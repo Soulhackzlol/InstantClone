@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 172" width="880" height="172" role="img" aria-label="Delay state machine: idle, arming, armed, active, then cut back to live">
+  <defs>
+    <linearGradient id="bgS" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a0c12"/>
+      <stop offset="100%" stop-color="#07080a"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5ac8fa"/>
+    </marker>
+    <marker id="arrowMuted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a4e5c"/>
+    </marker>
+    <marker id="arrowCut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff453a"/>
+    </marker>
+    <filter id="activeGlow" x="-30%" y="-50%" width="160%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.55"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="pillShadow" x="-20%" y="-20%" width="140%" height="180%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <style>
+    .pill-text { font-family: -apple-system, Segoe UI, Inter, sans-serif; font-weight: 700; font-size: 11px; }
+    .verb        { font-family: -apple-system, Segoe UI, Inter, sans-serif; font-weight: 600; font-size: 10px; fill: #5ac8fa; letter-spacing: 1px; text-transform: uppercase; }
+    .verb-cut    { font-family: -apple-system, Segoe UI, Inter, sans-serif; font-weight: 700; font-size: 10px; fill: #ff453a; letter-spacing: 1.5px; text-transform: uppercase; }
+    .verb-muted  { font-family: -apple-system, Segoe UI, Inter, sans-serif; font-weight: 500; font-size: 9.5px; fill: #7a7d8a; letter-spacing: 0.5px; font-style: italic; }
+    .arrow-line       { stroke: #5ac8fa; stroke-width: 1.6; fill: none; }
+    .arrow-line-muted { stroke: #4a4e5c; stroke-width: 1.4; fill: none; stroke-dasharray: 3 3; }
+  </style>
+
+  <rect width="880" height="172" rx="12" fill="url(#bgS)"/>
+
+  <!-- ═══ FORWARD PATH: IDLE → BUFFERING → ARMED → ACTIVE ════════
+       Pills sit at y 48..84. Verbs label the arrows above (y 38),
+       cyan for user-driven, muted dashed for automatic. -->
+
+  <!-- IDLE -->
+  <g transform="translate(28, 48)" filter="url(#pillShadow)">
+    <rect width="120" height="36" rx="18" fill="#1c2129"/>
+    <text class="pill-text" x="60" y="22" text-anchor="middle" fill="#7a7d8a">IDLE</text>
+  </g>
+
+  <!-- arm — user action, cyan + travelling dot -->
+  <text class="verb" x="194" y="40" text-anchor="middle">arm</text>
+  <line class="arrow-line" x1="152" y1="66" x2="234" y2="66" marker-end="url(#arrow)"/>
+  <circle r="2.5" fill="#5ac8fa">
+    <animateMotion path="M 152 66 L 226 66" dur="2.4s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.15;0.85;1" dur="2.4s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- BUFFERING -->
+  <g transform="translate(240, 48)" filter="url(#pillShadow)">
+    <rect width="160" height="36" rx="18" fill="rgba(255,159,10,0.14)" stroke="rgba(255,159,10,0.35)"/>
+    <circle cx="22" cy="18" r="3.5" fill="#ff9f0a">
+      <animate attributeName="opacity" values="1;0.35;1" dur="1.4s" repeatCount="indefinite"/>
+    </circle>
+    <text class="pill-text" x="88" y="22" text-anchor="middle" fill="#ff9f0a">BUFFERING</text>
+  </g>
+
+  <!-- fills — automatic transition, muted + dashed -->
+  <text class="verb-muted" x="440" y="40" text-anchor="middle">fills</text>
+  <line class="arrow-line-muted" x1="404" y1="66" x2="478" y2="66" marker-end="url(#arrowMuted)"/>
+  <circle r="2" fill="#7a7d8a" opacity="0.7">
+    <animateMotion path="M 404 66 L 470 66" dur="3.2s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;0.7;0.7;0" keyTimes="0;0.15;0.85;1" dur="3.2s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- ARMED -->
+  <g transform="translate(480, 48)" filter="url(#pillShadow)">
+    <rect width="120" height="36" rx="18" fill="rgba(90,200,250,0.14)" stroke="rgba(90,200,250,0.35)"/>
+    <text class="pill-text" x="60" y="22" text-anchor="middle" fill="#5ac8fa">ARMED</text>
+  </g>
+
+  <!-- activate — user action, cyan + travelling dot -->
+  <text class="verb" x="640" y="40" text-anchor="middle">activate</text>
+  <line class="arrow-line" x1="604" y1="66" x2="676" y2="66" marker-end="url(#arrow)"/>
+  <circle r="2.5" fill="#5ac8fa">
+    <animateMotion path="M 604 66 L 668 66" dur="2.4s" begin="0.8s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.15;0.85;1" dur="2.4s" begin="0.8s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- ACTIVE (destination state — soft halo + breathing dot) -->
+  <g transform="translate(680, 48)" filter="url(#activeGlow)">
+    <rect width="170" height="36" rx="18" fill="rgba(52,199,89,0.16)" stroke="rgba(52,199,89,0.4)"/>
+    <circle cx="22" cy="18" r="3.5" fill="#34c759">
+      <animate attributeName="opacity" values="1;0.55;1" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <text class="pill-text" x="92" y="22" text-anchor="middle" fill="#34c759">ACTIVE</text>
+  </g>
+
+  <!-- ═══ RETURN PATH: CUT (ACTIVE → IDLE) ═══════════════════════
+       Right-to-left dashed arc with arrowhead at the IDLE end so
+       the direction reads as "going back". A "CUT" pill is set into
+       the arc at the bottom to break the dashed line cleanly, and
+       a red dot rides the arc so motion follows the eye. -->
+
+  <path id="cutPath" d="M 766 88 C 766 142, 88 142, 88 88"
+        stroke="#ff453a" stroke-width="1.5" stroke-dasharray="5 4"
+        fill="none" marker-end="url(#arrowCut)"/>
+
+  <!-- Travelling red dot — head-to-tail of the cut path -->
+  <circle r="2.8" fill="#ff453a">
+    <animateMotion dur="4.5s" repeatCount="indefinite">
+      <mpath href="#cutPath"/>
+    </animateMotion>
+    <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.9;1" dur="4.5s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- "CUT" label set INTO the arc — opaque backdrop breaks the
+       dashed line so the label is the visual focus of the return path. -->
+  <g transform="translate(427, 130)">
+    <rect width="80" height="22" rx="11" fill="#07080a" stroke="rgba(255,69,58,0.55)" stroke-width="1"/>
+    <text class="verb-cut" x="40" y="15" text-anchor="middle">cut</text>
+  </g>
+
+  <!-- Caption sits clearly below the arc, no overlap -->
+  <text class="verb-muted" x="440" y="164" text-anchor="middle">snap back to live, any time</text>
+</svg>

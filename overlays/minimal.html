@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Delay (minimal)</title>
+<style>
+body{margin:0;background:transparent;color:#fff;font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+.box{position:fixed;left:24px;top:24px;background:rgba(10,12,16,.65);
+  backdrop-filter:blur(8px);padding:12px 18px;border-radius:12px;
+  border:1px solid rgba(255,255,255,.08);min-width:180px}
+.l{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,.55)}
+.v{font-size:32px;font-weight:700;letter-spacing:-1px;font-variant-numeric:tabular-nums;line-height:1.1;margin-top:2px}
+.u{font-size:16px;color:rgba(255,255,255,.55);font-weight:400;margin-left:3px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#3c3;
+  box-shadow:0 0 8px #3c3;margin-right:6px;vertical-align:middle}
+.dot.bad{background:#f55;box-shadow:0 0 8px #f55}
+.row{display:flex;gap:14px;margin-top:8px;font-size:12px;color:rgba(255,255,255,.7)}
+</style></head><body>
+<div class="box">
+  <div class="l">Delay</div>
+  <div class="v"><span id="v">0</span><span class="u">s</span></div>
+  <div class="row"><span><span class="dot" id="i"></span>OBS</span>
+    <span><span class="dot" id="e"></span>LIVE</span></div>
+</div>
+<script>
+async function t(){try{const s=await(await fetch('/state')).json();
+v.textContent=(s.current_delay_ms/1000).toFixed(1);
+i.className='dot '+(s.ingest_alive?'':'bad');
+e.className='dot '+(s.egress_alive?'':'bad');}catch(_){}}
+t();setInterval(t,500);
+</script></body></html>

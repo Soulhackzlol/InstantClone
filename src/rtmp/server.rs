@@ -1,0 +1,242 @@
+//! Ingest: accept an RTMP publish session from OBS and feed every audio,
+//! video, and data message into the controller's writer side.
+//!
+//! Only one active publisher is meaningful at a time (one streamer). We
+//! still accept many TCP connections but the controller will reject a
+//! second `publish` until the first goes away.
+
+use crate::controller::Controller;
+use crate::h264;
+use crate::rtmp::amf0::{self, Amf0};
+use crate::rtmp::chunk::{ChunkReader, ChunkWriter, Message};
+use crate::rtmp::handshake;
+use bytes::BytesMut;
+use std::collections::HashMap;
+use std::io;
+use std::sync::Arc;
+use tokio::io::split;
+use tokio::net::TcpListener;
+
+pub async fn run(addr: String, ctrl: Arc<Controller>) -> io::Result<()> {
+    let listener = TcpListener::bind(&addr).await?;
+    eprintln!("[ingest] listening on {}", addr);
+    loop {
+        let (sock, peer) = listener.accept().await?;
+        sock.set_nodelay(true)?;
+        // Mirror egress: aggressive TCP keepalive so a hung OBS process
+        // (no clean FIN) is detected within ~30 s instead of riding the
+        // OS default (~2 h on Windows). Without this, the dashboard
+        // reports "OBS alive" indefinitely after a crash.
+        let _ = crate::rtmp::tcp::set_aggressive_keepalive(&sock);
+        let ctrl = ctrl.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle(sock, ctrl).await {
+                eprintln!("[ingest] {} closed: {}", peer, e);
+            }
+        });
+    }
+}
+
+/// RAII guard: while held, this publisher owns the `ingest_alive` flag.
+/// Drop releases it so the dashboard correctly reflects the OBS state
+/// regardless of how `handle` returns (clean EOF, network error, panic).
+struct PublishGuard {
+    ctrl: Arc<Controller>,
+    active: bool,
+}
+impl Drop for PublishGuard {
+    fn drop(&mut self) {
+        if self.active {
+            self.ctrl.mark_ingest_dead();
+        }
+    }
+}
+
+async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::Result<()> {
+    handshake::perform_server(&mut sock).await?;
+
+    let (rd, wr) = split(sock);
+    let mut reader = ChunkReader::new(rd);
+    let mut writer = ChunkWriter::new(wr);
+
+    // Negotiate a larger chunk size up-front; 4096 is the de-facto standard.
+    writer.send_set_chunk_size(4096).await?;
+
+    let mut guard = PublishGuard { ctrl: ctrl.clone(), active: false };
+
+    loop {
+        let msg = reader.read_message().await?;
+        match msg.type_id {
+            20 /* AMF0 command */ => {
+                handle_command(&mut writer, &ctrl, &msg, &mut guard).await?;
+            }
+            18 /* AMF0 data — onMetaData et al */ => {
+                ctrl.on_metadata(msg.payload.to_vec());
+            }
+            8 /* audio */ => {
+                let info = h264::classify_audio_tag(&msg.payload);
+                ctrl.note_audio_codec(info.codec);
+                if info.is_multitrack { ctrl.note_multitrack_audio(); }
+                // Audio multi-track (VOD audio) is forwarded bit-faithfully
+                // — Twitch consumes the second track for VOD audio.
+                ctrl.on_tag(8, msg.timestamp, &msg.payload, false, info.is_seq_header);
+            }
+            9 /* video */ => {
+                let info = h264::classify_video_tag(&msg.payload);
+                ctrl.note_video_codec(info.codec);
+                if info.is_multitrack {
+                    ctrl.note_multitrack_video();
+                    // Flatten Enhanced Broadcasting simulcast down to the
+                    // primary track. Re-classify the flattened bytes so
+                    // codec + IDR detection match what the rest of the
+                    // pipeline will actually carry.
+                    if let Some(flat) = h264::flatten_multitrack_video(&msg.payload) {
+                        let info2 = h264::classify_video_tag(&flat);
+                        ctrl.note_video_codec(info2.codec);
+                        ctrl.on_tag(9, msg.timestamp, &flat, info2.is_idr, info2.is_seq_header);
+                    } else {
+                        // Pathological multi-track layout we can't parse —
+                        // forward as-is and let the destination decide.
+                        ctrl.on_tag(9, msg.timestamp, &msg.payload, info.is_idr, info.is_seq_header);
+                    }
+                } else {
+                    ctrl.on_tag(9, msg.timestamp, &msg.payload, info.is_idr, info.is_seq_header);
+                }
+            }
+            _ => { /* ignore other message types */ }
+        }
+    }
+}
+
+async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut ChunkWriter<W>,
+    ctrl: &Arc<Controller>,
+    msg: &Message,
+    guard: &mut PublishGuard,
+) -> io::Result<()> {
+    let values = amf0::decode_all(&msg.payload)?;
+    let name = values.first().and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let txn_id = values.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+    match name.as_str() {
+        "connect" => {
+            // Acknowledge bandwidth + Window ack size (some clients require this).
+            send_window_ack_size(writer, 5_000_000).await?;
+            send_set_peer_bandwidth(writer, 5_000_000, 2).await?;
+            // _result with capabilities/version etc.
+            let mut props = HashMap::new();
+            props.insert("fmsVer".to_string(), Amf0::String("FMS/3,0,1,123".into()));
+            props.insert("capabilities".to_string(), Amf0::Number(31.0));
+            let mut info = HashMap::new();
+            info.insert("level".to_string(), Amf0::String("status".into()));
+            info.insert("code".to_string(), Amf0::String("NetConnection.Connect.Success".into()));
+            info.insert("description".to_string(), Amf0::String("Connection succeeded.".into()));
+            info.insert("objectEncoding".to_string(), Amf0::Number(0.0));
+            send_command_result(writer, txn_id, Amf0::Object(props), Amf0::Object(info)).await?;
+        }
+        "releaseStream" | "FCPublish" | "FCUnpublish" | "deleteStream" => {
+            // No-op acks. Most clients don't care about the response body.
+            send_simple_result(writer, txn_id).await?;
+        }
+        "createStream" => {
+            // Stream id 1. We always use the same.
+            let mut buf = BytesMut::new();
+            amf0::enc_string(&mut buf, "_result");
+            amf0::enc_number(&mut buf, txn_id);
+            amf0::enc_null(&mut buf);
+            amf0::enc_number(&mut buf, 1.0);
+            writer.write_message(3, 0, 20, 0, &buf).await?;
+            writer.flush().await?;
+        }
+        "publish" => {
+            let stream_key = values.get(3).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            match ctrl.begin_publish(&stream_key).await {
+                Ok(_token) => {
+                    guard.active = true;
+                    // onStatus NetStream.Publish.Start
+                    let mut info = HashMap::new();
+                    info.insert("level".to_string(), Amf0::String("status".into()));
+                    info.insert("code".to_string(), Amf0::String("NetStream.Publish.Start".into()));
+                    info.insert("description".to_string(), Amf0::String("Start publishing".into()));
+                    let mut buf = BytesMut::new();
+                    amf0::enc_string(&mut buf, "onStatus");
+                    amf0::enc_number(&mut buf, 0.0);
+                    amf0::enc_null(&mut buf);
+                    amf0::enc_value(&mut buf, &Amf0::Object(info));
+                    writer.write_message(5, 0, 20, msg.stream_id, &buf).await?;
+                    writer.flush().await?;
+                }
+                Err(e) => {
+                    // Tell the client the slot is taken so it doesn't sit
+                    // there hopefully sending video into nothing.
+                    let mut info = HashMap::new();
+                    info.insert("level".to_string(), Amf0::String("error".into()));
+                    info.insert("code".to_string(),
+                        Amf0::String("NetStream.Publish.BadName".into()));
+                    info.insert("description".to_string(), Amf0::String(e.to_string()));
+                    let mut buf = BytesMut::new();
+                    amf0::enc_string(&mut buf, "onStatus");
+                    amf0::enc_number(&mut buf, 0.0);
+                    amf0::enc_null(&mut buf);
+                    amf0::enc_value(&mut buf, &Amf0::Object(info));
+                    let _ = writer.write_message(5, 0, 20, msg.stream_id, &buf).await;
+                    let _ = writer.flush().await;
+                    return Err(e);
+                }
+            }
+        }
+        _ => {
+            // Unknown command — silently ack so the client doesn't error.
+            if txn_id != 0.0 {
+                send_simple_result(writer, txn_id).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn send_command_result<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut ChunkWriter<W>,
+    txn_id: f64,
+    props: Amf0,
+    info: Amf0,
+) -> io::Result<()> {
+    let mut buf = BytesMut::new();
+    amf0::enc_string(&mut buf, "_result");
+    amf0::enc_number(&mut buf, txn_id);
+    amf0::enc_value(&mut buf, &props);
+    amf0::enc_value(&mut buf, &info);
+    writer.write_message(3, 0, 20, 0, &buf).await?;
+    writer.flush().await
+}
+
+async fn send_simple_result<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut ChunkWriter<W>,
+    txn_id: f64,
+) -> io::Result<()> {
+    let mut buf = BytesMut::new();
+    amf0::enc_string(&mut buf, "_result");
+    amf0::enc_number(&mut buf, txn_id);
+    amf0::enc_null(&mut buf);
+    amf0::enc_null(&mut buf);
+    writer.write_message(3, 0, 20, 0, &buf).await?;
+    writer.flush().await
+}
+
+async fn send_window_ack_size<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut ChunkWriter<W>,
+    size: u32,
+) -> io::Result<()> {
+    writer.write_message(2, 0, 5, 0, &size.to_be_bytes()).await
+}
+
+async fn send_set_peer_bandwidth<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut ChunkWriter<W>,
+    size: u32,
+    limit_type: u8,
+) -> io::Result<()> {
+    let mut buf = [0u8; 5];
+    buf[..4].copy_from_slice(&size.to_be_bytes());
+    buf[4] = limit_type;
+    writer.write_message(2, 0, 6, 0, &buf).await
+}

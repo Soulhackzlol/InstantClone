@@ -1,0 +1,428 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 580" width="1120" height="580" role="img" aria-label="InstantClone — free, open-source RTMP delay proxy">
+  <defs>
+    <linearGradient id="appBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a0c12"/>
+      <stop offset="100%" stop-color="#07080a"/>
+    </linearGradient>
+    <linearGradient id="cardBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#161a21"/>
+      <stop offset="100%" stop-color="#11141a"/>
+    </linearGradient>
+    <linearGradient id="primary" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#5ac8fa"/>
+      <stop offset="100%" stop-color="#42b8e8"/>
+    </linearGradient>
+    <linearGradient id="liveText" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#bce6f5"/>
+    </linearGradient>
+    <radialGradient id="aurora" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#5ac8fa" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#5ac8fa" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="auroraGreen" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#34c759" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#34c759" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Top-edge highlight: a faint white sliver that catches the "light"
+         on top of each card, giving a sense of physical depth. -->
+    <linearGradient id="topShine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="35%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- A travelling glint that sweeps across the buffer bar. -->
+    <linearGradient id="shimmer" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="50%"  stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Soft drop shadow under cards so they look elevated, not flat. -->
+    <filter id="cardShadow" x="-10%" y="-10%" width="120%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <!-- Cyan-tinted halo for the primary CTA button. -->
+    <filter id="ctaGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="12" flood-color="#5ac8fa" flood-opacity="0.45"/>
+    </filter>
+    <!-- Big-readout outer glow. -->
+    <filter id="numberGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <!-- Subtle noise/grain on the backdrop so it doesn't read as a flat
+         vector; turbulence at low opacity gives film-grain texture. -->
+    <filter id="grain" x="0%" y="0%" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="3"/>
+      <feColorMatrix values="0 0 0 0 1
+                             0 0 0 0 1
+                             0 0 0 0 1
+                             0 0 0 0.035 0"/>
+    </filter>
+    <!-- ─── HERO COMPOSITION DEFS ─────────────────────────── -->
+    <!-- Soft Gaussian for the dashboard backdrop. The dashboard becomes
+         atmospheric texture; the wordmark sits in front, sharp. -->
+    <filter id="heroBlur" x="-5%" y="-5%" width="110%" height="110%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <!-- Centre-weighted vignette: darker in the middle so the wordmark
+         pops, lighter at the edges so you still read "this is a real
+         dashboard" through the blur. -->
+    <radialGradient id="heroDim" cx="0.5" cy="0.5" r="0.7">
+      <stop offset="0%"   stop-color="#07080a" stop-opacity="0.78"/>
+      <stop offset="100%" stop-color="#07080a" stop-opacity="0.35"/>
+    </radialGradient>
+    <!-- Cyan aura behind the centred mark. -->
+    <radialGradient id="heroAura" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%"   stop-color="#5ac8fa" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#5ac8fa" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="heroMarkFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"  stop-color="#5ac8fa"/>
+      <stop offset="100%" stop-color="#42b8e8"/>
+    </linearGradient>
+    <linearGradient id="heroMarkShine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Animated gradient on the wordmark: a soft highlight band glides
+         left to right every 6 s by swapping the stop colours. -->
+    <linearGradient id="heroTypeFill" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#bce6f5">
+        <animate attributeName="stop-color" values="#bce6f5;#ffffff;#bce6f5" dur="6s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="50%" stop-color="#ffffff">
+        <animate attributeName="stop-color" values="#ffffff;#bce6f5;#ffffff" dur="6s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="100%" stop-color="#bce6f5">
+        <animate attributeName="stop-color" values="#bce6f5;#ffffff;#bce6f5" dur="6s" repeatCount="indefinite"/>
+      </stop>
+    </linearGradient>
+    <filter id="heroMarkGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#5ac8fa" flood-opacity="0.65"/>
+    </filter>
+  </defs>
+
+  <style>
+    .h    { font-family: -apple-system, Segoe UI, Inter, sans-serif; font-weight: 700; fill: #f4f6f9; }
+    .sub  { font-family: -apple-system, Segoe UI, Inter, sans-serif; font-weight: 500; fill: #7a7d8a; }
+    .lbl  { font-family: -apple-system, Segoe UI, Inter, sans-serif; font-weight: 600; fill: #7a7d8a; letter-spacing: 1.5px; }
+    .val  { font-family: 'JetBrains Mono', ui-monospace, monospace; fill: #f4f6f9; }
+    .accent { fill: #5ac8fa; }
+    .ok   { fill: #34c759; }
+  </style>
+
+  <!-- App background — base layer, never blurred so the outer
+       rounded-rect frame stays crisp. -->
+  <rect width="1120" height="580" rx="16" fill="url(#appBg)"/>
+  <!-- Film-grain texture overlay (very subtle) -->
+  <rect width="1120" height="580" rx="16" filter="url(#grain)" opacity="0.4"/>
+
+  <!-- ═══ BLURRED DASHBOARD BACKDROP ════════════════════════════
+       The full UI mockup, soft-focused and dimmed, becomes
+       atmospheric texture behind the hero wordmark. All the original
+       animations (aurora drift, OBS dot pulses, buffer fill, etc.)
+       still play — they just become a soft breathing motion behind
+       the foreground. -->
+  <g filter="url(#heroBlur)" opacity="0.55">
+  <!-- Aurora glows that slowly breathe + drift, giving a sense the
+       background is alive instead of frozen. -->
+  <ellipse cx="320" cy="290" rx="380" ry="200" fill="url(#aurora)">
+    <animate attributeName="cx" values="280;360;280" dur="14s" repeatCount="indefinite"/>
+    <animate attributeName="rx" values="380;430;380" dur="14s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="900" cy="460" rx="260" ry="140" fill="url(#auroraGreen)">
+    <animate attributeName="cx" values="900;840;900" dur="18s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.7;1;0.7" dur="9s" repeatCount="indefinite"/>
+  </ellipse>
+
+  <!-- ── HEADER ───────────────────────────────────────────── -->
+  <g transform="translate(40, 32)">
+    <rect width="1040" height="56" rx="12" fill="url(#cardBg)" stroke="rgba(255,255,255,0.06)" filter="url(#cardShadow)"/>
+    <!-- top-edge highlight: faint light catching the bevel -->
+    <rect width="1040" height="20" rx="12" fill="url(#topShine)"/>
+
+    <!-- macOS-style window chrome (purely decorative, signals "this is a window") -->
+    <g transform="translate(18, 21)">
+      <circle cx="0"  cy="0" r="6" fill="#ff5f57"/>
+      <circle cx="16" cy="0" r="6" fill="#febc2e"/>
+      <circle cx="32" cy="0" r="6" fill="#28c840"/>
+    </g>
+
+    <!-- Brand mark + wordmark (mirrors the cyan rounded-square + pause-bars motif) -->
+    <g transform="translate(74, 16)">
+      <rect width="24" height="24" rx="6" fill="#5ac8fa"/>
+      <rect x="7"  y="6" width="3" height="12" rx="0.5" fill="#ffffff"/>
+      <rect x="14" y="6" width="3" height="12" rx="0.5" fill="#ffffff"/>
+    </g>
+    <text class="h" font-size="15" x="106" y="34">InstantClone</text>
+    <text class="sub" font-size="12" x="211" y="34">RTMP delay proxy</text>
+
+    <!-- Right side pills — dots pulse + halo, signalling "alive" -->
+    <g transform="translate(710, 14)">
+      <!-- OBS pill -->
+      <g>
+        <rect width="92" height="28" rx="14" fill="rgba(52,199,89,0.12)" stroke="rgba(52,199,89,0.3)"/>
+        <circle cx="14" cy="14" r="4" fill="#34c759">
+          <animate attributeName="opacity" values="1;0.45;1" dur="1.9s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="14" cy="14" r="4" fill="none" stroke="#34c759" stroke-width="1.4" opacity="0.6">
+          <animate attributeName="r" values="4;10;4" dur="1.9s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="0.6;0;0.6" dur="1.9s" repeatCount="indefinite"/>
+        </circle>
+        <text class="h" font-size="11" x="26" y="18" fill="#7be38f">OBS</text>
+      </g>
+      <!-- Egress pill — second dot pulses on its own cadence so the
+           two pills don't beat in lock-step (feels too mechanical). -->
+      <g transform="translate(100, 0)">
+        <rect width="92" height="28" rx="14" fill="rgba(52,199,89,0.12)" stroke="rgba(52,199,89,0.3)"/>
+        <circle cx="14" cy="14" r="4" fill="#34c759">
+          <animate attributeName="opacity" values="1;0.45;1" dur="2.3s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="14" cy="14" r="4" fill="none" stroke="#34c759" stroke-width="1.4" opacity="0.6">
+          <animate attributeName="r" values="4;10;4" dur="2.3s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="0.6;0;0.6" dur="2.3s" repeatCount="indefinite"/>
+        </circle>
+        <text class="h" font-size="11" x="26" y="18" fill="#7be38f">Egress</text>
+      </g>
+      <!-- Bitrate pill -->
+      <g transform="translate(200, 0)">
+        <rect width="118" height="28" rx="14" fill="#1c2129" stroke="rgba(255,255,255,0.08)"/>
+        <text class="val" font-size="12" x="14" y="19">6 020</text>
+        <text class="sub" font-size="10" x="58" y="19">kbps</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- ── HERO READOUT (left card) ─────────────────────────── -->
+  <g transform="translate(40, 112)">
+    <rect width="620" height="280" rx="14" fill="url(#cardBg)" stroke="rgba(255,255,255,0.06)" filter="url(#cardShadow)"/>
+    <rect width="620" height="28" rx="14" fill="url(#topShine)"/>
+
+    <!-- Status pill — matches the dashboard's `computeStatePill(armed)` -->
+    <g transform="translate(28, 26)">
+      <rect width="184" height="28" rx="14" fill="rgba(90,200,250,0.14)" stroke="rgba(90,200,250,0.35)"/>
+      <circle cx="14" cy="14" r="4" fill="#5ac8fa">
+        <animate attributeName="opacity" values="1;0.55;1" dur="1.8s" repeatCount="indefinite"/>
+      </circle>
+      <text class="h" font-size="11" x="26" y="18" fill="#5ac8fa">ARMED</text>
+      <text class="sub" font-size="11" x="76" y="18">·  Click activate</text>
+    </g>
+
+    <!-- Big readout — weight 500 + letter-spacing -0.045em to match
+         hero-delay-num in the real dashboard. Subtle scale-breath so
+         the number feels alive without distracting the eye. -->
+    <g transform="translate(310, 175)" text-anchor="middle">
+      <g>
+        <animateTransform attributeName="transform" type="scale"
+                          values="1;1.015;1" dur="3.4s"
+                          additive="sum" repeatCount="indefinite"/>
+        <text font-family="-apple-system, Segoe UI, Inter, sans-serif" font-weight="500" font-size="116" letter-spacing="-5.2" fill="#5ac8fa" opacity="0.35" filter="url(#numberGlow)">15.0</text>
+        <text font-family="-apple-system, Segoe UI, Inter, sans-serif" font-weight="500" font-size="116" letter-spacing="-5.2" fill="url(#liveText)">15.0</text>
+        <text class="sub" font-size="28" x="115" y="0" font-weight="500">s</text>
+      </g>
+    </g>
+
+    <!-- Caption — actual hero-delay-sub copy for ARMED state -->
+    <text class="sub" font-size="13" x="310" y="220" text-anchor="middle">Buffer ready. Click Activate to cut your stream over.</text>
+
+    <!-- Buffer bar — ambient fill-and-hold + a travelling glint -->
+    <g transform="translate(28, 240)">
+      <!-- Clip rect so the shimmer can't escape the bar's rounded edges -->
+      <clipPath id="bufClip"><rect width="564" height="6" rx="3"/></clipPath>
+      <rect width="564" height="6" rx="3" fill="#1a1d28"/>
+      <rect width="564" height="6" rx="3" fill="url(#primary)">
+        <animate attributeName="width"
+                 values="0;564;564;0"
+                 keyTimes="0;0.55;0.9;1"
+                 dur="8s" repeatCount="indefinite"/>
+        <animate attributeName="opacity"
+                 values="1;1;0.55;1"
+                 keyTimes="0;0.55;0.9;1"
+                 dur="8s" repeatCount="indefinite"/>
+      </rect>
+      <!-- Shimmer sweep -->
+      <g clip-path="url(#bufClip)">
+        <rect width="140" height="6" fill="url(#shimmer)">
+          <animate attributeName="x" values="-140;700;700" keyTimes="0;0.6;1" dur="4s" repeatCount="indefinite"/>
+        </rect>
+      </g>
+    </g>
+  </g>
+
+  <!-- ── CONTROL PANEL (right card) ───────────────────────── -->
+  <g transform="translate(680, 112)">
+    <rect width="400" height="280" rx="14" fill="url(#cardBg)" stroke="rgba(255,255,255,0.06)" filter="url(#cardShadow)"/>
+    <rect width="400" height="28" rx="14" fill="url(#topShine)"/>
+
+    <!-- Header row -->
+    <text class="lbl" font-size="10" x="28" y="38">CUSTOM DELAY</text>
+    <text class="sub" font-size="11" x="372" y="38" text-anchor="end">0 — 600s</text>
+
+    <!-- Input row -->
+    <g transform="translate(28, 56)">
+      <rect width="344" height="56" rx="10" fill="#0e1117" stroke="rgba(255,255,255,0.08)"/>
+      <rect x="6" y="6" width="44" height="44" rx="8" fill="#1c2129"/>
+      <text class="val" font-size="22" x="28" y="38" text-anchor="middle">−</text>
+      <text class="val" font-size="32" x="172" y="44" text-anchor="middle">15</text>
+      <rect x="294" y="6" width="44" height="44" rx="8" fill="#1c2129"/>
+      <text class="val" font-size="22" x="316" y="38" text-anchor="middle">+</text>
+      <text class="sub" font-size="11" x="244" y="34" text-anchor="end">seconds</text>
+    </g>
+
+    <!-- Quick chips -->
+    <g transform="translate(28, 128)">
+      <text class="sub" font-size="11" x="0" y="0">Quick · save in Profiles for one-click arm</text>
+      <g transform="translate(0, 12)">
+        <rect width="48" height="26" rx="13" fill="#1c2129" stroke="rgba(90,200,250,0.4)"/>
+        <text class="val" font-size="11" x="24" y="17" text-anchor="middle" fill="#5ac8fa">15s</text>
+      </g>
+      <g transform="translate(56, 12)">
+        <rect width="48" height="26" rx="13" fill="#1c2129" stroke="rgba(90,200,250,0.4)"/>
+        <text class="val" font-size="11" x="24" y="17" text-anchor="middle" fill="#5ac8fa">30s</text>
+      </g>
+      <g transform="translate(112, 12)">
+        <rect width="48" height="26" rx="13" fill="#1c2129" stroke="rgba(90,200,250,0.4)"/>
+        <text class="val" font-size="11" x="24" y="17" text-anchor="middle" fill="#5ac8fa">5m</text>
+      </g>
+    </g>
+
+    <!-- Action row -->
+    <g transform="translate(28, 200)">
+      <!-- Primary CTA — actual button copy for ARMED state. Cyan-tinted
+           halo + travelling highlight sweep make it the visual anchor. -->
+      <clipPath id="ctaClip"><rect width="240" height="52" rx="12"/></clipPath>
+      <rect width="240" height="52" rx="12" fill="url(#primary)" filter="url(#ctaGlow)"/>
+      <rect width="240" height="18" rx="12" fill="url(#topShine)"/>
+      <g clip-path="url(#ctaClip)">
+        <rect width="80" height="52" fill="url(#shimmer)" opacity="0.6">
+          <animate attributeName="x" values="-80;320;320" keyTimes="0;0.6;1" dur="5s" repeatCount="indefinite"/>
+        </rect>
+      </g>
+      <text class="h" font-size="14" x="120" y="32" text-anchor="middle" fill="#001220">▶  Activate 15s delay</text>
+      <!-- Disarm ghost -->
+      <rect x="252" width="92" height="52" rx="12" fill="transparent" stroke="rgba(255,255,255,0.12)"/>
+      <text class="h" font-size="13" x="298" y="32" text-anchor="middle" fill="#c1c5cf">Disarm</text>
+    </g>
+  </g>
+
+  <!-- ── TABS ────────────────────────────────────────────── -->
+  <g transform="translate(40, 416)">
+    <rect width="1040" height="48" rx="10" fill="url(#cardBg)" stroke="rgba(255,255,255,0.06)" filter="url(#cardShadow)"/>
+    <rect width="1040" height="16" rx="10" fill="url(#topShine)"/>
+    <g font-family="-apple-system, Segoe UI, Inter, sans-serif" font-size="12" font-weight="500">
+      <!-- Active tab pill -->
+      <rect x="12" y="8" width="140" height="32" rx="8" fill="#1c2129"/>
+      <text x="82" y="29" text-anchor="middle" fill="#f4f6f9">Destinations</text>
+      <text x="206" y="29" text-anchor="middle" fill="#7a7d8a">Stats</text>
+      <text x="276" y="29" text-anchor="middle" fill="#7a7d8a">OBS</text>
+      <text x="354" y="29" text-anchor="middle" fill="#7a7d8a">Overlay</text>
+      <text x="438" y="29" text-anchor="middle" fill="#7a7d8a">Profiles</text>
+      <text x="522" y="29" text-anchor="middle" fill="#7a7d8a">System</text>
+      <text x="600" y="29" text-anchor="middle" fill="#7a7d8a">Logs</text>
+    </g>
+  </g>
+
+  <!-- ── DESTINATIONS ROW ────────────────────────────────── -->
+  <g transform="translate(40, 484)">
+    <!-- Twitch — alive, dot pulses with a halo -->
+    <g>
+      <rect width="338" height="72" rx="12" fill="url(#cardBg)" stroke="rgba(255,255,255,0.06)" filter="url(#cardShadow)"/>
+      <rect width="338" height="20" rx="12" fill="url(#topShine)"/>
+      <rect x="14" y="14" width="44" height="44" rx="10" fill="#1c2129"/>
+      <text class="h" font-size="18" x="36" y="44" text-anchor="middle" fill="#a970ff">T</text>
+      <text class="h" font-size="13" x="74" y="34">Twitch</text>
+      <text class="sub" font-size="11" x="74" y="50">live · 6 020 kbps</text>
+      <circle cx="308" cy="36" r="5" fill="#34c759">
+        <animate attributeName="opacity" values="1;0.5;1" dur="2.1s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="308" cy="36" r="5" fill="none" stroke="#34c759" stroke-width="1.4" opacity="0.55">
+        <animate attributeName="r" values="5;12;5" dur="2.1s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0.55;0;0.55" dur="2.1s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <!-- YouTube — alive, slightly different cadence -->
+    <g transform="translate(352, 0)">
+      <rect width="338" height="72" rx="12" fill="url(#cardBg)" stroke="rgba(255,255,255,0.06)" filter="url(#cardShadow)"/>
+      <rect width="338" height="20" rx="12" fill="url(#topShine)"/>
+      <rect x="14" y="14" width="44" height="44" rx="10" fill="#1c2129"/>
+      <text class="h" font-size="18" x="36" y="44" text-anchor="middle" fill="#ff5252">Y</text>
+      <text class="h" font-size="13" x="74" y="34">YouTube</text>
+      <text class="sub" font-size="11" x="74" y="50">live · 5 980 kbps</text>
+      <circle cx="308" cy="36" r="5" fill="#34c759">
+        <animate attributeName="opacity" values="1;0.5;1" dur="2.5s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="308" cy="36" r="5" fill="none" stroke="#34c759" stroke-width="1.4" opacity="0.55">
+        <animate attributeName="r" values="5;12;5" dur="2.5s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0.55;0;0.55" dur="2.5s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <!-- Custom (empty slot) -->
+    <g transform="translate(704, 0)">
+      <rect width="336" height="72" rx="12" fill="url(#cardBg)" stroke="rgba(255,255,255,0.06)" filter="url(#cardShadow)"/>
+      <rect width="336" height="20" rx="12" fill="url(#topShine)"/>
+      <rect x="14" y="14" width="44" height="44" rx="10" fill="#1c2129"/>
+      <text class="h" font-size="14" x="36" y="44" text-anchor="middle" fill="#7a7d8a">+</text>
+      <text class="h" font-size="13" x="74" y="34" fill="#c1c5cf">Add destination</text>
+      <text class="sub" font-size="11" x="74" y="50">Twitch · YouTube · Kick · custom</text>
+    </g>
+  </g>
+
+  </g>
+  <!-- ═══ END BLURRED BACKDROP ═══════════════════════════════════ -->
+
+  <!-- Centre-weighted vignette to make the foreground readable. -->
+  <rect width="1120" height="580" rx="16" fill="url(#heroDim)"/>
+
+  <!-- Cyan aura that bleeds out from behind the wordmark. -->
+  <ellipse cx="560" cy="290" rx="520" ry="180" fill="url(#heroAura)">
+    <animate attributeName="rx" values="520;560;520" dur="9s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="1;0.78;1" dur="9s" repeatCount="indefinite"/>
+  </ellipse>
+
+  <!-- ═══ HERO FOREGROUND: wordmark composition ═════════════════════
+       Cyan rounded-square mark + pause bars (matches tray icon &
+       README wordmark), large "InstantClone" type with animated
+       gradient sweep, tracked tagline, accent line. The whole group
+       gently floats on Y so the hero never feels frozen. -->
+  <g transform="translate(560, 200)">
+    <animateTransform attributeName="transform" type="translate"
+                      values="560 200; 560 196; 560 200" dur="6s"
+                      additive="replace" repeatCount="indefinite"/>
+
+    <!-- Mark: 96×96 cyan rounded square + breathing pause bars -->
+    <g transform="translate(-48, -8)" filter="url(#heroMarkGlow)">
+      <rect width="96" height="96" rx="22" fill="url(#heroMarkFill)"/>
+      <rect width="96" height="48" rx="22" fill="url(#heroMarkShine)"/>
+      <rect x="30" y="28" width="11" height="40" rx="2" fill="#ffffff">
+        <animate attributeName="y"      values="28;26;28" dur="3s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="40;44;40" dur="3s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="55" y="28" width="11" height="40" rx="2" fill="#ffffff">
+        <animate attributeName="y"      values="28;26;28" dur="3s" begin="0.4s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="40;44;40" dur="3s" begin="0.4s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+
+    <!-- Wordmark — huge, gradient sweep, anchored to the centre line -->
+    <text x="0" y="172"
+          font-family="-apple-system, Segoe UI, Inter, sans-serif"
+          font-size="78" font-weight="800" letter-spacing="-3.5"
+          text-anchor="middle"
+          fill="url(#heroTypeFill)">InstantClone</text>
+
+    <!-- Tracked tagline -->
+    <text x="0" y="208"
+          font-family="-apple-system, Segoe UI, Inter, sans-serif"
+          font-size="13" font-weight="600" letter-spacing="3.5"
+          text-anchor="middle"
+          fill="#bcc1cf"
+          opacity="0.85">FREE  ·  OPEN-SOURCE  ·  RTMP  DELAY  PROXY</text>
+
+    <!-- Thin cyan accent line with pulse -->
+    <line x1="-50" y1="232" x2="50" y2="232"
+          stroke="#5ac8fa" stroke-width="1.4" stroke-linecap="round" opacity="0.55">
+      <animate attributeName="opacity" values="0.55;0.95;0.55" dur="2.6s" repeatCount="indefinite"/>
+      <animate attributeName="x1" values="-50;-70;-50" dur="2.6s" repeatCount="indefinite"/>
+      <animate attributeName="x2" values="50;70;50" dur="2.6s" repeatCount="indefinite"/>
+    </line>
+  </g>
+</svg>

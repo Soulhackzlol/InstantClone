@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>InstantClone</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#0c0d12;color:#e9eaf0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+.wrap{display:flex;flex-direction:column;height:100vh;padding:12px;gap:9px}
+.row{display:flex;gap:6px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11px;border:1px solid #262936;background:#161922}
+.pill .dot{width:6px;height:6px;border-radius:50%;background:#666}
+.pill .dot.on{background:#34c759;box-shadow:0 0 6px #34c759}
+.pill .dot.bad{background:#ff453a}
+.pill .dot.warn{background:#ff9f0a}
+.phase{padding:3px 9px;border-radius:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;transition:.2s}
+.phase.off{background:#262936;color:#999}
+.phase.live{background:rgba(52,199,89,.15);color:#34c759}
+.phase.arming{background:rgba(255,159,10,.15);color:#ff9f0a}
+.phase.armed{background:rgba(90,200,250,.15);color:#5ac8fa}
+.phase.active{background:rgba(52,199,89,.18);color:#34c759;box-shadow:0 0 0 1px rgba(52,199,89,.4)}
+.cur{font-size:40px;font-weight:800;letter-spacing:-1.5px;font-variant-numeric:tabular-nums;text-align:center;line-height:1.05}
+.cur .u{font-size:17px;color:#7a7d8a;font-weight:500;margin-left:2px}
+.cur.changing{color:#5ac8fa}
+.bar{position:relative;height:6px;background:#1a1d28;border-radius:999px;overflow:hidden}
+.bar .fill{height:100%;width:0;background:linear-gradient(90deg,#ff9f0a,#ffb340);transition:width .35s cubic-bezier(.32,.72,0,1)}
+.bar .fill.ready{background:linear-gradient(90deg,#5ac8fa,#42b8e8)}
+.bar .fill.active{background:linear-gradient(90deg,#34c759,#28a745)}
+.tip{font-size:11px;color:#7a7d8a;text-align:center;min-height:14px;line-height:1.3}
+.input-row{display:flex;gap:4px;align-items:center;background:#1a1d28;border:1px solid #262936;border-radius:9px;padding:3px;transition:.15s}
+.input-row.disabled{opacity:.45;pointer-events:none}
+.input-row input{flex:1;background:transparent;border:0;color:#e9eaf0;font-size:14px;font-weight:600;text-align:center;font-variant-numeric:tabular-nums;outline:none;-moz-appearance:textfield;width:100%}
+.input-row input::-webkit-outer-spin-button,.input-row input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.input-row .step{background:transparent;border:0;color:#999;font-size:16px;width:26px;height:26px;border-radius:6px;cursor:pointer;transition:.15s}
+.input-row .step:hover{background:#262936;color:#fff}
+.input-row .suf{color:#7a7d8a;font-size:11px;padding:0 6px}
+.btn{padding:9px;border-radius:9px;border:1px solid #262936;background:#161922;color:#e9eaf0;font-size:13px;font-weight:600;cursor:pointer;transition:.15s;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px}
+.btn:hover:not(:disabled){background:#1f2330;border-color:#363a47}
+.btn:active:not(:disabled){transform:scale(.97)}
+.btn.primary{background:linear-gradient(180deg,#5ac8fa,#42b8e8);color:#001220;border-color:transparent}
+.btn.primary:hover:not(:disabled){box-shadow:0 4px 14px rgba(90,200,250,.35);transform:translateY(-1px)}
+.btn.go{background:linear-gradient(180deg,#34c759,#28a745);color:#001b08;border-color:transparent}
+.btn.go:hover:not(:disabled){box-shadow:0 4px 14px rgba(52,199,89,.35);transform:translateY(-1px)}
+.btn.danger{background:linear-gradient(180deg,#ff453a,#d63a30);color:#fff;border-color:transparent}
+.btn.danger:hover:not(:disabled){box-shadow:0 4px 14px rgba(255,69,58,.35);transform:translateY(-1px)}
+.btn.ghost{background:transparent;border-color:#262936;color:#bdbfc9}
+.btn.ghost:hover:not(:disabled){background:#161922;color:#fff}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn.full{width:100%}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.cta-row{display:flex;gap:6px}
+.cta-row .btn{flex:1}
+.cta-row .btn.disarm{flex:0 0 auto;padding:9px 12px}
+#toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%) translateY(40px);background:#1a1d28;border:1px solid #363a47;color:#e9eaf0;font-size:11px;padding:6px 12px;border-radius:8px;pointer-events:none;opacity:0;transition:.25s;white-space:nowrap;max-width:90%}
+#toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+#toast.err{border-color:#ff453a;color:#ff8b85}
+#toast.ok{border-color:#34c759;color:#7be38f}
+</style></head><body>
+<div class="wrap">
+  <div class="row" style="justify-content:space-between;align-items:center">
+    <span class="phase off" id="ph">Idle</span>
+    <span class="pill"><span class="dot" id="obs"></span><span id="obs-lbl">OBS</span></span>
+  </div>
+  <div class="cur"><span id="v">0.0</span><span class="u">s</span></div>
+  <div class="bar"><div class="fill" id="bar"></div></div>
+  <div class="tip" id="sub">No source.</div>
+  <div class="input-row" id="d-row">
+    <button class="step" onclick="bump(-5)" title="-5s">−</button>
+    <input id="d" type="number" min="0" max="600" value="0" inputmode="numeric">
+    <span class="suf">s</span>
+    <button class="step" onclick="bump(5)" title="+5s">+</button>
+  </div>
+  <div class="cta-row">
+    <button class="btn full" id="main" onclick="mainClick()" disabled>—</button>
+    <button class="btn ghost disarm" id="cancel" onclick="disarmClick()" hidden title="Cancel arming">✕</button>
+  </div>
+</div>
+<div id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);
+const PHASE_TO_STATE={idle:'off',preparing:'arming',ready:'armed',active:'active'};
+let s=null, lastVal='0.0', pending=null;
+async function fetchJ(u,o){try{const r=await fetch(u,o);const j=r.headers.get('content-type')?.includes('json')?await r.json():null;return {ok:r.ok,status:r.status,j}}catch(_){return {ok:false,status:0,j:null}}}
+function bump(n){const i=$('d');i.value=Math.max(0,Math.min(600,(+i.value||0)+n));renderCta()}
+$('d').addEventListener('input',renderCta);
+function toast(msg,kind){const t=$('toast');t.className='show '+(kind||'');t.textContent=msg;clearTimeout(t._h);t._h=setTimeout(()=>t.className='',1800)}
+function setPending(p){pending=p;setTimeout(()=>pending=null,1500);tick()}
+async function arm(ms){
+  setPending('arming');
+  const r=await fetchJ('/arm',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'ms='+ms});
+  if(!r.ok){toast(r.j?.error||'Failed to arm','err');pending=null}
+  else toast(`Arming ${(ms/1000).toFixed(0)}s`,'ok');
+  tick();
+}
+async function activate(){
+  setPending('active');
+  const r=await fetchJ('/activate',{method:'POST'});
+  if(!r.ok){toast(r.j?.error||'Cannot activate yet','err');pending=null}
+  else toast('Delay active','ok');
+  tick();
+}
+async function stop(){
+  setPending('off');
+  await fetchJ('/stop',{method:'POST'});
+  toast('Back to live','ok');
+  tick();
+}
+async function disarm(){
+  setPending('off');
+  await fetchJ('/disarm',{method:'POST'});
+  toast('Disarmed','ok');
+  tick();
+}
+function mainClick(){
+  const m=$('main'); if(m._busy||m.disabled)return;
+  m._busy=true;setTimeout(()=>m._busy=false,300);
+  if(!s)return;
+  const ds=PHASE_TO_STATE[s.phase]||'off';
+  if(ds==='active')return stop();
+  if(ds==='armed') return activate();
+  if(ds==='arming')return disarm();   // double-click safety: arming primary disarms too
+  const ms=(+$('d').value||0)*1000;
+  if(ms>0)arm(ms); else toast('Enter a delay','err');
+}
+function disarmClick(){
+  const b=$('cancel'); if(b._busy)return;
+  b._busy=true;setTimeout(()=>b._busy=false,300);
+  disarm();
+}
+function fmt(ms){if(ms<100)return '0.0';const x=Math.round(ms/100)/10;return x<10?x.toFixed(1):Math.round(x).toString()}
+function renderCta(){
+  if(!s){return}
+  const m=$('main'),cancel=$('cancel');
+  const ds=pending||PHASE_TO_STATE[s.phase]||'off';
+  const ingest=s.ingest_alive;
+  m.className='btn full';m.disabled=false;cancel.hidden=true;
+  $('d-row').classList.toggle('disabled',ds==='arming'||ds==='armed'||ds==='active');
+  if(ds==='active'){
+    m.textContent='Cut delay';m.classList.add('danger');
+  } else if(ds==='armed'){
+    m.innerHTML='<span>▶</span> Activate';m.classList.add('go');
+    cancel.hidden=false;
+  } else if(ds==='arming'){
+    const tgt=s.armed_delay_ms||1;
+    const pct=Math.min(99,Math.round((s.buffer_fill_ms/tgt)*100));
+    m.innerHTML=`<span class="spin"></span> Buffering ${pct}%`;m.disabled=true;
+    cancel.hidden=false;
+  } else {
+    const ms=(+$('d').value||0)*1000;
+    if(!ingest){m.textContent='Waiting for OBS…';m.disabled=true}
+    else if(ms<=0){m.textContent='Set delay above';m.disabled=true}
+    else {m.innerHTML=`<span>⏱</span> Arm ${(ms/1000).toFixed(0)}s`;m.classList.add('primary')}
+  }
+}
+function applyState(j){
+  s=j;
+  const ds=PHASE_TO_STATE[s.phase]||'off';
+  // Phase pill — distinguishes idle vs passthrough vs arming/armed/active
+  const phMap={off:s.ingest_alive?['live','Live']:['off','Idle'],arming:['arming','Buffering'],armed:['armed','Armed'],active:['active','Active']};
+  const [cls,txt]=phMap[ds];
+  $('ph').className='phase '+cls;
+  $('ph').textContent=txt;
+  // OBS pill — alive vs not
+  $('obs').className='dot '+(s.ingest_alive?'on':'bad');
+  $('obs-lbl').textContent=s.ingest_alive?'OBS':'no signal';
+  // Current delay
+  const nv=fmt(s.current_delay_ms);
+  if(nv!==lastVal){$('v').textContent=nv;lastVal=nv;
+    $('v').parentElement.classList.add('changing');setTimeout(()=>$('v').parentElement.classList.remove('changing'),350);
+  }
+  // Bar
+  const target=s.armed_delay_ms||s.buffer_target_ms||0;
+  const fill=$('bar');
+  fill.classList.remove('ready','active');
+  if(ds==='active'){fill.style.width='100%';fill.classList.add('active')}
+  else if(target>0){
+    const pct=Math.min(100,(Math.min(s.buffer_fill_ms,target)/target)*100);
+    fill.style.width=pct+'%';
+    if(pct>=99)fill.classList.add('ready');
+  } else {fill.style.width='0%'}
+  // Sub-tip
+  $('sub').textContent =
+    !s.ingest_alive ? 'Point OBS to rtmp://…/live · stream key: live' :
+    ds==='active'   ? `Live ${(s.current_delay_ms/1000).toFixed(1)}s behind real time.` :
+    ds==='armed'    ? 'Buffer full. Hit Activate to go live with delay.' :
+    ds==='arming'   ? 'Filling buffer… you can cancel any time.' :
+                      'Passthrough — no delay applied.';
+  renderCta();
+}
+async function tick(){
+  const r=await fetchJ('/state');
+  if(!r.ok||!r.j){$('obs').className='dot bad';$('obs-lbl').textContent='offline';return}
+  applyState(r.j);
+}
+// Prefer Server-Sent Events for state updates — one long-lived connection
+// the server writes to only when something changes. Falls back to 500 ms
+// polling if EventSource is missing or the stream drops.
+let _pollTimer=null;
+function startPolling(){
+  if(_pollTimer)return;
+  tick();
+  _pollTimer=setInterval(tick,500);
+}
+function stopPolling(){
+  if(_pollTimer){clearInterval(_pollTimer);_pollTimer=null}
+}
+let _es=null;
+function startSSE(){
+  if(!window.EventSource){startPolling();return}
+  try{
+    _es=new EventSource('/events');
+    _es.onmessage=ev=>{try{applyState(JSON.parse(ev.data));stopPolling()}catch(_){}};
+    _es.onerror=()=>{try{_es.close()}catch(_){}_es=null;startPolling()};
+  }catch(_){startPolling()}
+}
+startSSE();
+window.addEventListener('focus',()=>{ if(!_es)tick(); });
+</script></body></html>

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 100" width="460" height="100" role="img" aria-label="InstantClone, free open-source RTMP delay proxy">
+  <defs>
+    <linearGradient id="markFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"  stop-color="#5ac8fa"/>
+      <stop offset="100%" stop-color="#42b8e8"/>
+    </linearGradient>
+    <!-- Animated white-to-cyan sweep on the wordmark. The gradient stops
+         translate left-to-right so a soft highlight band glides across
+         the type every few seconds. -->
+    <linearGradient id="typeFill" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#bce6f5">
+        <animate attributeName="stop-color" values="#bce6f5;#ffffff;#bce6f5" dur="6s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="50%" stop-color="#ffffff">
+        <animate attributeName="stop-color" values="#ffffff;#bce6f5;#ffffff" dur="6s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="100%" stop-color="#bce6f5">
+        <animate attributeName="stop-color" values="#bce6f5;#ffffff;#bce6f5" dur="6s" repeatCount="indefinite"/>
+      </stop>
+    </linearGradient>
+    <!-- Cyan-tinted shadow under the mark — "lit from inside" feel. -->
+    <filter id="markGlowSoft" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#5ac8fa" flood-opacity="0.55"/>
+    </filter>
+    <!-- Subtle top-edge highlight on the mark, like glass catching light. -->
+    <linearGradient id="markShine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Mark: cyan rounded square + white pause bars (matches tray icon).
+       Bars subtly stretch ±2 px vertically on a 3 s loop — feels like
+       the icon is breathing, ties into the "delay buffer" metaphor. -->
+  <g transform="translate(8, 16)" filter="url(#markGlowSoft)">
+    <rect width="68" height="68" rx="15" fill="url(#markFill)"/>
+    <rect width="68" height="34" rx="15" fill="url(#markShine)"/>
+    <rect x="22" y="20" width="8" height="28" rx="1.5" fill="#ffffff">
+      <animate attributeName="y"      values="20;19;20" dur="3s" repeatCount="indefinite"/>
+      <animate attributeName="height" values="28;30;28" dur="3s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="38" y="20" width="8" height="28" rx="1.5" fill="#ffffff">
+      <animate attributeName="y"      values="20;19;20" dur="3s" begin="0.4s" repeatCount="indefinite"/>
+      <animate attributeName="height" values="28;30;28" dur="3s" begin="0.4s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="96" y="56"
+        font-family="-apple-system, Segoe UI, Inter, sans-serif"
+        font-size="38" font-weight="800" letter-spacing="-1.8"
+        fill="url(#typeFill)">InstantClone</text>
+
+  <!-- Sub-label / spec strip -->
+  <text x="98" y="78"
+        font-family="-apple-system, Segoe UI, Inter, sans-serif"
+        font-size="10.5" font-weight="600" letter-spacing="3"
+        fill="#7a7d8a">FREE  ·  OPEN-SOURCE  ·  RTMP  DELAY  PROXY</text>
+</svg>

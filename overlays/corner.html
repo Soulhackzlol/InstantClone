@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Delay (corner)</title>
+<style>
+body{margin:0;background:transparent;color:#fff;font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+.box{position:fixed;right:32px;bottom:32px;background:rgba(10,12,16,.85);
+  padding:18px 26px;border-radius:16px;border:2px solid #6cf;min-width:220px;text-align:right}
+.l{font-size:13px;text-transform:uppercase;letter-spacing:2px;color:#6cf}
+.v{font-size:48px;font-weight:800;letter-spacing:-2px;font-variant-numeric:tabular-nums;margin-top:4px}
+.u{font-size:22px;color:rgba(255,255,255,.6);font-weight:400;margin-left:4px}
+.row{display:flex;gap:14px;justify-content:flex-end;margin-top:10px;font-size:13px;color:rgba(255,255,255,.75)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#3c3;
+  box-shadow:0 0 8px #3c3;margin-right:6px;vertical-align:middle}
+.dot.bad{background:#f55;box-shadow:0 0 8px #f55}
+</style></head><body>
+<div class="box">
+  <div class="l">Stream Delay</div>
+  <div class="v"><span id="v">0</span><span class="u">s</span></div>
+  <div class="row"><span><span class="dot" id="i"></span>OBS</span>
+    <span><span class="dot" id="e"></span>LIVE</span></div>
+</div>
+<script>
+async function t(){try{const s=await(await fetch('/state')).json();
+v.textContent=(s.current_delay_ms/1000).toFixed(1);
+i.className='dot '+(s.ingest_alive?'':'bad');
+e.className='dot '+(s.egress_alive?'':'bad');}catch(_){}}
+t();setInterval(t,500);
+</script></body></html>

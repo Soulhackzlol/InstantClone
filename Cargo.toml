@@ -1,0 +1,42 @@
+[package]
+name = "instantclone"
+version = "0.1.0"
+edition = "2021"
+
+# Squeeze every byte out of the release binary.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[dependencies]
+tokio = { version = "1", default-features = false, features = [
+    "rt", "net", "io-util", "sync", "time", "macros", "fs", "signal", "process",
+] }
+bytes = "1"
+
+# Windows-only: system-tray icon + opening the default browser via a real
+# shell call. Same `windows-sys` crate that tokio's `mio` already pulls in
+# transitively, so adding it explicitly costs ~0 binary bytes — we just
+# get to use the typed APIs instead of hand-rolling FFI blocks.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+] }
+
+# Build-time only: minify + gzip the dashboard HTML so the binary embeds
+# only the compressed bytes. Does NOT add to the release binary.
+[build-dependencies]
+flate2 = "1"

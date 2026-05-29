@@ -1,0 +1,27 @@
+# Rust build output
+/target/
+**/*.rs.bk
+*.pdb
+
+# Runtime state written by the binary at the project root when you
+# `cargo run` locally. None of this should be committed:
+#  - instantclone.buf:         the disk-backed ring buffer (can be GBs)
+#  - instantclone.config.json: per-user settings (may contain stream keys)
+/instantclone.buf
+/instantclone.config.json
+
+# Editor / IDE
+/.vscode/
+/.idea/
+*.swp
+*.swo
+*.swn
+*~
+
+# OS junk
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Misc
+*.log

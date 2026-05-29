@@ -1,0 +1,2133 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>InstantClone — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+/* ── Design tokens (ported from instantclone design system, OKLCH-based) ─────── */
+:root{
+  --bg:#07080a; --bg-2:#0c0e12; --surface:#11141a; --surface-2:#161a21; --surface-3:#1c2129;
+  --line:rgba(255,255,255,0.06); --line-2:rgba(255,255,255,0.12);
+  --fg:oklch(0.97 0.005 230); --fg-2:oklch(0.78 0.01 230); --fg-3:oklch(0.58 0.015 230); --fg-4:oklch(0.42 0.018 230);
+  --accent:oklch(0.82 0.13 220); --accent-2:oklch(0.55 0.16 220); --accent-ink:#051018;
+  --accent-glow:oklch(0.82 0.13 220 / 0.18);
+  --live:oklch(0.78 0.18 145); --warn:oklch(0.78 0.16 55); --warn-2:oklch(0.58 0.18 55);
+  --danger:oklch(0.70 0.21 25); --idle:oklch(0.58 0.015 230);
+  --radius:12px; --radius-sm:8px; --radius-lg:16px;
+  --shadow-1:0 1px 0 rgba(255,255,255,0.04) inset,0 1px 2px rgba(0,0,0,0.4);
+  --shadow-2:0 1px 0 rgba(255,255,255,0.05) inset,0 8px 24px rgba(0,0,0,0.45);
+  --ease-out:cubic-bezier(.2,.7,.2,1); --ease-spring:cubic-bezier(.32,1.4,.5,1);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
+  font-family:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif;font-size:14px;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+.mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+button{font-family:inherit}
+input,select,textarea{font-family:inherit;color:inherit}
+:focus-visible{outline:2px solid color-mix(in oklch,var(--accent) 60%,transparent);outline-offset:2px}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:8px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.14);border:2px solid transparent;background-clip:content-box}
+
+.ic-app{min-height:100vh;background:
+  radial-gradient(1200px 600px at 50% -10%,color-mix(in oklch,var(--accent) 8%,transparent),transparent 60%),
+  radial-gradient(900px 500px at 90% 110%,color-mix(in oklch,var(--accent) 5%,transparent),transparent 70%),
+  var(--bg)}
+.ic-shell{max-width:1280px;margin:0 auto;padding:18px 24px 32px;display:flex;flex-direction:column;gap:14px}
+
+/* ── Header ───────────────────────────────────── */
+.ic-header{display:flex;align-items:center;gap:16px;padding:12px 18px;
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));
+  border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-1)}
+.ic-brand{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.ic-brand-mark{font-size:16px;font-weight:700;letter-spacing:-.01em;
+  background:linear-gradient(180deg,#fff,color-mix(in oklch,var(--accent) 30%,#fff));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.ic-brand-sub{color:var(--fg-3);font-size:12px}
+.ic-brand-dot{display:inline-block;width:5px;height:5px;border-radius:999px;background:var(--fg-4);margin:0 6px 2px}
+.ic-brand-credit{color:var(--fg-4);font-size:11px;margin-left:4px}
+.ic-brand-credit a{color:var(--fg-3);text-decoration:none;border-bottom:1px dotted var(--line-2);transition:.15s}
+.ic-brand-credit a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+.ic-spacer{flex:1}
+.ic-header-right{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+.ic-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border-radius:999px;
+  background:var(--surface-3);border:1px solid var(--line);font-size:12px;color:var(--fg-2);
+  transition:.2s var(--ease-out)}
+.ic-pill:hover{border-color:var(--line-2)}
+.ic-pill .dot{width:7px;height:7px;border-radius:999px;background:var(--idle)}
+.ic-pill.ok .dot{background:var(--live);box-shadow:0 0 0 4px color-mix(in oklch,var(--live) 15%,transparent)}
+.ic-pill.ok{color:var(--fg)}
+.ic-pill.warn{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 35%,transparent);
+  background:color-mix(in oklch,var(--warn) 8%,var(--surface-3))}
+.ic-pill.warn .dot{background:var(--warn)}
+.ic-pill.bad{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 35%,transparent);
+  background:color-mix(in oklch,var(--danger) 8%,var(--surface-3))}
+.ic-pill.bad .dot{background:var(--danger)}
+.ic-pill.live .dot{background:var(--live);animation:pulse-ring 1.8s var(--ease-out) infinite}
+@keyframes pulse-ring{
+  0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 60%,transparent)}
+  70%{box-shadow:0 0 0 8px color-mix(in oklch,var(--live) 0%,transparent)}
+  100%{box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 0%,transparent)}
+}
+.ic-bitrate{display:inline-flex;align-items:baseline;gap:6px;padding:6px 11px;border-radius:999px;
+  background:var(--surface-3);border:1px solid var(--line);
+  font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--fg);font-variant-numeric:tabular-nums}
+.ic-bitrate .unit{color:var(--fg-3);font-size:11px}
+
+/* ── Card / labels / buttons / inputs (atoms) ───────────── */
+.ic-card{background:linear-gradient(180deg,var(--surface-2),var(--surface));
+  border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-1)}
+.ic-label{font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3)}
+
+.ic-btn{appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:10px 16px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface-3);
+  color:var(--fg);font-size:13px;font-weight:500;cursor:pointer;
+  transition:transform .15s var(--ease-out),background .15s var(--ease-out),border-color .15s var(--ease-out),
+             box-shadow .15s var(--ease-out)}
+.ic-btn:hover{background:color-mix(in oklch,#fff 4%,var(--surface-3));border-color:rgba(255,255,255,.16)}
+.ic-btn:active{transform:translateY(1px)}
+.ic-btn-primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;
+  box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 6px 24px var(--accent-glow);
+  font-weight:600}
+.ic-btn-primary:hover{background:color-mix(in oklch,#fff 6%,var(--accent))}
+.ic-btn-primary:disabled,.ic-btn-disabled{opacity:.55;cursor:not-allowed;box-shadow:none;
+  background:var(--surface-3) !important;color:var(--fg-4) !important;border-color:var(--line) !important}
+.ic-btn-danger{background:color-mix(in oklch,var(--danger) 18%,var(--surface-3));color:var(--danger);
+  border-color:color-mix(in oklch,var(--danger) 35%,transparent);font-weight:600}
+.ic-btn-danger:hover{background:color-mix(in oklch,var(--danger) 25%,var(--surface-3))}
+.ic-btn-ghost{background:transparent;border-color:var(--line);color:var(--fg-2)}
+.ic-btn-ghost:hover{background:var(--surface-3);color:var(--fg)}
+.ic-btn-tiny{appearance:none;background:transparent;border:0;width:28px;height:28px;border-radius:6px;
+  display:inline-flex;align-items:center;justify-content:center;color:var(--fg-3);cursor:pointer;
+  transition:all .15s var(--ease-out);flex:0 0 auto}
+.ic-btn-tiny:hover{background:var(--surface-3);color:var(--fg)}
+.ic-btn.big{padding:12px 22px;font-size:14px}
+
+.ic-input{width:100%;padding:10px 12px;border-radius:10px;background:var(--bg-2);
+  border:1px solid var(--line);color:var(--fg);font-size:13px;outline:none;
+  transition:border-color .15s var(--ease-out),background .15s var(--ease-out)}
+.ic-input:hover{border-color:var(--line-2)}
+.ic-input:focus{border-color:color-mix(in oklch,var(--accent) 70%,transparent);background:var(--surface)}
+.ic-input::placeholder{color:var(--fg-4)}
+.ic-input.field-error{border-color:var(--danger);background:color-mix(in oklch,var(--danger) 5%,var(--bg-2));
+  animation:fieldShake .35s cubic-bezier(.36,.07,.19,.97)}
+@keyframes fieldShake{10%,90%{transform:translateX(-1px)} 20%,80%{transform:translateX(2px)} 30%,50%,70%{transform:translateX(-3px)} 40%,60%{transform:translateX(3px)}}
+
+.ic-switch{appearance:none;border:0;width:32px;height:18px;background:var(--surface-3);
+  border:1px solid var(--line);border-radius:999px;position:relative;cursor:pointer;
+  transition:background .2s var(--ease-out),border-color .2s var(--ease-out);flex:0 0 auto}
+.ic-switch>span{position:absolute;top:1px;left:1px;width:14px;height:14px;border-radius:999px;
+  background:var(--fg-3);transition:transform .2s var(--ease-spring),background .2s var(--ease-out);
+  display:block}
+.ic-switch.on{background:color-mix(in oklch,var(--accent) 75%,transparent);border-color:transparent}
+.ic-switch.on>span{transform:translateX(14px);background:#fff}
+
+.ic-check{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;
+  border-radius:5px;border:1px solid var(--line-2);background:var(--bg-2);
+  color:var(--accent-ink);transition:all .15s var(--ease-out);cursor:pointer}
+.ic-check.on{background:var(--accent);border-color:transparent}
+
+/* Toast */
+.ic-toast-rail{position:fixed;right:24px;bottom:24px;z-index:200;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.ic-toast{background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;
+  padding:10px 14px 10px 12px;display:flex;align-items:center;gap:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.4);pointer-events:auto;
+  animation:toast-in .25s var(--ease-spring);font-size:13px}
+.ic-toast-icon{width:18px;height:18px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
+  background:color-mix(in oklch,var(--accent) 22%,transparent);color:var(--accent);font-size:11px;font-weight:700}
+.ic-toast.err .ic-toast-icon{background:color-mix(in oklch,var(--danger) 22%,transparent);color:var(--danger)}
+.ic-toast.ok .ic-toast-icon{background:color-mix(in oklch,var(--live) 22%,transparent);color:var(--live)}
+@keyframes toast-in{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
+.ic-toast.leaving{opacity:0;transform:translateX(12px);transition:.25s var(--ease-out)}
+
+/* ── Wizard (when !configured) ───────────────── */
+.wizard-card{max-width:520px;margin:60px auto;padding:32px;display:flex;flex-direction:column;gap:14px}
+.wizard-card h2{font-size:22px;margin:0;letter-spacing:-.01em}
+.wizard-card .lead{color:var(--fg-3);font-size:13px;margin:0 0 8px}
+.wizard-card label{display:block;margin-top:8px;font-size:11px;color:var(--fg-3);
+  text-transform:uppercase;letter-spacing:.12em;font-weight:600}
+.wizard-row{display:flex;gap:8px;margin-top:8px}
+.wizard-row .ic-btn{flex:1}
+#w-custom-wrap{margin-top:8px}
+.w-hint{font-size:11.5px;color:var(--fg-4);margin-top:4px}
+#w-msg{margin-top:8px;min-height:1.2em;font-size:12px}
+#w-msg .err{color:var(--danger)}
+#w-msg .ok{color:var(--live)}
+
+/* ── Hero ────────────────────────────────────── */
+.hero-card{padding:0;overflow:hidden}
+.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:stretch;position:relative}
+@media (max-width:880px){.hero{grid-template-columns:1fr}}
+
+.hero-readout{display:flex;flex-direction:column;gap:14px;padding:28px 32px;min-width:0;
+  border-right:1px solid var(--line);position:relative;overflow:hidden}
+@media (max-width:880px){.hero-readout{border-right:0;border-bottom:1px solid var(--line)}}
+.hero-readout::before,.hero-readout::after{content:'';position:absolute;pointer-events:none;
+  border-radius:50%;filter:blur(60px);opacity:.22;z-index:0;
+  transition:background .6s var(--ease-out),opacity .6s var(--ease-out)}
+.hero-readout::before{width:360px;height:360px;left:-80px;top:-80px;
+  background:radial-gradient(circle at 30% 30%,var(--aurora-a,var(--accent)),transparent 70%);
+  animation:aurora-drift-a 14s ease-in-out infinite alternate}
+.hero-readout::after{width:320px;height:320px;right:-60px;bottom:-100px;
+  background:radial-gradient(circle at 70% 70%,var(--aurora-b,var(--accent)),transparent 70%);
+  animation:aurora-drift-b 18s ease-in-out infinite alternate}
+.hero-readout[data-state="off"]   {--aurora-a:oklch(0.55 0.04 230);--aurora-b:oklch(0.55 0.04 250)}
+.hero-readout[data-state="arming"]{--aurora-a:var(--warn);--aurora-b:oklch(0.65 0.18 35)}
+.hero-readout[data-state="armed"] {--aurora-a:var(--accent);--aurora-b:oklch(0.78 0.13 200)}
+.hero-readout[data-state="active"]{--aurora-a:var(--live);--aurora-b:oklch(0.75 0.16 165)}
+.hero-readout[data-state="active"]::before,.hero-readout[data-state="active"]::after{opacity:.32}
+.hero-readout[data-state="arming"]::before{animation-duration:4s;opacity:.30}
+.hero-readout[data-state="arming"]::after{animation-duration:5s;opacity:.30}
+@keyframes aurora-drift-a{0%{transform:translate(0,0) scale(1)} 100%{transform:translate(80px,40px) scale(1.15)}}
+@keyframes aurora-drift-b{0%{transform:translate(0,0) scale(1.1)} 100%{transform:translate(-60px,-40px) scale(.9)}}
+.hero-readout>*{position:relative;z-index:1}
+
+.hero-control{display:flex;flex-direction:column;gap:14px;padding:28px 32px;min-width:0;
+  justify-content:space-between;
+  background:radial-gradient(400px 200px at 80% 20%,color-mix(in oklch,var(--accent) 4%,transparent),transparent 70%)}
+.hero-status-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+.state-pill{display:inline-flex;align-items:center;gap:8px;padding:5px 11px;border-radius:999px;
+  background:color-mix(in oklch,var(--sc,var(--idle)) 8%,var(--surface-3));
+  border:1px solid color-mix(in oklch,var(--sc,var(--idle)) 30%,transparent);
+  color:var(--sc,var(--idle));align-self:flex-start}
+.state-pill .state-dot{width:7px;height:7px;border-radius:999px;background:var(--sc,var(--idle))}
+.state-pill .state-dot.pulse{animation:hpulse 1.6s cubic-bezier(.2,.7,.2,1) infinite}
+@keyframes hpulse{
+  0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--sc) 60%,transparent)}
+  70%{box-shadow:0 0 0 8px color-mix(in oklch,var(--sc) 0%,transparent)}
+  100%{box-shadow:0 0 0 0 color-mix(in oklch,var(--sc) 0%,transparent)}
+}
+
+.hero-delay-row{display:flex;align-items:baseline;gap:4px;line-height:.9;margin-top:-4px}
+.hero-delay-num{font-size:116px;font-weight:500;letter-spacing:-.045em;color:var(--fg);
+  font-variant-numeric:tabular-nums;transition:color .25s var(--ease-out)}
+.hero-delay-num.d-off   {color:var(--fg-3)}
+.hero-delay-num.d-arming{color:var(--warn)}
+.hero-delay-num.d-armed {color:var(--accent)}
+.hero-delay-num.d-active{color:var(--live)}
+.hero-delay-unit{font-size:32px;color:var(--fg-3);font-weight:400}
+.hero-delay-of{font-size:22px;color:var(--fg-3);margin-left:6px}
+.hero-delay-sub{color:var(--fg-3);font-size:13px;min-height:1.4em}
+.arm-bar{height:4px;width:100%;background:var(--surface-3);border-radius:999px;overflow:hidden;
+  margin-top:-4px;position:relative}
+.arm-bar-fill{height:100%;background:linear-gradient(90deg,color-mix(in oklch,var(--warn) 60%,transparent),var(--warn));
+  border-radius:999px;box-shadow:0 0 12px color-mix(in oklch,var(--warn) 50%,transparent);
+  transition:width .3s var(--ease-out)}
+.arm-bar::after{content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,.15) 50%,transparent 100%);
+  animation:arm-shimmer 1.6s linear infinite;pointer-events:none}
+@keyframes arm-shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+
+.cp-head{display:flex;align-items:baseline;justify-content:space-between}
+.cp-cap{color:var(--fg-4);font-size:11px}
+.cp-input-row{display:flex;align-items:center;gap:6px;background:var(--bg-2);
+  border:1px solid var(--line);border-radius:10px;padding:4px}
+.cp-input-row:focus-within{border-color:color-mix(in oklch,var(--accent) 60%,transparent);background:var(--bg)}
+.cp-step{appearance:none;background:var(--surface-3);border:0;width:36px;height:36px;border-radius:7px;
+  color:var(--fg-2);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+  transition:all .15s var(--ease-out);flex:0 0 auto;font-size:18px;line-height:1}
+.cp-step:hover:not(:disabled){background:color-mix(in oklch,var(--accent) 18%,var(--surface-3));color:var(--fg)}
+.cp-step:active:not(:disabled){transform:scale(.94)}
+.cp-step:disabled{opacity:.4;cursor:not-allowed}
+.cp-input{flex:1;appearance:none;-moz-appearance:textfield;background:transparent;border:0;outline:0;
+  color:var(--fg);font-size:22px;font-weight:500;text-align:center;padding:0;
+  font-variant-numeric:tabular-nums;letter-spacing:-.01em;min-width:0;
+  font-family:'JetBrains Mono',monospace}
+.cp-input::-webkit-outer-spin-button,.cp-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.cp-input::placeholder{color:var(--fg-4)}
+.cp-input:disabled{color:var(--fg-3)}
+.cp-unit{color:var(--fg-3);font-size:10.5px;font-weight:600;letter-spacing:.1em;padding:0 10px}
+.cp-hint{font-size:11.5px;color:var(--fg-3);padding:4px 2px}
+.cp-hint b{color:var(--fg-2)}
+.cp-profiles{display:flex;flex-wrap:wrap;gap:6px}
+.cp-profile-chip{appearance:none;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;
+  border-radius:999px;background:var(--bg-2);border:1px solid var(--line);color:var(--fg-2);
+  font-size:12px;font-weight:500;cursor:pointer;transition:all .15s var(--ease-out)}
+.cp-profile-chip:hover:not(:disabled){background:var(--surface-3);border-color:var(--line-2);color:var(--fg)}
+.cp-profile-chip.on{background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--accent)}
+.cp-profile-chip:disabled{opacity:.4;cursor:not-allowed}
+.cp-cta{width:100%;padding:13px 18px;font-size:14px;border-radius:10px}
+.cp-cta-pulse{animation:cta-pulse 1.8s var(--ease-out) infinite}
+@keyframes cta-pulse{
+  0%{box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 0 0 0 var(--accent-glow)}
+  50%{box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 0 0 10px transparent}
+  100%{box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 0 0 0 transparent}
+}
+
+/* ── Tabs ────────────────────────────────────── */
+.tabs{display:flex;align-items:center;padding:4px;background:var(--surface);border:1px solid var(--line);
+  border-radius:10px;gap:2px;position:relative;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:7px;
+  padding:7px 14px;border-radius:7px;color:var(--fg-3);font-size:12.5px;font-weight:500;cursor:pointer;
+  position:relative;z-index:2;transition:color .2s var(--ease-out);white-space:nowrap;
+  flex:1;justify-content:center}
+@media (max-width:720px){.tab{flex:0 0 auto}}
+.tab:hover{color:var(--fg)}
+.tab.on{color:var(--fg)}
+.tab svg{opacity:.7;width:13px;height:13px}
+.tab.on svg{opacity:1}
+.tab-ind{position:absolute;top:4px;bottom:4px;background:var(--surface-3);border-radius:7px;
+  transition:left .28s var(--ease-spring),width .28s var(--ease-spring);z-index:1;border:1px solid var(--line-2)}
+
+/* ── Pane ────────────────────────────────────── */
+.pane-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:22px;min-height:360px;max-height:70vh;overflow-y:auto;overflow-x:hidden}
+.tab-pane{animation:paneIn .25s var(--ease-out) both;display:flex;flex-direction:column;gap:18px}
+@keyframes paneIn{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
+.tab-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.tab-title{font-size:15px;font-weight:600;color:var(--fg);letter-spacing:-.01em}
+.tab-sub{color:var(--fg-3);font-size:12.5px;margin-top:3px;max-width:60ch}
+
+/* ── Destinations ────────────────────────────── */
+.dest-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
+.dcard{background:var(--bg-2);border:1px solid var(--line);border-radius:12px;padding:16px;
+  display:flex;flex-direction:column;gap:14px;
+  transition:border-color .2s var(--ease-out),transform .2s var(--ease-out);
+  position:relative;overflow:hidden}
+.dcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
+  background:color-mix(in oklch,var(--dc,var(--fg-3)) 60%,transparent);opacity:0;
+  transition:opacity .2s var(--ease-out)}
+.dcard:hover{border-color:var(--line-2)}
+.dcard:hover::before{opacity:.85}
+.dcard.alive::before{opacity:1;box-shadow:0 0 14px var(--dc,var(--accent))}
+.dcard.off{opacity:.65}
+.dcard.platform-twitch   {--dc:#a78bfa}
+.dcard.platform-youtube  {--dc:#fda4af}
+.dcard.platform-kick     {--dc:#86efac}
+.dcard.platform-trovo    {--dc:#67e8f9}
+.dcard.platform-restream {--dc:#5eead4}
+.dcard.platform-custom   {--dc:#fcd34d}
+.dcard-head{display:flex;align-items:center;gap:12px}
+.dcard-icon{width:36px;height:36px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
+  background:color-mix(in oklch,var(--dc,var(--fg-3)) 14%,var(--surface-3));
+  border:1px solid color-mix(in oklch,var(--dc,var(--fg-3)) 35%,transparent);
+  color:var(--dc,var(--fg-3));font-weight:700;font-size:14px;flex:0 0 auto}
+.dcard-name{font-size:14px;font-weight:600;color:var(--fg)}
+.dcard-host{font-size:11px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;
+  font-family:'JetBrains Mono',monospace}
+.dcard-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:500;
+  padding:4px 8px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line);
+  color:var(--fg-3);flex:0 0 auto}
+.dcard-status .d-dot{width:5px;height:5px;border-radius:999px;background:var(--fg-4)}
+.dcard-status.s-ready{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 30%,var(--line));
+  background:color-mix(in oklch,var(--accent) 8%,var(--surface-3))}
+.dcard-status.s-ready .d-dot{background:var(--accent)}
+.dcard-status.s-live{color:var(--live);border-color:color-mix(in oklch,var(--live) 30%,var(--line));
+  background:color-mix(in oklch,var(--live) 8%,var(--surface-3))}
+.dcard-status.s-live .d-dot{background:var(--live);box-shadow:0 0 6px var(--live);
+  animation:hpulse 1.6s infinite;--sc:var(--live)}
+.dcard-graph{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+  position:relative;overflow:hidden}
+.dcard-graph-overlay{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+.dcard-rate-row{display:flex;align-items:baseline;gap:4px}
+.dcard-rate{font-size:22px;font-weight:500;color:var(--fg);letter-spacing:-.02em;
+  font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+.dcard-rate-u{font-size:11px;color:var(--fg-3);font-family:'JetBrains Mono',monospace}
+.dcard-spark{width:100%;height:54px;display:block}
+.dcard-foot{display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid var(--line)}
+.dcard-foot-meta{font-size:11px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
+.dcard-link{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:5px;
+  color:var(--fg-3);font-size:11.5px;cursor:pointer;padding:4px 6px;border-radius:6px;
+  transition:all .15s var(--ease-out)}
+.dcard-link:hover{color:var(--danger);background:color-mix(in oklch,var(--danger) 8%,transparent)}
+.dest-add{appearance:none;background:transparent;border:1px dashed var(--line-2);border-radius:12px;
+  color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  min-height:140px;transition:all .2s var(--ease-out);font-family:inherit}
+.dest-add:hover{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 50%,transparent);
+  background:color-mix(in oklch,var(--accent) 4%,transparent)}
+.dest-add-icon{width:36px;height:36px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
+  background:var(--surface-3);border:1px solid var(--line-2);font-size:22px;line-height:1}
+
+/* Destination edit form (slides in below grid) */
+.dest-form{margin-top:14px;padding:18px;background:linear-gradient(180deg,var(--bg-2),var(--surface));
+  border:1px solid color-mix(in oklch,var(--accent) 40%,var(--line));border-radius:var(--radius);
+  animation:paneIn .25s var(--ease-out) both;display:flex;flex-direction:column;gap:10px}
+.dest-form h4{margin:0 0 4px;font-size:14px;font-weight:600}
+.dest-form label{display:block;margin-top:6px;font-size:11px;color:var(--fg-3);text-transform:uppercase;
+  letter-spacing:.12em;font-weight:600}
+.dest-form .row{display:flex;gap:8px;margin-top:8px;align-items:center}
+.dest-form .row .ic-btn{flex:0 0 auto}
+.dest-form-msg{min-height:1.2em;font-size:12px;margin-top:6px}
+.dest-form-msg .err{color:var(--danger)}
+
+/* ── Stats ───────────────────────────────────── */
+.stats-big{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}
+@media (max-width:880px){.stats-big{grid-template-columns:1fr}}
+.stat-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px}
+.stat-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+.stat-now{font-size:22px;font-weight:500;color:var(--fg);letter-spacing:-.02em;
+  font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+.stat-unit{color:var(--fg-3);font-size:12px;margin-left:4px;font-family:'JetBrains Mono',monospace}
+.stat-spark{width:100%;height:70px;display:block}
+.stats-small{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+@media (max-width:980px){.stats-small{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:540px){.stats-small{grid-template-columns:repeat(2,1fr)}}
+.metric-mini{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+  transition:border-color .15s var(--ease-out)}
+.metric-mini:hover{border-color:var(--line-2)}
+.metric-mini-v{display:flex;align-items:baseline;gap:4px;margin-top:4px}
+.metric-mini-v .mono{font-size:18px;font-weight:500;color:var(--fg);letter-spacing:-.01em;
+  font-variant-numeric:tabular-nums}
+.metric-unit{color:var(--fg-3);font-size:11px;font-family:'JetBrains Mono',monospace}
+
+/* ── OBS tab ─────────────────────────────────── */
+.obs-grid{display:grid;gap:12px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+@media (max-width:880px){.obs-grid{grid-template-columns:1fr}}
+.obs-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px;
+  display:flex;flex-direction:column;gap:6px}
+.obs-section.span-2{grid-column:1/-1}
+.copy-block{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface);
+  border:1px solid var(--line);border-radius:8px;margin-top:10px}
+.copy-block code{flex:1;font-size:12.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:'JetBrains Mono',monospace}
+.obs-recs{display:flex;flex-direction:column;gap:2px;margin-top:8px}
+.rec{display:grid;grid-template-columns:1fr auto 2fr;gap:16px;padding:10px 12px;border-radius:8px;
+  align-items:center;font-size:12.5px;transition:background .15s var(--ease-out)}
+.rec:hover{background:var(--surface)}
+.rec-k{color:var(--fg-2)}
+.rec-v{color:var(--accent);font-weight:500;font-size:13px;font-family:'JetBrains Mono',monospace}
+.rec-why{color:var(--fg-3);font-size:11.5px}
+@media (max-width:720px){.rec{grid-template-columns:1fr auto}.rec-why{grid-column:1/-1}}
+
+/* ── Overlay tab ─────────────────────────────── */
+.overlay-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}
+@media (max-width:880px){.overlay-grid{grid-template-columns:1fr}}
+.overlay-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px;
+  display:flex;flex-direction:column;gap:6px}
+.overlay-stage{margin-top:12px;position:relative;
+  background:repeating-conic-gradient(rgba(255,255,255,0.025) 0% 25%,transparent 0% 50%) 0 0/18px 18px,
+    linear-gradient(135deg,#161a23,#0a0d12);
+  border:1px solid var(--line);border-radius:8px;display:flex;align-items:flex-end;justify-content:flex-start;
+  padding:18px;min-height:160px}
+.overlay-files{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:10px}
+.overlay-file{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  padding:10px;display:flex;flex-direction:column;gap:8px;cursor:pointer;text-align:left;
+  position:relative;transition:all .15s var(--ease-out);color:inherit;font:inherit}
+.overlay-file:hover{border-color:var(--line-2);transform:translateY(-1px)}
+.overlay-file.selected{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
+  background:color-mix(in oklch,var(--accent) 6%,var(--surface));
+  box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 25%,transparent),0 6px 18px var(--accent-glow)}
+.overlay-file-tag{position:absolute;top:8px;right:8px;
+  font-size:9px;font-weight:600;letter-spacing:.1em;
+  padding:2px 6px;border-radius:999px;
+  background:color-mix(in oklch,var(--accent) 18%,transparent);color:var(--accent)}
+.overlay-file{position:relative}
+.overlay-file-name{font-size:13px;font-weight:500;color:var(--fg)}
+.overlay-file-meta{font-size:10.5px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.overlay-tip{display:flex;align-items:center;gap:8px;margin-top:12px;padding:10px 12px;
+  background:color-mix(in oklch,var(--accent) 5%,var(--surface));
+  border:1px solid color-mix(in oklch,var(--accent) 22%,var(--line));border-radius:8px;
+  font-size:12px;color:var(--fg-2)}
+.form-block{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:10px 0;border-bottom:1px solid var(--line)}
+.form-block:last-of-type{border-bottom:0}
+.form-block-l{font-size:12.5px;color:var(--fg-2);font-weight:500}
+.form-block .ic-input{max-width:180px}
+
+/* ── Profiles ────────────────────────────────── */
+.profile-list{display:flex;flex-direction:column;gap:4px}
+.profile-row{display:flex;align-items:center;gap:16px;padding:11px 14px;background:var(--bg-2);
+  border:1px solid var(--line);border-radius:9px;cursor:pointer;text-align:left;appearance:none;
+  color:inherit;font:inherit;transition:all .12s var(--ease-out)}
+.profile-row:hover{border-color:color-mix(in oklch,var(--accent) 40%,var(--line-2))}
+.profile-row.current{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
+  background:color-mix(in oklch,var(--accent) 7%,var(--bg-2));
+  box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 25%,transparent),0 6px 16px var(--accent-glow)}
+.profile-bolt{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;
+  background:var(--surface-3);border:1px solid var(--line);color:var(--fg-3);flex:0 0 auto;font-size:14px}
+.profile-row:hover .profile-bolt{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 40%,transparent)}
+.profile-row.current .profile-bolt{color:var(--accent);
+  border-color:color-mix(in oklch,var(--accent) 50%,transparent);
+  background:color-mix(in oklch,var(--accent) 15%,var(--surface-3))}
+.profile-name{flex:1;font-weight:500;color:var(--fg);font-size:13.5px}
+.profile-secs{color:var(--accent);font-size:13px;font-weight:500;font-family:'JetBrains Mono',monospace}
+.profile-tag{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  padding:3px 7px;border-radius:999px;background:color-mix(in oklch,var(--accent) 18%,transparent);color:var(--accent)}
+.profile-new{background:transparent;border:1px dashed var(--line-2);margin-top:8px;cursor:default;
+  display:flex;gap:10px;padding:11px 14px;border-radius:9px;align-items:center}
+.profile-new .ic-input{flex:1;min-width:0}
+.profile-new .ic-input.mono{max-width:110px;font-family:'JetBrains Mono',monospace}
+
+/* ── System ──────────────────────────────────── */
+.sys-grid{display:flex;flex-direction:column;gap:14px}
+.sys-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px}
+.form-row{display:flex;gap:16px;margin-top:16px;align-items:flex-end;flex-wrap:wrap}
+.form-row.tight{gap:12px;margin-top:10px}
+.form-row>div,.form-row>label{display:flex;flex-direction:column;gap:6px;flex:1;min-width:180px}
+.checkbox-row{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px}
+.checkbox-row label{display:inline-flex;align-items:center;gap:8px;color:var(--fg-2);font-size:13px;cursor:pointer}
+.restart-banner{padding:10px 14px;border-radius:8px;
+  background:color-mix(in oklch,var(--warn) 8%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--warn) 30%,transparent);
+  color:var(--warn);font-size:12.5px;display:flex;align-items:center;gap:8px}
+.restart-banner.hidden{display:none}
+
+/* ── Logs ────────────────────────────────────── */
+.logs-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.logs{background:#050608;border:1px solid var(--line);border-radius:10px;padding:10px 14px;
+  font-family:'JetBrains Mono',monospace;font-size:12px;
+  min-height:420px;max-height:420px;overflow-y:auto;color:var(--fg-2);
+  line-height:1.6;margin:0}
+
+/* Footer */
+.ic-foot{margin-top:4px;display:flex;align-items:center;gap:10px;color:var(--fg-4);font-size:11.5px;
+  flex-wrap:wrap}
+.ic-foot .ic-brand-dot{margin:0 4px 2px}
+
+/* SVG defs (sparkline gradient) */
+.spark-fill{fill:url(#sparkGrad)}
+.spark-line{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+
+/* ── Spotlight tour ─────────────────────────────────────
+   Layout:
+     #tour      = full-screen layer (pointer-events: none so clicks
+                  fall through everywhere except the tooltip)
+     SVG mask   = dark overlay with a hole punched over the target
+     .tour-highlight = a thin accent border around the hole for emphasis
+     .tour-tooltip   = floating card next to the hole, click-to-navigate
+*/
+.tour{position:fixed;inset:0;z-index:300;pointer-events:none;
+  animation:fadeIn .2s var(--ease-out)}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.tour-backdrop-svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:auto}
+.tour-highlight{position:absolute;border-radius:10px;
+  border:2px solid var(--accent);
+  box-shadow:0 0 0 1px rgba(255,255,255,.10) inset,0 0 24px var(--accent-glow);
+  pointer-events:none;
+  transition:left .35s var(--ease-spring),top .35s var(--ease-spring),
+             width .35s var(--ease-spring),height .35s var(--ease-spring),
+             opacity .25s;
+}
+.tour-highlight.hidden{opacity:0}
+
+.tour-tooltip{
+  position:absolute;
+  width:380px;max-width:calc(100vw - 32px);
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));
+  border:1px solid var(--line-2);border-radius:14px;
+  box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 1px var(--accent-glow);
+  pointer-events:auto;
+  display:flex;flex-direction:column;
+  transition:left .35s var(--ease-spring),top .35s var(--ease-spring),
+             transform .25s var(--ease-out),opacity .25s;
+  animation:tipIn .35s var(--ease-spring) both;
+}
+@keyframes tipIn{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
+.tour-arrow{position:absolute;width:14px;height:14px;
+  background:var(--surface-2);
+  border:1px solid var(--line-2);
+  pointer-events:none}
+.tour-tooltip[data-side="bottom"]{margin-top:14px}
+.tour-tooltip[data-side="bottom"] .tour-arrow{top:-8px;left:32px;
+  border-right:0;border-bottom:0;transform:rotate(45deg);
+  border-top-left-radius:3px}
+.tour-tooltip[data-side="top"]{margin-top:-14px}
+.tour-tooltip[data-side="top"] .tour-arrow{bottom:-8px;left:32px;
+  border-left:0;border-top:0;transform:rotate(45deg);
+  border-bottom-right-radius:3px}
+.tour-tooltip[data-side="left"]{margin-left:-14px}
+.tour-tooltip[data-side="left"] .tour-arrow{right:-8px;top:32px;
+  border-left:0;border-bottom:0;transform:rotate(45deg);
+  border-top-right-radius:3px}
+.tour-tooltip[data-side="right"]{margin-left:14px}
+.tour-tooltip[data-side="right"] .tour-arrow{left:-8px;top:32px;
+  border-right:0;border-top:0;transform:rotate(45deg);
+  border-bottom-left-radius:3px}
+.tour-tooltip[data-side="center"]{transform:translate(-50%,-50%)}
+.tour-tooltip[data-side="center"] .tour-arrow{display:none}
+
+.tour-head{display:flex;justify-content:space-between;align-items:flex-start;
+  padding:18px 20px 12px;border-bottom:1px solid var(--line)}
+.tour-step{font-size:10.5px;text-transform:uppercase;letter-spacing:1.4px;
+  color:var(--accent);font-weight:600;margin-bottom:4px}
+.tour-title{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.tour-body{padding:14px 20px 16px;color:var(--fg-2);font-size:13px;line-height:1.55;
+  max-height:40vh;overflow-y:auto}
+.tour-body p{margin:0 0 8px}
+.tour-body p:last-child{margin-bottom:0}
+.tour-body b{color:var(--fg)}
+.tour-body code{background:var(--bg-2);border:1px solid var(--line);
+  padding:1px 6px;border-radius:5px;font-family:'JetBrains Mono',monospace;font-size:12px}
+.tour-body ul{margin:6px 0 8px 16px;padding:0}
+.tour-body li{margin:3px 0}
+.tour-body .tour-tip{display:flex;align-items:flex-start;gap:8px;
+  padding:9px 11px;background:color-mix(in oklch,var(--accent) 5%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--accent) 25%,var(--line));
+  border-radius:8px;font-size:12px;margin-top:8px}
+.tour-body .tour-tip strong{color:var(--accent);margin-right:4px}
+.tour-foot{display:flex;align-items:center;gap:6px;padding:10px 16px;
+  border-top:1px solid var(--line);background:rgba(0,0,0,.15);
+  border-bottom-left-radius:14px;border-bottom-right-radius:14px}
+.tour-foot .ic-btn{padding:7px 12px;font-size:12px}
+.tour-foot .ic-btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* First-run "New here?" pulse around the (?) button. Auto-dismisses
+   on first interaction OR after they've explicitly seen the tour. */
+#hdr-help{transition:transform .15s var(--ease-spring),background .15s,color .15s}
+#hdr-help:hover{background:var(--accent);color:var(--accent-ink);border-color:transparent;transform:scale(1.06)}
+.help-hint{
+  position:absolute;top:calc(100% + 8px);right:0;
+  background:var(--accent);color:var(--accent-ink);
+  padding:6px 11px;border-radius:8px;
+  font-size:11px;font-weight:600;white-space:nowrap;letter-spacing:.2px;
+  box-shadow:0 6px 16px var(--accent-glow);
+  pointer-events:none;
+  animation:helpHintPulse 2s ease-in-out infinite;
+}
+.help-hint::before{
+  content:'';position:absolute;top:-4px;right:14px;
+  width:8px;height:8px;background:var(--accent);
+  transform:rotate(45deg);
+}
+@keyframes helpHintPulse{
+  0%,100%{transform:translateY(0)}
+  50%{transform:translateY(-2px)}
+}
+
+/* utility */
+.muted{color:var(--fg-3);font-size:12.5px}
+.row-end{display:flex;justify-content:flex-end;gap:8px}
+.spacer{flex:1}
+[hidden]{display:none !important}
+</style>
+</head>
+<body>
+<div class="ic-app">
+<svg width="0" height="0" style="position:absolute"><defs>
+  <linearGradient id="sparkGrad" x1="0" x2="0" y1="0" y2="1">
+    <stop offset="0%" stop-color="oklch(0.82 0.13 220)" stop-opacity="0.3"/>
+    <stop offset="100%" stop-color="oklch(0.82 0.13 220)" stop-opacity="0"/>
+  </linearGradient>
+</defs></svg>
+
+<div class="ic-shell">
+
+<!-- ── Header ───────────────────────────────────── -->
+<header class="ic-header" id="hdr-bar" hidden>
+  <div class="ic-brand">
+    <span class="ic-brand-mark">InstantClone</span>
+    <span class="ic-brand-sub">RTMP delay proxy</span>
+    <span class="ic-brand-credit">made by <a href="https://github.com/s1moscs" target="_blank" rel="noopener">s1moscs</a></span>
+  </div>
+  <div class="ic-header-right">
+    <span class="ic-pill" id="hdr-obs"><span class="dot"></span><span>OBS</span><span class="mono" id="hdr-obs-v">—</span></span>
+    <span class="ic-pill" id="hdr-egress"><span class="dot"></span><span>Egress</span><span class="mono" id="hdr-egress-v">—</span></span>
+    <span class="ic-bitrate"><span id="hdr-rate">—</span> <span class="unit">kbps</span></span>
+    <span class="ic-pill" id="hdr-codec" hidden><span class="mono" id="hdr-codec-v">—</span></span>
+    <span class="ic-pill warn" id="hdr-ebroadcast" hidden title="Twitch Enhanced Broadcasting detected — InstantClone forwards only the primary track. Disable simulcast in OBS for a clean single-resolution stream.">⚠ Enhanced Broadcasting</span>
+    <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
+    <button id="hdr-help" class="ic-btn-tiny" title="How does this work? (?)" onclick="openTour(0)" style="width:30px;height:30px;color:var(--fg-3);font-weight:700;font-size:14px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);position:relative">?
+      <span id="hdr-help-hint" class="help-hint" hidden>New here? Quick tour →</span>
+    </button>
+  </div>
+</header>
+
+<!-- ── Wizard (only when !configured) ──────────── -->
+<section class="ic-card wizard-card" id="wizard" hidden>
+  <h2>Welcome to InstantClone</h2>
+  <p class="lead">Two fields and you're live. You can change anything later.</p>
+  <label for="w-platform">Streaming platform</label>
+  <select id="w-platform" class="ic-input"></select>
+  <div id="w-custom-wrap" hidden>
+    <label for="w-custom">Custom RTMP URL (without the stream key)</label>
+    <input id="w-custom" class="ic-input mono" placeholder="rtmp://127.0.0.1:1936/live">
+    <div class="w-hint">Either put the stream key in the field below (recommended) or paste the full URL with the key embedded.</div>
+  </div>
+  <label for="w-key">Stream key <span class="muted">(optional for Custom if URL has key)</span></label>
+  <input id="w-key" type="password" class="ic-input mono" placeholder="paste your stream key" autocomplete="off">
+  <div class="wizard-row">
+    <button class="ic-btn ic-btn-primary" onclick="saveWizard()">Save &amp; Start</button>
+    <button class="ic-btn ic-btn-ghost" onclick="testConn()">Test connection</button>
+  </div>
+  <div id="w-msg"></div>
+</section>
+
+<!-- ── Hero ─────────────────────────────────────── -->
+<section class="ic-card hero-card" id="hero" hidden>
+  <div class="hero">
+    <div class="hero-readout" id="hero-readout" data-state="off">
+      <div class="hero-status-row">
+        <span class="state-pill" id="state-pill" style="--sc:var(--idle)">
+          <span class="state-dot" id="state-dot"></span>
+          <span style="font-weight:600;letter-spacing:.08em;font-size:11px" id="state-label">IDLE</span>
+          <span style="color:var(--fg-3);font-size:11px" id="state-desc">· No source</span>
+        </span>
+      </div>
+      <div class="hero-delay-row">
+        <span class="hero-delay-num mono d-off" id="delay-big">0.0</span>
+        <span class="hero-delay-unit">s</span>
+        <span class="hero-delay-of mono" id="delay-of" hidden></span>
+      </div>
+      <div class="arm-bar" id="arm-bar" hidden>
+        <div class="arm-bar-fill" id="arm-bar-fill" style="width:0%"></div>
+      </div>
+      <div class="hero-delay-sub" id="delay-sub">Stream forwarded with no delay.</div>
+    </div>
+
+    <div class="hero-control">
+      <div class="cp-head">
+        <span class="ic-label">Custom delay</span>
+        <span class="cp-cap mono">0 — 600s</span>
+      </div>
+      <div class="cp-input-row">
+        <button class="cp-step" onclick="bumpDelay(-1)" id="cp-minus" aria-label="decrement">−</button>
+        <input class="cp-input mono" id="delay-input" type="number" min="0" max="600" step="1" placeholder="0">
+        <button class="cp-step" onclick="bumpDelay(1)" id="cp-plus" aria-label="increment">+</button>
+        <span class="cp-unit">SECONDS</span>
+      </div>
+      <div class="cp-hint">Save common delays in <b>Profiles</b> for one-click insta-arm.</div>
+      <div class="cp-profiles" id="cp-profiles"></div>
+      <div style="display:flex;gap:8px;width:100%">
+        <button class="ic-btn ic-btn-disabled cp-cta" id="cp-cta" onclick="ctaClick(event)" style="flex:1">Arm delay</button>
+        <button class="ic-btn ic-btn-ghost" id="cp-cancel" hidden onclick="disarmClick(event)" style="flex:0 0 auto;padding:13px 18px">Disarm</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Tabs ─────────────────────────────────────── -->
+<nav class="tabs" id="tabs" hidden>
+  <span class="tab-ind" id="tab-ind"></span>
+  <button class="tab on" data-tab="destinations">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12c2-3 4-4 9-4s7 1 9 4"/><path d="M6 15c1.5-2 3-2.5 6-2.5s4.5.5 6 2.5"/><circle cx="12" cy="18" r="1.2" fill="currentColor"/></svg>
+    <span>Destinations</span></button>
+  <button class="tab" data-tab="stats">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20V10"/><path d="M9 20V4"/><path d="M15 20v-7"/><path d="M21 20V8"/></svg>
+    <span>Stats</span></button>
+  <button class="tab" data-tab="obs">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+    <span>OBS</span></button>
+  <button class="tab" data-tab="overlay">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>
+    <span>Overlay</span></button>
+  <button class="tab" data-tab="profiles">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12v17l-6-4-6 4z"/></svg>
+    <span>Profiles</span></button>
+  <button class="tab" data-tab="system">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6M4.22 4.22l4.24 4.24m7.08 7.08l4.24 4.24M1 12h6m10 0h6M4.22 19.78l4.24-4.24m7.08-7.08l4.24-4.24"/></svg>
+    <span>System</span></button>
+  <button class="tab" data-tab="logs">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6 6 6-6 6"/><path d="M12 18h8"/></svg>
+    <span>Logs</span></button>
+</nav>
+
+<div class="pane-card" id="pane-card" hidden>
+
+<section class="tab-pane" data-pane="destinations" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">Destinations</div>
+      <div class="tab-sub" id="dest-sub">0 configured</div>
+    </div>
+    <button class="ic-btn ic-btn-primary" id="dest-add-btn" onclick="openDestForm(null)">+ Add destination</button>
+  </div>
+  <div class="dest-grid" id="dest-grid"></div>
+  <div class="dest-form" id="dest-form" hidden>
+    <h4 id="dest-form-title">New destination</h4>
+    <input id="dest-form-id" type="hidden">
+    <label>Name</label>
+    <input id="dest-form-name" class="ic-input" placeholder="Twitch / YouTube / Backup …">
+    <label>Platform</label>
+    <select id="dest-form-platform" class="ic-input"></select>
+    <div id="dest-form-custom-wrap" hidden>
+      <label>Custom RTMP URL</label>
+      <input id="dest-form-custom" class="ic-input mono" placeholder="rtmp://host/app">
+    </div>
+    <div id="dest-form-twitch-wrap" hidden>
+      <label>Twitch ingest server <span class="muted">— pin a region if auto-routing is flaky</span></label>
+      <select id="dest-form-twitch-ingest" class="ic-input"></select>
+    </div>
+    <div id="dest-form-youtube-wrap" hidden>
+      <label>YouTube ingest <span class="muted">— switch to backup if the primary is flaky</span></label>
+      <select id="dest-form-youtube-ingest" class="ic-input">
+        <option value="">Primary (a.rtmp.youtube.com)</option>
+        <option value="backup">Backup (b.rtmp.youtube.com)</option>
+      </select>
+    </div>
+    <label>Stream key <span class="muted" id="dest-form-key-hint"></span></label>
+    <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
+    <div class="row"><label style="display:inline-flex;align-items:center;gap:8px;margin:0;text-transform:none;letter-spacing:0;font-size:13px">
+      <input type="checkbox" id="dest-form-enabled" checked> Enabled
+    </label></div>
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button class="ic-btn ic-btn-ghost" onclick="cancelDestForm()">Cancel</button>
+      <button class="ic-btn ic-btn-primary" onclick="saveDestForm()">Save destination</button>
+    </div>
+    <div class="dest-form-msg" id="dest-form-msg"></div>
+  </div>
+</section>
+
+<section class="tab-pane" data-pane="stats" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">Live metrics</div>
+      <div class="tab-sub">Sliding 60-second window — values update live.</div>
+    </div>
+  </div>
+  <div class="stats-big">
+    <div class="stat-card">
+      <div class="stat-head">
+        <span class="ic-label">Bitrate in</span>
+        <span class="mono stat-now"><span id="stat-rate">—</span> <span class="stat-unit">kbps</span></span>
+      </div>
+      <svg class="stat-spark" id="spark-rate" viewBox="0 0 760 70" preserveAspectRatio="none">
+        <path id="spark-rate-fill" class="spark-fill" d=""/>
+        <path id="spark-rate-line" class="spark-line" d=""/>
+      </svg>
+    </div>
+    <div class="stat-card">
+      <div class="stat-head">
+        <span class="ic-label">CPU</span>
+        <span class="mono stat-now"><span id="stat-cpu">—</span><span class="stat-unit">%</span></span>
+      </div>
+      <svg class="stat-spark" id="spark-cpu" viewBox="0 0 360 48" preserveAspectRatio="none">
+        <path id="spark-cpu-fill" class="spark-fill" d="" style="fill:oklch(0.78 0.16 55 / 0.18)"/>
+        <path id="spark-cpu-line" d="" style="fill:none;stroke:oklch(0.78 0.16 55);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round"/>
+      </svg>
+    </div>
+  </div>
+  <div class="stats-small">
+    <div class="metric-mini"><div class="ic-label">Frames sent</div><div class="metric-mini-v"><span class="mono" id="m-tags">0</span></div></div>
+    <div class="metric-mini"><div class="ic-label">Data sent</div><div class="metric-mini-v"><span class="mono" id="m-bytes">0</span><span class="metric-unit" id="m-bytes-u"></span></div></div>
+    <div class="metric-mini"><div class="ic-label">IDR cuts</div><div class="metric-mini-v"><span class="mono" id="m-cuts">0</span></div></div>
+    <div class="metric-mini"><div class="ic-label">OBS drops</div><div class="metric-mini-v"><span class="mono" id="m-idis">0</span></div></div>
+    <div class="metric-mini"><div class="ic-label">Egress retry</div><div class="metric-mini-v"><span class="mono" id="m-erec">0</span></div></div>
+    <div class="metric-mini"><div class="ic-label">Memory</div><div class="metric-mini-v"><span class="mono" id="m-rss">—</span><span class="metric-unit" id="m-rss-u"></span></div></div>
+  </div>
+</section>
+
+<section class="tab-pane" data-pane="obs" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">OBS connection</div>
+      <div class="tab-sub">Point OBS at InstantClone, then use the destination's stream key from the Destinations tab.</div>
+    </div>
+  </div>
+  <div class="obs-grid">
+    <section class="obs-section">
+      <div class="ic-label">1. Server URL</div>
+      <div class="tab-sub">OBS → Settings → Stream → Service: Custom… → Server.</div>
+      <div class="copy-block">
+        <code class="mono" id="obs-srv">rtmp://127.0.0.1:1935/live</code>
+        <button class="ic-btn ic-btn-ghost" onclick="copyEl('obs-srv','Server URL')">Copy</button>
+      </div>
+    </section>
+    <section class="obs-section">
+      <div class="ic-label">2. Stream key</div>
+      <div class="tab-sub">Type anything — InstantClone uses it only as a stream name. We suggest <code class="mono" style="color:var(--fg)">main</code>. Per-platform keys live in <b>Destinations</b>.</div>
+      <div class="copy-block">
+        <code class="mono">main</code>
+        <button class="ic-btn ic-btn-ghost" onclick="copyText('main','Stream key')">Copy</button>
+      </div>
+    </section>
+    <section class="obs-section span-2">
+      <div class="ic-label">Recommended OBS settings</div>
+      <div class="obs-recs">
+        <div class="rec"><div class="rec-k">Output → Video → Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Smaller is better — controls how fast delay cuts can happen.</div></div>
+        <div class="rec"><div class="rec-k">Output → Encoder</div><div class="rec-v">x264 / NVENC</div><div class="rec-why">Anything modern. InstantClone passes through untouched.</div></div>
+        <div class="rec"><div class="rec-k">Bitrate</div><div class="rec-v">≤ 80% of upload</div><div class="rec-why">Leave headroom or you'll see "Upload bottleneck" in the header.</div></div>
+      </div>
+    </section>
+  </div>
+</section>
+
+<section class="tab-pane" data-pane="overlay" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">On-stream overlay</div>
+      <div class="tab-sub">A browser-source widget that shows the current delay. Pick a style or drop your own <code class="mono">.html</code> into the overlays folder.</div>
+    </div>
+  </div>
+  <div class="overlay-grid">
+    <section class="overlay-section">
+      <div class="ic-label" style="display:flex;justify-content:space-between;align-items:baseline">
+        <span>Preview</span>
+        <span class="overlay-style-meta mono" id="ovl-selected-name" style="font-size:10.5px;text-transform:none;letter-spacing:0;color:var(--fg-4)">Minimal</span>
+      </div>
+      <div class="overlay-stage" id="overlay-stage" style="min-height:200px;padding:0;overflow:hidden">
+        <iframe id="overlay-preview" src="about:blank" style="width:100%;height:200px;border:0;background:transparent;display:block"></iframe>
+      </div>
+      <div class="copy-block" style="margin-top:12px">
+        <code class="mono" id="ovl-url">/overlay</code>
+        <button class="ic-btn ic-btn-ghost" onclick="copyEl('ovl-url','Overlay URL')">Copy</button>
+      </div>
+    </section>
+    <section class="overlay-section">
+      <div class="ic-label">Customize</div>
+      <div class="form-block">
+        <span class="form-block-l">Language</span>
+        <select id="ov-lang" class="ic-input" style="max-width:180px">
+          <option value="en">English</option>
+          <option value="es">Español</option>
+          <option value="pt">Português</option>
+          <option value="fr">Français</option>
+          <option value="de">Deutsch</option>
+        </select>
+      </div>
+      <div class="overlay-tip">
+        <span>Pick any overlay below, customize on the left, copy the URL, drop into OBS as Browser Source. Custom <code class="mono">.html</code> files receive the same <code class="mono">?lang=…</code> query if you read it.</span>
+      </div>
+      <div style="margin-top:4px">
+        <span class="ic-label" style="display:block;margin-bottom:6px">Folder</span>
+        <code class="mono" id="ov-dir-display" style="font-size:11px;color:var(--fg-3)">overlays/</code>
+      </div>
+    </section>
+  </div>
+  <section class="overlay-section" style="margin-top:0">
+    <div class="ic-label" style="display:flex;justify-content:space-between;align-items:baseline">
+      <span>Choose overlay</span>
+      <span class="overlay-style-meta mono" id="ovl-counts" style="font-size:10.5px;text-transform:none;letter-spacing:0;color:var(--fg-4)">3 built-in</span>
+    </div>
+    <div class="tab-sub">Click a card to preview it. Built-ins respond to the language picker; custom overlays can optionally read <code class="mono">?lang=…</code> too.</div>
+    <div class="overlay-files" id="overlay-files"></div>
+  </section>
+  <section class="overlay-section">
+    <div class="ic-label">OBS browser dock</div>
+    <div class="tab-sub">Add as an OBS Custom Browser Dock to control delay from within OBS. Recommended size: ~290 × 360.</div>
+    <div class="copy-block">
+      <code class="mono" id="dock-url">/dock</code>
+      <button class="ic-btn ic-btn-ghost" onclick="copyEl('dock-url','Dock URL')">Copy</button>
+    </div>
+  </section>
+</section>
+
+<section class="tab-pane" data-pane="profiles" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">Saved delays</div>
+      <div class="tab-sub">Profiles arm the delay in one click. You still need to click <b>Activate</b> when the buffer is ready.</div>
+    </div>
+  </div>
+  <div class="profile-list" id="profile-list"></div>
+  <div class="profile-new">
+    <input class="ic-input" placeholder="Name (e.g. Esports)" id="prof-name">
+    <input class="ic-input mono" placeholder="Seconds" id="prof-secs" type="number" min="0" max="600" step="1">
+    <button class="ic-btn ic-btn-primary" onclick="addProfile()">Save</button>
+  </div>
+</section>
+
+<section class="tab-pane" data-pane="system" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">System</div>
+      <div class="tab-sub">Network, buffer storage, and event integrations.</div>
+    </div>
+  </div>
+  <div class="restart-banner hidden" id="restart-banner">⚠ Buffer size or path changed. Restart the app for it to take effect.</div>
+  <div class="sys-grid">
+    <section class="sys-section">
+      <div class="ic-label">Network</div>
+      <div class="form-row tight">
+        <div><span class="ic-label">Ingest port</span><input id="s-iport" class="ic-input mono" type="number" min="1" max="65535"></div>
+        <div><span class="ic-label">Web UI port</span><input id="s-wport" class="ic-input mono" type="number" min="1" max="65535"></div>
+      </div>
+      <div class="checkbox-row">
+        <label><input type="checkbox" id="s-ibind"> Allow LAN to publish</label>
+        <label><input type="checkbox" id="s-wbind"> Allow LAN to access Web UI</label>
+      </div>
+    </section>
+    <section class="sys-section">
+      <div class="ic-label">Buffer</div>
+      <div class="form-row tight">
+        <div><span class="ic-label">Buffer size (MB)</span><input id="s-bmb" class="ic-input mono" type="number" min="50" max="10000"></div>
+        <div><span class="ic-label">Buffer file</span><input id="s-bpath" class="ic-input mono"></div>
+      </div>
+    </section>
+    <section class="sys-section">
+      <div class="ic-label">Discord webhook <span class="muted" style="text-transform:none;letter-spacing:0">(optional)</span></div>
+      <div class="tab-sub">Pings on OBS connect/disconnect and destination drops.</div>
+      <div style="margin-top:10px"><input id="s-webhook" class="ic-input mono" placeholder="https://discord.com/api/webhooks/…" autocomplete="off"><div class="muted" id="s-webhook-hint" style="margin-top:6px"></div></div>
+    </section>
+    <section class="sys-section">
+      <div class="ic-label">Overlays folder</div>
+      <input id="s-ovdir" class="ic-input mono" style="margin-top:8px">
+    </section>
+    <div class="row" style="justify-content:flex-end;gap:8px;margin-top:4px">
+      <button class="ic-btn ic-btn-ghost" onclick="testWebhook()">Test webhook</button>
+      <button class="ic-btn ic-btn-primary" onclick="saveSettings()">Save settings</button>
+    </div>
+    <div class="muted" id="s-msg" style="min-height:1.2em"></div>
+  </div>
+</section>
+
+<section class="tab-pane" data-pane="logs" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">Event log</div>
+      <div class="tab-sub">Newest at bottom · live tail when streaming.</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="ic-btn ic-btn-ghost" onclick="downloadLogs()">⬇ Download</button>
+      <button class="ic-btn ic-btn-ghost" onclick="clearLogs()">Clear</button>
+    </div>
+  </div>
+  <pre class="logs" id="logs"></pre>
+</section>
+
+</div><!-- /pane-card -->
+
+<footer class="ic-foot" id="ic-foot" hidden>
+  <span>RTMP <span class="mono" id="foot-rtmp">:1935</span></span>
+  <span class="ic-brand-dot"></span>
+  <span>Web UI <span class="mono" id="foot-web">:7799</span></span>
+  <span class="spacer"></span>
+  <span class="mono" id="foot-status">standby</span>
+</footer>
+
+</div><!-- /ic-shell -->
+</div><!-- /ic-app -->
+<div class="ic-toast-rail" id="toast-rail"></div>
+
+<!-- ── Tour: spotlight cutout + floating tooltip ───────────── -->
+<!-- The backdrop SVG draws a full-screen dark rect with a clear hole
+     punched over the current target element. Tooltip floats next to
+     the hole, auto-placed by JS. -->
+<div class="tour" id="tour" hidden>
+  <svg class="tour-backdrop-svg" id="tour-bg" preserveAspectRatio="none">
+    <defs>
+      <mask id="tour-mask">
+        <rect id="tour-mask-rect-all" x="0" y="0" width="100%" height="100%" fill="white"/>
+        <rect id="tour-mask-rect-hole" rx="10" ry="10" fill="black"/>
+      </mask>
+    </defs>
+    <rect x="0" y="0" width="100%" height="100%" fill="rgba(0,0,0,0.65)" mask="url(#tour-mask)"/>
+  </svg>
+  <div class="tour-highlight" id="tour-highlight"></div>
+  <div class="tour-tooltip" id="tour-tooltip" data-side="bottom">
+    <div class="tour-arrow"></div>
+    <div class="tour-head">
+      <div>
+        <div class="tour-step" id="tour-step">1 / 9</div>
+        <div class="tour-title" id="tour-title">Welcome to InstantClone</div>
+      </div>
+      <button class="ic-btn-tiny" onclick="closeTour()" title="Close (Esc)">✕</button>
+    </div>
+    <div class="tour-body" id="tour-body"></div>
+    <div class="tour-foot">
+      <button class="ic-btn ic-btn-ghost" onclick="closeTour()">Skip tour</button>
+      <span class="spacer"></span>
+      <button class="ic-btn ic-btn-ghost" id="tour-prev" onclick="tourPrev()" disabled>← Back</button>
+      <button class="ic-btn ic-btn-primary" id="tour-next" onclick="tourNext()">Next →</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const $$ = sel => Array.from(document.querySelectorAll(sel));
+
+// ── State ─────────────────────────────────────────────────────────────
+let lastState = null;
+let platforms = [];
+let twitchIngests = null;
+let profiles = [];
+let lastDests = [];
+let pendingPhase = null;
+let pendingClearT = null;
+let initialBufferMb = null;
+let initialBufferPath = '';
+let destCardCache = {};
+let rateHistory = [];
+let cpuHistory = [];
+const HISTORY_LEN = 60;
+const PHASE_TO_STATE = { idle:'off', preparing:'arming', ready:'armed', active:'active' };
+// State pill composes OBS-state + delay-state. "phase=idle" alone doesn't
+// mean "off air" — it just means "no delay armed" (passthrough). Only flag
+// OFFLINE when ingest is actually down.
+function computeStatePill(s){
+  if (!s || !s.ingest_alive){
+    return { label:'OFFLINE', desc:'· OBS not connected', c:'var(--idle)', pulse:false };
+  }
+  const ds = PHASE_TO_STATE[s.phase] || 'off';
+  if (ds === 'off')    return { label:'LIVE',      desc:'· Passthrough',    c:'var(--live)',   pulse:true };
+  if (ds === 'arming') return { label:'BUFFERING', desc:'· Filling buffer', c:'var(--warn)',   pulse:false };
+  if (ds === 'armed')  return { label:'ARMED',     desc:'· Click activate', c:'var(--accent)', pulse:false };
+  if (ds === 'active') return { label:'ACTIVE',    desc:'· Delay live',     c:'var(--live)',   pulse:true };
+  return { label:'IDLE', desc:'', c:'var(--idle)', pulse:false };
+}
+const PLATFORM_INITIAL = { twitch:'T', youtube:'Y', kick:'K', trovo:'V', restream:'R', custom:'·' };
+const PLATFORM_LABEL = { twitch:'Twitch', youtube:'YouTube', kick:'Kick', trovo:'Trovo', restream:'Restream', custom:'Custom' };
+const SETTINGS_FIELDS = {
+  'ingest_port':'s-iport','web_port':'s-wport','buffer_mb':'s-bmb','buffer_path':'s-bpath',
+  'discord webhook':'s-webhook','webhook':'s-webhook','overlays_dir':'s-ovdir',
+};
+
+// ── Formatting ─────────────────────────────────────────────────────────
+const fmtSecs = ms => { const s = ms/1000; return s < 10 ? s.toFixed(1) : Math.round(s).toString(); };
+const fmtDelay = ms => { const s = Math.round(ms/1000); if (s < 60) return s+'s'; const m = Math.floor(s/60), r = s%60; return r ? `${m}m${r}s` : `${m}m`; };
+const fmtKbps = k => k >= 1000 ? (k/1000).toFixed(2)+' Mbps' : k+' kbps';
+function fmtBytesPair(b){ const u=['B','KB','MB','GB','TB']; let i=0; while(b>=1024 && i<u.length-1){b/=1024;i++} return [b.toFixed(b<10&&i?1:0), u[i]]; }
+
+// ── Toast ─────────────────────────────────────────────────────────────
+function toast(msg, kind){
+  const k = kind || 'info';
+  const icon = { ok:'✓', err:'!', info:'i' }[k] || 'i';
+  const el = document.createElement('div');
+  el.className = 'ic-toast '+k;
+  el.innerHTML = `<span class="ic-toast-icon">${icon}</span><span></span>`;
+  el.lastChild.textContent = msg;
+  $('toast-rail').appendChild(el);
+  setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 350); }, 2400);
+}
+
+// ── Animated number helper ────────────────────────────────────────────
+const numState = new Map(); // id → {from, to, start}
+function animateNumber(id, target, dur, fmt){
+  const el = $(id); if(!el) return;
+  const cur = numState.get(id) || { from: target, to: target, start: 0, last: target };
+  if (cur.to === target){ // no change → make sure final text is right
+    if(!el._wired){ el._wired=true; }
+    el.textContent = fmt ? fmt(target) : Math.round(target).toLocaleString();
+    return;
+  }
+  cur.from = cur.last; cur.to = target; cur.start = performance.now();
+  numState.set(id, cur);
+  const tick = (now) => {
+    const t = Math.min(1, (now - cur.start) / (dur || 600));
+    const eased = 1 - Math.pow(1 - t, 3);
+    const v = cur.from + (cur.to - cur.from) * eased;
+    cur.last = v;
+    el.textContent = fmt ? fmt(v) : Math.round(v).toLocaleString();
+    if (t < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+// ── Sparkline ─────────────────────────────────────────────────────────
+function updateSpark(lineId, fillId, data, width, height){
+  if (data.length < 2){ $(lineId).setAttribute('d',''); $(fillId).setAttribute('d',''); return; }
+  const max = Math.max(...data, 1), min = Math.min(...data, 0);
+  const range = max - min || 1, step = width / (data.length - 1), pad = 2;
+  const pts = data.map((v,i) => [i*step, height-pad-((v-min)/range)*(height-pad*2)]);
+  const line = pts.map((p,i) => (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  $(lineId).setAttribute('d', line);
+  $(fillId).setAttribute('d', line+` L ${width} ${height} L 0 ${height} Z`);
+}
+
+// ── Action endpoints ──────────────────────────────────────────────────
+function setPending(p){
+  pendingPhase = p;
+  clearTimeout(pendingClearT);
+  pendingClearT = setTimeout(() => { pendingPhase = null; tick(); }, 2500);
+  if (lastState) renderHero(lastState);
+}
+function clearPending(){ pendingPhase = null; clearTimeout(pendingClearT); }
+
+async function arm(ms){
+  await fetch('/arm',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'ms='+ms});
+  toast(ms > 0 ? `Arming ${fmtDelay(ms)}…` : 'Disarmed', 'ok');
+  tick();
+}
+async function activate(){
+  setPending('active');
+  const r = await fetch('/activate',{method:'POST'});
+  if (r.status === 409){ const j = await r.json(); toast(j.error, 'err'); clearPending(); }
+  else toast('Delay active', 'ok');
+  tick();
+}
+async function stop(){
+  setPending('ready');
+  await fetch('/stop',{method:'POST'});
+  toast('Back to live', 'info');
+  tick();
+}
+async function disarm(){
+  setPending('idle');
+  await fetch('/disarm',{method:'POST'});
+  toast('Disarmed', 'info');
+  tick();
+}
+
+function bumpDelay(d){
+  const inp = $('delay-input');
+  const cur = parseInt(inp.value || '0', 10) || 0;
+  inp.value = Math.max(0, Math.min(600, cur + d));
+  renderCta();
+}
+$('delay-input') && $('delay-input').addEventListener('input', renderCta);
+
+function ctaClick(ev){
+  const btn = ev.currentTarget;
+  if (btn._busy) return;
+  btn._busy = true; setTimeout(() => { btn._busy = false; }, 300);
+  if (!lastState) return;
+  const ds = PHASE_TO_STATE[lastState.phase] || 'off';
+  if (ds === 'active') { stop(); return; }
+  if (ds === 'armed')  { activate(); return; }
+  if (ds === 'arming') { disarm(); return; }
+  const ms = (parseInt($('delay-input').value || '0', 10) || 0) * 1000;
+  if (ms > 0) arm(ms);
+}
+
+// Secondary disarm button — visible during `arming` or `armed` so the user
+// can always back out without having to first activate then cut. Without
+// this, the `armed` state had no exit path other than activating the
+// delay (then cutting it). Felt broken.
+function disarmClick(ev){
+  const btn = ev.currentTarget;
+  if (btn._busy) return;
+  btn._busy = true; setTimeout(() => { btn._busy = false; }, 300);
+  disarm();
+}
+
+// ── Hero render ───────────────────────────────────────────────────────
+function renderHero(s){
+  const ds = PHASE_TO_STATE[s.phase] || 'off';
+  // Aurora behind the readout: when OBS is forwarding without delay
+  // ("passthrough") we still want the green "live" glow, not the gray
+  // "idle" one — otherwise the hero looks dead while bytes are flowing.
+  const auroraState = (!s.ingest_alive) ? 'off'
+                     : (ds === 'off') ? 'active'   // passthrough → green
+                     : ds;
+  $('hero-readout').setAttribute('data-state', auroraState);
+  const pill = computeStatePill(s);
+  $('state-pill').style.setProperty('--sc', pill.c);
+  $('state-dot').className = 'state-dot' + (pill.pulse ? ' pulse' : '');
+  $('state-label').textContent = pill.label;
+  $('state-desc').textContent = pill.desc;
+  const big = $('delay-big');
+  big.className = 'hero-delay-num mono d-' + ds;
+  // big number: arming shows fill, otherwise target/current
+  const targetSec = (s.armed_delay_ms || 0) / 1000;
+  const fillSec = (s.buffer_fill_ms || 0) / 1000;
+  const showSec = ds === 'arming' ? Math.min(fillSec, targetSec)
+                 : ds === 'armed' || ds === 'active' ? targetSec
+                 : 0;
+  animateNumber('delay-big', showSec, ds === 'arming' ? 80 : 500, v => v.toFixed(1));
+  if (ds === 'arming'){
+    $('delay-of').hidden = false; $('delay-of').textContent = `/ ${targetSec.toFixed(1)}s`;
+    $('arm-bar').hidden = false;
+    const pct = targetSec > 0 ? Math.min(100, (fillSec / targetSec) * 100) : 0;
+    $('arm-bar-fill').style.width = pct + '%';
+  } else {
+    $('delay-of').hidden = true;
+    $('arm-bar').hidden = true;
+  }
+  // Sub copy
+  let sub = '';
+  if (ds === 'off') sub = `Stream forwarded with no delay${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
+  else if (ds === 'arming') sub = `Buffering — ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers still see live until you activate.`;
+  else if (ds === 'armed') sub = `Buffer ready. Click Activate to cut your stream over.`;
+  else if (ds === 'active') sub = `Forwarded with a ${fmtDelay(s.armed_delay_ms)} buffer${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
+  $('delay-sub').textContent = sub;
+
+  renderCta();
+}
+
+function renderCta(){
+  const btn = $('cp-cta');
+  const cancel = $('cp-cancel');
+  if (pendingPhase){
+    btn.className = 'ic-btn ic-btn-primary cp-cta';
+    btn.textContent = '… Applying';
+    btn.disabled = true;
+    if (cancel) cancel.hidden = true;
+    return;
+  }
+  if (!lastState){
+    btn.className = 'ic-btn ic-btn-disabled cp-cta'; btn.textContent = 'Arm delay'; btn.disabled = true;
+    if (cancel) cancel.hidden = true;
+    return;
+  }
+  const ds = PHASE_TO_STATE[lastState.phase] || 'off';
+  const inputMs = (parseInt($('delay-input').value || '0', 10) || 0) * 1000;
+  btn.disabled = false;
+  // Hide the secondary Disarm by default; show it for armed/arming so
+  // the user always has an exit path (without it, "armed" state forced
+  // you to activate+cut just to get back to passthrough).
+  if (cancel) cancel.hidden = !(ds === 'arming' || ds === 'armed');
+  if (ds === 'arming'){
+    // Primary CTA already does "cancel" semantics here; the secondary
+    // button is a clearer alias for users who don't read the label.
+    btn.className = 'ic-btn ic-btn-ghost cp-cta'; btn.textContent = '✕ Cancel arming';
+    if (cancel) cancel.hidden = true; // single-button is enough during arming
+  } else if (ds === 'armed'){
+    btn.className = 'ic-btn ic-btn-primary cp-cta cp-cta-pulse';
+    btn.textContent = `▶ Activate ${fmtDelay(lastState.armed_delay_ms)} delay`;
+    if (cancel){ cancel.hidden = false; cancel.textContent = 'Disarm'; }
+  } else if (ds === 'active'){
+    btn.className = 'ic-btn ic-btn-danger cp-cta'; btn.textContent = '✕ Cut delay';
+  } else {
+    // off / idle (== passthrough or genuinely no source)
+    if (inputMs > 0){
+      btn.className = 'ic-btn ic-btn-primary cp-cta';
+      btn.textContent = `⚡ Arm ${fmtDelay(inputMs)} delay`;
+    } else {
+      btn.className = 'ic-btn ic-btn-disabled cp-cta'; btn.textContent = 'Arm delay'; btn.disabled = true;
+    }
+  }
+}
+
+// ── Profile chips in hero ──────────────────────────────────────────────
+function renderCpProfiles(){
+  const c = $('cp-profiles'); c.innerHTML = '';
+  if (!profiles || profiles.length === 0) return;
+  const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
+  const target = lastState ? lastState.armed_delay_ms : 0;
+  profiles.slice(0, 5).forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'cp-profile-chip' + (target === p.delay_ms && ds !== 'off' ? ' on' : '');
+    b.disabled = ds === 'armed' || ds === 'active' || ds === 'arming';
+    b.title = `Arm: ${p.name}`;
+    b.innerHTML = `<span style="color:var(--accent)">⚡</span><span>${fmtDelay(p.delay_ms)}</span>`;
+    b.onclick = () => {
+      $('delay-input').value = String(Math.round(p.delay_ms / 1000));
+      arm(p.delay_ms);
+    };
+    c.appendChild(b);
+  });
+}
+
+// ── Header chips ───────────────────────────────────────────────────────
+function renderHeader(s){
+  // OBS pill
+  const obs = $('hdr-obs'); obs.className = 'ic-pill ' + (s.ingest_alive ? 'live ok' : '');
+  $('hdr-obs-v').textContent = s.ingest_alive ? 'in' : '—';
+  // Egress
+  const eg = $('hdr-egress'); eg.className = 'ic-pill ' + ((s.destinations_alive || 0) > 0 ? 'ok' : '');
+  $('hdr-egress-v').textContent = (s.destinations_total || 0) > 0
+    ? `${s.destinations_alive || 0}/${s.destinations_total || 0}` : '—';
+  // Bitrate
+  animateNumber('hdr-rate', s.stats.bitrate_kbps || 0, 400);
+  // Codec chip
+  const haveV = s.video_codec && s.video_codec !== '?' && s.video_codec !== '';
+  const haveA = s.audio_codec && s.audio_codec !== '?' && s.audio_codec !== '';
+  if (haveV || haveA){
+    $('hdr-codec').hidden = false;
+    $('hdr-codec-v').textContent = (haveV ? s.video_codec : '?') + ' / ' + (haveA ? s.audio_codec : '?');
+  } else $('hdr-codec').hidden = true;
+  $('hdr-ebroadcast').hidden = !s.multitrack_video;
+  $('hdr-backpressure').hidden = !s.backpressure;
+}
+
+// ── Stats render ───────────────────────────────────────────────────────
+function renderStats(s){
+  rateHistory.push(s.stats.bitrate_kbps || 0);
+  if (rateHistory.length > HISTORY_LEN) rateHistory.shift();
+  cpuHistory.push(s.cpu_pct || 0);
+  if (cpuHistory.length > HISTORY_LEN) cpuHistory.shift();
+  animateNumber('stat-rate', s.stats.bitrate_kbps || 0, 500);
+  animateNumber('stat-cpu', s.cpu_pct || 0, 500, v => v.toFixed(1));
+  updateSpark('spark-rate-line', 'spark-rate-fill', rateHistory, 760, 70);
+  updateSpark('spark-cpu-line', 'spark-cpu-fill', cpuHistory, 360, 48);
+  animateNumber('m-tags', s.stats.tags_sent || 0);
+  const [bv, bu] = fmtBytesPair(s.stats.bytes_sent || 0);
+  $('m-bytes').textContent = bv; $('m-bytes-u').textContent = bu;
+  animateNumber('m-cuts', s.stats.cuts || 0);
+  animateNumber('m-idis', s.stats.ingest_disconnects || 0);
+  animateNumber('m-erec', s.stats.egress_reconnects || 0);
+  const [rv, ru] = fmtBytesPair(s.rss_bytes || 0);
+  $('m-rss').textContent = rv; $('m-rss-u').textContent = ru;
+}
+
+// ── Destinations ───────────────────────────────────────────────────────
+function rebuildDests(){
+  const c = $('dest-grid');
+  // remove old "+Add" if present so we can re-append at end
+  const oldAdd = c.querySelector('.dest-add'); if (oldAdd) oldAdd.remove();
+  const seen = new Set();
+  lastDests.forEach(d => {
+    seen.add(d.id);
+    let entry = destCardCache[d.id];
+    if (!entry){ entry = buildDestCard(d); c.appendChild(entry.el); destCardCache[d.id] = entry; }
+    updateDestCard(entry, d);
+  });
+  Object.keys(destCardCache).forEach(id => {
+    if (!seen.has(id)){ destCardCache[id].el.remove(); delete destCardCache[id]; }
+  });
+  // (re)append add tile
+  const add = document.createElement('button');
+  add.className = 'dest-add';
+  add.innerHTML = `<span class="dest-add-icon">+</span><span>Add destination</span>`;
+  add.onclick = () => openDestForm(null);
+  c.appendChild(add);
+  $('dest-sub').textContent = `${lastDests.length} configured · ${lastDests.filter(d => d.alive).length} forwarding live`;
+}
+
+function buildDestCard(d){
+  const el = document.createElement('div');
+  el.className = 'dcard';
+  el.innerHTML = `
+    <div class="dcard-head">
+      <span class="dcard-icon"></span>
+      <div style="flex:1;min-width:0"><div class="dcard-name"></div><div class="dcard-host mono"></div></div>
+      <div class="dcard-status"><span class="d-dot"></span><span class="dcard-status-l"></span></div>
+    </div>
+    <div class="dcard-graph">
+      <div class="dcard-graph-overlay">
+        <div class="dcard-rate-row"><span class="dcard-rate mono">—</span><span class="dcard-rate-u">Mbps</span></div>
+        <span class="ic-label">Egress · last 60s</span>
+      </div>
+      <svg class="dcard-spark" viewBox="0 0 400 54" preserveAspectRatio="none">
+        <path class="dcard-spark-fill" style="fill:url(#sparkGrad)" d=""/>
+        <path class="dcard-spark-line" style="fill:none;stroke:var(--accent);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round" d=""/>
+      </svg>
+    </div>
+    <div class="dcard-foot">
+      <span class="dcard-foot-meta"><span class="dcard-frames">0</span> frames · <span class="dcard-cuts">0</span> cuts · <span class="dcard-rec">0</span> retries</span>
+      <span class="spacer"></span>
+      <button class="ic-btn-tiny dcard-edit" title="Edit">✎</button>
+      <button class="ic-btn-tiny dcard-toggle" title="Toggle"></button>
+      <button class="dcard-link dcard-del">✕ Remove</button>
+    </div>`;
+  const refs = {
+    el, last: d, history: [],
+    icon: el.querySelector('.dcard-icon'),
+    name: el.querySelector('.dcard-name'),
+    host: el.querySelector('.dcard-host'),
+    statL: el.querySelector('.dcard-status-l'),
+    statE: el.querySelector('.dcard-status'),
+    rate: el.querySelector('.dcard-rate'),
+    sparkLine: el.querySelector('.dcard-spark-line'),
+    sparkFill: el.querySelector('.dcard-spark-fill'),
+    frames: el.querySelector('.dcard-frames'),
+    cuts: el.querySelector('.dcard-cuts'),
+    rec: el.querySelector('.dcard-rec'),
+    toggle: el.querySelector('.dcard-toggle'),
+    edit: el.querySelector('.dcard-edit'),
+    del: el.querySelector('.dcard-del'),
+    lastPlatform: '',
+  };
+  refs.edit.onclick = () => openDestForm(refs.last);
+  refs.toggle.onclick = () => toggleDest(refs.last);
+  refs.del.onclick = () => { if (confirm('Delete '+refs.last.name+'?')) deleteDest(refs.last.id); };
+  return refs;
+}
+
+function updateDestCard(r, d){
+  r.last = d;
+  r.el.classList.toggle('alive', !!d.alive);
+  r.el.classList.toggle('off', !d.enabled);
+  if (r.lastPlatform !== d.platform){
+    if (r.lastPlatform) r.el.classList.remove('platform-'+r.lastPlatform);
+    r.el.classList.add('platform-'+d.platform);
+    r.lastPlatform = d.platform;
+    r.icon.textContent = PLATFORM_INITIAL[d.platform] || (d.platform || '?').charAt(0).toUpperCase();
+  }
+  if (r.name.textContent !== d.name) r.name.textContent = d.name;
+  const platLabel = PLATFORM_LABEL[d.platform] || d.platform;
+  if (r.host.textContent !== platLabel) r.host.textContent = platLabel;
+  // alive = TCP connected. bitrate>0 = actually forwarding frames. The
+  // sink/Twitch session can be CONNECTED but receiving nothing (OBS hasn't
+  // sent the first IDR yet) — UI used to call that "Streaming" which is
+  // misleading. Split into three states: Streaming (green pulse), Connected
+  // (accent, just sitting on a healthy TCP connection), Idle (gray).
+  const isStreaming = d.alive && (d.bitrate_kbps || 0) > 0;
+  const stat = !d.enabled ? 'off' : isStreaming ? 'live' : d.alive ? 'ready' : 'off';
+  r.statE.className = 'dcard-status s-' + stat;
+  r.statL.textContent = !d.enabled ? 'Disabled'
+                       : isStreaming ? 'Streaming'
+                       : d.alive ? 'Connected'
+                       : 'Idle';
+  // rate + history
+  const rate = d.alive ? (d.bitrate_kbps || 0) : 0;
+  r.history.push(rate); if (r.history.length > HISTORY_LEN) r.history.shift();
+  if (d.alive){
+    const mbps = rate / 1000;
+    r.rate.textContent = mbps >= 1 ? mbps.toFixed(2) : (rate||0);
+  } else r.rate.textContent = '—';
+  if (r.history.length >= 2){
+    const max = Math.max(...r.history, 1), min = Math.min(...r.history, 0);
+    const range = max - min || 1, step = 400 / (r.history.length - 1);
+    const pts = r.history.map((v,i) => [i*step, 54-2-((v-min)/range)*50]);
+    const line = pts.map((p,i) => (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+    r.sparkLine.setAttribute('d', line);
+    r.sparkFill.setAttribute('d', line+' L 400 54 L 0 54 Z');
+  }
+  r.frames.textContent = (d.tags_sent || 0).toLocaleString();
+  r.cuts.textContent = d.cuts || 0;
+  r.rec.textContent = d.reconnects || 0;
+  r.toggle.title = d.enabled ? 'Disable' : 'Enable';
+  r.toggle.textContent = d.enabled ? '⏸' : '▶';
+}
+
+async function loadDestinations(){
+  try { lastDests = await (await fetch('/destinations')).json(); rebuildDests(); } catch(_){}
+}
+
+// ── Destination form ──────────────────────────────────────────────────
+function openDestForm(d){
+  $('dest-form').hidden = false;
+  $('dest-form-title').textContent = d ? 'Edit destination' : 'New destination';
+  $('dest-form-id').value = d ? d.id : '';
+  $('dest-form-name').value = d ? d.name : '';
+  fillDestPlatforms();
+  fillTwitchIngests();
+  $('dest-form-platform').value = d ? d.platform : 'twitch';
+  $('dest-form-platform').dispatchEvent(new Event('change'));
+  $('dest-form-custom').value = d ? d.custom_egress_url : '';
+  $('dest-form-twitch-ingest').value = (d && d.twitch_ingest) || '';
+  $('dest-form-youtube-ingest').value = (d && d.youtube_ingest) || '';
+  $('dest-form-key').value = '';
+  $('dest-form-key').placeholder = d && d.stream_key_set ? 'leave blank to keep current' : 'paste stream key';
+  document.getElementById('dest-form-key-hint').textContent = d && d.stream_key_set ? '(currently set)' : '';
+  $('dest-form-enabled').checked = d ? d.enabled : true;
+  $('dest-form-msg').innerHTML = '';
+  $('dest-form').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function cancelDestForm(){ $('dest-form').hidden = true; }
+
+function fillDestPlatforms(){
+  const sel = $('dest-form-platform'); sel.innerHTML = '';
+  platforms.forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.label; sel.appendChild(o); });
+  if (!sel._wired){
+    sel._wired = true;
+    sel.addEventListener('change', () => {
+      $('dest-form-custom-wrap').hidden = sel.value !== 'custom';
+      $('dest-form-twitch-wrap').hidden = sel.value !== 'twitch';
+      $('dest-form-youtube-wrap').hidden = sel.value !== 'youtube';
+    });
+  }
+}
+async function fillTwitchIngests(){
+  const sel = $('dest-form-twitch-ingest');
+  if (!twitchIngests){
+    try { twitchIngests = await (await fetch('/twitch_ingests')).json(); } catch(_){ twitchIngests = []; }
+  }
+  sel.innerHTML = '';
+  twitchIngests.forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.label; sel.appendChild(o); });
+}
+
+async function saveDestForm(){
+  const id = $('dest-form-id').value;
+  const name = $('dest-form-name').value.trim();
+  const platform = $('dest-form-platform').value;
+  const custom = $('dest-form-custom').value.trim();
+  const ingest = $('dest-form-twitch-ingest').value;
+  const yingest = $('dest-form-youtube-ingest').value;
+  const key = $('dest-form-key').value.trim();
+  const enabled = $('dest-form-enabled').checked;
+  if (!name){ $('dest-form-msg').innerHTML = '<span class="err">Name required</span>'; return; }
+  const body = new URLSearchParams({name, platform, custom_egress_url:custom, enabled:enabled?'on':'off', twitch_ingest:ingest, youtube_ingest:yingest});
+  if (id) body.set('id', id);
+  if (key) body.set('stream_key', key);
+  const r = await fetch('/destinations', {method:'POST', body});
+  const j = await r.json();
+  if (j.ok){ toast('Saved','ok'); cancelDestForm(); loadDestinations(); loadConfig(); }
+  else $('dest-form-msg').innerHTML = '<span class="err">'+j.error+'</span>';
+}
+async function toggleDest(d){
+  const body = new URLSearchParams({id:d.id, name:d.name, platform:d.platform,
+    custom_egress_url:d.custom_egress_url, twitch_ingest:d.twitch_ingest||'', youtube_ingest:d.youtube_ingest||'',
+    enabled:d.enabled?'off':'on'});
+  await fetch('/destinations',{method:'POST', body});
+  loadDestinations();
+}
+async function deleteDest(id){
+  await fetch('/destinations/delete',{method:'POST',body:new URLSearchParams({id})});
+  loadDestinations(); loadConfig();
+}
+
+// ── Profiles ──────────────────────────────────────────────────────────
+async function loadProfiles(){
+  try {
+    const r = await fetch('/profiles');
+    const j = await r.json();
+    profiles = Array.isArray(j) ? j : (j.profiles || []);
+    renderCpProfiles(); renderProfilesPane();
+  } catch(_){}
+}
+function renderProfilesPane(){
+  const c = $('profile-list'); c.innerHTML = '';
+  profiles.forEach(p => {
+    const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
+    const isCur = ds !== 'off' && lastState && lastState.armed_delay_ms === p.delay_ms;
+    const b = document.createElement('button');
+    b.className = 'profile-row' + (isCur ? ' current' : '');
+    b.innerHTML = `<span class="profile-bolt">⚡</span><span class="profile-name"></span><span class="profile-secs mono"></span>`;
+    b.querySelector('.profile-name').textContent = p.name;
+    b.querySelector('.profile-secs').textContent = fmtDelay(p.delay_ms);
+    if (isCur){
+      const tag = document.createElement('span'); tag.className = 'profile-tag'; tag.textContent = ds;
+      b.appendChild(tag);
+    }
+    const x = document.createElement('span'); x.className = 'ic-btn-tiny'; x.textContent = '✕';
+    x.onclick = (e) => { e.stopPropagation(); delProfile(p.name); };
+    b.appendChild(x);
+    b.onclick = () => arm(p.delay_ms);
+    c.appendChild(b);
+  });
+}
+async function addProfile(){
+  const name = $('prof-name').value.trim();
+  const secs = parseInt($('prof-secs').value || '0', 10);
+  if (!name){ toast('Give the profile a name first','err'); return; }
+  if (!secs || secs <= 0){ toast('Set a delay greater than 0 seconds','err'); return; }
+  const body = new URLSearchParams({name, delay_ms: String(secs*1000)});
+  const r = await fetch('/profiles',{method:'POST', body});
+  if (r.ok){ $('prof-name').value=''; $('prof-secs').value=''; toast('Profile saved','ok'); loadProfiles(); }
+  else {
+    // Surface server error (e.g. duplicate name) instead of a flat "Failed"
+    let msg = `Couldn't save profile (HTTP ${r.status})`;
+    try { const j = await r.json(); if (j.error) msg = `Couldn't save: ${j.error}`; } catch(_){}
+    toast(msg, 'err');
+  }
+}
+async function delProfile(name){
+  await fetch('/profiles/delete',{method:'POST',body:new URLSearchParams({name})});
+  loadProfiles();
+}
+
+// ── Config / Settings ─────────────────────────────────────────────────
+async function loadConfig(){
+  try {
+    const c = await (await fetch('/config')).json();
+    initialBufferMb = c.buffer_mb; initialBufferPath = c.buffer_path;
+    // wizard
+    const first = (c.destinations && c.destinations[0]) || {platform:'twitch', custom_egress_url:'', stream_key_set:false};
+    if ($('w-platform').children.length === 0) fillWizardPlatforms();
+    $('w-platform').value = first.platform; $('w-platform').dispatchEvent(new Event('change'));
+    $('w-custom').value = first.custom_egress_url || '';
+    // system fields
+    $('s-iport').value = c.ingest_port; $('s-wport').value = c.web_port;
+    $('s-bmb').value = c.buffer_mb; $('s-bpath').value = c.buffer_path;
+    $('s-ibind').checked = c.ingest_bind_all; $('s-wbind').checked = c.web_bind_all;
+    $('s-webhook').value = '';
+    $('s-webhook').placeholder = c.webhook_set ? '(set — paste a new one to replace)' : 'https://discord.com/api/webhooks/…';
+    $('s-webhook-hint').textContent = c.webhook_set ? '(currently set)' : '';
+    $('s-ovdir').value = c.overlays_dir || '';
+    $('ov-dir-display').textContent = c.overlays_dir || 'overlays/';
+    // OBS panel
+    $('obs-srv').textContent = c.obs_url;
+    $('dock-url').textContent = location.origin + '/dock';
+    updateOverlayUrl();
+    // footer
+    $('foot-rtmp').textContent = ':' + c.ingest_port;
+    $('foot-web').textContent = ':' + c.web_port;
+    // visibility
+    const configured = c.configured;
+    $('wizard').hidden = configured;
+    $('hdr-bar').hidden = !configured;
+    $('hero').hidden = !configured;
+    $('tabs').hidden = !configured;
+    $('pane-card').hidden = !configured;
+    $('ic-foot').hidden = !configured;
+    if (configured){
+      // initial render of dest-add empty state at least
+      loadDestinations(); loadProfiles(); loadOverlays();
+      // ensure a tab is shown
+      const cur = document.querySelector('.tab.on') || document.querySelector('.tab[data-tab="destinations"]');
+      if (cur) showTab(cur.dataset.tab);
+      setTimeout(moveTabInd, 50);
+    }
+  } catch(e){ console.warn(e); }
+}
+
+function fillWizardPlatforms(){
+  const sel = $('w-platform'); sel.innerHTML = '';
+  platforms.forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.label; sel.appendChild(o); });
+  if (!sel._wired){
+    sel._wired = true;
+    sel.addEventListener('change', () => { $('w-custom-wrap').hidden = sel.value !== 'custom'; });
+  }
+}
+
+async function saveWizard(){
+  const platform = $('w-platform').value, key = $('w-key').value.trim(), custom = $('w-custom').value.trim();
+  if (platform !== 'custom' && !key){ $('w-msg').innerHTML = '<span class="err">Stream key required.</span>'; return; }
+  if (platform === 'custom' && !custom){ $('w-msg').innerHTML = '<span class="err">Custom RTMP URL required.</span>'; return; }
+  const body = new URLSearchParams({platform, stream_key:key, custom_egress_url:custom});
+  const j = await(await fetch('/config',{method:'POST',body})).json();
+  if (j.ok){ $('w-msg').innerHTML = '<span class="ok">Saved — starting up…</span>'; setTimeout(loadConfig, 500); }
+  else $('w-msg').innerHTML = '<span class="err">'+j.error+'</span>';
+}
+async function testConn(){
+  const platform = $('w-platform').value, key = $('w-key').value || '', custom = $('w-custom').value || '';
+  if (key || custom) await fetch('/config',{method:'POST', body:new URLSearchParams({platform, stream_key:key, custom_egress_url:custom})});
+  const r = await(await fetch('/test-egress',{method:'POST'})).json();
+  if (r.ok) toast('Reached '+r.message,'ok'); else toast('Failed: '+(r.error||'?'),'err');
+}
+
+function flashFieldErrors(message){
+  $$('input.field-error').forEach(el => el.classList.remove('field-error'));
+  if (!message) return;
+  const lower = message.toLowerCase();
+  Object.entries(SETTINGS_FIELDS).forEach(([k, id]) => {
+    if (lower.includes(k.toLowerCase())){
+      const el = $(id); if (!el) return;
+      el.classList.add('field-error');
+      el.addEventListener('input', () => el.classList.remove('field-error'), {once:true});
+    }
+  });
+}
+
+async function saveSettings(){
+  const body = new URLSearchParams({
+    ingest_port:$('s-iport').value, web_port:$('s-wport').value,
+    buffer_mb:$('s-bmb').value, buffer_path:$('s-bpath').value,
+    ingest_bind_all:$('s-ibind').checked?'on':'off',
+    web_bind_all:$('s-wbind').checked?'on':'off',
+    discord_webhook_url:$('s-webhook').value.trim(),
+    overlays_dir:$('s-ovdir').value.trim(),
+  });
+  const j = await(await fetch('/config',{method:'POST',body})).json();
+  if (j.ok){
+    flashFieldErrors(null);
+    toast('Settings saved','ok');
+    if (j.restart_required || +$('s-bmb').value !== initialBufferMb || $('s-bpath').value !== initialBufferPath){
+      $('restart-banner').classList.remove('hidden');
+    }
+    loadConfig();
+  } else { flashFieldErrors(j.error); toast(`Couldn't save settings: ${j.error}`, 'err'); $('s-msg').innerHTML = '<span class="err">'+j.error+'</span>'; }
+}
+async function testWebhook(){
+  const r = await(await fetch('/test-webhook',{method:'POST'})).json();
+  if (r.ok) toast('Webhook test fired — check Discord','ok');
+  else toast(`Webhook test failed: ${r.error || 'no response from Discord'}`, 'err');
+}
+
+// ── Overlays ──────────────────────────────────────────────────────────
+// Unified gallery of built-in styles + user-dropped custom .html files.
+// Clicking any card selects it: the preview iframe + URL update in lockstep.
+const BUILTIN_OVERLAYS = [
+  { id:'minimal',   name:'Minimal',    meta:'Built-in · Top-left glass badge' },
+  { id:'compact',   name:'Compact',    meta:'Built-in · Tiny top-right pill (zero noise)' },
+  { id:'corner',    name:'Corner',     meta:'Built-in · Bottom-right cyan block' },
+  { id:'strip',     name:'Strip',      meta:'Built-in · Full-width bottom bar' },
+  { id:'ticker',    name:'Ticker',     meta:'Built-in · News-strip with red accent' },
+  { id:'broadcast', name:'Broadcast',  meta:'Built-in · Top red bar, formal serif' },
+  { id:'focus',     name:'Focus',      meta:'Built-in · Big centered (tournament intermission)' },
+  { id:'stats',     name:'Stats',      meta:'Built-in · Multi-line debug-style' },
+  { id:'esports',   name:'Esports',    meta:'Built-in · Neon/cyberpunk glow' },
+];
+let customOverlays = [];
+let selectedOverlay = { kind:'builtin', id:'minimal' };
+
+function overlayUrlFor(sel, lang){
+  if (sel.kind === 'builtin'){
+    return `/overlay?lang=${encodeURIComponent(lang)}&style=${encodeURIComponent(sel.id)}`;
+  }
+  return `/overlay/${encodeURIComponent(sel.id)}?lang=${encodeURIComponent(lang)}`;
+}
+
+function selectOverlay(kind, id){
+  selectedOverlay = { kind, id };
+  updateOverlayUrl();
+  renderOverlayGallery();
+}
+
+function updateOverlayUrl(){
+  const lang = ($('ov-lang') && $('ov-lang').value) || 'en';
+  const path = overlayUrlFor(selectedOverlay, lang);
+  $('ovl-url').textContent = location.origin + path;
+  const iframe = $('overlay-preview');
+  if (iframe && iframe.src !== location.origin + path){
+    iframe.src = path;
+  }
+  // Selected name in preview header
+  const name = selectedOverlay.kind === 'builtin'
+    ? (BUILTIN_OVERLAYS.find(o => o.id === selectedOverlay.id) || {}).name || selectedOverlay.id
+    : selectedOverlay.id.replace(/\.html$/i, '');
+  $('ovl-selected-name').textContent = name;
+}
+
+function renderOverlayGallery(){
+  const c = $('overlay-files'); if (!c) return;
+  c.innerHTML = '';
+  BUILTIN_OVERLAYS.forEach(o => {
+    const sel = selectedOverlay.kind === 'builtin' && selectedOverlay.id === o.id;
+    const b = document.createElement('button');
+    b.className = 'overlay-file' + (sel ? ' selected' : '');
+    b.innerHTML = `<div class="overlay-file-name"></div><div class="overlay-file-meta">${o.meta}</div>`;
+    b.querySelector('.overlay-file-name').textContent = o.name;
+    b.onclick = () => selectOverlay('builtin', o.id);
+    c.appendChild(b);
+  });
+  customOverlays.forEach(f => {
+    const sel = selectedOverlay.kind === 'custom' && selectedOverlay.id === f;
+    const b = document.createElement('button');
+    b.className = 'overlay-file' + (sel ? ' selected' : '');
+    b.innerHTML = `<div class="overlay-file-name"></div><div class="overlay-file-meta mono"></div>
+                   <span class="overlay-file-tag">CUSTOM</span>`;
+    b.querySelector('.overlay-file-name').textContent = f.replace(/\.html$/i,'');
+    b.querySelector('.overlay-file-meta').textContent = '/overlay/'+f;
+    b.onclick = () => selectOverlay('custom', f);
+    c.appendChild(b);
+  });
+  const total = BUILTIN_OVERLAYS.length + customOverlays.length;
+  $('ovl-counts').textContent = `${BUILTIN_OVERLAYS.length} built-in · ${customOverlays.length} custom · ${total} total`;
+}
+
+async function loadOverlays(){
+  try {
+    const list = await (await fetch('/overlays')).json();
+    customOverlays = Array.isArray(list) ? list : (list.files || []);
+    renderOverlayGallery();
+    updateOverlayUrl();
+  } catch(_){}
+}
+$('ov-lang') && $('ov-lang').addEventListener('change', updateOverlayUrl);
+
+function copyEl(id, label){ navigator.clipboard.writeText($(id).textContent); toast((label||'Value')+' copied','ok'); }
+function copyText(text, label){ navigator.clipboard.writeText(text); toast((label||'Value')+' copied','ok'); }
+
+// ── Logs ──────────────────────────────────────────────────────────────
+async function pollLogs(){
+  try {
+    const j = await (await fetch('/logs')).json();
+    const el = $('logs');
+    if (!j.lines || !j.lines.length){ el.textContent=''; return; }
+    el.textContent = j.lines.join('\n'); el.scrollTop = el.scrollHeight;
+  } catch(_){}
+}
+async function clearLogs(){
+  await fetch('/logs/clear',{method:'POST'});
+  $('logs').textContent = '';
+  toast('Logs cleared','info');
+}
+// ── Spotlight onboarding tour ─────────────────────────────────────────
+// Each step optionally points at a real DOM element. The SVG mask
+// punches a hole over it, the tooltip floats next to it. Steps with
+// `tab` switch tabs first. Steps with `target: null` show a centered
+// modal-style tooltip (used for welcome + wrap-up).
+const TOUR = [
+  {
+    target: null, side: 'center',
+    title: 'Welcome to InstantClone',
+    body: `
+      <p>InstantClone sits between OBS and your streaming platforms (Twitch, YouTube, Kick…). It lets you <b>add/remove/change a stream delay live</b> without disconnecting OBS.</p>
+      <p>This 30-second tour points to the bits you'll actually use. Hit <b>Esc</b> or <b>Skip</b> at any time.</p>
+      <div class="tour-tip"><strong>The big picture:</strong> OBS → InstantClone → your platforms. You stay in OBS, you change the delay here.</div>
+    `,
+  },
+  {
+    target: '#hero-readout', side: 'right',
+    title: 'The delay readout',
+    body: `
+      <p>Big number = your <b>current delivered delay</b>. The pill above + aurora glow tell you the state:</p>
+      <ul>
+        <li><b>LIVE · Passthrough</b> — OBS forwarding, no delay</li>
+        <li><b>BUFFERING</b> — filling toward your armed value</li>
+        <li><b>ARMED</b> — buffer ready, click Activate</li>
+        <li><b>ACTIVE</b> — delay is live</li>
+      </ul>
+    `,
+  },
+  {
+    target: '.cp-input-row', side: 'bottom',
+    title: 'Set a custom delay',
+    body: `
+      <p>Type how many seconds of delay you want. Use the <b>−</b> / <b>+</b> buttons to nudge.</p>
+      <p>Range is 0 – 600 s (10 minutes). You can also save commonly-used delays as <b>Profiles</b> for one-click insta-arm.</p>
+    `,
+  },
+  {
+    target: '#cp-cta', side: 'top',
+    title: 'Arm → Activate (two-phase)',
+    body: `
+      <p>The big button changes meaning by state:</p>
+      <ul>
+        <li><b>Arm delay</b> → starts buffering (you can still cancel)</li>
+        <li><b>Activate</b> → once buffer is ready, click to cut your stream over</li>
+        <li><b>Cut delay</b> → return to passthrough live</li>
+      </ul>
+      <div class="tour-tip"><strong>Shortcut:</strong> press <b>Space</b> anywhere to fire this button.</div>
+    `,
+  },
+  {
+    target: '#tabs', side: 'bottom',
+    title: 'Tabs',
+    body: `
+      <p>Everything else lives in the tabs below. Destinations is the most important — that's where Twitch, YouTube, Kick etc. live.</p>
+      <p>Each tab loads instantly with a small spring animation. The pill behind the active tab slides between them.</p>
+    `,
+  },
+  {
+    target: '#dest-grid', side: 'top', tab: 'destinations',
+    title: 'Destinations',
+    body: `
+      <p>Add as many platforms as you want — each gets its own card with a coloured left stripe (Twitch purple, YouTube rose, Kick mint…), live bitrate sparkline, and per-destination status pill.</p>
+      <p>Stream keys are <b>per-destination</b>. OBS uses a simple stream identifier, the real platform keys live here.</p>
+      <div class="tour-tip"><strong>Streaming vs Connected:</strong> Streaming = bytes flowing. Connected = TCP up but OBS hasn't sent a frame yet.</div>
+    `,
+  },
+  {
+    target: '.tab[data-tab="obs"]', side: 'bottom', tab: 'obs',
+    title: 'OBS setup',
+    body: `
+      <p>One-time setup: copy the <b>Server URL</b> into OBS → Settings → Stream → Service: Custom.</p>
+      <p>Use any stream key (we suggest <code>main</code>) — InstantClone uses it only as a stream identifier. Your real per-platform keys are in the <b>Destinations</b> tab.</p>
+    `,
+  },
+  {
+    target: '.tab[data-tab="overlay"]', side: 'bottom', tab: 'overlay',
+    title: 'Overlay browser-source',
+    body: `
+      <p>Picks one of <b>9 built-in overlay styles</b> (Minimal, Compact, Corner, Strip, Ticker, Broadcast, Focus, Stats, Esports) for OBS to display the live delay on screen.</p>
+      <p>Drop your own <code>.html</code> file into the overlays folder and it shows up here automatically — fully customisable.</p>
+    `,
+  },
+  {
+    target: '#hdr-help', side: 'bottom',
+    title: 'You\'re ready',
+    body: `
+      <p>That's everything. Profiles, System, Logs are self-explanatory once you've used the rest.</p>
+      <p>Click this <b>?</b> button any time to re-open this tour. <b>Esc</b> closes it.</p>
+      <div class="tour-tip"><strong>Need help?</strong> The Logs tab has a Download button — send me the log file if something's misbehaving.</div>
+    `,
+  },
+];
+
+let tourIdx = 0;
+let tourResizeHandler = null;
+let tourScrollHandler = null;
+
+function openTour(idx){
+  tourIdx = idx || 0;
+  $('tour').hidden = false;
+  $('hdr-help-hint').hidden = true;
+  try { localStorage.setItem('instantclone_onboarded','1'); } catch(_){}
+  // Reposition on resize and scroll so the spotlight tracks the target.
+  if (!tourResizeHandler){
+    tourResizeHandler = () => positionTour();
+    tourScrollHandler = () => positionTour();
+    window.addEventListener('resize', tourResizeHandler);
+    window.addEventListener('scroll', tourScrollHandler, true);
+  }
+  renderTour();
+}
+
+function closeTour(){
+  $('tour').hidden = true;
+  if (tourResizeHandler){
+    window.removeEventListener('resize', tourResizeHandler);
+    window.removeEventListener('scroll', tourScrollHandler, true);
+    tourResizeHandler = null; tourScrollHandler = null;
+  }
+}
+
+function tourNext(){
+  if (tourIdx < TOUR.length - 1) { tourIdx++; renderTour(); }
+  else closeTour();
+}
+function tourPrev(){ if (tourIdx > 0){ tourIdx--; renderTour(); } }
+
+function renderTour(){
+  const t = TOUR[tourIdx];
+  $('tour-step').textContent = `${tourIdx + 1} / ${TOUR.length}`;
+  $('tour-title').textContent = t.title;
+  $('tour-body').innerHTML = t.body;
+  $('tour-prev').disabled = (tourIdx === 0);
+  $('tour-next').textContent = (tourIdx === TOUR.length - 1) ? 'Got it' : 'Next →';
+  // If this step belongs to a different tab, switch first so the
+  // target element exists before we try to position the spotlight.
+  if (t.tab) showTab(t.tab);
+  // Slight delay so tab-switch animation lays out, then position.
+  requestAnimationFrame(() => requestAnimationFrame(positionTour));
+}
+
+function positionTour(){
+  const t = TOUR[tourIdx]; if (!t) return;
+  const hl = $('tour-highlight');
+  const tip = $('tour-tooltip');
+  const mask = document.getElementById('tour-mask-rect-hole');
+
+  // Centered mode: no target, just centre the tooltip and hide the spotlight.
+  if (!t.target){
+    hl.classList.add('hidden');
+    if (mask){ mask.setAttribute('width', '0'); mask.setAttribute('height', '0'); }
+    tip.dataset.side = 'center';
+    tip.style.left = '50%';
+    tip.style.top  = '50%';
+    return;
+  }
+
+  const el = document.querySelector(t.target);
+  if (!el){
+    // Target missing (maybe hidden) — fall back to centered.
+    hl.classList.add('hidden');
+    if (mask){ mask.setAttribute('width', '0'); mask.setAttribute('height', '0'); }
+    tip.dataset.side = 'center';
+    tip.style.left = '50%'; tip.style.top = '50%';
+    return;
+  }
+
+  // Scroll into view first, then read rect.
+  try { el.scrollIntoView({block:'center', behavior:'smooth'}); } catch(_){}
+  const r = el.getBoundingClientRect();
+  const pad = 6; // extra padding around the highlight
+  const hx = Math.max(0, r.left   - pad);
+  const hy = Math.max(0, r.top    - pad);
+  const hw = r.width  + pad * 2;
+  const hh = r.height + pad * 2;
+
+  hl.classList.remove('hidden');
+  hl.style.left   = hx + 'px';
+  hl.style.top    = hy + 'px';
+  hl.style.width  = hw + 'px';
+  hl.style.height = hh + 'px';
+  if (mask){
+    mask.setAttribute('x', hx);
+    mask.setAttribute('y', hy);
+    mask.setAttribute('width', hw);
+    mask.setAttribute('height', hh);
+  }
+
+  // Smart placement: pick the side with the most room. Override with
+  // step's preferred `side` if it fits.
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const tw = 380, th = tip.offsetHeight || 280;
+  const preferred = t.side || 'bottom';
+  const sideFits = (s) => {
+    if (s === 'top')    return r.top > th + 30;
+    if (s === 'bottom') return vh - r.bottom > th + 30;
+    if (s === 'left')   return r.left > tw + 30;
+    if (s === 'right')  return vw - r.right > tw + 30;
+    return true;
+  };
+  const order = [preferred, 'bottom', 'top', 'right', 'left'];
+  const side = order.find(sideFits) || 'bottom';
+  tip.dataset.side = side;
+
+  let tx, ty;
+  if (side === 'bottom'){
+    tx = Math.min(vw - tw - 12, Math.max(12, hx));
+    ty = hy + hh;
+  } else if (side === 'top'){
+    tx = Math.min(vw - tw - 12, Math.max(12, hx));
+    ty = hy - th;
+  } else if (side === 'right'){
+    tx = hx + hw;
+    ty = Math.min(vh - th - 12, Math.max(12, hy));
+  } else { // left
+    tx = hx - tw;
+    ty = Math.min(vh - th - 12, Math.max(12, hy));
+  }
+  tip.style.left = tx + 'px';
+  tip.style.top  = ty + 'px';
+}
+
+document.addEventListener('keydown', e => {
+  if (!$('tour').hidden){
+    if (e.key === 'Escape')     { e.preventDefault(); closeTour(); }
+    else if (e.key === 'ArrowRight'){ e.preventDefault(); tourNext(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); tourPrev(); }
+  }
+});
+
+async function downloadLogs(){
+  try {
+    const j = await (await fetch('/logs')).json();
+    const lines = j.lines || [];
+    const ts = new Date().toISOString().replace(/[:.]/g,'-');
+    const blob = new Blob([lines.join('\n')+'\n'], {type:'text/plain'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'instantclone-log-'+ts+'.txt';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast('Saved '+lines.length+' lines','ok');
+  } catch(e){ toast('Download failed: '+e,'err'); }
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────
+function showTab(name){
+  $$('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === name));
+  $$('.tab-pane').forEach(p => p.hidden = p.dataset.pane !== name);
+  moveTabInd();
+}
+function moveTabInd(){
+  const cur = document.querySelector('.tab.on'); if (!cur) return;
+  const ind = $('tab-ind');
+  ind.style.left = cur.offsetLeft + 'px';
+  ind.style.width = cur.offsetWidth + 'px';
+}
+$$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
+window.addEventListener('resize', moveTabInd);
+
+// ── Tick / poll loop ──────────────────────────────────────────────────
+// applyState() is the pure render side — used by both the poll path
+// and the SSE push path so we don't have two copies of the dashboard
+// reconciliation logic.
+function applyState(s){
+  const prev = lastState;
+  if (prev){
+    if (!prev.ingest_alive && s.ingest_alive) toast('OBS connected','ok');
+    else if (prev.ingest_alive && !s.ingest_alive) toast('OBS disconnected','err');
+    else if (prev.ingest_alive && s.ingest_alive && prev.publisher_token !== s.publisher_token)
+      toast('OBS reconnected — re-aligned timeline','info');
+  }
+  lastState = s;
+  if ($('hero').hidden) return; // not configured
+  if (pendingPhase && pendingPhase === PHASE_TO_STATE[s.phase]) clearPending();
+  renderHero(s);
+  renderHeader(s);
+  renderStats(s);
+  renderCpProfiles();
+  const ds = PHASE_TO_STATE[s.phase] || 'off';
+  // Footer status: ingest down → "standby"; up & no delay → "live
+  // (passthrough)"; otherwise the delay phase. Matches the new state
+  // pill semantics so the dashboard tells a consistent story.
+  $('foot-status').textContent = !s.ingest_alive ? 'standby'
+                                : ds === 'off' ? 'live (passthrough)'
+                                : ds;
+}
+async function tick(){
+  try { applyState(await (await fetch('/state')).json()); } catch(_){}
+}
+
+// Prefer Server-Sent Events for state. One long-lived /events socket
+// replaces the 2 Hz polling loop — server writes only when state
+// actually changes, so idle CPU drops. Falls back to polling if
+// EventSource isn't supported (very old browsers) or the stream
+// errors out (e.g. proxy that doesn't grok text/event-stream).
+let _statePollTimer = null;
+function startStatePolling(){
+  if (_statePollTimer) return;
+  tick();
+  _statePollTimer = setInterval(tick, 500);
+}
+function stopStatePolling(){
+  if (_statePollTimer){ clearInterval(_statePollTimer); _statePollTimer = null; }
+}
+let _stateES = null;
+function startStateSSE(){
+  if (!window.EventSource){ startStatePolling(); return; }
+  try {
+    _stateES = new EventSource('/events');
+    _stateES.onmessage = ev => {
+      try { applyState(JSON.parse(ev.data)); stopStatePolling(); } catch(_){}
+    };
+    _stateES.onerror = () => {
+      try { _stateES.close(); } catch(_){}
+      _stateES = null;
+      startStatePolling();
+    };
+  } catch(_){ startStatePolling(); }
+}
+
+(async function init(){
+  try { platforms = await (await fetch('/platforms')).json(); } catch(_){ platforms = []; }
+  fillWizardPlatforms();
+  await loadConfig();
+  startStateSSE();
+  setInterval(pollLogs, 1500);
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === ' '){ e.preventDefault(); ctaClick({currentTarget: $('cp-cta')}); }
+  });
+  // Show the "New here?" hint near the (?) button once per browser
+  // until the user opens the tour. Persisted in localStorage so it
+  // doesn't nag returning users.
+  try {
+    if (!localStorage.getItem('instantclone_onboarded') && !$('hdr-bar').hidden){
+      $('hdr-help-hint').hidden = false;
+      // Auto-hide after 10 seconds so it's not permanently in the way.
+      setTimeout(() => { const h = $('hdr-help-hint'); if (h) h.hidden = true; }, 10000);
+    }
+  } catch(_){}
+})();
+</script>
+</body>
+</html>
