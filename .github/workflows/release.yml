@@ -12,7 +12,27 @@ permissions:
   contents: write  # needed to create releases
 
 jobs:
+  # Gate 1: tests must pass on the exact tagged commit before we ship.
+  # This guards against the "tag a commit that was never on main" case
+  # where ci.yml never ran. Same checks ci.yml does, in the same order.
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt check
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --release --all-targets -- -A clippy::all
+      - name: test
+        run: cargo test --release --no-fail-fast
+
+  # Gate 2: only runs if `test` succeeded. Builds, stages, publishes.
   build:
+    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

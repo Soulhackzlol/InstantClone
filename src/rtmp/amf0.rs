@@ -246,6 +246,51 @@ mod tests {
     }
 
     #[test]
+    fn ecma_array_decodes_like_object() {
+        // marker 0x08 (ECMA array): 4-byte count prefix, then same
+        // body layout as Object (key + value pairs, end marker).
+        let mut buf: Vec<u8> = Vec::new();
+        buf.push(0x08);                        // marker
+        buf.extend_from_slice(&3u32.to_be_bytes()); // count = 3 (ignored)
+        // one entry: key="x" value=number 1.0
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.push(b'x');
+        buf.push(0x00); // number marker
+        buf.extend_from_slice(&1.0f64.to_be_bytes());
+        // end marker
+        buf.extend_from_slice(&[0x00, 0x00, 0x09]);
+
+        let decoded = decode_all(&buf).unwrap();
+        let obj = decoded[0].as_object().expect("ecma array exposes as object");
+        assert_eq!(obj.get("x").and_then(|v| v.as_f64()), Some(1.0));
+    }
+
+    #[test]
+    fn empty_object_roundtrip() {
+        let mut buf = BytesMut::new();
+        enc_object(&mut buf, &[]);
+        let decoded = decode_all(&buf).unwrap();
+        let obj = decoded[0].as_object().expect("empty object");
+        assert!(obj.is_empty());
+    }
+
+    #[test]
+    fn multiple_values_in_one_buffer() {
+        // A single buffer can hold a sequence of top-level values,
+        // which `decode_all` returns as a Vec. This mirrors what RTMP
+        // command messages actually look like ("connect", txn, params).
+        let mut buf = BytesMut::new();
+        enc_string(&mut buf, "connect");
+        enc_number(&mut buf, 1.0);
+        enc_null(&mut buf);
+        let decoded = decode_all(&buf).unwrap();
+        assert_eq!(decoded.len(), 3);
+        assert_eq!(decoded[0].as_str(), Some("connect"));
+        assert_eq!(decoded[1].as_f64(), Some(1.0));
+        assert!(matches!(decoded[2], Amf0::Null));
+    }
+
+    #[test]
     fn deeply_nested_object_rejected() {
         // Hand-craft a deeply nested object payload — each 0x03 starts a
         // new object body. AMF0_MAX_DEPTH=16, so a 17-deep chain trips the

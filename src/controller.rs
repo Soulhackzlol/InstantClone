@@ -1555,5 +1555,40 @@ mod tests {
         assert_eq!(m.ts_ms, 2000);
         assert!(m.is_idr);
     }
+
+    // ── Timestamp wrap (the load-bearing one) ──────────────────────
+
+    #[test]
+    fn wire_ts_wrap_promotes_to_monotonic_u64() {
+        // RTMP wire timestamps are u32 ms, so they wrap every ~49.7 days.
+        // The Controller's expand_ts() promotes them to u64 by detecting
+        // a wrap (current u32 << previous u32) and bumping a "high"
+        // counter. Without this, a wrap would make `latest_ts - oldest_ts`
+        // negative and the whole delay accounting would explode.
+        //
+        // We can't call expand_ts directly (private), so we exercise it
+        // through on_tag() and observe the result via ring.latest_ts().
+        let h = harness(0);
+        // Walk forward toward the wrap boundary, then over it.
+        let near_max = u32::MAX - 1000;
+        h.ctrl.on_tag(9, near_max, &[0u8; 20], true, false);
+        h.ctrl.on_tag(9, near_max + 500, &[0u8; 20], false, false);
+        // Cross the boundary: wire_ts drops near 0 (this LOOKS LIKE
+        // going backwards if you only had u32 math).
+        h.ctrl.on_tag(9, 200, &[0u8; 20], false, false);
+
+        let latest = h.ctrl.ring.latest_ts().unwrap();
+        let oldest = h.ctrl.ring.oldest_ts().unwrap();
+        assert!(
+            latest > oldest,
+            "post-wrap latest ({latest}) must be > oldest ({oldest}); \
+             wrap promotion is broken"
+        );
+        // The expand_ts machinery should have lifted the post-wrap value
+        // above u32::MAX (high bit promoted).
+        assert!(latest > u32::MAX as u64,
+            "expected post-wrap ts above u32::MAX, got {latest}");
+    }
+
 }
 

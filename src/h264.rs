@@ -402,4 +402,47 @@ mod tests {
         assert_eq!(info.codec, AudioCodec::Opus);
         assert!(!info.is_seq_header);
     }
+
+    // ── Additional edge cases ──────────────────────────────────────
+
+    #[test]
+    fn avc_multi_nal_payload_detects_idr_anywhere() {
+        // A tag with [SEI, non-IDR slice, IDR slice]. The walk must
+        // keep going past the first non-IDR and still find the IDR.
+        let tag = avc_tag(1, &[nal(6, 20), nal(1, 30), nal(5, 50)]);
+        let info = classify_video_tag(&tag);
+        assert!(info.is_idr, "IDR in 3rd NAL must be detected");
+    }
+
+    #[test]
+    fn enhanced_rtmp_multitrack_packettype_6() {
+        // packet_type 6 = Multitrack. Should be flagged as multitrack
+        // but FrameType=1 still surfaces is_idr.
+        let byte0 = 0x80 | (1u8 << 4) | 6;
+        let payload = vec![byte0, 0, 0, 0, 0];
+        let info = classify_video_tag(&payload);
+        assert!(info.is_multitrack);
+        assert!(info.is_idr); // keyframe nibble still wins
+    }
+
+    #[test]
+    fn enhanced_aac_seq_header_via_packet_type_0() {
+        // sound_format 9 (ExAudio), packet_type 0 (SequenceStart), FourCC "mp4a"
+        let mut payload = vec![0x90, 0x00];
+        payload.extend_from_slice(b"mp4a");
+        let info = classify_audio_tag(&payload);
+        assert!(info.is_seq_header);
+        assert_eq!(info.codec, AudioCodec::Aac);
+        // The convenience shim agrees.
+        assert!(is_aac_seq_header(&payload));
+    }
+
+    #[test]
+    fn avc_legacy_with_unknown_codec_id_returns_unknown() {
+        // codec_id != 7 (we only understand AVC in legacy mode)
+        let tag = vec![0x12, 1, 0, 0, 0, 0x05]; // codec_id = 2 (Sorenson)
+        let info = classify_video_tag(&tag);
+        assert_eq!(info.codec, VideoCodec::Unknown);
+        assert!(!info.is_idr);
+    }
 }

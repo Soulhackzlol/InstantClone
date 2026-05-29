@@ -536,6 +536,70 @@ mod tests {
     }
 
     #[test]
+    fn read_past_latest_seq_returns_none() {
+        // A consumer asking for a seq that hasn't been written yet must
+        // get None, not stale bytes from a wrap or a buffer overread.
+        let t = tmp(4096);
+        let s = t.0.append(9, 0, &[0xAB; 40], false, false).unwrap().unwrap();
+        let mut buf = Vec::new();
+        assert!(t.0.try_read_seq(s + 1, &mut buf).unwrap().is_none());
+        assert!(t.0.try_read_seq(u64::MAX, &mut buf).unwrap().is_none());
+    }
+
+    #[test]
+    fn tag_exactly_at_half_capacity_is_accepted() {
+        // The rejection threshold is `> cap/2`. A tag exactly at cap/2
+        // bytes must be accepted (boundary check, not off-by-one).
+        let t = tmp(2048);
+        let payload = vec![0u8; 1024]; // exactly cap/2
+        let r = t.0.append(9, 100, &payload, false, false).unwrap();
+        assert!(r.is_some(), "tag at cap/2 must be accepted, not the rejection branch");
+    }
+
+    #[test]
+    fn ring_survives_multiple_full_wraps() {
+        // Cap 512. Write 30 tags of 80 bytes = 2400 bytes total, ~4.7×
+        // the capacity. The ring must keep the most recent tag readable
+        // and the index must not corrupt itself across multiple wraps.
+        let t = tmp(512);
+        let mut last_seq = 0;
+        for i in 0..30u32 {
+            let payload = vec![i as u8; 80];
+            last_seq = t.0.append(9, (i * 100) as u64, &payload, false, false)
+                .unwrap()
+                .unwrap();
+        }
+        let mut buf = Vec::new();
+        let r = t.0.try_read_seq(last_seq, &mut buf).unwrap();
+        assert!(r.is_some());
+        assert_eq!(buf.first(), Some(&29u8), "latest tag's bytes must be intact");
+        // Front seq is well past 0 (many evictions happened)
+        assert!(t.0.front_seq().unwrap() > 20);
+    }
+
+    #[test]
+    fn all_idr_queries_return_none_on_empty_ring() {
+        // Every IDR-lookup variant must early-return None instead of
+        // touching its (empty) underlying VecDeque. Collapsing into one
+        // test because they all share the same trivial precondition.
+        let t = tmp(2048);
+        assert!(t.0.find_idr_near(1000, 500).is_none());
+        assert!(t.0.newest_idr().is_none());
+        assert!(t.0.newest_idr_after(0).is_none());
+        assert!(t.0.oldest_idr_at_or_after(0).is_none());
+    }
+
+    #[test]
+    fn find_idr_near_with_zero_tolerance_demands_exact_match() {
+        let t = tmp(4096);
+        t.0.append(9, 1000, &[0u8; 40], true, false).unwrap();
+        // ts 999 with tolerance 0 → no match
+        assert!(t.0.find_idr_near(999, 0).is_none());
+        // ts 1000 with tolerance 0 → exact hit
+        assert_eq!(t.0.find_idr_near(1000, 0).unwrap().ts_ms, 1000);
+    }
+
+    #[test]
     fn newest_idr_after_skips_stale_publisher_idrs() {
         // Models the publisher-reconnect case: there are old IDRs in the
         // ring from before the reconnect; we want only the new session's.
