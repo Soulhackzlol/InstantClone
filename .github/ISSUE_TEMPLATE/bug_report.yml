@@ -1,0 +1,79 @@
+name: Bug report
+description: Something's broken or behaving weird.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this. The more concrete you can be, the faster I can fix it.
+
+  - type: input
+    id: version
+    attributes:
+      label: InstantClone version
+      description: Top-right of the dashboard, or the `v0.1.0` in the .exe name.
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: Run `winver` in the start menu.
+      placeholder: "Windows 11 23H2 / Build 22631"
+    validations:
+      required: true
+
+  - type: input
+    id: obs
+    attributes:
+      label: OBS version
+      placeholder: "30.2.0"
+
+  - type: dropdown
+    id: destination
+    attributes:
+      label: Streaming destination
+      options:
+        - Twitch
+        - YouTube
+        - Kick
+        - Trovo
+        - Restream
+        - Custom RTMP
+        - Multiple destinations
+        - N/A
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, in your words. Screenshots help a lot.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected to happen
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      placeholder: |
+        1. Open InstantClone
+        2. Start OBS streaming to rtmp://127.0.0.1:1935/live
+        3. Click Arm with 15s
+        4. ...
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Copy from the Logs tab in the dashboard. Redact stream keys if any leak through.
+      render: text

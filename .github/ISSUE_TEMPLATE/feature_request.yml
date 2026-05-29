@@ -1,0 +1,26 @@
+name: Feature request
+description: Something you wish InstantClone did.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: One sentence. The thing you want.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The use case. What problem does it solve for you? "I want to X so that Y" is a good shape.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: How you'd work around it today
+      description: If there's an existing way to do this with the current API / dashboard, mention it. Helps decide if a new feature is needed or just docs.

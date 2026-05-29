@@ -1,0 +1,42 @@
+name: release
+
+# Trigger: pushing a tag like v0.1.0 or v0.2.3.
+# What it does: builds the release binary, computes its SHA-256, and
+# creates a GitHub Release with the .exe + a checksum file attached.
+# Auto-generated release notes come from the commit log between tags.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # needed to create releases
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build release
+        run: cargo build --release
+
+      - name: stage artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts | Out-Null
+          $tag = "${{ github.ref_name }}"
+          Copy-Item .\target\release\instantclone.exe "artifacts\instantclone-$tag-windows-x64.exe"
+          $hash = (Get-FileHash "artifacts\instantclone-$tag-windows-x64.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  instantclone-$tag-windows-x64.exe" | Out-File -FilePath "artifacts\SHA256SUMS.txt" -Encoding ascii
+          Get-ChildItem artifacts
+
+      - name: publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/instantclone-*.exe
+            artifacts/SHA256SUMS.txt

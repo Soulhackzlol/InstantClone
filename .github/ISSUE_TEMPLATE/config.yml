@@ -1,0 +1,12 @@
+# Disables the "blank issue" option so people pick a template (bug or
+# feature). The contact_links route Q&A traffic to Discussions instead
+# of clogging the issue tracker.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Question / general discussion
+    url: https://github.com/Soulhackzlol/InstantClone/discussions
+    about: "Not a bug or a feature request? Discussions is the right place."
+  - name: Security report (private)
+    url: https://github.com/Soulhackzlol/InstantClone/security/advisories/new
+    about: "Found something with security implications? Open a private advisory, not a public issue."

@@ -1,0 +1,25 @@
+version: 2
+
+# Dependabot opens PRs when a dependency has an update available. Two
+# ecosystems for us: Cargo for the Rust deps, and the workflow files
+# themselves (so `actions/checkout@v4` doesn't drift to a deprecated
+# version silently).
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels: ["dependencies", "rust"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    labels: ["dependencies", "github-actions"]
