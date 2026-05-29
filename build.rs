@@ -35,7 +35,10 @@ fn main() {
         let gz_size = fs::metadata(&out_path).unwrap().len();
         println!(
             "cargo:warning={}: {} B raw -> {} B mini -> {} B gz",
-            name, raw.len(), mini.len(), gz_size
+            name,
+            raw.len(),
+            mini.len(),
+            gz_size
         );
     }
 
@@ -48,7 +51,11 @@ fn main() {
         let ico_path = out_dir.join("icon.ico");
         let bytes = make_ico(&[16, 32, 48]);
         fs::write(&ico_path, &bytes).unwrap();
-        println!("cargo:warning=icon.ico: {} bytes ({} sizes)", bytes.len(), 3);
+        println!(
+            "cargo:warning=icon.ico: {} bytes ({} sizes)",
+            bytes.len(),
+            3
+        );
     }
 
     println!("cargo:rerun-if-changed=build.rs");
@@ -71,8 +78,8 @@ fn make_ico(sizes: &[u32]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(header_size + images.iter().map(|i| i.len()).sum::<usize>());
 
     // ICONDIR
-    buf.extend_from_slice(&0u16.to_le_bytes());           // reserved
-    buf.extend_from_slice(&1u16.to_le_bytes());           // type = icon
+    buf.extend_from_slice(&0u16.to_le_bytes()); // reserved
+    buf.extend_from_slice(&1u16.to_le_bytes()); // type = icon
     buf.extend_from_slice(&(sizes.len() as u16).to_le_bytes());
 
     let mut offset = header_size as u32;
@@ -80,17 +87,19 @@ fn make_ico(sizes: &[u32]) -> Vec<u8> {
         let img_size = images[i].len() as u32;
         // 0 means 256 in ICONDIRENTRY; otherwise the actual dimension.
         let dim = if size >= 256 { 0u8 } else { size as u8 };
-        buf.push(dim);                                     // width
-        buf.push(dim);                                     // height
-        buf.push(0);                                       // color count (>=8bpp)
-        buf.push(0);                                       // reserved
-        buf.extend_from_slice(&1u16.to_le_bytes());        // planes
-        buf.extend_from_slice(&32u16.to_le_bytes());       // bpp
-        buf.extend_from_slice(&img_size.to_le_bytes());    // bytes_in_res
-        buf.extend_from_slice(&offset.to_le_bytes());      // image_offset
+        buf.push(dim); // width
+        buf.push(dim); // height
+        buf.push(0); // color count (>=8bpp)
+        buf.push(0); // reserved
+        buf.extend_from_slice(&1u16.to_le_bytes()); // planes
+        buf.extend_from_slice(&32u16.to_le_bytes()); // bpp
+        buf.extend_from_slice(&img_size.to_le_bytes()); // bytes_in_res
+        buf.extend_from_slice(&offset.to_le_bytes()); // image_offset
         offset += img_size;
     }
-    for img in images { buf.extend_from_slice(&img); }
+    for img in images {
+        buf.extend_from_slice(&img);
+    }
     buf
 }
 
@@ -104,14 +113,14 @@ fn make_image(size: u32) -> Vec<u8> {
     img.extend_from_slice(&40u32.to_le_bytes());
     img.extend_from_slice(&(size as i32).to_le_bytes());
     img.extend_from_slice(&((size as i32) * 2).to_le_bytes());
-    img.extend_from_slice(&1u16.to_le_bytes());            // planes
-    img.extend_from_slice(&32u16.to_le_bytes());           // bpp
-    img.extend_from_slice(&0u32.to_le_bytes());            // compression = BI_RGB
-    img.extend_from_slice(&0u32.to_le_bytes());            // size_image
-    img.extend_from_slice(&0i32.to_le_bytes());            // x_ppm
-    img.extend_from_slice(&0i32.to_le_bytes());            // y_ppm
-    img.extend_from_slice(&0u32.to_le_bytes());            // clr_used
-    img.extend_from_slice(&0u32.to_le_bytes());            // clr_important
+    img.extend_from_slice(&1u16.to_le_bytes()); // planes
+    img.extend_from_slice(&32u16.to_le_bytes()); // bpp
+    img.extend_from_slice(&0u32.to_le_bytes()); // compression = BI_RGB
+    img.extend_from_slice(&0u32.to_le_bytes()); // size_image
+    img.extend_from_slice(&0i32.to_le_bytes()); // x_ppm
+    img.extend_from_slice(&0i32.to_le_bytes()); // y_ppm
+    img.extend_from_slice(&0u32.to_le_bytes()); // clr_used
+    img.extend_from_slice(&0u32.to_le_bytes()); // clr_important
 
     // Render top-down into a BGRA buffer, then flip rows to bottom-up
     // (ICO convention) when appending.
@@ -155,7 +164,9 @@ fn draw_icon(pixels: &mut [u8], n: usize) {
     // Filled rounded square (cyan)
     for y in 0..n {
         for x in 0..n {
-            if !inside_rrect(x, y, x0, y0, x1, y1, radius) { continue; }
+            if !inside_rrect(x, y, x0, y0, x1, y1, radius) {
+                continue;
+            }
             let i = (y * n + x) * 4;
             pixels[i..i + 4].copy_from_slice(&CYAN);
         }
@@ -187,17 +198,19 @@ fn draw_icon(pixels: &mut [u8], n: usize) {
 /// the small ICO sizes hide the staircase well enough.
 #[cfg(windows)]
 fn inside_rrect(x: usize, y: usize, x0: usize, y0: usize, x1: usize, y1: usize, r: usize) -> bool {
-    if x < x0 || x >= x1 || y < y0 || y >= y1 { return false; }
+    if x < x0 || x >= x1 || y < y0 || y >= y1 {
+        return false;
+    }
     // Snap onto a corner centre if we're in any of the four corner squares.
     let in_left = x < x0 + r;
     let in_right = x + r >= x1;
     let in_top = y < y0 + r;
     let in_bottom = y + r >= y1;
     let (cx, cy) = match (in_left, in_right, in_top, in_bottom) {
-        (true,  false, true,  false) => (x0 + r, y0 + r),
-        (false, true,  true,  false) => (x1 - r - 1, y0 + r),
-        (true,  false, false, true ) => (x0 + r, y1 - r - 1),
-        (false, true,  false, true ) => (x1 - r - 1, y1 - r - 1),
+        (true, false, true, false) => (x0 + r, y0 + r),
+        (false, true, true, false) => (x1 - r - 1, y0 + r),
+        (true, false, false, true) => (x0 + r, y1 - r - 1),
+        (false, true, false, true) => (x1 - r - 1, y1 - r - 1),
         _ => return true, // straight edge or pure interior
     };
     let dx = x as i32 - cx as i32;
@@ -227,10 +240,18 @@ fn minify(input: &str) -> Vec<u8> {
     for line in input.lines() {
         // Detect pre/textarea open/close on the line (very rough).
         let lower = line.to_ascii_lowercase();
-        if lower.contains("<pre") { in_pre = true; }
-        if lower.contains("</pre>") { in_pre = false; }
-        if lower.contains("<textarea") { in_textarea = true; }
-        if lower.contains("</textarea>") { in_textarea = false; }
+        if lower.contains("<pre") {
+            in_pre = true;
+        }
+        if lower.contains("</pre>") {
+            in_pre = false;
+        }
+        if lower.contains("<textarea") {
+            in_textarea = true;
+        }
+        if lower.contains("</textarea>") {
+            in_textarea = false;
+        }
 
         if in_pre || in_textarea {
             out.extend_from_slice(line.as_bytes());
@@ -243,7 +264,9 @@ fn minify(input: &str) -> Vec<u8> {
         // multi-line template literal, leave the line as-is so we don't
         // corrupt the string content.
         let backticks = line.matches('`').count();
-        if backticks % 2 == 1 { in_template = !in_template; }
+        if backticks % 2 == 1 {
+            in_template = !in_template;
+        }
 
         if in_template {
             out.extend_from_slice(line.as_bytes());
@@ -257,7 +280,10 @@ fn minify(input: &str) -> Vec<u8> {
         let trimmed = trim_ws(&stripped);
 
         if trimmed.is_empty() {
-            if !prev_blank { out.push(b'\n'); prev_blank = true; }
+            if !prev_blank {
+                out.push(b'\n');
+                prev_blank = true;
+            }
             continue;
         }
 
@@ -275,8 +301,12 @@ fn minify(input: &str) -> Vec<u8> {
 fn trim_ws(b: &[u8]) -> &[u8] {
     let mut s = 0;
     let mut e = b.len();
-    while s < e && matches!(b[s], b' ' | b'\t' | b'\r' | b'\n') { s += 1; }
-    while e > s && matches!(b[e - 1], b' ' | b'\t' | b'\r' | b'\n') { e -= 1; }
+    while s < e && matches!(b[s], b' ' | b'\t' | b'\r' | b'\n') {
+        s += 1;
+    }
+    while e > s && matches!(b[e - 1], b' ' | b'\t' | b'\r' | b'\n') {
+        e -= 1;
+    }
     &b[s..e]
 }
 
@@ -311,7 +341,9 @@ fn strip_line(line: &str, in_block: &mut bool) -> Vec<u8> {
                 i += 2;
                 continue;
             }
-            if b == q { in_str = None; }
+            if b == q {
+                in_str = None;
+            }
             i += 1;
             continue;
         }
@@ -335,7 +367,9 @@ fn strip_line(line: &str, in_block: &mut bool) -> Vec<u8> {
         // a URL like https://). Treat `//` after `:` as URL noise.
         if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
             let prev = if i == 0 { b' ' } else { bytes[i - 1] };
-            if prev != b':' { break; }
+            if prev != b':' {
+                break;
+            }
         }
 
         out.push(b);

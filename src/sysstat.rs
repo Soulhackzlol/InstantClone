@@ -17,7 +17,9 @@ pub struct SysStat {
 
 impl SysStat {
     pub fn new() -> Self {
-        Self { prev: Mutex::new(None) }
+        Self {
+            prev: Mutex::new(None),
+        }
     }
 
     /// Returns (cpu_percent, rss_bytes). On unsupported platforms, both
@@ -34,7 +36,10 @@ mod platform {
     use std::time::Instant;
 
     #[repr(C)]
-    struct Filetime { dw_low_date_time: u32, dw_high_date_time: u32 }
+    struct Filetime {
+        dw_low_date_time: u32,
+        dw_high_date_time: u32,
+    }
 
     #[repr(C)]
     struct ProcessMemoryCounters {
@@ -80,35 +85,55 @@ mod platform {
 
         // CPU: user + kernel jiffies (in 100 ns units). We compute the
         // delta since last call and divide by wall-time delta to get %.
-        let mut creation = Filetime { dw_low_date_time: 0, dw_high_date_time: 0 };
-        let mut exit     = Filetime { dw_low_date_time: 0, dw_high_date_time: 0 };
-        let mut kernel   = Filetime { dw_low_date_time: 0, dw_high_date_time: 0 };
-        let mut user     = Filetime { dw_low_date_time: 0, dw_high_date_time: 0 };
+        let mut creation = Filetime {
+            dw_low_date_time: 0,
+            dw_high_date_time: 0,
+        };
+        let mut exit = Filetime {
+            dw_low_date_time: 0,
+            dw_high_date_time: 0,
+        };
+        let mut kernel = Filetime {
+            dw_low_date_time: 0,
+            dw_high_date_time: 0,
+        };
+        let mut user = Filetime {
+            dw_low_date_time: 0,
+            dw_high_date_time: 0,
+        };
         let now = Instant::now();
-        let cpu_pct = if unsafe {
-            GetProcessTimes(proc, &mut creation, &mut exit, &mut kernel, &mut user)
-        } != 0 {
-            let total = ft_to_100ns(&kernel).saturating_add(ft_to_100ns(&user));
-            let mut prev = s.prev.lock().unwrap();
-            let pct = if let Some((prev_total, prev_t)) = *prev {
-                let dt_ns = now.duration_since(prev_t).as_nanos() as u64;
-                let dt_100ns = dt_ns / 100;
-                let work = total.saturating_sub(prev_total);
-                if dt_100ns == 0 { 0.0 }
-                else { (work as f64 / dt_100ns as f64) as f32 * 100.0 }
-            } else { 0.0 };
-            *prev = Some((total, now));
-            pct
-        } else { 0.0 };
+        let cpu_pct =
+            if unsafe { GetProcessTimes(proc, &mut creation, &mut exit, &mut kernel, &mut user) }
+                != 0
+            {
+                let total = ft_to_100ns(&kernel).saturating_add(ft_to_100ns(&user));
+                let mut prev = s.prev.lock().unwrap();
+                let pct = if let Some((prev_total, prev_t)) = *prev {
+                    let dt_ns = now.duration_since(prev_t).as_nanos() as u64;
+                    let dt_100ns = dt_ns / 100;
+                    let work = total.saturating_sub(prev_total);
+                    if dt_100ns == 0 {
+                        0.0
+                    } else {
+                        (work as f64 / dt_100ns as f64) as f32 * 100.0
+                    }
+                } else {
+                    0.0
+                };
+                *prev = Some((total, now));
+                pct
+            } else {
+                0.0
+            };
 
         // RSS: working set size. Sized to current PROCESS_MEMORY_COUNTERS.
         let mut pmc: ProcessMemoryCounters = unsafe { std::mem::zeroed() };
         pmc.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
-        let rss = if unsafe {
-            GetProcessMemoryInfo(proc, &mut pmc, pmc.cb)
-        } != 0 {
+        let rss = if unsafe { GetProcessMemoryInfo(proc, &mut pmc, pmc.cb) } != 0 {
             pmc.working_set_size as u64
-        } else { 0 };
+        } else {
+            0
+        };
 
         // CPU% can briefly exceed 100 on multi-core spikes; clamp display
         // to a friendlier ceiling so the UI doesn't show "732%".
@@ -118,12 +143,16 @@ mod platform {
     fn num_cpus_hint() -> u32 {
         // std::thread::available_parallelism is the cheapest cross-version
         // path; fall back to 1 to avoid clamping to zero on weird hosts.
-        std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1)
+        std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1)
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 mod platform {
     use super::SysStat;
-    pub fn sample(_s: &SysStat) -> (f32, u64) { (0.0, 0) }
+    pub fn sample(_s: &SysStat) -> (f32, u64) {
+        (0.0, 0)
+    }
 }

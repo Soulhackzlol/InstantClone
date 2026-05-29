@@ -34,7 +34,7 @@ use tokio::sync::broadcast;
 
 pub fn run_cli(args: &[String]) -> io::Result<()> {
     let mut port: u16 = 1936;
-    let mut web_port: u16 = 1937;        // 0 = disable web player
+    let mut web_port: u16 = 1937; // 0 = disable web player
     let mut file: Option<String> = None;
     let mut verbose = false;
     let mut max_mb: Option<u64> = None;
@@ -44,22 +44,26 @@ pub fn run_cli(args: &[String]) -> io::Result<()> {
         match a.as_str() {
             "--port" => {
                 port = it.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| {
-                    eprintln!("--port needs a number"); std::process::exit(2);
+                    eprintln!("--port needs a number");
+                    std::process::exit(2);
                 });
             }
             "--web-port" => {
                 web_port = it.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| {
-                    eprintln!("--web-port needs a number"); std::process::exit(2);
+                    eprintln!("--web-port needs a number");
+                    std::process::exit(2);
                 });
             }
             "--file" => {
                 file = it.next().cloned().or_else(|| {
-                    eprintln!("--file needs a path"); std::process::exit(2);
+                    eprintln!("--file needs a path");
+                    std::process::exit(2);
                 });
             }
             "--max-mb" => {
                 max_mb = it.next().and_then(|s| s.parse().ok()).or_else(|| {
-                    eprintln!("--max-mb needs a number"); std::process::exit(2);
+                    eprintln!("--max-mb needs a number");
+                    std::process::exit(2);
                 });
             }
             "--temp" => temp = true,
@@ -76,13 +80,15 @@ pub fn run_cli(args: &[String]) -> io::Result<()> {
         }
     }
 
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
     rt.block_on(async move { run_sink(port, web_port, file, verbose, max_mb, temp).await })
 }
 
 fn print_help() {
     eprintln!(
-"InstantClone — RTMP sink (for end-to-end local testing)
+        "InstantClone — RTMP sink (for end-to-end local testing)
 
 USAGE:
     instantclone sink [OPTIONS]
@@ -107,7 +113,8 @@ To use this with the proxy:
     2. Run `instantclone` in another terminal
     3. In the web UI, set platform → \"Custom\" and URL to
        rtmp://127.0.0.1:1936/live/test
-    4. Point OBS at rtmp://127.0.0.1:1935/live");
+    4. Point OBS at rtmp://127.0.0.1:1935/live"
+    );
 }
 
 async fn run_sink(
@@ -126,9 +133,15 @@ async fn run_sink(
     println!("┌─────────────────────────────────────────────────────────┐");
     println!("│  InstantClone — local RTMP sink                         │");
     println!("│                                                         │");
-    println!("│  RTMP:       rtmp://127.0.0.1:{:<5}/live                 │", port);
+    println!(
+        "│  RTMP:       rtmp://127.0.0.1:{:<5}/live                 │",
+        port
+    );
     if web_port > 0 {
-        println!("│  Web player: http://127.0.0.1:{:<5}/                     │", web_port);
+        println!(
+            "│  Web player: http://127.0.0.1:{:<5}/                     │",
+            web_port
+        );
     } else {
         println!("│  Web player: disabled (--web-port 0)                    │");
     }
@@ -136,7 +149,7 @@ async fn run_sink(
         println!("│  Recording:  {:<42} │", truncate(p, 42));
         match max_mb {
             Some(n) => println!("│  Cap:        {:<42} │", format!("{} MB", n)),
-            None    => println!("│  Cap:        unlimited (use --max-mb N to cap)          │"),
+            None => println!("│  Cap:        unlimited (use --max-mb N to cap)          │"),
         }
         if temp {
             println!("│  Cleanup:    delete on Ctrl+C (--temp)                  │");
@@ -147,7 +160,10 @@ async fn run_sink(
     println!("│                                                         │");
     println!("│  In InstantClone's web UI:                              │");
     println!("│    Platform → Custom                                    │");
-    println!("│    URL     → rtmp://127.0.0.1:{}/live/test               │", port);
+    println!(
+        "│    URL     → rtmp://127.0.0.1:{}/live/test               │",
+        port
+    );
     println!("│    Key     → (anything)                                 │");
     println!("└─────────────────────────────────────────────────────────┘");
     println!();
@@ -171,7 +187,10 @@ async fn run_sink(
         loop {
             let (sock, peer) = match listener.accept().await {
                 Ok(v) => v,
-                Err(e) => { eprintln!("[sink] accept failed: {}", e); break; }
+                Err(e) => {
+                    eprintln!("[sink] accept failed: {}", e);
+                    break;
+                }
             };
             let _ = sock.set_nodelay(true);
             let out = out_path.clone();
@@ -279,7 +298,11 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
     msg: &Message,
 ) -> io::Result<()> {
     let values = amf0::decode_all(&msg.payload)?;
-    let name = values.first().and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let name = values
+        .first()
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let txn = values.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
 
     match name.as_str() {
@@ -300,8 +323,14 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
             props.insert("capabilities".to_string(), Amf0::Number(31.0));
             let mut info = HashMap::new();
             info.insert("level".to_string(), Amf0::String("status".into()));
-            info.insert("code".to_string(), Amf0::String("NetConnection.Connect.Success".into()));
-            info.insert("description".to_string(), Amf0::String("Connection succeeded.".into()));
+            info.insert(
+                "code".to_string(),
+                Amf0::String("NetConnection.Connect.Success".into()),
+            );
+            info.insert(
+                "description".to_string(),
+                Amf0::String("Connection succeeded.".into()),
+            );
             info.insert("objectEncoding".to_string(), Amf0::Number(0.0));
             let mut buf = BytesMut::new();
             amf0::enc_string(&mut buf, "_result");
@@ -334,8 +363,14 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
             println!("[sink] publish accepted (stream key: {:?})", key);
             let mut info = HashMap::new();
             info.insert("level".to_string(), Amf0::String("status".into()));
-            info.insert("code".to_string(), Amf0::String("NetStream.Publish.Start".into()));
-            info.insert("description".to_string(), Amf0::String("Sink is recording".into()));
+            info.insert(
+                "code".to_string(),
+                Amf0::String("NetStream.Publish.Start".into()),
+            );
+            info.insert(
+                "description".to_string(),
+                Amf0::String("Sink is recording".into()),
+            );
             let mut buf = BytesMut::new();
             amf0::enc_string(&mut buf, "onStatus");
             amf0::enc_number(&mut buf, 0.0);
@@ -384,11 +419,23 @@ impl SinkStats {
 
     fn note_video(&mut self, ts: u32, len: usize, is_idr: bool, is_seq: bool) {
         self.bytes += len as u64;
-        if !is_seq { self.video_frames += 1; }
-        if is_idr { self.idrs += 1; }
-        if self.first_ts.is_none() { self.first_ts = Some(ts); }
+        if !is_seq {
+            self.video_frames += 1;
+        }
+        if is_idr {
+            self.idrs += 1;
+        }
+        if self.first_ts.is_none() {
+            self.first_ts = Some(ts);
+        }
         if self.verbose {
-            let marker = if is_seq { "VS" } else if is_idr { "VI" } else { "Vp" };
+            let marker = if is_seq {
+                "VS"
+            } else if is_idr {
+                "VI"
+            } else {
+                "Vp"
+            };
             println!("  {} ts={:>8} sz={:>6}", marker, ts, len);
         }
         self.last_video_ts = Some(ts);
@@ -397,7 +444,9 @@ impl SinkStats {
     fn note_audio(&mut self, ts: u32, len: usize) {
         self.bytes += len as u64;
         self.audio_frames += 1;
-        if self.first_ts.is_none() { self.first_ts = Some(ts); }
+        if self.first_ts.is_none() {
+            self.first_ts = Some(ts);
+        }
         if self.verbose {
             println!("  A  ts={:>8} sz={:>6}", ts, len);
         }
@@ -406,7 +455,9 @@ impl SinkStats {
 
     fn maybe_print(&mut self) {
         let elapsed = self.window_start.elapsed();
-        if elapsed < Duration::from_secs(1) { return; }
+        if elapsed < Duration::from_secs(1) {
+            return;
+        }
         let kbps = (self.bytes * 8) / elapsed.as_millis().max(1) as u64;
         let v_ts = self.last_video_ts.unwrap_or(0);
         let a_ts = self.last_audio_ts.unwrap_or(0);
@@ -430,7 +481,7 @@ impl SinkStats {
 // ---------------------------------------------------------------------
 struct FlvWriter {
     w: BufWriter<File>,
-    max_bytes: Option<u64>,   // hard cap; further writes are silently dropped past it
+    max_bytes: Option<u64>, // hard cap; further writes are silently dropped past it
     bytes_written: u64,
     cap_warned: bool,
 }
@@ -458,8 +509,10 @@ impl FlvWriter {
         if let Some(cap) = self.max_bytes {
             if self.bytes_written + tag_bytes > cap {
                 if !self.cap_warned {
-                    eprintln!("[sink] recording capped at {} MB — further tags dropped from FLV",
-                        cap / 1024 / 1024);
+                    eprintln!(
+                        "[sink] recording capped at {} MB — further tags dropped from FLV",
+                        cap / 1024 / 1024
+                    );
                     let _ = self.w.flush();
                     self.cap_warned = true;
                 }
@@ -482,7 +535,9 @@ impl FlvWriter {
         self.bytes_written += tag_bytes;
         // Flush after each tag so a Ctrl+C doesn't lose the latest frame
         // and VLC can tail the file during live record.
-        if len > 0 { let _ = self.w.flush(); }
+        if len > 0 {
+            let _ = self.w.flush();
+        }
         Ok(())
     }
 }
@@ -494,7 +549,9 @@ impl Drop for FlvWriter {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { return s.to_string(); }
+    if s.len() <= max {
+        return s.to_string();
+    }
     let mut out = String::with_capacity(max);
     out.push_str(&s[..max.saturating_sub(1)]);
     out.push('…');
@@ -521,7 +578,7 @@ pub struct LiveStream {
     tx: broadcast::Sender<Arc<Vec<u8>>>,
     seq_video: std::sync::Mutex<Option<Arc<Vec<u8>>>>,
     seq_audio: std::sync::Mutex<Option<Arc<Vec<u8>>>>,
-    metadata:  std::sync::Mutex<Option<Arc<Vec<u8>>>>,
+    metadata: std::sync::Mutex<Option<Arc<Vec<u8>>>>,
 }
 
 impl LiveStream {
@@ -534,7 +591,7 @@ impl LiveStream {
             tx,
             seq_video: std::sync::Mutex::new(None),
             seq_audio: std::sync::Mutex::new(None),
-            metadata:  std::sync::Mutex::new(None),
+            metadata: std::sync::Mutex::new(None),
         })
     }
 }
@@ -560,7 +617,10 @@ fn flv_tag_bytes(tag_type: u8, ts: u32, payload: &[u8]) -> Vec<u8> {
 
 async fn run_web(port: u16, live: Arc<LiveStream>) -> io::Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-    println!("[sink-web] 🎬 open http://127.0.0.1:{}/ in your browser to watch live", port);
+    println!(
+        "[sink-web] 🎬 open http://127.0.0.1:{}/ in your browser to watch live",
+        port
+    );
     loop {
         let (sock, _) = listener.accept().await?;
         let _ = sock.set_nodelay(true);
@@ -577,10 +637,16 @@ async fn handle_web_request(mut sock: TcpStream, live: Arc<LiveStream>) -> io::R
     let mut used = 0;
     loop {
         let n = sock.read(&mut buf[used..]).await?;
-        if n == 0 { return Ok(()); }
+        if n == 0 {
+            return Ok(());
+        }
         used += n;
-        if buf[..used].windows(4).any(|w| w == b"\r\n\r\n") { break; }
-        if used == buf.len() { return Ok(()); }
+        if buf[..used].windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+        if used == buf.len() {
+            return Ok(());
+        }
     }
     let req = std::str::from_utf8(&buf[..used]).unwrap_or("");
     let path = req.split_whitespace().nth(1).unwrap_or("/");
@@ -589,7 +655,11 @@ async fn handle_web_request(mut sock: TcpStream, live: Arc<LiveStream>) -> io::R
         "/" => serve_player_page(&mut sock).await,
         "/live.flv" => serve_live_flv(&mut sock, live).await,
         _ => {
-            let _ = sock.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+            let _ = sock
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
             Ok(())
         }
     }
@@ -639,7 +709,9 @@ async fn serve_live_flv(sock: &mut TcpStream, live: Arc<LiveStream>) -> io::Resu
     loop {
         match rx.recv().await {
             Ok(bytes) => {
-                if send_chunked(sock, &bytes).await.is_err() { break; }
+                if send_chunked(sock, &bytes).await.is_err() {
+                    break;
+                }
             }
             Err(broadcast::error::RecvError::Lagged(_)) => break,
             Err(broadcast::error::RecvError::Closed) => break,

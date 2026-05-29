@@ -16,8 +16,8 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoCodec {
-    Avc,    // H.264
-    Hevc,   // H.265
+    Avc,  // H.264
+    Hevc, // H.265
     Av1,
     Vp9,
     Unknown,
@@ -26,10 +26,10 @@ pub enum VideoCodec {
 impl VideoCodec {
     pub fn label(self) -> &'static str {
         match self {
-            VideoCodec::Avc     => "H.264",
-            VideoCodec::Hevc    => "HEVC",
-            VideoCodec::Av1     => "AV1",
-            VideoCodec::Vp9     => "VP9",
+            VideoCodec::Avc => "H.264",
+            VideoCodec::Hevc => "HEVC",
+            VideoCodec::Av1 => "AV1",
+            VideoCodec::Vp9 => "VP9",
             VideoCodec::Unknown => "?",
         }
     }
@@ -51,15 +51,21 @@ const FOURCC_AVC1: [u8; 4] = *b"avc1";
 
 pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     let unknown = VideoTagInfo {
-        is_seq_header: false, is_idr: false,
-        is_multitrack: false, codec: VideoCodec::Unknown,
+        is_seq_header: false,
+        is_idr: false,
+        is_multitrack: false,
+        codec: VideoCodec::Unknown,
     };
-    if payload.is_empty() { return unknown; }
+    if payload.is_empty() {
+        return unknown;
+    }
     let b0 = payload[0];
     let is_ex_header = b0 & 0x80 != 0;
 
     if !is_ex_header {
-        if payload.len() < 5 { return unknown; }
+        if payload.len() < 5 {
+            return unknown;
+        }
         let codec_id = b0 & 0x0F;
         if codec_id != 7 {
             return unknown; // We only understand AVC in legacy mode.
@@ -71,7 +77,8 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
         // FrameType=key on the seq header too).
         let is_idr = avc_packet_type == 1 && contains_idr_nalu(&payload[5..]);
         return VideoTagInfo {
-            is_seq_header, is_idr,
+            is_seq_header,
+            is_idr,
             is_multitrack: false,
             codec: VideoCodec::Avc,
         };
@@ -81,8 +88,8 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     //   PacketType 0=SequenceStart, 1=CodedFrames, 2=SequenceEnd,
     //              3=CodedFramesX (no composition time),
     //              4=Metadata, 5=MPEG2TSSequenceStart, 6=Multitrack.
-    let frame_type  = (b0 >> 4) & 0x07;
-    let packet_type =  b0       & 0x0F;
+    let frame_type = (b0 >> 4) & 0x07;
+    let packet_type = b0 & 0x0F;
     let is_seq_header = packet_type == 0;
     // Enhanced encoders always set FrameType=1 on keyframes. For AVC we
     // walked NALUs because some encoders flag P-frames as key incorrectly;
@@ -95,7 +102,8 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     // path flattens it to single-track before any downstream code runs.
     if is_multitrack {
         return VideoTagInfo {
-            is_seq_header, is_idr: is_keyframe,
+            is_seq_header,
+            is_idr: is_keyframe,
             is_multitrack: true,
             codec: VideoCodec::Unknown,
         };
@@ -103,7 +111,8 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
 
     if payload.len() < 5 {
         return VideoTagInfo {
-            is_seq_header, is_idr: is_keyframe,
+            is_seq_header,
+            is_idr: is_keyframe,
             is_multitrack: false,
             codec: VideoCodec::Unknown,
         };
@@ -111,10 +120,10 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     let fourcc = [payload[1], payload[2], payload[3], payload[4]];
     let codec = match fourcc {
         FOURCC_HVC1 | FOURCC_HEV1 => VideoCodec::Hevc,
-        FOURCC_AV01               => VideoCodec::Av1,
-        FOURCC_VP09               => VideoCodec::Vp9,
-        FOURCC_AVC1               => VideoCodec::Avc,
-        _                         => VideoCodec::Unknown,
+        FOURCC_AV01 => VideoCodec::Av1,
+        FOURCC_VP09 => VideoCodec::Vp9,
+        FOURCC_AVC1 => VideoCodec::Avc,
+        _ => VideoCodec::Unknown,
     };
     VideoTagInfo {
         is_seq_header,
@@ -127,9 +136,13 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
 fn contains_idr_nalu(mut data: &[u8]) -> bool {
     while data.len() >= 4 {
         let len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        if 4 + len > data.len() { return false; }
+        if 4 + len > data.len() {
+            return false;
+        }
         let nal_unit_type = data[4] & 0x1F;
-        if nal_unit_type == 5 { return true; }
+        if nal_unit_type == 5 {
+            return true;
+        }
         data = &data[4 + len..];
     }
     false
@@ -150,13 +163,17 @@ fn contains_idr_nalu(mut data: &[u8]) -> bool {
 ///   bytes 1..5 = FourCC
 ///   bytes 5..  = the chosen track's payload
 pub fn flatten_multitrack_video(payload: &[u8]) -> Option<Vec<u8>> {
-    if payload.len() < 6 { return None; }
+    if payload.len() < 6 {
+        return None;
+    }
     let b0 = payload[0];
-    if (b0 & 0x80) == 0 || (b0 & 0x0F) != 6 { return None; }
+    if (b0 & 0x80) == 0 || (b0 & 0x0F) != 6 {
+        return None;
+    }
     let frame_type = (b0 >> 4) & 0x07;
-    let mt_header  = payload[1];
-    let mt_type    = (mt_header >> 4) & 0x0F;
-    let nested_pt  =  mt_header       & 0x0F;
+    let mt_header = payload[1];
+    let mt_type = (mt_header >> 4) & 0x0F;
+    let nested_pt = mt_header & 0x0F;
 
     // Stitch the rewritten single-track tag header.
     let mut out = Vec::with_capacity(payload.len());
@@ -165,7 +182,9 @@ pub fn flatten_multitrack_video(payload: &[u8]) -> Option<Vec<u8>> {
     match mt_type {
         0 => {
             // OneTrack: [FourCC(4)][TrackId(1)][payload..]
-            if payload.len() < 7 { return None; }
+            if payload.len() < 7 {
+                return None;
+            }
             let fourcc = &payload[2..6];
             let track_payload = &payload[7..];
             out.push(header_byte);
@@ -177,12 +196,18 @@ pub fn flatten_multitrack_video(payload: &[u8]) -> Option<Vec<u8>> {
             // ManyTracks: [FourCC(4)] then repeated
             //   [TrackId(1)][SizeOfVideoTrack(3 BE)][payload]
             // Take the FIRST track in the list (primary by spec).
-            if payload.len() < 6 + 4 { return None; }
+            if payload.len() < 6 + 4 {
+                return None;
+            }
             let fourcc = &payload[2..6];
             let rest = &payload[6..];
-            if rest.len() < 4 { return None; }
+            if rest.len() < 4 {
+                return None;
+            }
             let track_len = u32::from_be_bytes([0, rest[1], rest[2], rest[3]]) as usize;
-            if rest.len() < 4 + track_len { return None; }
+            if rest.len() < 4 + track_len {
+                return None;
+            }
             let track_payload = &rest[4..4 + track_len];
             out.push(header_byte);
             out.extend_from_slice(fourcc);
@@ -193,10 +218,14 @@ pub fn flatten_multitrack_video(payload: &[u8]) -> Option<Vec<u8>> {
             // ManyTracksManyCodecs: repeated
             //   [TrackId(1)][FourCC(4)][SizeOfVideoTrack(3 BE)][payload]
             let rest = &payload[2..];
-            if rest.len() < 8 { return None; }
+            if rest.len() < 8 {
+                return None;
+            }
             let fourcc = &rest[1..5];
             let track_len = u32::from_be_bytes([0, rest[5], rest[6], rest[7]]) as usize;
-            if rest.len() < 8 + track_len { return None; }
+            if rest.len() < 8 + track_len {
+                return None;
+            }
             let track_payload = &rest[8..8 + track_len];
             out.push(header_byte);
             out.extend_from_slice(fourcc);
@@ -209,18 +238,24 @@ pub fn flatten_multitrack_video(payload: &[u8]) -> Option<Vec<u8>> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioCodec {
-    Aac, Mp3, Opus, Ac3, Eac3, Flac, Unknown,
+    Aac,
+    Mp3,
+    Opus,
+    Ac3,
+    Eac3,
+    Flac,
+    Unknown,
 }
 
 impl AudioCodec {
     pub fn label(self) -> &'static str {
         match self {
-            AudioCodec::Aac     => "AAC",
-            AudioCodec::Mp3     => "MP3",
-            AudioCodec::Opus    => "Opus",
-            AudioCodec::Ac3     => "AC-3",
-            AudioCodec::Eac3    => "E-AC-3",
-            AudioCodec::Flac    => "FLAC",
+            AudioCodec::Aac => "AAC",
+            AudioCodec::Mp3 => "MP3",
+            AudioCodec::Opus => "Opus",
+            AudioCodec::Ac3 => "AC-3",
+            AudioCodec::Eac3 => "E-AC-3",
+            AudioCodec::Flac => "FLAC",
             AudioCodec::Unknown => "?",
         }
     }
@@ -234,33 +269,44 @@ pub struct AudioTagInfo {
 }
 
 const FOURCC_OPUS: [u8; 4] = *b"Opus";
-const FOURCC_AC3:  [u8; 4] = *b"ac-3";
+const FOURCC_AC3: [u8; 4] = *b"ac-3";
 const FOURCC_EAC3: [u8; 4] = *b"ec-3";
 const FOURCC_FLAC: [u8; 4] = *b"fLaC";
 const FOURCC_MP4A: [u8; 4] = *b"mp4a";
 
 pub fn classify_audio_tag(payload: &[u8]) -> AudioTagInfo {
     let unknown = AudioTagInfo {
-        is_seq_header: false, is_multitrack: false, codec: AudioCodec::Unknown,
+        is_seq_header: false,
+        is_multitrack: false,
+        codec: AudioCodec::Unknown,
     };
-    if payload.is_empty() { return unknown; }
+    if payload.is_empty() {
+        return unknown;
+    }
     let sound_format = (payload[0] >> 4) & 0x0F;
 
     // Legacy AAC: byte 1 is AACPacketType (0=AudioSpecificConfig).
     if sound_format == 10 {
         let is_seq_header = payload.len() >= 2 && payload[1] == 0;
         return AudioTagInfo {
-            is_seq_header, is_multitrack: false, codec: AudioCodec::Aac,
+            is_seq_header,
+            is_multitrack: false,
+            codec: AudioCodec::Aac,
         };
     }
     if sound_format == 2 {
-        return AudioTagInfo { codec: AudioCodec::Mp3, ..unknown };
+        return AudioTagInfo {
+            codec: AudioCodec::Mp3,
+            ..unknown
+        };
     }
     // Enhanced RTMP audio uses sound_format=9 as the sentinel for
     // ExAudioTagHeader. We pass these tags through bit-faithfully so
     // Twitch's VOD audio track (OBS "Audio Track 2") keeps working.
     if sound_format == 9 {
-        if payload.len() < 2 { return unknown; }
+        if payload.len() < 2 {
+            return unknown;
+        }
         // byte 1: AudioPacketModEx(4) | AudioPacketType(4)
         //   PacketType 0=SequenceStart, 1=CodedFrames, 5=Multitrack.
         let packet_type = payload[1] & 0x0F;
@@ -270,16 +316,20 @@ pub fn classify_audio_tag(payload: &[u8]) -> AudioTagInfo {
             let fourcc = [payload[2], payload[3], payload[4], payload[5]];
             match fourcc {
                 FOURCC_OPUS => AudioCodec::Opus,
-                FOURCC_AC3  => AudioCodec::Ac3,
+                FOURCC_AC3 => AudioCodec::Ac3,
                 FOURCC_EAC3 => AudioCodec::Eac3,
                 FOURCC_FLAC => AudioCodec::Flac,
                 FOURCC_MP4A => AudioCodec::Aac,
-                _           => AudioCodec::Unknown,
+                _ => AudioCodec::Unknown,
             }
         } else {
             AudioCodec::Unknown
         };
-        return AudioTagInfo { is_seq_header, is_multitrack, codec };
+        return AudioTagInfo {
+            is_seq_header,
+            is_multitrack,
+            codec,
+        };
     }
     unknown
 }
@@ -310,7 +360,9 @@ mod tests {
     /// frame_type: 1 = keyframe (high nibble); codec_id 7 (AVC, low nibble).
     fn avc_tag(packet_type: u8, nals: &[Vec<u8>]) -> Vec<u8> {
         let mut out = vec![0x17, packet_type, 0, 0, 0]; // FrameType=1, CodecID=7
-        for n in nals { out.extend_from_slice(n); }
+        for n in nals {
+            out.extend_from_slice(n);
+        }
         out
     }
 
@@ -339,7 +391,10 @@ mod tests {
         let tag = avc_tag(0, &[]);
         let info = classify_video_tag(&tag);
         assert!(info.is_seq_header);
-        assert!(!info.is_idr, "seq headers carry SPS/PPS, never an IDR slice");
+        assert!(
+            !info.is_idr,
+            "seq headers carry SPS/PPS, never an IDR slice"
+        );
     }
 
     #[test]

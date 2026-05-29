@@ -28,14 +28,14 @@ mod buffer;
 mod config;
 mod controller;
 mod h264;
+#[cfg(windows)]
+mod portcheck;
 mod rtmp;
 mod sink;
 mod sysstat;
-mod web;
-#[cfg(windows)]
-mod portcheck;
 #[cfg(windows)]
 mod tray;
+mod web;
 
 use crate::config::Settings;
 use std::path::PathBuf;
@@ -75,14 +75,22 @@ fn main() -> std::io::Result<()> {
     // and pop a native modal asking the user to switch or quit.
     #[cfg(windows)]
     {
-        let host_ingest = if settings.ingest_bind_all { "0.0.0.0" } else { "127.0.0.1" };
+        let host_ingest = if settings.ingest_bind_all {
+            "0.0.0.0"
+        } else {
+            "127.0.0.1"
+        };
         if !portcheck::is_port_free(&format!("{}:{}", host_ingest, settings.ingest_port)) {
             match preflight_resolve("RTMP port", settings.ingest_port, host_ingest) {
                 Some(new_port) => settings.ingest_port = new_port,
                 None => return Ok(()),
             }
         }
-        let host_web = if settings.web_bind_all { "0.0.0.0" } else { "127.0.0.1" };
+        let host_web = if settings.web_bind_all {
+            "0.0.0.0"
+        } else {
+            "127.0.0.1"
+        };
         if !portcheck::is_port_free(&format!("{}:{}", host_web, settings.web_port)) {
             match preflight_resolve("Web port", settings.web_port, host_web) {
                 Some(new_port) => settings.web_port = new_port,
@@ -112,7 +120,8 @@ fn main() -> std::io::Result<()> {
         // back the moment the stream resumes. They explicitly hit
         // "Activate" once the buffer is ready (or auto-activate via the
         // config flag, if we add one later).
-        let initial_armed = settings.armed_delay_ms
+        let initial_armed = settings
+            .armed_delay_ms
             .max(settings.target_delay_ms)
             .max(settings.initial_delay_ms);
         let ctrl = Arc::new(controller::Controller::new(ring, initial_armed));
@@ -171,7 +180,8 @@ fn main() -> std::io::Result<()> {
         // Tiny window — if a pump is mid-await it'll just exit on next
         // loop tick.
         for (_id, st) in ctrl.all_destination_states() {
-            st.shutdown_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+            st.shutdown_requested
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         tokio::time::sleep(Duration::from_millis(800)).await;
 
@@ -192,10 +202,7 @@ fn main() -> std::io::Result<()> {
     })
 }
 
-async fn supervise_ingest(
-    mut rx: watch::Receiver<Settings>,
-    ctrl: Arc<controller::Controller>,
-) {
+async fn supervise_ingest(mut rx: watch::Receiver<Settings>, ctrl: Arc<controller::Controller>) {
     let mut current_addr = rx.borrow().ingest_addr();
     let mut handle = tokio::spawn(rtmp::server::run(current_addr.clone(), ctrl.clone()));
     loop {
@@ -224,10 +231,7 @@ async fn supervise_ingest(
 /// One egress pump per destination. Owns a map { dest_id → (url, JoinHandle) }
 /// and diffs it against the active-destinations list whenever settings
 /// change. Adds/removes/restarts as needed.
-async fn supervise_egress(
-    mut rx: watch::Receiver<Settings>,
-    ctrl: Arc<controller::Controller>,
-) {
+async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controller::Controller>) {
     // Currently-running egress pumps, indexed by Destination.id.
     let mut running: std::collections::HashMap<
         String,
@@ -240,14 +244,13 @@ async fn supervise_egress(
 
     loop {
         // Snapshot the current desired destinations.
-        let desired: Vec<(config::Destination, String)> = {
-            rx.borrow().active_destinations()
-        };
+        let desired: Vec<(config::Destination, String)> = { rx.borrow().active_destinations() };
 
         // 1) Stop any pump whose dest is no longer desired (or whose URL changed).
         let desired_ids: std::collections::HashSet<String> =
             desired.iter().map(|(d, _)| d.id.clone()).collect();
-        let to_remove: Vec<String> = running.keys()
+        let to_remove: Vec<String> = running
+            .keys()
             .filter(|id| !desired_ids.contains(*id))
             .cloned()
             .collect();
@@ -261,7 +264,9 @@ async fn supervise_egress(
                 // loop would keep retrying forever even after the user
                 // toggled it off.
                 let state = ctrl.destination_state(&id);
-                state.shutdown_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                state
+                    .shutdown_requested
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 let abort = handle.abort_handle();
                 let _ = tokio::time::timeout(Duration::from_millis(1500), handle).await;
                 abort.abort();
@@ -286,11 +291,16 @@ async fn supervise_egress(
                 // shutdown flag set on the (cached) Arc. Reset it before
                 // the new pump enters its loop or it would immediately
                 // send deleteStream and exit.
-                state.shutdown_requested.store(false, std::sync::atomic::Ordering::Relaxed);
+                state
+                    .shutdown_requested
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
                 let label = dest.name.clone();
                 let url_clone = url.clone();
                 let handle = tokio::spawn(controller::run_egress(
-                    ctrl.clone(), label, url_clone.clone(), state,
+                    ctrl.clone(),
+                    label,
+                    url_clone.clone(),
+                    state,
                 ));
                 running.insert(dest.id.clone(), (url_clone, handle));
                 ctrl.log(format!("[{}] starting egress", dest.name));
@@ -312,7 +322,9 @@ async fn supervise_egress(
             // task forever. Instead just sleep and check.
             loop {
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                if running.values().any(|(_, h)| h.is_finished()) { return; }
+                if running.values().any(|(_, h)| h.is_finished()) {
+                    return;
+                }
             }
         };
         tokio::select! {
@@ -338,9 +350,8 @@ async fn supervise_web(
     cfg_path: PathBuf,
 ) {
     let mut current_addr = rx.borrow().web_addr();
-    let spawn_one = |addr: String| {
-        tokio::spawn(web::run(addr, ctrl.clone(), tx.clone(), cfg_path.clone()))
-    };
+    let spawn_one =
+        |addr: String| tokio::spawn(web::run(addr, ctrl.clone(), tx.clone(), cfg_path.clone()));
     let mut handle = spawn_one(current_addr.clone());
     loop {
         tokio::select! {
@@ -399,9 +410,9 @@ fn ensure_overlays_dir(dir: &std::path::Path) {
         }
     };
     drop("minimal.html", OVERLAY_MINIMAL);
-    drop("corner.html",  OVERLAY_CORNER);
-    drop("strip.html",   OVERLAY_STRIP);
-    drop("README.md",    OVERLAY_README);
+    drop("corner.html", OVERLAY_CORNER);
+    drop("strip.html", OVERLAY_STRIP);
+    drop("README.md", OVERLAY_README);
 }
 
 const OVERLAY_README: &str = r#"# InstantClone overlay plugins

@@ -18,7 +18,10 @@ pub async fn perform_server(sock: &mut TcpStream) -> io::Result<()> {
     let mut c0 = [0u8; 1];
     sock.read_exact(&mut c0).await?;
     if c0[0] != 3 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "bad RTMP version"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bad RTMP version",
+        ));
     }
     let mut c1 = vec![0u8; HS_SIZE];
     sock.read_exact(&mut c1).await?;
@@ -46,7 +49,10 @@ pub async fn perform_client(sock: &mut TcpStream) -> io::Result<()> {
     let mut s0 = [0u8; 1];
     sock.read_exact(&mut s0).await?;
     if s0[0] != 3 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "bad RTMP version"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bad RTMP version",
+        ));
     }
     let mut s1 = vec![0u8; HS_SIZE];
     sock.read_exact(&mut s1).await?;

@@ -62,7 +62,10 @@ async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::R
     // Negotiate a larger chunk size up-front; 4096 is the de-facto standard.
     writer.send_set_chunk_size(4096).await?;
 
-    let mut guard = PublishGuard { ctrl: ctrl.clone(), active: false };
+    let mut guard = PublishGuard {
+        ctrl: ctrl.clone(),
+        active: false,
+    };
 
     loop {
         let msg = reader.read_message().await?;
@@ -115,7 +118,11 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
     guard: &mut PublishGuard,
 ) -> io::Result<()> {
     let values = amf0::decode_all(&msg.payload)?;
-    let name = values.first().and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let name = values
+        .first()
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let txn_id = values.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
 
     match name.as_str() {
@@ -129,8 +136,14 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
             props.insert("capabilities".to_string(), Amf0::Number(31.0));
             let mut info = HashMap::new();
             info.insert("level".to_string(), Amf0::String("status".into()));
-            info.insert("code".to_string(), Amf0::String("NetConnection.Connect.Success".into()));
-            info.insert("description".to_string(), Amf0::String("Connection succeeded.".into()));
+            info.insert(
+                "code".to_string(),
+                Amf0::String("NetConnection.Connect.Success".into()),
+            );
+            info.insert(
+                "description".to_string(),
+                Amf0::String("Connection succeeded.".into()),
+            );
             info.insert("objectEncoding".to_string(), Amf0::Number(0.0));
             send_command_result(writer, txn_id, Amf0::Object(props), Amf0::Object(info)).await?;
         }
@@ -149,15 +162,25 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
             writer.flush().await?;
         }
         "publish" => {
-            let stream_key = values.get(3).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let stream_key = values
+                .get(3)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             match ctrl.begin_publish(&stream_key).await {
                 Ok(_token) => {
                     guard.active = true;
                     // onStatus NetStream.Publish.Start
                     let mut info = HashMap::new();
                     info.insert("level".to_string(), Amf0::String("status".into()));
-                    info.insert("code".to_string(), Amf0::String("NetStream.Publish.Start".into()));
-                    info.insert("description".to_string(), Amf0::String("Start publishing".into()));
+                    info.insert(
+                        "code".to_string(),
+                        Amf0::String("NetStream.Publish.Start".into()),
+                    );
+                    info.insert(
+                        "description".to_string(),
+                        Amf0::String("Start publishing".into()),
+                    );
                     let mut buf = BytesMut::new();
                     amf0::enc_string(&mut buf, "onStatus");
                     amf0::enc_number(&mut buf, 0.0);
@@ -171,8 +194,10 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
                     // there hopefully sending video into nothing.
                     let mut info = HashMap::new();
                     info.insert("level".to_string(), Amf0::String("error".into()));
-                    info.insert("code".to_string(),
-                        Amf0::String("NetStream.Publish.BadName".into()));
+                    info.insert(
+                        "code".to_string(),
+                        Amf0::String("NetStream.Publish.BadName".into()),
+                    );
                     info.insert("description".to_string(), Amf0::String(e.to_string()));
                     let mut buf = BytesMut::new();
                     amf0::enc_string(&mut buf, "onStatus");

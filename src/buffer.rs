@@ -18,9 +18,9 @@ use tokio::sync::Notify;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TagMeta {
-    pub seq: u64,        // monotonic id, stable across eviction
-    pub offset: u64,     // byte offset into the ring file
-    pub len: u32,        // payload length in bytes
+    pub seq: u64,    // monotonic id, stable across eviction
+    pub offset: u64, // byte offset into the ring file
+    pub len: u32,    // payload length in bytes
     /// Original input presentation time, promoted from the on-the-wire
     /// u32 milliseconds to u64 by the Controller's `expand_ts` wrap
     /// detector. RTMP timestamps wrap every ~49.7 days; storing u64 here
@@ -28,8 +28,8 @@ pub struct TagMeta {
     /// is naturally correct without `wrapping_sub` gymnastics. The
     /// downstream send path narrows back to u32 at the wire boundary.
     pub ts_ms: u64,
-    pub kind: u8,        // FLV tag type: 8=audio, 9=video, 18=script-data
-    pub is_idr: bool,    // verified IDR keyframe (NAL type 5 present)
+    pub kind: u8,     // FLV tag type: 8=audio, 9=video, 18=script-data
+    pub is_idr: bool, // verified IDR keyframe (NAL type 5 present)
 }
 
 pub struct DiskRing {
@@ -198,7 +198,9 @@ impl DiskRing {
             Some(m) => m.seq,
             None => return Ok(None),
         };
-        if seq < front { return Ok(None); }
+        if seq < front {
+            return Ok(None);
+        }
         let idx = (seq - front) as usize;
         let meta = match inner.index.get(idx).copied() {
             Some(m) => m,
@@ -265,25 +267,51 @@ impl DiskRing {
         let inner = self.inner.lock().unwrap();
         let tol = tolerance_ms as u64;
         let pos = inner.idr_index.partition_point(|m| m.ts_ms <= target_ts);
-        let below = if pos > 0 { inner.idr_index.get(pos - 1).copied() } else { None };
+        let below = if pos > 0 {
+            inner.idr_index.get(pos - 1).copied()
+        } else {
+            None
+        };
         let above = inner.idr_index.get(pos).copied();
 
-        let dist = |m: &TagMeta| -> u64 {
-            m.ts_ms.abs_diff(target_ts)
-        };
+        let dist = |m: &TagMeta| -> u64 { m.ts_ms.abs_diff(target_ts) };
 
         match (below, above) {
             (Some(b), Some(a)) => {
                 let bd = dist(&b);
                 let ad = dist(&a);
                 if bd <= ad {
-                    if bd <= tol { Some(b) } else if ad <= tol { Some(a) } else { None }
+                    if bd <= tol {
+                        Some(b)
+                    } else if ad <= tol {
+                        Some(a)
+                    } else {
+                        None
+                    }
                 } else {
-                    if ad <= tol { Some(a) } else if bd <= tol { Some(b) } else { None }
+                    if ad <= tol {
+                        Some(a)
+                    } else if bd <= tol {
+                        Some(b)
+                    } else {
+                        None
+                    }
                 }
             }
-            (Some(b), None) => if dist(&b) <= tol { Some(b) } else { None },
-            (None, Some(a)) => if dist(&a) <= tol { Some(a) } else { None },
+            (Some(b), None) => {
+                if dist(&b) <= tol {
+                    Some(b)
+                } else {
+                    None
+                }
+            }
+            (None, Some(a)) => {
+                if dist(&a) <= tol {
+                    Some(a)
+                } else {
+                    None
+                }
+            }
             (None, None) => None,
         }
     }
@@ -300,7 +328,12 @@ impl DiskRing {
     /// previous session that still happen to live in the ring.
     pub fn newest_idr_after(&self, min_seq: u64) -> Option<TagMeta> {
         let inner = self.inner.lock().unwrap();
-        inner.index.iter().rev().find(|m| m.is_idr && m.seq > min_seq).copied()
+        inner
+            .index
+            .iter()
+            .rev()
+            .find(|m| m.is_idr && m.seq > min_seq)
+            .copied()
     }
 
     /// OLDEST IDR whose seq is >= `min_seq`. Used by the egress pump
@@ -311,7 +344,11 @@ impl DiskRing {
     /// content while keeping the decode chain valid.
     pub fn oldest_idr_at_or_after(&self, min_seq: u64) -> Option<TagMeta> {
         let inner = self.inner.lock().unwrap();
-        inner.index.iter().find(|m| m.is_idr && m.seq >= min_seq).copied()
+        inner
+            .index
+            .iter()
+            .find(|m| m.is_idr && m.seq >= min_seq)
+            .copied()
     }
 
     /// Seq of the most recently appended tag, or None if the ring is empty.
@@ -335,14 +372,14 @@ impl DiskRing {
             // Never evict a tag the consumer is still reading or hasn't
             // reached yet — otherwise pace_and_send's read_tag could race
             // with a future overwrite of the same byte offset.
-            if front.seq >= min_seq { break; }
+            if front.seq >= min_seq {
+                break;
+            }
             if front.ts_ms < cutoff {
                 inner.index.pop_front();
                 // Keep the IDR-only index in sync — same defensive front
                 // check as the byte-overlap eviction path in `append`.
-                if front.is_idr
-                    && inner.idr_index.front().map(|m| m.seq) == Some(front.seq)
-                {
+                if front.is_idr && inner.idr_index.front().map(|m| m.seq) == Some(front.seq) {
                     inner.idr_index.pop_front();
                 }
             } else {
@@ -399,7 +436,10 @@ mod tests {
     fn append_then_read_roundtrip() {
         let t = tmp(4096);
         let payload = b"hello world";
-        let seq = t.0.append(9, 100, payload, false, false).unwrap().expect("seq");
+        let seq =
+            t.0.append(9, 100, payload, false, false)
+                .unwrap()
+                .expect("seq");
         assert_eq!(seq, 0);
 
         let mut buf = Vec::new();
@@ -413,7 +453,10 @@ mod tests {
         let t = tmp(4096);
         let r = t.0.append(9, 0, b"AVCDecoderConfig", false, true).unwrap();
         assert!(r.is_none(), "seq headers must not return a ring seq");
-        assert_eq!(*t.0.video_seq_header.lock().unwrap(), Some(b"AVCDecoderConfig".to_vec()));
+        assert_eq!(
+            *t.0.video_seq_header.lock().unwrap(),
+            Some(b"AVCDecoderConfig".to_vec())
+        );
     }
 
     #[test]
@@ -442,9 +485,10 @@ mod tests {
         let mut last_seq = 0;
         for i in 0..6 {
             let payload = vec![(i + 1) as u8; 80];
-            last_seq = t.0.append(9, i as u64, &payload, false, false)
-                .unwrap()
-                .unwrap();
+            last_seq =
+                t.0.append(9, i as u64, &payload, false, false)
+                    .unwrap()
+                    .unwrap();
         }
         // Front is no longer seq=0
         let front = t.0.front_seq().unwrap();
@@ -499,9 +543,10 @@ mod tests {
         // Push 6 tags at 100, 200, 300, 400, 500, 600 ms.
         let mut seqs = Vec::new();
         for i in 1..=6u32 {
-            let s = t.0.append(9, (i * 100) as u64, &[0u8; 60], false, false)
-                .unwrap()
-                .unwrap();
+            let s =
+                t.0.append(9, (i * 100) as u64, &[0u8; 60], false, false)
+                    .unwrap()
+                    .unwrap();
             seqs.push(s);
         }
         // Consumer is on seq=2 (third tag, ts=300).
@@ -511,8 +556,11 @@ mod tests {
         t.0.trim_older_than(100, 600, /*min_seq=*/ seqs[2]);
 
         // Front should be exactly seq[2], not later.
-        assert_eq!(t.0.front_seq(), Some(seqs[2]),
-            "trim must stop at min_seq, never evict an in-flight tag");
+        assert_eq!(
+            t.0.front_seq(),
+            Some(seqs[2]),
+            "trim must stop at min_seq, never evict an in-flight tag"
+        );
 
         // Sanity: seq[0] and seq[1] (which were < min_seq AND older than
         // cutoff) should be gone.
@@ -540,7 +588,10 @@ mod tests {
         // A consumer asking for a seq that hasn't been written yet must
         // get None, not stale bytes from a wrap or a buffer overread.
         let t = tmp(4096);
-        let s = t.0.append(9, 0, &[0xAB; 40], false, false).unwrap().unwrap();
+        let s =
+            t.0.append(9, 0, &[0xAB; 40], false, false)
+                .unwrap()
+                .unwrap();
         let mut buf = Vec::new();
         assert!(t.0.try_read_seq(s + 1, &mut buf).unwrap().is_none());
         assert!(t.0.try_read_seq(u64::MAX, &mut buf).unwrap().is_none());
@@ -553,7 +604,10 @@ mod tests {
         let t = tmp(2048);
         let payload = vec![0u8; 1024]; // exactly cap/2
         let r = t.0.append(9, 100, &payload, false, false).unwrap();
-        assert!(r.is_some(), "tag at cap/2 must be accepted, not the rejection branch");
+        assert!(
+            r.is_some(),
+            "tag at cap/2 must be accepted, not the rejection branch"
+        );
     }
 
     #[test]
@@ -565,14 +619,19 @@ mod tests {
         let mut last_seq = 0;
         for i in 0..30u32 {
             let payload = vec![i as u8; 80];
-            last_seq = t.0.append(9, (i * 100) as u64, &payload, false, false)
-                .unwrap()
-                .unwrap();
+            last_seq =
+                t.0.append(9, (i * 100) as u64, &payload, false, false)
+                    .unwrap()
+                    .unwrap();
         }
         let mut buf = Vec::new();
         let r = t.0.try_read_seq(last_seq, &mut buf).unwrap();
         assert!(r.is_some());
-        assert_eq!(buf.first(), Some(&29u8), "latest tag's bytes must be intact");
+        assert_eq!(
+            buf.first(),
+            Some(&29u8),
+            "latest tag's bytes must be intact"
+        );
         // Front seq is well past 0 (many evictions happened)
         assert!(t.0.front_seq().unwrap() > 20);
     }
@@ -604,8 +663,14 @@ mod tests {
         // Models the publisher-reconnect case: there are old IDRs in the
         // ring from before the reconnect; we want only the new session's.
         let t = tmp(4096);
-        let old_seq = t.0.append(9, 100, &[0u8; 30], true, false).unwrap().unwrap();
-        let new_seq = t.0.append(9, 200, &[0u8; 30], true, false).unwrap().unwrap();
+        let old_seq =
+            t.0.append(9, 100, &[0u8; 30], true, false)
+                .unwrap()
+                .unwrap();
+        let new_seq =
+            t.0.append(9, 200, &[0u8; 30], true, false)
+                .unwrap()
+                .unwrap();
         let m = t.0.newest_idr_after(old_seq).expect("found");
         assert_eq!(m.seq, new_seq);
         assert!(t.0.newest_idr_after(new_seq + 100).is_none());

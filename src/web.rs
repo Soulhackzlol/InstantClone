@@ -63,7 +63,9 @@ async fn serve(
     let head_end;
     loop {
         let n = sock.read(&mut buf[used..]).await?;
-        if n == 0 { return Ok(()); }
+        if n == 0 {
+            return Ok(());
+        }
         used += n;
         if let Some(idx) = find_subslice(&buf[..used], b"\r\n\r\n") {
             head_end = idx + 4;
@@ -72,9 +74,11 @@ async fn serve(
         if used >= buf.len() {
             // Header section larger than our buffer — refuse politely
             // instead of dropping the TCP connection without explanation.
-            let _ = sock.write_all(
-                b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            ).await;
+            let _ = sock
+                .write_all(
+                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
             return Ok(());
         }
     }
@@ -99,7 +103,9 @@ async fn serve(
         let r = format!(
             "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(), body);
+            body.len(),
+            body
+        );
         sock.write_all(r.as_bytes()).await?;
         return Ok(());
     }
@@ -128,7 +134,11 @@ async fn serve(
             sock.write_all(body).await?;
             return Ok(());
         }
-        let blob: &'static [u8] = if bare_path == "/" { INDEX_HTML_GZ } else { DOCK_HTML_GZ };
+        let blob: &'static [u8] = if bare_path == "/" {
+            INDEX_HTML_GZ
+        } else {
+            DOCK_HTML_GZ
+        };
         let r = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
              Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n\
@@ -172,7 +182,9 @@ async fn serve(
     while body_buf.len() < content_length {
         let mut tmp = [0u8; 4096];
         let n = sock.read(&mut tmp).await?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         body_buf.extend_from_slice(&tmp[..n]);
     }
     if body_buf.len() > content_length {
@@ -180,13 +192,18 @@ async fn serve(
     }
     let body = std::str::from_utf8(&body_buf).unwrap_or("");
 
-    let (status, ctype, payload) = route(method, path, body, &ctrl, &settings, &cfg_path, &sysstat).await;
+    let (status, ctype, payload) =
+        route(method, path, body, &ctrl, &settings, &cfg_path, &sysstat).await;
 
     // ACAO is intentionally restrictive now — only set on GET responses
     // so overlays / docks loaded as foreign origins can still read state.
     // POST endpoints get NO ACAO header, which (with credentials=false)
     // blocks cross-origin script-readable responses too.
-    let acao = if method == "GET" { "Access-Control-Allow-Origin: *\r\n" } else { "" };
+    let acao = if method == "GET" {
+        "Access-Control-Allow-Origin: *\r\n"
+    } else {
+        ""
+    };
     let resp = format!(
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
         status, ctype, payload.len(), acao
@@ -219,36 +236,50 @@ async fn route(
     match (method, bare_path) {
         // GET / and GET /dock are handled in serve() as a fast-path
         // (static gz blob, no allocation, no String round-trip).
-        ("GET", "/overlay")    => ("200 OK", "text/html; charset=utf-8", overlay_html(query)),
-        ("GET", "/state")      => ("200 OK", "application/json", state_json(ctrl, settings, sysstat)),
-        ("GET", "/config")     => ("200 OK", "application/json", settings.borrow().to_json()),
-        ("GET", "/platforms")  => ("200 OK", "application/json", platforms_json()),
+        ("GET", "/overlay") => ("200 OK", "text/html; charset=utf-8", overlay_html(query)),
+        ("GET", "/state") => (
+            "200 OK",
+            "application/json",
+            state_json(ctrl, settings, sysstat),
+        ),
+        ("GET", "/config") => ("200 OK", "application/json", settings.borrow().to_json()),
+        ("GET", "/platforms") => ("200 OK", "application/json", platforms_json()),
         ("GET", "/twitch_ingests") => ("200 OK", "application/json", twitch_ingests_json()),
-        ("GET", "/profiles")   => ("200 OK", "application/json", profiles_json(settings)),
-        ("GET", "/logs")       => ("200 OK", "application/json", logs_json(ctrl)),
-        ("GET", "/overlays")   => ("200 OK", "application/json", list_overlays(settings)),
-        ("GET", "/destinations") => ("200 OK", "application/json", destinations_json(ctrl, settings)),
+        ("GET", "/profiles") => ("200 OK", "application/json", profiles_json(settings)),
+        ("GET", "/logs") => ("200 OK", "application/json", logs_json(ctrl)),
+        ("GET", "/overlays") => ("200 OK", "application/json", list_overlays(settings)),
+        ("GET", "/destinations") => (
+            "200 OK",
+            "application/json",
+            destinations_json(ctrl, settings),
+        ),
 
-        ("POST", "/config")    => post_config(body, ctrl, settings, cfg_path).await,
+        ("POST", "/config") => post_config(body, ctrl, settings, cfg_path).await,
         // Two-phase delay endpoints
-        ("POST", "/arm")       => post_arm(body, ctrl, settings, cfg_path, sysstat).await,
-        ("POST", "/activate")  => post_activate(ctrl, settings, cfg_path, sysstat).await,
-        ("POST", "/stop")      => post_stop(ctrl, settings, cfg_path, sysstat).await,
-        ("POST", "/disarm")    => post_disarm(ctrl, settings, cfg_path, sysstat).await,
+        ("POST", "/arm") => post_arm(body, ctrl, settings, cfg_path, sysstat).await,
+        ("POST", "/activate") => post_activate(ctrl, settings, cfg_path, sysstat).await,
+        ("POST", "/stop") => post_stop(ctrl, settings, cfg_path, sysstat).await,
+        ("POST", "/disarm") => post_disarm(ctrl, settings, cfg_path, sysstat).await,
         // Legacy one-shot endpoints (Stream Deck etc.)
-        ("POST", "/delay")     => post_delay(body, ctrl, settings, cfg_path, sysstat).await,
-        ("POST", "/go-live")   => post_stop(ctrl, settings, cfg_path, sysstat).await,
+        ("POST", "/delay") => post_delay(body, ctrl, settings, cfg_path, sysstat).await,
+        ("POST", "/go-live") => post_stop(ctrl, settings, cfg_path, sysstat).await,
         ("POST", "/test-egress") => test_egress(settings).await,
         ("POST", "/test-webhook") => post_test_webhook(ctrl).await,
-        ("POST", "/logs/clear")  => { ctrl.clear_logs();
-            ("200 OK", "application/json", r#"{"ok":true}"#.into()) }
+        ("POST", "/logs/clear") => {
+            ctrl.clear_logs();
+            ("200 OK", "application/json", r#"{"ok":true}"#.into())
+        }
         // Profiles CRUD
-        ("POST", "/profiles")        => post_profile_add(body, settings, cfg_path).await,
+        ("POST", "/profiles") => post_profile_add(body, settings, cfg_path).await,
         ("POST", "/profiles/delete") => post_profile_del(body, settings, cfg_path).await,
         // Destinations CRUD
-        ("POST", "/destinations")        => post_destination_upsert(body, settings, cfg_path).await,
+        ("POST", "/destinations") => post_destination_upsert(body, settings, cfg_path).await,
         ("POST", "/destinations/delete") => post_destination_delete(body, settings, cfg_path).await,
-        _ => ("404 Not Found", "text/plain; charset=utf-8", "not found".into()),
+        _ => (
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            "not found".into(),
+        ),
     }
 }
 
@@ -313,7 +344,11 @@ async fn handle_sse(
 
 // ---- Endpoints ----
 
-fn state_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>, sysstat: &Arc<SysStat>) -> String {
+fn state_json(
+    ctrl: &Controller,
+    settings: &Arc<watch::Sender<Settings>>,
+    sysstat: &Arc<SysStat>,
+) -> String {
     let s = settings.borrow();
     let kbps = ctrl.bitrate_kbps().max(2_000) as u64;
     let max_buffer_ms = s.buffer_mb * 1024 * 1024 * 8 / kbps;
@@ -382,7 +417,9 @@ fn state_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>, syssta
 fn platforms_json() -> String {
     let mut out = String::from("[");
     for (i, (slug, label)) in config::all_platforms().iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 {
+            out.push(',');
+        }
         out.push_str(&format!(r#"{{"slug":"{}","label":"{}"}}"#, slug, label));
     }
     out.push(']');
@@ -392,7 +429,9 @@ fn platforms_json() -> String {
 fn twitch_ingests_json() -> String {
     let mut out = String::from("[");
     for (i, (slug, label)) in config::twitch_ingests().iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 {
+            out.push(',');
+        }
         out.push_str(&format!(r#"{{"slug":"{}","label":"{}"}}"#, slug, label));
     }
     out.push(']');
@@ -415,12 +454,16 @@ async fn post_config(
     // POST without an explicit "delete webhook" intent must be a no-op
     // for that field — otherwise saving any other setting would wipe it.
     for (k, v) in form.iter() {
-        if matches!(k.as_str(),
-            "ingest_port" | "ingest_bind_all"
-            | "web_port"    | "web_bind_all"
-            | "buffer_mb"   | "buffer_path"
-            | "initial_delay_ms"
-            | "overlays_dir"
+        if matches!(
+            k.as_str(),
+            "ingest_port"
+                | "ingest_bind_all"
+                | "web_port"
+                | "web_bind_all"
+                | "buffer_mb"
+                | "buffer_path"
+                | "initial_delay_ms"
+                | "overlays_dir"
         ) {
             apply_field_str(&mut new_settings, k, v);
         }
@@ -440,8 +483,8 @@ async fn post_config(
     // destinations[0] (creating "Main" if the list is empty). This keeps
     // the first-run setup flow working without UI changes.
     let wizard_platform = form.get("platform").cloned();
-    let wizard_key      = form.get("stream_key").cloned();
-    let wizard_custom   = form.get("custom_egress_url").cloned();
+    let wizard_key = form.get("stream_key").cloned();
+    let wizard_custom = form.get("custom_egress_url").cloned();
     if wizard_platform.is_some() || wizard_key.is_some() || wizard_custom.is_some() {
         if new_settings.destinations.is_empty() {
             new_settings.destinations.push(config::Destination {
@@ -456,16 +499,27 @@ async fn post_config(
             });
         }
         let d = &mut new_settings.destinations[0];
-        if let Some(v) = wizard_platform { d.platform = v; }
-        if let Some(v) = wizard_key      { if !v.is_empty() { d.stream_key = v; } }
-        if let Some(v) = wizard_custom   { d.custom_egress_url = v; }
+        if let Some(v) = wizard_platform {
+            d.platform = v;
+        }
+        if let Some(v) = wizard_key {
+            if !v.is_empty() {
+                d.stream_key = v;
+            }
+        }
+        if let Some(v) = wizard_custom {
+            d.custom_egress_url = v;
+        }
     }
 
     let errors = new_settings.validate();
     if !errors.is_empty() {
         let msg = errors.join("; ");
-        return ("400 Bad Request", "application/json",
-            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&msg)));
+        return (
+            "400 Bad Request",
+            "application/json",
+            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&msg)),
+        );
     }
 
     let old = settings.borrow().clone();
@@ -473,13 +527,23 @@ async fn post_config(
         old.buffer_mb != new_settings.buffer_mb || old.buffer_path != new_settings.buffer_path;
 
     // Mark as configured the moment we have at least one usable destination.
-    if new_settings.destinations.iter().any(|d| d.enabled && d.is_well_formed()) {
+    if new_settings
+        .destinations
+        .iter()
+        .any(|d| d.enabled && d.is_well_formed())
+    {
         new_settings.configured = true;
     }
 
     if let Err(e) = new_settings.save(cfg_path) {
-        return ("500 Internal Server Error", "application/json",
-            format!(r#"{{"ok":false,"error":"save failed: {}"}}"#, json_escape(&e.to_string())));
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"save failed: {}"}}"#,
+                json_escape(&e.to_string())
+            ),
+        );
     }
     // Mirror webhook into the controller so events fire correctly even
     // before the next supervisor settings-change tick.
@@ -488,9 +552,14 @@ async fn post_config(
 
     let restart_msg = if needs_restart {
         ",\"restart_required\":true,\"restart_reason\":\"buffer size/path changed\""
-    } else { "" };
-    ("200 OK", "application/json",
-        format!(r#"{{"ok":true{}}}"#, restart_msg))
+    } else {
+        ""
+    };
+    (
+        "200 OK",
+        "application/json",
+        format!(r#"{{"ok":true{}}}"#, restart_msg),
+    )
 }
 
 /// Legacy one-shot delay endpoint — semantically the same as arming and
@@ -513,7 +582,11 @@ async fn post_delay(
         let _ = ctrl.activate_delay();
     }
     persist_delay_state(ctrl, settings, cfg_path);
-    ("200 OK", "application/json", state_json(ctrl, settings, sysstat))
+    (
+        "200 OK",
+        "application/json",
+        state_json(ctrl, settings, sysstat),
+    )
 }
 
 // ---- Two-phase delay endpoints ----
@@ -529,7 +602,11 @@ async fn post_arm(
     let ms: u32 = form.get("ms").and_then(|v| v.parse().ok()).unwrap_or(0);
     ctrl.arm_delay(ms.min(600_000));
     persist_delay_state(ctrl, settings, cfg_path);
-    ("200 OK", "application/json", state_json(ctrl, settings, sysstat))
+    (
+        "200 OK",
+        "application/json",
+        state_json(ctrl, settings, sysstat),
+    )
 }
 
 async fn post_activate(
@@ -541,10 +618,17 @@ async fn post_activate(
     match ctrl.activate_delay() {
         Ok(_) => {
             persist_delay_state(ctrl, settings, cfg_path);
-            ("200 OK", "application/json", state_json(ctrl, settings, sysstat))
+            (
+                "200 OK",
+                "application/json",
+                state_json(ctrl, settings, sysstat),
+            )
         }
-        Err(e) => ("409 Conflict", "application/json",
-            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e.message()))),
+        Err(e) => (
+            "409 Conflict",
+            "application/json",
+            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e.message())),
+        ),
     }
 }
 
@@ -556,7 +640,11 @@ async fn post_stop(
 ) -> (&'static str, &'static str, String) {
     ctrl.stop_delay();
     persist_delay_state(ctrl, settings, cfg_path);
-    ("200 OK", "application/json", state_json(ctrl, settings, sysstat))
+    (
+        "200 OK",
+        "application/json",
+        state_json(ctrl, settings, sysstat),
+    )
 }
 
 async fn post_disarm(
@@ -567,7 +655,11 @@ async fn post_disarm(
 ) -> (&'static str, &'static str, String) {
     ctrl.arm_delay(0); // arm(0) also resets target
     persist_delay_state(ctrl, settings, cfg_path);
-    ("200 OK", "application/json", state_json(ctrl, settings, sysstat))
+    (
+        "200 OK",
+        "application/json",
+        state_json(ctrl, settings, sysstat),
+    )
 }
 
 fn persist_delay_state(
@@ -592,10 +684,13 @@ fn profiles_json(settings: &Arc<watch::Sender<Settings>>) -> String {
     let s = settings.borrow();
     let mut out = String::from("[");
     for (i, p) in s.profiles.iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 {
+            out.push(',');
+        }
         out.push_str(&format!(
             r#"{{"name":"{}","delay_ms":{}}}"#,
-            json_escape(&p.name), p.delay_ms
+            json_escape(&p.name),
+            p.delay_ms
         ));
     }
     out.push(']');
@@ -609,10 +704,16 @@ async fn post_profile_add(
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let name = form.get("name").cloned().unwrap_or_default();
-    let delay_ms: u32 = form.get("delay_ms").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let delay_ms: u32 = form
+        .get("delay_ms")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     if name.trim().is_empty() {
-        return ("400 Bad Request", "application/json",
-            r#"{"ok":false,"error":"name required"}"#.into());
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"name required"}"#.into(),
+        );
     }
     let mut ns = settings.borrow().clone();
     // Replace existing by name, else append.
@@ -646,7 +747,9 @@ fn logs_json(ctrl: &Controller) -> String {
     let q = ctrl.logs.lock().unwrap();
     let mut out = String::from(r#"{"lines":["#);
     for (i, line) in q.iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 {
+            out.push(',');
+        }
         out.push('"');
         out.push_str(&json_escape(line));
         out.push('"');
@@ -655,32 +758,51 @@ fn logs_json(ctrl: &Controller) -> String {
     out
 }
 
-async fn test_egress(settings: &Arc<watch::Sender<Settings>>) -> (&'static str, &'static str, String) {
+async fn test_egress(
+    settings: &Arc<watch::Sender<Settings>>,
+) -> (&'static str, &'static str, String) {
     let url_str = match settings.borrow().egress_url() {
         Some(u) => u,
         None => {
-            return ("200 OK", "application/json",
-                r#"{"ok":false,"error":"set platform + stream key first"}"#.into());
+            return (
+                "200 OK",
+                "application/json",
+                r#"{"ok":false,"error":"set platform + stream key first"}"#.into(),
+            );
         }
     };
     let parsed = match EgressUrl::parse(&url_str) {
         Ok(p) => p,
-        Err(e) => return ("200 OK", "application/json",
-            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e.to_string()))),
+        Err(e) => {
+            return (
+                "200 OK",
+                "application/json",
+                format!(
+                    r#"{{"ok":false,"error":"{}"}}"#,
+                    json_escape(&e.to_string())
+                ),
+            )
+        }
     };
     // DNS + TCP connect with 3 s timeout. We deliberately don't run the
     // full RTMP handshake — that would burn a "slot" on the platform.
     let connect = async {
-        let _addrs: Vec<_> = (parsed.host.as_str(), parsed.port).to_socket_addrs()
-            .map(|i| i.collect()).unwrap_or_default();
+        let _addrs: Vec<_> = (parsed.host.as_str(), parsed.port)
+            .to_socket_addrs()
+            .map(|i| i.collect())
+            .unwrap_or_default();
         TcpStream::connect((parsed.host.as_str(), parsed.port)).await
     };
     let res = tokio::time::timeout(Duration::from_secs(3), connect).await;
     let payload = match res {
         Ok(Ok(_)) => format!(
-            r#"{{"ok":true,"message":"reached {}:{}"}}"#, parsed.host, parsed.port),
+            r#"{{"ok":true,"message":"reached {}:{}"}}"#,
+            parsed.host, parsed.port
+        ),
         Ok(Err(e)) => format!(
-            r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e.to_string())),
+            r#"{{"ok":false,"error":"{}"}}"#,
+            json_escape(&e.to_string())
+        ),
         Err(_) => r#"{"ok":false,"error":"timed out after 3s"}"#.into(),
     };
     ("200 OK", "application/json", payload)
@@ -710,16 +832,25 @@ async fn post_destination_upsert(
     let form = config::parse_form(body);
     let id = form.get("id").cloned().unwrap_or_else(generate_dest_id);
     let name = form.get("name").cloned().unwrap_or_default();
-    let enabled = matches!(form.get("enabled").map(String::as_str), Some("on" | "true" | "1"));
-    let platform = form.get("platform").cloned().unwrap_or_else(|| "twitch".into());
+    let enabled = matches!(
+        form.get("enabled").map(String::as_str),
+        Some("on" | "true" | "1")
+    );
+    let platform = form
+        .get("platform")
+        .cloned()
+        .unwrap_or_else(|| "twitch".into());
     let stream_key = form.get("stream_key").cloned().unwrap_or_default();
     let custom = form.get("custom_egress_url").cloned().unwrap_or_default();
     let twitch_ingest = form.get("twitch_ingest").cloned().unwrap_or_default();
     let youtube_ingest = form.get("youtube_ingest").cloned().unwrap_or_default();
 
     if name.trim().is_empty() {
-        return ("400 Bad Request", "application/json",
-            r#"{"ok":false,"error":"name required"}"#.into());
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"name required"}"#.into(),
+        );
     }
 
     let mut ns = settings.borrow().clone();
@@ -727,14 +858,22 @@ async fn post_destination_upsert(
         existing.name = name;
         existing.enabled = enabled;
         existing.platform = platform;
-        if !stream_key.is_empty() { existing.stream_key = stream_key; }
+        if !stream_key.is_empty() {
+            existing.stream_key = stream_key;
+        }
         existing.custom_egress_url = custom;
         existing.twitch_ingest = twitch_ingest;
         existing.youtube_ingest = youtube_ingest;
     } else {
         ns.destinations.push(config::Destination {
-            id, name, enabled, platform, stream_key,
-            custom_egress_url: custom, twitch_ingest, youtube_ingest,
+            id,
+            name,
+            enabled,
+            platform,
+            stream_key,
+            custom_egress_url: custom,
+            twitch_ingest,
+            youtube_ingest,
         });
     }
 
@@ -742,15 +881,31 @@ async fn post_destination_upsert(
     // "destination 'Backup' is missing a stream key" specifically.
     let errs = ns.validate();
     if !errs.is_empty() {
-        return ("400 Bad Request", "application/json",
-            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&errs.join("; "))));
+        return (
+            "400 Bad Request",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&errs.join("; "))
+            ),
+        );
     }
-    if ns.destinations.iter().any(|d| d.enabled && d.is_well_formed()) {
+    if ns
+        .destinations
+        .iter()
+        .any(|d| d.enabled && d.is_well_formed())
+    {
         ns.configured = true;
     }
     if let Err(e) = ns.save(cfg_path) {
-        return ("500 Internal Server Error", "application/json",
-            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e.to_string())));
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&e.to_string())
+            ),
+        );
     }
     let _ = settings.send(ns);
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
@@ -767,10 +922,17 @@ async fn post_destination_delete(
     let before = ns.destinations.len();
     ns.destinations.retain(|d| d.id != id);
     if ns.destinations.len() == before {
-        return ("404 Not Found", "application/json",
-            r#"{"ok":false,"error":"no such destination"}"#.into());
+        return (
+            "404 Not Found",
+            "application/json",
+            r#"{"ok":false,"error":"no such destination"}"#.into(),
+        );
     }
-    if !ns.destinations.iter().any(|d| d.enabled && d.is_well_formed()) {
+    if !ns
+        .destinations
+        .iter()
+        .any(|d| d.enabled && d.is_well_formed())
+    {
         ns.configured = false;
     }
     let _ = ns.save(cfg_path);
@@ -785,12 +947,16 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
     let s = settings.borrow();
     let snap = ctrl.destination_snapshot();
     let stats_for = |id: &str| {
-        snap.iter().find(|t| t.0 == id).cloned()
+        snap.iter()
+            .find(|t| t.0 == id)
+            .cloned()
             .unwrap_or_else(|| (id.into(), false, 0, 0, 0, 0, 0, 0))
     };
     let mut out = String::from("[");
     for (i, d) in s.destinations.iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 {
+            out.push(',');
+        }
         let url = d.egress_url().unwrap_or_default();
         let (_id, alive, _seq, kbps, tags, bytes, cuts, reconnects) = stats_for(&d.id);
         out.push_str(&format!(
@@ -836,7 +1002,10 @@ fn json_escape_quoted(s: &str) -> String {
 
 fn generate_dest_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     format!("d{:x}", nanos as u64)
 }
 
@@ -859,7 +1028,9 @@ fn list_overlays(settings: &Arc<watch::Sender<Settings>>) -> String {
     names.sort();
     let mut out = String::from("[");
     for (i, n) in names.iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 {
+            out.push(',');
+        }
         out.push_str(&json_escape_quoted(n));
     }
     out.push(']');
@@ -879,7 +1050,11 @@ fn serve_overlay_file(
         || name.contains("..")
         || name.contains(':')
     {
-        return ("400 Bad Request", "text/plain; charset=utf-8", "invalid overlay name".into());
+        return (
+            "400 Bad Request",
+            "text/plain; charset=utf-8",
+            "invalid overlay name".into(),
+        );
     }
     let dir = settings.borrow().overlays_dir.clone();
     let path = dir.join(name);
@@ -891,25 +1066,41 @@ fn serve_overlay_file(
     // the filesystem does the redirect.
     let canon_path = match path.canonicalize() {
         Ok(p) => p,
-        Err(_) => return ("404 Not Found", "text/plain; charset=utf-8",
-            format!("overlay '{}' not found in {}", name, dir.display())),
+        Err(_) => {
+            return (
+                "404 Not Found",
+                "text/plain; charset=utf-8",
+                format!("overlay '{}' not found in {}", name, dir.display()),
+            )
+        }
     };
     let canon_dir = match dir.canonicalize() {
         Ok(p) => p,
         // If the overlays dir itself can't be canonicalized, refuse
         // rather than risk serving anything: misconfigured state.
-        Err(_) => return ("500 Internal Server Error", "text/plain; charset=utf-8",
-            "overlays_dir is misconfigured".into()),
+        Err(_) => {
+            return (
+                "500 Internal Server Error",
+                "text/plain; charset=utf-8",
+                "overlays_dir is misconfigured".into(),
+            )
+        }
     };
     if !canon_path.starts_with(&canon_dir) {
-        return ("403 Forbidden", "text/plain; charset=utf-8",
-            "overlay path escapes the overlays directory".into());
+        return (
+            "403 Forbidden",
+            "text/plain; charset=utf-8",
+            "overlay path escapes the overlays directory".into(),
+        );
     }
 
     match std::fs::read_to_string(&canon_path) {
         Ok(content) => ("200 OK", "text/html; charset=utf-8", content),
-        Err(_) => ("404 Not Found", "text/plain; charset=utf-8",
-            format!("overlay '{}' not found in {}", name, dir.display())),
+        Err(_) => (
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            format!("overlay '{}' not found in {}", name, dir.display()),
+        ),
     }
 }
 
@@ -919,7 +1110,11 @@ fn serve_overlay_file(
 
 async fn post_test_webhook(ctrl: &Arc<Controller>) -> (&'static str, &'static str, String) {
     ctrl.fire_webhook("🧪", "Test message — webhook is wired up and working.");
-    ("200 OK", "application/json", r#"{"ok":true,"message":"test fired"}"#.into())
+    (
+        "200 OK",
+        "application/json",
+        r#"{"ok":true,"message":"test fired"}"#.into(),
+    )
 }
 
 fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
@@ -929,13 +1124,29 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         "platform" => s.platform = value.into(),
         "stream_key" => s.stream_key = value.into(),
         "custom_egress_url" => s.custom_egress_url = value.into(),
-        "ingest_port" => if let Ok(v) = value.parse() { s.ingest_port = v; },
+        "ingest_port" => {
+            if let Ok(v) = value.parse() {
+                s.ingest_port = v;
+            }
+        }
         "ingest_bind_all" => s.ingest_bind_all = value == "on" || value == "true" || value == "1",
-        "web_port" => if let Ok(v) = value.parse() { s.web_port = v; },
+        "web_port" => {
+            if let Ok(v) = value.parse() {
+                s.web_port = v;
+            }
+        }
         "web_bind_all" => s.web_bind_all = value == "on" || value == "true" || value == "1",
-        "buffer_mb" => if let Ok(v) = value.parse() { s.buffer_mb = v; },
+        "buffer_mb" => {
+            if let Ok(v) = value.parse() {
+                s.buffer_mb = v;
+            }
+        }
         "buffer_path" => s.buffer_path = std::path::PathBuf::from(value),
-        "initial_delay_ms" => if let Ok(v) = value.parse() { s.initial_delay_ms = v; },
+        "initial_delay_ms" => {
+            if let Ok(v) = value.parse() {
+                s.initial_delay_ms = v;
+            }
+        }
         "overlays_dir" => s.overlays_dir = std::path::PathBuf::from(value),
         "discord_webhook_url" => s.discord_webhook_url = value.into(),
         _ => {}
@@ -984,7 +1195,8 @@ fn accepts_gzip(head: &str) -> bool {
                 // confirm gzip appears with q != 0.
                 let (token, q) = match p.split_once(';') {
                     Some((t, params)) => {
-                        let qv = params.split(';')
+                        let qv = params
+                            .split(';')
                             .find_map(|kv| {
                                 let kv = kv.trim();
                                 kv.strip_prefix("q=").or_else(|| kv.strip_prefix("Q="))
@@ -995,8 +1207,9 @@ fn accepts_gzip(head: &str) -> bool {
                     }
                     None => (p, 1.0),
                 };
-                if q > 0.0 && (token.eq_ignore_ascii_case("gzip")
-                            || token.eq_ignore_ascii_case("*")) {
+                if q > 0.0
+                    && (token.eq_ignore_ascii_case("gzip") || token.eq_ignore_ascii_case("*"))
+                {
                     return true;
                 }
             }
@@ -1035,15 +1248,25 @@ fn allow_csrf(method: &str, origin: &str, host: &str) -> bool {
         .strip_prefix("https://")
         .or_else(|| origin.strip_prefix("http://"))
         .unwrap_or(origin)
-        .split('/').next().unwrap_or("");
+        .split('/')
+        .next()
+        .unwrap_or("");
     !host.is_empty() && origin_host.eq_ignore_ascii_case(host)
 }
 
 fn strip_prefix_icase<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    if s.len() < prefix.len() { return None; }
-    if s.as_bytes().iter().zip(prefix.as_bytes()).all(|(a, b)| a.eq_ignore_ascii_case(b)) {
+    if s.len() < prefix.len() {
+        return None;
+    }
+    if s.as_bytes()
+        .iter()
+        .zip(prefix.as_bytes())
+        .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    {
         Some(&s[prefix.len()..])
-    } else { None }
+    } else {
+        None
+    }
 }
 
 fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -1088,20 +1311,49 @@ fn overlay_html(query: &str) -> String {
 
     // Sanitise so a malformed URL can't break the variant selector.
     let style = match style {
-        "minimal" | "corner" | "strip" | "compact" | "focus"
-        | "broadcast" | "stats" | "ticker" | "esports" => style,
+        "minimal" | "corner" | "strip" | "compact" | "focus" | "broadcast" | "stats" | "ticker"
+        | "esports" => style,
         _ => "minimal",
     };
 
     let (l_delay, l_live, l_preparing, l_ready, l_active, l_passthrough) = match lang {
-        "es" => ("Retraso","EN VIVO","Preparando","Listo","Activo","Sin retraso"),
-        "pt" => ("Atraso", "AO VIVO","Preparando","Pronto","Ativo","Sem atraso"),
-        "fr" => ("Délai",  "EN DIRECT","Préparation","Prêt","Actif","Sans délai"),
-        "de" => ("Verz.",  "LIVE",   "Aufbau",   "Bereit","Aktiv","Ohne Verz."),
-        _    => ("Delay",  "LIVE",   "Preparing","Ready", "Active","Passthrough"),
+        "es" => (
+            "Retraso",
+            "EN VIVO",
+            "Preparando",
+            "Listo",
+            "Activo",
+            "Sin retraso",
+        ),
+        "pt" => (
+            "Atraso",
+            "AO VIVO",
+            "Preparando",
+            "Pronto",
+            "Ativo",
+            "Sem atraso",
+        ),
+        "fr" => (
+            "Délai",
+            "EN DIRECT",
+            "Préparation",
+            "Prêt",
+            "Actif",
+            "Sans délai",
+        ),
+        "de" => ("Verz.", "LIVE", "Aufbau", "Bereit", "Aktiv", "Ohne Verz."),
+        _ => (
+            "Delay",
+            "LIVE",
+            "Preparing",
+            "Ready",
+            "Active",
+            "Passthrough",
+        ),
     };
 
-    format!(r##"<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
+    format!(
+        r##"<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
 <title>InstantClone overlay</title><style>
 *{{box-sizing:border-box}}
 html,body{{margin:0;padding:0;background:transparent;color:#fff;
@@ -1303,7 +1555,8 @@ async function refresh(){{
 refresh();
 setInterval(refresh, 500);
 </script></body></html>
-"##)
+"##
+    )
 }
 
 #[cfg(test)]
@@ -1312,7 +1565,9 @@ mod tests {
 
     #[test]
     fn accepts_gzip_when_listed() {
-        assert!(accepts_gzip("GET / HTTP/1.1\r\nAccept-Encoding: gzip, deflate, br\r\n"));
+        assert!(accepts_gzip(
+            "GET / HTTP/1.1\r\nAccept-Encoding: gzip, deflate, br\r\n"
+        ));
         assert!(accepts_gzip("GET / HTTP/1.1\r\nAccept-Encoding: gzip\r\n"));
         // case insensitive header name + token
         assert!(accepts_gzip("GET / HTTP/1.1\r\naccept-encoding: GZIP\r\n"));
@@ -1326,20 +1581,30 @@ mod tests {
     #[test]
     fn refuses_when_header_missing_or_identity_only() {
         assert!(!accepts_gzip("GET / HTTP/1.1\r\nHost: x\r\n"));
-        assert!(!accepts_gzip("GET / HTTP/1.1\r\nAccept-Encoding: identity\r\n"));
-        assert!(!accepts_gzip("GET / HTTP/1.1\r\nAccept-Encoding: deflate, br\r\n"));
+        assert!(!accepts_gzip(
+            "GET / HTTP/1.1\r\nAccept-Encoding: identity\r\n"
+        ));
+        assert!(!accepts_gzip(
+            "GET / HTTP/1.1\r\nAccept-Encoding: deflate, br\r\n"
+        ));
     }
 
     #[test]
     fn refuses_gzip_when_q_zero() {
         // RFC 7231: `q=0` explicitly forbids that coding.
-        assert!(!accepts_gzip("GET / HTTP/1.1\r\nAccept-Encoding: gzip;q=0\r\n"));
-        assert!(!accepts_gzip("GET / HTTP/1.1\r\nAccept-Encoding: *;q=0\r\n"));
+        assert!(!accepts_gzip(
+            "GET / HTTP/1.1\r\nAccept-Encoding: gzip;q=0\r\n"
+        ));
+        assert!(!accepts_gzip(
+            "GET / HTTP/1.1\r\nAccept-Encoding: *;q=0\r\n"
+        ));
     }
 
     #[test]
     fn accepts_gzip_with_explicit_quality() {
-        assert!(accepts_gzip("GET / HTTP/1.1\r\nAccept-Encoding: gzip;q=0.5, deflate\r\n"));
+        assert!(accepts_gzip(
+            "GET / HTTP/1.1\r\nAccept-Encoding: gzip;q=0.5, deflate\r\n"
+        ));
     }
 
     #[test]
@@ -1347,8 +1612,10 @@ mod tests {
         let redacted = redact_url("rtmp://live.twitch.tv/app/live_123456789_abcdefgh");
         assert!(redacted.starts_with("rtmp://live.twitch.tv/app/"));
         assert!(redacted.contains("…"));
-        assert!(!redacted.contains("live_123456789_abcdefgh"),
-            "the actual key must not appear in the redacted form");
+        assert!(
+            !redacted.contains("live_123456789_abcdefgh"),
+            "the actual key must not appear in the redacted form"
+        );
     }
 
     #[test]
@@ -1413,17 +1680,17 @@ mod tests {
 
     #[test]
     fn csrf_allows_same_origin_post() {
-        assert!(allow_csrf("POST",
+        assert!(allow_csrf(
+            "POST",
             "http://127.0.0.1:7799",
-            "127.0.0.1:7799"));
+            "127.0.0.1:7799"
+        ));
     }
 
     #[test]
     fn csrf_blocks_cross_origin_post() {
         // The real attack: a tab on evil.com fetching our local API.
-        assert!(!allow_csrf("POST",
-            "https://evil.com",
-            "127.0.0.1:7799"));
+        assert!(!allow_csrf("POST", "https://evil.com", "127.0.0.1:7799"));
     }
 
     // ── Misc helpers ─────────────────────────────────────────────────

@@ -20,12 +20,12 @@ use windows_sys::Win32::Foundation::{CloseHandle, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
 };
-use windows_sys::Win32::Networking::WinSock::{AF_INET, ntohs};
+use windows_sys::Win32::Networking::WinSock::{ntohs, AF_INET};
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    IDYES, MB_ICONWARNING, MB_OK, MB_YESNO, MessageBoxW,
+    MessageBoxW, IDYES, MB_ICONWARNING, MB_OK, MB_YESNO,
 };
 
 /// Header struct of the variable-length table returned by
@@ -52,7 +52,9 @@ pub fn find_process_on_port(port: u16) -> Option<(u32, Option<String>)> {
             TCP_TABLE_OWNER_PID_LISTENER,
             0,
         );
-        if size == 0 { return None; }
+        if size == 0 {
+            return None;
+        }
 
         let mut buf = vec![0u8; size as usize];
         let r = GetExtendedTcpTable(
@@ -63,7 +65,9 @@ pub fn find_process_on_port(port: u16) -> Option<(u32, Option<String>)> {
             TCP_TABLE_OWNER_PID_LISTENER,
             0,
         );
-        if r != NO_ERROR { return None; }
+        if r != NO_ERROR {
+            return None;
+        }
 
         let table = &*(buf.as_ptr() as *const MibTcpTableOwnerPid);
         let n = table.num_entries as usize;
@@ -88,20 +92,19 @@ pub fn find_process_on_port(port: u16) -> Option<(u32, Option<String>)> {
 fn process_name(pid: u32) -> Option<String> {
     unsafe {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if h.is_null() { return None; }
+        if h.is_null() {
+            return None;
+        }
         let mut buf = [0u16; 1024];
         let mut size: u32 = buf.len() as u32;
         let ok = QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut size);
         CloseHandle(h);
-        if ok == 0 { return None; }
+        if ok == 0 {
+            return None;
+        }
         let full = String::from_utf16_lossy(&buf[..size as usize]);
         // Trim to the basename — full path is noise in a user dialog.
-        Some(
-            full.rsplit(['\\', '/'])
-                .next()
-                .unwrap_or(&full)
-                .to_string(),
-        )
+        Some(full.rsplit(['\\', '/']).next().unwrap_or(&full).to_string())
     }
 }
 
@@ -138,8 +141,8 @@ pub fn ask_user(
 ) -> ConflictChoice {
     let owner_text = match owner {
         Some((pid, Some(name))) => format!("{} (PID {})", name, pid),
-        Some((pid, None))       => format!("PID {} (process name unavailable)", pid),
-        None                    => "another process".to_string(),
+        Some((pid, None)) => format!("PID {} (process name unavailable)", pid),
+        None => "another process".to_string(),
     };
 
     let (body_text, flags, accept) = match proposed_port {
@@ -168,9 +171,7 @@ pub fn ask_user(
 
     let title = wide("InstantClone");
     let body = wide(&body_text);
-    let r = unsafe {
-        MessageBoxW(ptr::null_mut(), body.as_ptr(), title.as_ptr(), flags)
-    };
+    let r = unsafe { MessageBoxW(ptr::null_mut(), body.as_ptr(), title.as_ptr(), flags) };
     match (r, accept) {
         (IDYES, Some(p)) => ConflictChoice::SwitchPort(p),
         _ => ConflictChoice::Quit,
@@ -178,7 +179,10 @@ pub fn ask_user(
 }
 
 fn wide(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 #[cfg(test)]
@@ -197,13 +201,17 @@ mod tests {
     #[test]
     fn is_port_free_distinguishes_held_from_open() {
         let (held, port) = bind_eph();
-        assert!(!is_port_free(&format!("127.0.0.1:{port}")),
-            "held port must NOT report as free");
+        assert!(
+            !is_port_free(&format!("127.0.0.1:{port}")),
+            "held port must NOT report as free"
+        );
         drop(held);
         // Brief breath for the OS to release the socket. On Windows the
         // socket lingers briefly after drop; the loop tolerates this.
         for _ in 0..20 {
-            if is_port_free(&format!("127.0.0.1:{port}")) { return; }
+            if is_port_free(&format!("127.0.0.1:{port}")) {
+                return;
+            }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         panic!("released port did not become free");
@@ -231,7 +239,10 @@ mod tests {
         drop(held);
 
         let (pid, _name) = owner.expect("FFI should locate the listener");
-        assert_eq!(pid, std::process::id(),
-            "owning PID must be this test process");
+        assert_eq!(
+            pid,
+            std::process::id(),
+            "owning PID must be this test process"
+        );
     }
 }

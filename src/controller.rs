@@ -13,7 +13,7 @@ use crate::h264::{AudioCodec, VideoCodec};
 use crate::rtmp::client::{EgressClient, EgressSink, EgressUrl};
 use std::collections::HashMap;
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -34,27 +34,41 @@ fn process_now_ms() -> u64 {
 /// Encode VideoCodec as a u8 for atomic storage.
 fn enc_vcodec(c: VideoCodec) -> u8 {
     match c {
-        VideoCodec::Unknown => 0, VideoCodec::Avc => 1,
-        VideoCodec::Hevc => 2, VideoCodec::Av1 => 3, VideoCodec::Vp9 => 4,
+        VideoCodec::Unknown => 0,
+        VideoCodec::Avc => 1,
+        VideoCodec::Hevc => 2,
+        VideoCodec::Av1 => 3,
+        VideoCodec::Vp9 => 4,
     }
 }
 fn dec_vcodec(v: u8) -> VideoCodec {
     match v {
-        1 => VideoCodec::Avc, 2 => VideoCodec::Hevc,
-        3 => VideoCodec::Av1, 4 => VideoCodec::Vp9, _ => VideoCodec::Unknown,
+        1 => VideoCodec::Avc,
+        2 => VideoCodec::Hevc,
+        3 => VideoCodec::Av1,
+        4 => VideoCodec::Vp9,
+        _ => VideoCodec::Unknown,
     }
 }
 fn enc_acodec(c: AudioCodec) -> u8 {
     match c {
-        AudioCodec::Unknown => 0, AudioCodec::Aac => 1, AudioCodec::Mp3 => 2,
-        AudioCodec::Opus => 3, AudioCodec::Ac3 => 4,
-        AudioCodec::Eac3 => 5, AudioCodec::Flac => 6,
+        AudioCodec::Unknown => 0,
+        AudioCodec::Aac => 1,
+        AudioCodec::Mp3 => 2,
+        AudioCodec::Opus => 3,
+        AudioCodec::Ac3 => 4,
+        AudioCodec::Eac3 => 5,
+        AudioCodec::Flac => 6,
     }
 }
 fn dec_acodec(v: u8) -> AudioCodec {
     match v {
-        1 => AudioCodec::Aac, 2 => AudioCodec::Mp3,  3 => AudioCodec::Opus,
-        4 => AudioCodec::Ac3, 5 => AudioCodec::Eac3, 6 => AudioCodec::Flac,
+        1 => AudioCodec::Aac,
+        2 => AudioCodec::Mp3,
+        3 => AudioCodec::Opus,
+        4 => AudioCodec::Ac3,
+        5 => AudioCodec::Eac3,
+        6 => AudioCodec::Flac,
         _ => AudioCodec::Unknown,
     }
 }
@@ -140,9 +154,15 @@ impl DestinationState {
 
     fn note_outbound_bytes(&self, n: usize) {
         let now = process_now_ms();
-        let total = self.rate_window_bytes.fetch_add(n as u64, Ordering::Relaxed) + n as u64;
+        let total = self
+            .rate_window_bytes
+            .fetch_add(n as u64, Ordering::Relaxed)
+            + n as u64;
         let start = self.rate_window_start_ms.load(Ordering::Relaxed);
-        if start == 0 { self.rate_window_start_ms.store(now, Ordering::Relaxed); return; }
+        if start == 0 {
+            self.rate_window_start_ms.store(now, Ordering::Relaxed);
+            return;
+        }
         let elapsed = now.saturating_sub(start);
         if elapsed >= 1_000 {
             let kbps = ((total * 8) / elapsed.max(1)) as u32;
@@ -177,7 +197,7 @@ pub struct Controller {
 
     // Ingest-side stats
     ingest_disconnects: AtomicU32,
-    bitrate_kbps: AtomicU32,         // inbound (from OBS)
+    bitrate_kbps: AtomicU32, // inbound (from OBS)
     rate_window_bytes: AtomicU64,
     rate_window_start_ms: AtomicU64,
 
@@ -269,8 +289,12 @@ impl Controller {
         }
     }
 
-    pub fn video_codec(&self) -> VideoCodec { dec_vcodec(self.video_codec.load(Ordering::Relaxed)) }
-    pub fn audio_codec(&self) -> AudioCodec { dec_acodec(self.audio_codec.load(Ordering::Relaxed)) }
+    pub fn video_codec(&self) -> VideoCodec {
+        dec_vcodec(self.video_codec.load(Ordering::Relaxed))
+    }
+    pub fn audio_codec(&self) -> AudioCodec {
+        dec_acodec(self.audio_codec.load(Ordering::Relaxed))
+    }
     /// Freshness-based — true only if a multi-track video tag was seen
     /// within the last 5 s AND OBS is currently publishing. The old
     /// sticky-bool version kept the warning chip on forever after a
@@ -278,19 +302,27 @@ impl Controller {
     /// soon as multi-track stops, and is always off when ingest is
     /// not alive.
     pub fn multitrack_video(&self) -> bool {
-        if !self.ingest_alive.load(Ordering::Relaxed) { return false; }
+        if !self.ingest_alive.load(Ordering::Relaxed) {
+            return false;
+        }
         let last = self.last_multitrack_video_ms.load(Ordering::Relaxed);
-        if last == 0 { return false; }
+        if last == 0 {
+            return false;
+        }
         process_now_ms().saturating_sub(last) < 5_000
     }
-    pub fn multitrack_audio(&self) -> bool { self.multitrack_audio.load(Ordering::Relaxed) }
+    pub fn multitrack_audio(&self) -> bool {
+        self.multitrack_audio.load(Ordering::Relaxed)
+    }
 
     /// Called by the ingest path. Stores the codec atomically and only
     /// logs / fires-a-webhook on the very first observation, so codec
     /// changes mid-stream don't spam events.
     pub fn note_video_codec(&self, c: VideoCodec) {
         let enc = enc_vcodec(c);
-        if enc == 0 { return; }
+        if enc == 0 {
+            return;
+        }
         let prev = self.video_codec.swap(enc, Ordering::Relaxed);
         if prev != enc {
             self.log(format!("ingest: video codec = {}", c.label()));
@@ -298,7 +330,9 @@ impl Controller {
     }
     pub fn note_audio_codec(&self, c: AudioCodec) {
         let enc = enc_acodec(c);
-        if enc == 0 { return; }
+        if enc == 0 {
+            return;
+        }
         let prev = self.audio_codec.swap(enc, Ordering::Relaxed);
         if prev != enc {
             self.log(format!("ingest: audio codec = {}", c.label()));
@@ -312,15 +346,18 @@ impl Controller {
     /// sticky bool used to live on `multitrack_video` itself; we keep it
     /// here just to throttle the log to once.
     pub fn note_multitrack_video(&self) {
-        self.last_multitrack_video_ms.store(process_now_ms(), Ordering::Relaxed);
+        self.last_multitrack_video_ms
+            .store(process_now_ms(), Ordering::Relaxed);
         if !self.multitrack_video.swap(true, Ordering::Relaxed) {
             self.log(
                 "WARN: Enhanced Broadcasting (multi-track video) detected — \
                  keeping the primary track only. Disable simulcast in OBS for \
-                 a clean single-resolution stream."
+                 a clean single-resolution stream.",
             );
-            self.fire_webhook("⚠️",
-                "Enhanced Broadcasting detected — sending the primary resolution only.");
+            self.fire_webhook(
+                "⚠️",
+                "Enhanced Broadcasting detected — sending the primary resolution only.",
+            );
         }
     }
     pub fn note_multitrack_audio(&self) {
@@ -392,28 +429,39 @@ impl Controller {
     /// Snapshot of every (id → state) pair. Used by graceful-shutdown
     /// paths that need to flip flags on every pump in one pass.
     pub fn all_destination_states(&self) -> Vec<(String, Arc<DestinationState>)> {
-        self.destinations.read().unwrap()
-            .iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.destinations
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     /// Snapshot for the dashboard: (id, alive, consumer_seq, kbps_out, tags, bytes, cuts, reconnects).
     pub fn destination_snapshot(&self) -> Vec<DestinationSnapshot> {
         let map = self.destinations.read().unwrap();
-        map.values().map(|d| (
-            d.id.clone(),
-            d.egress_alive.load(Ordering::Relaxed),
-            d.consumer_seq.load(Ordering::Relaxed),
-            d.bitrate_kbps_out.load(Ordering::Relaxed),
-            d.tags_sent.load(Ordering::Relaxed),
-            d.bytes_sent.load(Ordering::Relaxed),
-            d.cuts_performed.load(Ordering::Relaxed),
-            d.reconnects.load(Ordering::Relaxed),
-        )).collect()
+        map.values()
+            .map(|d| {
+                (
+                    d.id.clone(),
+                    d.egress_alive.load(Ordering::Relaxed),
+                    d.consumer_seq.load(Ordering::Relaxed),
+                    d.bitrate_kbps_out.load(Ordering::Relaxed),
+                    d.tags_sent.load(Ordering::Relaxed),
+                    d.bytes_sent.load(Ordering::Relaxed),
+                    d.cuts_performed.load(Ordering::Relaxed),
+                    d.reconnects.load(Ordering::Relaxed),
+                )
+            })
+            .collect()
     }
 
     /// All destinations alive flag (any-of) — for the topbar pill.
     pub fn any_destination_alive(&self) -> bool {
-        self.destinations.read().unwrap().values()
+        self.destinations
+            .read()
+            .unwrap()
+            .values()
             .any(|d| d.egress_alive.load(Ordering::Relaxed))
     }
 
@@ -421,7 +469,8 @@ impl Controller {
     pub fn destination_alive_summary(&self) -> (u32, u32) {
         let map = self.destinations.read().unwrap();
         let total = map.len() as u32;
-        let alive = map.values()
+        let alive = map
+            .values()
             .filter(|d| d.egress_alive.load(Ordering::Relaxed))
             .count() as u32;
         (alive, total)
@@ -459,7 +508,9 @@ impl Controller {
     /// the user staring at "still building" with no eta.
     pub fn activate_delay(&self) -> Result<u32, ActivateError> {
         let armed = self.armed_delay_ms.load(Ordering::Relaxed);
-        if armed == 0 { return Err(ActivateError::NotArmed); }
+        if armed == 0 {
+            return Err(ActivateError::NotArmed);
+        }
         let fill = self.buffer_fill_ms();
         if fill + 500 < armed {
             let remaining_ms = armed.saturating_sub(fill);
@@ -476,15 +527,21 @@ impl Controller {
         self.target_delay_ms.store(0, Ordering::Relaxed);
     }
 
-    pub fn armed_delay_ms(&self) -> u32 { self.armed_delay_ms.load(Ordering::Relaxed) }
-    pub fn target_delay_ms(&self) -> u32 { self.target_delay_ms.load(Ordering::Relaxed) }
+    pub fn armed_delay_ms(&self) -> u32 {
+        self.armed_delay_ms.load(Ordering::Relaxed)
+    }
+    pub fn target_delay_ms(&self) -> u32 {
+        self.target_delay_ms.load(Ordering::Relaxed)
+    }
     /// Server-side derivation: (latest_ts − consumer_ts) using the
     /// slowest live destination. Replaces the prior per-pump
     /// `current_delay_ms` atomic, which N pumps would race to overwrite
     /// every loop iteration — producing visible UI wobble. Falls back
     /// to 0 when nothing is being sent.
     pub fn current_delay_ms(&self) -> u32 {
-        let Some(latest) = self.ring.latest_ts() else { return 0 };
+        let Some(latest) = self.ring.latest_ts() else {
+            return 0;
+        };
         let min_consumer = {
             let map = self.destinations.read().unwrap();
             map.values()
@@ -506,47 +563,81 @@ impl Controller {
     pub fn phase(&self) -> &'static str {
         let armed = self.armed_delay_ms();
         let target = self.target_delay_ms();
-        if target > 0 { return "active"; }
-        if armed == 0 { return "idle"; }
-        if self.buffer_fill_ms() + 500 < armed { return "preparing"; }
+        if target > 0 {
+            return "active";
+        }
+        if armed == 0 {
+            return "idle";
+        }
+        if self.buffer_fill_ms() + 500 < armed {
+            return "preparing";
+        }
         "ready"
     }
 
-    pub fn ingest_alive(&self) -> bool { self.ingest_alive.load(Ordering::Relaxed) }
+    pub fn ingest_alive(&self) -> bool {
+        self.ingest_alive.load(Ordering::Relaxed)
+    }
     /// Bumps once per OBS publish session. Egress reads it each loop and
     /// re-anchors its output timeline if the token changed — without this,
     /// the new publisher's "fresh" timestamps (which can reset to 0) get
     /// silently dropped by pace_and_send's monotonic guard.
-    pub fn publisher_token(&self) -> u64 { self.publisher_token.load(Ordering::Relaxed) }
-    pub fn egress_alive(&self) -> bool { self.any_destination_alive() }
+    pub fn publisher_token(&self) -> u64 {
+        self.publisher_token.load(Ordering::Relaxed)
+    }
+    pub fn egress_alive(&self) -> bool {
+        self.any_destination_alive()
+    }
     pub fn buffer_fill_ms(&self) -> u32 {
         match (self.ring.oldest_ts(), self.ring.latest_ts()) {
             (Some(o), Some(l)) => l.saturating_sub(o).min(u32::MAX as u64) as u32,
             _ => 0,
         }
     }
-    pub fn buffer_building(&self) -> bool { self.buffer_building.load(Ordering::Relaxed) }
+    pub fn buffer_building(&self) -> bool {
+        self.buffer_building.load(Ordering::Relaxed)
+    }
 
     // Aggregated stats — summed across all destinations for the
     // dashboard's top-level metric cards.
     pub fn tags_sent(&self) -> u64 {
-        self.destinations.read().unwrap().values()
-            .map(|d| d.tags_sent.load(Ordering::Relaxed)).sum()
+        self.destinations
+            .read()
+            .unwrap()
+            .values()
+            .map(|d| d.tags_sent.load(Ordering::Relaxed))
+            .sum()
     }
     pub fn bytes_sent(&self) -> u64 {
-        self.destinations.read().unwrap().values()
-            .map(|d| d.bytes_sent.load(Ordering::Relaxed)).sum()
+        self.destinations
+            .read()
+            .unwrap()
+            .values()
+            .map(|d| d.bytes_sent.load(Ordering::Relaxed))
+            .sum()
     }
     pub fn cuts_performed(&self) -> u32 {
-        self.destinations.read().unwrap().values()
-            .map(|d| d.cuts_performed.load(Ordering::Relaxed)).sum()
+        self.destinations
+            .read()
+            .unwrap()
+            .values()
+            .map(|d| d.cuts_performed.load(Ordering::Relaxed))
+            .sum()
     }
     pub fn egress_reconnects(&self) -> u32 {
-        self.destinations.read().unwrap().values()
-            .map(|d| d.reconnects.load(Ordering::Relaxed)).sum()
+        self.destinations
+            .read()
+            .unwrap()
+            .values()
+            .map(|d| d.reconnects.load(Ordering::Relaxed))
+            .sum()
     }
-    pub fn ingest_disconnects(&self) -> u32 { self.ingest_disconnects.load(Ordering::Relaxed) }
-    pub fn bitrate_kbps(&self) -> u32 { self.bitrate_kbps.load(Ordering::Relaxed) }
+    pub fn ingest_disconnects(&self) -> u32 {
+        self.ingest_disconnects.load(Ordering::Relaxed)
+    }
+    pub fn bitrate_kbps(&self) -> u32 {
+        self.bitrate_kbps.load(Ordering::Relaxed)
+    }
 
     // ---- Internal: ingest counters ----
 
@@ -554,7 +645,10 @@ impl Controller {
     /// 1-second rolling bitrate average (kbps) — cheap, lock-free.
     pub fn note_inbound_bytes(&self, n: usize) {
         let now = process_now_ms();
-        let total = self.rate_window_bytes.fetch_add(n as u64, Ordering::Relaxed) + n as u64;
+        let total = self
+            .rate_window_bytes
+            .fetch_add(n as u64, Ordering::Relaxed)
+            + n as u64;
         let start = self.rate_window_start_ms.load(Ordering::Relaxed);
         if start == 0 {
             self.rate_window_start_ms.store(now, Ordering::Relaxed);
@@ -581,7 +675,9 @@ impl Controller {
     /// 30 seconds in".
     pub fn log(&self, line: impl Into<String>) {
         let mut q = self.logs.lock().unwrap();
-        if q.len() >= 1500 { q.pop_front(); }
+        if q.len() >= 1500 {
+            q.pop_front();
+        }
         let ts_s = process_now_ms() as f64 / 1000.0;
         q.push_back(format!("[+{:>8.3}s] {}", ts_s, line.into()));
     }
@@ -658,7 +754,9 @@ impl Controller {
     /// behind (5 s × ~80 tags/s ≈ 400 tags), so any naive threshold
     /// generates false positives. Use `is_backpressured` instead.
     pub fn max_consumer_lag(&self) -> u64 {
-        let Some(latest) = self.ring.latest_seq() else { return 0 };
+        let Some(latest) = self.ring.latest_seq() else {
+            return 0;
+        };
         let min_consumer = {
             let map = self.destinations.read().unwrap();
             map.values()
@@ -694,7 +792,10 @@ impl Controller {
             let map = self.destinations.read().unwrap();
             map.values().any(|d| d.egress_alive.load(Ordering::Relaxed))
         };
-        if !any_alive { self.backpressure_since_ms.store(0, Ordering::Relaxed); return false; }
+        if !any_alive {
+            self.backpressure_since_ms.store(0, Ordering::Relaxed);
+            return false;
+        }
 
         let current = self.current_delay_ms();
         let target = self.target_delay_ms();
@@ -730,7 +831,11 @@ impl Controller {
         // minimum when nothing is armed — gives compute_delay_cut at
         // least one IDR to work with the moment the user arms something).
         let armed = self.armed_delay_ms();
-        if armed == 0 { MIN_BUFFER_MS } else { armed }
+        if armed == 0 {
+            MIN_BUFFER_MS
+        } else {
+            armed
+        }
     }
 
     fn effective_target_buffer_ms(&self) -> u32 {
@@ -772,12 +877,16 @@ impl Controller {
     /// "runtime deps" technically include the system curl binary.
     pub fn fire_webhook(&self, emoji: &str, message: &str) {
         let url = self.webhook_url.lock().unwrap().clone();
-        if url.is_empty() { return; }
+        if url.is_empty() {
+            return;
+        }
 
         // Throttle: skip if we fired less than 2 s ago.
         let now = process_now_ms();
         let last = self.webhook_last_fire_ms.load(Ordering::Relaxed);
-        if now.saturating_sub(last) < 2_000 { return; }
+        if now.saturating_sub(last) < 2_000 {
+            return;
+        }
         self.webhook_last_fire_ms.store(now, Ordering::Relaxed);
 
         let content = format!("{emoji} **InstantClone**: {message}");
@@ -798,7 +907,8 @@ impl Controller {
                         .set("Content-Type", "application/json")
                         .send_string(&body);
                 }),
-            ).await;
+            )
+            .await;
         });
     }
 }
@@ -812,7 +922,7 @@ fn json_escape_inline(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
     for c in s.chars() {
         match c {
-            '"'  => out.push_str(r#"\""#),
+            '"' => out.push_str(r#"\""#),
             '\\' => out.push_str(r"\\"),
             '\n' => out.push_str(r"\n"),
             '\r' => out.push_str(r"\r"),
@@ -844,7 +954,10 @@ pub async fn run_egress(
     let parsed = match EgressUrl::parse(&url) {
         Ok(p) => p,
         Err(e) => {
-            ctrl.log(format!("[{}] invalid URL ({}) — fix it in Settings", label, e));
+            ctrl.log(format!(
+                "[{}] invalid URL ({}) — fix it in Settings",
+                label, e
+            ));
             tokio::time::sleep(Duration::from_secs(3600)).await;
             return Ok(());
         }
@@ -863,11 +976,20 @@ pub async fn run_egress(
         //   "[egress Twitch] connect failed: early eof (next try in 30s)"
         // continuing even after the destination is toggled off.
         if dest.shutdown_requested.load(Ordering::Relaxed) {
-            ctrl.log(format!("[{}] shutdown requested — egress loop exiting", label));
+            ctrl.log(format!(
+                "[{}] shutdown requested — egress loop exiting",
+                label
+            ));
             return Ok(());
         }
-        eprintln!("[egress {}] connecting to {}:{}/{}", label, parsed.host, parsed.port, parsed.app);
-        ctrl.log(format!("[{}] connecting to {}:{}", label, parsed.host, parsed.port));
+        eprintln!(
+            "[egress {}] connecting to {}:{}/{}",
+            label, parsed.host, parsed.port, parsed.app
+        );
+        ctrl.log(format!(
+            "[{}] connecting to {}:{}",
+            label, parsed.host, parsed.port
+        ));
         match EgressClient::connect(&parsed).await {
             Ok(client) => {
                 backoff = Duration::from_secs(1);
@@ -899,9 +1021,16 @@ pub async fn run_egress(
             }
             Err(e) => {
                 let safe = scrub_secret(&e.to_string(), &parsed.stream_key);
-                eprintln!("[egress {}] connect failed: {} (next try in {:?})", label, safe, backoff);
-                ctrl.log(format!("[{}] connect failed ({}), retrying in {}s",
-                    label, safe, backoff.as_secs()));
+                eprintln!(
+                    "[egress {}] connect failed: {} (next try in {:?})",
+                    label, safe, backoff
+                );
+                ctrl.log(format!(
+                    "[{}] connect failed ({}), retrying in {}s",
+                    label,
+                    safe,
+                    backoff.as_secs()
+                ));
             }
         }
         // Cancellable backoff sleep — wake every 200 ms to check the
@@ -910,10 +1039,15 @@ pub async fn run_egress(
         let deadline = tokio::time::Instant::now() + backoff;
         loop {
             if dest.shutdown_requested.load(Ordering::Relaxed) {
-                ctrl.log(format!("[{}] shutdown requested during backoff — exiting", label));
+                ctrl.log(format!(
+                    "[{}] shutdown requested during backoff — exiting",
+                    label
+                ));
                 return Ok(());
             }
-            if tokio::time::Instant::now() >= deadline { break; }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         backoff = (backoff * 2).min(max_backoff);
@@ -927,9 +1061,11 @@ pub async fn run_egress(
 fn scrub_secret(text: &str, secret: &str) -> String {
     let mut out = text.to_string();
     if secret.len() >= 6 {
-        let redacted = format!("{}…{}",
+        let redacted = format!(
+            "{}…{}",
             &secret[..secret.len().min(3)],
-            &secret[secret.len().saturating_sub(3)..]);
+            &secret[secret.len().saturating_sub(3)..]
+        );
         out = out.replace(secret, &redacted);
     }
     out
@@ -971,9 +1107,12 @@ async fn pump_dest(
     state.wall_anchor = Instant::now();
     state.wall_anchor_input_ts = first_idr.ts_ms;
     state.last_sent_input_ts = first_idr.ts_ms;
-    dest.consumer_seq.store(state.consumer_seq, Ordering::Relaxed);
+    dest.consumer_seq
+        .store(state.consumer_seq, Ordering::Relaxed);
     dest.last_seq_header_gen.store(
-        ctrl.seq_header_gen.load(Ordering::Relaxed), Ordering::Relaxed);
+        ctrl.seq_header_gen.load(Ordering::Relaxed),
+        Ordering::Relaxed,
+    );
 
     // Always lead with sequence headers + the IDR itself.
     send_sequence_headers(ctrl, &mut sink, state.output_ts_base).await?;
@@ -1001,9 +1140,12 @@ async fn pump_dest(
             reseed_after_publisher_change(&mut state, new_idr);
             state.last_publisher_token = current_token;
             send_sequence_headers(ctrl, &mut sink, state.output_ts_base).await?;
-            dest.consumer_seq.store(state.consumer_seq, Ordering::Relaxed);
+            dest.consumer_seq
+                .store(state.consumer_seq, Ordering::Relaxed);
             dest.last_seq_header_gen.store(
-                ctrl.seq_header_gen.load(Ordering::Relaxed), Ordering::Relaxed);
+                ctrl.seq_header_gen.load(Ordering::Relaxed),
+                Ordering::Relaxed,
+            );
             continue;
         }
 
@@ -1016,7 +1158,8 @@ async fn pump_dest(
             ctrl.log(format!("[{}] sequence header changed — resending", dest.id));
             // Use last_sent_input_ts so the resent header lands AFTER
             // anything we've already sent (same trick as apply_cut).
-            let delta_u32 = state.last_sent_input_ts
+            let delta_u32 = state
+                .last_sent_input_ts
                 .saturating_sub(state.input_ts_anchor) as u32;
             let resend_ts = state.output_ts_base.wrapping_add(delta_u32);
             send_sequence_headers(ctrl, &mut sink, resend_ts).await?;
@@ -1048,15 +1191,15 @@ async fn pump_dest(
 /// Per-egress-session state. Lost on reconnect; re-anchored from scratch.
 struct EgressState {
     consumer_seq: u64,
-    input_ts_anchor: u64,    // original input ts of the most recent cut target
-    output_ts_base: u32,     // output ts assigned to the most recent cut target (RTMP wire is u32)
-    wall_anchor: Instant,    // wall clock at the most recent cut
+    input_ts_anchor: u64,      // original input ts of the most recent cut target
+    output_ts_base: u32, // output ts assigned to the most recent cut target (RTMP wire is u32)
+    wall_anchor: Instant, // wall clock at the most recent cut
     wall_anchor_input_ts: u64, // input ts that pairs with wall_anchor
     last_sent_input_ts: u64, // input ts of the last tag we actually emitted —
-                             // required so apply_cut can re-anchor the
-                             // output timeline *after* the last sent frame
-                             // (instead of after the last cut, which would
-                             // produce a monotonic-violating backward jump).
+    // required so apply_cut can re-anchor the
+    // output timeline *after* the last sent frame
+    // (instead of after the last cut, which would
+    // produce a monotonic-violating backward jump).
     /// Snapshot of `Controller::publisher_token()` at the last seed.
     /// When the controller bumps this (new OBS publish session), the
     /// pump re-anchors — otherwise the new publisher's reset timestamps
@@ -1109,7 +1252,8 @@ async fn pace_and_send(
     // direct — no wrapping_sub / signed-int dance needed.
     if meta.ts_ms < state.input_ts_anchor {
         state.consumer_seq = meta.seq + 1;
-        dest.consumer_seq.store(state.consumer_seq, Ordering::Relaxed);
+        dest.consumer_seq
+            .store(state.consumer_seq, Ordering::Relaxed);
         return Ok(());
     }
     let raw_delta_u64 = meta.ts_ms - state.input_ts_anchor;
@@ -1141,7 +1285,8 @@ async fn pace_and_send(
         Some(()) => {}
         None => {
             state.consumer_seq = meta.seq + 1;
-            dest.consumer_seq.store(state.consumer_seq, Ordering::Relaxed);
+            dest.consumer_seq
+                .store(state.consumer_seq, Ordering::Relaxed);
             return Ok(());
         }
     }
@@ -1151,14 +1296,16 @@ async fn pace_and_send(
         _ => {}
     }
     dest.tags_sent.fetch_add(1, Ordering::Relaxed);
-    dest.bytes_sent.fetch_add(io_buf.len() as u64, Ordering::Relaxed);
+    dest.bytes_sent
+        .fetch_add(io_buf.len() as u64, Ordering::Relaxed);
     dest.note_outbound_bytes(io_buf.len());
     state.consumer_seq = meta.seq + 1;
     state.last_sent_input_ts = meta.ts_ms;
     // Tell the ingest-side trimmer how far we've read. The trimmer takes
     // the MIN across all destinations, so a slow consumer protects all
     // others from over-aggressive eviction.
-    dest.consumer_seq.store(state.consumer_seq, Ordering::Relaxed);
+    dest.consumer_seq
+        .store(state.consumer_seq, Ordering::Relaxed);
     Ok(())
 }
 
@@ -1231,17 +1378,28 @@ async fn apply_cut(
     // user just toggled a few times (fine).
     {
         let prev_seq = state.consumer_seq;
-        let prev_ts  = state.last_sent_input_ts;
-        let new_seq  = cut.target.seq;
-        let new_ts   = cut.target.ts_ms;
-        let direction = if new_ts > prev_ts { "FWD" }
-                       else if new_ts < prev_ts { "BACK" }
-                       else { "SAME" };
+        let prev_ts = state.last_sent_input_ts;
+        let new_seq = cut.target.seq;
+        let new_ts = cut.target.ts_ms;
+        let direction = if new_ts > prev_ts {
+            "FWD"
+        } else if new_ts < prev_ts {
+            "BACK"
+        } else {
+            "SAME"
+        };
         let delta_ms = (new_ts as i64) - (prev_ts as i64);
         ctrl.log(format!(
             "[{}] CUT {} seq:{}→{}  ts:{}→{}  delta:{}ms  out_ts_base:0x{:08x}→0x{:08x}",
-            dest.id, direction, prev_seq, new_seq, prev_ts, new_ts,
-            delta_ms, state.output_ts_base, state.output_ts_base.wrapping_add(1),
+            dest.id,
+            direction,
+            prev_seq,
+            new_seq,
+            prev_ts,
+            new_ts,
+            delta_ms,
+            state.output_ts_base,
+            state.output_ts_base.wrapping_add(1),
         ));
     }
 
@@ -1254,7 +1412,8 @@ async fn apply_cut(
     // Both anchors are u64 now so the subtraction can't underflow even
     // across the RTMP 49-day wrap (expand_ts handles the wrap at ingest).
     // Output_ts is still u32 (RTMP wire) and wraps naturally.
-    let input_delta_u32 = state.last_sent_input_ts
+    let input_delta_u32 = state
+        .last_sent_input_ts
         .saturating_sub(state.input_ts_anchor) as u32;
     let last_out_ts = state.output_ts_base.wrapping_add(input_delta_u32);
     state.output_ts_base = last_out_ts.wrapping_add(1);
@@ -1271,7 +1430,8 @@ async fn apply_cut(
     // Update the per-dest atomic immediately so the ingest-side trim
     // sees the new (potentially backward) position right away and can't
     // evict tags we just rewound to.
-    dest.consumer_seq.store(state.consumer_seq, Ordering::Relaxed);
+    dest.consumer_seq
+        .store(state.consumer_seq, Ordering::Relaxed);
 
     // NOTE: we deliberately do NOT re-emit sequence headers here.
     // OBS/ffmpeg send sequence headers ONCE per session — Twitch's
@@ -1349,7 +1509,8 @@ async fn seed_idr(ctrl: &Arc<Controller>) -> TagMeta {
 /// Re-anchor egress state after the publisher changed identity. Mirrors
 /// `apply_cut`'s timeline math so the output_ts stays strictly monotonic.
 fn reseed_after_publisher_change(state: &mut EgressState, new_idr: TagMeta) {
-    let input_delta_u32 = state.last_sent_input_ts
+    let input_delta_u32 = state
+        .last_sent_input_ts
         .saturating_sub(state.input_ts_anchor) as u32;
     let last_out_ts = state.output_ts_base.wrapping_add(input_delta_u32);
     state.output_ts_base = last_out_ts.wrapping_add(1);
@@ -1418,11 +1579,9 @@ mod tests {
 
     fn harness(initial_armed_ms: u32) -> Harness {
         let n = UNIQ.fetch_add(1, TestOrd::SeqCst);
-        let path = env::temp_dir().join(format!("ic-test-ctrl-{}-{}.buf",
-            std::process::id(), n));
+        let path = env::temp_dir().join(format!("ic-test-ctrl-{}-{}.buf", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
-        let ring = Arc::new(DiskRing::create(&path, 4 * 1024 * 1024)
-            .expect("ring create"));
+        let ring = Arc::new(DiskRing::create(&path, 4 * 1024 * 1024).expect("ring create"));
         let ctrl = Arc::new(Controller::new(ring, initial_armed_ms));
         Harness { ctrl, path }
     }
@@ -1467,9 +1626,12 @@ mod tests {
         let h = harness(0);
         h.ctrl.arm_delay(3_000);
         feed_seconds(&h.ctrl, 0, 4, 30); // 4 seconds of tags @ 30 fps
-        // fill ≈ 3933 ms (29 × 33 ms span), well past the 3 s armed target
-        assert!(h.ctrl.buffer_fill_ms() >= 3_000,
-            "buffer should hold ≥3 s of tags, got {} ms", h.ctrl.buffer_fill_ms());
+                                         // fill ≈ 3933 ms (29 × 33 ms span), well past the 3 s armed target
+        assert!(
+            h.ctrl.buffer_fill_ms() >= 3_000,
+            "buffer should hold ≥3 s of tags, got {} ms",
+            h.ctrl.buffer_fill_ms()
+        );
         assert_eq!(h.ctrl.phase(), "ready");
     }
 
@@ -1479,7 +1641,11 @@ mod tests {
         h.ctrl.arm_delay(2_000);
         feed_seconds(&h.ctrl, 0, 3, 30);
         let r = h.ctrl.activate_delay();
-        assert!(r.is_ok(), "activate must succeed when buffer ≥ armed: {:?}", r);
+        assert!(
+            r.is_ok(),
+            "activate must succeed when buffer ≥ armed: {:?}",
+            r
+        );
         assert_eq!(h.ctrl.phase(), "active");
         assert_eq!(h.ctrl.target_delay_ms(), 2_000);
     }
@@ -1499,8 +1665,11 @@ mod tests {
         feed_seconds(&h.ctrl, 0, 1, 30);
         match h.ctrl.activate_delay() {
             Err(ActivateError::BufferShort { remaining_ms }) => {
-                assert!(remaining_ms >= 5_000,
-                    "expected meaningful remaining time, got {}", remaining_ms);
+                assert!(
+                    remaining_ms >= 5_000,
+                    "expected meaningful remaining time, got {}",
+                    remaining_ms
+                );
             }
             other => panic!("expected BufferShort, got {:?}", other),
         }
@@ -1545,8 +1714,11 @@ mod tests {
         h.ctrl.activate_delay().unwrap();
         assert_eq!(h.ctrl.target_delay_ms(), 2_000);
         h.ctrl.arm_delay(5_000);
-        assert_eq!(h.ctrl.target_delay_ms(), 5_000,
-            "live-arm-change must propagate to target");
+        assert_eq!(
+            h.ctrl.target_delay_ms(),
+            5_000,
+            "live-arm-change must propagate to target"
+        );
     }
 
     #[test]
@@ -1582,8 +1754,11 @@ mod tests {
     fn idr_index_seek_finds_the_right_frame() {
         let h = harness(0);
         feed_seconds(&h.ctrl, 0, 5, 30); // IDR at 0, 1000, 2000, 3000, 4000
-        // Target 2500, tolerance 600 → closest IDR is 2000 (distance 500)
-        let m = h.ctrl.ring.find_idr_near(2500, 600)
+                                         // Target 2500, tolerance 600 → closest IDR is 2000 (distance 500)
+        let m = h
+            .ctrl
+            .ring
+            .find_idr_near(2500, 600)
             .expect("should find IDR near 2500");
         assert_eq!(m.ts_ms, 2000);
         assert!(m.is_idr);
@@ -1619,9 +1794,9 @@ mod tests {
         );
         // The expand_ts machinery should have lifted the post-wrap value
         // above u32::MAX (high bit promoted).
-        assert!(latest > u32::MAX as u64,
-            "expected post-wrap ts above u32::MAX, got {latest}");
+        assert!(
+            latest > u32::MAX as u64,
+            "expected post-wrap ts above u32::MAX, got {latest}"
+        );
     }
-
 }
-

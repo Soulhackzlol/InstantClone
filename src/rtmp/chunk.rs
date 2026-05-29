@@ -32,14 +32,14 @@ pub struct Message {
 }
 
 struct CsState {
-    timestamp: u32,          // absolute timestamp of the in-progress message
-    timestamp_delta: u32,    // last delta (reused by fmt 3 within a message run)
-    last_had_ext_ts: bool,   // continuation chunks repeat the ext ts iff so
+    timestamp: u32,        // absolute timestamp of the in-progress message
+    timestamp_delta: u32,  // last delta (reused by fmt 3 within a message run)
+    last_had_ext_ts: bool, // continuation chunks repeat the ext ts iff so
     length: u32,
     type_id: u8,
     stream_id: u32,
-    buf: BytesMut,           // accumulating payload across chunks
-    receiving: bool,         // true while we have partial bytes for a message
+    buf: BytesMut,   // accumulating payload across chunks
+    receiving: bool, // true while we have partial bytes for a message
 }
 
 impl Default for CsState {
@@ -218,9 +218,9 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                         }
                         continue;
                     }
-                    2 => continue,                  // Abort Message
-                    3 => continue,                  // Acknowledgement
-                    5 | 6 => continue,              // Window Ack Size / Set Peer Bandwidth
+                    2 => continue,     // Abort Message
+                    3 => continue,     // Acknowledgement
+                    5 | 6 => continue, // Window Ack Size / Set Peer Bandwidth
                     _ => return Ok(msg),
                 }
             }
@@ -301,7 +301,8 @@ impl<W: AsyncWrite + Unpin> ChunkWriter<W> {
                 self.out_buf.extend_from_slice(&timestamp.to_be_bytes());
             }
             let n = (payload.len() - written).min(self.chunk_size);
-            self.out_buf.extend_from_slice(&payload[written..written + n]);
+            self.out_buf
+                .extend_from_slice(&payload[written..written + n]);
             written += n;
         }
 

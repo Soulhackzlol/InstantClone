@@ -48,7 +48,13 @@ impl EgressUrl {
         let app = path[..last_slash].to_string();
         let stream_key = path[last_slash + 1..].to_string();
         let tc_url = format!("rtmp://{}:{}/{}", host, port, app);
-        Ok(Self { host, port, app, stream_key, tc_url })
+        Ok(Self {
+            host,
+            port,
+            app,
+            stream_key,
+            tc_url,
+        })
     }
 }
 
@@ -80,7 +86,10 @@ impl EgressClient {
         let mut props = HashMap::new();
         props.insert("app".to_string(), Amf0::String(url.app.clone()));
         props.insert("type".to_string(), Amf0::String("nonprivate".into()));
-        props.insert("flashVer".to_string(), Amf0::String("FMLE/3.0 (compatible; InstantClone)".into()));
+        props.insert(
+            "flashVer".to_string(),
+            Amf0::String("FMLE/3.0 (compatible; InstantClone)".into()),
+        );
         props.insert("tcUrl".to_string(), Amf0::String(url.tc_url.clone()));
         let mut buf = BytesMut::new();
         amf0::enc_string(&mut buf, "connect");
@@ -91,17 +100,26 @@ impl EgressClient {
         await_command_status(&mut reader, "_result").await?;
 
         // --- releaseStream ---
-        send_cmd(&mut writer, "releaseStream", 2.0, &[Amf0::String(url.stream_key.clone())]).await?;
+        send_cmd(
+            &mut writer,
+            "releaseStream",
+            2.0,
+            &[Amf0::String(url.stream_key.clone())],
+        )
+        .await?;
         // --- FCPublish ---
-        send_cmd(&mut writer, "FCPublish", 3.0, &[Amf0::String(url.stream_key.clone())]).await?;
+        send_cmd(
+            &mut writer,
+            "FCPublish",
+            3.0,
+            &[Amf0::String(url.stream_key.clone())],
+        )
+        .await?;
 
         // --- createStream ---
         send_cmd(&mut writer, "createStream", 4.0, &[]).await?;
         let create_resp = await_command_status(&mut reader, "_result").await?;
-        let stream_id = create_resp
-            .get(3)
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0) as u32;
+        let stream_id = create_resp.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as u32;
 
         // --- publish ---
         let mut buf = BytesMut::new();
@@ -114,7 +132,11 @@ impl EgressClient {
         writer.flush().await?;
         await_command_status(&mut reader, "onStatus").await?;
 
-        Ok(Self { reader, writer, stream_id })
+        Ok(Self {
+            reader,
+            writer,
+            stream_id,
+        })
     }
 
     /// Spawn a background drain of server-to-client messages (acks, ping,
@@ -155,18 +177,24 @@ impl Drop for EgressSink {
 impl EgressSink {
     pub async fn send_metadata(&mut self, payload: &[u8]) -> io::Result<()> {
         // AMF0 data on CSID 5, message type 18, timestamp 0.
-        self.writer.write_message(5, 0, 18, self.stream_id, payload).await?;
+        self.writer
+            .write_message(5, 0, 18, self.stream_id, payload)
+            .await?;
         self.writer.flush().await
     }
 
     pub async fn send_audio(&mut self, timestamp: u32, payload: &[u8]) -> io::Result<()> {
         // CSID 6 conventionally for audio.
-        self.writer.write_message(6, timestamp, 8, self.stream_id, payload).await
+        self.writer
+            .write_message(6, timestamp, 8, self.stream_id, payload)
+            .await
     }
 
     pub async fn send_video(&mut self, timestamp: u32, payload: &[u8]) -> io::Result<()> {
         // CSID 7 conventionally for video.
-        self.writer.write_message(7, timestamp, 9, self.stream_id, payload).await
+        self.writer
+            .write_message(7, timestamp, 9, self.stream_id, payload)
+            .await
     }
 
     pub async fn flush(&mut self) -> io::Result<()> {
@@ -188,7 +216,6 @@ impl EgressSink {
         self.writer.flush().await
     }
 }
-
 
 async fn send_cmd<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut ChunkWriter<W>,
@@ -213,7 +240,9 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
 ) -> io::Result<Vec<Amf0>> {
     loop {
         let msg: Message = reader.read_message().await?;
-        if msg.type_id != 20 { continue; }
+        if msg.type_id != 20 {
+            continue;
+        }
         let vals = amf0::decode_all(&msg.payload)?;
         let cmd = vals.first().and_then(|v| v.as_str());
 
@@ -221,7 +250,8 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
         // Surface them as io::Errors so the supervisor can log a useful
         // reason instead of silently looping forever waiting for `_result`.
         if cmd == Some("_error") {
-            let desc = vals.iter()
+            let desc = vals
+                .iter()
                 .find_map(|v| v.as_object())
                 .and_then(|o| o.get("description").and_then(|v| v.as_str()))
                 .unwrap_or("unspecified _error")
@@ -232,8 +262,11 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
             if let Some(info) = vals.get(3).and_then(|v| v.as_object()) {
                 let level = info.get("level").and_then(|v| v.as_str()).unwrap_or("");
                 if level == "error" {
-                    let desc = info.get("description").and_then(|v| v.as_str())
-                        .unwrap_or("onStatus level=error").to_string();
+                    let desc = info
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("onStatus level=error")
+                        .to_string();
                     let code = info.get("code").and_then(|v| v.as_str()).unwrap_or("");
                     return Err(io::Error::other(format!("RTMP {}: {}", code, desc)));
                 }

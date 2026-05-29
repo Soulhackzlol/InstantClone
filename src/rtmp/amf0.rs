@@ -30,10 +30,18 @@ pub enum Amf0 {
 
 impl Amf0 {
     pub fn as_str(&self) -> Option<&str> {
-        if let Amf0::String(s) = self { Some(s) } else { None }
+        if let Amf0::String(s) = self {
+            Some(s)
+        } else {
+            None
+        }
     }
     pub fn as_f64(&self) -> Option<f64> {
-        if let Amf0::Number(n) = self { Some(*n) } else { None }
+        if let Amf0::Number(n) = self {
+            Some(*n)
+        } else {
+            None
+        }
     }
     pub fn as_object(&self) -> Option<&HashMap<String, Amf0>> {
         match self {
@@ -64,7 +72,9 @@ pub fn decode_all(mut data: &[u8]) -> io::Result<Vec<Amf0>> {
 fn decode_one(data: &[u8], depth: u32) -> io::Result<(Amf0, &[u8])> {
     if depth > AMF0_MAX_DEPTH {
         return Err(io::Error::new(
-            ErrorKind::InvalidData, "amf0: nesting too deep"));
+            ErrorKind::InvalidData,
+            "amf0: nesting too deep",
+        ));
     }
     if data.is_empty() {
         return Err(io::Error::new(ErrorKind::UnexpectedEof, "amf0: empty"));
@@ -250,9 +260,9 @@ mod tests {
         // marker 0x08 (ECMA array): 4-byte count prefix, then same
         // body layout as Object (key + value pairs, end marker).
         let mut buf: Vec<u8> = Vec::new();
-        buf.push(0x08);                        // marker
+        buf.push(0x08); // marker
         buf.extend_from_slice(&3u32.to_be_bytes()); // count = 3 (ignored)
-        // one entry: key="x" value=number 1.0
+                                                    // one entry: key="x" value=number 1.0
         buf.extend_from_slice(&1u16.to_be_bytes());
         buf.push(b'x');
         buf.push(0x00); // number marker
@@ -261,7 +271,9 @@ mod tests {
         buf.extend_from_slice(&[0x00, 0x00, 0x09]);
 
         let decoded = decode_all(&buf).unwrap();
-        let obj = decoded[0].as_object().expect("ecma array exposes as object");
+        let obj = decoded[0]
+            .as_object()
+            .expect("ecma array exposes as object");
         assert_eq!(obj.get("x").and_then(|v| v.as_f64()), Some(1.0));
     }
 
@@ -303,6 +315,9 @@ mod tests {
             payload.extend_from_slice(&[0x00, 0x00, 0x09]);
         }
         let r = decode_all(&payload);
-        assert!(r.is_err(), "deeply nested objects must be rejected to prevent stack-blow");
+        assert!(
+            r.is_err(),
+            "deeply nested objects must be rejected to prevent stack-blow"
+        );
     }
 }

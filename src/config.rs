@@ -25,7 +25,7 @@ const MIN_BUFFER_MB: u64 = 50;
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub ingest_port: u16,
-    pub ingest_bind_all: bool,    // true → 0.0.0.0, false → 127.0.0.1
+    pub ingest_bind_all: bool, // true → 0.0.0.0, false → 127.0.0.1
 
     // Legacy single-destination fields. Still present on disk for backward
     // compatibility — on load they get migrated into destinations[0] if
@@ -59,12 +59,12 @@ pub struct DelayProfile {
 /// rewritten independently from the same shared DiskRing.
 #[derive(Debug, Clone)]
 pub struct Destination {
-    pub id: String,                 // stable across renames; UI key
-    pub name: String,               // user label ("Twitch", "Backup", etc.)
+    pub id: String,   // stable across renames; UI key
+    pub name: String, // user label ("Twitch", "Backup", etc.)
     pub enabled: bool,
-    pub platform: String,           // "twitch" | "youtube" | "kick" | "trovo" | "restream" | "custom"
+    pub platform: String, // "twitch" | "youtube" | "kick" | "trovo" | "restream" | "custom"
     pub stream_key: String,
-    pub custom_egress_url: String,  // used when platform == "custom"
+    pub custom_egress_url: String, // used when platform == "custom"
     /// Only meaningful when platform == "twitch". Empty = auto-route via
     /// live.twitch.tv (which load-balances regionally). Otherwise: a
     /// Twitch ingest slug from `twitch_ingests()` (e.g. "fra", "jfk").
@@ -86,8 +86,15 @@ impl Destination {
     /// app+key, the key field is ignored; otherwise the key is appended.
     pub fn egress_url(&self) -> Option<String> {
         if self.platform == "custom" {
-            let base = non_empty(&self.custom_egress_url)?.trim_end_matches('/').to_string();
-            let path = base.strip_prefix("rtmp://").unwrap_or(&base).split_once('/').map(|x| x.1).unwrap_or("");
+            let base = non_empty(&self.custom_egress_url)?
+                .trim_end_matches('/')
+                .to_string();
+            let path = base
+                .strip_prefix("rtmp://")
+                .unwrap_or(&base)
+                .split_once('/')
+                .map(|x| x.1)
+                .unwrap_or("");
             let segs = path.split('/').filter(|s| !s.is_empty()).count();
             if segs >= 2 || self.stream_key.is_empty() {
                 return Some(base);
@@ -110,7 +117,12 @@ impl Destination {
     pub fn is_well_formed(&self) -> bool {
         match self.egress_url() {
             Some(url) => {
-                let path = url.strip_prefix("rtmp://").unwrap_or(&url).split_once('/').map(|x| x.1).unwrap_or("");
+                let path = url
+                    .strip_prefix("rtmp://")
+                    .unwrap_or(&url)
+                    .split_once('/')
+                    .map(|x| x.1)
+                    .unwrap_or("");
                 path.split('/').filter(|s| !s.is_empty()).count() >= 2
             }
             None => false,
@@ -139,9 +151,18 @@ impl Settings {
             initial_delay_ms: 0,
             configured: false,
             profiles: vec![
-                DelayProfile { name: "Quick".into(),     delay_ms:  15_000 },
-                DelayProfile { name: "Standard".into(),  delay_ms:  30_000 },
-                DelayProfile { name: "Tournament".into(),delay_ms: 300_000 },
+                DelayProfile {
+                    name: "Quick".into(),
+                    delay_ms: 15_000,
+                },
+                DelayProfile {
+                    name: "Standard".into(),
+                    delay_ms: 30_000,
+                },
+                DelayProfile {
+                    name: "Tournament".into(),
+                    delay_ms: 300_000,
+                },
             ],
             destinations: Vec::new(),
             discord_webhook_url: String::new(),
@@ -158,7 +179,9 @@ impl Settings {
         let text = fs::read_to_string(path)?;
         for line in text.lines() {
             let line = line.trim();
-            if line.is_empty() || line.starts_with('#') { continue; }
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
             if let Some((k, v)) = line.split_once('=') {
                 s.apply_field(k.trim(), v.trim());
             }
@@ -198,9 +221,15 @@ impl Settings {
     /// errors); this one just rounds inputs to safe ranges silently so
     /// the process can still start.
     fn sanitize_load(&mut self) {
-        if self.buffer_mb < MIN_BUFFER_MB { self.buffer_mb = MIN_BUFFER_MB; }
-        if self.ingest_port == 0 { self.ingest_port = 1935; }
-        if self.web_port == 0 { self.web_port = 7799; }
+        if self.buffer_mb < MIN_BUFFER_MB {
+            self.buffer_mb = MIN_BUFFER_MB;
+        }
+        if self.ingest_port == 0 {
+            self.ingest_port = 1935;
+        }
+        if self.web_port == 0 {
+            self.web_port = 7799;
+        }
         if self.web_port == self.ingest_port {
             // Defensive port move — if the user collided them in the
             // config file, push the web port to a sane fallback so at
@@ -244,9 +273,27 @@ impl Settings {
         // older binaries that don't know about `destination.*`. We mirror
         // destinations[0] into them so a downgrade still works.
         let mirror = self.destinations.first();
-        writeln!(f, "platform={}", mirror.map(|d| d.platform.as_str()).unwrap_or(&self.platform))?;
-        writeln!(f, "stream_key={}", mirror.map(|d| d.stream_key.as_str()).unwrap_or(&self.stream_key))?;
-        writeln!(f, "custom_egress_url={}", mirror.map(|d| d.custom_egress_url.as_str()).unwrap_or(&self.custom_egress_url))?;
+        writeln!(
+            f,
+            "platform={}",
+            mirror
+                .map(|d| d.platform.as_str())
+                .unwrap_or(&self.platform)
+        )?;
+        writeln!(
+            f,
+            "stream_key={}",
+            mirror
+                .map(|d| d.stream_key.as_str())
+                .unwrap_or(&self.stream_key)
+        )?;
+        writeln!(
+            f,
+            "custom_egress_url={}",
+            mirror
+                .map(|d| d.custom_egress_url.as_str())
+                .unwrap_or(&self.custom_egress_url)
+        )?;
         writeln!(f, "ingest_port={}", self.ingest_port)?;
         writeln!(f, "ingest_bind_all={}", self.ingest_bind_all)?;
         writeln!(f, "web_port={}", self.web_port)?;
@@ -268,7 +315,11 @@ impl Settings {
             writeln!(f, "destination.{}.enabled={}", i, d.enabled)?;
             writeln!(f, "destination.{}.platform={}", i, d.platform)?;
             writeln!(f, "destination.{}.stream_key={}", i, d.stream_key)?;
-            writeln!(f, "destination.{}.custom_egress_url={}", i, d.custom_egress_url)?;
+            writeln!(
+                f,
+                "destination.{}.custom_egress_url={}",
+                i, d.custom_egress_url
+            )?;
             writeln!(f, "destination.{}.twitch_ingest={}", i, d.twitch_ingest)?;
             writeln!(f, "destination.{}.youtube_ingest={}", i, d.youtube_ingest)?;
         }
@@ -282,15 +333,39 @@ impl Settings {
             "platform" => self.platform = value.into(),
             "stream_key" => self.stream_key = value.into(),
             "custom_egress_url" => self.custom_egress_url = value.into(),
-            "ingest_port" => if let Ok(v) = value.parse() { self.ingest_port = v; },
+            "ingest_port" => {
+                if let Ok(v) = value.parse() {
+                    self.ingest_port = v;
+                }
+            }
             "ingest_bind_all" => self.ingest_bind_all = value == "true",
-            "web_port" => if let Ok(v) = value.parse() { self.web_port = v; },
+            "web_port" => {
+                if let Ok(v) = value.parse() {
+                    self.web_port = v;
+                }
+            }
             "web_bind_all" => self.web_bind_all = value == "true",
-            "buffer_mb" => if let Ok(v) = value.parse() { self.buffer_mb = v; },
+            "buffer_mb" => {
+                if let Ok(v) = value.parse() {
+                    self.buffer_mb = v;
+                }
+            }
             "buffer_path" => self.buffer_path = PathBuf::from(value),
-            "target_delay_ms" => if let Ok(v) = value.parse() { self.target_delay_ms = v; },
-            "armed_delay_ms" => if let Ok(v) = value.parse() { self.armed_delay_ms = v; },
-            "initial_delay_ms" => if let Ok(v) = value.parse() { self.initial_delay_ms = v; },
+            "target_delay_ms" => {
+                if let Ok(v) = value.parse() {
+                    self.target_delay_ms = v;
+                }
+            }
+            "armed_delay_ms" => {
+                if let Ok(v) = value.parse() {
+                    self.armed_delay_ms = v;
+                }
+            }
+            "initial_delay_ms" => {
+                if let Ok(v) = value.parse() {
+                    self.initial_delay_ms = v;
+                }
+            }
             "discord_webhook_url" => self.discord_webhook_url = value.into(),
             "overlays_dir" => self.overlays_dir = PathBuf::from(value),
             k if k.starts_with("profile.") => {
@@ -300,14 +375,23 @@ impl Settings {
                         // Cap: a hand-edited / attacker-fed config line
                         // like `profile.4294967295.name=x` would otherwise
                         // allocate billions of empty profiles and OOM.
-                        if idx >= MAX_PROFILES { return; }
+                        if idx >= MAX_PROFILES {
+                            return;
+                        }
                         while self.profiles.len() <= idx {
-                            self.profiles.push(DelayProfile { name: String::new(), delay_ms: 0 });
+                            self.profiles.push(DelayProfile {
+                                name: String::new(),
+                                delay_ms: 0,
+                            });
                         }
                         let field = &rest[dot + 1..];
                         match field {
                             "name" => self.profiles[idx].name = value.into(),
-                            "delay_ms" => if let Ok(v) = value.parse() { self.profiles[idx].delay_ms = v; },
+                            "delay_ms" => {
+                                if let Ok(v) = value.parse() {
+                                    self.profiles[idx].delay_ms = v;
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -321,7 +405,9 @@ impl Settings {
                         // Same OOM-guard as profiles. 128 destinations is
                         // already absurd for a single streamer — beyond
                         // that it's almost certainly malformed input.
-                        if idx >= MAX_DESTINATIONS { return; }
+                        if idx >= MAX_DESTINATIONS {
+                            return;
+                        }
                         while self.destinations.len() <= idx {
                             self.destinations.push(Destination {
                                 id: format!("dest{}", idx),
@@ -331,7 +417,7 @@ impl Settings {
                                 stream_key: String::new(),
                                 custom_egress_url: String::new(),
                                 twitch_ingest: String::new(),
-                youtube_ingest: String::new(),
+                                youtube_ingest: String::new(),
                             });
                         }
                         let d = &mut self.destinations[idx];
@@ -356,12 +442,20 @@ impl Settings {
     // ---- Derived values ----
 
     pub fn ingest_addr(&self) -> String {
-        let host = if self.ingest_bind_all { "0.0.0.0" } else { "127.0.0.1" };
+        let host = if self.ingest_bind_all {
+            "0.0.0.0"
+        } else {
+            "127.0.0.1"
+        };
         format!("{}:{}", host, self.ingest_port)
     }
 
     pub fn web_addr(&self) -> String {
-        let host = if self.web_bind_all { "0.0.0.0" } else { "127.0.0.1" };
+        let host = if self.web_bind_all {
+            "0.0.0.0"
+        } else {
+            "127.0.0.1"
+        };
         format!("{}:{}", host, self.web_port)
     }
 
@@ -375,12 +469,21 @@ impl Settings {
     /// code paths (validate, redacted display, etc.). Multi-destination
     /// pump uses `Destination::egress_url` directly per-dest.
     pub fn egress_url(&self) -> Option<String> {
-        self.destinations.first().and_then(|d| d.egress_url())
+        self.destinations
+            .first()
+            .and_then(|d| d.egress_url())
             .or_else(|| {
                 // Pre-migration safety net.
                 if self.platform == "custom" {
-                    let base = non_empty(&self.custom_egress_url)?.trim_end_matches('/').to_string();
-                    let path = base.strip_prefix("rtmp://").unwrap_or(&base).split_once('/').map(|x| x.1).unwrap_or("");
+                    let base = non_empty(&self.custom_egress_url)?
+                        .trim_end_matches('/')
+                        .to_string();
+                    let path = base
+                        .strip_prefix("rtmp://")
+                        .unwrap_or(&base)
+                        .split_once('/')
+                        .map(|x| x.1)
+                        .unwrap_or("");
                     let segs = path.split('/').filter(|s| !s.is_empty()).count();
                     if segs >= 2 || self.stream_key.is_empty() {
                         return Some(base);
@@ -396,7 +499,8 @@ impl Settings {
     /// All resolved, well-formed, enabled destinations — the set the
     /// supervisor will spawn egress pumps for.
     pub fn active_destinations(&self) -> Vec<(Destination, String)> {
-        self.destinations.iter()
+        self.destinations
+            .iter()
             .filter(|d| d.enabled)
             .filter_map(|d| d.egress_url().map(|u| (d.clone(), u)))
             .collect()
@@ -412,7 +516,9 @@ impl Settings {
         // a `stream_key_set` boolean per destination.
         let mut dests = String::from("[");
         for (i, d) in self.destinations.iter().enumerate() {
-            if i > 0 { dests.push(','); }
+            if i > 0 {
+                dests.push(',');
+            }
             let url = d.egress_url().unwrap_or_default();
             dests.push_str(&format!(
                 r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"stream_key_set":{ks},"egress_url_redacted":{red}}}"#,
@@ -449,8 +555,12 @@ impl Settings {
 
     pub fn validate(&self) -> Vec<String> {
         let mut errs = Vec::new();
-        if self.ingest_port == 0 { errs.push("ingest_port must be > 0".into()); }
-        if self.web_port == 0 { errs.push("web_port must be > 0".into()); }
+        if self.ingest_port == 0 {
+            errs.push("ingest_port must be > 0".into());
+        }
+        if self.web_port == 0 {
+            errs.push("web_port must be > 0".into());
+        }
         if self.ingest_port == self.web_port {
             errs.push("ingest_port and web_port must differ — they share the same socket otherwise and one will silently fail to bind".into());
         }
@@ -490,8 +600,7 @@ impl Settings {
                 ));
             }
         }
-        if !self.discord_webhook_url.is_empty()
-            && !self.discord_webhook_url.starts_with("https://")
+        if !self.discord_webhook_url.is_empty() && !self.discord_webhook_url.starts_with("https://")
         {
             errs.push("Discord webhook URL must start with https://".into());
         }
@@ -500,10 +609,16 @@ impl Settings {
         // exec already; this is just defence in depth so a casual POST
         // can't trick the proxy into writing a 300 MB .buf into System32.
         if !is_path_safe(&self.buffer_path) {
-            errs.push(format!("buffer_path looks unsafe: {}", self.buffer_path.display()));
+            errs.push(format!(
+                "buffer_path looks unsafe: {}",
+                self.buffer_path.display()
+            ));
         }
         if !is_path_safe(&self.overlays_dir) {
-            errs.push(format!("overlays_dir looks unsafe: {}", self.overlays_dir.display()));
+            errs.push(format!(
+                "overlays_dir looks unsafe: {}",
+                self.overlays_dir.display()
+            ));
         }
         errs
     }
@@ -517,15 +632,30 @@ pub fn is_path_safe(p: &std::path::Path) -> bool {
         Some(s) => s,
         None => return false, // non-UTF8 path — refuse rather than guess
     };
-    if s.is_empty() { return false; }
-    if s.contains("..") { return false; }
+    if s.is_empty() {
+        return false;
+    }
+    if s.contains("..") {
+        return false;
+    }
     let lower = s.to_ascii_lowercase().replace('\\', "/");
     const BAD_PREFIXES: &[&str] = &[
-        "c:/windows", "c:/program files", "c:/programdata",
-        "/windows", "/etc", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc",
+        "c:/windows",
+        "c:/program files",
+        "c:/programdata",
+        "/windows",
+        "/etc",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/boot",
+        "/sys",
+        "/proc",
     ];
     for bad in BAD_PREFIXES {
-        if lower.starts_with(bad) { return false; }
+        if lower.starts_with(bad) {
+            return false;
+        }
     }
     true
 }
@@ -533,10 +663,10 @@ pub fn is_path_safe(p: &std::path::Path) -> bool {
 /// Mapping of platform slug → RTMP ingest base. New platforms go here.
 pub fn platform_base(slug: &str) -> Option<&'static str> {
     Some(match slug {
-        "twitch"   => "rtmp://live.twitch.tv/app",
-        "youtube"  => "rtmp://a.rtmp.youtube.com/live2",
-        "kick"     => "rtmp://fa723fc1b171.global-contribute.live-video.net/app",
-        "trovo"    => "rtmp://livepush.trovo.live/live",
+        "twitch" => "rtmp://live.twitch.tv/app",
+        "youtube" => "rtmp://a.rtmp.youtube.com/live2",
+        "kick" => "rtmp://fa723fc1b171.global-contribute.live-video.net/app",
+        "trovo" => "rtmp://livepush.trovo.live/live",
         "restream" => "rtmp://live.restream.io/live",
         _ => return None,
     })
@@ -544,12 +674,12 @@ pub fn platform_base(slug: &str) -> Option<&'static str> {
 
 pub fn all_platforms() -> &'static [(&'static str, &'static str)] {
     &[
-        ("twitch",   "Twitch"),
-        ("youtube",  "YouTube Live"),
-        ("kick",     "Kick"),
-        ("trovo",    "Trovo"),
+        ("twitch", "Twitch"),
+        ("youtube", "YouTube Live"),
+        ("kick", "Kick"),
+        ("trovo", "Trovo"),
         ("restream", "Restream.io"),
-        ("custom",   "Custom RTMP URL"),
+        ("custom", "Custom RTMP URL"),
     ]
 }
 
@@ -558,29 +688,29 @@ pub fn all_platforms() -> &'static [(&'static str, &'static str)] {
 /// Empty slug = auto (default — Twitch picks for you).
 pub fn twitch_ingests() -> &'static [(&'static str, &'static str)] {
     &[
-        ("",     "Auto (recommended)"),
-        ("jfk",  "North America: New York"),
-        ("ord",  "North America: Chicago"),
-        ("dfw",  "North America: Dallas"),
-        ("den",  "North America: Denver"),
-        ("sea",  "North America: Seattle"),
-        ("sfo",  "North America: San Francisco"),
-        ("lax",  "North America: Los Angeles"),
-        ("yto",  "North America: Toronto"),
-        ("fra",  "Europe: Frankfurt"),
-        ("ams",  "Europe: Amsterdam"),
-        ("lhr",  "Europe: London"),
-        ("cdg",  "Europe: Paris"),
-        ("arn",  "Europe: Stockholm"),
-        ("mad",  "Europe: Madrid"),
-        ("mxp",  "Europe: Milan"),
-        ("waw",  "Europe: Warsaw"),
-        ("hnd",  "Asia: Tokyo"),
-        ("icn",  "Asia: Seoul"),
-        ("sin",  "Asia: Singapore"),
-        ("hkg",  "Asia: Hong Kong"),
-        ("syd",  "Oceania: Sydney"),
-        ("gru",  "South America: São Paulo"),
+        ("", "Auto (recommended)"),
+        ("jfk", "North America: New York"),
+        ("ord", "North America: Chicago"),
+        ("dfw", "North America: Dallas"),
+        ("den", "North America: Denver"),
+        ("sea", "North America: Seattle"),
+        ("sfo", "North America: San Francisco"),
+        ("lax", "North America: Los Angeles"),
+        ("yto", "North America: Toronto"),
+        ("fra", "Europe: Frankfurt"),
+        ("ams", "Europe: Amsterdam"),
+        ("lhr", "Europe: London"),
+        ("cdg", "Europe: Paris"),
+        ("arn", "Europe: Stockholm"),
+        ("mad", "Europe: Madrid"),
+        ("mxp", "Europe: Milan"),
+        ("waw", "Europe: Warsaw"),
+        ("hnd", "Asia: Tokyo"),
+        ("icn", "Asia: Seoul"),
+        ("sin", "Asia: Singapore"),
+        ("hkg", "Asia: Hong Kong"),
+        ("syd", "Oceania: Sydney"),
+        ("gru", "South America: São Paulo"),
     ]
 }
 
@@ -612,7 +742,11 @@ fn redact_key(url: &str) -> String {
 }
 
 fn non_empty(s: &String) -> Option<&String> {
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 fn json_str(s: &str) -> String {
@@ -620,7 +754,7 @@ fn json_str(s: &str) -> String {
     out.push('"');
     for c in s.chars() {
         match c {
-            '"'  => out.push_str("\\\""),
+            '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
@@ -640,7 +774,11 @@ fn free_space_bytes(path: &Path) -> Option<u64> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let wide: Vec<u16> = dir
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
         let mut free_bytes_available: u64 = 0;
         let mut total_bytes: u64 = 0;
         let mut total_free_bytes: u64 = 0;
@@ -653,16 +791,22 @@ fn free_space_bytes(path: &Path) -> Option<u64> {
                 &mut total_free_bytes,
             )
         };
-        if ok != 0 { Some(free_bytes_available) } else { None }
+        if ok != 0 {
+            Some(free_bytes_available)
+        } else {
+            None
+        }
     }
     #[cfg(not(windows))]
     {
-        use std::os::unix::ffi::OsStrExt;
         use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
         let c = CString::new(dir.as_os_str().as_bytes()).ok()?;
         let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
         // SAFETY: c is a valid C string; st is a valid out-param.
-        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 { return None; }
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
         Some((st.f_bavail as u64) * (st.f_frsize as u64))
     }
 }
@@ -697,7 +841,10 @@ fn url_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'+' => { out.push(b' '); i += 1; }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
             b'%' if i + 2 < bytes.len() => {
                 let hex = &s[i + 1..i + 3];
                 if let Ok(b) = u8::from_str_radix(hex, 16) {
@@ -708,7 +855,10 @@ fn url_decode(s: &str) -> String {
                     i += 1;
                 }
             }
-            b => { out.push(b); i += 1; }
+            b => {
+                out.push(b);
+                i += 1;
+            }
         }
     }
     String::from_utf8(out).unwrap_or_default()
@@ -746,7 +896,9 @@ mod tests {
     #[test]
     fn is_path_safe_blocks_traversal_and_system_dirs() {
         assert!(!is_path_safe(&PathBuf::from("../../../etc/passwd")));
-        assert!(!is_path_safe(&PathBuf::from("C:\\Windows\\System32\\evil.dll")));
+        assert!(!is_path_safe(&PathBuf::from(
+            "C:\\Windows\\System32\\evil.dll"
+        )));
         assert!(!is_path_safe(&PathBuf::from("/etc/shadow")));
         assert!(!is_path_safe(&PathBuf::from("")));
     }
@@ -761,10 +913,14 @@ mod tests {
     #[test]
     fn destination_egress_url_for_twitch_appends_key() {
         let d = Destination {
-            id: "x".into(), name: "T".into(), enabled: true,
-            platform: "twitch".into(), stream_key: "live_123_abc".into(),
+            id: "x".into(),
+            name: "T".into(),
+            enabled: true,
+            platform: "twitch".into(),
+            stream_key: "live_123_abc".into(),
             custom_egress_url: String::new(),
-            twitch_ingest: String::new(), youtube_ingest: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
         };
         let url = d.egress_url().unwrap();
         assert!(url.starts_with("rtmp://live.twitch.tv/app/"));
@@ -774,12 +930,19 @@ mod tests {
     #[test]
     fn destination_egress_url_region_pin_uses_live_dash_slug() {
         let d = Destination {
-            id: "x".into(), name: "T".into(), enabled: true,
-            platform: "twitch".into(), stream_key: "k".into(),
+            id: "x".into(),
+            name: "T".into(),
+            enabled: true,
+            platform: "twitch".into(),
+            stream_key: "k".into(),
             custom_egress_url: String::new(),
-            twitch_ingest: "fra".into(), youtube_ingest: String::new(),
+            twitch_ingest: "fra".into(),
+            youtube_ingest: String::new(),
         };
-        assert_eq!(d.egress_url().as_deref(), Some("rtmp://live-fra.twitch.tv/app/k"));
+        assert_eq!(
+            d.egress_url().as_deref(),
+            Some("rtmp://live-fra.twitch.tv/app/k")
+        );
     }
 
     #[test]
@@ -787,10 +950,14 @@ mod tests {
         // A custom URL that already includes app+key (2+ path segments)
         // must be passed through verbatim, even if stream_key is set.
         let d = Destination {
-            id: "x".into(), name: "C".into(), enabled: true,
-            platform: "custom".into(), stream_key: "ignored".into(),
+            id: "x".into(),
+            name: "C".into(),
+            enabled: true,
+            platform: "custom".into(),
+            stream_key: "ignored".into(),
             custom_egress_url: "rtmp://my.server/live/secret_key".into(),
-            twitch_ingest: String::new(), youtube_ingest: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -802,22 +969,33 @@ mod tests {
     #[test]
     fn destination_youtube_backup_uses_b_ingest() {
         let d = Destination {
-            id: "x".into(), name: "Y".into(), enabled: true,
-            platform: "youtube".into(), stream_key: "abcd".into(),
+            id: "x".into(),
+            name: "Y".into(),
+            enabled: true,
+            platform: "youtube".into(),
+            stream_key: "abcd".into(),
             custom_egress_url: String::new(),
-            twitch_ingest: String::new(), youtube_ingest: "backup".into(),
+            twitch_ingest: String::new(),
+            youtube_ingest: "backup".into(),
         };
-        assert_eq!(d.egress_url().as_deref(), Some("rtmp://b.rtmp.youtube.com/live2/abcd"));
+        assert_eq!(
+            d.egress_url().as_deref(),
+            Some("rtmp://b.rtmp.youtube.com/live2/abcd")
+        );
     }
 
     #[test]
     fn destination_well_formed_requires_app_and_key() {
         let bad = Destination {
-            id: "x".into(), name: "B".into(), enabled: true,
-            platform: "custom".into(), stream_key: String::new(),
+            id: "x".into(),
+            name: "B".into(),
+            enabled: true,
+            platform: "custom".into(),
+            stream_key: String::new(),
             // No app segment — just a bare host. Not a valid RTMP URL.
             custom_egress_url: "rtmp://my.server".into(),
-            twitch_ingest: String::new(), youtube_ingest: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
         };
         assert!(!bad.is_well_formed());
     }
@@ -838,8 +1016,11 @@ mod tests {
         let mut s = Settings::defaults();
         s.buffer_path = PathBuf::from("../../system32/cmd.exe");
         let errs = s.validate();
-        assert!(errs.iter().any(|e| e.contains("buffer_path looks unsafe")),
-            "expected buffer_path validation error, got: {:?}", errs);
+        assert!(
+            errs.iter().any(|e| e.contains("buffer_path looks unsafe")),
+            "expected buffer_path validation error, got: {:?}",
+            errs
+        );
     }
 
     #[test]
@@ -854,24 +1035,37 @@ mod tests {
         s.discord_webhook_url = "https://discord.com/api/webhooks/123/abc".into();
         s.destinations.clear();
         s.destinations.push(Destination {
-            id: "tw1".into(), name: "Twitch".into(), enabled: true,
-            platform: "twitch".into(), stream_key: "live_secret".into(),
+            id: "tw1".into(),
+            name: "Twitch".into(),
+            enabled: true,
+            platform: "twitch".into(),
+            stream_key: "live_secret".into(),
             custom_egress_url: String::new(),
-            twitch_ingest: "fra".into(), youtube_ingest: String::new(),
+            twitch_ingest: "fra".into(),
+            youtube_ingest: String::new(),
         });
         s.destinations.push(Destination {
-            id: "yt1".into(), name: "YT Backup".into(), enabled: false,
-            platform: "youtube".into(), stream_key: "yt_secret".into(),
+            id: "yt1".into(),
+            name: "YT Backup".into(),
+            enabled: false,
+            platform: "youtube".into(),
+            stream_key: "yt_secret".into(),
             custom_egress_url: String::new(),
-            twitch_ingest: String::new(), youtube_ingest: "backup".into(),
+            twitch_ingest: String::new(),
+            youtube_ingest: "backup".into(),
         });
         s.profiles = vec![
-            DelayProfile { name: "Quick".into(),     delay_ms: 10_000 },
-            DelayProfile { name: "Long".into(),      delay_ms: 120_000 },
+            DelayProfile {
+                name: "Quick".into(),
+                delay_ms: 10_000,
+            },
+            DelayProfile {
+                name: "Long".into(),
+                delay_ms: 120_000,
+            },
         ];
 
-        let path = std::env::temp_dir()
-            .join(format!("ic-test-cfg-{}.ini", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ic-test-cfg-{}.ini", std::process::id()));
         let _ = std::fs::remove_file(&path);
         s.save(&path).expect("save");
         let loaded = Settings::load(&path).expect("load");
@@ -880,7 +1074,10 @@ mod tests {
         assert_eq!(loaded.ingest_port, 1936);
         assert_eq!(loaded.web_port, 7898);
         assert_eq!(loaded.buffer_mb, 200);
-        assert_eq!(loaded.discord_webhook_url, "https://discord.com/api/webhooks/123/abc");
+        assert_eq!(
+            loaded.discord_webhook_url,
+            "https://discord.com/api/webhooks/123/abc"
+        );
         assert_eq!(loaded.destinations.len(), 2);
         assert_eq!(loaded.destinations[0].id, "tw1");
         assert_eq!(loaded.destinations[0].name, "Twitch");
@@ -898,8 +1095,7 @@ mod tests {
     fn missing_config_file_falls_back_to_defaults() {
         // load_or_default must not panic on a non-existent path — that's
         // the cold-start case where there's nothing to read yet.
-        let path = std::env::temp_dir()
-            .join(format!("ic-no-such-file-{}.ini", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ic-no-such-file-{}.ini", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let s = Settings::load_or_default(&path);
         assert_eq!(s.ingest_port, 1935);
@@ -913,9 +1109,17 @@ mod tests {
 mod libc {
     #[repr(C)]
     pub struct statvfs {
-        pub f_bsize: u64, pub f_frsize: u64, pub f_blocks: u64, pub f_bfree: u64,
-        pub f_bavail: u64, pub f_files: u64, pub f_ffree: u64, pub f_favail: u64,
-        pub f_fsid: u64,  pub f_flag: u64,  pub f_namemax: u64,
+        pub f_bsize: u64,
+        pub f_frsize: u64,
+        pub f_blocks: u64,
+        pub f_bfree: u64,
+        pub f_bavail: u64,
+        pub f_files: u64,
+        pub f_ffree: u64,
+        pub f_favail: u64,
+        pub f_fsid: u64,
+        pub f_flag: u64,
+        pub f_namemax: u64,
         // padding/reserved: we only read f_bavail and f_frsize, but on many
         // platforms the struct is larger. Allocate generous tail bytes.
         _reserved: [u64; 8],

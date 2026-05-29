@@ -43,20 +43,33 @@ pub fn set_aggressive_keepalive(sock: &TcpStream) -> io::Result<()> {
     }
 
     let raw = sock.as_raw_socket() as usize;
-    let kpa = TcpKeepalive { onoff: 1, keepalivetime: 30_000, keepaliveinterval: 10_000 };
+    let kpa = TcpKeepalive {
+        onoff: 1,
+        keepalivetime: 30_000,
+        keepaliveinterval: 10_000,
+    };
     let mut returned: u32 = 0;
     let rc = unsafe {
         WSAIoctl(
-            raw, SIO_KEEPALIVE_VALS,
+            raw,
+            SIO_KEEPALIVE_VALS,
             &kpa as *const _ as *const std::ffi::c_void,
             std::mem::size_of::<TcpKeepalive>() as u32,
-            std::ptr::null_mut(), 0,
+            std::ptr::null_mut(),
+            0,
             &mut returned,
-            std::ptr::null_mut(), std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
         )
     };
-    if rc != 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+    if rc != 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn set_aggressive_keepalive(_sock: &TcpStream) -> io::Result<()> { Ok(()) }
+pub fn set_aggressive_keepalive(_sock: &TcpStream) -> io::Result<()> {
+    Ok(())
+}
