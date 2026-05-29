@@ -8,6 +8,20 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet. First public push lives below.
 
+## [0.1.0-beta.1] - first public pre-release
+
+End-to-end tested locally against the in-tree RTMP sink with `ffmpeg`
+publishing a synthetic H.264 + AAC source: ingest, codec classification,
+forwarding to destination, and the full `arm → activate → cut → disarm`
+state machine all behave correctly.
+
+**Not yet tested against real Twitch / YouTube / Kick ingests.** That's the
+gap between `-beta.1` and the eventual `v0.1.0`. If you're a streamer
+willing to try it on a low-stakes session and report back, the bug
+template is in [Issues](https://github.com/Soulhackzlol/InstantClone/issues).
+
+See `0.1.0` below for the full feature list.
+
 ## [0.1.0] - first public release
 
 ### Added
