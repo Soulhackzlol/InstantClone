@@ -51,3 +51,45 @@ jobs:
         run: |
           $sz = (Get-Item .\target\release\instantclone.exe).Length
           "Binary: $([Math]::Round($sz/1KB,1)) KB" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: upload binary for e2e
+        uses: actions/upload-artifact@v4
+        with:
+          name: instantclone-${{ github.sha }}
+          path: target/release/instantclone.exe
+          retention-days: 1
+
+  # Real end-to-end: ffmpeg pushes a synthetic H.264 + AAC stream into
+  # instantclone's ingest, instantclone forwards it to the in-tree sink,
+  # the sink confirms onMetaData + publish + IDR detection. Exercises
+  # handshake, AMF0, chunking, h264 classification, and the egress pump
+  # against a real RTMP peer — the whole wire path the unit tests skip.
+  e2e:
+    name: e2e (ffmpeg → proxy → sink)
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: instantclone-${{ github.sha }}
+          path: target/release
+
+      - name: install ffmpeg
+        run: choco install ffmpeg --no-progress --yes
+
+      - name: run e2e
+        shell: pwsh
+        run: .\scripts\e2e.ps1
+
+      - name: upload e2e logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ github.sha }}
+          path: ${{ runner.temp }}/ic-e2e-*
+          retention-days: 7
+          if-no-files-found: ignore

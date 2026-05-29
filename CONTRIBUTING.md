@@ -1,48 +1,36 @@
 # Contributing
 
-Thanks for looking. A few quick notes so we don't waste each other's time.
+Hey, thanks for stopping by. Quick rundown so you know what to expect.
 
 ## Filing a bug
 
-Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.yml). The more
-concrete you can be, the faster I can fix it: InstantClone version, Windows
-version, OBS version, what you did, what you expected, what you got. Logs from
-the dashboard's **Logs** tab go a long way (redact stream keys if any leak in).
+Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.yml). The more concrete the better: InstantClone version, Windows version, OBS version, what you did, what you expected, what actually happened. Logs from the dashboard's **Logs** tab help a ton (redact stream keys if any leak in).
 
 ## Asking a question
 
-Open a [Discussion](https://github.com/Soulhackzlol/InstantClone/discussions),
-not an issue. Issues are for things that need fixing.
+Open a [Discussion](https://github.com/Soulhackzlol/InstantClone/discussions). Issues are for things that need fixing.
 
 ## Sending a PR
 
-- Keep PRs focused. One change per PR is easier to review than a grab bag.
-- Run the test suite and make sure `cargo clippy --release` is clean before
-  you push: `cargo test --release` should print `73 passed; 0 failed`.
-- Match the existing code style. `cargo fmt` handles most of it.
-- Mention how you tested. "Tested against OBS 30.2 streaming to a local
-  RTMP sink for ~5 min with a 15 s armed delay" beats "works on my machine".
-- New features: consider opening an issue first so we don't both write the
-  same thing.
+- One change per PR makes review easier.
+- Before pushing: `cargo fmt`, `cargo clippy --release` clean, `cargo test --release` showing `86 passed; 0 failed`.
+- A line on how you tested goes a long way. "Tested with OBS 30.2 against a local RTMP sink for ~5 min with a 15 s armed delay" beats "works on my machine".
+- For new features, open an issue first so we don't duplicate effort.
 
-## What I'm interested in
+## Stuff I'd love help with
 
-- Cross-platform support (macOS, Linux). The code is mostly portable;
-  `tray.rs`, `portcheck.rs`, and `sysstat.rs` have Windows-specific paths
-  that need parallel implementations.
-- More overlay styles. Drop new `.html` files into `overlays/`, they're
-  picked up automatically.
+- Cross-platform support (macOS, Linux). The code is mostly portable; [tray.rs](src/tray.rs), [portcheck.rs](src/portcheck.rs), and [sysstat.rs](src/sysstat.rs) have Windows-specific paths that need parallel implementations.
+- New overlay styles. Drop new `.html` files into [overlays/](overlays/) and they're served automatically.
 - Real-world bug reports from streaming with the proxy in the loop.
 
-## What I'm less interested in
+## Probably not
 
-- Refactors with no behaviour change. The code is small enough.
-- Wide-net dep additions. Runtime stays at `tokio` + `bytes` (+ `windows-sys`
-  on Windows) unless there's a strong reason.
+- Pure-refactor PRs with no behaviour change. The codebase is small; churn costs more than it earns.
+- Wide-net dep additions. Runtime stays at `tokio` + `bytes` + `ureq` (+ `windows-sys` on Windows) unless there's a strong reason.
 
 ## Build
 
-Rust **1.74+** stable.
+Rust 1.74+ stable.
 
 ```powershell
 cargo build --release
@@ -50,7 +38,6 @@ cargo test --release
 .\target\release\instantclone.exe
 ```
 
-## Heads-up
+## One last thing
 
-I'm one person, weekends mostly. Patience appreciated. If something's been
-sitting for a week without a reply, a friendly bump is fine.
+I'm one person doing this on weekends. If a PR or issue sits for a week or two without a reply, a friendly bump is welcome.

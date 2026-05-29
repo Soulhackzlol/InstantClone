@@ -52,7 +52,7 @@ See `0.1.0` below for the full feature list.
   `GetExtendedTcpTable` + `QueryFullProcessImageNameW`, pops a native
   modal asking the user to switch to the next free port or quit, persists
   the choice.
-- 73 unit tests covering the state machine, AMF0 codec + recursion guard,
+- 86 unit tests covering the state machine, AMF0 codec + recursion guard,
   H.264 + Enhanced RTMP IDR detection, ring-buffer eviction with in-flight-
   read protection, port-conflict FFI roundtrip, HTTP parsing, CSRF policy,
   config form parsing + save/load round-trip, and `accepts_gzip` content

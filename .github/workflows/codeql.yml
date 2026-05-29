@@ -1,0 +1,53 @@
+name: codeql
+
+# Static analysis on every push/PR + weekly cron. The cron catches new
+# rules that GitHub ships to the default Rust query pack between our
+# pushes — common pattern for security-events to stay current on quiet
+# branches. Cron time is intentionally off-peak to avoid queueing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 1"
+
+permissions:
+  security-events: write
+  actions: read
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: init codeql
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      # CodeQL's Rust extractor watches `cargo build`. Default profile is
+      # fine: clippy/security queries don't need optimised codegen.
+      - name: build
+        run: cargo build
+
+      - name: analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

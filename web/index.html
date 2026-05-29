@@ -1854,10 +1854,17 @@ const TOUR = [
   },
   {
     target: '.tab[data-tab="obs"]', side: 'bottom', tab: 'obs',
-    title: 'OBS setup',
+    title: 'Wire OBS to InstantClone',
     body: `
-      <p>One-time setup: copy the <b>Server URL</b> into OBS → Settings → Stream → Service: Custom.</p>
-      <p>Use any stream key (we suggest <code>main</code>) — InstantClone uses it only as a stream identifier. Your real per-platform keys are in the <b>Destinations</b> tab.</p>
+      <p>One-time setup. In OBS:</p>
+      <ol style="margin:6px 0 8px 18px;padding:0">
+        <li>Open <b>Settings → Stream</b></li>
+        <li>Service: pick <b>Custom…</b></li>
+        <li>Server: paste the URL shown in this tab (<code>rtmp://127.0.0.1:1935/live</code>)</li>
+        <li>Stream Key: anything works — we suggest <code>main</code></li>
+        <li>Apply, then hit <b>Start Streaming</b> like normal</li>
+      </ol>
+      <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just an internal label here. Your real Twitch / YouTube / Kick keys go in the <b>Destinations</b> tab — that's what actually reaches the platforms.</div>
     `,
   },
   {
@@ -2117,14 +2124,15 @@ function startStateSSE(){
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     if (e.key === ' '){ e.preventDefault(); ctaClick({currentTarget: $('cp-cta')}); }
   });
-  // Show the "New here?" hint near the (?) button once per browser
-  // until the user opens the tour. Persisted in localStorage so it
-  // doesn't nag returning users.
+  // First run: auto-open the tour so newcomers get walked through
+  // OBS wiring before they're left staring at a blank dashboard.
+  // The flag is set inside openTour() so reopens via the (?) button
+  // don't trigger this again. Returning users see nothing extra.
   try {
     if (!localStorage.getItem('instantclone_onboarded') && !$('hdr-bar').hidden){
-      $('hdr-help-hint').hidden = false;
-      // Auto-hide after 10 seconds so it's not permanently in the way.
-      setTimeout(() => { const h = $('hdr-help-hint'); if (h) h.hidden = true; }, 10000);
+      // Small delay so initial layout settles before we measure
+      // spotlight targets.
+      setTimeout(() => openTour(0), 700);
     }
   } catch(_){}
 })();
