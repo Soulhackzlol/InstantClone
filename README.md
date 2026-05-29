@@ -308,4 +308,4 @@ No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzippe
 
 [GPL-3.0](LICENSE). You can use it, modify it, run it on whatever stream you like. If you distribute a modified version (including a "Pro" fork, a bundled installer with extras, or a paid front-end), your source has to ship under the same license, publicly. I built this as a free alternative because I wanted one for myself; GPL is what keeps forks free too.
 
-Built by [s1moscs](https://github.com/s1moscs).
+Built by [s1moscs](https://s1moscs.dev).
