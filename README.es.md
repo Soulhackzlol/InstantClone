@@ -308,4 +308,4 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 
 [GPL-3.0](LICENSE). Puedes usarlo, modificarlo y correrlo en el directo que quieras. Si distribuyes una versión modificada (incluyendo un fork "Pro", un instalador empaquetado con extras o un front-end de pago), tu código fuente tiene que publicarse bajo la misma licencia, en abierto. Construí esto como alternativa gratis porque la quería para mí; la GPL es lo que hace que los forks sigan siendo libres también.
 
-Hecho por [s1moscs](https://github.com/s1moscs).
+Hecho por [s1moscs](https://s1moscs.dev).
