@@ -1,16 +1,19 @@
 name: codeql
 
-# Static analysis on every push/PR + weekly cron. The cron catches new
-# rules that GitHub ships to the default Rust query pack between our
-# pushes — common pattern for security-events to stay current on quiet
-# branches. Cron time is intentionally off-peak to avoid queueing.
+# Static analysis on every push/PR. Skipped while the repo is private —
+# CodeQL is gated behind GitHub Advanced Security for private repos, but
+# free on public ones. When the repo flips public this workflow starts
+# running automatically with no edits needed.
+#
+# Re-add the weekly cron trigger after going public if you want CodeQL
+# to pick up new rules between pushes on quiet branches:
+#   schedule:
+#     - cron: "23 4 * * 1"
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    - cron: "23 4 * * 1"
 
 permissions:
   security-events: write
@@ -24,6 +27,9 @@ concurrency:
 jobs:
   analyze:
     name: analyze (${{ matrix.language }})
+    # Gate: skip on private repos (where CodeQL would 403 without GHAS).
+    # Becomes a no-op until the repo is made public.
+    if: ${{ github.event.repository.private == false }}
     runs-on: windows-latest
     timeout-minutes: 30
     strategy:
@@ -38,7 +44,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: init codeql
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
 
@@ -48,6 +54,6 @@ jobs:
         run: cargo build
 
       - name: analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
