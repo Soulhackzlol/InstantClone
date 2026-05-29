@@ -73,7 +73,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
     }
 
     pub fn set_chunk_size(&mut self, size: usize) {
-        self.chunk_size = size.max(1).min(0xFF_FFFF);
+        self.chunk_size = size.clamp(1, 0xFF_FFFF);
     }
 
     /// Read until one full RTMP message is reassembled, then yield it.
@@ -244,7 +244,7 @@ impl<W: AsyncWrite + Unpin> ChunkWriter<W> {
     }
 
     pub fn set_chunk_size(&mut self, size: usize) {
-        self.chunk_size = size.max(1).min(0xFF_FFFF);
+        self.chunk_size = size.clamp(1, 0xFF_FFFF);
     }
 
     /// Send "Set Chunk Size" to the peer and update our own outbound size.

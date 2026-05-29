@@ -26,9 +26,9 @@ jobs:
       - name: fmt check
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy --release --all-targets -- -A clippy::all
+        run: cargo clippy --all-targets -- -D warnings
       - name: test
-        run: cargo test --release --no-fail-fast
+        run: cargo test --release
 
   # Gate 2: only runs if `test` succeeded. Builds, stages, publishes.
   build:
@@ -57,6 +57,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          # SemVer convention: anything with a `-` suffix (e.g. v0.1.0-beta.1,
+          # v0.1.0-rc.2) is a pre-release. Stable tags (v0.1.0) ship as full.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             artifacts/instantclone-*.exe
             artifacts/SHA256SUMS.txt

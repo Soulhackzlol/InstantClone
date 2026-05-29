@@ -126,8 +126,8 @@ fn make_image(size: u32) -> Vec<u8> {
     // AND mask: 1 bit per pixel, rows padded to 4-byte boundary, bottom-up.
     // We use the alpha channel for transparency on 32bpp icons, so the
     // mask is all zeros (meaning "use XOR color for every pixel").
-    let stride = ((n + 31) / 32) * 4;
-    img.extend(std::iter::repeat(0u8).take(stride * n));
+    let stride = n.div_ceil(32) * 4;
+    img.extend(std::iter::repeat_n(0u8, stride * n));
 
     img
 }

@@ -31,14 +31,20 @@ jobs:
       - name: fmt check
         run: cargo fmt --all -- --check
 
+      # Real clippy gate: `-D warnings` turns every lint into an error.
+      # Default profile (not --release) because clippy emits the same
+      # lints either way and the unoptimised compile is faster.
       - name: clippy
-        run: cargo clippy --release --all-targets -- -A clippy::all
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: build
         run: cargo build --release
 
+      # Tests run in --release because runtime correctness depends on
+      # `panic = "abort"`. Drop `--no-fail-fast` so the first failure is
+      # the one in the log — clearer signal than a wall of stack traces.
       - name: test
-        run: cargo test --release --no-fail-fast
+        run: cargo test --release
 
       - name: binary size
         shell: pwsh

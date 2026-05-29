@@ -19,7 +19,7 @@ use crate::rtmp::client::EgressUrl;
 use crate::sysstat::SysStat;
 use std::io;
 use std::net::ToSocketAddrs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -202,7 +202,7 @@ async fn route(
     body: &str,
     ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
     sysstat: &Arc<SysStat>,
 ) -> (&'static str, &'static str, String) {
     // Strip ?query — we only read it for /overlay.
@@ -403,7 +403,7 @@ async fn post_config(
     body: &str,
     ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let mut new_settings = settings.borrow().clone();
@@ -500,7 +500,7 @@ async fn post_delay(
     body: &str,
     ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
     sysstat: &Arc<SysStat>,
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
@@ -522,7 +522,7 @@ async fn post_arm(
     body: &str,
     ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
     sysstat: &Arc<SysStat>,
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
@@ -535,7 +535,7 @@ async fn post_arm(
 async fn post_activate(
     ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
     sysstat: &Arc<SysStat>,
 ) -> (&'static str, &'static str, String) {
     match ctrl.activate_delay() {
@@ -551,7 +551,7 @@ async fn post_activate(
 async fn post_stop(
     ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
     sysstat: &Arc<SysStat>,
 ) -> (&'static str, &'static str, String) {
     ctrl.stop_delay();
@@ -562,7 +562,7 @@ async fn post_stop(
 async fn post_disarm(
     ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
     sysstat: &Arc<SysStat>,
 ) -> (&'static str, &'static str, String) {
     ctrl.arm_delay(0); // arm(0) also resets target
@@ -573,7 +573,7 @@ async fn post_disarm(
 fn persist_delay_state(
     ctrl: &Controller,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
 ) {
     let mut ns = settings.borrow().clone();
     let armed = ctrl.armed_delay_ms();
@@ -605,7 +605,7 @@ fn profiles_json(settings: &Arc<watch::Sender<Settings>>) -> String {
 async fn post_profile_add(
     body: &str,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let name = form.get("name").cloned().unwrap_or_default();
@@ -629,7 +629,7 @@ async fn post_profile_add(
 async fn post_profile_del(
     body: &str,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let name = form.get("name").cloned().unwrap_or_default();
@@ -705,7 +705,7 @@ async fn test_egress(settings: &Arc<watch::Sender<Settings>>) -> (&'static str, 
 async fn post_destination_upsert(
     body: &str,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let id = form.get("id").cloned().unwrap_or_else(generate_dest_id);
@@ -759,7 +759,7 @@ async fn post_destination_upsert(
 async fn post_destination_delete(
     body: &str,
     settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &PathBuf,
+    cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let id = form.get("id").cloned().unwrap_or_default();

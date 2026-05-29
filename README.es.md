@@ -20,8 +20,7 @@
 <a href="https://github.com/Soulhackzlol/InstantClone/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Soulhackzlol/InstantClone/ci.yml?branch=main&style=flat-square&label=ci&color=34c759&labelColor=11141a"/></a>
 <a href="https://github.com/Soulhackzlol/InstantClone/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/Soulhackzlol/InstantClone?style=flat-square&color=5ac8fa&labelColor=11141a&display_name=tag&sort=semver"/></a>
 <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/licencia-GPL--3.0-d4d8e1?style=flat-square&labelColor=11141a"/></a>
-<img alt="Binario" src="https://img.shields.io/badge/binario-893%20KB-5ac8fa?style=flat-square&labelColor=11141a"/>
-<img alt="Tests" src="https://img.shields.io/badge/tests-73%20OK-34c759?style=flat-square&labelColor=11141a"/>
+<img alt="Binario" src="https://img.shields.io/badge/binario-1.2%20MB-5ac8fa?style=flat-square&labelColor=11141a"/>
 <img alt="Solo Windows" src="https://img.shields.io/badge/windows-solo-7a7d8a?style=flat-square&labelColor=11141a"/>
 
 </div>
@@ -46,12 +45,11 @@ Cuando ya lo tenía hecho, las piezas que de verdad quería eran: una activació
 <td valign="top" width="38%">
 
 <table>
-<tr><td><b>Binario</b></td><td align="right"><code>893 KB</code></td></tr>
+<tr><td><b>Binario</b></td><td align="right"><code>1.2 MB</code></td></tr>
 <tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td></tr>
-<tr><td><b>Hilos</b></td><td align="right"><code>1 + 1</code></td></tr>
-<tr><td><b>Deps en runtime</b></td><td align="right"><code>2</code></td></tr>
-<tr><td><b>Allocs hot-path</b></td><td align="right"><code>0</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>73 / 73</code></td></tr>
+<tr><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td></tr>
+<tr><td><b>Deps en runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>86 / 86</code></td></tr>
 </table>
 
 </td>
@@ -286,18 +284,21 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 
 ## Estado
 
-<details>
-<summary><b>Listo para uso diario en Windows.</b> &nbsp;Salvedades honestas (haz clic para expandir)</summary>
+**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 86 tests en cada push, y un tag dispara la build + publicación automática de la release.
 
-<br/>
+**Lo que está sólido**
 
-- **Solo Windows.** macOS y Linux no están soportados. No lo he probado ni lo he empaquetado para ellos, y varios módulos (icono de bandeja, subsistema sin consola, sampler de RSS) son específicos de Windows. PRs añadiendo soporte multiplataforma son bienvenidos; informes de "me funciona en mi Linux" no (aunque me sorprenderian), hasta que pueda verificarlo yo mismo.
-- **Sin pipeline de releases automatizada.** O lo compilas tú o coges una release.
-- **Un puñado de `unwrap()` sobre locks.** Está bien porque el proyecto compila con `panic = "abort"` (una condición de poison no puede propagarse), pero está en la lista de limpieza igualmente.
-- **I/O de disco en el hot-path async** para el append del ring. La page cache lo absorbe a tasas típicas de stream, pero un futuro cambio a `tokio::task::spawn_blocking` lo blindaría contra stalls por flush de disco.
-- **Sin `.ico` propio todavía.** El icono de la bandeja usa el icono genérico de aplicación de Windows hasta que se dibuje uno.
+- La máquina de estados `arm → activate → cut` en dos fases, con cortes alineados a IDR y reescritura monótona de timestamps. La pieza por la que empecé este proyecto.
+- Egress multi-destino con reconexión + bitrate por destino.
+- Icono de bandeja con estado en vivo + corte de un click, pre-flight de puertos que identifica el proceso conflictivo por PID + exe.
+- Cobertura de tests sobre la máquina de estados, detección IDR (AVC + Enhanced RTMP), codec AMF0, evicción del ring con protección de lecturas en vuelo, y la promoción del wrap de timestamps que evita el bug de los 49,7 días.
 
-</details>
+**Lo que sigue siendo áspero, siendo honesto**
+
+- **Solo Windows.** macOS / Linux no están probados ni empaquetados. Varios módulos (bandeja, pre-flight de puertos, sampler de RSS) tienen rutas específicas de Windows que necesitarían implementación paralela.
+- **I/O de disco sin async en el hot-path** para el append del ring. La page cache lo absorbe a tasas típicas de stream, pero un stall por flush podría congelar otras tareas. `spawn_blocking` está en la lista para v0.2.
+- **Un puñado de `unwrap()` sobre locks.** Está bien porque `panic = "abort"` impide que una condición de poison se propague, pero sigue en la lista de limpieza.
+- **Servidor HTTP escrito a mano.** Binario más pequeño que con `hyper`, pero ahora me toca cargar con toda la superficie de CVEs HTTP. Vale la pena reevaluarlo si la superficie crece.
 
 > [!WARNING]
 > Esto es un proyecto personal que uso yo mismo, no un producto de empresa. Si emites esports pagados, valídalo contra tu propio pipeline antes de confiar en él.

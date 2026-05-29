@@ -97,7 +97,7 @@ fn process_name(pid: u32) -> Option<String> {
         let full = String::from_utf16_lossy(&buf[..size as usize]);
         // Trim to the basename — full path is noise in a user dialog.
         Some(
-            full.rsplit(|c| c == '\\' || c == '/')
+            full.rsplit(['\\', '/'])
                 .next()
                 .unwrap_or(&full)
                 .to_string(),

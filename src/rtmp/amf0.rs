@@ -297,10 +297,10 @@ mod tests {
         // guard. The empty-key + 0x09 end markers are appended in reverse
         // to keep the payload syntactically closeable (the decoder bails
         // on the depth check before getting that far).
-        let mut payload: Vec<u8> = Vec::new();
-        for _ in 0..17 { payload.push(0x03); }
+        // 17 opening Object markers, then 17 (empty-key + end) trailers.
+        let mut payload: Vec<u8> = vec![0x03; 17];
         for _ in 0..17 {
-            payload.push(0x00); payload.push(0x00); payload.push(0x09);
+            payload.extend_from_slice(&[0x00, 0x00, 0x09]);
         }
         let r = decode_all(&payload);
         assert!(r.is_err(), "deeply nested objects must be rejected to prevent stack-blow");

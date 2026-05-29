@@ -20,8 +20,7 @@
 <a href="https://github.com/Soulhackzlol/InstantClone/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Soulhackzlol/InstantClone/ci.yml?branch=main&style=flat-square&label=ci&color=34c759&labelColor=11141a"/></a>
 <a href="https://github.com/Soulhackzlol/InstantClone/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/Soulhackzlol/InstantClone?style=flat-square&color=5ac8fa&labelColor=11141a&display_name=tag&sort=semver"/></a>
 <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-d4d8e1?style=flat-square&labelColor=11141a"/></a>
-<img alt="Binary" src="https://img.shields.io/badge/binary-893%20KB-5ac8fa?style=flat-square&labelColor=11141a"/>
-<img alt="Tests" src="https://img.shields.io/badge/tests-73%20passing-34c759?style=flat-square&labelColor=11141a"/>
+<img alt="Binary" src="https://img.shields.io/badge/binary-1.2%20MB-5ac8fa?style=flat-square&labelColor=11141a"/>
 <img alt="Windows only" src="https://img.shields.io/badge/windows-only-7a7d8a?style=flat-square&labelColor=11141a"/>
 
 </div>
@@ -46,12 +45,11 @@ Once it existed, the parts I'd actually wanted ended up in: a real two-phase arm
 <td valign="top" width="38%">
 
 <table>
-<tr><td><b>Binary</b></td><td align="right"><code>893 KB</code></td></tr>
+<tr><td><b>Binary</b></td><td align="right"><code>1.2 MB</code></td></tr>
 <tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td></tr>
-<tr><td><b>Threads</b></td><td align="right"><code>1 + 1</code></td></tr>
-<tr><td><b>Runtime deps</b></td><td align="right"><code>2</code></td></tr>
-<tr><td><b>Hot-path allocs</b></td><td align="right"><code>0</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>73 / 73</code></td></tr>
+<tr><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td></tr>
+<tr><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>86 / 86</code></td></tr>
 </table>
 
 </td>
@@ -286,18 +284,21 @@ No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzippe
 
 ## Status
 
-<details>
-<summary><b>Daily-driver ready on Windows.</b> &nbsp;Honest caveats (click to expand)</summary>
+**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 86 tests on every push, and a tagged commit auto-builds + publishes a signed release artifact.
 
-<br/>
+**What's solid**
 
-- **Windows only.** macOS and Linux are not supported. I haven't tested or packaged for them, and several modules (tray icon, no-console subsystem, RSS sampler) are Windows-specific. PRs adding cross-platform support are welcome; reports that "it works on my Linux" are not, until I can verify them myself.
-- **No automated release pipeline.** Build it yourself or grab a tagged commit.
-- **A handful of `unwrap()` calls on lock guards.** Fine because the project compiles with `panic = "abort"` (a poison condition can't propagate), but on the cleanup list anyway.
-- **Disk I/O on the async hot path** for ring append. Page cache absorbs it at typical stream rates, but a future change to `tokio::task::spawn_blocking` would harden against disk-flush stalls.
-- **No bundled `.ico` yet.** The tray icon uses Windows' generic app icon until a custom one is drawn.
+- The two-phase `arm → activate → cut` state machine, with IDR-aligned cuts and monotonic timestamp rewrites. The thing that would have made me build this if it didn't exist.
+- Multi-destination egress with per-destination reconnect + bitrate stats.
+- Tray icon with live status + one-click cut, port-conflict pre-flight that names the offending process by PID + exe.
+- Test coverage covers the state machine, AVC + Enhanced RTMP IDR detection, AMF0 codec, ring eviction with in-flight-read protection, and the timestamp-wrap promotion that prevents the 49.7-day bug.
 
-</details>
+**What's rough, honestly**
+
+- **Windows only.** macOS / Linux aren't tested or packaged. Several modules (tray, port pre-flight, RSS sampler) have Windows-specific code paths that need parallel implementations.
+- **Sync disk I/O on the async hot path** for ring append. Page cache absorbs it at typical stream rates, but a flush stall could freeze other tasks. `spawn_blocking` is on the v0.2 list.
+- **A handful of `unwrap()` on lock guards.** Fine because `panic = "abort"` means a poison condition can't propagate, but still on the cleanup list.
+- **Hand-rolled HTTP server.** Smaller binary than `hyper`, but I now own the entire HTTP CVE surface. Worth re-evaluating if the surface grows.
 
 > [!WARNING]
 > This is a hobby project I use myself, not a vendor product. If you stream paid esports, validate it against your own pipeline before trusting it on a tournament night.

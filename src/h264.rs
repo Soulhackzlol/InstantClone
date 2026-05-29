@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn enhanced_rtmp_seq_header_not_idr() {
         // PacketType=0 (SequenceStart) — must not be flagged as IDR
-        let byte0 = 0x80 | (1u8 << 4) | 0;
+        let byte0 = 0x80 | (1u8 << 4);
         let mut payload = vec![byte0];
         payload.extend_from_slice(b"av01");
         let info = classify_video_tag(&payload);

@@ -11,14 +11,14 @@
 //! nothing comes from env vars.
 //!
 //! Three supervisors run forever:
-//!   * supervise_ingest  — owns the RTMP listener task; restarts it when
-//!                         `ingest_port`/`ingest_bind_all` change
-//!   * supervise_egress  — owns the outbound publisher; reconnects when
-//!                         platform/key change OR when the egress URL
-//!                         becomes valid for the first time
-//!   * supervise_web     — owns the HTTP server; restarts on web_port
-//!                         change so the user can move it without a
-//!                         binary restart
+//!
+//! * `supervise_ingest` owns the RTMP listener task; restarts it when
+//!   `ingest_port` / `ingest_bind_all` change.
+//! * `supervise_egress` owns the outbound publisher; reconnects when
+//!   platform/key change OR when the egress URL becomes valid for the
+//!   first time.
+//! * `supervise_web` owns the HTTP server; restarts on `web_port` change
+//!   so the user can move it without a binary restart.
 //!
 //! Changing buffer_mb / buffer_path is the one thing that still requires a
 //! full restart (the DiskRing is immutable once mapped). The UI shows a

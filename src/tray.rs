@@ -27,12 +27,14 @@ use tokio::sync::watch;
 use crate::config::Settings;
 use crate::controller::Controller;
 
-use windows_sys::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{GlobalFree, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows_sys::Win32::System::Memory::{
+    GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock,
+};
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
@@ -344,31 +346,76 @@ fn obs_rtmp_url(s: &Settings) -> String {
     format!("rtmp://{}:{}/live", host, s.ingest_port)
 }
 
-/// Put UTF-16 text on the Windows clipboard. Best-effort — failures are
-/// silent (clipboard may be locked by another app).
-unsafe fn set_clipboard_text(hwnd: HWND, text: &str) -> Result<(), ()> {
-    if OpenClipboard(hwnd) == 0 { return Err(()); }
-    // ClosingClipboard at every exit path: a tiny RAII guard would be
-    // cleaner but the code is short enough to inline.
-    let close = |r: Result<(), ()>| -> Result<(), ()> { CloseClipboard(); r };
+/// RAII wrapper around an HGLOBAL. Frees on Drop unless ownership is
+/// transferred (call `.release()` after a successful `SetClipboardData`
+/// since the system takes over the handle at that point).
+///
+/// Previous version of `set_clipboard_text` had three early-return paths
+/// between `GlobalAlloc` and `SetClipboardData` that all leaked the
+/// HGLOBAL. This struct closes that hole structurally.
+struct HglobalGuard(HANDLE);
 
-    if EmptyClipboard() == 0 { return close(Err(())); }
+impl HglobalGuard {
+    /// Take the HGLOBAL out of the guard. Caller is now responsible for
+    /// it (typically because they just handed it to the OS).
+    fn release(mut self) -> HANDLE {
+        let h = self.0;
+        self.0 = std::ptr::null_mut();
+        h
+    }
+}
+
+impl Drop for HglobalGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { GlobalFree(self.0); }
+        }
+    }
+}
+
+/// RAII wrapper around the Windows clipboard: ensures `CloseClipboard`
+/// runs on every exit path. Constructed via `open(hwnd)` which returns
+/// `None` if `OpenClipboard` fails.
+struct ClipboardGuard;
+
+impl ClipboardGuard {
+    unsafe fn open(hwnd: HWND) -> Option<Self> {
+        if OpenClipboard(hwnd) == 0 { None } else { Some(Self) }
+    }
+}
+
+impl Drop for ClipboardGuard {
+    fn drop(&mut self) {
+        unsafe { CloseClipboard(); }
+    }
+}
+
+/// Put UTF-16 text on the Windows clipboard. Best-effort: failures are
+/// silent (clipboard may be locked by another app). The RAII guards
+/// above guarantee no HGLOBAL leak on any error path.
+unsafe fn set_clipboard_text(hwnd: HWND, text: &str) -> Result<(), ()> {
+    let _clip = ClipboardGuard::open(hwnd).ok_or(())?;
+    if EmptyClipboard() == 0 { return Err(()); }
 
     let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     let bytes = utf16.len() * 2;
-    let h_mem: HANDLE = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if h_mem.is_null() { return close(Err(())); }
+    let h_mem = HglobalGuard(GlobalAlloc(GMEM_MOVEABLE, bytes));
+    if h_mem.0.is_null() { return Err(()); }
 
-    let dst = GlobalLock(h_mem) as *mut u16;
-    if dst.is_null() { return close(Err(())); }
+    // Copy in. If GlobalLock fails (rare), h_mem's Drop runs GlobalFree.
+    let dst = GlobalLock(h_mem.0) as *mut u16;
+    if dst.is_null() { return Err(()); }
     ptr::copy_nonoverlapping(utf16.as_ptr(), dst, utf16.len());
-    GlobalUnlock(h_mem);
+    GlobalUnlock(h_mem.0);
 
-    // After this call, the system owns h_mem — we MUST NOT free it.
-    if SetClipboardData(CF_UNICODETEXT as u32, h_mem).is_null() {
-        return close(Err(()));
+    // SetClipboardData transfers ownership ONLY on success. If it
+    // returns null we still own the HGLOBAL, so let h_mem's Drop free it.
+    if SetClipboardData(CF_UNICODETEXT as u32, h_mem.0).is_null() {
+        return Err(());
     }
-    close(Ok(()))
+    // System now owns the HGLOBAL — release the guard so Drop is a no-op.
+    let _ = h_mem.release();
+    Ok(())
 }
 
 /// Update the tray tooltip text. Unused right now but kept here because

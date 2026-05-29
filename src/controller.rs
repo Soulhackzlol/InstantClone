@@ -85,6 +85,12 @@ impl ActivateError {
 /// IDR even if the nearest one happens to be slightly past the boundary.
 const BUFFER_SLACK_MS: u32 = 2_000;
 
+/// Flat tuple the dashboard reads each tick:
+/// `(id, alive, consumer_seq, kbps_out, tags_sent, bytes_sent, cuts, reconnects)`.
+/// Aliased so the public signature of `destination_snapshot()` doesn't
+/// trip clippy's `type_complexity` lint.
+pub type DestinationSnapshot = (String, bool, u64, u32, u64, u64, u32, u32);
+
 /// Per-destination atomics. One of these per active egress pump.
 /// Pointer-stable (`Arc<DestinationState>`) so the pump can hold a
 /// reference for its lifetime even if the controller's map changes.
@@ -391,7 +397,7 @@ impl Controller {
     }
 
     /// Snapshot for the dashboard: (id, alive, consumer_seq, kbps_out, tags, bytes, cuts, reconnects).
-    pub fn destination_snapshot(&self) -> Vec<(String, bool, u64, u32, u64, u64, u32, u32)> {
+    pub fn destination_snapshot(&self) -> Vec<DestinationSnapshot> {
         let map = self.destinations.read().unwrap();
         map.values().map(|d| (
             d.id.clone(),
@@ -759,8 +765,11 @@ impl Controller {
     /// configured, OR when the last fire was less than 2 s ago (rate
     /// limit — prevents subprocess spam if a destination flaps).
     ///
-    /// Uses the system `curl` (ubiquitous on Win10+/macOS/Linux) so we
-    /// don't ship a TLS stack and HTTP client just for one feature.
+    /// Uses `ureq` (tiny blocking HTTPS client, ~150 KB) wrapped in
+    /// `spawn_blocking` so the actual TCP+TLS work doesn't park the
+    /// current-thread runtime. Previously shelled out to `curl`, which
+    /// (a) silently failed when `curl.exe` wasn't on PATH and (b) made
+    /// "runtime deps" technically include the system curl binary.
     pub fn fire_webhook(&self, emoji: &str, message: &str) {
         let url = self.webhook_url.lock().unwrap().clone();
         if url.is_empty() { return; }
@@ -771,28 +780,52 @@ impl Controller {
         if now.saturating_sub(last) < 2_000 { return; }
         self.webhook_last_fire_ms.store(now, Ordering::Relaxed);
 
-        let content = format!("{} **InstantClone**: {}", emoji, message);
-        let body = format!(
-            r#"{{"content":"{}"}}"#,
-            content.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
-        );
+        let content = format!("{emoji} **InstantClone**: {message}");
+        let body = format!(r#"{{"content":"{}"}}"#, json_escape_inline(&content));
+
         tokio::spawn(async move {
-            // Kill_on_drop so a slow curl can't outlive the task. With
-            // throttling above, in steady state we have at most one curl
-            // child alive at a time.
-            let _ = tokio::process::Command::new("curl")
-                .args([
-                    "-s", "-S", "-X", "POST",
-                    "--max-time", "10",
-                    "-H", "Content-Type: application/json",
-                    "-d", &body,
-                    &url,
-                ])
-                .kill_on_drop(true)
-                .output()
-                .await;
+            // Spawn-blocking + 10 s outer timeout so a wedged Discord
+            // edge can't keep a thread tied up forever. Ignore the
+            // result: webhooks are fire-and-forget by design.
+            let _ = tokio::time::timeout(
+                Duration::from_secs(10),
+                tokio::task::spawn_blocking(move || {
+                    let _ = ureq::AgentBuilder::new()
+                        .timeout_connect(Duration::from_secs(5))
+                        .timeout(Duration::from_secs(8))
+                        .build()
+                        .post(&url)
+                        .set("Content-Type", "application/json")
+                        .send_string(&body);
+                }),
+            ).await;
         });
     }
+}
+
+/// JSON-string escape that handles every C0 control char that would
+/// otherwise produce an invalid Discord payload (the previous
+/// `replace('\\', ..).replace('"', ..).replace('\n', ..)` chain missed
+/// `\r`, `\t`, `\u{0008}` and friends — any destination name with a
+/// stray control character could nuke the webhook body).
+fn json_escape_inline(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '"'  => out.push_str(r#"\""#),
+            '\\' => out.push_str(r"\\"),
+            '\n' => out.push_str(r"\n"),
+            '\r' => out.push_str(r"\r"),
+            '\t' => out.push_str(r"\t"),
+            '\u{0008}' => out.push_str(r"\b"),
+            '\u{000C}' => out.push_str(r"\f"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

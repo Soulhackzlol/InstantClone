@@ -886,8 +886,8 @@ mod tests {
         assert_eq!(loaded.destinations[0].name, "Twitch");
         assert_eq!(loaded.destinations[0].stream_key, "live_secret");
         assert_eq!(loaded.destinations[0].twitch_ingest, "fra");
-        assert_eq!(loaded.destinations[0].enabled, true);
-        assert_eq!(loaded.destinations[1].enabled, false);
+        assert!(loaded.destinations[0].enabled);
+        assert!(!loaded.destinations[1].enabled);
         assert_eq!(loaded.destinations[1].youtube_ingest, "backup");
         assert_eq!(loaded.profiles.len(), 2);
         assert_eq!(loaded.profiles[0].delay_ms, 10_000);
