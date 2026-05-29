@@ -34,9 +34,9 @@
 
 ## Por qué
 
-Quería poner delay en mi propio directo y me puse a buscar. La opción más cuidada que encontré fue [InstantDelay](https://instant-delay.com/), que es de pago. Prefería tener algo que pudiera reconstruir desde cero, entender de punta a punta y adaptar a mi setup, así que escribí esto.
+Quería poner delay en mi propio directo y me puse a buscar. La opción más cuidada que encontré fue [InstantDelay](https://instant-delay.com/), que es de pago. Prefería tener algo que pudiera construir desde cero, entender de punta a punta y adaptar a mi setup, así que escribí esto.
 
-Cuando ya lo tenía hecho, las piezas que de verdad quería eran: un arm/activate real en dos fases (para que el momento de salir al aire con delay sea **cero glitch** en el reproductor del destino), varios destinos simultáneos, un dock para OBS y un overlay de estadísticas que se mete como browser-source.
+Cuando ya lo tenía hecho, las piezas que de verdad quería eran: una activación en dos fases (para que el momento de salir al aire con delay sea imperceptible en el reproductor del destino), varios destinos simultáneos, un dock para OBS y un overlay de estadísticas que se mete como browser-source.
 
 <sub>InstantClone es un proyecto independiente, sin afiliación ni respaldo de InstantDelay ni de sus desarrolladores.</sub>
 
@@ -72,12 +72,12 @@ Cuando ya lo tenía hecho, las piezas que de verdad quería eran: un arm/activat
 <tr>
 <td valign="top" width="50%">
 
-**Dos fases por diseño.** **Armas** un buffer (tamaño en segundos). InstantClone empieza a rellenarlo desde el feed de OBS sin afectar todavía a lo que sale al aire. Cuando está lleno pasa de <kbd>BUFFERING</kbd> a <kbd>ARMED</kbd> y pulsas **Activar** cuando quieras. La transición es instantánea en pantalla: el lector cambia de la cola en vivo a una posición N segundos atrás en el ring.
+**Dos fases por diseño.** **Armas** un buffer (tamaño en segundos). InstantClone empieza a rellenarlo desde el feed de OBS sin afectar todavía a lo que sale al aire. Cuando está lleno pasa de <kbd>BUFFERING</kbd> a <kbd>ARMED</kbd> y pulsas **Activar** cuando quieras. La transición es instantánea en pantalla: el lector cambia de la cola en vivo a una posición N segundos atrás.
 
 </td>
 <td valign="top" width="50%">
 
-**Cortar es el mismo truco al revés.** Pulsas **Cortar**, el lector busca el IDR más cercano a la cola en vivo, reescribe los timestamps para que sigan siendo monótonos desde donde el reproductor del destino piensa que está el "ahora", y reanuda. Sin reconexión, sin nuevo handshake, sin glitch.
+**Cortar es el mismo truco al revés.** Pulsas **Cortar**, el lector busca el IDR más cercano a la cola en vivo, reescribe los timestamps para que sigan siendo monótonos desde donde el reproductor del destino piensa que está el "ahora", y reanuda. Sin reconexión, sin nuevo handshake.
 
 </td>
 </tr>
@@ -142,7 +142,7 @@ En OBS, ve a **Ajustes → Emisión** y cambia:
 ```
 
 Pulsa **Iniciar transmisión**. La cápsula OBS de InstantClone se pone verde. Tus claves reales de Twitch/YouTube/Kick van en la pestaña **Destinos** de InstantClone, no en OBS. OBS solo habla con InstantClone.
-
+Seguramente desaparezca tu chat de twitch en OBS porque OBS detecta que no "vas a transmitir en Twitch", añade el panel manualmente.
 </td>
 <td valign="top" width="42%">
 
@@ -289,8 +289,8 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 
 <br/>
 
-- **Solo Windows.** macOS y Linux no están soportados. No lo he probado ni lo he empaquetado para ellos, y varios módulos (icono de bandeja, subsistema sin consola, sampler de RSS) son específicos de Windows. PRs añadiendo soporte multiplataforma son bienvenidos; informes de "me funciona en mi Linux" no, hasta que pueda verificarlo yo mismo.
-- **Sin pipeline de releases automatizada.** O lo compilas tú o coges un tag.
+- **Solo Windows.** macOS y Linux no están soportados. No lo he probado ni lo he empaquetado para ellos, y varios módulos (icono de bandeja, subsistema sin consola, sampler de RSS) son específicos de Windows. PRs añadiendo soporte multiplataforma son bienvenidos; informes de "me funciona en mi Linux" no (aunque me sorprenderian), hasta que pueda verificarlo yo mismo.
+- **Sin pipeline de releases automatizada.** O lo compilas tú o coges una release.
 - **Un puñado de `unwrap()` sobre locks.** Está bien porque el proyecto compila con `panic = "abort"` (una condición de poison no puede propagarse), pero está en la lista de limpieza igualmente.
 - **I/O de disco en el hot-path async** para el append del ring. La page cache lo absorbe a tasas típicas de stream, pero un futuro cambio a `tokio::task::spawn_blocking` lo blindaría contra stalls por flush de disco.
 - **Sin `.ico` propio todavía.** El icono de la bandeja usa el icono genérico de aplicación de Windows hasta que se dibuje uno.
@@ -298,7 +298,7 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 </details>
 
 > [!WARNING]
-> Esto es un proyecto personal que uso yo mismo, no un producto de empresa. Si emites esports pagados, valídalo contra tu propio pipeline antes de confiar en él una noche de torneo.
+> Esto es un proyecto personal que uso yo mismo, no un producto de empresa. Si emites esports pagados, valídalo contra tu propio pipeline antes de confiar en él.
 
 <br/>
 
