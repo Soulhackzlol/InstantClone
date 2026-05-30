@@ -543,8 +543,23 @@ input,select,textarea{font-family:inherit;color:inherit}
 .tour-tooltip[data-side="right"] .tour-arrow{left:-8px;top:32px;
   border-right:0;border-top:0;transform:rotate(45deg);
   border-bottom-left-radius:3px}
-.tour-tooltip[data-side="center"]{transform:translate(-50%,-50%)}
+/* Centered variant (welcome + wrap-up steps). Needs its own keyframe
+   because the default tipIn animation sets `transform: scale(...)` and
+   would override the `translate(-50%,-50%)` that does the centering —
+   the tooltip would render at the top-left of 50%/50% instead of the
+   middle. Composing both transforms in every keyframe keeps it locked
+   to centre throughout the entrance and after it finishes. Slightly
+   longer + softer than the sided animation because the welcome step is
+   the first thing the user sees and we want it to land gently. */
+.tour-tooltip[data-side="center"]{
+  transform:translate(-50%,-50%);
+  animation:tipInCenter .45s var(--ease-spring) both;
+}
 .tour-tooltip[data-side="center"] .tour-arrow{display:none}
+@keyframes tipInCenter{
+  from{transform:translate(-50%,calc(-50% + 14px)) scale(.94);opacity:0}
+  to  {transform:translate(-50%,-50%) scale(1);opacity:1}
+}
 
 .tour-head{display:flex;justify-content:space-between;align-items:flex-start;
   padding:18px 20px 12px;border-bottom:1px solid var(--line)}
@@ -650,6 +665,11 @@ input,select,textarea{font-family:inherit;color:inherit}
     <button class="ic-btn ic-btn-ghost" onclick="testConn()">Test connection</button>
   </div>
   <div id="w-msg"></div>
+  <div style="margin-top:14px;text-align:center">
+    <button onclick="skipWizard()" style="background:none;border:0;color:var(--fg-3);font:inherit;font-size:12px;cursor:pointer;padding:6px 10px;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line)" onmouseover="this.style.color='var(--fg-2)'" onmouseout="this.style.color='var(--fg-3)'">
+      Not now &mdash; let me look around first
+    </button>
+  </div>
 </section>
 
 <!-- ── Hero ─────────────────────────────────────── -->
@@ -1620,6 +1640,19 @@ async function loadConfig(){
       const cur = document.querySelector('.tab.on') || document.querySelector('.tab[data-tab="destinations"]');
       if (cur) showTab(cur.dataset.tab);
       setTimeout(moveTabInd, 50);
+      // First-run tour: fires on the first loadConfig() that sees
+      // configured=true, which is the right moment for both fresh users
+      // (just finished the wizard) and returning users (already
+      // configured on initial load). openTour() sets the localStorage
+      // flag so this no-ops on all subsequent loadConfig calls.
+      try {
+        if (!localStorage.getItem('instantclone_onboarded')){
+          // Slightly longer delay than the initial-load path: the
+          // wizard-to-dashboard transition has more layout to settle
+          // (tabs, hero, footer all un-hiding at once).
+          setTimeout(() => openTour(0), 900);
+        }
+      } catch(_){}
     }
   } catch(e){ console.warn(e); }
 }
@@ -1631,6 +1664,29 @@ function fillWizardPlatforms(){
     sel._wired = true;
     sel.addEventListener('change', () => { $('w-custom-wrap').hidden = sel.value !== 'custom'; });
   }
+}
+
+// Wizard escape hatch. Reveals the dashboard without writing any
+// destination to the server, so `configured` stays false on disk and
+// the wizard returns next launch (gentle nudge, not a permanent skip).
+// Triggers the same first-run tour as the configured path so the user
+// still gets walked through the UI before being left alone.
+function skipWizard(){
+  $('wizard').hidden = true;
+  $('hdr-bar').hidden = false;
+  $('hero').hidden = false;
+  $('tabs').hidden = false;
+  $('pane-card').hidden = false;
+  $('ic-foot').hidden = false;
+  loadDestinations(); loadProfiles(); loadOverlays();
+  const cur = document.querySelector('.tab.on') || document.querySelector('.tab[data-tab="destinations"]');
+  if (cur) showTab(cur.dataset.tab);
+  setTimeout(moveTabInd, 50);
+  try {
+    if (!localStorage.getItem('instantclone_onboarded')){
+      setTimeout(() => openTour(0), 900);
+    }
+  } catch(_){}
 }
 
 async function saveWizard(){
@@ -1807,6 +1863,7 @@ const TOUR = [
     body: `
       <p>Big number = your <b>current delivered delay</b>. The pill above + aurora glow tell you the state:</p>
       <ul>
+        <li><b>OFFLINE</b> — OBS isn't streaming to InstantClone yet (where you probably are right now)</li>
         <li><b>LIVE · Passthrough</b> — OBS forwarding, no delay</li>
         <li><b>BUFFERING</b> — filling toward your armed value</li>
         <li><b>ARMED</b> — buffer ready, click Activate</li>
@@ -1864,6 +1921,7 @@ const TOUR = [
         <li>Stream Key: anything works — we suggest <code>main</code></li>
         <li>Apply, then hit <b>Start Streaming</b> like normal</li>
       </ol>
+      <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you press <b>Start Streaming</b> in OBS, the dashboard stays <b>OFFLINE</b> and the OBS pill at the top reads "not connected" — that's expected, not a setup mistake.</p>
       <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just an internal label here. Your real Twitch / YouTube / Kick keys go in the <b>Destinations</b> tab — that's what actually reaches the platforms.</div>
     `,
   },
@@ -2124,17 +2182,12 @@ function startStateSSE(){
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     if (e.key === ' '){ e.preventDefault(); ctaClick({currentTarget: $('cp-cta')}); }
   });
-  // First run: auto-open the tour so newcomers get walked through
-  // OBS wiring before they're left staring at a blank dashboard.
-  // The flag is set inside openTour() so reopens via the (?) button
-  // don't trigger this again. Returning users see nothing extra.
-  try {
-    if (!localStorage.getItem('instantclone_onboarded') && !$('hdr-bar').hidden){
-      // Small delay so initial layout settles before we measure
-      // spotlight targets.
-      setTimeout(() => openTour(0), 700);
-    }
-  } catch(_){}
+  // First-run tour autostart lives inside loadConfig() (see the
+  // `if (configured)` branch). That hook fires both on the
+  // wizard-to-dashboard transition AND on initial load when the user is
+  // already configured, with the localStorage flag preventing double-
+  // fires. Doing it here would race the wizard (hdr-bar hidden → skip)
+  // and leave first-run users without a tour after they save settings.
 })();
 </script>
 </body>

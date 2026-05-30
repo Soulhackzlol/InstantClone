@@ -49,6 +49,26 @@ fn main() -> std::io::Result<()> {
     // don't need two `cargo run` recipes to test end-to-end locally.
     let raw_args: Vec<String> = std::env::args().collect();
     if raw_args.get(1).map(String::as_str) == Some("sink") {
+        // The release binary builds with `windows_subsystem = "windows"`
+        // so double-clicking the proxy doesn't flash a console window.
+        // That same flag silences the sink CLI: its `println!` calls
+        // would write into a null stdout. Try to attach to the parent
+        // console (e.g. the PowerShell that launched us); fall back to
+        // allocating a fresh one when there is no parent console (the
+        // user double-clicked the .exe). Skip both when stdout is
+        // already a valid handle — that means a caller already piped or
+        // redirected us, and stealing it would break their capture.
+        #[cfg(all(windows, not(debug_assertions)))]
+        unsafe {
+            use windows_sys::Win32::System::Console::{
+                AllocConsole, AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS,
+                STD_OUTPUT_HANDLE,
+            };
+            let h = GetStdHandle(STD_OUTPUT_HANDLE);
+            if h.is_null() && AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+                AllocConsole();
+            }
+        }
         return sink::run_cli(&raw_args[2..]);
     }
 
