@@ -1125,6 +1125,17 @@ async fn pump_dest(
         Ordering::Relaxed,
     );
 
+    crate::trace::log(
+        "PUMP_START",
+        &format!(
+            "dest={} consumer_seq={} input_ts_anchor={} output_ts_base=0x{:08x} pub_token={}",
+            dest.id,
+            state.consumer_seq,
+            state.input_ts_anchor,
+            state.output_ts_base,
+            state.last_publisher_token
+        ),
+    );
     // Always lead with sequence headers + the IDR itself.
     send_sequence_headers(ctrl, &mut sink, state.output_ts_base).await?;
 
@@ -1317,9 +1328,49 @@ async fn pace_and_send(
             return Ok(());
         }
     }
+    // Per-tag trace. For audio we log only seq headers and an every-N
+    // sample to keep the file small (audio at 50 Hz would dominate).
+    // For video we log every tag — at ~30 fps × bytes/line the file
+    // grows ~3 MB / 10 min, which is the right trade for diagnosing a
+    // wire-format bug.
     match meta.kind {
-        8 => sink.send_audio(out_ts, io_buf).await?,
-        9 => sink.send_video(out_ts, io_buf).await?,
+        8 => {
+            let tags_so_far = dest.tags_sent.load(Ordering::Relaxed);
+            if tags_so_far < 20 || tags_so_far.is_multiple_of(200) {
+                crate::trace::log(
+                    "TAG_AUDIO",
+                    &format!(
+                        "dest={} i={} in_ts={} out_ts=0x{:08x} bytes={} hdr=0x{:02x}",
+                        dest.id,
+                        tags_so_far,
+                        meta.ts_ms,
+                        out_ts,
+                        io_buf.len(),
+                        io_buf.first().copied().unwrap_or(0),
+                    ),
+                );
+            }
+            sink.send_audio(out_ts, io_buf).await?;
+        }
+        9 => {
+            let hdr = io_buf.first().copied().unwrap_or(0);
+            let is_idr = meta.is_idr;
+            crate::trace::log(
+                "TAG_VIDEO",
+                &format!(
+                    "dest={} i={} in_ts={} out_ts=0x{:08x} bytes={} hdr=0x{:02x} is_idr={} hex={}",
+                    dest.id,
+                    dest.tags_sent.load(Ordering::Relaxed),
+                    meta.ts_ms,
+                    out_ts,
+                    io_buf.len(),
+                    hdr,
+                    is_idr as u8,
+                    crate::trace::hex_prefix(io_buf, 16),
+                ),
+            );
+            sink.send_video(out_ts, io_buf).await?;
+        }
         _ => {}
     }
     dest.tags_sent.fetch_add(1, Ordering::Relaxed);
@@ -1430,6 +1481,7 @@ async fn apply_cut(
             "SAME"
         };
         let delta_ms = (new_ts as i64) - (prev_ts as i64);
+        let gen = ctrl.seq_header_gen.load(Ordering::Relaxed);
         ctrl.log(format!(
             "[{}] CUT {} seq:{}→{}  ts:{}→{}  delta:{}ms  out_ts_base:0x{:08x}→0x{:08x}  gen:{}",
             dest.id,
@@ -1441,8 +1493,16 @@ async fn apply_cut(
             delta_ms,
             state.output_ts_base,
             new_output_ts_base,
-            ctrl.seq_header_gen.load(Ordering::Relaxed),
+            gen,
         ));
+        crate::trace::log(
+            "CUT",
+            &format!(
+                "dest={} dir={} seq={}→{} in_ts={}→{} delta_ms={} out_ts_base=0x{:08x}→0x{:08x} gen={}",
+                dest.id, direction, prev_seq, new_seq, prev_ts, new_ts, delta_ms,
+                state.output_ts_base, new_output_ts_base, gen,
+            ),
+        );
     }
 
     state.output_ts_base = new_output_ts_base;
@@ -1496,10 +1556,28 @@ async fn send_sequence_headers(
     // Drop the MutexGuards before the awaits.
     let v = ctrl.ring.video_seq_header.lock().unwrap().clone();
     if let Some(h) = v {
+        crate::trace::log(
+            "VIDEO_SEQ_HDR_SENT",
+            &format!(
+                "ts=0x{:08x} bytes={} hex={}",
+                ts,
+                h.len(),
+                crate::trace::hex_prefix(&h, 64)
+            ),
+        );
         sink.send_video(ts, &h).await?;
     }
     let a = ctrl.ring.audio_seq_header.lock().unwrap().clone();
     if let Some(h) = a {
+        crate::trace::log(
+            "AUDIO_SEQ_HDR_SENT",
+            &format!(
+                "ts=0x{:08x} bytes={} hex={}",
+                ts,
+                h.len(),
+                crate::trace::hex_prefix(&h, 32)
+            ),
+        );
         sink.send_audio(ts, &h).await?;
     }
     sink.flush().await

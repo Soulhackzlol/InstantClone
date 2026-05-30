@@ -33,6 +33,7 @@ mod portcheck;
 mod rtmp;
 mod sink;
 mod sysstat;
+mod trace;
 #[cfg(windows)]
 mod tray;
 mod web;
@@ -79,6 +80,13 @@ fn main() -> std::io::Result<()> {
     let cfg_path: PathBuf = std::env::var("CONFIG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("./instantclone.config.json"));
+
+    // Egress trace — wire-level append-only log next to the config.
+    // Captures handshake details, sequence headers, every video tag,
+    // and every cut so any "Twitch live looks broken but VOD is fine"
+    // class of bug can be diagnosed by diffing the file against a known-
+    // good capture. Opt-out via INSTANTCLONE_NO_TRACE=1.
+    trace::init("./instantclone-trace.log");
 
     let mut settings = Settings::load_or_default(&cfg_path);
     // If the file didn't exist, persist the smart defaults so the file
@@ -194,6 +202,9 @@ fn main() -> std::io::Result<()> {
             _ = tray_rx                 => { shutdown_reason = "tray quit"; }
         }
         eprintln!("\nShutting down ({shutdown_reason}) — closing active streams cleanly...");
+        // Flush the egress trace so the last few thousand events make
+        // it to disk before the BufWriter is dropped on process exit.
+        trace::flush();
         // Flip shutdown on every active destination so each pump sends
         // `deleteStream` to its upstream before the runtime drops them.
         // Tiny window — if a pump is mid-await it'll just exit on next

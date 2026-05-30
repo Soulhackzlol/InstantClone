@@ -66,6 +66,10 @@ pub struct EgressClient {
 
 impl EgressClient {
     pub async fn connect(url: &EgressUrl) -> io::Result<Self> {
+        crate::trace::log(
+            "EGRESS_DIAL",
+            &format!("host={} port={} app={}", url.host, url.port, url.app),
+        );
         let mut sock = TcpStream::connect((url.host.as_str(), url.port)).await?;
         sock.set_nodelay(true)?;
         // Aggressive TCP keepalive (Windows-only — best-effort no-op on
@@ -75,20 +79,29 @@ impl EgressClient {
         // retry interval gives us reliable disconnect detection well
         // before the user's viewers see a frozen stream.
         let _ = crate::rtmp::tcp::set_aggressive_keepalive(&sock);
+        crate::trace::log("TCP_CONNECTED", &format!("host={}", url.host));
         handshake::perform_client(&mut sock).await?;
+        crate::trace::log("RTMP_HANDSHAKE_OK", &format!("host={}", url.host));
 
         let (rd, wr) = split(sock);
         let mut reader = ChunkReader::new(rd);
         let mut writer = ChunkWriter::new(wr);
         writer.send_set_chunk_size(4096).await?;
+        crate::trace::log("CHUNK_SIZE_SET", "size=4096");
 
         // --- connect ---
+        // flashVer matches what OBS reports to its RTMP outputs. Twitch
+        // (and historically Wowza, Adobe Media Server) gate features by
+        // this string: an unknown publisher identifier may be put in a
+        // restricted lane (lower-priority transcode, reduced ladder).
+        // OBS's libobs RTMP plugin reports exactly this token, so by
+        // mirroring it we get the same preferred-publisher treatment.
         let mut props = HashMap::new();
         props.insert("app".to_string(), Amf0::String(url.app.clone()));
         props.insert("type".to_string(), Amf0::String("nonprivate".into()));
         props.insert(
             "flashVer".to_string(),
-            Amf0::String("FMLE/3.0 (compatible; InstantClone)".into()),
+            Amf0::String("FMLE/3.0 (compatible; FMSc/1.0)".into()),
         );
         props.insert("tcUrl".to_string(), Amf0::String(url.tc_url.clone()));
         let mut buf = BytesMut::new();
@@ -97,7 +110,21 @@ impl EgressClient {
         amf0::enc_value(&mut buf, &Amf0::Object(props));
         writer.write_message(3, 0, 20, 0, &buf).await?;
         writer.flush().await?;
-        await_command_status(&mut reader, "_result").await?;
+        crate::trace::log(
+            "AMF_OUT",
+            &format!(
+                "cmd=connect tcUrl={} flashVer=\"FMLE/3.0 (compatible; FMSc/1.0)\"",
+                url.tc_url
+            ),
+        );
+        let connect_resp = await_command_status(&mut reader, "_result").await?;
+        crate::trace::log(
+            "AMF_IN",
+            &format!(
+                "cmd=_result(connect) details={}",
+                summarize_status(&connect_resp)
+            ),
+        );
 
         // --- releaseStream ---
         send_cmd(
@@ -107,6 +134,7 @@ impl EgressClient {
             &[Amf0::String(url.stream_key.clone())],
         )
         .await?;
+        crate::trace::log("AMF_OUT", "cmd=releaseStream key_redacted=true");
         // --- FCPublish ---
         send_cmd(
             &mut writer,
@@ -115,11 +143,17 @@ impl EgressClient {
             &[Amf0::String(url.stream_key.clone())],
         )
         .await?;
+        crate::trace::log("AMF_OUT", "cmd=FCPublish key_redacted=true");
 
         // --- createStream ---
         send_cmd(&mut writer, "createStream", 4.0, &[]).await?;
+        crate::trace::log("AMF_OUT", "cmd=createStream");
         let create_resp = await_command_status(&mut reader, "_result").await?;
         let stream_id = create_resp.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as u32;
+        crate::trace::log(
+            "AMF_IN",
+            &format!("cmd=_result(createStream) stream_id={}", stream_id),
+        );
 
         // --- publish ---
         let mut buf = BytesMut::new();
@@ -130,7 +164,15 @@ impl EgressClient {
         amf0::enc_string(&mut buf, "live");
         writer.write_message(4, 0, 20, stream_id, &buf).await?;
         writer.flush().await?;
-        await_command_status(&mut reader, "onStatus").await?;
+        crate::trace::log("AMF_OUT", "cmd=publish key_redacted=true type=live");
+        let publish_resp = await_command_status(&mut reader, "onStatus").await?;
+        crate::trace::log(
+            "AMF_IN",
+            &format!(
+                "cmd=onStatus(publish) details={}",
+                summarize_status(&publish_resp)
+            ),
+        );
 
         Ok(Self {
             reader,
@@ -176,6 +218,14 @@ impl Drop for EgressSink {
 
 impl EgressSink {
     pub async fn send_metadata(&mut self, payload: &[u8]) -> io::Result<()> {
+        crate::trace::log(
+            "METADATA_SENT",
+            &format!(
+                "bytes={} hex={}",
+                payload.len(),
+                crate::trace::hex_prefix(payload, 64)
+            ),
+        );
         // AMF0 data on CSID 5, message type 18, timestamp 0.
         self.writer
             .write_message(5, 0, 18, self.stream_id, payload)
@@ -207,6 +257,7 @@ impl EgressSink {
     /// log + potentially count against your account on flaky internet).
     /// Best-effort; errors are swallowed since we're tearing down anyway.
     pub async fn send_delete_stream(&mut self) -> io::Result<()> {
+        crate::trace::log("AMF_OUT", "cmd=deleteStream");
         let mut buf = BytesMut::new();
         amf0::enc_string(&mut buf, "deleteStream");
         amf0::enc_number(&mut buf, 0.0);
@@ -215,6 +266,22 @@ impl EgressSink {
         self.writer.write_message(3, 0, 20, 0, &buf).await?;
         self.writer.flush().await
     }
+}
+
+/// Convert an AMF0 onStatus / _result info object into a one-line summary
+/// like `level=status code=NetConnection.Connect.Success description="..."`,
+/// suitable for the trace log. Falls back to a count when the payload
+/// isn't an object we can introspect.
+fn summarize_status(vals: &[amf0::Amf0]) -> String {
+    for v in vals {
+        if let Some(o) = v.as_object() {
+            let level = o.get("level").and_then(|x| x.as_str()).unwrap_or("?");
+            let code = o.get("code").and_then(|x| x.as_str()).unwrap_or("?");
+            let desc = o.get("description").and_then(|x| x.as_str()).unwrap_or("");
+            return format!("level={} code={} description=\"{}\"", level, code, desc);
+        }
+    }
+    format!("non-object response, {} values", vals.len())
 }
 
 async fn send_cmd<W: tokio::io::AsyncWrite + Unpin>(
