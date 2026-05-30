@@ -192,6 +192,41 @@ pub fn enc_value(out: &mut BytesMut, v: &Amf0) {
     }
 }
 
+/// Encode an AMF0 Strict Array (marker 0x0A) of strings. Used for the
+/// Enhanced RTMP `fourCcList` property in the connect command, where
+/// publishers declare which non-legacy codecs they're capable of
+/// sending (HEVC, AV1, VP9, Opus, AC-3, FLAC). Strict Array is the
+/// semantically correct AMF0 container for a fixed-length, integer-
+/// indexed sequence.
+pub fn enc_strict_array_str(out: &mut BytesMut, items: &[&str]) {
+    out.put_u8(0x0A);
+    out.put_u32(items.len() as u32);
+    for s in items {
+        enc_string(out, s);
+    }
+}
+
+/// Open an AMF0 object (marker 0x03). Pair with `enc_object_end` and
+/// `enc_object_key` to write objects whose values aren't all uniform
+/// types — useful when one of the values is a Strict Array that the
+/// generic `enc_object(&[(&str, &Amf0)])` builder can't represent.
+pub fn enc_object_begin(out: &mut BytesMut) {
+    out.put_u8(0x03);
+}
+
+/// Write one AMF0 object key (length-prefixed UTF-8, NO string marker —
+/// object keys are raw, distinct from the 0x02 string-value marker).
+pub fn enc_object_key(out: &mut BytesMut, key: &str) {
+    out.put_u16(key.len() as u16);
+    out.put_slice(key.as_bytes());
+}
+
+/// Close an AMF0 object — empty key + 0x09 end-of-object marker.
+pub fn enc_object_end(out: &mut BytesMut) {
+    out.put_u16(0);
+    out.put_u8(0x09);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

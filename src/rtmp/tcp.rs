@@ -73,3 +73,42 @@ pub fn set_aggressive_keepalive(sock: &TcpStream) -> io::Result<()> {
 pub fn set_aggressive_keepalive(_sock: &TcpStream) -> io::Result<()> {
     Ok(())
 }
+
+/// Increase the kernel send buffer for a TCP socket. The Windows default
+/// (~64 KB) is enough at typical streaming bitrates but starts blocking
+/// our writes at 10+ Mbps when the receiving platform (Twitch / YouTube)
+/// is momentarily slow to ACK — every send waits for buffer space,
+/// fighting the bursty IDR pattern. Bumping to 1 MB gives roughly
+/// 800 ms of slack at 10 Mbps, costing one extra MB per active egress
+/// connection (negligible vs. the 300 MB disk-ring buffer).
+///
+/// Best-effort: any setsockopt failure is returned but callers should
+/// treat it as non-fatal — the smaller default buffer still works, just
+/// with more write-side back-pressure under load.
+#[cfg(target_os = "windows")]
+pub fn set_send_buffer(sock: &TcpStream, bytes: u32) -> io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{setsockopt, SOL_SOCKET, SO_SNDBUF};
+
+    let raw = sock.as_raw_socket() as usize;
+    let val = bytes as i32;
+    let rc = unsafe {
+        setsockopt(
+            raw,
+            SOL_SOCKET,
+            SO_SNDBUF,
+            &val as *const i32 as *const u8,
+            std::mem::size_of::<i32>() as i32,
+        )
+    };
+    if rc != 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_send_buffer(_sock: &TcpStream, _bytes: u32) -> io::Result<()> {
+    Ok(())
+}

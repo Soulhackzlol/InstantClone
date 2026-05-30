@@ -10,7 +10,6 @@ use crate::rtmp::amf0::{self, Amf0};
 use crate::rtmp::chunk::{ChunkReader, ChunkWriter, Message};
 use crate::rtmp::handshake;
 use bytes::BytesMut;
-use std::collections::HashMap;
 use std::io;
 use tokio::io::{split, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
@@ -79,6 +78,14 @@ impl EgressClient {
         // retry interval gives us reliable disconnect detection well
         // before the user's viewers see a frozen stream.
         let _ = crate::rtmp::tcp::set_aggressive_keepalive(&sock);
+        // Larger SO_SNDBUF for high-bitrate streamers. Windows default is
+        // ~64 KB which is enough at ≤ 6 Mbps but starts blocking writes
+        // at 10+ Mbps when the egress receiver (Twitch / YouTube) is
+        // momentarily slow to ACK. 1 MB holds ~800 ms of stream at
+        // 10 Mbps — plenty of slack without pinning huge per-connection
+        // memory. Best-effort: errors are logged-only because not every
+        // platform / firewall stack honours setsockopt(SO_SNDBUF).
+        let _ = crate::rtmp::tcp::set_send_buffer(&sock, 1024 * 1024);
         crate::trace::log("TCP_CONNECTED", &format!("host={}", url.host));
         handshake::perform_client(&mut sock).await?;
         crate::trace::log("RTMP_HANDSHAKE_OK", &format!("host={}", url.host));
@@ -86,55 +93,81 @@ impl EgressClient {
         let (rd, wr) = split(sock);
         let mut reader = ChunkReader::new(rd);
         let mut writer = ChunkWriter::new(wr);
-        writer.send_set_chunk_size(4096).await?;
-        crate::trace::log("CHUNK_SIZE_SET", "size=4096");
+        // Larger chunk size (~60 KB) matches what OBS / librtmp use by
+        // default for high-bitrate publishers. At 10 Mbps and a 4 KB
+        // chunk size we'd emit ~305 chunk-stream headers per second; at
+        // 60 KB it's ~20/sec. The protocol overhead saving is tiny
+        // (couple hundred bytes/sec), but the fewer chunk boundaries
+        // also reduce per-syscall churn on the Tokio writer.
+        const CHUNK_SIZE: u32 = 60_000;
+        writer.send_set_chunk_size(CHUNK_SIZE).await?;
+        crate::trace::log("CHUNK_SIZE_SET", &format!("size={}", CHUNK_SIZE));
 
         // --- connect ---
         // Match what OBS's libobs RTMP plugin (and librtmp underneath it)
-        // sends. Two reasons this matters for Twitch specifically:
+        // sends. Three reasons this matters for Twitch specifically:
         //
         // 1. flashVer = "FMLE/3.0 (compatible; FMSc/1.0)" puts us in the
         //    same preferred-publisher lane OBS gets.
-        // 2. The audioCodecs / videoCodecs bitmaps are how a publisher
-        //    declares "I will send AAC + H.264" at the protocol level.
-        //    Twitch's transcoder uses these flags to decide which
-        //    ladder lane to allocate. WITHOUT them, Twitch sees a
-        //    publisher that hasn't promised modern codecs and routes
-        //    the stream to a conservative "Source-only" lane — which is
-        //    exactly the symptom users were hitting at high bitrate.
-        //    Bit values mirror librtmp's defaults exactly:
+        // 2. The audioCodecs / videoCodecs bitmaps declare "I will send
+        //    AAC + H.264" at the protocol level. Twitch's transcoder
+        //    uses these flags to decide which ladder lane to allocate.
+        //    WITHOUT them, Twitch routes the stream to a conservative
+        //    Source-only lane above ~6 Mbps. Bit values mirror librtmp:
         //       audioCodecs    = 3191  (incl. SUPPORT_SND_AAC bit 10)
         //       videoCodecs    = 252   (incl. SUPPORT_VID_H264 bit 7)
         //       videoFunction  = 1     (SUPPORT_VID_CLIENT_SEEK)
         //       objectEncoding = 0     (AMF0)
         //       capabilities   = 239   (Flash player default)
         //       fpad           = false (no proxy in front of us)
-        let mut props = HashMap::new();
-        props.insert("app".to_string(), Amf0::String(url.app.clone()));
-        props.insert("type".to_string(), Amf0::String("nonprivate".into()));
-        props.insert(
-            "flashVer".to_string(),
-            Amf0::String("FMLE/3.0 (compatible; FMSc/1.0)".into()),
-        );
-        props.insert("tcUrl".to_string(), Amf0::String(url.tc_url.clone()));
-        props.insert("fpad".to_string(), Amf0::Boolean(false));
-        props.insert("capabilities".to_string(), Amf0::Number(239.0));
-        props.insert("audioCodecs".to_string(), Amf0::Number(3191.0));
-        props.insert("videoCodecs".to_string(), Amf0::Number(252.0));
-        props.insert("videoFunction".to_string(), Amf0::Number(1.0));
-        props.insert("objectEncoding".to_string(), Amf0::Number(0.0));
+        // 3. The Enhanced RTMP `fourCcList` declares non-legacy codecs
+        //    (HEVC, AV1, VP9, Opus, AC-3, FLAC) so HEVC / AV1 streams
+        //    via OBS's Enhanced Broadcasting get routed to the modern
+        //    codec lane. The legacy bitmaps above don't have bits for
+        //    HEVC / AV1 — those codecs only exist in Enhanced RTMP.
+        //    Written directly as AMF0 bytes because the strict-array
+        //    type doesn't fit our HashMap-based Object builder.
+        const FOURCC_LIST: &[&str] = &[
+            "avc1", "hvc1", "av01", "vp09", // video
+            "mp4a", "Opus", "ac-3", "ec-3", "fLaC", // audio
+        ];
         let mut buf = BytesMut::new();
         amf0::enc_string(&mut buf, "connect");
         amf0::enc_number(&mut buf, 1.0);
-        amf0::enc_value(&mut buf, &Amf0::Object(props));
+        amf0::enc_object_begin(&mut buf);
+        amf0::enc_object_key(&mut buf, "app");
+        amf0::enc_string(&mut buf, &url.app);
+        amf0::enc_object_key(&mut buf, "type");
+        amf0::enc_string(&mut buf, "nonprivate");
+        amf0::enc_object_key(&mut buf, "flashVer");
+        amf0::enc_string(&mut buf, "FMLE/3.0 (compatible; FMSc/1.0)");
+        amf0::enc_object_key(&mut buf, "tcUrl");
+        amf0::enc_string(&mut buf, &url.tc_url);
+        amf0::enc_object_key(&mut buf, "fpad");
+        amf0::enc_value(&mut buf, &Amf0::Boolean(false));
+        amf0::enc_object_key(&mut buf, "capabilities");
+        amf0::enc_number(&mut buf, 239.0);
+        amf0::enc_object_key(&mut buf, "audioCodecs");
+        amf0::enc_number(&mut buf, 3191.0);
+        amf0::enc_object_key(&mut buf, "videoCodecs");
+        amf0::enc_number(&mut buf, 252.0);
+        amf0::enc_object_key(&mut buf, "videoFunction");
+        amf0::enc_number(&mut buf, 1.0);
+        amf0::enc_object_key(&mut buf, "objectEncoding");
+        amf0::enc_number(&mut buf, 0.0);
+        amf0::enc_object_key(&mut buf, "fourCcList");
+        amf0::enc_strict_array_str(&mut buf, FOURCC_LIST);
+        amf0::enc_object_end(&mut buf);
         writer.write_message(3, 0, 20, 0, &buf).await?;
         writer.flush().await?;
         crate::trace::log(
             "AMF_OUT",
             &format!(
                 "cmd=connect tcUrl={} flashVer=\"FMLE/3.0 (compatible; FMSc/1.0)\" \
-                 audioCodecs=3191 videoCodecs=252 videoFunction=1 objectEncoding=0",
-                url.tc_url
+                 audioCodecs=3191 videoCodecs=252 videoFunction=1 objectEncoding=0 \
+                 fourCcList=[{}]",
+                url.tc_url,
+                FOURCC_LIST.join(",")
             ),
         );
         let connect_resp = await_command_status(&mut reader, "_result").await?;
@@ -271,12 +304,29 @@ impl EgressSink {
         self.writer.flush().await
     }
 
-    /// Send AMF0 `deleteStream` then flush. The Twitch session
-    /// bookkeeping uses this to mark the publish as a clean shutdown
-    /// instead of an unexpected disconnect (which it would otherwise
-    /// log + potentially count against your account on flaky internet).
-    /// Best-effort; errors are swallowed since we're tearing down anyway.
+    /// Clean shutdown matching OBS's exact teardown sequence: send
+    /// `FCUnpublish` (paired with the `FCPublish` from connect), then
+    /// `deleteStream`. Twitch's session bookkeeping uses this pair to
+    /// mark the publish as ended on purpose rather than as a flaky
+    /// disconnect that counts against your account / triggers re-auth.
+    /// Best-effort: errors swallowed because we're tearing down anyway.
     pub async fn send_delete_stream(&mut self) -> io::Result<()> {
+        // FCUnpublish carries the stream key, but we never see it at
+        // this layer — the `EgressSink` only knows the stream_id. The
+        // stream key is in the URL the EgressClient was built from, but
+        // not retained here. Twitch accepts an empty-string key on
+        // FCUnpublish (it knows which stream you mean from the
+        // session); other servers may not, but the worst case is a
+        // silently-ignored unpublish, which still degrades cleanly to
+        // the deleteStream below.
+        crate::trace::log("AMF_OUT", "cmd=FCUnpublish key_redacted=true");
+        let mut buf = BytesMut::new();
+        amf0::enc_string(&mut buf, "FCUnpublish");
+        amf0::enc_number(&mut buf, 0.0);
+        amf0::enc_null(&mut buf);
+        amf0::enc_string(&mut buf, "");
+        let _ = self.writer.write_message(3, 0, 20, 0, &buf).await;
+
         crate::trace::log("AMF_OUT", "cmd=deleteStream");
         let mut buf = BytesMut::new();
         amf0::enc_string(&mut buf, "deleteStream");
@@ -325,44 +375,64 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
     reader: &mut ChunkReader<R>,
     expect: &str,
 ) -> io::Result<Vec<Amf0>> {
-    loop {
-        let msg: Message = reader.read_message().await?;
-        if msg.type_id != 20 {
-            continue;
-        }
-        let vals = amf0::decode_all(&msg.payload)?;
-        let cmd = vals.first().and_then(|v| v.as_str());
+    // Hard cap so a wedged Twitch / YouTube edge that goes silent
+    // mid-handshake can't hang the egress task forever. 15 s is well
+    // beyond a healthy round-trip (typical: 30-200 ms) while staying
+    // short enough that the supervisor's reconnect backoff doesn't
+    // pile up. Without this, a publish that Twitch silently drops
+    // (which happened repeatedly in the user's 8 k bitrate test —
+    // 7 reconnect cycles before the first onStatus arrived) wedges
+    // here until the underlying TCP error happens to surface.
+    let work = async {
+        loop {
+            let msg: Message = reader.read_message().await?;
+            if msg.type_id != 20 {
+                continue;
+            }
+            let vals = amf0::decode_all(&msg.payload)?;
+            let cmd = vals.first().and_then(|v| v.as_str());
 
-        // Both `_error` and `onStatus { level: "error" }` indicate failure.
-        // Surface them as io::Errors so the supervisor can log a useful
-        // reason instead of silently looping forever waiting for `_result`.
-        if cmd == Some("_error") {
-            let desc = vals
-                .iter()
-                .find_map(|v| v.as_object())
-                .and_then(|o| o.get("description").and_then(|v| v.as_str()))
-                .unwrap_or("unspecified _error")
-                .to_string();
-            return Err(io::Error::other(format!("RTMP _error: {}", desc)));
-        }
-        if cmd == Some("onStatus") {
-            if let Some(info) = vals.get(3).and_then(|v| v.as_object()) {
-                let level = info.get("level").and_then(|v| v.as_str()).unwrap_or("");
-                if level == "error" {
-                    let desc = info
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("onStatus level=error")
-                        .to_string();
-                    let code = info.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                    return Err(io::Error::other(format!("RTMP {}: {}", code, desc)));
+            // Both `_error` and `onStatus { level: "error" }` indicate failure.
+            // Surface them as io::Errors so the supervisor can log a useful
+            // reason instead of silently looping forever waiting for `_result`.
+            if cmd == Some("_error") {
+                let desc = vals
+                    .iter()
+                    .find_map(|v| v.as_object())
+                    .and_then(|o| o.get("description").and_then(|v| v.as_str()))
+                    .unwrap_or("unspecified _error")
+                    .to_string();
+                return Err(io::Error::other(format!("RTMP _error: {}", desc)));
+            }
+            if cmd == Some("onStatus") {
+                if let Some(info) = vals.get(3).and_then(|v| v.as_object()) {
+                    let level = info.get("level").and_then(|v| v.as_str()).unwrap_or("");
+                    if level == "error" {
+                        let desc = info
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("onStatus level=error")
+                            .to_string();
+                        let code = info.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                        return Err(io::Error::other(format!("RTMP {}: {}", code, desc)));
+                    }
                 }
             }
+            if cmd == Some(expect) {
+                return Ok(vals);
+            }
+            // Anything else (Window Ack, onBWDone, onFCPublish, ping …) is
+            // ignored and we keep reading until we see what we're waiting for.
         }
-        if cmd == Some(expect) {
-            return Ok(vals);
-        }
-        // Anything else (Window Ack, onBWDone, onFCPublish, ping …) is
-        // ignored and we keep reading until we see what we're waiting for.
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(15), work).await {
+        Ok(res) => res,
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "no `{}` response from server within 15 s — likely silent disconnect or auth delay",
+                expect
+            ),
+        )),
     }
 }
