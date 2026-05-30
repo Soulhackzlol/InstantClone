@@ -1126,6 +1126,22 @@ async fn pump_dest(
             return Ok(());
         }
 
+        // Ingest gone → close the destination session cleanly instead
+        // of sitting on a stale TCP connection. Platforms hold the
+        // publish slot for 30-90 s after the last frame, so without
+        // this the user's stream appears "live but frozen" on Twitch /
+        // YouTube long after OBS dropped. The supervisor's gate on
+        // ingest_alive prevents an immediate respawn here, so the
+        // destination stays cleanly disconnected until OBS comes back.
+        if !ctrl.ingest_alive() {
+            ctrl.log(format!(
+                "[{}] ingest gone — closing destination session",
+                dest.id
+            ));
+            let _ = sink.send_delete_stream().await;
+            return Ok(());
+        }
+
         // Detect publisher reconnect (OBS stopped and re-started, new
         // session token). Without this branch the new session's "fresh"
         // timestamps would all read earlier than `input_ts_anchor` and
@@ -1366,16 +1382,30 @@ fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<Pendin
 async fn apply_cut(
     ctrl: &Arc<Controller>,
     dest: &Arc<DestinationState>,
-    _sink: &mut EgressSink,
+    sink: &mut EgressSink,
     state: &mut EgressState,
     cut: PendingCut,
 ) -> io::Result<()> {
+    // Compute the LAST OUTPUT timestamp we actually sent (not the base
+    // from the previous cut). The +1 ms gap is the minimum that satisfies
+    // strict monotonicity (the only thing RTMP players require here).
+    // The prior +33 ms was framerate-naive: at 60 fps it consistently
+    // pushed the output timeline 17 ms ahead per cut, drifting forever
+    // and showing up as audio/video sync drift over many toggles.
+    // Both anchors are u64 now so the subtraction can't underflow even
+    // across the RTMP 49-day wrap (expand_ts handles the wrap at ingest).
+    // Output_ts is still u32 (RTMP wire) and wraps naturally.
+    let input_delta_u32 = state
+        .last_sent_input_ts
+        .saturating_sub(state.input_ts_anchor) as u32;
+    let last_out_ts = state.output_ts_base.wrapping_add(input_delta_u32);
+    let new_output_ts_base = last_out_ts.wrapping_add(1);
+
     // Detailed cut trace — every cut writes one log line with the
     // before/after seq, the input-ts jump, and the resulting output_ts
-    // base. If the bouncing symptom is back, this log makes it obvious:
-    // repeated lines with the same target.seq + target.ts_ms === a cut
-    // loop. Repeated lines with monotonically advancing target === the
-    // user just toggled a few times (fine).
+    // base. Now logs the ACTUAL new base (previously the formatter just
+    // showed `old+1`, useless for diagnosing post-cut drift), plus the
+    // current seq_header_gen so reconnect/codec-change events line up.
     {
         let prev_seq = state.consumer_seq;
         let prev_ts = state.last_sent_input_ts;
@@ -1390,7 +1420,7 @@ async fn apply_cut(
         };
         let delta_ms = (new_ts as i64) - (prev_ts as i64);
         ctrl.log(format!(
-            "[{}] CUT {} seq:{}→{}  ts:{}→{}  delta:{}ms  out_ts_base:0x{:08x}→0x{:08x}",
+            "[{}] CUT {} seq:{}→{}  ts:{}→{}  delta:{}ms  out_ts_base:0x{:08x}→0x{:08x}  gen:{}",
             dest.id,
             direction,
             prev_seq,
@@ -1399,24 +1429,12 @@ async fn apply_cut(
             new_ts,
             delta_ms,
             state.output_ts_base,
-            state.output_ts_base.wrapping_add(1),
+            new_output_ts_base,
+            ctrl.seq_header_gen.load(Ordering::Relaxed),
         ));
     }
 
-    // Compute the LAST OUTPUT timestamp we actually sent (not the base
-    // from the previous cut). The +1 ms gap is the minimum that satisfies
-    // strict monotonicity (the only thing RTMP players require here).
-    // The prior +33 ms was framerate-naive: at 60 fps it consistently
-    // pushed the output timeline 17 ms ahead per cut, drifting forever
-    // and showing up as audio/video sync drift over many toggles.
-    // Both anchors are u64 now so the subtraction can't underflow even
-    // across the RTMP 49-day wrap (expand_ts handles the wrap at ingest).
-    // Output_ts is still u32 (RTMP wire) and wraps naturally.
-    let input_delta_u32 = state
-        .last_sent_input_ts
-        .saturating_sub(state.input_ts_anchor) as u32;
-    let last_out_ts = state.output_ts_base.wrapping_add(input_delta_u32);
-    state.output_ts_base = last_out_ts.wrapping_add(1);
+    state.output_ts_base = new_output_ts_base;
     state.input_ts_anchor = cut.target.ts_ms;
     // Plain wall-clock anchor: from this instant onwards, pace_and_send
     // delivers content at real-time rate relative to the cut target's
@@ -1433,11 +1451,28 @@ async fn apply_cut(
     dest.consumer_seq
         .store(state.consumer_seq, Ordering::Relaxed);
 
-    // NOTE: we deliberately do NOT re-emit sequence headers here.
-    // OBS/ffmpeg send sequence headers ONCE per session — Twitch's
-    // transcoder caches them and tolerates same-codec IDRs after a
-    // content jump fine. Headers are still resent on publisher reconnect
-    // (in the pump loop) and on actual codec change (via seq_header_gen).
+    // Re-emit cached sequence headers on the new output timeline so
+    // the destination decoder has fresh config before the first
+    // post-cut frame. The previous code skipped this on the assumption
+    // that platforms cache headers from the initial publish — which is
+    // true for YouTube but NOT reliably for Twitch. Twitch rotates its
+    // transcoder workers periodically and the new worker has no cached
+    // config: every cut without an explicit header resend was a chance
+    // to land on a fresh worker with no SPS/PPS, producing audio-only
+    // playback for the rest of the session. Cost is ~50 bytes per cut,
+    // benefit is that every cut becomes self-contained from the
+    // destination decoder's POV. Headers are also resent on publisher
+    // reconnect (in the pump loop) and on actual codec change (via the
+    // seq_header_gen check).
+    send_sequence_headers(ctrl, sink, new_output_ts_base).await?;
+    // Sync the generation counter — the explicit resend above means
+    // the next pump iteration shouldn't redundantly resend on a
+    // gen-mismatch that has already been satisfied.
+    dest.last_seq_header_gen.store(
+        ctrl.seq_header_gen.load(Ordering::Relaxed),
+        Ordering::Relaxed,
+    );
+
     dest.cuts_performed.fetch_add(1, Ordering::Relaxed);
     Ok(())
 }

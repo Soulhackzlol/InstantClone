@@ -111,7 +111,21 @@ impl Destination {
             platform_base(&self.platform)?.to_string()
         };
         let key = non_empty(&self.stream_key)?;
-        Some(format!("{}/{}", base, key))
+        let url = format!("{}/{}", base, key);
+        // YouTube's backup ingest requires a `?backup=1` suffix on the
+        // stream name so their edge treats this connection as the
+        // redundancy partner of the primary. Without the suffix the
+        // backup is accepted but never actually fails over, so a primary
+        // drop would still glitch the stream — the worst of both worlds.
+        // Reference: YouTube Studio's "URL del servidor secundario" pane
+        // surfaces the exact format `…/live2?backup=1`; we slot the
+        // stream key in between so the wire form is `…/live2/KEY?backup=1`,
+        // which is what OBS produces when wired against YouTube's UI URL.
+        if self.platform == "youtube" && self.youtube_ingest == "backup" {
+            Some(format!("{}?backup=1", url))
+        } else {
+            Some(url)
+        }
     }
 
     pub fn is_well_formed(&self) -> bool {
@@ -980,7 +994,9 @@ mod tests {
         };
         assert_eq!(
             d.egress_url().as_deref(),
-            Some("rtmp://b.rtmp.youtube.com/live2/abcd")
+            Some("rtmp://b.rtmp.youtube.com/live2/abcd?backup=1"),
+            "YouTube backup ingest needs the ?backup=1 suffix so their \
+             edge enables real fail-over, not just a duplicate stream"
         );
     }
 

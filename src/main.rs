@@ -294,16 +294,29 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             }
         }
 
-        // 2) For each desired dest: spawn if missing, or restart if URL changed.
+        // 2) For each desired dest: spawn if missing, or restart if URL
+        //    changed, OR if the previous pump has finished (e.g. it
+        //    bailed out cleanly when ingest went away — we want a fresh
+        //    pump now that ingest is back).
+        let ingest_alive = ctrl.ingest_alive();
         for (dest, url) in &desired {
             let needs_restart = match running.get(&dest.id) {
-                Some((existing_url, _)) => existing_url != url,
+                Some((existing_url, handle)) => existing_url != url || handle.is_finished(),
                 None => true,
             };
             if needs_restart {
                 if let Some((_old_url, handle)) = running.remove(&dest.id) {
                     handle.abort();
                     let _ = handle.await;
+                }
+                // Don't open a fresh egress while OBS isn't sending —
+                // we'd either burn TCP to Twitch / YouTube for an empty
+                // publish slot, or sit blocked in next_or_wait. The
+                // pump itself bails out cleanly on ingest loss; here we
+                // just refuse to spawn its replacement until ingest is
+                // back. The next supervisor tick (~2 s) re-checks.
+                if !ingest_alive {
+                    continue;
                 }
                 let state = ctrl.destination_state(&dest.id);
                 // Defensive: a previous teardown may have left the
