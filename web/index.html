@@ -1747,15 +1747,12 @@ async function testWebhook(){
 // Unified gallery of built-in styles + user-dropped custom .html files.
 // Clicking any card selects it: the preview iframe + URL update in lockstep.
 const BUILTIN_OVERLAYS = [
-  { id:'minimal',   name:'Minimal',    meta:'Built-in · Top-left glass badge' },
-  { id:'compact',   name:'Compact',    meta:'Built-in · Tiny top-right pill (zero noise)' },
-  { id:'corner',    name:'Corner',     meta:'Built-in · Bottom-right cyan block' },
-  { id:'strip',     name:'Strip',      meta:'Built-in · Full-width bottom bar' },
-  { id:'ticker',    name:'Ticker',     meta:'Built-in · News-strip with red accent' },
-  { id:'broadcast', name:'Broadcast',  meta:'Built-in · Top red bar, formal serif' },
-  { id:'focus',     name:'Focus',      meta:'Built-in · Big centered (tournament intermission)' },
-  { id:'stats',     name:'Stats',      meta:'Built-in · Multi-line debug-style' },
-  { id:'esports',   name:'Esports',    meta:'Built-in · Neon/cyberpunk glow' },
+  { id:'minimal',   name:'Minimal',    meta:'Built-in · Top-left whisper, auto-dims when idle' },
+  { id:'corner',    name:'Corner',     meta:'Built-in · Bottom-right glass, accent top line' },
+  { id:'strip',     name:'Strip',      meta:'Built-in · Bottom edge bar, rises from below' },
+  { id:'focus',     name:'Focus',      meta:'Built-in · Center modal (tournament intermissions)' },
+  { id:'broadcast', name:'Broadcast',  meta:'Built-in · TV news bar, drops in from above' },
+  { id:'ticker',    name:'Ticker',     meta:'Built-in · Bottom scrolling marquee, accent rule' },
 ];
 let customOverlays = [];
 let selectedOverlay = { kind:'builtin', id:'minimal' };
@@ -1929,7 +1926,7 @@ const TOUR = [
     target: '.tab[data-tab="overlay"]', side: 'bottom', tab: 'overlay',
     title: 'Overlay browser-source',
     body: `
-      <p>Picks one of <b>9 built-in overlay styles</b> (Minimal, Compact, Corner, Strip, Ticker, Broadcast, Focus, Stats, Esports) for OBS to display the live delay on screen.</p>
+      <p>Picks one of <b>6 built-in overlay styles</b> (Minimal, Corner, Strip, Focus, Broadcast, Ticker) for OBS to display the live delay on screen. All six share one design language — they differ in position and density, not aesthetic — and auto-dim when nothing's happening so they don't snag the viewer's eye.</p>
       <p>Drop your own <code>.html</code> file into the overlays folder and it shows up here automatically — fully customisable.</p>
     `,
   },
@@ -2130,6 +2127,27 @@ function applyState(s){
   renderHeader(s);
   renderStats(s);
   renderCpProfiles();
+  // Live destination stats — /state already carries alive / bitrate_kbps /
+  // tags_sent / bytes_sent / cuts / reconnects per destination, so merge
+  // those into our cached list and rebuild the cards on every state tick.
+  // Previously the cards only refreshed on explicit user actions (saving
+  // a destination, switching tabs) so bitrate sparklines and status pills
+  // froze until the user hit F5.
+  if (Array.isArray(s.destinations) && lastDests.length > 0){
+    s.destinations.forEach(sd => {
+      const ld = lastDests.find(d => d.id === sd.id);
+      if (ld){
+        ld.alive = sd.alive;
+        ld.bitrate_kbps = sd.bitrate_kbps;
+        ld.tags_sent = sd.tags_sent;
+        ld.bytes_sent = sd.bytes_sent;
+        ld.cuts = sd.cuts;
+        ld.reconnects = sd.reconnects;
+        ld.enabled = sd.enabled;
+      }
+    });
+    rebuildDests();
+  }
   const ds = PHASE_TO_STATE[s.phase] || 'off';
   // Footer status: ingest down → "standby"; up & no delay → "live
   // (passthrough)"; otherwise the delay phase. Matches the new state

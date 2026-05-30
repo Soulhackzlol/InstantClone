@@ -1109,12 +1109,70 @@ fn serve_overlay_file(
 // ----------------------------------------------------------------------
 
 async fn post_test_webhook(ctrl: &Arc<Controller>) -> (&'static str, &'static str, String) {
-    ctrl.fire_webhook("🧪", "Test message — webhook is wired up and working.");
-    (
-        "200 OK",
-        "application/json",
-        r#"{"ok":true,"message":"test fired"}"#.into(),
+    // Verbose test path. The fire-and-forget `fire_webhook` is the wrong
+    // tool here because it (a) silently returns when the URL is empty,
+    // (b) silently returns when its 2-second throttle is active (a fresh
+    // destination-connect notification suppresses the user's test for 2s),
+    // and (c) drops any HTTP/TLS error from Discord on the floor. This
+    // path bypasses the throttle, validates the URL, and surfaces the
+    // real result so the user knows whether the webhook is actually
+    // reachable from this machine.
+    let url = ctrl.webhook_url_snapshot();
+    if url.is_empty() {
+        return (
+            "200 OK",
+            "application/json",
+            r#"{"ok":false,"error":"webhook URL is empty — set it in the System tab and save first"}"#.into(),
+        );
+    }
+    let body =
+        r#"{"content":"🧪 **InstantClone**: Test message — webhook is wired up and working."}"#;
+    // Map ureq::Error (a fat enum that would trip clippy::result_large_err
+    // if propagated) down to just the status code on success or a short
+    // string on failure inside the worker thread.
+    let send = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || -> Result<u16, String> {
+            ureq::AgentBuilder::new()
+                .timeout_connect(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(8))
+                .build()
+                .post(&url)
+                .set("Content-Type", "application/json")
+                .send_string(body)
+                .map(|r| r.status())
+                .map_err(|e| e.to_string())
+        }),
     )
+    .await;
+    let (ok, msg) = match send {
+        Ok(Ok(Ok(status))) if (200..300).contains(&status) => {
+            (true, format!("Discord accepted (HTTP {})", status))
+        }
+        Ok(Ok(Ok(status))) => (
+            false,
+            format!(
+                "Discord rejected with HTTP {} — check the webhook URL",
+                status
+            ),
+        ),
+        Ok(Ok(Err(e))) => (false, format!("connection error: {}", e)),
+        Ok(Err(e)) => (false, format!("internal: {}", e)),
+        Err(_) => (
+            false,
+            "timed out after 10 s waiting for Discord".to_string(),
+        ),
+    };
+    // Match the dashboard contract: `ok=true` carries a friendly status
+    // in `message`, `ok=false` carries the same string in `error` so the
+    // existing toast handler ("Webhook test failed: ${r.error}") just
+    // works without a client-side change.
+    let json = if ok {
+        format!(r#"{{"ok":true,"message":{}}}"#, json_escape_quoted(&msg))
+    } else {
+        format!(r#"{{"ok":false,"error":{}}}"#, json_escape_quoted(&msg))
+    };
+    ("200 OK", "application/json", json)
 }
 
 fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
@@ -1302,8 +1360,17 @@ static DOCK_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html
 /// build-time minified + gzipped (see `build.rs`).
 static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
 /// Render the OBS browser-source overlay. Supports two query knobs:
-///   ?lang=en|es|pt|fr|de   — label localization
-///   ?style=minimal|corner|strip   — visual variant
+///   ?lang=en|es|pt|fr|de                         — label localization
+///   ?style=minimal|corner|strip|focus|broadcast|ticker  — visual variant
+///
+/// All six styles share the same DOM skeleton and `/state` polling
+/// loop. The differences are spatial density + position, applied via a
+/// `body.<style>` class hook. Three shared behaviours:
+///   * 4 s idle auto-dim — overlay fades to ~22% opacity during
+///     `idle`/`passthrough`, wakes back on the next phase transition.
+///   * Phase-change halo — brief accent-glow bloom on any phase change.
+///   * Tweened delay readout — the big number animates between values
+///     instead of snapping, so arming reads as a building number.
 fn overlay_html(query: &str) -> String {
     let params = config::parse_form(query);
     let lang = params.get("lang").map(String::as_str).unwrap_or("en");
@@ -1311,8 +1378,7 @@ fn overlay_html(query: &str) -> String {
 
     // Sanitise so a malformed URL can't break the variant selector.
     let style = match style {
-        "minimal" | "corner" | "strip" | "compact" | "focus" | "broadcast" | "stats" | "ticker"
-        | "esports" => style,
+        "minimal" | "corner" | "strip" | "focus" | "broadcast" | "ticker" => style,
         _ => "minimal",
     };
 
@@ -1355,122 +1421,165 @@ fn overlay_html(query: &str) -> String {
     format!(
         r##"<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
 <title>InstantClone overlay</title><style>
+/* ───── Shared design tokens — one palette, one type ramp, six layouts.
+   Every style below dresses the same DOM skeleton; the differences are
+   spatial density, not art direction. ───────────────────────────── */
+:root{{
+  --fg:rgba(255,255,255,.94);
+  --muted:rgba(255,255,255,.55);
+  --dim:rgba(255,255,255,.32);
+  --accent:#5ac8fa;
+  --accent-glow:rgba(90,200,250,.45);
+  --good:#34c759;
+  --warn:#ffae00;
+  --bad:#ff453a;
+  --surface:rgba(10,12,16,.62);
+  --surface-strong:rgba(10,12,16,.86);
+  --line:rgba(255,255,255,.08);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+}}
 *{{box-sizing:border-box}}
-html,body{{margin:0;padding:0;background:transparent;color:#fff;
+html,body{{margin:0;padding:0;background:transparent;color:var(--fg);
   font-family:-apple-system,Segoe UI,Roboto,Inter,sans-serif;
-  font-feature-settings:"tnum" 1;width:100%;height:100%;overflow:hidden}}
-.mono{{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}}
-.dot{{display:inline-block;width:8px;height:8px;border-radius:50%;background:#34c759;
-  box-shadow:0 0 8px #34c759;vertical-align:middle}}
-.dot.bad{{background:#ff453a;box-shadow:0 0 8px #ff453a}}
-.dot.warn{{background:#ffae00;box-shadow:0 0 8px #ffae00}}
-.dot.cool{{background:#5ac8fa;box-shadow:0 0 8px #5ac8fa}}
-.pulse{{animation:p 1.4s ease-in-out infinite}}
-@keyframes p{{0%,100%{{opacity:1}}50%{{opacity:.45}}}}
+  font-feature-settings:"tnum" 1;width:100%;height:100%;overflow:hidden;
+  -webkit-font-smoothing:antialiased}}
 
-/* ── minimal: top-left glass badge ───────────────────────── */
-body.minimal .box{{position:fixed;left:24px;top:24px;background:rgba(10,12,16,.65);
-  backdrop-filter:blur(8px);padding:12px 18px;border-radius:12px;
-  border:1px solid rgba(255,255,255,.08);min-width:180px}}
-body.minimal .l{{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,.55);font-weight:600}}
-body.minimal .v{{font-size:32px;font-weight:700;letter-spacing:-1px;line-height:1.1;margin-top:2px}}
-body.minimal .u{{font-size:16px;color:rgba(255,255,255,.55);font-weight:400;margin-left:3px}}
-body.minimal .row{{display:flex;gap:14px;align-items:center;margin-top:8px;font-size:12px;color:rgba(255,255,255,.7)}}
-body.minimal .row .dot{{margin-right:6px}}
+/* Dots — shared across styles. State transitions cross-fade smoothly
+   rather than snap, so a phase change doesn't read as a flicker. */
+.dot{{display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--good);box-shadow:0 0 8px var(--good);vertical-align:middle;
+  transition:background .22s ease,box-shadow .22s ease,opacity .22s ease}}
+.dot.bad{{background:var(--bad);box-shadow:0 0 8px var(--bad)}}
+.dot.warn{{background:var(--warn);box-shadow:0 0 8px var(--warn)}}
+.dot.cool{{background:var(--accent);box-shadow:0 0 8px var(--accent)}}
+.dot.pulse{{animation:dotPulse 1.6s ease-in-out infinite}}
+@keyframes dotPulse{{0%,100%{{opacity:1}}50%{{opacity:.45}}}}
 
-/* ── corner: bottom-right chunky block ───────────────────── */
-body.corner .box{{position:fixed;right:32px;bottom:32px;background:rgba(10,12,16,.85);
-  padding:18px 26px;border-radius:16px;border:2px solid #6cf;min-width:220px;text-align:right}}
-body.corner .l{{font-size:13px;text-transform:uppercase;letter-spacing:2px;color:#6cf;font-weight:600}}
-body.corner .v{{font-size:48px;font-weight:800;letter-spacing:-2px;margin-top:4px;line-height:1}}
-body.corner .u{{font-size:22px;color:rgba(255,255,255,.6);font-weight:400;margin-left:4px}}
-body.corner .row{{display:flex;gap:14px;justify-content:flex-end;margin-top:10px;font-size:13px;color:rgba(255,255,255,.75)}}
+/* Shared entrance — soft blur+fade so the overlay arrives rather than
+   pops. Tuned to feel "noticed" without being draw-attention. */
+.box{{animation:boxIn .42s var(--ease-out) both;will-change:transform,opacity,filter}}
+@keyframes boxIn{{from{{opacity:0;filter:blur(8px)}}to{{opacity:1;filter:blur(0)}}}}
+
+/* Sneaky behaviour: 4 s after we enter idle/passthrough, dim the box so
+   the viewer's eye stops snagging on it. Phase transition wakes it. */
+body.idle-dim .box{{opacity:.22}}
+.box{{transition:opacity .55s ease,box-shadow .42s ease}}
+
+/* Phase-change halo — accent glow briefly blooms around the box on any
+   phase transition. Helps the streamer (and the viewer) catch the
+   moment a delay arms / activates / cuts. */
+body.phase-flash .box{{box-shadow:0 0 0 1px var(--accent-glow),
+  0 0 32px 6px var(--accent-glow)}}
+
+/* ── minimal: top-left whisper, the new flagship ─────────── */
+body.minimal .box{{position:fixed;left:20px;top:20px;
+  background:var(--surface);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  padding:10px 16px;border-radius:14px;
+  border:1px solid var(--line);min-width:160px}}
+body.minimal .l{{font-size:10.5px;text-transform:uppercase;
+  letter-spacing:1.6px;color:var(--muted);font-weight:600}}
+body.minimal .v{{font-size:30px;font-weight:700;letter-spacing:-1px;
+  line-height:1.08;margin-top:1px}}
+body.minimal .u{{font-size:15px;color:var(--muted);font-weight:400;margin-left:2px}}
+body.minimal .row{{display:flex;gap:13px;align-items:center;margin-top:7px;
+  font-size:11.5px;color:var(--muted)}}
+body.minimal .row .dot{{margin-right:6px;width:7px;height:7px}}
+
+/* ── corner: bottom-right default — a thin accent line as brand ── */
+body.corner .box{{position:fixed;right:28px;bottom:28px;
+  background:var(--surface-strong);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  padding:16px 22px;border-radius:14px;
+  border:1px solid var(--line);min-width:200px;text-align:right}}
+body.corner .box::before{{content:"";position:absolute;left:18px;right:18px;top:0;
+  height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);
+  opacity:.65}}
+body.corner .l{{font-size:11.5px;text-transform:uppercase;
+  letter-spacing:1.8px;color:var(--accent);font-weight:600;
+  text-shadow:0 0 14px var(--accent-glow)}}
+body.corner .v{{font-size:44px;font-weight:800;letter-spacing:-2px;
+  margin-top:3px;line-height:1}}
+body.corner .u{{font-size:20px;color:var(--muted);font-weight:400;margin-left:3px}}
+body.corner .row{{display:flex;gap:14px;justify-content:flex-end;
+  margin-top:10px;font-size:12px;color:var(--muted)}}
 body.corner .row .dot{{margin-right:6px}}
 
-/* ── strip: full-width bottom bar ────────────────────────── */
+/* ── strip: bottom-edge bar that rises in from below ─────── */
 body.strip .box{{position:fixed;left:0;right:0;bottom:0;
-  background:linear-gradient(180deg,transparent,rgba(10,12,16,.9));
-  padding:18px 32px;display:flex;align-items:center;gap:32px;font-size:18px}}
-body.strip .l{{font-size:12px;text-transform:uppercase;letter-spacing:2px;color:rgba(255,255,255,.55);font-weight:600}}
-body.strip .v{{font-size:36px;font-weight:700;letter-spacing:-1px;line-height:1}}
-body.strip .u{{font-size:18px;color:rgba(255,255,255,.55);font-weight:400;margin-left:3px}}
-body.strip .row{{display:flex;gap:18px;margin-left:auto;font-size:14px;color:rgba(255,255,255,.75)}}
-body.strip .row .dot{{margin-right:6px}}
+  background:linear-gradient(180deg,transparent 0%,
+    rgba(10,12,16,.0) 20%,rgba(10,12,16,.86) 100%);
+  padding:18px 32px 16px;display:flex;align-items:flex-end;gap:28px;
+  animation:stripIn .55s var(--ease-out) both}}
+@keyframes stripIn{{from{{transform:translateY(20px);opacity:0;filter:blur(8px)}}
+  to{{transform:translateY(0);opacity:1;filter:blur(0)}}}}
+body.strip .box::before{{content:"";position:absolute;left:0;right:0;bottom:0;
+  height:1px;background:linear-gradient(90deg,transparent 5%,
+    var(--accent) 50%,transparent 95%);opacity:.4}}
 body.strip .group{{display:flex;flex-direction:column;align-items:flex-start}}
+body.strip .l{{font-size:10.5px;text-transform:uppercase;letter-spacing:1.8px;
+  color:var(--muted);font-weight:600;margin-bottom:1px}}
+body.strip .v{{font-size:34px;font-weight:700;letter-spacing:-1px;line-height:1}}
+body.strip .u{{font-size:18px;color:var(--muted);font-weight:400;margin-left:2px}}
+body.strip .row{{display:flex;gap:16px;margin-left:auto;
+  font-size:12.5px;color:var(--muted);align-self:center}}
+body.strip .row .dot{{margin-right:6px}}
 
-/* ── compact: tiny top-right pill, delay number only ─────── */
-body.compact .box{{position:fixed;top:14px;right:14px;
-  display:inline-flex;align-items:center;gap:8px;
-  background:rgba(10,12,16,.75);backdrop-filter:blur(8px);
-  padding:6px 12px 6px 10px;border-radius:999px;
-  border:1px solid rgba(255,255,255,.08);
-  font-size:14px;font-weight:600;letter-spacing:-.2px}}
-body.compact .l,body.compact .u,body.compact .row{{display:none}}
-body.compact .dot{{width:6px;height:6px}}
-body.compact .v{{font-variant-numeric:tabular-nums}}
-body.compact .v::after{{content:'s';color:rgba(255,255,255,.55);font-weight:400;margin-left:2px;font-size:11px}}
-
-/* ── focus: BIG center-screen, for tournament intermissions ─ */
+/* ── focus: dead-centre modal for intermissions ──────────── */
 body.focus{{display:flex;align-items:center;justify-content:center}}
-body.focus .box{{background:rgba(0,0,0,.75);backdrop-filter:blur(12px);
-  padding:36px 56px;border-radius:24px;border:1px solid rgba(255,255,255,.10);
-  text-align:center;box-shadow:0 30px 80px rgba(0,0,0,.55)}}
-body.focus .l{{font-size:13px;text-transform:uppercase;letter-spacing:3.5px;color:rgba(255,255,255,.65);font-weight:600}}
-body.focus .v{{font-size:96px;font-weight:800;letter-spacing:-3px;margin-top:8px;line-height:.95}}
-body.focus .u{{font-size:36px;color:rgba(255,255,255,.55);font-weight:400;margin-left:6px}}
-body.focus .row{{display:flex;gap:18px;justify-content:center;margin-top:14px;font-size:14px;color:rgba(255,255,255,.7)}}
+body.focus .box{{background:rgba(0,0,0,.78);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  padding:38px 60px;border-radius:24px;
+  border:1px solid rgba(255,255,255,.10);text-align:center;
+  box-shadow:0 30px 80px rgba(0,0,0,.55);
+  animation:focusIn .5s var(--ease-out) both}}
+@keyframes focusIn{{from{{transform:scale(.94);opacity:0;filter:blur(10px)}}
+  to{{transform:scale(1);opacity:1;filter:blur(0)}}}}
+body.focus .l{{font-size:12.5px;text-transform:uppercase;letter-spacing:3.5px;
+  color:var(--muted);font-weight:600}}
+body.focus .v{{font-size:88px;font-weight:800;letter-spacing:-3px;
+  margin-top:8px;line-height:.95}}
+body.focus .u{{font-size:34px;color:var(--muted);font-weight:400;margin-left:6px}}
+body.focus .row{{display:flex;gap:18px;justify-content:center;
+  margin-top:14px;font-size:13px;color:var(--muted)}}
 body.focus .row .dot{{margin-right:6px}}
 
-/* ── broadcast: TV-style red bar, formal type ─────────────── */
-body.broadcast .box{{position:fixed;left:0;right:0;top:0;
-  background:#cc0a00;color:#fff;padding:10px 20px;
-  display:flex;align-items:center;gap:18px;
-  font-family:Georgia,'Times New Roman',serif;
-  box-shadow:0 2px 0 rgba(0,0,0,.4),0 0 0 2px #fff inset}}
-body.broadcast .l{{font-size:13px;text-transform:uppercase;letter-spacing:3px;font-weight:700}}
-body.broadcast .v{{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}}
-body.broadcast .u{{font-size:18px;opacity:.85;margin-left:2px}}
-body.broadcast .row{{display:flex;gap:14px;margin-left:auto;font-size:12px;text-transform:uppercase;letter-spacing:2px}}
-body.broadcast .row .dot{{margin-right:6px;background:#fff;box-shadow:0 0 8px #fff}}
+/* ── broadcast: TV news bar, sits at top, drops in ────────── */
+body.broadcast .box{{position:fixed;left:0;right:0;top:0;height:46px;
+  background:linear-gradient(180deg,#c81e1e,#a31616);color:#fff;
+  padding:10px 22px;display:flex;align-items:center;gap:20px;
+  box-shadow:0 2px 0 rgba(0,0,0,.45),
+    inset 0 1px 0 rgba(255,255,255,.25),
+    inset 0 -1px 0 rgba(0,0,0,.25);
+  animation:bcastIn .45s var(--ease-out) both}}
+@keyframes bcastIn{{from{{transform:translateY(-46px)}}to{{transform:translateY(0)}}}}
+body.broadcast .l{{font-size:13px;text-transform:uppercase;letter-spacing:3px;
+  font-weight:700;font-family:Georgia,'Times New Roman',serif}}
+body.broadcast .v{{font-size:24px;font-weight:700;letter-spacing:-.4px}}
+body.broadcast .u{{font-size:16px;opacity:.85;margin-left:1px}}
+body.broadcast .row{{display:flex;gap:14px;margin-left:auto;
+  font-size:11.5px;text-transform:uppercase;letter-spacing:2px;font-weight:600}}
+body.broadcast .row .dot{{margin-right:5px;background:#fff;
+  box-shadow:0 0 10px rgba(255,255,255,.65)}}
+body.broadcast .row .dot.bad{{background:#1a1a1a;box-shadow:none;opacity:.6}}
 
-/* ── stats: small multi-row info panel ───────────────────── */
-body.stats .box{{position:fixed;left:14px;bottom:14px;
-  background:rgba(8,10,14,.78);backdrop-filter:blur(8px);
-  padding:10px 14px;border-radius:10px;
-  border:1px solid rgba(255,255,255,.08);
-  font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.6;
-  min-width:170px;color:rgba(255,255,255,.85)}}
-body.stats .l{{font-size:9.5px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,.50);font-weight:600;margin-bottom:4px}}
-body.stats .v{{font-size:22px;font-weight:700;letter-spacing:-.5px;line-height:1}}
-body.stats .u{{font-size:13px;color:rgba(255,255,255,.55);margin-left:3px}}
-body.stats .group{{display:flex;flex-direction:column;align-items:flex-start}}
-body.stats .row{{display:flex;flex-direction:column;gap:3px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08);font-size:11px}}
-body.stats .row span{{display:flex;align-items:center;gap:6px}}
-
-/* ── ticker: full-width single-line text (broadcast scroll) ─ */
-body.ticker .box{{position:fixed;left:0;right:0;bottom:0;
-  background:rgba(0,0,0,.85);padding:8px 24px;
-  display:flex;align-items:center;gap:14px;
-  font-size:13px;letter-spacing:.5px;color:#fff;
-  border-top:2px solid #ff3b30;font-weight:500}}
-body.ticker .l{{text-transform:uppercase;letter-spacing:2px;font-weight:700;font-size:11px;color:#ff3b30}}
-body.ticker .v{{font-weight:700;font-variant-numeric:tabular-nums}}
-body.ticker .u{{opacity:.7;margin-left:2px}}
-body.ticker .row{{display:flex;gap:12px;margin-left:auto;font-size:11px;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:1.5px}}
-body.ticker .row .dot{{margin-right:4px}}
-
-/* ── esports: neon/cyberpunk, glow ───────────────────────── */
-body.esports .box{{position:fixed;right:28px;top:28px;
-  background:linear-gradient(135deg,#1e1b4b,#312e81);
-  padding:14px 22px;border-radius:8px;
-  border:2px solid #a78bfa;
-  box-shadow:0 0 24px rgba(167,139,250,.55),inset 0 0 24px rgba(167,139,250,.18);
-  font-family:'JetBrains Mono',monospace}}
-body.esports .l{{font-size:10px;text-transform:uppercase;letter-spacing:3px;color:#c4b5fd;font-weight:700}}
-body.esports .v{{font-size:34px;font-weight:800;letter-spacing:-1px;text-shadow:0 0 14px rgba(167,139,250,.7);margin-top:4px;line-height:1}}
-body.esports .u{{font-size:18px;color:#c4b5fd;font-weight:400;margin-left:3px}}
-body.esports .row{{display:flex;gap:14px;margin-top:10px;font-size:11px;color:#c4b5fd;text-transform:uppercase;letter-spacing:1.5px}}
-body.esports .row .dot{{background:#a78bfa;box-shadow:0 0 8px #a78bfa;margin-right:5px}}
+/* ── ticker: ACTUALLY scrolling marquee, seamless loop ───── */
+body.ticker .box{{position:fixed;left:0;right:0;bottom:0;height:38px;
+  background:rgba(0,0,0,.88);display:flex;align-items:center;
+  border-top:1px solid var(--accent);overflow:hidden}}
+body.ticker .group,body.ticker .row{{display:none}}
+body.ticker .ticker-track{{display:flex;flex-shrink:0;
+  animation:tickerScroll 38s linear infinite;
+  white-space:nowrap}}
+@keyframes tickerScroll{{from{{transform:translateX(0)}}to{{transform:translateX(-50%)}}}}
+body.ticker .ticker-cell{{display:inline-flex;align-items:center;gap:14px;
+  padding:0 32px;font-size:13px;letter-spacing:.4px;flex-shrink:0}}
+body.ticker .ticker-cell .l{{display:inline;text-transform:uppercase;
+  letter-spacing:1.6px;font-weight:700;font-size:11px;color:var(--accent)}}
+body.ticker .ticker-cell .v{{font-weight:700;letter-spacing:-.3px}}
+body.ticker .ticker-cell .u{{opacity:.65;margin-left:1px}}
+body.ticker .ticker-cell .sep{{opacity:.35}}
+body.ticker .ticker-cell .dot{{margin-right:6px;width:6px;height:6px}}
 </style></head><body class="{style}">
 <div class="box">
   <div class="group">
@@ -1481,10 +1590,11 @@ body.esports .row .dot{{background:#a78bfa;box-shadow:0 0 8px #a78bfa;margin-rig
     <span><span class="dot" id="i"></span>OBS</span>
     <span><span class="dot" id="e"></span><span id="estatus">{l_live}</span></span>
   </div>
+  <div class="ticker-track" id="ticker-track" aria-hidden="true"></div>
 </div>
 <script>
 'use strict';
-// State labels for delay phases. Keyed by the proxy's `phase` enum.
+// Strings from the server, hand-localized in overlay_html().
 const L = {{
   live:        "{l_live}",
   preparing:   "{l_preparing}",
@@ -1493,64 +1603,129 @@ const L = {{
   delay:       "{l_delay}",
   passthrough: "{l_passthrough}",
 }};
+// First body class is the style identifier — set server-side from the
+// `style=` query param after the allowlist match.
+const STYLE = document.body.className.split(/\s+/)[0];
 
-// Format the delay number: hide sub-100ms jitter that creates a "0.1s"
-// flicker when the consumer is at the live edge with no actual delay
-// armed. Sub-tenth values round visually to 0.0.
-function fmtDelay(ms){{
-  if (!ms || ms < 100) return '0.0';
-  return (ms / 1000).toFixed(1);
+// Hide sub-100 ms jitter so the consumer's "0.1s" doesn't flicker when
+// effectively at the live edge with no delay armed.
+function fmtDelay(secs){{
+  if (!isFinite(secs) || secs < 0.05) return '0.0';
+  return secs.toFixed(1);
+}}
+
+// Tween a number element from its currently-displayed value to `to`
+// over `dur` ms using ease-out-cubic. Arming a 15 s delay then reads as
+// the number building up rather than snapping. `format` does the
+// stringification so callers don't have to.
+const tweens = new WeakMap();
+function tweenNumber(el, to, dur, format){{
+  const prev = tweens.get(el);
+  const from = prev ? prev.target : parseFloat(el.textContent) || 0;
+  if (Math.abs(to - from) < 0.005){{ el.textContent = format(to); tweens.set(el,{{target:to}}); return; }}
+  if (prev && prev.raf) cancelAnimationFrame(prev.raf);
+  const start = performance.now();
+  const rec = {{ target: to, raf: 0 }};
+  function step(now){{
+    const t = Math.min(1, (now - start) / dur);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = format(from + (to - from) * eased);
+    if (t < 1) rec.raf = requestAnimationFrame(step);
+  }}
+  rec.raf = requestAnimationFrame(step);
+  tweens.set(el, rec);
+}}
+
+// 4 s of idle/passthrough → fade the overlay down. Any non-idle phase
+// resets the timer and wakes the box immediately.
+let idleTimer = null;
+function setIdleDim(idle){{
+  if (idle){{
+    if (!idleTimer && !document.body.classList.contains('idle-dim')){{
+      idleTimer = setTimeout(() => {{
+        document.body.classList.add('idle-dim');
+        idleTimer = null;
+      }}, 4000);
+    }}
+  }} else {{
+    if (idleTimer){{ clearTimeout(idleTimer); idleTimer = null; }}
+    document.body.classList.remove('idle-dim');
+  }}
+}}
+
+// Brief accent halo on every phase transition. Skipped on the first
+// /state result so we don't flash just because we went from null → idle.
+let lastPhase = null;
+function maybeFlashPhase(phase){{
+  if (lastPhase !== null && lastPhase !== phase){{
+    document.body.classList.add('phase-flash');
+    setTimeout(() => document.body.classList.remove('phase-flash'), 480);
+  }}
+  lastPhase = phase;
+}}
+
+// Ticker track builder — two identical cells side by side, animated
+// translateX(-50%) for a seamless wrap. Each refresh rewrites both cells
+// with the current state; the CSS animation runs on the wrapper and is
+// undisturbed by inner text changes.
+function renderTicker(parts){{
+  const track = document.getElementById('ticker-track');
+  if (!track) return;
+  const cellHtml = ''
+    + '<span class="l">' + parts.label + '</span>'
+    + '<span class="v">' + parts.valueText + '<span class="u">s</span></span>'
+    + '<span class="sep">·</span>'
+    + '<span><span class="dot ' + parts.iCls + '"></span>OBS</span>'
+    + '<span class="sep">·</span>'
+    + '<span><span class="dot ' + parts.eCls + '"></span>' + parts.statusText + '</span>';
+  track.innerHTML =
+    '<span class="ticker-cell">' + cellHtml + '</span>' +
+    '<span class="ticker-cell">' + cellHtml + '</span>';
 }}
 
 async function refresh(){{
-  try {{
-    const s = await (await fetch('/state')).json();
+  let s;
+  try {{ s = await (await fetch('/state')).json(); }} catch(_){{ return; }}
 
-    // Dots
-    const iDot = document.getElementById('i');
-    const eDot = document.getElementById('e');
-    iDot.className = 'dot ' + (s.ingest_alive ? 'pulse' : 'bad');
-    if (!s.ingest_alive) {{
-      eDot.className = 'dot bad';
-    }} else if (s.phase === 'preparing') {{
-      eDot.className = 'dot warn pulse';
-    }} else if (s.phase === 'active') {{
-      eDot.className = 'dot pulse';
-    }} else if (s.phase === 'ready') {{
-      eDot.className = 'dot cool';
-    }} else {{
-      eDot.className = 'dot pulse';
-    }}
+  // Resolve what to display this tick.
+  let displayMs = 0, label = L.delay, status = L.live;
+  if (!s.ingest_alive){{
+    label = L.delay; status = '—'; displayMs = 0;
+  }} else if (s.phase === 'idle'){{
+    label = L.delay; status = L.passthrough; displayMs = 0;
+  }} else if (s.phase === 'preparing'){{
+    label = L.preparing; status = L.preparing; displayMs = s.buffer_fill_ms || 0;
+  }} else if (s.phase === 'ready'){{
+    label = L.ready; status = L.ready; displayMs = s.armed_delay_ms || 0;
+  }} else {{ // active
+    label = L.delay; status = L.active;
+    displayMs = s.current_delay_ms || s.target_delay_ms || 0;
+  }}
+  const valueSecs = displayMs / 1000;
 
-    // Label + value depending on phase. When idle/passthrough, we show
-    // "0.0s" not the tiny noise-floor reading from current_delay_ms.
-    const lEl = document.getElementById('l');
+  // Dot classes — semantic: bad=disconnected, warn=preparing,
+  // cool=armed-ready, pulse=live/active.
+  const iCls = s.ingest_alive ? 'pulse' : 'bad';
+  let eCls;
+  if (!s.ingest_alive) eCls = 'bad';
+  else if (s.phase === 'preparing') eCls = 'warn pulse';
+  else if (s.phase === 'ready')     eCls = 'cool';
+  else                              eCls = 'pulse';
+
+  if (STYLE === 'ticker'){{
+    renderTicker({{ label, valueText: fmtDelay(valueSecs),
+      statusText: status, iCls, eCls }});
+  }} else {{
     const vEl = document.getElementById('v');
-    const stEl = document.getElementById('estatus');
-    const ds = s.phase;
-    if (!s.ingest_alive) {{
-      lEl.textContent = L.delay;
-      vEl.textContent = '0.0';
-      stEl.textContent = '—';
-    }} else if (ds === 'idle') {{
-      lEl.textContent = L.delay;
-      vEl.textContent = '0.0';
-      stEl.textContent = L.passthrough;
-    }} else if (ds === 'preparing') {{
-      lEl.textContent = L.preparing;
-      vEl.textContent = fmtDelay(s.buffer_fill_ms || 0);
-      stEl.textContent = L.preparing;
-    }} else if (ds === 'ready') {{
-      lEl.textContent = L.ready;
-      vEl.textContent = fmtDelay(s.armed_delay_ms || 0);
-      stEl.textContent = L.ready;
-    }} else {{
-      // active
-      lEl.textContent = L.delay;
-      vEl.textContent = fmtDelay(s.current_delay_ms || s.target_delay_ms || 0);
-      stEl.textContent = L.active;
-    }}
-  }} catch (_) {{}}
+    tweenNumber(vEl, valueSecs, 380, fmtDelay);
+    document.getElementById('l').textContent = label;
+    document.getElementById('estatus').textContent = status;
+    document.getElementById('i').className = 'dot ' + iCls;
+    document.getElementById('e').className = 'dot ' + eCls;
+  }}
+
+  setIdleDim(!s.ingest_alive || s.phase === 'idle');
+  maybeFlashPhase(s.phase);
 }}
 refresh();
 setInterval(refresh, 500);

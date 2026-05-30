@@ -866,6 +866,14 @@ impl Controller {
         *self.webhook_url.lock().unwrap() = url;
     }
 
+    /// Snapshot the current webhook URL. Used by the test endpoint so it
+    /// can route the request with verbose error reporting instead of
+    /// going through `fire_webhook` (which is fire-and-forget and
+    /// silently swallows everything from empty-URL to TLS failures).
+    pub fn webhook_url_snapshot(&self) -> String {
+        self.webhook_url.lock().unwrap().clone()
+    }
+
     /// Fire-and-forget Discord post. Skips silently when no webhook is
     /// configured, OR when the last fire was less than 2 s ago (rate
     /// limit — prevents subprocess spam if a destination flaps).
