@@ -239,17 +239,48 @@ impl EgressClient {
     /// that drain — when the sink is dropped (egress disconnects /
     /// reconnects), the drain task is aborted, preventing zombie tasks
     /// from accumulating on every reconnect.
+    ///
+    /// The drain doesn't just discard messages now: when it sees a User
+    /// Control Message with event type 6 (RTMP Ping Request), it pushes
+    /// the server's 4-byte timestamp onto a channel that `pump_dest`
+    /// drains at the top of every loop iteration and replies to via
+    /// `EgressSink::send_ping_response`. Without this, a server that
+    /// pings us mid-stream to verify liveness (Twitch / YouTube edges
+    /// do this on long sessions) would conclude we're dead after ~30 s
+    /// of silence and drop the publish.
     pub fn spawn_reader_drain(mut self) -> EgressSink {
+        let (ping_tx, ping_rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
         let drain = tokio::spawn(async move {
             loop {
-                if self.reader.read_message().await.is_err() {
+                let Ok(msg) = self.reader.read_message().await else {
                     return;
+                };
+                // User Control Message — type 4. Layout:
+                //   bytes 0..2: event type (u16 BE)
+                //   bytes 2..:  event-specific payload
+                // Event type 6 = Ping Request (4-byte server ts
+                // follows). The matching response is event type 7
+                // with the same 4-byte ts echoed back.
+                if msg.type_id == 4 && msg.payload.len() >= 6 {
+                    let event = u16::from_be_bytes([msg.payload[0], msg.payload[1]]);
+                    if event == 6 {
+                        let ts = u32::from_be_bytes([
+                            msg.payload[2],
+                            msg.payload[3],
+                            msg.payload[4],
+                            msg.payload[5],
+                        ]);
+                        // Best-effort: if the receiver dropped (egress
+                        // shutting down), silently ignore.
+                        let _ = ping_tx.send(ts);
+                    }
                 }
             }
         });
         EgressSink {
             writer: self.writer,
             stream_id: self.stream_id,
+            ping_rx,
             _drain_abort: drain.abort_handle(),
         }
     }
@@ -258,6 +289,12 @@ impl EgressClient {
 pub struct EgressSink {
     writer: ChunkWriter<WriteHalf<TcpStream>>,
     pub stream_id: u32,
+    /// Pings the drain task has captured from the server, queued for the
+    /// pump loop to acknowledge. Unbounded because pings arrive at most
+    /// every few seconds and the queue is drained on every pump tick —
+    /// even with no traffic on the egress, the queue never grows beyond
+    /// a handful of entries.
+    ping_rx: tokio::sync::mpsc::UnboundedReceiver<u32>,
     // Aborts the paired drain task when the sink is dropped. Held only
     // for its Drop side-effect; never read.
     _drain_abort: tokio::task::AbortHandle,
@@ -302,6 +339,29 @@ impl EgressSink {
 
     pub async fn flush(&mut self) -> io::Result<()> {
         self.writer.flush().await
+    }
+
+    /// Drain any pending Ping Requests captured by the reader-drain task
+    /// and write the matching Ping Response (User Control Message event
+    /// type 7, echoing the server's 4-byte timestamp). Called by
+    /// `pump_dest` at the top of every loop iteration; cheap when idle
+    /// (single non-blocking try_recv), one short RTMP message when a
+    /// ping is pending. Mute on errors — at worst we miss a single ping
+    /// and the underlying connection error surfaces on the next real
+    /// send anyway.
+    pub async fn drain_pings(&mut self) -> io::Result<()> {
+        use bytes::BufMut;
+        while let Ok(ts) = self.ping_rx.try_recv() {
+            let mut buf = BytesMut::with_capacity(6);
+            buf.put_u16(7); // event type: Ping Response
+            buf.put_u32(ts); // echo server's timestamp verbatim
+                             // User Control Messages go on CSID 2, message type 4,
+                             // timestamp 0, stream id 0 (control stream).
+            self.writer.write_message(2, 0, 4, 0, &buf).await?;
+            self.writer.flush().await?;
+            crate::trace::log("PING_REPLY", &format!("ts={} (echoed server ping)", ts));
+        }
+        Ok(())
     }
 
     /// Clean shutdown matching OBS's exact teardown sequence: send

@@ -1156,6 +1156,12 @@ async fn pump_dest(
             return Ok(());
         }
 
+        // Reply to any RTMP Ping Requests the server (Twitch / YouTube
+        // edge) sent us since the last tick. Cheap when idle, critical
+        // for long sessions — without it, the server eventually
+        // concludes we're dead and drops the publish slot.
+        sink.drain_pings().await?;
+
         // Ingest gone → close the destination session cleanly instead
         // of sitting on a stale TCP connection. Platforms hold the
         // publish slot for 30-90 s after the last frame, so without

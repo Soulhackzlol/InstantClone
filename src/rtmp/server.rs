@@ -106,7 +106,29 @@ async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::R
                     ctrl.on_tag(9, msg.timestamp, &msg.payload, info.is_idr, info.is_seq_header);
                 }
             }
-            _ => { /* ignore other message types */ }
+            4 if msg.payload.len() >= 6
+                && u16::from_be_bytes([msg.payload[0], msg.payload[1]]) == 6 =>
+            {
+                // User Control Message, event type 6 = Ping Request.
+                // Layout: u16 event type + 4-byte sender timestamp.
+                // OBS pings us periodically as its server to verify
+                // we're consuming its publish; we echo the timestamp
+                // back as event type 7 (Ping Response). Without this,
+                // OBS's TCP keepalive would eventually fire, but the
+                // explicit RTMP-layer reply is what OBS expects and
+                // matches every other RTMP server's behaviour.
+                let ts = u32::from_be_bytes([
+                    msg.payload[2], msg.payload[3], msg.payload[4], msg.payload[5],
+                ]);
+                use bytes::{BufMut, BytesMut};
+                let mut buf = BytesMut::with_capacity(6);
+                buf.put_u16(7); // Ping Response
+                buf.put_u32(ts);
+                // User Control Messages go on CSID 2, msg type 4.
+                let _ = writer.write_message(2, 0, 4, 0, &buf).await;
+                let _ = writer.flush().await;
+            }
+            _ => { /* ignore other message types (incl. non-ping user-control) */ }
         }
     }
 }
