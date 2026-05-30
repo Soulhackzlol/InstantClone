@@ -6,7 +6,75 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
-Nothing yet. First public push lives below.
+Nothing yet.
+
+## [0.1.0-beta.5] - full OBS parity on the wire + per-platform onboarding
+
+Headline: InstantClone now looks indistinguishable from OBS to every
+RTMP ingest it talks to, and the dashboard tells you where to find
+your stream key and which platforms have hidden gotchas.
+
+**Full OBS parity in the publish handshake.** The `connect` command
+now carries the same property bag OBS does — `audioCodecs=3191`,
+`videoCodecs=252`, `videoFunction=1`, `objectEncoding=0`,
+`capabilities=239`, `fpad=false` — plus the Enhanced-RTMP
+`fourCcList` (`avc1, hvc1, av01, vp09, mp4a, Opus, ac-3, ec-3, fLaC`)
+so transcoder lanes know we can pass through HEVC / AV1 / Opus. This
+is the real fix for the beta.4 known issue: Twitch was downgrading
+streams above ~6 Mbps to Source-only because we hadn't declared codec
+support, so the transcoder didn't pick the stream up. Other RTMP-layer
+changes match OBS bit-for-bit: chunk size negotiated to 60 000,
+1 MB `SO_SNDBUF` for big-bitrate headroom, and `FCUnpublish` sent
+before `deleteStream` on graceful close.
+
+**RTMP Ping Request / Response on both sides.** Some RTMP servers (OBS
+itself when it's our peer; certain CDN edges) ping us periodically to
+verify we're still consuming. We now parse User Control Message event
+type 6 (Ping Request) on both the ingest and egress reader paths and
+echo back event type 7 (Ping Response) with the original timestamp on
+CSID 2. Without this, idle keepalives eventually fired but RTMP-layer
+protocol expectations weren't being met.
+
+**15-second publish timeout, end of the 60-second startup stall.**
+`await_command_status` now bails after 15 s of no `onStatus` instead
+of letting the dead-server case ride the TCP retransmit clock. First
+publish after a network blip used to stall for ~60 s; the supervisor
+now reconnects fast enough that the user sees one missed frame instead
+of a minute of dead air.
+
+**Wire-level trace becomes a UI toggle.** The advanced trace
+(`./instantclone-trace.log`) used to require the `INSTANTCLONE_NO_TRACE`
+env var to disable. There's now a checkbox in the System tab that
+flips an atomic at runtime — no restart, persists to settings. Default
+on for the beta so traces are shippable without flipping a flag.
+
+**Per-platform stream-key help.** The wizard and destination form now
+render a help block under the key input with a deep link to the
+platform's dashboard page ("Twitch Creator Dashboard → Settings →
+Stream → Primary Stream Key") and a one-line tip. Updates live when
+you change the platform dropdown. The Kick tip is styled as a
+warning: Kick runs on AWS IVS which silently drops streams with
+B-frames enabled, and most OBS encoders default B-frames on. The
+recommended-settings panel in the OBS tab now spells out exactly
+which encoder switches to flip.
+
+**Chat in OBS (browser dock builder).** New section in the OBS tab:
+pick Twitch / YouTube / Kick / Trovo, paste your channel name (or, for
+YouTube, the live broadcast video ID / watch URL), copy the URL,
+add as an OBS Custom Browser Dock. No more leaving the app to find
+the popout-chat URL pattern.
+
+**Destinations tab graphics auto-update.** Saved-destination cards
+were only updating their bitrate sparkline / alive pill on explicit
+user actions. `applyState` now merges the live per-destination fields
+from `/state` into the rendered list on every tick.
+
+### Known issues
+
+- None new since beta.4. The Twitch ≤ 6 Mbps workaround documented
+  in beta.4 should no longer trigger for most users now that the
+  codec hints are declared, but is left in place as a fallback in
+  case any transcoder lane still misbehaves on a given stream.
 
 ## [0.1.0-beta.4] - overlays redesigned, dashboard quirks fixed, Twitch caveat documented
 
