@@ -90,12 +90,25 @@ impl EgressClient {
         crate::trace::log("CHUNK_SIZE_SET", "size=4096");
 
         // --- connect ---
-        // flashVer matches what OBS reports to its RTMP outputs. Twitch
-        // (and historically Wowza, Adobe Media Server) gate features by
-        // this string: an unknown publisher identifier may be put in a
-        // restricted lane (lower-priority transcode, reduced ladder).
-        // OBS's libobs RTMP plugin reports exactly this token, so by
-        // mirroring it we get the same preferred-publisher treatment.
+        // Match what OBS's libobs RTMP plugin (and librtmp underneath it)
+        // sends. Two reasons this matters for Twitch specifically:
+        //
+        // 1. flashVer = "FMLE/3.0 (compatible; FMSc/1.0)" puts us in the
+        //    same preferred-publisher lane OBS gets.
+        // 2. The audioCodecs / videoCodecs bitmaps are how a publisher
+        //    declares "I will send AAC + H.264" at the protocol level.
+        //    Twitch's transcoder uses these flags to decide which
+        //    ladder lane to allocate. WITHOUT them, Twitch sees a
+        //    publisher that hasn't promised modern codecs and routes
+        //    the stream to a conservative "Source-only" lane — which is
+        //    exactly the symptom users were hitting at high bitrate.
+        //    Bit values mirror librtmp's defaults exactly:
+        //       audioCodecs    = 3191  (incl. SUPPORT_SND_AAC bit 10)
+        //       videoCodecs    = 252   (incl. SUPPORT_VID_H264 bit 7)
+        //       videoFunction  = 1     (SUPPORT_VID_CLIENT_SEEK)
+        //       objectEncoding = 0     (AMF0)
+        //       capabilities   = 239   (Flash player default)
+        //       fpad           = false (no proxy in front of us)
         let mut props = HashMap::new();
         props.insert("app".to_string(), Amf0::String(url.app.clone()));
         props.insert("type".to_string(), Amf0::String("nonprivate".into()));
@@ -104,6 +117,12 @@ impl EgressClient {
             Amf0::String("FMLE/3.0 (compatible; FMSc/1.0)".into()),
         );
         props.insert("tcUrl".to_string(), Amf0::String(url.tc_url.clone()));
+        props.insert("fpad".to_string(), Amf0::Boolean(false));
+        props.insert("capabilities".to_string(), Amf0::Number(239.0));
+        props.insert("audioCodecs".to_string(), Amf0::Number(3191.0));
+        props.insert("videoCodecs".to_string(), Amf0::Number(252.0));
+        props.insert("videoFunction".to_string(), Amf0::Number(1.0));
+        props.insert("objectEncoding".to_string(), Amf0::Number(0.0));
         let mut buf = BytesMut::new();
         amf0::enc_string(&mut buf, "connect");
         amf0::enc_number(&mut buf, 1.0);
@@ -113,7 +132,8 @@ impl EgressClient {
         crate::trace::log(
             "AMF_OUT",
             &format!(
-                "cmd=connect tcUrl={} flashVer=\"FMLE/3.0 (compatible; FMSc/1.0)\"",
+                "cmd=connect tcUrl={} flashVer=\"FMLE/3.0 (compatible; FMSc/1.0)\" \
+                 audioCodecs=3191 videoCodecs=252 videoFunction=1 objectEncoding=0",
                 url.tc_url
             ),
         );
