@@ -415,15 +415,24 @@ fn state_json(
 }
 
 fn platforms_json() -> String {
-    let mut out = String::from("[");
-    for (i, (slug, label)) in config::all_platforms().iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push_str(&format!(r#"{{"slug":"{}","label":"{}"}}"#, slug, label));
-    }
-    out.push(']');
-    out
+    // Per-platform first-run help: a deep-link to where the stream key
+    // lives in that platform's dashboard, and a one-line quirk worth
+    // surfacing before the user wastes a stream session on it (Kick's
+    // no-B-frames rule is the prime example — without that hint, OBS's
+    // default config gets dropped by AWS IVS within seconds).
+    //
+    // Hand-written rather than table-driven because the strings are
+    // short, stable, and need careful copyediting per platform; a
+    // generator would just add indirection. JSON-safe at source — no
+    // string here contains an unescaped " or \.
+    r#"[
+  {"slug":"twitch","label":"Twitch","key_url":"https://dashboard.twitch.tv/u/_/settings/stream","key_help":"Twitch Creator Dashboard → Settings → Stream → Primary Stream Key","tip":"Want chat in OBS? Add a Custom Browser Dock pointing at https://www.twitch.tv/popout/YOUR-USERNAME/chat?popout="},
+  {"slug":"youtube","label":"YouTube Live","key_url":"https://studio.youtube.com/channel/UC/livestreaming","key_help":"YouTube Studio → Go live → Stream tab → Stream key","tip":"First-time live: YouTube requires a 24h verification window after enabling live streaming."},
+  {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream","tip":"Kick runs on AWS IVS — DISABLE B-frames in OBS (Output → Advanced → x264/NVENC) or the stream will be dropped. Keep bitrate ≤ 8500 kbps and keyframe interval 1-2 s."},
+  {"slug":"trovo","label":"Trovo","key_url":"https://studio.trovo.live/channel/myinfo","key_help":"Trovo Studio → Channel → My Info → Stream Key","tip":null},
+  {"slug":"restream","label":"Restream.io","key_url":"https://app.restream.io/channel-settings","key_help":"Restream → Channel Settings → Stream Key","tip":"Restream relays your single stream to multiple platforms — per-platform limits apply on the downstream side, not here."},
+  {"slug":"custom","label":"Custom RTMP URL","key_url":null,"key_help":null,"tip":null}
+]"#.to_string()
 }
 
 fn twitch_ingests_json() -> String {

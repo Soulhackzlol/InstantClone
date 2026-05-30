@@ -695,17 +695,6 @@ pub fn platform_base(slug: &str) -> Option<&'static str> {
     })
 }
 
-pub fn all_platforms() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("twitch", "Twitch"),
-        ("youtube", "YouTube Live"),
-        ("kick", "Kick"),
-        ("trovo", "Trovo"),
-        ("restream", "Restream.io"),
-        ("custom", "Custom RTMP URL"),
-    ]
-}
-
 /// Curated list of regional Twitch ingests. Slug → human label. The slug
 /// is the airport-code prefix Twitch uses in `live-<slug>.twitch.tv`.
 /// Empty slug = auto (default — Twitch picks for you).

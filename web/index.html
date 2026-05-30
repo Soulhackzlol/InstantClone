@@ -155,6 +155,11 @@ input,select,textarea{font-family:inherit;color:inherit}
 .wizard-row .ic-btn{flex:1}
 #w-custom-wrap{margin-top:8px}
 .w-hint{font-size:11.5px;color:var(--fg-4);margin-top:4px}
+.w-key-help{margin-top:6px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg-2);font-size:11.5px;color:var(--fg-3);line-height:1.45}
+.w-key-help a{color:var(--fg-2);text-decoration:underline;text-underline-offset:2px}
+.w-key-help a:hover{color:var(--fg)}
+.w-key-help .w-key-tip{margin-top:4px;color:var(--fg-4)}
+.w-key-help .w-key-tip.warn{color:var(--warn,#d6a23a)}
 #w-msg{margin-top:8px;min-height:1.2em;font-size:12px}
 #w-msg .err{color:var(--danger)}
 #w-msg .ok{color:var(--live)}
@@ -397,6 +402,9 @@ input,select,textarea{font-family:inherit;color:inherit}
 .rec-v{color:var(--accent);font-weight:500;font-size:13px;font-family:'JetBrains Mono',monospace}
 .rec-why{color:var(--fg-3);font-size:11.5px}
 @media (max-width:720px){.rec{grid-template-columns:1fr auto}.rec-why{grid-column:1/-1}}
+.chat-dock-row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.chat-dock-row select{flex:0 0 160px}
+.chat-dock-row input{flex:1 1 200px;min-width:160px}
 
 /* ── Overlay tab ─────────────────────────────── */
 .overlay-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}
@@ -660,6 +668,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   </div>
   <label for="w-key">Stream key <span class="muted">(optional for Custom if URL has key)</span></label>
   <input id="w-key" type="password" class="ic-input mono" placeholder="paste your stream key" autocomplete="off">
+  <div id="w-key-help" class="w-key-help" hidden></div>
   <div class="wizard-row">
     <button class="ic-btn ic-btn-primary" onclick="saveWizard()">Save &amp; Start</button>
     <button class="ic-btn ic-btn-ghost" onclick="testConn()">Test connection</button>
@@ -776,6 +785,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     </div>
     <label>Stream key <span class="muted" id="dest-form-key-hint"></span></label>
     <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
+    <div id="dest-form-key-help" class="w-key-help" hidden></div>
     <div class="row"><label style="display:inline-flex;align-items:center;gap:8px;margin:0;text-transform:none;letter-spacing:0;font-size:13px">
       <input type="checkbox" id="dest-form-enabled" checked> Enabled
     </label></div>
@@ -856,6 +866,24 @@ input,select,textarea{font-family:inherit;color:inherit}
         <div class="rec"><div class="rec-k">Output → Video → Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Smaller is better — controls how fast delay cuts can happen.</div></div>
         <div class="rec"><div class="rec-k">Output → Encoder</div><div class="rec-v">x264 / NVENC</div><div class="rec-why">Anything modern. InstantClone passes through untouched.</div></div>
         <div class="rec"><div class="rec-k">Bitrate</div><div class="rec-v">≤ 80% of upload</div><div class="rec-why">Leave headroom or you'll see "Upload bottleneck" in the header.</div></div>
+        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">Disable B-frames</div><div class="rec-why">Kick runs on AWS IVS which rejects B-frames. Output → Output Mode: Advanced → Encoder: x264 → B-frames: <b>0</b> (or NVENC → Max B-frames: 0).</div></div>
+      </div>
+    </section>
+    <section class="obs-section span-2">
+      <div class="ic-label">Chat in OBS (optional)</div>
+      <div class="tab-sub">Add your platform's chat as an OBS Custom Browser Dock so you can read it without alt-tabbing. Pick your platform and copy the URL — in OBS go to <b>Docks → Custom Browser Docks…</b>, give it a name, paste, click <b>Apply</b>.</div>
+      <div class="chat-dock-row">
+        <select id="chat-dock-platform" class="ic-input">
+          <option value="twitch">Twitch</option>
+          <option value="youtube">YouTube Live</option>
+          <option value="kick">Kick</option>
+          <option value="trovo">Trovo</option>
+        </select>
+        <input id="chat-dock-user" class="ic-input mono" placeholder="your channel name" autocomplete="off">
+      </div>
+      <div class="copy-block" style="margin-top:8px">
+        <code class="mono" id="chat-dock-url">enter your channel name above</code>
+        <button class="ic-btn ic-btn-ghost" onclick="copyEl('chat-dock-url','Chat URL')">Copy</button>
       </div>
     </section>
   </div>
@@ -1515,6 +1543,7 @@ function fillDestPlatforms(){
       $('dest-form-custom-wrap').hidden = sel.value !== 'custom';
       $('dest-form-twitch-wrap').hidden = sel.value !== 'twitch';
       $('dest-form-youtube-wrap').hidden = sel.value !== 'youtube';
+      renderKeyHelp(sel.value, 'dest-form-key-help');
     });
   }
 }
@@ -1666,13 +1695,83 @@ async function loadConfig(){
   } catch(e){ console.warn(e); }
 }
 
+// Chat-dock URL builder for the OBS tab. The popout/embed URL pattern
+// is well-defined for each platform (and stable; these endpoints have
+// been the same for years), so we build them client-side rather than
+// adding another /api round-trip just to template a string. The user
+// pastes the result into OBS as a Custom Browser Dock — no server
+// state is touched.
+//
+// YouTube is the odd one out: live chat URLs key off the per-broadcast
+// video ID, not the channel name. We let the user paste either the
+// video ID or the full Studio/watch URL and extract the id with a
+// short regex.
+const CHAT_DOCK_URLS = {
+  twitch:  u => `https://www.twitch.tv/popout/${u}/chat?popout=`,
+  kick:    u => `https://kick.com/popout/${u}/chat`,
+  trovo:   u => `https://trovo.live/chat/${u}`,
+};
+function wireChatDock(){
+  const sel = document.getElementById('chat-dock-platform');
+  const inp = document.getElementById('chat-dock-user');
+  const out = document.getElementById('chat-dock-url');
+  if (!sel || !inp || !out) return;
+  const update = () => {
+    const raw = inp.value.trim();
+    if (sel.value === 'youtube'){
+      inp.placeholder = 'video ID or watch URL of your live broadcast';
+      if (!raw){ out.textContent = 'paste your live broadcast video ID above'; return; }
+      const m = raw.match(/[?&]v=([\w-]{11})|youtu\.be\/([\w-]{11})|^([\w-]{11})$/);
+      const id = m ? (m[1] || m[2] || m[3]) : null;
+      out.textContent = id
+        ? `https://www.youtube.com/live_chat?is_popout=1&v=${id}`
+        : `couldn't read a YouTube video ID from "${raw}"`;
+      return;
+    }
+    inp.placeholder = 'your channel name';
+    if (!raw){ out.textContent = 'enter your channel name above'; return; }
+    const fn = CHAT_DOCK_URLS[sel.value];
+    out.textContent = fn ? fn(raw) : raw;
+  };
+  sel.addEventListener('change', update);
+  inp.addEventListener('input', update);
+}
+
 function fillWizardPlatforms(){
   const sel = $('w-platform'); sel.innerHTML = '';
   platforms.forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.label; sel.appendChild(o); });
   if (!sel._wired){
     sel._wired = true;
-    sel.addEventListener('change', () => { $('w-custom-wrap').hidden = sel.value !== 'custom'; });
+    sel.addEventListener('change', () => {
+      $('w-custom-wrap').hidden = sel.value !== 'custom';
+      renderKeyHelp(sel.value, 'w-key-help');
+    });
   }
+  renderKeyHelp(sel.value, 'w-key-help');
+}
+
+// Per-platform "where do I get my stream key + what gotchas to know"
+// hint. Rendered under the key input in both the wizard and the
+// destination form. Source of truth is /platforms (key_url, key_help,
+// tip). For Kick we mark the tip as a warning because its no-B-frames
+// rule is the kind of thing that drops the stream silently — worth a
+// visual nudge, not just plain grey text.
+function renderKeyHelp(slug, hostId){
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  const p = platforms.find(x => x.slug === slug);
+  if (!p || (!p.key_url && !p.tip)){ host.hidden = true; host.innerHTML = ''; return; }
+  const parts = [];
+  if (p.key_url){
+    const where = p.key_help || 'Where to find your stream key';
+    parts.push(`<a href="${p.key_url}" target="_blank" rel="noopener">${where} →</a>`);
+  }
+  if (p.tip){
+    const cls = slug === 'kick' ? 'w-key-tip warn' : 'w-key-tip';
+    parts.push(`<div class="${cls}">${p.tip}</div>`);
+  }
+  host.innerHTML = parts.join('');
+  host.hidden = false;
 }
 
 // Wizard escape hatch. Reveals the dashboard without writing any
@@ -2203,6 +2302,7 @@ function startStateSSE(){
 (async function init(){
   try { platforms = await (await fetch('/platforms')).json(); } catch(_){ platforms = []; }
   fillWizardPlatforms();
+  wireChatDock();
   await loadConfig();
   startStateSSE();
   setInterval(pollLogs, 1500);
