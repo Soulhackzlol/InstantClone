@@ -8,6 +8,46 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet. First public push lives below.
 
+## [0.1.0-beta.3] - first-run UX pass
+
+The onboarding tour now actually fires on first launch: beta.2 had it
+implemented but gated behind a check that the wizard silently sidestepped,
+so first-run users never saw it. Moved the trigger into the
+wizard-to-dashboard transition where it belongs.
+
+Wizard now has a subtle "Not now — let me look around first" link for
+people who want to poke the dashboard before committing to a destination.
+`configured=false` stays on disk so the wizard returns next launch.
+
+Tour copy is more honest about pre-stream state: OFFLINE is the first
+listed delay-readout state with "(where you probably are right now)", and
+the OBS step explicitly says the dashboard will read "not connected"
+until OBS hits Start Streaming. Welcome card lands smoothly in the centre
+with a 450ms spring entrance (beta.2 anchored it at the top-left of
+50%/50% because of a transform conflict).
+
+`instantclone.exe sink` from PowerShell prints its banner + live stats
+again. Was silent in beta.2 because the release binary builds as
+`windows_subsystem = "windows"` and the sink CLI's `println!`s wrote
+into the void. Now attaches to the parent console (or allocates a fresh
+one for double-click invocations) before dispatching.
+
+CI: real end-to-end job — ffmpeg pushes a synthetic H.264 + AAC stream
+into the proxy, sink confirms publish + IDR + audio frames on every push.
+CodeQL workflow added (skipped while the repo is private; auto-runs once
+it goes public).
+
+Still not tested against real Twitch / YouTube / Kick ingests — same gap
+as beta.1 / beta.2 between here and `v0.1.0`.
+
+## [0.1.0-beta.2] - tag-on-fmt-clean rebuild
+
+Same code as beta.1 from the user's point of view. beta.1 was tagged on
+a pre-`cargo fmt` commit, so the strict CI gate rejected it and no
+release artefact published. beta.2 is the same content built from the
+fmt-clean commit. Use this if you grabbed nothing from the beta.1 release
+page.
+
 ## [0.1.0-beta.1] - first public pre-release
 
 End-to-end tested locally against the in-tree RTMP sink with `ffmpeg`
