@@ -343,22 +343,15 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             eprintln!("[egress] idle — add a destination in the web UI");
         }
 
-        // Wait for the next settings change, or for any running pump to
-        // exit (in which case it'll respawn on the next loop iteration —
-        // the run_egress fn already handles connect-retry internally; a
-        // task return means something unrecoverable, very rare).
-        let any_pump_dead = async {
-            // Poll until at least one task has finished (then drop them
-            // all so the next iteration respawns). We don't actually
-            // await on the handles here — that'd hang on any healthy
-            // task forever. Instead just sleep and check.
-            loop {
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                if running.values().any(|(_, h)| h.is_finished()) {
-                    return;
-                }
-            }
-        };
+        // Wake at most every 2 s to re-check ingest_alive, finished
+        // pumps, and desired-set membership. Important: this MUST fire
+        // even when `running` is empty, otherwise the supervisor blocks
+        // forever after refusing to spawn while ingest was dead, and
+        // OBS connecting wouldn't wake anything. (Before this change,
+        // users had to toggle a destination off+on to get the supervisor
+        // to look at the world again.) Settings changes still preempt
+        // the wait via `rx.changed()` for instant response.
+        let periodic_wake = tokio::time::sleep(Duration::from_secs(2));
         tokio::select! {
             ch = rx.changed() => {
                 if ch.is_err() { return; }
@@ -366,7 +359,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 let new_webhook = { rx.borrow().discord_webhook_url.clone() };
                 ctrl.update_webhook(new_webhook);
             }
-            _ = any_pump_dead => {
+            _ = periodic_wake => {
                 // One or more pumps exited unexpectedly. Drop dead ones
                 // so the diff loop above respawns them.
                 running.retain(|_, (_, h)| !h.is_finished());

@@ -982,6 +982,17 @@ pub async fn run_egress(
             ));
             return Ok(());
         }
+        // Ingest gate. pump_dest closes when ingest_alive flips false;
+        // without this matching gate at the connect site, the outer
+        // retry loop would just dial Twitch / YouTube again with no
+        // frames to send, creating a 1-Hz connect → close → reconnect
+        // spam visible in /logs. Wait for ingest to come back instead,
+        // polling cheaply every 500 ms so we react quickly to OBS
+        // resuming a publish session.
+        if !ctrl.ingest_alive() {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
+        }
         eprintln!(
             "[egress {}] connecting to {}:{}/{}",
             label, parsed.host, parsed.port, parsed.app
