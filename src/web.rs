@@ -548,6 +548,9 @@ async fn post_config(
     // Mirror webhook into the controller so events fire correctly even
     // before the next supervisor settings-change tick.
     ctrl.update_webhook(new_settings.discord_webhook_url.clone());
+    // Flip the trace switch right away so a toggle in the System tab
+    // takes effect this instant — no need to wait for a restart.
+    crate::trace::set_enabled(new_settings.tracing_enabled);
     let _ = settings.send(new_settings.clone());
 
     let restart_msg = if needs_restart {
@@ -1207,6 +1210,12 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         }
         "overlays_dir" => s.overlays_dir = std::path::PathBuf::from(value),
         "discord_webhook_url" => s.discord_webhook_url = value.into(),
+        "tracing_enabled" => {
+            // Form encoding: checkbox sends "true"/"false" or "on"/"" —
+            // treat anything non-empty-non-false as truthy.
+            let on = !matches!(value, "" | "false" | "0" | "off");
+            s.tracing_enabled = on;
+        }
         _ => {}
     }
 }

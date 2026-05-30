@@ -89,6 +89,10 @@ fn main() -> std::io::Result<()> {
     trace::init("./instantclone-trace.log");
 
     let mut settings = Settings::load_or_default(&cfg_path);
+    // Honour the persisted tracing toggle from disk. init() defaults to
+    // enabled; if the user disabled it last session, flip it off before
+    // any code path starts writing.
+    trace::set_enabled(settings.tracing_enabled);
     // If the file didn't exist, persist the smart defaults so the file
     // appears on disk immediately (useful for the user to find and edit).
     if !cfg_path.exists() {

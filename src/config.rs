@@ -46,6 +46,11 @@ pub struct Settings {
     pub destinations: Vec<Destination>,
     pub discord_webhook_url: String,
     pub overlays_dir: PathBuf,
+    /// Whether the wire-level egress trace (instantclone-trace.log) is
+    /// actively writing. Default true so a fresh install captures
+    /// diagnostic data; toggleable in the System tab so users past the
+    /// debugging phase can stop the file from growing.
+    pub tracing_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +186,7 @@ impl Settings {
             destinations: Vec::new(),
             discord_webhook_url: String::new(),
             overlays_dir: PathBuf::from("./overlays"),
+            tracing_enabled: true,
         }
     }
 
@@ -319,6 +325,7 @@ impl Settings {
         writeln!(f, "armed_delay_ms={}", self.armed_delay_ms)?;
         writeln!(f, "discord_webhook_url={}", self.discord_webhook_url)?;
         writeln!(f, "overlays_dir={}", self.overlays_dir.display())?;
+        writeln!(f, "tracing_enabled={}", self.tracing_enabled)?;
         for (i, p) in self.profiles.iter().enumerate() {
             writeln!(f, "profile.{}.name={}", i, p.name)?;
             writeln!(f, "profile.{}.delay_ms={}", i, p.delay_ms)?;
@@ -382,6 +389,7 @@ impl Settings {
             }
             "discord_webhook_url" => self.discord_webhook_url = value.into(),
             "overlays_dir" => self.overlays_dir = PathBuf::from(value),
+            "tracing_enabled" => self.tracing_enabled = value.parse().unwrap_or(true),
             k if k.starts_with("profile.") => {
                 let rest = &k[8..];
                 if let Some(dot) = rest.find('.') {
@@ -549,7 +557,7 @@ impl Settings {
         }
         dests.push(']');
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"initial_delay_ms":{id},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"initial_delay_ms":{id},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"destinations":{dests}}}"#,
             c = self.configured,
             ip = self.ingest_port,
             iba = self.ingest_bind_all,
@@ -563,6 +571,7 @@ impl Settings {
             dw = json_str(&redact_webhook(&self.discord_webhook_url)),
             ws = !self.discord_webhook_url.is_empty(),
             ov = json_str(&self.overlays_dir.display().to_string()),
+            te = self.tracing_enabled,
             dests = dests,
         )
     }

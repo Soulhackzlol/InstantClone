@@ -17,6 +17,7 @@
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -27,6 +28,17 @@ struct TraceState {
 }
 
 static STATE: OnceLock<TraceState> = OnceLock::new();
+
+/// Runtime on/off switch — flipped by the settings UI via `set_enabled`.
+/// Default true so a freshly installed beta produces traces without the
+/// user opting in. Once they're past the diagnostic phase they can
+/// disable it in the System tab to stop the file growing.
+///
+/// `Relaxed` is fine here: a flip taking a few microseconds to be
+/// observed by the hot path is invisible — the worst case is a
+/// handful of extra lines after disable, or a handful of dropped
+/// lines after enable. No memory ordering invariant rides on this.
+static ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// Initialise the trace writer. Idempotent; subsequent calls are no-ops.
 /// `INSTANTCLONE_NO_TRACE=1` disables tracing entirely (zero overhead —
@@ -53,14 +65,39 @@ pub fn init(path: impl AsRef<Path>) {
 
 /// Write one trace line. `category` is a short tag (≤20 chars) used to
 /// grep the file later (`grep VIDEO_TAG`, `grep CUT`, etc.). `msg` is the
-/// human-readable detail.
+/// human-readable detail. Becomes a single atomic load when tracing is
+/// disabled — cheap enough to call from any hot path.
 pub fn log(category: &str, msg: &str) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     let Some(s) = STATE.get() else {
         return;
     };
     let ms = s.start.elapsed().as_secs_f64() * 1000.0;
     let mut f = s.file.lock().unwrap();
     let _ = writeln!(f, "T+{:>11.3}ms  {:<22}  {}", ms, category, msg);
+}
+
+/// Flip tracing on/off at runtime. Called by the settings POST handler
+/// so a user can toggle the System-tab checkbox without restarting the
+/// app. The file stays open either way — re-enabling resumes appending
+/// to the same file.
+pub fn set_enabled(on: bool) {
+    let was = ENABLED.swap(on, Ordering::Relaxed);
+    if was != on {
+        log(
+            "session",
+            if on {
+                "tracing enabled (via UI)"
+            } else {
+                "tracing disabled (via UI)"
+            },
+        );
+        if !on {
+            flush();
+        }
+    }
 }
 
 /// Convenience: hex-dump up to `max` bytes for quick wire inspection.

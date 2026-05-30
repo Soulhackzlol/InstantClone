@@ -972,6 +972,14 @@ input,select,textarea{font-family:inherit;color:inherit}
       <div class="ic-label">Overlays folder</div>
       <input id="s-ovdir" class="ic-input mono" style="margin-top:8px">
     </section>
+    <section class="sys-section">
+      <div class="ic-label">Advanced diagnostics</div>
+      <div class="tab-sub">Wire-level egress trace at <code class="mono">./instantclone-trace.log</code>. Useful when investigating an issue, safe to disable otherwise.</div>
+      <label style="display:flex;align-items:center;gap:10px;margin-top:10px;cursor:pointer">
+        <input id="s-trace" type="checkbox" style="width:16px;height:16px;cursor:pointer">
+        <span>Capture trace log when streaming</span>
+      </label>
+    </section>
     <div class="row" style="justify-content:flex-end;gap:8px;margin-top:4px">
       <button class="ic-btn ic-btn-ghost" onclick="testWebhook()">Test webhook</button>
       <button class="ic-btn ic-btn-primary" onclick="saveSettings()">Save settings</button>
@@ -1618,6 +1626,7 @@ async function loadConfig(){
     $('s-webhook-hint').textContent = c.webhook_set ? '(currently set)' : '';
     $('s-ovdir').value = c.overlays_dir || '';
     $('ov-dir-display').textContent = c.overlays_dir || 'overlays/';
+    $('s-trace').checked = c.tracing_enabled !== false;
     // OBS panel
     $('obs-srv').textContent = c.obs_url;
     $('dock-url').textContent = location.origin + '/dock';
@@ -1726,6 +1735,7 @@ async function saveSettings(){
     web_bind_all:$('s-wbind').checked?'on':'off',
     discord_webhook_url:$('s-webhook').value.trim(),
     overlays_dir:$('s-ovdir').value.trim(),
+    tracing_enabled:$('s-trace').checked?'true':'false',
   });
   const j = await(await fetch('/config',{method:'POST',body})).json();
   if (j.ok){
