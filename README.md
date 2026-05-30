@@ -188,7 +188,7 @@ Drop one in as a browser-source for an on-stream readout:
 
 <pre><code>http://127.0.0.1:7799/overlay?style=corner&amp;lang=es</code></pre>
 
-<sub><b>Styles</b></sub> &nbsp;`minimal` · `corner` · `strip` · `compact` · `focus` · `broadcast` · `stats` · `ticker` · `esports`
+<sub><b>Styles</b></sub> &nbsp;`minimal` · `corner` · `strip` · `focus` · `broadcast` · `ticker`
 
 <sub><b>Languages</b></sub> &nbsp;`en` · `es` · `pt` · `fr` · `de`
 

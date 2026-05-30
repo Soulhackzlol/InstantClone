@@ -1,0 +1,82 @@
+<!doctype html>
+<!--
+  InstantClone — custom overlay starting point.
+
+  Drop a copy of this file (renamed to anything.html) into this folder
+  and it shows up automatically in the dashboard's Overlay tab. The URL
+  to paste into OBS as a browser-source is:
+
+      http://127.0.0.1:7799/overlay/your-file.html?lang=en
+
+  The overlay can poll the live proxy state from GET /state. The
+  response shape is:
+
+      {
+        "phase": "idle" | "preparing" | "ready" | "active",
+        "armed_delay_ms": <u32>,         // what the user set
+        "current_delay_ms": <u32>,        // what's actually delivered
+        "target_delay_ms": <u32>,         // post-cut target
+        "buffer_fill_ms": <u32>,          // 0..armed during preparing
+        "ingest_alive": <bool>,           // OBS connected to us
+        "egress_alive": <bool>,           // at least one destination forwarding
+        "destinations_alive": <u32>,
+        "destinations_total": <u32>,
+        "bitrate_kbps": <u32>,            // ingest bitrate
+        "stats": { "tags_sent", "bytes_sent", "cuts" }
+      }
+
+  The six built-in styles (served from /overlay?style=…) are a good
+  reference: open one in DevTools and inspect. They all share the same
+  DOM skeleton — only the CSS differs — and follow three behaviours:
+    1. Auto-dim after 4 s of idle/passthrough so the viewer's eye
+       stops snagging on a static badge.
+    2. Tween the big delay number between values instead of snapping.
+    3. Brief accent halo bloom on phase transitions.
+
+  Feel free to throw all that out — this file is yours to redesign. The
+  only contract is the URL above and the /state JSON.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Custom overlay</title>
+<style>
+  body{margin:0;background:transparent;color:#fff;
+    font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+  .badge{position:fixed;right:24px;top:24px;
+    background:rgba(10,12,16,.62);backdrop-filter:blur(12px);
+    border:1px solid rgba(255,255,255,.08);
+    padding:10px 16px;border-radius:14px;min-width:160px;
+    animation:in .4s cubic-bezier(.16,1,.3,1) both}
+  @keyframes in{from{opacity:0;filter:blur(8px)}to{opacity:1;filter:blur(0)}}
+  .l{font-size:10.5px;text-transform:uppercase;letter-spacing:1.6px;
+    color:rgba(255,255,255,.55);font-weight:600}
+  .v{font-size:30px;font-weight:700;letter-spacing:-1px;line-height:1.08;margin-top:1px;
+    font-variant-numeric:tabular-nums}
+  .u{font-size:15px;color:rgba(255,255,255,.55);font-weight:400;margin-left:2px}
+  .row{display:flex;gap:13px;margin-top:7px;font-size:11.5px;color:rgba(255,255,255,.55)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+    background:#34c759;box-shadow:0 0 8px #34c759;margin-right:6px;vertical-align:middle;
+    transition:background .22s ease,box-shadow .22s ease}
+  .dot.bad{background:#ff453a;box-shadow:0 0 8px #ff453a}
+</style></head><body>
+<div class="badge">
+  <div class="l">Custom</div>
+  <div class="v"><span id="v">0.0</span><span class="u">s</span></div>
+  <div class="row">
+    <span><span class="dot" id="i"></span>OBS</span>
+    <span><span class="dot" id="e"></span>LIVE</span>
+  </div>
+</div>
+<script>
+async function tick(){
+  try {
+    const s = await (await fetch('/state')).json();
+    const ms = s.phase === 'preparing' ? (s.buffer_fill_ms || 0)
+             : s.phase === 'ready'     ? (s.armed_delay_ms || 0)
+             : (s.current_delay_ms || 0);
+    document.getElementById('v').textContent = (ms / 1000).toFixed(1);
+    document.getElementById('i').className = 'dot ' + (s.ingest_alive ? '' : 'bad');
+    document.getElementById('e').className = 'dot ' + (s.egress_alive ? '' : 'bad');
+  } catch (_) { /* keep last shown values */ }
+}
+tick(); setInterval(tick, 500);
+</script>
+</body></html>

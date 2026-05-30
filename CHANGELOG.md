@@ -8,6 +8,79 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet. First public push lives below.
 
+## [0.1.0-beta.4] - overlays redesigned, dashboard quirks fixed, Twitch caveat documented
+
+Headline: the overlay system gets a full pass and two real dashboard bugs
+get killed.
+
+**Overlays.** The 9-style grab-bag becomes a curated 6 with a shared design
+language: minimal, corner, strip, focus, broadcast, ticker. Three
+behaviours apply across all of them — overlay auto-dims to ~22% after 4 s
+of idle/passthrough, the big delay number tweens between values instead
+of snapping, and a brief accent halo blooms on every phase transition so
+the moment of arm/activate/cut is felt rather than guessed at. The
+`ticker` style actually scrolls now (it was a static bar pretending). The
+`overlays/` folder is cleaned of the three stale standalone duplicates
+(`minimal.html`, `corner.html`, `strip.html`) and gets a single
+well-commented `custom-template.html` that documents the `/state` JSON
+contract so you can fork your own.
+
+**Destinations tab finally auto-updates.** The cards (bitrate sparkline,
+alive pill, status text) were only refreshing on explicit user actions —
+saving a form, switching tabs, or F5. The `/state` poll already carried
+the live per-destination fields; `applyState` now merges them into the
+cached list on every tick so the cards stay live.
+
+**Discord webhook test endpoint stops lying.** It used to call the same
+fire-and-forget path as the destination/ingest notifications, which
+silently dropped empty-URL cases, was suppressed by the 2-second throttle
+right after a destination-connect notification, and swallowed any HTTP or
+TLS error from Discord. Result: "test fired" toast, nothing reaches
+Discord, no way to diagnose. Replaced with an explicit synchronous path
+that validates the URL, bypasses the throttle, and surfaces the real
+outcome — empty URL, connection error, non-2xx HTTP from Discord (with
+status), or timeout.
+
+**Platform polish from beta.3 testing:**
+
+- `flashVer` now reports `"FMLE/3.0 (compatible; FMSc/1.0)"` to match OBS
+  exactly — some platforms gate transcode behaviour by this string.
+- Wire-level egress trace to `./instantclone-trace.log` (opt-out via
+  `INSTANTCLONE_NO_TRACE=1`) records every handshake event, AMF0
+  command, sequence header, cut, and tag for offline diagnosis when
+  something looks weird platform-side.
+- Sequence headers are re-emitted on every cut now. The previous "Twitch
+  caches them, don't re-emit" assumption was optimistic; some transcoder
+  workers don't share that cache.
+- Cut log format actually shows the new `output_ts_base` and
+  `seq_header_gen` instead of `OLD→OLD+1`.
+- Egress destinations close cleanly (`deleteStream`) when OBS goes away,
+  and the supervisor refuses to respawn while ingest is dead so we don't
+  burn TCP cycles to Twitch / YouTube while there's nothing to send.
+- YouTube backup ingest URL now correctly appends `?backup=1` so
+  YouTube's edge enables real fail-over instead of treating it as a
+  duplicate primary.
+
+### Known issues
+
+- **Twitch streams above ~6000 Kbps lose the transcoded ladder.** Twitch
+  produces transcoded qualities (720p60 / 480p / 360p / 160p) only for
+  streams within its documented bitrate ceiling. Above that, viewers
+  receive Source-only quality, which means PC viewers on slower
+  connections hit `Error #1000` and mobile viewers see a black screen
+  with audio still playing (the mobile hardware decoder can't handle the
+  Source resolution / bitrate combo). InstantClone is a transparent
+  pass-through and cannot re-encode without bundling ffmpeg or NVENC
+  (dozens of MB, platform-specific GPU dependencies, defeats the
+  "tiny binary" point). Workaround: set OBS to ≤ 6000 Kbps for guaranteed
+  transcoded ladder. Twitch Partners can sometimes push higher with
+  Auto-Transcode access. A tier-aware in-app warning chip is planned for
+  a follow-up release.
+- The on-disk overlay file paths (`/overlay/minimal.html` etc) that some
+  early-beta users may have bookmarked are gone — use
+  `/overlay?style=minimal` instead (same renderer, but newer, with the
+  unified design language and behaviours described above).
+
 ## [0.1.0-beta.3] - first-run UX pass
 
 The onboarding tour now actually fires on first launch: beta.2 had it

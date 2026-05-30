@@ -188,7 +188,7 @@ Mete uno como browser-source para mostrar el delay en directo:
 
 <pre><code>http://127.0.0.1:7799/overlay?style=corner&amp;lang=es</code></pre>
 
-<sub><b>Estilos</b></sub> &nbsp;`minimal` · `corner` · `strip` · `compact` · `focus` · `broadcast` · `stats` · `ticker` · `esports`
+<sub><b>Estilos</b></sub> &nbsp;`minimal` · `corner` · `strip` · `focus` · `broadcast` · `ticker`
 
 <sub><b>Idiomas</b></sub> &nbsp;`en` · `es` · `pt` · `fr` · `de`
 
