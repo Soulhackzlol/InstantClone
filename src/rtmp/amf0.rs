@@ -12,6 +12,14 @@
 //!   0x06 undefined
 //!   0x08 ECMA array — like object with a 4-byte count prefix (ignored)
 //!   0x09 object-end (only valid inside object/ecma array)
+//!   0x0A strict array — 4-byte BE count, then N values back-to-back.
+//!                       OBS-style clients send `fourCcList` this way
+//!                       in the connect properties (Enhanced RTMP). We
+//!                       parse it so the value isn't a decode hard-stop
+//!                       — none of the handshake logic actually needs
+//!                       to read the list's contents, but the in-tree
+//!                       sink and any cross-talk between proxies has
+//!                       to be able to step over it.
 
 use bytes::{BufMut, BytesMut};
 use std::collections::HashMap;
@@ -26,6 +34,7 @@ pub enum Amf0 {
     Null,
     Undefined,
     EcmaArray(HashMap<String, Amf0>),
+    StrictArray(Vec<Amf0>),
 }
 
 impl Amf0 {
@@ -106,6 +115,24 @@ fn decode_one(data: &[u8], depth: u32) -> io::Result<(Amf0, &[u8])> {
             let _count = u32::from_be_bytes(rest[..4].try_into().unwrap());
             let (m, rest) = decode_object_body(&rest[4..], depth + 1)?;
             Ok((Amf0::EcmaArray(m), rest))
+        }
+        0x0A => {
+            need(rest, 4)?;
+            let count = u32::from_be_bytes(rest[..4].try_into().unwrap()) as usize;
+            // Cap the declared count at the number of bytes remaining; a
+            // malicious peer could otherwise advertise a huge count and
+            // walk us into an OOM by pushing into a Vec we pre-grew.
+            // Each AMF0 value is at least 1 byte (the marker), so the
+            // remaining buffer length is a strict upper bound.
+            let mut data = &rest[4..];
+            let cap = count.min(data.len());
+            let mut items = Vec::with_capacity(cap);
+            for _ in 0..count {
+                let (v, next) = decode_one(data, depth + 1)?;
+                items.push(v);
+                data = next;
+            }
+            Ok((Amf0::StrictArray(items), data))
         }
         m => Err(io::Error::new(
             ErrorKind::InvalidData,
@@ -188,6 +215,13 @@ pub fn enc_value(out: &mut BytesMut, v: &Amf0) {
         Amf0::Object(m) | Amf0::EcmaArray(m) => {
             let pairs: Vec<(&str, &Amf0)> = m.iter().map(|(k, v)| (k.as_str(), v)).collect();
             enc_object(out, &pairs);
+        }
+        Amf0::StrictArray(items) => {
+            out.put_u8(0x0A);
+            out.put_u32(items.len() as u32);
+            for it in items {
+                enc_value(out, it);
+            }
         }
     }
 }
@@ -288,6 +322,26 @@ mod tests {
         // string marker says 100 bytes follow, but only 4 are present
         let r = decode_all(&[0x02, 0x00, 100, 0xAB, 0xCD]);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn strict_array_of_strings_roundtrip() {
+        // Enhanced-RTMP fourCcList shape: a Strict Array of 4-char
+        // codec identifier strings. This test guards the e2e path —
+        // before 0x0A decoding landed, the in-tree sink rejected our
+        // own connect with `amf0: unsupported marker 0xa`.
+        let mut buf = BytesMut::new();
+        enc_strict_array_str(&mut buf, &["avc1", "hvc1", "mp4a"]);
+        let decoded = decode_all(&buf).unwrap();
+        match &decoded[0] {
+            Amf0::StrictArray(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0].as_str(), Some("avc1"));
+                assert_eq!(items[1].as_str(), Some("hvc1"));
+                assert_eq!(items[2].as_str(), Some("mp4a"));
+            }
+            other => panic!("expected StrictArray, got {:?}", other),
+        }
     }
 
     #[test]
