@@ -1717,7 +1717,14 @@ async function refresh(){{
     label = L.ready; status = L.ready; displayMs = s.armed_delay_ms || 0;
   }} else {{ // active
     label = L.delay; status = L.active;
-    displayMs = s.current_delay_ms || s.target_delay_ms || 0;
+    // Prefer the *target* (= what the user armed) over the
+    // measured current delay so the overlay doesn't wobble between
+    // e.g. 15.8 / 15.9 / 16.0 every pump tick. The measured number
+    // is informative on the dashboard but viewer-facing overlays
+    // want the stable, committed delay value. Falls back to
+    // current_delay_ms only if target wasn't reported (defensive —
+    // shouldn't happen once active).
+    displayMs = s.target_delay_ms || s.armed_delay_ms || s.current_delay_ms || 0;
   }}
   const valueSecs = displayMs / 1000;
 
