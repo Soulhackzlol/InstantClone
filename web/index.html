@@ -657,6 +657,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     <span class="ic-pill" id="hdr-codec" hidden><span class="mono" id="hdr-codec-v">—</span></span>
     <span class="ic-pill warn" id="hdr-ebroadcast" hidden title="Twitch Enhanced Broadcasting detected — InstantClone forwards only the primary track. Disable simulcast in OBS for a clean single-resolution stream.">⚠ Enhanced Broadcasting</span>
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
+    <span class="ic-pill warn" id="hdr-twitch-cap" hidden>⚠ <span id="hdr-twitch-cap-v">Twitch · Source-Only at 10 Mbps</span></span>
     <button id="hdr-help" class="ic-btn-tiny" title="How does this work? (?)" onclick="openTour(0)" style="width:30px;height:30px;color:var(--fg-3);font-weight:700;font-size:14px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);position:relative">?
       <span id="hdr-help-hint" class="help-hint" hidden>New here? Quick tour →</span>
     </button>
@@ -1566,6 +1567,7 @@ function renderHeader(s){
   } else $('hdr-codec').hidden = true;
   $('hdr-ebroadcast').hidden = !s.multitrack_video;
   $('hdr-backpressure').hidden = !s.backpressure;
+  renderTwitchCapPill(s);
 }
 
 // ── Stats render ───────────────────────────────────────────────────────
@@ -1922,6 +1924,51 @@ async function loadConfig(){
       } catch(_){}
     }
   } catch(e){ console.warn(e); }
+}
+
+// Twitch mobile-decoder warning. Twitch's transcoded quality ladder
+// (1080p / 720p / 480p / 360p / 160p) is account-tier gated, NOT
+// bitrate gated — non-Affiliate accounts get Source-Only regardless
+// of bitrate, Affiliate / Partner get the ladder. When the stream
+// IS in Source-Only mode (no ladder), every viewer has to decode
+// the full source bitrate. At ≤ 8 Mbps 1080p60 H.264 most mobile
+// hardware decoders cope; above ~8 Mbps they start failing — that's
+// the original beta.4 symptom (Error #1000 on PC, black screen with
+// audio on mobile). The 8000 cap matches what the user verified is
+// the "sweet spot" on an actual no-Affiliate alt: 8k Source-Only is
+// watchable, 10k Source-Only is not.
+//
+// We can't tell from the wire whether the user's account has the
+// transcoded ladder, so we warn unconditionally on Twitch + > 8 Mbps.
+// Streamers with confirmed transcoded ladders can dismiss it; the
+// alternative (silently letting beta.4 happen again) is worse.
+const TWITCH_MOBILE_SAFE_KBPS = 8000;
+function renderTwitchCapPill(s){
+  const pill = document.getElementById('hdr-twitch-cap');
+  const v = document.getElementById('hdr-twitch-cap-v');
+  if (!pill || !v) return;
+  const hasTwitchDest = (s.destinations || []).some(
+    d => d.platform === 'twitch' && d.alive && d.enabled
+  );
+  const kbps = (s.stats && s.stats.bitrate_kbps) || 0;
+  if (hasTwitchDest && kbps > TWITCH_MOBILE_SAFE_KBPS){
+    v.textContent = `Twitch · mobile risk at ${(kbps/1000).toFixed(1)} Mbps`;
+    pill.hidden = false;
+    pill.style.cursor = 'pointer';
+    pill.title = '';
+    pill.onclick = openTwitchCapInfo;
+  } else {
+    pill.hidden = true;
+    pill.onclick = null;
+  }
+}
+function openTwitchCapInfo(){
+  const measured = lastState && lastState.stats && lastState.stats.bitrate_kbps;
+  const at = measured ? `${(measured/1000).toFixed(1)} Mbps` : 'your current bitrate';
+  toast(
+    `If Twitch shows your stream as "Source-Only" (no quality ladder), viewers must decode the full ${at}. Above ~8 Mbps that's too heavy for many mobile decoders — they hit Error #1000 or black screen with audio. The transcoded ladder is account-tier gated (Affiliate / Partner), not bitrate gated. If you're not sure your account gets transcoded, drop OBS to ≤ 8 Mbps for safe mobile playback. If you know it's transcoded, ignore this — viewers will pick lower qualities themselves.`,
+    'err'
+  );
 }
 
 // Chat-dock URL builder for the OBS tab. The popout/embed URL pattern
