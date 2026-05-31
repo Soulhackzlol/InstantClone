@@ -190,7 +190,14 @@ impl Settings {
             destinations: Vec::new(),
             discord_webhook_url: String::new(),
             overlays_dir: PathBuf::from("./overlays"),
-            tracing_enabled: true,
+            // Off by default for end users — the trace file grows fast
+            // (~3000 lines/s at typical bitrate) and 99 % of users
+            // never need it. Streamers reporting a bug can toggle it
+            // on in System → Advanced diagnostics, reproduce, then
+            // send `./instantclone-trace.log`. Saved configs with
+            // `tracing_enabled=true` from earlier betas are honoured
+            // — only fresh installs default to off.
+            tracing_enabled: false,
         }
     }
 
@@ -393,7 +400,7 @@ impl Settings {
             }
             "discord_webhook_url" => self.discord_webhook_url = value.into(),
             "overlays_dir" => self.overlays_dir = PathBuf::from(value),
-            "tracing_enabled" => self.tracing_enabled = value.parse().unwrap_or(true),
+            "tracing_enabled" => self.tracing_enabled = value.parse().unwrap_or(false),
             k if k.starts_with("profile.") => {
                 let rest = &k[8..];
                 if let Some(dot) = rest.find('.') {

@@ -8,11 +8,19 @@
 //! log buffer (512 entries) is way too small for that; this writes
 //! straight to disk with no rate limit.
 //!
-//! Init is opt-out via the `INSTANTCLONE_NO_TRACE` env var. On by default
-//! during the beta so the user can ship traces without flipping a flag.
+//! Off by default for end users — `main` calls `set_enabled` with
+//! whichever value `settings.tracing_enabled` carries, and that
+//! defaults to `false` on a fresh install. Streamers reporting a bug
+//! flip it on in System → Advanced diagnostics, reproduce, and send
+//! the file. `INSTANTCLONE_NO_TRACE=1` is a separate hard-kill that
+//! disables the whole subsystem regardless of the runtime atomic.
+//!
 //! Writes are protected by a mutex; the hot path is a single locked
 //! `writeln!` per event, which at typical ~30 fps is ~3000 lines / s on
-//! a busy stream — well under disk-write contention thresholds.
+//! a busy stream — well under disk-write contention thresholds. The
+//! file still grows fast enough (≈ 6 MB / 10 min at 8 Mbps) that an
+//! always-on default is the wrong call for a typical streamer; reserve
+//! the cost for users who are actively diagnosing.
 
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
@@ -30,15 +38,15 @@ struct TraceState {
 static STATE: OnceLock<TraceState> = OnceLock::new();
 
 /// Runtime on/off switch — flipped by the settings UI via `set_enabled`.
-/// Default true so a freshly installed beta produces traces without the
-/// user opting in. Once they're past the diagnostic phase they can
-/// disable it in the System tab to stop the file growing.
+/// Default false so a freshly installed app stays quiet; main.rs picks
+/// up the persisted `settings.tracing_enabled` shortly after start and
+/// flips this if the user opted in.
 ///
 /// `Relaxed` is fine here: a flip taking a few microseconds to be
 /// observed by the hot path is invisible — the worst case is a
 /// handful of extra lines after disable, or a handful of dropped
 /// lines after enable. No memory ordering invariant rides on this.
-static ENABLED: AtomicBool = AtomicBool::new(true);
+static ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Initialise the trace writer. Idempotent; subsequent calls are no-ops.
 /// `INSTANTCLONE_NO_TRACE=1` disables tracing entirely (zero overhead —
