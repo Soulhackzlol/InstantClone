@@ -1018,6 +1018,15 @@ input,select,textarea{font-family:inherit;color:inherit}
         <span>Capture trace log when streaming</span>
       </label>
     </section>
+    <section class="sys-section">
+      <div class="ic-label">OBS integration</div>
+      <div class="tab-sub">Register InstantClone as a service in OBS so it appears in the <b>Service</b> dropdown alongside Twitch / YouTube. No more "Custom server" setup, no manual JSON, multi-track video "Auto" works. One-time setup per OBS install — restart OBS after to refresh its service list.</div>
+      <div id="obs-reg-status" class="muted" style="margin-top:10px;font-size:11.5px"></div>
+      <div class="row" style="gap:8px;margin-top:10px">
+        <button class="ic-btn ic-btn-primary" id="obs-reg-btn" onclick="toggleObsRegister()">Register with OBS</button>
+        <span class="muted" id="obs-reg-msg" style="font-size:11.5px;align-self:center"></span>
+      </div>
+    </section>
     <div class="row" style="justify-content:flex-end;gap:8px;margin-top:4px">
       <button class="ic-btn ic-btn-ghost" onclick="testWebhook()">Test webhook</button>
       <button class="ic-btn ic-btn-primary" onclick="saveSettings()">Save settings</button>
@@ -2128,6 +2137,65 @@ async function testWebhook(){
   else toast(`Webhook test failed: ${r.error || 'no response from Discord'}`, 'err');
 }
 
+// ── OBS service registration ─────────────────────────────────────────
+// Patches OBS's services.json so InstantClone shows up in the Service
+// dropdown like Twitch/YouTube. Polls /obs/register-status on System-tab
+// activation so the button + status reflect whatever the user last did
+// (including changes made by another instance or by deleting the
+// services.json file outside our control).
+async function refreshObsRegisterStatus(){
+  const status = $('obs-reg-status');
+  const btn = $('obs-reg-btn');
+  const msg = $('obs-reg-msg');
+  if (!status || !btn) return;
+  try {
+    const r = await (await fetch('/obs/register-status')).json();
+    if (r.path === null){
+      status.textContent = '⚠ OBS not detected (services.json not found in %AppData%\\obs-studio).';
+      btn.disabled = true;
+      btn.textContent = 'Register with OBS';
+      btn.className = 'ic-btn ic-btn-disabled';
+      return;
+    }
+    btn.disabled = false;
+    if (r.registered){
+      status.innerHTML = '<span style="color:var(--live)">✓ Registered.</span> InstantClone is in your OBS Service dropdown. Restart OBS if it isn\'t showing yet.';
+      btn.textContent = 'Unregister from OBS';
+      btn.className = 'ic-btn ic-btn-ghost';
+    } else {
+      status.textContent = 'Not registered yet — OBS won\'t see InstantClone in its Service dropdown until you click below.';
+      btn.textContent = 'Register with OBS';
+      btn.className = 'ic-btn ic-btn-primary';
+    }
+    if (msg) msg.textContent = '';
+  } catch(e){
+    status.textContent = 'Could not query registration status.';
+  }
+}
+async function toggleObsRegister(){
+  const btn = $('obs-reg-btn');
+  const msg = $('obs-reg-msg');
+  if (!btn || btn.disabled) return;
+  const wasRegistered = btn.textContent.includes('Unregister');
+  const endpoint = wasRegistered ? '/obs/unregister' : '/obs/register';
+  btn.disabled = true;
+  if (msg) msg.textContent = '…';
+  try {
+    const r = await (await fetch(endpoint, {method:'POST'})).json();
+    if (r.ok){
+      toast(r.message || 'Done','ok');
+      if (msg) msg.textContent = '';
+    } else {
+      toast(r.error || 'Failed','err');
+      if (msg) msg.textContent = r.error || '';
+    }
+  } catch(e){
+    toast('Request failed','err');
+    if (msg) msg.textContent = String(e);
+  }
+  await refreshObsRegisterStatus();
+}
+
 // ── Overlays ──────────────────────────────────────────────────────────
 // Unified gallery of built-in styles + user-dropped custom .html files.
 // Clicking any card selects it: the preview iframe + URL update in lockstep.
@@ -2585,6 +2653,7 @@ function startStateSSE(){
   fillWizardPlatforms();
   wireChatDock();
   await loadConfig();
+  refreshObsRegisterStatus();
   startStateSSE();
   setInterval(pollLogs, 1500);
   document.addEventListener('keydown', e => {

@@ -244,6 +244,54 @@ async fn route(
         ),
         ("GET", "/config") => ("200 OK", "application/json", settings.borrow().to_json()),
         ("GET", "/platforms") => ("200 OK", "application/json", platforms_json()),
+        ("GET", "/obs/multitrack-config") => (
+            "200 OK",
+            "application/json",
+            obs_multitrack_config(query, settings),
+        ),
+        ("GET", "/obs/register-status") => (
+            "200 OK",
+            "application/json",
+            format!(
+                r#"{{"registered":{},"path":{}}}"#,
+                crate::obs_register::is_registered(),
+                match crate::obs_register::services_json_path() {
+                    Some(p) => format!(r#""{}""#, p.display().to_string().replace('\\', "\\\\")),
+                    None => "null".to_string(),
+                }
+            ),
+        ),
+        ("POST", "/obs/register") => {
+            let s = settings.borrow();
+            match crate::obs_register::register(s.web_port, s.ingest_port) {
+                Ok(()) => (
+                    "200 OK",
+                    "application/json",
+                    r#"{"ok":true,"message":"Registered with OBS — restart OBS to see the InstantClone service in the dropdown."}"#.to_string(),
+                ),
+                Err(e) => (
+                    "500 Internal Server Error",
+                    "application/json",
+                    format!(r#"{{"ok":false,"error":"{}"}}"#, e.to_string().replace('"', "'")),
+                ),
+            }
+        }
+        ("POST", "/obs/unregister") => match crate::obs_register::unregister() {
+            Ok(()) => (
+                "200 OK",
+                "application/json",
+                r#"{"ok":true,"message":"Unregistered. Restart OBS to refresh the service list."}"#
+                    .to_string(),
+            ),
+            Err(e) => (
+                "500 Internal Server Error",
+                "application/json",
+                format!(
+                    r#"{{"ok":false,"error":"{}"}}"#,
+                    e.to_string().replace('"', "'")
+                ),
+            ),
+        },
         ("GET", "/twitch_ingests") => ("200 OK", "application/json", twitch_ingests_json()),
         ("GET", "/profiles") => ("200 OK", "application/json", profiles_json(settings)),
         ("GET", "/logs") => ("200 OK", "application/json", logs_json(ctrl)),
@@ -433,6 +481,174 @@ fn platforms_json() -> String {
   {"slug":"restream","label":"Restream.io","key_url":"https://app.restream.io/channel-settings","key_help":"Restream → Channel Settings → Stream Key","tip":"Restream relays your single stream to multiple platforms — per-platform limits apply on the downstream side, not here."},
   {"slug":"custom","label":"Custom RTMP URL","key_url":null,"key_help":null,"tip":null}
 ]"#.to_string()
+}
+
+/// Serve the multi-track-video config endpoint OBS calls when its
+/// service has a `multitrack_video_configuration_url`. The schema is
+/// the 2024-06-04 revision documented in OBS's
+/// `frontend/utility/models/multitrack-video.hpp` — every field name,
+/// order, and the `framerate` substruct shape match what
+/// `nlohmann::json::FromJson` deserialises into. Missing `config_id`
+/// in the `meta` block is what rejected our first hand-written test
+/// payload; OBS treats it as required even though some downstream
+/// docs imply otherwise.
+///
+/// Query knobs (all optional):
+///   * `encoder` = `x264` (default) | `nvenc` | `amd` | `qsv` — picks
+///     the libobs encoder ID and an appropriate preset/profile bundle.
+///   * `tracks` = 2 | 3 (default) — 1080p+720p or 1080p+720p+480p.
+///   * `bandwidth` = total Kbps budget (default 10000). Split across
+///     tracks with the high-rez track getting ~60 %, mid ~30 %,
+///     low ~10 %.
+///
+/// `{stream_key}` in the `url_template` is OBS's substitution token —
+/// it replaces with whatever the user typed in the Stream Key field at
+/// stream start. Our ingest doesn't authenticate on the key; we just
+/// accept whatever shows up after `/live/`.
+fn obs_multitrack_config(query: &str, settings: &Arc<watch::Sender<Settings>>) -> String {
+    let params = config::parse_form(query);
+    let encoder = params.get("encoder").map(|s| s.as_str()).unwrap_or("x264");
+    let tracks: u32 = params
+        .get("tracks")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3)
+        .clamp(1, 3);
+    let bandwidth: u32 = params
+        .get("bandwidth")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10000)
+        .clamp(1500, 50000);
+
+    let ingest_port = settings.borrow().ingest_port;
+
+    let (enc_type, settings_json_1080, settings_json_720, settings_json_480): (
+        &str,
+        String,
+        String,
+        String,
+    );
+    // Per-encoder presets: libobs encoder IDs + the settings keys each
+    // implementation understands. x264 uses `preset` strings like
+    // "veryfast"; nvenc uses "p1"-"p7"; AMD uses similar tier names.
+    // `profile=main` is what every Twitch / YouTube / Kick decoder
+    // accepts; baseline would drop B-frames entirely and main+high
+    // are functionally equivalent on the wire for ~1080p60.
+    match encoder {
+        "nvenc" => {
+            enc_type = "jim_nvenc";
+            settings_json_1080 = encoder_settings_nvenc(bitrate_for_track(bandwidth, tracks, 0));
+            settings_json_720 = encoder_settings_nvenc(bitrate_for_track(bandwidth, tracks, 1));
+            settings_json_480 = encoder_settings_nvenc(bitrate_for_track(bandwidth, tracks, 2));
+        }
+        "amd" => {
+            enc_type = "h264_texture_amf";
+            settings_json_1080 = encoder_settings_amd(bitrate_for_track(bandwidth, tracks, 0));
+            settings_json_720 = encoder_settings_amd(bitrate_for_track(bandwidth, tracks, 1));
+            settings_json_480 = encoder_settings_amd(bitrate_for_track(bandwidth, tracks, 2));
+        }
+        "qsv" => {
+            enc_type = "obs_qsv11";
+            settings_json_1080 = encoder_settings_qsv(bitrate_for_track(bandwidth, tracks, 0));
+            settings_json_720 = encoder_settings_qsv(bitrate_for_track(bandwidth, tracks, 1));
+            settings_json_480 = encoder_settings_qsv(bitrate_for_track(bandwidth, tracks, 2));
+        }
+        _ => {
+            enc_type = "obs_x264";
+            settings_json_1080 = encoder_settings_x264(bitrate_for_track(bandwidth, tracks, 0));
+            settings_json_720 = encoder_settings_x264(bitrate_for_track(bandwidth, tracks, 1));
+            settings_json_480 = encoder_settings_x264(bitrate_for_track(bandwidth, tracks, 2));
+        }
+    }
+
+    // Per-call config_id: a monotonic-ish value derived from the
+    // process clock means OBS treats each config-fetch as fresh
+    // (matches Twitch's behaviour — they hand out a new ID each call).
+    // Format doesn't matter to OBS as long as it's a non-empty string.
+    let config_id = format!(
+        "instantclone-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    );
+
+    // 1080p60 always present. 720p60 when tracks >= 2. 480p30 when
+    // tracks == 3. The encoder_configurations array is emitted in
+    // resolution-descending order — OBS reads track 0 as primary.
+    let mut enc_configs = String::new();
+    enc_configs.push_str(&format!(
+        r#"{{"type":"{enc}","width":1920,"height":1080,"framerate":{{"numerator":60,"denominator":1}},"canvas_index":0,"settings":{s}}}"#,
+        enc = enc_type,
+        s = settings_json_1080,
+    ));
+    if tracks >= 2 {
+        enc_configs.push(',');
+        enc_configs.push_str(&format!(
+            r#"{{"type":"{enc}","width":1280,"height":720,"framerate":{{"numerator":60,"denominator":1}},"canvas_index":0,"settings":{s}}}"#,
+            enc = enc_type,
+            s = settings_json_720,
+        ));
+    }
+    if tracks >= 3 {
+        enc_configs.push(',');
+        enc_configs.push_str(&format!(
+            r#"{{"type":"{enc}","width":854,"height":480,"framerate":{{"numerator":30,"denominator":1}},"canvas_index":0,"settings":{s}}}"#,
+            enc = enc_type,
+            s = settings_json_480,
+        ));
+    }
+
+    format!(
+        r#"{{"meta":{{"service":"InstantClone","schema_version":"2024-06-04","config_id":"{cid}"}},"ingest_endpoints":[{{"protocol":"RTMP","url_template":"rtmp://127.0.0.1:{port}/live/{{stream_key}}"}}],"encoder_configurations":[{encs}],"audio_configurations":{{"live":[{{"codec":"aac","track_id":0,"channels":2,"settings":{{"bitrate":160}}}}]}}}}"#,
+        cid = config_id,
+        port = ingest_port,
+        encs = enc_configs,
+    )
+}
+
+/// Split the user's total bandwidth budget across N tracks. With three
+/// tracks the split is roughly 60 / 30 / 10 % (matches OBS's beta
+/// Twitch defaults). With two tracks it's 67 / 33 %. Single track gets
+/// everything. Returns an integer Kbps value clamped to ≥ 500.
+fn bitrate_for_track(total_kbps: u32, tracks: u32, index: u32) -> u32 {
+    let pct = match (tracks, index) {
+        (1, 0) => 100,
+        (2, 0) => 67,
+        (2, _) => 33,
+        (3, 0) => 60,
+        (3, 1) => 30,
+        (3, _) => 10,
+        _ => 33,
+    };
+    ((total_kbps as u64 * pct as u64) / 100).max(500) as u32
+}
+
+fn encoder_settings_x264(bitrate: u32) -> String {
+    format!(
+        r#"{{"bitrate":{b},"rate_control":"CBR","keyint_sec":2,"profile":"main","preset":"veryfast"}}"#,
+        b = bitrate
+    )
+}
+
+fn encoder_settings_nvenc(bitrate: u32) -> String {
+    format!(
+        r#"{{"bitrate":{b},"rate_control":"CBR","keyint_sec":2,"profile":"main","preset":"p5","tune":"hq","multipass":"qres"}}"#,
+        b = bitrate
+    )
+}
+
+fn encoder_settings_amd(bitrate: u32) -> String {
+    format!(
+        r#"{{"bitrate":{b},"rate_control":"CBR","keyint_sec":2,"profile":"main","preset":"quality"}}"#,
+        b = bitrate
+    )
+}
+
+fn encoder_settings_qsv(bitrate: u32) -> String {
+    format!(
+        r#"{{"bitrate":{b},"rate_control":"CBR","keyint_sec":2,"profile":"main","target_usage":"balanced"}}"#,
+        b = bitrate
+    )
 }
 
 fn twitch_ingests_json() -> String {
