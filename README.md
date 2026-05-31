@@ -49,7 +49,7 @@ Once it existed, the parts I'd actually wanted ended up in: a real two-phase arm
 <tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td></tr>
 <tr><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>86 / 86</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>88 / 88</code></td></tr>
 </table>
 
 </td>
@@ -94,11 +94,13 @@ flowchart LR
   end
   ic --> tw([Twitch])
   ic --> yt([YouTube])
+  ic --> kk([Kick])
+  ic --> rs([Restream])
   ic --> any([custom RTMP])
 ```
 
 > [!NOTE]
-> The buffer is on disk by default (`./instantclone.buf`, 300 MB ≈ 7 minutes at 6 Mbps), kept off RAM because it can be hundreds of MB. The only thing in RAM is the IDR index, about 1 MB for 10 minutes at 60 fps. The file is reset on every clean shutdown, so it doesn't accumulate between sessions.
+> The buffer is on disk by default (`./instantclone.buf`, 500 MB ≈ 11 minutes at 6 Mbps, ≈ 6 min 50 s at 10 Mbps), kept off RAM because it can be hundreds of MB. The only thing in RAM is the IDR index, about 1 MB for 10 minutes at 60 fps. The file is reset on every clean shutdown, so it doesn't accumulate between sessions. The UI refuses to arm a delay larger than the buffer can hold at the current bitrate, with an explicit "needs ≥ N MB" reason — no silent stalls.
 
 <br/>
 
@@ -276,7 +278,7 @@ cargo build --release
 
 No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzipped at build time by `build.rs` (uses `flate2`, build-only) and embedded into the binary; at runtime it's served with `Content-Encoding: gzip`.
 
-`cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced RTMP IDR detection, AMF0 codec + recursion guard, settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, and `accepts_gzip` content negotiation. 86 tests, all green.
+`cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced RTMP IDR detection, AMF0 codec including Strict Array (Enhanced-RTMP `fourCcList`) + recursion guard, settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, and `accepts_gzip` content negotiation. 88 tests, all green.
 
 <br/>
 
@@ -284,24 +286,44 @@ No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzippe
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 86 tests on every push, and a tagged commit auto-builds + publishes a signed release artifact.
+**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 88 tests on every push, and a tagged commit auto-builds + publishes a signed release artifact.
 
 **What's solid**
 
 - The two-phase `arm → activate → cut` state machine, with IDR-aligned cuts and monotonic timestamp rewrites. The thing that would have made me build this if it didn't exist.
+- **Live delay adjustment**: re-arm or adjust the delay up / down without disarming first. Backend already supported it; the cockpit now exposes it as a single typed-value + "↻ Adjust ↑/↓ to Ns" CTA.
+- **Full OBS-parity RTMP handshake.** `connect` carries the same codec-capability bag librtmp ships (`audioCodecs=3191`, `videoCodecs=252`, `videoFunction=1`), the Enhanced-RTMP `fourCcList` (AVC / HEVC / AV1 / VP9 / Opus / AC-3 / FLAC), `Set Chunk Size` before connect, `FCUnpublish → deleteStream` on shutdown, and RTMP Acknowledgement (BYTES_READ_REPORT) at the peer-declared window/10 threshold on both ingest and egress.
 - Multi-destination egress with per-destination reconnect + bitrate stats.
+- **Capacity-aware buffer UI**: live "X MB → max Ys delay at N Mbps" hint, refuses to arm a delay larger than the buffer can hold with an explicit "needs ≥ N MB" reason.
+- **Platform-specific warnings**: Twitch mobile-decoder risk above 8 Mbps under Source-Only, Kick's no-B-frames requirement (AWS IVS), per-platform stream-key dashboard links — all surfaced in the wizard / destination form so streamers don't have to learn each platform's gotchas the hard way.
 - Tray icon with live status + one-click cut, port-conflict pre-flight that names the offending process by PID + exe.
-- Test coverage covers the state machine, AVC + Enhanced RTMP IDR detection, AMF0 codec, ring eviction with in-flight-read protection, and the timestamp-wrap promotion that prevents the 49.7-day bug.
+- Test coverage covers the state machine, AVC + Enhanced RTMP IDR detection + multi-track flatten, AMF0 codec including Strict Array, ring eviction with in-flight-read protection, and the timestamp-wrap promotion that prevents the 49.7-day bug.
 
 **What's rough, honestly**
 
 - **Windows only.** macOS / Linux aren't tested or packaged. Several modules (tray, port pre-flight, RSS sampler) have Windows-specific code paths that need parallel implementations.
+- **Multi-hour streams unproven.** Longest validated real-world stream is ~30 minutes. The supervisor + keepalive + ack logic is designed to handle indefinite sessions but nobody has stress-tested an 8-hour run.
 - **Sync disk I/O on the async hot path** for ring append. Page cache absorbs it at typical stream rates, but a flush stall could freeze other tasks. `spawn_blocking` is on the v0.2 list.
 - **A handful of `unwrap()` on lock guards.** Fine because `panic = "abort"` means a poison condition can't propagate, but still on the cleanup list.
 - **Hand-rolled HTTP server.** Smaller binary than `hyper`, but I now own the entire HTTP CVE surface. Worth re-evaluating if the surface grows.
 
 > [!WARNING]
 > This is a hobby project I use myself, not a vendor product. If you stream paid esports, validate it against your own pipeline before trusting it on a tournament night.
+
+<br/>
+
+<div align="center"><img src="docs/divider.svg" alt="" width="100%"/></div>
+
+## Connect
+
+<p>
+<a href="https://twitch.tv/s1moscs"><img alt="Twitch @s1moscs" src="https://img.shields.io/badge/Twitch-%40s1moscs-9146FF?style=flat-square&logo=twitch&logoColor=white&labelColor=11141a"/></a>
+&nbsp;<a href="https://x.com/s1moscs"><img alt="X @s1moscs" src="https://img.shields.io/badge/X-%40s1moscs-000000?style=flat-square&logo=x&logoColor=white&labelColor=11141a"/></a>
+&nbsp;<a href="https://youtube.com/@s1moscs"><img alt="YouTube @s1moscs" src="https://img.shields.io/badge/YouTube-%40s1moscs-FF0000?style=flat-square&logo=youtube&logoColor=white&labelColor=11141a"/></a>
+&nbsp;<a href="https://discord.com/users/s1moscs"><img alt="Discord @s1moscs" src="https://img.shields.io/badge/Discord-%40s1moscs-5865F2?style=flat-square&logo=discord&logoColor=white&labelColor=11141a"/></a>
+</p>
+
+Catch me streaming while building this, or just chat about the project. Bug reports and feature ideas → [Issues](https://github.com/Soulhackzlol/InstantClone/issues) and [Discussions](https://github.com/Soulhackzlol/InstantClone/discussions).
 
 <br/>
 

@@ -13,7 +13,7 @@ Open a [Discussion](https://github.com/Soulhackzlol/InstantClone/discussions). I
 ## Sending a PR
 
 - One change per PR makes review easier.
-- Before pushing: `cargo fmt`, `cargo clippy --release` clean, `cargo test --release` showing `86 passed; 0 failed`.
+- Before pushing: `cargo fmt`, `cargo clippy --release` clean, `cargo test --release` showing `88 passed; 0 failed`.
 - A line on how you tested goes a long way. "Tested with OBS 30.2 against a local RTMP sink for ~5 min with a 15 s armed delay" beats "works on my machine".
 - For new features, open an issue first so we don't duplicate effort.
 

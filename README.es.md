@@ -49,7 +49,7 @@ Cuando ya lo tenía hecho, las piezas que de verdad quería eran: una activació
 <tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td></tr>
 <tr><td><b>Deps en runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>86 / 86</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>88 / 88</code></td></tr>
 </table>
 
 </td>
@@ -94,11 +94,13 @@ flowchart LR
   end
   ic --> tw([Twitch])
   ic --> yt([YouTube])
+  ic --> kk([Kick])
+  ic --> rs([Restream])
   ic --> any([RTMP personalizado])
 ```
 
 > [!NOTE]
-> El buffer vive en disco por defecto (`./instantclone.buf`, 300 MB ≈ 7 minutos a 6 Mbps), fuera de RAM porque puede llegar a varios cientos de MB. Lo único en RAM es el índice de IDR, alrededor de 1 MB para 10 minutos a 60 fps. El archivo se borra al cerrar la app de forma limpia, así que no se acumula entre sesiones.
+> El buffer vive en disco por defecto (`./instantclone.buf`, 500 MB ≈ 11 minutos a 6 Mbps, ≈ 6 min 50 s a 10 Mbps), fuera de RAM porque puede llegar a varios cientos de MB. Lo único en RAM es el índice de IDR, alrededor de 1 MB para 10 minutos a 60 fps. El archivo se borra al cerrar la app de forma limpia, así que no se acumula entre sesiones. La UI se niega a armar un delay mayor de lo que el buffer puede aguantar al bitrate actual, con un "necesita ≥ N MB" explícito — sin stalls silenciosos.
 
 <br/>
 
@@ -276,7 +278,7 @@ cargo build --release
 
 Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y comprime con gzip en tiempo de compilación desde `build.rs` (usa `flate2`, solo build-dep) y se embebe en el binario; en runtime se sirve con `Content-Encoding: gzip`.
 
-`cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR en AVC + Enhanced RTMP, codec AMF0 + guardia de recursión, round-trip de settings, evicción del ring-buffer con protección de lecturas en vuelo, parsing HTTP, política CSRF, pre-flight de puertos y la negociación de contenido `accepts_gzip`. 86 tests, todos en verde.
+`cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR en AVC + Enhanced RTMP, codec AMF0 incluyendo Strict Array (la `fourCcList` de Enhanced-RTMP) + guardia de recursión, round-trip de settings, evicción del ring-buffer con protección de lecturas en vuelo, parsing HTTP, política CSRF, pre-flight de puertos y la negociación de contenido `accepts_gzip`. 88 tests, todos en verde.
 
 <br/>
 
@@ -284,24 +286,44 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 86 tests en cada push, y un tag dispara la build + publicación automática de la release.
+**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 88 tests en cada push, y un tag dispara la build + publicación automática de la release.
 
 **Lo que está sólido**
 
 - La máquina de estados `arm → activate → cut` en dos fases, con cortes alineados a IDR y reescritura monótona de timestamps. La pieza por la que empecé este proyecto.
+- **Ajuste de delay en vivo**: re-armar o cambiar el delay arriba/abajo sin desarmar primero. El backend ya lo soportaba; el panel ahora lo expone como un valor escrito + CTA "↻ Adjust ↑/↓ to Ns".
+- **Handshake RTMP a la altura de OBS.** `connect` lleva el mismo paquete de capacidades de códec que envía librtmp (`audioCodecs=3191`, `videoCodecs=252`, `videoFunction=1`), la `fourCcList` de Enhanced-RTMP (AVC / HEVC / AV1 / VP9 / Opus / AC-3 / FLAC), `Set Chunk Size` antes del connect, `FCUnpublish → deleteStream` al cerrar, y Acknowledgement RTMP (BYTES_READ_REPORT) cruzando el umbral window/10 declarado por el peer en ingest y egress.
 - Egress multi-destino con reconexión + bitrate por destino.
+- **UI consciente de la capacidad del buffer**: pista en vivo "X MB → máx Ys de delay a N Mbps", se niega a armar un delay mayor de lo que cabe con una razón explícita "necesita ≥ N MB".
+- **Avisos por plataforma**: riesgo de fallo de decodificación en móvil por encima de 8 Mbps en Twitch Source-Only, requerimiento de no-B-frames de Kick (AWS IVS), enlaces directos al dashboard de claves de cada plataforma — todo expuesto en el wizard y el formulario de destino para no aprender cada gotcha en directo.
 - Icono de bandeja con estado en vivo + corte de un click, pre-flight de puertos que identifica el proceso conflictivo por PID + exe.
-- Cobertura de tests sobre la máquina de estados, detección IDR (AVC + Enhanced RTMP), codec AMF0, evicción del ring con protección de lecturas en vuelo, y la promoción del wrap de timestamps que evita el bug de los 49,7 días.
+- Cobertura de tests sobre la máquina de estados, detección IDR (AVC + Enhanced RTMP + flatten multi-track), codec AMF0 incluyendo Strict Array, evicción del ring con protección de lecturas en vuelo, y la promoción del wrap de timestamps que evita el bug de los 49,7 días.
 
 **Lo que sigue siendo áspero, siendo honesto**
 
 - **Solo Windows.** macOS / Linux no están probados ni empaquetados. Varios módulos (bandeja, pre-flight de puertos, sampler de RSS) tienen rutas específicas de Windows que necesitarían implementación paralela.
+- **Directos de varias horas sin verificar.** El más largo probado en condiciones reales son ~30 minutos. El supervisor + keepalive + acks están diseñados para sesiones indefinidas pero nadie ha estresado una sesión de 8 h aún.
 - **I/O de disco sin async en el hot-path** para el append del ring. La page cache lo absorbe a tasas típicas de stream, pero un stall por flush podría congelar otras tareas. `spawn_blocking` está en la lista para v0.2.
 - **Un puñado de `unwrap()` sobre locks.** Está bien porque `panic = "abort"` impide que una condición de poison se propague, pero sigue en la lista de limpieza.
 - **Servidor HTTP escrito a mano.** Binario más pequeño que con `hyper`, pero ahora me toca cargar con toda la superficie de CVEs HTTP. Vale la pena reevaluarlo si la superficie crece.
 
 > [!WARNING]
 > Esto es un proyecto personal que uso yo mismo, no un producto de empresa. Si emites esports pagados, valídalo contra tu propio pipeline antes de confiar en él.
+
+<br/>
+
+<div align="center"><img src="docs/divider.svg" alt="" width="100%"/></div>
+
+## Contacto
+
+<p>
+<a href="https://twitch.tv/s1moscs"><img alt="Twitch @s1moscs" src="https://img.shields.io/badge/Twitch-%40s1moscs-9146FF?style=flat-square&logo=twitch&logoColor=white&labelColor=11141a"/></a>
+&nbsp;<a href="https://x.com/s1moscs"><img alt="X @s1moscs" src="https://img.shields.io/badge/X-%40s1moscs-000000?style=flat-square&logo=x&logoColor=white&labelColor=11141a"/></a>
+&nbsp;<a href="https://youtube.com/@s1moscs"><img alt="YouTube @s1moscs" src="https://img.shields.io/badge/YouTube-%40s1moscs-FF0000?style=flat-square&logo=youtube&logoColor=white&labelColor=11141a"/></a>
+&nbsp;<a href="https://discord.com/users/s1moscs"><img alt="Discord @s1moscs" src="https://img.shields.io/badge/Discord-%40s1moscs-5865F2?style=flat-square&logo=discord&logoColor=white&labelColor=11141a"/></a>
+</p>
+
+Sígueme en directo mientras construyo esto, o cuéntame qué tal te va con la app. Bugs y propuestas → [Issues](https://github.com/Soulhackzlol/InstantClone/issues) y [Discussions](https://github.com/Soulhackzlol/InstantClone/discussions).
 
 <br/>
 
