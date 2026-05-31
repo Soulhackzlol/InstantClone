@@ -159,11 +159,15 @@ impl Settings {
             custom_egress_url: String::new(),
             web_port: 7799,
             web_bind_all: false,
-            // 300 MB ≈ 5 minutes of headroom at 8 Mbps. With the trim
-            // logic, the *actual* used portion matches the armed delay;
-            // this is just the hard cap on what the user could ever arm.
-            // Lower it to save disk; raise for >5-min armed delays.
-            buffer_mb: 300,
+            // 500 MB ≈ 6m 50s at 10 Mbps, ~11 min at 6 Mbps. The cap on
+            // what the user could ever arm at the current bitrate; with
+            // the trim logic the *actual* used portion matches the armed
+            // delay. Bumped from 300 after the 2026-05-31 beta.5 test
+            // surfaced that 300 MB stalls at ~247 s when arming 5 min at
+            // 10 Mbps — the new default leaves headroom for a 5-min arm
+            // at any realistic Twitch bitrate. Lower to save disk; raise
+            // for >7-min delays at 10 Mbps+.
+            buffer_mb: 500,
             buffer_path: PathBuf::from("./instantclone.buf"),
             target_delay_ms: 0,
             armed_delay_ms: 0,

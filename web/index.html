@@ -231,6 +231,9 @@ input,select,textarea{font-family:inherit;color:inherit}
 
 .cp-head{display:flex;align-items:baseline;justify-content:space-between}
 .cp-cap{color:var(--fg-4);font-size:11px}
+.cp-cap-warn{margin-top:8px;padding:8px 10px;border:1px solid var(--danger);border-radius:6px;background:color-mix(in oklch,var(--danger) 8%,var(--bg-2));color:var(--fg-2);font-size:11.5px;line-height:1.45}
+.cp-cap-warn b{color:var(--danger);font-weight:600}
+.cp-input.field-error,.cp-input-row.field-error{border-color:var(--danger);color:var(--danger)}
 .cp-input-row{display:flex;align-items:center;gap:6px;background:var(--bg-2);
   border:1px solid var(--line);border-radius:10px;padding:4px}
 .cp-input-row:focus-within{border-color:color-mix(in oklch,var(--accent) 60%,transparent);background:var(--bg)}
@@ -459,6 +462,11 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--accent) 15%,var(--surface-3))}
 .profile-name{flex:1;font-weight:500;color:var(--fg);font-size:13.5px}
 .profile-secs{color:var(--accent);font-size:13px;font-weight:500;font-family:'JetBrains Mono',monospace}
+.profile-row.too-big{opacity:.5;cursor:not-allowed}
+.profile-row.too-big:hover{border-color:var(--line)}
+.profile-row.too-big .profile-secs{color:var(--fg-4)}
+.profile-row .profile-warn{font-size:10.5px;color:var(--danger);margin-left:auto;margin-right:8px;white-space:nowrap}
+.cp-profile-chip.too-big{opacity:.45;cursor:not-allowed;border-color:var(--line)}
 .profile-tag{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
   padding:3px 7px;border-radius:999px;background:color-mix(in oklch,var(--accent) 18%,transparent);color:var(--accent)}
 .profile-new{background:transparent;border:1px dashed var(--line-2);margin-top:8px;cursor:default;
@@ -714,6 +722,7 @@ input,select,textarea{font-family:inherit;color:inherit}
         <button class="cp-step" onclick="bumpDelay(1)" id="cp-plus" aria-label="increment">+</button>
         <span class="cp-unit">SECONDS</span>
       </div>
+      <div class="cp-cap-warn" id="cp-cap-warn" hidden></div>
       <div class="cp-hint">Save common delays in <b>Profiles</b> for one-click insta-arm.</div>
       <div class="cp-profiles" id="cp-profiles"></div>
       <div style="display:flex;gap:8px;width:100%">
@@ -987,7 +996,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     <section class="sys-section">
       <div class="ic-label">Buffer</div>
       <div class="form-row tight">
-        <div><span class="ic-label">Buffer size (MB)</span><input id="s-bmb" class="ic-input mono" type="number" min="50" max="10000"></div>
+        <div><span class="ic-label">Buffer size (MB)</span><input id="s-bmb" class="ic-input mono" type="number" min="50" max="10000"><div class="muted" id="s-bmb-hint" style="margin-top:6px;font-size:11.5px;line-height:1.4"></div></div>
         <div><span class="ic-label">Buffer file</span><input id="s-bpath" class="ic-input mono"></div>
       </div>
     </section>
@@ -1085,6 +1094,10 @@ const $$ = sel => Array.from(document.querySelectorAll(sel));
 
 // ── State ─────────────────────────────────────────────────────────────
 let lastState = null;
+// Last /config snapshot — cached so the capacity-math helpers can read
+// buffer_mb without re-fetching. Updated by loadConfig() and by the
+// settings save flow.
+let lastConfig = null;
 let platforms = [];
 let twitchIngests = null;
 let profiles = [];
@@ -1124,6 +1137,72 @@ const fmtSecs = ms => { const s = ms/1000; return s < 10 ? s.toFixed(1) : Math.r
 const fmtDelay = ms => { const s = Math.round(ms/1000); if (s < 60) return s+'s'; const m = Math.floor(s/60), r = s%60; return r ? `${m}m${r}s` : `${m}m`; };
 const fmtKbps = k => k >= 1000 ? (k/1000).toFixed(2)+' Mbps' : k+' kbps';
 function fmtBytesPair(b){ const u=['B','KB','MB','GB','TB']; let i=0; while(b>=1024 && i<u.length-1){b/=1024;i++} return [b.toFixed(b<10&&i?1:0), u[i]]; }
+
+// ── Buffer capacity math ──────────────────────────────────────────────
+// The disk-backed ring caps how much delay we can actually fill. At
+// 10 Mbps the 500 MB default holds ~6m 50s of video+audio+overhead;
+// arming above that capacity silently stalls during the "preparing"
+// phase, which from the user's side looks like a bug. So we compute
+// the capacity client-side and refuse to let the UI arm a delay that
+// can't be filled at the current bitrate.
+//
+// Formula assumes ~160 kbps audio and ~5% RTMP framing overhead — both
+// roughly OBS defaults. The capacity is a soft estimate, not a hard
+// guarantee; we clamp it slightly to leave the cut machinery a frame
+// of headroom (otherwise a delay sized to exactly the buffer would
+// have nothing to scrub through).
+const BUF_AUDIO_KBPS = 160;
+const BUF_OVERHEAD_PCT = 5;
+const BUF_HEADROOM_PCT = 3;
+const BUF_REF_KBPS = 10000;  // when we have no measured bitrate, plan for 10 Mbps
+
+function planningKbps(){
+  const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
+  if (m && m > 1000) return m;
+  return BUF_REF_KBPS;
+}
+function bufferCapMs(bufferMB, videoKbps){
+  if (!bufferMB || bufferMB <= 0) return 0;
+  const v = Math.max(1, videoKbps || 0);
+  const total = (v + BUF_AUDIO_KBPS) * (1 + BUF_OVERHEAD_PCT/100);
+  const secs = (bufferMB * 8192) / total;          // 1 MB = 8192 kbits
+  return Math.floor(secs * (1 - BUF_HEADROOM_PCT/100)) * 1000;
+}
+function requiredMBForMs(ms, videoKbps){
+  if (!ms || ms <= 0) return 0;
+  const v = Math.max(1, videoKbps || planningKbps());
+  const total = (v + BUF_AUDIO_KBPS) * (1 + BUF_OVERHEAD_PCT/100);
+  const headroomFactor = 1 / (1 - BUF_HEADROOM_PCT/100);
+  return Math.ceil((ms/1000) * total * headroomFactor / 8192);
+}
+// Capacity using the persisted buffer_mb (lastConfig) and the
+// planning-bitrate heuristic. Used by every "can the user arm this?"
+// check below. Returns 0 if we don't yet have a config (pre-load).
+function currentBufferCapMs(){
+  const mb = lastConfig && lastConfig.buffer_mb;
+  if (!mb) return 0;
+  return bufferCapMs(mb, planningKbps());
+}
+// Live hint under the System-tab buffer-size input. Reads whatever
+// number the user has *currently typed* (not the saved value) so the
+// "X MB ≈ Ys max delay" feedback updates as they're picking a size.
+// When a stream is live, we also surface the same math at the
+// measured bitrate so they can see how much disk it actually buys
+// them right now.
+function renderBufferHint(){
+  const el = $('s-bmb-hint');
+  if (!el) return;
+  const mb = parseInt($('s-bmb').value || '0', 10) || 0;
+  if (mb <= 0){ el.textContent = ''; return; }
+  const refMs = bufferCapMs(mb, BUF_REF_KBPS);
+  let txt = `${mb} MB → max ${fmtDelay(refMs)} delay at ${BUF_REF_KBPS/1000} Mbps reference.`;
+  const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
+  if (m && m > 1000){
+    const curMs = bufferCapMs(mb, m);
+    txt += `  Currently ≈ ${fmtDelay(curMs)} at ${(m/1000).toFixed(1)} Mbps in.`;
+  }
+  el.textContent = txt;
+}
 
 // ── Toast ─────────────────────────────────────────────────────────────
 function toast(msg, kind){
@@ -1181,6 +1260,19 @@ function setPending(p){
 function clearPending(){ pendingPhase = null; clearTimeout(pendingClearT); }
 
 async function arm(ms){
+  // Capacity guard — defence in depth so a profile chip / scripted
+  // call hits the same wall as the manual delay input. ms === 0 is
+  // "disarm" and skips the check.
+  if (ms > 0){
+    const cap = currentBufferCapMs();
+    if (cap > 0 && ms > cap){
+      const needMB = requiredMBForMs(ms);
+      const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
+      const at = (m && m > 1000) ? `${(m/1000).toFixed(1)} Mbps` : `${BUF_REF_KBPS/1000} Mbps`;
+      toast(`Buffer too small — ${fmtDelay(ms)} at ${at} needs ≥ ${needMB} MB (current ${lastConfig?lastConfig.buffer_mb:'?'} MB → ${fmtDelay(cap)}).`, 'err');
+      return;
+    }
+  }
   await fetch('/arm',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'ms='+ms});
   toast(ms > 0 ? `Arming ${fmtDelay(ms)}…` : 'Disarmed', 'ok');
   tick();
@@ -1212,6 +1304,7 @@ function bumpDelay(d){
   renderCta();
 }
 $('delay-input') && $('delay-input').addEventListener('input', renderCta);
+$('s-bmb') && $('s-bmb').addEventListener('input', renderBufferHint);
 
 function ctaClick(ev){
   const btn = ev.currentTarget;
@@ -1316,11 +1409,31 @@ function renderCta(){
     btn.className = 'ic-btn ic-btn-danger cp-cta'; btn.textContent = '✕ Cut delay';
   } else {
     // off / idle (== passthrough or genuinely no source)
-    if (inputMs > 0){
+    const cap = currentBufferCapMs();
+    const tooBig = inputMs > 0 && cap > 0 && inputMs > cap;
+    const warn = $('cp-cap-warn');
+    const inputEl = $('delay-input');
+    if (inputMs > 0 && tooBig){
+      btn.className = 'ic-btn ic-btn-disabled cp-cta';
+      btn.textContent = `Buffer holds only ${fmtDelay(cap)} — raise it first`;
+      btn.disabled = true;
+      if (inputEl) inputEl.classList.add('field-error');
+      if (warn){
+        const needMB = requiredMBForMs(inputMs);
+        const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
+        const at = (m && m > 1000) ? `${(m/1000).toFixed(1)} Mbps in` : `${BUF_REF_KBPS/1000} Mbps reference`;
+        warn.innerHTML = `<b>Can't arm ${fmtDelay(inputMs)} at ${at}.</b> Buffer is ${lastConfig?lastConfig.buffer_mb:'?'} MB, would need ≥ ${needMB} MB. Raise in System tab and restart, or pick ≤ ${fmtDelay(cap)}.`;
+        warn.hidden = false;
+      }
+    } else if (inputMs > 0){
       btn.className = 'ic-btn ic-btn-primary cp-cta';
       btn.textContent = `⚡ Arm ${fmtDelay(inputMs)} delay`;
+      if (inputEl) inputEl.classList.remove('field-error');
+      if (warn) warn.hidden = true;
     } else {
       btn.className = 'ic-btn ic-btn-disabled cp-cta'; btn.textContent = 'Arm delay'; btn.disabled = true;
+      if (inputEl) inputEl.classList.remove('field-error');
+      if (warn) warn.hidden = true;
     }
   }
 }
@@ -1331,15 +1444,22 @@ function renderCpProfiles(){
   if (!profiles || profiles.length === 0) return;
   const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
   const target = lastState ? lastState.armed_delay_ms : 0;
+  const cap = currentBufferCapMs();
   profiles.slice(0, 5).forEach(p => {
+    const tooBig = cap > 0 && p.delay_ms > cap;
     const b = document.createElement('button');
-    b.className = 'cp-profile-chip' + (target === p.delay_ms && ds !== 'off' ? ' on' : '');
+    b.className = 'cp-profile-chip' + (target === p.delay_ms && ds !== 'off' ? ' on' : '') + (tooBig ? ' too-big' : '');
     b.disabled = ds === 'armed' || ds === 'active' || ds === 'arming';
-    b.title = `Arm: ${p.name}`;
+    if (tooBig){
+      const needMB = requiredMBForMs(p.delay_ms);
+      b.title = `${p.name}: buffer too small — needs ≥ ${needMB} MB at the current bitrate (raise in System tab).`;
+    } else {
+      b.title = `Arm: ${p.name}`;
+    }
     b.innerHTML = `<span style="color:var(--accent)">⚡</span><span>${fmtDelay(p.delay_ms)}</span>`;
     b.onclick = () => {
       $('delay-input').value = String(Math.round(p.delay_ms / 1000));
-      arm(p.delay_ms);
+      arm(p.delay_ms);  // arm() handles the capacity refusal + toast
     };
     c.appendChild(b);
   });
@@ -1597,11 +1717,13 @@ async function loadProfiles(){
 }
 function renderProfilesPane(){
   const c = $('profile-list'); c.innerHTML = '';
+  const cap = currentBufferCapMs();
   profiles.forEach(p => {
     const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
     const isCur = ds !== 'off' && lastState && lastState.armed_delay_ms === p.delay_ms;
+    const tooBig = cap > 0 && p.delay_ms > cap;
     const b = document.createElement('button');
-    b.className = 'profile-row' + (isCur ? ' current' : '');
+    b.className = 'profile-row' + (isCur ? ' current' : '') + (tooBig ? ' too-big' : '');
     b.innerHTML = `<span class="profile-bolt">⚡</span><span class="profile-name"></span><span class="profile-secs mono"></span>`;
     b.querySelector('.profile-name').textContent = p.name;
     b.querySelector('.profile-secs').textContent = fmtDelay(p.delay_ms);
@@ -1609,10 +1731,17 @@ function renderProfilesPane(){
       const tag = document.createElement('span'); tag.className = 'profile-tag'; tag.textContent = ds;
       b.appendChild(tag);
     }
+    if (tooBig){
+      const needMB = requiredMBForMs(p.delay_ms);
+      const warn = document.createElement('span'); warn.className = 'profile-warn';
+      warn.textContent = `needs ≥ ${needMB} MB`;
+      b.appendChild(warn);
+      b.title = `Buffer too small at the current bitrate — raise buffer in System tab to ≥ ${needMB} MB to use this profile.`;
+    }
     const x = document.createElement('span'); x.className = 'ic-btn-tiny'; x.textContent = '✕';
     x.onclick = (e) => { e.stopPropagation(); delProfile(p.name); };
     b.appendChild(x);
-    b.onclick = () => arm(p.delay_ms);
+    b.onclick = () => arm(p.delay_ms);  // arm() itself surfaces the reason if blocked
     c.appendChild(b);
   });
 }
@@ -1621,6 +1750,19 @@ async function addProfile(){
   const secs = parseInt($('prof-secs').value || '0', 10);
   if (!name){ toast('Give the profile a name first','err'); return; }
   if (!secs || secs <= 0){ toast('Set a delay greater than 0 seconds','err'); return; }
+  // Refuse to save a profile that the current buffer can't even hold —
+  // the user wouldn't be able to arm it anyway, and a saved-but-unusable
+  // entry is just clutter waiting to bite them. Capacity math uses
+  // current bitrate if streaming, otherwise a 10 Mbps reference.
+  const cap = currentBufferCapMs();
+  const ms = secs * 1000;
+  if (cap > 0 && ms > cap){
+    const needMB = requiredMBForMs(ms);
+    const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
+    const at = (m && m > 1000) ? `${(m/1000).toFixed(1)} Mbps` : `${BUF_REF_KBPS/1000} Mbps`;
+    toast(`Can't save ${fmtDelay(ms)} profile at ${at} — buffer is ${lastConfig?lastConfig.buffer_mb:'?'} MB (≈ ${fmtDelay(cap)} max). Raise to ≥ ${needMB} MB first.`, 'err');
+    return;
+  }
   const body = new URLSearchParams({name, delay_ms: String(secs*1000)});
   const r = await fetch('/profiles',{method:'POST', body});
   if (r.ok){ $('prof-name').value=''; $('prof-secs').value=''; toast('Profile saved','ok'); loadProfiles(); }
@@ -1640,6 +1782,7 @@ async function delProfile(name){
 async function loadConfig(){
   try {
     const c = await (await fetch('/config')).json();
+    lastConfig = c;
     initialBufferMb = c.buffer_mb; initialBufferPath = c.buffer_path;
     // wizard
     const first = (c.destinations && c.destinations[0]) || {platform:'twitch', custom_egress_url:'', stream_key_set:false};
@@ -1649,6 +1792,7 @@ async function loadConfig(){
     // system fields
     $('s-iport').value = c.ingest_port; $('s-wport').value = c.web_port;
     $('s-bmb').value = c.buffer_mb; $('s-bpath').value = c.buffer_path;
+    renderBufferHint();
     $('s-ibind').checked = c.ingest_bind_all; $('s-wbind').checked = c.web_bind_all;
     $('s-webhook').value = '';
     $('s-webhook').placeholder = c.webhook_set ? '(set — paste a new one to replace)' : 'https://discord.com/api/webhooks/…';
@@ -2236,6 +2380,11 @@ function applyState(s){
   renderHeader(s);
   renderStats(s);
   renderCpProfiles();
+  renderBufferHint();
+  // The profiles pane uses the live bitrate to decide which entries are
+  // unreachable at the current buffer size — rebuild on every tick so
+  // the dimming follows the bitrate without the user re-clicking the tab.
+  if (!$('pane-card').hidden) renderProfilesPane();
   // Live destination stats — /state already carries alive / bitrate_kbps /
   // tags_sent / bytes_sent / cuts / reconnects per destination, so merge
   // those into our cached list and rebuild the cards on every state tick.
