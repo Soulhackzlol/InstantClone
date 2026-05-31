@@ -250,6 +250,12 @@ impl EgressClient {
     /// of silence and drop the publish.
     pub fn spawn_reader_drain(mut self) -> EgressSink {
         let (ping_tx, ping_rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
+        // Acknowledgement (BYTES_READ_REPORT) queue. The drain task
+        // owns the reader's byte counter; the sink owns the writer.
+        // After every message the drain checks `take_pending_ack` and
+        // forwards the seq number through here. Same pattern as pings
+        // — keeps the writer's side of the socket single-owner.
+        let (ack_tx, ack_rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
         let drain = tokio::spawn(async move {
             loop {
                 let Ok(msg) = self.reader.read_message().await else {
@@ -275,12 +281,22 @@ impl EgressClient {
                         let _ = ping_tx.send(ts);
                     }
                 }
+                // Send back an Acknowledgement (msg type 3) whenever the
+                // reader says we've crossed the peer's window/10
+                // threshold. Egress traffic from the server to us is
+                // small (acks + pings + onStatus), so this fires rarely
+                // — but every well-behaved RTMP peer does it and so
+                // should we.
+                if let Some(seq) = self.reader.take_pending_ack() {
+                    let _ = ack_tx.send(seq);
+                }
             }
         });
         EgressSink {
             writer: self.writer,
             stream_id: self.stream_id,
             ping_rx,
+            ack_rx,
             _drain_abort: drain.abort_handle(),
         }
     }
@@ -295,6 +311,10 @@ pub struct EgressSink {
     /// even with no traffic on the egress, the queue never grows beyond
     /// a handful of entries.
     ping_rx: tokio::sync::mpsc::UnboundedReceiver<u32>,
+    /// BYTES_READ_REPORT sequence numbers queued by the drain task —
+    /// see `spawn_reader_drain`. Drained by `drain_pings` on every
+    /// pump tick.
+    ack_rx: tokio::sync::mpsc::UnboundedReceiver<u32>,
     // Aborts the paired drain task when the sink is dropped. Held only
     // for its Drop side-effect; never read.
     _drain_abort: tokio::task::AbortHandle,
@@ -341,16 +361,15 @@ impl EgressSink {
         self.writer.flush().await
     }
 
-    /// Drain any pending Ping Requests captured by the reader-drain task
-    /// and write the matching Ping Response (User Control Message event
-    /// type 7, echoing the server's 4-byte timestamp). Called by
-    /// `pump_dest` at the top of every loop iteration; cheap when idle
-    /// (single non-blocking try_recv), one short RTMP message when a
-    /// ping is pending. Mute on errors — at worst we miss a single ping
-    /// and the underlying connection error surfaces on the next real
-    /// send anyway.
+    /// Drain any pending Ping Requests and Acknowledgements that the
+    /// reader-drain task has queued for us, and write the matching
+    /// responses on the wire. Called by `pump_dest` at the top of every
+    /// loop iteration; cheap when idle (two non-blocking `try_recv`s),
+    /// one short RTMP message per pending event when work is needed.
+    /// Errors abort the loop so the supervisor can reconnect.
     pub async fn drain_pings(&mut self) -> io::Result<()> {
         use bytes::BufMut;
+        let mut wrote = false;
         while let Ok(ts) = self.ping_rx.try_recv() {
             let mut buf = BytesMut::with_capacity(6);
             buf.put_u16(7); // event type: Ping Response
@@ -358,8 +377,20 @@ impl EgressSink {
                              // User Control Messages go on CSID 2, message type 4,
                              // timestamp 0, stream id 0 (control stream).
             self.writer.write_message(2, 0, 4, 0, &buf).await?;
-            self.writer.flush().await?;
+            wrote = true;
             crate::trace::log("PING_REPLY", &format!("ts={} (echoed server ping)", ts));
+        }
+        // Acknowledgement (BYTES_READ_REPORT) drain: the reader queues
+        // a sequence number every time it crosses the peer's window/10
+        // threshold. Send each one through the writer (CSID 2, msg
+        // type 3, 4-byte BE count).
+        while let Ok(seq) = self.ack_rx.try_recv() {
+            self.writer.send_ack(seq).await?;
+            wrote = true;
+            crate::trace::log("ACK_SENT", &format!("seq={}", seq));
+        }
+        if wrote {
+            self.writer.flush().await?;
         }
         Ok(())
     }

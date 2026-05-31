@@ -69,6 +69,19 @@ async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::R
 
     loop {
         let msg = reader.read_message().await?;
+        // librtmp's window-ack rule: fire BYTES_READ_REPORT once we've
+        // received more than `window_ack_size/10` bytes since our last
+        // ack. Strict RTMP relays (nginx-rtmp under tight config, SRS,
+        // some CDN ingest edges) drop the publish if this is missing —
+        // OBS streams keep working because OBS doesn't gate its send
+        // on receiving acks, but a downstream relay re-publishing
+        // through us would. Free side-effect: gives the publisher a
+        // healthy flow-control signal even when our buffer drains
+        // unevenly.
+        if let Some(seq) = reader.take_pending_ack() {
+            writer.send_ack(seq).await?;
+            writer.flush().await?;
+        }
         match msg.type_id {
             20 /* AMF0 command */ => {
                 handle_command(&mut writer, &ctrl, &msg, &mut guard).await?;
@@ -87,6 +100,17 @@ async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::R
             9 /* video */ => {
                 let info = h264::classify_video_tag(&msg.payload);
                 ctrl.note_video_codec(info.codec);
+                if info.is_metadata {
+                    // Enhanced-RTMP PacketTypeMetadata (=4) — typically a
+                    // mid-stream HDR `colorInfo` update. Surface in the
+                    // wire trace so a future investigation into stale
+                    // colour rendering on a destination has a thread to
+                    // pull on. We still forward it bit-faithfully below.
+                    crate::trace::log(
+                        "ENHANCED_METADATA",
+                        &format!("codec={} bytes={}", info.codec.label(), msg.payload.len()),
+                    );
+                }
                 if info.is_multitrack {
                     ctrl.note_multitrack_video();
                     // Flatten Enhanced Broadcasting simulcast down to the

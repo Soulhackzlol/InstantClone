@@ -40,6 +40,12 @@ pub struct VideoTagInfo {
     pub is_seq_header: bool,
     pub is_idr: bool,
     pub is_multitrack: bool,
+    /// Enhanced-RTMP `PacketTypeMetadata` (=4) carries mid-stream
+    /// updates like HDR `colorInfo`. Bit-faithfully passed through to
+    /// the destination — flagged here only so the trace log doesn't
+    /// mistake it for an anomalous packet, and so callers that cache
+    /// "must-replay-on-cut" packets can choose to include it.
+    pub is_metadata: bool,
     pub codec: VideoCodec,
 }
 
@@ -54,6 +60,7 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
         is_seq_header: false,
         is_idr: false,
         is_multitrack: false,
+        is_metadata: false,
         codec: VideoCodec::Unknown,
     };
     if payload.is_empty() {
@@ -80,6 +87,7 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
             is_seq_header,
             is_idr,
             is_multitrack: false,
+            is_metadata: false,
             codec: VideoCodec::Avc,
         };
     }
@@ -87,14 +95,18 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     // Enhanced RTMP: bit7=IsEx, bits6:4=FrameType, bits3:0=PacketType.
     //   PacketType 0=SequenceStart, 1=CodedFrames, 2=SequenceEnd,
     //              3=CodedFramesX (no composition time),
-    //              4=Metadata, 5=MPEG2TSSequenceStart, 6=Multitrack.
+    //              4=Metadata (mid-stream HDR colorInfo etc.),
+    //              5=MPEG2TSSequenceStart, 6=Multitrack.
     let frame_type = (b0 >> 4) & 0x07;
     let packet_type = b0 & 0x0F;
     let is_seq_header = packet_type == 0;
+    let is_metadata = packet_type == 4;
     // Enhanced encoders always set FrameType=1 on keyframes. For AVC we
     // walked NALUs because some encoders flag P-frames as key incorrectly;
     // enhanced-rtmp tightens this and FrameType is the spec-blessed signal.
-    let is_keyframe = frame_type == 1 && packet_type != 0;
+    // SeqStart / Metadata packets carry no slice data, so refuse to flag
+    // them as IDR even if the encoder set FrameType=1.
+    let is_keyframe = frame_type == 1 && !is_seq_header && !is_metadata;
     let is_multitrack = packet_type == 6;
 
     // For multi-track, the FourCC sits behind the multitrack header; we
@@ -105,6 +117,7 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
             is_seq_header,
             is_idr: is_keyframe,
             is_multitrack: true,
+            is_metadata: false,
             codec: VideoCodec::Unknown,
         };
     }
@@ -114,6 +127,7 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
             is_seq_header,
             is_idr: is_keyframe,
             is_multitrack: false,
+            is_metadata,
             codec: VideoCodec::Unknown,
         };
     }
@@ -129,6 +143,7 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
         is_seq_header,
         is_idr: is_keyframe,
         is_multitrack: false,
+        is_metadata,
         codec,
     }
 }
@@ -467,6 +482,22 @@ mod tests {
         let tag = avc_tag(1, &[nal(6, 20), nal(1, 30), nal(5, 50)]);
         let info = classify_video_tag(&tag);
         assert!(info.is_idr, "IDR in 3rd NAL must be detected");
+    }
+
+    #[test]
+    fn enhanced_rtmp_metadata_packettype_4_not_idr() {
+        // packet_type 4 = Metadata (mid-stream HDR colorInfo etc.).
+        // Even if the encoder sets FrameType=1, this packet carries no
+        // slice data and must not be treated as an IDR cut point.
+        let byte0 = 0x80 | (1u8 << 4) | 4;
+        let mut payload = vec![byte0];
+        payload.extend_from_slice(b"hvc1");
+        payload.extend_from_slice(&[0; 8]);
+        let info = classify_video_tag(&payload);
+        assert!(info.is_metadata);
+        assert!(!info.is_idr, "Metadata packets must not be IDR cuts");
+        assert!(!info.is_seq_header);
+        assert_eq!(info.codec, VideoCodec::Hevc);
     }
 
     #[test]

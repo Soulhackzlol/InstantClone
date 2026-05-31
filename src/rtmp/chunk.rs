@@ -61,6 +61,23 @@ pub struct ChunkReader<R> {
     inner: R,
     chunk_size: usize,
     streams: HashMap<u32, CsState>,
+    /// Total wire bytes consumed from the peer since the connection
+    /// opened — chunk headers + payload + extended timestamps + control
+    /// messages. Used to emit RTMP Acknowledgement (BYTES_READ_REPORT,
+    /// msg type 3) when we cross the peer-declared window threshold.
+    /// Wraps at 2^64 (~146 years at 4 GB/s) so saturating arithmetic
+    /// isn't needed.
+    bytes_in: u64,
+    /// Window acknowledgement size declared by the peer (msg type 5).
+    /// librtmp's threshold rule fires when `bytes_in - last_ack >
+    /// window/10`. We default to 2_500_000 (Twitch's and most CDNs'
+    /// default) so the first ack fires at a sane interval even if the
+    /// peer never sent a Window Ack Size message.
+    window_ack_size: u32,
+    /// Cumulative byte count we last reported in an Acknowledgement.
+    /// The next ack fires when `bytes_in` exceeds this plus
+    /// `window_ack_size / 10`.
+    bytes_in_at_last_ack: u64,
 }
 
 impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
@@ -69,11 +86,50 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
             inner,
             chunk_size: DEFAULT_CHUNK_SIZE,
             streams: HashMap::with_capacity(8),
+            bytes_in: 0,
+            window_ack_size: 2_500_000,
+            bytes_in_at_last_ack: 0,
         }
     }
 
     pub fn set_chunk_size(&mut self, size: usize) {
         self.chunk_size = size.clamp(1, 0xFF_FFFF);
+    }
+
+    /// If we have received more than `window/10` bytes since the last
+    /// Acknowledgement we sent, returns the current cumulative byte
+    /// count (truncated to u32 per spec) and advances the watermark.
+    /// Caller is responsible for actually writing the ack message —
+    /// the reader cannot write because it doesn't own the writer half
+    /// of the socket. librtmp's exact rule, reproduced here so the
+    /// behaviour is byte-for-byte compatible with what every OBS-class
+    /// publisher / consumer expects from a well-behaved RTMP peer.
+    pub fn take_pending_ack(&mut self) -> Option<u32> {
+        let threshold = self.bytes_in_at_last_ack + (self.window_ack_size as u64) / 10;
+        if self.bytes_in > threshold {
+            self.bytes_in_at_last_ack = self.bytes_in;
+            // RTMP BYTES_READ_REPORT is a u32 field — let it wrap.
+            Some(self.bytes_in as u32)
+        } else {
+            None
+        }
+    }
+
+    /// Internal `read_exact` wrapper that updates the wire-bytes
+    /// counter. Used for every header byte and payload byte so the
+    /// `bytes_in` accounting matches "everything we pulled off the
+    /// socket" (which is what the peer's window-ack-size threshold is
+    /// counting on its side, mirror-image).
+    async fn read_exact_counted(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        self.inner.read_exact(buf).await?;
+        self.bytes_in += buf.len() as u64;
+        Ok(())
+    }
+
+    async fn read_u32_be_counted(&mut self) -> io::Result<u32> {
+        let mut b = [0u8; 4];
+        self.read_exact_counted(&mut b).await?;
+        Ok(u32::from_be_bytes(b))
     }
 
     /// Read until one full RTMP message is reassembled, then yield it.
@@ -83,45 +139,143 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
         loop {
             // --- Basic header (1-3 bytes): fmt(2) + csid(6/14/22) ---
             let mut b0 = [0u8; 1];
-            self.inner.read_exact(&mut b0).await?;
+            self.read_exact_counted(&mut b0).await?;
             let fmt = (b0[0] >> 6) & 0x03;
             let csid_low = b0[0] & 0x3F;
             let csid: u32 = match csid_low {
                 0 => {
                     let mut b = [0u8; 1];
-                    self.inner.read_exact(&mut b).await?;
+                    self.read_exact_counted(&mut b).await?;
                     b[0] as u32 + 64
                 }
                 1 => {
                     let mut b = [0u8; 2];
-                    self.inner.read_exact(&mut b).await?;
+                    self.read_exact_counted(&mut b).await?;
                     (b[1] as u32) * 256 + b[0] as u32 + 64
                 }
                 n => n as u32,
             };
-
-            let st = self.streams.entry(csid).or_default();
 
             // --- Message header (0/3/7/11 bytes by fmt) ---
             // We only fully parse a fresh header on fmt < 3 and on the
             // first chunk of a message. fmt == 3 continuations either
             // continue an in-flight message or start a new one identical
             // to the previous (whole-message replay), per spec.
-            match fmt {
+            //
+            // Header reads happen here (before grabbing &mut self.streams)
+            // because read_exact_counted needs &mut self, and the borrow
+            // checker won't let both live at once. We materialise the
+            // header fields into locals, then drop into the streams map
+            // to update CsState.
+            let (
+                ext_ts_value,
+                ext_ts_delta,
+                len_opt,
+                type_id_opt,
+                msid_opt,
+                ext_ts_present,
+                ext_ts_bytes,
+                ts24,
+                delta24,
+            ) = match fmt {
                 0 => {
                     let mut h = [0u8; 11];
-                    self.inner.read_exact(&mut h).await?;
+                    self.read_exact_counted(&mut h).await?;
                     let ts24 = u24_be(&h[0..3]);
                     let len = u24_be(&h[3..6]);
                     let type_id = h[6];
-                    // Message stream ID is little-endian per spec.
                     let msid = u32::from_le_bytes([h[7], h[8], h[9], h[10]]);
                     let ext_ts_present = ts24 == 0x00FF_FFFF;
                     let timestamp = if ext_ts_present {
-                        read_u32_be(&mut self.inner).await?
+                        Some(self.read_u32_be_counted().await?)
                     } else {
-                        ts24
+                        None
                     };
+                    (
+                        timestamp,
+                        None,
+                        Some(len),
+                        Some(type_id),
+                        Some(msid),
+                        ext_ts_present,
+                        ext_ts_present,
+                        ts24,
+                        0,
+                    )
+                }
+                1 => {
+                    let mut h = [0u8; 7];
+                    self.read_exact_counted(&mut h).await?;
+                    let delta24 = u24_be(&h[0..3]);
+                    let len = u24_be(&h[3..6]);
+                    let type_id = h[6];
+                    let ext_ts_present = delta24 == 0x00FF_FFFF;
+                    let delta = if ext_ts_present {
+                        Some(self.read_u32_be_counted().await?)
+                    } else {
+                        None
+                    };
+                    (
+                        None,
+                        delta,
+                        Some(len),
+                        Some(type_id),
+                        None,
+                        ext_ts_present,
+                        ext_ts_present,
+                        0,
+                        delta24,
+                    )
+                }
+                2 => {
+                    let mut h = [0u8; 3];
+                    self.read_exact_counted(&mut h).await?;
+                    let delta24 = u24_be(&h[0..3]);
+                    let ext_ts_present = delta24 == 0x00FF_FFFF;
+                    let delta = if ext_ts_present {
+                        Some(self.read_u32_be_counted().await?)
+                    } else {
+                        None
+                    };
+                    (
+                        None,
+                        delta,
+                        None,
+                        None,
+                        None,
+                        ext_ts_present,
+                        ext_ts_present,
+                        0,
+                        delta24,
+                    )
+                }
+                3 => {
+                    // fmt-3 continuation. Whether to consume the
+                    // extended-timestamp field depends on what the
+                    // last header on this CSID indicated, so peek into
+                    // streams first.
+                    let needs_ext = self
+                        .streams
+                        .get(&csid)
+                        .map(|st| st.last_had_ext_ts)
+                        .unwrap_or(false);
+                    if needs_ext {
+                        let _ = self.read_u32_be_counted().await?;
+                    }
+                    (None, None, None, None, None, false, needs_ext, 0, 0)
+                }
+                _ => unreachable!(),
+            };
+            let _ = ext_ts_bytes; // already counted via read_u32_be_counted
+
+            // Now update CsState from the parsed header.
+            let st = self.streams.entry(csid).or_default();
+            match fmt {
+                0 => {
+                    let len = len_opt.unwrap();
+                    let type_id = type_id_opt.unwrap();
+                    let msid = msid_opt.unwrap();
+                    let timestamp = ext_ts_value.unwrap_or(ts24);
                     st.timestamp = timestamp;
                     st.timestamp_delta = timestamp;
                     st.length = len;
@@ -132,17 +286,9 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     st.receiving = true;
                 }
                 1 => {
-                    let mut h = [0u8; 7];
-                    self.inner.read_exact(&mut h).await?;
-                    let delta24 = u24_be(&h[0..3]);
-                    let len = u24_be(&h[3..6]);
-                    let type_id = h[6];
-                    let ext_ts_present = delta24 == 0x00FF_FFFF;
-                    let delta = if ext_ts_present {
-                        read_u32_be(&mut self.inner).await?
-                    } else {
-                        delta24
-                    };
+                    let delta = ext_ts_delta.unwrap_or(delta24);
+                    let len = len_opt.unwrap();
+                    let type_id = type_id_opt.unwrap();
                     st.timestamp = st.timestamp.wrapping_add(delta);
                     st.timestamp_delta = delta;
                     st.length = len;
@@ -152,15 +298,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     st.receiving = true;
                 }
                 2 => {
-                    let mut h = [0u8; 3];
-                    self.inner.read_exact(&mut h).await?;
-                    let delta24 = u24_be(&h[0..3]);
-                    let ext_ts_present = delta24 == 0x00FF_FFFF;
-                    let delta = if ext_ts_present {
-                        read_u32_be(&mut self.inner).await?
-                    } else {
-                        delta24
-                    };
+                    let delta = ext_ts_delta.unwrap_or(delta24);
                     st.timestamp = st.timestamp.wrapping_add(delta);
                     st.timestamp_delta = delta;
                     st.last_had_ext_ts = ext_ts_present;
@@ -168,19 +306,10 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     st.receiving = true;
                 }
                 3 => {
-                    // Continuation. If we have a message in progress, keep
-                    // appending; otherwise this is the spec-allowed "repeat
-                    // previous message header" shortcut.
                     if !st.receiving {
                         st.timestamp = st.timestamp.wrapping_add(st.timestamp_delta);
                         st.buf = BytesMut::with_capacity(st.length as usize);
                         st.receiving = true;
-                    }
-                    // Continuation chunks re-emit the extended timestamp
-                    // iff the message header indicated one. Many encoders
-                    // get this wrong; we follow spec.
-                    if st.last_had_ext_ts {
-                        let _ = read_u32_be(&mut self.inner).await?;
                     }
                 }
                 _ => unreachable!(),
@@ -191,7 +320,11 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
             let to_read = remaining.min(self.chunk_size);
             let start = st.buf.len();
             st.buf.resize(start + to_read, 0);
+            // Re-borrow `inner` directly here: we can't call
+            // read_exact_counted while st is also borrowed from
+            // self.streams. We bump the byte counter manually afterwards.
             self.inner.read_exact(&mut st.buf[start..]).await?;
+            self.bytes_in += to_read as u64;
 
             if st.buf.len() as u32 == st.length {
                 let msg = Message {
@@ -218,9 +351,28 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                         }
                         continue;
                     }
-                    2 => continue,     // Abort Message
-                    3 => continue,     // Acknowledgement
-                    5 | 6 => continue, // Window Ack Size / Set Peer Bandwidth
+                    2 => continue, // Abort Message
+                    3 => continue, // Acknowledgement
+                    5 => {
+                        // Window Acknowledgement Size from the peer —
+                        // record it so our `take_pending_ack` threshold
+                        // uses the peer-declared value rather than the
+                        // 2.5 MB default. Zero is meaningless per spec;
+                        // ignore it.
+                        if msg.payload.len() >= 4 {
+                            let n = u32::from_be_bytes([
+                                msg.payload[0],
+                                msg.payload[1],
+                                msg.payload[2],
+                                msg.payload[3],
+                            ]);
+                            if n > 0 {
+                                self.window_ack_size = n;
+                            }
+                        }
+                        continue;
+                    }
+                    6 => continue, // Set Peer Bandwidth — informational only
                     _ => return Ok(msg),
                 }
             }
@@ -255,6 +407,17 @@ impl<W: AsyncWrite + Unpin> ChunkWriter<W> {
         self.write_message(2, 0, 1, 0, &payload).await?;
         self.set_chunk_size(size as usize);
         Ok(())
+    }
+
+    /// Send an RTMP Acknowledgement (BYTES_READ_REPORT, msg type 3) on
+    /// the control channel. `seq` is the cumulative wire-bytes-received
+    /// count, truncated to u32 per spec. Real-world peers (Twitch's
+    /// edges, OBS's librtmp consumer) silently disconnect a stalled
+    /// receiver when their `window_ack_size/10` threshold is breached
+    /// without an ack landing — so callers should fire this from the
+    /// same task that drives the chunk reader, after every read.
+    pub async fn send_ack(&mut self, seq: u32) -> io::Result<()> {
+        self.write_message(2, 0, 3, 0, &seq.to_be_bytes()).await
     }
 
     /// Write a complete RTMP message, fragmenting into chunks as needed.
@@ -338,10 +501,4 @@ fn push_u24_be(out: &mut Vec<u8>, v: u32) {
 
 fn u24_be(b: &[u8]) -> u32 {
     ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32)
-}
-
-async fn read_u32_be<R: AsyncReadExt + Unpin>(r: &mut R) -> io::Result<u32> {
-    let mut b = [0u8; 4];
-    r.read_exact(&mut b).await?;
-    Ok(u32::from_be_bytes(b))
 }
