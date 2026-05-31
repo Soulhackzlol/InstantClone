@@ -78,7 +78,8 @@ fn entry_json(web_port: u16, ingest_port: u16) -> String {
                 "profile": "main",
                 "max video bitrate": 50000,
                 "max audio bitrate": 320
-            }}
+            }},
+            "supported video codecs": ["h264"]
         }}"#,
         web = web_port,
         rtmp = ingest_port,

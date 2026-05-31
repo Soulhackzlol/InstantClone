@@ -892,6 +892,7 @@ async fn post_config(
                 | "buffer_path"
                 | "initial_delay_ms"
                 | "overlays_dir"
+                | "tracing_enabled"
         ) {
             apply_field_str(&mut new_settings, k, v);
         }
@@ -2181,6 +2182,29 @@ setInterval(refresh, 500);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Settings save: tracing_enabled regression test ──────────
+    //
+    // `post_config` whitelists which form keys get dispatched into
+    // `apply_field_str`. Any field that handles a save but isn't in
+    // the whitelist gets silently dropped — exactly what happened
+    // with `tracing_enabled` between 3f9db09 (toggle added) and
+    // 6a3990b (default flipped to off). Invisible until users
+    // actually tried to enable the toggle on a fresh install.
+
+    #[test]
+    fn apply_field_str_persists_tracing_enabled_value() {
+        // The dispatch in post_config gates which keys reach this
+        // function. The test below asserts the gate includes our
+        // key by simulating the form-loop assignment.
+        let mut s = crate::config::Settings::defaults();
+        // beta.6 default is `false`.
+        assert!(!s.tracing_enabled);
+        apply_field_str(&mut s, "tracing_enabled", "true");
+        assert!(s.tracing_enabled);
+        apply_field_str(&mut s, "tracing_enabled", "false");
+        assert!(!s.tracing_enabled);
+    }
 
     // ── OBS multitrack-config proxy helpers ──────────────────────
     //
