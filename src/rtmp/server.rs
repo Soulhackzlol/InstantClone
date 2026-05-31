@@ -113,22 +113,20 @@ async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::R
                 }
                 if info.is_multitrack {
                     ctrl.note_multitrack_video();
-                    // Flatten Enhanced Broadcasting simulcast down to the
-                    // primary track. Re-classify the flattened bytes so
-                    // codec + IDR detection match what the rest of the
-                    // pipeline will actually carry.
-                    if let Some(flat) = h264::flatten_multitrack_video(&msg.payload) {
-                        let info2 = h264::classify_video_tag(&flat);
-                        ctrl.note_video_codec(info2.codec);
-                        ctrl.on_tag(9, msg.timestamp, &flat, info2.is_idr, info2.is_seq_header);
-                    } else {
-                        // Pathological multi-track layout we can't parse —
-                        // forward as-is and let the destination decide.
-                        ctrl.on_tag(9, msg.timestamp, &msg.payload, info.is_idr, info.is_seq_header);
-                    }
-                } else {
-                    ctrl.on_tag(9, msg.timestamp, &msg.payload, info.is_idr, info.is_seq_header);
                 }
+                // Store the raw payload — including any Enhanced Broadcasting
+                // multi-track wrapper — and let each egress pump decide what
+                // to do with it. Twitch destinations pass the multi-track tag
+                // through bit-faithfully (it's what unlocks the transcoded
+                // ladder for non-Affiliate accounts via simulcast). Every
+                // other platform doesn't support multi-track video and gets
+                // a single-track flatten applied just before sending. The
+                // IDR / seq-header flags are taken from the multi-track tag's
+                // outer header (FrameType for IDR, inner PacketType for seq
+                // header) — both spec-required to be track-aligned, so the
+                // outer-header signal is correct for cut detection regardless
+                // of which destination's flatten path the bytes end up on.
+                ctrl.on_tag(9, msg.timestamp, &msg.payload, info.is_idr, info.is_seq_header);
             }
             4 if msg.payload.len() >= 6
                 && u16::from_be_bytes([msg.payload[0], msg.payload[1]]) == 6 =>

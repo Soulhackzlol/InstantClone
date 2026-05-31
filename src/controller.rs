@@ -132,6 +132,16 @@ pub struct DestinationState {
     last_seq_header_gen: AtomicU32,
     rate_window_bytes: AtomicU64,
     rate_window_start_ms: AtomicU64,
+    /// True if this destination accepts Enhanced Broadcasting multi-track
+    /// video on the wire. Set by the supervisor to `true` when the
+    /// destination's platform is `twitch` and to `false` for everything
+    /// else (YouTube / Kick / Trovo / Restream / custom RTMP — none of
+    /// which currently process multi-track video). When false, the pump
+    /// runs `flatten_multitrack_video` on every multi-track tag just
+    /// before sending, which produces a single-track tag that's
+    /// byte-identical to what beta.6 emitted from the ingest-side
+    /// flatten — so existing destinations see no behaviour change.
+    pub pass_through_multitrack_video: AtomicBool,
 }
 
 impl DestinationState {
@@ -149,6 +159,12 @@ impl DestinationState {
             last_seq_header_gen: AtomicU32::new(0),
             rate_window_bytes: AtomicU64::new(0),
             rate_window_start_ms: AtomicU64::new(0),
+            // Default false: every newly-spawned destination flattens
+            // multi-track until the supervisor decides otherwise. This
+            // preserves beta.6 behaviour for any code path that creates
+            // a DestinationState without going through the supervisor
+            // (the destination_state lazy-init in particular).
+            pass_through_multitrack_video: AtomicBool::new(false),
         }
     }
 
@@ -1145,7 +1161,7 @@ async fn pump_dest(
         ),
     );
     // Always lead with sequence headers + the IDR itself.
-    send_sequence_headers(ctrl, &mut sink, state.output_ts_base).await?;
+    send_sequence_headers(ctrl, dest, &mut sink, state.output_ts_base).await?;
 
     loop {
         // Cooperative shutdown: when the supervisor flips this, we end
@@ -1191,7 +1207,7 @@ async fn pump_dest(
             let new_idr = wait_first_idr_after(&ctrl.ring, watermark).await;
             reseed_after_publisher_change(&mut state, new_idr);
             state.last_publisher_token = current_token;
-            send_sequence_headers(ctrl, &mut sink, state.output_ts_base).await?;
+            send_sequence_headers(ctrl, dest, &mut sink, state.output_ts_base).await?;
             dest.consumer_seq
                 .store(state.consumer_seq, Ordering::Relaxed);
             dest.last_seq_header_gen.store(
@@ -1214,7 +1230,7 @@ async fn pump_dest(
                 .last_sent_input_ts
                 .saturating_sub(state.input_ts_anchor) as u32;
             let resend_ts = state.output_ts_base.wrapping_add(delta_u32);
-            send_sequence_headers(ctrl, &mut sink, resend_ts).await?;
+            send_sequence_headers(ctrl, dest, &mut sink, resend_ts).await?;
             dest.last_seq_header_gen.store(cur_gen, Ordering::Relaxed);
         }
 
@@ -1367,7 +1383,18 @@ async fn pace_and_send(
             sink.send_audio(out_ts, io_buf).await?;
         }
         9 => {
-            let hdr = io_buf.first().copied().unwrap_or(0);
+            // Per-destination video-tag selection. Twitch
+            // destinations pass multi-track through bit-faithfully
+            // (Enhanced Broadcasting); every other RTMP ingest gets
+            // the single-track flatten that beta.6 used to apply
+            // globally at the ingest stage. Single-track tags
+            // borrow `io_buf` and never allocate.
+            let selected = crate::h264::select_video_bytes(
+                io_buf,
+                dest.pass_through_multitrack_video.load(Ordering::Relaxed),
+            );
+            let bytes_out: &[u8] = &selected;
+            let hdr = bytes_out.first().copied().unwrap_or(0);
             let is_idr = meta.is_idr;
             crate::trace::log(
                 "TAG_VIDEO",
@@ -1377,13 +1404,26 @@ async fn pace_and_send(
                     dest.tags_sent.load(Ordering::Relaxed),
                     meta.ts_ms,
                     out_ts,
-                    io_buf.len(),
+                    bytes_out.len(),
                     hdr,
                     is_idr as u8,
-                    crate::trace::hex_prefix(io_buf, 16),
+                    crate::trace::hex_prefix(bytes_out, 16),
                 ),
             );
-            sink.send_video(out_ts, io_buf).await?;
+            sink.send_video(out_ts, bytes_out).await?;
+            // The bytes_sent accounting below uses bytes_out.len()
+            // so per-destination bitrate reflects what we actually
+            // put on the wire (raw multi-track for Twitch, flat
+            // for everyone else).
+            dest.tags_sent.fetch_add(1, Ordering::Relaxed);
+            dest.bytes_sent
+                .fetch_add(bytes_out.len() as u64, Ordering::Relaxed);
+            dest.note_outbound_bytes(bytes_out.len());
+            state.consumer_seq = meta.seq + 1;
+            state.last_sent_input_ts = meta.ts_ms;
+            dest.consumer_seq
+                .store(state.consumer_seq, Ordering::Relaxed);
+            return Ok(());
         }
         _ => {}
     }
@@ -1549,7 +1589,7 @@ async fn apply_cut(
     // destination decoder's POV. Headers are also resent on publisher
     // reconnect (in the pump loop) and on actual codec change (via the
     // seq_header_gen check).
-    send_sequence_headers(ctrl, sink, new_output_ts_base).await?;
+    send_sequence_headers(ctrl, dest, sink, new_output_ts_base).await?;
     // Sync the generation counter — the explicit resend above means
     // the next pump iteration shouldn't redundantly resend on a
     // gen-mismatch that has already been satisfied.
@@ -1564,22 +1604,33 @@ async fn apply_cut(
 
 async fn send_sequence_headers(
     ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
     sink: &mut EgressSink,
     ts: u32,
 ) -> io::Result<()> {
     // Drop the MutexGuards before the awaits.
     let v = ctrl.ring.video_seq_header.lock().unwrap().clone();
     if let Some(h) = v {
+        // Same per-destination selection as the data-tag path: if the
+        // cached video seq header is a multi-track wrapper and this
+        // destination doesn't accept multi-track, flatten it down to
+        // single-track before sending so the destination's decoder
+        // doesn't choke on bytes it can't parse.
+        let selected = crate::h264::select_video_bytes(
+            &h,
+            dest.pass_through_multitrack_video.load(Ordering::Relaxed),
+        );
+        let bytes_out: &[u8] = &selected;
         crate::trace::log(
             "VIDEO_SEQ_HDR_SENT",
             &format!(
                 "ts=0x{:08x} bytes={} hex={}",
                 ts,
-                h.len(),
-                crate::trace::hex_prefix(&h, 64)
+                bytes_out.len(),
+                crate::trace::hex_prefix(bytes_out, 64)
             ),
         );
-        sink.send_video(ts, &h).await?;
+        sink.send_video(ts, bytes_out).await?;
     }
     let a = ctrl.ring.audio_seq_header.lock().unwrap().clone();
     if let Some(h) = a {

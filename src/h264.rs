@@ -6,13 +6,15 @@
 //!
 //!   * sequence headers (cache + resend on every cut and reconnect)
 //!   * keyframes / IDRs (cut points the player can resync to)
-//!   * multi-track packets (Twitch Enhanced Broadcasting — handled at
-//!     ingest by extracting the first/primary track and rewriting the
-//!     tag as standard single-track)
+//!   * multi-track packets (Twitch Enhanced Broadcasting — kept raw in
+//!     the buffer; the pump flattens per-destination via
+//!     `select_video_bytes` so Twitch receives the simulcast while
+//!     every other destination gets a standard single-track tag)
 //!
-//! The rest of the pipeline is bit-transparent on the payload, so once
-//! ingest classifies and (optionally) flattens multi-track, every
-//! downstream send is just `writer.write_message(... payload ...)`.
+//! The buffer stores tags bit-faithfully as ingest received them. The
+//! only transformation we apply is `select_video_bytes` in the pump
+//! right before each `sink.send_video` call, on a per-destination
+//! basis — single-track tags are borrowed through with zero copies.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoCodec {
@@ -110,8 +112,10 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     let is_multitrack = packet_type == 6;
 
     // For multi-track, the FourCC sits behind the multitrack header; we
-    // don't bother classifying the inner codec here because the ingest
-    // path flattens it to single-track before any downstream code runs.
+    // don't bother classifying the inner codec here because each
+    // destination's pump either passes the multi-track tag through
+    // (Twitch) or flattens it to single-track right before send (every
+    // other destination, via `select_video_bytes`).
     if is_multitrack {
         return VideoTagInfo {
             is_seq_header,
@@ -248,6 +252,44 @@ pub fn flatten_multitrack_video(payload: &[u8]) -> Option<Vec<u8>> {
             Some(out)
         }
         _ => None,
+    }
+}
+
+/// Per-destination video-tag selection. Decides which bytes to put on
+/// the wire given the destination's Enhanced Broadcasting policy:
+///
+/// - `pass_through_multitrack = true`: Twitch destinations. Multi-track
+///   tags go through bit-faithfully so Twitch's edge can populate the
+///   transcoded ladder from the simulcast.
+/// - `pass_through_multitrack = false`: every other RTMP ingest we
+///   know of. Multi-track tags get flattened down to the primary
+///   track (matching what beta.6 emitted from the ingest-side flatten),
+///   single-track tags pass through unchanged.
+///
+/// Single-track tags ALWAYS pass through unchanged regardless of the
+/// flag — there's nothing to flatten and no destination policy that
+/// would want them changed. Returns a borrow when no copy is needed
+/// (the common case) and an owned `Vec` only when a flatten was
+/// actually performed.
+pub fn select_video_bytes<'a>(
+    payload: &'a [u8],
+    pass_through_multitrack: bool,
+) -> std::borrow::Cow<'a, [u8]> {
+    use std::borrow::Cow;
+    if pass_through_multitrack {
+        return Cow::Borrowed(payload);
+    }
+    let info = classify_video_tag(payload);
+    if !info.is_multitrack {
+        return Cow::Borrowed(payload);
+    }
+    match flatten_multitrack_video(payload) {
+        Some(flat) => Cow::Owned(flat),
+        // Pathological multi-track layout we couldn't parse — let it
+        // through as-is, same fallback the old ingest-side flatten
+        // used. The destination will either accept it or surface an
+        // error we can chase.
+        None => Cow::Borrowed(payload),
     }
 }
 
@@ -521,6 +563,89 @@ mod tests {
         assert_eq!(info.codec, AudioCodec::Aac);
         // The convenience shim agrees.
         assert!(is_aac_seq_header(&payload));
+    }
+
+    // ── select_video_bytes: per-destination flatten policy ───────────
+    //
+    // The pump uses this helper to decide what bytes to put on the wire
+    // for a given destination. Three invariants must hold absolutely or
+    // beta.7's "Enhanced Broadcasting to Twitch + flatten to everyone
+    // else" promise breaks silently.
+
+    fn avc_single_track_keyframe_bytes() -> Vec<u8> {
+        // Realistic FLV AVC keyframe: FrameType=1, CodecID=7,
+        // AVCPacketType=1 (NALU), 3-byte CompositionTime=0, then a
+        // length-prefixed IDR NAL. Mirrors what any single-track OBS
+        // encoder emits per frame.
+        let nal = nal(5, 64);
+        let mut tag = vec![0x17, 0x01, 0x00, 0x00, 0x00];
+        tag.extend_from_slice(&nal);
+        tag
+    }
+
+    fn enhanced_rtmp_onetrack_video_bytes() -> Vec<u8> {
+        // Enhanced-RTMP multi-track video, layout type 0 (OneTrack):
+        //   byte 0 = IsEx(1) | FrameType(3, keyframe=1) | PacketType(4, Multitrack=6)
+        //   byte 1 = MultiTrackType(4, OneTrack=0) | nested PacketType(4, CodedFrames=1)
+        //   bytes 2..6 = FourCC ("hvc1")
+        //   byte 6 = TrackId
+        //   bytes 7.. = inner payload
+        let mut payload = vec![0x80 | (1u8 << 4) | 6, 0x01];
+        payload.extend_from_slice(b"hvc1");
+        payload.push(0); // TrackId
+        payload.extend_from_slice(&[0xAA; 32]); // inner payload bytes
+        payload
+    }
+
+    #[test]
+    fn select_video_bytes_passes_single_track_through_unchanged_in_both_modes() {
+        // Invariant 1: single-track tags never get rewritten. The
+        // pass_through flag is meaningless when there's nothing to
+        // flatten — and the borrow path means no copy happens either.
+        let tag = avc_single_track_keyframe_bytes();
+        let twitch = select_video_bytes(&tag, true);
+        let youtube = select_video_bytes(&tag, false);
+        assert_eq!(twitch.as_ref(), tag.as_slice());
+        assert_eq!(youtube.as_ref(), tag.as_slice());
+        assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(youtube, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn select_video_bytes_passes_multitrack_through_for_twitch() {
+        // Invariant 2: Twitch destinations get the raw multi-track
+        // bytes verbatim — that's what unlocks the transcoded ladder.
+        let tag = enhanced_rtmp_onetrack_video_bytes();
+        let twitch = select_video_bytes(&tag, true);
+        assert_eq!(twitch.as_ref(), tag.as_slice());
+        assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn select_video_bytes_flattens_multitrack_for_non_twitch() {
+        // Invariant 3: non-Twitch destinations get exactly the bytes
+        // beta.6 emitted — i.e. whatever `flatten_multitrack_video`
+        // produces. If this changes byte-for-byte we've silently
+        // regressed every YouTube/Kick/Restream/custom-RTMP user.
+        let tag = enhanced_rtmp_onetrack_video_bytes();
+        let youtube = select_video_bytes(&tag, false);
+        let direct_flat = flatten_multitrack_video(&tag).expect("OneTrack layout must flatten");
+        assert_eq!(youtube.as_ref(), direct_flat.as_slice());
+        assert!(matches!(youtube, std::borrow::Cow::Owned(_)));
+    }
+
+    #[test]
+    fn select_video_bytes_falls_back_to_raw_when_flatten_cannot_parse() {
+        // Pathological multi-track tag (declares multi-track but the
+        // payload is too short to contain a valid inner structure).
+        // The pump must NOT crash and must NOT swallow the tag —
+        // letting it through unchanged matches the old ingest-side
+        // fallback so the destination gets a chance to surface the
+        // error properly.
+        let truncated = vec![0x80 | (1u8 << 4) | 6, 0]; // 2 bytes total
+        let youtube = select_video_bytes(&truncated, false);
+        assert_eq!(youtube.as_ref(), truncated.as_slice());
+        assert!(matches!(youtube, std::borrow::Cow::Borrowed(_)));
     }
 
     #[test]

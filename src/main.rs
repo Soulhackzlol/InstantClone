@@ -341,6 +341,18 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 state
                     .shutdown_requested
                     .store(false, std::sync::atomic::Ordering::Relaxed);
+                // Enhanced Broadcasting (multi-track video) pass-through
+                // is currently a Twitch-only capability — Twitch's
+                // ingest accepts the simulcast and uses it to populate
+                // the transcoded quality ladder, bypassing the
+                // account-tier source-only fallback. Every other RTMP
+                // ingest we know of rejects or mishandles multi-track
+                // video, so they get the same single-track flatten the
+                // ingest used to apply globally.
+                state.pass_through_multitrack_video.store(
+                    dest.platform == "twitch",
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 let label = dest.name.clone();
                 let url_clone = url.clone();
                 let handle = tokio::spawn(controller::run_egress(
