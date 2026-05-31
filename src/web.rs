@@ -244,10 +244,25 @@ async fn route(
         ),
         ("GET", "/config") => ("200 OK", "application/json", settings.borrow().to_json()),
         ("GET", "/platforms") => ("200 OK", "application/json", platforms_json()),
+        // OBS sends a POST with a system-info payload (CPU/GPU/encoder
+        // capabilities + the user's stream-key field as the auth
+        // value). We proxy that payload to Twitch's real config
+        // endpoint with the streamer's real Twitch key swapped in,
+        // then rewrite the response's ingest URL to point back at us
+        // so OBS sends multi-track to InstantClone instead of Twitch
+        // directly. Falls back to a self-contained static config when
+        // no Twitch destination is configured or the upstream call
+        // fails. GET is supported as an escape hatch for poking the
+        // static fallback from a browser address bar.
+        ("POST", "/obs/multitrack-config") => (
+            "200 OK",
+            "application/json",
+            obs_multitrack_config_proxy(body, query, settings).await,
+        ),
         ("GET", "/obs/multitrack-config") => (
             "200 OK",
             "application/json",
-            obs_multitrack_config(query, settings),
+            obs_multitrack_config_static(query, settings),
         ),
         ("GET", "/obs/register-status") => (
             "200 OK",
@@ -505,7 +520,195 @@ fn platforms_json() -> String {
 /// it replaces with whatever the user typed in the Stream Key field at
 /// stream start. Our ingest doesn't authenticate on the key; we just
 /// accept whatever shows up after `/live/`.
-fn obs_multitrack_config(query: &str, settings: &Arc<watch::Sender<Settings>>) -> String {
+/// Proxy OBS's multitrack-config POST through to Twitch's real
+/// `GetClientConfiguration` endpoint and rewrite the response so the
+/// stream lands at us instead of going straight to Twitch.
+///
+/// Flow:
+///   1. OBS POSTs a JSON payload with system info + an `authentication`
+///      field (the stream key the user typed in OBS's Stream Key
+///      field). For a stream that's being proxied through us the
+///      typed value won't authenticate with Twitch directly.
+///   2. We look up the streamer's real Twitch key in our destinations
+///      and string-replace the `authentication` value in the payload.
+///   3. We POST the modified payload to
+///      `https://ingest.twitch.tv/api/v3/GetClientConfiguration`.
+///   4. Twitch returns its real tier-appropriate config (encoder
+///      bitrates, track count, codec recommendations). We rewrite
+///      every `url_template` field in the `ingest_endpoints` array to
+///      point at our localhost RTMP ingest.
+///   5. OBS encodes per Twitch's actual recommendations and sends the
+///      multi-track stream to us. We forward it raw to Twitch via the
+///      EB passthrough on this branch.
+///
+/// If anything in steps 2-4 fails (no Twitch destination configured,
+/// Twitch API down, response unparseable) we fall back to the
+/// hand-crafted static config from `obs_multitrack_config_static`.
+/// That keeps the path usable for streamers who haven't put a Twitch
+/// destination in our app yet, or who are testing without internet.
+async fn obs_multitrack_config_proxy(
+    body: &str,
+    query: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+) -> String {
+    // The streamer's real Twitch key lives in our destinations list.
+    // Pick the first enabled Twitch destination with a non-empty key.
+    let twitch_key = {
+        let s = settings.borrow();
+        s.destinations
+            .iter()
+            .find(|d| d.enabled && d.platform == "twitch" && !d.stream_key.is_empty())
+            .map(|d| d.stream_key.clone())
+    };
+    let Some(twitch_key) = twitch_key else {
+        // No Twitch destination → fall back to our self-contained
+        // static config. Useful for testing through us before the
+        // streamer has wired anything up.
+        return obs_multitrack_config_static(query, settings);
+    };
+
+    // Swap the `authentication` field in OBS's payload with the real
+    // Twitch key. JSON-parser-free: the field is a flat top-level
+    // string value, easy to splice on string boundaries.
+    let modified_body = match replace_auth_field(body, &twitch_key) {
+        Some(b) => b,
+        None => {
+            crate::trace::log(
+                "OBS_MULTITRACK",
+                "could not patch authentication field — using static fallback",
+            );
+            return obs_multitrack_config_static(query, settings);
+        }
+    };
+
+    let ingest_port = settings.borrow().ingest_port;
+
+    // ureq is sync — run it on a blocking thread so we don't stall
+    // the tokio runtime. 8 s outer timeout covers Twitch's API even
+    // when their edge is slow; if it times out we fall back to the
+    // static config rather than make the streamer wait.
+    let twitch_response = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        tokio::task::spawn_blocking(move || -> Option<String> {
+            // Map ureq::Error to a small type before the `?`-style
+            // chain so `clippy::result_large_err` stays happy — the
+            // ureq error enum is ~300 bytes and triggers the lint
+            // when it crosses an `and_then` boundary.
+            let resp = ureq::AgentBuilder::new()
+                .timeout_connect(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(6))
+                .build()
+                .post("https://ingest.twitch.tv/api/v3/GetClientConfiguration")
+                .set("Content-Type", "application/json")
+                .send_string(&modified_body)
+                .ok()?;
+            resp.into_string().ok()
+        }),
+    )
+    .await;
+
+    let Ok(Ok(Some(twitch_json))) = twitch_response else {
+        crate::trace::log(
+            "OBS_MULTITRACK",
+            "Twitch GetClientConfiguration call failed — using static fallback",
+        );
+        return obs_multitrack_config_static(query, settings);
+    };
+
+    // Twitch's response has one or more `ingest_endpoints` entries
+    // with `url_template` values like
+    // `rtmps://<region>.contribute.live-video.net/app/{stream_key}`.
+    // Replace every rtmp:// or rtmps:// URL in url_template fields
+    // with our localhost ingest so OBS sends the multi-track stream
+    // to us instead. We keep `{stream_key}` as the literal token —
+    // OBS substitutes it with whatever's in its Stream Key field
+    // (which the streamer can type as anything; we ignore it).
+    let rewritten = rewrite_url_templates(
+        &twitch_json,
+        &format!("rtmp://127.0.0.1:{}/live/{{stream_key}}", ingest_port),
+    );
+    crate::trace::log(
+        "OBS_MULTITRACK",
+        "Twitch config received + rewritten to localhost ingest",
+    );
+    rewritten
+}
+
+/// Replace the value of a top-level `"authentication"` field in a JSON
+/// string with `new_value`. Returns `None` if the field can't be
+/// located unambiguously — we'd rather fall back to a static config
+/// than ship a malformed payload to Twitch and have the streamer
+/// puzzle over an opaque 4xx.
+fn replace_auth_field(json: &str, new_value: &str) -> Option<String> {
+    // Match both `"authentication":"..."` and `"authentication": "..."`.
+    // We don't allow embedded whitespace inside the value because OBS
+    // never emits one and a multi-line value would mean we're not
+    // looking at the field we think we are.
+    let key_pos = json.find(r#""authentication""#)?;
+    let after_key = &json[key_pos + r#""authentication""#.len()..];
+    // Skip whitespace + colon.
+    let colon_offset = after_key.find(':')?;
+    let after_colon = &after_key[colon_offset + 1..];
+    let quote_offset = after_colon.find('"')?;
+    let value_start_abs = key_pos + r#""authentication""#.len() + colon_offset + 1 + quote_offset;
+    let after_quote = &json[value_start_abs + 1..];
+    let end_quote_offset = after_quote.find('"')?;
+    let value_end_abs = value_start_abs + 1 + end_quote_offset;
+    Some(format!(
+        "{}\"{}\"{}",
+        &json[..value_start_abs],
+        new_value.replace('\\', "\\\\").replace('"', "\\\""),
+        &json[value_end_abs + 1..]
+    ))
+}
+
+/// Replace every `"url_template":"<rtmp[s]://...>"` value in a JSON
+/// blob with `new_value`. Twitch's response has one or more such
+/// fields (one per region they offer) — every one of them needs to
+/// point at us so OBS doesn't accidentally pick a Twitch URL.
+fn rewrite_url_templates(json: &str, new_value: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    let mut cursor = 0;
+    let key = "\"url_template\"";
+    while let Some(rel_pos) = json[cursor..].find(key) {
+        let key_pos = cursor + rel_pos;
+        // Copy everything before the key verbatim.
+        out.push_str(&json[cursor..key_pos]);
+        // Walk through key + `:` + whitespace + opening quote.
+        let after_key = &json[key_pos + key.len()..];
+        let Some(colon_off) = after_key.find(':') else {
+            // Malformed — bail and emit the remainder unchanged.
+            out.push_str(&json[key_pos..]);
+            return out;
+        };
+        let after_colon = &after_key[colon_off + 1..];
+        let Some(quote_off) = after_colon.find('"') else {
+            out.push_str(&json[key_pos..]);
+            return out;
+        };
+        let value_start_abs = key_pos + key.len() + colon_off + 1 + quote_off;
+        let after_quote = &json[value_start_abs + 1..];
+        let Some(end_quote_off) = after_quote.find('"') else {
+            out.push_str(&json[key_pos..]);
+            return out;
+        };
+        let value_end_abs = value_start_abs + 1 + end_quote_off;
+        // Emit the key, colon, opening quote, our new value, closing
+        // quote — leaving the original `{stream_key}` placeholder
+        // semantics intact via the `new_value` argument the caller
+        // passes in.
+        out.push_str(key);
+        out.push_str(": \"");
+        out.push_str(new_value);
+        out.push('"');
+        cursor = value_end_abs + 1;
+    }
+    // Tail.
+    out.push_str(&json[cursor..]);
+    out
+}
+
+fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settings>>) -> String {
     let params = config::parse_form(query);
     let encoder = params.get("encoder").map(|s| s.as_str()).unwrap_or("x264");
     let tracks: u32 = params
@@ -1978,6 +2181,87 @@ setInterval(refresh, 500);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── OBS multitrack-config proxy helpers ──────────────────────
+    //
+    // The proxy path forwards OBS's POST to Twitch with our
+    // destination's stream key swapped in, then rewrites the response
+    // to point the multi-track ingest at us. Both string helpers run
+    // without a JSON parser, so they're easy to get subtly wrong —
+    // these tests pin down the invariants we depend on.
+
+    #[test]
+    fn replace_auth_field_swaps_value_in_typical_obs_body() {
+        // OBS's actual payload has many top-level keys before/after
+        // `authentication`. Verify our string ops cope with both
+        // orderings and don't touch sibling fields.
+        let body = r#"{"authentication":"live_typed_in_obs","capabilities":{"cpu":{"name":"AMD"}},"client":{"name":"obs-studio"}}"#;
+        let patched = replace_auth_field(body, "live_real_twitch_key").unwrap();
+        assert!(patched.contains(r#""authentication":"live_real_twitch_key""#));
+        assert!(!patched.contains("live_typed_in_obs"));
+        // Sibling keys must survive untouched.
+        assert!(patched.contains(r#""capabilities":{"cpu":{"name":"AMD"}}"#));
+        assert!(patched.contains(r#""client":{"name":"obs-studio"}"#));
+    }
+
+    #[test]
+    fn replace_auth_field_tolerates_whitespace_around_colon() {
+        // OBS's encoder formats with `"key": "value"` indent; some
+        // libs emit compact `"key":"value"` instead. Both must work.
+        let indented = r#"{ "authentication" : "old" , "x": 1 }"#;
+        let patched = replace_auth_field(indented, "new").unwrap();
+        assert!(patched.contains(r#""new""#));
+        assert!(!patched.contains(r#""old""#));
+    }
+
+    #[test]
+    fn replace_auth_field_returns_none_when_absent() {
+        // If OBS ever changes their schema and drops `authentication`,
+        // we must NOT silently emit a half-modified body that Twitch
+        // accepts but with wrong values. `None` triggers the static
+        // fallback at the caller.
+        let body = r#"{"client":"obs-studio"}"#;
+        assert!(replace_auth_field(body, "x").is_none());
+    }
+
+    #[test]
+    fn rewrite_url_templates_replaces_every_endpoint() {
+        // Twitch returns multiple `ingest_endpoints` for regional
+        // load-balancing. Every one of them must end up pointing at
+        // our localhost ingest — missing even one leaves a chance
+        // OBS picks a Twitch URL and bypasses our proxy.
+        let response = r#"{"ingest_endpoints":[{"url_template":"rtmps://fra.contribute.live-video.net/app/{stream_key}"},{"url_template":"rtmps://jfk.contribute.live-video.net/app/{stream_key}"}]}"#;
+        let rewritten = rewrite_url_templates(response, "rtmp://127.0.0.1:1935/live/{stream_key}");
+        assert_eq!(rewritten.matches("contribute.live-video.net").count(), 0);
+        assert_eq!(
+            rewritten
+                .matches("rtmp://127.0.0.1:1935/live/{stream_key}")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn rewrite_url_templates_preserves_unrelated_fields() {
+        // The function must not corrupt other fields that happen to
+        // contain `url_template` as a substring of their value (e.g.
+        // a `"description": "url_template is the field..."`).
+        // Our matcher requires the full quoted `"url_template"` key
+        // marker, so adjacent text is safe.
+        let response = r#"{"description":"see url_template","ingest_endpoints":[{"url_template":"rtmp://old"}]}"#;
+        let rewritten = rewrite_url_templates(response, "rtmp://new");
+        assert!(rewritten.contains(r#""description":"see url_template""#));
+        assert!(rewritten.contains(r#""rtmp://new""#));
+    }
+
+    #[test]
+    fn rewrite_url_templates_handles_zero_matches_gracefully() {
+        // If Twitch ever changes the response shape, the function
+        // must return the input verbatim rather than corrupt it.
+        let response = r#"{"ingest_endpoints":[]}"#;
+        let rewritten = rewrite_url_templates(response, "rtmp://new");
+        assert_eq!(rewritten, response);
+    }
 
     #[test]
     fn accepts_gzip_when_listed() {
