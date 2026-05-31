@@ -1312,11 +1312,21 @@ function ctaClick(ev){
   btn._busy = true; setTimeout(() => { btn._busy = false; }, 300);
   if (!lastState) return;
   const ds = PHASE_TO_STATE[lastState.phase] || 'off';
+  const inputMs = (parseInt($('delay-input').value || '0', 10) || 0) * 1000;
+  const armedMs = lastState.armed_delay_ms || 0;
+  const wantsChange = inputMs > 0 && inputMs !== armedMs;
+  // Re-arm / adjust takes priority over the state's default action: if
+  // the user has typed a different value in the input, that's their
+  // intent. Empty input or input matching what's already armed falls
+  // through to activate / stop / disarm.
+  if ((ds === 'armed' || ds === 'active') && wantsChange){
+    arm(inputMs);  // arm() does the capacity check + clears the input
+    return;
+  }
   if (ds === 'active') { stop(); return; }
   if (ds === 'armed')  { activate(); return; }
   if (ds === 'arming') { disarm(); return; }
-  const ms = (parseInt($('delay-input').value || '0', 10) || 0) * 1000;
-  if (ms > 0) arm(ms);
+  if (inputMs > 0) arm(inputMs);
 }
 
 // Secondary disarm button — visible during `arming` or `armed` so the user
@@ -1363,11 +1373,27 @@ function renderHero(s){
     $('delay-of').hidden = true;
     $('arm-bar').hidden = true;
   }
+  // Adjusting detector: during a live delay change the controller
+  // updates `armed_delay_ms` immediately but `current_delay_ms` only
+  // catches up once the cut machinery seeks to (or rewinds toward) the
+  // new target. For decreases (10→5s) the cut is effectively instant
+  // — armed and current converge within one or two pump ticks. For
+  // increases (10→15s) it depends on buffer history: if we already
+  // have ≥15s buffered, also instant; otherwise the controller waits
+  // for more bytes to land and the gap stays visible. 1.5 s tolerance
+  // skips the natural ~1s jitter from the per-IDR cut quantum.
+  const curMs = s.current_delay_ms || 0;
+  const armedMs = s.armed_delay_ms || 0;
+  const adjusting = ds === 'active' && armedMs > 0 && Math.abs(armedMs - curMs) > 1500;
   // Sub copy
   let sub = '';
   if (ds === 'off') sub = `Stream forwarded with no delay${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
   else if (ds === 'arming') sub = `Buffering — ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers still see live until you activate.`;
   else if (ds === 'armed') sub = `Buffer ready. Click Activate to cut your stream over.`;
+  else if (ds === 'active' && adjusting){
+    const dir = armedMs > curMs ? 'rewinding' : 'jumping forward';
+    sub = `Adjusting → ${dir} to ${fmtDelay(armedMs)} (currently ${fmtDelay(curMs)})…`;
+  }
   else if (ds === 'active') sub = `Forwarded with a ${fmtDelay(s.armed_delay_ms)} buffer${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
   $('delay-sub').textContent = sub;
 
@@ -1377,63 +1403,111 @@ function renderHero(s){
 function renderCta(){
   const btn = $('cp-cta');
   const cancel = $('cp-cancel');
+  const warn = $('cp-cap-warn');
+  const inputEl = $('delay-input');
+  const clearWarn = () => {
+    if (inputEl) inputEl.classList.remove('field-error');
+    if (warn) warn.hidden = true;
+  };
   if (pendingPhase){
     btn.className = 'ic-btn ic-btn-primary cp-cta';
     btn.textContent = '… Applying';
     btn.disabled = true;
     if (cancel) cancel.hidden = true;
+    clearWarn();
     return;
   }
   if (!lastState){
     btn.className = 'ic-btn ic-btn-disabled cp-cta'; btn.textContent = 'Arm delay'; btn.disabled = true;
     if (cancel) cancel.hidden = true;
+    clearWarn();
     return;
   }
   const ds = PHASE_TO_STATE[lastState.phase] || 'off';
   const inputMs = (parseInt($('delay-input').value || '0', 10) || 0) * 1000;
+  const armedMs = lastState.armed_delay_ms || 0;
+  // "User wants to change to something different from what's currently
+  // armed/active" — the trigger for re-arm / adjust UX. Treat empty
+  // input as "no change requested" so default actions (Activate / Cut)
+  // stay accessible without the user clearing the field.
+  const wantsChange = inputMs > 0 && inputMs !== armedMs;
+  const cap = currentBufferCapMs();
+  const tooBig = wantsChange && cap > 0 && inputMs > cap;
   btn.disabled = false;
   // Hide the secondary Disarm by default; show it for armed/arming so
   // the user always has an exit path (without it, "armed" state forced
   // you to activate+cut just to get back to passthrough).
   if (cancel) cancel.hidden = !(ds === 'arming' || ds === 'armed');
+
+  // Capacity refusal is the same message regardless of which state we
+  // were in when the user typed an oversize value — pull it out once.
+  const showCapWarn = () => {
+    if (inputEl) inputEl.classList.add('field-error');
+    if (warn){
+      const needMB = requiredMBForMs(inputMs);
+      const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
+      const at = (m && m > 1000) ? `${(m/1000).toFixed(1)} Mbps in` : `${BUF_REF_KBPS/1000} Mbps reference`;
+      warn.innerHTML = `<b>Can't go to ${fmtDelay(inputMs)} at ${at}.</b> Buffer is ${lastConfig?lastConfig.buffer_mb:'?'} MB, would need ≥ ${needMB} MB. Raise in System tab and restart, or pick ≤ ${fmtDelay(cap)}.`;
+      warn.hidden = false;
+    }
+  };
+
   if (ds === 'arming'){
     // Primary CTA already does "cancel" semantics here; the secondary
     // button is a clearer alias for users who don't read the label.
     btn.className = 'ic-btn ic-btn-ghost cp-cta'; btn.textContent = '✕ Cancel arming';
-    if (cancel) cancel.hidden = true; // single-button is enough during arming
+    if (cancel) cancel.hidden = true;
+    clearWarn();
   } else if (ds === 'armed'){
-    btn.className = 'ic-btn ic-btn-primary cp-cta cp-cta-pulse';
-    btn.textContent = `▶ Activate ${fmtDelay(lastState.armed_delay_ms)} delay`;
-    if (cancel){ cancel.hidden = false; cancel.textContent = 'Disarm'; }
+    if (wantsChange && tooBig){
+      btn.className = 'ic-btn ic-btn-disabled cp-cta';
+      btn.textContent = `Buffer holds only ${fmtDelay(cap)} — raise it first`;
+      btn.disabled = true;
+      showCapWarn();
+    } else if (wantsChange){
+      // User typed a new delay while armed → re-arm at the new value.
+      // arm() handles "smaller is instant, bigger waits for buffer".
+      btn.className = 'ic-btn ic-btn-primary cp-cta';
+      btn.textContent = `↻ Re-arm at ${fmtDelay(inputMs)}`;
+      clearWarn();
+    } else {
+      btn.className = 'ic-btn ic-btn-primary cp-cta cp-cta-pulse';
+      btn.textContent = `▶ Activate ${fmtDelay(armedMs)} delay`;
+      if (cancel){ cancel.hidden = false; cancel.textContent = 'Disarm'; }
+      clearWarn();
+    }
   } else if (ds === 'active'){
-    btn.className = 'ic-btn ic-btn-danger cp-cta'; btn.textContent = '✕ Cut delay';
+    if (wantsChange && tooBig){
+      btn.className = 'ic-btn ic-btn-disabled cp-cta';
+      btn.textContent = `Buffer holds only ${fmtDelay(cap)} — raise it first`;
+      btn.disabled = true;
+      showCapWarn();
+    } else if (wantsChange){
+      // Live delay adjustment — the backend's arm_delay already routes
+      // this to a live-update path: smaller is an instant forward cut,
+      // larger triggers a rewind once the buffer has the history.
+      btn.className = 'ic-btn ic-btn-primary cp-cta';
+      const dir = inputMs > armedMs ? '↑' : '↓';
+      btn.textContent = `↻ Adjust ${dir} to ${fmtDelay(inputMs)}`;
+      clearWarn();
+    } else {
+      btn.className = 'ic-btn ic-btn-danger cp-cta'; btn.textContent = '✕ Cut delay';
+      clearWarn();
+    }
   } else {
     // off / idle (== passthrough or genuinely no source)
-    const cap = currentBufferCapMs();
-    const tooBig = inputMs > 0 && cap > 0 && inputMs > cap;
-    const warn = $('cp-cap-warn');
-    const inputEl = $('delay-input');
     if (inputMs > 0 && tooBig){
       btn.className = 'ic-btn ic-btn-disabled cp-cta';
       btn.textContent = `Buffer holds only ${fmtDelay(cap)} — raise it first`;
       btn.disabled = true;
-      if (inputEl) inputEl.classList.add('field-error');
-      if (warn){
-        const needMB = requiredMBForMs(inputMs);
-        const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
-        const at = (m && m > 1000) ? `${(m/1000).toFixed(1)} Mbps in` : `${BUF_REF_KBPS/1000} Mbps reference`;
-        warn.innerHTML = `<b>Can't arm ${fmtDelay(inputMs)} at ${at}.</b> Buffer is ${lastConfig?lastConfig.buffer_mb:'?'} MB, would need ≥ ${needMB} MB. Raise in System tab and restart, or pick ≤ ${fmtDelay(cap)}.`;
-        warn.hidden = false;
-      }
+      showCapWarn();
     } else if (inputMs > 0){
       btn.className = 'ic-btn ic-btn-primary cp-cta';
       btn.textContent = `⚡ Arm ${fmtDelay(inputMs)} delay`;
-      if (inputEl) inputEl.classList.remove('field-error');
-      if (warn) warn.hidden = true;
+      clearWarn();
     } else {
       btn.className = 'ic-btn ic-btn-disabled cp-cta'; btn.textContent = 'Arm delay'; btn.disabled = true;
-      if (inputEl) inputEl.classList.remove('field-error');
-      if (warn) warn.hidden = true;
+      clearWarn();
     }
   }
 }
@@ -1447,19 +1521,26 @@ function renderCpProfiles(){
   const cap = currentBufferCapMs();
   profiles.slice(0, 5).forEach(p => {
     const tooBig = cap > 0 && p.delay_ms > cap;
+    const isCur = target === p.delay_ms && ds !== 'off';
     const b = document.createElement('button');
-    b.className = 'cp-profile-chip' + (target === p.delay_ms && ds !== 'off' ? ' on' : '') + (tooBig ? ' too-big' : '');
-    b.disabled = ds === 'armed' || ds === 'active' || ds === 'arming';
+    b.className = 'cp-profile-chip' + (isCur ? ' on' : '') + (tooBig ? ' too-big' : '');
+    // Stay clickable while armed/active so the user can pivot between
+    // profiles without disarming first — arm() routes the request to
+    // the live-adjust path. Only the "arming" mid-fill state and the
+    // explicit current profile are disabled.
+    b.disabled = isCur || ds === 'arming';
     if (tooBig){
       const needMB = requiredMBForMs(p.delay_ms);
       b.title = `${p.name}: buffer too small — needs ≥ ${needMB} MB at the current bitrate (raise in System tab).`;
+    } else if (ds === 'active' && !isCur){
+      b.title = `Adjust to ${p.name}`;
     } else {
       b.title = `Arm: ${p.name}`;
     }
     b.innerHTML = `<span style="color:var(--accent)">⚡</span><span>${fmtDelay(p.delay_ms)}</span>`;
     b.onclick = () => {
       $('delay-input').value = String(Math.round(p.delay_ms / 1000));
-      arm(p.delay_ms);  // arm() handles the capacity refusal + toast
+      arm(p.delay_ms);
     };
     c.appendChild(b);
   });
@@ -1718,8 +1799,8 @@ async function loadProfiles(){
 function renderProfilesPane(){
   const c = $('profile-list'); c.innerHTML = '';
   const cap = currentBufferCapMs();
+  const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
   profiles.forEach(p => {
-    const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
     const isCur = ds !== 'off' && lastState && lastState.armed_delay_ms === p.delay_ms;
     const tooBig = cap > 0 && p.delay_ms > cap;
     const b = document.createElement('button');
@@ -1737,11 +1818,15 @@ function renderProfilesPane(){
       warn.textContent = `needs ≥ ${needMB} MB`;
       b.appendChild(warn);
       b.title = `Buffer too small at the current bitrate — raise buffer in System tab to ≥ ${needMB} MB to use this profile.`;
+    } else if (ds === 'active' && !isCur){
+      b.title = `Adjust live delay to ${p.name}`;
+    } else if (ds === 'armed' && !isCur){
+      b.title = `Re-arm at ${p.name}`;
     }
     const x = document.createElement('span'); x.className = 'ic-btn-tiny'; x.textContent = '✕';
     x.onclick = (e) => { e.stopPropagation(); delProfile(p.name); };
     b.appendChild(x);
-    b.onclick = () => arm(p.delay_ms);  // arm() itself surfaces the reason if blocked
+    b.onclick = () => arm(p.delay_ms);  // arm() handles capacity refusal + active/armed live update
     c.appendChild(b);
   });
 }
