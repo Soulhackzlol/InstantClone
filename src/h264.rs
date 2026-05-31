@@ -116,12 +116,23 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     // destination's pump either passes the multi-track tag through
     // (Twitch) or flattens it to single-track right before send (every
     // other destination, via `select_video_bytes`).
+    //
+    // Crucially: the *nested* PacketType lives in the low nibble of
+    // byte 1, not byte 0. A multi-track tag carrying decoder config
+    // has outer packet_type=6 but nested packet_type=0 — and that's
+    // what determines whether this is a seq header that needs caching
+    // for re-emit on cuts. Same nested check refuses IDR-cut treatment
+    // on a multi-track config tag where the encoder also set
+    // FrameType=1 (some do).
     if is_multitrack {
+        let nested_pt = payload.get(1).map(|b| b & 0x0F).unwrap_or(0xFF);
+        let is_mt_seq_header = nested_pt == 0;
+        let is_mt_metadata = nested_pt == 4;
         return VideoTagInfo {
-            is_seq_header,
-            is_idr: is_keyframe,
+            is_seq_header: is_mt_seq_header,
+            is_idr: is_keyframe && !is_mt_seq_header && !is_mt_metadata,
             is_multitrack: true,
-            is_metadata: false,
+            is_metadata: is_mt_metadata,
             codec: VideoCodec::Unknown,
         };
     }
@@ -543,14 +554,36 @@ mod tests {
     }
 
     #[test]
-    fn enhanced_rtmp_multitrack_packettype_6() {
-        // packet_type 6 = Multitrack. Should be flagged as multitrack
-        // but FrameType=1 still surfaces is_idr.
+    fn enhanced_rtmp_multitrack_codedframes_is_idr() {
+        // outer packet_type=6 (Multitrack), nested packet_type=1
+        // (CodedFrames). FrameType=1 → real keyframe.
         let byte0 = 0x80 | (1u8 << 4) | 6;
-        let payload = vec![byte0, 0, 0, 0, 0];
+        let byte1 = 0x01; // nested CodedFrames
+        let payload = vec![byte0, byte1, 0, 0, 0, 0];
         let info = classify_video_tag(&payload);
         assert!(info.is_multitrack);
-        assert!(info.is_idr); // keyframe nibble still wins
+        assert!(info.is_idr);
+        assert!(!info.is_seq_header);
+    }
+
+    #[test]
+    fn enhanced_rtmp_multitrack_seqstart_caches_as_seq_header() {
+        // outer packet_type=6 (Multitrack), nested packet_type=0
+        // (SequenceStart). This is the decoder-config tag for an
+        // Enhanced Broadcasting stream — MUST be flagged as seq
+        // header or the controller never caches it and every cut
+        // emits a stale or empty config to the destination, which
+        // then fails to decode the post-cut frames.
+        let byte0 = 0x80 | (1u8 << 4) | 6; // FrameType=1, packet_type=Multitrack
+        let byte1 = 0x00; // nested SequenceStart
+        let payload = vec![byte0, byte1, 0, 0, 0, 0];
+        let info = classify_video_tag(&payload);
+        assert!(info.is_multitrack);
+        assert!(info.is_seq_header);
+        // FrameType=1 set on a seq header tag must NOT be flagged
+        // as IDR — seq headers carry decoder config, never slice
+        // data. Same rule as the single-track classifier.
+        assert!(!info.is_idr);
     }
 
     #[test]
