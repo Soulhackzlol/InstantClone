@@ -35,8 +35,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
 use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
@@ -464,20 +463,6 @@ unsafe fn set_clipboard_text(hwnd: HWND, text: &str) -> Result<(), ()> {
     // System now owns the HGLOBAL — release the guard so Drop is a no-op.
     let _ = h_mem.release();
     Ok(())
-}
-
-/// Update the tray tooltip text. Unused right now but kept here because
-/// it pairs with the menu rebuild — easy hook later for "OBS connected"
-/// notifications.
-#[allow(dead_code)]
-unsafe fn update_tooltip(hwnd: HWND, text: &str) {
-    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
-    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = hwnd;
-    nid.uID = 1;
-    nid.uFlags = NIF_TIP;
-    write_tip(&mut nid.szTip, text);
-    Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
 fn open_url(url: &str) -> std::io::Result<std::process::Child> {

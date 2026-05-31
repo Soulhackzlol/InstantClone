@@ -57,6 +57,31 @@ impl Default for CsState {
     }
 }
 
+/// Parsed message-header for one chunk, keyed off the wire `fmt`. The
+/// enum exists purely to thread the parsed fields out of the async
+/// read code (which holds `&mut self`) into the per-CSID state update
+/// (which holds `&mut self.streams`) without a tuple-of-Options.
+enum ChunkHeader {
+    Fmt0 {
+        timestamp: u32,
+        length: u32,
+        type_id: u8,
+        msid: u32,
+        ext_ts_present: bool,
+    },
+    Fmt1 {
+        delta: u32,
+        length: u32,
+        type_id: u8,
+        ext_ts_present: bool,
+    },
+    Fmt2 {
+        delta: u32,
+        ext_ts_present: bool,
+    },
+    Fmt3,
+}
+
 pub struct ChunkReader<R> {
     inner: R,
     chunk_size: usize,
@@ -132,6 +157,85 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
         Ok(u32::from_be_bytes(b))
     }
 
+    /// Parse the per-fmt chunk message header from the wire. Returns a
+    /// `ChunkHeader` enum the caller dispatches on. Reads (and counts)
+    /// all header bytes including any extended timestamp; the per-CSID
+    /// state in `streams` is left untouched.
+    async fn read_chunk_header(&mut self, fmt: u8, csid: u32) -> io::Result<ChunkHeader> {
+        match fmt {
+            0 => {
+                let mut h = [0u8; 11];
+                self.read_exact_counted(&mut h).await?;
+                let ts24 = u24_be(&h[0..3]);
+                let length = u24_be(&h[3..6]);
+                let type_id = h[6];
+                let msid = u32::from_le_bytes([h[7], h[8], h[9], h[10]]);
+                let ext_ts_present = ts24 == 0x00FF_FFFF;
+                let timestamp = if ext_ts_present {
+                    self.read_u32_be_counted().await?
+                } else {
+                    ts24
+                };
+                Ok(ChunkHeader::Fmt0 {
+                    timestamp,
+                    length,
+                    type_id,
+                    msid,
+                    ext_ts_present,
+                })
+            }
+            1 => {
+                let mut h = [0u8; 7];
+                self.read_exact_counted(&mut h).await?;
+                let delta24 = u24_be(&h[0..3]);
+                let length = u24_be(&h[3..6]);
+                let type_id = h[6];
+                let ext_ts_present = delta24 == 0x00FF_FFFF;
+                let delta = if ext_ts_present {
+                    self.read_u32_be_counted().await?
+                } else {
+                    delta24
+                };
+                Ok(ChunkHeader::Fmt1 {
+                    delta,
+                    length,
+                    type_id,
+                    ext_ts_present,
+                })
+            }
+            2 => {
+                let mut h = [0u8; 3];
+                self.read_exact_counted(&mut h).await?;
+                let delta24 = u24_be(&h[0..3]);
+                let ext_ts_present = delta24 == 0x00FF_FFFF;
+                let delta = if ext_ts_present {
+                    self.read_u32_be_counted().await?
+                } else {
+                    delta24
+                };
+                Ok(ChunkHeader::Fmt2 {
+                    delta,
+                    ext_ts_present,
+                })
+            }
+            3 => {
+                // Continuation. Whether to consume an extended-timestamp
+                // field depends on what the last header on this CSID
+                // indicated, so we peek (read-only) into streams first.
+                let needs_ext = self
+                    .streams
+                    .get(&csid)
+                    .map(|st| st.last_had_ext_ts)
+                    .unwrap_or(false);
+                if needs_ext {
+                    let _ = self.read_u32_be_counted().await?;
+                }
+                Ok(ChunkHeader::Fmt3)
+            }
+            _ => unreachable!(),
+        }
+    }
+
     /// Read until one full RTMP message is reassembled, then yield it.
     /// Control messages (Set Chunk Size = 1) are handled in-band so the
     /// caller never has to think about them.
@@ -157,162 +261,62 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
             };
 
             // --- Message header (0/3/7/11 bytes by fmt) ---
-            // We only fully parse a fresh header on fmt < 3 and on the
-            // first chunk of a message. fmt == 3 continuations either
-            // continue an in-flight message or start a new one identical
-            // to the previous (whole-message replay), per spec.
-            //
-            // Header reads happen here (before grabbing &mut self.streams)
-            // because read_exact_counted needs &mut self, and the borrow
-            // checker won't let both live at once. We materialise the
-            // header fields into locals, then drop into the streams map
-            // to update CsState.
-            let (
-                ext_ts_value,
-                ext_ts_delta,
-                len_opt,
-                type_id_opt,
-                msid_opt,
-                ext_ts_present,
-                ext_ts_bytes,
-                ts24,
-                delta24,
-            ) = match fmt {
-                0 => {
-                    let mut h = [0u8; 11];
-                    self.read_exact_counted(&mut h).await?;
-                    let ts24 = u24_be(&h[0..3]);
-                    let len = u24_be(&h[3..6]);
-                    let type_id = h[6];
-                    let msid = u32::from_le_bytes([h[7], h[8], h[9], h[10]]);
-                    let ext_ts_present = ts24 == 0x00FF_FFFF;
-                    let timestamp = if ext_ts_present {
-                        Some(self.read_u32_be_counted().await?)
-                    } else {
-                        None
-                    };
-                    (
-                        timestamp,
-                        None,
-                        Some(len),
-                        Some(type_id),
-                        Some(msid),
-                        ext_ts_present,
-                        ext_ts_present,
-                        ts24,
-                        0,
-                    )
-                }
-                1 => {
-                    let mut h = [0u8; 7];
-                    self.read_exact_counted(&mut h).await?;
-                    let delta24 = u24_be(&h[0..3]);
-                    let len = u24_be(&h[3..6]);
-                    let type_id = h[6];
-                    let ext_ts_present = delta24 == 0x00FF_FFFF;
-                    let delta = if ext_ts_present {
-                        Some(self.read_u32_be_counted().await?)
-                    } else {
-                        None
-                    };
-                    (
-                        None,
-                        delta,
-                        Some(len),
-                        Some(type_id),
-                        None,
-                        ext_ts_present,
-                        ext_ts_present,
-                        0,
-                        delta24,
-                    )
-                }
-                2 => {
-                    let mut h = [0u8; 3];
-                    self.read_exact_counted(&mut h).await?;
-                    let delta24 = u24_be(&h[0..3]);
-                    let ext_ts_present = delta24 == 0x00FF_FFFF;
-                    let delta = if ext_ts_present {
-                        Some(self.read_u32_be_counted().await?)
-                    } else {
-                        None
-                    };
-                    (
-                        None,
-                        delta,
-                        None,
-                        None,
-                        None,
-                        ext_ts_present,
-                        ext_ts_present,
-                        0,
-                        delta24,
-                    )
-                }
-                3 => {
-                    // fmt-3 continuation. Whether to consume the
-                    // extended-timestamp field depends on what the
-                    // last header on this CSID indicated, so peek into
-                    // streams first.
-                    let needs_ext = self
-                        .streams
-                        .get(&csid)
-                        .map(|st| st.last_had_ext_ts)
-                        .unwrap_or(false);
-                    if needs_ext {
-                        let _ = self.read_u32_be_counted().await?;
-                    }
-                    (None, None, None, None, None, false, needs_ext, 0, 0)
-                }
-                _ => unreachable!(),
-            };
-            let _ = ext_ts_bytes; // already counted via read_u32_be_counted
-
-            // Now update CsState from the parsed header.
+            // Read it first (no borrow on self.streams in flight), then
+            // dispatch into the per-CSID state. The two phases exist so
+            // the async byte-counting reads can hold &mut self exclusively.
+            let header = self.read_chunk_header(fmt, csid).await?;
             let st = self.streams.entry(csid).or_default();
-            match fmt {
-                0 => {
-                    let len = len_opt.unwrap();
-                    let type_id = type_id_opt.unwrap();
-                    let msid = msid_opt.unwrap();
-                    let timestamp = ext_ts_value.unwrap_or(ts24);
+            match header {
+                ChunkHeader::Fmt0 {
+                    timestamp,
+                    length,
+                    type_id,
+                    msid,
+                    ext_ts_present,
+                } => {
                     st.timestamp = timestamp;
                     st.timestamp_delta = timestamp;
-                    st.length = len;
+                    st.length = length;
                     st.type_id = type_id;
                     st.stream_id = msid;
                     st.last_had_ext_ts = ext_ts_present;
-                    st.buf = BytesMut::with_capacity(len as usize);
+                    st.buf = BytesMut::with_capacity(length as usize);
                     st.receiving = true;
                 }
-                1 => {
-                    let delta = ext_ts_delta.unwrap_or(delta24);
-                    let len = len_opt.unwrap();
-                    let type_id = type_id_opt.unwrap();
+                ChunkHeader::Fmt1 {
+                    delta,
+                    length,
+                    type_id,
+                    ext_ts_present,
+                } => {
                     st.timestamp = st.timestamp.wrapping_add(delta);
                     st.timestamp_delta = delta;
-                    st.length = len;
+                    st.length = length;
                     st.type_id = type_id;
                     st.last_had_ext_ts = ext_ts_present;
-                    st.buf = BytesMut::with_capacity(len as usize);
+                    st.buf = BytesMut::with_capacity(length as usize);
                     st.receiving = true;
                 }
-                2 => {
-                    let delta = ext_ts_delta.unwrap_or(delta24);
+                ChunkHeader::Fmt2 {
+                    delta,
+                    ext_ts_present,
+                } => {
                     st.timestamp = st.timestamp.wrapping_add(delta);
                     st.timestamp_delta = delta;
                     st.last_had_ext_ts = ext_ts_present;
                     st.buf = BytesMut::with_capacity(st.length as usize);
                     st.receiving = true;
                 }
-                3 => {
+                ChunkHeader::Fmt3 => {
                     if !st.receiving {
+                        // Whole-message replay: same header as before,
+                        // so the absolute timestamp advances by the
+                        // last delta and the buffer restarts.
                         st.timestamp = st.timestamp.wrapping_add(st.timestamp_delta);
                         st.buf = BytesMut::with_capacity(st.length as usize);
                         st.receiving = true;
                     }
                 }
-                _ => unreachable!(),
             }
 
             // --- Payload chunk ---
