@@ -8,6 +8,122 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.0-beta.6] - audit follow-through + live delay adjustment + the Twitch source-only mystery solved
+
+Headline: a wire-spec audit closed the last meaningful protocol gap,
+the dashboard learned to adjust delay on-the-fly, and a full afternoon
+of alt-account testing finally disentangled why some streams went
+Source-Only at high bitrate — turns out it was never InstantClone.
+
+**RTMP Acknowledgement (BYTES_READ_REPORT) on both directions.** Adobe
+spec §5.4.3 and librtmp's actual code both require a peer to send msg
+type 3 every time bytes received cross the window-ack-size/10
+threshold. We accepted incoming acks silently but never sent any.
+The `ChunkReader` now counts every wire byte (chunk headers + extended
+timestamps + payload), captures the peer's Window Ack Size from msg
+type 5 (defaults to 2.5 MB until the peer overrides), and exposes
+`take_pending_ack()` so the ingest server and egress reader-drain can
+emit `BYTES_READ_REPORT` inline. At 6 Mbps that's about one 4-byte
+message every 0.4 s — invisible perf cost, but lets strict RTMP
+relays accept InstantClone as a well-behaved peer when it's used as
+itself a re-publish source.
+
+**AMF0 Strict Array decode.** The connect-properties bag we ship for
+Twitch OBS-parity includes an Enhanced-RTMP `fourCcList`, which is
+encoded as Strict Array (marker `0x0A`). Real RTMP servers handle
+that marker fine — the published beta.5 binary streams correctly to
+Twitch, YouTube, Kick — but the in-tree sink used for e2e CI shares
+the same decoder, which only knew `0x00`-`0x08`. So the sink rejected
+our own connect and the e2e job went red. Adds a
+`StrictArray(Vec<Amf0>)` variant with a depth-bounded recursive
+decoder; the public binary is unchanged.
+
+**Enhanced-RTMP `PacketTypeMetadata` (=4) classified distinctly.** The
+video classifier was implicitly treating PacketType=4 (mid-stream
+HDR `colorInfo` updates) as an arbitrary non-seqheader packet. Adding
+`is_metadata: bool` to `VideoTagInfo` lets the trace log distinguish
+these from anomalous packets, and tightens `is_keyframe` to refuse
+IDR-cut treatment on PacketType ∈ {0, 4} (neither carries slice data;
+flagging them as IDR would invent a bogus cut point if the encoder
+set FrameType=1 anyway).
+
+**Capacity-aware UI, no more silent buffer-cap stalls.** The default
+`buffer_mb` bumps 300 → 500. The System tab gains a live "X MB → max
+Ys delay at 10 Mbps reference (currently ≈ Zs at N.N Mbps in)"
+hint that updates as the user types. The cockpit's delay input and
+profile chips refuse to arm a delay larger than the buffer can hold
+at the current (or planning-default) bitrate, with an explicit "needs
+≥ N MB" reason instead of the previous silent stall. Math accounts
+for ~160 kbps audio, ~5 % RTMP framing overhead, and a 3 % safety
+headroom.
+
+**Live delay adjustment (re-arm + adjust-up + adjust-down).** The
+controller had `arm_delay()` wired for live changes since day one,
+but the cockpit hid it: the delay input was logically dropped in
+armed / active states and the CTA only offered Activate / Cut. The
+cockpit now treats a typed value that differs from the current
+`armed_delay_ms` as the new target — replacing Activate with
+"↻ Re-arm at Ns" while armed, or Cut delay with "↻ Adjust ↑/↓ to
+Ns" while active. Profile chips and rows stay clickable in both
+states with adaptive tooltips. A transient "Adjusting → rewinding to
+Ns (currently X.Xs)…" sub-text shows during the brief window where
+the controller is seeking to a larger delay than what's currently
+being delivered.
+
+**Twitch source-only / mobile-decoder warning.** A full afternoon of
+testing on a no-Affiliate alt account established two things that
+beta.4 had bundled into one bug:
+
+- The transcoded quality ladder is *account-tier* gated, not
+  bitrate-gated. Non-Affiliate accounts get "Transmuxed (Source-Only)"
+  at any bitrate; Affiliate / Partner get the ladder.
+- The viewer-side "Error #1000 / black screen with audio" symptom is
+  a mobile-decoder ceiling, not a Twitch transcode issue. At ≤ 8 Mbps
+  1080p60 H.264 Source-Only most mobile hardware decoders cope; above
+  ~8 Mbps they start failing. Verified empirically on the alt — 8k
+  Source-Only plays clean on phone and PC, 10k Source-Only reproduces
+  the beta.4 viewer breakage.
+
+A new header chip (`⚠ Twitch · mobile risk at N.N Mbps`) lights when
+any Twitch destination is alive at > 8 Mbps and a click toast lays
+out the tier-vs-bitrate distinction so users blame the right layer.
+The Twitch entry in `/platforms` tip gets rewritten with the same
+framing for destination-creation-time discovery. OBS's built-in
+Twitch *preset* auto-caps via Twitch's API; OBS's "Custom server"
+path skips that check, and InstantClone is necessarily a
+Custom-server target — so the cap-skip behaviour is structural, not
+a wire bug. The warning is the right intervention.
+
+**Overlay number stops jittering in active phase.** The on-stream
+overlay's seconds readout used to wobble 15.8 → 15.9 → 16.0 because
+it was wired to `current_delay_ms`, which is recomputed each pump
+tick from the slowest consumer's frame timestamp and doesn't land on
+round boundaries. Switched to `target_delay_ms` (== armed in active
+phase) — stable to the tenth-of-a-second the streamer actually
+intended. Dashboard hero already did this.
+
+**ChunkReader internal refactor.** The Acknowledgement work
+introduced a temporary 9-element Option tuple for threading parsed
+header fields between the read phase (holds &mut self) and the
+state update phase (holds &mut streams). Replaced with a private
+`ChunkHeader` enum returned by a `read_chunk_header` helper —
+~130 fewer lines, no unused-binding suppressions, same wire
+behaviour. Also dropped the speculative `tray.rs::update_tooltip`
+shim that was carrying a `#[allow(dead_code)]` for hypothetical
+future use.
+
+### Known issues
+
+- Long-session behaviour (multi-hour streams) unproven. Longest
+  validated run is ~20 min.
+- YouTube-via-restream worked in prior testing but hasn't been
+  re-validated post-OBS-parity. Wire layer is unchanged so no reason
+  to expect regression, but it's listed here for honesty.
+- Twitch bandwidth-test mode does not route through the full
+  transcoder, so the actual transcoder-lane decision can only be
+  confirmed by a real (non-`?bandwidthtest=true`) stream — which the
+  alt-account work in this release does cover.
+
 ## [0.1.0-beta.5] - full OBS parity on the wire + per-platform onboarding
 
 Headline: InstantClone now looks indistinguishable from OBS to every
