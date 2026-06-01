@@ -764,29 +764,62 @@ async fn obs_multitrack_config_proxy(
     let substitution = ivs_auth.as_deref().unwrap_or(&twitch_key);
     let ivs_url = ivs_template.map(|t| t.replace("{stream_key}", substitution));
     if let Some(ivs) = ivs_url.as_ref() {
-        // Set the override on every Twitch destination we find in
-        // settings. Filtering by `pass_through_multitrack_video` was
-        // wrong because that atomic only gets set when the supervisor
-        // spawns the egress — and the supervisor refuses to spawn
-        // until ingest is alive. Since OBS calls this endpoint BEFORE
-        // it connects to our ingest, the flag is still false here on
-        // every destination and the loop matched nothing (silent
-        // no-op, override never landed, egress kept dialling the
-        // legacy URL). Settings-driven platform lookup avoids that
-        // ordering trap entirely.
-        let twitch_ids: Vec<String> = settings
-            .borrow()
-            .destinations
-            .iter()
-            .filter(|d| d.enabled && d.platform == "twitch")
-            .map(|d| d.id.clone())
-            .collect();
-        for id in &twitch_ids {
-            let state = ctrl.destination_state(id);
+        // Apply the override to EXACTLY one Twitch destination: the
+        // one whose stream key we sent in the GetClientConfiguration
+        // call. The IVS session-allocated `authentication` token
+        // embeds resolutions + bitrates for one stream, and the IVS
+        // edge enforces it — pointing two egresses at the same URL
+        // with the same token would collide on Twitch's side and at
+        // most one publish would survive. Settings-driven lookup
+        // matches by stream key (not by id) to be robust across
+        // wizard-vs-destinations-tab key edits.
+        let (chosen_id, twitch_count) = {
+            let s = settings.borrow();
+            let twitch_count = s
+                .destinations
+                .iter()
+                .filter(|d| d.enabled && d.platform == "twitch")
+                .count();
+            let chosen = s
+                .destinations
+                .iter()
+                .find(|d| d.enabled && d.platform == "twitch" && d.stream_key == twitch_key)
+                .map(|d| d.id.clone());
+            (chosen, twitch_count)
+        };
+        if let Some(id) = chosen_id {
+            let state = ctrl.destination_state(&id);
             *state.eb_override_url.lock().unwrap() = Some(ivs.clone());
         }
+        // Clean up any stale override on OTHER Twitch destinations —
+        // the proxy might have run before and left stale state from a
+        // previous session shape (e.g. the user removed one Twitch
+        // dest and re-added it under a new id).
+        {
+            let other_ids: Vec<String> = settings
+                .borrow()
+                .destinations
+                .iter()
+                .filter(|d| d.enabled && d.platform == "twitch" && d.stream_key != twitch_key)
+                .map(|d| d.id.clone())
+                .collect();
+            for id in &other_ids {
+                let state = ctrl.destination_state(id);
+                *state.eb_override_url.lock().unwrap() = None;
+            }
+        }
+        if twitch_count > 1 {
+            ctrl.log(format!(
+                "[OBS multitrack] {} enabled Twitch destinations detected. EB \
+                 transcoder ladders are session-bound to one stream key — only \
+                 the first Twitch destination will receive the multi-track \
+                 ladder. Other Twitch destinations stream a single flattened \
+                 track to live.twitch.tv (still works, no EB transcode).",
+                twitch_count
+            ));
+        }
         ctrl.log(format!(
-            "[OBS multitrack] Twitch GetClientConfiguration call succeeded — \
+            "[OBS multitrack] Twitch GetClientConfiguration call succeeded - \
              multi-track session at {} (stream key hidden). Egress will switch \
              to the IVS endpoint for this session.",
             ivs.split("/app/").next().unwrap_or(ivs)

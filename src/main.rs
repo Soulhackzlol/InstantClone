@@ -361,17 +361,21 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                     .shutdown_requested
                     .store(false, std::sync::atomic::Ordering::Relaxed);
                 // Enhanced Broadcasting (multi-track video) pass-through
-                // is currently a Twitch-only capability — Twitch's
-                // ingest accepts the simulcast and uses it to populate
-                // the transcoded quality ladder, bypassing the
-                // account-tier source-only fallback. Every other RTMP
-                // ingest we know of rejects or mishandles multi-track
-                // video, so they get the same single-track flatten the
-                // ingest used to apply globally.
-                state.pass_through_multitrack_video.store(
-                    dest.platform == "twitch",
-                    std::sync::atomic::Ordering::Relaxed,
-                );
+                // follows the per-destination IVS session, not the
+                // platform. The /obs/multitrack-config proxy sets
+                // eb_override_url on exactly one Twitch destination
+                // (the one whose stream key it sent to Twitch's API);
+                // ONLY that destination owns a session-allocated
+                // transcoder ladder. A second Twitch destination —
+                // simulcasting to a different Twitch account — has no
+                // IVS session here, so it must NOT receive raw
+                // multi-track tags (they'd collide on Twitch's edge
+                // with the first dest's session). It falls back to the
+                // single-track flatten just like a YouTube destination.
+                let has_eb_session = override_url.is_some();
+                state
+                    .pass_through_multitrack_video
+                    .store(has_eb_session, std::sync::atomic::Ordering::Relaxed);
                 let label = dest.name.clone();
                 let url_clone = url.clone();
                 let handle = tokio::spawn(controller::run_egress(
