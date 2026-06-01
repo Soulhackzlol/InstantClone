@@ -25,14 +25,31 @@
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+/// Hard cap on how much trace we'll write before auto-disabling. The
+/// log grows at ~6 MB / 10 min on a busy EB stream when tracing is on,
+/// so a streamer who flipped it on for diagnostics and forgot would
+/// fill ~36 GB over a 100-hour week. The cap fires once, emits one
+/// last line ("trace cap reached - disabling"), and flips ENABLED to
+/// false. The user has to manually re-enable from the System tab if
+/// they want to keep going, by which point they've also presumably
+/// noticed the file size and rotated it.
+const MAX_TRACE_BYTES: u64 = 200 * 1024 * 1024; // 200 MB
+
 struct TraceState {
     file: Mutex<BufWriter<std::fs::File>>,
     start: Instant,
+    /// Approximate bytes written since process start. We bump this by
+    /// the line length on every `log()` call (atomic add, no mutex)
+    /// and check against `MAX_TRACE_BYTES`. Approximate because we
+    /// don't count the file's pre-existing bytes from earlier sessions
+    /// — but the cap fires before either grows beyond 200 MB *this*
+    /// session, which is the relevant safety bound.
+    bytes_written: AtomicU64,
 }
 
 static STATE: OnceLock<TraceState> = OnceLock::new();
@@ -67,6 +84,7 @@ pub fn init(path: impl AsRef<Path>) {
     let _ = STATE.set(TraceState {
         file: Mutex::new(BufWriter::with_capacity(64 * 1024, file)),
         start: Instant::now(),
+        bytes_written: AtomicU64::new(0),
     });
     log("session", &format!("trace started at {}", path.display()));
 }
@@ -94,6 +112,32 @@ pub fn log(category: &str, msg: &str) {
         return;
     };
     let ms = s.start.elapsed().as_secs_f64() * 1000.0;
+    // Approximate-but-cheap size cap. We bump the counter by an
+    // estimated line length (the formatted prefix is ~40 bytes plus
+    // the message). When the cap trips we emit one terminal line and
+    // flip the runtime atom — subsequent calls short-circuit at the
+    // ENABLED check above. The cap-tripping path itself races for the
+    // privilege of writing the terminal line via compare_exchange, so
+    // we don't spam it across pumps.
+    let line_bytes = (msg.len() + category.len() + 40) as u64;
+    let prev = s.bytes_written.fetch_add(line_bytes, Ordering::Relaxed);
+    if prev + line_bytes > MAX_TRACE_BYTES {
+        // Try to be the thread that emits the final notice. swap to
+        // false; only the winner sees `true` and writes the line.
+        if ENABLED.swap(false, Ordering::Relaxed) {
+            let mut f = s.file.lock().unwrap();
+            let _ = writeln!(
+                f,
+                "T+{:>11.3}ms  {:<22}  trace cap reached ({} MB) - disabling. \
+                 Re-enable from System -> Advanced diagnostics if you need more.",
+                ms,
+                "session",
+                MAX_TRACE_BYTES / (1024 * 1024)
+            );
+            let _ = f.flush();
+        }
+        return;
+    }
     let mut f = s.file.lock().unwrap();
     let _ = writeln!(f, "T+{:>11.3}ms  {:<22}  {}", ms, category, msg);
 }
@@ -105,15 +149,18 @@ pub fn log(category: &str, msg: &str) {
 pub fn set_enabled(on: bool) {
     let was = ENABLED.swap(on, Ordering::Relaxed);
     if was != on {
-        log(
-            "session",
-            if on {
-                "tracing enabled (via UI)"
-            } else {
-                "tracing disabled (via UI)"
-            },
-        );
-        if !on {
+        if on {
+            // Reset the cap counter so a user re-enabling after the
+            // cap fired (or after they manually rotated the file) gets
+            // a fresh budget instead of immediately re-tripping. Lives
+            // here rather than in `init` so a stop->start cycle from
+            // the UI works exactly like a fresh launch.
+            if let Some(s) = STATE.get() {
+                s.bytes_written.store(0, Ordering::Relaxed);
+            }
+            log("session", "tracing enabled (via UI)");
+        } else {
+            log("session", "tracing disabled (via UI)");
             flush();
         }
     }

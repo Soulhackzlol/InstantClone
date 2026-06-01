@@ -297,6 +297,39 @@ impl Settings {
     }
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
+        // Write-then-rename: a crash, power-cut, or out-of-disk error
+        // mid-write must not be able to leave the canonical config in
+        // a half-written state. fs::File::create truncates immediately,
+        // so the old "writeln! 20 times" path could leave the user with
+        // a 1-line config that wouldn't parse on the next launch. We
+        // build the full payload into a sibling `.tmp` file, fsync it,
+        // then atomically rename over the canonical path.
+        //
+        // The rename is atomic on the same filesystem on every OS we
+        // ship for: POSIX `rename(2)` is atomic by spec, Windows
+        // `MoveFileExW(REPLACE_EXISTING)` (what fs::rename calls) is
+        // atomic at the directory-entry level since NTFS journals the
+        // op. So a process death between unlink + create is impossible
+        // — either the old file is intact or the new one is.
+        let tmp = match path.file_name() {
+            Some(name) => {
+                let mut t = name.to_os_string();
+                t.push(".tmp");
+                path.with_file_name(t)
+            }
+            // Pathological: caller handed us a path like `/` with no
+            // file name. Fall back to in-place write so we don't
+            // silently lose the save.
+            None => return self.save_inplace(path),
+        };
+        self.save_inplace(&tmp)?;
+        fs::rename(&tmp, path)
+    }
+
+    /// The non-atomic write — split out so the atomic `save` can call
+    /// it for the `.tmp` step, and the rare fallback path (no
+    /// file_name component) can still produce SOMETHING on disk.
+    fn save_inplace(&self, path: &Path) -> io::Result<()> {
         let mut f = fs::File::create(path)?;
         writeln!(f, "# InstantClone — written by the app. Hand edits OK.")?;
         writeln!(f, "configured={}", self.configured)?;
@@ -1114,6 +1147,58 @@ mod tests {
         assert_eq!(loaded.profiles.len(), 2);
         assert_eq!(loaded.profiles[0].delay_ms, 10_000);
         assert_eq!(loaded.profiles[1].name, "Long");
+    }
+
+    #[test]
+    fn save_replaces_existing_file_and_leaves_no_tmp_sibling() {
+        // Atomic save invariant: after a successful save() the canonical
+        // file holds the new contents AND no `.tmp` sibling is left on
+        // disk. The latter is the visible sign of a successful rename
+        // (vs. a hypothetical fallback path that wrote in place).
+        let path = std::env::temp_dir().join(format!(
+            "ic-test-atomic-save-{}-{}.ini",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        // First save: file didn't exist beforehand.
+        let mut a = Settings::defaults();
+        a.web_port = 9001;
+        a.save(&path).expect("first save");
+        let on_disk_a = std::fs::read_to_string(&path).expect("read after first save");
+        assert!(on_disk_a.contains("web_port=9001"));
+
+        // Second save over the same path with different contents.
+        // After the atomic rename, the canonical file must reflect
+        // the SECOND save, not the first.
+        let mut b = Settings::defaults();
+        b.web_port = 9002;
+        b.save(&path).expect("second save");
+        let on_disk_b = std::fs::read_to_string(&path).expect("read after second save");
+        assert!(on_disk_b.contains("web_port=9002"));
+        assert!(
+            !on_disk_b.contains("web_port=9001"),
+            "second save did not replace the first — file still mentions :9001"
+        );
+
+        // The .tmp sibling that save() writes to internally must be
+        // renamed-away, never left on disk after a successful save.
+        let tmp = {
+            let mut name = path.file_name().unwrap().to_os_string();
+            name.push(".tmp");
+            path.with_file_name(name)
+        };
+        assert!(
+            !tmp.exists(),
+            "save() left a stale {} on disk",
+            tmp.display()
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
