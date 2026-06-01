@@ -1416,13 +1416,25 @@ async fn pace_and_send(
             // Per-destination video-tag selection. Twitch
             // destinations pass multi-track through bit-faithfully
             // (Enhanced Broadcasting); every other RTMP ingest gets
-            // the single-track flatten that beta.6 used to apply
-            // globally at the ingest stage. Single-track tags
-            // borrow `io_buf` and never allocate.
-            let selected = crate::h264::select_video_bytes(
+            // single-track tags (legacy AVC / Enhanced single-track)
+            // unchanged plus a *filtered* view of any multi-track
+            // simulcast: OneTrack TrackId != 0 tags are dropped to
+            // avoid the multi-frame-per-PTS storm that crashes
+            // YouTube's decoder. See `select_video_bytes` for the
+            // full rationale. Single-track tags borrow `io_buf`.
+            let Some(selected) = crate::h264::select_video_bytes(
                 io_buf,
                 dest.pass_through_multitrack_video.load(Ordering::Relaxed),
-            );
+            ) else {
+                // Multi-track ladder tag deliberately dropped; advance
+                // the consumer cursor so we don't replay it next call
+                // but skip every per-tag side-effect (send, byte
+                // accounting, last_sent_input_ts update).
+                state.consumer_seq = meta.seq + 1;
+                dest.consumer_seq
+                    .store(state.consumer_seq, Ordering::Relaxed);
+                return Ok(());
+            };
             let bytes_out: &[u8] = &selected;
             let hdr = bytes_out.first().copied().unwrap_or(0);
             let is_idr = meta.is_idr;
@@ -1684,7 +1696,12 @@ async fn send_sequence_headers(
             .or_else(|| v_headers.first())
             .map(|(_, v)| v)
         {
-            let selected = crate::h264::select_video_bytes(h, false);
+            // We pre-selected TrackId 0 (or the only entry as a
+            // defensive fallback), so select_video_bytes will always
+            // return Some for seq headers. The unwrap_or_else is just
+            // belt-and-suspenders for a pathological ring state.
+            let selected = crate::h264::select_video_bytes(h, false)
+                .unwrap_or(std::borrow::Cow::Borrowed(h.as_slice()));
             let bytes_out: &[u8] = &selected;
             crate::trace::log(
                 "VIDEO_SEQ_HDR_SENT",

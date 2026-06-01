@@ -330,22 +330,35 @@ pub fn seq_header_track_id(payload: &[u8]) -> u8 {
 pub fn select_video_bytes<'a>(
     payload: &'a [u8],
     pass_through_multitrack: bool,
-) -> std::borrow::Cow<'a, [u8]> {
+) -> Option<std::borrow::Cow<'a, [u8]>> {
     use std::borrow::Cow;
     if pass_through_multitrack {
-        return Cow::Borrowed(payload);
+        return Some(Cow::Borrowed(payload));
     }
     let info = classify_video_tag(payload);
     if !info.is_multitrack {
-        return Cow::Borrowed(payload);
+        return Some(Cow::Borrowed(payload));
+    }
+    // For OneTrack layout, OBS sends one tag per track per frame.
+    // Forwarding every track to a non-Twitch destination would deliver
+    // N frames per PTS — decoders read that as a multi-frame storm and
+    // either drop the connection (YouTube did, ~12 s per ladder rung)
+    // or render heavy artefacts. The primary stream arrives separately
+    // as a legacy AVC / Enhanced single-track tag, so dropping
+    // TrackId != 0 here is lossless from the destination's POV.
+    if payload.len() >= 7 && (payload[1] >> 4) & 0x0F == 0 {
+        let track_id = payload[6];
+        if track_id != 0 {
+            return None;
+        }
     }
     match flatten_multitrack_video(payload) {
-        Some(flat) => Cow::Owned(flat),
+        Some(flat) => Some(Cow::Owned(flat)),
         // Pathological multi-track layout we couldn't parse — let it
         // through as-is, same fallback the old ingest-side flatten
         // used. The destination will either accept it or surface an
         // error we can chase.
-        None => Cow::Borrowed(payload),
+        None => Some(Cow::Borrowed(payload)),
     }
 }
 
@@ -661,7 +674,7 @@ mod tests {
         tag
     }
 
-    fn enhanced_rtmp_onetrack_video_bytes() -> Vec<u8> {
+    fn enhanced_rtmp_onetrack_video_bytes_track(track_id: u8) -> Vec<u8> {
         // Enhanced-RTMP multi-track video, layout type 0 (OneTrack):
         //   byte 0 = IsEx(1) | FrameType(3, keyframe=1) | PacketType(4, Multitrack=6)
         //   byte 1 = MultiTrackType(4, OneTrack=0) | nested PacketType(4, CodedFrames=1)
@@ -670,8 +683,8 @@ mod tests {
         //   bytes 7.. = inner payload
         let mut payload = vec![0x80 | (1u8 << 4) | 6, 0x01];
         payload.extend_from_slice(b"hvc1");
-        payload.push(0); // TrackId
-        payload.extend_from_slice(&[0xAA; 32]); // inner payload bytes
+        payload.push(track_id);
+        payload.extend_from_slice(&[0xAA; 32]);
         payload
     }
 
@@ -681,8 +694,8 @@ mod tests {
         // pass_through flag is meaningless when there's nothing to
         // flatten — and the borrow path means no copy happens either.
         let tag = avc_single_track_keyframe_bytes();
-        let twitch = select_video_bytes(&tag, true);
-        let youtube = select_video_bytes(&tag, false);
+        let twitch = select_video_bytes(&tag, true).expect("single-track always forwards");
+        let youtube = select_video_bytes(&tag, false).expect("single-track always forwards");
         assert_eq!(twitch.as_ref(), tag.as_slice());
         assert_eq!(youtube.as_ref(), tag.as_slice());
         assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
@@ -693,23 +706,46 @@ mod tests {
     fn select_video_bytes_passes_multitrack_through_for_twitch() {
         // Invariant 2: Twitch destinations get the raw multi-track
         // bytes verbatim — that's what unlocks the transcoded ladder.
-        let tag = enhanced_rtmp_onetrack_video_bytes();
-        let twitch = select_video_bytes(&tag, true);
-        assert_eq!(twitch.as_ref(), tag.as_slice());
-        assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
+        // True for every TrackId, not just the primary.
+        for track in 0u8..=4 {
+            let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
+            let twitch = select_video_bytes(&tag, true)
+                .unwrap_or_else(|| panic!("twitch must forward track {track}"));
+            assert_eq!(twitch.as_ref(), tag.as_slice());
+            assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
+        }
     }
 
     #[test]
-    fn select_video_bytes_flattens_multitrack_for_non_twitch() {
-        // Invariant 3: non-Twitch destinations get exactly the bytes
-        // beta.6 emitted — i.e. whatever `flatten_multitrack_video`
-        // produces. If this changes byte-for-byte we've silently
-        // regressed every YouTube/Kick/Restream/custom-RTMP user.
-        let tag = enhanced_rtmp_onetrack_video_bytes();
-        let youtube = select_video_bytes(&tag, false);
+    fn select_video_bytes_flattens_track0_multitrack_for_non_twitch() {
+        // Defensive path: an encoder that sends the *primary* as
+        // OneTrack-format TrackId 0 (rather than as a separate legacy
+        // AVC tag) still gets a flattened single-track tag for
+        // non-Twitch destinations. In the wild OBS sends the primary
+        // as legacy, so this path rarely fires — but we want a future
+        // encoder change not to silently blank YouTube.
+        let tag = enhanced_rtmp_onetrack_video_bytes_track(0);
+        let youtube = select_video_bytes(&tag, false).expect("track 0 must be forwarded");
         let direct_flat = flatten_multitrack_video(&tag).expect("OneTrack layout must flatten");
         assert_eq!(youtube.as_ref(), direct_flat.as_slice());
         assert!(matches!(youtube, std::borrow::Cow::Owned(_)));
+    }
+
+    #[test]
+    fn select_video_bytes_drops_nonzero_track_multitrack_for_non_twitch() {
+        // The core fix: OBS sends the simulcast ladder as OneTrack
+        // tags with TrackId 1..N, one tag per resolution per frame.
+        // Forwarding every one to YouTube delivered N frames per PTS
+        // → decoder storm → reconnect cascade. These tags must be
+        // dropped; the primary arrives separately as a legacy /
+        // Enhanced single-track tag.
+        for track in 1u8..=4 {
+            let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
+            assert!(
+                select_video_bytes(&tag, false).is_none(),
+                "TrackId {track} must be dropped for non-Twitch",
+            );
+        }
     }
 
     #[test]
@@ -719,9 +755,11 @@ mod tests {
         // The pump must NOT crash and must NOT swallow the tag —
         // letting it through unchanged matches the old ingest-side
         // fallback so the destination gets a chance to surface the
-        // error properly.
+        // error properly. Truncated below the TrackId byte means we
+        // can't tell which track it is; treat that as "forward".
         let truncated = vec![0x80 | (1u8 << 4) | 6, 0]; // 2 bytes total
-        let youtube = select_video_bytes(&truncated, false);
+        let youtube =
+            select_video_bytes(&truncated, false).expect("truncated tags must still forward");
         assert_eq!(youtube.as_ref(), truncated.as_slice());
         assert!(matches!(youtube, std::borrow::Cow::Borrowed(_)));
     }
