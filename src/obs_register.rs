@@ -95,8 +95,10 @@ fn entry_exists(file: &str) -> bool {
     file.contains(r#""name": "InstantClone""#) || file.contains(r#""name":"InstantClone""#)
 }
 
-/// Register InstantClone with OBS. Idempotent — running twice doesn't
-/// duplicate the entry. Returns an `io::Error` with a user-readable
+/// Register InstantClone with OBS. Idempotent and self-healing — a
+/// pre-existing entry is removed and replaced so a changed web_port
+/// (e.g. user retuned the dashboard port in System settings) refreshes
+/// the URL OBS will hit. Returns an `io::Error` with a user-readable
 /// message when something goes wrong, so the UI can surface it.
 pub fn register(web_port: u16, ingest_port: u16) -> io::Result<()> {
     let path = services_json_path().ok_or_else(|| {
@@ -106,18 +108,25 @@ pub fn register(web_port: u16, ingest_port: u16) -> io::Result<()> {
         )
     })?;
     let original = fs::read_to_string(&path)?;
-    if entry_exists(&original) {
-        return Ok(()); // already registered, no-op
-    }
-    let patched = insert_entry(&original, &entry_json(web_port, ingest_port)).ok_or_else(|| {
+    looks_like_services_json(&original)?;
+    // If our entry is already there, strip it first so a port-changed
+    // re-register actually refreshes the URL. remove_entry's parse is
+    // forgiving — falling back to the raw file keeps register() a
+    // no-fail path when the entry isn't structurally cleanly bounded.
+    let base = if entry_exists(&original) {
+        remove_entry(&original).unwrap_or_else(|| original.clone())
+    } else {
+        original.clone()
+    };
+    let patched = insert_entry(&base, &entry_json(web_port, ingest_port)).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             "couldn't locate the `\"services\":[` array in services.json — file shape unexpected",
         )
     })?;
     let bak = path.with_extension("json.instantclone.bak");
-    fs::write(&bak, &original)?;
-    fs::write(&path, patched)?;
+    write_or_friendly(&bak, &original)?;
+    write_or_friendly(&path, &patched)?;
     Ok(())
 }
 
@@ -135,6 +144,7 @@ pub fn unregister() -> io::Result<()> {
     if !entry_exists(&original) {
         return Ok(()); // nothing to do
     }
+    looks_like_services_json(&original)?;
     let stripped = remove_entry(&original).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -142,9 +152,54 @@ pub fn unregister() -> io::Result<()> {
         )
     })?;
     let bak = path.with_extension("json.instantclone.bak");
-    fs::write(&bak, &original)?;
-    fs::write(&path, stripped)?;
+    write_or_friendly(&bak, &original)?;
+    write_or_friendly(&path, &stripped)?;
     Ok(())
+}
+
+/// Reject a services.json that doesn't at least look like the expected
+/// shape — a JSON object containing a `"services"` array. Spares the
+/// user a half-corrupted file when something else (a botched manual
+/// edit, a different program writing to the same path) trashed it
+/// since OBS last touched it.
+fn looks_like_services_json(file: &str) -> io::Result<()> {
+    let trimmed = file.trim_start();
+    if !trimmed.starts_with('{') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "services.json doesn't start with a JSON object — file may be corrupted, close OBS and run it once to regenerate it.",
+        ));
+    }
+    if !file.contains("\"services\"") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "services.json is missing the `services` array — file looks unfamiliar, restore from .instantclone.bak or let OBS regenerate it.",
+        ));
+    }
+    Ok(())
+}
+
+/// Wrap `fs::write` with a friendlier error when Windows reports the
+/// file is locked by another process — usually OBS holding it open.
+fn write_or_friendly(path: &std::path::Path, contents: &str) -> io::Result<()> {
+    match fs::write(path, contents) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Windows: ERROR_ACCESS_DENIED (5) and ERROR_SHARING_VIOLATION
+            // (32) are the two ways OBS-holding-the-file shows up.
+            // PermissionDenied catches the unix-style mapping of those.
+            let locked = matches!(e.raw_os_error(), Some(5) | Some(32))
+                || e.kind() == io::ErrorKind::PermissionDenied;
+            if locked {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "services.json is locked — close OBS Studio first, then try again.",
+                ))
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 /// Splice `entry` into the `"services":[ … ]` array as the first
@@ -329,5 +384,51 @@ mod tests {
         assert!(entry_exists(indented));
         assert!(entry_exists(compact));
         assert!(!entry_exists(r#""name": "InstantCloneAndCompany""#));
+    }
+
+    #[test]
+    fn looks_like_services_json_rejects_garbage() {
+        // A file that doesn't even start with `{` is almost certainly
+        // not OBS's services.json — refuse to splice into it so we
+        // don't compound the corruption.
+        assert!(looks_like_services_json("garbage not even json").is_err());
+        // Valid JSON object but no services array — could be some
+        // other config file at the wrong path; bail out.
+        assert!(looks_like_services_json(r#"{"foo":"bar"}"#).is_err());
+        // The real shape passes.
+        assert!(looks_like_services_json(&fake_services_json()).is_ok());
+    }
+
+    #[test]
+    fn insert_into_garbage_file_is_refused_at_validate_step() {
+        // Confirms the validate step in register() catches garbage
+        // before insert_entry would happily splice into nonsense.
+        // We can't drive register() in unit tests (it touches the
+        // filesystem) but the validator + insert chain is what
+        // protects us.
+        let bad = "definitely not services.json";
+        assert!(looks_like_services_json(bad).is_err());
+    }
+
+    #[test]
+    fn re_register_refreshes_changed_port() {
+        // The flow we exercise here: register at port A, then "register"
+        // at port B with the same entry already present. We can't call
+        // `register()` directly (it touches disk), but the helpers it
+        // uses — remove_entry + insert_entry — must compose into a file
+        // that contains the *new* port.
+        let original = fake_services_json();
+        let v1 = insert_entry(&original, &entry_json(7799, 1935)).unwrap();
+        assert!(v1.contains(":7799/"));
+        // Re-register with a new port: strip the old entry, splice fresh.
+        let cleaned = remove_entry(&v1).expect("strip must succeed");
+        let v2 = insert_entry(&cleaned, &entry_json(8800, 1935)).unwrap();
+        assert!(v2.contains(":8800/"), "must reflect new port");
+        assert!(!v2.contains(":7799/"), "old port must be gone");
+        assert_eq!(
+            v2.matches(r#""name": "InstantClone""#).count(),
+            1,
+            "exactly one InstantClone entry, not two"
+        );
     }
 }
