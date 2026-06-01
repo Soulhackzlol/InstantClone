@@ -317,6 +317,23 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         //    pump now that ingest is back).
         let ingest_alive = ctrl.ingest_alive();
         for (dest, url) in &desired {
+            // Enhanced Broadcasting override: when the
+            // /obs/multitrack-config proxy gets back a real
+            // session-allocated IVS URL from Twitch's API, it stashes
+            // it on the destination state. The egress MUST connect to
+            // that IVS endpoint instead of the user's configured
+            // `live.twitch.tv` — only the IVS edge runs the EB
+            // transcoder pipeline. Pull the override (if any) here so
+            // a change to it triggers the same URL-changed restart
+            // path as a user editing the destination.
+            let override_url = ctrl
+                .destination_state(&dest.id)
+                .eb_override_url
+                .lock()
+                .unwrap()
+                .clone();
+            let effective_url = override_url.as_deref().unwrap_or(url.as_str()).to_string();
+            let url = &effective_url;
             let needs_restart = match running.get(&dest.id) {
                 Some((existing_url, handle)) => existing_url != url || handle.is_finished(),
                 None => true,

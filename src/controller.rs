@@ -142,6 +142,21 @@ pub struct DestinationState {
     /// byte-identical to what beta.6 emitted from the ingest-side
     /// flatten — so existing destinations see no behaviour change.
     pub pass_through_multitrack_video: AtomicBool,
+    /// Twitch only: when our /obs/multitrack-config proxy successfully
+    /// allocates an Enhanced Broadcasting session, Twitch's API returns
+    /// a specific IVS ingest URL like
+    /// `rtmps://<region>.contribute.live-video.net/app/<key>` — and
+    /// that's the *only* endpoint with the EB transcoder pipeline
+    /// behind it. The user's configured destination URL usually points
+    /// at `rtmp://live.twitch.tv/app`, the legacy ingest, which
+    /// accepts multi-track tags but doesn't route them to a
+    /// transcoder, so the stream reaches Twitch but never goes live to
+    /// viewers (and the unfed session dies of TCP retransmit timeout
+    /// after ~60 s). When this field is Some, the egress supervisor
+    /// uses it instead of the configured destination URL. Cleared on
+    /// publisher disconnect so the next normal stream goes back to
+    /// the configured URL.
+    pub eb_override_url: std::sync::Mutex<Option<String>>,
 }
 
 impl DestinationState {
@@ -157,6 +172,7 @@ impl DestinationState {
             bitrate_kbps_out: AtomicU32::new(0),
             shutdown_requested: AtomicBool::new(false),
             last_seq_header_gen: AtomicU32::new(0),
+            eb_override_url: std::sync::Mutex::new(None),
             rate_window_bytes: AtomicU64::new(0),
             rate_window_start_ms: AtomicU64::new(0),
             // Default false: every newly-spawned destination flattens
@@ -876,6 +892,15 @@ impl Controller {
         if self.ingest_alive.swap(false, Ordering::Relaxed) {
             self.note_ingest_disconnect();
             self.reset_codec_state();
+            // Clear any Enhanced Broadcasting URL overrides on the
+            // way out — the next stream may or may not be EB, and a
+            // stale override would force a non-EB stream onto an IVS
+            // endpoint that has no allocated session. The
+            // /obs/multitrack-config proxy sets a fresh override on
+            // every new EB session anyway.
+            for (_id, state) in self.all_destination_states() {
+                *state.eb_override_url.lock().unwrap() = None;
+            }
             self.log("ingest: publisher disconnected");
             self.fire_webhook("⚠️", "OBS publisher disconnected.");
         }

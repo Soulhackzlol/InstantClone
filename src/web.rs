@@ -714,16 +714,68 @@ async fn obs_multitrack_config_proxy(
         &twitch_json,
         &format!("rtmp://127.0.0.1:{}/live/{{stream_key}}", ingest_port),
     );
-    ctrl.log(
-        "[OBS multitrack] Twitch GetClientConfiguration call succeeded — \
-         multi-track session provisioned with Twitch's recommended bitrates. \
-         Ingest URL rewritten to the local proxy.",
-    );
+    // Extract the *original* IVS ingest URL from Twitch's response
+    // BEFORE rewriting it to localhost, substitute the streamer's real
+    // stream key into the `{stream_key}` placeholder, and stash it on
+    // the Twitch destination state. The egress supervisor uses this
+    // override to forward the multi-track stream to the
+    // session-allocated IVS endpoint instead of the configured
+    // `live.twitch.tv` URL — the IVS endpoint is the only one that
+    // runs the EB transcoder pipeline, so without this swap the
+    // stream reaches Twitch but no transcoder picks it up, and the
+    // session dies at the TCP-retransmit-timeout boundary (~60 s).
+    let ivs_url = first_url_template(&twitch_json).map(|t| t.replace("{stream_key}", &twitch_key));
+    if let Some(ivs) = ivs_url.as_ref() {
+        // Set the override only on Twitch destinations — the
+        // supervisor tags those with `pass_through_multitrack_video`
+        // at spawn time, so we use that as the filter. Other
+        // destinations (YouTube / Kick / Restream) keep their
+        // configured URL because none of them speak EB.
+        for (_id, state) in ctrl.all_destination_states() {
+            if state
+                .pass_through_multitrack_video
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                *state.eb_override_url.lock().unwrap() = Some(ivs.clone());
+            }
+        }
+        ctrl.log(format!(
+            "[OBS multitrack] Twitch GetClientConfiguration call succeeded — \
+             multi-track session at {} (stream key hidden). Egress will switch \
+             to the IVS endpoint for this session.",
+            ivs.split("/app/").next().unwrap_or(ivs)
+        ));
+    } else {
+        ctrl.log(
+            "[OBS multitrack] Twitch GetClientConfiguration call succeeded but \
+             we couldn't parse the ingest URL out of the response. Egress will \
+             use the configured destination URL — this typically means EB \
+             will reach Twitch's edge but no transcoder session.",
+        );
+    }
     crate::trace::log(
         "OBS_MULTITRACK",
         "Twitch config received + rewritten to localhost ingest",
     );
     rewritten
+}
+
+/// Pull the first `"url_template": "<value>"` value out of Twitch's
+/// `GetClientConfiguration` response. Returns the raw template still
+/// containing the `{stream_key}` placeholder — callers substitute the
+/// real key themselves. None if the response shape doesn't expose
+/// such a field, in which case the proxy should log and fall back.
+fn first_url_template(json: &str) -> Option<String> {
+    let key = "\"url_template\"";
+    let key_pos = json.find(key)?;
+    let after_key = &json[key_pos + key.len()..];
+    let colon_off = after_key.find(':')?;
+    let after_colon = &after_key[colon_off + 1..];
+    let quote_off = after_colon.find('"')?;
+    let value_start = quote_off + 1;
+    let after_quote = &after_colon[value_start..];
+    let end_quote_off = after_quote.find('"')?;
+    Some(after_quote[..end_quote_off].to_string())
 }
 
 /// Replace the value of a top-level `"authentication"` field in a JSON
