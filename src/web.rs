@@ -1259,6 +1259,15 @@ async fn post_config_reset(
     }
     ctrl.update_webhook(next.discord_webhook_url.clone());
     crate::trace::set_enabled(next.tracing_enabled);
+    if scope == "all" {
+        // Nuke the controller's live delay state too. Settings on
+        // disk going back to 0 isn't enough — the in-memory atoms
+        // would otherwise keep an armed delay alive past the reset
+        // and confuse the wizard reload. clear_logs makes the
+        // event-log tab match the "fresh install" feel.
+        ctrl.arm_delay(0);
+        ctrl.clear_logs();
+    }
     ctrl.log(format!("config reset (scope={})", scope));
     let _ = settings.send(next);
     (
