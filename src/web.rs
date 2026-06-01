@@ -726,18 +726,26 @@ async fn obs_multitrack_config_proxy(
     // session dies at the TCP-retransmit-timeout boundary (~60 s).
     let ivs_url = first_url_template(&twitch_json).map(|t| t.replace("{stream_key}", &twitch_key));
     if let Some(ivs) = ivs_url.as_ref() {
-        // Set the override only on Twitch destinations — the
-        // supervisor tags those with `pass_through_multitrack_video`
-        // at spawn time, so we use that as the filter. Other
-        // destinations (YouTube / Kick / Restream) keep their
-        // configured URL because none of them speak EB.
-        for (_id, state) in ctrl.all_destination_states() {
-            if state
-                .pass_through_multitrack_video
-                .load(std::sync::atomic::Ordering::Relaxed)
-            {
-                *state.eb_override_url.lock().unwrap() = Some(ivs.clone());
-            }
+        // Set the override on every Twitch destination we find in
+        // settings. Filtering by `pass_through_multitrack_video` was
+        // wrong because that atomic only gets set when the supervisor
+        // spawns the egress — and the supervisor refuses to spawn
+        // until ingest is alive. Since OBS calls this endpoint BEFORE
+        // it connects to our ingest, the flag is still false here on
+        // every destination and the loop matched nothing (silent
+        // no-op, override never landed, egress kept dialling the
+        // legacy URL). Settings-driven platform lookup avoids that
+        // ordering trap entirely.
+        let twitch_ids: Vec<String> = settings
+            .borrow()
+            .destinations
+            .iter()
+            .filter(|d| d.enabled && d.platform == "twitch")
+            .map(|d| d.id.clone())
+            .collect();
+        for id in &twitch_ids {
+            let state = ctrl.destination_state(id);
+            *state.eb_override_url.lock().unwrap() = Some(ivs.clone());
         }
         ctrl.log(format!(
             "[OBS multitrack] Twitch GetClientConfiguration call succeeded — \
