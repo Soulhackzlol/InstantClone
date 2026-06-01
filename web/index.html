@@ -162,6 +162,42 @@ input,select,textarea{font-family:inherit;color:inherit}
 .wizard-obs-status{margin:6px 0 0;font-size:11.5px;line-height:1.45;color:var(--fg-3)}
 .wizard-obs-status:empty{display:none}
 .wizard-obs-tip{margin:0;font-size:11px;color:var(--fg-4)}
+/* Progressive disclosure primitive — `<details class="ic-disclose">`
+   with a `<summary>` that reads as an inline link, plus a subtle
+   slide-down on open. Used to keep wizard / OBS / platform-tip
+   explanations one click away instead of dumping paragraphs of dense
+   text into the user's eyeline on first paint. */
+.ic-disclose{margin-top:8px;font-size:11.5px;color:var(--fg-3);line-height:1.5}
+.ic-disclose summary{
+  cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+  color:var(--fg-3);font-size:11.5px;
+  -webkit-user-select:none;user-select:none;list-style:none;
+  padding:2px 0;border-radius:4px;
+  transition:color .15s var(--ease-out);
+}
+.ic-disclose summary::-webkit-details-marker{display:none}
+.ic-disclose summary::before{
+  content:"";display:inline-block;width:0;height:0;
+  border-left:4px solid currentColor;border-top:3px solid transparent;border-bottom:3px solid transparent;
+  transition:transform .18s var(--ease-out);transform-origin:35% 50%;
+}
+.ic-disclose[open] summary::before{transform:rotate(90deg)}
+.ic-disclose summary:hover{color:var(--fg-2)}
+.ic-disclose summary:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+.ic-disclose-body{
+  margin-top:6px;padding:10px 12px;border-radius:8px;
+  background:color-mix(in oklch,var(--bg-2) 60%,var(--surface));
+  border:1px solid var(--line);
+  color:var(--fg-3);font-size:11.5px;line-height:1.55;
+  animation:discloseIn .22s var(--ease-out) both;
+}
+.ic-disclose-body p{margin:0}
+.ic-disclose-body p + p{margin-top:8px}
+.ic-disclose-body code.mono{background:var(--surface);padding:1px 5px;border-radius:4px;font-size:11px}
+@keyframes discloseIn{
+  from{opacity:0;transform:translateY(-4px)}
+  to{opacity:1;transform:none}
+}
 .wizard-card h2{font-size:22px;margin:0;letter-spacing:-.01em}
 .wizard-card .lead{color:var(--fg-3);font-size:13px;margin:0 0 8px}
 .wizard-card label{display:block;margin-top:8px;font-size:11px;color:var(--fg-3);
@@ -170,8 +206,18 @@ input,select,textarea{font-family:inherit;color:inherit}
 .wizard-row .ic-btn{flex:1}
 #w-custom-wrap{margin-top:8px}
 .w-hint{font-size:11.5px;color:var(--fg-4);margin-top:4px}
-.w-key-help{margin-top:6px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg-2);font-size:11.5px;color:var(--fg-3);line-height:1.45}
-.w-key-help a{color:var(--fg-2);text-decoration:underline;text-underline-offset:2px}
+/* Container for the per-platform help under the wizard / destination
+   key input. Inside lives an optional link to the platform's key page
+   and an optional <details> disclosure for the long gotcha tip. We
+   don't put a visible card around it anymore — the disclosure body
+   carries its own panel, and the deep-link is just a styled anchor. */
+.w-key-help{margin-top:6px;display:flex;flex-direction:column;gap:6px;font-size:11.5px;color:var(--fg-3);line-height:1.45}
+.w-key-help .w-key-link{color:var(--fg-2);text-decoration:underline;text-underline-offset:2px;font-size:11.5px}
+.w-key-help .w-key-link:hover{color:var(--fg)}
+.w-key-disclose{margin-top:0}
+/* Kick gets the warning palette on its summary even when not hovered. */
+.w-key-disclose summary.warn{color:var(--warn,#d6a23a)}
+.w-key-disclose summary.warn:hover{color:color-mix(in oklch,var(--warn,#d6a23a) 70%,#fff)}
 .w-key-help a:hover{color:var(--fg)}
 .w-key-help .w-key-tip{margin-top:4px;color:var(--fg-4)}
 .w-key-help .w-key-tip.warn{color:var(--warn,#d6a23a)}
@@ -738,27 +784,32 @@ input,select,textarea{font-family:inherit;color:inherit}
 <!-- ── Wizard (only when !configured) ──────────── -->
 <section class="ic-card wizard-card" id="wizard" hidden>
   <h2>Welcome to InstantClone</h2>
-  <p class="lead">Two short steps and you're live. You can change anything later.</p>
+  <p class="lead">Two short steps and you're live.</p>
 
   <!-- Step 1: how OBS finds us -->
-  <div class="wizard-step-label">Step 1 &middot; Connect OBS to InstantClone</div>
-  <p class="wizard-step-sub">Pick one. The first option is recommended for everyone on OBS 30.2 or newer.</p>
+  <div class="wizard-step-label">Step 1 &middot; Connect OBS</div>
   <div class="wizard-obs-options">
     <div class="wizard-obs-card" id="wiz-obs-service">
       <div class="wizard-obs-title">
         <span>⚡ Register as an OBS service</span>
         <span class="wizard-obs-badge">recommended</span>
       </div>
-      <p class="wizard-obs-body">Adds an <b>InstantClone</b> entry to OBS's Service dropdown next to Twitch / YouTube. Multi-track Video "Auto" works out of the box; you just pick InstantClone in OBS, restart, and stream.</p>
+      <p class="wizard-obs-body">One click adds InstantClone to OBS's Service dropdown.</p>
       <div class="wizard-obs-action">
         <button class="ic-btn ic-btn-primary" id="wiz-obs-register-btn" onclick="wizRegisterObs()">Register with OBS</button>
       </div>
       <p class="wizard-obs-status muted" id="wiz-obs-status">Checking your OBS install&hellip;</p>
-      <p class="wizard-obs-tip">Writes to OBS's <code class="mono">services.json</code> with a <code class="mono">.bak</code> backup. You can unregister any time from the <b>OBS</b> tab.</p>
+      <details class="ic-disclose">
+        <summary>How it works</summary>
+        <div class="ic-disclose-body">
+          <p>InstantClone appears next to Twitch / YouTube in OBS's <b>Settings &rarr; Stream &rarr; Service</b> list. Multi-track Video "Auto" works out of the box &mdash; pick InstantClone, restart OBS, and stream.</p>
+          <p>Edits OBS's <code class="mono">services.json</code> in <code class="mono">%APPDATA%</code> with a <code class="mono">.bak</code> backup. You can unregister any time from the <b>OBS</b> tab.</p>
+        </div>
+      </details>
     </div>
     <div class="wizard-obs-card" id="wiz-obs-custom">
-      <div class="wizard-obs-title"><span>🔧 Use a Custom RTMP server in OBS</span></div>
-      <p class="wizard-obs-body">Open OBS &rarr; Settings &rarr; Stream &rarr; Service: <b>Custom&hellip;</b> and paste the values below. Older OBS, multi-RTMP plugins, or any non-OBS encoder all work this way.</p>
+      <div class="wizard-obs-title"><span>🔧 Custom RTMP server</span></div>
+      <p class="wizard-obs-body">Paste these in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service: Custom</b>.</p>
       <div class="wizard-obs-copy-row">
         <span class="muted">Server</span>
         <code class="mono" id="wiz-obs-srv">rtmp://127.0.0.1:1935/live</code>
@@ -768,13 +819,17 @@ input,select,textarea{font-family:inherit;color:inherit}
         <span class="muted">Stream key</span>
         <code class="mono">anything (e.g. main)</code>
       </div>
-      <p class="wizard-obs-tip">The real platform stream key goes in Step 2, not in OBS.</p>
+      <details class="ic-disclose">
+        <summary>When to pick this</summary>
+        <div class="ic-disclose-body">
+          <p>Older OBS (before 30.2), multi-RTMP plugins, or non-OBS encoders. The real platform stream key goes in Step 2 &mdash; not in OBS.</p>
+        </div>
+      </details>
     </div>
   </div>
 
   <!-- Step 2: destination -->
-  <div class="wizard-step-label">Step 2 &middot; Where should we forward your stream?</div>
-  <p class="wizard-step-sub">Pick your platform and paste your real stream key. Add more destinations later in the Destinations tab.</p>
+  <div class="wizard-step-label">Step 2 &middot; Where to send your stream</div>
   <label for="w-platform">Streaming platform</label>
   <select id="w-platform" class="ic-input"></select>
   <div id="w-custom-wrap" hidden>
@@ -2299,11 +2354,24 @@ function renderKeyHelp(slug, hostId){
   const parts = [];
   if (p.key_url){
     const where = p.key_help || 'Where to find your stream key';
-    parts.push(`<a href="${p.key_url}" target="_blank" rel="noopener">${where} →</a>`);
+    parts.push(`<a class="w-key-link" href="${p.key_url}" target="_blank" rel="noopener">${where} →</a>`);
   }
   if (p.tip){
-    const cls = slug === 'kick' ? 'w-key-tip warn' : 'w-key-tip';
-    parts.push(`<div class="${cls}">${p.tip}</div>`);
+    // Long platform-specific gotcha goes behind a disclosure. The
+    // summary is intentionally short ("Things to know about Twitch")
+    // so it doesn't crowd the key input; the user only sees the full
+    // paragraph if they care enough to click. Kick's tip is the
+    // exception — its B-frames rule silently drops the stream, so
+    // we expand it by default for that one platform.
+    const isKick = slug === 'kick';
+    const label = isKick ? '⚠ Things to know about Kick' : `Things to know about ${p.label || 'this platform'}`;
+    const cls = isKick ? 'w-key-tip warn' : 'w-key-tip';
+    parts.push(`
+      <details class="ic-disclose w-key-disclose"${isKick ? ' open' : ''}>
+        <summary class="${cls}">${label}</summary>
+        <div class="ic-disclose-body">${p.tip}</div>
+      </details>
+    `);
   }
   host.innerHTML = parts.join('');
   host.hidden = false;
