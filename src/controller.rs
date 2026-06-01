@@ -365,14 +365,19 @@ impl Controller {
         self.last_multitrack_video_ms
             .store(process_now_ms(), Ordering::Relaxed);
         if !self.multitrack_video.swap(true, Ordering::Relaxed) {
+            // Twitch destinations pass the multi-track tag through
+            // bit-faithfully (Enhanced Broadcasting → transcoded
+            // ladder); every other platform flattens to the primary
+            // resolution on the way out via select_video_bytes. So
+            // this is now informational, not a warning.
             self.log(
-                "WARN: Enhanced Broadcasting (multi-track video) detected — \
-                 keeping the primary track only. Disable simulcast in OBS for \
-                 a clean single-resolution stream.",
+                "Enhanced Broadcasting (multi-track video) detected — \
+                 forwarding raw to Twitch destinations, flattening to the \
+                 primary resolution for any other platform.",
             );
             self.fire_webhook(
-                "⚠️",
-                "Enhanced Broadcasting detected — sending the primary resolution only.",
+                "🎚️",
+                "Enhanced Broadcasting detected — multi-track forwarding active.",
             );
         }
     }
