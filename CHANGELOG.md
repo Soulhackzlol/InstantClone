@@ -6,7 +6,79 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
-Nothing yet.
+Headline: Enhanced Broadcasting works end-to-end through the proxy.
+OBS Multi-track "Auto" lights up the Twitch transcoded ladder
+regardless of account tier, and non-Twitch destinations keep getting
+a clean single-resolution stream.
+
+**Enhanced Broadcasting to Twitch.** New `POST /obs/multitrack-config`
+endpoint proxies OBS's request to Twitch's `GetClientConfiguration`
+API: we swap the `authentication` field, capture the session-allocated
+IVS ingest URL + auth token, and rewrite the response's
+`url_template`s so OBS uploads back through us. The supervisor stores
+the IVS URL as a per-destination override and routes egress there
+instead of the configured `live.twitch.tv` (only the IVS edge runs
+the EB transcoder). Failure modes (Twitch API timeout, transport
+error, non-2xx response) each fall back to a static config and log a
+discriminated reason. Webhook + EB proxy now share a `native-tls`
+connector helper (`src/https.rs`) — silently broken Discord webhooks
+got fixed as a side-effect.
+
+**Per-track sequence-header cache.** OBS sends one OneTrack-format
+SPS/PPS tag per ladder rung. The old single-slot cache stomped them
+all to the last-received one, which Twitch Inspector surfaced as
+resolution "x" for tracks 1..N and the stream silently died at the
+TCP retransmit boundary (~60 s). Cache is now keyed on the TrackId
+byte (`h264::seq_header_track_id`); `send_sequence_headers` iterates
+every cached track for Twitch passthrough and selects TrackId 0 for
+non-Twitch destinations.
+
+**Non-Twitch ladder-tag drop.** Per-frame OneTrack tags with
+`TrackId != 0` are filtered out of the non-Twitch egress in
+`select_video_bytes`. Before this fix, OBS's 4-rung ladder produced 5
+single-track tags per PTS on YouTube — decoders read that as a
+multi-frame storm, the connection dropped ~12 s after handshake, and
+the supervisor reconnected on a loop. The primary still flows
+through as a legacy AVC tag.
+
+**One-click OBS service registration.** The wizard's primary path
+adds an "InstantClone" entry to OBS's Service dropdown with the
+`multitrack_video_configuration_url` pointing at our proxy. Idempotent
++ self-healing: re-registering with a changed `web_port` refreshes
+the URL; a corrupted or write-locked `services.json` surfaces
+specific errors ("close OBS Studio first" / "file may be corrupted").
+A `.bak` is always written before patching.
+
+**Wizard rewrite.** Two steps now: "Step 1 · Connect OBS to
+InstantClone" (Register-with-OBS button vs. Custom-RTMP card with
+copy-server-URL) then "Step 2 · Where should we forward your stream?"
+(existing platform/key form). The OBS card polls
+`/obs/register-status` so the button reflects current registration
+state.
+
+**Hardening.**
+
+- `begin_publish` clears `video_seq_headers`, `audio_seq_header`, and
+  the `onMetaData` cache on a fresh publisher session. Previously a
+  publisher A→B reconnect could leak EB seq-headers into a non-EB
+  session and freeze Twitch's decoder. Mid-session caches still
+  survive an egress supervisor restart (regression-tested).
+- `mark_ingest_dead` clears every destination's `eb_override_url` so
+  a subsequent non-EB stream doesn't land on a stale IVS endpoint.
+- The dashboard `⚡ Enhanced Broadcasting` chip lights when multi-track
+  is observed; the Twitch mobile-decoder cap pill auto-suppresses
+  while EB is active (the ladder bypasses the cap).
+- Per-tag `TAG_VIDEO` trace formatting is now gated behind
+  `trace::is_enabled()`, saving ~24 KB/s of allocation churn on idle
+  builds.
+- Fresh `DestinationState`s initialise `consumer_seq` to `u64::MAX`
+  so a destination registered mid-stream doesn't briefly pin the
+  ring's trim to seq 0.
+
+**Tests: 88 → 113.** New coverage for the per-track seq-header
+cache, EB chip lifecycle, `mark_ingest_dead` override-clear, the
+TrackId-drop selection path, OBS `services.json` re-register flow +
+validator, and the `begin_publish` cache-purge regression.
 
 ## [0.1.0-beta.6] - audit follow-through + live delay adjustment + the Twitch source-only mystery solved
 

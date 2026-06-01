@@ -164,7 +164,14 @@ impl DestinationState {
         Self {
             id,
             egress_alive: AtomicBool::new(false),
-            consumer_seq: AtomicU64::new(0),
+            // Sentinel: a freshly-registered destination whose pump
+            // hasn't seeded yet must NOT pin the ring's trim to seq 0.
+            // min_consumer_seq treats u64::MAX as "no constraint", so
+            // until PUMP_START stores the real seed seq, on_tag's trim
+            // can evict freely. Otherwise adding a new destination
+            // mid-stream would briefly stop the ring from trimming —
+            // ballooning the buffer by ~bitrate × seed_idr wait.
+            consumer_seq: AtomicU64::new(u64::MAX),
             tags_sent: AtomicU64::new(0),
             bytes_sent: AtomicU64::new(0),
             cuts_performed: AtomicU32::new(0),
@@ -738,11 +745,23 @@ impl Controller {
             ));
         }
 
+        // Wipe every per-session cache that survives mark_ingest_dead.
+        // The seq-header caches deliberately persist across an in-session
+        // egress restart (see `eb_seq_headers_survive_egress_restart`) so
+        // we clear them only when a new publisher takes the slot —
+        // otherwise stale multi-track SPS/PPS leak into a non-EB
+        // session and freeze the destination's decoder.
         if let Ok(mut hdrs) = self.ring.video_seq_headers.lock() {
-            hdrs.clear(); // Delete old video tracks (if EB was on)
+            hdrs.clear();
         }
         if let Ok(mut audio_hdr) = self.ring.audio_seq_header.lock() {
-            *audio_hdr = None; // Delete old audio track
+            *audio_hdr = None;
+        }
+        // onMetaData leaks the same way: the prior publisher's
+        // resolution / fps / encoder fields would be replayed at every
+        // pump start until the new publisher's first onMetaData arrives.
+        if let Ok(mut meta) = self.ring.metadata.lock() {
+            *meta = None;
         }
 
         // Bump token so any prior egress reader knows it's stale.
@@ -1444,22 +1463,27 @@ async fn pace_and_send(
                 return Ok(());
             };
             let bytes_out: &[u8] = &selected;
-            let hdr = bytes_out.first().copied().unwrap_or(0);
-            let is_idr = meta.is_idr;
-            crate::trace::log(
-                "TAG_VIDEO",
-                &format!(
-                    "dest={} i={} in_ts={} out_ts=0x{:08x} bytes={} hdr=0x{:02x} is_idr={} hex={}",
-                    dest.id,
-                    dest.tags_sent.load(Ordering::Relaxed),
-                    meta.ts_ms,
-                    out_ts,
-                    bytes_out.len(),
-                    hdr,
-                    is_idr as u8,
-                    crate::trace::hex_prefix(bytes_out, 16),
-                ),
-            );
+            // Hottest path in the whole binary — ~300 events/s on a
+            // 5-rung EB stream × 2 destinations. Skip the format!
+            // entirely when tracing is disabled (the default).
+            if crate::trace::is_enabled() {
+                let hdr = bytes_out.first().copied().unwrap_or(0);
+                let is_idr = meta.is_idr;
+                crate::trace::log(
+                    "TAG_VIDEO",
+                    &format!(
+                        "dest={} i={} in_ts={} out_ts=0x{:08x} bytes={} hdr=0x{:02x} is_idr={} hex={}",
+                        dest.id,
+                        dest.tags_sent.load(Ordering::Relaxed),
+                        meta.ts_ms,
+                        out_ts,
+                        bytes_out.len(),
+                        hdr,
+                        is_idr as u8,
+                        crate::trace::hex_prefix(bytes_out, 16),
+                    ),
+                );
+            }
             sink.send_video(out_ts, bytes_out).await?;
             // The bytes_sent accounting below uses bytes_out.len()
             // so per-destination bitrate reflects what we actually
@@ -2163,20 +2187,20 @@ mod tests {
             "chip must clear when codec state resets"
         );
     }
-    
+
     /// A fresh publisher session must clear out all cached audio and multi-track
-    /// video sequence headers left over from a previous stream. While those 
-    /// headers are required to survive mid-stream egress supervisor restarts 
-    /// (tested via `eb_seq_headers_survive_egress_restart`), allowing them to 
-    /// leak into a subsequent session causes severe pipeline pollution. If a 
-    /// publisher reconnects without Enhanced Broadcasting, a failure to clear 
-    /// this state causes the egress engine to inject stale multi-track headers 
+    /// video sequence headers left over from a previous stream. While those
+    /// headers are required to survive mid-stream egress supervisor restarts
+    /// (tested via `eb_seq_headers_survive_egress_restart`), allowing them to
+    /// leak into a subsequent session causes severe pipeline pollution. If a
+    /// publisher reconnects without Enhanced Broadcasting, a failure to clear
+    /// this state causes the egress engine to inject stale multi-track headers
     /// into Twitch, triggering an unrecoverable stream freeze.
     #[tokio::test]
     async fn begin_publish_purges_cached_sequence_headers_from_prior_sessions() {
         let h = harness(0);
 
-        // 1. Populate the video sequence headers cache simulating an active 
+        // 1. Populate the video sequence headers cache simulating an active
         //    Twitch EB multi-track ladder (Tracks 0..=3).
         for track_id in 0u8..=3 {
             let mut tag = vec![0x96, 0x00, 0x61, 0x76, 0x63, 0x31, track_id];
@@ -2191,15 +2215,25 @@ mod tests {
         let mock_audio = vec![0xaf, 0x00, 0x11, 0x22, 0x33];
         *h.ctrl.ring.audio_seq_header.lock().unwrap() = Some(mock_audio.clone());
 
+        // 3. Populate metadata cache simulating Publisher A's onMetaData.
+        *h.ctrl.ring.metadata.lock().unwrap() = Some(b"onMetaData-publisher-A".to_vec());
+
         // Validate baseline assumptions: caches must be fully loaded.
         {
             let video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
             assert_eq!(video_cache.len(), 4, "video cache must start with 4 tracks");
-            assert!(h.ctrl.ring.audio_seq_header.lock().unwrap().is_some(), "audio cache must be active");
+            assert!(
+                h.ctrl.ring.audio_seq_header.lock().unwrap().is_some(),
+                "audio cache must be active"
+            );
+            assert!(
+                h.ctrl.ring.metadata.lock().unwrap().is_some(),
+                "metadata cache must be active"
+            );
         }
 
-        // 3. Simulate a clean stream teardown or crash. The supervisor invokes 
-        //    `mark_ingest_dead`, which updates atomic states but leaves headers 
+        // 3. Simulate a clean stream teardown or crash. The supervisor invokes
+        //    `mark_ingest_dead`, which updates atomic states but leaves headers
         //    intact by design to allow ongoing egress readers to recover.
         h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
         h.ctrl.mark_ingest_dead();
@@ -2207,8 +2241,15 @@ mod tests {
         {
             let video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
             let audio_cache = h.ctrl.ring.audio_seq_header.lock().unwrap();
-            assert_eq!(video_cache.len(), 4, "regression: mark_ingest_dead cleared video headers early");
-            assert!(audio_cache.is_some(), "regression: mark_ingest_dead cleared audio headers early");
+            assert_eq!(
+                video_cache.len(),
+                4,
+                "regression: mark_ingest_dead cleared video headers early"
+            );
+            assert!(
+                audio_cache.is_some(),
+                "regression: mark_ingest_dead cleared audio headers early"
+            );
         }
 
         // 4. Critical transition: A brand new publisher hits the RTMP stack.
@@ -2233,6 +2274,14 @@ mod tests {
             "leak detected: begin_publish failed to clear stale audio_seq_header configuration. \
              cached data: {:?}",
             post_audio_cache
+        );
+
+        let post_metadata_cache = h.ctrl.ring.metadata.lock().unwrap();
+        assert!(
+            post_metadata_cache.is_none(),
+            "leak detected: begin_publish failed to clear stale onMetaData. \
+             cached data: {:?}",
+            post_metadata_cache
         );
     }
 }

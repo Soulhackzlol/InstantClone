@@ -71,6 +71,17 @@ pub fn init(path: impl AsRef<Path>) {
     log("session", &format!("trace started at {}", path.display()));
 }
 
+/// Cheap probe for callers on the per-tag hot path. They want to skip
+/// the `format!` that builds the `msg` argument when tracing is off —
+/// `log` itself short-circuits but only AFTER the caller has already
+/// allocated the message string. At ~300 video tags/s an unconditional
+/// `format!` is ~24 KB/s of churn nobody asked for. Reads the same
+/// atomic `log` reads; if a flip races the check, the only effect is
+/// one missed line at the boundary.
+pub fn is_enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
 /// Write one trace line. `category` is a short tag (≤20 chars) used to
 /// grep the file later (`grep VIDEO_TAG`, `grep CUT`, etc.). `msg` is the
 /// human-readable detail. Becomes a single atomic load when tracing is
