@@ -724,6 +724,18 @@ async fn obs_multitrack_config_proxy(
     // runs the EB transcoder pipeline, so without this swap the
     // stream reaches Twitch but no transcoder picks it up, and the
     // session dies at the TCP-retransmit-timeout boundary (~60 s).
+    // Sanitize and trace the full Twitch response so we can see what
+    // fields it actually returned — Status block (eligibility),
+    // url_template placeholders, optional authentication tokens, and
+    // any error html_en_us payload. The stream key gets redacted out
+    // of any url_template via simple substring replacement so the
+    // trace stays shareable.
+    let sanitized = twitch_json.replace(&twitch_key, "<STREAM_KEY>");
+    crate::trace::log(
+        "OBS_MULTITRACK_RESPONSE",
+        &format!("(stream key redacted) {sanitized}"),
+    );
+
     let ivs_url = first_url_template(&twitch_json).map(|t| t.replace("{stream_key}", &twitch_key));
     if let Some(ivs) = ivs_url.as_ref() {
         // Set the override on every Twitch destination we find in
