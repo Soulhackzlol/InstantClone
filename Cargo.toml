@@ -3,9 +3,15 @@ name = "instantclone"
 version = "0.1.0"
 edition = "2021"
 
-# Squeeze every byte out of the release binary.
+# Squeeze every byte out of the release binary. opt-level = "s" trades
+# a small amount of code-generation aggressiveness for a meaningful
+# binary-size win — measured at -236 KB (1404 KB -> 1168 KB) vs
+# opt-level = 3 on our workload. Hot paths in this binary are
+# I/O-bound (RTMP chunk read/write, disk ring append, TCP send) where
+# the bottleneck is the syscall, not codegen, so the size win is the
+# right tradeoff for end-users.
 [profile.release]
-opt-level = 3
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = true

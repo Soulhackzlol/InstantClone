@@ -144,10 +144,37 @@ fn main() -> std::io::Result<()> {
         .build()?;
 
     rt.block_on(async move {
-        let ring = Arc::new(buffer::DiskRing::create(
-            &settings.buffer_path,
-            settings.buffer_bytes(),
-        )?);
+        let ring = match buffer::DiskRing::create(&settings.buffer_path, settings.buffer_bytes()) {
+            Ok(r) => Arc::new(r),
+            Err(e) => {
+                // Cold-start showstopper. Under windows_subsystem=windows
+                // there's no console to print this to, so pop a native
+                // dialog before exiting — otherwise the binary appears
+                // to do nothing and the user has no path to diagnose.
+                // Mirrors how `preflight_resolve` surfaces port
+                // conflicts before the runtime starts.
+                let msg = format!(
+                    "InstantClone couldn't open or create the delay buffer file.\n\n\
+                     Path:  {}\n\
+                     Size:  {} MB\n\
+                     Error: {}\n\n\
+                     Common causes:\n\
+                     - Another instance of InstantClone is still running\n\
+                     - Antivirus or backup software is scanning the file\n\
+                     - The drive is full or read-only\n\
+                     - The path is on a removable drive that's disconnected\n\n\
+                     Fix one of the above and relaunch, or change \
+                     'buffer_path' in instantclone.config.json to a writable folder.",
+                    settings.buffer_path.display(),
+                    settings.buffer_mb,
+                    e,
+                );
+                #[cfg(windows)]
+                portcheck::show_error("InstantClone -buffer error", &msg);
+                eprintln!("{}", msg);
+                return Err(e);
+            }
+        };
         // The new model: cold-start *arms* a delay so the buffer rebuilds
         // toward what the user had before, but doesn't yank the viewer
         // back the moment the stream resumes. They explicitly hit

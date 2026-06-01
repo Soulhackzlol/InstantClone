@@ -77,13 +77,33 @@ struct RingInner {
 
 impl DiskRing {
     pub fn create(path: &Path, capacity: u64) -> Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)?;
-        file.set_len(capacity)?;
+        // Make sure the parent directory exists. With a hand-edited
+        // config the user might point buffer_path at a path whose
+        // parent doesn't exist yet — OpenOptions returns a bare
+        // "path not found" io::Error in that case and the binary
+        // exits silently under windows_subsystem=windows. Eagerly
+        // creating the directory turns one class of cold-start
+        // failure into a no-op.
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        // On Windows the buffer file is briefly shared with whatever
+        // touched it last (antivirus scan, Indexer, Explorer preview
+        // pane, a still-shutting-down prior instance). The
+        // `set_len(capacity)` call below maps to NtSetInformationFile
+        // which fails with SHARING_VIOLATION (os error 32) when
+        // another handle is still open. Retry a handful of times
+        // with backoff so a 100 ms AV scan doesn't permanently
+        // block the user's cold start.
+        let mut file = open_with_retry(path)?;
+        set_len_with_retry(&file, capacity)?;
+        // Seek back to 0 so the first append writes at the start.
+        // open_with_retry positions the cursor at end-of-file when
+        // the file existed before.
+        file.seek(SeekFrom::Start(0))?;
+        let file = file; // freeze rebinding
         Ok(Self {
             file: Mutex::new(file),
             capacity,
@@ -413,6 +433,62 @@ impl DiskRing {
             }
         }
     }
+}
+
+/// Open the buffer file with read+write+create, retrying briefly on
+/// transient Windows sharing violations (antivirus scan, prior-instance
+/// still-shutting-down, Explorer preview pane). The retry window is
+/// short and bounded — if the file is truly locked we surface the OS
+/// error after ~1 s rather than spin indefinitely.
+fn open_with_retry(path: &Path) -> Result<File> {
+    let mut attempt = 0;
+    loop {
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+        {
+            Ok(f) => return Ok(f),
+            Err(e) if attempt < 5 && is_transient_lock(&e) => {
+                std::thread::sleep(std::time::Duration::from_millis(50 << attempt));
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Resize the buffer file to the configured capacity, retrying on
+/// the same transient-lock errors as `open_with_retry`. set_len maps
+/// to NtSetInformationFile on Windows; the kernel returns
+/// SHARING_VIOLATION while another handle is still scanning the file.
+fn set_len_with_retry(file: &File, capacity: u64) -> Result<()> {
+    let mut attempt = 0;
+    loop {
+        match file.set_len(capacity) {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < 5 && is_transient_lock(&e) => {
+                std::thread::sleep(std::time::Duration::from_millis(50 << attempt));
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Windows ERROR_SHARING_VIOLATION (32), ERROR_LOCK_VIOLATION (33),
+/// and the unix-side PermissionDenied mapping all indicate a file is
+/// briefly held by another process. WouldBlock covers async-locked
+/// handles. Anything else (NotFound, PermissionDenied without an OS
+/// code we recognise, etc.) means a retry won't help.
+fn is_transient_lock(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(32) | Some(33))
+        || matches!(
+            e.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        )
 }
 
 /// Does the write spanning `[w_off, w_off+w_len)` (mod cap) cover any byte

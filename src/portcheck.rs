@@ -178,6 +178,23 @@ pub fn ask_user(
     }
 }
 
+/// Pop a one-shot native error dialog. Used by main.rs for fatal
+/// cold-start failures that would otherwise leave the user staring at
+/// a closed (or never-opened) console — buffer file unwritable, etc.
+/// Safe to call from any thread; on non-Windows it's a no-op.
+pub fn show_error(title: &str, body: &str) {
+    let title_w = wide(title);
+    let body_w = wide(body);
+    unsafe {
+        MessageBoxW(
+            ptr::null_mut(),
+            body_w.as_ptr(),
+            title_w.as_ptr(),
+            MB_OK | MB_ICONWARNING,
+        );
+    }
+}
+
 fn wide(s: &str) -> Vec<u16> {
     OsStr::new(s)
         .encode_wide()
