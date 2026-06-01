@@ -146,7 +146,20 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ic-toast.leaving{opacity:0;transform:translateX(12px);transition:.25s var(--ease-out)}
 
 /* ── Wizard (when !configured) ───────────────── */
-.wizard-card{max-width:520px;margin:60px auto;padding:32px;display:flex;flex-direction:column;gap:14px}
+.wizard-card{max-width:640px;margin:60px auto;padding:32px;display:flex;flex-direction:column;gap:14px}
+.wizard-step-label{margin-top:14px;font-size:11px;text-transform:uppercase;letter-spacing:1.6px;color:var(--accent);font-weight:600}
+.wizard-step-sub{color:var(--fg-3);font-size:12px;margin:0 0 6px}
+.wizard-obs-options{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px}
+@media (max-width:560px){.wizard-obs-options{grid-template-columns:1fr}}
+.wizard-obs-card{padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);display:flex;flex-direction:column;gap:8px}
+.wizard-obs-title{font-size:13px;font-weight:600;color:var(--fg);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.wizard-obs-badge{font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:var(--accent);background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));padding:2px 7px;border-radius:999px}
+.wizard-obs-body{margin:0;font-size:11.5px;color:var(--fg-3);line-height:1.45}
+.wizard-obs-action{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.wizard-obs-action .muted{font-size:11px}
+.wizard-obs-copy-row{display:flex;align-items:center;gap:8px;font-size:11.5px;flex-wrap:wrap}
+.wizard-obs-copy-row code{flex:1 1 200px;padding:6px 10px;background:var(--surface);border:1px solid var(--line);border-radius:6px;font-size:11.5px}
+.wizard-obs-tip{margin:0;font-size:11px;color:var(--fg-4)}
 .wizard-card h2{font-size:22px;margin:0;letter-spacing:-.01em}
 .wizard-card .lead{color:var(--fg-3);font-size:13px;margin:0 0 8px}
 .wizard-card label{display:block;margin-top:8px;font-size:11px;color:var(--fg-3);
@@ -655,7 +668,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     <span class="ic-pill" id="hdr-egress"><span class="dot"></span><span>Egress</span><span class="mono" id="hdr-egress-v">—</span></span>
     <span class="ic-bitrate"><span id="hdr-rate">—</span> <span class="unit">kbps</span></span>
     <span class="ic-pill" id="hdr-codec" hidden><span class="mono" id="hdr-codec-v">—</span></span>
-    <span class="ic-pill warn" id="hdr-ebroadcast" hidden title="Twitch Enhanced Broadcasting detected — InstantClone forwards only the primary track. Disable simulcast in OBS for a clean single-resolution stream.">⚠ Enhanced Broadcasting</span>
+    <span class="ic-pill ok" id="hdr-ebroadcast" hidden title="Enhanced Broadcasting active — multi-track simulcast is being forwarded bit-faithfully to Twitch and flattened to the primary track for any non-Twitch destinations. Twitch's transcoder serves the full quality ladder to viewers.">⚡ Enhanced Broadcasting</span>
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
     <span class="ic-pill warn" id="hdr-twitch-cap" hidden>⚠ <span id="hdr-twitch-cap-v">Twitch · Source-Only at 10 Mbps</span></span>
     <button id="hdr-help" class="ic-btn-tiny" title="How does this work? (?)" onclick="openTour(0)" style="width:30px;height:30px;color:var(--fg-3);font-weight:700;font-size:14px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);position:relative">?
@@ -667,7 +680,42 @@ input,select,textarea{font-family:inherit;color:inherit}
 <!-- ── Wizard (only when !configured) ──────────── -->
 <section class="ic-card wizard-card" id="wizard" hidden>
   <h2>Welcome to InstantClone</h2>
-  <p class="lead">Two fields and you're live. You can change anything later.</p>
+  <p class="lead">Two short steps and you're live. You can change anything later.</p>
+
+  <!-- Step 1: how OBS finds us -->
+  <div class="wizard-step-label">Step 1 &middot; Connect OBS to InstantClone</div>
+  <p class="wizard-step-sub">Pick one. The first option is recommended for everyone on OBS 30.2 or newer.</p>
+  <div class="wizard-obs-options">
+    <div class="wizard-obs-card" id="wiz-obs-service">
+      <div class="wizard-obs-title">
+        <span>⚡ Register as an OBS service</span>
+        <span class="wizard-obs-badge">recommended</span>
+      </div>
+      <p class="wizard-obs-body">Adds an <b>InstantClone</b> entry to OBS's Service dropdown next to Twitch / YouTube. Multi-track Video "Auto" works out of the box; you just pick InstantClone in OBS, restart, and stream.</p>
+      <div class="wizard-obs-action">
+        <button class="ic-btn ic-btn-primary" id="wiz-obs-register-btn" onclick="wizRegisterObs()">Register with OBS</button>
+        <span class="muted" id="wiz-obs-status"></span>
+      </div>
+    </div>
+    <div class="wizard-obs-card" id="wiz-obs-custom">
+      <div class="wizard-obs-title"><span>🔧 Use a Custom RTMP server in OBS</span></div>
+      <p class="wizard-obs-body">Open OBS &rarr; Settings &rarr; Stream &rarr; Service: <b>Custom&hellip;</b> and paste the values below. Older OBS, multi-RTMP plugins, or any non-OBS encoder all work this way.</p>
+      <div class="wizard-obs-copy-row">
+        <span class="muted">Server</span>
+        <code class="mono" id="wiz-obs-srv">rtmp://127.0.0.1:1935/live</code>
+        <button class="ic-btn ic-btn-ghost" onclick="copyEl('wiz-obs-srv','Server URL')">Copy</button>
+      </div>
+      <div class="wizard-obs-copy-row">
+        <span class="muted">Stream key</span>
+        <code class="mono">anything (e.g. main)</code>
+      </div>
+      <p class="wizard-obs-tip">The real platform stream key goes in Step 2, not in OBS.</p>
+    </div>
+  </div>
+
+  <!-- Step 2: destination -->
+  <div class="wizard-step-label">Step 2 &middot; Where should we forward your stream?</div>
+  <p class="wizard-step-sub">Pick your platform and paste your real stream key. Add more destinations later in the Destinations tab.</p>
   <label for="w-platform">Streaming platform</label>
   <select id="w-platform" class="ic-input"></select>
   <div id="w-custom-wrap" hidden>
@@ -684,7 +732,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   </div>
   <div id="w-msg"></div>
   <div style="margin-top:14px;text-align:center">
-    <button onclick="skipWizard()" style="background:none;border:0;color:var(--fg-3);font:inherit;font-size:12px;cursor:pointer;padding:6px 10px;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line)" onmouseover="this.style.color='var(--fg-2)'" onmouseout="this.style.color='var(--fg-3)'">
+    <button onclick="skipWizard()" style="background:none;border:0;color:var(--fg-3);font:inherit;font-size:12px;cursor:pointer;padding:6px 10px;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line)" onmouseover="this.style.color='var(--fg-3)'" onmouseout="this.style.color='var(--fg-3)'">
       Not now &mdash; let me look around first
     </button>
   </div>
@@ -1898,6 +1946,7 @@ async function loadConfig(){
     $('s-trace').checked = c.tracing_enabled !== false;
     // OBS panel
     $('obs-srv').textContent = c.obs_url;
+    if ($('wiz-obs-srv')) $('wiz-obs-srv').textContent = c.obs_url;
     $('dock-url').textContent = location.origin + '/dock';
     updateOverlayUrl();
     // footer
@@ -1906,6 +1955,7 @@ async function loadConfig(){
     // visibility
     const configured = c.configured;
     $('wizard').hidden = configured;
+    if (!configured) { refreshWizObsStatus(); }
     $('hdr-bar').hidden = !configured;
     $('hero').hidden = !configured;
     $('tabs').hidden = !configured;
@@ -1960,7 +2010,15 @@ function renderTwitchCapPill(s){
     d => d.platform === 'twitch' && d.alive && d.enabled
   );
   const kbps = (s.stats && s.stats.bitrate_kbps) || 0;
-  if (hasTwitchDest && kbps > TWITCH_MOBILE_SAFE_KBPS){
+  // When Enhanced Broadcasting is active the multi-track stream
+  // bypasses Twitch's account-tier source-only fallback — viewers
+  // get the full transcoded ladder regardless of bitrate, so the
+  // mobile-decoder warning we'd otherwise show is moot. The "⚡
+  // Enhanced Broadcasting" chip next to this one already
+  // communicates the EB-active state, so silently suppress this
+  // warning to avoid two chips telling the user different things.
+  const ebActive = !!s.multitrack_video;
+  if (hasTwitchDest && kbps > TWITCH_MOBILE_SAFE_KBPS && !ebActive){
     v.textContent = `Twitch · mobile risk at ${(kbps/1000).toFixed(1)} Mbps`;
     pill.hidden = false;
     pill.style.cursor = 'pointer';
@@ -2033,6 +2091,63 @@ function fillWizardPlatforms(){
     });
   }
   renderKeyHelp(sel.value, 'w-key-help');
+}
+
+// First-run OBS-service registration card in the wizard. Renders the
+// status text + button state based on /obs/register-status, and the
+// "Register with OBS" button calls /obs/register and refreshes.
+// Falls through to the Custom-RTMP card when OBS isn't detected on
+// this machine (e.g. a fresh InstantClone install before OBS is
+// installed — rare but the dashboard shouldn't show an action that
+// can't possibly succeed).
+async function refreshWizObsStatus(){
+  const btn = $('wiz-obs-register-btn');
+  const status = $('wiz-obs-status');
+  if (!btn || !status) return;
+  try {
+    const r = await (await fetch('/obs/register-status')).json();
+    if (r.path === null){
+      status.innerHTML = '<span style="color:var(--warn,#d6a23a)">⚠ OBS not detected on this machine — use the Custom RTMP card on the right.</span>';
+      btn.disabled = true;
+      btn.textContent = 'Register with OBS';
+      btn.className = 'ic-btn ic-btn-disabled';
+      return;
+    }
+    btn.disabled = false;
+    if (r.registered){
+      status.innerHTML = '<span style="color:var(--live)">✓ Registered.</span> Restart OBS, then choose <b>InstantClone</b> from Settings → Stream → Service.';
+      btn.textContent = 'Unregister';
+      btn.className = 'ic-btn ic-btn-ghost';
+      btn.onclick = wizUnregisterObs;
+    } else {
+      status.textContent = "We'll add an InstantClone entry to OBS's service list — one click, no restart needed before clicking.";
+      btn.textContent = 'Register with OBS';
+      btn.className = 'ic-btn ic-btn-primary';
+      btn.onclick = wizRegisterObs;
+    }
+  } catch(e){
+    status.textContent = "Couldn't query OBS — the Custom RTMP card on the right also works.";
+  }
+}
+async function wizRegisterObs(){
+  const btn = $('wiz-obs-register-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await (await fetch('/obs/register', {method:'POST'})).json();
+    if (r.ok){ toast(r.message || 'Registered','ok'); }
+    else { toast(r.error || 'Failed','err'); }
+  } catch(e){ toast('Request failed','err'); }
+  await refreshWizObsStatus();
+}
+async function wizUnregisterObs(){
+  const btn = $('wiz-obs-register-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await (await fetch('/obs/unregister', {method:'POST'})).json();
+    if (r.ok){ toast(r.message || 'Unregistered','ok'); }
+    else { toast(r.error || 'Failed','err'); }
+  } catch(e){ toast('Request failed','err'); }
+  await refreshWizObsStatus();
 }
 
 // Per-platform "where do I get my stream key + what gotchas to know"

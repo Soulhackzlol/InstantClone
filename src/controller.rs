@@ -2054,4 +2054,88 @@ mod tests {
             "expected post-wrap ts above u32::MAX, got {latest}"
         );
     }
+
+    // ── Enhanced Broadcasting stability ──────────────────────────────
+
+    /// EB seq headers must survive across the `pace_and_send` resync
+    /// path: the supervisor restarts egress without disturbing the
+    /// publisher, the per-track BTreeMap stays populated, and the next
+    /// `send_sequence_headers` for a Twitch destination re-emits every
+    /// track from the cache. The bug we shipped + reverted was the
+    /// pre-BTreeMap single-Option cache stomping all tracks down to
+    /// just the last one received — verify via the ring's cache
+    /// directly so we'd catch a regression to that storage shape.
+    #[test]
+    fn eb_seq_headers_survive_egress_restart() {
+        let h = harness(0);
+        // Simulate OBS sending OneTrack-format seq headers for tracks
+        // 0..=3 (a typical Twitch EB four-rung ladder).
+        for track in 0u8..=3 {
+            let mut tag = vec![0x96, 0x00, 0x61, 0x76, 0x63, 0x31, track];
+            tag.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+            h.ctrl
+                .ring
+                .append(9, 0, &tag, false, true)
+                .expect("seq-header append");
+        }
+        // mark_ingest_dead clears codec state and EB overrides, but
+        // the seq-header cache itself belongs to the ring and only
+        // gets wiped by a fresh publisher session — verify it stays.
+        let dest = h.ctrl.destination_state("d1");
+        *dest.eb_override_url.lock().unwrap() = Some("rtmps://stale".into());
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_dead();
+        let cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+        assert_eq!(cache.len(), 4, "all 4 tracks must persist across cut");
+        for track in 0u8..=3 {
+            assert!(cache.contains_key(&track), "track {track} dropped");
+        }
+    }
+
+    /// `mark_ingest_dead` must clear every destination's
+    /// `eb_override_url`. A stale override would force the next
+    /// (possibly non-EB) stream onto an IVS endpoint with no
+    /// allocated session — exactly the silent 60-s-drop failure mode
+    /// we were chasing before the override field landed.
+    #[test]
+    fn mark_ingest_dead_clears_all_eb_overrides() {
+        let h = harness(0);
+        for id in ["dest-a", "dest-b", "dest-c"] {
+            let s = h.ctrl.destination_state(id);
+            *s.eb_override_url.lock().unwrap() = Some(format!("rtmps://ivs/{id}"));
+        }
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_dead();
+        for (id, s) in h.ctrl.all_destination_states() {
+            assert!(
+                s.eb_override_url.lock().unwrap().is_none(),
+                "override for {id} survived ingest cut"
+            );
+        }
+    }
+
+    /// `note_multitrack_video` is sticky-with-decay: once set, the
+    /// chip stays lit for a short window after the last multi-track
+    /// tag arrived (so a momentary pause between IDRs doesn't drop
+    /// the chip), and decays to false once stale. `reset_codec_state`
+    /// must wipe it immediately so a fresh non-EB publisher session
+    /// doesn't inherit the previous session's EB flag.
+    #[test]
+    fn eb_chip_clears_on_publisher_reset() {
+        let h = harness(0);
+        // `multitrack_video()` returns false when ingest is dead, so
+        // simulate an active publisher session first. Also sleep
+        // briefly so `process_now_ms()` advances past 0 — the chip
+        // uses 0 as a sentinel for "never set" and would otherwise
+        // race the process anchor on a freshly-started test binary.
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        h.ctrl.note_multitrack_video();
+        assert!(h.ctrl.multitrack_video(), "chip must light on first tag");
+        h.ctrl.reset_codec_state();
+        assert!(
+            !h.ctrl.multitrack_video(),
+            "chip must clear when codec state resets"
+        );
+    }
 }
