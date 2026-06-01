@@ -159,6 +159,8 @@ input,select,textarea{font-family:inherit;color:inherit}
 .wizard-obs-action .muted{font-size:11px}
 .wizard-obs-copy-row{display:flex;align-items:center;gap:8px;font-size:11.5px;flex-wrap:wrap}
 .wizard-obs-copy-row code{flex:1 1 200px;padding:6px 10px;background:var(--surface);border:1px solid var(--line);border-radius:6px;font-size:11.5px}
+.wizard-obs-status{margin:6px 0 0;font-size:11.5px;line-height:1.45;color:var(--fg-3)}
+.wizard-obs-status:empty{display:none}
 .wizard-obs-tip{margin:0;font-size:11px;color:var(--fg-4)}
 .wizard-card h2{font-size:22px;margin:0;letter-spacing:-.01em}
 .wizard-card .lead{color:var(--fg-3);font-size:13px;margin:0 0 8px}
@@ -551,10 +553,18 @@ input,select,textarea{font-family:inherit;color:inherit}
 
 /* ── Logs ────────────────────────────────────── */
 .logs-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.logs-wrap{position:relative;min-height:420px}
 .logs{background:#050608;border:1px solid var(--line);border-radius:10px;padding:10px 14px;
   font-family:'JetBrains Mono',monospace;font-size:12px;
   min-height:420px;max-height:420px;overflow-y:auto;color:var(--fg-2);
   line-height:1.6;margin:0}
+.logs-empty{background:var(--bg-2);border:1px dashed var(--line);border-radius:10px;
+  min-height:420px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:8px;text-align:center;padding:24px;color:var(--fg-3)}
+.logs-empty[hidden]{display:none}
+.logs-empty-icon{font-size:28px;opacity:.7;margin-bottom:6px}
+.logs-empty-title{font-size:14px;font-weight:600;color:var(--fg-2)}
+.logs-empty-body{font-size:12.5px;max-width:42ch;line-height:1.5}
 
 /* Footer */
 .ic-foot{margin-top:4px;display:flex;align-items:center;gap:10px;color:var(--fg-4);font-size:11.5px;
@@ -742,8 +752,9 @@ input,select,textarea{font-family:inherit;color:inherit}
       <p class="wizard-obs-body">Adds an <b>InstantClone</b> entry to OBS's Service dropdown next to Twitch / YouTube. Multi-track Video "Auto" works out of the box; you just pick InstantClone in OBS, restart, and stream.</p>
       <div class="wizard-obs-action">
         <button class="ic-btn ic-btn-primary" id="wiz-obs-register-btn" onclick="wizRegisterObs()">Register with OBS</button>
-        <span class="muted" id="wiz-obs-status"></span>
       </div>
+      <p class="wizard-obs-status muted" id="wiz-obs-status">Checking your OBS install&hellip;</p>
+      <p class="wizard-obs-tip">Writes to OBS's <code class="mono">services.json</code> with a <code class="mono">.bak</code> backup. You can unregister any time from the <b>OBS</b> tab.</p>
     </div>
     <div class="wizard-obs-card" id="wiz-obs-custom">
       <div class="wizard-obs-title"><span>🔧 Use a Custom RTMP server in OBS</span></div>
@@ -771,7 +782,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     <input id="w-custom" class="ic-input mono" placeholder="rtmp://127.0.0.1:1936/live">
     <div class="w-hint">Either put the stream key in the field below (recommended) or paste the full URL with the key embedded.</div>
   </div>
-  <label for="w-key">Stream key <span class="muted">(optional for Custom if URL has key)</span></label>
+  <label for="w-key">Stream key <span class="muted" id="w-key-optional-hint" hidden>(optional for Custom if URL has key)</span></label>
   <input id="w-key" type="password" class="ic-input mono" placeholder="paste your stream key" autocomplete="off">
   <div id="w-key-help" class="w-key-help" hidden></div>
   <div class="wizard-row">
@@ -1170,7 +1181,14 @@ input,select,textarea{font-family:inherit;color:inherit}
       <button class="ic-btn ic-btn-ghost" onclick="clearLogs()">Clear</button>
     </div>
   </div>
-  <pre class="logs" id="logs"></pre>
+  <div class="logs-wrap">
+    <pre class="logs" id="logs" hidden></pre>
+    <div class="logs-empty" id="logs-empty">
+      <div class="logs-empty-icon">📜</div>
+      <div class="logs-empty-title">No events yet</div>
+      <div class="logs-empty-body">As soon as OBS connects, you'll see ingest, egress, and destination events tail here in real time.</div>
+    </div>
+  </div>
 </section>
 
 </div><!-- /pane-card -->
@@ -2194,10 +2212,19 @@ function fillWizardPlatforms(){
   if (!sel._wired){
     sel._wired = true;
     sel.addEventListener('change', () => {
-      $('w-custom-wrap').hidden = sel.value !== 'custom';
+      const isCustom = sel.value === 'custom';
+      $('w-custom-wrap').hidden = !isCustom;
+      // Only Custom destinations can embed the stream key in the URL
+      // and skip the key field. Twitch/YouTube/Kick keys are always
+      // required, so the "(optional…)" hint would mislead — hide it
+      // unless we're on Custom.
+      const optHint = $('w-key-optional-hint');
+      if (optHint) optHint.hidden = !isCustom;
       renderKeyHelp(sel.value, 'w-key-help');
     });
   }
+  const optHint = $('w-key-optional-hint');
+  if (optHint) optHint.hidden = sel.value !== 'custom';
   renderKeyHelp(sel.value, 'w-key-help');
 }
 
@@ -2604,13 +2631,26 @@ async function pollLogs(){
   try {
     const j = await (await fetch('/logs')).json();
     const el = $('logs');
-    if (!j.lines || !j.lines.length){ el.textContent=''; return; }
-    el.textContent = j.lines.join('\n'); el.scrollTop = el.scrollHeight;
+    const empty = $('logs-empty');
+    const lines = j.lines || [];
+    if (!lines.length){
+      el.textContent = '';
+      el.hidden = true;
+      if (empty) empty.hidden = false;
+      return;
+    }
+    if (empty) empty.hidden = true;
+    el.hidden = false;
+    el.textContent = lines.join('\n');
+    el.scrollTop = el.scrollHeight;
   } catch(_){}
 }
 async function clearLogs(){
   await fetch('/logs/clear',{method:'POST'});
   $('logs').textContent = '';
+  $('logs').hidden = true;
+  const empty = $('logs-empty');
+  if (empty) empty.hidden = false;
   toast('Logs cleared','info');
 }
 // ── Spotlight onboarding tour ─────────────────────────────────────────
