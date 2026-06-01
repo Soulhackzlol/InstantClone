@@ -214,6 +214,10 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
             match ctrl.begin_publish(&stream_key).await {
                 Ok(_token) => {
                     guard.active = true;
+
+                    // Cleanup old stream cached state
+                    ctrl.reset_codec_state();
+                    
                     // onStatus NetStream.Publish.Start
                     let mut info = HashMap::new();
                     info.insert("level".to_string(), Amf0::String("status".into()));

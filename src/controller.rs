@@ -737,6 +737,14 @@ impl Controller {
                 "another publisher is already active",
             ));
         }
+
+        if let Ok(mut hdrs) = self.ring.video_seq_headers.lock() {
+            hdrs.clear(); // Delete old video tracks (if EB was on)
+        }
+        if let Ok(mut audio_hdr) = self.ring.audio_seq_header.lock() {
+            *audio_hdr = None; // Delete old audio track
+        }
+
         // Bump token so any prior egress reader knows it's stale.
         let token = self.publisher_token.fetch_add(1, Ordering::SeqCst) + 1;
         self.ingest_alive.store(true, Ordering::Relaxed);
@@ -2153,6 +2161,78 @@ mod tests {
         assert!(
             !h.ctrl.multitrack_video(),
             "chip must clear when codec state resets"
+        );
+    }
+    
+    /// A fresh publisher session must clear out all cached audio and multi-track
+    /// video sequence headers left over from a previous stream. While those 
+    /// headers are required to survive mid-stream egress supervisor restarts 
+    /// (tested via `eb_seq_headers_survive_egress_restart`), allowing them to 
+    /// leak into a subsequent session causes severe pipeline pollution. If a 
+    /// publisher reconnects without Enhanced Broadcasting, a failure to clear 
+    /// this state causes the egress engine to inject stale multi-track headers 
+    /// into Twitch, triggering an unrecoverable stream freeze.
+    #[tokio::test]
+    async fn begin_publish_purges_cached_sequence_headers_from_prior_sessions() {
+        let h = harness(0);
+
+        // 1. Populate the video sequence headers cache simulating an active 
+        //    Twitch EB multi-track ladder (Tracks 0..=3).
+        for track_id in 0u8..=3 {
+            let mut tag = vec![0x96, 0x00, 0x61, 0x76, 0x63, 0x31, track_id];
+            tag.extend_from_slice(&[0xaa, 0xbb, 0xcc, track_id]);
+            h.ctrl
+                .ring
+                .append(9, 0, &tag, false, true)
+                .expect("failed to seed mock multi-track video sequence header");
+        }
+
+        // 2. Populate the audio sequence header cache simulating a legacy AAC header.
+        let mock_audio = vec![0xaf, 0x00, 0x11, 0x22, 0x33];
+        *h.ctrl.ring.audio_seq_header.lock().unwrap() = Some(mock_audio.clone());
+
+        // Validate baseline assumptions: caches must be fully loaded.
+        {
+            let video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+            assert_eq!(video_cache.len(), 4, "video cache must start with 4 tracks");
+            assert!(h.ctrl.ring.audio_seq_header.lock().unwrap().is_some(), "audio cache must be active");
+        }
+
+        // 3. Simulate a clean stream teardown or crash. The supervisor invokes 
+        //    `mark_ingest_dead`, which updates atomic states but leaves headers 
+        //    intact by design to allow ongoing egress readers to recover.
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_dead();
+
+        {
+            let video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+            let audio_cache = h.ctrl.ring.audio_seq_header.lock().unwrap();
+            assert_eq!(video_cache.len(), 4, "regression: mark_ingest_dead cleared video headers early");
+            assert!(audio_cache.is_some(), "regression: mark_ingest_dead cleared audio headers early");
+        }
+
+        // 4. Critical transition: A brand new publisher hits the RTMP stack.
+        //    `begin_publish` must perform atomic state purging of the ring caches.
+        h.ctrl
+            .begin_publish("fresh_incoming_stream_key")
+            .await
+            .expect("begin_publish must accept the new session token assignment");
+
+        // 5. Hard assertions to guarantee a zeroed cache allocation before streaming starts.
+        let post_video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+        assert!(
+            post_video_cache.is_empty(),
+            "leak detected: begin_publish failed to purge video_seq_headers cache. \
+             stale tracks remaining: {:?}",
+            post_video_cache.keys()
+        );
+
+        let post_audio_cache = h.ctrl.ring.audio_seq_header.lock().unwrap();
+        assert!(
+            post_audio_cache.is_none(),
+            "leak detected: begin_publish failed to clear stale audio_seq_header configuration. \
+             cached data: {:?}",
+            post_audio_cache
         );
     }
 }
