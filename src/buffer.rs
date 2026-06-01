@@ -39,7 +39,20 @@ pub struct DiskRing {
 
     // Sequence headers and onMetaData live outside the ring — they are tiny,
     // never expire, and must be resendable on every reconnect and every cut.
-    pub video_seq_header: Mutex<Option<Vec<u8>>>,
+    //
+    // Video seq headers are keyed by track id (0..255) to handle Enhanced
+    // Broadcasting / multi-track streams: OBS sends one OneTrack-format
+    // multi-track seq-header tag PER track at session start (with the
+    // track id encoded in byte 6 of the payload), each carrying that
+    // track's SPS/PPS. A single-slot cache would overwrite every
+    // earlier track's config with the last one received — which is
+    // exactly the bug we traced down to Twitch Inspector showing
+    // per-track resolutions as "x" and the IVS transcoder pipeline
+    // failing to bind after 60 s. Single-track tags occupy slot 0 and
+    // the map degenerates to one entry, so the storage cost vs. the
+    // old `Option` is negligible in the common case. BTreeMap so the
+    // re-emit order is deterministic (track 0 first).
+    pub video_seq_headers: Mutex<std::collections::BTreeMap<u8, Vec<u8>>>,
     pub audio_seq_header: Mutex<Option<Vec<u8>>>,
     pub metadata: Mutex<Option<Vec<u8>>>,
 
@@ -80,7 +93,7 @@ impl DiskRing {
                 index: VecDeque::with_capacity(65_536),
                 idr_index: VecDeque::with_capacity(2_048),
             }),
-            video_seq_header: Mutex::new(None),
+            video_seq_headers: Mutex::new(std::collections::BTreeMap::new()),
             audio_seq_header: Mutex::new(None),
             metadata: Mutex::new(None),
             on_append: Notify::new(),
@@ -101,7 +114,20 @@ impl DiskRing {
     ) -> Result<Option<u64>> {
         if is_seq_header {
             match kind {
-                9 => *self.video_seq_header.lock().unwrap() = Some(payload.to_vec()),
+                9 => {
+                    // Cache per-track for multi-track streams. For single-track
+                    // or ManyTracks-format multi-track tags this collapses to a
+                    // single slot at key 0, matching the old single-Option
+                    // behaviour. For OneTrack-format Enhanced Broadcasting
+                    // streams (what OBS actually sends) each track id gets its
+                    // own slot, so the re-emit on cuts / reconnects carries the
+                    // SPS/PPS for every track Twitch's session expects.
+                    let track_id = crate::h264::seq_header_track_id(payload);
+                    self.video_seq_headers
+                        .lock()
+                        .unwrap()
+                        .insert(track_id, payload.to_vec());
+                }
                 8 => *self.audio_seq_header.lock().unwrap() = Some(payload.to_vec()),
                 _ => {}
             }
@@ -453,10 +479,32 @@ mod tests {
         let t = tmp(4096);
         let r = t.0.append(9, 0, b"AVCDecoderConfig", false, true).unwrap();
         assert!(r.is_none(), "seq headers must not return a ring seq");
-        assert_eq!(
-            *t.0.video_seq_header.lock().unwrap(),
-            Some(b"AVCDecoderConfig".to_vec())
-        );
+        // Single-track seq headers cache under track id 0 — same slot
+        // they used before the per-track refactor for multi-track.
+        let map = t.0.video_seq_headers.lock().unwrap();
+        assert_eq!(map.get(&0), Some(&b"AVCDecoderConfig".to_vec()));
+    }
+
+    #[test]
+    fn multitrack_seq_headers_cache_per_track_id() {
+        // Two OneTrack-format Enhanced-RTMP seq-header tags for tracks
+        // 0 and 4 must both survive in the cache — the bug we fixed.
+        // The pre-change single-Option storage would have kept only
+        // the last-received one, which is why Twitch Inspector showed
+        // tracks 1-4 with resolution "x" during the EB rollout.
+        let t = tmp(4096);
+        let track_0 = vec![
+            0x96, 0x00, 0x61, 0x76, 0x63, 0x31, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
+        ];
+        let track_4 = vec![
+            0x96, 0x00, 0x61, 0x76, 0x63, 0x31, 0x04, 0xff, 0xfe, 0xfd, 0xfc, 0xfb,
+        ];
+        t.0.append(9, 0, &track_0, false, true).unwrap();
+        t.0.append(9, 0, &track_4, false, true).unwrap();
+        let map = t.0.video_seq_headers.lock().unwrap();
+        assert_eq!(map.get(&0), Some(&track_0));
+        assert_eq!(map.get(&4), Some(&track_4));
+        assert_eq!(map.len(), 2);
     }
 
     #[test]

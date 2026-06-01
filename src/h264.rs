@@ -282,6 +282,51 @@ pub fn flatten_multitrack_video(payload: &[u8]) -> Option<Vec<u8>> {
 /// would want them changed. Returns a borrow when no copy is needed
 /// (the common case) and an owned `Vec` only when a flatten was
 /// actually performed.
+/// Best-effort extraction of the Enhanced-RTMP TrackId carried by an
+/// Enhanced-RTMP `OneTrack`-layout multi-track video tag (the format
+/// OBS uses for Enhanced Broadcasting seq-headers, where each track's
+/// SPS/PPS arrives as its own tag with TrackId in byte 6). Returns 0
+/// for:
+///   * legacy single-track payloads
+///   * Enhanced-RTMP single-track payloads (IsEx bit set but
+///     PacketType != Multitrack)
+///   * Multi-track ManyTracks / ManyTracksManyCodecs layouts (the
+///     whole tag holds every track's config — one slot is correct)
+///   * Truncated payloads we can't parse safely
+///
+/// Used by the seq-header cache to key per-track entries so a
+/// multi-track stream's full config is preserved across cuts /
+/// reconnects, instead of being silently overwritten by the
+/// last-received track.
+pub fn seq_header_track_id(payload: &[u8]) -> u8 {
+    if payload.len() < 2 {
+        return 0;
+    }
+    let b0 = payload[0];
+    // Not Enhanced-RTMP at all — legacy AVC/HEVC tag, no track id.
+    if b0 & 0x80 == 0 {
+        return 0;
+    }
+    // Enhanced-RTMP but not the Multitrack PacketType — single-track,
+    // no track id field to read.
+    if b0 & 0x0F != 6 {
+        return 0;
+    }
+    // Multi-track layout type lives in the high nibble of byte 1.
+    // OneTrack = 0; ManyTracks = 1; ManyTracksManyCodecs = 2. Only
+    // the OneTrack layout has a per-tag track id at byte 6; the other
+    // layouts pack every track into one tag so the single-slot key 0
+    // already captures the whole config.
+    let mt_type = (payload[1] >> 4) & 0x0F;
+    if mt_type != 0 {
+        return 0;
+    }
+    if payload.len() < 7 {
+        return 0;
+    }
+    payload[6]
+}
+
 pub fn select_video_bytes<'a>(
     payload: &'a [u8],
     pass_through_multitrack: bool,

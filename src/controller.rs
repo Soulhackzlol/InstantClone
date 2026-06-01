@@ -1638,29 +1638,65 @@ async fn send_sequence_headers(
     sink: &mut EgressSink,
     ts: u32,
 ) -> io::Result<()> {
-    // Drop the MutexGuards before the awaits.
-    let v = ctrl.ring.video_seq_header.lock().unwrap().clone();
-    if let Some(h) = v {
-        // Same per-destination selection as the data-tag path: if the
-        // cached video seq header is a multi-track wrapper and this
-        // destination doesn't accept multi-track, flatten it down to
-        // single-track before sending so the destination's decoder
-        // doesn't choke on bytes it can't parse.
-        let selected = crate::h264::select_video_bytes(
-            &h,
-            dest.pass_through_multitrack_video.load(Ordering::Relaxed),
-        );
-        let bytes_out: &[u8] = &selected;
-        crate::trace::log(
-            "VIDEO_SEQ_HDR_SENT",
-            &format!(
-                "ts=0x{:08x} bytes={} hex={}",
-                ts,
-                bytes_out.len(),
-                crate::trace::hex_prefix(bytes_out, 64)
-            ),
-        );
-        sink.send_video(ts, bytes_out).await?;
+    // Drop the MutexGuard before the awaits. Clone is cheap — each
+    // value is a tiny SPS/PPS blob and there are at most ~5 entries
+    // (one per Enhanced-RTMP OneTrack track in a multi-track stream;
+    // exactly one for the legacy / single-track case).
+    let v_headers: Vec<(u8, Vec<u8>)> = ctrl
+        .ring
+        .video_seq_headers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    let passthrough = dest.pass_through_multitrack_video.load(Ordering::Relaxed);
+    if passthrough {
+        // Twitch (EB): forward every cached track's seq header
+        // bit-faithfully. Twitch's IVS pipeline binds each track's
+        // SPS/PPS to its allocated transcoder slot — missing one
+        // leaves that track with no decoder config, which Twitch
+        // surfaces as resolution "x" in Inspector and the transcoder
+        // pipeline as "no config bound to this session", killing the
+        // stream at the TCP retransmit boundary ~60 s later.
+        for (track_id, h) in &v_headers {
+            crate::trace::log(
+                "VIDEO_SEQ_HDR_SENT",
+                &format!(
+                    "ts=0x{:08x} track={} bytes={} hex={}",
+                    ts,
+                    track_id,
+                    h.len(),
+                    crate::trace::hex_prefix(h, 64)
+                ),
+            );
+            sink.send_video(ts, h).await?;
+        }
+    } else {
+        // Non-Twitch destinations get the single-track-flattened
+        // form of the primary track (TrackId 0) — same behaviour
+        // beta.6 had via the single-Option cache. Falls back to the
+        // first entry the BTreeMap iterates if track 0 is missing
+        // (defensive — every real stream we've seen has a track 0).
+        if let Some(h) = v_headers
+            .iter()
+            .find(|(k, _)| *k == 0)
+            .or_else(|| v_headers.first())
+            .map(|(_, v)| v)
+        {
+            let selected = crate::h264::select_video_bytes(h, false);
+            let bytes_out: &[u8] = &selected;
+            crate::trace::log(
+                "VIDEO_SEQ_HDR_SENT",
+                &format!(
+                    "ts=0x{:08x} flattened bytes={} hex={}",
+                    ts,
+                    bytes_out.len(),
+                    crate::trace::hex_prefix(bytes_out, 64)
+                ),
+            );
+            sink.send_video(ts, bytes_out).await?;
+        }
     }
     let a = ctrl.ring.audio_seq_header.lock().unwrap().clone();
     if let Some(h) = a {
