@@ -318,6 +318,7 @@ async fn route(
         ),
 
         ("POST", "/config") => post_config(body, ctrl, settings, cfg_path).await,
+        ("POST", "/config/reset") => post_config_reset(query, ctrl, settings, cfg_path).await,
         // Two-phase delay endpoints
         ("POST", "/arm") => post_arm(body, ctrl, settings, cfg_path, sysstat).await,
         ("POST", "/activate") => post_activate(ctrl, settings, cfg_path, sysstat).await,
@@ -1204,6 +1205,66 @@ async fn post_config(
         "200 OK",
         "application/json",
         format!(r#"{{"ok":true{}}}"#, restart_msg),
+    )
+}
+
+/// Reset the persisted config to defaults. Two scopes:
+///
+/// - `scope=settings`: app-level knobs (ports, buffer, webhook,
+///   overlays dir, diagnostics) go back to defaults. Destinations,
+///   profiles, and the `configured` flag stay so the user doesn't get
+///   booted back into the wizard or lose stream keys.
+/// - `scope=all`: full `Settings::defaults()` — destinations and
+///   profiles are wiped, `configured=false` so the next page load
+///   shows the wizard. The OBS service registration in
+///   `services.json` is intentionally NOT touched here: it lives
+///   outside our config and has its own surface on the OBS tab.
+///
+/// In both cases the controller's webhook + trace toggle are
+/// updated in-process so the change is immediate, not next-restart.
+async fn post_config_reset(
+    query: &str,
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> (&'static str, &'static str, String) {
+    let scope = config::parse_form(query)
+        .get("scope")
+        .cloned()
+        .unwrap_or_else(|| "settings".to_string());
+    let mut next = Settings::defaults();
+    if scope == "settings" {
+        // Carry over the user's stream destinations and profiles —
+        // a settings reset must not silently lose their stream keys.
+        let prev = settings.borrow().clone();
+        next.destinations = prev.destinations;
+        next.profiles = prev.profiles;
+        next.configured = prev.configured;
+    } else if scope != "all" {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"unknown scope (use 'settings' or 'all')"}"#.to_string(),
+        );
+    }
+    if let Err(e) = next.save(cfg_path) {
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"save failed: {}"}}"#,
+                json_escape(&e.to_string())
+            ),
+        );
+    }
+    ctrl.update_webhook(next.discord_webhook_url.clone());
+    crate::trace::set_enabled(next.tracing_enabled);
+    ctrl.log(format!("config reset (scope={})", scope));
+    let _ = settings.send(next);
+    (
+        "200 OK",
+        "application/json",
+        format!(r#"{{"ok":true,"scope":"{}"}}"#, scope),
     )
 }
 

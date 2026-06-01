@@ -406,6 +406,15 @@ input,select,textarea{font-family:inherit;color:inherit}
 .obs-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px;
   display:flex;flex-direction:column;gap:6px}
 .obs-section.span-2{grid-column:1/-1}
+.obs-reg-card{background:linear-gradient(180deg,rgba(90,200,250,.07) 0%,var(--bg-2) 60%);
+  border-color:rgba(90,200,250,.32)}
+.obs-manual-card{opacity:.94}
+.obs-manual-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px}
+@media (max-width:880px){.obs-manual-row{grid-template-columns:1fr}}
+.obs-manual-field{display:flex;flex-direction:column;gap:4px}
+.ic-badge{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+  padding:2px 7px;border-radius:99px;margin-right:8px;vertical-align:1px}
+.ic-badge-ok{background:rgba(90,200,250,.18);color:#5ac8fa;border:1px solid rgba(90,200,250,.4)}
 .copy-block{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface);
   border:1px solid var(--line);border-radius:8px;margin-top:10px}
 .copy-block code{flex:1;font-size:12.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -490,6 +499,45 @@ input,select,textarea{font-family:inherit;color:inherit}
 /* ── System ──────────────────────────────────── */
 .sys-grid{display:flex;flex-direction:column;gap:14px}
 .sys-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px}
+/* Danger zone — visually fenced from Save with an err-tinted top border
+   so a click reaching for Save can't drift into Reset by accident. */
+.sys-reset{margin-top:24px;padding-top:18px;border-top:1px dashed color-mix(in oklch,var(--err) 32%,var(--line))}
+.sys-reset-head{margin-bottom:12px}
+.sys-reset-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:720px){.sys-reset-grid{grid-template-columns:1fr}}
+.sys-reset-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px;
+  display:flex;flex-direction:column;gap:8px}
+.sys-reset-card-danger{border-color:color-mix(in oklch,var(--err) 32%,var(--line));
+  background:color-mix(in oklch,var(--err) 4%,var(--bg-2))}
+.sys-reset-card .ic-btn{align-self:flex-start;margin-top:6px}
+.ic-btn-warn{background:color-mix(in oklch,var(--warn) 18%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--warn) 45%,var(--line));color:var(--warn)}
+.ic-btn-warn:hover{background:color-mix(in oklch,var(--warn) 28%,var(--bg-2))}
+.ic-btn-danger{background:color-mix(in oklch,var(--err) 18%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--err) 50%,var(--line));color:var(--err);font-weight:600}
+.ic-btn-danger:hover:not(:disabled){background:color-mix(in oklch,var(--err) 32%,var(--bg-2))}
+.ic-btn-danger:disabled{opacity:.45;cursor:not-allowed}
+/* Reset modal */
+.ic-modal{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+.ic-modal[hidden]{display:none}
+.ic-modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(4px);
+  animation:fadeIn .18s var(--ease-out)}
+.ic-modal-card{position:relative;width:min(520px,100%);background:var(--bg-1);
+  border:1px solid color-mix(in oklch,var(--err) 28%,var(--line));border-radius:14px;
+  box-shadow:0 24px 60px rgba(0,0,0,.5);padding:0;overflow:hidden;
+  animation:modalIn .22s var(--ease-out) both}
+@keyframes modalIn{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
+.ic-modal-head{display:flex;align-items:flex-start;gap:14px;padding:18px 20px 12px}
+.ic-modal-icon{width:36px;height:36px;flex:0 0 36px;border-radius:50%;
+  background:color-mix(in oklch,var(--err) 18%,var(--bg-2));color:var(--err);
+  display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:600}
+.ic-modal-title{font-size:15px;font-weight:600;color:var(--fg);letter-spacing:-.01em}
+.ic-modal-sub{color:var(--fg-3);font-size:12.5px;margin-top:2px}
+.ic-modal-body{padding:4px 20px 8px;color:var(--fg-2);font-size:13px}
+.ic-modal-list{margin:0;padding-left:18px;line-height:1.6}
+.ic-modal-list li b{color:var(--err)}
+.ic-modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px 18px;
+  border-top:1px solid var(--line);background:color-mix(in oklch,var(--err) 3%,var(--bg-2))}
 .form-row{display:flex;gap:16px;margin-top:16px;align-items:flex-end;flex-wrap:wrap}
 .form-row.tight{gap:12px;margin-top:10px}
 .form-row>div,.form-row>label{display:flex;flex-direction:column;gap:6px;flex:1;min-width:180px}
@@ -902,20 +950,34 @@ input,select,textarea{font-family:inherit;color:inherit}
     </div>
   </div>
   <div class="obs-grid">
-    <section class="obs-section">
-      <div class="ic-label">1. Server URL</div>
-      <div class="tab-sub">OBS → Settings → Stream → Service: Custom… → Server.</div>
-      <div class="copy-block">
-        <code class="mono" id="obs-srv">rtmp://127.0.0.1:1935/live</code>
-        <button class="ic-btn ic-btn-ghost" onclick="copyEl('obs-srv','Server URL')">Copy</button>
+    <section class="obs-section span-2 obs-reg-card">
+      <div class="ic-label"><span class="ic-badge ic-badge-ok">recommended</span> Register InstantClone as an OBS service</div>
+      <div class="tab-sub">One-click setup: adds an <b>InstantClone</b> entry to OBS's <i>Settings → Stream → Service</i> dropdown alongside Twitch / YouTube. Multi-track Video "Auto" works out of the box. Restart OBS once after registering so it picks up the new service.</div>
+      <div id="obs-reg-status" class="muted" style="margin-top:10px;font-size:12px;line-height:1.45"></div>
+      <div class="row" style="gap:8px;margin-top:12px;align-items:center">
+        <button class="ic-btn ic-btn-primary" id="obs-reg-btn" onclick="toggleObsRegister()">Register with OBS</button>
+        <span class="muted" id="obs-reg-msg" style="font-size:11.5px"></span>
       </div>
     </section>
-    <section class="obs-section">
-      <div class="ic-label">2. Stream key</div>
-      <div class="tab-sub">Type anything — InstantClone uses it only as a stream name. We suggest <code class="mono" style="color:var(--fg)">main</code>. Per-platform keys live in <b>Destinations</b>.</div>
-      <div class="copy-block">
-        <code class="mono">main</code>
-        <button class="ic-btn ic-btn-ghost" onclick="copyText('main','Stream key')">Copy</button>
+    <section class="obs-section span-2 obs-manual-card">
+      <div class="ic-label">Or set up a Custom RTMP server manually</div>
+      <div class="tab-sub">Older OBS, multi-RTMP plugins, or non-OBS encoders: in OBS go to <b>Settings → Stream → Service: Custom…</b> and paste the values below.</div>
+      <div class="obs-manual-row">
+        <div class="obs-manual-field">
+          <div class="ic-label">Server URL</div>
+          <div class="copy-block">
+            <code class="mono" id="obs-srv">rtmp://127.0.0.1:1935/live</code>
+            <button class="ic-btn ic-btn-ghost" onclick="copyEl('obs-srv','Server URL')">Copy</button>
+          </div>
+        </div>
+        <div class="obs-manual-field">
+          <div class="ic-label">Stream key</div>
+          <div class="copy-block">
+            <code class="mono">main</code>
+            <button class="ic-btn ic-btn-ghost" onclick="copyText('main','Stream key')">Copy</button>
+          </div>
+          <div class="tab-sub" style="margin-top:6px">Type anything — InstantClone uses it only as a stream name. Per-platform keys live in <b>Destinations</b>.</div>
+        </div>
       </div>
     </section>
     <section class="obs-section span-2">
@@ -1066,20 +1128,34 @@ input,select,textarea{font-family:inherit;color:inherit}
         <span>Capture trace log when streaming</span>
       </label>
     </section>
-    <section class="sys-section">
-      <div class="ic-label">OBS integration</div>
-      <div class="tab-sub">Register InstantClone as a service in OBS so it appears in the <b>Service</b> dropdown alongside Twitch / YouTube. No more "Custom server" setup, no manual JSON, multi-track video "Auto" works. One-time setup per OBS install — restart OBS after to refresh its service list.</div>
-      <div id="obs-reg-status" class="muted" style="margin-top:10px;font-size:11.5px"></div>
-      <div class="row" style="gap:8px;margin-top:10px">
-        <button class="ic-btn ic-btn-primary" id="obs-reg-btn" onclick="toggleObsRegister()">Register with OBS</button>
-        <span class="muted" id="obs-reg-msg" style="font-size:11.5px;align-self:center"></span>
-      </div>
-    </section>
     <div class="row" style="justify-content:flex-end;gap:8px;margin-top:4px">
       <button class="ic-btn ic-btn-ghost" onclick="testWebhook()">Test webhook</button>
       <button class="ic-btn ic-btn-primary" onclick="saveSettings()">Save settings</button>
     </div>
     <div class="muted" id="s-msg" style="min-height:1.2em"></div>
+    <!-- Reset zone — kept visually separated from Save by an explicit
+         hairline + warning palette so a streamer doesn't accidentally
+         nuke a working setup while reaching for Save. -->
+    <section class="sys-reset" id="sys-reset">
+      <div class="sys-reset-head">
+        <div>
+          <div class="ic-label" style="color:var(--err)">Danger zone</div>
+          <div class="tab-sub">Both options keep the buffer file on disk; the next launch recreates a fresh empty one. They <b>do not</b> unregister InstantClone from OBS — use the <b>OBS connection</b> tab for that.</div>
+        </div>
+      </div>
+      <div class="sys-reset-grid">
+        <div class="sys-reset-card">
+          <div class="ic-label">Reset settings</div>
+          <div class="tab-sub">Restores network ports, buffer size/path, webhook, overlays folder, and diagnostics to defaults. <b>Keeps</b> your destinations, delay profiles, and OBS service registration.</div>
+          <button class="ic-btn ic-btn-warn" onclick="openResetModal('settings')">Reset settings…</button>
+        </div>
+        <div class="sys-reset-card sys-reset-card-danger">
+          <div class="ic-label" style="color:var(--err)">Reset everything</div>
+          <div class="tab-sub">Wipes <b>every</b> setting plus all destinations and delay profiles. The app restarts into the first-run wizard. <b>Cannot be undone.</b></div>
+          <button class="ic-btn ic-btn-danger" onclick="openResetModal('all')">Reset everything…</button>
+        </div>
+      </div>
+    </section>
   </div>
 </section>
 
@@ -1110,6 +1186,38 @@ input,select,textarea{font-family:inherit;color:inherit}
 </div><!-- /ic-shell -->
 </div><!-- /ic-app -->
 <div class="ic-toast-rail" id="toast-rail"></div>
+
+<!-- ── Reset confirmation modal ─────────────────────────────────
+     Two-step destructive flow: scope-dependent. The "settings" scope
+     just needs a click-through; the "all" scope additionally requires
+     typing the literal word RESET so a stray double-click can't wipe
+     destinations + profiles. Tab key returns focus to the cancel
+     button so the trapped-focus default is the safe action. -->
+<div class="ic-modal" id="reset-modal" hidden role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
+  <div class="ic-modal-backdrop" onclick="closeResetModal()"></div>
+  <div class="ic-modal-card" id="reset-modal-card">
+    <div class="ic-modal-head">
+      <div class="ic-modal-icon" id="reset-modal-icon">⚠</div>
+      <div>
+        <div class="ic-modal-title" id="reset-modal-title">Reset settings</div>
+        <div class="ic-modal-sub" id="reset-modal-sub"></div>
+      </div>
+      <button class="ic-btn-tiny" onclick="closeResetModal()" title="Cancel (Esc)" aria-label="Close">✕</button>
+    </div>
+    <div class="ic-modal-body">
+      <ul class="ic-modal-list" id="reset-modal-list"></ul>
+      <div id="reset-modal-keeps" class="muted" style="margin-top:10px;font-size:12px"></div>
+      <div id="reset-modal-typebox" hidden style="margin-top:14px">
+        <label class="ic-label" for="reset-confirm-input">Type <code class="mono" style="color:var(--err)">RESET</code> to confirm</label>
+        <input id="reset-confirm-input" class="ic-input mono" autocomplete="off" spellcheck="false" oninput="onResetConfirmInput()">
+      </div>
+    </div>
+    <div class="ic-modal-foot">
+      <button class="ic-btn ic-btn-ghost" id="reset-cancel-btn" onclick="closeResetModal()">Cancel</button>
+      <button class="ic-btn ic-btn-danger" id="reset-confirm-btn" onclick="confirmResetModal()" disabled>Reset</button>
+    </div>
+  </div>
+</div>
 
 <!-- ── Tour: spotlight cutout + floating tooltip ───────────── -->
 <!-- The backdrop SVG draws a full-screen dark rect with a clear hole
@@ -2309,6 +2417,104 @@ async function toggleObsRegister(){
     if (msg) msg.textContent = String(e);
   }
   await refreshObsRegisterStatus();
+}
+
+// ── Reset settings / Reset everything ────────────────────────────────
+// Two-step destructive flow. The "settings" scope is recoverable in
+// practice (the user can just re-enter their port/buffer/webhook
+// values) so a single click-through is fine. The "all" scope wipes
+// destinations + delay profiles and bounces the app into the wizard,
+// so we additionally require typing the literal word RESET before
+// the confirm button enables.
+let resetScope = null;
+function openResetModal(scope){
+  resetScope = scope;
+  const m = $('reset-modal');
+  const title = $('reset-modal-title');
+  const sub = $('reset-modal-sub');
+  const list = $('reset-modal-list');
+  const keeps = $('reset-modal-keeps');
+  const typebox = $('reset-modal-typebox');
+  const confirm = $('reset-confirm-btn');
+  const input = $('reset-confirm-input');
+  if (scope === 'all'){
+    title.textContent = 'Reset everything?';
+    sub.textContent = "This wipes every setting plus all destinations and profiles, then restarts InstantClone.";
+    list.innerHTML = [
+      '<li><b>All destinations</b> (Twitch / YouTube / custom keys) — gone</li>',
+      '<li><b>All saved delay profiles</b> — gone</li>',
+      '<li>Network ports, buffer settings, webhook, overlays folder — reset to defaults</li>',
+      '<li>Diagnostic trace toggle — turned off</li>',
+    ].join('');
+    keeps.innerHTML = '<b>Kept:</b> the buffer file on disk (it\'s reset on every clean shutdown anyway) and the OBS service registration (use the OBS tab to unregister if you want).';
+    typebox.hidden = false;
+    confirm.disabled = true;
+    confirm.textContent = 'Reset everything';
+    input.value = '';
+    setTimeout(() => input.focus(), 50);
+  } else {
+    title.textContent = 'Reset settings?';
+    sub.textContent = "Restores app-level settings to defaults. Your destinations and profiles stay.";
+    list.innerHTML = [
+      '<li>Network ports back to <code class="mono">:1935</code> / <code class="mono">:7799</code></li>',
+      '<li>Buffer size and path back to defaults</li>',
+      '<li>Discord webhook URL cleared</li>',
+      '<li>Overlays folder reset to <code class="mono">overlays/</code></li>',
+      '<li>Diagnostic trace toggle turned off</li>',
+    ].join('');
+    keeps.innerHTML = '<b>Kept:</b> destinations, delay profiles, OBS service registration, your buffer file on disk.';
+    typebox.hidden = true;
+    confirm.disabled = false;
+    confirm.textContent = 'Reset settings';
+    setTimeout(() => $('reset-cancel-btn').focus(), 50);
+  }
+  m.hidden = false;
+  document.addEventListener('keydown', onResetModalKey);
+}
+function closeResetModal(){
+  const m = $('reset-modal');
+  if (!m || m.hidden) return;
+  m.hidden = true;
+  resetScope = null;
+  document.removeEventListener('keydown', onResetModalKey);
+}
+function onResetModalKey(e){
+  if (e.key === 'Escape'){ e.preventDefault(); closeResetModal(); }
+}
+function onResetConfirmInput(){
+  if (resetScope !== 'all') return;
+  const input = $('reset-confirm-input');
+  const confirm = $('reset-confirm-btn');
+  confirm.disabled = (input.value.trim() !== 'RESET');
+}
+async function confirmResetModal(){
+  if (!resetScope) return;
+  const scope = resetScope;
+  const confirm = $('reset-confirm-btn');
+  confirm.disabled = true;
+  confirm.textContent = scope === 'all' ? 'Resetting everything…' : 'Resetting…';
+  try {
+    const r = await fetch('/config/reset?scope=' + scope, {method:'POST'});
+    if (!r.ok){
+      const j = await r.json().catch(() => ({error: r.statusText}));
+      toast('Reset failed: ' + (j.error || r.statusText), 'err');
+      confirm.disabled = false;
+      confirm.textContent = scope === 'all' ? 'Reset everything' : 'Reset settings';
+      return;
+    }
+    closeResetModal();
+    toast(scope === 'all'
+      ? 'Everything reset. Reloading into the wizard…'
+      : 'Settings reset to defaults. Reloading…', 'ok');
+    // Give the server a moment to flush the new config + persist, then
+    // reload. The page reload re-reads /config + /state from the now
+    // pristine state and the wizard / settings reflect defaults.
+    setTimeout(() => location.reload(), 700);
+  } catch (e){
+    toast('Reset request failed: ' + e, 'err');
+    confirm.disabled = false;
+    confirm.textContent = scope === 'all' ? 'Reset everything' : 'Reset settings';
+  }
 }
 
 // ── Overlays ──────────────────────────────────────────────────────────
