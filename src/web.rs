@@ -257,7 +257,7 @@ async fn route(
         ("POST", "/obs/multitrack-config") => (
             "200 OK",
             "application/json",
-            obs_multitrack_config_proxy(body, query, settings).await,
+            obs_multitrack_config_proxy(body, query, ctrl, settings).await,
         ),
         ("GET", "/obs/multitrack-config") => (
             "200 OK",
@@ -549,10 +549,17 @@ fn platforms_json() -> String {
 async fn obs_multitrack_config_proxy(
     body: &str,
     query: &str,
+    ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
 ) -> String {
     // The streamer's real Twitch key lives in our destinations list.
     // Pick the first enabled Twitch destination with a non-empty key.
+    // Also report what we found in the dashboard event log — the
+    // 2026-06-01 EB test couldn't distinguish "proxy succeeded" from
+    // "proxy silently fell back" because neither path was visible to
+    // the user, and the symptom (Twitch's edge dropping us at ~60 s
+    // because no transcoder session was provisioned via their API)
+    // looked identical to a generic network drop.
     let twitch_key = {
         let s = settings.borrow();
         s.destinations
@@ -561,9 +568,13 @@ async fn obs_multitrack_config_proxy(
             .map(|d| d.stream_key.clone())
     };
     let Some(twitch_key) = twitch_key else {
-        // No Twitch destination → fall back to our self-contained
-        // static config. Useful for testing through us before the
-        // streamer has wired anything up.
+        ctrl.log(
+            "[OBS multitrack] no enabled Twitch destination with a stream key — \
+             returning static config. Twitch will accept the multi-track stream \
+             but won't go live to viewers without an API-allocated session. \
+             Fix: Destinations → enable a Twitch destination with the real key.",
+        );
+        crate::trace::log("OBS_MULTITRACK", "no twitch destination — static fallback");
         return obs_multitrack_config_static(query, settings);
     };
 
@@ -573,9 +584,14 @@ async fn obs_multitrack_config_proxy(
     let modified_body = match replace_auth_field(body, &twitch_key) {
         Some(b) => b,
         None => {
+            ctrl.log(
+                "[OBS multitrack] OBS's POST body didn't expose an authentication \
+                 field — schema may have changed. Returning static config. \
+                 Send the next instantclone-trace.log for diagnosis.",
+            );
             crate::trace::log(
                 "OBS_MULTITRACK",
-                "could not patch authentication field — using static fallback",
+                "could not patch authentication field — static fallback",
             );
             return obs_multitrack_config_static(query, settings);
         }
@@ -608,9 +624,16 @@ async fn obs_multitrack_config_proxy(
     .await;
 
     let Ok(Ok(Some(twitch_json))) = twitch_response else {
+        ctrl.log(
+            "[OBS multitrack] Twitch GetClientConfiguration call failed or timed out \
+             after 8 s — returning static config. Multi-track stream will reach \
+             Twitch's edge but won't go live to viewers (no API session). \
+             Check internet connectivity and that the Twitch destination's \
+             stream key is current.",
+        );
         crate::trace::log(
             "OBS_MULTITRACK",
-            "Twitch GetClientConfiguration call failed — using static fallback",
+            "Twitch GetClientConfiguration call failed — static fallback",
         );
         return obs_multitrack_config_static(query, settings);
     };
@@ -626,6 +649,11 @@ async fn obs_multitrack_config_proxy(
     let rewritten = rewrite_url_templates(
         &twitch_json,
         &format!("rtmp://127.0.0.1:{}/live/{{stream_key}}", ingest_port),
+    );
+    ctrl.log(
+        "[OBS multitrack] Twitch GetClientConfiguration call succeeded — \
+         multi-track session provisioned with Twitch's recommended bitrates. \
+         Ingest URL rewritten to the local proxy.",
     );
     crate::trace::log(
         "OBS_MULTITRACK",
