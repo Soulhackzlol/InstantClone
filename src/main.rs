@@ -28,6 +28,7 @@ mod buffer;
 mod config;
 mod controller;
 mod h264;
+mod https;
 mod obs_register;
 #[cfg(windows)]
 mod portcheck;

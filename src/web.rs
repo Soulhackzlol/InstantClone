@@ -619,7 +619,7 @@ async fn obs_multitrack_config_proxy(
     let twitch_response = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         tokio::task::spawn_blocking(move || -> ProxyOutcome {
-            let agent = ureq::AgentBuilder::new()
+            let agent = crate::https::https_agent_builder()
                 .timeout_connect(std::time::Duration::from_secs(6))
                 .timeout(std::time::Duration::from_secs(12))
                 .build();
@@ -1657,7 +1657,7 @@ async fn post_test_webhook(ctrl: &Arc<Controller>) -> (&'static str, &'static st
     let send = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         tokio::task::spawn_blocking(move || -> Result<u16, String> {
-            ureq::AgentBuilder::new()
+            crate::https::https_agent_builder()
                 .timeout_connect(std::time::Duration::from_secs(5))
                 .timeout(std::time::Duration::from_secs(8))
                 .build()
