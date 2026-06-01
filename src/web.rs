@@ -600,42 +600,106 @@ async fn obs_multitrack_config_proxy(
     let ingest_port = settings.borrow().ingest_port;
 
     // ureq is sync — run it on a blocking thread so we don't stall
-    // the tokio runtime. 8 s outer timeout covers Twitch's API even
-    // when their edge is slow; if it times out we fall back to the
-    // static config rather than make the streamer wait.
+    // the tokio runtime. 15 s outer timeout matches OBS's own
+    // GetClientConfiguration timeout; if it hits the wall we fall
+    // back to the static config rather than make the streamer wait.
+    //
+    // We capture a discriminated outcome (transport vs HTTP status
+    // vs body-read vs timeout) so the dashboard log can name the
+    // failure mode instead of just saying "failed". The 2026-06-01
+    // EB test couldn't tell DNS vs TLS vs HTTP 4xx vs slow-response
+    // apart because we threw the original error away.
+    enum ProxyOutcome {
+        Ok(String),
+        TransportError(String),
+        HttpError(u16, String),
+        ReadError(String),
+        Timeout,
+    }
     let twitch_response = tokio::time::timeout(
-        std::time::Duration::from_secs(8),
-        tokio::task::spawn_blocking(move || -> Option<String> {
-            // Map ureq::Error to a small type before the `?`-style
-            // chain so `clippy::result_large_err` stays happy — the
-            // ureq error enum is ~300 bytes and triggers the lint
-            // when it crosses an `and_then` boundary.
-            let resp = ureq::AgentBuilder::new()
-                .timeout_connect(std::time::Duration::from_secs(5))
-                .timeout(std::time::Duration::from_secs(6))
-                .build()
+        std::time::Duration::from_secs(15),
+        tokio::task::spawn_blocking(move || -> ProxyOutcome {
+            let agent = ureq::AgentBuilder::new()
+                .timeout_connect(std::time::Duration::from_secs(6))
+                .timeout(std::time::Duration::from_secs(12))
+                .build();
+            // Match OBS's user-agent shape so Twitch's API doesn't
+            // route us through a different code path / WAF rule than
+            // the OBS client. Mostly defensive — the API is
+            // documented as content-type-only auth.
+            let req = agent
                 .post("https://ingest.twitch.tv/api/v3/GetClientConfiguration")
                 .set("Content-Type", "application/json")
-                .send_string(&modified_body)
-                .ok()?;
-            resp.into_string().ok()
+                .set("User-Agent", "obs-studio/32.1.2 InstantClone-proxy");
+            match req.send_string(&modified_body) {
+                Ok(resp) => match resp.into_string() {
+                    Ok(s) => ProxyOutcome::Ok(s),
+                    Err(e) => ProxyOutcome::ReadError(e.to_string()),
+                },
+                Err(ureq::Error::Status(code, resp)) => {
+                    let body = resp.into_string().unwrap_or_default();
+                    ProxyOutcome::HttpError(code, body)
+                }
+                Err(e) => ProxyOutcome::TransportError(e.to_string()),
+            }
         }),
     )
     .await;
 
-    let Ok(Ok(Some(twitch_json))) = twitch_response else {
-        ctrl.log(
-            "[OBS multitrack] Twitch GetClientConfiguration call failed or timed out \
-             after 8 s — returning static config. Multi-track stream will reach \
-             Twitch's edge but won't go live to viewers (no API session). \
-             Check internet connectivity and that the Twitch destination's \
-             stream key is current.",
-        );
-        crate::trace::log(
-            "OBS_MULTITRACK",
-            "Twitch GetClientConfiguration call failed — static fallback",
-        );
-        return obs_multitrack_config_static(query, settings);
+    let outcome = match twitch_response {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => ProxyOutcome::TransportError(format!("spawn_blocking panic: {e}")),
+        Err(_) => ProxyOutcome::Timeout,
+    };
+
+    let twitch_json = match outcome {
+        ProxyOutcome::Ok(s) => s,
+        ProxyOutcome::Timeout => {
+            ctrl.log(
+                "[OBS multitrack] Twitch GetClientConfiguration timed out after 15 s — \
+                 returning static config. Twitch's API may be slow or unreachable. \
+                 Try `curl -v https://ingest.twitch.tv/api/v3/GetClientConfiguration` \
+                 from this machine.",
+            );
+            crate::trace::log("OBS_MULTITRACK", "Twitch API timed out — static fallback");
+            return obs_multitrack_config_static(query, settings);
+        }
+        ProxyOutcome::HttpError(code, body) => {
+            // Truncate the body so a verbose Twitch error page doesn't
+            // flood the dashboard log line.
+            let snippet: String = body.chars().take(300).collect();
+            ctrl.log(format!(
+                "[OBS multitrack] Twitch API returned HTTP {code} — returning static \
+                 config. Response body (first 300 chars): {snippet}"
+            ));
+            crate::trace::log(
+                "OBS_MULTITRACK",
+                &format!("Twitch API HTTP {code} — static fallback. body={snippet}"),
+            );
+            return obs_multitrack_config_static(query, settings);
+        }
+        ProxyOutcome::TransportError(e) => {
+            ctrl.log(format!(
+                "[OBS multitrack] Twitch API transport error — returning static config. \
+                 Detail: {e}. Likely DNS / TLS / connectivity."
+            ));
+            crate::trace::log(
+                "OBS_MULTITRACK",
+                &format!("Twitch API transport error: {e} — static fallback"),
+            );
+            return obs_multitrack_config_static(query, settings);
+        }
+        ProxyOutcome::ReadError(e) => {
+            ctrl.log(format!(
+                "[OBS multitrack] Twitch API responded but the body couldn't be read — \
+                 returning static config. Detail: {e}."
+            ));
+            crate::trace::log(
+                "OBS_MULTITRACK",
+                &format!("Twitch API read error: {e} — static fallback"),
+            );
+            return obs_multitrack_config_static(query, settings);
+        }
     };
 
     // Twitch's response has one or more `ingest_endpoints` entries
