@@ -736,7 +736,26 @@ async fn obs_multitrack_config_proxy(
         &format!("(stream key redacted) {sanitized}"),
     );
 
-    let ivs_url = first_url_template(&twitch_json).map(|t| t.replace("{stream_key}", &twitch_key));
+    // Twitch's API returns each ingest_endpoint with TWO fields that
+    // matter for our purposes: `url_template` (the dial-time host
+    // path with a `{stream_key}` placeholder) and `authentication`
+    // (optional — a session-bound token like
+    // `v1_<hash>_<id>_<hex_profile>_<key>` that OBS substitutes into
+    // the placeholder when present). The token encodes the
+    // resolutions/bitrates Twitch provisioned for this session, and
+    // without it the IVS edge accepts the publish but never binds it
+    // to the transcoder pipeline — which is exactly what 60 s
+    // disconnects + Inspector showing "x" for resolutions told us.
+    //
+    // When `authentication` is set we use it as the substitution
+    // value. When absent (rare — non-IVS multitrack services), fall
+    // back to the user's configured Twitch stream key so we at least
+    // attempt a valid auth.
+    let (ivs_template, ivs_auth) = first_ingest_endpoint(&twitch_json)
+        .map(|e| (Some(e.url_template), e.authentication))
+        .unwrap_or((None, None));
+    let substitution = ivs_auth.as_deref().unwrap_or(&twitch_key);
+    let ivs_url = ivs_template.map(|t| t.replace("{stream_key}", substitution));
     if let Some(ivs) = ivs_url.as_ref() {
         // Set the override on every Twitch destination we find in
         // settings. Filtering by `pass_through_multitrack_video` was
@@ -780,20 +799,50 @@ async fn obs_multitrack_config_proxy(
     rewritten
 }
 
-/// Pull the first `"url_template": "<value>"` value out of Twitch's
-/// `GetClientConfiguration` response. Returns the raw template still
-/// containing the `{stream_key}` placeholder — callers substitute the
-/// real key themselves. None if the response shape doesn't expose
-/// such a field, in which case the proxy should log and fall back.
-fn first_url_template(json: &str) -> Option<String> {
-    let key = "\"url_template\"";
-    let key_pos = json.find(key)?;
-    let after_key = &json[key_pos + key.len()..];
+/// The two fields we care about per `ingest_endpoints[i]` entry in
+/// Twitch's `GetClientConfiguration` response. `url_template` always
+/// contains the raw template still holding the `{stream_key}`
+/// placeholder; `authentication` is the session-bound token Twitch
+/// sometimes returns (IVS multitrack always does — it encodes the
+/// resolutions/bitrates the API allocated for the session, and the
+/// IVS edge expects it as the substitution value, not the user's
+/// regular Twitch stream key).
+struct IngestEndpoint {
+    url_template: String,
+    authentication: Option<String>,
+}
+
+/// Pull the first `ingest_endpoints[…]` entry's `url_template` and
+/// optional `authentication` out of Twitch's response. The parser is
+/// scoped to the substring starting at the first `"ingest_endpoints"`
+/// occurrence so we don't accidentally pick up an `authentication`
+/// field from some other part of the response. None if the response
+/// shape doesn't expose those fields, in which case the proxy logs
+/// and falls back.
+fn first_ingest_endpoint(json: &str) -> Option<IngestEndpoint> {
+    let arr_pos = json.find("\"ingest_endpoints\"")?;
+    let after_arr = &json[arr_pos..];
+    let url_template = read_string_field(after_arr, "url_template")?;
+    let authentication = read_string_field(after_arr, "authentication");
+    Some(IngestEndpoint {
+        url_template,
+        authentication,
+    })
+}
+
+/// Find `"<key>": "<value>"` in a JSON-ish substring and return the
+/// value. JSON-parser-free string ops: handles both compact and
+/// indented styles, requires the field's value to be a plain string
+/// (no embedded escaped quotes — fine for everything Twitch returns
+/// in this response).
+fn read_string_field(json: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let key_pos = json.find(needle.as_str())?;
+    let after_key = &json[key_pos + needle.len()..];
     let colon_off = after_key.find(':')?;
     let after_colon = &after_key[colon_off + 1..];
     let quote_off = after_colon.find('"')?;
-    let value_start = quote_off + 1;
-    let after_quote = &after_colon[value_start..];
+    let after_quote = &after_colon[quote_off + 1..];
     let end_quote_off = after_quote.find('"')?;
     Some(after_quote[..end_quote_off].to_string())
 }
