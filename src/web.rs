@@ -620,26 +620,32 @@ async fn obs_multitrack_config_proxy(
     let twitch_response = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         tokio::task::spawn_blocking(move || -> ProxyOutcome {
-            let agent = crate::https::https_agent_builder()
-                .timeout_connect(std::time::Duration::from_secs(6))
-                .timeout(std::time::Duration::from_secs(12))
-                .build();
+            let agent = crate::https::https_agent();
             // Match OBS's user-agent shape so Twitch's API doesn't
             // route us through a different code path / WAF rule than
             // the OBS client. Mostly defensive — the API is
-            // documented as content-type-only auth.
+            // documented as content-type-only auth. Timeouts go on
+            // the request, not the agent, so the shared agent stays
+            // reusable for different policies (webhook etc.).
             let req = agent
                 .post("https://ingest.twitch.tv/api/v3/GetClientConfiguration")
-                .set("Content-Type", "application/json")
-                .set("User-Agent", "obs-studio/32.1.2 InstantClone-proxy");
-            match req.send_string(&modified_body) {
-                Ok(resp) => match resp.into_string() {
-                    Ok(s) => ProxyOutcome::Ok(s),
-                    Err(e) => ProxyOutcome::ReadError(e.to_string()),
-                },
-                Err(ureq::Error::Status(code, resp)) => {
-                    let body = resp.into_string().unwrap_or_default();
-                    ProxyOutcome::HttpError(code, body)
+                .config()
+                .timeout_connect(Some(std::time::Duration::from_secs(6)))
+                .timeout_global(Some(std::time::Duration::from_secs(12)))
+                .build()
+                .header("Content-Type", "application/json")
+                .header("User-Agent", "obs-studio/32.1.2 InstantClone-proxy");
+            // `http_status_as_error(false)` on the agent keeps 4xx in
+            // the Ok branch so we can pull the body before deciding.
+            match req.send(&modified_body) {
+                Ok(resp) => {
+                    let code = resp.status().as_u16();
+                    let mut body = resp.into_body();
+                    match body.read_to_string() {
+                        Ok(s) if (200..300).contains(&code) => ProxyOutcome::Ok(s),
+                        Ok(s) => ProxyOutcome::HttpError(code, s),
+                        Err(e) => ProxyOutcome::ReadError(e.to_string()),
+                    }
                 }
                 Err(e) => ProxyOutcome::TransportError(e.to_string()),
             }
@@ -1848,14 +1854,15 @@ async fn post_test_webhook(ctrl: &Arc<Controller>) -> (&'static str, &'static st
     let send = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         tokio::task::spawn_blocking(move || -> Result<u16, String> {
-            crate::https::https_agent_builder()
-                .timeout_connect(std::time::Duration::from_secs(5))
-                .timeout(std::time::Duration::from_secs(8))
-                .build()
+            crate::https::https_agent()
                 .post(&url)
-                .set("Content-Type", "application/json")
-                .send_string(body)
-                .map(|r| r.status())
+                .config()
+                .timeout_connect(Some(std::time::Duration::from_secs(5)))
+                .timeout_global(Some(std::time::Duration::from_secs(8)))
+                .build()
+                .header("Content-Type", "application/json")
+                .send(body)
+                .map(|r| r.status().as_u16())
                 .map_err(|e| e.to_string())
         }),
     )

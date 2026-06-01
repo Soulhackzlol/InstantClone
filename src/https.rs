@@ -1,36 +1,46 @@
-//! Shared `ureq::AgentBuilder` factory with a native-tls connector
-//! pre-installed.
+//! Shared `ureq` agent factory that selects native-tls as the TLS
+//! provider and lets callers see 4xx response bodies.
 //!
-//! `ureq` v2 with `default-features = false, features = ["native-tls"]`
-//! exposes the API to use a `native_tls::TlsConnector` but does NOT
-//! auto-install one — the AgentBuilder still says "no TLS backend
-//! configured" the moment you try to make an HTTPS request unless you
-//! explicitly call `.tls_connector(...)`. The default behaviour seems
-//! useful for the `rustls` story but it silently broke every HTTPS
-//! call from this binary (the Discord webhook, the test-webhook
-//! endpoint, and — most visibly — the Twitch `GetClientConfiguration`
-//! proxy).
+//! ureq 3.x changes vs the 2.x setup we used to have:
 //!
-//! The error message at runtime is exactly:
-//!     `Unknown Scheme: cannot make HTTPS request because no TLS
-//!     backend is configured`
+//!   - TLS backend selection moved from an imperative `tls_connector()`
+//!     call (with a hand-built `native_tls::TlsConnector`) to a
+//!     declarative `TlsConfig::builder().provider(TlsProvider::NativeTls)`.
+//!     The `native-tls` cargo feature on `ureq` wires the real
+//!     `native_tls` crate in for us — we just have to tell ureq to
+//!     prefer it over the rustls default.
 //!
-//! Use [`https_agent_builder`] everywhere we need to call out to an
-//! HTTPS URL. Webhooks and the multi-track config proxy share this so
-//! a future TLS-backend swap (e.g. moving to rustls + webpki-roots) is
-//! a one-line change.
+//!   - 4xx / 5xx responses default to `Err(Error::StatusCode(u16))`,
+//!     which DROPS the response body. The Twitch
+//!     `GetClientConfiguration` proxy needs the body in the 4xx case
+//!     to surface why the EB allocation failed; flipping
+//!     `http_status_as_error(false)` on the agent moves non-2xx into
+//!     the Ok branch so we can read the body before deciding.
+//!
+//!   - Timeouts moved from per-builder methods (`.timeout_connect(d)`,
+//!     `.timeout(d)`) to an `Option<Duration>` config field on either
+//!     the agent or, per-request, via `req.config().timeout_*().build()`.
+//!
+//! Use [`https_agent`] everywhere we need to call out to an HTTPS URL.
 
-use std::sync::Arc;
+use ureq::tls::{TlsConfig, TlsProvider};
+use ureq::Agent;
 
-/// Build an `AgentBuilder` with native-tls wired in as the TLS
-/// connector. The native-tls constructor only fails on truly broken
-/// systems (no platform TLS library available); on a fresh Windows
-/// install this always succeeds, so we expect rather than wrap-in-Result
-/// the call site. If it ever does fail the panic is the right signal
-/// — every HTTPS call from this process would be unable to negotiate
-/// a session anyway.
-pub fn https_agent_builder() -> ureq::AgentBuilder {
-    let connector = native_tls::TlsConnector::new()
-        .expect("native-tls TlsConnector::new() failed — platform TLS unavailable");
-    ureq::AgentBuilder::new().tls_connector(Arc::new(connector))
+/// Build a ready-to-use ureq `Agent` with native-tls selected as the
+/// TLS provider and `http_status_as_error` disabled so callers retain
+/// access to non-2xx response bodies. Native-tls uses Windows schannel
+/// under the hood — no rustls + ring dependency chain.
+pub fn https_agent() -> Agent {
+    Agent::config_builder()
+        .tls_config(
+            TlsConfig::builder()
+                .provider(TlsProvider::NativeTls)
+                .build(),
+        )
+        // Non-2xx as Ok(resp): the Twitch proxy needs the 4xx body to
+        // surface why allocation failed; webhooks check
+        // `resp.status()` directly. Either way, one code path.
+        .http_status_as_error(false)
+        .build()
+        .into()
 }

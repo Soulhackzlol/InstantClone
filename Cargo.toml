@@ -21,7 +21,7 @@ bytes = "1"
 # the Windows schannel that's already in the process, so we don't ship
 # rustls + ring (which would add ~1.4 MB to the binary for one POST).
 # Default features off so we don't pull gzip / json / cookies we don't use.
-ureq = { version = "2", default-features = false, features = ["native-tls"] }
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
 native-tls = "0.2"
 
 # Windows-only: system-tray icon + opening the default browser via a real

@@ -980,13 +980,14 @@ impl Controller {
             let _ = tokio::time::timeout(
                 Duration::from_secs(10),
                 tokio::task::spawn_blocking(move || {
-                    let _ = crate::https::https_agent_builder()
-                        .timeout_connect(Duration::from_secs(5))
-                        .timeout(Duration::from_secs(8))
-                        .build()
+                    let _ = crate::https::https_agent()
                         .post(&url)
-                        .set("Content-Type", "application/json")
-                        .send_string(&body);
+                        .config()
+                        .timeout_connect(Some(Duration::from_secs(5)))
+                        .timeout_global(Some(Duration::from_secs(8)))
+                        .build()
+                        .header("Content-Type", "application/json")
+                        .send(&body);
                 }),
             )
             .await;
