@@ -1,17 +1,17 @@
-//! Built-in web UI — first-run wizard, dashboard, settings, overlay, and
+//! Built-in web UI - first-run wizard, dashboard, settings, overlay, and
 //! a small JSON state/config API. Hand-rolled HTTP/1.1 so we don't pull
 //! hyper/axum into the RAM budget.
 //!
 //! Routes
-//!     GET  /              — wizard (when !configured) or dashboard
-//!     GET  /overlay       — OBS browser-source overlay
-//!     GET  /state         — live JSON (delay, fill, alive, stats)
-//!     GET  /config        — current settings (stream key NOT echoed)
-//!     POST /config        — apply settings (form-encoded)
-//!     POST /delay         — ms=NNN, sets target delay live
-//!     POST /go-live       — convenience for delay=0
-//!     POST /test-egress   — TCP-tests the configured platform endpoint
-//!     GET  /platforms     — list of supported platforms (for UI dropdown)
+//!     GET  /              - wizard (when !configured) or dashboard
+//!     GET  /overlay       - OBS browser-source overlay
+//!     GET  /state         - live JSON (delay, fill, alive, stats)
+//!     GET  /config        - current settings (stream key NOT echoed)
+//!     POST /config        - apply settings (form-encoded)
+//!     POST /delay         - ms=NNN, sets target delay live
+//!     POST /go-live       - convenience for delay=0
+//!     POST /test-egress   - TCP-tests the configured platform endpoint
+//!     GET  /platforms     - list of supported platforms (for UI dropdown)
 
 use crate::config::{self, Settings};
 use crate::controller::Controller;
@@ -57,7 +57,7 @@ async fn serve(
     sysstat: Arc<SysStat>,
 ) -> io::Result<()> {
     // Read until the headers terminator. For our POST bodies (config form,
-    // <2 KB) this single read is enough — but be defensive about partials.
+    // <2 KB) this single read is enough - but be defensive about partials.
     let mut buf = vec![0u8; 16 * 1024];
     let mut used = 0usize;
     let head_end;
@@ -72,7 +72,7 @@ async fn serve(
             break;
         }
         if used >= buf.len() {
-            // Header section larger than our buffer — refuse politely
+            // Header section larger than our buffer - refuse politely
             // instead of dropping the TCP connection without explanation.
             let _ = sock
                 .write_all(
@@ -88,7 +88,7 @@ async fn serve(
     let (origin, host) = parse_origin_host(head_str);
     let accept_gzip = accepts_gzip(head_str);
 
-    // CSRF guard — block cross-origin browser POSTs. See `allow_csrf`
+    // CSRF guard - block cross-origin browser POSTs. See `allow_csrf`
     // for the policy. Pre-flight OPTIONS gets a generic 204 so browsers
     // doing a CORS preflight don't see this as a hard reject.
     if method == "OPTIONS" {
@@ -195,7 +195,7 @@ async fn serve(
     let (status, ctype, payload) =
         route(method, path, body, &ctrl, &settings, &cfg_path, &sysstat).await;
 
-    // ACAO is intentionally restrictive now — only set on GET responses
+    // ACAO is intentionally restrictive now - only set on GET responses
     // so overlays / docks loaded as foreign origins can still read state.
     // POST endpoints get NO ACAO header, which (with credentials=false)
     // blocks cross-origin script-readable responses too.
@@ -222,7 +222,7 @@ async fn route(
     cfg_path: &Path,
     sysstat: &Arc<SysStat>,
 ) -> (&'static str, &'static str, String) {
-    // Strip ?query — we only read it for /overlay.
+    // Strip ?query - we only read it for /overlay.
     let (bare_path, query) = match path.split_once('?') {
         Some((p, q)) => (p, q),
         None => (path, ""),
@@ -282,7 +282,7 @@ async fn route(
                 Ok(()) => (
                     "200 OK",
                     "application/json",
-                    r#"{"ok":true,"message":"Registered with OBS — restart OBS to see the InstantClone service in the dropdown."}"#.to_string(),
+                    r#"{"ok":true,"message":"Registered with OBS - restart OBS to see the InstantClone service in the dropdown."}"#.to_string(),
                 ),
                 Err(e) => (
                     "500 Internal Server Error",
@@ -353,7 +353,7 @@ async fn route(
 /// state JSON would actually change (string-diff against last sent), with
 /// a heartbeat every 10 s to keep middleboxes from killing the socket.
 ///
-/// Tick cadence is 250 ms — fine-grained enough for the bar/readout to
+/// Tick cadence is 250 ms - fine-grained enough for the bar/readout to
 /// feel responsive, but only writes to the wire on change. With one tab
 /// open this is the same compute as polling at 4 Hz; with N tabs it's N×
 /// the compute but no per-request HTTP overhead. The win is upstream:
@@ -367,7 +367,7 @@ async fn handle_sse(
 ) -> io::Result<()> {
     // SSE preamble. `X-Accel-Buffering: no` tells nginx-style proxies not
     // to buffer; `Cache-Control: no-store` keeps browsers from caching;
-    // `Connection: keep-alive` is essential — our other routes use close.
+    // `Connection: keep-alive` is essential - our other routes use close.
     let headers = b"HTTP/1.1 200 OK\r\n\
                     Content-Type: text/event-stream\r\n\
                     Cache-Control: no-store\r\n\
@@ -375,7 +375,7 @@ async fn handle_sse(
                     X-Accel-Buffering: no\r\n\
                     Connection: keep-alive\r\n\r\n";
     sock.write_all(headers).await?;
-    // Initial retry hint — clients reconnect after 1 s if the socket drops.
+    // Initial retry hint - clients reconnect after 1 s if the socket drops.
     sock.write_all(b"retry: 1000\n\n").await?;
 
     let mut last_payload = String::new();
@@ -397,7 +397,7 @@ async fn handle_sse(
             frame.push_str(&cur);
             frame.push_str("\n\n");
             if sock.write_all(frame.as_bytes()).await.is_err() {
-                return Ok(()); // client gone — just exit, don't escalate
+                return Ok(()); // client gone - just exit, don't escalate
             }
             last_payload = cur;
             last_send = now;
@@ -426,7 +426,7 @@ fn state_json(
     // now timestamp-based. See `Controller::is_backpressured`.
     let backpressure = ctrl.is_backpressured();
 
-    // Per-destination summary array — joined from settings (the configured
+    // Per-destination summary array - joined from settings (the configured
     // list) with the controller's live runtime stats.
     let snap = ctrl.destination_snapshot();
     let dest_list = s.destinations.iter().map(|d| {
@@ -482,19 +482,19 @@ fn platforms_json() -> String {
     // Per-platform first-run help: a deep-link to where the stream key
     // lives in that platform's dashboard, and a one-line quirk worth
     // surfacing before the user wastes a stream session on it (Kick's
-    // no-B-frames rule is the prime example — without that hint, OBS's
+    // no-B-frames rule is the prime example - without that hint, OBS's
     // default config gets dropped by AWS IVS within seconds).
     //
     // Hand-written rather than table-driven because the strings are
     // short, stable, and need careful copyediting per platform; a
-    // generator would just add indirection. JSON-safe at source — no
+    // generator would just add indirection. JSON-safe at source - no
     // string here contains an unescaped " or \.
     r#"[
-  {"slug":"twitch","label":"Twitch","key_url":"https://dashboard.twitch.tv/u/_/settings/stream","key_help":"Twitch Creator Dashboard → Settings → Stream → Primary Stream Key","tip":"Twitch's transcoded quality ladder (1080p / 720p / 480p / 360p / 160p) is account-tier gated — non-Affiliates get Source-Only at any bitrate, Affiliate / Partner get the ladder. In Source-Only mode every viewer must decode your full source bitrate, and above ~8 Mbps mobile devices may fail (Error #1000 / black screen with audio). Stay ≤ 8 Mbps if your audience includes mobile and you're not sure your account gets transcoded."},
+  {"slug":"twitch","label":"Twitch","key_url":"https://dashboard.twitch.tv/u/_/settings/stream","key_help":"Twitch Creator Dashboard → Settings → Stream → Primary Stream Key","tip":"Twitch's transcoded quality ladder (1080p / 720p / 480p / 360p / 160p) is account-tier gated - non-Affiliates get Source-Only at any bitrate, Affiliate / Partner get the ladder. In Source-Only mode every viewer must decode your full source bitrate, and above ~8 Mbps mobile devices may fail (Error #1000 / black screen with audio). Stay ≤ 8 Mbps if your audience includes mobile and you're not sure your account gets transcoded."},
   {"slug":"youtube","label":"YouTube Live","key_url":"https://studio.youtube.com/channel/UC/livestreaming","key_help":"YouTube Studio → Go live → Stream tab → Stream key","tip":"First-time live: YouTube requires a 24h verification window after enabling live streaming."},
-  {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream","tip":"Kick runs on AWS IVS — DISABLE B-frames in OBS (Output → Advanced → x264/NVENC) or the stream will be dropped. Keep bitrate ≤ 8500 kbps and keyframe interval 1-2 s."},
+  {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream","tip":"Kick runs on AWS IVS - DISABLE B-frames in OBS (Output → Advanced → x264/NVENC) or the stream will be dropped. Keep bitrate ≤ 8500 kbps and keyframe interval 1-2 s."},
   {"slug":"trovo","label":"Trovo","key_url":"https://studio.trovo.live/channel/myinfo","key_help":"Trovo Studio → Channel → My Info → Stream Key","tip":null},
-  {"slug":"restream","label":"Restream.io","key_url":"https://app.restream.io/channel-settings","key_help":"Restream → Channel Settings → Stream Key","tip":"Restream relays your single stream to multiple platforms — per-platform limits apply on the downstream side, not here."},
+  {"slug":"restream","label":"Restream.io","key_url":"https://app.restream.io/channel-settings","key_help":"Restream → Channel Settings → Stream Key","tip":"Restream relays your single stream to multiple platforms - per-platform limits apply on the downstream side, not here."},
   {"slug":"custom","label":"Custom RTMP URL","key_url":null,"key_help":null,"tip":null}
 ]"#.to_string()
 }
@@ -502,7 +502,7 @@ fn platforms_json() -> String {
 /// Serve the multi-track-video config endpoint OBS calls when its
 /// service has a `multitrack_video_configuration_url`. The schema is
 /// the 2024-06-04 revision documented in OBS's
-/// `frontend/utility/models/multitrack-video.hpp` — every field name,
+/// `frontend/utility/models/multitrack-video.hpp` - every field name,
 /// order, and the `framerate` substruct shape match what
 /// `nlohmann::json::FromJson` deserialises into. Missing `config_id`
 /// in the `meta` block is what rejected our first hand-written test
@@ -510,14 +510,14 @@ fn platforms_json() -> String {
 /// docs imply otherwise.
 ///
 /// Query knobs (all optional):
-///   * `encoder` = `x264` (default) | `nvenc` | `amd` | `qsv` — picks
+///   * `encoder` = `x264` (default) | `nvenc` | `amd` | `qsv` - picks
 ///     the libobs encoder ID and an appropriate preset/profile bundle.
-///   * `tracks` = 2 | 3 (default) — 1080p+720p or 1080p+720p+480p.
+///   * `tracks` = 2 | 3 (default) - 1080p+720p or 1080p+720p+480p.
 ///   * `bandwidth` = total Kbps budget (default 10000). Split across
 ///     tracks with the high-rez track getting ~60 %, mid ~30 %,
 ///     low ~10 %.
 ///
-/// `{stream_key}` in the `url_template` is OBS's substitution token —
+/// `{stream_key}` in the `url_template` is OBS's substitution token -
 /// it replaces with whatever the user typed in the Stream Key field at
 /// stream start. Our ingest doesn't authenticate on the key; we just
 /// accept whatever shows up after `/live/`.
@@ -555,7 +555,7 @@ async fn obs_multitrack_config_proxy(
 ) -> String {
     // The streamer's real Twitch key lives in our destinations list.
     // Pick the first enabled Twitch destination with a non-empty key.
-    // Also report what we found in the dashboard event log — the
+    // Also report what we found in the dashboard event log - the
     // 2026-06-01 EB test couldn't distinguish "proxy succeeded" from
     // "proxy silently fell back" because neither path was visible to
     // the user, and the symptom (Twitch's edge dropping us at ~60 s
@@ -570,12 +570,12 @@ async fn obs_multitrack_config_proxy(
     };
     let Some(twitch_key) = twitch_key else {
         ctrl.log(
-            "[OBS multitrack] no enabled Twitch destination with a stream key — \
+            "[OBS multitrack] no enabled Twitch destination with a stream key - \
              returning static config. Twitch will accept the multi-track stream \
              but won't go live to viewers without an API-allocated session. \
              Fix: Destinations → enable a Twitch destination with the real key.",
         );
-        crate::trace::log("OBS_MULTITRACK", "no twitch destination — static fallback");
+        crate::trace::log("OBS_MULTITRACK", "no twitch destination - static fallback");
         return obs_multitrack_config_static(query, settings);
     };
 
@@ -587,12 +587,12 @@ async fn obs_multitrack_config_proxy(
         None => {
             ctrl.log(
                 "[OBS multitrack] OBS's POST body didn't expose an authentication \
-                 field — schema may have changed. Returning static config. \
+                 field - schema may have changed. Returning static config. \
                  Send the next instantclone-trace.log for diagnosis.",
             );
             crate::trace::log(
                 "OBS_MULTITRACK",
-                "could not patch authentication field — static fallback",
+                "could not patch authentication field - static fallback",
             );
             return obs_multitrack_config_static(query, settings);
         }
@@ -600,7 +600,7 @@ async fn obs_multitrack_config_proxy(
 
     let ingest_port = settings.borrow().ingest_port;
 
-    // ureq is sync — run it on a blocking thread so we don't stall
+    // ureq is sync - run it on a blocking thread so we don't stall
     // the tokio runtime. 15 s outer timeout matches OBS's own
     // GetClientConfiguration timeout; if it hits the wall we fall
     // back to the static config rather than make the streamer wait.
@@ -623,7 +623,7 @@ async fn obs_multitrack_config_proxy(
             let agent = crate::https::https_agent();
             // Match OBS's user-agent shape so Twitch's API doesn't
             // route us through a different code path / WAF rule than
-            // the OBS client. Mostly defensive — the API is
+            // the OBS client. Mostly defensive - the API is
             // documented as content-type-only auth. Timeouts go on
             // the request, not the agent, so the shared agent stays
             // reusable for different policies (webhook etc.).
@@ -663,12 +663,12 @@ async fn obs_multitrack_config_proxy(
         ProxyOutcome::Ok(s) => s,
         ProxyOutcome::Timeout => {
             ctrl.log(
-                "[OBS multitrack] Twitch GetClientConfiguration timed out after 15 s — \
+                "[OBS multitrack] Twitch GetClientConfiguration timed out after 15 s - \
                  returning static config. Twitch's API may be slow or unreachable. \
                  Try `curl -v https://ingest.twitch.tv/api/v3/GetClientConfiguration` \
                  from this machine.",
             );
-            crate::trace::log("OBS_MULTITRACK", "Twitch API timed out — static fallback");
+            crate::trace::log("OBS_MULTITRACK", "Twitch API timed out - static fallback");
             return obs_multitrack_config_static(query, settings);
         }
         ProxyOutcome::HttpError(code, body) => {
@@ -676,34 +676,34 @@ async fn obs_multitrack_config_proxy(
             // flood the dashboard log line.
             let snippet: String = body.chars().take(300).collect();
             ctrl.log(format!(
-                "[OBS multitrack] Twitch API returned HTTP {code} — returning static \
+                "[OBS multitrack] Twitch API returned HTTP {code} - returning static \
                  config. Response body (first 300 chars): {snippet}"
             ));
             crate::trace::log(
                 "OBS_MULTITRACK",
-                &format!("Twitch API HTTP {code} — static fallback. body={snippet}"),
+                &format!("Twitch API HTTP {code} - static fallback. body={snippet}"),
             );
             return obs_multitrack_config_static(query, settings);
         }
         ProxyOutcome::TransportError(e) => {
             ctrl.log(format!(
-                "[OBS multitrack] Twitch API transport error — returning static config. \
+                "[OBS multitrack] Twitch API transport error - returning static config. \
                  Detail: {e}. Likely DNS / TLS / connectivity."
             ));
             crate::trace::log(
                 "OBS_MULTITRACK",
-                &format!("Twitch API transport error: {e} — static fallback"),
+                &format!("Twitch API transport error: {e} - static fallback"),
             );
             return obs_multitrack_config_static(query, settings);
         }
         ProxyOutcome::ReadError(e) => {
             ctrl.log(format!(
-                "[OBS multitrack] Twitch API responded but the body couldn't be read — \
+                "[OBS multitrack] Twitch API responded but the body couldn't be read - \
                  returning static config. Detail: {e}."
             ));
             crate::trace::log(
                 "OBS_MULTITRACK",
-                &format!("Twitch API read error: {e} — static fallback"),
+                &format!("Twitch API read error: {e} - static fallback"),
             );
             return obs_multitrack_config_static(query, settings);
         }
@@ -714,7 +714,7 @@ async fn obs_multitrack_config_proxy(
     // `rtmps://<region>.contribute.live-video.net/app/{stream_key}`.
     // Replace every rtmp:// or rtmps:// URL in url_template fields
     // with our localhost ingest so OBS sends the multi-track stream
-    // to us instead. We keep `{stream_key}` as the literal token —
+    // to us instead. We keep `{stream_key}` as the literal token -
     // OBS substitutes it with whatever's in its Stream Key field
     // (which the streamer can type as anything; we ignore it).
     let rewritten = rewrite_url_templates(
@@ -727,12 +727,12 @@ async fn obs_multitrack_config_proxy(
     // the Twitch destination state. The egress supervisor uses this
     // override to forward the multi-track stream to the
     // session-allocated IVS endpoint instead of the configured
-    // `live.twitch.tv` URL — the IVS endpoint is the only one that
+    // `live.twitch.tv` URL - the IVS endpoint is the only one that
     // runs the EB transcoder pipeline, so without this swap the
     // stream reaches Twitch but no transcoder picks it up, and the
     // session dies at the TCP-retransmit-timeout boundary (~60 s).
     // Sanitize and trace the full Twitch response so we can see what
-    // fields it actually returned — Status block (eligibility),
+    // fields it actually returned - Status block (eligibility),
     // url_template placeholders, optional authentication tokens, and
     // any error html_en_us payload. The stream key gets redacted out
     // of any url_template via simple substring replacement so the
@@ -746,16 +746,16 @@ async fn obs_multitrack_config_proxy(
     // Twitch's API returns each ingest_endpoint with TWO fields that
     // matter for our purposes: `url_template` (the dial-time host
     // path with a `{stream_key}` placeholder) and `authentication`
-    // (optional — a session-bound token like
+    // (optional - a session-bound token like
     // `v1_<hash>_<id>_<hex_profile>_<key>` that OBS substitutes into
     // the placeholder when present). The token encodes the
     // resolutions/bitrates Twitch provisioned for this session, and
     // without it the IVS edge accepts the publish but never binds it
-    // to the transcoder pipeline — which is exactly what 60 s
+    // to the transcoder pipeline - which is exactly what 60 s
     // disconnects + Inspector showing "x" for resolutions told us.
     //
     // When `authentication` is set we use it as the substitution
-    // value. When absent (rare — non-IVS multitrack services), fall
+    // value. When absent (rare - non-IVS multitrack services), fall
     // back to the user's configured Twitch stream key so we at least
     // attempt a valid auth.
     let (ivs_template, ivs_auth) = first_ingest_endpoint(&twitch_json)
@@ -768,7 +768,7 @@ async fn obs_multitrack_config_proxy(
         // one whose stream key we sent in the GetClientConfiguration
         // call. The IVS session-allocated `authentication` token
         // embeds resolutions + bitrates for one stream, and the IVS
-        // edge enforces it — pointing two egresses at the same URL
+        // edge enforces it - pointing two egresses at the same URL
         // with the same token would collide on Twitch's side and at
         // most one publish would survive. Settings-driven lookup
         // matches by stream key (not by id) to be robust across
@@ -791,7 +791,7 @@ async fn obs_multitrack_config_proxy(
             let state = ctrl.destination_state(&id);
             *state.eb_override_url.lock().unwrap() = Some(ivs.clone());
         }
-        // Clean up any stale override on OTHER Twitch destinations —
+        // Clean up any stale override on OTHER Twitch destinations -
         // the proxy might have run before and left stale state from a
         // previous session shape (e.g. the user removed one Twitch
         // dest and re-added it under a new id).
@@ -811,7 +811,7 @@ async fn obs_multitrack_config_proxy(
         if twitch_count > 1 {
             ctrl.log(format!(
                 "[OBS multitrack] {} enabled Twitch destinations detected. EB \
-                 transcoder ladders are session-bound to one stream key — only \
+                 transcoder ladders are session-bound to one stream key - only \
                  the first Twitch destination will receive the multi-track \
                  ladder. Other Twitch destinations stream a single flattened \
                  track to live.twitch.tv (still works, no EB transcode).",
@@ -828,7 +828,7 @@ async fn obs_multitrack_config_proxy(
         ctrl.log(
             "[OBS multitrack] Twitch GetClientConfiguration call succeeded but \
              we couldn't parse the ingest URL out of the response. Egress will \
-             use the configured destination URL — this typically means EB \
+             use the configured destination URL - this typically means EB \
              will reach Twitch's edge but no transcoder session.",
         );
     }
@@ -843,7 +843,7 @@ async fn obs_multitrack_config_proxy(
 /// Twitch's `GetClientConfiguration` response. `url_template` always
 /// contains the raw template still holding the `{stream_key}`
 /// placeholder; `authentication` is the session-bound token Twitch
-/// sometimes returns (IVS multitrack always does — it encodes the
+/// sometimes returns (IVS multitrack always does - it encodes the
 /// resolutions/bitrates the API allocated for the session, and the
 /// IVS edge expects it as the substitution value, not the user's
 /// regular Twitch stream key).
@@ -873,7 +873,7 @@ fn first_ingest_endpoint(json: &str) -> Option<IngestEndpoint> {
 /// Find `"<key>": "<value>"` in a JSON-ish substring and return the
 /// value. JSON-parser-free string ops: handles both compact and
 /// indented styles, requires the field's value to be a plain string
-/// (no embedded escaped quotes — fine for everything Twitch returns
+/// (no embedded escaped quotes - fine for everything Twitch returns
 /// in this response).
 fn read_string_field(json: &str, key: &str) -> Option<String> {
     let needle = format!("\"{key}\"");
@@ -889,7 +889,7 @@ fn read_string_field(json: &str, key: &str) -> Option<String> {
 
 /// Replace the value of a top-level `"authentication"` field in a JSON
 /// string with `new_value`. Returns `None` if the field can't be
-/// located unambiguously — we'd rather fall back to a static config
+/// located unambiguously - we'd rather fall back to a static config
 /// than ship a malformed payload to Twitch and have the streamer
 /// puzzle over an opaque 4xx.
 fn replace_auth_field(json: &str, new_value: &str) -> Option<String> {
@@ -917,7 +917,7 @@ fn replace_auth_field(json: &str, new_value: &str) -> Option<String> {
 
 /// Replace every `"url_template":"<rtmp[s]://...>"` value in a JSON
 /// blob with `new_value`. Twitch's response has one or more such
-/// fields (one per region they offer) — every one of them needs to
+/// fields (one per region they offer) - every one of them needs to
 /// point at us so OBS doesn't accidentally pick a Twitch URL.
 fn rewrite_url_templates(json: &str, new_value: &str) -> String {
     let mut out = String::with_capacity(json.len());
@@ -930,7 +930,7 @@ fn rewrite_url_templates(json: &str, new_value: &str) -> String {
         // Walk through key + `:` + whitespace + opening quote.
         let after_key = &json[key_pos + key.len()..];
         let Some(colon_off) = after_key.find(':') else {
-            // Malformed — bail and emit the remainder unchanged.
+            // Malformed - bail and emit the remainder unchanged.
             out.push_str(&json[key_pos..]);
             return out;
         };
@@ -947,7 +947,7 @@ fn rewrite_url_templates(json: &str, new_value: &str) -> String {
         };
         let value_end_abs = value_start_abs + 1 + end_quote_off;
         // Emit the key, colon, opening quote, our new value, closing
-        // quote — leaving the original `{stream_key}` placeholder
+        // quote - leaving the original `{stream_key}` placeholder
         // semantics intact via the `new_value` argument the caller
         // passes in.
         out.push_str(key);
@@ -1018,7 +1018,7 @@ fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settin
 
     // Per-call config_id: a monotonic-ish value derived from the
     // process clock means OBS treats each config-fetch as fresh
-    // (matches Twitch's behaviour — they hand out a new ID each call).
+    // (matches Twitch's behaviour - they hand out a new ID each call).
     // Format doesn't matter to OBS as long as it's a non-empty string.
     let config_id = format!(
         "instantclone-{}",
@@ -1030,7 +1030,7 @@ fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settin
 
     // 1080p60 always present. 720p60 when tracks >= 2. 480p30 when
     // tracks == 3. The encoder_configurations array is emitted in
-    // resolution-descending order — OBS reads track 0 as primary.
+    // resolution-descending order - OBS reads track 0 as primary.
     let mut enc_configs = String::new();
     enc_configs.push_str(&format!(
         r#"{{"type":"{enc}","width":1920,"height":1080,"framerate":{{"numerator":60,"denominator":1}},"canvas_index":0,"settings":{s}}}"#,
@@ -1133,7 +1133,7 @@ async fn post_config(
     // value". The dashboard leaves the field blank for security (so the
     // server-side redacted value isn't shown to the user), so any empty
     // POST without an explicit "delete webhook" intent must be a no-op
-    // for that field — otherwise saving any other setting would wipe it.
+    // for that field - otherwise saving any other setting would wipe it.
     for (k, v) in form.iter() {
         if matches!(
             k.as_str(),
@@ -1231,7 +1231,7 @@ async fn post_config(
     // before the next supervisor settings-change tick.
     ctrl.update_webhook(new_settings.discord_webhook_url.clone());
     // Flip the trace switch right away so a toggle in the System tab
-    // takes effect this instant — no need to wait for a restart.
+    // takes effect this instant - no need to wait for a restart.
     crate::trace::set_enabled(new_settings.tracing_enabled);
     let _ = settings.send(new_settings.clone());
 
@@ -1253,7 +1253,7 @@ async fn post_config(
 ///   overlays dir, diagnostics) go back to defaults. Destinations,
 ///   profiles, and the `configured` flag stay so the user doesn't get
 ///   booted back into the wizard or lose stream keys.
-/// - `scope=all`: full `Settings::defaults()` — destinations and
+/// - `scope=all`: full `Settings::defaults()` - destinations and
 ///   profiles are wiped, `configured=false` so the next page load
 ///   shows the wizard. The OBS service registration in
 ///   `services.json` is intentionally NOT touched here: it lives
@@ -1273,7 +1273,7 @@ async fn post_config_reset(
         .unwrap_or_else(|| "settings".to_string());
     let mut next = Settings::defaults();
     if scope == "settings" {
-        // Carry over the user's stream destinations and profiles —
+        // Carry over the user's stream destinations and profiles -
         // a settings reset must not silently lose their stream keys.
         let prev = settings.borrow().clone();
         next.destinations = prev.destinations;
@@ -1300,7 +1300,7 @@ async fn post_config_reset(
     crate::trace::set_enabled(next.tracing_enabled);
     if scope == "all" {
         // Nuke the controller's live delay state too. Settings on
-        // disk going back to 0 isn't enough — the in-memory atoms
+        // disk going back to 0 isn't enough - the in-memory atoms
         // would otherwise keep an armed delay alive past the reset
         // and confuse the wizard reload. clear_logs makes the
         // event-log tab match the "fresh install" feel.
@@ -1316,7 +1316,7 @@ async fn post_config_reset(
     )
 }
 
-/// Legacy one-shot delay endpoint — semantically the same as arming and
+/// Legacy one-shot delay endpoint - semantically the same as arming and
 /// immediately activating. Used by Stream Deck / API integrations that
 /// don't care about the two-phase UX.
 async fn post_delay(
@@ -1331,7 +1331,7 @@ async fn post_delay(
     let ms = ms.min(600_000);
     ctrl.arm_delay(ms);
     if ms > 0 {
-        // Force activate even if buffer hasn't built — controller will
+        // Force activate even if buffer hasn't built - controller will
         // hold at live edge until it has, with buffer_building=true.
         let _ = ctrl.activate_delay();
     }
@@ -1539,7 +1539,7 @@ async fn test_egress(
         }
     };
     // DNS + TCP connect with 3 s timeout. We deliberately don't run the
-    // full RTMP handshake — that would burn a "slot" on the platform.
+    // full RTMP handshake - that would burn a "slot" on the platform.
     let connect = async {
         let _addrs: Vec<_> = (parsed.host.as_str(), parsed.port)
             .to_socket_addrs()
@@ -1569,11 +1569,11 @@ async fn test_egress(
 // ----------------------------------------------------------------------
 //
 // POST /destinations with form fields:
-//   id (optional)  — if present and matches existing, edit; else create new
-//   name           — display label
-//   enabled        — "on"/"off"
-//   platform       — slug
-//   stream_key     — empty string leaves existing untouched (security)
+//   id (optional)  - if present and matches existing, edit; else create new
+//   name           - display label
+//   enabled        - "on"/"off"
+//   platform       - slug
+//   stream_key     - empty string leaves existing untouched (security)
 //   custom_egress_url
 //
 // POST /destinations/delete with `id=<id>` to remove.
@@ -1631,7 +1631,7 @@ async fn post_destination_upsert(
         });
     }
 
-    // Validate the new full state — return all errors so the UI can show
+    // Validate the new full state - return all errors so the UI can show
     // "destination 'Backup' is missing a stream key" specifically.
     let errs = ns.validate();
     if !errs.is_empty() {
@@ -1764,7 +1764,7 @@ fn generate_dest_id() -> String {
 }
 
 // ----------------------------------------------------------------------
-// Pluggable overlays — files under settings.overlays_dir
+// Pluggable overlays - files under settings.overlays_dir
 // ----------------------------------------------------------------------
 
 fn list_overlays(settings: &Arc<watch::Sender<Settings>>) -> String {
@@ -1816,7 +1816,7 @@ fn serve_overlay_file(
     // Second-pass: canonicalize and confirm the resolved file is still
     // inside the overlays dir. Without this, a symlink inside overlays/
     // pointing at C:\Users\…\.ssh\id_rsa would be served as text. The
-    // name-only check above can't catch that — the path string is clean,
+    // name-only check above can't catch that - the path string is clean,
     // the filesystem does the redirect.
     let canon_path = match path.canonicalize() {
         Ok(p) => p,
@@ -1876,11 +1876,11 @@ async fn post_test_webhook(ctrl: &Arc<Controller>) -> (&'static str, &'static st
         return (
             "200 OK",
             "application/json",
-            r#"{"ok":false,"error":"webhook URL is empty — set it in the System tab and save first"}"#.into(),
+            r#"{"ok":false,"error":"webhook URL is empty - set it in the System tab and save first"}"#.into(),
         );
     }
     let body =
-        r#"{"content":"🧪 **InstantClone**: Test message — webhook is wired up and working."}"#;
+        r#"{"content":"🧪 **InstantClone**: Test message - webhook is wired up and working."}"#;
     // Map ureq::Error (a fat enum that would trip clippy::result_large_err
     // if propagated) down to just the status code on success or a short
     // string on failure inside the worker thread.
@@ -1907,7 +1907,7 @@ async fn post_test_webhook(ctrl: &Arc<Controller>) -> (&'static str, &'static st
         Ok(Ok(Ok(status))) => (
             false,
             format!(
-                "Discord rejected with HTTP {} — check the webhook URL",
+                "Discord rejected with HTTP {} - check the webhook URL",
                 status
             ),
         ),
@@ -1963,7 +1963,7 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         "overlays_dir" => s.overlays_dir = std::path::PathBuf::from(value),
         "discord_webhook_url" => s.discord_webhook_url = value.into(),
         "tracing_enabled" => {
-            // Form encoding: checkbox sends "true"/"false" or "on"/"" —
+            // Form encoding: checkbox sends "true"/"false" or "on"/"" -
             // treat anything non-empty-non-false as truthy.
             let on = !matches!(value, "" | "false" | "0" | "off");
             s.tracing_enabled = on;
@@ -2044,17 +2044,17 @@ fn accepts_gzip(head: &str) -> bool {
 ///   * GET / HEAD: always allowed (read-only).
 ///   * POST with NO Origin header: allowed (CLI tools like curl,
 ///     Stream Deck "Web Request" action, and most server-to-server
-///     callers don't send Origin — we'd break legitimate use-cases by
+///     callers don't send Origin - we'd break legitimate use-cases by
 ///     rejecting these).
 ///   * POST WITH an Origin header: must match the Host header (i.e.
 ///     same-origin from the user's own dashboard). Cross-origin browser
-///     POSTs (the actual CSRF surface) are blocked here — a tab on
+///     POSTs (the actual CSRF surface) are blocked here - a tab on
 ///     evil.com `fetch('http://127.0.0.1:7799/stop', {method:'POST'})`
 ///     sends `Origin: https://evil.com`, which won't match Host.
 ///
 /// This is the cheapest defense that closes the CSRF browser surface
 /// without breaking headless API users. A token-based scheme would be
-/// strictly stronger but requires UI plumbing — punt unless asked.
+/// strictly stronger but requires UI plumbing - punt unless asked.
 fn allow_csrf(method: &str, origin: &str, host: &str) -> bool {
     if !matches!(method, "POST" | "PUT" | "DELETE" | "PATCH") {
         return true;
@@ -2108,29 +2108,29 @@ fn json_escape(s: &str) -> String {
 }
 
 // ----------------------------------------------------------------------
-// HTML  —  one page, conditional setup / dashboard, all CSS+JS inline.
+// HTML  -  one page, conditional setup / dashboard, all CSS+JS inline.
 // ----------------------------------------------------------------------
 
 /// Compact view for OBS browser-dock embedding. ~280x340 looks decent.
 /// Reuses the same `/state` + `/arm` + `/activate` + `/stop` endpoints
 /// as the main dashboard so behavior stays identical. Source lives in
-/// `web/dock.html` — built-time minified + gzipped (see `build.rs`).
+/// `web/dock.html` - built-time minified + gzipped (see `build.rs`).
 static DOCK_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html.gz"));
 
 /// Main dashboard / first-run wizard. Source lives in `web/index.html`;
 /// build-time minified + gzipped (see `build.rs`).
 static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
 /// Render the OBS browser-source overlay. Supports two query knobs:
-///   ?lang=en|es|pt|fr|de                         — label localization
-///   ?style=minimal|corner|strip|focus|broadcast|ticker  — visual variant
+///   ?lang=en|es|pt|fr|de                         - label localization
+///   ?style=minimal|corner|strip|focus|broadcast|ticker  - visual variant
 ///
 /// All six styles share the same DOM skeleton and `/state` polling
 /// loop. The differences are spatial density + position, applied via a
 /// `body.<style>` class hook. Three shared behaviours:
-///   * 4 s idle auto-dim — overlay fades to ~22% opacity during
+///   * 4 s idle auto-dim - overlay fades to ~22% opacity during
 ///     `idle`/`passthrough`, wakes back on the next phase transition.
-///   * Phase-change halo — brief accent-glow bloom on any phase change.
-///   * Tweened delay readout — the big number animates between values
+///   * Phase-change halo - brief accent-glow bloom on any phase change.
+///   * Tweened delay readout - the big number animates between values
 ///     instead of snapping, so arming reads as a building number.
 fn overlay_html(query: &str) -> String {
     let params = config::parse_form(query);
@@ -2143,7 +2143,7 @@ fn overlay_html(query: &str) -> String {
         _ => "minimal",
     };
 
-    let (l_delay, l_live, l_preparing, l_ready, l_active, l_passthrough) = match lang {
+    let (l_delay, _l_live, l_preparing, l_ready, l_active, l_passthrough) = match lang {
         "es" => (
             "Retraso",
             "EN VIVO",
@@ -2182,321 +2182,341 @@ fn overlay_html(query: &str) -> String {
     format!(
         r##"<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
 <title>InstantClone overlay</title><style>
-/* ───── Shared design tokens — one palette, one type ramp, six layouts.
-   Every style below dresses the same DOM skeleton; the differences are
-   spatial density, not art direction. ───────────────────────────── */
+/* Shared tokens. The OBS / LIVE dot row that used to live next to the
+   number is GONE -its three states (idle / armed-cool / warn-pulse)
+   now live on the number itself, conveyed by the current colour
+   class on <body>. The colour class is the status. */
 :root{{
-  --fg:rgba(255,255,255,.94);
-  --muted:rgba(255,255,255,.55);
-  --dim:rgba(255,255,255,.32);
-  --accent:#5ac8fa;
-  --accent-glow:rgba(90,200,250,.45);
-  --good:#34c759;
-  --warn:#ffae00;
-  --bad:#ff453a;
+  --idle:rgba(255,255,255,.55);
+  --amber:#ffb73a;
+  --cyan:#5ac8fa;
+  --red:#ff5a5a;
   --surface:rgba(10,12,16,.62);
   --surface-strong:rgba(10,12,16,.86);
-  --line:rgba(255,255,255,.08);
+  --line:rgba(255,255,255,.10);
   --ease-out:cubic-bezier(.16,1,.3,1);
 }}
 *{{box-sizing:border-box}}
-html,body{{margin:0;padding:0;background:transparent;color:var(--fg);
-  font-family:-apple-system,Segoe UI,Roboto,Inter,sans-serif;
+html,body{{margin:0;padding:0;background:transparent;color:var(--idle);
+  font-family:'Inter','SF Pro Display',-apple-system,Segoe UI,Roboto,sans-serif;
   font-feature-settings:"tnum" 1;width:100%;height:100%;overflow:hidden;
   -webkit-font-smoothing:antialiased}}
 
-/* Dots — shared across styles. State transitions cross-fade smoothly
-   rather than snap, so a phase change doesn't read as a flicker. */
-.dot{{display:inline-block;width:8px;height:8px;border-radius:50%;
-  background:var(--good);box-shadow:0 0 8px var(--good);vertical-align:middle;
-  transition:background .22s ease,box-shadow .22s ease,opacity .22s ease}}
-.dot.bad{{background:var(--bad);box-shadow:0 0 8px var(--bad)}}
-.dot.warn{{background:var(--warn);box-shadow:0 0 8px var(--warn)}}
-.dot.cool{{background:var(--accent);box-shadow:0 0 8px var(--accent)}}
-.dot.pulse{{animation:dotPulse 1.6s ease-in-out infinite}}
-@keyframes dotPulse{{0%,100%{{opacity:1}}50%{{opacity:.45}}}}
+/* Colour state lives on <body>. Each class sets `color: <hue>`; child
+   text uses `color: inherit` and `text-shadow: 0 0 N currentColor` so
+   the hue + glow track together with one declaration. */
+body.state-idle  {{color:var(--idle)}}
+body.state-amber {{color:var(--amber)}}
+body.state-ok    {{color:var(--cyan)}}
+body.state-red   {{color:var(--red)}}
 
-/* Shared entrance — soft blur+fade so the overlay arrives rather than
-   pops. Tuned to feel "noticed" without being draw-attention. */
-.box{{animation:boxIn .42s var(--ease-out) both;will-change:transform,opacity,filter}}
+/* Soft entrance. The overlay arrives rather than pops. */
+.box{{animation:boxIn .42s var(--ease-out) both;
+  transition:color .55s ease,opacity .55s ease,filter .55s ease,box-shadow .42s ease}}
 @keyframes boxIn{{from{{opacity:0;filter:blur(8px)}}to{{opacity:1;filter:blur(0)}}}}
 
-/* Sneaky behaviour: 4 s after we enter idle/passthrough, dim the box so
-   the viewer's eye stops snagging on it. Phase transition wakes it. */
-body.idle-dim .box{{opacity:.22}}
-.box{{transition:opacity .55s ease,box-shadow .42s ease}}
+/* Idle / passthrough fades the whole overlay down after 4 s of nothing
+   happening, so the viewer's eye stops snagging on a static number. */
+body.idle-dim .box{{opacity:.32;filter:blur(.3px)}}
 
-/* Phase-change halo — accent glow briefly blooms around the box on any
-   phase transition. Helps the streamer (and the viewer) catch the
-   moment a delay arms / activates / cuts. */
-body.phase-flash .box{{box-shadow:0 0 0 1px var(--accent-glow),
-  0 0 32px 6px var(--accent-glow)}}
+/* Phase-change halo. Brief bloom in the current state colour on every
+   transition, so 'I just armed' / 'I just activated' / 'I just cut'
+   read as a moment instead of a slide. */
+body.phase-flash .box{{box-shadow:0 0 0 1px color-mix(in oklch,currentColor 40%,transparent),
+  0 0 36px 8px color-mix(in oklch,currentColor 35%,transparent)}}
 
-/* ── minimal: top-left whisper, the new flagship ─────────── */
-body.minimal .box{{position:fixed;left:20px;top:20px;
-  background:var(--surface);
-  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-  padding:10px 16px;border-radius:14px;
-  border:1px solid var(--line);min-width:160px}}
-body.minimal .l{{font-size:10.5px;text-transform:uppercase;
-  letter-spacing:1.6px;color:var(--muted);font-weight:600}}
-body.minimal .v{{font-size:30px;font-weight:700;letter-spacing:-1px;
-  line-height:1.08;margin-top:1px}}
-body.minimal .u{{font-size:15px;color:var(--muted);font-weight:400;margin-left:2px}}
-body.minimal .row{{display:flex;gap:13px;align-items:center;margin-top:7px;
-  font-size:11.5px;color:var(--muted)}}
-body.minimal .row .dot{{margin-right:6px;width:7px;height:7px}}
+/* The strip layout reuses .track / .fill / .label DOM nodes; every
+   other style hides them so the corner / focus / minimal etc. boxes
+   don't end up with a duplicate number or a stray progress line. */
+.track,.fill,.label{{display:none}}
+body.strip .track,body.strip .fill,body.strip .label{{display:block}}
 
-/* ── corner: bottom-right default — a thin accent line as brand ── */
+/* Number + breathing pulse. The "live" body class adds a subtle 3 s
+   breath to the number's text-shadow, signalling the clock is
+   running on a delayed feed without strobing the viewer. */
+.v{{font-variant-numeric:tabular-nums;font-weight:700;letter-spacing:-1px;
+  color:inherit;text-shadow:0 0 18px currentColor;
+  transition:text-shadow .35s ease}}
+body.live .v{{animation:breathe 3.2s ease-in-out infinite}}
+@keyframes breathe{{0%,100%{{text-shadow:0 0 16px currentColor}}
+  50%{{text-shadow:0 0 28px currentColor}}}}
+
+/* ── minimal: top-left whisper ─────────────────────────────── */
+body.minimal .box{{position:fixed;left:24px;top:24px;
+  display:flex;align-items:baseline;gap:6px}}
+body.minimal .l{{display:none}} /* label hidden — the colour is the label */
+body.minimal .v{{font-size:38px;letter-spacing:-1.5px;line-height:1}}
+body.minimal .u{{font-size:18px;font-weight:500;opacity:.7;letter-spacing:-.2px}}
+
+/* ── corner: bottom-right block ────────────────────────────── */
 body.corner .box{{position:fixed;right:28px;bottom:28px;
   background:var(--surface-strong);
   backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
-  padding:16px 22px;border-radius:14px;
-  border:1px solid var(--line);min-width:200px;text-align:right}}
-body.corner .box::before{{content:"";position:absolute;left:18px;right:18px;top:0;
-  height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);
-  opacity:.65}}
-body.corner .l{{font-size:11.5px;text-transform:uppercase;
-  letter-spacing:1.8px;color:var(--accent);font-weight:600;
-  text-shadow:0 0 14px var(--accent-glow)}}
-body.corner .v{{font-size:44px;font-weight:800;letter-spacing:-2px;
-  margin-top:3px;line-height:1}}
-body.corner .u{{font-size:20px;color:var(--muted);font-weight:400;margin-left:3px}}
-body.corner .row{{display:flex;gap:14px;justify-content:flex-end;
-  margin-top:10px;font-size:12px;color:var(--muted)}}
-body.corner .row .dot{{margin-right:6px}}
+  padding:18px 24px;border-radius:14px;
+  border:1px solid var(--line);min-width:200px;text-align:right;
+  display:flex;flex-direction:column;align-items:flex-end;gap:2px}}
+body.corner .box::before{{content:"";position:absolute;left:20px;right:20px;top:0;
+  height:1px;background:linear-gradient(90deg,transparent,currentColor,transparent);
+  opacity:.6;transition:opacity .42s ease}}
+body.corner .l{{font-size:11px;text-transform:uppercase;letter-spacing:2px;
+  font-weight:700;color:currentColor;opacity:.78;text-shadow:0 0 12px currentColor}}
+body.corner .v{{font-size:46px;font-weight:800;letter-spacing:-2px;
+  margin-top:2px;line-height:1}}
+body.corner .u{{font-size:22px;opacity:.6;font-weight:400;margin-left:3px}}
 
-/* ── strip: bottom-edge bar that rises in from below ─────── */
-body.strip .box{{position:fixed;left:0;right:0;bottom:0;
-  background:linear-gradient(180deg,transparent 0%,
-    rgba(10,12,16,.0) 20%,rgba(10,12,16,.86) 100%);
-  padding:18px 32px 16px;display:flex;align-items:flex-end;gap:28px;
-  animation:stripIn .55s var(--ease-out) both}}
-@keyframes stripIn{{from{{transform:translateY(20px);opacity:0;filter:blur(8px)}}
-  to{{transform:translateY(0);opacity:1;filter:blur(0)}}}}
-body.strip .box::before{{content:"";position:absolute;left:0;right:0;bottom:0;
-  height:1px;background:linear-gradient(90deg,transparent 5%,
-    var(--accent) 50%,transparent 95%);opacity:.4}}
-body.strip .group{{display:flex;flex-direction:column;align-items:flex-start}}
-body.strip .l{{font-size:10.5px;text-transform:uppercase;letter-spacing:1.8px;
-  color:var(--muted);font-weight:600;margin-bottom:1px}}
-body.strip .v{{font-size:34px;font-weight:700;letter-spacing:-1px;line-height:1}}
-body.strip .u{{font-size:18px;color:var(--muted);font-weight:400;margin-left:2px}}
-body.strip .row{{display:flex;gap:16px;margin-left:auto;
-  font-size:12.5px;color:var(--muted);align-self:center}}
-body.strip .row .dot{{margin-right:6px}}
+/* ── strip: a glowing line across the bottom edge ────────── */
+body.strip{{display:block}}
+/* Strip uses the .label DOM node (with #v2) for its number on the
+   right side. Hide the primary .group entirely so we don't render two
+   copies of the number. */
+body.strip .group{{display:none}}
+body.strip .box{{position:fixed;left:0;right:0;bottom:0;height:38px;
+  display:flex;align-items:flex-end;animation:none;
+  background:none;border:0;padding:0}}
+body.strip .track{{position:absolute;left:0;right:0;bottom:0;height:2px;
+  background:rgba(255,255,255,.04)}}
+body.strip .fill{{position:absolute;left:0;bottom:0;height:2px;width:0;
+  background:currentColor;
+  box-shadow:0 0 12px currentColor,0 -2px 22px currentColor;
+  transition:width .42s var(--ease-out),background-color .35s ease,opacity .35s ease;
+  opacity:0}}
+body.strip.has-fill .fill{{opacity:1}}
+body.strip.live .fill{{animation:stripPulse 3s ease-in-out infinite}}
+@keyframes stripPulse{{0%,100%{{box-shadow:0 0 12px currentColor,0 -2px 22px currentColor}}
+  50%{{box-shadow:0 0 24px currentColor,0 -2px 36px currentColor}}}}
+body.strip .label{{position:absolute;right:24px;bottom:10px;
+  display:flex;align-items:baseline;gap:4px;
+  opacity:0;transform:translateY(4px);
+  transition:opacity .42s ease,transform .42s ease}}
+body.strip.has-fill .label{{opacity:1;transform:none}}
+body.strip .l{{display:none}}
+body.strip .v{{font-size:22px;letter-spacing:-.6px;line-height:1}}
+body.strip .u{{font-size:11px;font-weight:600;letter-spacing:2px;
+  text-transform:uppercase;opacity:.65}}
 
-/* ── focus: dead-centre modal for intermissions ──────────── */
+/* ── focus: dead-centre intermission card ─────────────────── */
 body.focus{{display:flex;align-items:center;justify-content:center}}
 body.focus .box{{background:rgba(0,0,0,.78);
   backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
-  padding:38px 60px;border-radius:24px;
-  border:1px solid rgba(255,255,255,.10);text-align:center;
-  box-shadow:0 30px 80px rgba(0,0,0,.55);
+  padding:40px 64px;border-radius:24px;
+  border:1px solid color-mix(in oklch,currentColor 22%,transparent);
+  text-align:center;box-shadow:0 30px 80px rgba(0,0,0,.55);
   animation:focusIn .5s var(--ease-out) both}}
 @keyframes focusIn{{from{{transform:scale(.94);opacity:0;filter:blur(10px)}}
   to{{transform:scale(1);opacity:1;filter:blur(0)}}}}
 body.focus .l{{font-size:12.5px;text-transform:uppercase;letter-spacing:3.5px;
-  color:var(--muted);font-weight:600}}
-body.focus .v{{font-size:88px;font-weight:800;letter-spacing:-3px;
-  margin-top:8px;line-height:.95}}
-body.focus .u{{font-size:34px;color:var(--muted);font-weight:400;margin-left:6px}}
-body.focus .row{{display:flex;gap:18px;justify-content:center;
-  margin-top:14px;font-size:13px;color:var(--muted)}}
-body.focus .row .dot{{margin-right:6px}}
+  color:currentColor;opacity:.78;font-weight:600}}
+body.focus .v{{font-size:96px;font-weight:800;letter-spacing:-3px;
+  margin-top:10px;line-height:.95}}
+body.focus .u{{font-size:34px;opacity:.55;font-weight:400;margin-left:6px}}
 
-/* ── broadcast: TV news bar, sits at top, drops in ────────── */
-body.broadcast .box{{position:fixed;left:0;right:0;top:0;height:46px;
+/* ── broadcast: TV-news red bar at top. State colour applied to a
+   trailing accent strip so the red brand stays even when the
+   underlying state goes amber/cyan. ─────────────────────────── */
+body.broadcast .box{{position:fixed;left:0;right:0;top:0;height:44px;
   background:linear-gradient(180deg,#c81e1e,#a31616);color:#fff;
-  padding:10px 22px;display:flex;align-items:center;gap:20px;
+  padding:10px 22px;display:flex;align-items:center;gap:18px;
   box-shadow:0 2px 0 rgba(0,0,0,.45),
     inset 0 1px 0 rgba(255,255,255,.25),
     inset 0 -1px 0 rgba(0,0,0,.25);
   animation:bcastIn .45s var(--ease-out) both}}
 @keyframes bcastIn{{from{{transform:translateY(-46px)}}to{{transform:translateY(0)}}}}
+/* Group lives inside a 44 px bar, so label + number must sit on a
+   single baseline rather than stack. */
+body.broadcast .group{{display:flex;align-items:baseline;gap:14px}}
 body.broadcast .l{{font-size:13px;text-transform:uppercase;letter-spacing:3px;
-  font-weight:700;font-family:Georgia,'Times New Roman',serif}}
-body.broadcast .v{{font-size:24px;font-weight:700;letter-spacing:-.4px}}
-body.broadcast .u{{font-size:16px;opacity:.85;margin-left:1px}}
-body.broadcast .row{{display:flex;gap:14px;margin-left:auto;
-  font-size:11.5px;text-transform:uppercase;letter-spacing:2px;font-weight:600}}
-body.broadcast .row .dot{{margin-right:5px;background:#fff;
-  box-shadow:0 0 10px rgba(255,255,255,.65)}}
-body.broadcast .row .dot.bad{{background:#1a1a1a;box-shadow:none;opacity:.6}}
+  font-weight:700;font-family:Georgia,'Times New Roman',serif;color:#fff;
+  opacity:.9}}
+body.broadcast .v{{font-size:22px;color:#fff;letter-spacing:-.4px;
+  text-shadow:0 0 8px rgba(0,0,0,.4)}}
+body.broadcast .u{{font-size:14px;opacity:.85;margin-left:1px;color:#fff}}
+/* Accent strip on the bottom of the bar carries the state colour. */
+body.broadcast .box::after{{content:"";position:absolute;left:0;right:0;bottom:0;
+  height:2px;background:currentColor;
+  box-shadow:0 0 12px currentColor;opacity:.85;
+  transition:background-color .35s ease}}
 
-/* ── ticker: ACTUALLY scrolling marquee, seamless loop ───── */
+/* ── ticker: scrolling marquee, seamless wrap ─────────────── */
 body.ticker .box{{position:fixed;left:0;right:0;bottom:0;height:38px;
   background:rgba(0,0,0,.88);display:flex;align-items:center;
-  border-top:1px solid var(--accent);overflow:hidden}}
-body.ticker .group,body.ticker .row{{display:none}}
+  border-top:1px solid currentColor;overflow:hidden;
+  transition:border-color .35s ease}}
+body.ticker .group,body.ticker .v,body.ticker .l,body.ticker .u{{display:none}}
 body.ticker .ticker-track{{display:flex;flex-shrink:0;
-  animation:tickerScroll 38s linear infinite;
+  animation:tickerScroll 32s linear infinite;
   white-space:nowrap}}
 @keyframes tickerScroll{{from{{transform:translateX(0)}}to{{transform:translateX(-50%)}}}}
 body.ticker .ticker-cell{{display:inline-flex;align-items:center;gap:14px;
-  padding:0 32px;font-size:13px;letter-spacing:.4px;flex-shrink:0}}
-body.ticker .ticker-cell .l{{display:inline;text-transform:uppercase;
-  letter-spacing:1.6px;font-weight:700;font-size:11px;color:var(--accent)}}
-body.ticker .ticker-cell .v{{font-weight:700;letter-spacing:-.3px}}
-body.ticker .ticker-cell .u{{opacity:.65;margin-left:1px}}
-body.ticker .ticker-cell .sep{{opacity:.35}}
-body.ticker .ticker-cell .dot{{margin-right:6px;width:6px;height:6px}}
-</style></head><body class="{style}">
+  padding:0 38px;font-size:13px;letter-spacing:.4px;flex-shrink:0;color:#fff}}
+body.ticker .ticker-cell .label{{display:inline-flex;text-transform:uppercase;
+  letter-spacing:1.6px;font-weight:700;font-size:11px;color:currentColor;
+  opacity:.78}}
+body.ticker .ticker-cell .value{{font-weight:700;letter-spacing:-.3px;
+  color:#fff;text-shadow:0 0 10px currentColor}}
+body.ticker .ticker-cell .unit{{opacity:.55;margin-left:1px}}
+body.ticker .ticker-cell .sep{{opacity:.3}}
+</style></head><body class="{style} state-idle">
 <div class="box">
+  <div class="track" aria-hidden="true"></div>
+  <div class="fill" aria-hidden="true"></div>
   <div class="group">
     <div class="l" id="l">{l_delay}</div>
     <div class="v"><span id="v">0.0</span><span class="u">s</span></div>
   </div>
-  <div class="row">
-    <span><span class="dot" id="i"></span>OBS</span>
-    <span><span class="dot" id="e"></span><span id="estatus">{l_live}</span></span>
-  </div>
+  <div class="label" aria-hidden="true"><span class="v" id="v2">0.0</span><span class="u">s</span></div>
   <div class="ticker-track" id="ticker-track" aria-hidden="true"></div>
 </div>
 <script>
 'use strict';
-// Strings from the server, hand-localized in overlay_html().
 const L = {{
-  live:        "{l_live}",
+  delay:       "{l_delay}",
   preparing:   "{l_preparing}",
   ready:       "{l_ready}",
   active:      "{l_active}",
-  delay:       "{l_delay}",
   passthrough: "{l_passthrough}",
 }};
-// First body class is the style identifier — set server-side from the
-// `style=` query param after the allowlist match.
 const STYLE = document.body.className.split(/\s+/)[0];
+const body = document.body;
+const fillEl = document.querySelector('.fill');
+const labelEl = document.getElementById('l');
+const vEls = document.querySelectorAll('.v #v, .label #v2, .v#v, span#v, span#v2');
+const vMain = document.getElementById('v');
+const vAlt  = document.getElementById('v2');
 
-// Hide sub-100 ms jitter so the consumer's "0.1s" doesn't flicker when
-// effectively at the live edge with no delay armed.
 function fmtDelay(secs){{
   if (!isFinite(secs) || secs < 0.05) return '0.0';
   return secs.toFixed(1);
 }}
 
-// Tween a number element from its currently-displayed value to `to`
-// over `dur` ms using ease-out-cubic. Arming a 15 s delay then reads as
-// the number building up rather than snapping. `format` does the
-// stringification so callers don't have to.
+// Ease-out cubic tween between numbers — phase changes read as a build
+// rather than a snap. Reused for both the main number and the strip's
+// label number; they stay in lockstep because the same value flows in.
 const tweens = new WeakMap();
-function tweenNumber(el, to, dur, format){{
+function tweenNumber(el, to, dur){{
+  if (!el) return;
   const prev = tweens.get(el);
   const from = prev ? prev.target : parseFloat(el.textContent) || 0;
-  if (Math.abs(to - from) < 0.005){{ el.textContent = format(to); tweens.set(el,{{target:to}}); return; }}
+  if (Math.abs(to - from) < 0.005){{ el.textContent = fmtDelay(to); tweens.set(el,{{target:to}}); return; }}
   if (prev && prev.raf) cancelAnimationFrame(prev.raf);
   const start = performance.now();
   const rec = {{ target: to, raf: 0 }};
   function step(now){{
     const t = Math.min(1, (now - start) / dur);
-    const eased = 1 - Math.pow(1 - t, 3);
-    el.textContent = format(from + (to - from) * eased);
+    const e = 1 - Math.pow(1 - t, 3);
+    el.textContent = fmtDelay(from + (to - from) * e);
     if (t < 1) rec.raf = requestAnimationFrame(step);
   }}
   rec.raf = requestAnimationFrame(step);
   tweens.set(el, rec);
 }}
 
-// 4 s of idle/passthrough → fade the overlay down. Any non-idle phase
-// resets the timer and wakes the box immediately.
 let idleTimer = null;
 function setIdleDim(idle){{
   if (idle){{
-    if (!idleTimer && !document.body.classList.contains('idle-dim')){{
-      idleTimer = setTimeout(() => {{
-        document.body.classList.add('idle-dim');
-        idleTimer = null;
-      }}, 4000);
+    if (!idleTimer && !body.classList.contains('idle-dim')){{
+      idleTimer = setTimeout(() => {{ body.classList.add('idle-dim'); idleTimer = null; }}, 4000);
     }}
   }} else {{
     if (idleTimer){{ clearTimeout(idleTimer); idleTimer = null; }}
-    document.body.classList.remove('idle-dim');
+    body.classList.remove('idle-dim');
   }}
 }}
 
-// Brief accent halo on every phase transition. Skipped on the first
-// /state result so we don't flash just because we went from null → idle.
 let lastPhase = null;
 function maybeFlashPhase(phase){{
   if (lastPhase !== null && lastPhase !== phase){{
-    document.body.classList.add('phase-flash');
-    setTimeout(() => document.body.classList.remove('phase-flash'), 480);
+    body.classList.add('phase-flash');
+    setTimeout(() => body.classList.remove('phase-flash'), 480);
   }}
   lastPhase = phase;
 }}
 
-// Ticker track builder — two identical cells side by side, animated
-// translateX(-50%) for a seamless wrap. Each refresh rewrites both cells
-// with the current state; the CSS animation runs on the wrapper and is
-// undisturbed by inner text changes.
+// Replace all state-* and live classes in one swap so the body's
+// colour class stays consistent (no flash of multiple colours during a
+// transition).
+function setState(stateClass, opts){{
+  body.classList.remove('state-idle','state-amber','state-ok','state-red','live','has-fill');
+  body.classList.add(stateClass);
+  if (opts && opts.live)    body.classList.add('live');
+  if (opts && opts.hasFill) body.classList.add('has-fill');
+}}
+
 function renderTicker(parts){{
   const track = document.getElementById('ticker-track');
   if (!track) return;
-  const cellHtml = ''
-    + '<span class="l">' + parts.label + '</span>'
-    + '<span class="v">' + parts.valueText + '<span class="u">s</span></span>'
+  const cell = ''
+    + '<span class="label">' + parts.label + '</span>'
+    + '<span class="value">' + parts.valueText + '<span class="unit">s</span></span>'
     + '<span class="sep">·</span>'
-    + '<span><span class="dot ' + parts.iCls + '"></span>OBS</span>'
-    + '<span class="sep">·</span>'
-    + '<span><span class="dot ' + parts.eCls + '"></span>' + parts.statusText + '</span>';
+    + '<span class="label">' + parts.status + '</span>';
   track.innerHTML =
-    '<span class="ticker-cell">' + cellHtml + '</span>' +
-    '<span class="ticker-cell">' + cellHtml + '</span>';
+    '<span class="ticker-cell">' + cell + '</span>' +
+    '<span class="ticker-cell">' + cell + '</span>';
 }}
 
-async function refresh(){{
-  let s;
-  try {{ s = await (await fetch('/state')).json(); }} catch(_){{ return; }}
+function paint(s){{
+  let displayMs = 0, fillFrac = 0;
+  let stateClass = 'state-idle';
+  let live = false, hasFill = false;
+  let label = L.delay, status = L.passthrough;
 
-  // Resolve what to display this tick.
-  let displayMs = 0, label = L.delay, status = L.live;
   if (!s.ingest_alive){{
-    label = L.delay; status = '—'; displayMs = 0;
+    stateClass = 'state-idle';
+    status = '—';
   }} else if (s.phase === 'idle'){{
-    label = L.delay; status = L.passthrough; displayMs = 0;
+    stateClass = 'state-idle';
+    status = L.passthrough;
   }} else if (s.phase === 'preparing'){{
-    label = L.preparing; status = L.preparing; displayMs = s.buffer_fill_ms || 0;
+    stateClass = 'state-amber'; hasFill = true;
+    displayMs = s.buffer_fill_ms || 0;
+    fillFrac = Math.max(0, Math.min(1, displayMs / (s.armed_delay_ms || 1)));
+    label = L.preparing; status = L.preparing;
   }} else if (s.phase === 'ready'){{
-    label = L.ready; status = L.ready; displayMs = s.armed_delay_ms || 0;
-  }} else {{ // active
-    label = L.delay; status = L.active;
-    // Prefer the *target* (= what the user armed) over the
-    // measured current delay so the overlay doesn't wobble between
-    // e.g. 15.8 / 15.9 / 16.0 every pump tick. The measured number
-    // is informative on the dashboard but viewer-facing overlays
-    // want the stable, committed delay value. Falls back to
-    // current_delay_ms only if target wasn't reported (defensive —
-    // shouldn't happen once active).
-    displayMs = s.target_delay_ms || s.armed_delay_ms || s.current_delay_ms || 0;
-  }}
-  const valueSecs = displayMs / 1000;
-
-  // Dot classes — semantic: bad=disconnected, warn=preparing,
-  // cool=armed-ready, pulse=live/active.
-  const iCls = s.ingest_alive ? 'pulse' : 'bad';
-  let eCls;
-  if (!s.ingest_alive) eCls = 'bad';
-  else if (s.phase === 'preparing') eCls = 'warn pulse';
-  else if (s.phase === 'ready')     eCls = 'cool';
-  else                              eCls = 'pulse';
-
-  if (STYLE === 'ticker'){{
-    renderTicker({{ label, valueText: fmtDelay(valueSecs),
-      statusText: status, iCls, eCls }});
+    stateClass = 'state-ok'; hasFill = true;
+    displayMs = s.armed_delay_ms || 0;
+    fillFrac = 1;
+    label = L.ready; status = L.ready;
   }} else {{
-    const vEl = document.getElementById('v');
-    tweenNumber(vEl, valueSecs, 380, fmtDelay);
-    document.getElementById('l').textContent = label;
-    document.getElementById('estatus').textContent = status;
-    document.getElementById('i').className = 'dot ' + iCls;
-    document.getElementById('e').className = 'dot ' + eCls;
+    stateClass = 'state-ok'; hasFill = true; live = true;
+    displayMs = s.target_delay_ms || s.armed_delay_ms || s.current_delay_ms || 0;
+    fillFrac = 1;
+    label = L.delay; status = L.active;
+  }}
+  if (s.ingest_alive && s.destinations_total > 0 && s.destinations_alive === 0){{
+    stateClass = 'state-red'; hasFill = true; live = false;
+  }}
+  setState(stateClass, {{ live, hasFill }});
+
+  if (fillEl) fillEl.style.width = (fillFrac * 100).toFixed(2) + '%';
+  const secs = displayMs / 1000;
+  if (STYLE === 'ticker'){{
+    renderTicker({{ label, valueText: fmtDelay(secs), status }});
+  }} else {{
+    if (labelEl) labelEl.textContent = label;
+    tweenNumber(vMain, secs, 380);
+    tweenNumber(vAlt,  secs, 380);
   }}
 
   setIdleDim(!s.ingest_alive || s.phase === 'idle');
   maybeFlashPhase(s.phase);
 }}
-refresh();
-setInterval(refresh, 500);
+
+function start(){{
+  if (window.EventSource){{
+    try {{
+      const es = new EventSource('/events');
+      es.onmessage = e => {{ try {{ paint(JSON.parse(e.data)); }} catch(_){{}} }};
+      es.onerror = () => {{ es.close(); setTimeout(startPolling, 1000); }};
+      return;
+    }} catch(_){{}}
+  }}
+  startPolling();
+}}
+function startPolling(){{
+  async function tick(){{ try {{ paint(await (await fetch('/state')).json()); }} catch(_){{}} }}
+  tick(); setInterval(tick, 500);
+}}
+start();
 </script></body></html>
 "##
     )
@@ -2510,7 +2530,7 @@ mod tests {
     //
     // `post_config` whitelists which form keys get dispatched into
     // `apply_field_str`. Any field that handles a save but isn't in
-    // the whitelist gets silently dropped — exactly what happened
+    // the whitelist gets silently dropped - exactly what happened
     // with `tracing_enabled` between 3f9db09 (toggle added) and
     // 6a3990b (default flipped to off). Invisible until users
     // actually tried to enable the toggle on a fresh install.
@@ -2534,7 +2554,7 @@ mod tests {
     // The proxy path forwards OBS's POST to Twitch with our
     // destination's stream key swapped in, then rewrites the response
     // to point the multi-track ingest at us. Both string helpers run
-    // without a JSON parser, so they're easy to get subtly wrong —
+    // without a JSON parser, so they're easy to get subtly wrong -
     // these tests pin down the invariants we depend on.
 
     #[test]
@@ -2575,7 +2595,7 @@ mod tests {
     fn rewrite_url_templates_replaces_every_endpoint() {
         // Twitch returns multiple `ingest_endpoints` for regional
         // load-balancing. Every one of them must end up pointing at
-        // our localhost ingest — missing even one leaves a chance
+        // our localhost ingest - missing even one leaves a chance
         // OBS picks a Twitch URL and bypasses our proxy.
         let response = r#"{"ingest_endpoints":[{"url_template":"rtmps://fra.contribute.live-video.net/app/{stream_key}"},{"url_template":"rtmps://jfk.contribute.live-video.net/app/{stream_key}"}]}"#;
         let rewritten = rewrite_url_templates(response, "rtmp://127.0.0.1:1935/live/{stream_key}");
@@ -2721,7 +2741,7 @@ mod tests {
 
     #[test]
     fn csrf_allows_post_without_origin() {
-        // CLI tools and Stream Deck don't send Origin — must keep working.
+        // CLI tools and Stream Deck don't send Origin - must keep working.
         assert!(allow_csrf("POST", "", "127.0.0.1:7799"));
     }
 
