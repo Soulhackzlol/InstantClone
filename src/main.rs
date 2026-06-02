@@ -359,6 +359,43 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 .lock()
                 .unwrap()
                 .clone();
+            // VOD-audio mode: when this is a Twitch destination with
+            // vod_audio=true and we haven't yet fetched an IVS session
+            // for it, fire one off in the background. The fetch task
+            // populates eb_override_url; the next supervisor tick
+            // (~2 s) reads it and restarts egress with the IVS URL.
+            // Only triggers once ingest is alive - no point burning
+            // Twitch API quota for a stream that hasn't started.
+            if ingest_alive
+                && override_url.is_none()
+                && dest.platform == "twitch"
+                && dest.vod_audio
+                && !dest.stream_key.is_empty()
+            {
+                let key = dest.stream_key.clone();
+                let want_eb = dest.vod_audio_inject_eb;
+                let state = ctrl.destination_state(&dest.id);
+                let ctrl_for_log = ctrl.clone();
+                let dest_id = dest.id.clone();
+                tokio::spawn(async move {
+                    match web::fetch_twitch_vod_session(key, want_eb).await {
+                        Some(url) => {
+                            *state.eb_override_url.lock().unwrap() = Some(url);
+                            ctrl_for_log.log(format!(
+                                "[{}] VOD-audio session allocated by Twitch{}",
+                                dest_id,
+                                if want_eb { " (with EB ladder)" } else { "" }
+                            ));
+                        }
+                        None => {
+                            ctrl_for_log.log(format!(
+                                "[{}] VOD-audio: Twitch API call failed - retrying on next tick",
+                                dest_id
+                            ));
+                        }
+                    }
+                });
+            }
             let effective_url = override_url.as_deref().unwrap_or(url.as_str()).to_string();
             let url = &effective_url;
             let needs_restart = match running.get(&dest.id) {

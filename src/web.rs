@@ -264,18 +264,28 @@ async fn route(
             "application/json",
             obs_multitrack_config_static(query, settings),
         ),
-        ("GET", "/obs/register-status") => (
-            "200 OK",
-            "application/json",
-            format!(
-                r#"{{"registered":{},"path":{}}}"#,
-                crate::obs_register::is_registered(),
-                match crate::obs_register::services_json_path() {
-                    Some(p) => format!(r#""{}""#, p.display().to_string().replace('\\', "\\\\")),
-                    None => "null".to_string(),
-                }
-            ),
-        ),
+        ("GET", "/obs/register-status") => {
+            let s = settings.borrow();
+            (
+                "200 OK",
+                "application/json",
+                format!(
+                    r#"{{"registered":{},"vod_audio_flag":{},"vod_eb_injected":{},"active_profile":{},"path":{}}}"#,
+                    crate::obs_register::is_registered(),
+                    crate::obs_register::vod_audio_flag_set(),
+                    crate::obs_register::vod_eb_injection_present(s.web_port),
+                    match crate::obs_register::active_profile() {
+                        Some(p) => format!(r#""{}""#, p.replace('\\', "\\\\").replace('"', "\\\"")),
+                        None => "null".to_string(),
+                    },
+                    match crate::obs_register::services_json_path() {
+                        Some(p) =>
+                            format!(r#""{}""#, p.display().to_string().replace('\\', "\\\\")),
+                        None => "null".to_string(),
+                    }
+                ),
+            )
+        }
         ("POST", "/obs/register") => {
             let s = settings.borrow();
             match crate::obs_register::register(s.web_port, s.ingest_port) {
@@ -915,6 +925,60 @@ fn replace_auth_field(json: &str, new_value: &str) -> Option<String> {
     ))
 }
 
+/// Self-triggered Twitch GetClientConfiguration for VOD-audio mode.
+/// Called from the supervisor when a destination has `vod_audio=true`
+/// but no eb_override_url yet. We construct a minimal POST body asking
+/// for a VOD-audio slot (no multi-track video unless `want_eb` is set),
+/// fire it to Twitch's API, and return the session-allocated IVS URL
+/// with the auth token substituted. None on any failure - the
+/// supervisor logs and the next tick retries.
+pub async fn fetch_twitch_vod_session(stream_key: String, want_eb: bool) -> Option<String> {
+    // Minimal request body. OBS sends a much larger envelope with
+    // client info, encoder caps, etc., but Twitch's API accepts the
+    // shape below for the VOD-only path (no multi-track video).
+    // `vod_track_audio: true` is the only knob that actually allocates
+    // the VOD slot; the rest is housekeeping. If `want_eb` is set we
+    // also signal multi-track video so the response carries the EB
+    // ladder (the Phase C path).
+    let body = if want_eb {
+        format!(
+            r#"{{"schema_version":"2024-06-04","authentication":"{}","preferences":{{"vod_track_audio":true,"maximum_aggregate_bitrate":10000,"maximum_video_tracks":5}},"capabilities":{{"plugin":{{"name":"InstantClone-proxy","version":"1.0.0"}}}},"client":{{"name":"obs-studio","version":"32.1.2","os":"windows"}}}}"#,
+            stream_key.replace('\\', "\\\\").replace('"', "\\\"")
+        )
+    } else {
+        format!(
+            r#"{{"schema_version":"2024-06-04","authentication":"{}","preferences":{{"vod_track_audio":true,"maximum_aggregate_bitrate":8000,"maximum_video_tracks":1}},"capabilities":{{"plugin":{{"name":"InstantClone-proxy","version":"1.0.0"}}}},"client":{{"name":"obs-studio","version":"32.1.2","os":"windows"}}}}"#,
+            stream_key.replace('\\', "\\\\").replace('"', "\\\"")
+        )
+    };
+    let twitch_response = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tokio::task::spawn_blocking(move || -> Option<String> {
+            let agent = crate::https::https_agent();
+            let req = agent
+                .post("https://ingest.twitch.tv/api/v3/GetClientConfiguration")
+                .config()
+                .timeout_connect(Some(std::time::Duration::from_secs(6)))
+                .timeout_global(Some(std::time::Duration::from_secs(12)))
+                .build()
+                .header("Content-Type", "application/json")
+                .header("User-Agent", "obs-studio/32.1.2 InstantClone-proxy");
+            let resp = req.send(&body).ok()?;
+            if !(200..300).contains(&resp.status().as_u16()) {
+                return None;
+            }
+            resp.into_body().read_to_string().ok()
+        }),
+    )
+    .await
+    .ok()?
+    .ok()??;
+
+    let endpoint = first_ingest_endpoint(&twitch_response)?;
+    let substitution = endpoint.authentication.as_deref().unwrap_or(&stream_key);
+    Some(endpoint.url_template.replace("{stream_key}", substitution))
+}
+
 /// Replace every `"url_template":"<rtmp[s]://...>"` value in a JSON
 /// blob with `new_value`. Twitch's response has one or more such
 /// fields (one per region they offer) - every one of them needs to
@@ -1178,6 +1242,8 @@ async fn post_config(
                 custom_egress_url: String::new(),
                 twitch_ingest: String::new(),
                 youtube_ingest: String::new(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
             });
         }
         let d = &mut new_settings.destinations[0];
@@ -1308,6 +1374,7 @@ async fn post_config_reset(
         ctrl.clear_logs();
     }
     ctrl.log(format!("config reset (scope={})", scope));
+    reconcile_obs_vod_files(&next);
     let _ = settings.send(next);
     (
         "200 OK",
@@ -1598,6 +1665,14 @@ async fn post_destination_upsert(
     let custom = form.get("custom_egress_url").cloned().unwrap_or_default();
     let twitch_ingest = form.get("twitch_ingest").cloned().unwrap_or_default();
     let youtube_ingest = form.get("youtube_ingest").cloned().unwrap_or_default();
+    let vod_audio = matches!(
+        form.get("vod_audio").map(String::as_str),
+        Some("on" | "true" | "1")
+    );
+    let vod_audio_inject_eb = matches!(
+        form.get("vod_audio_inject_eb").map(String::as_str),
+        Some("on" | "true" | "1")
+    );
 
     if name.trim().is_empty() {
         return (
@@ -1618,6 +1693,8 @@ async fn post_destination_upsert(
         existing.custom_egress_url = custom;
         existing.twitch_ingest = twitch_ingest;
         existing.youtube_ingest = youtube_ingest;
+        existing.vod_audio = vod_audio;
+        existing.vod_audio_inject_eb = vod_audio_inject_eb;
     } else {
         ns.destinations.push(config::Destination {
             id,
@@ -1628,6 +1705,8 @@ async fn post_destination_upsert(
             custom_egress_url: custom,
             twitch_ingest,
             youtube_ingest,
+            vod_audio,
+            vod_audio_inject_eb,
         });
     }
 
@@ -1661,8 +1740,33 @@ async fn post_destination_upsert(
             ),
         );
     }
+    reconcile_obs_vod_files(&ns);
     let _ = settings.send(ns);
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
+/// Reconcile OBS's external files (global.ini, profile service.json)
+/// against the current destinations. Idempotent and silent on failure -
+/// we log to the dashboard event log instead of bubbling up an HTTP
+/// error, because the user's destination save shouldn't fail just
+/// because OBS is closed (which holds the files open).
+fn reconcile_obs_vod_files(s: &Settings) {
+    let any_vod = s
+        .destinations
+        .iter()
+        .any(|d| d.enabled && d.platform == "twitch" && d.vod_audio);
+    let any_eb = s
+        .destinations
+        .iter()
+        .any(|d| d.enabled && d.platform == "twitch" && d.vod_audio && d.vod_audio_inject_eb);
+    // global.ini flag tracks "any VOD-audio destination wants it".
+    let _ = crate::obs_register::set_vod_audio_flag(any_vod);
+    // service.json injection tracks "any VOD+EB destination wants it".
+    let _ = if any_eb {
+        crate::obs_register::inject_vod_eb(s.web_port)
+    } else {
+        crate::obs_register::revert_vod_eb(s.web_port)
+    };
 }
 
 async fn post_destination_delete(
@@ -1690,6 +1794,7 @@ async fn post_destination_delete(
         ns.configured = false;
     }
     let _ = ns.save(cfg_path);
+    reconcile_obs_vod_files(&ns);
     let _ = settings.send(ns);
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
 }
@@ -1714,7 +1819,7 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         let url = d.egress_url().unwrap_or_default();
         let (_id, alive, _seq, kbps, tags, bytes, cuts, reconnects) = stats_for(&d.id);
         out.push_str(&format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled,
@@ -1726,6 +1831,8 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             cu = json_escape_quoted(&d.custom_egress_url),
             ti = json_escape_quoted(&d.twitch_ingest),
             yi = json_escape_quoted(&d.youtube_ingest),
+            va = d.vod_audio,
+            vie = d.vod_audio_inject_eb,
             ks = !d.stream_key.is_empty(),
             ur = json_escape_quoted(&redact_url(&url)),
             al = alive,

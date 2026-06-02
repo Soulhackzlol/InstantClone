@@ -83,6 +83,31 @@ pub struct Destination {
     /// flaky in the streamer's region - surfacing it as an option saves
     /// users from dropping to a Custom RTMP URL just to switch endpoints.
     pub youtube_ingest: String,
+    /// VOD-audio mode (Twitch only). When true, on publisher-connect we
+    /// call Twitch's GetClientConfiguration ourselves with
+    /// `vod_track_audio: true`, get back an IVS session URL with a
+    /// VOD-audio slot allocated, and stash it on `eb_override_url`.
+    /// The streamer must also set OBS to Custom RTMP + enable the VOD
+    /// Track checkbox in Output settings (we write the unlocking flag
+    /// to OBS's global.ini when the toggle is on).
+    ///
+    /// Trade-off: VOD-audio mode does not use the EB transcoded ladder
+    /// by default - the streamer gets the legacy single-resolution
+    /// transcode (Affiliate/Partner) or Source-Only (non-Affiliate).
+    /// To recover EB on top of VOD-audio, see `vod_audio_inject_eb`.
+    pub vod_audio: bool,
+    /// EXPERIMENTAL companion to `vod_audio`. When both this and
+    /// `vod_audio` are true, the dashboard injects
+    /// `multitrack_video_configuration_url` into the user's OBS
+    /// rtmp_custom service.json for the active profile. With that key
+    /// present, OBS auto-fetches our multitrack-video config even on
+    /// Custom RTMP - bypassing OBS's "name == Twitch" gate so VOD-audio
+    /// and Enhanced Broadcasting both fire on the same session.
+    ///
+    /// Marked experimental because the file we touch is OBS-internal
+    /// and per-profile; a future OBS update could change the on-disk
+    /// shape and break the injection. We write a `.bak` on every edit.
+    pub vod_audio_inject_eb: bool,
 }
 
 impl Destination {
@@ -238,6 +263,8 @@ impl Settings {
                 custom_egress_url: s.custom_egress_url.clone(),
                 twitch_ingest: String::new(),
                 youtube_ingest: String::new(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
             });
         }
         // Clamp / sanitize on load - hand-edited values can otherwise
@@ -387,6 +414,16 @@ impl Settings {
             )?;
             writeln!(f, "destination.{}.twitch_ingest={}", i, d.twitch_ingest)?;
             writeln!(f, "destination.{}.youtube_ingest={}", i, d.youtube_ingest)?;
+            // VOD audio knobs. Defaults (false/false) are written only
+            // when set so a downgrade to a pre-Phase-B build still
+            // parses cleanly (apply_field's `_ => {}` arm drops keys
+            // it doesn't recognise).
+            if d.vod_audio {
+                writeln!(f, "destination.{}.vod_audio=true", i)?;
+            }
+            if d.vod_audio_inject_eb {
+                writeln!(f, "destination.{}.vod_audio_inject_eb=true", i)?;
+            }
         }
         f.sync_all()?;
         Ok(())
@@ -484,6 +521,8 @@ impl Settings {
                                 custom_egress_url: String::new(),
                                 twitch_ingest: String::new(),
                                 youtube_ingest: String::new(),
+                                vod_audio: false,
+                                vod_audio_inject_eb: false,
                             });
                         }
                         let d = &mut self.destinations[idx];
@@ -496,6 +535,8 @@ impl Settings {
                             "custom_egress_url" => d.custom_egress_url = value.into(),
                             "twitch_ingest" => d.twitch_ingest = value.into(),
                             "youtube_ingest" => d.youtube_ingest = value.into(),
+                            "vod_audio" => d.vod_audio = value == "true",
+                            "vod_audio_inject_eb" => d.vod_audio_inject_eb = value == "true",
                             _ => {}
                         }
                     }
@@ -977,6 +1018,8 @@ mod tests {
             custom_egress_url: String::new(),
             twitch_ingest: String::new(),
             youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
         };
         let url = d.egress_url().unwrap();
         assert!(url.starts_with("rtmp://live.twitch.tv/app/"));
@@ -994,6 +1037,8 @@ mod tests {
             custom_egress_url: String::new(),
             twitch_ingest: "fra".into(),
             youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1014,6 +1059,8 @@ mod tests {
             custom_egress_url: "rtmp://my.server/live/secret_key".into(),
             twitch_ingest: String::new(),
             youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1033,6 +1080,8 @@ mod tests {
             custom_egress_url: String::new(),
             twitch_ingest: String::new(),
             youtube_ingest: "backup".into(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1054,6 +1103,8 @@ mod tests {
             custom_egress_url: "rtmp://my.server".into(),
             twitch_ingest: String::new(),
             youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
         };
         assert!(!bad.is_well_formed());
     }
@@ -1101,6 +1152,8 @@ mod tests {
             custom_egress_url: String::new(),
             twitch_ingest: "fra".into(),
             youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
         });
         s.destinations.push(Destination {
             id: "yt1".into(),
@@ -1111,6 +1164,8 @@ mod tests {
             custom_egress_url: String::new(),
             twitch_ingest: String::new(),
             youtube_ingest: "backup".into(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
         });
         s.profiles = vec![
             DelayProfile {

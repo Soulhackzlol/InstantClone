@@ -997,6 +997,37 @@ input,select,textarea{font-family:inherit;color:inherit}
     <div class="row"><label style="display:inline-flex;align-items:center;gap:8px;margin:0;text-transform:none;letter-spacing:0;font-size:13px">
       <input type="checkbox" id="dest-form-enabled" checked> Enabled
     </label></div>
+    <!-- VOD audio (Twitch only). Visible only when platform == twitch.
+         The sub-toggle for VOD+EB sits inside this block so it's
+         visually subordinate to the parent. -->
+    <div id="dest-form-vod-wrap" hidden style="margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)">
+      <label style="display:flex;align-items:flex-start;gap:10px;margin:0;text-transform:none;letter-spacing:0;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="dest-form-vod-audio" style="margin-top:2px">
+        <div>
+          <div style="font-weight:600;color:var(--fg)">VOD audio mode</div>
+          <div class="muted" style="font-size:11.5px;margin-top:2px;line-height:1.45">
+            Records a separate audio track to Twitch's VOD. Useful when your live stream has copyrighted music that should be stripped from the saved recording.
+            <b style="color:var(--warn,#d6a23a)">Disables Enhanced Broadcasting</b> (the transcoded quality ladder) unless you also enable the experimental sub-toggle below.
+            Requires switching OBS to <b>Custom RTMP</b> + enabling the VOD Track checkbox in OBS Output settings.
+          </div>
+        </div>
+      </label>
+      <div id="dest-form-vod-eb-wrap" hidden style="margin-top:10px;padding:10px;border:1px dashed color-mix(in oklch,var(--err) 32%,var(--line));border-radius:8px;background:color-mix(in oklch,var(--err) 3%,var(--bg-2))">
+        <label style="display:flex;align-items:flex-start;gap:10px;margin:0;text-transform:none;letter-spacing:0;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="dest-form-vod-inject-eb" style="margin-top:2px">
+          <div>
+            <div style="font-weight:600;color:var(--err)">
+              Also enable Enhanced Broadcasting
+              <span style="display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:1.5px;background:color-mix(in oklch,var(--warn,#d6a23a) 22%,transparent);color:var(--warn,#d6a23a);padding:1px 6px;border-radius:99px;margin-left:4px;text-transform:uppercase;vertical-align:1px">experimental</span>
+            </div>
+            <div class="muted" style="font-size:11.5px;margin-top:2px;line-height:1.45">
+              Injects <code class="mono" style="font-size:11px">multitrack_video_configuration_url</code> into your active OBS profile's <code class="mono" style="font-size:11px">service.json</code> so Custom RTMP also gets EB. Modifies OBS's internal file (with a <code class="mono" style="font-size:11px">.bak</code> backup); disabling this toggle reverts.
+              Only applies to your <b>active</b> OBS profile - switching profiles in OBS disables the injection until you re-toggle here.
+            </div>
+          </div>
+        </label>
+      </div>
+    </div>
     <div class="row" style="margin-top:14px;justify-content:flex-end">
       <button class="ic-btn ic-btn-ghost" onclick="cancelDestForm()">Cancel</button>
       <button class="ic-btn ic-btn-primary" onclick="saveDestForm()">Save destination</button>
@@ -2042,10 +2073,35 @@ function openDestForm(d){
   $('dest-form-key').placeholder = d && d.stream_key_set ? 'leave blank to keep current' : 'paste stream key';
   document.getElementById('dest-form-key-hint').textContent = d && d.stream_key_set ? '(currently set)' : '';
   $('dest-form-enabled').checked = d ? d.enabled : true;
+  $('dest-form-vod-audio').checked = !!(d && d.vod_audio);
+  $('dest-form-vod-inject-eb').checked = !!(d && d.vod_audio_inject_eb);
+  updateVodVisibility();
   $('dest-form-msg').innerHTML = '';
   $('dest-form').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 function cancelDestForm(){ $('dest-form').hidden = true; }
+
+// VOD-audio mode is Twitch-only (the gate is hardcoded in OBS). When
+// the platform isn't twitch we hide the whole block. When VOD audio
+// is OFF we hide the experimental sub-toggle so its scary warning
+// doesn't loom over destinations that have no use for it.
+function updateVodVisibility(){
+  const plat = $('dest-form-platform').value;
+  const vodWrap = $('dest-form-vod-wrap');
+  const vodEbWrap = $('dest-form-vod-eb-wrap');
+  if (!vodWrap || !vodEbWrap) return;
+  vodWrap.hidden = plat !== 'twitch';
+  if (plat !== 'twitch'){
+    $('dest-form-vod-audio').checked = false;
+    $('dest-form-vod-inject-eb').checked = false;
+    vodEbWrap.hidden = true;
+    return;
+  }
+  vodEbWrap.hidden = !$('dest-form-vod-audio').checked;
+  if (!$('dest-form-vod-audio').checked){
+    $('dest-form-vod-inject-eb').checked = false;
+  }
+}
 
 function fillDestPlatforms(){
   const sel = $('dest-form-platform'); sel.innerHTML = '';
@@ -2057,7 +2113,10 @@ function fillDestPlatforms(){
       $('dest-form-twitch-wrap').hidden = sel.value !== 'twitch';
       $('dest-form-youtube-wrap').hidden = sel.value !== 'youtube';
       renderKeyHelp(sel.value, 'dest-form-key-help');
+      updateVodVisibility();
     });
+    const vodToggle = $('dest-form-vod-audio');
+    if (vodToggle) vodToggle.addEventListener('change', updateVodVisibility);
   }
 }
 async function fillTwitchIngests(){
@@ -2078,8 +2137,18 @@ async function saveDestForm(){
   const yingest = $('dest-form-youtube-ingest').value;
   const key = $('dest-form-key').value.trim();
   const enabled = $('dest-form-enabled').checked;
+  // VOD-audio knobs only apply to Twitch destinations. Defensive
+  // gating in case the user enabled them then switched platform
+  // without the change handler running.
+  const vodAudio = platform === 'twitch' && $('dest-form-vod-audio').checked;
+  const vodInjectEb = vodAudio && $('dest-form-vod-inject-eb').checked;
   if (!name){ $('dest-form-msg').innerHTML = '<span class="err">Name required</span>'; return; }
-  const body = new URLSearchParams({name, platform, custom_egress_url:custom, enabled:enabled?'on':'off', twitch_ingest:ingest, youtube_ingest:yingest});
+  const body = new URLSearchParams({
+    name, platform, custom_egress_url:custom, enabled:enabled?'on':'off',
+    twitch_ingest:ingest, youtube_ingest:yingest,
+    vod_audio: vodAudio ? 'on' : 'off',
+    vod_audio_inject_eb: vodInjectEb ? 'on' : 'off',
+  });
   if (id) body.set('id', id);
   if (key) body.set('stream_key', key);
   const r = await fetch('/destinations', {method:'POST', body});
@@ -2088,8 +2157,14 @@ async function saveDestForm(){
   else $('dest-form-msg').innerHTML = '<span class="err">'+j.error+'</span>';
 }
 async function toggleDest(d){
+  // Preserve every per-destination field on a toggle - the form
+  // handler reads them all back, so anything we DON'T pass through
+  // here gets reset to its default (false for the VOD knobs, which
+  // would silently disable VOD-audio mode on a simple enable toggle).
   const body = new URLSearchParams({id:d.id, name:d.name, platform:d.platform,
     custom_egress_url:d.custom_egress_url, twitch_ingest:d.twitch_ingest||'', youtube_ingest:d.youtube_ingest||'',
+    vod_audio: d.vod_audio ? 'on' : 'off',
+    vod_audio_inject_eb: d.vod_audio_inject_eb ? 'on' : 'off',
     enabled:d.enabled?'off':'on'});
   await fetch('/destinations',{method:'POST', body});
   loadDestinations();

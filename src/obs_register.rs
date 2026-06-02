@@ -299,6 +299,318 @@ fn remove_entry(file: &str) -> Option<String> {
     Some(format!("{}{}", &file[..left], &file[right..]))
 }
 
+// ── VOD-audio integration: OBS global.ini flag ──────────────────────
+//
+// OBS gates the VOD Track checkbox behind `EnableCustomServerVodTrack`
+// in `[General]` of global.ini when the active service id is
+// `rtmp_custom`. We write/remove this flag in lockstep with the
+// per-destination `vod_audio` toggle so the streamer doesn't have to
+// hand-edit an INI file. The flag is global to the user's OBS - it
+// affects every Custom RTMP setup they have, not just InstantClone.
+// That's deliberate on OBS's side: they only want power users who
+// understand the implication enabling this, which is exactly what
+// our dashboard toggle's copy spells out.
+
+fn global_ini_path() -> Option<PathBuf> {
+    std::env::var("APPDATA")
+        .ok()
+        .map(|p| PathBuf::from(p).join("obs-studio/global.ini"))
+        .filter(|p| p.exists())
+}
+
+/// Read `[General] EnableCustomServerVodTrack` from OBS's global.ini.
+/// Returns `false` when OBS isn't installed, the file is missing, or
+/// the key isn't set. We treat any value other than literal `true` /
+/// `1` as off, matching OBS's `config_get_bool` parser.
+pub fn vod_audio_flag_set() -> bool {
+    let Some(p) = global_ini_path() else {
+        return false;
+    };
+    let Ok(s) = fs::read_to_string(&p) else {
+        return false;
+    };
+    ini_get(&s, "General", "EnableCustomServerVodTrack")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1"))
+        .unwrap_or(false)
+}
+
+/// Set or clear `[General] EnableCustomServerVodTrack=true` in OBS's
+/// global.ini. Idempotent. Returns `Ok(false)` if OBS isn't installed
+/// (the file path doesn't exist) so callers can degrade gracefully
+/// instead of treating "no OBS" as a hard error.
+pub fn set_vod_audio_flag(enable: bool) -> io::Result<bool> {
+    let Some(p) = global_ini_path() else {
+        return Ok(false);
+    };
+    let original = fs::read_to_string(&p)?;
+    let updated = ini_set(&original, "General", "EnableCustomServerVodTrack", enable);
+    if updated == original {
+        return Ok(true); // already in desired state
+    }
+    let bak = p.with_extension("ini.instantclone.bak");
+    write_or_friendly(&bak, &original)?;
+    write_or_friendly(&p, &updated)?;
+    Ok(true)
+}
+
+/// Tiny INI reader / writer. OBS's global.ini is a strict
+/// "[Section]" + "key=value" file with no comments / continuations -
+/// no need to pull a full INI crate for two helpers.
+fn ini_get<'a>(file: &'a str, section: &str, key: &str) -> Option<&'a str> {
+    let mut cur: Option<&str> = None;
+    for line in file.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            cur = Some(rest);
+            continue;
+        }
+        if cur != Some(section) {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == key {
+                return Some(v.trim());
+            }
+        }
+    }
+    None
+}
+
+fn ini_set(file: &str, section: &str, key: &str, enable: bool) -> String {
+    // Strategy: walk lines, copy through, replace the key inside its
+    // section, or insert at end of section / end of file if missing.
+    let want_value = if enable { "true" } else { "false" };
+    let mut out = String::with_capacity(file.len() + 64);
+    let mut cur: Option<String> = None;
+    let mut in_target_section = false;
+    let mut wrote_key = false;
+    let mut section_end_idx: Option<usize> = None;
+
+    // First pass: walk and either rewrite the existing key or remember
+    // where the target section ends (so we can insert if absent).
+    for line in file.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            // Leaving a section without finding our key - remember the
+            // line we're ABOUT to add (the new section header) as the
+            // place to splice the key in if needed.
+            if in_target_section && !wrote_key {
+                section_end_idx = Some(out.len());
+            }
+            in_target_section = rest == section;
+            cur = Some(rest.to_string());
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if in_target_section && !wrote_key {
+            if let Some((k, _)) = trimmed.split_once('=') {
+                if k.trim() == key {
+                    if enable {
+                        out.push_str(key);
+                        out.push('=');
+                        out.push_str(want_value);
+                        out.push('\n');
+                    }
+                    // If disabling, drop the line entirely.
+                    wrote_key = true;
+                    continue;
+                }
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    // End-of-file inside the target section without finding the key.
+    if in_target_section && !wrote_key && enable {
+        out.push_str(key);
+        out.push('=');
+        out.push_str(want_value);
+        out.push('\n');
+        wrote_key = true;
+    }
+    // Target section ended before EOF without finding the key:
+    // splice the line in at the boundary.
+    if !wrote_key && enable {
+        if let Some(idx) = section_end_idx {
+            let line = format!("{}={}\n", key, want_value);
+            out.insert_str(idx, &line);
+            wrote_key = true;
+        }
+    }
+    // Section doesn't exist at all - append it with our key.
+    if !wrote_key && enable && cur.as_deref() != Some(section) {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&format!("[{}]\n{}={}\n", section, key, want_value));
+    }
+    // `cur` is set only for triggering the !cur match on absent section
+    let _ = cur;
+    out
+}
+
+// ── VOD+EB experimental: per-profile service.json injection ─────────
+//
+// When the streamer enables the experimental "Also enable Enhanced
+// Broadcasting" sub-toggle, we inject
+// `"multitrack_video_configuration_url": "<our endpoint>"` into the
+// active OBS profile's service.json under `settings`. OBS's
+// rtmp-custom plugin only writes `server` / `key` / `use_auth` /
+// `username` / `password` to settings, but obs_data_t preserves
+// arbitrary keys round-trip. So the injected URL persists until we
+// remove it, and OBS auto-fetches our multitrack config from there.
+//
+// We touch only the ACTIVE profile (not every profile we find). This
+// is the user-chosen scope from the dashboard: minimal footprint, the
+// user is warned that switching OBS profiles disables the injection.
+
+const PROFILES_DIR_REL: &str = "obs-studio/basic/profiles";
+
+/// Active OBS profile name, read from `%APPDATA%\obs-studio\global.ini`
+/// (`[Basic] Profile=<name>`). None when OBS isn't installed or the
+/// key isn't present.
+pub fn active_profile() -> Option<String> {
+    let p = global_ini_path()?;
+    let s = fs::read_to_string(&p).ok()?;
+    ini_get(&s, "Basic", "Profile").map(|v| v.to_string())
+}
+
+/// Path to the active profile's service.json, or None if OBS isn't
+/// installed / no profile is selected.
+pub fn active_profile_service_json_path() -> Option<PathBuf> {
+    let profile = active_profile()?;
+    let base = std::env::var("APPDATA").ok().map(PathBuf::from)?;
+    let p = base
+        .join(PROFILES_DIR_REL)
+        .join(&profile)
+        .join("service.json");
+    p.exists().then_some(p)
+}
+
+/// True when our `multitrack_video_configuration_url` is currently
+/// injected into the active profile's service.json. Used by the UI
+/// status indicator so a manual edit / profile switch is reflected.
+pub fn vod_eb_injection_present(web_port: u16) -> bool {
+    let Some(p) = active_profile_service_json_path() else {
+        return false;
+    };
+    let Ok(s) = fs::read_to_string(&p) else {
+        return false;
+    };
+    let needle = format!(
+        "\"multitrack_video_configuration_url\":\"http://127.0.0.1:{}/obs/multitrack-config\"",
+        web_port
+    );
+    let needle_spaced = format!(
+        "\"multitrack_video_configuration_url\": \"http://127.0.0.1:{}/obs/multitrack-config\"",
+        web_port
+    );
+    s.contains(&needle) || s.contains(&needle_spaced)
+}
+
+/// Inject the multitrack-video config URL into the active OBS profile's
+/// rtmp_custom service.json. Idempotent. Returns Ok(true) when the
+/// active profile exists AND uses rtmp_custom AND the write landed
+/// (or was already present); Ok(false) when there's no active profile
+/// or the profile uses a different service type (rtmp_common is one
+/// where the URL would have no effect, since OBS gets it from
+/// services.json).
+pub fn inject_vod_eb(web_port: u16) -> io::Result<bool> {
+    let Some(p) = active_profile_service_json_path() else {
+        return Ok(false);
+    };
+    let original = fs::read_to_string(&p)?;
+    // Only inject into rtmp_custom — for rtmp_common services the
+    // multitrack-video URL is read from services.json (not from
+    // service.json), and injecting would be a no-op at best, foot-gun
+    // at worst.
+    if !original.contains("\"type\": \"rtmp_custom\"")
+        && !original.contains("\"type\":\"rtmp_custom\"")
+    {
+        return Ok(false);
+    }
+    let needle = format!("http://127.0.0.1:{}/obs/multitrack-config", web_port);
+    if original.contains(&needle) {
+        return Ok(true); // already injected
+    }
+    let patched = inject_service_json_key(&original, web_port).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "couldn't find `settings` object in service.json - file shape unexpected",
+        )
+    })?;
+    let bak = p.with_extension("json.instantclone.bak");
+    write_or_friendly(&bak, &original)?;
+    write_or_friendly(&p, &patched)?;
+    Ok(true)
+}
+
+/// Remove the injected URL from the active OBS profile's service.json.
+/// Idempotent. Returns Ok(true) when the active profile exists and we
+/// removed (or there was nothing to remove); Ok(false) when there's no
+/// active profile.
+pub fn revert_vod_eb(web_port: u16) -> io::Result<bool> {
+    let Some(p) = active_profile_service_json_path() else {
+        return Ok(false);
+    };
+    let original = fs::read_to_string(&p)?;
+    let needle = format!("http://127.0.0.1:{}/obs/multitrack-config", web_port);
+    if !original.contains(&needle) {
+        return Ok(true); // nothing to remove
+    }
+    let stripped = strip_service_json_key(&original, web_port);
+    let bak = p.with_extension("json.instantclone.bak");
+    write_or_friendly(&bak, &original)?;
+    write_or_friendly(&p, &stripped)?;
+    Ok(true)
+}
+
+/// Splice `"multitrack_video_configuration_url": "<url>"` into the
+/// JSON object's `settings` block. We locate `"settings": {` then
+/// insert the key as the first child, comma-separated from whatever
+/// comes next. Returns None if the marker isn't found - safer than
+/// blindly editing a file we don't recognise.
+fn inject_service_json_key(file: &str, web_port: u16) -> Option<String> {
+    let key_pos = file.find("\"settings\"")?;
+    let brace_offset = file[key_pos..].find('{')?;
+    let absolute_brace = key_pos + brace_offset;
+    let (head, tail) = file.split_at(absolute_brace + 1);
+    let entry = format!(
+        "\n        \"multitrack_video_configuration_url\": \"http://127.0.0.1:{}/obs/multitrack-config\",",
+        web_port
+    );
+    Some(format!("{head}{entry}{tail}"))
+}
+
+/// Remove the multitrack-video-configuration-url key (matching our
+/// local URL) from the settings object. We match the FULL key+value
+/// pair plus surrounding whitespace + a trailing comma if present.
+fn strip_service_json_key(file: &str, web_port: u16) -> String {
+    let needle = format!("http://127.0.0.1:{}/obs/multitrack-config", web_port);
+    let Some(needle_pos) = file.find(&needle) else {
+        return file.to_string();
+    };
+    // Walk backwards from the URL to find the start of the line
+    // containing the key. Walk forwards to find the comma (or `}`).
+    let bytes = file.as_bytes();
+    let mut start = needle_pos;
+    while start > 0 && bytes[start - 1] != b'\n' {
+        start -= 1;
+    }
+    let mut end = needle_pos + needle.len();
+    while end < bytes.len() && bytes[end] != b'\n' {
+        end += 1;
+    }
+    if end < bytes.len() && bytes[end] == b'\n' {
+        end += 1;
+    }
+    // Strip the line entirely. The JSON stays valid because the next
+    // sibling line (or `}`) is still well-formed.
+    format!("{}{}", &file[..start], &file[end..])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,5 +742,111 @@ mod tests {
             1,
             "exactly one InstantClone entry, not two"
         );
+    }
+
+    // ── INI read/write ───────────────────────────────────────────────
+
+    #[test]
+    fn ini_get_reads_value_from_correct_section() {
+        let ini =
+            "[Basic]\nProfile=Untitled\n[General]\nName=Foo\nEnableCustomServerVodTrack=true\n";
+        assert_eq!(
+            ini_get(ini, "General", "EnableCustomServerVodTrack"),
+            Some("true")
+        );
+        assert_eq!(ini_get(ini, "Basic", "Profile"), Some("Untitled"));
+        assert_eq!(ini_get(ini, "General", "Missing"), None);
+        // Key exists in a different section - must not match.
+        assert_eq!(ini_get(ini, "Basic", "EnableCustomServerVodTrack"), None);
+    }
+
+    #[test]
+    fn ini_set_inserts_when_section_exists_but_key_missing() {
+        let ini = "[General]\nName=Foo\n[Basic]\nProfile=A\n";
+        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
+        assert!(out.contains("EnableCustomServerVodTrack=true"));
+        assert_eq!(
+            ini_get(&out, "General", "EnableCustomServerVodTrack"),
+            Some("true")
+        );
+        // Existing [Basic] block is preserved.
+        assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
+    }
+
+    #[test]
+    fn ini_set_replaces_existing_key_value() {
+        let ini = "[General]\nEnableCustomServerVodTrack=false\nName=Foo\n";
+        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
+        assert_eq!(
+            ini_get(&out, "General", "EnableCustomServerVodTrack"),
+            Some("true")
+        );
+        assert!(!out.contains("EnableCustomServerVodTrack=false"));
+        // Sibling key not disturbed.
+        assert_eq!(ini_get(&out, "General", "Name"), Some("Foo"));
+    }
+
+    #[test]
+    fn ini_set_removes_key_when_disabling() {
+        let ini = "[General]\nEnableCustomServerVodTrack=true\nName=Foo\n";
+        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
+        assert_eq!(ini_get(&out, "General", "EnableCustomServerVodTrack"), None);
+        assert_eq!(ini_get(&out, "General", "Name"), Some("Foo"));
+    }
+
+    #[test]
+    fn ini_set_creates_section_when_absent() {
+        let ini = "[Basic]\nProfile=A\n";
+        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
+        assert_eq!(
+            ini_get(&out, "General", "EnableCustomServerVodTrack"),
+            Some("true")
+        );
+        assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
+    }
+
+    // ── service.json injection ─────────────────────────────────────
+
+    fn fake_rtmp_custom_service_json() -> String {
+        // Minimal but realistic shape OBS writes for a Custom RTMP service.
+        r#"{
+    "settings": {
+        "key": "main",
+        "server": "rtmp://127.0.0.1:1935/live",
+        "use_auth": false
+    },
+    "type": "rtmp_custom"
+}
+"#
+        .to_string()
+    }
+
+    #[test]
+    fn inject_service_json_key_adds_url_into_settings() {
+        let original = fake_rtmp_custom_service_json();
+        let patched = inject_service_json_key(&original, 7799).expect("inject must succeed");
+        assert!(patched.contains("multitrack_video_configuration_url"));
+        assert!(patched.contains("http://127.0.0.1:7799/obs/multitrack-config"));
+        // Existing settings are still present.
+        assert!(patched.contains("\"server\": \"rtmp://127.0.0.1:1935/live\""));
+        assert!(patched.contains("\"type\": \"rtmp_custom\""));
+    }
+
+    #[test]
+    fn strip_service_json_key_removes_only_our_line() {
+        let original = fake_rtmp_custom_service_json();
+        let patched = inject_service_json_key(&original, 7799).unwrap();
+        let stripped = strip_service_json_key(&patched, 7799);
+        assert!(!stripped.contains("multitrack_video_configuration_url"));
+        // Sibling settings stay untouched.
+        assert!(stripped.contains("\"server\": \"rtmp://127.0.0.1:1935/live\""));
+        assert!(stripped.contains("\"key\": \"main\""));
+    }
+
+    #[test]
+    fn strip_service_json_key_is_noop_when_not_present() {
+        let original = fake_rtmp_custom_service_json();
+        let stripped = strip_service_json_key(&original, 7799);
+        assert_eq!(stripped, original);
     }
 }
