@@ -53,7 +53,17 @@ pub struct DiskRing {
     // old `Option` is negligible in the common case. BTreeMap so the
     // re-emit order is deterministic (track 0 first).
     pub video_seq_headers: Mutex<std::collections::BTreeMap<u8, Vec<u8>>>,
-    pub audio_seq_header: Mutex<Option<Vec<u8>>>,
+    /// Audio seq-headers keyed by track id (0..255). Same shape as
+    /// `video_seq_headers` and for the same reason: OBS's VOD-audio
+    /// feature (and Twitch's Enhanced Broadcasting multi-track audio
+    /// in general) sends one OneTrack-format AudioSpecificConfig per
+    /// audio track at session start. A single-slot cache would
+    /// overwrite the live track's config with the VOD track's the
+    /// instant the second one arrived - same failure mode that left
+    /// the video tracks reading 'x' resolution in Twitch Inspector
+    /// before we fixed it. Single-track audio sits in slot 0 and the
+    /// map degenerates to one entry.
+    pub audio_seq_headers: Mutex<std::collections::BTreeMap<u8, Vec<u8>>>,
     pub metadata: Mutex<Option<Vec<u8>>>,
 
     // Signaled by the producer whenever a new tag is appended. The egress
@@ -114,7 +124,7 @@ impl DiskRing {
                 idr_index: VecDeque::with_capacity(2_048),
             }),
             video_seq_headers: Mutex::new(std::collections::BTreeMap::new()),
-            audio_seq_header: Mutex::new(None),
+            audio_seq_headers: Mutex::new(std::collections::BTreeMap::new()),
             metadata: Mutex::new(None),
             on_append: Notify::new(),
         })
@@ -148,7 +158,16 @@ impl DiskRing {
                         .unwrap()
                         .insert(track_id, payload.to_vec());
                 }
-                8 => *self.audio_seq_header.lock().unwrap() = Some(payload.to_vec()),
+                8 => {
+                    // Same per-track keying as video. For legacy AAC or
+                    // single-track Enhanced-RTMP audio the helper returns
+                    // 0, so the map degenerates to one slot at key 0.
+                    let track_id = crate::h264::audio_seq_header_track_id(payload);
+                    self.audio_seq_headers
+                        .lock()
+                        .unwrap()
+                        .insert(track_id, payload.to_vec());
+                }
                 _ => {}
             }
             return Ok(None);
@@ -581,6 +600,40 @@ mod tests {
         assert_eq!(map.get(&0), Some(&track_0));
         assert_eq!(map.get(&4), Some(&track_4));
         assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn multitrack_audio_seq_headers_cache_per_track_id() {
+        // Same shape as the video test: the VOD-audio session sends
+        // one OneTrack seq-header per audio track. Without per-track
+        // keying the second arrival would stomp the first, and the
+        // destination's decoder for the missing track would lose its
+        // AudioSpecificConfig after the next pump restart.
+        let t = tmp(4096);
+        let live = vec![
+            0x90, 0x05, 0x00, b'm', b'p', b'4', b'a', 0x00, 0x12, 0x10, 0x56, 0xe5,
+        ];
+        let vod = vec![
+            0x90, 0x05, 0x00, b'm', b'p', b'4', b'a', 0x01, 0x12, 0x08, 0x44, 0x00,
+        ];
+        t.0.append(8, 0, &live, false, true).unwrap();
+        t.0.append(8, 0, &vod, false, true).unwrap();
+        let map = t.0.audio_seq_headers.lock().unwrap();
+        assert_eq!(map.get(&0), Some(&live));
+        assert_eq!(map.get(&1), Some(&vod));
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn legacy_aac_seq_header_caches_under_track_zero() {
+        // Legacy AAC seq header has no track id; the helper returns 0
+        // so the cache stays single-slot for the common case.
+        let t = tmp(4096);
+        let aac = vec![0xaf, 0x00, 0x12, 0x10, 0x56, 0xe5];
+        t.0.append(8, 0, &aac, false, true).unwrap();
+        let map = t.0.audio_seq_headers.lock().unwrap();
+        assert_eq!(map.get(&0), Some(&aac));
+        assert_eq!(map.len(), 1);
     }
 
     #[test]

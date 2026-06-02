@@ -754,8 +754,8 @@ impl Controller {
         if let Ok(mut hdrs) = self.ring.video_seq_headers.lock() {
             hdrs.clear();
         }
-        if let Ok(mut audio_hdr) = self.ring.audio_seq_header.lock() {
-            *audio_hdr = None;
+        if let Ok(mut hdrs) = self.ring.audio_seq_headers.lock() {
+            hdrs.clear();
         }
         // onMetaData leaks the same way: the prior publisher's
         // resolution / fps / encoder fields would be replayed at every
@@ -1423,6 +1423,22 @@ async fn pace_and_send(
     // wire-format bug.
     match meta.kind {
         8 => {
+            // Mirror the per-destination video selection. Twitch
+            // destinations get multi-track audio passthrough (VOD-audio
+            // session); non-Twitch destinations drop OneTrack TrackId
+            // != 0 so a simulcast YouTube / Kick doesn't choke on a
+            // second audio track they don't decode. Single-track audio
+            // borrows through unchanged in both modes.
+            let Some(selected) = crate::h264::select_audio_bytes(
+                io_buf,
+                dest.pass_through_multitrack_video.load(Ordering::Relaxed),
+            ) else {
+                state.consumer_seq = meta.seq + 1;
+                dest.consumer_seq
+                    .store(state.consumer_seq, Ordering::Relaxed);
+                return Ok(());
+            };
+            let bytes_out: &[u8] = &selected;
             let tags_so_far = dest.tags_sent.load(Ordering::Relaxed);
             if tags_so_far < 20 || tags_so_far.is_multiple_of(200) {
                 crate::trace::log(
@@ -1433,12 +1449,12 @@ async fn pace_and_send(
                         tags_so_far,
                         meta.ts_ms,
                         out_ts,
-                        io_buf.len(),
-                        io_buf.first().copied().unwrap_or(0),
+                        bytes_out.len(),
+                        bytes_out.first().copied().unwrap_or(0),
                     ),
                 );
             }
-            sink.send_audio(out_ts, io_buf).await?;
+            sink.send_audio(out_ts, bytes_out).await?;
         }
         9 => {
             // Per-destination video-tag selection. Twitch
@@ -1748,18 +1764,50 @@ async fn send_sequence_headers(
             sink.send_video(ts, bytes_out).await?;
         }
     }
-    let a = ctrl.ring.audio_seq_header.lock().unwrap().clone();
-    if let Some(h) = a {
+    // Audio seq-headers, same per-track shape as video. Twitch
+    // destinations (passthrough) receive every cached track's
+    // AudioSpecificConfig bit-faithfully so a VOD audio track's
+    // decoder stays configured across egress restarts. Non-Twitch
+    // destinations only get the primary track's config - the
+    // simulcast-second-audio-track simply doesn't exist for them.
+    let a_headers: Vec<(u8, Vec<u8>)> = ctrl
+        .ring
+        .audio_seq_headers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    if passthrough {
+        for (track_id, h) in &a_headers {
+            crate::trace::log(
+                "AUDIO_SEQ_HDR_SENT",
+                &format!(
+                    "ts=0x{:08x} track={} bytes={} hex={}",
+                    ts,
+                    track_id,
+                    h.len(),
+                    crate::trace::hex_prefix(h, 32)
+                ),
+            );
+            sink.send_audio(ts, h).await?;
+        }
+    } else if let Some(h) = a_headers
+        .iter()
+        .find(|(k, _)| *k == 0)
+        .or_else(|| a_headers.first())
+        .map(|(_, v)| v)
+    {
         crate::trace::log(
             "AUDIO_SEQ_HDR_SENT",
             &format!(
                 "ts=0x{:08x} bytes={} hex={}",
                 ts,
                 h.len(),
-                crate::trace::hex_prefix(&h, 32)
+                crate::trace::hex_prefix(h, 32)
             ),
         );
-        sink.send_audio(ts, &h).await?;
+        sink.send_audio(ts, h).await?;
     }
     sink.flush().await
 }
@@ -2212,9 +2260,19 @@ mod tests {
                 .expect("failed to seed mock multi-track video sequence header");
         }
 
-        // 2. Populate the audio sequence header cache simulating a legacy AAC header.
-        let mock_audio = vec![0xaf, 0x00, 0x11, 0x22, 0x33];
-        *h.ctrl.ring.audio_seq_header.lock().unwrap() = Some(mock_audio.clone());
+        // 2. Populate the audio sequence header cache simulating an active
+        //    Twitch VOD-audio session (Tracks 0 and 1).
+        for track_id in 0u8..=1 {
+            // OneTrack multi-track audio seq-header: SoundFormat=9,
+            // PacketType=Multitrack(5), MultiTrackType=0, NestedPT=0,
+            // FourCC=mp4a, TrackId at byte 7.
+            let mut tag = vec![0x90, 0x05, 0x00, 0x6d, 0x70, 0x34, 0x61, track_id];
+            tag.extend_from_slice(&[0x12, 0x10, track_id, 0x00]);
+            h.ctrl
+                .ring
+                .append(8, 0, &tag, false, true)
+                .expect("failed to seed mock multi-track audio seq header");
+        }
 
         // 3. Populate metadata cache simulating Publisher A's onMetaData.
         *h.ctrl.ring.metadata.lock().unwrap() = Some(b"onMetaData-publisher-A".to_vec());
@@ -2223,10 +2281,8 @@ mod tests {
         {
             let video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
             assert_eq!(video_cache.len(), 4, "video cache must start with 4 tracks");
-            assert!(
-                h.ctrl.ring.audio_seq_header.lock().unwrap().is_some(),
-                "audio cache must be active"
-            );
+            let audio_cache = h.ctrl.ring.audio_seq_headers.lock().unwrap();
+            assert_eq!(audio_cache.len(), 2, "audio cache must start with 2 tracks");
             assert!(
                 h.ctrl.ring.metadata.lock().unwrap().is_some(),
                 "metadata cache must be active"
@@ -2241,14 +2297,15 @@ mod tests {
 
         {
             let video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
-            let audio_cache = h.ctrl.ring.audio_seq_header.lock().unwrap();
+            let audio_cache = h.ctrl.ring.audio_seq_headers.lock().unwrap();
             assert_eq!(
                 video_cache.len(),
                 4,
                 "regression: mark_ingest_dead cleared video headers early"
             );
-            assert!(
-                audio_cache.is_some(),
+            assert_eq!(
+                audio_cache.len(),
+                2,
                 "regression: mark_ingest_dead cleared audio headers early"
             );
         }
@@ -2269,12 +2326,12 @@ mod tests {
             post_video_cache.keys()
         );
 
-        let post_audio_cache = h.ctrl.ring.audio_seq_header.lock().unwrap();
+        let post_audio_cache = h.ctrl.ring.audio_seq_headers.lock().unwrap();
         assert!(
-            post_audio_cache.is_none(),
-            "leak detected: begin_publish failed to clear stale audio_seq_header configuration. \
-             cached data: {:?}",
-            post_audio_cache
+            post_audio_cache.is_empty(),
+            "leak detected: begin_publish failed to clear stale audio_seq_headers cache. \
+             stale tracks remaining: {:?}",
+            post_audio_cache.keys()
         );
 
         let post_metadata_cache = h.ctrl.ring.metadata.lock().unwrap();
