@@ -15,7 +15,7 @@ concurrency:
 jobs:
   test:
     name: test + clippy
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v6
 
@@ -67,7 +67,7 @@ jobs:
   e2e:
     name: e2e (ffmpeg → proxy → sink)
     needs: test
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6

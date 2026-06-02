@@ -8,6 +8,43 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.2] - Stop-start session restart fix
+
+**The delay bar would freeze at 0% after Stop Streaming + Start
+Streaming in OBS.** Reported by a streamer testing v0.1.1 against
+their Enhanced Broadcasting setup ("stream no EB, stop, turn on EB,
+try to apply delay - bar doesn't fill"). Not actually EB-specific:
+any stop-start cycle reproduces it.
+
+Root cause: OBS's RTMP wire timestamps restart from ~0 on every
+fresh stream session. `begin_publish` correctly cleared the
+per-track seq-header caches and the cached onMetaData, but left
+the ring buffer's indexed tags from the prior session in place.
+The old tags sat at the front of the index with high ts_ms values
+(e.g. 600,000 ms into a 10-minute prior stream); the new session's
+tags landed at the back with low ts_ms values (e.g. 100 ms).
+`buffer_fill_ms = latest.saturating_sub(oldest)` saturated to 0
+forever, and `trim_older_than` could not rescue it - its cutoff
+also saturated to 0 against the new session's small current_ts.
+
+Fix: `Ring::clear()` wipes the index (and the IDR-only secondary
+index) on every fresh `begin_publish`. The seq counter and disk
+write cursor are deliberately preserved so consumer seqs held by
+destinations stay valid - new tags get seqs above the old high-water
+mark and reads naturally advance onto fresh data. The on-disk bytes
+get overwritten as new tags land. A regression test in
+`buffer_fill_recovers_after_publisher_session_restart` reproduces
+the exact streamer-reported symptom and fails fast (buffer_fill_ms
+returns 0) without the fix.
+
+**CI runners pinned to `windows-2022`.** GitHub is redirecting the
+`windows-latest` alias to `windows-2025-vs2026` on June 15, 2026,
+which would change the MSVC toolchain and runtime DLL set the
+shipped binary links against - a silent upgrade that could regress
+users on older Windows builds. Five lines across `release.yml`,
+`ci.yml`, and `codeql.yml`. Bumping to a newer runner is now an
+intentional choice rather than an upstream surprise.
+
 ## [0.1.1] - First-run dashboard polish
 
 Quality-of-life fixes spotted right after the v0.1.0 release went out.

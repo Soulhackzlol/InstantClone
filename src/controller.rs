@@ -763,6 +763,16 @@ impl Controller {
         if let Ok(mut meta) = self.ring.metadata.lock() {
             *meta = None;
         }
+        // The ring's indexed tags also have to go. OBS's RTMP wire
+        // timestamps restart from ~0 on every fresh stream session
+        // (Start Streaming -> Stop -> Start), but the ring still holds
+        // the prior session's tags at much higher ts_ms values. Leaving
+        // them in place makes oldest_ts() return the stale front and
+        // latest_ts() the fresh back, so buffer_fill_ms saturates to 0
+        // forever in the new session - the delay bar never fills.
+        // trim_older_than cannot recover from this either: its cutoff
+        // also saturates to 0 against the new session's low current_ts.
+        self.ring.clear();
 
         // Bump token so any prior egress reader knows it's stale.
         let token = self.publisher_token.fetch_add(1, Ordering::SeqCst) + 1;
@@ -2340,6 +2350,83 @@ mod tests {
             "leak detected: begin_publish failed to clear stale onMetaData. \
              cached data: {:?}",
             post_metadata_cache
+        );
+    }
+
+    /// User-visible regression: after a Stop Streaming / Start Streaming
+    /// cycle in OBS (the proxy stays running), the delay bar froze at 0%
+    /// and never filled even though tags were flowing. OBS's RTMP wire
+    /// timestamps restart from ~0 on every fresh session, but the ring
+    /// still held the prior session's tags at much higher ts_ms values.
+    /// `oldest_ts()` returned the stale front and `latest_ts()` returned
+    /// the fresh back, so `buffer_fill_ms = latest.saturating_sub(oldest)`
+    /// saturated to 0 forever. `trim_older_than` could not rescue it
+    /// either - its cutoff also saturated to 0 against the new session's
+    /// low current_ts.
+    ///
+    /// Reported by the streamer on the v0.1.1 build: "stream no EB, stop,
+    /// turn on EB, try to apply delay - bar doesn't fill". Not actually
+    /// EB-specific: any stop-start cycle reproduces it.
+    #[tokio::test]
+    async fn buffer_fill_recovers_after_publisher_session_restart() {
+        let h = harness(0);
+
+        // Session 1: a few tags at "10 minutes into the stream" ts_ms,
+        // standing in for a real prior stream. Three tags is enough to
+        // populate the index front - the bug is purely about the ts
+        // values at the front vs back, not tag count.
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        for offset in 0u64..3 {
+            h.ctrl
+                .ring
+                .append(9, 600_000 + offset * 33, &[0xaa; 64], false, false)
+                .expect("session 1 append");
+        }
+        assert!(
+            h.ctrl.buffer_fill_ms() <= 100,
+            "session 1 sanity: three same-timestamp-region tags = tiny span"
+        );
+
+        // OBS stops streaming. Publisher disconnects. The ring is
+        // deliberately NOT cleared here so that a same-session blip
+        // (network flap, brief reconnect) keeps its buffered tags -
+        // only `begin_publish` of a fresh session wipes it.
+        h.ctrl.mark_ingest_dead();
+
+        // Fresh OBS Start Streaming. begin_publish must clear the
+        // ring so the new session's ts_ms (starting near 0) is
+        // measured against an empty index.
+        h.ctrl
+            .begin_publish("fresh-session-after-stop-start")
+            .await
+            .expect("begin_publish must succeed on fresh session");
+
+        // Session 2: simulate OBS sending tags with wire_ts starting
+        // from 0, the standard RTMP behaviour on a new stream session.
+        // After the fix, these tags populate an empty index and
+        // buffer_fill_ms reflects their span. Before the fix, the
+        // session 1 front sits at ts_ms=600_000 and latest_ts=66 makes
+        // buffer_fill_ms saturate to 0.
+        for offset in 0u64..3 {
+            h.ctrl
+                .ring
+                .append(9, offset * 33, &[0xbb; 64], false, false)
+                .expect("session 2 append");
+        }
+
+        let fill = h.ctrl.buffer_fill_ms();
+        assert!(
+            fill > 0,
+            "buffer_fill_ms must reflect new session tags after \
+             begin_publish, got {} (before the fix, the prior session's \
+             high-ts front made latest - oldest saturate to 0)",
+            fill,
+        );
+        assert!(
+            fill <= 200,
+            "session 2 fill must be the span of session 2 tags only \
+             (~66 ms), not a phantom span that includes session 1; got {}",
+            fill,
         );
     }
 }
