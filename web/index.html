@@ -9,16 +9,46 @@
 <style>
 /* ── Design tokens (ported from instantclone design system, OKLCH-based) ─────── */
 :root{
-  --bg:#07080a; --bg-2:#0c0e12; --surface:#11141a; --surface-2:#161a21; --surface-3:#1c2129;
-  --line:rgba(255,255,255,0.06); --line-2:rgba(255,255,255,0.12);
-  --fg:oklch(0.97 0.005 230); --fg-2:oklch(0.78 0.01 230); --fg-3:oklch(0.58 0.015 230); --fg-4:oklch(0.42 0.018 230);
+  /* Surfaces — five stacked elevations from the page background up.
+     Tuned to a near-blue-black so the OKLCH accent doesn't bleed into
+     the neutrals; keep deltas large enough (~3% lightness/step) that
+     stacked surfaces remain legible without leaning on borders. */
+  --bg:#07080a; --bg-2:#0c0e12; --surface:#11141a; --surface-2:#171b22; --surface-3:#1f242d;
+
+  /* Hairlines. Bumped from 6%/12% to 10%/18% white — previous values
+     were below the threshold where a 1 px stroke visibly separates
+     stacked surfaces on a typical sRGB monitor, leaving cards looking
+     like they were floating in soup. */
+  --line:rgba(255,255,255,0.10); --line-2:rgba(255,255,255,0.18);
+
+  /* Foregrounds — four readability tiers. --fg-4 is the deepest mute
+     we use (timestamps, secondary labels); bumped from L 0.42 to 0.50
+     so it stays above WCAG AA contrast against --bg. */
+  --fg:oklch(0.97 0.005 230); --fg-2:oklch(0.80 0.012 230);
+  --fg-3:oklch(0.62 0.015 230); --fg-4:oklch(0.50 0.018 230);
+
+  /* Accent (cyan). --accent is the brand fill, --accent-2 is a 30%
+     darker variant for hovered/pressed states, --accent-ink is the
+     text colour that sits on top of an accent fill (dark enough for
+     7:1 contrast on a 0.82-lightness background). */
   --accent:oklch(0.82 0.13 220); --accent-2:oklch(0.55 0.16 220); --accent-ink:#051018;
-  --accent-glow:oklch(0.82 0.13 220 / 0.18);
-  --live:oklch(0.78 0.18 145); --warn:oklch(0.78 0.16 55); --warn-2:oklch(0.58 0.18 55);
-  --danger:oklch(0.70 0.21 25); --idle:oklch(0.58 0.015 230);
+  --accent-glow:oklch(0.82 0.13 220 / 0.22);
+
+  /* Semantic palette. Each "logical" name (--ok / --warn / --err /
+     --info) aliases the corresponding "named" colour so call sites
+     can read either. The codebase grew with both spellings; aliasing
+     instead of renaming avoids touching the dozen files that already
+     use one or the other, and lets future code prefer the logical
+     name without a flag-day rewrite. */
+  --live:oklch(0.78 0.18 145);   --ok:var(--live);
+  --warn:oklch(0.80 0.17 65);    --warn-2:oklch(0.60 0.20 65);
+  --danger:oklch(0.72 0.21 25);  --err:var(--danger);
+  --info:var(--accent);
+  --idle:oklch(0.55 0.015 230);
+
   --radius:12px; --radius-sm:8px; --radius-lg:16px;
-  --shadow-1:0 1px 0 rgba(255,255,255,0.04) inset,0 1px 2px rgba(0,0,0,0.4);
-  --shadow-2:0 1px 0 rgba(255,255,255,0.05) inset,0 8px 24px rgba(0,0,0,0.45);
+  --shadow-1:0 1px 0 rgba(255,255,255,0.05) inset,0 1px 2px rgba(0,0,0,0.45);
+  --shadow-2:0 1px 0 rgba(255,255,255,0.06) inset,0 10px 28px rgba(0,0,0,0.50);
   --ease-out:cubic-bezier(.2,.7,.2,1); --ease-spring:cubic-bezier(.32,1.4,.5,1);
 }
 *{box-sizing:border-box}
@@ -95,8 +125,14 @@ input,select,textarea{font-family:inherit;color:inherit}
   box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 6px 24px var(--accent-glow);
   font-weight:600}
 .ic-btn-primary:hover{background:color-mix(in oklch,#fff 6%,var(--accent))}
-.ic-btn-primary:disabled,.ic-btn-disabled{opacity:.55;cursor:not-allowed;box-shadow:none;
-  background:var(--surface-3) !important;color:var(--fg-4) !important;border-color:var(--line) !important}
+/* Disabled state — has to read as "available but inert" even when
+   parented to a dark card. Previous styling (surface-3 at 0.55 alpha)
+   blended into card backgrounds. Now: opaque surface-3 fill + a
+   visible line-2 stroke + fg-3 ink, so the button has the same
+   visual weight as an enabled ghost button minus the hover. */
+.ic-btn-primary:disabled,.ic-btn-disabled{opacity:1;cursor:not-allowed;box-shadow:none;
+  background:var(--surface-3) !important;color:var(--fg-3) !important;
+  border-color:var(--line-2) !important}
 .ic-btn-danger{background:color-mix(in oklch,var(--danger) 18%,var(--surface-3));color:var(--danger);
   border-color:color-mix(in oklch,var(--danger) 35%,transparent);font-weight:600}
 .ic-btn-danger:hover{background:color-mix(in oklch,var(--danger) 25%,var(--surface-3))}
