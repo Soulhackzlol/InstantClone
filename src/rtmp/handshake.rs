@@ -65,9 +65,9 @@ pub async fn perform_client(sock: &mut TcpStream) -> io::Result<()> {
 
 fn fill_handshake_payload() -> [u8; HS_SIZE] {
     let mut buf = [0u8; HS_SIZE];
-    // Bytes 0..4 = time (uptime ms, we send 0 — accepted in practice).
+    // Bytes 0..4 = time (uptime ms, we send 0 - accepted in practice).
     // Bytes 4..8 = version zeros for simple handshake.
-    // Bytes 8.. = "random" — we fill with a cheap PRNG seeded by addr-of-stack.
+    // Bytes 8.. = "random" - we fill with a cheap PRNG seeded by addr-of-stack.
     let seed = (&buf as *const _ as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let mut s = seed | 1;
     for chunk in buf[8..].chunks_mut(8) {

@@ -30,7 +30,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 /// Header struct of the variable-length table returned by
 /// `GetExtendedTcpTable(TCP_TABLE_OWNER_PID_LISTENER)`. We never
-/// instantiate this — we cast a `Vec<u8>` buffer to it.
+/// instantiate this - we cast a `Vec<u8>` buffer to it.
 #[repr(C)]
 struct MibTcpTableOwnerPid {
     num_entries: u32,
@@ -87,7 +87,7 @@ pub fn find_process_on_port(port: u16) -> Option<(u32, Option<String>)> {
 }
 
 /// Best-effort executable basename for a PID. `None` if the OS denies
-/// us access (e.g. PID belongs to an elevated process) — the caller
+/// us access (e.g. PID belongs to an elevated process) - the caller
 /// still has the PID to show.
 fn process_name(pid: u32) -> Option<String> {
     unsafe {
@@ -103,7 +103,7 @@ fn process_name(pid: u32) -> Option<String> {
             return None;
         }
         let full = String::from_utf16_lossy(&buf[..size as usize]);
-        // Trim to the basename — full path is noise in a user dialog.
+        // Trim to the basename - full path is noise in a user dialog.
         Some(full.rsplit(['\\', '/']).next().unwrap_or(&full).to_string())
     }
 }
@@ -175,6 +175,23 @@ pub fn ask_user(
     match (r, accept) {
         (IDYES, Some(p)) => ConflictChoice::SwitchPort(p),
         _ => ConflictChoice::Quit,
+    }
+}
+
+/// Pop a one-shot native error dialog. Used by main.rs for fatal
+/// cold-start failures that would otherwise leave the user staring at
+/// a closed (or never-opened) console - buffer file unwritable, etc.
+/// Safe to call from any thread; on non-Windows it's a no-op.
+pub fn show_error(title: &str, body: &str) {
+    let title_w = wide(title);
+    let body_w = wide(body);
+    unsafe {
+        MessageBoxW(
+            ptr::null_mut(),
+            body_w.as_ptr(),
+            title_w.as_ptr(),
+            MB_OK | MB_ICONWARNING,
+        );
     }
 }
 

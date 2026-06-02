@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 580" width="1120" height="580" role="img" aria-label="InstantClone — free, open-source RTMP delay proxy">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 580" width="1120" height="580" role="img" aria-label="InstantClone - free, open-source RTMP delay proxy">
   <defs>
     <linearGradient id="appBg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#0a0c12"/>
@@ -110,7 +110,7 @@
     .ok   { fill: #34c759; }
   </style>
 
-  <!-- App background — base layer, never blurred so the outer
+  <!-- App background - base layer, never blurred so the outer
        rounded-rect frame stays crisp. -->
   <rect width="1120" height="580" rx="16" fill="url(#appBg)"/>
   <!-- Film-grain texture overlay (very subtle) -->
@@ -120,7 +120,7 @@
        The full UI mockup, soft-focused and dimmed, becomes
        atmospheric texture behind the hero wordmark. All the original
        animations (aurora drift, OBS dot pulses, buffer fill, etc.)
-       still play — they just become a soft breathing motion behind
+       still play - they just become a soft breathing motion behind
        the foreground. -->
   <g filter="url(#heroBlur)" opacity="0.55">
   <!-- Aurora glows that slowly breathe + drift, giving a sense the
@@ -156,7 +156,7 @@
     <text class="h" font-size="15" x="106" y="34">InstantClone</text>
     <text class="sub" font-size="12" x="211" y="34">RTMP delay proxy</text>
 
-    <!-- Right side pills — dots pulse + halo, signalling "alive" -->
+    <!-- Right side pills - dots pulse + halo, signalling "alive" -->
     <g transform="translate(710, 14)">
       <!-- OBS pill -->
       <g>
@@ -170,7 +170,7 @@
         </circle>
         <text class="h" font-size="11" x="26" y="18" fill="#7be38f">OBS</text>
       </g>
-      <!-- Egress pill — second dot pulses on its own cadence so the
+      <!-- Egress pill - second dot pulses on its own cadence so the
            two pills don't beat in lock-step (feels too mechanical). -->
       <g transform="translate(100, 0)">
         <rect width="92" height="28" rx="14" fill="rgba(52,199,89,0.12)" stroke="rgba(52,199,89,0.3)"/>
@@ -197,7 +197,7 @@
     <rect width="620" height="280" rx="14" fill="url(#cardBg)" stroke="rgba(255,255,255,0.06)" filter="url(#cardShadow)"/>
     <rect width="620" height="28" rx="14" fill="url(#topShine)"/>
 
-    <!-- Status pill — matches the dashboard's `computeStatePill(armed)` -->
+    <!-- Status pill - matches the dashboard's `computeStatePill(armed)` -->
     <g transform="translate(28, 26)">
       <rect width="184" height="28" rx="14" fill="rgba(90,200,250,0.14)" stroke="rgba(90,200,250,0.35)"/>
       <circle cx="14" cy="14" r="4" fill="#5ac8fa">
@@ -207,7 +207,7 @@
       <text class="sub" font-size="11" x="76" y="18">·  Click activate</text>
     </g>
 
-    <!-- Big readout — weight 500 + letter-spacing -0.045em to match
+    <!-- Big readout - weight 500 + letter-spacing -0.045em to match
          hero-delay-num in the real dashboard. Subtle scale-breath so
          the number feels alive without distracting the eye. -->
     <g transform="translate(310, 175)" text-anchor="middle">
@@ -221,10 +221,10 @@
       </g>
     </g>
 
-    <!-- Caption — actual hero-delay-sub copy for ARMED state -->
+    <!-- Caption - actual hero-delay-sub copy for ARMED state -->
     <text class="sub" font-size="13" x="310" y="220" text-anchor="middle">Buffer ready. Click Activate to cut your stream over.</text>
 
-    <!-- Buffer bar — ambient fill-and-hold + a travelling glint -->
+    <!-- Buffer bar - ambient fill-and-hold + a travelling glint -->
     <g transform="translate(28, 240)">
       <!-- Clip rect so the shimmer can't escape the bar's rounded edges -->
       <clipPath id="bufClip"><rect width="564" height="6" rx="3"/></clipPath>
@@ -255,7 +255,7 @@
 
     <!-- Header row -->
     <text class="lbl" font-size="10" x="28" y="38">CUSTOM DELAY</text>
-    <text class="sub" font-size="11" x="372" y="38" text-anchor="end">0 — 600s</text>
+    <text class="sub" font-size="11" x="372" y="38" text-anchor="end">0 - 600s</text>
 
     <!-- Input row -->
     <g transform="translate(28, 56)">
@@ -287,7 +287,7 @@
 
     <!-- Action row -->
     <g transform="translate(28, 200)">
-      <!-- Primary CTA — actual button copy for ARMED state. Cyan-tinted
+      <!-- Primary CTA - actual button copy for ARMED state. Cyan-tinted
            halo + travelling highlight sweep make it the visual anchor. -->
       <clipPath id="ctaClip"><rect width="240" height="52" rx="12"/></clipPath>
       <rect width="240" height="52" rx="12" fill="url(#primary)" filter="url(#ctaGlow)"/>
@@ -323,7 +323,7 @@
 
   <!-- ── DESTINATIONS ROW ────────────────────────────────── -->
   <g transform="translate(40, 484)">
-    <!-- Twitch — alive, dot pulses with a halo -->
+    <!-- Twitch - alive, dot pulses with a halo -->
     <g>
       <rect width="338" height="72" rx="12" fill="url(#cardBg)" stroke="rgba(255,255,255,0.06)" filter="url(#cardShadow)"/>
       <rect width="338" height="20" rx="12" fill="url(#topShine)"/>
@@ -339,7 +339,7 @@
         <animate attributeName="opacity" values="0.55;0;0.55" dur="2.1s" repeatCount="indefinite"/>
       </circle>
     </g>
-    <!-- YouTube — alive, slightly different cadence -->
+    <!-- YouTube - alive, slightly different cadence -->
     <g transform="translate(352, 0)">
       <rect width="338" height="72" rx="12" fill="url(#cardBg)" stroke="rgba(255,255,255,0.06)" filter="url(#cardShadow)"/>
       <rect width="338" height="20" rx="12" fill="url(#topShine)"/>
@@ -402,7 +402,7 @@
       </rect>
     </g>
 
-    <!-- Wordmark — huge, gradient sweep, anchored to the centre line -->
+    <!-- Wordmark - huge, gradient sweep, anchored to the centre line -->
     <text x="0" y="172"
           font-family="-apple-system, Segoe UI, Inter, sans-serif"
           font-size="78" font-weight="800" letter-spacing="-3.5"

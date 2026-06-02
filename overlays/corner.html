@@ -1,0 +1,133 @@
+<!doctype html>
+<!--
+  InstantClone overlay - "corner".
+
+  Bottom-right ring gauge. The ring fills clockwise as the buffer
+  rebuilds toward the armed delay, then settles solid when active.
+  No status text at all - the ring colour is the status:
+    grey   = idle (or ingest down)
+    amber  = buffering toward armed
+    cyan   = ready / active
+    red    = egress dropped while ingest is publishing
+  Number in the centre tweens; sub-line under it just says "s".
+-->
+<html><head><meta charset="utf-8"><title>Delay (corner)</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:transparent;width:100%;height:100%;
+  font-family:'Inter','SF Pro Display',-apple-system,Segoe UI,Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased;font-feature-settings:"tnum" 1}
+.wrap{position:fixed;right:32px;bottom:32px;
+  width:140px;height:140px;
+  display:flex;align-items:center;justify-content:center;
+  color:rgba(255,255,255,.55);
+  transition:color .55s ease,opacity .55s ease;
+  animation:enter .55s cubic-bezier(.16,1,.3,1) both}
+@keyframes enter{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
+.wrap.idle{opacity:.35}
+.wrap.ok{color:#5ac8fa}
+.wrap.amber{color:#ffb73a}
+.wrap.red{color:#ff5a5a}
+.ring{position:absolute;inset:0;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:4}
+.ring .track{stroke:rgba(255,255,255,.08)}
+.ring .fill{stroke:currentColor;stroke-linecap:round;
+  filter:drop-shadow(0 0 8px currentColor);
+  transition:stroke-dashoffset .42s cubic-bezier(.16,1,.3,1),stroke .35s ease}
+.center{position:relative;text-align:center;line-height:1}
+.v{display:block;font-size:38px;font-weight:700;letter-spacing:-1.4px;
+  font-variant-numeric:tabular-nums;color:#fff;
+  text-shadow:0 0 12px currentColor;
+  transition:color .35s ease}
+.wrap.idle .v{color:rgba(255,255,255,.7);text-shadow:none}
+.u{display:block;font-size:11px;font-weight:600;
+  letter-spacing:2.2px;text-transform:uppercase;
+  margin-top:4px;color:currentColor;opacity:.78}
+.wrap.live .v{animation:pulse 3s ease-in-out infinite}
+@keyframes pulse{0%,100%{text-shadow:0 0 12px currentColor}
+  50%{text-shadow:0 0 22px currentColor}}
+</style></head><body>
+<div class="wrap idle" id="w">
+  <svg class="ring" viewBox="0 0 100 100">
+    <circle class="track" cx="50" cy="50" r="46"/>
+    <!-- stroke-dasharray = circumference of r=46 ≈ 289.027; dashoffset
+         starts at full so the visible arc is 0, then animates down. -->
+    <circle class="fill" id="ring" cx="50" cy="50" r="46"
+            stroke-dasharray="289" stroke-dashoffset="289"/>
+  </svg>
+  <div class="center">
+    <span class="v" id="v">0.0</span>
+    <span class="u" id="u">sec</span>
+  </div>
+</div>
+<script>
+'use strict';
+const w = document.getElementById('w');
+const vEl = document.getElementById('v');
+const ring = document.getElementById('ring');
+const CIRC = 289;
+// ?autohide=off keeps the ring at full opacity during passthrough.
+const AUTOHIDE = new URLSearchParams(location.search).get('autohide') !== 'off';
+
+let tween = {raf:0};
+function tweenTo(secs){
+  const from = parseFloat(vEl.textContent) || 0;
+  if (Math.abs(secs - from) < 0.05){ vEl.textContent = secs.toFixed(1); return; }
+  cancelAnimationFrame(tween.raf);
+  const start = performance.now(), dur = 400;
+  function step(now){
+    const t = Math.min(1, (now - start) / dur);
+    const e = 1 - Math.pow(1 - t, 3);
+    vEl.textContent = (from + (secs - from) * e).toFixed(1);
+    if (t < 1) tween.raf = requestAnimationFrame(step);
+  }
+  tween.raf = requestAnimationFrame(step);
+}
+
+// Fill is fraction-of-target. Preparing: buffer / armed. Ready / Active:
+// always 100% (the ring "completes" once the buffer is full).
+function paint(s){
+  w.classList.remove('idle','ok','amber','red','live');
+  let displayMs = 0, fillFrac = 0;
+  if (!s.ingest_alive || s.phase === 'idle'){
+    // .idle dims the ring + numeric. AUTOHIDE off keeps full opacity.
+    if (AUTOHIDE) w.classList.add('idle');
+  } else if (s.phase === 'preparing'){
+    w.classList.add('amber');
+    displayMs = s.buffer_fill_ms || 0;
+    const target = s.armed_delay_ms || 1;
+    fillFrac = Math.max(0, Math.min(1, displayMs / target));
+  } else if (s.phase === 'ready'){
+    w.classList.add('ok');
+    displayMs = s.armed_delay_ms || 0;
+    fillFrac = 1;
+  } else {
+    w.classList.add('ok','live');
+    displayMs = s.target_delay_ms || s.armed_delay_ms || s.current_delay_ms || 0;
+    fillFrac = 1;
+  }
+  if (s.ingest_alive && s.destinations_total > 0 && s.destinations_alive === 0){
+    w.classList.remove('idle','ok','amber'); w.classList.add('red');
+    fillFrac = 1;
+  }
+  ring.style.strokeDashoffset = String(CIRC * (1 - fillFrac));
+  tweenTo(displayMs / 1000);
+}
+
+function start(){
+  if (window.EventSource){
+    try {
+      const es = new EventSource('/events');
+      es.onmessage = e => { try { paint(JSON.parse(e.data)); } catch(_){} };
+      es.onerror = () => { es.close(); setTimeout(startPolling, 1000); };
+      return;
+    } catch(_){}
+  }
+  startPolling();
+}
+function startPolling(){
+  async function tick(){ try { paint(await (await fetch('/state')).json()); } catch(_){} }
+  tick(); setInterval(tick, 500);
+}
+start();
+</script></body></html>

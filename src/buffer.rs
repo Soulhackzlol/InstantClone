@@ -37,10 +37,33 @@ pub struct DiskRing {
     capacity: u64,
     inner: Mutex<RingInner>,
 
-    // Sequence headers and onMetaData live outside the ring — they are tiny,
+    // Sequence headers and onMetaData live outside the ring - they are tiny,
     // never expire, and must be resendable on every reconnect and every cut.
-    pub video_seq_header: Mutex<Option<Vec<u8>>>,
-    pub audio_seq_header: Mutex<Option<Vec<u8>>>,
+    //
+    // Video seq headers are keyed by track id (0..255) to handle Enhanced
+    // Broadcasting / multi-track streams: OBS sends one OneTrack-format
+    // multi-track seq-header tag PER track at session start (with the
+    // track id encoded in byte 6 of the payload), each carrying that
+    // track's SPS/PPS. A single-slot cache would overwrite every
+    // earlier track's config with the last one received - which is
+    // exactly the bug we traced down to Twitch Inspector showing
+    // per-track resolutions as "x" and the IVS transcoder pipeline
+    // failing to bind after 60 s. Single-track tags occupy slot 0 and
+    // the map degenerates to one entry, so the storage cost vs. the
+    // old `Option` is negligible in the common case. BTreeMap so the
+    // re-emit order is deterministic (track 0 first).
+    pub video_seq_headers: Mutex<std::collections::BTreeMap<u8, Vec<u8>>>,
+    /// Audio seq-headers keyed by track id (0..255). Same shape as
+    /// `video_seq_headers` and for the same reason: OBS's VOD-audio
+    /// feature (and Twitch's Enhanced Broadcasting multi-track audio
+    /// in general) sends one OneTrack-format AudioSpecificConfig per
+    /// audio track at session start. A single-slot cache would
+    /// overwrite the live track's config with the VOD track's the
+    /// instant the second one arrived - same failure mode that left
+    /// the video tracks reading 'x' resolution in Twitch Inspector
+    /// before we fixed it. Single-track audio sits in slot 0 and the
+    /// map degenerates to one entry.
+    pub audio_seq_headers: Mutex<std::collections::BTreeMap<u8, Vec<u8>>>,
     pub metadata: Mutex<Option<Vec<u8>>>,
 
     // Signaled by the producer whenever a new tag is appended. The egress
@@ -53,7 +76,7 @@ struct RingInner {
     next_seq: u64,
     /// All indexed tags in append order (== monotonic by seq AND by ts).
     index: VecDeque<TagMeta>,
-    /// SECONDARY index of just the IDR keyframes — same ordering, just
+    /// SECONDARY index of just the IDR keyframes - same ordering, just
     /// filtered. Lets `find_idr_near` do a binary search on a
     /// small list (~1 IDR per 2 s of stream) instead of a linear walk
     /// over every audio + video tag (~150-300/s). Kept in lockstep with
@@ -64,13 +87,33 @@ struct RingInner {
 
 impl DiskRing {
     pub fn create(path: &Path, capacity: u64) -> Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)?;
-        file.set_len(capacity)?;
+        // Make sure the parent directory exists. With a hand-edited
+        // config the user might point buffer_path at a path whose
+        // parent doesn't exist yet - OpenOptions returns a bare
+        // "path not found" io::Error in that case and the binary
+        // exits silently under windows_subsystem=windows. Eagerly
+        // creating the directory turns one class of cold-start
+        // failure into a no-op.
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        // On Windows the buffer file is briefly shared with whatever
+        // touched it last (antivirus scan, Indexer, Explorer preview
+        // pane, a still-shutting-down prior instance). The
+        // `set_len(capacity)` call below maps to NtSetInformationFile
+        // which fails with SHARING_VIOLATION (os error 32) when
+        // another handle is still open. Retry a handful of times
+        // with backoff so a 100 ms AV scan doesn't permanently
+        // block the user's cold start.
+        let mut file = open_with_retry(path)?;
+        set_len_with_retry(&file, capacity)?;
+        // Seek back to 0 so the first append writes at the start.
+        // open_with_retry positions the cursor at end-of-file when
+        // the file existed before.
+        file.seek(SeekFrom::Start(0))?;
+        let file = file; // freeze rebinding
         Ok(Self {
             file: Mutex::new(file),
             capacity,
@@ -80,8 +123,8 @@ impl DiskRing {
                 index: VecDeque::with_capacity(65_536),
                 idr_index: VecDeque::with_capacity(2_048),
             }),
-            video_seq_header: Mutex::new(None),
-            audio_seq_header: Mutex::new(None),
+            video_seq_headers: Mutex::new(std::collections::BTreeMap::new()),
+            audio_seq_headers: Mutex::new(std::collections::BTreeMap::new()),
             metadata: Mutex::new(None),
             on_append: Notify::new(),
         })
@@ -101,8 +144,30 @@ impl DiskRing {
     ) -> Result<Option<u64>> {
         if is_seq_header {
             match kind {
-                9 => *self.video_seq_header.lock().unwrap() = Some(payload.to_vec()),
-                8 => *self.audio_seq_header.lock().unwrap() = Some(payload.to_vec()),
+                9 => {
+                    // Cache per-track for multi-track streams. For single-track
+                    // or ManyTracks-format multi-track tags this collapses to a
+                    // single slot at key 0, matching the old single-Option
+                    // behaviour. For OneTrack-format Enhanced Broadcasting
+                    // streams (what OBS actually sends) each track id gets its
+                    // own slot, so the re-emit on cuts / reconnects carries the
+                    // SPS/PPS for every track Twitch's session expects.
+                    let track_id = crate::h264::seq_header_track_id(payload);
+                    self.video_seq_headers
+                        .lock()
+                        .unwrap()
+                        .insert(track_id, payload.to_vec());
+                }
+                8 => {
+                    // Same per-track keying as video. For legacy AAC or
+                    // single-track Enhanced-RTMP audio the helper returns
+                    // 0, so the map degenerates to one slot at key 0.
+                    let track_id = crate::h264::audio_seq_header_track_id(payload);
+                    self.audio_seq_headers
+                        .lock()
+                        .unwrap()
+                        .insert(track_id, payload.to_vec());
+                }
                 _ => {}
             }
             return Ok(None);
@@ -112,7 +177,7 @@ impl DiskRing {
             return Ok(None);
         }
 
-        // Reject tags larger than half the buffer outright — they cannot
+        // Reject tags larger than half the buffer outright - they cannot
         // coexist with any other tag without immediately evicting themselves.
         if (payload.len() as u64) > self.capacity / 2 {
             return Ok(None);
@@ -132,7 +197,7 @@ impl DiskRing {
             if write_overlaps(offset, len, self.capacity, front.offset, front.len as u64) {
                 inner.index.pop_front();
                 if front.is_idr {
-                    // Front of idr_index MUST be this same IDR — both
+                    // Front of idr_index MUST be this same IDR - both
                     // queues are time-ordered and we only ever push at
                     // the back. Defensive `if let` keeps us robust to
                     // any future ordering invariant change.
@@ -185,7 +250,7 @@ impl DiskRing {
 
     /// Read the bytes of the tag at `seq` into the caller's reusable
     /// buffer. Returns `Ok(None)` if the tag has been evicted between
-    /// when the caller obtained its meta and now — eviction-safe by
+    /// when the caller obtained its meta and now - eviction-safe by
     /// design.
     ///
     /// Atomicity: holds the index lock for the full read, so a concurrent
@@ -251,13 +316,13 @@ impl DiskRing {
     /// Pick the IDR closest to `target_ts` within ±`tolerance_ms`.
     /// Returns the keyframe that minimises `|ts - target_ts|`.
     ///
-    /// Binary-search on the IDR-only secondary index — O(log n) over
+    /// Binary-search on the IDR-only secondary index - O(log n) over
     /// just the keyframes (~one IDR per 2 s of stream → ~300 entries
     /// for a 10-minute delay) instead of an O(n) walk over every
     /// audio + video tag (~90k entries).
     ///
     /// CHOICE: closest, not "prefer at-or-before". The earlier policy
-    /// was "never undershoot the user's requested delay" — but that
+    /// was "never undershoot the user's requested delay" - but that
     /// caused a cut loop. After a cut to an over-delayed IDR, the
     /// dead-band check would fire again (delivered > target by more
     /// than the dead band), and we'd cut to the SAME old IDR every
@@ -337,7 +402,7 @@ impl DiskRing {
     }
 
     /// OLDEST IDR whose seq is >= `min_seq`. Used by the egress pump
-    /// after eviction skip-ahead — landing on a random P-frame would
+    /// after eviction skip-ahead - landing on a random P-frame would
     /// stream P-frames that reference absent reference frames and the
     /// player would show macroblocking until the next IDR. Returning
     /// the *earliest* IDR at or after the skip target loses the least
@@ -358,10 +423,10 @@ impl DiskRing {
 
     /// Trim oldest indexed tags whose timestamp is older than
     /// `(current_ts - max_age_ms)`, never crossing `min_seq` (the
-    /// consumer's last-acknowledged position — protects in-flight reads).
+    /// consumer's last-acknowledged position - protects in-flight reads).
     ///
     /// One lock acquisition; pop_front is O(1). Bytes on disk are left
-    /// untouched — the natural write-over-old-tags path reclaims them
+    /// untouched - the natural write-over-old-tags path reclaims them
     /// as the ring wraps. Trimming only the index lets us keep the
     /// buffer's *useful contents* exactly at the user's armed delay
     /// without juggling actual disk layout.
@@ -370,14 +435,14 @@ impl DiskRing {
         let cutoff = current_ts.saturating_sub(max_age_ms as u64);
         while let Some(front) = inner.index.front().copied() {
             // Never evict a tag the consumer is still reading or hasn't
-            // reached yet — otherwise pace_and_send's read_tag could race
+            // reached yet - otherwise pace_and_send's read_tag could race
             // with a future overwrite of the same byte offset.
             if front.seq >= min_seq {
                 break;
             }
             if front.ts_ms < cutoff {
                 inner.index.pop_front();
-                // Keep the IDR-only index in sync — same defensive front
+                // Keep the IDR-only index in sync - same defensive front
                 // check as the byte-overlap eviction path in `append`.
                 if front.is_idr && inner.idr_index.front().map(|m| m.seq) == Some(front.seq) {
                     inner.idr_index.pop_front();
@@ -387,6 +452,62 @@ impl DiskRing {
             }
         }
     }
+}
+
+/// Open the buffer file with read+write+create, retrying briefly on
+/// transient Windows sharing violations (antivirus scan, prior-instance
+/// still-shutting-down, Explorer preview pane). The retry window is
+/// short and bounded - if the file is truly locked we surface the OS
+/// error after ~1 s rather than spin indefinitely.
+fn open_with_retry(path: &Path) -> Result<File> {
+    let mut attempt = 0;
+    loop {
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+        {
+            Ok(f) => return Ok(f),
+            Err(e) if attempt < 5 && is_transient_lock(&e) => {
+                std::thread::sleep(std::time::Duration::from_millis(50 << attempt));
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Resize the buffer file to the configured capacity, retrying on
+/// the same transient-lock errors as `open_with_retry`. set_len maps
+/// to NtSetInformationFile on Windows; the kernel returns
+/// SHARING_VIOLATION while another handle is still scanning the file.
+fn set_len_with_retry(file: &File, capacity: u64) -> Result<()> {
+    let mut attempt = 0;
+    loop {
+        match file.set_len(capacity) {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < 5 && is_transient_lock(&e) => {
+                std::thread::sleep(std::time::Duration::from_millis(50 << attempt));
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Windows ERROR_SHARING_VIOLATION (32), ERROR_LOCK_VIOLATION (33),
+/// and the unix-side PermissionDenied mapping all indicate a file is
+/// briefly held by another process. WouldBlock covers async-locked
+/// handles. Anything else (NotFound, PermissionDenied without an OS
+/// code we recognise, etc.) means a retry won't help.
+fn is_transient_lock(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(32) | Some(33))
+        || matches!(
+            e.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        )
 }
 
 /// Does the write spanning `[w_off, w_off+w_len)` (mod cap) cover any byte
@@ -453,10 +574,66 @@ mod tests {
         let t = tmp(4096);
         let r = t.0.append(9, 0, b"AVCDecoderConfig", false, true).unwrap();
         assert!(r.is_none(), "seq headers must not return a ring seq");
-        assert_eq!(
-            *t.0.video_seq_header.lock().unwrap(),
-            Some(b"AVCDecoderConfig".to_vec())
-        );
+        // Single-track seq headers cache under track id 0 - same slot
+        // they used before the per-track refactor for multi-track.
+        let map = t.0.video_seq_headers.lock().unwrap();
+        assert_eq!(map.get(&0), Some(&b"AVCDecoderConfig".to_vec()));
+    }
+
+    #[test]
+    fn multitrack_seq_headers_cache_per_track_id() {
+        // Two OneTrack-format Enhanced-RTMP seq-header tags for tracks
+        // 0 and 4 must both survive in the cache - the bug we fixed.
+        // The pre-change single-Option storage would have kept only
+        // the last-received one, which is why Twitch Inspector showed
+        // tracks 1-4 with resolution "x" during the EB rollout.
+        let t = tmp(4096);
+        let track_0 = vec![
+            0x96, 0x00, 0x61, 0x76, 0x63, 0x31, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
+        ];
+        let track_4 = vec![
+            0x96, 0x00, 0x61, 0x76, 0x63, 0x31, 0x04, 0xff, 0xfe, 0xfd, 0xfc, 0xfb,
+        ];
+        t.0.append(9, 0, &track_0, false, true).unwrap();
+        t.0.append(9, 0, &track_4, false, true).unwrap();
+        let map = t.0.video_seq_headers.lock().unwrap();
+        assert_eq!(map.get(&0), Some(&track_0));
+        assert_eq!(map.get(&4), Some(&track_4));
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn multitrack_audio_seq_headers_cache_per_track_id() {
+        // Same shape as the video test: the VOD-audio session sends
+        // one OneTrack seq-header per audio track. Without per-track
+        // keying the second arrival would stomp the first, and the
+        // destination's decoder for the missing track would lose its
+        // AudioSpecificConfig after the next pump restart.
+        let t = tmp(4096);
+        let live = vec![
+            0x90, 0x05, 0x00, b'm', b'p', b'4', b'a', 0x00, 0x12, 0x10, 0x56, 0xe5,
+        ];
+        let vod = vec![
+            0x90, 0x05, 0x00, b'm', b'p', b'4', b'a', 0x01, 0x12, 0x08, 0x44, 0x00,
+        ];
+        t.0.append(8, 0, &live, false, true).unwrap();
+        t.0.append(8, 0, &vod, false, true).unwrap();
+        let map = t.0.audio_seq_headers.lock().unwrap();
+        assert_eq!(map.get(&0), Some(&live));
+        assert_eq!(map.get(&1), Some(&vod));
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn legacy_aac_seq_header_caches_under_track_zero() {
+        // Legacy AAC seq header has no track id; the helper returns 0
+        // so the cache stays single-slot for the common case.
+        let t = tmp(4096);
+        let aac = vec![0xaf, 0x00, 0x12, 0x10, 0x56, 0xe5];
+        t.0.append(8, 0, &aac, false, true).unwrap();
+        let map = t.0.audio_seq_headers.lock().unwrap();
+        assert_eq!(map.get(&0), Some(&aac));
+        assert_eq!(map.len(), 1);
     }
 
     #[test]
@@ -469,7 +646,7 @@ mod tests {
 
     #[test]
     fn oversized_tag_is_rejected_silently() {
-        // Capacity 4096, tag of 3000 bytes (> cap/2) — must be dropped.
+        // Capacity 4096, tag of 3000 bytes (> cap/2) - must be dropped.
         let t = tmp(4096);
         let big = vec![0u8; 3000];
         let r = t.0.append(9, 0, &big, false, false).unwrap();
@@ -479,7 +656,7 @@ mod tests {
 
     #[test]
     fn wrapping_write_evicts_oldest_and_reads_correctly() {
-        // Capacity 256. Write 6 × 80 = 480 bytes total — wraps the cursor
+        // Capacity 256. Write 6 × 80 = 480 bytes total - wraps the cursor
         // twice. Oldest tags get evicted; we read the latest one back.
         let t = tmp(256);
         let mut last_seq = 0;
@@ -526,10 +703,10 @@ mod tests {
         // Linear case
         assert!(write_overlaps(50, 30, 1000, 60, 10));
         assert!(!write_overlaps(50, 30, 1000, 100, 10));
-        // Write wraps, tag near start of buffer — tag at 5 is inside the
+        // Write wraps, tag near start of buffer - tag at 5 is inside the
         // wrap segment [0, 20) (write spans 980..1000 ∪ 0..20).
         assert!(write_overlaps(980, 40, 1000, 5, 10));
-        // Write wraps, tag past wrap segment — no overlap
+        // Write wraps, tag past wrap segment - no overlap
         assert!(!write_overlaps(980, 40, 1000, 500, 10));
     }
 

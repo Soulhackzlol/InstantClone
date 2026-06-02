@@ -3,20 +3,20 @@
 //! `_result` and `onStatus` responses. That's the entire surface.
 //!
 //! Value markers we care about:
-//!   0x00 number     — 8-byte big-endian f64
-//!   0x01 boolean    — 1 byte
-//!   0x02 string     — 2-byte length BE + UTF-8 bytes
-//!   0x03 object     — repeated (key:string-no-marker, value:any) ending in
+//!   0x00 number     - 8-byte big-endian f64
+//!   0x01 boolean    - 1 byte
+//!   0x02 string     - 2-byte length BE + UTF-8 bytes
+//!   0x03 object     - repeated (key:string-no-marker, value:any) ending in
 //!                     0x00 0x00 0x09 (empty-key + end-marker)
 //!   0x05 null
 //!   0x06 undefined
-//!   0x08 ECMA array — like object with a 4-byte count prefix (ignored)
+//!   0x08 ECMA array - like object with a 4-byte count prefix (ignored)
 //!   0x09 object-end (only valid inside object/ecma array)
-//!   0x0A strict array — 4-byte BE count, then N values back-to-back.
+//!   0x0A strict array - 4-byte BE count, then N values back-to-back.
 //!                       OBS-style clients send `fourCcList` this way
 //!                       in the connect properties (Enhanced RTMP). We
 //!                       parse it so the value isn't a decode hard-stop
-//!                       — none of the handshake logic actually needs
+//!                       - none of the handshake logic actually needs
 //!                       to read the list's contents, but the in-tree
 //!                       sink and any cross-talk between proxies has
 //!                       to be able to step over it.
@@ -154,7 +154,7 @@ fn decode_string(data: &[u8]) -> io::Result<(String, &[u8])> {
 fn decode_object_body(mut data: &[u8], depth: u32) -> io::Result<(HashMap<String, Amf0>, &[u8])> {
     let mut map = HashMap::new();
     loop {
-        // Key has no string marker — it's an inline length-prefixed string.
+        // Key has no string marker - it's an inline length-prefixed string.
         let (key, rest) = decode_string(data)?;
         data = rest;
         if key.is_empty() && data.first() == Some(&0x09) {
@@ -242,20 +242,20 @@ pub fn enc_strict_array_str(out: &mut BytesMut, items: &[&str]) {
 
 /// Open an AMF0 object (marker 0x03). Pair with `enc_object_end` and
 /// `enc_object_key` to write objects whose values aren't all uniform
-/// types — useful when one of the values is a Strict Array that the
+/// types - useful when one of the values is a Strict Array that the
 /// generic `enc_object(&[(&str, &Amf0)])` builder can't represent.
 pub fn enc_object_begin(out: &mut BytesMut) {
     out.put_u8(0x03);
 }
 
-/// Write one AMF0 object key (length-prefixed UTF-8, NO string marker —
+/// Write one AMF0 object key (length-prefixed UTF-8, NO string marker -
 /// object keys are raw, distinct from the 0x02 string-value marker).
 pub fn enc_object_key(out: &mut BytesMut, key: &str) {
     out.put_u16(key.len() as u16);
     out.put_slice(key.as_bytes());
 }
 
-/// Close an AMF0 object — empty key + 0x09 end-of-object marker.
+/// Close an AMF0 object - empty key + 0x09 end-of-object marker.
 pub fn enc_object_end(out: &mut BytesMut) {
     out.put_u16(0);
     out.put_u8(0x09);
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn unsupported_marker_returns_error() {
-        // marker 0xAA — we don't implement that one
+        // marker 0xAA - we don't implement that one
         let r = decode_all(&[0xAA, 0x00]);
         assert!(r.is_err());
     }
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn strict_array_of_strings_roundtrip() {
         // Enhanced-RTMP fourCcList shape: a Strict Array of 4-char
-        // codec identifier strings. This test guards the e2e path —
+        // codec identifier strings. This test guards the e2e path -
         // before 0x0A decoding landed, the in-tree sink rejected our
         // own connect with `amf0: unsupported marker 0xa`.
         let mut buf = BytesMut::new();
@@ -393,7 +393,7 @@ mod tests {
 
     #[test]
     fn deeply_nested_object_rejected() {
-        // Hand-craft a deeply nested object payload — each 0x03 starts a
+        // Hand-craft a deeply nested object payload - each 0x03 starts a
         // new object body. AMF0_MAX_DEPTH=16, so a 17-deep chain trips the
         // guard. The empty-key + 0x09 end markers are appended in reverse
         // to keep the payload syntactically closeable (the decoder bails

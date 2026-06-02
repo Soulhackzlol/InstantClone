@@ -13,7 +13,7 @@
 //! The menu is rebuilt every time the user clicks the icon, so the
 //! status row and conditional items reflect *live* state (read from
 //! the controller). Actions like "Cut delay" call straight into the
-//! controller's sync methods — they're atomics-only, no runtime needed.
+//! controller's sync methods - they're atomics-only, no runtime needed.
 
 #![cfg(windows)]
 
@@ -123,7 +123,7 @@ fn run(
         }
 
         let title = wide("InstantClone");
-        // HWND_MESSAGE = -3 cast to ptr — message-only window, never visible.
+        // HWND_MESSAGE = -3 cast to ptr - message-only window, never visible.
         let parent: HWND = -3isize as HWND;
         let hwnd = CreateWindowExW(
             0,
@@ -166,7 +166,7 @@ fn run(
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = TRAY_MSG;
         nid.hIcon = h_icon;
-        write_tip(&mut nid.szTip, "InstantClone — click for menu");
+        write_tip(&mut nid.szTip, "InstantClone - click for menu");
 
         if Shell_NotifyIconW(NIM_ADD, &nid) == 0 {
             return Err("Shell_NotifyIconW(NIM_ADD) failed".into());
@@ -193,7 +193,7 @@ fn run(
 }
 
 /// Decode the embedded ICO into an HICON at the system's small-icon size.
-/// Returns `None` on any FFI failure — caller falls back to the stock icon.
+/// Returns `None` on any FFI failure - caller falls back to the stock icon.
 unsafe fn load_embedded_icon() -> Option<windows_sys::Win32::UI::WindowsAndMessaging::HICON> {
     let cx = GetSystemMetrics(SM_CXSMICON);
     let cy = GetSystemMetrics(SM_CYSMICON);
@@ -248,7 +248,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     let _ = open_url(&state.dock_url);
                 }
                 ID_CUT_DELAY => {
-                    // Direct sync call — Controller methods are atomic stores,
+                    // Direct sync call - Controller methods are atomic stores,
                     // no runtime needed.
                     state.ctrl.stop_delay();
                 }
@@ -289,7 +289,7 @@ unsafe fn show_menu(hwnd: HWND) {
         return;
     }
 
-    // Top: live status header. Disabled item, no action — just a glance.
+    // Top: live status header. Disabled item, no action - just a glance.
     let status = wide(&status_label(&state.ctrl));
     AppendMenuW(
         menu,
@@ -322,7 +322,7 @@ unsafe fn show_menu(hwnd: HWND) {
 
     let mut pt = POINT { x: 0, y: 0 };
     GetCursorPos(&mut pt);
-    // SetForegroundWindow is required for TrackPopupMenu to behave —
+    // SetForegroundWindow is required for TrackPopupMenu to behave -
     // without it the menu can vanish on first outside click.
     SetForegroundWindow(hwnd);
     TrackPopupMenu(
@@ -334,7 +334,7 @@ unsafe fn show_menu(hwnd: HWND) {
         hwnd,
         ptr::null(),
     );
-    // Post a dummy message so the menu actually closes on outside-click —
+    // Post a dummy message so the menu actually closes on outside-click -
     // standard Win32 dance.
     PostMessageW(hwnd, 0, 0, 0);
     DestroyMenu(menu);
@@ -347,17 +347,17 @@ fn status_label(ctrl: &Controller) -> String {
     match phase {
         "active" => {
             let s = (ctrl.current_delay_ms() + 500) / 1000;
-            format!("Status: ACTIVE — {s}s delay")
+            format!("Status: ACTIVE - {s}s delay")
         }
         "ready" => {
             let s = (ctrl.armed_delay_ms() + 500) / 1000;
-            format!("Status: ARMED — {s}s ready to activate")
+            format!("Status: ARMED - {s}s ready to activate")
         }
         "preparing" => {
             let armed = ctrl.armed_delay_ms().max(1) as f32;
             let fill = ctrl.buffer_fill_ms() as f32;
             let pct = ((fill / armed) * 100.0).min(99.0) as u32;
-            format!("Status: BUFFERING — {pct}%")
+            format!("Status: BUFFERING - {pct}%")
         }
         _ => {
             if ctrl.ingest_alive() {
@@ -460,7 +460,7 @@ unsafe fn set_clipboard_text(hwnd: HWND, text: &str) -> Result<(), ()> {
     if SetClipboardData(CF_UNICODETEXT as u32, h_mem.0).is_null() {
         return Err(());
     }
-    // System now owns the HGLOBAL — release the guard so Drop is a no-op.
+    // System now owns the HGLOBAL - release the guard so Drop is a no-op.
     let _ = h_mem.release();
     Ok(())
 }

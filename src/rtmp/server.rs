@@ -72,7 +72,7 @@ async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::R
         // librtmp's window-ack rule: fire BYTES_READ_REPORT once we've
         // received more than `window_ack_size/10` bytes since our last
         // ack. Strict RTMP relays (nginx-rtmp under tight config, SRS,
-        // some CDN ingest edges) drop the publish if this is missing —
+        // some CDN ingest edges) drop the publish if this is missing -
         // OBS streams keep working because OBS doesn't gate its send
         // on receiving acks, but a downstream relay re-publishing
         // through us would. Free side-effect: gives the publisher a
@@ -86,7 +86,7 @@ async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::R
             20 /* AMF0 command */ => {
                 handle_command(&mut writer, &ctrl, &msg, &mut guard).await?;
             }
-            18 /* AMF0 data — onMetaData et al */ => {
+            18 /* AMF0 data - onMetaData et al */ => {
                 ctrl.on_metadata(msg.payload.to_vec());
             }
             8 /* audio */ => {
@@ -94,14 +94,14 @@ async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::R
                 ctrl.note_audio_codec(info.codec);
                 if info.is_multitrack { ctrl.note_multitrack_audio(); }
                 // Audio multi-track (VOD audio) is forwarded bit-faithfully
-                // — Twitch consumes the second track for VOD audio.
+                // - Twitch consumes the second track for VOD audio.
                 ctrl.on_tag(8, msg.timestamp, &msg.payload, false, info.is_seq_header);
             }
             9 /* video */ => {
                 let info = h264::classify_video_tag(&msg.payload);
                 ctrl.note_video_codec(info.codec);
                 if info.is_metadata {
-                    // Enhanced-RTMP PacketTypeMetadata (=4) — typically a
+                    // Enhanced-RTMP PacketTypeMetadata (=4) - typically a
                     // mid-stream HDR `colorInfo` update. Surface in the
                     // wire trace so a future investigation into stale
                     // colour rendering on a destination has a thread to
@@ -113,22 +113,20 @@ async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::R
                 }
                 if info.is_multitrack {
                     ctrl.note_multitrack_video();
-                    // Flatten Enhanced Broadcasting simulcast down to the
-                    // primary track. Re-classify the flattened bytes so
-                    // codec + IDR detection match what the rest of the
-                    // pipeline will actually carry.
-                    if let Some(flat) = h264::flatten_multitrack_video(&msg.payload) {
-                        let info2 = h264::classify_video_tag(&flat);
-                        ctrl.note_video_codec(info2.codec);
-                        ctrl.on_tag(9, msg.timestamp, &flat, info2.is_idr, info2.is_seq_header);
-                    } else {
-                        // Pathological multi-track layout we can't parse —
-                        // forward as-is and let the destination decide.
-                        ctrl.on_tag(9, msg.timestamp, &msg.payload, info.is_idr, info.is_seq_header);
-                    }
-                } else {
-                    ctrl.on_tag(9, msg.timestamp, &msg.payload, info.is_idr, info.is_seq_header);
                 }
+                // Store the raw payload - including any Enhanced Broadcasting
+                // multi-track wrapper - and let each egress pump decide what
+                // to do with it. Twitch destinations pass the multi-track tag
+                // through bit-faithfully (it's what unlocks the transcoded
+                // ladder for non-Affiliate accounts via simulcast). Every
+                // other platform doesn't support multi-track video and gets
+                // a single-track flatten applied just before sending. The
+                // IDR / seq-header flags are taken from the multi-track tag's
+                // outer header (FrameType for IDR, inner PacketType for seq
+                // header) - both spec-required to be track-aligned, so the
+                // outer-header signal is correct for cut detection regardless
+                // of which destination's flatten path the bytes end up on.
+                ctrl.on_tag(9, msg.timestamp, &msg.payload, info.is_idr, info.is_seq_header);
             }
             4 if msg.payload.len() >= 6
                 && u16::from_be_bytes([msg.payload[0], msg.payload[1]]) == 6 =>
@@ -257,7 +255,7 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
             }
         }
         _ => {
-            // Unknown command — silently ack so the client doesn't error.
+            // Unknown command - silently ack so the client doesn't error.
             if txn_id != 0.0 {
                 send_simple_result(writer, txn_id).await?;
             }

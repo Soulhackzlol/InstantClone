@@ -7,10 +7,10 @@
 //!
 //! Chunk headers come in four `fmt` flavors that compress fields by
 //! referencing the previous chunk on the same CSID:
-//!   fmt 0 — full 11-byte header: timestamp, length, type, msg-stream-id
-//!   fmt 1 —  7 bytes: timestamp delta, length, type   (reuse msg-stream-id)
-//!   fmt 2 —  3 bytes: timestamp delta                (reuse length/type/msid)
-//!   fmt 3 —  0 bytes: continuation                   (reuse everything)
+//!   fmt 0 - full 11-byte header: timestamp, length, type, msg-stream-id
+//!   fmt 1 -  7 bytes: timestamp delta, length, type   (reuse msg-stream-id)
+//!   fmt 2 -  3 bytes: timestamp delta                (reuse length/type/msid)
+//!   fmt 3 -  0 bytes: continuation                   (reuse everything)
 //!
 //! Timestamps that overflow 24 bits use an extended 32-bit field appended
 //! after the message header (and on all continuation chunks for that
@@ -87,7 +87,7 @@ pub struct ChunkReader<R> {
     chunk_size: usize,
     streams: HashMap<u32, CsState>,
     /// Total wire bytes consumed from the peer since the connection
-    /// opened — chunk headers + payload + extended timestamps + control
+    /// opened - chunk headers + payload + extended timestamps + control
     /// messages. Used to emit RTMP Acknowledgement (BYTES_READ_REPORT,
     /// msg type 3) when we cross the peer-declared window threshold.
     /// Wraps at 2^64 (~146 years at 4 GB/s) so saturating arithmetic
@@ -124,7 +124,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
     /// If we have received more than `window/10` bytes since the last
     /// Acknowledgement we sent, returns the current cumulative byte
     /// count (truncated to u32 per spec) and advances the watermark.
-    /// Caller is responsible for actually writing the ack message —
+    /// Caller is responsible for actually writing the ack message -
     /// the reader cannot write because it doesn't own the writer half
     /// of the socket. librtmp's exact rule, reproduced here so the
     /// behaviour is byte-for-byte compatible with what every OBS-class
@@ -133,7 +133,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
         let threshold = self.bytes_in_at_last_ack + (self.window_ack_size as u64) / 10;
         if self.bytes_in > threshold {
             self.bytes_in_at_last_ack = self.bytes_in;
-            // RTMP BYTES_READ_REPORT is a u32 field — let it wrap.
+            // RTMP BYTES_READ_REPORT is a u32 field - let it wrap.
             Some(self.bytes_in as u32)
         } else {
             None
@@ -358,7 +358,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     2 => continue, // Abort Message
                     3 => continue, // Acknowledgement
                     5 => {
-                        // Window Acknowledgement Size from the peer —
+                        // Window Acknowledgement Size from the peer -
                         // record it so our `take_pending_ack` threshold
                         // uses the peer-declared value rather than the
                         // 2.5 MB default. Zero is meaningless per spec;
@@ -376,7 +376,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                         }
                         continue;
                     }
-                    6 => continue, // Set Peer Bandwidth — informational only
+                    6 => continue, // Set Peer Bandwidth - informational only
                     _ => return Ok(msg),
                 }
             }
@@ -418,14 +418,14 @@ impl<W: AsyncWrite + Unpin> ChunkWriter<W> {
     /// count, truncated to u32 per spec. Real-world peers (Twitch's
     /// edges, OBS's librtmp consumer) silently disconnect a stalled
     /// receiver when their `window_ack_size/10` threshold is breached
-    /// without an ack landing — so callers should fire this from the
+    /// without an ack landing - so callers should fire this from the
     /// same task that drives the chunk reader, after every read.
     pub async fn send_ack(&mut self, seq: u32) -> io::Result<()> {
         self.write_message(2, 0, 3, 0, &seq.to_be_bytes()).await
     }
 
     /// Write a complete RTMP message, fragmenting into chunks as needed.
-    /// Emits one fmt-0 chunk followed by fmt-3 continuations — the
+    /// Emits one fmt-0 chunk followed by fmt-3 continuations - the
     /// simplest and most broadly compatible pattern.
     pub async fn write_message(
         &mut self,

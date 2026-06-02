@@ -73,7 +73,7 @@ fn dec_acodec(v: u8) -> AudioCodec {
     }
 }
 
-/// Smallest buffer we'll keep even when the user has nothing armed —
+/// Smallest buffer we'll keep even when the user has nothing armed -
 /// guarantees compute_delay_cut always has at least one IDR to find.
 const MIN_BUFFER_MS: u32 = 2_000;
 
@@ -89,7 +89,7 @@ impl ActivateError {
             ActivateError::NotArmed => "no delay armed".to_string(),
             ActivateError::BufferShort { remaining_ms } => {
                 let secs = ((*remaining_ms + 500) / 1000).max(1);
-                format!("buffer is still building — wait ~{}s", secs)
+                format!("buffer is still building - wait ~{}s", secs)
             }
         }
     }
@@ -126,12 +126,37 @@ pub struct DestinationState {
     /// Last seq-header generation this pump has resent. Compared against
     /// the Controller's counter so we re-emit AVC/HEVC SPS/PPS (or AAC
     /// AudioSpecificConfig) when OBS switches encoders or resolutions
-    /// mid-stream — without this, the cached old config and new keyframe
+    /// mid-stream - without this, the cached old config and new keyframe
     /// bytes don't match and the upstream decoder silently rejects every
     /// subsequent frame.
     last_seq_header_gen: AtomicU32,
     rate_window_bytes: AtomicU64,
     rate_window_start_ms: AtomicU64,
+    /// True if this destination accepts Enhanced Broadcasting multi-track
+    /// video on the wire. Set by the supervisor to `true` when the
+    /// destination's platform is `twitch` and to `false` for everything
+    /// else (YouTube / Kick / Trovo / Restream / custom RTMP - none of
+    /// which currently process multi-track video). When false, the pump
+    /// runs `flatten_multitrack_video` on every multi-track tag just
+    /// before sending, which produces a single-track tag that's
+    /// byte-identical to what beta.6 emitted from the ingest-side
+    /// flatten - so existing destinations see no behaviour change.
+    pub pass_through_multitrack_video: AtomicBool,
+    /// Twitch only: when our /obs/multitrack-config proxy successfully
+    /// allocates an Enhanced Broadcasting session, Twitch's API returns
+    /// a specific IVS ingest URL like
+    /// `rtmps://<region>.contribute.live-video.net/app/<key>` - and
+    /// that's the *only* endpoint with the EB transcoder pipeline
+    /// behind it. The user's configured destination URL usually points
+    /// at `rtmp://live.twitch.tv/app`, the legacy ingest, which
+    /// accepts multi-track tags but doesn't route them to a
+    /// transcoder, so the stream reaches Twitch but never goes live to
+    /// viewers (and the unfed session dies of TCP retransmit timeout
+    /// after ~60 s). When this field is Some, the egress supervisor
+    /// uses it instead of the configured destination URL. Cleared on
+    /// publisher disconnect so the next normal stream goes back to
+    /// the configured URL.
+    pub eb_override_url: std::sync::Mutex<Option<String>>,
 }
 
 impl DestinationState {
@@ -139,7 +164,14 @@ impl DestinationState {
         Self {
             id,
             egress_alive: AtomicBool::new(false),
-            consumer_seq: AtomicU64::new(0),
+            // Sentinel: a freshly-registered destination whose pump
+            // hasn't seeded yet must NOT pin the ring's trim to seq 0.
+            // min_consumer_seq treats u64::MAX as "no constraint", so
+            // until PUMP_START stores the real seed seq, on_tag's trim
+            // can evict freely. Otherwise adding a new destination
+            // mid-stream would briefly stop the ring from trimming -
+            // ballooning the buffer by ~bitrate × seed_idr wait.
+            consumer_seq: AtomicU64::new(u64::MAX),
             tags_sent: AtomicU64::new(0),
             bytes_sent: AtomicU64::new(0),
             cuts_performed: AtomicU32::new(0),
@@ -147,8 +179,15 @@ impl DestinationState {
             bitrate_kbps_out: AtomicU32::new(0),
             shutdown_requested: AtomicBool::new(false),
             last_seq_header_gen: AtomicU32::new(0),
+            eb_override_url: std::sync::Mutex::new(None),
             rate_window_bytes: AtomicU64::new(0),
             rate_window_start_ms: AtomicU64::new(0),
+            // Default false: every newly-spawned destination flattens
+            // multi-track until the supervisor decides otherwise. This
+            // preserves beta.6 behaviour for any code path that creates
+            // a DestinationState without going through the supervisor
+            // (the destination_state lazy-init in particular).
+            pass_through_multitrack_video: AtomicBool::new(false),
         }
     }
 
@@ -177,7 +216,7 @@ pub struct Controller {
     pub ring: Arc<DiskRing>,
 
     // --- Delay state machine (single, applies to ALL destinations) ----
-    // The consumer offset is global — every destination delivers the same
+    // The consumer offset is global - every destination delivers the same
     // delay simultaneously. Per-destination delays would require N
     // consumer cursors; deferred until requested.
     armed_delay_ms: AtomicU32,
@@ -232,21 +271,21 @@ pub struct Controller {
     last_input_ts_u32: AtomicU32,
     input_ts_wrap_high: AtomicU32,
 
-    // Wall-clock (process_now_ms) of last multi-track video tag — the
+    // Wall-clock (process_now_ms) of last multi-track video tag - the
     // Enhanced Broadcasting warning chip only shows if we've seen one
     // recently. Sticky-on-true was the old behavior and produced
     // permanent false-positive chips after a single misclassified tag.
     last_multitrack_video_ms: AtomicU64,
     // Tracks when backpressure first started being true. Used by
     // `is_backpressured` to require the condition to hold for a
-    // sustained window (1.5 s) before reporting — without this the
+    // sustained window (1.5 s) before reporting - without this the
     // chip strobes on every cut transition.
     backpressure_since_ms: AtomicU64,
     /// Bumped on every NEW sequence-header tag received from ingest
     /// (audio or video, regardless of whether the bytes actually
     /// changed). Egress pumps compare this against their own
     /// `last_seq_header_gen` and resend both cached headers when it
-    /// jumps — so mid-stream encoder swaps (resolution change in OBS,
+    /// jumps - so mid-stream encoder swaps (resolution change in OBS,
     /// AVC→HEVC switch) don't desync the downstream decoder.
     seq_header_gen: AtomicU32,
 
@@ -295,7 +334,7 @@ impl Controller {
     pub fn audio_codec(&self) -> AudioCodec {
         dec_acodec(self.audio_codec.load(Ordering::Relaxed))
     }
-    /// Freshness-based — true only if a multi-track video tag was seen
+    /// Freshness-based - true only if a multi-track video tag was seen
     /// within the last 5 s AND OBS is currently publishing. The old
     /// sticky-bool version kept the warning chip on forever after a
     /// single (often misclassified) tag; this version auto-clears as
@@ -342,32 +381,37 @@ impl Controller {
     /// timestamp so the `multitrack_video()` getter can auto-clear when
     /// multi-track stops (e.g. the user switched Enhanced Broadcasting
     /// off mid-stream, or a single tag was misclassified). Edge-triggered
-    /// log + webhook fire only on the first detection per session — the
+    /// log + webhook fire only on the first detection per session - the
     /// sticky bool used to live on `multitrack_video` itself; we keep it
     /// here just to throttle the log to once.
     pub fn note_multitrack_video(&self) {
         self.last_multitrack_video_ms
             .store(process_now_ms(), Ordering::Relaxed);
         if !self.multitrack_video.swap(true, Ordering::Relaxed) {
+            // Twitch destinations pass the multi-track tag through
+            // bit-faithfully (Enhanced Broadcasting → transcoded
+            // ladder); every other platform flattens to the primary
+            // resolution on the way out via select_video_bytes. So
+            // this is now informational, not a warning.
             self.log(
-                "WARN: Enhanced Broadcasting (multi-track video) detected — \
-                 keeping the primary track only. Disable simulcast in OBS for \
-                 a clean single-resolution stream.",
+                "Enhanced Broadcasting (multi-track video) detected - \
+                 forwarding raw to Twitch destinations, flattening to the \
+                 primary resolution for any other platform.",
             );
             self.fire_webhook(
-                "⚠️",
-                "Enhanced Broadcasting detected — sending the primary resolution only.",
+                "🎚️",
+                "Enhanced Broadcasting detected - multi-track forwarding active.",
             );
         }
     }
     pub fn note_multitrack_audio(&self) {
         if !self.multitrack_audio.swap(true, Ordering::Relaxed) {
-            self.log("ingest: multi-track audio detected (VOD audio track) — forwarding as-is.");
+            self.log("ingest: multi-track audio detected (VOD audio track) - forwarding as-is.");
         }
     }
     /// Wipe codec/multitrack state when the publisher disconnects so a
     /// fresh OBS connect with a different codec starts from a clean slate.
-    /// Also resets the u32→u64 timestamp wrap counter — a new publisher
+    /// Also resets the u32→u64 timestamp wrap counter - a new publisher
     /// may restart from ts=0, which from the old wrap counter's POV would
     /// look like a 49-day jump forward.
     pub fn reset_codec_state(&self) {
@@ -385,7 +429,7 @@ impl Controller {
     /// a monotonic u64 ms relative to this publisher session.
     ///
     /// Called by the ingest path exactly once per tag. The single
-    /// publisher invariant (only one OBS may publish at a time — see
+    /// publisher invariant (only one OBS may publish at a time - see
     /// `begin_publish`) means there's only one caller of `on_tag` /
     /// `expand_ts` at any moment, so the relaxed atomic load + store
     /// is race-free in practice.
@@ -394,7 +438,7 @@ impl Controller {
     /// by more than 2^31 ms (~24.8 days), the counter wrapped around;
     /// bump the high half. Smaller backward jumps are treated as the
     /// (normal) inter-stream out-of-order audio interleaving and ignored
-    /// here — pace_and_send drops those separately.
+    /// here - pace_and_send drops those separately.
     fn expand_ts(&self, wire_ts: u32) -> u64 {
         let last = self.last_input_ts_u32.load(Ordering::Relaxed);
         let mut wrap_high = self.input_ts_wrap_high.load(Ordering::Relaxed);
@@ -421,7 +465,7 @@ impl Controller {
             .clone()
     }
 
-    /// Drop a destination's state — call when the user removes it.
+    /// Drop a destination's state - call when the user removes it.
     pub fn remove_destination_state(&self, id: &str) {
         self.destinations.write().unwrap().remove(id);
     }
@@ -456,7 +500,7 @@ impl Controller {
             .collect()
     }
 
-    /// All destinations alive flag (any-of) — for the topbar pill.
+    /// All destinations alive flag (any-of) - for the topbar pill.
     pub fn any_destination_alive(&self) -> bool {
         self.destinations
             .read()
@@ -465,7 +509,7 @@ impl Controller {
             .any(|d| d.egress_alive.load(Ordering::Relaxed))
     }
 
-    /// (alive_count, total_count) — for "2/3 destinations live" chips.
+    /// (alive_count, total_count) - for "2/3 destinations live" chips.
     pub fn destination_alive_summary(&self) -> (u32, u32) {
         let map = self.destinations.read().unwrap();
         let total = map.len() as u32;
@@ -520,7 +564,7 @@ impl Controller {
         Ok(armed)
     }
 
-    /// Drop back to live but *keep the armed delay* — buffer continues
+    /// Drop back to live but *keep the armed delay* - buffer continues
     /// to fill, so the next activate is instant. This is the magic
     /// behavior the streamer described.
     pub fn stop_delay(&self) {
@@ -536,7 +580,7 @@ impl Controller {
     /// Server-side derivation: (latest_ts − consumer_ts) using the
     /// slowest live destination. Replaces the prior per-pump
     /// `current_delay_ms` atomic, which N pumps would race to overwrite
-    /// every loop iteration — producing visible UI wobble. Falls back
+    /// every loop iteration - producing visible UI wobble. Falls back
     /// to 0 when nothing is being sent.
     pub fn current_delay_ms(&self) -> u32 {
         let Some(latest) = self.ring.latest_ts() else {
@@ -552,13 +596,13 @@ impl Controller {
         match min_consumer.and_then(|c| self.ring.find_by_seq(c).map(|(_, m)| m)) {
             // Clamp to u32: a u64 delta can't realistically exceed
             // 600_000 ms (our hard armed-delay ceiling) but we cap to
-            // be safe — the UI consumes a u32 number anyway.
+            // be safe - the UI consumes a u32 number anyway.
             Some(meta) => latest.saturating_sub(meta.ts_ms).min(u32::MAX as u64) as u32,
             None => 0,
         }
     }
 
-    /// Convenience for the dashboard — collapses the (armed, target, fill)
+    /// Convenience for the dashboard - collapses the (armed, target, fill)
     /// triple into a single label.
     pub fn phase(&self) -> &'static str {
         let armed = self.armed_delay_ms();
@@ -579,7 +623,7 @@ impl Controller {
         self.ingest_alive.load(Ordering::Relaxed)
     }
     /// Bumps once per OBS publish session. Egress reads it each loop and
-    /// re-anchors its output timeline if the token changed — without this,
+    /// re-anchors its output timeline if the token changed - without this,
     /// the new publisher's "fresh" timestamps (which can reset to 0) get
     /// silently dropped by pace_and_send's monotonic guard.
     pub fn publisher_token(&self) -> u64 {
@@ -598,7 +642,7 @@ impl Controller {
         self.buffer_building.load(Ordering::Relaxed)
     }
 
-    // Aggregated stats — summed across all destinations for the
+    // Aggregated stats - summed across all destinations for the
     // dashboard's top-level metric cards.
     pub fn tags_sent(&self) -> u64 {
         self.destinations
@@ -642,7 +686,7 @@ impl Controller {
     // ---- Internal: ingest counters ----
 
     /// Called from the ingest path on every audio/video tag. Maintains a
-    /// 1-second rolling bitrate average (kbps) — cheap, lock-free.
+    /// 1-second rolling bitrate average (kbps) - cheap, lock-free.
     pub fn note_inbound_bytes(&self, n: usize) {
         let now = process_now_ms();
         let total = self
@@ -671,7 +715,7 @@ impl Controller {
     /// Append a line to the in-process log ring (drops the oldest if full).
     /// Each entry is prefixed with a process-relative `[+12.345s]` timestamp
     /// so a downloaded log shows when things happened relative to each
-    /// other — invaluable for diagnosing "the bouncing happened around
+    /// other - invaluable for diagnosing "the bouncing happened around
     /// 30 seconds in".
     pub fn log(&self, line: impl Into<String>) {
         let mut q = self.logs.lock().unwrap();
@@ -690,7 +734,7 @@ impl Controller {
 
     pub async fn begin_publish(&self, _stream_key: &str) -> io::Result<u64> {
         let _g = self.publish_lock.lock().await;
-        // One publisher at a time — a second OBS connecting would
+        // One publisher at a time - a second OBS connecting would
         // interleave its tags into the buffer with its own timestamp
         // origin and guarantee a viewer-visible glitch.
         if self.ingest_alive.load(Ordering::Relaxed) {
@@ -700,11 +744,31 @@ impl Controller {
                 "another publisher is already active",
             ));
         }
+
+        // Wipe every per-session cache that survives mark_ingest_dead.
+        // The seq-header caches deliberately persist across an in-session
+        // egress restart (see `eb_seq_headers_survive_egress_restart`) so
+        // we clear them only when a new publisher takes the slot -
+        // otherwise stale multi-track SPS/PPS leak into a non-EB
+        // session and freeze the destination's decoder.
+        if let Ok(mut hdrs) = self.ring.video_seq_headers.lock() {
+            hdrs.clear();
+        }
+        if let Ok(mut hdrs) = self.ring.audio_seq_headers.lock() {
+            hdrs.clear();
+        }
+        // onMetaData leaks the same way: the prior publisher's
+        // resolution / fps / encoder fields would be replayed at every
+        // pump start until the new publisher's first onMetaData arrives.
+        if let Ok(mut meta) = self.ring.metadata.lock() {
+            *meta = None;
+        }
+
         // Bump token so any prior egress reader knows it's stale.
         let token = self.publisher_token.fetch_add(1, Ordering::SeqCst) + 1;
         self.ingest_alive.store(true, Ordering::Relaxed);
         self.log("ingest: publisher connected");
-        self.fire_webhook("✅", "OBS publisher connected — going live.");
+        self.fire_webhook("✅", "OBS publisher connected - going live.");
         Ok(token)
     }
 
@@ -749,7 +813,7 @@ impl Controller {
     }
 
     /// How many tags behind the latest the slowest consumer is. Kept
-    /// for diagnostics — but DO NOT use this directly to flag
+    /// for diagnostics - but DO NOT use this directly to flag
     /// backpressure: on any active delay the consumer is intentionally
     /// behind (5 s × ~80 tags/s ≈ 400 tags), so any naive threshold
     /// generates false positives. Use `is_backpressured` instead.
@@ -773,12 +837,12 @@ impl Controller {
         }
     }
 
-    /// True if egress can't keep up with ingest — i.e. the actual
+    /// True if egress can't keep up with ingest - i.e. the actual
     /// delivered delay is materially larger than the user asked for.
     ///
     /// Definition: `current_delay − target_delay > 2 s` (sustained).
     /// This is timestamp-based, so a healthy 5 s delay reads as
-    /// "0 over" (no backpressure) — unlike the tag-count metric, which
+    /// "0 over" (no backpressure) - unlike the tag-count metric, which
     /// would always read ~400 tags behind on a 5 s delay regardless of
     /// stream health.
     ///
@@ -786,7 +850,7 @@ impl Controller {
     /// or it briefly flips on every toggle. We use a sustained-condition
     /// check via `backpressure_since_ms`.
     pub fn is_backpressured(&self) -> bool {
-        // Skip the check entirely if there's no live destination — the
+        // Skip the check entirely if there's no live destination - the
         // signal is meaningless when nothing is being sent.
         let any_alive = {
             let map = self.destinations.read().unwrap();
@@ -828,7 +892,7 @@ impl Controller {
     /// progress, not 0/1258s).
     pub fn target_buffer_ms(&self) -> u32 {
         // Visible-to-user target = exactly the armed delay (or a small
-        // minimum when nothing is armed — gives compute_delay_cut at
+        // minimum when nothing is armed - gives compute_delay_cut at
         // least one IDR to work with the moment the user arms something).
         let armed = self.armed_delay_ms();
         if armed == 0 {
@@ -855,12 +919,21 @@ impl Controller {
         if self.ingest_alive.swap(false, Ordering::Relaxed) {
             self.note_ingest_disconnect();
             self.reset_codec_state();
+            // Clear any Enhanced Broadcasting URL overrides on the
+            // way out - the next stream may or may not be EB, and a
+            // stale override would force a non-EB stream onto an IVS
+            // endpoint that has no allocated session. The
+            // /obs/multitrack-config proxy sets a fresh override on
+            // every new EB session anyway.
+            for (_id, state) in self.all_destination_states() {
+                *state.eb_override_url.lock().unwrap() = None;
+            }
             self.log("ingest: publisher disconnected");
             self.fire_webhook("⚠️", "OBS publisher disconnected.");
         }
     }
 
-    /// Update the Discord webhook URL — call when settings change. Empty
+    /// Update the Discord webhook URL - call when settings change. Empty
     /// string disables webhook delivery entirely.
     pub fn update_webhook(&self, url: String) {
         *self.webhook_url.lock().unwrap() = url;
@@ -876,7 +949,7 @@ impl Controller {
 
     /// Fire-and-forget Discord post. Skips silently when no webhook is
     /// configured, OR when the last fire was less than 2 s ago (rate
-    /// limit — prevents subprocess spam if a destination flaps).
+    /// limit - prevents subprocess spam if a destination flaps).
     ///
     /// Uses `ureq` (tiny blocking HTTPS client, ~150 KB) wrapped in
     /// `spawn_blocking` so the actual TCP+TLS work doesn't park the
@@ -907,13 +980,14 @@ impl Controller {
             let _ = tokio::time::timeout(
                 Duration::from_secs(10),
                 tokio::task::spawn_blocking(move || {
-                    let _ = ureq::AgentBuilder::new()
-                        .timeout_connect(Duration::from_secs(5))
-                        .timeout(Duration::from_secs(8))
-                        .build()
+                    let _ = crate::https::https_agent()
                         .post(&url)
-                        .set("Content-Type", "application/json")
-                        .send_string(&body);
+                        .config()
+                        .timeout_connect(Some(Duration::from_secs(5)))
+                        .timeout_global(Some(Duration::from_secs(8)))
+                        .build()
+                        .header("Content-Type", "application/json")
+                        .send(&body);
                 }),
             )
             .await;
@@ -924,7 +998,7 @@ impl Controller {
 /// JSON-string escape that handles every C0 control char that would
 /// otherwise produce an invalid Discord payload (the previous
 /// `replace('\\', ..).replace('"', ..).replace('\n', ..)` chain missed
-/// `\r`, `\t`, `\u{0008}` and friends — any destination name with a
+/// `\r`, `\t`, `\u{0008}` and friends - any destination name with a
 /// stray control character could nuke the webhook body).
 fn json_escape_inline(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
@@ -947,7 +1021,7 @@ fn json_escape_inline(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Egress driver — the timing & cut-alignment core.
+// Egress driver - the timing & cut-alignment core.
 // ---------------------------------------------------------------------------
 
 /// Run the egress loop for ONE destination. Reconnects on connection
@@ -963,7 +1037,7 @@ pub async fn run_egress(
         Ok(p) => p,
         Err(e) => {
             ctrl.log(format!(
-                "[{}] invalid URL ({}) — fix it in Settings",
+                "[{}] invalid URL ({}) - fix it in Settings",
                 label, e
             ));
             tokio::time::sleep(Duration::from_secs(3600)).await;
@@ -975,7 +1049,7 @@ pub async fn run_egress(
     let max_backoff = Duration::from_secs(30);
 
     loop {
-        // Cooperative shutdown — check BEFORE attempting another
+        // Cooperative shutdown - check BEFORE attempting another
         // connect. Without this, a destination the user just disabled
         // (or with a permanently failing endpoint) would spin forever
         // in the connect-retry loop, because pump_dest is only reached
@@ -985,7 +1059,7 @@ pub async fn run_egress(
         // continuing even after the destination is toggled off.
         if dest.shutdown_requested.load(Ordering::Relaxed) {
             ctrl.log(format!(
-                "[{}] shutdown requested — egress loop exiting",
+                "[{}] shutdown requested - egress loop exiting",
                 label
             ));
             return Ok(());
@@ -1022,7 +1096,7 @@ pub async fn run_egress(
                 if let Err(e) = pump_result {
                     // Twitch/etc. sometimes echo the stream key in error
                     // descriptions ("Authentication failed for live_…").
-                    // Scrub before logging or webhooking — otherwise the
+                    // Scrub before logging or webhooking - otherwise the
                     // key shows up in /logs (screen-shareable) and in
                     // the Discord webhook payload.
                     let safe = scrub_secret(&e.to_string(), &parsed.stream_key);
@@ -1052,14 +1126,14 @@ pub async fn run_egress(
                 ));
             }
         }
-        // Cancellable backoff sleep — wake every 200 ms to check the
+        // Cancellable backoff sleep - wake every 200 ms to check the
         // shutdown flag so a disable doesn't have to wait the full
         // 30 s backoff window before stopping.
         let deadline = tokio::time::Instant::now() + backoff;
         loop {
             if dest.shutdown_requested.load(Ordering::Relaxed) {
                 ctrl.log(format!(
-                    "[{}] shutdown requested during backoff — exiting",
+                    "[{}] shutdown requested during backoff - exiting",
                     label
                 ));
                 return Ok(());
@@ -1076,7 +1150,7 @@ pub async fn run_egress(
 /// Replace any occurrence of `secret` (case-sensitive) in `text` with a
 /// short redaction so it doesn't end up in logs or webhook payloads.
 /// Also redacts the suffix after the last `/` if it's long enough to be
-/// a stream key — defensive against secrets we don't know about.
+/// a stream key - defensive against secrets we don't know about.
 fn scrub_secret(text: &str, secret: &str) -> String {
     let mut out = text.to_string();
     if secret.len() >= 6 {
@@ -1094,7 +1168,7 @@ fn scrub_secret(text: &str, secret: &str) -> String {
 ///
 /// If ingest starves (OBS drops, network glitches that interrupt the
 /// publisher), we simply *stop sending*. The upstream platform's idle
-/// timeout will close the session naturally — which is the standard,
+/// timeout will close the session naturally - which is the standard,
 /// predictable failure mode and lets viewers see the real "stream
 /// offline" UI instead of a confusing freeze-frame. No filler-frame
 /// replay (it created its own desync bugs and added memory pressure
@@ -1114,7 +1188,7 @@ async fn pump_dest(
     let mut io_buf: Vec<u8> = Vec::with_capacity(64 * 1024);
 
     // Initial seed: if a delay is ALREADY active when this pump spawns
-    // (multi-destination case — a second destination added mid-stream
+    // (multi-destination case - a second destination added mid-stream
     // while the first is on a 5 s delay), join at the right delayed
     // position. Otherwise we'd briefly emit live frames before
     // compute_delay_cut catches up, producing a visible ~5 s backward
@@ -1145,7 +1219,7 @@ async fn pump_dest(
         ),
     );
     // Always lead with sequence headers + the IDR itself.
-    send_sequence_headers(ctrl, &mut sink, state.output_ts_base).await?;
+    send_sequence_headers(ctrl, dest, &mut sink, state.output_ts_base).await?;
 
     loop {
         // Cooperative shutdown: when the supervisor flips this, we end
@@ -1158,7 +1232,7 @@ async fn pump_dest(
 
         // Reply to any RTMP Ping Requests the server (Twitch / YouTube
         // edge) sent us since the last tick. Cheap when idle, critical
-        // for long sessions — without it, the server eventually
+        // for long sessions - without it, the server eventually
         // concludes we're dead and drops the publish slot.
         sink.drain_pings().await?;
 
@@ -1171,7 +1245,7 @@ async fn pump_dest(
         // destination stays cleanly disconnected until OBS comes back.
         if !ctrl.ingest_alive() {
             ctrl.log(format!(
-                "[{}] ingest gone — closing destination session",
+                "[{}] ingest gone - closing destination session",
                 dest.id
             ));
             let _ = sink.send_delete_stream().await;
@@ -1182,16 +1256,16 @@ async fn pump_dest(
         // session token). Without this branch the new session's "fresh"
         // timestamps would all read earlier than `input_ts_anchor` and
         // pace_and_send's monotonic guard would silently drop every
-        // tag — the upstream stream would freeze forever even though
+        // tag - the upstream stream would freeze forever even though
         // ingest is happily receiving bytes.
         let current_token = ctrl.publisher_token();
         if current_token != state.last_publisher_token {
-            ctrl.log(format!("[{}] publisher reconnect — re-anchoring", dest.id));
+            ctrl.log(format!("[{}] publisher reconnect - re-anchoring", dest.id));
             let watermark = ctrl.ring.latest_seq().unwrap_or(0);
             let new_idr = wait_first_idr_after(&ctrl.ring, watermark).await;
             reseed_after_publisher_change(&mut state, new_idr);
             state.last_publisher_token = current_token;
-            send_sequence_headers(ctrl, &mut sink, state.output_ts_base).await?;
+            send_sequence_headers(ctrl, dest, &mut sink, state.output_ts_base).await?;
             dest.consumer_seq
                 .store(state.consumer_seq, Ordering::Relaxed);
             dest.last_seq_header_gen.store(
@@ -1207,14 +1281,14 @@ async fn pump_dest(
         // next media tag so the decoder reconfigures cleanly.
         let cur_gen = ctrl.seq_header_gen.load(Ordering::Relaxed);
         if cur_gen != dest.last_seq_header_gen.load(Ordering::Relaxed) {
-            ctrl.log(format!("[{}] sequence header changed — resending", dest.id));
+            ctrl.log(format!("[{}] sequence header changed - resending", dest.id));
             // Use last_sent_input_ts so the resent header lands AFTER
             // anything we've already sent (same trick as apply_cut).
             let delta_u32 = state
                 .last_sent_input_ts
                 .saturating_sub(state.input_ts_anchor) as u32;
             let resend_ts = state.output_ts_base.wrapping_add(delta_u32);
-            send_sequence_headers(ctrl, &mut sink, resend_ts).await?;
+            send_sequence_headers(ctrl, dest, &mut sink, resend_ts).await?;
             dest.last_seq_header_gen.store(cur_gen, Ordering::Relaxed);
         }
 
@@ -1247,14 +1321,14 @@ struct EgressState {
     output_ts_base: u32, // output ts assigned to the most recent cut target (RTMP wire is u32)
     wall_anchor: Instant, // wall clock at the most recent cut
     wall_anchor_input_ts: u64, // input ts that pairs with wall_anchor
-    last_sent_input_ts: u64, // input ts of the last tag we actually emitted —
+    last_sent_input_ts: u64, // input ts of the last tag we actually emitted -
     // required so apply_cut can re-anchor the
     // output timeline *after* the last sent frame
     // (instead of after the last cut, which would
     // produce a monotonic-violating backward jump).
     /// Snapshot of `Controller::publisher_token()` at the last seed.
     /// When the controller bumps this (new OBS publish session), the
-    /// pump re-anchors — otherwise the new publisher's reset timestamps
+    /// pump re-anchors - otherwise the new publisher's reset timestamps
     /// would all fail pace_and_send's "older than anchor" check and the
     /// upstream player would never see another frame.
     last_publisher_token: u64,
@@ -1298,10 +1372,10 @@ async fn pace_and_send(
     // than the keyframe. Drop the tag rather than emit a backward
     // out_ts (which would break monotonicity and stutter the player).
     // Lost frame is at most ~23 ms of audio (one AAC frame) or ~33 ms
-    // of video (one P-frame) — imperceptible compared to the glitch.
+    // of video (one P-frame) - imperceptible compared to the glitch.
     //
     // With u64 ts (set by expand_ts on ingest) the comparison is now
-    // direct — no wrapping_sub / signed-int dance needed.
+    // direct - no wrapping_sub / signed-int dance needed.
     if meta.ts_ms < state.input_ts_anchor {
         state.consumer_seq = meta.seq + 1;
         dest.consumer_seq
@@ -1329,9 +1403,9 @@ async fn pace_and_send(
     // slept hundreds of ms waiting for the wall-clock to catch up. While
     // we slept, ingest could in theory have wrapped the ring past this
     // tag's bytes (only realistic if buffer_mb is tight and bitrate is
-    // huge — but the check is essentially free, so we always do it).
+    // huge - but the check is essentially free, so we always do it).
     // try_read_seq holds the index lock for the disk read, so the bytes
-    // are guaranteed to still be the bytes of this tag — or it returns
+    // are guaranteed to still be the bytes of this tag - or it returns
     // None and we skip ahead instead of sending corrupted data to Twitch.
     match ctrl.ring.try_read_seq(meta.seq, io_buf)? {
         Some(()) => {}
@@ -1344,11 +1418,27 @@ async fn pace_and_send(
     }
     // Per-tag trace. For audio we log only seq headers and an every-N
     // sample to keep the file small (audio at 50 Hz would dominate).
-    // For video we log every tag — at ~30 fps × bytes/line the file
+    // For video we log every tag - at ~30 fps × bytes/line the file
     // grows ~3 MB / 10 min, which is the right trade for diagnosing a
     // wire-format bug.
     match meta.kind {
         8 => {
+            // Mirror the per-destination video selection. Twitch
+            // destinations get multi-track audio passthrough (VOD-audio
+            // session); non-Twitch destinations drop OneTrack TrackId
+            // != 0 so a simulcast YouTube / Kick doesn't choke on a
+            // second audio track they don't decode. Single-track audio
+            // borrows through unchanged in both modes.
+            let Some(selected) = crate::h264::select_audio_bytes(
+                io_buf,
+                dest.pass_through_multitrack_video.load(Ordering::Relaxed),
+            ) else {
+                state.consumer_seq = meta.seq + 1;
+                dest.consumer_seq
+                    .store(state.consumer_seq, Ordering::Relaxed);
+                return Ok(());
+            };
+            let bytes_out: &[u8] = &selected;
             let tags_so_far = dest.tags_sent.load(Ordering::Relaxed);
             if tags_so_far < 20 || tags_so_far.is_multiple_of(200) {
                 crate::trace::log(
@@ -1359,31 +1449,72 @@ async fn pace_and_send(
                         tags_so_far,
                         meta.ts_ms,
                         out_ts,
-                        io_buf.len(),
-                        io_buf.first().copied().unwrap_or(0),
+                        bytes_out.len(),
+                        bytes_out.first().copied().unwrap_or(0),
                     ),
                 );
             }
-            sink.send_audio(out_ts, io_buf).await?;
+            sink.send_audio(out_ts, bytes_out).await?;
         }
         9 => {
-            let hdr = io_buf.first().copied().unwrap_or(0);
-            let is_idr = meta.is_idr;
-            crate::trace::log(
-                "TAG_VIDEO",
-                &format!(
-                    "dest={} i={} in_ts={} out_ts=0x{:08x} bytes={} hdr=0x{:02x} is_idr={} hex={}",
-                    dest.id,
-                    dest.tags_sent.load(Ordering::Relaxed),
-                    meta.ts_ms,
-                    out_ts,
-                    io_buf.len(),
-                    hdr,
-                    is_idr as u8,
-                    crate::trace::hex_prefix(io_buf, 16),
-                ),
-            );
-            sink.send_video(out_ts, io_buf).await?;
+            // Per-destination video-tag selection. Twitch
+            // destinations pass multi-track through bit-faithfully
+            // (Enhanced Broadcasting); every other RTMP ingest gets
+            // single-track tags (legacy AVC / Enhanced single-track)
+            // unchanged plus a *filtered* view of any multi-track
+            // simulcast: OneTrack TrackId != 0 tags are dropped to
+            // avoid the multi-frame-per-PTS storm that crashes
+            // YouTube's decoder. See `select_video_bytes` for the
+            // full rationale. Single-track tags borrow `io_buf`.
+            let Some(selected) = crate::h264::select_video_bytes(
+                io_buf,
+                dest.pass_through_multitrack_video.load(Ordering::Relaxed),
+            ) else {
+                // Multi-track ladder tag deliberately dropped; advance
+                // the consumer cursor so we don't replay it next call
+                // but skip every per-tag side-effect (send, byte
+                // accounting, last_sent_input_ts update).
+                state.consumer_seq = meta.seq + 1;
+                dest.consumer_seq
+                    .store(state.consumer_seq, Ordering::Relaxed);
+                return Ok(());
+            };
+            let bytes_out: &[u8] = &selected;
+            // Hottest path in the whole binary - ~300 events/s on a
+            // 5-rung EB stream × 2 destinations. Skip the format!
+            // entirely when tracing is disabled (the default).
+            if crate::trace::is_enabled() {
+                let hdr = bytes_out.first().copied().unwrap_or(0);
+                let is_idr = meta.is_idr;
+                crate::trace::log(
+                    "TAG_VIDEO",
+                    &format!(
+                        "dest={} i={} in_ts={} out_ts=0x{:08x} bytes={} hdr=0x{:02x} is_idr={} hex={}",
+                        dest.id,
+                        dest.tags_sent.load(Ordering::Relaxed),
+                        meta.ts_ms,
+                        out_ts,
+                        bytes_out.len(),
+                        hdr,
+                        is_idr as u8,
+                        crate::trace::hex_prefix(bytes_out, 16),
+                    ),
+                );
+            }
+            sink.send_video(out_ts, bytes_out).await?;
+            // The bytes_sent accounting below uses bytes_out.len()
+            // so per-destination bitrate reflects what we actually
+            // put on the wire (raw multi-track for Twitch, flat
+            // for everyone else).
+            dest.tags_sent.fetch_add(1, Ordering::Relaxed);
+            dest.bytes_sent
+                .fetch_add(bytes_out.len() as u64, Ordering::Relaxed);
+            dest.note_outbound_bytes(bytes_out.len());
+            state.consumer_seq = meta.seq + 1;
+            state.last_sent_input_ts = meta.ts_ms;
+            dest.consumer_seq
+                .store(state.consumer_seq, Ordering::Relaxed);
+            return Ok(());
         }
         _ => {}
     }
@@ -1419,14 +1550,14 @@ fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<Pendin
     // typical 2 s OBS IDR cadence: after the initial cut, delivered
     // delay would be off by up to ~1 s (closest-IDR error), the 500 ms
     // dead band would fire, find_idr_near would (often) return the
-    // SAME IDR, and we'd re-cut to it every 500 ms — visible as the
-    // "repeating 1–2 s of content" bouncing the user reported.
+    // SAME IDR, and we'd re-cut to it every 500 ms - visible as the
+    // "repeating 1-2 s of content" bouncing the user reported.
     //
     // 1500 ms must exceed (IDR_cadence / 2 + send_jitter) to prevent
     // re-cuts when we're already on the best available IDR. For OBS's
     // recommended 2 s keyframe interval, 1500 ms is the right number.
     // The trade-off is the user's delay may be off by up to ~1.5 s from
-    // their requested value — acceptable given the alternative is the
+    // their requested value - acceptable given the alternative is the
     // bouncing bug.
     let diff = (current_delay as i64) - (target_delay as i64);
     if diff.abs() < 1500 {
@@ -1434,7 +1565,7 @@ fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<Pendin
         return None;
     }
 
-    // "Build buffer first" — if the user asked for a delay deeper than
+    // "Build buffer first" - if the user asked for a delay deeper than
     // the buffer currently extends, we can't honor it yet. Mark the state
     // and hold our position; the buffer keeps filling at real time, and
     // once the requested delay becomes reachable, the next iteration cuts.
@@ -1477,7 +1608,7 @@ async fn apply_cut(
     let last_out_ts = state.output_ts_base.wrapping_add(input_delta_u32);
     let new_output_ts_base = last_out_ts.wrapping_add(1);
 
-    // Detailed cut trace — every cut writes one log line with the
+    // Detailed cut trace - every cut writes one log line with the
     // before/after seq, the input-ts jump, and the resulting output_ts
     // base. Now logs the ACTUAL new base (previously the formatter just
     // showed `old+1`, useless for diagnosing post-cut drift), plus the
@@ -1523,7 +1654,7 @@ async fn apply_cut(
     state.input_ts_anchor = cut.target.ts_ms;
     // Plain wall-clock anchor: from this instant onwards, pace_and_send
     // delivers content at real-time rate relative to the cut target's
-    // input timeline. No backdating, no burst — the user model is
+    // input timeline. No backdating, no burst - the user model is
     // "save N seconds of buffer, when ready jump back N seconds, then
     // play at 1×" and that's exactly this.
     state.wall_anchor = Instant::now();
@@ -1539,7 +1670,7 @@ async fn apply_cut(
     // Re-emit cached sequence headers on the new output timeline so
     // the destination decoder has fresh config before the first
     // post-cut frame. The previous code skipped this on the assumption
-    // that platforms cache headers from the initial publish — which is
+    // that platforms cache headers from the initial publish - which is
     // true for YouTube but NOT reliably for Twitch. Twitch rotates its
     // transcoder workers periodically and the new worker has no cached
     // config: every cut without an explicit header resend was a chance
@@ -1549,8 +1680,8 @@ async fn apply_cut(
     // destination decoder's POV. Headers are also resent on publisher
     // reconnect (in the pump loop) and on actual codec change (via the
     // seq_header_gen check).
-    send_sequence_headers(ctrl, sink, new_output_ts_base).await?;
-    // Sync the generation counter — the explicit resend above means
+    send_sequence_headers(ctrl, dest, sink, new_output_ts_base).await?;
+    // Sync the generation counter - the explicit resend above means
     // the next pump iteration shouldn't redundantly resend on a
     // gen-mismatch that has already been satisfied.
     dest.last_seq_header_gen.store(
@@ -1564,42 +1695,126 @@ async fn apply_cut(
 
 async fn send_sequence_headers(
     ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
     sink: &mut EgressSink,
     ts: u32,
 ) -> io::Result<()> {
-    // Drop the MutexGuards before the awaits.
-    let v = ctrl.ring.video_seq_header.lock().unwrap().clone();
-    if let Some(h) = v {
-        crate::trace::log(
-            "VIDEO_SEQ_HDR_SENT",
-            &format!(
-                "ts=0x{:08x} bytes={} hex={}",
-                ts,
-                h.len(),
-                crate::trace::hex_prefix(&h, 64)
-            ),
-        );
-        sink.send_video(ts, &h).await?;
+    // Drop the MutexGuard before the awaits. Clone is cheap - each
+    // value is a tiny SPS/PPS blob and there are at most ~5 entries
+    // (one per Enhanced-RTMP OneTrack track in a multi-track stream;
+    // exactly one for the legacy / single-track case).
+    let v_headers: Vec<(u8, Vec<u8>)> = ctrl
+        .ring
+        .video_seq_headers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    let passthrough = dest.pass_through_multitrack_video.load(Ordering::Relaxed);
+    if passthrough {
+        // Twitch (EB): forward every cached track's seq header
+        // bit-faithfully. Twitch's IVS pipeline binds each track's
+        // SPS/PPS to its allocated transcoder slot - missing one
+        // leaves that track with no decoder config, which Twitch
+        // surfaces as resolution "x" in Inspector and the transcoder
+        // pipeline as "no config bound to this session", killing the
+        // stream at the TCP retransmit boundary ~60 s later.
+        for (track_id, h) in &v_headers {
+            crate::trace::log(
+                "VIDEO_SEQ_HDR_SENT",
+                &format!(
+                    "ts=0x{:08x} track={} bytes={} hex={}",
+                    ts,
+                    track_id,
+                    h.len(),
+                    crate::trace::hex_prefix(h, 64)
+                ),
+            );
+            sink.send_video(ts, h).await?;
+        }
+    } else {
+        // Non-Twitch destinations get the single-track-flattened
+        // form of the primary track (TrackId 0) - same behaviour
+        // beta.6 had via the single-Option cache. Falls back to the
+        // first entry the BTreeMap iterates if track 0 is missing
+        // (defensive - every real stream we've seen has a track 0).
+        if let Some(h) = v_headers
+            .iter()
+            .find(|(k, _)| *k == 0)
+            .or_else(|| v_headers.first())
+            .map(|(_, v)| v)
+        {
+            // We pre-selected TrackId 0 (or the only entry as a
+            // defensive fallback), so select_video_bytes will always
+            // return Some for seq headers. The unwrap_or_else is just
+            // belt-and-suspenders for a pathological ring state.
+            let selected = crate::h264::select_video_bytes(h, false)
+                .unwrap_or(std::borrow::Cow::Borrowed(h.as_slice()));
+            let bytes_out: &[u8] = &selected;
+            crate::trace::log(
+                "VIDEO_SEQ_HDR_SENT",
+                &format!(
+                    "ts=0x{:08x} flattened bytes={} hex={}",
+                    ts,
+                    bytes_out.len(),
+                    crate::trace::hex_prefix(bytes_out, 64)
+                ),
+            );
+            sink.send_video(ts, bytes_out).await?;
+        }
     }
-    let a = ctrl.ring.audio_seq_header.lock().unwrap().clone();
-    if let Some(h) = a {
+    // Audio seq-headers, same per-track shape as video. Twitch
+    // destinations (passthrough) receive every cached track's
+    // AudioSpecificConfig bit-faithfully so a VOD audio track's
+    // decoder stays configured across egress restarts. Non-Twitch
+    // destinations only get the primary track's config - the
+    // simulcast-second-audio-track simply doesn't exist for them.
+    let a_headers: Vec<(u8, Vec<u8>)> = ctrl
+        .ring
+        .audio_seq_headers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    if passthrough {
+        for (track_id, h) in &a_headers {
+            crate::trace::log(
+                "AUDIO_SEQ_HDR_SENT",
+                &format!(
+                    "ts=0x{:08x} track={} bytes={} hex={}",
+                    ts,
+                    track_id,
+                    h.len(),
+                    crate::trace::hex_prefix(h, 32)
+                ),
+            );
+            sink.send_audio(ts, h).await?;
+        }
+    } else if let Some(h) = a_headers
+        .iter()
+        .find(|(k, _)| *k == 0)
+        .or_else(|| a_headers.first())
+        .map(|(_, v)| v)
+    {
         crate::trace::log(
             "AUDIO_SEQ_HDR_SENT",
             &format!(
                 "ts=0x{:08x} bytes={} hex={}",
                 ts,
                 h.len(),
-                crate::trace::hex_prefix(&h, 32)
+                crate::trace::hex_prefix(h, 32)
             ),
         );
-        sink.send_audio(ts, &h).await?;
+        sink.send_audio(ts, h).await?;
     }
     sink.flush().await
 }
 
 async fn wait_first_idr(ring: &Arc<DiskRing>) -> TagMeta {
     loop {
-        // Register notification *before* checking — guarantees we don't
+        // Register notification *before* checking - guarantees we don't
         // miss an append that lands between the check and the await.
         let notified = ring.on_append.notified();
         if let Some(m) = ring.newest_idr() {
@@ -1631,7 +1846,7 @@ async fn seed_idr(ctrl: &Arc<Controller>) -> TagMeta {
     if target > 0 {
         if let (Some(latest), Some(oldest)) = (ctrl.ring.latest_ts(), ctrl.ring.oldest_ts()) {
             // Only attempt the delayed seed if the buffer actually spans
-            // far enough back — otherwise find_idr_near may give us an
+            // far enough back - otherwise find_idr_near may give us an
             // IDR much closer to live than the user asked for.
             if latest.saturating_sub(oldest) + 1_500 >= target {
                 let desired = latest.saturating_sub(target);
@@ -1668,7 +1883,7 @@ fn reseed_after_publisher_change(state: &mut EgressState, new_idr: TagMeta) {
 async fn next_or_wait(ring: &Arc<DiskRing>, seq: u64, wait_ms: u64) -> Option<TagMeta> {
     // If we've fallen off the back of the ring (eviction passed us), jump
     // forward to the FIRST IDR at or after the new front. Landing on
-    // whatever the front happens to be — typically a P-frame — would
+    // whatever the front happens to be - typically a P-frame - would
     // send frames that reference reference-frames that aren't in the
     // decoder's buffer → viewers see macroblocking until the next IDR.
     // Aligning to an IDR boundary loses a bit more content but keeps
@@ -1678,7 +1893,7 @@ async fn next_or_wait(ring: &Arc<DiskRing>, seq: u64, wait_ms: u64) -> Option<Ta
             if let Some(m) = ring.oldest_idr_at_or_after(front) {
                 return Some(m);
             }
-            // No IDR in the ring at all (very early or pathological) —
+            // No IDR in the ring at all (very early or pathological) -
             // fall through to the wait path; the next append might be one.
         }
     }
@@ -1799,7 +2014,7 @@ mod tests {
     fn activate_with_partial_buffer_errors_buffer_short() {
         let h = harness(0);
         h.ctrl.arm_delay(10_000);
-        // Only 1 second of buffer — activate should refuse with remaining ETA
+        // Only 1 second of buffer - activate should refuse with remaining ETA
         feed_seconds(&h.ctrl, 0, 1, 30);
         match h.ctrl.activate_delay() {
             Err(ActivateError::BufferShort { remaining_ms }) => {
@@ -1825,7 +2040,7 @@ mod tests {
         h.ctrl.stop_delay();
         assert_eq!(h.ctrl.target_delay_ms(), 0, "target must clear on stop");
         assert_eq!(h.ctrl.armed_delay_ms(), 2_000, "armed must survive stop");
-        // With buffer still full, phase is `ready` again — not `idle`.
+        // With buffer still full, phase is `ready` again - not `idle`.
         assert_eq!(h.ctrl.phase(), "ready");
     }
 
@@ -1843,7 +2058,7 @@ mod tests {
 
     #[test]
     fn arm_change_during_active_updates_target_live() {
-        // While active, changing the armed amount must also re-target —
+        // While active, changing the armed amount must also re-target -
         // otherwise the user moves the slider and nothing happens until
         // they cut + re-activate.
         let h = harness(0);
@@ -1876,7 +2091,7 @@ mod tests {
         // logic. Even a small wrap should produce strictly increasing
         // u64 timestamps in the ring.
         let h = harness(0);
-        // Two tags well below any wrap point — strictly increasing.
+        // Two tags well below any wrap point - strictly increasing.
         h.ctrl.on_tag(9, 100, &[0u8; 10], true, false);
         h.ctrl.on_tag(9, 200, &[0u8; 10], false, false);
         h.ctrl.on_tag(9, 300, &[0u8; 10], false, false);
@@ -1935,6 +2150,196 @@ mod tests {
         assert!(
             latest > u32::MAX as u64,
             "expected post-wrap ts above u32::MAX, got {latest}"
+        );
+    }
+
+    // ── Enhanced Broadcasting stability ──────────────────────────────
+
+    /// EB seq headers must survive across the `pace_and_send` resync
+    /// path: the supervisor restarts egress without disturbing the
+    /// publisher, the per-track BTreeMap stays populated, and the next
+    /// `send_sequence_headers` for a Twitch destination re-emits every
+    /// track from the cache. The bug we shipped + reverted was the
+    /// pre-BTreeMap single-Option cache stomping all tracks down to
+    /// just the last one received - verify via the ring's cache
+    /// directly so we'd catch a regression to that storage shape.
+    #[test]
+    fn eb_seq_headers_survive_egress_restart() {
+        let h = harness(0);
+        // Simulate OBS sending OneTrack-format seq headers for tracks
+        // 0..=3 (a typical Twitch EB four-rung ladder).
+        for track in 0u8..=3 {
+            let mut tag = vec![0x96, 0x00, 0x61, 0x76, 0x63, 0x31, track];
+            tag.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+            h.ctrl
+                .ring
+                .append(9, 0, &tag, false, true)
+                .expect("seq-header append");
+        }
+        // mark_ingest_dead clears codec state and EB overrides, but
+        // the seq-header cache itself belongs to the ring and only
+        // gets wiped by a fresh publisher session - verify it stays.
+        let dest = h.ctrl.destination_state("d1");
+        *dest.eb_override_url.lock().unwrap() = Some("rtmps://stale".into());
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_dead();
+        let cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+        assert_eq!(cache.len(), 4, "all 4 tracks must persist across cut");
+        for track in 0u8..=3 {
+            assert!(cache.contains_key(&track), "track {track} dropped");
+        }
+    }
+
+    /// `mark_ingest_dead` must clear every destination's
+    /// `eb_override_url`. A stale override would force the next
+    /// (possibly non-EB) stream onto an IVS endpoint with no
+    /// allocated session - exactly the silent 60-s-drop failure mode
+    /// we were chasing before the override field landed.
+    #[test]
+    fn mark_ingest_dead_clears_all_eb_overrides() {
+        let h = harness(0);
+        for id in ["dest-a", "dest-b", "dest-c"] {
+            let s = h.ctrl.destination_state(id);
+            *s.eb_override_url.lock().unwrap() = Some(format!("rtmps://ivs/{id}"));
+        }
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_dead();
+        for (id, s) in h.ctrl.all_destination_states() {
+            assert!(
+                s.eb_override_url.lock().unwrap().is_none(),
+                "override for {id} survived ingest cut"
+            );
+        }
+    }
+
+    /// `note_multitrack_video` is sticky-with-decay: once set, the
+    /// chip stays lit for a short window after the last multi-track
+    /// tag arrived (so a momentary pause between IDRs doesn't drop
+    /// the chip), and decays to false once stale. `reset_codec_state`
+    /// must wipe it immediately so a fresh non-EB publisher session
+    /// doesn't inherit the previous session's EB flag.
+    #[test]
+    fn eb_chip_clears_on_publisher_reset() {
+        let h = harness(0);
+        // `multitrack_video()` returns false when ingest is dead, so
+        // simulate an active publisher session first. Also sleep
+        // briefly so `process_now_ms()` advances past 0 - the chip
+        // uses 0 as a sentinel for "never set" and would otherwise
+        // race the process anchor on a freshly-started test binary.
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        h.ctrl.note_multitrack_video();
+        assert!(h.ctrl.multitrack_video(), "chip must light on first tag");
+        h.ctrl.reset_codec_state();
+        assert!(
+            !h.ctrl.multitrack_video(),
+            "chip must clear when codec state resets"
+        );
+    }
+
+    /// A fresh publisher session must clear out all cached audio and multi-track
+    /// video sequence headers left over from a previous stream. While those
+    /// headers are required to survive mid-stream egress supervisor restarts
+    /// (tested via `eb_seq_headers_survive_egress_restart`), allowing them to
+    /// leak into a subsequent session causes severe pipeline pollution. If a
+    /// publisher reconnects without Enhanced Broadcasting, a failure to clear
+    /// this state causes the egress engine to inject stale multi-track headers
+    /// into Twitch, triggering an unrecoverable stream freeze.
+    #[tokio::test]
+    async fn begin_publish_purges_cached_sequence_headers_from_prior_sessions() {
+        let h = harness(0);
+
+        // 1. Populate the video sequence headers cache simulating an active
+        //    Twitch EB multi-track ladder (Tracks 0..=3).
+        for track_id in 0u8..=3 {
+            let mut tag = vec![0x96, 0x00, 0x61, 0x76, 0x63, 0x31, track_id];
+            tag.extend_from_slice(&[0xaa, 0xbb, 0xcc, track_id]);
+            h.ctrl
+                .ring
+                .append(9, 0, &tag, false, true)
+                .expect("failed to seed mock multi-track video sequence header");
+        }
+
+        // 2. Populate the audio sequence header cache simulating an active
+        //    Twitch VOD-audio session (Tracks 0 and 1).
+        for track_id in 0u8..=1 {
+            // OneTrack multi-track audio seq-header: SoundFormat=9,
+            // PacketType=Multitrack(5), MultiTrackType=0, NestedPT=0,
+            // FourCC=mp4a, TrackId at byte 7.
+            let mut tag = vec![0x90, 0x05, 0x00, 0x6d, 0x70, 0x34, 0x61, track_id];
+            tag.extend_from_slice(&[0x12, 0x10, track_id, 0x00]);
+            h.ctrl
+                .ring
+                .append(8, 0, &tag, false, true)
+                .expect("failed to seed mock multi-track audio seq header");
+        }
+
+        // 3. Populate metadata cache simulating Publisher A's onMetaData.
+        *h.ctrl.ring.metadata.lock().unwrap() = Some(b"onMetaData-publisher-A".to_vec());
+
+        // Validate baseline assumptions: caches must be fully loaded.
+        {
+            let video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+            assert_eq!(video_cache.len(), 4, "video cache must start with 4 tracks");
+            let audio_cache = h.ctrl.ring.audio_seq_headers.lock().unwrap();
+            assert_eq!(audio_cache.len(), 2, "audio cache must start with 2 tracks");
+            assert!(
+                h.ctrl.ring.metadata.lock().unwrap().is_some(),
+                "metadata cache must be active"
+            );
+        }
+
+        // 3. Simulate a clean stream teardown or crash. The supervisor invokes
+        //    `mark_ingest_dead`, which updates atomic states but leaves headers
+        //    intact by design to allow ongoing egress readers to recover.
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_dead();
+
+        {
+            let video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+            let audio_cache = h.ctrl.ring.audio_seq_headers.lock().unwrap();
+            assert_eq!(
+                video_cache.len(),
+                4,
+                "regression: mark_ingest_dead cleared video headers early"
+            );
+            assert_eq!(
+                audio_cache.len(),
+                2,
+                "regression: mark_ingest_dead cleared audio headers early"
+            );
+        }
+
+        // 4. Critical transition: A brand new publisher hits the RTMP stack.
+        //    `begin_publish` must perform atomic state purging of the ring caches.
+        h.ctrl
+            .begin_publish("fresh_incoming_stream_key")
+            .await
+            .expect("begin_publish must accept the new session token assignment");
+
+        // 5. Hard assertions to guarantee a zeroed cache allocation before streaming starts.
+        let post_video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+        assert!(
+            post_video_cache.is_empty(),
+            "leak detected: begin_publish failed to purge video_seq_headers cache. \
+             stale tracks remaining: {:?}",
+            post_video_cache.keys()
+        );
+
+        let post_audio_cache = h.ctrl.ring.audio_seq_headers.lock().unwrap();
+        assert!(
+            post_audio_cache.is_empty(),
+            "leak detected: begin_publish failed to clear stale audio_seq_headers cache. \
+             stale tracks remaining: {:?}",
+            post_audio_cache.keys()
+        );
+
+        let post_metadata_cache = h.ctrl.ring.metadata.lock().unwrap();
+        assert!(
+            post_metadata_cache.is_none(),
+            "leak detected: begin_publish failed to clear stale onMetaData. \
+             cached data: {:?}",
+            post_metadata_cache
         );
     }
 }

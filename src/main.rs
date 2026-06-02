@@ -1,4 +1,4 @@
-// Release builds on Windows run without a console — the tray icon is
+// Release builds on Windows run without a console - the tray icon is
 // the user-facing exit affordance. Debug builds keep the console so
 // `cargo run` still prints log output.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -6,7 +6,7 @@
 //! InstantClone entry point.
 //!
 //! Settings live in a single file (default `./instantclone.config.json`).
-//! On first launch — when `configured=false` — we open the user's browser
+//! On first launch - when `configured=false` - we open the user's browser
 //! at the setup wizard. The web UI is the configuration surface; almost
 //! nothing comes from env vars.
 //!
@@ -28,6 +28,8 @@ mod buffer;
 mod config;
 mod controller;
 mod h264;
+mod https;
+mod obs_register;
 #[cfg(windows)]
 mod portcheck;
 mod rtmp;
@@ -46,7 +48,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 fn main() -> std::io::Result<()> {
-    // Subcommand dispatch — keeps the proxy + sink in one binary so users
+    // Subcommand dispatch - keeps the proxy + sink in one binary so users
     // don't need two `cargo run` recipes to test end-to-end locally.
     let raw_args: Vec<String> = std::env::args().collect();
     if raw_args.get(1).map(String::as_str) == Some("sink") {
@@ -57,7 +59,7 @@ fn main() -> std::io::Result<()> {
         // console (e.g. the PowerShell that launched us); fall back to
         // allocating a fresh one when there is no parent console (the
         // user double-clicked the .exe). Skip both when stdout is
-        // already a valid handle — that means a caller already piped or
+        // already a valid handle - that means a caller already piped or
         // redirected us, and stealing it would break their capture.
         #[cfg(all(windows, not(debug_assertions)))]
         unsafe {
@@ -81,7 +83,7 @@ fn main() -> std::io::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("./instantclone.config.json"));
 
-    // Egress trace — wire-level append-only log next to the config.
+    // Egress trace - wire-level append-only log next to the config.
     // Captures handshake details, sequence headers, every video tag,
     // and every cut so any "Twitch live looks broken but VOD is fine"
     // class of bug can be diagnosed by diffing the file against a known-
@@ -100,7 +102,7 @@ fn main() -> std::io::Result<()> {
     }
 
     // Port pre-flight (Windows only). Without this, a busy port leaves
-    // us in a silent retry loop with no console to print to — the worst
+    // us in a silent retry loop with no console to print to - the worst
     // possible first-run UX. If either port is taken we identify the
     // owning process, propose the next free port in the +0..+9 window,
     // and pop a native modal asking the user to switch or quit.
@@ -142,10 +144,37 @@ fn main() -> std::io::Result<()> {
         .build()?;
 
     rt.block_on(async move {
-        let ring = Arc::new(buffer::DiskRing::create(
-            &settings.buffer_path,
-            settings.buffer_bytes(),
-        )?);
+        let ring = match buffer::DiskRing::create(&settings.buffer_path, settings.buffer_bytes()) {
+            Ok(r) => Arc::new(r),
+            Err(e) => {
+                // Cold-start showstopper. Under windows_subsystem=windows
+                // there's no console to print this to, so pop a native
+                // dialog before exiting - otherwise the binary appears
+                // to do nothing and the user has no path to diagnose.
+                // Mirrors how `preflight_resolve` surfaces port
+                // conflicts before the runtime starts.
+                let msg = format!(
+                    "InstantClone couldn't open or create the delay buffer file.\n\n\
+                     Path:  {}\n\
+                     Size:  {} MB\n\
+                     Error: {}\n\n\
+                     Common causes:\n\
+                     - Another instance of InstantClone is still running\n\
+                     - Antivirus or backup software is scanning the file\n\
+                     - The drive is full or read-only\n\
+                     - The path is on a removable drive that's disconnected\n\n\
+                     Fix one of the above and relaunch, or change \
+                     'buffer_path' in instantclone.config.json to a writable folder.",
+                    settings.buffer_path.display(),
+                    settings.buffer_mb,
+                    e,
+                );
+                #[cfg(windows)]
+                portcheck::show_error("InstantClone -buffer error", &msg);
+                eprintln!("{}", msg);
+                return Err(e);
+            }
+        };
         // The new model: cold-start *arms* a delay so the buffer rebuilds
         // toward what the user had before, but doesn't yank the viewer
         // back the moment the stream resumes. They explicitly hit
@@ -166,7 +195,7 @@ fn main() -> std::io::Result<()> {
 
         // Auto-open the browser on every launch so the user always sees
         // the dashboard within a second of double-clicking the exe. The
-        // tray icon stays running in the background — closing the tab
+        // tray icon stays running in the background - closing the tab
         // doesn't kill the proxy. `--no-browser` skips this for autostart
         // / headless setups.
         if !suppress_browser {
@@ -205,13 +234,13 @@ fn main() -> std::io::Result<()> {
             _ = tokio::signal::ctrl_c() => { shutdown_reason = "ctrl-c"; }
             _ = tray_rx                 => { shutdown_reason = "tray quit"; }
         }
-        eprintln!("\nShutting down ({shutdown_reason}) — closing active streams cleanly...");
+        eprintln!("\nShutting down ({shutdown_reason}) - closing active streams cleanly...");
         // Flush the egress trace so the last few thousand events make
         // it to disk before the BufWriter is dropped on process exit.
         trace::flush();
         // Flip shutdown on every active destination so each pump sends
         // `deleteStream` to its upstream before the runtime drops them.
-        // Tiny window — if a pump is mid-await it'll just exit on next
+        // Tiny window - if a pump is mid-await it'll just exit on next
         // loop tick.
         for (_id, st) in ctrl.all_destination_states() {
             st.shutdown_requested
@@ -291,7 +320,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         for id in to_remove {
             if let Some((_url, handle)) = running.remove(&id) {
                 // Cooperative shutdown: ask the pump to send deleteStream
-                // and close cleanly. Give it a short window — then
+                // and close cleanly. Give it a short window - then
                 // HARD-ABORT no matter what. Without the explicit abort,
                 // dropping the JoinHandle leaves the task running
                 // detached: a Twitch destination stuck in a connect-fail
@@ -311,10 +340,64 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
 
         // 2) For each desired dest: spawn if missing, or restart if URL
         //    changed, OR if the previous pump has finished (e.g. it
-        //    bailed out cleanly when ingest went away — we want a fresh
+        //    bailed out cleanly when ingest went away - we want a fresh
         //    pump now that ingest is back).
         let ingest_alive = ctrl.ingest_alive();
         for (dest, url) in &desired {
+            // Enhanced Broadcasting override: when the
+            // /obs/multitrack-config proxy gets back a real
+            // session-allocated IVS URL from Twitch's API, it stashes
+            // it on the destination state. The egress MUST connect to
+            // that IVS endpoint instead of the user's configured
+            // `live.twitch.tv` - only the IVS edge runs the EB
+            // transcoder pipeline. Pull the override (if any) here so
+            // a change to it triggers the same URL-changed restart
+            // path as a user editing the destination.
+            let override_url = ctrl
+                .destination_state(&dest.id)
+                .eb_override_url
+                .lock()
+                .unwrap()
+                .clone();
+            // VOD-audio mode: when this is a Twitch destination with
+            // vod_audio=true and we haven't yet fetched an IVS session
+            // for it, fire one off in the background. The fetch task
+            // populates eb_override_url; the next supervisor tick
+            // (~2 s) reads it and restarts egress with the IVS URL.
+            // Only triggers once ingest is alive - no point burning
+            // Twitch API quota for a stream that hasn't started.
+            if ingest_alive
+                && override_url.is_none()
+                && dest.platform == "twitch"
+                && dest.vod_audio
+                && !dest.stream_key.is_empty()
+            {
+                let key = dest.stream_key.clone();
+                let want_eb = dest.vod_audio_inject_eb;
+                let state = ctrl.destination_state(&dest.id);
+                let ctrl_for_log = ctrl.clone();
+                let dest_id = dest.id.clone();
+                tokio::spawn(async move {
+                    match web::fetch_twitch_vod_session(key, want_eb).await {
+                        Some(url) => {
+                            *state.eb_override_url.lock().unwrap() = Some(url);
+                            ctrl_for_log.log(format!(
+                                "[{}] VOD-audio session allocated by Twitch{}",
+                                dest_id,
+                                if want_eb { " (with EB ladder)" } else { "" }
+                            ));
+                        }
+                        None => {
+                            ctrl_for_log.log(format!(
+                                "[{}] VOD-audio: Twitch API call failed - retrying on next tick",
+                                dest_id
+                            ));
+                        }
+                    }
+                });
+            }
+            let effective_url = override_url.as_deref().unwrap_or(url.as_str()).to_string();
+            let url = &effective_url;
             let needs_restart = match running.get(&dest.id) {
                 Some((existing_url, handle)) => existing_url != url || handle.is_finished(),
                 None => true,
@@ -324,7 +407,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                     handle.abort();
                     let _ = handle.await;
                 }
-                // Don't open a fresh egress while OBS isn't sending —
+                // Don't open a fresh egress while OBS isn't sending -
                 // we'd either burn TCP to Twitch / YouTube for an empty
                 // publish slot, or sit blocked in next_or_wait. The
                 // pump itself bails out cleanly on ingest loss; here we
@@ -341,6 +424,22 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 state
                     .shutdown_requested
                     .store(false, std::sync::atomic::Ordering::Relaxed);
+                // Enhanced Broadcasting (multi-track video) pass-through
+                // follows the per-destination IVS session, not the
+                // platform. The /obs/multitrack-config proxy sets
+                // eb_override_url on exactly one Twitch destination
+                // (the one whose stream key it sent to Twitch's API);
+                // ONLY that destination owns a session-allocated
+                // transcoder ladder. A second Twitch destination -
+                // simulcasting to a different Twitch account - has no
+                // IVS session here, so it must NOT receive raw
+                // multi-track tags (they'd collide on Twitch's edge
+                // with the first dest's session). It falls back to the
+                // single-track flatten just like a YouTube destination.
+                let has_eb_session = override_url.is_some();
+                state
+                    .pass_through_multitrack_video
+                    .store(has_eb_session, std::sync::atomic::Ordering::Relaxed);
                 let label = dest.name.clone();
                 let url_clone = url.clone();
                 let handle = tokio::spawn(controller::run_egress(
@@ -355,7 +454,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         }
 
         if running.is_empty() {
-            eprintln!("[egress] idle — add a destination in the web UI");
+            eprintln!("[egress] idle - add a destination in the web UI");
         }
 
         // Wake at most every 2 s to re-check ingest_alive, finished
@@ -438,7 +537,7 @@ fn open_browser(url: &str) {
 }
 
 /// Create the overlays directory (if missing) and write any of the three
-/// built-in templates that don't already exist on disk. Idempotent — safe
+/// built-in templates that don't already exist on disk. Idempotent - safe
 /// to call on every startup. Users can freely edit the files; the next
 /// run won't overwrite them.
 fn ensure_overlays_dir(dir: &std::path::Path) {
@@ -484,95 +583,13 @@ Recommended pattern:
     </script>
 
 The three bundled overlays (minimal, corner, strip) are useful starting
-points — copy one and modify.
+points - copy one and modify.
 "#;
 
-const OVERLAY_MINIMAL: &str = r##"<!doctype html>
-<html><head><meta charset="utf-8"><title>Delay (minimal)</title>
-<style>
-body{margin:0;background:transparent;color:#fff;font-family:-apple-system,Segoe UI,Roboto,sans-serif}
-.box{position:fixed;left:24px;top:24px;background:rgba(10,12,16,.65);
-  backdrop-filter:blur(8px);padding:12px 18px;border-radius:12px;
-  border:1px solid rgba(255,255,255,.08);min-width:180px}
-.l{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,.55)}
-.v{font-size:32px;font-weight:700;letter-spacing:-1px;font-variant-numeric:tabular-nums;line-height:1.1;margin-top:2px}
-.u{font-size:16px;color:rgba(255,255,255,.55);font-weight:400;margin-left:3px}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#3c3;
-  box-shadow:0 0 8px #3c3;margin-right:6px;vertical-align:middle}
-.dot.bad{background:#f55;box-shadow:0 0 8px #f55}
-.row{display:flex;gap:14px;margin-top:8px;font-size:12px;color:rgba(255,255,255,.7)}
-</style></head><body>
-<div class="box">
-  <div class="l">Delay</div>
-  <div class="v"><span id="v">0</span><span class="u">s</span></div>
-  <div class="row"><span><span class="dot" id="i"></span>OBS</span>
-    <span><span class="dot" id="e"></span>LIVE</span></div>
-</div>
-<script>
-async function t(){try{const s=await(await fetch('/state')).json();
-v.textContent=(s.current_delay_ms/1000).toFixed(1);
-i.className='dot '+(s.ingest_alive?'':'bad');
-e.className='dot '+(s.egress_alive?'':'bad');}catch(_){}}
-t();setInterval(t,500);
-</script></body></html>
-"##;
-
-const OVERLAY_CORNER: &str = r##"<!doctype html>
-<html><head><meta charset="utf-8"><title>Delay (corner)</title>
-<style>
-body{margin:0;background:transparent;color:#fff;font-family:-apple-system,Segoe UI,Roboto,sans-serif}
-.box{position:fixed;right:32px;bottom:32px;background:rgba(10,12,16,.85);
-  padding:18px 26px;border-radius:16px;border:2px solid #6cf;min-width:220px;text-align:right}
-.l{font-size:13px;text-transform:uppercase;letter-spacing:2px;color:#6cf}
-.v{font-size:48px;font-weight:800;letter-spacing:-2px;font-variant-numeric:tabular-nums;margin-top:4px}
-.u{font-size:22px;color:rgba(255,255,255,.6);font-weight:400;margin-left:4px}
-.row{display:flex;gap:14px;justify-content:flex-end;margin-top:10px;font-size:13px;color:rgba(255,255,255,.75)}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#3c3;
-  box-shadow:0 0 8px #3c3;margin-right:6px;vertical-align:middle}
-.dot.bad{background:#f55;box-shadow:0 0 8px #f55}
-</style></head><body>
-<div class="box">
-  <div class="l">Stream Delay</div>
-  <div class="v"><span id="v">0</span><span class="u">s</span></div>
-  <div class="row"><span><span class="dot" id="i"></span>OBS</span>
-    <span><span class="dot" id="e"></span>LIVE</span></div>
-</div>
-<script>
-async function t(){try{const s=await(await fetch('/state')).json();
-v.textContent=(s.current_delay_ms/1000).toFixed(1);
-i.className='dot '+(s.ingest_alive?'':'bad');
-e.className='dot '+(s.egress_alive?'':'bad');}catch(_){}}
-t();setInterval(t,500);
-</script></body></html>
-"##;
-
-const OVERLAY_STRIP: &str = r##"<!doctype html>
-<html><head><meta charset="utf-8"><title>Delay (strip)</title>
-<style>
-body{margin:0;background:transparent;color:#fff;font-family:-apple-system,Segoe UI,Roboto,sans-serif}
-.box{position:fixed;left:0;right:0;bottom:0;
-  background:linear-gradient(180deg,transparent,rgba(10,12,16,.9));
-  padding:18px 32px;display:flex;align-items:center;gap:32px;font-size:18px}
-.l{font-size:12px;text-transform:uppercase;letter-spacing:2px;color:rgba(255,255,255,.55)}
-.v{font-size:36px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-1px}
-.u{font-size:18px;color:rgba(255,255,255,.55);font-weight:400;margin-left:3px}
-.row{display:flex;gap:18px;margin-left:auto;font-size:14px;color:rgba(255,255,255,.75)}
-.group{display:flex;flex-direction:column;align-items:flex-start}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#3c3;
-  box-shadow:0 0 8px #3c3;margin-right:6px;vertical-align:middle}
-.dot.bad{background:#f55;box-shadow:0 0 8px #f55}
-</style></head><body>
-<div class="box">
-  <div class="group"><span class="l">Delay</span>
-    <span class="v"><span id="v">0</span><span class="u">s</span></span></div>
-  <div class="row"><span><span class="dot" id="i"></span>OBS</span>
-    <span><span class="dot" id="e"></span>LIVE</span></div>
-</div>
-<script>
-async function t(){try{const s=await(await fetch('/state')).json();
-v.textContent=(s.current_delay_ms/1000).toFixed(1);
-i.className='dot '+(s.ingest_alive?'':'bad');
-e.className='dot '+(s.egress_alive?'':'bad');}catch(_){}}
-t();setInterval(t,500);
-</script></body></html>
-"##;
+// Overlay templates are embedded straight from the canonical files in
+// ../overlays/ so a fresh install drops the *same* HTML that lives in
+// the repo. include_str! keeps the constant and the on-disk template
+// in lockstep automatically - no risk of the two drifting silently.
+const OVERLAY_MINIMAL: &str = include_str!("../overlays/minimal.html");
+const OVERLAY_CORNER: &str = include_str!("../overlays/corner.html");
+const OVERLAY_STRIP: &str = include_str!("../overlays/strip.html");

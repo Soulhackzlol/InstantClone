@@ -42,7 +42,7 @@ jobs:
 
       # Tests run in --release because runtime correctness depends on
       # `panic = "abort"`. Drop `--no-fail-fast` so the first failure is
-      # the one in the log — clearer signal than a wall of stack traces.
+      # the one in the log - clearer signal than a wall of stack traces.
       - name: test
         run: cargo test --release
 
@@ -53,7 +53,7 @@ jobs:
           "Binary: $([Math]::Round($sz/1KB,1)) KB" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
       - name: upload binary for e2e
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: instantclone-${{ github.sha }}
           path: target/release/instantclone.exe
@@ -63,7 +63,7 @@ jobs:
   # instantclone's ingest, instantclone forwards it to the in-tree sink,
   # the sink confirms onMetaData + publish + IDR detection. Exercises
   # handshake, AMF0, chunking, h264 classification, and the egress pump
-  # against a real RTMP peer — the whole wire path the unit tests skip.
+  # against a real RTMP peer - the whole wire path the unit tests skip.
   e2e:
     name: e2e (ffmpeg → proxy → sink)
     needs: test
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: download binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: instantclone-${{ github.sha }}
           path: target/release
@@ -87,7 +87,7 @@ jobs:
 
       - name: upload e2e logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-logs-${{ github.sha }}
           path: ${{ runner.temp }}/ic-e2e-*

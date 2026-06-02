@@ -69,7 +69,7 @@ html,body{margin:0;padding:0;background:#0c0d12;color:#e9eaf0;font-family:-apple
     <button class="step" onclick="bump(5)" title="+5s">+</button>
   </div>
   <div class="cta-row">
-    <button class="btn full" id="main" onclick="mainClick()" disabled>—</button>
+    <button class="btn full" id="main" onclick="mainClick()" disabled>-</button>
     <button class="btn ghost disarm" id="cancel" onclick="disarmClick()" hidden title="Cancel arming">✕</button>
   </div>
 </div>
@@ -153,12 +153,12 @@ function renderCta(){
 function applyState(j){
   s=j;
   const ds=PHASE_TO_STATE[s.phase]||'off';
-  // Phase pill — distinguishes idle vs passthrough vs arming/armed/active
+  // Phase pill - distinguishes idle vs passthrough vs arming/armed/active
   const phMap={off:s.ingest_alive?['live','Live']:['off','Idle'],arming:['arming','Buffering'],armed:['armed','Armed'],active:['active','Active']};
   const [cls,txt]=phMap[ds];
   $('ph').className='phase '+cls;
   $('ph').textContent=txt;
-  // OBS pill — alive vs not
+  // OBS pill - alive vs not
   $('obs').className='dot '+(s.ingest_alive?'on':'bad');
   $('obs-lbl').textContent=s.ingest_alive?'OBS':'no signal';
   // Current delay
@@ -182,7 +182,7 @@ function applyState(j){
     ds==='active'   ? `Live ${(s.current_delay_ms/1000).toFixed(1)}s behind real time.` :
     ds==='armed'    ? 'Buffer full. Hit Activate to go live with delay.' :
     ds==='arming'   ? 'Filling buffer… you can cancel any time.' :
-                      'Passthrough — no delay applied.';
+                      'Passthrough - no delay applied.';
   renderCta();
 }
 async function tick(){
@@ -190,7 +190,7 @@ async function tick(){
   if(!r.ok||!r.j){$('obs').className='dot bad';$('obs-lbl').textContent='offline';return}
   applyState(r.j);
 }
-// Prefer Server-Sent Events for state updates — one long-lived connection
+// Prefer Server-Sent Events for state updates - one long-lived connection
 // the server writes to only when something changes. Falls back to 500 ms
 // polling if EventSource is missing or the stream drops.
 let _pollTimer=null;

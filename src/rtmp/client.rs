@@ -71,7 +71,7 @@ impl EgressClient {
         );
         let mut sock = TcpStream::connect((url.host.as_str(), url.port)).await?;
         sock.set_nodelay(true)?;
-        // Aggressive TCP keepalive (Windows-only — best-effort no-op on
+        // Aggressive TCP keepalive (Windows-only - best-effort no-op on
         // other platforms). Twitch's edge sometimes silently drops idle
         // sessions; without keepalive probes we'd not notice until the
         // first frame post-pause failed with EPIPE. 30 s probe + 10 s
@@ -82,7 +82,7 @@ impl EgressClient {
         // ~64 KB which is enough at ≤ 6 Mbps but starts blocking writes
         // at 10+ Mbps when the egress receiver (Twitch / YouTube) is
         // momentarily slow to ACK. 1 MB holds ~800 ms of stream at
-        // 10 Mbps — plenty of slack without pinning huge per-connection
+        // 10 Mbps - plenty of slack without pinning huge per-connection
         // memory. Best-effort: errors are logged-only because not every
         // platform / firewall stack honours setsockopt(SO_SNDBUF).
         let _ = crate::rtmp::tcp::set_send_buffer(&sock, 1024 * 1024);
@@ -124,7 +124,7 @@ impl EgressClient {
         //    (HEVC, AV1, VP9, Opus, AC-3, FLAC) so HEVC / AV1 streams
         //    via OBS's Enhanced Broadcasting get routed to the modern
         //    codec lane. The legacy bitmaps above don't have bits for
-        //    HEVC / AV1 — those codecs only exist in Enhanced RTMP.
+        //    HEVC / AV1 - those codecs only exist in Enhanced RTMP.
         //    Written directly as AMF0 bytes because the strict-array
         //    type doesn't fit our HashMap-based Object builder.
         const FOURCC_LIST: &[&str] = &[
@@ -236,7 +236,7 @@ impl EgressClient {
 
     /// Spawn a background drain of server-to-client messages (acks, ping,
     /// onStatus). The resulting `EgressSink` owns an `AbortHandle` for
-    /// that drain — when the sink is dropped (egress disconnects /
+    /// that drain - when the sink is dropped (egress disconnects /
     /// reconnects), the drain task is aborted, preventing zombie tasks
     /// from accumulating on every reconnect.
     ///
@@ -254,14 +254,14 @@ impl EgressClient {
         // owns the reader's byte counter; the sink owns the writer.
         // After every message the drain checks `take_pending_ack` and
         // forwards the seq number through here. Same pattern as pings
-        // — keeps the writer's side of the socket single-owner.
+        // - keeps the writer's side of the socket single-owner.
         let (ack_tx, ack_rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
         let drain = tokio::spawn(async move {
             loop {
                 let Ok(msg) = self.reader.read_message().await else {
                     return;
                 };
-                // User Control Message — type 4. Layout:
+                // User Control Message - type 4. Layout:
                 //   bytes 0..2: event type (u16 BE)
                 //   bytes 2..:  event-specific payload
                 // Event type 6 = Ping Request (4-byte server ts
@@ -285,7 +285,7 @@ impl EgressClient {
                 // reader says we've crossed the peer's window/10
                 // threshold. Egress traffic from the server to us is
                 // small (acks + pings + onStatus), so this fires rarely
-                // — but every well-behaved RTMP peer does it and so
+                // - but every well-behaved RTMP peer does it and so
                 // should we.
                 if let Some(seq) = self.reader.take_pending_ack() {
                     let _ = ack_tx.send(seq);
@@ -307,11 +307,11 @@ pub struct EgressSink {
     pub stream_id: u32,
     /// Pings the drain task has captured from the server, queued for the
     /// pump loop to acknowledge. Unbounded because pings arrive at most
-    /// every few seconds and the queue is drained on every pump tick —
+    /// every few seconds and the queue is drained on every pump tick -
     /// even with no traffic on the egress, the queue never grows beyond
     /// a handful of entries.
     ping_rx: tokio::sync::mpsc::UnboundedReceiver<u32>,
-    /// BYTES_READ_REPORT sequence numbers queued by the drain task —
+    /// BYTES_READ_REPORT sequence numbers queued by the drain task -
     /// see `spawn_reader_drain`. Drained by `drain_pings` on every
     /// pump tick.
     ack_rx: tokio::sync::mpsc::UnboundedReceiver<u32>,
@@ -403,7 +403,7 @@ impl EgressSink {
     /// Best-effort: errors swallowed because we're tearing down anyway.
     pub async fn send_delete_stream(&mut self) -> io::Result<()> {
         // FCUnpublish carries the stream key, but we never see it at
-        // this layer — the `EgressSink` only knows the stream_id. The
+        // this layer - the `EgressSink` only knows the stream_id. The
         // stream key is in the URL the EgressClient was built from, but
         // not retained here. Twitch accepts an empty-string key on
         // FCUnpublish (it knows which stream you mean from the
@@ -471,7 +471,7 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
     // beyond a healthy round-trip (typical: 30-200 ms) while staying
     // short enough that the supervisor's reconnect backoff doesn't
     // pile up. Without this, a publish that Twitch silently drops
-    // (which happened repeatedly in the user's 8 k bitrate test —
+    // (which happened repeatedly in the user's 8 k bitrate test -
     // 7 reconnect cycles before the first onStatus arrived) wedges
     // here until the underlying TCP error happens to surface.
     let work = async {
@@ -521,7 +521,7 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
         Err(_) => Err(io::Error::new(
             io::ErrorKind::TimedOut,
             format!(
-                "no `{}` response from server within 15 s — likely silent disconnect or auth delay",
+                "no `{}` response from server within 15 s - likely silent disconnect or auth delay",
                 expect
             ),
         )),

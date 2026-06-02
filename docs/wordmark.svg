@@ -18,7 +18,7 @@
         <animate attributeName="stop-color" values="#bce6f5;#ffffff;#bce6f5" dur="6s" repeatCount="indefinite"/>
       </stop>
     </linearGradient>
-    <!-- Cyan-tinted shadow under the mark — "lit from inside" feel. -->
+    <!-- Cyan-tinted shadow under the mark - "lit from inside" feel. -->
     <filter id="markGlowSoft" x="-50%" y="-50%" width="200%" height="200%">
       <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#5ac8fa" flood-opacity="0.55"/>
     </filter>
@@ -30,7 +30,7 @@
   </defs>
 
   <!-- Mark: cyan rounded square + white pause bars (matches tray icon).
-       Bars subtly stretch ±2 px vertically on a 3 s loop — feels like
+       Bars subtly stretch ±2 px vertically on a 3 s loop - feels like
        the icon is breathing, ties into the "delay buffer" metaphor. -->
   <g transform="translate(8, 16)" filter="url(#markGlowSoft)">
     <rect width="68" height="68" rx="15" fill="url(#markFill)"/>

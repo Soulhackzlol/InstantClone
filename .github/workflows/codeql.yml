@@ -1,6 +1,6 @@
 name: codeql
 
-# Static analysis on every push/PR. Skipped while the repo is private —
+# Static analysis on every push/PR. Skipped while the repo is private -
 # CodeQL is gated behind GitHub Advanced Security for private repos, but
 # free on public ones. When the repo flips public this workflow starts
 # running automatically with no edits needed.

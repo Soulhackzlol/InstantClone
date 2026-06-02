@@ -7,7 +7,7 @@
 //!     surfaces the real state in ~30 s.
 //!   * EGRESS: Twitch / NAT / firewall idle-paths sometimes silently drop
 //!     long connections. Without probes, we'd only discover a dead socket
-//!     on the next send — by then the viewer has been frozen for a while.
+//!     on the next send - by then the viewer has been frozen for a while.
 //!
 //! Implementation: raw `WSAIoctl(SIO_KEEPALIVE_VALS)` on Windows (no
 //! `socket2` dependency), no-op stub on other platforms.
@@ -77,13 +77,13 @@ pub fn set_aggressive_keepalive(_sock: &TcpStream) -> io::Result<()> {
 /// Increase the kernel send buffer for a TCP socket. The Windows default
 /// (~64 KB) is enough at typical streaming bitrates but starts blocking
 /// our writes at 10+ Mbps when the receiving platform (Twitch / YouTube)
-/// is momentarily slow to ACK — every send waits for buffer space,
+/// is momentarily slow to ACK - every send waits for buffer space,
 /// fighting the bursty IDR pattern. Bumping to 1 MB gives roughly
 /// 800 ms of slack at 10 Mbps, costing one extra MB per active egress
 /// connection (negligible vs. the 300 MB disk-ring buffer).
 ///
 /// Best-effort: any setsockopt failure is returned but callers should
-/// treat it as non-fatal — the smaller default buffer still works, just
+/// treat it as non-fatal - the smaller default buffer still works, just
 /// with more write-side back-pressure under load.
 #[cfg(target_os = "windows")]
 pub fn set_send_buffer(sock: &TcpStream, bytes: u32) -> io::Result<()> {

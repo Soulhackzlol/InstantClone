@@ -44,7 +44,7 @@
     <text class="pill-text" x="60" y="22" text-anchor="middle" fill="#7a7d8a">IDLE</text>
   </g>
 
-  <!-- arm — user action, cyan + travelling dot -->
+  <!-- arm - user action, cyan + travelling dot -->
   <text class="verb" x="194" y="40" text-anchor="middle">arm</text>
   <line class="arrow-line" x1="152" y1="66" x2="234" y2="66" marker-end="url(#arrow)"/>
   <circle r="2.5" fill="#5ac8fa">
@@ -61,7 +61,7 @@
     <text class="pill-text" x="88" y="22" text-anchor="middle" fill="#ff9f0a">BUFFERING</text>
   </g>
 
-  <!-- fills — automatic transition, muted + dashed -->
+  <!-- fills - automatic transition, muted + dashed -->
   <text class="verb-muted" x="440" y="40" text-anchor="middle">fills</text>
   <line class="arrow-line-muted" x1="404" y1="66" x2="478" y2="66" marker-end="url(#arrowMuted)"/>
   <circle r="2" fill="#7a7d8a" opacity="0.7">
@@ -75,7 +75,7 @@
     <text class="pill-text" x="60" y="22" text-anchor="middle" fill="#5ac8fa">ARMED</text>
   </g>
 
-  <!-- activate — user action, cyan + travelling dot -->
+  <!-- activate - user action, cyan + travelling dot -->
   <text class="verb" x="640" y="40" text-anchor="middle">activate</text>
   <line class="arrow-line" x1="604" y1="66" x2="676" y2="66" marker-end="url(#arrow)"/>
   <circle r="2.5" fill="#5ac8fa">
@@ -83,7 +83,7 @@
     <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.15;0.85;1" dur="2.4s" begin="0.8s" repeatCount="indefinite"/>
   </circle>
 
-  <!-- ACTIVE (destination state — soft halo + breathing dot) -->
+  <!-- ACTIVE (destination state - soft halo + breathing dot) -->
   <g transform="translate(680, 48)" filter="url(#activeGlow)">
     <rect width="170" height="36" rx="18" fill="rgba(52,199,89,0.16)" stroke="rgba(52,199,89,0.4)"/>
     <circle cx="22" cy="18" r="3.5" fill="#34c759">
@@ -102,7 +102,7 @@
         stroke="#ff453a" stroke-width="1.5" stroke-dasharray="5 4"
         fill="none" marker-end="url(#arrowCut)"/>
 
-  <!-- Travelling red dot — head-to-tail of the cut path -->
+  <!-- Travelling red dot - head-to-tail of the cut path -->
   <circle r="2.8" fill="#ff453a">
     <animateMotion dur="4.5s" repeatCount="indefinite">
       <mpath href="#cutPath"/>
@@ -110,7 +110,7 @@
     <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.9;1" dur="4.5s" repeatCount="indefinite"/>
   </circle>
 
-  <!-- "CUT" label set INTO the arc — opaque backdrop breaks the
+  <!-- "CUT" label set INTO the arc - opaque backdrop breaks the
        dashed line so the label is the visual focus of the return path. -->
   <g transform="translate(427, 130)">
     <rect width="80" height="22" rx="11" fill="#07080a" stroke="rgba(255,69,58,0.55)" stroke-width="1"/>

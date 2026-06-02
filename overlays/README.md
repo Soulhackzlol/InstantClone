@@ -39,7 +39,7 @@ Typical poll loop:
 
 ## Starting points
 
-- **`custom-template.html`** — copy this. It's a small working overlay
+- **`custom-template.html`** - copy this. It's a small working overlay
   with comments explaining every part of the contract above. Rename the
   copy to whatever you want; it'll appear in the dashboard.
 - **The six built-in styles** (`minimal`, `corner`, `strip`, `focus`,

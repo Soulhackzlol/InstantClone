@@ -3,9 +3,15 @@ name = "instantclone"
 version = "0.1.0"
 edition = "2021"
 
-# Squeeze every byte out of the release binary.
+# Squeeze every byte out of the release binary. opt-level = "s" trades
+# a small amount of code-generation aggressiveness for a meaningful
+# binary-size win - measured at -236 KB (1404 KB -> 1168 KB) vs
+# opt-level = 3 on our workload. Hot paths in this binary are
+# I/O-bound (RTMP chunk read/write, disk ring append, TCP send) where
+# the bottleneck is the syscall, not codegen, so the size win is the
+# right tradeoff for end-users.
 [profile.release]
-opt-level = 3
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = true
@@ -21,12 +27,12 @@ bytes = "1"
 # the Windows schannel that's already in the process, so we don't ship
 # rustls + ring (which would add ~1.4 MB to the binary for one POST).
 # Default features off so we don't pull gzip / json / cookies we don't use.
-ureq = { version = "2", default-features = false, features = ["native-tls"] }
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
 native-tls = "0.2"
 
 # Windows-only: system-tray icon + opening the default browser via a real
 # shell call. Same `windows-sys` crate that tokio's `mio` already pulls in
-# transitively, so adding it explicitly costs ~0 binary bytes — we just
+# transitively, so adding it explicitly costs ~0 binary bytes - we just
 # get to use the typed APIs instead of hand-rolling FFI blocks.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
