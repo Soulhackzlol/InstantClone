@@ -8,7 +8,7 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
-## [0.1.0-beta.7] - Enhanced Broadcasting + VOD audio mode
+## [0.1.0] - Enhanced Broadcasting + VOD audio mode
 
 Headline: Enhanced Broadcasting works end-to-end through the proxy.
 OBS Multi-track "Auto" lights up the Twitch transcoded ladder

@@ -1,9 +1,9 @@
 <!doctype html>
 <!--
-  InstantClone overlay — "minimal".
+  InstantClone overlay - "minimal".
 
   Top-left whisper. The whole thing is the delay number + a colour cue.
-  No "OBS"/"LIVE" text labels — state is encoded in the number's tint and
+  No "OBS"/"LIVE" text labels - state is encoded in the number's tint and
   glow:
     grey      = ingest disconnected (or idle/passthrough)
     amber     = buffer is filling toward the armed delay
@@ -100,7 +100,7 @@ function paint(s){
     w.classList.add('ok','live');
     displayMs = s.target_delay_ms || s.armed_delay_ms || s.current_delay_ms || 0;
   }
-  // Egress failure trumps the phase colour — the streamer needs to
+  // Egress failure trumps the phase colour - the streamer needs to
   // notice the dropped destination immediately, viewer or not.
   if (s.ingest_alive && s.destinations_total > 0 && s.destinations_alive === 0){
     w.classList.remove('idle','ok','amber'); w.classList.add('red');
@@ -108,7 +108,7 @@ function paint(s){
   tweenTo(displayMs / 1000);
 }
 
-// Prefer SSE — single long-lived socket, server pushes on change. Fall
+// Prefer SSE - single long-lived socket, server pushes on change. Fall
 // back to polling for environments where EventSource isn't available
 // (older OBS CEF builds, network proxies that buffer text/event-stream).
 function start(){

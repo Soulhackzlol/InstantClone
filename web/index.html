@@ -9,19 +9,19 @@
 <style>
 /* ── Design tokens (ported from instantclone design system, OKLCH-based) ─────── */
 :root{
-  /* Surfaces — five stacked elevations from the page background up.
+  /* Surfaces - five stacked elevations from the page background up.
      Tuned to a near-blue-black so the OKLCH accent doesn't bleed into
      the neutrals; keep deltas large enough (~3% lightness/step) that
      stacked surfaces remain legible without leaning on borders. */
   --bg:#07080a; --bg-2:#0c0e12; --surface:#11141a; --surface-2:#171b22; --surface-3:#1f242d;
 
-  /* Hairlines. Bumped from 6%/12% to 10%/18% white — previous values
+  /* Hairlines. Bumped from 6%/12% to 10%/18% white - previous values
      were below the threshold where a 1 px stroke visibly separates
      stacked surfaces on a typical sRGB monitor, leaving cards looking
      like they were floating in soup. */
   --line:rgba(255,255,255,0.10); --line-2:rgba(255,255,255,0.18);
 
-  /* Foregrounds — four readability tiers. --fg-4 is the deepest mute
+  /* Foregrounds - four readability tiers. --fg-4 is the deepest mute
      we use (timestamps, secondary labels); bumped from L 0.42 to 0.50
      so it stays above WCAG AA contrast against --bg. */
   --fg:oklch(0.97 0.005 230); --fg-2:oklch(0.80 0.012 230);
@@ -125,7 +125,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 6px 24px var(--accent-glow);
   font-weight:600}
 .ic-btn-primary:hover{background:color-mix(in oklch,#fff 6%,var(--accent))}
-/* Disabled state — has to read as "available but inert" even when
+/* Disabled state - has to read as "available but inert" even when
    parented to a dark card. Previous styling (surface-3 at 0.55 alpha)
    blended into card backgrounds. Now: opaque surface-3 fill + a
    visible line-2 stroke + fg-3 ink, so the button has the same
@@ -2909,7 +2909,7 @@ const TOUR = [
     title: 'Set a custom delay',
     body: `
       <p>Type how many seconds of delay you want. Use the <b>−</b> / <b>+</b> buttons to nudge.</p>
-      <p>Range is 0 – 600 s (10 minutes). You can also save commonly-used delays as <b>Profiles</b> for one-click insta-arm.</p>
+      <p>Range is 0 - 600 s (10 minutes). You can also save commonly-used delays as <b>Profiles</b> for one-click insta-arm.</p>
     `,
   },
   {

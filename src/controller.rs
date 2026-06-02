@@ -1551,7 +1551,7 @@ fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<Pendin
     // delay would be off by up to ~1 s (closest-IDR error), the 500 ms
     // dead band would fire, find_idr_near would (often) return the
     // SAME IDR, and we'd re-cut to it every 500 ms - visible as the
-    // "repeating 1–2 s of content" bouncing the user reported.
+    // "repeating 1-2 s of content" bouncing the user reported.
     //
     // 1500 ms must exceed (IDR_cadence / 2 + send_jitter) to prevent
     // re-cuts when we're already on the best available IDR. For OBS's

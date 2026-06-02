@@ -589,7 +589,7 @@ points - copy one and modify.
 // Overlay templates are embedded straight from the canonical files in
 // ../overlays/ so a fresh install drops the *same* HTML that lives in
 // the repo. include_str! keeps the constant and the on-disk template
-// in lockstep automatically — no risk of the two drifting silently.
+// in lockstep automatically - no risk of the two drifting silently.
 const OVERLAY_MINIMAL: &str = include_str!("../overlays/minimal.html");
 const OVERLAY_CORNER: &str = include_str!("../overlays/corner.html");
 const OVERLAY_STRIP: &str = include_str!("../overlays/strip.html");

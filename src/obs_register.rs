@@ -522,7 +522,7 @@ pub fn inject_vod_eb(web_port: u16) -> io::Result<bool> {
         return Ok(false);
     };
     let original = fs::read_to_string(&p)?;
-    // Only inject into rtmp_custom — for rtmp_common services the
+    // Only inject into rtmp_custom - for rtmp_common services the
     // multitrack-video URL is read from services.json (not from
     // service.json), and injecting would be a no-op at best, foot-gun
     // at worst.

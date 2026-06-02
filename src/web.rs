@@ -2351,7 +2351,7 @@ body.live .v{{animation:breathe 3.2s ease-in-out infinite}}
 /* ── minimal: top-left whisper ─────────────────────────────── */
 body.minimal .box{{position:fixed;left:24px;top:24px;
   display:flex;align-items:baseline;gap:6px}}
-body.minimal .l{{display:none}} /* label hidden — the colour is the label */
+body.minimal .l{{display:none}} /* label hidden - the colour is the label */
 body.minimal .v{{font-size:38px;letter-spacing:-1.5px;line-height:1}}
 body.minimal .u{{font-size:18px;font-weight:500;opacity:.7;letter-spacing:-.2px}}
 
@@ -2495,7 +2495,7 @@ function fmtDelay(secs){{
   return secs.toFixed(1);
 }}
 
-// Ease-out cubic tween between numbers — phase changes read as a build
+// Ease-out cubic tween between numbers - phase changes read as a build
 // rather than a snap. Reused for both the main number and the strip's
 // label number; they stay in lockstep because the same value flows in.
 const tweens = new WeakMap();
@@ -2575,7 +2575,7 @@ function paint(s){{
 
   if (!s.ingest_alive){{
     stateClass = 'state-idle';
-    status = '—';
+    status = '-';
   }} else if (s.phase === 'idle'){{
     stateClass = 'state-idle';
     status = L.passthrough;
