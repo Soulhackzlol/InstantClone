@@ -66,6 +66,8 @@ const w = document.getElementById('w');
 const vEl = document.getElementById('v');
 const ring = document.getElementById('ring');
 const CIRC = 289;
+// ?autohide=off keeps the ring at full opacity during passthrough.
+const AUTOHIDE = new URLSearchParams(location.search).get('autohide') !== 'off';
 
 let tween = {raf:0};
 function tweenTo(secs){
@@ -88,7 +90,8 @@ function paint(s){
   w.classList.remove('idle','ok','amber','red','live');
   let displayMs = 0, fillFrac = 0;
   if (!s.ingest_alive || s.phase === 'idle'){
-    w.classList.add('idle');
+    // .idle dims the ring + numeric. AUTOHIDE off keeps full opacity.
+    if (AUTOHIDE) w.classList.add('idle');
   } else if (s.phase === 'preparing'){
     w.classList.add('amber');
     displayMs = s.buffer_fill_ms || 0;

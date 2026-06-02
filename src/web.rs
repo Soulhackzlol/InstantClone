@@ -2410,8 +2410,14 @@ function tweenNumber(el, to, dur){{
   tweens.set(el, rec);
 }}
 
+// `?autohide=off` disables the 4 s idle-dim entirely so the overlay
+// stays at full opacity even during passthrough. Default behaviour
+// (no param, or `?autohide=on`) is the original dim-after-4s.
+const AUTOHIDE = !new URLSearchParams(location.search).get('autohide')
+  || new URLSearchParams(location.search).get('autohide') !== 'off';
 let idleTimer = null;
 function setIdleDim(idle){{
+  if (!AUTOHIDE){{ body.classList.remove('idle-dim'); return; }}
   if (idle){{
     if (!idleTimer && !body.classList.contains('idle-dim')){{
       idleTimer = setTimeout(() => {{ body.classList.add('idle-dim'); idleTimer = null; }}, 4000);

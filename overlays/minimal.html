@@ -53,6 +53,10 @@ html,body{margin:0;padding:0;background:transparent;width:100%;height:100%;
 'use strict';
 const w = document.getElementById('w');
 const vEl = document.getElementById('v');
+// ?autohide=off keeps the overlay at full opacity during passthrough.
+// Default (no param, or ?autohide=on) dims to ~32% so the viewer's eye
+// doesn't snag on a static 0.0s.
+const AUTOHIDE = new URLSearchParams(location.search).get('autohide') !== 'off';
 
 // Tween the number between values with an ease-out so a phase change
 // reads as a smooth ramp instead of a snap. 400 ms hits a sweet spot
@@ -79,10 +83,13 @@ function tweenTo(secs){
 function paint(s){
   w.classList.remove('idle','ok','amber','red','live');
   let displayMs = 0;
+  // When AUTOHIDE is off, the .idle class never gets applied -the
+  // overlay stays at full opacity even during passthrough so the
+  // streamer's preview window keeps reading at-a-glance.
   if (!s.ingest_alive){
-    w.classList.add('idle');
+    if (AUTOHIDE) w.classList.add('idle');
   } else if (s.phase === 'idle'){
-    w.classList.add('idle'); // passthrough — show 0.0s, dimmed
+    if (AUTOHIDE) w.classList.add('idle');
   } else if (s.phase === 'preparing'){
     w.classList.add('amber');
     displayMs = s.buffer_fill_ms || 0;

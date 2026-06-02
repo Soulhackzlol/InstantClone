@@ -1163,6 +1163,17 @@ input,select,textarea{font-family:inherit;color:inherit}
           <option value="de">Deutsch</option>
         </select>
       </div>
+      <div class="form-block">
+        <span class="form-block-l">Auto-hide</span>
+        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--fg-2)">
+          <input id="ov-autohide" type="checkbox" checked style="width:16px;height:16px;cursor:pointer">
+          <span>Dim when no delay is active</span>
+        </label>
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-top:-2px;line-height:1.5">
+        On (default): overlay fades down to ~30% opacity during passthrough so it doesn't snag the viewer's eye when there's nothing to show.
+        Off: overlay stays fully visible regardless of state.
+      </div>
       <div class="overlay-tip">
         <span>Pick any overlay below, customize on the left, copy the URL, drop into OBS as Browser Source. Custom <code class="mono">.html</code> files receive the same <code class="mono">?lang=…</code> query if you read it.</span>
       </div>
@@ -2687,11 +2698,16 @@ const BUILTIN_OVERLAYS = [
 let customOverlays = [];
 let selectedOverlay = { kind:'builtin', id:'minimal' };
 
-function overlayUrlFor(sel, lang){
+function overlayUrlFor(sel, lang, autohide){
+  // `autohide=off` only appears in the URL when the user toggles the
+  // checkbox off. The overlay JS treats anything other than 'off' as
+  // 'on', so omitting the param keeps the default dim-when-idle
+  // behaviour we shipped originally - and keeps the URL short.
+  const ah = autohide ? '' : '&autohide=off';
   if (sel.kind === 'builtin'){
-    return `/overlay?lang=${encodeURIComponent(lang)}&style=${encodeURIComponent(sel.id)}`;
+    return `/overlay?lang=${encodeURIComponent(lang)}&style=${encodeURIComponent(sel.id)}${ah}`;
   }
-  return `/overlay/${encodeURIComponent(sel.id)}?lang=${encodeURIComponent(lang)}`;
+  return `/overlay/${encodeURIComponent(sel.id)}?lang=${encodeURIComponent(lang)}${ah}`;
 }
 
 function selectOverlay(kind, id){
@@ -2702,7 +2718,8 @@ function selectOverlay(kind, id){
 
 function updateOverlayUrl(){
   const lang = ($('ov-lang') && $('ov-lang').value) || 'en';
-  const path = overlayUrlFor(selectedOverlay, lang);
+  const autohide = !$('ov-autohide') || $('ov-autohide').checked;
+  const path = overlayUrlFor(selectedOverlay, lang, autohide);
   $('ovl-url').textContent = location.origin + path;
   const iframe = $('overlay-preview');
   if (iframe && iframe.src !== location.origin + path){
@@ -2751,6 +2768,7 @@ async function loadOverlays(){
   } catch(_){}
 }
 $('ov-lang') && $('ov-lang').addEventListener('change', updateOverlayUrl);
+$('ov-autohide') && $('ov-autohide').addEventListener('change', updateOverlayUrl);
 
 function copyEl(id, label){ navigator.clipboard.writeText($(id).textContent); toast((label||'Value')+' copied','ok'); }
 function copyText(text, label){ navigator.clipboard.writeText(text); toast((label||'Value')+' copied','ok'); }
