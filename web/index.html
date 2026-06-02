@@ -2946,14 +2946,9 @@ const TOUR = [
     target: '.tab[data-tab="obs"]', side: 'bottom', tab: 'obs',
     title: 'Wire OBS to InstantClone',
     body: `
-      <p>One-time setup. In OBS:</p>
-      <ol style="margin:6px 0 8px 18px;padding:0">
-        <li>Open <b>Settings → Stream</b></li>
-        <li>Service: pick <b>Custom…</b></li>
-        <li>Server: paste the URL shown in this tab (<code>rtmp://127.0.0.1:1935/live</code>)</li>
-        <li>Stream Key: anything works - we suggest <code>main</code></li>
-        <li>Apply, then hit <b>Start Streaming</b> like normal</li>
-      </ol>
+      <p>Two ways - pick whichever fits your setup.</p>
+      <p><b>Recommended - one click:</b> hit <b>Register with OBS</b> on this tab. InstantClone shows up next to Twitch / YouTube in OBS's <b>Settings → Stream → Service</b> dropdown. Restart OBS once, pick <b>InstantClone</b>, set Stream Key to anything (we suggest <code>main</code>), and hit <b>Start Streaming</b>. Multi-track Video "Auto" works out of the box.</p>
+      <p><b>Fallback - Custom RTMP:</b> if you're on older OBS, using a multi-RTMP plugin, or a non-OBS encoder, use the Server URL + key shown below this section instead - Service: <b>Custom…</b>.</p>
       <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you press <b>Start Streaming</b> in OBS, the dashboard stays <b>OFFLINE</b> and the OBS pill at the top reads "not connected" - that's expected, not a setup mistake.</p>
       <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just an internal label here. Your real Twitch / YouTube / Kick keys go in the <b>Destinations</b> tab - that's what actually reaches the platforms.</div>
     `,
@@ -3134,6 +3129,7 @@ function showTab(name){
   $$('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === name));
   $$('.tab-pane').forEach(p => p.hidden = p.dataset.pane !== name);
   moveTabInd();
+  if (name === 'obs') refreshObsRegisterStatus();
 }
 function moveTabInd(){
   const cur = document.querySelector('.tab.on'); if (!cur) return;

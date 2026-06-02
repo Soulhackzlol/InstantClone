@@ -8,6 +8,27 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.1] - First-run dashboard polish
+
+Quality-of-life fixes spotted right after the v0.1.0 release went out.
+
+**Tour bubble for "Wire OBS to InstantClone" now matches the actual
+OBS tab.** The step still described the manual Custom-RTMP path
+exclusively even though the tab itself leads with the one-click
+"Register with OBS" service-injection button. Rewrote the bubble
+copy: recommended path first (click Register, restart OBS, pick
+InstantClone from the Service dropdown), Custom RTMP framed as the
+fallback for older OBS / multi-RTMP plugins / non-OBS encoders.
+
+**OBS tab no longer shows a stale registration state.** If you
+registered through the first-run wizard and *then* opened the OBS
+tab, the tab still rendered "Not registered yet" with a primary
+"Register with OBS" button - because the tab's status only refreshed
+at page init and after its own button click, never on tab activation.
+`showTab()` now re-queries `/obs/register-status` whenever the OBS
+tab becomes active, so the button correctly flips to "Unregister
+from OBS" the moment you switch to the tab.
+
 ## [0.1.0] - Enhanced Broadcasting + VOD audio mode
 
 Headline: Enhanced Broadcasting works end-to-end through the proxy.
