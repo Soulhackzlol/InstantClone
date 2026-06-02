@@ -49,7 +49,7 @@ Once it existed, the parts I'd actually wanted ended up in: a real two-phase arm
 <tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td></tr>
 <tr><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>113 / 113</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>132 / 132</code></td></tr>
 </table>
 
 </td>

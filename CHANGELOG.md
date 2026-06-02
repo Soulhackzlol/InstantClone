@@ -6,6 +6,10 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.0-beta.7] - Enhanced Broadcasting + VOD audio mode
+
 Headline: Enhanced Broadcasting works end-to-end through the proxy.
 OBS Multi-track "Auto" lights up the Twitch transcoded ladder
 regardless of account tier, and non-Twitch destinations keep getting
@@ -75,10 +79,48 @@ state.
   so a destination registered mid-stream doesn't briefly pin the
   ring's trim to seq 0.
 
-**Tests: 88 → 113.** New coverage for the per-track seq-header
-cache, EB chip lifecycle, `mark_ingest_dead` override-clear, the
-TrackId-drop selection path, OBS `services.json` re-register flow +
-validator, and the `begin_publish` cache-purge regression.
+**Multi-track audio + VOD-audio mode.** Mirror of the video EB fix
+on the audio side: `classify_audio_tag` now detects nested seq-headers
+in multi-track audio packets, `audio_seq_header` becomes a
+per-TrackId BTreeMap, `send_sequence_headers` re-emits every cached
+track for passthrough destinations, and `select_audio_bytes` drops
+OneTrack tags with TrackId != 0 on non-Twitch egress. The whole
+delay machine handles two-audio-track Enhanced-RTMP streams without
+losing decoder config on cuts or reconnects. Phase A in commit
+`bef752b`.
+
+**Two-mode VOD-audio toggle (opt-in, off by default).** Per-Twitch-
+destination toggle in the editor; two modes:
+
+- **VOD audio mode** -on publisher-connect we ourselves call Twitch's
+  `GetClientConfiguration` with `vod_track_audio: true`, get back a
+  session-allocated IVS URL with a VOD-audio slot, stash it on
+  `eb_override_url`. The streamer picks Custom RTMP in OBS; we
+  flip `EnableCustomServerVodTrack=true` in OBS's `global.ini` so
+  the VOD Track checkbox unlocks. Trade-off: no EB transcoded
+  ladder on this path.
+- **Also enable Enhanced Broadcasting (EXPERIMENTAL)** -sub-toggle
+  inside VOD-audio. Injects
+  `multitrack_video_configuration_url: http://127.0.0.1:<port>/obs/multitrack-config`
+  into the active OBS profile's `service.json` (with a `.bak`). With
+  the injection in place, OBS's Custom RTMP service auto-fetches our
+  multitrack-video config -EB and VOD audio both fire on the same
+  session. Only applies to the **active** OBS profile; switching
+  profiles in OBS disables the injection until you re-toggle. We
+  warn the user explicitly in the toggle's disclosure body.
+
+`reconcile_obs_vod_files` runs after every destination upsert /
+delete / config reset and keeps `global.ini` + `service.json` in
+sync with what the dashboard says. `GET /obs/register-status` now
+also reports `vod_audio_flag`, `vod_eb_injected`, and
+`active_profile` for the UI status line.
+
+**Tests: 88 → 132.** New coverage for the per-track audio
+seq-header cache, multi-track audio classification, TrackId-drop
+selection for non-Twitch audio, INI read/write round-trips, and
+service.json inject/strip round-trips. Phase A regression test in
+`begin_publish_purges_cached_sequence_headers_from_prior_sessions`
+extended to seed two audio tracks plus the video four-track ladder.
 
 ## [0.1.0-beta.6] - audit follow-through + live delay adjustment + the Twitch source-only mystery solved
 

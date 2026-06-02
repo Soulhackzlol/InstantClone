@@ -1,6 +1,6 @@
 [package]
 name = "instantclone"
-version = "0.1.0"
+version = "0.1.0-beta.7"
 edition = "2021"
 
 # Squeeze every byte out of the release binary. opt-level = "s" trades
