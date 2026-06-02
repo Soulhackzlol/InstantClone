@@ -452,6 +452,28 @@ impl DiskRing {
             }
         }
     }
+
+    /// Drop every indexed tag. Called from `begin_publish` so a fresh
+    /// OBS session, whose RTMP wire timestamps restart from ~0, does not
+    /// get measured against the prior session's tags still sitting at
+    /// the front of the index at much higher ts_ms values. Without this,
+    /// `oldest_ts()` returns the stale session's first tag and
+    /// `latest_ts() - oldest_ts()` saturates to 0, freezing
+    /// `buffer_fill_ms` at zero for the new session even as tags pour
+    /// in. `trim_older_than` cannot rescue it either, because
+    /// `cutoff = current_ts - max_age` also saturates to 0 when
+    /// `current_ts` is small.
+    ///
+    /// The seq counter and write cursor are deliberately preserved.
+    /// Consumer seqs held by destinations stay valid (the new tags get
+    /// seqs above the old high-water mark, so reads naturally advance
+    /// onto fresh data), and the disk bytes get overwritten as new tags
+    /// land.
+    pub fn clear(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.index.clear();
+        inner.idr_index.clear();
+    }
 }
 
 /// Open the buffer file with read+write+create, retrying briefly on
