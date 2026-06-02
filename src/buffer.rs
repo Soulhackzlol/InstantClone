@@ -37,7 +37,7 @@ pub struct DiskRing {
     capacity: u64,
     inner: Mutex<RingInner>,
 
-    // Sequence headers and onMetaData live outside the ring — they are tiny,
+    // Sequence headers and onMetaData live outside the ring - they are tiny,
     // never expire, and must be resendable on every reconnect and every cut.
     //
     // Video seq headers are keyed by track id (0..255) to handle Enhanced
@@ -45,7 +45,7 @@ pub struct DiskRing {
     // multi-track seq-header tag PER track at session start (with the
     // track id encoded in byte 6 of the payload), each carrying that
     // track's SPS/PPS. A single-slot cache would overwrite every
-    // earlier track's config with the last one received — which is
+    // earlier track's config with the last one received - which is
     // exactly the bug we traced down to Twitch Inspector showing
     // per-track resolutions as "x" and the IVS transcoder pipeline
     // failing to bind after 60 s. Single-track tags occupy slot 0 and
@@ -66,7 +66,7 @@ struct RingInner {
     next_seq: u64,
     /// All indexed tags in append order (== monotonic by seq AND by ts).
     index: VecDeque<TagMeta>,
-    /// SECONDARY index of just the IDR keyframes — same ordering, just
+    /// SECONDARY index of just the IDR keyframes - same ordering, just
     /// filtered. Lets `find_idr_near` do a binary search on a
     /// small list (~1 IDR per 2 s of stream) instead of a linear walk
     /// over every audio + video tag (~150-300/s). Kept in lockstep with
@@ -79,7 +79,7 @@ impl DiskRing {
     pub fn create(path: &Path, capacity: u64) -> Result<Self> {
         // Make sure the parent directory exists. With a hand-edited
         // config the user might point buffer_path at a path whose
-        // parent doesn't exist yet — OpenOptions returns a bare
+        // parent doesn't exist yet - OpenOptions returns a bare
         // "path not found" io::Error in that case and the binary
         // exits silently under windows_subsystem=windows. Eagerly
         // creating the directory turns one class of cold-start
@@ -158,7 +158,7 @@ impl DiskRing {
             return Ok(None);
         }
 
-        // Reject tags larger than half the buffer outright — they cannot
+        // Reject tags larger than half the buffer outright - they cannot
         // coexist with any other tag without immediately evicting themselves.
         if (payload.len() as u64) > self.capacity / 2 {
             return Ok(None);
@@ -178,7 +178,7 @@ impl DiskRing {
             if write_overlaps(offset, len, self.capacity, front.offset, front.len as u64) {
                 inner.index.pop_front();
                 if front.is_idr {
-                    // Front of idr_index MUST be this same IDR — both
+                    // Front of idr_index MUST be this same IDR - both
                     // queues are time-ordered and we only ever push at
                     // the back. Defensive `if let` keeps us robust to
                     // any future ordering invariant change.
@@ -231,7 +231,7 @@ impl DiskRing {
 
     /// Read the bytes of the tag at `seq` into the caller's reusable
     /// buffer. Returns `Ok(None)` if the tag has been evicted between
-    /// when the caller obtained its meta and now — eviction-safe by
+    /// when the caller obtained its meta and now - eviction-safe by
     /// design.
     ///
     /// Atomicity: holds the index lock for the full read, so a concurrent
@@ -297,13 +297,13 @@ impl DiskRing {
     /// Pick the IDR closest to `target_ts` within ±`tolerance_ms`.
     /// Returns the keyframe that minimises `|ts - target_ts|`.
     ///
-    /// Binary-search on the IDR-only secondary index — O(log n) over
+    /// Binary-search on the IDR-only secondary index - O(log n) over
     /// just the keyframes (~one IDR per 2 s of stream → ~300 entries
     /// for a 10-minute delay) instead of an O(n) walk over every
     /// audio + video tag (~90k entries).
     ///
     /// CHOICE: closest, not "prefer at-or-before". The earlier policy
-    /// was "never undershoot the user's requested delay" — but that
+    /// was "never undershoot the user's requested delay" - but that
     /// caused a cut loop. After a cut to an over-delayed IDR, the
     /// dead-band check would fire again (delivered > target by more
     /// than the dead band), and we'd cut to the SAME old IDR every
@@ -383,7 +383,7 @@ impl DiskRing {
     }
 
     /// OLDEST IDR whose seq is >= `min_seq`. Used by the egress pump
-    /// after eviction skip-ahead — landing on a random P-frame would
+    /// after eviction skip-ahead - landing on a random P-frame would
     /// stream P-frames that reference absent reference frames and the
     /// player would show macroblocking until the next IDR. Returning
     /// the *earliest* IDR at or after the skip target loses the least
@@ -404,10 +404,10 @@ impl DiskRing {
 
     /// Trim oldest indexed tags whose timestamp is older than
     /// `(current_ts - max_age_ms)`, never crossing `min_seq` (the
-    /// consumer's last-acknowledged position — protects in-flight reads).
+    /// consumer's last-acknowledged position - protects in-flight reads).
     ///
     /// One lock acquisition; pop_front is O(1). Bytes on disk are left
-    /// untouched — the natural write-over-old-tags path reclaims them
+    /// untouched - the natural write-over-old-tags path reclaims them
     /// as the ring wraps. Trimming only the index lets us keep the
     /// buffer's *useful contents* exactly at the user's armed delay
     /// without juggling actual disk layout.
@@ -416,14 +416,14 @@ impl DiskRing {
         let cutoff = current_ts.saturating_sub(max_age_ms as u64);
         while let Some(front) = inner.index.front().copied() {
             // Never evict a tag the consumer is still reading or hasn't
-            // reached yet — otherwise pace_and_send's read_tag could race
+            // reached yet - otherwise pace_and_send's read_tag could race
             // with a future overwrite of the same byte offset.
             if front.seq >= min_seq {
                 break;
             }
             if front.ts_ms < cutoff {
                 inner.index.pop_front();
-                // Keep the IDR-only index in sync — same defensive front
+                // Keep the IDR-only index in sync - same defensive front
                 // check as the byte-overlap eviction path in `append`.
                 if front.is_idr && inner.idr_index.front().map(|m| m.seq) == Some(front.seq) {
                     inner.idr_index.pop_front();
@@ -438,7 +438,7 @@ impl DiskRing {
 /// Open the buffer file with read+write+create, retrying briefly on
 /// transient Windows sharing violations (antivirus scan, prior-instance
 /// still-shutting-down, Explorer preview pane). The retry window is
-/// short and bounded — if the file is truly locked we surface the OS
+/// short and bounded - if the file is truly locked we surface the OS
 /// error after ~1 s rather than spin indefinitely.
 fn open_with_retry(path: &Path) -> Result<File> {
     let mut attempt = 0;
@@ -555,7 +555,7 @@ mod tests {
         let t = tmp(4096);
         let r = t.0.append(9, 0, b"AVCDecoderConfig", false, true).unwrap();
         assert!(r.is_none(), "seq headers must not return a ring seq");
-        // Single-track seq headers cache under track id 0 — same slot
+        // Single-track seq headers cache under track id 0 - same slot
         // they used before the per-track refactor for multi-track.
         let map = t.0.video_seq_headers.lock().unwrap();
         assert_eq!(map.get(&0), Some(&b"AVCDecoderConfig".to_vec()));
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn multitrack_seq_headers_cache_per_track_id() {
         // Two OneTrack-format Enhanced-RTMP seq-header tags for tracks
-        // 0 and 4 must both survive in the cache — the bug we fixed.
+        // 0 and 4 must both survive in the cache - the bug we fixed.
         // The pre-change single-Option storage would have kept only
         // the last-received one, which is why Twitch Inspector showed
         // tracks 1-4 with resolution "x" during the EB rollout.
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn oversized_tag_is_rejected_silently() {
-        // Capacity 4096, tag of 3000 bytes (> cap/2) — must be dropped.
+        // Capacity 4096, tag of 3000 bytes (> cap/2) - must be dropped.
         let t = tmp(4096);
         let big = vec![0u8; 3000];
         let r = t.0.append(9, 0, &big, false, false).unwrap();
@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn wrapping_write_evicts_oldest_and_reads_correctly() {
-        // Capacity 256. Write 6 × 80 = 480 bytes total — wraps the cursor
+        // Capacity 256. Write 6 × 80 = 480 bytes total - wraps the cursor
         // twice. Oldest tags get evicted; we read the latest one back.
         let t = tmp(256);
         let mut last_seq = 0;
@@ -650,10 +650,10 @@ mod tests {
         // Linear case
         assert!(write_overlaps(50, 30, 1000, 60, 10));
         assert!(!write_overlaps(50, 30, 1000, 100, 10));
-        // Write wraps, tag near start of buffer — tag at 5 is inside the
+        // Write wraps, tag near start of buffer - tag at 5 is inside the
         // wrap segment [0, 20) (write spans 980..1000 ∪ 0..20).
         assert!(write_overlaps(980, 40, 1000, 5, 10));
-        // Write wraps, tag past wrap segment — no overlap
+        // Write wraps, tag past wrap segment - no overlap
         assert!(!write_overlaps(980, 40, 1000, 500, 10));
     }
 

@@ -46,12 +46,12 @@
 
   <!-- Status row -->
   <g transform="translate(20, 22)">
-    <!-- ARMED pill — fill opacity breathes lightly so it draws the eye -->
+    <!-- ARMED pill - fill opacity breathes lightly so it draws the eye -->
     <rect width="68" height="22" rx="11" fill="rgba(90,200,250,0.14)" stroke="rgba(90,200,250,0.35)">
       <animate attributeName="fill" values="rgba(90,200,250,0.14);rgba(90,200,250,0.24);rgba(90,200,250,0.14)" dur="2.6s" repeatCount="indefinite"/>
     </rect>
     <text class="h" font-size="10" x="34" y="15" text-anchor="middle" fill="#5ac8fa">ARMED</text>
-    <!-- OBS pill — dot pulses to show "connection is live" -->
+    <!-- OBS pill - dot pulses to show "connection is live" -->
     <g transform="translate(212, 0)">
       <rect width="68" height="22" rx="11" fill="#161a21" stroke="rgba(255,255,255,0.08)"/>
       <circle cx="14" cy="11" r="3.5" fill="#34c759">
@@ -65,7 +65,7 @@
     </g>
   </g>
 
-  <!-- Big readout — sits above its own soft glow halo, with a subtle
+  <!-- Big readout - sits above its own soft glow halo, with a subtle
        scale-breath so even when nothing changes the dock feels alive. -->
   <g transform="translate(160, 130)" text-anchor="middle">
     <g>
@@ -78,7 +78,7 @@
     </g>
   </g>
 
-  <!-- Buffer bar — fill + shimmer sweep -->
+  <!-- Buffer bar - fill + shimmer sweep -->
   <g transform="translate(20, 156)">
     <clipPath id="dockBufClip"><rect width="280" height="6" rx="3"/></clipPath>
     <rect width="280" height="6" rx="3" fill="#1a1d28"/>
@@ -107,7 +107,7 @@
     <text class="h" font-size="18" x="260" y="24" text-anchor="middle" fill="#7a7d8a">+</text>
   </g>
 
-  <!-- Primary action — halo + travelling highlight sweep. Width 224 so
+  <!-- Primary action - halo + travelling highlight sweep. Width 224 so
        the row (224 + 12 gap + 44 X) fits exactly inside the 280 safe area. -->
   <g transform="translate(20, 258)">
     <clipPath id="ctaClipD"><rect width="224" height="44" rx="10"/></clipPath>
@@ -119,7 +119,7 @@
       </rect>
     </g>
     <text class="h" font-size="13" x="112" y="28" text-anchor="middle" fill="#001220">▶  Activate</text>
-    <!-- Ghost disarm — square 44×44 so it sits with the same 20 px
+    <!-- Ghost disarm - square 44×44 so it sits with the same 20 px
          right-padding the rest of the card uses (card width 320, parent
          translate +20, so usable row is 280: 224 + 12 gap + 44 = 280).
          Cross is drawn as two strokes for pixel-perfect centring. -->
@@ -130,5 +130,5 @@
     </g>
   </g>
 
-  <text class="sub" font-size="10" x="160" y="338" text-anchor="middle">/dock — sits inside OBS as a browser-dock</text>
+  <text class="sub" font-size="10" x="160" y="338" text-anchor="middle">/dock - sits inside OBS as a browser-dock</text>
 </svg>

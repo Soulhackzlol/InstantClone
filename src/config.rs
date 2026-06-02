@@ -28,7 +28,7 @@ pub struct Settings {
     pub ingest_bind_all: bool, // true → 0.0.0.0, false → 127.0.0.1
 
     // Legacy single-destination fields. Still present on disk for backward
-    // compatibility — on load they get migrated into destinations[0] if
+    // compatibility - on load they get migrated into destinations[0] if
     // `destinations` was empty (i.e. config written before multi-dest).
     pub platform: String,
     pub stream_key: String,
@@ -59,7 +59,7 @@ pub struct DelayProfile {
     pub delay_ms: u32,
 }
 
-/// One streaming destination — Twitch, YouTube, a private server, etc.
+/// One streaming destination - Twitch, YouTube, a private server, etc.
 /// Each destination runs its own RTMP egress and is paced/cut/timestamp-
 /// rewritten independently from the same shared DiskRing.
 #[derive(Debug, Clone)]
@@ -74,13 +74,13 @@ pub struct Destination {
     /// live.twitch.tv (which load-balances regionally). Otherwise: a
     /// Twitch ingest slug from `twitch_ingests()` (e.g. "fra", "jfk").
     /// Pinning a region helps when auto-routing keeps picking a flaky
-    /// edge — common for streamers near a region boundary.
+    /// edge - common for streamers near a region boundary.
     pub twitch_ingest: String,
     /// Only meaningful when platform == "youtube". One of:
     ///   "" / "primary"  → rtmp://a.rtmp.youtube.com/live2 (default)
     ///   "backup"        → rtmp://b.rtmp.youtube.com/live2
     /// YouTube recommends using the backup ingest when the primary is
-    /// flaky in the streamer's region — surfacing it as an option saves
+    /// flaky in the streamer's region - surfacing it as an option saves
     /// users from dropping to a Custom RTMP URL just to switch endpoints.
     pub youtube_ingest: String,
 }
@@ -121,7 +121,7 @@ impl Destination {
         // stream name so their edge treats this connection as the
         // redundancy partner of the primary. Without the suffix the
         // backup is accepted but never actually fails over, so a primary
-        // drop would still glitch the stream — the worst of both worlds.
+        // drop would still glitch the stream - the worst of both worlds.
         // Reference: YouTube Studio's "URL del servidor secundario" pane
         // surfaces the exact format `…/live2?backup=1`; we slot the
         // stream key in between so the wire form is `…/live2/KEY?backup=1`,
@@ -164,7 +164,7 @@ impl Settings {
             // the trim logic the *actual* used portion matches the armed
             // delay. Bumped from 300 after the 2026-05-31 beta.5 test
             // surfaced that 300 MB stalls at ~247 s when arming 5 min at
-            // 10 Mbps — the new default leaves headroom for a 5-min arm
+            // 10 Mbps - the new default leaves headroom for a 5-min arm
             // at any realistic Twitch bitrate. Lower to save disk; raise
             // for >7-min delays at 10 Mbps+.
             buffer_mb: 500,
@@ -190,20 +190,20 @@ impl Settings {
             destinations: Vec::new(),
             discord_webhook_url: String::new(),
             overlays_dir: PathBuf::from("./overlays"),
-            // Off by default for end users — the trace file grows fast
+            // Off by default for end users - the trace file grows fast
             // (~3000 lines/s at typical bitrate) and 99 % of users
             // never need it. Streamers reporting a bug can toggle it
             // on in System → Advanced diagnostics, reproduce, then
             // send `./instantclone-trace.log`. Saved configs with
             // `tracing_enabled=true` from earlier betas are honoured
-            // — only fresh installs default to off.
+            // - only fresh installs default to off.
             tracing_enabled: false,
         }
     }
 
     pub fn load(path: &Path) -> io::Result<Self> {
         let mut s = Self::defaults();
-        // Both lists are file-authoritative — a user who deletes them all
+        // Both lists are file-authoritative - a user who deletes them all
         // must see them stay deleted across restarts.
         s.profiles.clear();
         s.destinations.clear();
@@ -240,7 +240,7 @@ impl Settings {
                 youtube_ingest: String::new(),
             });
         }
-        // Clamp / sanitize on load — hand-edited values can otherwise
+        // Clamp / sanitize on load - hand-edited values can otherwise
         // hit divide-by-zero (buffer_mb=0 → `% capacity` in DiskRing) or
         // bind two services to the same port (one will silently fail).
         s.sanitize_load();
@@ -262,7 +262,7 @@ impl Settings {
             self.web_port = 7799;
         }
         if self.web_port == self.ingest_port {
-            // Defensive port move — if the user collided them in the
+            // Defensive port move - if the user collided them in the
             // config file, push the web port to a sane fallback so at
             // least the UI is reachable to fix it.
             self.web_port = if self.ingest_port == 7799 { 7800 } else { 7799 };
@@ -310,7 +310,7 @@ impl Settings {
         // `MoveFileExW(REPLACE_EXISTING)` (what fs::rename calls) is
         // atomic at the directory-entry level since NTFS journals the
         // op. So a process death between unlink + create is impossible
-        // — either the old file is intact or the new one is.
+        // - either the old file is intact or the new one is.
         let tmp = match path.file_name() {
             Some(name) => {
                 let mut t = name.to_os_string();
@@ -326,12 +326,12 @@ impl Settings {
         fs::rename(&tmp, path)
     }
 
-    /// The non-atomic write — split out so the atomic `save` can call
+    /// The non-atomic write - split out so the atomic `save` can call
     /// it for the `.tmp` step, and the rare fallback path (no
     /// file_name component) can still produce SOMETHING on disk.
     fn save_inplace(&self, path: &Path) -> io::Result<()> {
         let mut f = fs::File::create(path)?;
-        writeln!(f, "# InstantClone — written by the app. Hand edits OK.")?;
+        writeln!(f, "# InstantClone - written by the app. Hand edits OK.")?;
         writeln!(f, "configured={}", self.configured)?;
         // Legacy single-destination fields: kept for backward compat with
         // older binaries that don't know about `destination.*`. We mirror
@@ -469,7 +469,7 @@ impl Settings {
                 if let Some(dot) = rest.find('.') {
                     if let Ok(idx) = rest[..dot].parse::<usize>() {
                         // Same OOM-guard as profiles. 128 destinations is
-                        // already absurd for a single streamer — beyond
+                        // already absurd for a single streamer - beyond
                         // that it's almost certainly malformed input.
                         if idx >= MAX_DESTINATIONS {
                             return;
@@ -531,7 +531,7 @@ impl Settings {
         format!("rtmp://127.0.0.1:{}/live", self.ingest_port)
     }
 
-    /// First destination's resolved URL — used by the legacy single-dest
+    /// First destination's resolved URL - used by the legacy single-dest
     /// code paths (validate, redacted display, etc.). Multi-destination
     /// pump uses `Destination::egress_url` directly per-dest.
     pub fn egress_url(&self) -> Option<String> {
@@ -562,7 +562,7 @@ impl Settings {
             })
     }
 
-    /// All resolved, well-formed, enabled destinations — the set the
+    /// All resolved, well-formed, enabled destinations - the set the
     /// supervisor will spawn egress pumps for.
     pub fn active_destinations(&self) -> Vec<(Destination, String)> {
         self.destinations
@@ -629,7 +629,7 @@ impl Settings {
             errs.push("web_port must be > 0".into());
         }
         if self.ingest_port == self.web_port {
-            errs.push("ingest_port and web_port must differ — they share the same socket otherwise and one will silently fail to bind".into());
+            errs.push("ingest_port and web_port must differ - they share the same socket otherwise and one will silently fail to bind".into());
         }
         if self.buffer_mb < MIN_BUFFER_MB {
             errs.push(format!("buffer_mb must be at least {}", MIN_BUFFER_MB));
@@ -697,7 +697,7 @@ impl Settings {
 pub fn is_path_safe(p: &std::path::Path) -> bool {
     let s = match p.to_str() {
         Some(s) => s,
-        None => return false, // non-UTF8 path — refuse rather than guess
+        None => return false, // non-UTF8 path - refuse rather than guess
     };
     if s.is_empty() {
         return false;
@@ -741,7 +741,7 @@ pub fn platform_base(slug: &str) -> Option<&'static str> {
 
 /// Curated list of regional Twitch ingests. Slug → human label. The slug
 /// is the airport-code prefix Twitch uses in `live-<slug>.twitch.tv`.
-/// Empty slug = auto (default — Twitch picks for you).
+/// Empty slug = auto (default - Twitch picks for you).
 pub fn twitch_ingests() -> &'static [(&'static str, &'static str)] {
     &[
         ("", "Auto (recommended)"),
@@ -1050,7 +1050,7 @@ mod tests {
             enabled: true,
             platform: "custom".into(),
             stream_key: String::new(),
-            // No app segment — just a bare host. Not a valid RTMP URL.
+            // No app segment - just a bare host. Not a valid RTMP URL.
             custom_egress_url: "rtmp://my.server".into(),
             twitch_ingest: String::new(),
             youtube_ingest: String::new(),
@@ -1182,7 +1182,7 @@ mod tests {
         assert!(on_disk_b.contains("web_port=9002"));
         assert!(
             !on_disk_b.contains("web_port=9001"),
-            "second save did not replace the first — file still mentions :9001"
+            "second save did not replace the first - file still mentions :9001"
         );
 
         // The .tmp sibling that save() writes to internally must be
@@ -1203,7 +1203,7 @@ mod tests {
 
     #[test]
     fn missing_config_file_falls_back_to_defaults() {
-        // load_or_default must not panic on a non-existent path — that's
+        // load_or_default must not panic on a non-existent path - that's
         // the cold-start case where there's nothing to read yet.
         let path = std::env::temp_dir().join(format!("ic-no-such-file-{}.ini", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -1214,7 +1214,7 @@ mod tests {
     }
 }
 
-// Tiny libc shim for Unix free-space — avoids adding the `libc` crate.
+// Tiny libc shim for Unix free-space - avoids adding the `libc` crate.
 #[cfg(not(windows))]
 mod libc {
     #[repr(C)]

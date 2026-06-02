@@ -7,7 +7,7 @@
 //!     call (with a hand-built `native_tls::TlsConnector`) to a
 //!     declarative `TlsConfig::builder().provider(TlsProvider::NativeTls)`.
 //!     The `native-tls` cargo feature on `ureq` wires the real
-//!     `native_tls` crate in for us — we just have to tell ureq to
+//!     `native_tls` crate in for us - we just have to tell ureq to
 //!     prefer it over the rustls default.
 //!
 //!   - 4xx / 5xx responses default to `Err(Error::StatusCode(u16))`,
@@ -29,7 +29,7 @@ use ureq::Agent;
 /// Build a ready-to-use ureq `Agent` with native-tls selected as the
 /// TLS provider and `http_status_as_error` disabled so callers retain
 /// access to non-2xx response bodies. Native-tls uses Windows schannel
-/// under the hood — no rustls + ring dependency chain.
+/// under the hood - no rustls + ring dependency chain.
 pub fn https_agent() -> Agent {
     Agent::config_builder()
         .tls_config(

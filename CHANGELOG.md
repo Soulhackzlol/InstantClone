@@ -21,7 +21,7 @@ instead of the configured `live.twitch.tv` (only the IVS edge runs
 the EB transcoder). Failure modes (Twitch API timeout, transport
 error, non-2xx response) each fall back to a static config and log a
 discriminated reason. Webhook + EB proxy now share a `native-tls`
-connector helper (`src/https.rs`) — silently broken Discord webhooks
+connector helper (`src/https.rs`) - silently broken Discord webhooks
 got fixed as a side-effect.
 
 **Per-track sequence-header cache.** OBS sends one OneTrack-format
@@ -36,7 +36,7 @@ non-Twitch destinations.
 **Non-Twitch ladder-tag drop.** Per-frame OneTrack tags with
 `TrackId != 0` are filtered out of the non-Twitch egress in
 `select_video_bytes`. Before this fix, OBS's 4-rung ladder produced 5
-single-track tags per PTS on YouTube — decoders read that as a
+single-track tags per PTS on YouTube - decoders read that as a
 multi-frame storm, the connection dropped ~12 s after handshake, and
 the supervisor reconnected on a loop. The primary still flows
 through as a legacy AVC tag.
@@ -85,7 +85,7 @@ validator, and the `begin_publish` cache-purge regression.
 Headline: a wire-spec audit closed the last meaningful protocol gap,
 the dashboard learned to adjust delay on-the-fly, and a full afternoon
 of alt-account testing finally disentangled why some streams went
-Source-Only at high bitrate — turns out it was never InstantClone.
+Source-Only at high bitrate - turns out it was never InstantClone.
 
 **RTMP Acknowledgement (BYTES_READ_REPORT) on both directions.** Adobe
 spec §5.4.3 and librtmp's actual code both require a peer to send msg
@@ -96,15 +96,15 @@ timestamps + payload), captures the peer's Window Ack Size from msg
 type 5 (defaults to 2.5 MB until the peer overrides), and exposes
 `take_pending_ack()` so the ingest server and egress reader-drain can
 emit `BYTES_READ_REPORT` inline. At 6 Mbps that's about one 4-byte
-message every 0.4 s — invisible perf cost, but lets strict RTMP
+message every 0.4 s - invisible perf cost, but lets strict RTMP
 relays accept InstantClone as a well-behaved peer when it's used as
 itself a re-publish source.
 
 **AMF0 Strict Array decode.** The connect-properties bag we ship for
 Twitch OBS-parity includes an Enhanced-RTMP `fourCcList`, which is
 encoded as Strict Array (marker `0x0A`). Real RTMP servers handle
-that marker fine — the published beta.5 binary streams correctly to
-Twitch, YouTube, Kick — but the in-tree sink used for e2e CI shares
+that marker fine - the published beta.5 binary streams correctly to
+Twitch, YouTube, Kick - but the in-tree sink used for e2e CI shares
 the same decoder, which only knew `0x00`-`0x08`. So the sink rejected
 our own connect and the e2e job went red. Adds a
 `StrictArray(Vec<Amf0>)` variant with a depth-bounded recursive
@@ -134,7 +134,7 @@ controller had `arm_delay()` wired for live changes since day one,
 but the cockpit hid it: the delay input was logically dropped in
 armed / active states and the CTA only offered Activate / Cut. The
 cockpit now treats a typed value that differs from the current
-`armed_delay_ms` as the new target — replacing Activate with
+`armed_delay_ms` as the new target - replacing Activate with
 "↻ Re-arm at Ns" while armed, or Cut delay with "↻ Adjust ↑/↓ to
 Ns" while active. Profile chips and rows stay clickable in both
 states with adaptive tooltips. A transient "Adjusting → rewinding to
@@ -152,7 +152,7 @@ beta.4 had bundled into one bug:
 - The viewer-side "Error #1000 / black screen with audio" symptom is
   a mobile-decoder ceiling, not a Twitch transcode issue. At ≤ 8 Mbps
   1080p60 H.264 Source-Only most mobile hardware decoders cope; above
-  ~8 Mbps they start failing. Verified empirically on the alt — 8k
+  ~8 Mbps they start failing. Verified empirically on the alt - 8k
   Source-Only plays clean on phone and PC, 10k Source-Only reproduces
   the beta.4 viewer breakage.
 
@@ -163,7 +163,7 @@ The Twitch entry in `/platforms` tip gets rewritten with the same
 framing for destination-creation-time discovery. OBS's built-in
 Twitch *preset* auto-caps via Twitch's API; OBS's "Custom server"
 path skips that check, and InstantClone is necessarily a
-Custom-server target — so the cap-skip behaviour is structural, not
+Custom-server target - so the cap-skip behaviour is structural, not
 a wire bug. The warning is the right intervention.
 
 **Overlay number stops jittering in active phase.** The on-stream
@@ -171,14 +171,14 @@ overlay's seconds readout used to wobble 15.8 → 15.9 → 16.0 because
 it was wired to `current_delay_ms`, which is recomputed each pump
 tick from the slowest consumer's frame timestamp and doesn't land on
 round boundaries. Switched to `target_delay_ms` (== armed in active
-phase) — stable to the tenth-of-a-second the streamer actually
+phase) - stable to the tenth-of-a-second the streamer actually
 intended. Dashboard hero already did this.
 
 **ChunkReader internal refactor.** The Acknowledgement work
 introduced a temporary 9-element Option tuple for threading parsed
 header fields between the read phase (holds &mut self) and the
 state update phase (holds &mut streams). Replaced with a private
-`ChunkHeader` enum returned by a `read_chunk_header` helper —
+`ChunkHeader` enum returned by a `read_chunk_header` helper -
 ~130 fewer lines, no unused-binding suppressions, same wire
 behaviour. Also dropped the speculative `tray.rs::update_tooltip`
 shim that was carrying a `#[allow(dead_code)]` for hypothetical
@@ -193,7 +193,7 @@ future use.
   to expect regression, but it's listed here for honesty.
 - Twitch bandwidth-test mode does not route through the full
   transcoder, so the actual transcoder-lane decision can only be
-  confirmed by a real (non-`?bandwidthtest=true`) stream — which the
+  confirmed by a real (non-`?bandwidthtest=true`) stream - which the
   alt-account work in this release does cover.
 
 ## [0.1.0-beta.5] - full OBS parity on the wire + per-platform onboarding
@@ -203,9 +203,9 @@ RTMP ingest it talks to, and the dashboard tells you where to find
 your stream key and which platforms have hidden gotchas.
 
 **Full OBS parity in the publish handshake.** The `connect` command
-now carries the same property bag OBS does — `audioCodecs=3191`,
+now carries the same property bag OBS does - `audioCodecs=3191`,
 `videoCodecs=252`, `videoFunction=1`, `objectEncoding=0`,
-`capabilities=239`, `fpad=false` — plus the Enhanced-RTMP
+`capabilities=239`, `fpad=false` - plus the Enhanced-RTMP
 `fourCcList` (`avc1, hvc1, av01, vp09, mp4a, Opus, ac-3, ec-3, fLaC`)
 so transcoder lanes know we can pass through HEVC / AV1 / Opus. This
 is the real fix for the beta.4 known issue: Twitch was downgrading
@@ -233,7 +233,7 @@ of a minute of dead air.
 **Wire-level trace becomes a UI toggle.** The advanced trace
 (`./instantclone-trace.log`) used to require the `INSTANTCLONE_NO_TRACE`
 env var to disable. There's now a checkbox in the System tab that
-flips an atomic at runtime — no restart, persists to settings. Default
+flips an atomic at runtime - no restart, persists to settings. Default
 on for the beta so traces are shippable without flipping a flag.
 
 **Per-platform stream-key help.** The wizard and destination form now
@@ -271,7 +271,7 @@ get killed.
 
 **Overlays.** The 9-style grab-bag becomes a curated 6 with a shared design
 language: minimal, corner, strip, focus, broadcast, ticker. Three
-behaviours apply across all of them — overlay auto-dims to ~22% after 4 s
+behaviours apply across all of them - overlay auto-dims to ~22% after 4 s
 of idle/passthrough, the big delay number tweens between values instead
 of snapping, and a brief accent halo blooms on every phase transition so
 the moment of arm/activate/cut is felt rather than guessed at. The
@@ -282,7 +282,7 @@ well-commented `custom-template.html` that documents the `/state` JSON
 contract so you can fork your own.
 
 **Destinations tab finally auto-updates.** The cards (bitrate sparkline,
-alive pill, status text) were only refreshing on explicit user actions —
+alive pill, status text) were only refreshing on explicit user actions -
 saving a form, switching tabs, or F5. The `/state` poll already carried
 the live per-destination fields; `applyState` now merges them into the
 cached list on every tick so the cards stay live.
@@ -294,13 +294,13 @@ right after a destination-connect notification, and swallowed any HTTP or
 TLS error from Discord. Result: "test fired" toast, nothing reaches
 Discord, no way to diagnose. Replaced with an explicit synchronous path
 that validates the URL, bypasses the throttle, and surfaces the real
-outcome — empty URL, connection error, non-2xx HTTP from Discord (with
+outcome - empty URL, connection error, non-2xx HTTP from Discord (with
 status), or timeout.
 
 **Platform polish from beta.3 testing:**
 
 - `flashVer` now reports `"FMLE/3.0 (compatible; FMSc/1.0)"` to match OBS
-  exactly — some platforms gate transcode behaviour by this string.
+  exactly - some platforms gate transcode behaviour by this string.
 - Wire-level egress trace to `./instantclone-trace.log` (opt-out via
   `INSTANTCLONE_NO_TRACE=1`) records every handshake event, AMF0
   command, sequence header, cut, and tag for offline diagnosis when
@@ -333,7 +333,7 @@ status), or timeout.
   Auto-Transcode access. A tier-aware in-app warning chip is planned for
   a follow-up release.
 - The on-disk overlay file paths (`/overlay/minimal.html` etc) that some
-  early-beta users may have bookmarked are gone — use
+  early-beta users may have bookmarked are gone - use
   `/overlay?style=minimal` instead (same renderer, but newer, with the
   unified design language and behaviours described above).
 
@@ -344,7 +344,7 @@ implemented but gated behind a check that the wizard silently sidestepped,
 so first-run users never saw it. Moved the trigger into the
 wizard-to-dashboard transition where it belongs.
 
-Wizard now has a subtle "Not now — let me look around first" link for
+Wizard now has a subtle "Not now - let me look around first" link for
 people who want to poke the dashboard before committing to a destination.
 `configured=false` stays on disk so the wizard returns next launch.
 
@@ -361,12 +361,12 @@ again. Was silent in beta.2 because the release binary builds as
 into the void. Now attaches to the parent console (or allocates a fresh
 one for double-click invocations) before dispatching.
 
-CI: real end-to-end job — ffmpeg pushes a synthetic H.264 + AAC stream
+CI: real end-to-end job - ffmpeg pushes a synthetic H.264 + AAC stream
 into the proxy, sink confirms publish + IDR + audio frames on every push.
 CodeQL workflow added (skipped while the repo is private; auto-runs once
 it goes public).
 
-Still not tested against real Twitch / YouTube / Kick ingests — same gap
+Still not tested against real Twitch / YouTube / Kick ingests - same gap
 as beta.1 / beta.2 between here and `v0.1.0`.
 
 ## [0.1.0-beta.2] - tag-on-fmt-clean rebuild

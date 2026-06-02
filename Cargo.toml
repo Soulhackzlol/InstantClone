@@ -5,7 +5,7 @@ edition = "2021"
 
 # Squeeze every byte out of the release binary. opt-level = "s" trades
 # a small amount of code-generation aggressiveness for a meaningful
-# binary-size win — measured at -236 KB (1404 KB -> 1168 KB) vs
+# binary-size win - measured at -236 KB (1404 KB -> 1168 KB) vs
 # opt-level = 3 on our workload. Hot paths in this binary are
 # I/O-bound (RTMP chunk read/write, disk ring append, TCP send) where
 # the bottleneck is the syscall, not codegen, so the size win is the
@@ -32,7 +32,7 @@ native-tls = "0.2"
 
 # Windows-only: system-tray icon + opening the default browser via a real
 # shell call. Same `windows-sys` crate that tokio's `mio` already pulls in
-# transitively, so adding it explicitly costs ~0 binary bytes — we just
+# transitively, so adding it explicitly costs ~0 binary bytes - we just
 # get to use the typed APIs instead of hand-rolling FFI blocks.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

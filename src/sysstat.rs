@@ -11,7 +11,7 @@ use std::time::Instant;
 /// 100 ns ticks and CPU% needs a non-trivial wall delta to be meaningful.
 pub struct SysStat {
     // Previous (user + kernel) jiffy total and the wall time we read it.
-    // Mutex<…> is fine — there's exactly one caller (the web /state path).
+    // Mutex<…> is fine - there's exactly one caller (the web /state path).
     prev: Mutex<Option<(u64, Instant)>>,
 }
 
@@ -23,7 +23,7 @@ impl SysStat {
     }
 
     /// Returns (cpu_percent, rss_bytes). On unsupported platforms, both
-    /// are zero. Errors are swallowed — a missing metric is better than
+    /// are zero. Errors are swallowed - a missing metric is better than
     /// a 500 from /state.
     pub fn sample(&self) -> (f32, u64) {
         platform::sample(self)
@@ -47,7 +47,7 @@ mod platform {
         page_fault_count: u32,
         peak_working_set_size: usize,
         working_set_size: usize,
-        // remaining fields unused — laid out for size only so cb is correct.
+        // remaining fields unused - laid out for size only so cb is correct.
         _quota_peak_paged_pool_usage: usize,
         _quota_paged_pool_usage: usize,
         _quota_peak_non_paged_pool_usage: usize,

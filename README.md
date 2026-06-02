@@ -100,7 +100,7 @@ flowchart LR
 ```
 
 > [!NOTE]
-> The buffer is on disk by default (`./instantclone.buf`, 500 MB ≈ 11 minutes at 6 Mbps, ≈ 6 min 50 s at 10 Mbps), kept off RAM because it can be hundreds of MB. The only thing in RAM is the IDR index, about 1 MB for 10 minutes at 60 fps. The file is reset on every clean shutdown, so it doesn't accumulate between sessions. The UI refuses to arm a delay larger than the buffer can hold at the current bitrate, with an explicit "needs ≥ N MB" reason — no silent stalls.
+> The buffer is on disk by default (`./instantclone.buf`, 500 MB ≈ 11 minutes at 6 Mbps, ≈ 6 min 50 s at 10 Mbps), kept off RAM because it can be hundreds of MB. The only thing in RAM is the IDR index, about 1 MB for 10 minutes at 60 fps. The file is reset on every clean shutdown, so it doesn't accumulate between sessions. The UI refuses to arm a delay larger than the buffer can hold at the current bitrate, with an explicit "needs ≥ N MB" reason - no silent stalls.
 
 <br/>
 
@@ -293,11 +293,11 @@ No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzippe
 - The two-phase `arm → activate → cut` state machine, with IDR-aligned cuts and monotonic timestamp rewrites. The thing that would have made me build this if it didn't exist.
 - **Live delay adjustment**: re-arm or adjust the delay up / down without disarming first. Backend already supported it; the cockpit now exposes it as a single typed-value + "↻ Adjust ↑/↓ to Ns" CTA.
 - **Full OBS-parity RTMP handshake.** `connect` carries the same codec-capability bag librtmp ships (`audioCodecs=3191`, `videoCodecs=252`, `videoFunction=1`), the Enhanced-RTMP `fourCcList` (AVC / HEVC / AV1 / VP9 / Opus / AC-3 / FLAC), `Set Chunk Size` before connect, `FCUnpublish → deleteStream` on shutdown, and RTMP Acknowledgement (BYTES_READ_REPORT) at the peer-declared window/10 threshold on both ingest and egress.
-- **Enhanced Broadcasting passthrough to Twitch.** When OBS hits multi-track "Auto" we proxy Twitch's `GetClientConfiguration`, route egress to the session-allocated IVS endpoint, and forward every per-track SPS/PPS bit-faithfully so the transcoded ladder lights up regardless of account tier. Non-Twitch destinations get the primary track only — multi-track ladder tags with `TrackId != 0` are dropped to avoid the multi-frame-per-PTS storm that crashes YouTube's decoder.
+- **Enhanced Broadcasting passthrough to Twitch.** When OBS hits multi-track "Auto" we proxy Twitch's `GetClientConfiguration`, route egress to the session-allocated IVS endpoint, and forward every per-track SPS/PPS bit-faithfully so the transcoded ladder lights up regardless of account tier. Non-Twitch destinations get the primary track only - multi-track ladder tags with `TrackId != 0` are dropped to avoid the multi-frame-per-PTS storm that crashes YouTube's decoder.
 - **One-click OBS service registration.** The wizard's primary onboarding path adds an "InstantClone" entry to OBS's Service dropdown (writes `services.json` with a `.bak` first; refreshes on port change; surfaces "close OBS first" when the file is locked).
 - Multi-destination egress with per-destination reconnect + bitrate stats.
 - **Capacity-aware buffer UI**: live "X MB → max Ys delay at N Mbps" hint, refuses to arm a delay larger than the buffer can hold with an explicit "needs ≥ N MB" reason.
-- **Platform-specific warnings**: Twitch mobile-decoder risk above 8 Mbps under Source-Only, Kick's no-B-frames requirement (AWS IVS), per-platform stream-key dashboard links — all surfaced in the wizard / destination form so streamers don't have to learn each platform's gotchas the hard way.
+- **Platform-specific warnings**: Twitch mobile-decoder risk above 8 Mbps under Source-Only, Kick's no-B-frames requirement (AWS IVS), per-platform stream-key dashboard links - all surfaced in the wizard / destination form so streamers don't have to learn each platform's gotchas the hard way.
 - Tray icon with live status + one-click cut, port-conflict pre-flight that names the offending process by PID + exe.
 - Test coverage covers the state machine, AVC + Enhanced RTMP IDR detection + multi-track flatten, AMF0 codec including Strict Array, ring eviction with in-flight-read protection, and the timestamp-wrap promotion that prevents the 49.7-day bug.
 

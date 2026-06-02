@@ -1,4 +1,4 @@
-//! Local RTMP sink — accepts the proxy's published stream so you can
+//! Local RTMP sink - accepts the proxy's published stream so you can
 //! validate the full OBS → InstantClone → "Twitch" pipeline without ever
 //! touching a real streaming platform.
 //!
@@ -14,7 +14,7 @@
 //!                                              └─ optional FLV recording
 //!                                                 (playable in VLC/mpv)
 //!
-//! The sink is intentionally tiny — handshake, AMF replies, tag receive,
+//! The sink is intentionally tiny - handshake, AMF replies, tag receive,
 //! optional FLV write. It deliberately reuses our own `rtmp::*` modules
 //! so any wire-format bug shows up here just as it would against Twitch.
 
@@ -88,7 +88,7 @@ pub fn run_cli(args: &[String]) -> io::Result<()> {
 
 fn print_help() {
     eprintln!(
-        "InstantClone — RTMP sink (for end-to-end local testing)
+        "InstantClone - RTMP sink (for end-to-end local testing)
 
 USAGE:
     instantclone sink [OPTIONS]
@@ -131,7 +131,7 @@ async fn run_sink(
 
     println!();
     println!("┌─────────────────────────────────────────────────────────┐");
-    println!("│  InstantClone — local RTMP sink                         │");
+    println!("│  InstantClone - local RTMP sink                         │");
     println!("│                                                         │");
     println!(
         "│  RTMP:       rtmp://127.0.0.1:{:<5}/live                 │",
@@ -155,7 +155,7 @@ async fn run_sink(
             println!("│  Cleanup:    delete on Ctrl+C (--temp)                  │");
         }
     } else {
-        println!("│  Recording:  (off — use --file PATH to enable)          │");
+        println!("│  Recording:  (off - use --file PATH to enable)          │");
     }
     println!("│                                                         │");
     println!("│  In InstantClone's web UI:                              │");
@@ -215,7 +215,7 @@ async fn run_sink(
                 let mb = size as f64 / 1024.0 / 1024.0;
                 if temp {
                     match std::fs::remove_file(p) {
-                        Ok(_) => println!("[sink] removed {} ({:.1} MB) — --temp was set", p, mb),
+                        Ok(_) => println!("[sink] removed {} ({:.1} MB) - --temp was set", p, mb),
                         Err(e) => println!("[sink] could not remove {}: {}", p, e),
                     }
                 } else {
@@ -251,7 +251,7 @@ async fn handle_one(
         let msg = reader.read_message().await?;
         match msg.type_id {
             20 => handle_command(&mut writer, &msg).await?,
-            17 => { /* AMF3 — ignore */ }
+            17 => { /* AMF3 - ignore */ }
             18 /* AMF0 onMetaData / @setDataFrame */ => {
                 if let Some(f) = flv.as_mut() {
                     f.write_tag(18, msg.timestamp, &msg.payload)?;
@@ -385,7 +385,7 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
 }
 
 // ---------------------------------------------------------------------
-// Stats — one summary line per second
+// Stats - one summary line per second
 // ---------------------------------------------------------------------
 struct SinkStats {
     verbose: bool,
@@ -476,7 +476,7 @@ impl SinkStats {
 }
 
 // ---------------------------------------------------------------------
-// FLV writer — minimal valid-FLV emission for playback in VLC/mpv/ffmpeg.
+// FLV writer - minimal valid-FLV emission for playback in VLC/mpv/ffmpeg.
 // Spec ref: Adobe FLV file format spec v10 (2008).
 // ---------------------------------------------------------------------
 struct FlvWriter {
@@ -505,12 +505,12 @@ impl FlvWriter {
         let len = payload.len() as u32;
         let tag_bytes = 11u64 + len as u64 + 4;
         // Hard cap: stop writing when we would exceed the requested size.
-        // We never truncate a partial tag — refuse cleanly at the boundary.
+        // We never truncate a partial tag - refuse cleanly at the boundary.
         if let Some(cap) = self.max_bytes {
             if self.bytes_written + tag_bytes > cap {
                 if !self.cap_warned {
                     eprintln!(
-                        "[sink] recording capped at {} MB — further tags dropped from FLV",
+                        "[sink] recording capped at {} MB - further tags dropped from FLV",
                         cap / 1024 / 1024
                     );
                     let _ = self.w.flush();
@@ -559,7 +559,7 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 // ---------------------------------------------------------------------
-// Live web player — serves an HTML page plus an HTTP-FLV stream of the
+// Live web player - serves an HTML page plus an HTTP-FLV stream of the
 // tags we're receiving in real time. Browser plays with flv.js (loaded
 // from a CDN; ~150 KB, no binary bloat).
 //
@@ -597,7 +597,7 @@ impl LiveStream {
 }
 
 /// Serialize one FLV tag (header + payload + previousTagSize tail) into a
-/// single Vec — the exact bytes that go on the wire for HTTP-FLV.
+/// single Vec - the exact bytes that go on the wire for HTTP-FLV.
 fn flv_tag_bytes(tag_type: u8, ts: u32, payload: &[u8]) -> Vec<u8> {
     let len = payload.len() as u32;
     let mut out = Vec::with_capacity(11 + payload.len() + 4);
@@ -632,7 +632,7 @@ async fn run_web(port: u16, live: Arc<LiveStream>) -> io::Result<()> {
 }
 
 async fn handle_web_request(mut sock: TcpStream, live: Arc<LiveStream>) -> io::Result<()> {
-    // Read the request line + headers (up to 4 KB — plenty for any GET).
+    // Read the request line + headers (up to 4 KB - plenty for any GET).
     let mut buf = [0u8; 4096];
     let mut used = 0;
     loop {
@@ -705,7 +705,7 @@ async fn serve_live_flv(sock: &mut TcpStream, live: Arc<LiveStream>) -> io::Resu
         send_chunked(sock, slot).await?;
     }
 
-    // Live stream — break on any send error (client closed) or lag.
+    // Live stream - break on any send error (client closed) or lag.
     loop {
         match rx.recv().await {
             Ok(bytes) => {
@@ -732,7 +732,7 @@ async fn send_chunked(sock: &mut TcpStream, data: &[u8]) -> io::Result<()> {
 }
 
 /// HTML player. Uses flv.js from a CDN (~150 KB) plus a hand-rolled
-/// player chrome modelled loosely on Twitch's — custom controls, LIVE
+/// player chrome modelled loosely on Twitch's - custom controls, LIVE
 /// badge, buffering spinner, and a toggleable "stats for nerds" overlay
 /// (press S) that exposes everything you need to diagnose proxy hiccups:
 /// receive bitrate, buffer-ahead, dropped frames, stall count, total
@@ -743,7 +743,7 @@ const PLAYER_HTML: &str = r##"<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>InstantClone — live preview</title>
+<title>InstantClone - live preview</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-font-smoothing:antialiased}
 :root{
@@ -756,12 +756,12 @@ body{background:var(--bg);color:var(--fg);
   font-family:-apple-system,Segoe UI,Roboto,sans-serif;
   overflow:hidden;user-select:none}
 
-/* Player container — relatively positioned so overlays anchor cleanly */
+/* Player container - relatively positioned so overlays anchor cleanly */
 .stage{position:relative;width:100%;height:100%;background:#000;cursor:default}
 .stage.hide-cursor{cursor:none}
 video{width:100%;height:100%;background:#000;outline:none;display:block}
 
-/* LIVE badge — top-left, red dot when receiving, gray when offline */
+/* LIVE badge - top-left, red dot when receiving, gray when offline */
 .live{
   position:absolute;top:14px;left:14px;
   display:inline-flex;align-items:center;gap:7px;
@@ -777,7 +777,7 @@ video{width:100%;height:100%;background:#000;outline:none;display:block}
 .live.off .ldot{background:var(--dim);box-shadow:none;animation:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-/* Buffering spinner — center, only when video is stalled */
+/* Buffering spinner - center, only when video is stalled */
 .buffering{
   position:absolute;inset:0;display:flex;
   align-items:center;justify-content:center;
@@ -800,7 +800,7 @@ video{width:100%;height:100%;background:#000;outline:none;display:block}
 }
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* Stats overlay — top-right, slides in. Press S to toggle. */
+/* Stats overlay - top-right, slides in. Press S to toggle. */
 .stats{
   position:absolute;top:14px;right:14px;
   width:280px;max-width:calc(100% - 28px);
@@ -832,7 +832,7 @@ video{width:100%;height:100%;background:#000;outline:none;display:block}
 .stats .row .v.good{color:var(--good)}
 .stats hr{border:0;border-top:1px solid var(--border);margin:8px 0}
 
-/* Bottom controls — auto-hide after 2s of mouse-still. */
+/* Bottom controls - auto-hide after 2s of mouse-still. */
 .controls{
   position:absolute;left:0;right:0;bottom:0;
   display:flex;align-items:center;gap:8px;
@@ -879,7 +879,7 @@ video{width:100%;height:100%;background:#000;outline:none;display:block}
   border-radius:50%;background:var(--fg);cursor:pointer;
 }
 
-/* Record button — empty circle when idle, pulsing red dot when active. */
+/* Record button - empty circle when idle, pulsing red dot when active. */
 .controls .rec-btn{position:relative}
 .controls .rec-btn .rec-ring{
   width:14px;height:14px;border-radius:50%;
@@ -899,7 +899,7 @@ video{width:100%;height:100%;background:#000;outline:none;display:block}
 }
 .controls .rec-meta.hidden{display:none}
 
-/* Toast — bottom-center, transient. */
+/* Toast - bottom-center, transient. */
 .toast{
   position:absolute;left:50%;bottom:80px;transform:translateX(-50%);
   background:var(--panel);backdrop-filter:blur(8px);
@@ -910,7 +910,7 @@ video{width:100%;height:100%;background:#000;outline:none;display:block}
 }
 .toast.show{opacity:1}
 
-/* Error banner — for fatal flv.js errors. */
+/* Error banner - for fatal flv.js errors. */
 .err{
   position:absolute;top:50%;left:50%;
   transform:translate(-50%,-50%);
@@ -934,38 +934,38 @@ video{width:100%;height:100%;background:#000;outline:none;display:block}
   <!-- Twitch-style LIVE badge -->
   <div class="live off" id="live"><span class="ldot"></span><span>LIVE</span></div>
 
-  <!-- Buffering spinner — visible while video is waiting for data -->
+  <!-- Buffering spinner - visible while video is waiting for data -->
   <div class="buffering" id="buffering">
     <div class="ring"></div>
     <div class="label" id="buffering-label">Buffering…</div>
   </div>
 
-  <!-- Stats-for-nerds — press S to toggle -->
+  <!-- Stats-for-nerds - press S to toggle -->
   <div class="stats" id="stats">
     <h4>Stream debug <span class="hint">press S to hide</span></h4>
-    <div class="row"><span class="k">Resolution</span><span class="v" id="s-res">—</span></div>
-    <div class="row"><span class="k">Video codec</span><span class="v" id="s-vcodec">—</span></div>
-    <div class="row"><span class="k">Audio codec</span><span class="v" id="s-acodec">—</span></div>
-    <div class="row"><span class="k">FPS (reported)</span><span class="v" id="s-fps">—</span></div>
+    <div class="row"><span class="k">Resolution</span><span class="v" id="s-res">-</span></div>
+    <div class="row"><span class="k">Video codec</span><span class="v" id="s-vcodec">-</span></div>
+    <div class="row"><span class="k">Audio codec</span><span class="v" id="s-acodec">-</span></div>
+    <div class="row"><span class="k">FPS (reported)</span><span class="v" id="s-fps">-</span></div>
     <hr>
-    <div class="row"><span class="k">Receive rate</span><span class="v" id="s-rcv">—</span></div>
+    <div class="row"><span class="k">Receive rate</span><span class="v" id="s-rcv">-</span></div>
     <div class="row"><span class="k">Decoded frames</span><span class="v" id="s-dec">0</span></div>
     <div class="row"><span class="k">Dropped frames</span><span class="v" id="s-drop">0</span></div>
     <hr>
     <div class="row"><span class="k">Buffer ahead</span><span class="v" id="s-buf">0.00 s</span></div>
     <div class="row"><span class="k">Buffered end</span><span class="v" id="s-end">0.00 s</span></div>
     <div class="row"><span class="k">Playhead</span><span class="v" id="s-cur">0.00 s</span></div>
-    <div class="row"><span class="k">Ready state</span><span class="v" id="s-state">—</span></div>
+    <div class="row"><span class="k">Ready state</span><span class="v" id="s-state">-</span></div>
     <hr>
     <div class="row"><span class="k">Stalls</span><span class="v" id="s-stalls">0</span></div>
-    <div class="row"><span class="k">Last stall</span><span class="v" id="s-last-stall">—</span></div>
+    <div class="row"><span class="k">Last stall</span><span class="v" id="s-last-stall">-</span></div>
     <div class="row"><span class="k">Total stalled</span><span class="v" id="s-stall-total">0.00 s</span></div>
     <div class="row"><span class="k">Stalled now</span><span class="v" id="s-stalling">no</span></div>
     <hr>
     <div class="row"><span class="k">Session uptime</span><span class="v" id="s-up">0 s</span></div>
   </div>
 
-  <!-- Controls bar — auto-hides when idle -->
+  <!-- Controls bar - auto-hides when idle -->
   <div class="controls">
     <button id="play-pause" title="Play/Pause (Space)">
       <svg id="icon-play" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20" fill="currentColor" stroke="none"/></svg>
@@ -979,12 +979,12 @@ video{width:100%;height:100%;background:#000;outline:none;display:block}
       <input id="vol-slider" type="range" min="0" max="100" value="100" title="Volume">
     </div>
     <button class="live-edge hidden" id="live-edge" title="Jump to live edge">Live</button>
-    <span class="lbl" id="live-lbl"><span class="ldot"></span><span id="latency">—</span></span>
+    <span class="lbl" id="live-lbl"><span class="ldot"></span><span id="latency">-</span></span>
 
     <span class="spacer"></span>
 
     <span class="rec-meta hidden" id="rec-meta">REC <span id="rec-time">0s</span></span>
-    <button id="record" class="rec-btn" title="Record trace (R) — downloads .jsonl on stop">
+    <button id="record" class="rec-btn" title="Record trace (R) - downloads .jsonl on stop">
       <span class="rec-ring"></span>
     </button>
     <button id="stats-toggle" title="Stats (S)">
@@ -1057,7 +1057,7 @@ function readyStateName(rs){
 // ── Recording: capture every sample + event to a JSONL log the user
 // can download and share for offline analysis. Each line is one JSON
 // object with `t` (ms since rec-start), `kind`, and event-specific
-// fields. Recording works during normal playback — no perf impact when
+// fields. Recording works during normal playback - no perf impact when
 // idle (just appending to an array).
 const rec = {
   on: false,
@@ -1076,7 +1076,7 @@ function recStart(){
   rec.on = true;
   rec.startedAt = Date.now();
   rec.lines = [];
-  // Header line — context for whoever reads the trace later.
+  // Header line - context for whoever reads the trace later.
   rec.lines.push(JSON.stringify({
     t: 0,
     kind: 'header',
@@ -1131,7 +1131,7 @@ function start(){
   recPush({ kind: 'player_start' });
 
   // Default config: aggressive low-latency. We WANT to see proxy
-  // hiccups here — bumping these would mask the very bugs the sink
+  // hiccups here - bumping these would mask the very bugs the sink
   // exists to surface.
   player = flvjs.createPlayer({
     type: 'flv',
@@ -1166,7 +1166,7 @@ function start(){
   });
 
   player.load();
-  video.play().catch(() => { /* autoplay blocked — user clicks play */ });
+  video.play().catch(() => { /* autoplay blocked - user clicks play */ });
 }
 
 // ── Stall tracking via the video element events ─────────────────────
@@ -1274,7 +1274,7 @@ nudge();
 
 // ── Stats loop ──────────────────────────────────────────────────────
 function fmtRate(kBps){
-  if(!kBps) return '—';
+  if(!kBps) return '-';
   if(kBps < 1024) return kBps.toFixed(0) + ' KB/s';
   return (kBps / 1024).toFixed(2) + ' MB/s';
 }
@@ -1287,8 +1287,8 @@ function refreshStats(){
   // mediaInfo
   if(mediaInfo){
     $('s-res').textContent    = (mediaInfo.width || '?') + '×' + (mediaInfo.height || '?');
-    $('s-vcodec').textContent = mediaInfo.videoCodec || '—';
-    $('s-acodec').textContent = mediaInfo.audioCodec || '—';
+    $('s-vcodec').textContent = mediaInfo.videoCodec || '-';
+    $('s-acodec').textContent = mediaInfo.audioCodec || '-';
     $('s-fps').textContent    = (mediaInfo.fps || 0).toFixed(2);
   }
 
@@ -1323,7 +1323,7 @@ function refreshStats(){
   const stalling = stats.stallStart != null;
   $('s-stalls').textContent      = stats.stalls;
   $('s-stalls').className        = 'v ' + (stats.stalls === 0 ? 'good' : 'warn');
-  $('s-last-stall').textContent  = stats.lastStallMs ? fmtMs(stats.lastStallMs) : '—';
+  $('s-last-stall').textContent  = stats.lastStallMs ? fmtMs(stats.lastStallMs) : '-';
   $('s-stall-total').textContent = (stats.totalStallMs / 1000).toFixed(2) + ' s';
   $('s-stall-total').className   = 'v ' + (stats.totalStallMs === 0 ? 'good' : 'warn');
   $('s-stalling').textContent    = stalling ? 'YES' : 'no';
@@ -1366,7 +1366,7 @@ function refreshStats(){
 }
 setInterval(refreshStats, 250);
 
-// Open stats by default — this player exists for diagnostics.
+// Open stats by default - this player exists for diagnostics.
 $('stats').classList.add('open');
 
 start();

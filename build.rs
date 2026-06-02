@@ -4,7 +4,7 @@
 //!
 //! Net effect: ~125 KB of HTML/CSS/JS in source compresses to ~25 KB in
 //! the binary. The release binary serves the gz blob directly with
-//! `Content-Encoding: gzip` — every real browser supports it.
+//! `Content-Encoding: gzip` - every real browser supports it.
 
 use std::env;
 use std::fs;
@@ -194,7 +194,7 @@ fn draw_icon(pixels: &mut [u8], n: usize) {
 }
 
 /// True iff `(x, y)` falls inside the rounded rectangle described by
-/// `[x0, x1) × [y0, y1)` with corner radius `r`. Pixel-perfect, no AA —
+/// `[x0, x1) × [y0, y1)` with corner radius `r`. Pixel-perfect, no AA -
 /// the small ICO sizes hide the staircase well enough.
 #[cfg(windows)]
 fn inside_rrect(x: usize, y: usize, x0: usize, y0: usize, x1: usize, y1: usize, r: usize) -> bool {
@@ -260,7 +260,7 @@ fn minify(input: &str) -> Vec<u8> {
             continue;
         }
 
-        // Track unbalanced backticks across lines — if we're inside a
+        // Track unbalanced backticks across lines - if we're inside a
         // multi-line template literal, leave the line as-is so we don't
         // corrupt the string content.
         let backticks = line.matches('`').count();
@@ -296,7 +296,7 @@ fn minify(input: &str) -> Vec<u8> {
 }
 
 /// Trim ASCII whitespace from both ends of a byte slice. We only need to
-/// match the four whitespace chars JS / HTML use (space, tab, CR, LF) —
+/// match the four whitespace chars JS / HTML use (space, tab, CR, LF) -
 /// no need to handle Unicode whitespace.
 fn trim_ws(b: &[u8]) -> &[u8] {
     let mut s = 0;
@@ -322,7 +322,7 @@ fn strip_line(line: &str, in_block: &mut bool) -> Vec<u8> {
     while i < bytes.len() {
         let b = bytes[i];
 
-        // Inside a block comment — look for terminator
+        // Inside a block comment - look for terminator
         if *in_block {
             if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
                 *in_block = false;
@@ -333,7 +333,7 @@ fn strip_line(line: &str, in_block: &mut bool) -> Vec<u8> {
             continue;
         }
 
-        // Inside a string — copy literally, watching for escapes + close
+        // Inside a string - copy literally, watching for escapes + close
         if let Some(q) = in_str {
             out.push(b);
             if b == b'\\' && i + 1 < bytes.len() {
@@ -363,7 +363,7 @@ fn strip_line(line: &str, in_block: &mut bool) -> Vec<u8> {
             continue;
         }
 
-        // Line comment — stop here, but ONLY if this looks like JS (not
+        // Line comment - stop here, but ONLY if this looks like JS (not
         // a URL like https://). Treat `//` after `:` as URL noise.
         if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
             let prev = if i == 0 { b' ' } else { bytes[i - 1] };

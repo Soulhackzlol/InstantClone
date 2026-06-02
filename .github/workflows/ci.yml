@@ -42,7 +42,7 @@ jobs:
 
       # Tests run in --release because runtime correctness depends on
       # `panic = "abort"`. Drop `--no-fail-fast` so the first failure is
-      # the one in the log — clearer signal than a wall of stack traces.
+      # the one in the log - clearer signal than a wall of stack traces.
       - name: test
         run: cargo test --release
 
@@ -63,7 +63,7 @@ jobs:
   # instantclone's ingest, instantclone forwards it to the in-tree sink,
   # the sink confirms onMetaData + publish + IDR detection. Exercises
   # handshake, AMF0, chunking, h264 classification, and the egress pump
-  # against a real RTMP peer — the whole wire path the unit tests skip.
+  # against a real RTMP peer - the whole wire path the unit tests skip.
   e2e:
     name: e2e (ffmpeg → proxy → sink)
     needs: test

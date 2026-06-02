@@ -2,11 +2,11 @@
 //!
 //! Covers both legacy (AVC, AAC, MP3) and Enhanced RTMP (HEVC, AV1, VP9,
 //! Opus, AC-3, EAC-3, FLAC, multi-track) tag headers. We only need to
-//! identify three things — actual decoding never happens:
+//! identify three things - actual decoding never happens:
 //!
 //!   * sequence headers (cache + resend on every cut and reconnect)
 //!   * keyframes / IDRs (cut points the player can resync to)
-//!   * multi-track packets (Twitch Enhanced Broadcasting — kept raw in
+//!   * multi-track packets (Twitch Enhanced Broadcasting - kept raw in
 //!     the buffer; the pump flattens per-destination via
 //!     `select_video_bytes` so Twitch receives the simulcast while
 //!     every other destination gets a standard single-track tag)
@@ -14,7 +14,7 @@
 //! The buffer stores tags bit-faithfully as ingest received them. The
 //! only transformation we apply is `select_video_bytes` in the pump
 //! right before each `sink.send_video` call, on a per-destination
-//! basis — single-track tags are borrowed through with zero copies.
+//! basis - single-track tags are borrowed through with zero copies.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoCodec {
@@ -44,7 +44,7 @@ pub struct VideoTagInfo {
     pub is_multitrack: bool,
     /// Enhanced-RTMP `PacketTypeMetadata` (=4) carries mid-stream
     /// updates like HDR `colorInfo`. Bit-faithfully passed through to
-    /// the destination — flagged here only so the trace log doesn't
+    /// the destination - flagged here only so the trace log doesn't
     /// mistake it for an anomalous packet, and so callers that cache
     /// "must-replay-on-cut" packets can choose to include it.
     pub is_metadata: bool,
@@ -81,7 +81,7 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
         }
         let avc_packet_type = payload[1];
         let is_seq_header = avc_packet_type == 0;
-        // Sequence headers carry SPS/PPS, never an IDR slice — trust the
+        // Sequence headers carry SPS/PPS, never an IDR slice - trust the
         // NAL walk rather than the FLV FrameType nibble (some encoders set
         // FrameType=key on the seq header too).
         let is_idr = avc_packet_type == 1 && contains_idr_nalu(&payload[5..]);
@@ -119,7 +119,7 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     //
     // Crucially: the *nested* PacketType lives in the low nibble of
     // byte 1, not byte 0. A multi-track tag carrying decoder config
-    // has outer packet_type=6 but nested packet_type=0 — and that's
+    // has outer packet_type=6 but nested packet_type=0 - and that's
     // what determines whether this is a seq header that needs caching
     // for re-emit on cuts. Same nested check refuses IDR-cut treatment
     // on a multi-track config tag where the encoder also set
@@ -182,7 +182,7 @@ fn contains_idr_nalu(mut data: &[u8]) -> bool {
 /// single-track tag carrying the first listed track only.
 ///
 /// Twitch's Enhanced Broadcasting feeds simulcast resolutions in a single
-/// RTMP stream — picking the first track keeps the user's primary
+/// RTMP stream - picking the first track keeps the user's primary
 /// resolution (encoders are required by the spec to list the primary
 /// first). Returns `None` if the payload isn't a recognised multi-track
 /// layout, in which case the caller should pass the bytes through and
@@ -278,7 +278,7 @@ pub fn flatten_multitrack_video(payload: &[u8]) -> Option<Vec<u8>> {
 ///   single-track tags pass through unchanged.
 ///
 /// Single-track tags ALWAYS pass through unchanged regardless of the
-/// flag — there's nothing to flatten and no destination policy that
+/// flag - there's nothing to flatten and no destination policy that
 /// would want them changed. Returns a borrow when no copy is needed
 /// (the common case) and an owned `Vec` only when a flatten was
 /// actually performed.
@@ -291,7 +291,7 @@ pub fn flatten_multitrack_video(payload: &[u8]) -> Option<Vec<u8>> {
 ///   * Enhanced-RTMP single-track payloads (IsEx bit set but
 ///     PacketType != Multitrack)
 ///   * Multi-track ManyTracks / ManyTracksManyCodecs layouts (the
-///     whole tag holds every track's config — one slot is correct)
+///     whole tag holds every track's config - one slot is correct)
 ///   * Truncated payloads we can't parse safely
 ///
 /// Used by the seq-header cache to key per-track entries so a
@@ -303,11 +303,11 @@ pub fn seq_header_track_id(payload: &[u8]) -> u8 {
         return 0;
     }
     let b0 = payload[0];
-    // Not Enhanced-RTMP at all — legacy AVC/HEVC tag, no track id.
+    // Not Enhanced-RTMP at all - legacy AVC/HEVC tag, no track id.
     if b0 & 0x80 == 0 {
         return 0;
     }
-    // Enhanced-RTMP but not the Multitrack PacketType — single-track,
+    // Enhanced-RTMP but not the Multitrack PacketType - single-track,
     // no track id field to read.
     if b0 & 0x0F != 6 {
         return 0;
@@ -341,7 +341,7 @@ pub fn select_video_bytes<'a>(
     }
     // For OneTrack layout, OBS sends one tag per track per frame.
     // Forwarding every track to a non-Twitch destination would deliver
-    // N frames per PTS — decoders read that as a multi-frame storm and
+    // N frames per PTS - decoders read that as a multi-frame storm and
     // either drop the connection (YouTube did, ~12 s per ladder rung)
     // or render heavy artefacts. The primary stream arrives separately
     // as a legacy AVC / Enhanced single-track tag, so dropping
@@ -354,7 +354,7 @@ pub fn select_video_bytes<'a>(
     }
     match flatten_multitrack_video(payload) {
         Some(flat) => Some(Cow::Owned(flat)),
-        // Pathological multi-track layout we couldn't parse — let it
+        // Pathological multi-track layout we couldn't parse - let it
         // through as-is, same fallback the old ingest-side flatten
         // used. The destination will either accept it or surface an
         // error we can chase.
@@ -460,7 +460,7 @@ pub fn classify_audio_tag(payload: &[u8]) -> AudioTagInfo {
     unknown
 }
 
-/// Back-compat shim — sink.rs and a few other callers used this name
+/// Back-compat shim - sink.rs and a few other callers used this name
 /// before the audio classifier existed. Kept so the call site stays terse.
 pub fn is_aac_seq_header(payload: &[u8]) -> bool {
     classify_audio_tag(payload).is_seq_header
@@ -477,7 +477,7 @@ mod tests {
         let mut out = Vec::with_capacity(4 + 1 + body_len);
         let len = (1 + body_len) as u32;
         out.extend_from_slice(&len.to_be_bytes());
-        out.push(nal_type & 0x1F); // forbidden_zero=0, nal_ref_idc=0 — fine for the type check
+        out.push(nal_type & 0x1F); // forbidden_zero=0, nal_ref_idc=0 - fine for the type check
         out.resize(out.len() + body_len, 0);
         out
     }
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn avc_non_idr_not_flagged() {
         // NAL type 1 = non-IDR slice; encoder MIGHT lie via the FrameType
-        // nibble — we trust the NAL walk and refuse to call it an IDR.
+        // nibble - we trust the NAL walk and refuse to call it an IDR.
         let tag = avc_tag(1, &[nal(1, 50)]);
         let info = classify_video_tag(&tag);
         assert!(!info.is_idr);
@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn enhanced_rtmp_seq_header_not_idr() {
-        // PacketType=0 (SequenceStart) — must not be flagged as IDR
+        // PacketType=0 (SequenceStart) - must not be flagged as IDR
         let byte0 = 0x80 | (1u8 << 4);
         let mut payload = vec![byte0];
         payload.extend_from_slice(b"av01");
@@ -628,7 +628,7 @@ mod tests {
     fn enhanced_rtmp_multitrack_seqstart_caches_as_seq_header() {
         // outer packet_type=6 (Multitrack), nested packet_type=0
         // (SequenceStart). This is the decoder-config tag for an
-        // Enhanced Broadcasting stream — MUST be flagged as seq
+        // Enhanced Broadcasting stream - MUST be flagged as seq
         // header or the controller never caches it and every cut
         // emits a stale or empty config to the destination, which
         // then fails to decode the post-cut frames.
@@ -639,7 +639,7 @@ mod tests {
         assert!(info.is_multitrack);
         assert!(info.is_seq_header);
         // FrameType=1 set on a seq header tag must NOT be flagged
-        // as IDR — seq headers carry decoder config, never slice
+        // as IDR - seq headers carry decoder config, never slice
         // data. Same rule as the single-track classifier.
         assert!(!info.is_idr);
     }
@@ -692,7 +692,7 @@ mod tests {
     fn select_video_bytes_passes_single_track_through_unchanged_in_both_modes() {
         // Invariant 1: single-track tags never get rewritten. The
         // pass_through flag is meaningless when there's nothing to
-        // flatten — and the borrow path means no copy happens either.
+        // flatten - and the borrow path means no copy happens either.
         let tag = avc_single_track_keyframe_bytes();
         let twitch = select_video_bytes(&tag, true).expect("single-track always forwards");
         let youtube = select_video_bytes(&tag, false).expect("single-track always forwards");
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn select_video_bytes_passes_multitrack_through_for_twitch() {
         // Invariant 2: Twitch destinations get the raw multi-track
-        // bytes verbatim — that's what unlocks the transcoded ladder.
+        // bytes verbatim - that's what unlocks the transcoded ladder.
         // True for every TrackId, not just the primary.
         for track in 0u8..=4 {
             let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
@@ -722,7 +722,7 @@ mod tests {
         // OneTrack-format TrackId 0 (rather than as a separate legacy
         // AVC tag) still gets a flattened single-track tag for
         // non-Twitch destinations. In the wild OBS sends the primary
-        // as legacy, so this path rarely fires — but we want a future
+        // as legacy, so this path rarely fires - but we want a future
         // encoder change not to silently blank YouTube.
         let tag = enhanced_rtmp_onetrack_video_bytes_track(0);
         let youtube = select_video_bytes(&tag, false).expect("track 0 must be forwarded");
@@ -752,7 +752,7 @@ mod tests {
     fn select_video_bytes_falls_back_to_raw_when_flatten_cannot_parse() {
         // Pathological multi-track tag (declares multi-track but the
         // payload is too short to contain a valid inner structure).
-        // The pump must NOT crash and must NOT swallow the tag —
+        // The pump must NOT crash and must NOT swallow the tag -
         // letting it through unchanged matches the old ingest-side
         // fallback so the destination gets a chance to surface the
         // error properly. Truncated below the TrackId byte means we

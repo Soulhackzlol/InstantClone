@@ -2,16 +2,16 @@
 //!
 //! OBS knows about streaming services through a `services.json` file
 //! in the user's `AppData` directory. Each entry declares the server
-//! URLs, recommended encoder settings, and — critically for our
-//! use-case — the `multitrack_video_configuration_url` that turns on
+//! URLs, recommended encoder settings, and - critically for our
+//! use-case - the `multitrack_video_configuration_url` that turns on
 //! the Enhanced Broadcasting / multi-track-video UI inside OBS.
 //!
 //! By inserting an InstantClone entry into that file we let the
-//! streamer pick us straight from the OBS service dropdown — no
+//! streamer pick us straight from the OBS service dropdown - no
 //! Custom-server fiddling, no manual JSON paste, multi-track Video
 //! "Auto" buttons work because they hit our local config endpoint.
 //!
-//! No `serde_json` dependency — the file is well-formed JSON produced
+//! No `serde_json` dependency - the file is well-formed JSON produced
 //! by OBS, so a careful string-level insert + an idempotent check by
 //! exact-substring match handles all the cases we care about. Every
 //! write goes via a `.bak` copy first; if anything goes sideways the
@@ -21,9 +21,9 @@
 //!   1. `$APPDATA\obs-studio\plugin_config\rtmp-services\services.json`
 //!      (the OBS-on-Windows standard path)
 //!   2. `$LOCALAPPDATA\obs-studio\plugin_config\rtmp-services\services.json`
-//!      (rare — some portable installs land here)
+//!      (rare - some portable installs land here)
 //!
-//! macOS / Linux paths are not handled — the rest of the app is
+//! macOS / Linux paths are not handled - the rest of the app is
 //! Windows-only by design.
 
 use std::fs;
@@ -31,7 +31,7 @@ use std::io;
 use std::path::PathBuf;
 
 /// Locate the user's `services.json`. Returns `None` if neither
-/// candidate path exists — typical when OBS isn't installed at all.
+/// candidate path exists - typical when OBS isn't installed at all.
 pub fn services_json_path() -> Option<PathBuf> {
     let candidates = [
         std::env::var("APPDATA")
@@ -56,7 +56,7 @@ pub fn is_registered() -> bool {
 
 /// Build the services.json entry for InstantClone. The
 /// `multitrack_video_configuration_url` is what OBS hits when the user
-/// enables multi-track video — we serve it from our own web port.
+/// enables multi-track video - we serve it from our own web port.
 fn entry_json(web_port: u16, ingest_port: u16) -> String {
     format!(
         r#"{{
@@ -87,7 +87,7 @@ fn entry_json(web_port: u16, ingest_port: u16) -> String {
 }
 
 /// Check whether an "InstantClone" entry is present anywhere in
-/// services.json. Exact-substring match on the name key — services.json
+/// services.json. Exact-substring match on the name key - services.json
 /// is OBS-generated and stable enough that this won't false-positive on
 /// e.g. a "FooInstantCloneBar" service name (no such service exists in
 /// the upstream services.json).
@@ -95,7 +95,7 @@ fn entry_exists(file: &str) -> bool {
     file.contains(r#""name": "InstantClone""#) || file.contains(r#""name":"InstantClone""#)
 }
 
-/// Register InstantClone with OBS. Idempotent and self-healing — a
+/// Register InstantClone with OBS. Idempotent and self-healing - a
 /// pre-existing entry is removed and replaced so a changed web_port
 /// (e.g. user retuned the dashboard port in System settings) refreshes
 /// the URL OBS will hit. Returns an `io::Error` with a user-readable
@@ -104,14 +104,14 @@ pub fn register(web_port: u16, ingest_port: u16) -> io::Result<()> {
     let path = services_json_path().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "OBS services.json not found — is OBS installed for the current user?",
+            "OBS services.json not found - is OBS installed for the current user?",
         )
     })?;
     let original = fs::read_to_string(&path)?;
     looks_like_services_json(&original)?;
     // If our entry is already there, strip it first so a port-changed
     // re-register actually refreshes the URL. remove_entry's parse is
-    // forgiving — falling back to the raw file keeps register() a
+    // forgiving - falling back to the raw file keeps register() a
     // no-fail path when the entry isn't structurally cleanly bounded.
     let base = if entry_exists(&original) {
         remove_entry(&original).unwrap_or_else(|| original.clone())
@@ -121,7 +121,7 @@ pub fn register(web_port: u16, ingest_port: u16) -> io::Result<()> {
     let patched = insert_entry(&base, &entry_json(web_port, ingest_port)).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "couldn't locate the `\"services\":[` array in services.json — file shape unexpected",
+            "couldn't locate the `\"services\":[` array in services.json - file shape unexpected",
         )
     })?;
     let bak = path.with_extension("json.instantclone.bak");
@@ -131,13 +131,13 @@ pub fn register(web_port: u16, ingest_port: u16) -> io::Result<()> {
 }
 
 /// Remove our entry from services.json. Returns Ok(()) even when not
-/// registered (idempotent) — only surfaces an error if the file is
+/// registered (idempotent) - only surfaces an error if the file is
 /// present but in an unexpected shape we can't safely edit.
 pub fn unregister() -> io::Result<()> {
     let path = services_json_path().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "OBS services.json not found — nothing to unregister",
+            "OBS services.json not found - nothing to unregister",
         )
     })?;
     let original = fs::read_to_string(&path)?;
@@ -148,7 +148,7 @@ pub fn unregister() -> io::Result<()> {
     let stripped = remove_entry(&original).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "couldn't unambiguously remove the InstantClone entry — restore from .bak manually",
+            "couldn't unambiguously remove the InstantClone entry - restore from .bak manually",
         )
     })?;
     let bak = path.with_extension("json.instantclone.bak");
@@ -158,7 +158,7 @@ pub fn unregister() -> io::Result<()> {
 }
 
 /// Reject a services.json that doesn't at least look like the expected
-/// shape — a JSON object containing a `"services"` array. Spares the
+/// shape - a JSON object containing a `"services"` array. Spares the
 /// user a half-corrupted file when something else (a botched manual
 /// edit, a different program writing to the same path) trashed it
 /// since OBS last touched it.
@@ -167,20 +167,20 @@ fn looks_like_services_json(file: &str) -> io::Result<()> {
     if !trimmed.starts_with('{') {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "services.json doesn't start with a JSON object — file may be corrupted, close OBS and run it once to regenerate it.",
+            "services.json doesn't start with a JSON object - file may be corrupted, close OBS and run it once to regenerate it.",
         ));
     }
     if !file.contains("\"services\"") {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "services.json is missing the `services` array — file looks unfamiliar, restore from .instantclone.bak or let OBS regenerate it.",
+            "services.json is missing the `services` array - file looks unfamiliar, restore from .instantclone.bak or let OBS regenerate it.",
         ));
     }
     Ok(())
 }
 
 /// Wrap `fs::write` with a friendlier error when Windows reports the
-/// file is locked by another process — usually OBS holding it open.
+/// file is locked by another process - usually OBS holding it open.
 fn write_or_friendly(path: &std::path::Path, contents: &str) -> io::Result<()> {
     match fs::write(path, contents) {
         Ok(()) => Ok(()),
@@ -193,7 +193,7 @@ fn write_or_friendly(path: &std::path::Path, contents: &str) -> io::Result<()> {
             if locked {
                 Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    "services.json is locked — close OBS Studio first, then try again.",
+                    "services.json is locked - close OBS Studio first, then try again.",
                 ))
             } else {
                 Err(e)
@@ -203,7 +203,7 @@ fn write_or_friendly(path: &std::path::Path, contents: &str) -> io::Result<()> {
 }
 
 /// Splice `entry` into the `"services":[ … ]` array as the first
-/// element. Returns `None` if the array marker can't be found —
+/// element. Returns `None` if the array marker can't be found -
 /// services.json is OBS-managed so this should always succeed for an
 /// install we can trust, but we hand back `None` rather than corrupt
 /// the file if anything looks off.
@@ -228,7 +228,7 @@ fn insert_entry(file: &str, entry: &str) -> Option<String> {
 /// any preceding/trailing comma so the surrounding array stays valid.
 fn remove_entry(file: &str) -> Option<String> {
     // Locate the marker (handles both indented and non-indented
-    // formats — the exact-substring check `entry_exists` already
+    // formats - the exact-substring check `entry_exists` already
     // confirmed at least one is present, so the unwraps below are
     // safe in practice but we still use `?` for paranoia).
     let marker = if file.contains(r#""name": "InstantClone""#) {
@@ -246,7 +246,7 @@ fn remove_entry(file: &str) -> Option<String> {
     if bytes[start] != b'{' {
         return None;
     }
-    // Walk forward from start to find the matching `}` — tracks
+    // Walk forward from start to find the matching `}` - tracks
     // brace depth and ignores braces inside strings.
     let mut depth = 0i32;
     let mut in_str = false;
@@ -286,7 +286,7 @@ fn remove_entry(file: &str) -> Option<String> {
     if probe < bytes.len() && bytes[probe] == b',' {
         right = probe + 1;
     } else {
-        // No trailing comma — try eating a leading one instead so the
+        // No trailing comma - try eating a leading one instead so the
         // remaining array doesn't end with a stray `,]`.
         let mut probe = start;
         while probe > 0 && bytes[probe - 1].is_ascii_whitespace() {
@@ -389,10 +389,10 @@ mod tests {
     #[test]
     fn looks_like_services_json_rejects_garbage() {
         // A file that doesn't even start with `{` is almost certainly
-        // not OBS's services.json — refuse to splice into it so we
+        // not OBS's services.json - refuse to splice into it so we
         // don't compound the corruption.
         assert!(looks_like_services_json("garbage not even json").is_err());
-        // Valid JSON object but no services array — could be some
+        // Valid JSON object but no services array - could be some
         // other config file at the wrong path; bail out.
         assert!(looks_like_services_json(r#"{"foo":"bar"}"#).is_err());
         // The real shape passes.
@@ -415,7 +415,7 @@ mod tests {
         // The flow we exercise here: register at port A, then "register"
         // at port B with the same entry already present. We can't call
         // `register()` directly (it touches disk), but the helpers it
-        // uses — remove_entry + insert_entry — must compose into a file
+        // uses - remove_entry + insert_entry - must compose into a file
         // that contains the *new* port.
         let original = fake_services_json();
         let v1 = insert_entry(&original, &entry_json(7799, 1935)).unwrap();
