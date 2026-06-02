@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>InstantClone — Dashboard</title>
+<title>InstantClone - Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
@@ -162,7 +162,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .wizard-obs-status{margin:6px 0 0;font-size:11.5px;line-height:1.45;color:var(--fg-3)}
 .wizard-obs-status:empty{display:none}
 .wizard-obs-tip{margin:0;font-size:11px;color:var(--fg-4)}
-/* Progressive disclosure primitive — `<details class="ic-disclose">`
+/* Progressive disclosure primitive - `<details class="ic-disclose">`
    with a `<summary>` that reads as an inline link, plus a subtle
    slide-down on open. Used to keep wizard / OBS / platform-tip
    explanations one click away instead of dumping paragraphs of dense
@@ -209,7 +209,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 /* Container for the per-platform help under the wizard / destination
    key input. Inside lives an optional link to the platform's key page
    and an optional <details> disclosure for the long gotcha tip. We
-   don't put a visible card around it anymore — the disclosure body
+   don't put a visible card around it anymore - the disclosure body
    carries its own panel, and the deep-link is just a styled anchor. */
 .w-key-help{margin-top:6px;display:flex;flex-direction:column;gap:6px;font-size:11.5px;color:var(--fg-3);line-height:1.45}
 .w-key-help .w-key-link{color:var(--fg-2);text-decoration:underline;text-underline-offset:2px;font-size:11.5px}
@@ -547,7 +547,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 /* ── System ──────────────────────────────────── */
 .sys-grid{display:flex;flex-direction:column;gap:14px}
 .sys-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px}
-/* Danger zone — visually fenced from Save with an err-tinted top border
+/* Danger zone - visually fenced from Save with an err-tinted top border
    so a click reaching for Save can't drift into Reset by accident. */
 .sys-reset{margin-top:24px;padding-top:18px;border-top:1px dashed color-mix(in oklch,var(--err) 32%,var(--line))}
 .sys-reset-head{margin-bottom:12px}
@@ -678,7 +678,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   border-bottom-left-radius:3px}
 /* Centered variant (welcome + wrap-up steps). Needs its own keyframe
    because the default tipIn animation sets `transform: scale(...)` and
-   would override the `translate(-50%,-50%)` that does the centering —
+   would override the `translate(-50%,-50%)` that does the centering -
    the tooltip would render at the top-left of 50%/50% instead of the
    middle. Composing both transforms in every keyframe keeps it locked
    to centre throughout the entrance and after it finishes. Slightly
@@ -768,11 +768,11 @@ input,select,textarea{font-family:inherit;color:inherit}
     <span class="ic-brand-credit">made by <a href="https://github.com/s1moscs" target="_blank" rel="noopener">s1moscs</a></span>
   </div>
   <div class="ic-header-right">
-    <span class="ic-pill" id="hdr-obs"><span class="dot"></span><span>OBS</span><span class="mono" id="hdr-obs-v">—</span></span>
-    <span class="ic-pill" id="hdr-egress"><span class="dot"></span><span>Egress</span><span class="mono" id="hdr-egress-v">—</span></span>
-    <span class="ic-bitrate"><span id="hdr-rate">—</span> <span class="unit">kbps</span></span>
-    <span class="ic-pill" id="hdr-codec" hidden><span class="mono" id="hdr-codec-v">—</span></span>
-    <span class="ic-pill ok" id="hdr-ebroadcast" hidden title="Enhanced Broadcasting active — multi-track simulcast is being forwarded bit-faithfully to Twitch and flattened to the primary track for any non-Twitch destinations. Twitch's transcoder serves the full quality ladder to viewers.">⚡ Enhanced Broadcasting</span>
+    <span class="ic-pill" id="hdr-obs"><span class="dot"></span><span>OBS</span><span class="mono" id="hdr-obs-v">-</span></span>
+    <span class="ic-pill" id="hdr-egress"><span class="dot"></span><span>Egress</span><span class="mono" id="hdr-egress-v">-</span></span>
+    <span class="ic-bitrate"><span id="hdr-rate">-</span> <span class="unit">kbps</span></span>
+    <span class="ic-pill" id="hdr-codec" hidden><span class="mono" id="hdr-codec-v">-</span></span>
+    <span class="ic-pill ok" id="hdr-ebroadcast" hidden title="Enhanced Broadcasting active - multi-track simulcast is being forwarded bit-faithfully to Twitch and flattened to the primary track for any non-Twitch destinations. Twitch's transcoder serves the full quality ladder to viewers.">⚡ Enhanced Broadcasting</span>
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
     <span class="ic-pill warn" id="hdr-twitch-cap" hidden>⚠ <span id="hdr-twitch-cap-v">Twitch · Source-Only at 10 Mbps</span></span>
     <button id="hdr-help" class="ic-btn-tiny" title="How does this work? (?)" onclick="openTour(0)" style="width:30px;height:30px;color:var(--fg-3);font-weight:700;font-size:14px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);position:relative">?
@@ -877,7 +877,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     <div class="hero-control">
       <div class="cp-head">
         <span class="ic-label">Custom delay</span>
-        <span class="cp-cap mono">0 — 600s</span>
+        <span class="cp-cap mono">0 - 600s</span>
       </div>
       <div class="cp-input-row">
         <button class="cp-step" onclick="bumpDelay(-1)" id="cp-minus" aria-label="decrement">−</button>
@@ -945,11 +945,11 @@ input,select,textarea{font-family:inherit;color:inherit}
       <input id="dest-form-custom" class="ic-input mono" placeholder="rtmp://host/app">
     </div>
     <div id="dest-form-twitch-wrap" hidden>
-      <label>Twitch ingest server <span class="muted">— pin a region if auto-routing is flaky</span></label>
+      <label>Twitch ingest server <span class="muted">- pin a region if auto-routing is flaky</span></label>
       <select id="dest-form-twitch-ingest" class="ic-input"></select>
     </div>
     <div id="dest-form-youtube-wrap" hidden>
-      <label>YouTube ingest <span class="muted">— switch to backup if the primary is flaky</span></label>
+      <label>YouTube ingest <span class="muted">- switch to backup if the primary is flaky</span></label>
       <select id="dest-form-youtube-ingest" class="ic-input">
         <option value="">Primary (a.rtmp.youtube.com)</option>
         <option value="backup">Backup (b.rtmp.youtube.com)</option>
@@ -973,14 +973,14 @@ input,select,textarea{font-family:inherit;color:inherit}
   <div class="tab-head">
     <div>
       <div class="tab-title">Live metrics</div>
-      <div class="tab-sub">Sliding 60-second window — values update live.</div>
+      <div class="tab-sub">Sliding 60-second window - values update live.</div>
     </div>
   </div>
   <div class="stats-big">
     <div class="stat-card">
       <div class="stat-head">
         <span class="ic-label">Bitrate in</span>
-        <span class="mono stat-now"><span id="stat-rate">—</span> <span class="stat-unit">kbps</span></span>
+        <span class="mono stat-now"><span id="stat-rate">-</span> <span class="stat-unit">kbps</span></span>
       </div>
       <svg class="stat-spark" id="spark-rate" viewBox="0 0 760 70" preserveAspectRatio="none">
         <path id="spark-rate-fill" class="spark-fill" d=""/>
@@ -990,7 +990,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     <div class="stat-card">
       <div class="stat-head">
         <span class="ic-label">CPU</span>
-        <span class="mono stat-now"><span id="stat-cpu">—</span><span class="stat-unit">%</span></span>
+        <span class="mono stat-now"><span id="stat-cpu">-</span><span class="stat-unit">%</span></span>
       </div>
       <svg class="stat-spark" id="spark-cpu" viewBox="0 0 360 48" preserveAspectRatio="none">
         <path id="spark-cpu-fill" class="spark-fill" d="" style="fill:oklch(0.78 0.16 55 / 0.18)"/>
@@ -1004,7 +1004,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     <div class="metric-mini"><div class="ic-label">IDR cuts</div><div class="metric-mini-v"><span class="mono" id="m-cuts">0</span></div></div>
     <div class="metric-mini"><div class="ic-label">OBS drops</div><div class="metric-mini-v"><span class="mono" id="m-idis">0</span></div></div>
     <div class="metric-mini"><div class="ic-label">Egress retry</div><div class="metric-mini-v"><span class="mono" id="m-erec">0</span></div></div>
-    <div class="metric-mini"><div class="ic-label">Memory</div><div class="metric-mini-v"><span class="mono" id="m-rss">—</span><span class="metric-unit" id="m-rss-u"></span></div></div>
+    <div class="metric-mini"><div class="ic-label">Memory</div><div class="metric-mini-v"><span class="mono" id="m-rss">-</span><span class="metric-unit" id="m-rss-u"></span></div></div>
   </div>
 </section>
 
@@ -1018,16 +1018,22 @@ input,select,textarea{font-family:inherit;color:inherit}
   <div class="obs-grid">
     <section class="obs-section span-2 obs-reg-card">
       <div class="ic-label"><span class="ic-badge ic-badge-ok">recommended</span> Register InstantClone as an OBS service</div>
-      <div class="tab-sub">One-click setup: adds an <b>InstantClone</b> entry to OBS's <i>Settings → Stream → Service</i> dropdown alongside Twitch / YouTube. Multi-track Video "Auto" works out of the box. Restart OBS once after registering so it picks up the new service.</div>
+      <div class="tab-sub">One-click setup. InstantClone shows up in OBS's Service dropdown.</div>
       <div id="obs-reg-status" class="muted" style="margin-top:10px;font-size:12px;line-height:1.45"></div>
       <div class="row" style="gap:8px;margin-top:12px;align-items:center">
         <button class="ic-btn ic-btn-primary" id="obs-reg-btn" onclick="toggleObsRegister()">Register with OBS</button>
         <span class="muted" id="obs-reg-msg" style="font-size:11.5px"></span>
       </div>
+      <details class="ic-disclose">
+        <summary>How it works</summary>
+        <div class="ic-disclose-body">
+          <p>Writes an <b>InstantClone</b> entry next to Twitch / YouTube in OBS's <i>Settings &rarr; Stream &rarr; Service</i> list. Multi-track Video "Auto" works out of the box. Restart OBS once after registering so it picks up the new service.</p>
+        </div>
+      </details>
     </section>
     <section class="obs-section span-2 obs-manual-card">
       <div class="ic-label">Or set up a Custom RTMP server manually</div>
-      <div class="tab-sub">Older OBS, multi-RTMP plugins, or non-OBS encoders: in OBS go to <b>Settings → Stream → Service: Custom…</b> and paste the values below.</div>
+      <div class="tab-sub">Paste these in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service: Custom</b>.</div>
       <div class="obs-manual-row">
         <div class="obs-manual-field">
           <div class="ic-label">Server URL</div>
@@ -1042,23 +1048,30 @@ input,select,textarea{font-family:inherit;color:inherit}
             <code class="mono">main</code>
             <button class="ic-btn ic-btn-ghost" onclick="copyText('main','Stream key')">Copy</button>
           </div>
-          <div class="tab-sub" style="margin-top:6px">Type anything — InstantClone uses it only as a stream name. Per-platform keys live in <b>Destinations</b>.</div>
+          <div class="tab-sub" style="margin-top:6px">Any string works - the real platform key lives in <b>Destinations</b>.</div>
         </div>
       </div>
     </section>
     <section class="obs-section span-2">
       <div class="ic-label">Recommended OBS settings</div>
       <div class="obs-recs">
-        <div class="rec"><div class="rec-k">Output → Video → Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Smaller is better — controls how fast delay cuts can happen.</div></div>
-        <div class="rec"><div class="rec-k">Output → Encoder</div><div class="rec-v">x264 / NVENC</div><div class="rec-why">Anything modern. InstantClone passes through untouched.</div></div>
-        <div class="rec"><div class="rec-k">Bitrate</div><div class="rec-v">≤ 80% of upload</div><div class="rec-why">Leave headroom or you'll see "Upload bottleneck" in the header.</div></div>
-        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">Disable B-frames</div><div class="rec-why">Kick runs on AWS IVS which rejects B-frames. Output → Output Mode: Advanced → Encoder: x264 → B-frames: <b>0</b> (or NVENC → Max B-frames: 0).</div></div>
+        <div class="rec"><div class="rec-k">Output &rarr; Video &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
+        <div class="rec"><div class="rec-k">Output &rarr; Encoder</div><div class="rec-v">x264 / NVENC</div><div class="rec-why">Anything modern - InstantClone passes through untouched.</div></div>
+        <div class="rec"><div class="rec-k">Bitrate</div><div class="rec-v">&le; 80% of upload</div><div class="rec-why">Leave headroom or the "Upload bottleneck" pill lights up.</div></div>
+        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">Disable B-frames</div><div class="rec-why">Kick / AWS IVS rejects them. <a href="#" onclick="event.preventDefault();$('rec-kick-detail').open=!$('rec-kick-detail').open">where?</a></div></div>
       </div>
+      <details class="ic-disclose" id="rec-kick-detail">
+        <summary>Where to disable B-frames in OBS</summary>
+        <div class="ic-disclose-body">
+          <p>OBS &rarr; <b>Settings &rarr; Output</b> &rarr; switch <b>Output Mode</b> to <b>Advanced</b>:</p>
+          <p>x264: <b>B-frames</b> &rarr; <code class="mono">0</code><br>NVENC: <b>Max B-frames</b> &rarr; <code class="mono">0</code></p>
+        </div>
+      </details>
     </section>
     <section class="obs-section span-2">
-      <div class="ic-label">Chat in OBS (optional)</div>
-      <div class="tab-sub">Add your platform's chat as an OBS Custom Browser Dock so you can read it without alt-tabbing. Pick your platform and copy the URL — in OBS go to <b>Docks → Custom Browser Docks…</b>, give it a name, paste, click <b>Apply</b>.</div>
-      <div class="chat-dock-row">
+      <div class="ic-label">Chat in OBS <span class="muted" style="text-transform:none;letter-spacing:0">(optional)</span></div>
+      <div class="tab-sub">Drop chat into OBS as a Custom Browser Dock.</div>
+      <div class="chat-dock-row" style="margin-top:10px">
         <select id="chat-dock-platform" class="ic-input">
           <option value="twitch">Twitch</option>
           <option value="youtube">YouTube Live</option>
@@ -1071,6 +1084,12 @@ input,select,textarea{font-family:inherit;color:inherit}
         <code class="mono" id="chat-dock-url">enter your channel name above</code>
         <button class="ic-btn ic-btn-ghost" onclick="copyEl('chat-dock-url','Chat URL')">Copy</button>
       </div>
+      <details class="ic-disclose">
+        <summary>How to add it to OBS</summary>
+        <div class="ic-disclose-body">
+          <p>OBS &rarr; <b>Docks &rarr; Custom Browser Docks&hellip;</b>, give it a name, paste the URL above, click <b>Apply</b>.</p>
+        </div>
+      </details>
     </section>
   </div>
 </section>
@@ -1199,28 +1218,34 @@ input,select,textarea{font-family:inherit;color:inherit}
       <button class="ic-btn ic-btn-primary" onclick="saveSettings()">Save settings</button>
     </div>
     <div class="muted" id="s-msg" style="min-height:1.2em"></div>
-    <!-- Reset zone — kept visually separated from Save by an explicit
+    <!-- Reset zone - kept visually separated from Save by an explicit
          hairline + warning palette so a streamer doesn't accidentally
          nuke a working setup while reaching for Save. -->
     <section class="sys-reset" id="sys-reset">
       <div class="sys-reset-head">
         <div>
           <div class="ic-label" style="color:var(--err)">Danger zone</div>
-          <div class="tab-sub">Both options keep the buffer file on disk; the next launch recreates a fresh empty one. They <b>do not</b> unregister InstantClone from OBS — use the <b>OBS connection</b> tab for that.</div>
+          <div class="tab-sub">Restore InstantClone to a clean state.</div>
         </div>
       </div>
       <div class="sys-reset-grid">
         <div class="sys-reset-card">
           <div class="ic-label">Reset settings</div>
-          <div class="tab-sub">Restores network ports, buffer size/path, webhook, overlays folder, and diagnostics to defaults. <b>Keeps</b> your destinations, delay profiles, and OBS service registration.</div>
+          <div class="tab-sub">Ports, buffer, webhook, overlays, diagnostics &rarr; defaults. Destinations and profiles kept.</div>
           <button class="ic-btn ic-btn-warn" onclick="openResetModal('settings')">Reset settings…</button>
         </div>
         <div class="sys-reset-card sys-reset-card-danger">
           <div class="ic-label" style="color:var(--err)">Reset everything</div>
-          <div class="tab-sub">Wipes <b>every</b> setting plus all destinations and delay profiles. The app restarts into the first-run wizard. <b>Cannot be undone.</b></div>
+          <div class="tab-sub">Also wipes destinations and profiles. Restarts into the wizard. <b>Cannot be undone.</b></div>
           <button class="ic-btn ic-btn-danger" onclick="openResetModal('all')">Reset everything…</button>
         </div>
       </div>
+      <details class="ic-disclose" style="margin-top:10px">
+        <summary>What's not touched</summary>
+        <div class="ic-disclose-body">
+          <p>The buffer file on disk is kept (the next launch recreates a fresh empty one anyway). InstantClone stays registered in OBS &mdash; unregister from the <b>OBS</b> tab if you also want to remove it from OBS's Service dropdown.</p>
+        </div>
+      </details>
     </section>
   </div>
 </section>
@@ -1239,7 +1264,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   <div class="logs-wrap">
     <pre class="logs" id="logs" hidden></pre>
     <div class="logs-empty" id="logs-empty">
-      <div class="logs-empty-icon">📜</div>
+      <div class="logs-empty-icon">X</div>
       <div class="logs-empty-title">No events yet</div>
       <div class="logs-empty-body">As soon as OBS connects, you'll see ingest, egress, and destination events tail here in real time.</div>
     </div>
@@ -1333,7 +1358,7 @@ const $$ = sel => Array.from(document.querySelectorAll(sel));
 
 // ── State ─────────────────────────────────────────────────────────────
 let lastState = null;
-// Last /config snapshot — cached so the capacity-math helpers can read
+// Last /config snapshot - cached so the capacity-math helpers can read
 // buffer_mb without re-fetching. Updated by loadConfig() and by the
 // settings save flow.
 let lastConfig = null;
@@ -1351,7 +1376,7 @@ let cpuHistory = [];
 const HISTORY_LEN = 60;
 const PHASE_TO_STATE = { idle:'off', preparing:'arming', ready:'armed', active:'active' };
 // State pill composes OBS-state + delay-state. "phase=idle" alone doesn't
-// mean "off air" — it just means "no delay armed" (passthrough). Only flag
+// mean "off air" - it just means "no delay armed" (passthrough). Only flag
 // OFFLINE when ingest is actually down.
 function computeStatePill(s){
   if (!s || !s.ingest_alive){
@@ -1385,7 +1410,7 @@ function fmtBytesPair(b){ const u=['B','KB','MB','GB','TB']; let i=0; while(b>=1
 // the capacity client-side and refuse to let the UI arm a delay that
 // can't be filled at the current bitrate.
 //
-// Formula assumes ~160 kbps audio and ~5% RTMP framing overhead — both
+// Formula assumes ~160 kbps audio and ~5% RTMP framing overhead - both
 // roughly OBS defaults. The capacity is a soft estimate, not a hard
 // guarantee; we clamp it slightly to leave the cut machinery a frame
 // of headroom (otherwise a delay sized to exactly the buffer would
@@ -1499,7 +1524,7 @@ function setPending(p){
 function clearPending(){ pendingPhase = null; clearTimeout(pendingClearT); }
 
 async function arm(ms){
-  // Capacity guard — defence in depth so a profile chip / scripted
+  // Capacity guard - defence in depth so a profile chip / scripted
   // call hits the same wall as the manual delay input. ms === 0 is
   // "disarm" and skips the check.
   if (ms > 0){
@@ -1508,7 +1533,7 @@ async function arm(ms){
       const needMB = requiredMBForMs(ms);
       const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
       const at = (m && m > 1000) ? `${(m/1000).toFixed(1)} Mbps` : `${BUF_REF_KBPS/1000} Mbps`;
-      toast(`Buffer too small — ${fmtDelay(ms)} at ${at} needs ≥ ${needMB} MB (current ${lastConfig?lastConfig.buffer_mb:'?'} MB → ${fmtDelay(cap)}).`, 'err');
+      toast(`Buffer too small - ${fmtDelay(ms)} at ${at} needs ≥ ${needMB} MB (current ${lastConfig?lastConfig.buffer_mb:'?'} MB → ${fmtDelay(cap)}).`, 'err');
       return;
     }
   }
@@ -1568,7 +1593,7 @@ function ctaClick(ev){
   if (inputMs > 0) arm(inputMs);
 }
 
-// Secondary disarm button — visible during `arming` or `armed` so the user
+// Secondary disarm button - visible during `arming` or `armed` so the user
 // can always back out without having to first activate then cut. Without
 // this, the `armed` state had no exit path other than activating the
 // delay (then cutting it). Felt broken.
@@ -1584,7 +1609,7 @@ function renderHero(s){
   const ds = PHASE_TO_STATE[s.phase] || 'off';
   // Aurora behind the readout: when OBS is forwarding without delay
   // ("passthrough") we still want the green "live" glow, not the gray
-  // "idle" one — otherwise the hero looks dead while bytes are flowing.
+  // "idle" one - otherwise the hero looks dead while bytes are flowing.
   const auroraState = (!s.ingest_alive) ? 'off'
                      : (ds === 'off') ? 'active'   // passthrough → green
                      : ds;
@@ -1616,7 +1641,7 @@ function renderHero(s){
   // updates `armed_delay_ms` immediately but `current_delay_ms` only
   // catches up once the cut machinery seeks to (or rewinds toward) the
   // new target. For decreases (10→5s) the cut is effectively instant
-  // — armed and current converge within one or two pump ticks. For
+  // - armed and current converge within one or two pump ticks. For
   // increases (10→15s) it depends on buffer history: if we already
   // have ≥15s buffered, also instant; otherwise the controller waits
   // for more bytes to land and the gap stays visible. 1.5 s tolerance
@@ -1627,7 +1652,7 @@ function renderHero(s){
   // Sub copy
   let sub = '';
   if (ds === 'off') sub = `Stream forwarded with no delay${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
-  else if (ds === 'arming') sub = `Buffering — ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers still see live until you activate.`;
+  else if (ds === 'arming') sub = `Buffering - ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers still see live until you activate.`;
   else if (ds === 'armed') sub = `Buffer ready. Click Activate to cut your stream over.`;
   else if (ds === 'active' && adjusting){
     const dir = armedMs > curMs ? 'rewinding' : 'jumping forward';
@@ -1666,7 +1691,7 @@ function renderCta(){
   const inputMs = (parseInt($('delay-input').value || '0', 10) || 0) * 1000;
   const armedMs = lastState.armed_delay_ms || 0;
   // "User wants to change to something different from what's currently
-  // armed/active" — the trigger for re-arm / adjust UX. Treat empty
+  // armed/active" - the trigger for re-arm / adjust UX. Treat empty
   // input as "no change requested" so default actions (Activate / Cut)
   // stay accessible without the user clearing the field.
   const wantsChange = inputMs > 0 && inputMs !== armedMs;
@@ -1679,7 +1704,7 @@ function renderCta(){
   if (cancel) cancel.hidden = !(ds === 'arming' || ds === 'armed');
 
   // Capacity refusal is the same message regardless of which state we
-  // were in when the user typed an oversize value — pull it out once.
+  // were in when the user typed an oversize value - pull it out once.
   const showCapWarn = () => {
     if (inputEl) inputEl.classList.add('field-error');
     if (warn){
@@ -1700,7 +1725,7 @@ function renderCta(){
   } else if (ds === 'armed'){
     if (wantsChange && tooBig){
       btn.className = 'ic-btn ic-btn-disabled cp-cta';
-      btn.textContent = `Buffer holds only ${fmtDelay(cap)} — raise it first`;
+      btn.textContent = `Buffer holds only ${fmtDelay(cap)} - raise it first`;
       btn.disabled = true;
       showCapWarn();
     } else if (wantsChange){
@@ -1718,11 +1743,11 @@ function renderCta(){
   } else if (ds === 'active'){
     if (wantsChange && tooBig){
       btn.className = 'ic-btn ic-btn-disabled cp-cta';
-      btn.textContent = `Buffer holds only ${fmtDelay(cap)} — raise it first`;
+      btn.textContent = `Buffer holds only ${fmtDelay(cap)} - raise it first`;
       btn.disabled = true;
       showCapWarn();
     } else if (wantsChange){
-      // Live delay adjustment — the backend's arm_delay already routes
+      // Live delay adjustment - the backend's arm_delay already routes
       // this to a live-update path: smaller is an instant forward cut,
       // larger triggers a rewind once the buffer has the history.
       btn.className = 'ic-btn ic-btn-primary cp-cta';
@@ -1737,7 +1762,7 @@ function renderCta(){
     // off / idle (== passthrough or genuinely no source)
     if (inputMs > 0 && tooBig){
       btn.className = 'ic-btn ic-btn-disabled cp-cta';
-      btn.textContent = `Buffer holds only ${fmtDelay(cap)} — raise it first`;
+      btn.textContent = `Buffer holds only ${fmtDelay(cap)} - raise it first`;
       btn.disabled = true;
       showCapWarn();
     } else if (inputMs > 0){
@@ -1764,13 +1789,13 @@ function renderCpProfiles(){
     const b = document.createElement('button');
     b.className = 'cp-profile-chip' + (isCur ? ' on' : '') + (tooBig ? ' too-big' : '');
     // Stay clickable while armed/active so the user can pivot between
-    // profiles without disarming first — arm() routes the request to
+    // profiles without disarming first - arm() routes the request to
     // the live-adjust path. Only the "arming" mid-fill state and the
     // explicit current profile are disabled.
     b.disabled = isCur || ds === 'arming';
     if (tooBig){
       const needMB = requiredMBForMs(p.delay_ms);
-      b.title = `${p.name}: buffer too small — needs ≥ ${needMB} MB at the current bitrate (raise in System tab).`;
+      b.title = `${p.name}: buffer too small - needs ≥ ${needMB} MB at the current bitrate (raise in System tab).`;
     } else if (ds === 'active' && !isCur){
       b.title = `Adjust to ${p.name}`;
     } else {
@@ -1789,11 +1814,11 @@ function renderCpProfiles(){
 function renderHeader(s){
   // OBS pill
   const obs = $('hdr-obs'); obs.className = 'ic-pill ' + (s.ingest_alive ? 'live ok' : '');
-  $('hdr-obs-v').textContent = s.ingest_alive ? 'in' : '—';
+  $('hdr-obs-v').textContent = s.ingest_alive ? 'in' : '-';
   // Egress
   const eg = $('hdr-egress'); eg.className = 'ic-pill ' + ((s.destinations_alive || 0) > 0 ? 'ok' : '');
   $('hdr-egress-v').textContent = (s.destinations_total || 0) > 0
-    ? `${s.destinations_alive || 0}/${s.destinations_total || 0}` : '—';
+    ? `${s.destinations_alive || 0}/${s.destinations_total || 0}` : '-';
   // Bitrate
   animateNumber('hdr-rate', s.stats.bitrate_kbps || 0, 400);
   // Codec chip
@@ -1863,7 +1888,7 @@ function buildDestCard(d){
     </div>
     <div class="dcard-graph">
       <div class="dcard-graph-overlay">
-        <div class="dcard-rate-row"><span class="dcard-rate mono">—</span><span class="dcard-rate-u">Mbps</span></div>
+        <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">Mbps</span></div>
         <span class="ic-label">Egress · last 60s</span>
       </div>
       <svg class="dcard-spark" viewBox="0 0 400 54" preserveAspectRatio="none">
@@ -1917,7 +1942,7 @@ function updateDestCard(r, d){
   if (r.host.textContent !== platLabel) r.host.textContent = platLabel;
   // alive = TCP connected. bitrate>0 = actually forwarding frames. The
   // sink/Twitch session can be CONNECTED but receiving nothing (OBS hasn't
-  // sent the first IDR yet) — UI used to call that "Streaming" which is
+  // sent the first IDR yet) - UI used to call that "Streaming" which is
   // misleading. Split into three states: Streaming (green pulse), Connected
   // (accent, just sitting on a healthy TCP connection), Idle (gray).
   const isStreaming = d.alive && (d.bitrate_kbps || 0) > 0;
@@ -1933,7 +1958,7 @@ function updateDestCard(r, d){
   if (d.alive){
     const mbps = rate / 1000;
     r.rate.textContent = mbps >= 1 ? mbps.toFixed(2) : (rate||0);
-  } else r.rate.textContent = '—';
+  } else r.rate.textContent = '-';
   if (r.history.length >= 2){
     const max = Math.max(...r.history, 1), min = Math.min(...r.history, 0);
     const range = max - min || 1, step = 400 / (r.history.length - 1);
@@ -2057,7 +2082,7 @@ function renderProfilesPane(){
       const warn = document.createElement('span'); warn.className = 'profile-warn';
       warn.textContent = `needs ≥ ${needMB} MB`;
       b.appendChild(warn);
-      b.title = `Buffer too small at the current bitrate — raise buffer in System tab to ≥ ${needMB} MB to use this profile.`;
+      b.title = `Buffer too small at the current bitrate - raise buffer in System tab to ≥ ${needMB} MB to use this profile.`;
     } else if (ds === 'active' && !isCur){
       b.title = `Adjust live delay to ${p.name}`;
     } else if (ds === 'armed' && !isCur){
@@ -2075,7 +2100,7 @@ async function addProfile(){
   const secs = parseInt($('prof-secs').value || '0', 10);
   if (!name){ toast('Give the profile a name first','err'); return; }
   if (!secs || secs <= 0){ toast('Set a delay greater than 0 seconds','err'); return; }
-  // Refuse to save a profile that the current buffer can't even hold —
+  // Refuse to save a profile that the current buffer can't even hold -
   // the user wouldn't be able to arm it anyway, and a saved-but-unusable
   // entry is just clutter waiting to bite them. Capacity math uses
   // current bitrate if streaming, otherwise a 10 Mbps reference.
@@ -2085,7 +2110,7 @@ async function addProfile(){
     const needMB = requiredMBForMs(ms);
     const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
     const at = (m && m > 1000) ? `${(m/1000).toFixed(1)} Mbps` : `${BUF_REF_KBPS/1000} Mbps`;
-    toast(`Can't save ${fmtDelay(ms)} profile at ${at} — buffer is ${lastConfig?lastConfig.buffer_mb:'?'} MB (≈ ${fmtDelay(cap)} max). Raise to ≥ ${needMB} MB first.`, 'err');
+    toast(`Can't save ${fmtDelay(ms)} profile at ${at} - buffer is ${lastConfig?lastConfig.buffer_mb:'?'} MB (≈ ${fmtDelay(cap)} max). Raise to ≥ ${needMB} MB first.`, 'err');
     return;
   }
   const body = new URLSearchParams({name, delay_ms: String(secs*1000)});
@@ -2120,7 +2145,7 @@ async function loadConfig(){
     renderBufferHint();
     $('s-ibind').checked = c.ingest_bind_all; $('s-wbind').checked = c.web_bind_all;
     $('s-webhook').value = '';
-    $('s-webhook').placeholder = c.webhook_set ? '(set — paste a new one to replace)' : 'https://discord.com/api/webhooks/…';
+    $('s-webhook').placeholder = c.webhook_set ? '(set - paste a new one to replace)' : 'https://discord.com/api/webhooks/…';
     $('s-webhook-hint').textContent = c.webhook_set ? '(currently set)' : '';
     $('s-ovdir').value = c.overlays_dir || '';
     $('ov-dir-display').textContent = c.overlays_dir || 'overlays/';
@@ -2168,11 +2193,11 @@ async function loadConfig(){
 
 // Twitch mobile-decoder warning. Twitch's transcoded quality ladder
 // (1080p / 720p / 480p / 360p / 160p) is account-tier gated, NOT
-// bitrate gated — non-Affiliate accounts get Source-Only regardless
+// bitrate gated - non-Affiliate accounts get Source-Only regardless
 // of bitrate, Affiliate / Partner get the ladder. When the stream
 // IS in Source-Only mode (no ladder), every viewer has to decode
 // the full source bitrate. At ≤ 8 Mbps 1080p60 H.264 most mobile
-// hardware decoders cope; above ~8 Mbps they start failing — that's
+// hardware decoders cope; above ~8 Mbps they start failing - that's
 // the original beta.4 symptom (Error #1000 on PC, black screen with
 // audio on mobile). The 8000 cap matches what the user verified is
 // the "sweet spot" on an actual no-Affiliate alt: 8k Source-Only is
@@ -2192,7 +2217,7 @@ function renderTwitchCapPill(s){
   );
   const kbps = (s.stats && s.stats.bitrate_kbps) || 0;
   // When Enhanced Broadcasting is active the multi-track stream
-  // bypasses Twitch's account-tier source-only fallback — viewers
+  // bypasses Twitch's account-tier source-only fallback - viewers
   // get the full transcoded ladder regardless of bitrate, so the
   // mobile-decoder warning we'd otherwise show is moot. The "⚡
   // Enhanced Broadcasting" chip next to this one already
@@ -2214,7 +2239,7 @@ function openTwitchCapInfo(){
   const measured = lastState && lastState.stats && lastState.stats.bitrate_kbps;
   const at = measured ? `${(measured/1000).toFixed(1)} Mbps` : 'your current bitrate';
   toast(
-    `If Twitch shows your stream as "Source-Only" (no quality ladder), viewers must decode the full ${at}. Above ~8 Mbps that's too heavy for many mobile decoders — they hit Error #1000 or black screen with audio. The transcoded ladder is account-tier gated (Affiliate / Partner), not bitrate gated. If you're not sure your account gets transcoded, drop OBS to ≤ 8 Mbps for safe mobile playback. If you know it's transcoded, ignore this — viewers will pick lower qualities themselves.`,
+    `If Twitch shows your stream as "Source-Only" (no quality ladder), viewers must decode the full ${at}. Above ~8 Mbps that's too heavy for many mobile decoders - they hit Error #1000 or black screen with audio. The transcoded ladder is account-tier gated (Affiliate / Partner), not bitrate gated. If you're not sure your account gets transcoded, drop OBS to ≤ 8 Mbps for safe mobile playback. If you know it's transcoded, ignore this - viewers will pick lower qualities themselves.`,
     'err'
   );
 }
@@ -2223,7 +2248,7 @@ function openTwitchCapInfo(){
 // is well-defined for each platform (and stable; these endpoints have
 // been the same for years), so we build them client-side rather than
 // adding another /api round-trip just to template a string. The user
-// pastes the result into OBS as a Custom Browser Dock — no server
+// pastes the result into OBS as a Custom Browser Dock - no server
 // state is touched.
 //
 // YouTube is the odd one out: live chat URLs key off the per-broadcast
@@ -2271,7 +2296,7 @@ function fillWizardPlatforms(){
       $('w-custom-wrap').hidden = !isCustom;
       // Only Custom destinations can embed the stream key in the URL
       // and skip the key field. Twitch/YouTube/Kick keys are always
-      // required, so the "(optional…)" hint would mislead — hide it
+      // required, so the "(optional…)" hint would mislead - hide it
       // unless we're on Custom.
       const optHint = $('w-key-optional-hint');
       if (optHint) optHint.hidden = !isCustom;
@@ -2288,7 +2313,7 @@ function fillWizardPlatforms(){
 // "Register with OBS" button calls /obs/register and refreshes.
 // Falls through to the Custom-RTMP card when OBS isn't detected on
 // this machine (e.g. a fresh InstantClone install before OBS is
-// installed — rare but the dashboard shouldn't show an action that
+// installed - rare but the dashboard shouldn't show an action that
 // can't possibly succeed).
 async function refreshWizObsStatus(){
   const btn = $('wiz-obs-register-btn');
@@ -2297,7 +2322,7 @@ async function refreshWizObsStatus(){
   try {
     const r = await (await fetch('/obs/register-status')).json();
     if (r.path === null){
-      status.innerHTML = '<span style="color:var(--warn,#d6a23a)">⚠ OBS not detected on this machine — use the Custom RTMP card on the right.</span>';
+      status.innerHTML = '<span style="color:var(--warn,#d6a23a)">⚠ OBS not detected on this machine - use the Custom RTMP card on the right.</span>';
       btn.disabled = true;
       btn.textContent = 'Register with OBS';
       btn.className = 'ic-btn ic-btn-disabled';
@@ -2310,13 +2335,13 @@ async function refreshWizObsStatus(){
       btn.className = 'ic-btn ic-btn-ghost';
       btn.onclick = wizUnregisterObs;
     } else {
-      status.textContent = "We'll add an InstantClone entry to OBS's service list — one click, no restart needed before clicking.";
+      status.textContent = "We'll add an InstantClone entry to OBS's service list - one click, no restart needed before clicking.";
       btn.textContent = 'Register with OBS';
       btn.className = 'ic-btn ic-btn-primary';
       btn.onclick = wizRegisterObs;
     }
   } catch(e){
-    status.textContent = "Couldn't query OBS — the Custom RTMP card on the right also works.";
+    status.textContent = "Couldn't query OBS - the Custom RTMP card on the right also works.";
   }
 }
 async function wizRegisterObs(){
@@ -2344,7 +2369,7 @@ async function wizUnregisterObs(){
 // hint. Rendered under the key input in both the wizard and the
 // destination form. Source of truth is /platforms (key_url, key_help,
 // tip). For Kick we mark the tip as a warning because its no-B-frames
-// rule is the kind of thing that drops the stream silently — worth a
+// rule is the kind of thing that drops the stream silently - worth a
 // visual nudge, not just plain grey text.
 function renderKeyHelp(slug, hostId){
   const host = document.getElementById(hostId);
@@ -2361,7 +2386,7 @@ function renderKeyHelp(slug, hostId){
     // summary is intentionally short ("Things to know about Twitch")
     // so it doesn't crowd the key input; the user only sees the full
     // paragraph if they care enough to click. Kick's tip is the
-    // exception — its B-frames rule silently drops the stream, so
+    // exception - its B-frames rule silently drops the stream, so
     // we expand it by default for that one platform.
     const isKick = slug === 'kick';
     const label = isKick ? '⚠ Things to know about Kick' : `Things to know about ${p.label || 'this platform'}`;
@@ -2406,7 +2431,7 @@ async function saveWizard(){
   if (platform === 'custom' && !custom){ $('w-msg').innerHTML = '<span class="err">Custom RTMP URL required.</span>'; return; }
   const body = new URLSearchParams({platform, stream_key:key, custom_egress_url:custom});
   const j = await(await fetch('/config',{method:'POST',body})).json();
-  if (j.ok){ $('w-msg').innerHTML = '<span class="ok">Saved — starting up…</span>'; setTimeout(loadConfig, 500); }
+  if (j.ok){ $('w-msg').innerHTML = '<span class="ok">Saved - starting up…</span>'; setTimeout(loadConfig, 500); }
   else $('w-msg').innerHTML = '<span class="err">'+j.error+'</span>';
 }
 async function testConn(){
@@ -2451,7 +2476,7 @@ async function saveSettings(){
 }
 async function testWebhook(){
   const r = await(await fetch('/test-webhook',{method:'POST'})).json();
-  if (r.ok) toast('Webhook test fired — check Discord','ok');
+  if (r.ok) toast('Webhook test fired - check Discord','ok');
   else toast(`Webhook test failed: ${r.error || 'no response from Discord'}`, 'err');
 }
 
@@ -2481,7 +2506,7 @@ async function refreshObsRegisterStatus(){
       btn.textContent = 'Unregister from OBS';
       btn.className = 'ic-btn ic-btn-ghost';
     } else {
-      status.textContent = 'Not registered yet — OBS won\'t see InstantClone in its Service dropdown until you click below.';
+      status.textContent = 'Not registered yet - OBS won\'t see InstantClone in its Service dropdown until you click below.';
       btn.textContent = 'Register with OBS';
       btn.className = 'ic-btn ic-btn-primary';
     }
@@ -2536,10 +2561,10 @@ function openResetModal(scope){
     title.textContent = 'Reset everything?';
     sub.textContent = "This wipes every setting plus all destinations and profiles, then restarts InstantClone.";
     list.innerHTML = [
-      '<li><b>All destinations</b> (Twitch / YouTube / custom keys) — gone</li>',
-      '<li><b>All saved delay profiles</b> — gone</li>',
-      '<li>Network ports, buffer settings, webhook, overlays folder — reset to defaults</li>',
-      '<li>Diagnostic trace toggle — turned off</li>',
+      '<li><b>All destinations</b> (Twitch / YouTube / custom keys) - gone</li>',
+      '<li><b>All saved delay profiles</b> - gone</li>',
+      '<li>Network ports, buffer settings, webhook, overlays folder - reset to defaults</li>',
+      '<li>Diagnostic trace toggle - turned off</li>',
     ].join('');
     keeps.innerHTML = '<b>Kept:</b> the buffer file on disk (it\'s reset on every clean shutdown anyway) and the OBS service registration (use the OBS tab to unregister if you want).';
     typebox.hidden = false;
@@ -2742,11 +2767,11 @@ const TOUR = [
     body: `
       <p>Big number = your <b>current delivered delay</b>. The pill above + aurora glow tell you the state:</p>
       <ul>
-        <li><b>OFFLINE</b> — OBS isn't streaming to InstantClone yet (where you probably are right now)</li>
-        <li><b>LIVE · Passthrough</b> — OBS forwarding, no delay</li>
-        <li><b>BUFFERING</b> — filling toward your armed value</li>
-        <li><b>ARMED</b> — buffer ready, click Activate</li>
-        <li><b>ACTIVE</b> — delay is live</li>
+        <li><b>OFFLINE</b> - OBS isn't streaming to InstantClone yet (where you probably are right now)</li>
+        <li><b>LIVE · Passthrough</b> - OBS forwarding, no delay</li>
+        <li><b>BUFFERING</b> - filling toward your armed value</li>
+        <li><b>ARMED</b> - buffer ready, click Activate</li>
+        <li><b>ACTIVE</b> - delay is live</li>
       </ul>
     `,
   },
@@ -2775,7 +2800,7 @@ const TOUR = [
     target: '#tabs', side: 'bottom',
     title: 'Tabs',
     body: `
-      <p>Everything else lives in the tabs below. Destinations is the most important — that's where Twitch, YouTube, Kick etc. live.</p>
+      <p>Everything else lives in the tabs below. Destinations is the most important - that's where Twitch, YouTube, Kick etc. live.</p>
       <p>Each tab loads instantly with a small spring animation. The pill behind the active tab slides between them.</p>
     `,
   },
@@ -2783,7 +2808,7 @@ const TOUR = [
     target: '#dest-grid', side: 'top', tab: 'destinations',
     title: 'Destinations',
     body: `
-      <p>Add as many platforms as you want — each gets its own card with a coloured left stripe (Twitch purple, YouTube rose, Kick mint…), live bitrate sparkline, and per-destination status pill.</p>
+      <p>Add as many platforms as you want - each gets its own card with a coloured left stripe (Twitch purple, YouTube rose, Kick mint…), live bitrate sparkline, and per-destination status pill.</p>
       <p>Stream keys are <b>per-destination</b>. OBS uses a simple stream identifier, the real platform keys live here.</p>
       <div class="tour-tip"><strong>Streaming vs Connected:</strong> Streaming = bytes flowing. Connected = TCP up but OBS hasn't sent a frame yet.</div>
     `,
@@ -2797,28 +2822,28 @@ const TOUR = [
         <li>Open <b>Settings → Stream</b></li>
         <li>Service: pick <b>Custom…</b></li>
         <li>Server: paste the URL shown in this tab (<code>rtmp://127.0.0.1:1935/live</code>)</li>
-        <li>Stream Key: anything works — we suggest <code>main</code></li>
+        <li>Stream Key: anything works - we suggest <code>main</code></li>
         <li>Apply, then hit <b>Start Streaming</b> like normal</li>
       </ol>
-      <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you press <b>Start Streaming</b> in OBS, the dashboard stays <b>OFFLINE</b> and the OBS pill at the top reads "not connected" — that's expected, not a setup mistake.</p>
-      <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just an internal label here. Your real Twitch / YouTube / Kick keys go in the <b>Destinations</b> tab — that's what actually reaches the platforms.</div>
+      <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you press <b>Start Streaming</b> in OBS, the dashboard stays <b>OFFLINE</b> and the OBS pill at the top reads "not connected" - that's expected, not a setup mistake.</p>
+      <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just an internal label here. Your real Twitch / YouTube / Kick keys go in the <b>Destinations</b> tab - that's what actually reaches the platforms.</div>
     `,
   },
   {
     target: '.tab[data-tab="overlay"]', side: 'bottom', tab: 'overlay',
     title: 'Overlay browser-source',
     body: `
-      <p>Picks one of <b>6 built-in overlay styles</b> (Minimal, Corner, Strip, Focus, Broadcast, Ticker) for OBS to display the live delay on screen. All six share one design language — they differ in position and density, not aesthetic — and auto-dim when nothing's happening so they don't snag the viewer's eye.</p>
-      <p>Drop your own <code>.html</code> file into the overlays folder and it shows up here automatically — fully customisable.</p>
+      <p>Picks one of <b>6 built-in overlay styles</b> (Minimal, Corner, Strip, Focus, Broadcast, Ticker) for OBS to display the live delay on screen. All six share one design language - they differ in position and density, not aesthetic - and auto-dim when nothing's happening so they don't snag the viewer's eye.</p>
+      <p>Drop your own <code>.html</code> file into the overlays folder and it shows up here automatically - fully customisable.</p>
     `,
   },
   {
-    target: '#hdr-help', side: 'bottom',
+    target: '#hdr-help', side: 'bottom', tab: 'destinations',
     title: 'You\'re ready',
     body: `
       <p>That's everything. Profiles, System, Logs are self-explanatory once you've used the rest.</p>
       <p>Click this <b>?</b> button any time to re-open this tour. <b>Esc</b> closes it.</p>
-      <div class="tour-tip"><strong>Need help?</strong> The Logs tab has a Download button — send me the log file if something's misbehaving.</div>
+      <div class="tour-tip"><strong>Need help?</strong> The Logs tab has a Download button - send me the log file if something's misbehaving.</div>
     `,
   },
 ];
@@ -2889,7 +2914,7 @@ function positionTour(){
 
   const el = document.querySelector(t.target);
   if (!el){
-    // Target missing (maybe hidden) — fall back to centered.
+    // Target missing (maybe hidden) - fall back to centered.
     hl.classList.add('hidden');
     if (mask){ mask.setAttribute('width', '0'); mask.setAttribute('height', '0'); }
     tip.dataset.side = 'center';
@@ -2991,7 +3016,7 @@ $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)
 window.addEventListener('resize', moveTabInd);
 
 // ── Tick / poll loop ──────────────────────────────────────────────────
-// applyState() is the pure render side — used by both the poll path
+// applyState() is the pure render side - used by both the poll path
 // and the SSE push path so we don't have two copies of the dashboard
 // reconciliation logic.
 function applyState(s){
@@ -3000,7 +3025,7 @@ function applyState(s){
     if (!prev.ingest_alive && s.ingest_alive) toast('OBS connected','ok');
     else if (prev.ingest_alive && !s.ingest_alive) toast('OBS disconnected','err');
     else if (prev.ingest_alive && s.ingest_alive && prev.publisher_token !== s.publisher_token)
-      toast('OBS reconnected — re-aligned timeline','info');
+      toast('OBS reconnected - re-aligned timeline','info');
   }
   lastState = s;
   if ($('hero').hidden) return; // not configured
@@ -3011,10 +3036,10 @@ function applyState(s){
   renderCpProfiles();
   renderBufferHint();
   // The profiles pane uses the live bitrate to decide which entries are
-  // unreachable at the current buffer size — rebuild on every tick so
+  // unreachable at the current buffer size - rebuild on every tick so
   // the dimming follows the bitrate without the user re-clicking the tab.
   if (!$('pane-card').hidden) renderProfilesPane();
-  // Live destination stats — /state already carries alive / bitrate_kbps /
+  // Live destination stats - /state already carries alive / bitrate_kbps /
   // tags_sent / bytes_sent / cuts / reconnects per destination, so merge
   // those into our cached list and rebuild the cards on every state tick.
   // Previously the cards only refreshed on explicit user actions (saving
@@ -3048,7 +3073,7 @@ async function tick(){
 }
 
 // Prefer Server-Sent Events for state. One long-lived /events socket
-// replaces the 2 Hz polling loop — server writes only when state
+// replaces the 2 Hz polling loop - server writes only when state
 // actually changes, so idle CPU drops. Falls back to polling if
 // EventSource isn't supported (very old browsers) or the stream
 // errors out (e.g. proxy that doesn't grok text/event-stream).
