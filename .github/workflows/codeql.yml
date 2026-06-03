@@ -1,19 +1,25 @@
 name: codeql
 
-# Static analysis on every push/PR. Skipped while the repo is private -
-# CodeQL is gated behind GitHub Advanced Security for private repos, but
-# free on public ones. When the repo flips public this workflow starts
-# running automatically with no edits needed.
+# Static analysis on every push/PR + a weekly Monday cron so new CodeQL
+# rules + new advisories surface on the security tab even when the
+# branch is quiet. Manual trigger via `gh workflow run codeql.yml` for
+# ad-hoc re-runs (handy when bumping the codeql-action major version).
 #
-# Re-add the weekly cron trigger after going public if you want CodeQL
-# to pick up new rules between pushes on quiet branches:
-#   schedule:
-#     - cron: "23 4 * * 1"
+# Skipped while the repo is private - CodeQL is gated behind GitHub
+# Advanced Security for private repos, but free on public ones. The
+# `if: github.event.repository.private == false` guard on the job
+# below makes the workflow a no-op until the repo flips public.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # 04:23 UTC every Monday. Off-peak hour to avoid the top-of-hour
+    # cron rush, and Monday so a Tuesday-morning glance at the security
+    # tab catches anything new from the weekend.
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
 
 permissions:
   security-events: write
