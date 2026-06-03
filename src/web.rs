@@ -317,6 +317,61 @@ async fn route(
                 ),
             ),
         },
+        ("POST", "/obs/launch-with-eb") => {
+            let s = settings.borrow();
+            match crate::obs_register::launch_obs_with_eb_config(s.web_port) {
+                Ok(exe) => {
+                    ctrl.log(format!(
+                        "obs-eb-launch: spawned {} with --config-url",
+                        exe.display()
+                    ));
+                    (
+                        "200 OK",
+                        "application/json",
+                        format!(
+                            r#"{{"ok":true,"message":"Launched OBS with Enhanced Broadcasting enabled. OBS will pick up multi-track video from InstantClone on this session only - if you close OBS and reopen normally, you'll need this button again.","exe":"{}"}}"#,
+                            exe.display()
+                                .to_string()
+                                .replace('\\', "\\\\")
+                                .replace('"', "'")
+                        ),
+                    )
+                }
+                Err(e) => (
+                    "500 Internal Server Error",
+                    "application/json",
+                    format!(
+                        r#"{{"ok":false,"error":"{}"}}"#,
+                        e.to_string().replace('"', "'")
+                    ),
+                ),
+            }
+        }
+        ("GET", "/update-check") => {
+            let info = crate::update_check::check_update();
+            ("200 OK", "application/json", info.to_json())
+        }
+        ("GET", "/obs/launch-status") => {
+            let exe = crate::obs_register::find_obs_executable();
+            (
+                "200 OK",
+                "application/json",
+                format!(
+                    r#"{{"installed":{},"exe":{}}}"#,
+                    exe.is_some(),
+                    match exe {
+                        Some(p) => format!(
+                            "\"{}\"",
+                            p.display()
+                                .to_string()
+                                .replace('\\', "\\\\")
+                                .replace('"', "'")
+                        ),
+                        None => "null".to_string(),
+                    }
+                ),
+            )
+        }
         ("GET", "/twitch_ingests") => ("200 OK", "application/json", twitch_ingests_json()),
         ("GET", "/profiles") => ("200 OK", "application/json", profiles_json(settings)),
         ("GET", "/logs") => ("200 OK", "application/json", logs_json(ctrl)),
@@ -347,8 +402,10 @@ async fn route(
         ("POST", "/profiles") => post_profile_add(body, settings, cfg_path).await,
         ("POST", "/profiles/delete") => post_profile_del(body, settings, cfg_path).await,
         // Destinations CRUD
-        ("POST", "/destinations") => post_destination_upsert(body, settings, cfg_path).await,
-        ("POST", "/destinations/delete") => post_destination_delete(body, settings, cfg_path).await,
+        ("POST", "/destinations") => post_destination_upsert(body, ctrl, settings, cfg_path).await,
+        ("POST", "/destinations/delete") => {
+            post_destination_delete(body, ctrl, settings, cfg_path).await
+        }
         _ => (
             "404 Not Found",
             "text/plain; charset=utf-8",
@@ -1374,7 +1431,7 @@ async fn post_config_reset(
         ctrl.clear_logs();
     }
     ctrl.log(format!("config reset (scope={})", scope));
-    reconcile_obs_vod_files(&next);
+    reconcile_obs_vod_files(&next, ctrl);
     let _ = settings.send(next);
     (
         "200 OK",
@@ -1647,6 +1704,7 @@ async fn test_egress(
 
 async fn post_destination_upsert(
     body: &str,
+    ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
@@ -1740,37 +1798,56 @@ async fn post_destination_upsert(
             ),
         );
     }
-    reconcile_obs_vod_files(&ns);
+    reconcile_obs_vod_files(&ns, ctrl);
     let _ = settings.send(ns);
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
 }
 
-/// Reconcile OBS's external files (global.ini, profile service.json)
-/// against the current destinations. Idempotent and silent on failure -
-/// we log to the dashboard event log instead of bubbling up an HTTP
-/// error, because the user's destination save shouldn't fail just
-/// because OBS is closed (which holds the files open).
-fn reconcile_obs_vod_files(s: &Settings) {
+/// Reconcile OBS's external files (user.ini) against the current
+/// destinations. Idempotent. A failed write does NOT abort the
+/// upstream destination save - we still want the user's config to
+/// land - but we log it to the dashboard event log so the user sees
+/// why their toggle didn't take effect. The expected failure mode is
+/// OBS holding the files open: PermissionDenied, recoverable by
+/// closing OBS and toggling once more.
+///
+/// Also runs a best-effort cleanup pass that strips any stale
+/// `multitrack_video_configuration_url` injection from the active
+/// profile's service.json. v0.1.0..0.1.2 wrote that on every
+/// `vod_audio_inject_eb` toggle, but we now know OBS's `rtmp_custom`
+/// plugin discards the key on load (see `obs_register.rs` comment
+/// block), so the injection was always dead code. The cleanup means
+/// upgraders end up with a clean file.
+fn reconcile_obs_vod_files(s: &Settings, ctrl: &Arc<Controller>) {
     let any_vod = s
         .destinations
         .iter()
         .any(|d| d.enabled && d.platform == "twitch" && d.vod_audio);
-    let any_eb = s
-        .destinations
-        .iter()
-        .any(|d| d.enabled && d.platform == "twitch" && d.vod_audio && d.vod_audio_inject_eb);
-    // global.ini flag tracks "any VOD-audio destination wants it".
-    let _ = crate::obs_register::set_vod_audio_flag(any_vod);
-    // service.json injection tracks "any VOD+EB destination wants it".
-    let _ = if any_eb {
-        crate::obs_register::inject_vod_eb(s.web_port)
-    } else {
-        crate::obs_register::revert_vod_eb(s.web_port)
-    };
+    // user.ini flag tracks "any VOD-audio destination wants it".
+    if let Err(e) = crate::obs_register::set_vod_audio_flag(any_vod) {
+        ctrl.log(format!(
+            "vod-audio: couldn't write OBS user config ({}). \
+             Close OBS, then toggle the destination off and back on to retry.",
+            e
+        ));
+    }
+    // One-time cleanup of legacy v0.1.0..0.1.2 service.json injection.
+    // Phase C now uses the --config-url CLI flag via the
+    // /obs/launch-with-eb button instead of file injection, since OBS's
+    // rtmp_custom plugin discards unknown settings keys at load time.
+    if let Err(e) = crate::obs_register::revert_vod_eb(s.web_port) {
+        ctrl.log(format!(
+            "vod-eb cleanup: couldn't strip legacy injection from \
+             service.json ({}). Harmless - the injection never reached \
+             OBS anyway.",
+            e
+        ));
+    }
 }
 
 async fn post_destination_delete(
     body: &str,
+    ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
@@ -1794,7 +1871,7 @@ async fn post_destination_delete(
         ns.configured = false;
     }
     let _ = ns.save(cfg_path);
-    reconcile_obs_vod_files(&ns);
+    reconcile_obs_vod_files(&ns, ctrl);
     let _ = settings.send(ns);
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
 }
