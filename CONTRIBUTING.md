@@ -38,6 +38,10 @@ cargo test --release
 .\target\release\instantclone.exe
 ```
 
+## Be decent
+
+Participation here is covered by the [Code of Conduct](CODE_OF_CONDUCT.md). Short version: be respectful, no harassment.
+
 ## One last thing
 
 I'm one person doing this on weekends. If a PR or issue sits for a week or two without a reply, a friendly bump is welcome.
