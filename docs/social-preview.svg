@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  InstantClone GitHub social preview - 1280×640.
+  Same brand composition as docs/banner.svg, repositioned for the
+  taller GitHub social-preview canvas (Twitter, Discord, Slack link
+  unfurls). Aurora ellipses re-spread to fill the extra vertical
+  room; brand block sits at optical centre (slightly above geometric
+  centre because the visual weight of the tagline + chips below the
+  wordmark pulls the eye down naturally).
+
+  Upload via GitHub: Settings → General → Social preview → Upload
+  an image (this SVG; GitHub auto-renders to PNG).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640"
+     role="img" aria-label="InstantClone - RTMP delay buffer for streamers">
+  <title>InstantClone - RTMP delay buffer for streamers</title>
+
+  <defs>
+    <radialGradient id="aurCyan" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#5ac8fa" stop-opacity="0.85"/>
+      <stop offset="0.55" stop-color="#5ac8fa" stop-opacity="0.25"/>
+      <stop offset="1"    stop-color="#5ac8fa" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aurViolet" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#8a4cff" stop-opacity="0.75"/>
+      <stop offset="0.55" stop-color="#8a4cff" stop-opacity="0.20"/>
+      <stop offset="1"    stop-color="#8a4cff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aurRose" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#ff5aa0" stop-opacity="0.55"/>
+      <stop offset="0.55" stop-color="#ff5aa0" stop-opacity="0.15"/>
+      <stop offset="1"    stop-color="#ff5aa0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aurTeal" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#3ad6c4" stop-opacity="0.45"/>
+      <stop offset="0.55" stop-color="#3ad6c4" stop-opacity="0.12"/>
+      <stop offset="1"    stop-color="#3ad6c4" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="auroraBlur" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="110"/>
+    </filter>
+
+    <filter id="hSmear" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="14 0"/>
+    </filter>
+
+    <linearGradient id="vignette" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#0a0c12" stop-opacity="0.55"/>
+      <stop offset="0.35" stop-color="#0a0c12" stop-opacity="0"/>
+      <stop offset="0.65" stop-color="#0a0c12" stop-opacity="0"/>
+      <stop offset="1"    stop-color="#0a0c12" stop-opacity="0.65"/>
+    </linearGradient>
+
+    <linearGradient id="leftShade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0"    stop-color="#0a0c12" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#0a0c12" stop-opacity="0"/>
+      <stop offset="1"    stop-color="#0a0c12" stop-opacity="0"/>
+    </linearGradient>
+
+    <style>
+      .brand   { font: 700 108px 'Inter','SF Pro Display',-apple-system,'Segoe UI',Roboto,sans-serif; letter-spacing: -4px; }
+      .tagline { font: 500 26px 'Inter','SF Pro Display',-apple-system,'Segoe UI',Roboto,sans-serif; letter-spacing: -.2px; }
+      .chip    { font: 600 13px ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace; letter-spacing: 1.4px; text-transform: uppercase; }
+    </style>
+  </defs>
+
+  <!-- base -->
+  <rect width="1280" height="640" fill="#0a0c12"/>
+
+  <!-- aurora, repositioned for taller canvas -->
+  <g filter="url(#auroraBlur)" opacity="0.95">
+    <ellipse cx="220"  cy="180" rx="360" ry="260" fill="url(#aurCyan)"/>
+    <ellipse cx="1080" cy="500" rx="460" ry="320" fill="url(#aurViolet)"/>
+    <ellipse cx="950"  cy="260" rx="340" ry="240" fill="url(#aurRose)"/>
+    <ellipse cx="780"  cy="580" rx="280" ry="220" fill="url(#aurTeal)" opacity="0.7"/>
+    <ellipse cx="380"  cy="540" rx="240" ry="200" fill="url(#aurCyan)" opacity="0.5"/>
+    <ellipse cx="1120" cy="100" rx="260" ry="140" fill="url(#aurRose)" opacity="0.45"/>
+  </g>
+
+  <rect width="1280" height="640" fill="url(#leftShade)"/>
+  <rect width="1280" height="640" fill="url(#vignette)"/>
+
+  <rect x="0.5" y="0.5" width="1279" height="639" fill="none" stroke="#1c2129" stroke-width="1"/>
+
+  <!-- brand block, vertically centred (wordmark at y=308 of 640) -->
+  <g transform="translate(108,0)">
+
+    <!-- ghost smear + chromatic aberration + crisp wordmark -->
+    <text x="0"  y="308" class="brand" fill="#5ac8fa" fill-opacity="0.20" filter="url(#hSmear)">InstantClone</text>
+    <text x="-3" y="308" class="brand" fill="#ff5aa0" fill-opacity="0.55">InstantClone</text>
+    <text x="3"  y="308" class="brand" fill="#5ac8fa" fill-opacity="0.55">InstantClone</text>
+    <text x="0"  y="308" class="brand" fill="#f5efe1">InstantClone</text>
+
+    <rect x="3" y="332" width="112" height="2" fill="#5ac8fa"/>
+
+    <text x="0" y="382" class="tagline" fill="#c0c4cc">RTMP delay buffer for streamers, plus a bit more.</text>
+
+    <g transform="translate(0,432)">
+      <g>
+        <rect x="0"   y="0" width="222" height="34" rx="17" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.10"/>
+        <text x="111" y="22" class="chip" fill="#d8dce4" text-anchor="middle">Two-phase arm / cut</text>
+      </g>
+      <g transform="translate(236,0)">
+        <rect x="0"  y="0" width="200" height="34" rx="17" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.10"/>
+        <text x="100" y="22" class="chip" fill="#d8dce4" text-anchor="middle">Multi-destination</text>
+      </g>
+      <g transform="translate(450,0)">
+        <rect x="0"  y="0" width="134" height="34" rx="17" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.10"/>
+        <text x="67" y="22" class="chip" fill="#d8dce4" text-anchor="middle">OBS dock</text>
+      </g>
+      <g transform="translate(598,0)">
+        <rect x="0"  y="0" width="144" height="34" rx="17" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.10"/>
+        <text x="72" y="22" class="chip" fill="#d8dce4" text-anchor="middle">6 overlays</text>
+      </g>
+    </g>
+  </g>
+</svg>
