@@ -38,6 +38,7 @@ mod sysstat;
 mod trace;
 #[cfg(windows)]
 mod tray;
+mod update_check;
 mod web;
 
 use crate::config::Settings;
@@ -440,6 +441,22 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 state
                     .pass_through_multitrack_video
                     .store(has_eb_session, std::sync::atomic::Ordering::Relaxed);
+                // Audio multi-track passthrough is decoupled from EB.
+                // Twitch's regular ingest (live.twitch.tv) has supported
+                // VOD audio (OBS "Pista VOD de Twitch", wire TrackId 1)
+                // for years and accepts Enhanced-RTMP multi-track audio
+                // bit-faithfully. So pass through for any Twitch
+                // destination, with or without an EB session. Non-Twitch
+                // destinations still drop TrackId != 0 so a simulcast
+                // YouTube / Kick doesn't get a track its decoder can't
+                // map. Before v0.1.3 we reused the video flag here,
+                // which silently dropped VOD audio on every non-EB
+                // Twitch destination and wrapped the live audio in
+                // multi-track framing the regular ingest renders silent.
+                let is_twitch = dest.platform == "twitch";
+                state
+                    .pass_through_multitrack_audio
+                    .store(is_twitch, std::sync::atomic::Ordering::Relaxed);
                 let label = dest.name.clone();
                 let url_clone = url.clone();
                 let handle = tokio::spawn(controller::run_egress(

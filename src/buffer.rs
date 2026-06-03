@@ -239,7 +239,13 @@ impl DiskRing {
             is_idr,
         };
         inner.index.push_back(meta);
-        if is_idr {
+        if is_idr && crate::h264::is_primary_video_idr(payload) {
+            // Only the PRIMARY track's IDRs become cut candidates. Each
+            // EB ladder rung has its own IDR cadence; OBS aligns them
+            // all to the same encoder PTS, so we don't lose cut points,
+            // we just stop landing on a non-primary rung's IDR where
+            // the legacy decoder has no reference. See
+            // `h264::is_primary_video_idr` for the full classification.
             inner.idr_index.push_back(meta);
         }
         drop(inner);
@@ -557,6 +563,18 @@ mod tests {
 
     static UNIQ: AtomicU32 = AtomicU32::new(0);
 
+    /// Build a video payload whose leading byte (`0x17`) matches the
+    /// legacy-AVC keyframe shape that the v0.1.3 primary-IDR gate
+    /// expects. Used everywhere a test wants to seed the IDR-only
+    /// index - before v0.1.3 a generic `[0u8; N]` slice also landed
+    /// in idr_index because the gate didn't exist.
+    fn primary_idr_payload(len: usize) -> Vec<u8> {
+        let mut v = Vec::with_capacity(len);
+        v.push(0x17);
+        v.resize(len, 0);
+        v
+    }
+
     /// Test-scoped DiskRing in a fresh temp file. Deletes the file on drop
     /// so a run can re-create cleanly. Capacity must be > 2× any test tag.
     struct Tmp(DiskRing, std::path::PathBuf);
@@ -626,17 +644,18 @@ mod tests {
 
     #[test]
     fn multitrack_audio_seq_headers_cache_per_track_id() {
-        // Same shape as the video test: the VOD-audio session sends
-        // one OneTrack seq-header per audio track. Without per-track
-        // keying the second arrival would stomp the first, and the
-        // destination's decoder for the missing track would lose its
-        // AudioSpecificConfig after the next pump restart.
+        // OneTrack Enhanced-RTMP audio per OBS's flv_packet_audio_ex:
+        //   byte 0: 0x95 (SoundFormat=9 | PacketType=Multitrack)
+        //   byte 1: MultiTrackType=0 | NestedPacketType=0 (Seq)
+        //   bytes 2..6: FourCC = "mp4a"
+        //   byte 6:    TrackId
+        //   bytes 7..: AudioSpecificConfig
         let t = tmp(4096);
         let live = vec![
-            0x90, 0x05, 0x00, b'm', b'p', b'4', b'a', 0x00, 0x12, 0x10, 0x56, 0xe5,
+            0x95, 0x00, b'm', b'p', b'4', b'a', 0x00, 0x12, 0x10, 0x56, 0xe5,
         ];
         let vod = vec![
-            0x90, 0x05, 0x00, b'm', b'p', b'4', b'a', 0x01, 0x12, 0x08, 0x44, 0x00,
+            0x95, 0x00, b'm', b'p', b'4', b'a', 0x01, 0x12, 0x08, 0x44, 0x00,
         ];
         t.0.append(8, 0, &live, false, true).unwrap();
         t.0.append(8, 0, &vod, false, true).unwrap();
@@ -704,9 +723,13 @@ mod tests {
     #[test]
     fn find_idr_near_picks_closest() {
         let t = tmp(8192);
-        // Three IDRs at ts 1000, 2000, 3000
+        // Three IDRs at ts 1000, 2000, 3000. v0.1.3 added a primary-
+        // track gate on idr_index pushes - use the helper that emits
+        // a payload classifying as primary so the cut-candidate index
+        // actually fills up.
+        let payload = primary_idr_payload(50);
         for ts in [1000u64, 2000, 3000] {
-            t.0.append(9, ts, &[0u8; 50], true, false).unwrap();
+            t.0.append(9, ts, &payload, true, false).unwrap();
         }
         // Target 1900 with tolerance 500 → closest is 2000
         let m = t.0.find_idr_near(1900, 500).expect("found IDR");
@@ -773,9 +796,10 @@ mod tests {
     #[test]
     fn newest_idr_returns_the_last_one() {
         let t = tmp(4096);
-        t.0.append(9, 100, &[0u8; 30], true, false).unwrap();
+        let idr = primary_idr_payload(30);
+        t.0.append(9, 100, &idr, true, false).unwrap();
         t.0.append(9, 200, &[0u8; 30], false, false).unwrap();
-        t.0.append(9, 300, &[0u8; 30], true, false).unwrap();
+        t.0.append(9, 300, &idr, true, false).unwrap();
         t.0.append(9, 400, &[0u8; 30], false, false).unwrap();
         let m = t.0.newest_idr().expect("has IDR");
         assert_eq!(m.ts_ms, 300);
@@ -850,7 +874,8 @@ mod tests {
     #[test]
     fn find_idr_near_with_zero_tolerance_demands_exact_match() {
         let t = tmp(4096);
-        t.0.append(9, 1000, &[0u8; 40], true, false).unwrap();
+        t.0.append(9, 1000, &primary_idr_payload(40), true, false)
+            .unwrap();
         // ts 999 with tolerance 0 → no match
         assert!(t.0.find_idr_near(999, 0).is_none());
         // ts 1000 with tolerance 0 → exact hit
@@ -862,14 +887,9 @@ mod tests {
         // Models the publisher-reconnect case: there are old IDRs in the
         // ring from before the reconnect; we want only the new session's.
         let t = tmp(4096);
-        let old_seq =
-            t.0.append(9, 100, &[0u8; 30], true, false)
-                .unwrap()
-                .unwrap();
-        let new_seq =
-            t.0.append(9, 200, &[0u8; 30], true, false)
-                .unwrap()
-                .unwrap();
+        let idr = primary_idr_payload(30);
+        let old_seq = t.0.append(9, 100, &idr, true, false).unwrap().unwrap();
+        let new_seq = t.0.append(9, 200, &idr, true, false).unwrap().unwrap();
         let m = t.0.newest_idr_after(old_seq).expect("found");
         assert_eq!(m.seq, new_seq);
         assert!(t.0.newest_idr_after(new_seq + 100).is_none());

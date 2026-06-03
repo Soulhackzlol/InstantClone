@@ -327,6 +327,66 @@ pub fn seq_header_track_id(payload: &[u8]) -> u8 {
     payload[6]
 }
 
+/// True iff this video tag is a keyframe carrying the PRIMARY track's
+/// IDR. Used to gate which tags enter the buffer's IDR-only secondary
+/// index (the cut-point selector). For multi-track Enhanced Broadcasting
+/// streams every ladder rung has its own IDR cadence; if we index all
+/// of them as cut candidates, `compute_delay_cut` lands on whichever
+/// rung's IDR happens to be at the closest seq, and the destination
+/// decoder for the OTHER rungs receives a P-frame with no reference -
+/// the pixel-glitch artefact users see on EB cuts. Restricting the
+/// IDR index to primary-track keyframes only guarantees the cut lands
+/// at a temporal moment where the legacy decoder has its anchor, and
+/// since OBS aligns every ladder track's IDR to the same encoder PTS
+/// the other rungs naturally have IDRs at the same input ts too.
+///
+/// Returns true for:
+///   * legacy AVC keyframes (byte 0 == 0x17) - single-track, IS primary
+///   * Enhanced-RTMP single-track keyframes (Ex bit + FrameType=1 +
+///     PacketType != Multitrack)
+///   * Enhanced-RTMP OneTrack multi-track keyframes with TrackId == 0
+///
+/// Returns false for non-key frames, non-primary multi-track tags, and
+/// payloads too short to classify.
+pub fn is_primary_video_idr(payload: &[u8]) -> bool {
+    if payload.is_empty() {
+        return false;
+    }
+    let b0 = payload[0];
+    if (b0 & 0x80) == 0 {
+        // Legacy: FrameType=1 (key, high nibble) + CodecID=7 (AVC, low
+        // nibble) packs into 0x17. AVC has only one track per stream,
+        // so any AVC keyframe IS the primary IDR.
+        return b0 == 0x17;
+    }
+    // Enhanced-RTMP. bits6:4 = FrameType, bits3:0 = PacketType.
+    let frame_type = (b0 >> 4) & 0x07;
+    if frame_type != 1 {
+        return false;
+    }
+    let packet_type = b0 & 0x0F;
+    if packet_type != 6 {
+        // Single-track Enhanced-RTMP keyframe - one track per stream,
+        // so the keyframe IS the primary.
+        return true;
+    }
+    // Multitrack tag. mt_type in byte 1 high nibble; only OneTrack (=0)
+    // has a per-tag TrackId at byte 6. ManyTracks layouts pack every
+    // track into one tag and we treat them as primary too (the cut is
+    // semantically aligned for the whole bundle).
+    if payload.len() < 2 {
+        return false;
+    }
+    let mt_type = (payload[1] >> 4) & 0x0F;
+    if mt_type != 0 {
+        return true;
+    }
+    if payload.len() < 7 {
+        return false;
+    }
+    payload[6] == 0
+}
+
 pub fn select_video_bytes<'a>(
     payload: &'a [u8],
     pass_through_multitrack: bool,
@@ -385,25 +445,32 @@ pub fn select_audio_bytes<'a>(
     if pass_through_multitrack {
         return Some(Cow::Borrowed(payload));
     }
-    // Pre-checks that mirror audio_seq_header_track_id. Anything that
-    // isn't an Enhanced-RTMP OneTrack multi-track audio tag passes
-    // through unchanged - single-track audio, legacy AAC / MP3,
+    // Pre-checks mirror audio_seq_header_track_id. Anything that isn't
+    // an Enhanced-RTMP OneTrack multi-track audio tag passes through
+    // unchanged - single-track audio (Enhanced or legacy), MP3, or
     // ManyTracks / ManyTracksManyCodecs layouts.
-    if payload.len() < 8 {
+    if payload.is_empty() {
         return Some(Cow::Borrowed(payload));
     }
     if (payload[0] >> 4) & 0x0F != 9 {
         return Some(Cow::Borrowed(payload));
     }
-    if payload[1] & 0x0F != 5 {
+    // PacketType in byte 0's low nibble; 5 = Multitrack.
+    if payload[0] & 0x0F != 5 {
         return Some(Cow::Borrowed(payload));
     }
-    // OneTrack only - the layouts that pack every track into one tag
-    // have nothing to drop.
-    if (payload[2] >> 4) & 0x0F != 0 {
+    if payload.len() < 2 {
         return Some(Cow::Borrowed(payload));
     }
-    let track_id = payload[7];
+    // OneTrack only (mt_type=0). ManyTracks layouts pack every track
+    // into one tag so there is nothing to drop.
+    if (payload[1] >> 4) & 0x0F != 0 {
+        return Some(Cow::Borrowed(payload));
+    }
+    if payload.len() < 7 {
+        return Some(Cow::Borrowed(payload));
+    }
+    let track_id = payload[6];
     if track_id != 0 {
         return None;
     }
@@ -474,44 +541,52 @@ pub fn classify_audio_tag(payload: &[u8]) -> AudioTagInfo {
             ..unknown
         };
     }
-    // Enhanced RTMP audio uses sound_format=9 as the sentinel for
-    // ExAudioTagHeader. We pass these tags through bit-faithfully so
-    // Twitch's VOD audio track (OBS "Audio Track 2") keeps working.
+    // Enhanced RTMP audio (ExAudioTagHeader) uses sound_format=9 as the
+    // sentinel. The PacketType lives in the SAME byte's low nibble -
+    // NOT byte 1 as our v0.1.0..0.1.3 wrote it. See OBS's
+    // flv_packet_audio_ex in plugins/obs-outputs/flv-mux.c:
+    //
+    //   s_w8(&s, AUDIO_HEADER_EX | (is_multitrack
+    //              ? AUDIO_PACKETTYPE_MULTITRACK
+    //              : type));
+    //   if (is_multitrack) {
+    //       s_w8(&s, MULTITRACKTYPE_ONE_TRACK | type);
+    //       s_wa4cc(&s, codec_id);
+    //       s_w8(&s, (uint8_t)idx);
+    //   } else {
+    //       s_wa4cc(&s, codec_id);
+    //   }
+    //
+    // Single-track layout: byte0 = 0x9X (X = packet type),
+    //                      bytes 1..5 = FourCC, payload from byte 5.
+    // Multi-track  layout: byte0 = 0x95 (Multitrack packet type),
+    //                      byte1 = MultiTrackType | nested packet type,
+    //                      bytes 2..6 = FourCC,
+    //                      byte 6 = TrackId, payload from byte 7.
     if sound_format == 9 {
-        if payload.len() < 2 {
-            return unknown;
-        }
-        // byte 1: AudioPacketModEx(4) | AudioPacketType(4)
-        //   PacketType 0=SequenceStart, 1=CodedFrames, 5=Multitrack.
-        let packet_type = payload[1] & 0x0F;
+        let packet_type = payload[0] & 0x0F;
         let is_multitrack = packet_type == 5;
-        // For multi-track audio the SeqStart marker isn't on byte 1 -
-        // it's nested in the multitrack header at byte 2's low nibble
-        // (mirror of how Enhanced-RTMP video multi-track tags nest the
-        // real PacketType behind the multitrack envelope). Without this
-        // detection the per-track AudioSpecificConfig that OBS sends at
-        // session start would flow into the ring like a normal tag and
-        // get evicted by the trim, leaving the destination's decoder
-        // permanently unconfigured for that track after a buffer cut.
+        // For multi-track the SeqStart marker is the *nested* packet
+        // type in byte 1's low nibble - the outer packet type is 5
+        // (Multitrack) regardless of whether this is a config or a
+        // coded frame.
         let is_seq_header = if is_multitrack {
-            payload.len() >= 3 && (payload[2] & 0x0F) == 0
+            payload.len() >= 2 && (payload[1] & 0x0F) == 0
         } else {
             packet_type == 0
         };
-        // Codec FourCC sits at bytes 2..6 for single-track Enhanced-RTMP
-        // audio, and at bytes 3..7 for multi-track OneTrack / ManyTracks
+        // FourCC sits at bytes 1..5 for single-track Enhanced-RTMP,
+        // and at bytes 2..6 for multi-track OneTrack / ManyTracks
         // layouts (one extra byte for the multitrack header itself).
         // ManyTracksManyCodecs packs FourCC per-track inside the body,
         // so we report Unknown at the outer level - good enough for
         // dashboard chip display.
-        let codec = if !is_multitrack && payload.len() >= 6 {
-            fourcc_to_codec([payload[2], payload[3], payload[4], payload[5]])
-        } else if is_multitrack && payload.len() >= 7 {
-            // OneTrack(0) and ManyTracks(1) layouts carry the FourCC
-            // right after the multitrack header byte.
-            let mt_type = (payload[2] >> 4) & 0x0F;
+        let codec = if !is_multitrack && payload.len() >= 5 {
+            fourcc_to_codec([payload[1], payload[2], payload[3], payload[4]])
+        } else if is_multitrack && payload.len() >= 6 {
+            let mt_type = (payload[1] >> 4) & 0x0F;
             if mt_type <= 1 {
-                fourcc_to_codec([payload[3], payload[4], payload[5], payload[6]])
+                fourcc_to_codec([payload[2], payload[3], payload[4], payload[5]])
             } else {
                 AudioCodec::Unknown
             }
@@ -550,27 +625,38 @@ fn fourcc_to_codec(fourcc: [u8; 4]) -> AudioCodec {
 ///     track's data, so the single-slot key 0 captures the whole config)
 ///   * Truncated payloads we can't parse safely
 pub fn audio_seq_header_track_id(payload: &[u8]) -> u8 {
-    if payload.len() < 3 {
+    if payload.is_empty() {
         return 0;
     }
     // sound_format=9 sentinel
     if (payload[0] >> 4) & 0x0F != 9 {
         return 0;
     }
-    // PacketType=Multitrack
-    if payload[1] & 0x0F != 5 {
+    // PacketType=Multitrack lives in byte 0's low nibble (NOT byte 1's
+    // low nibble - that was the v0.1.0..0.1.3 wire-format mis-read).
+    if payload[0] & 0x0F != 5 {
         return 0;
     }
-    // MultiTrackType high nibble. Only OneTrack (=0) has a per-tag id.
-    let mt_type = (payload[2] >> 4) & 0x0F;
+    if payload.len() < 2 {
+        return 0;
+    }
+    // MultiTrackType is byte 1's high nibble. Only OneTrack (=0) has a
+    // per-tag id; ManyTracks/ManyTracksManyCodecs layouts pack every
+    // track into one tag.
+    let mt_type = (payload[1] >> 4) & 0x0F;
     if mt_type != 0 {
         return 0;
     }
-    // OneTrack layout: [byte2 mt-header][bytes 3..7 FourCC][byte 7 TrackId][payload..]
-    if payload.len() < 8 {
+    // OneTrack layout (verified against OBS's flv-mux.c):
+    //   byte 0: 0x95 (SoundFormat=9 | PacketType=Multitrack)
+    //   byte 1: MultiTrackType=0 | NestedPacketType
+    //   bytes 2..6: FourCC
+    //   byte 6: TrackId   <- here, NOT byte 7
+    //   bytes 7..: payload
+    if payload.len() < 7 {
         return 0;
     }
-    payload[7]
+    payload[6]
 }
 
 /// Back-compat shim - sink.rs and a few other callers used this name
@@ -689,8 +775,9 @@ mod tests {
 
     #[test]
     fn enhanced_rtmp_opus_audio_recognised() {
-        // sound_format 9 (ExAudio), packet_type 1 (CodedFrames), FourCC "Opus"
-        let mut payload = vec![0x90, 0x01];
+        // Enhanced-RTMP single-track: byte 0 = SoundFormat<<4 | PacketType.
+        // Here: 9 << 4 | 1 (CodedFrames) = 0x91, followed by FourCC.
+        let mut payload = vec![0x91];
         payload.extend_from_slice(b"Opus");
         let info = classify_audio_tag(&payload);
         assert_eq!(info.codec, AudioCodec::Opus);
@@ -759,8 +846,12 @@ mod tests {
 
     #[test]
     fn enhanced_aac_seq_header_via_packet_type_0() {
-        // sound_format 9 (ExAudio), packet_type 0 (SequenceStart), FourCC "mp4a"
-        let mut payload = vec![0x90, 0x00];
+        // Enhanced-RTMP single-track AAC seq header: byte 0 = 0x90
+        // (SoundFormat=9, AudioPacketType=0=SequenceStart), followed
+        // by FourCC. This is the exact tag OBS emits for the live
+        // track when VOD audio is enabled (live = idx=0, single-track
+        // because not multitrack).
+        let mut payload = vec![0x90];
         payload.extend_from_slice(b"mp4a");
         let info = classify_audio_tag(&payload);
         assert!(info.is_seq_header);
@@ -861,6 +952,68 @@ mod tests {
         }
     }
 
+    // ── is_primary_video_idr: cut-target gate for EB ladder cuts ──
+    //
+    // Regression test set for the v0.1.3 EB pixel-glitch fix. Before
+    // this gate, the ring's IDR-only secondary index recorded every
+    // track's keyframes equally, so `compute_delay_cut` could land on
+    // a TrackId-1 IDR while the legacy primary (track 0) was mid-GOP.
+    // After: only primary-track IDRs are candidates, the legacy
+    // decoder always has its anchor at the cut boundary.
+
+    #[test]
+    fn is_primary_video_idr_accepts_legacy_avc_keyframe() {
+        let tag = avc_single_track_keyframe_bytes();
+        assert!(is_primary_video_idr(&tag));
+    }
+
+    #[test]
+    fn is_primary_video_idr_rejects_legacy_avc_inter_frame() {
+        // FrameType=2 (inter) + CodecID=7 (AVC) = 0x27. Same shape as
+        // the keyframe builder above, just with the leading byte flipped.
+        let mut tag = avc_single_track_keyframe_bytes();
+        tag[0] = 0x27;
+        assert!(!is_primary_video_idr(&tag));
+    }
+
+    #[test]
+    fn is_primary_video_idr_accepts_onetrack_multitrack_track_0() {
+        // EB ladder primary rung at TrackId=0 - the cut anchor we want.
+        let tag = enhanced_rtmp_onetrack_video_bytes_track(0);
+        assert!(is_primary_video_idr(&tag));
+    }
+
+    #[test]
+    fn is_primary_video_idr_rejects_onetrack_multitrack_nonzero_tracks() {
+        // EB ladder rungs 1..=4 each carry their own IDR cadence but
+        // must NOT be picked as a cut anchor - if the cut lands here
+        // the legacy decoder on the destination has no reference.
+        for track in 1u8..=4 {
+            let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
+            assert!(
+                !is_primary_video_idr(&tag),
+                "TrackId {track} must not be a cut candidate"
+            );
+        }
+    }
+
+    #[test]
+    fn is_primary_video_idr_rejects_enhanced_p_frame() {
+        // Enhanced-RTMP single-track inter-frame: IsEx | FrameType=2 |
+        // PacketType=CodedFrames(1) -> bits assembled as 0xA1.
+        let tag = vec![0x80 | (2u8 << 4) | 1, b'a', b'v', b'c', b'1', 0xAA, 0xBB];
+        assert!(!is_primary_video_idr(&tag));
+    }
+
+    #[test]
+    fn is_primary_video_idr_handles_truncated_multitrack_gracefully() {
+        // Multitrack header declared but payload too short to read the
+        // TrackId byte - safer to refuse cut-candidacy than to land on
+        // an unknown track.
+        let truncated = vec![0x80 | (1u8 << 4) | 6, 0x01, b'a', b'v', b'c', b'1'];
+        assert!(!is_primary_video_idr(&truncated));
+    }
+
     #[test]
     fn select_video_bytes_falls_back_to_raw_when_flatten_cannot_parse() {
         // Pathological multi-track tag (declares multi-track but the
@@ -886,26 +1039,89 @@ mod tests {
         assert!(!info.is_idr);
     }
 
-    // ── Multi-track audio (VOD audio path) ─────────────────────────
+    // ── Enhanced-RTMP audio (VOD audio path) ───────────────────────
     //
-    // OBS's VOD-audio feature emits Enhanced-RTMP audio packets with
-    // PacketType=Multitrack(5). The seq-header is nested: outer
-    // PacketType=5 with a nested PacketType=0 in byte 2. The TrackId
-    // for OneTrack-layout audio sits at byte 7 (one byte deeper than
-    // the video equivalent because audio has an extra header byte).
+    // OBS's VOD-audio feature emits Enhanced-RTMP audio packets via
+    // flv_packet_audio_ex in plugins/obs-outputs/flv-mux.c. The Live
+    // track (idx=0) is sent as Enhanced-RTMP SINGLE-TRACK and the VOD
+    // track (idx>0) as Enhanced-RTMP OneTrack multi-track. Layouts:
+    //
+    //   single-track: [byte0 0x9X][bytes 1..5 FourCC][payload]
+    //                     X = AudioPacketType (0=Seq, 1=Frames)
+    //
+    //   multi-track:  [byte0 0x95][byte1 mt_type|nested_pt][bytes 2..6 FourCC]
+    //                 [byte6 TrackId][payload]
+    //                     byte0 low nibble = 5 (Multitrack)
+    //                     byte1 high nibble = 0 (OneTrack)
+    //                     byte1 low nibble  = nested packet type
+    //
+    // v0.1.0..0.1.3 mis-read this format - PacketType from byte 1
+    // instead of byte 0, TrackId from byte 7 instead of byte 6. With
+    // VOD audio enabled the live track's seq-header was not detected
+    // (the classifier saw PacketType = 'm' & 0x0F = 0x0D), so it went
+    // into the ring like a regular tag and got evicted by trim before
+    // the destination consumer read it - Twitch never received an
+    // AudioSpecificConfig and both audio tracks rendered silent.
+
+    /// Helper: build an Enhanced-RTMP single-track AAC audio tag.
+    /// packet_type: 0=SequenceStart, 1=CodedFrames.
+    fn enhanced_audio_single_track(packet_type: u8) -> Vec<u8> {
+        let mut payload = vec![
+            0x90 | (packet_type & 0x0F), // SoundFormat=9 | AudioPacketType
+            b'm',
+            b'p',
+            b'4',
+            b'a', // FourCC=mp4a
+        ];
+        // AudioSpecificConfig stub (or AAC frame data; bytes don't
+        // matter for classification, only their position relative to
+        // the header).
+        payload.extend_from_slice(&[0x12, 0x10, 0x56, 0xe5]);
+        payload
+    }
 
     /// Helper: build an Enhanced-RTMP OneTrack multi-track audio tag.
     /// nested_pt: 0=SequenceStart, 1=CodedFrames.
     fn enhanced_audio_onetrack(track_id: u8, nested_pt: u8) -> Vec<u8> {
         let mut payload = vec![
-            0x90,      // SoundFormat=9
-            0x05,      // PacketType=Multitrack
-            nested_pt, // MultiTrackType=0, NestedPT=nested_pt
-            b'm', b'p', b'4', b'a',     // FourCC=mp4a
-            track_id, // TrackId
+            0x95,             // SoundFormat=9 | PacketType=Multitrack
+            nested_pt & 0x0F, // MultiTrackType=0 (high nibble) | NestedPT (low)
+            b'm',
+            b'p',
+            b'4',
+            b'a',     // FourCC=mp4a
+            track_id, // TrackId at byte 6
         ];
-        payload.extend_from_slice(&[0x12, 0x10, 0x56, 0xe5]); // AudioSpecificConfig stub
+        payload.extend_from_slice(&[0x12, 0x10, 0x56, 0xe5]);
         payload
+    }
+
+    #[test]
+    fn enhanced_single_track_seq_header_is_detected() {
+        // The user-visible regression for issue #9 (post-v0.1.3 manual
+        // test): with VOD audio enabled, OBS sends the live track as
+        // Enhanced-RTMP single-track. v0.1.0..0.1.3 read PacketType
+        // from byte 1 (which is 'm' = 0x6D, low nibble 0x0D) and never
+        // matched the SequenceStart value - so the AudioSpecificConfig
+        // tag flowed into the ring like a normal frame and got
+        // evicted, leaving Twitch's decoder unconfigured.
+        let tag = enhanced_audio_single_track(0);
+        let info = classify_audio_tag(&tag);
+        assert!(
+            info.is_seq_header,
+            "Enhanced-RTMP single-track byte 0 = 0x90 must classify as seq header"
+        );
+        assert!(!info.is_multitrack);
+        assert_eq!(info.codec, AudioCodec::Aac);
+    }
+
+    #[test]
+    fn enhanced_single_track_coded_frame_is_not_seq_header() {
+        let tag = enhanced_audio_single_track(1);
+        let info = classify_audio_tag(&tag);
+        assert!(!info.is_seq_header);
+        assert!(!info.is_multitrack);
+        assert_eq!(info.codec, AudioCodec::Aac);
     }
 
     #[test]
@@ -934,9 +1150,10 @@ mod tests {
     }
 
     #[test]
-    fn audio_seq_header_track_id_reads_onetrack_byte_7() {
-        // Each VOD-audio session sends one seq-header per track with
-        // TrackId at byte 7. Our cache keys on this so a publisher
+    fn audio_seq_header_track_id_reads_onetrack_byte_6() {
+        // OBS writes TrackId at byte 6 of the audio tag payload
+        // (byte 0 = 0x95, byte 1 = mt|nested, bytes 2..6 = FourCC,
+        // byte 6 = TrackId). Our cache keys on this so a publisher
         // reconnect can replay every track's config.
         for track in 0u8..=3 {
             let tag = enhanced_audio_onetrack(track, 0);

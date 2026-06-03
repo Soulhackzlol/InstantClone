@@ -28,7 +28,7 @@
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Locate the user's `services.json`. Returns `None` if neither
 /// candidate path exists - typical when OBS isn't installed at all.
@@ -299,31 +299,95 @@ fn remove_entry(file: &str) -> Option<String> {
     Some(format!("{}{}", &file[..left], &file[right..]))
 }
 
-// ── VOD-audio integration: OBS global.ini flag ──────────────────────
+// ── VOD-audio integration: OBS user.ini flag ────────────────────────
 //
 // OBS gates the VOD Track checkbox behind `EnableCustomServerVodTrack`
-// in `[General]` of global.ini when the active service id is
-// `rtmp_custom`. We write/remove this flag in lockstep with the
-// per-destination `vod_audio` toggle so the streamer doesn't have to
-// hand-edit an INI file. The flag is global to the user's OBS - it
-// affects every Custom RTMP setup they have, not just InstantClone.
-// That's deliberate on OBS's side: they only want power users who
-// understand the implication enabling this, which is exactly what
-// our dashboard toggle's copy spells out.
+// in `[General]` of the user config. The frontend reads it as:
+//
+//   bool enableForCustomServer = config_get_bool(
+//       App()->GetUserConfig(), "General", "EnableCustomServerVodTrack");
+//   bool enableVodTrack = ui->service->currentText() == "Twitch";
+//   if (enableForCustomServer && IsCustomService())
+//       enableVodTrack = true;
+//
+// (frontend/settings/OBSBasicSettings_Stream.cpp on master)
+//
+// IMPORTANT: OBS 32 split the legacy global.ini into two files -
+// `global.ini` (app-level) and `user.ini` (user-level) - and
+// `GetUserConfig()` now returns user.ini. v0.1.0..0.1.2 wrote the
+// flag to global.ini, which OBS 32 simply ignored. Issue #9 was the
+// streamer report ("the bypass didn't work") that surfaced this.
+//
+// Strategy: prefer user.ini when it exists (OBS 32+), fall back to
+// global.ini for older installs. On every write we also strip the
+// legacy key from global.ini if it's there, so upgraders don't carry
+// dead state across files.
+//
+// We write/remove this flag in lockstep with the per-destination
+// `vod_audio` toggle so the streamer doesn't have to hand-edit an INI
+// file. The flag is global to the user's OBS - it affects every
+// Custom RTMP setup they have, not just InstantClone. That's
+// deliberate on OBS's side: they only want power users who understand
+// the implication enabling this, which is exactly what our dashboard
+// toggle's copy spells out.
 
-fn global_ini_path() -> Option<PathBuf> {
-    std::env::var("APPDATA")
-        .ok()
-        .map(|p| PathBuf::from(p).join("obs-studio/global.ini"))
-        .filter(|p| p.exists())
+/// Pure path-resolution helper: given an OBS install directory
+/// (typically `%APPDATA%\obs-studio`), pick the authoritative user
+/// config file - user.ini on OBS 32+, falling back to global.ini on
+/// older installs that haven't been split. Separated from
+/// `obs_user_config_path` so tests can exercise the prefer-user.ini
+/// logic with a temp directory instead of mutating real %APPDATA%.
+fn resolve_user_config_in(obs_dir: &Path) -> Option<PathBuf> {
+    let user = obs_dir.join("user.ini");
+    if user.exists() {
+        return Some(user);
+    }
+    let global = obs_dir.join("global.ini");
+    global.exists().then_some(global)
 }
 
-/// Read `[General] EnableCustomServerVodTrack` from OBS's global.ini.
+/// Pure helper for the cleanup-only path that resolves the legacy
+/// global.ini under an OBS install directory, but ONLY when user.ini
+/// is present alongside (i.e. OBS 32+, where global.ini's
+/// `EnableCustomServerVodTrack` is dead state to strip). Returns None
+/// on older installs where global.ini is still the live config.
+fn legacy_global_ini_in(obs_dir: &Path) -> Option<PathBuf> {
+    let user = obs_dir.join("user.ini");
+    if !user.exists() {
+        return None;
+    }
+    let global = obs_dir.join("global.ini");
+    global.exists().then_some(global)
+}
+
+/// Authoritative user-config path: user.ini in OBS 32+, falling back
+/// to global.ini for pre-32 installs that haven't been split yet.
+/// `[Basic] Profile=` lives in this file too, so the active-profile
+/// detection below shares the same lookup.
+fn obs_user_config_path() -> Option<PathBuf> {
+    let obs_dir = std::env::var("APPDATA")
+        .ok()
+        .map(|p| PathBuf::from(p).join("obs-studio"))?;
+    resolve_user_config_in(&obs_dir)
+}
+
+/// Legacy global.ini path - only consulted for the post-upgrade
+/// cleanup pass that strips dead `EnableCustomServerVodTrack` entries
+/// left behind by v0.1.0..0.1.2. None on pre-32 installs where
+/// `obs_user_config_path` already points at global.ini.
+fn legacy_global_ini_path_for_cleanup() -> Option<PathBuf> {
+    let obs_dir = std::env::var("APPDATA")
+        .ok()
+        .map(|p| PathBuf::from(p).join("obs-studio"))?;
+    legacy_global_ini_in(&obs_dir)
+}
+
+/// Read `[General] EnableCustomServerVodTrack` from OBS's user config.
 /// Returns `false` when OBS isn't installed, the file is missing, or
 /// the key isn't set. We treat any value other than literal `true` /
 /// `1` as off, matching OBS's `config_get_bool` parser.
 pub fn vod_audio_flag_set() -> bool {
-    let Some(p) = global_ini_path() else {
+    let Some(p) = obs_user_config_path() else {
         return false;
     };
     let Ok(s) = fs::read_to_string(&p) else {
@@ -334,22 +398,53 @@ pub fn vod_audio_flag_set() -> bool {
         .unwrap_or(false)
 }
 
-/// Set or clear `[General] EnableCustomServerVodTrack=true` in OBS's
-/// global.ini. Idempotent. Returns `Ok(false)` if OBS isn't installed
+/// Set `[General] EnableCustomServerVodTrack=<true|false>` in OBS's
+/// user config. Idempotent. Returns `Ok(false)` if OBS isn't installed
 /// (the file path doesn't exist) so callers can degrade gracefully
 /// instead of treating "no OBS" as a hard error.
+///
+/// Disabling rewrites the existing line to `=false` rather than
+/// deleting it. OBS's `config_get_bool` reads `=false` and "key
+/// absent" identically, but the in-place rewrite is robust against
+/// OBS rewriting user.ini on shutdown and moving the key between
+/// duplicate [General] blocks - wherever it lands, the next toggle
+/// just flips the value. The downside (one extra line on a never-
+/// enabled install) is gated away: insertion only happens on enable.
+///
+/// On OBS 32+ we also flip the same key to false in the now-orphan
+/// global.ini, so users upgrading from v0.1.0..0.1.2 (which mistakenly
+/// wrote there) end up with no live flag anywhere.
 pub fn set_vod_audio_flag(enable: bool) -> io::Result<bool> {
-    let Some(p) = global_ini_path() else {
+    let Some(p) = obs_user_config_path() else {
         return Ok(false);
     };
     let original = fs::read_to_string(&p)?;
     let updated = ini_set(&original, "General", "EnableCustomServerVodTrack", enable);
-    if updated == original {
-        return Ok(true); // already in desired state
+    if updated != original {
+        let bak = p.with_extension("ini.instantclone.bak");
+        write_or_friendly(&bak, &original)?;
+        write_or_friendly(&p, &updated)?;
     }
-    let bak = p.with_extension("ini.instantclone.bak");
-    write_or_friendly(&bak, &original)?;
-    write_or_friendly(&p, &updated)?;
+    // Best-effort legacy cleanup: silently strip the key from
+    // global.ini if v0.1.0..0.1.2 ever wrote it there. Failures are
+    // non-fatal - the user.ini write above is the load-bearing one,
+    // global.ini being unwritable just means the dead key lingers as
+    // harmless noise until the user closes OBS.
+    if let Some(legacy) = legacy_global_ini_path_for_cleanup() {
+        if let Ok(legacy_original) = fs::read_to_string(&legacy) {
+            let cleaned = ini_set(
+                &legacy_original,
+                "General",
+                "EnableCustomServerVodTrack",
+                false,
+            );
+            if cleaned != legacy_original {
+                let bak = legacy.with_extension("ini.instantclone.bak");
+                let _ = write_or_friendly(&bak, &legacy_original);
+                let _ = write_or_friendly(&legacy, &cleaned);
+            }
+        }
+    }
     Ok(true)
 }
 
@@ -377,8 +472,15 @@ fn ini_get<'a>(file: &'a str, section: &str, key: &str) -> Option<&'a str> {
 }
 
 fn ini_set(file: &str, section: &str, key: &str, enable: bool) -> String {
-    // Strategy: walk lines, copy through, replace the key inside its
-    // section, or insert at end of section / end of file if missing.
+    // Strategy: walk lines, copy through, ALWAYS rewrite the key's
+    // value when we encounter it (true OR false - never drop), or
+    // insert at end of section / end of file if missing AND we're
+    // enabling. Robust against OBS rewriting user.ini and moving the
+    // key around between duplicate [General] blocks - we don't depend
+    // on "where" the key lives, just that it lives in the target
+    // section *somewhere*. Disabling is just `=false`, which OBS's
+    // `config_get_bool` reads identically to "key absent" - so we
+    // never need to delete a line we can't reliably find.
     let want_value = if enable { "true" } else { "false" };
     let mut out = String::with_capacity(file.len() + 64);
     let mut cur: Option<String> = None;
@@ -406,13 +508,10 @@ fn ini_set(file: &str, section: &str, key: &str, enable: bool) -> String {
         if in_target_section && !wrote_key {
             if let Some((k, _)) = trimmed.split_once('=') {
                 if k.trim() == key {
-                    if enable {
-                        out.push_str(key);
-                        out.push('=');
-                        out.push_str(want_value);
-                        out.push('\n');
-                    }
-                    // If disabling, drop the line entirely.
+                    out.push_str(key);
+                    out.push('=');
+                    out.push_str(want_value);
+                    out.push('\n');
                     wrote_key = true;
                     continue;
                 }
@@ -458,9 +557,15 @@ fn ini_set(file: &str, section: &str, key: &str, enable: bool) -> String {
 // `"multitrack_video_configuration_url": "<our endpoint>"` into the
 // active OBS profile's service.json under `settings`. OBS's
 // rtmp-custom plugin only writes `server` / `key` / `use_auth` /
-// `username` / `password` to settings, but obs_data_t preserves
-// arbitrary keys round-trip. So the injected URL persists until we
-// remove it, and OBS auto-fetches our multitrack config from there.
+// `username` / `password` to settings, and discards every other key
+// in its `rtmp_custom_update` function. That means the injected URL
+// is dropped on LOAD (never reaches OBS's MultitrackVideoAutoConfigURL
+// lookup), not only on SAVE - so the injection mechanism is dead.
+// We keep `inject_vod_eb` / `revert_vod_eb` only for cleanup of stale
+// state left behind by v0.1.0..0.1.2. New Phase C is the
+// `launch_obs_with_eb_config` helper below: spawn obs64.exe with the
+// `--config-url` CLI flag, which is the only path OBS's frontend
+// actually honours for Custom RTMP services.
 //
 // We touch only the ACTIVE profile (not every profile we find). This
 // is the user-chosen scope from the dashboard: minimal footprint, the
@@ -468,11 +573,11 @@ fn ini_set(file: &str, section: &str, key: &str, enable: bool) -> String {
 
 const PROFILES_DIR_REL: &str = "obs-studio/basic/profiles";
 
-/// Active OBS profile name, read from `%APPDATA%\obs-studio\global.ini`
-/// (`[Basic] Profile=<name>`). None when OBS isn't installed or the
-/// key isn't present.
+/// Active OBS profile name, read from `[Basic] Profile=<name>` in
+/// OBS's user config (user.ini on 32+, global.ini on older installs).
+/// None when OBS isn't installed or the key isn't present.
 pub fn active_profile() -> Option<String> {
-    let p = global_ini_path()?;
+    let p = obs_user_config_path()?;
     let s = fs::read_to_string(&p).ok()?;
     ini_get(&s, "Basic", "Profile").map(|v| v.to_string())
 }
@@ -510,43 +615,6 @@ pub fn vod_eb_injection_present(web_port: u16) -> bool {
     s.contains(&needle) || s.contains(&needle_spaced)
 }
 
-/// Inject the multitrack-video config URL into the active OBS profile's
-/// rtmp_custom service.json. Idempotent. Returns Ok(true) when the
-/// active profile exists AND uses rtmp_custom AND the write landed
-/// (or was already present); Ok(false) when there's no active profile
-/// or the profile uses a different service type (rtmp_common is one
-/// where the URL would have no effect, since OBS gets it from
-/// services.json).
-pub fn inject_vod_eb(web_port: u16) -> io::Result<bool> {
-    let Some(p) = active_profile_service_json_path() else {
-        return Ok(false);
-    };
-    let original = fs::read_to_string(&p)?;
-    // Only inject into rtmp_custom - for rtmp_common services the
-    // multitrack-video URL is read from services.json (not from
-    // service.json), and injecting would be a no-op at best, foot-gun
-    // at worst.
-    if !original.contains("\"type\": \"rtmp_custom\"")
-        && !original.contains("\"type\":\"rtmp_custom\"")
-    {
-        return Ok(false);
-    }
-    let needle = format!("http://127.0.0.1:{}/obs/multitrack-config", web_port);
-    if original.contains(&needle) {
-        return Ok(true); // already injected
-    }
-    let patched = inject_service_json_key(&original, web_port).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "couldn't find `settings` object in service.json - file shape unexpected",
-        )
-    })?;
-    let bak = p.with_extension("json.instantclone.bak");
-    write_or_friendly(&bak, &original)?;
-    write_or_friendly(&p, &patched)?;
-    Ok(true)
-}
-
 /// Remove the injected URL from the active OBS profile's service.json.
 /// Idempotent. Returns Ok(true) when the active profile exists and we
 /// removed (or there was nothing to remove); Ok(false) when there's no
@@ -567,21 +635,70 @@ pub fn revert_vod_eb(web_port: u16) -> io::Result<bool> {
     Ok(true)
 }
 
-/// Splice `"multitrack_video_configuration_url": "<url>"` into the
-/// JSON object's `settings` block. We locate `"settings": {` then
-/// insert the key as the first child, comma-separated from whatever
-/// comes next. Returns None if the marker isn't found - safer than
-/// blindly editing a file we don't recognise.
-fn inject_service_json_key(file: &str, web_port: u16) -> Option<String> {
-    let key_pos = file.find("\"settings\"")?;
-    let brace_offset = file[key_pos..].find('{')?;
-    let absolute_brace = key_pos + brace_offset;
-    let (head, tail) = file.split_at(absolute_brace + 1);
-    let entry = format!(
-        "\n        \"multitrack_video_configuration_url\": \"http://127.0.0.1:{}/obs/multitrack-config\",",
-        web_port
-    );
-    Some(format!("{head}{entry}{tail}"))
+// ── Phase C v2: launch OBS with --config-url ────────────────────────
+//
+// OBS's frontend looks for the multi-track config URL in this order
+// (frontend/utility/GoLiveAPI_Network.cpp::MultitrackVideoAutoConfigURL):
+//
+//   1. `--config-url <url>` command-line argument
+//   2. `multitrack_video_configuration_url` key in the active service's
+//      settings (services.json for rtmp_common, service.json for
+//      anything else).
+//
+// For rtmp_custom services, path 2 is dead - the plugin's
+// `rtmp_custom_update` only extracts 5 known keys from the settings
+// object and discards the rest, so OBS never sees our injection. The
+// CLI flag is the only durable way to enable Enhanced Broadcasting
+// alongside VOD audio (which itself requires Custom RTMP, since
+// rtmp_common services gate the VOD track checkbox on the service name
+// being literally "Twitch"). That's why this is a "Launch OBS" button
+// instead of an auto-injected file edit.
+
+/// Standard Windows install paths for obs64.exe. The first match wins.
+/// Portable / non-standard installs aren't auto-discovered (rare and
+/// the user can always launch OBS themselves with the flag).
+fn obs_executable_candidates() -> [PathBuf; 2] {
+    [
+        PathBuf::from("C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe"),
+        PathBuf::from("C:\\Program Files (x86)\\obs-studio\\bin\\64bit\\obs64.exe"),
+    ]
+}
+
+pub fn find_obs_executable() -> Option<PathBuf> {
+    obs_executable_candidates().into_iter().find(|p| p.exists())
+}
+
+/// Spawn OBS Studio with the `--config-url` flag pointing at
+/// InstantClone's multitrack-config endpoint. Detaches from our
+/// process group so closing InstantClone afterwards doesn't take OBS
+/// down with it.
+///
+/// Returns Ok when the spawn syscall succeeded (NOT when OBS finishes
+/// loading - that's async). Errors surface "OBS not installed" or
+/// permission failures to the dashboard so the user can act.
+pub fn launch_obs_with_eb_config(web_port: u16) -> io::Result<PathBuf> {
+    let exe = find_obs_executable().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "obs64.exe not found at C:\\Program Files\\obs-studio\\bin\\64bit\\ \
+             (or the x86 path). Launch OBS manually with the \
+             --config-url <our endpoint> flag from the directory where you installed it.",
+        )
+    })?;
+    let config_url = format!("http://127.0.0.1:{web_port}/obs/multitrack-config");
+    // CREATE_NEW_PROCESS_GROUP (0x00000200) gives OBS its own console
+    // group so InstantClone closing doesn't propagate a SIGTERM-
+    // equivalent. We also pass the launcher's parent dir as the working
+    // directory because OBS's logging and locale paths are resolved
+    // relative to the bin/64bit folder.
+    use std::os::windows::process::CommandExt;
+    let workdir = exe.parent().unwrap_or(&exe);
+    std::process::Command::new(&exe)
+        .args(["--config-url", &config_url])
+        .current_dir(workdir)
+        .creation_flags(0x0000_0200)
+        .spawn()?;
+    Ok(exe)
 }
 
 /// Remove the multitrack-video-configuration-url key (matching our
@@ -614,6 +731,7 @@ fn strip_service_json_key(file: &str, web_port: u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32 as TestUniq, Ordering as TestOrd};
 
     fn fake_services_json() -> String {
         // Minimal but realistic shape. OBS's actual file has many more
@@ -787,11 +905,32 @@ mod tests {
     }
 
     #[test]
-    fn ini_set_removes_key_when_disabling() {
+    fn ini_set_writes_false_in_place_when_disabling() {
+        // Issue #9 follow-up: disabling REWRITES the value as `false`
+        // instead of deleting the line. OBS's config_get_bool reads
+        // `=false` and "key absent" identically, but rewriting the
+        // line in place is robust against OBS shuffling the key into
+        // a different [General] block on its own file rewrite -
+        // wherever the key ended up, we just flip the value.
         let ini = "[General]\nEnableCustomServerVodTrack=true\nName=Foo\n";
         let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
-        assert_eq!(ini_get(&out, "General", "EnableCustomServerVodTrack"), None);
+        assert_eq!(
+            ini_get(&out, "General", "EnableCustomServerVodTrack"),
+            Some("false")
+        );
+        assert!(!out.contains("EnableCustomServerVodTrack=true"));
         assert_eq!(ini_get(&out, "General", "Name"), Some("Foo"));
+    }
+
+    #[test]
+    fn ini_set_does_not_create_false_line_when_disabling_a_virgin_file() {
+        // A user who has never toggled VOD audio on shouldn't end up
+        // with a stray `EnableCustomServerVodTrack=false` line in
+        // their user.ini just because the dashboard reconcile ran on
+        // a clean state. Insertion is still gated to the enable path.
+        let ini = "[General]\nName=Foo\n[Basic]\nProfile=A\n";
+        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
+        assert_eq!(out, ini, "no key found + disable should be a no-op");
     }
 
     #[test]
@@ -803,6 +942,84 @@ mod tests {
             Some("true")
         );
         assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
+    }
+
+    /// Reported on the v0.1.3 test build: user.ini ends up with two
+    /// `[General]` sections (OBS itself maintains a second one at the
+    /// end of the file). Our toggle-ON correctly lands the key in the
+    /// trailing block; this test confirms toggle-OFF flips its value
+    /// in place to `false` without disturbing either section's other
+    /// keys or trying to delete the line - which would be fragile
+    /// against OBS rewriting the file and moving the key around. The
+    /// file shape mirrors what OBS 32 wrote after the first toggle +
+    /// restart, trimmed down to the bits that exercise the
+    /// duplicate-section walk.
+    #[test]
+    fn ini_set_flips_value_to_false_in_trailing_duplicate_general_section() {
+        let ini = "[General]\n\
+            Pre19Defaults=false\n\
+            FirstRun=true\n\
+            \n\
+            [Basic]\n\
+            Profile=Sin Título\n\
+            \n\
+            [Audio]\n\
+            DisableAudioDucking=true\n\
+            \n\
+            [General]\n\
+            EnableCustomServerVodTrack=true\n\
+            FirstRun=true\n";
+        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
+
+        // Value flipped, line stays.
+        assert_eq!(
+            ini_get(&out, "General", "EnableCustomServerVodTrack"),
+            Some("false")
+        );
+        assert!(out.contains("EnableCustomServerVodTrack=false"));
+        assert!(!out.contains("EnableCustomServerVodTrack=true"));
+
+        // Both [General] sections are still there - we never want to
+        // collapse OBS's own structure, just edit our one key.
+        assert_eq!(out.matches("[General]").count(), 2);
+
+        // Sibling keys in BOTH [General] blocks survive.
+        assert!(out.contains("Pre19Defaults=false"));
+        assert!(out.contains("FirstRun=true"));
+
+        // Unrelated sections are untouched.
+        assert_eq!(ini_get(&out, "Basic", "Profile"), Some("Sin Título"));
+        assert_eq!(ini_get(&out, "Audio", "DisableAudioDucking"), Some("true"));
+    }
+
+    /// Sibling property: toggle-ON on a fresh duplicate-section file
+    /// (no key present in either [General]) lands the key in the
+    /// trailing [General] - which is what we observed during the
+    /// v0.1.3 test build. Documenting this so a future refactor that
+    /// chooses to insert into the first block instead doesn't surprise
+    /// the next maintainer.
+    #[test]
+    fn ini_set_lands_in_trailing_general_when_duplicate_sections_exist() {
+        let ini = "[General]\n\
+            FirstRun=true\n\
+            \n\
+            [Basic]\n\
+            Profile=A\n\
+            \n\
+            [General]\n\
+            ConfirmOnExit=true\n";
+        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
+
+        assert_eq!(
+            ini_get(&out, "General", "EnableCustomServerVodTrack"),
+            Some("true")
+        );
+        // Lands inside the trailing [General], after ConfirmOnExit.
+        let trailing = out.rfind("[General]").expect("trailing [General] kept");
+        assert!(out[trailing..].contains("EnableCustomServerVodTrack=true"));
+        // Idempotent toggle-on - second call must not double-write.
+        let twice = ini_set(&out, "General", "EnableCustomServerVodTrack", true);
+        assert_eq!(twice.matches("EnableCustomServerVodTrack=true").count(), 1);
     }
 
     // ── service.json injection ─────────────────────────────────────
@@ -821,22 +1038,29 @@ mod tests {
         .to_string()
     }
 
-    #[test]
-    fn inject_service_json_key_adds_url_into_settings() {
-        let original = fake_rtmp_custom_service_json();
-        let patched = inject_service_json_key(&original, 7799).expect("inject must succeed");
-        assert!(patched.contains("multitrack_video_configuration_url"));
-        assert!(patched.contains("http://127.0.0.1:7799/obs/multitrack-config"));
-        // Existing settings are still present.
-        assert!(patched.contains("\"server\": \"rtmp://127.0.0.1:1935/live\""));
-        assert!(patched.contains("\"type\": \"rtmp_custom\""));
+    /// Manually crafted legacy state from v0.1.0..0.1.2's broken
+    /// inject path: an `rtmp_custom` service.json that was once
+    /// patched by the old `inject_service_json_key` helper. Strip must
+    /// remove our key without disturbing real OBS settings, so an
+    /// upgrade from a polluted file ends up clean.
+    fn legacy_polluted_rtmp_custom_service_json() -> String {
+        r#"{
+    "settings": {
+        "multitrack_video_configuration_url": "http://127.0.0.1:7799/obs/multitrack-config",
+        "key": "main",
+        "server": "rtmp://127.0.0.1:1935/live",
+        "use_auth": false
+    },
+    "type": "rtmp_custom"
+}
+"#
+        .to_string()
     }
 
     #[test]
     fn strip_service_json_key_removes_only_our_line() {
-        let original = fake_rtmp_custom_service_json();
-        let patched = inject_service_json_key(&original, 7799).unwrap();
-        let stripped = strip_service_json_key(&patched, 7799);
+        let polluted = legacy_polluted_rtmp_custom_service_json();
+        let stripped = strip_service_json_key(&polluted, 7799);
         assert!(!stripped.contains("multitrack_video_configuration_url"));
         // Sibling settings stay untouched.
         assert!(stripped.contains("\"server\": \"rtmp://127.0.0.1:1935/live\""));
@@ -849,4 +1073,87 @@ mod tests {
         let stripped = strip_service_json_key(&original, 7799);
         assert_eq!(stripped, original);
     }
+
+    // ── OBS user-config path resolution ─────────────────────────────
+    //
+    // Issue #9 (v0.1.2): the EnableCustomServerVodTrack flag was
+    // being written to global.ini, but OBS 32 reads the VOD-track
+    // gate from user.ini (via App()->GetUserConfig()). These tests
+    // lock the prefer-user.ini behaviour so the file selection
+    // can't silently regress back to global.ini in a future refactor.
+
+    fn fresh_obs_dir(label: &str) -> std::path::PathBuf {
+        // Each test gets its own dir so a tempdir cleanup race
+        // between them can't make assertions flap.
+        let dir = std::env::temp_dir().join(format!(
+            "ic-obs-{}-{}-{}",
+            label,
+            std::process::id(),
+            UNIQ_OBS.fetch_add(1, TestOrd::SeqCst),
+        ));
+        std::fs::create_dir_all(&dir).expect("fresh_obs_dir create_dir_all");
+        dir
+    }
+
+    #[test]
+    fn resolve_user_config_prefers_user_ini_when_both_files_exist() {
+        let dir = fresh_obs_dir("prefer-user");
+        let user = dir.join("user.ini");
+        let global = dir.join("global.ini");
+        std::fs::write(&user, "[General]\n").unwrap();
+        std::fs::write(&global, "[General]\n").unwrap();
+
+        let resolved = resolve_user_config_in(&dir).expect("must resolve");
+        assert_eq!(
+            resolved, user,
+            "OBS 32+ keeps user.ini as the authoritative user config - \
+             writing to global.ini is the v0.1.0..0.1.2 bug from issue #9"
+        );
+    }
+
+    #[test]
+    fn resolve_user_config_falls_back_to_global_ini_when_user_ini_missing() {
+        let dir = fresh_obs_dir("fallback-global");
+        let global = dir.join("global.ini");
+        std::fs::write(&global, "[General]\n").unwrap();
+
+        let resolved = resolve_user_config_in(&dir).expect("must resolve");
+        assert_eq!(
+            resolved, global,
+            "pre-OBS-32 installs only have global.ini; the resolver \
+             must still find the user config there"
+        );
+    }
+
+    #[test]
+    fn resolve_user_config_returns_none_when_neither_exists() {
+        let dir = fresh_obs_dir("no-obs");
+        assert!(
+            resolve_user_config_in(&dir).is_none(),
+            "no OBS install means no config to write to - caller \
+             should degrade gracefully, not error"
+        );
+    }
+
+    #[test]
+    fn legacy_global_ini_only_reported_when_user_ini_present() {
+        // Case 1: OBS 32+ with both files - legacy global.ini is
+        // dead state we want to clean up.
+        let dir = fresh_obs_dir("legacy-both");
+        let user = dir.join("user.ini");
+        let global = dir.join("global.ini");
+        std::fs::write(&user, "[General]\n").unwrap();
+        std::fs::write(&global, "[General]\n").unwrap();
+        assert_eq!(legacy_global_ini_in(&dir), Some(global.clone()));
+
+        // Case 2: pre-32 install - global.ini IS the live config,
+        // not legacy. The cleanup path must skip so we don't
+        // strip the flag from the file OBS is actively reading.
+        let dir = fresh_obs_dir("legacy-no-user");
+        let global = dir.join("global.ini");
+        std::fs::write(&global, "[General]\n").unwrap();
+        assert!(legacy_global_ini_in(&dir).is_none());
+    }
+
+    static UNIQ_OBS: TestUniq = TestUniq::new(0);
 }

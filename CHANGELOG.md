@@ -8,6 +8,193 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.3] - VOD audio flag actually works (issue #9)
+
+**VOD audio toggle did nothing on OBS 32.** Reported as issue #9
+on v0.1.2: the streamer toggled VOD audio in InstantClone, restarted
+OBS, and the "Twitch VOD audio track" option stayed locked - both
+with the InstantClone-registered service AND with Custom RTMP.
+
+Root cause: OBS 32 split the legacy `global.ini` into two files -
+`global.ini` (app-level) and `user.ini` (user-level) - and the
+VOD-track frontend gate reads `App()->GetUserConfig()` which now
+maps to `user.ini`:
+
+    bool enableForCustomServer = config_get_bool(
+        App()->GetUserConfig(), "General", "EnableCustomServerVodTrack");
+    bool enableVodTrack = ui->service->currentText() == "Twitch";
+    if (enableForCustomServer && IsCustomService())
+        enableVodTrack = true;
+
+We were writing the flag to `global.ini`, which OBS 32 simply
+ignored. v0.1.0..0.1.2 shipped the toggle as a no-op without anyone
+catching it because we never tested against a fresh OBS 32 install
+with a real Custom RTMP service.
+
+Fix: a new `obs_user_config_path()` prefers `user.ini` when present
+(OBS 32+) and falls back to `global.ini` for older installs that
+haven't been split yet. The active-profile detection now resolves
+through the same helper, so both the VOD flag and the `[Basic]
+Profile=` lookup follow the same source of truth. Every write to
+`set_vod_audio_flag` also flips the same key to `false` in the
+now-orphan `global.ini`, so users upgrading from v0.1.0..0.1.2 end
+up with no live flag anywhere. Pure path-resolution helpers
+`resolve_user_config_in` and `legacy_global_ini_in` are unit-tested
+against a temp directory so the prefer-user.ini behaviour can't
+silently regress.
+
+**Toggle-OFF now flips the value in place instead of deleting the
+line.** On the v0.1.3 test build, OBS 32 was observed rewriting
+`user.ini` on shutdown and consolidating its own duplicate
+`[General]` sections - which would have left a "deleted by us" path
+fragile against where exactly OBS chose to keep the key after the
+rewrite. New semantics: `set_vod_audio_flag(true)` writes
+`EnableCustomServerVodTrack=true`, `set_vod_audio_flag(false)` writes
+`EnableCustomServerVodTrack=false`, and we never try to find-and-
+delete. OBS's `config_get_bool` reads `=false` and "key absent"
+identically, so the runtime behaviour is the same; the robustness
+gain is that wherever OBS shuffles the key to between sessions, the
+next toggle just flips the value in place. Insertion is still gated
+to the enable path, so a never-toggled `user.ini` stays clean.
+Tests `ini_set_writes_false_in_place_when_disabling`,
+`ini_set_does_not_create_false_line_when_disabling_a_virgin_file`,
+and `ini_set_flips_value_to_false_in_trailing_duplicate_general_section`
+lock in this behaviour against the exact file shape OBS 32 produces.
+
+**Stopped swallowing reconcile errors.** `reconcile_obs_vod_files`
+previously used `let _ = ...` on every write call. When OBS was open
+and held its files locked, `write_or_friendly` returned
+`PermissionDenied`, the toggle silently failed, and the user got no
+feedback. The function now takes the controller and logs failures
+to the dashboard event log with the message
+`vod-audio: couldn't write OBS user config (...). Close OBS, then
+toggle the destination off and back on to retry.` so the path
+forward is obvious from the Logs tab.
+
+**Enhanced-RTMP audio wire format read correctly for the first time.**
+The fundamental bug behind issue #9's "both tracks silent" symptom
+on manual test: v0.1.0..0.1.3 mis-located the `AudioPacketType` and
+`TrackId` fields in Enhanced-RTMP audio tags. The classifier read
+`PacketType` from `payload[1] & 0x0F` and `TrackId` from `payload[7]`;
+the correct positions per OBS's
+`plugins/obs-outputs/flv-mux.c::flv_packet_audio_ex` are
+`payload[0] & 0x0F` (high nibble of byte 0 is `SoundFormat=9`, low
+nibble is the packet type) and `payload[6]` (after the multitrack
+header byte and the 4-byte FourCC).
+
+The user-visible failure: when OBS sends the Live track as
+Enhanced-RTMP single-track (which it does whenever VOD audio is
+enabled, since the encoder switches to the EX header path for
+idx=0 even without multitrack wrapping), our classifier saw
+`PacketType = 'm' & 0x0F = 0x0D` and never matched
+`SequenceStart=0`. The `AudioSpecificConfig` tag flowed into the
+ring buffer like a regular audio frame, got evicted by `trim_older_than`
+once newer tags accumulated past the delay window, and the
+destination consumer connected to Twitch with no decoder config
+ever sent. Twitch's `Inspector` still listed both tracks because
+OBS's `onMetaData` declared them, but the actual frames were
+undecodable - both tracks silent.
+
+Fix: corrected `classify_audio_tag`, `select_audio_bytes`, and
+`audio_seq_header_track_id` to read the real byte positions. Test
+data builders (`enhanced_audio_onetrack`, new
+`enhanced_audio_single_track`) now emit byte sequences identical
+to what OBS actually puts on the wire, verified against
+`flv_packet_audio_ex`. Two existing tests that asserted the broken
+interpretation (`enhanced_rtmp_opus_audio_recognised`,
+`enhanced_aac_seq_header_via_packet_type_0`) were rewritten to
+match the spec layout. New test
+`enhanced_single_track_seq_header_is_detected` locks in the exact
+bytes that triggered the regression so a future refactor can't
+silently re-introduce the off-by-one.
+
+**Audio multi-track passthrough decoupled from Enhanced Broadcasting.**
+Reported during manual test of the v0.1.3 build: OBS was sending
+VOD audio (mixer track 2, wire TrackId 1) but Twitch was receiving
+both Live and VOD tracks silent. Root cause was a flag-scope bug
+in v0.1.0..0.1.2: `pass_through_multitrack_video` gated both audio
+AND video selection, and was only set true when an EB session was
+allocated. For a Twitch destination without EB but with VOD audio:
+TrackId 0 (live) was forwarded wrapped in Enhanced-RTMP multi-track
+framing that Twitch's regular ingest can't decode, and TrackId 1
+(VOD) was dropped entirely. New `pass_through_multitrack_audio`
+flag is decoupled and set to true for every enabled Twitch
+destination - VOD audio has worked on Twitch's regular ingest for
+years, predating EB. Non-Twitch destinations still drop TrackId
+!= 0 so a simulcast YouTube / Kick doesn't choke on a track its
+decoder can't map. `send_sequence_headers` also gates the audio
+seq-header replay on the same audio flag now, so a VOD track's
+AudioSpecificConfig gets re-emitted on egress restart for any
+Twitch destination, not only EB ones.
+
+**Phase C (experimental "EB on Custom RTMP") replaced with a "Launch
+OBS for EB + VOD" button.** After confirming the file-injection path
+was architecturally dead (OBS's `rtmp_custom` plugin only declares
+five known settings keys in `rtmp_custom_update` and discards every
+other field at LOAD time, never at SAVE - so our injected
+`multitrack_video_configuration_url` was never read at all),
+re-implemented Phase C using the only path OBS's frontend actually
+honours for Custom RTMP: the `--config-url` command-line argument
+(`frontend/utility/GoLiveAPI_Network.cpp::MultitrackVideoAutoConfigURL`
+checks the CLI flag before consulting the service settings object).
+The dashboard's destination editor now shows a "Launch OBS for EB +
+VOD" button under the VOD audio toggle when the user enables VOD
+audio on a Twitch destination. The button hits a new
+`POST /obs/launch-with-eb` endpoint that spawns
+`C:\Program Files\obs-studio\bin\64bit\obs64.exe --config-url <our
+endpoint>` (detached process group so closing InstantClone afterwards
+doesn't take OBS down). The flag is per-launch, so the UI copy makes
+it clear the user has to use this button every time they want EB on
+top of VOD audio. The old `inject_vod_eb` file-edit path and its UI
+sub-toggle are gone; the legacy strip is preserved and runs on every
+reconcile so users upgrading from v0.1.0..0.1.2 end up with a clean
+service.json. Recommended paths for the simpler cases stay the same:
+- EB alone -> register InstantClone as an OBS service
+- VOD audio alone -> Custom RTMP + the per-destination VOD toggle
+- Both together -> the new Launch button (experimental)
+
+**EB cuts no longer pixel-glitch on the legacy primary track.**
+Confirmed via trace log inspection during the v0.1.3 EB+VOD manual
+test: `compute_delay_cut` was landing on whichever ladder rung's IDR
+happened to win the partition_point in the IDR-only secondary index,
+including TrackId-1..4. The destination's decoder for the LEGACY
+primary track (the one Twitch's transcoder anchors on) then received
+a P-frame with no reference, producing visible pixel artefacts until
+the next track-0 IDR ~2 s later. Fix: new `is_primary_video_idr`
+classifier in `h264.rs` and a gate in `Ring::append` that only adds
+the PRIMARY track's keyframes to `idr_index`. Multi-track ladder
+IDRs still live in the main `index` (forwarded bit-faithfully to
+Twitch IVS) - they just stop being cut candidates. Since OBS aligns
+every ladder rung's IDR to the same encoder PTS, no cut points are
+lost; we just stop landing on a rung where the legacy decoder has
+no anchor. Six unit tests in `h264::tests` lock in the classifier
+(legacy AVC keyframe accepted, legacy inter rejected, OneTrack
+TrackId=0 accepted, OneTrack TrackId 1..4 rejected, Enhanced-RTMP
+single-track P-frame rejected, truncated multi-track handled
+gracefully). Three pre-existing buffer/controller tests were updated
+to seed proper primary-IDR payloads via a new `primary_idr_payload`
+helper - they previously used `[0u8; N]` which incidentally passed
+through the old "any-track" index but is correctly rejected now.
+
+**Dashboard title contrast.** `.ic-brand-mark` is now a solid warm
+cream (`#f5efe1`) instead of the previous white -> 30%-accent
+gradient. The bottom half of the letters was muddied to ~30%
+lightness on most themes, which read as low-contrast against the
+dark header.
+
+**Passive update check.** New `src/update_check.rs` calls GitHub's
+Releases API once per process lifetime (with a 10-minute cache to
+avoid hammering on dashboard refreshes), parses `tag_name`, and
+compares against the compiled-in `CARGO_PKG_VERSION`. A small "v0.1.4
+available" pill appears in the dashboard header on load when a newer
+release is published. Failures are silent - offline users and
+GitHub rate-limit hits don't get an error toast, just no pill. The
+SemVer-ish comparison correctly handles prerelease suffixes
+(`0.1.3` beats `0.1.3-beta.7`) so users on a beta tag don't get an
+"update available" prompt that points back at their current build.
+Six unit tests in `update_check::tests` lock in the tag-name parser
+and the version comparator.
+
 ## [0.1.2] - Stop-start session restart fix
 
 **The delay bar would freeze at 0% after Stop Streaming + Start

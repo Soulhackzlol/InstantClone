@@ -76,8 +76,10 @@ input,select,textarea{font-family:inherit;color:inherit}
   border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-1)}
 .ic-brand{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .ic-brand-mark{font-size:16px;font-weight:700;letter-spacing:-.01em;
-  background:linear-gradient(180deg,#fff,color-mix(in oklch,var(--accent) 30%,#fff));
-  -webkit-background-clip:text;background-clip:text;color:transparent}
+  /* Solid warm cream for max contrast vs the dark header. The previous
+     fff-to-accent-mix gradient muddied the bottom half of the letters
+     into ~30% lightness which read as low-contrast on dark themes. */
+  color:#f5efe1}
 .ic-brand-sub{color:var(--fg-3);font-size:12px}
 .ic-brand-dot{display:inline-block;width:5px;height:5px;border-radius:999px;background:var(--fg-4);margin:0 6px 2px}
 .ic-brand-credit{color:var(--fg-4);font-size:11px;margin-left:4px}
@@ -811,6 +813,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     <span class="ic-pill ok" id="hdr-ebroadcast" hidden title="Enhanced Broadcasting active - multi-track simulcast is being forwarded bit-faithfully to Twitch and flattened to the primary track for any non-Twitch destinations. Twitch's transcoder serves the full quality ladder to viewers.">⚡ Enhanced Broadcasting</span>
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
     <span class="ic-pill warn" id="hdr-twitch-cap" hidden>⚠ <span id="hdr-twitch-cap-v">Twitch · Source-Only at 10 Mbps</span></span>
+    <a id="hdr-update" class="ic-pill" href="#" target="_blank" rel="noopener" hidden title="Click to view release notes on GitHub">⬆ <span id="hdr-update-v">update available</span></a>
     <button id="hdr-help" class="ic-btn-tiny" title="How does this work? (?)" onclick="openTour(0)" style="width:30px;height:30px;color:var(--fg-3);font-weight:700;font-size:14px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);position:relative">?
       <span id="hdr-help-hint" class="help-hint" hidden>New here? Quick tour →</span>
     </button>
@@ -1007,25 +1010,27 @@ input,select,textarea{font-family:inherit;color:inherit}
           <div style="font-weight:600;color:var(--fg)">VOD audio mode</div>
           <div class="muted" style="font-size:11.5px;margin-top:2px;line-height:1.45">
             Records a separate audio track to Twitch's VOD. Useful when your live stream has copyrighted music that should be stripped from the saved recording.
-            <b style="color:var(--warn,#d6a23a)">Disables Enhanced Broadcasting</b> (the transcoded quality ladder) unless you also enable the experimental sub-toggle below.
+            <b style="color:var(--warn,#d6a23a)">Disables Enhanced Broadcasting</b> (the transcoded quality ladder) unless you use the experimental Launch button below.
             Requires switching OBS to <b>Custom RTMP</b> + enabling the VOD Track checkbox in OBS Output settings.
           </div>
         </div>
       </label>
       <div id="dest-form-vod-eb-wrap" hidden style="margin-top:10px;padding:10px;border:1px dashed color-mix(in oklch,var(--err) 32%,var(--line));border-radius:8px;background:color-mix(in oklch,var(--err) 3%,var(--bg-2))">
-        <label style="display:flex;align-items:flex-start;gap:10px;margin:0;text-transform:none;letter-spacing:0;font-size:13px;cursor:pointer">
-          <input type="checkbox" id="dest-form-vod-inject-eb" style="margin-top:2px">
-          <div>
-            <div style="font-weight:600;color:var(--err)">
-              Also enable Enhanced Broadcasting
+        <div style="display:flex;align-items:flex-start;gap:10px">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;color:var(--err);font-size:13px">
+              Want Enhanced Broadcasting too?
               <span style="display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:1.5px;background:color-mix(in oklch,var(--warn,#d6a23a) 22%,transparent);color:var(--warn,#d6a23a);padding:1px 6px;border-radius:99px;margin-left:4px;text-transform:uppercase;vertical-align:1px">experimental</span>
             </div>
-            <div class="muted" style="font-size:11.5px;margin-top:2px;line-height:1.45">
-              Injects <code class="mono" style="font-size:11px">multitrack_video_configuration_url</code> into your active OBS profile's <code class="mono" style="font-size:11px">service.json</code> so Custom RTMP also gets EB. Modifies OBS's internal file (with a <code class="mono" style="font-size:11px">.bak</code> backup); disabling this toggle reverts.
-              Only applies to your <b>active</b> OBS profile - switching profiles in OBS disables the injection until you re-toggle here.
+            <div class="muted" style="font-size:11.5px;margin-top:4px;line-height:1.45">
+              Use this <b>only if you want EB + VOD audio at the same time</b>. Launches OBS with the <code class="mono" style="font-size:11px">--config-url</code> CLI flag - the only path OBS honours for Custom RTMP (its plugin discards <code class="mono" style="font-size:11px">service.json</code> injections at load time). Close OBS first; the flag is per-launch, so reopening OBS normally will lose EB until you click again.
+            </div>
+            <div class="row" style="gap:8px;margin-top:10px;align-items:center">
+              <button type="button" class="ic-btn ic-btn-primary" id="obs-eb-launch-btn" onclick="launchObsWithEb()">Launch OBS for EB + VOD</button>
+              <span class="muted" id="obs-eb-launch-msg" style="font-size:11.5px"></span>
             </div>
           </div>
-        </label>
+        </div>
       </div>
     </div>
     <div class="row" style="margin-top:14px;justify-content:flex-end">
@@ -2074,32 +2079,33 @@ function openDestForm(d){
   document.getElementById('dest-form-key-hint').textContent = d && d.stream_key_set ? '(currently set)' : '';
   $('dest-form-enabled').checked = d ? d.enabled : true;
   $('dest-form-vod-audio').checked = !!(d && d.vod_audio);
-  $('dest-form-vod-inject-eb').checked = !!(d && d.vod_audio_inject_eb);
   updateVodVisibility();
+  refreshObsEbLaunchAvailability();
   $('dest-form-msg').innerHTML = '';
   $('dest-form').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 function cancelDestForm(){ $('dest-form').hidden = true; }
 
-// VOD-audio mode is Twitch-only (the gate is hardcoded in OBS). When
-// the platform isn't twitch we hide the whole block. When VOD audio
-// is OFF we hide the experimental sub-toggle so its scary warning
-// doesn't loom over destinations that have no use for it.
+// VOD-audio mode is Twitch-only (the gate is hardcoded in OBS). The
+// "Launch OBS for EB + VOD" experimental button below only matters
+// when VOD audio is actually enabled - showing it otherwise just
+// invites the user to misuse the CLI flag. Visibility cascades:
+//   platform != twitch        -> hide both
+//   platform == twitch + !vod -> show VOD toggle, hide EB launcher
+//   platform == twitch + vod  -> show both
 function updateVodVisibility(){
   const plat = $('dest-form-platform').value;
   const vodWrap = $('dest-form-vod-wrap');
   const vodEbWrap = $('dest-form-vod-eb-wrap');
-  if (!vodWrap || !vodEbWrap) return;
+  if (!vodWrap) return;
   vodWrap.hidden = plat !== 'twitch';
   if (plat !== 'twitch'){
     $('dest-form-vod-audio').checked = false;
-    $('dest-form-vod-inject-eb').checked = false;
-    vodEbWrap.hidden = true;
+    if (vodEbWrap) vodEbWrap.hidden = true;
     return;
   }
-  vodEbWrap.hidden = !$('dest-form-vod-audio').checked;
-  if (!$('dest-form-vod-audio').checked){
-    $('dest-form-vod-inject-eb').checked = false;
+  if (vodEbWrap){
+    vodEbWrap.hidden = !$('dest-form-vod-audio').checked;
   }
 }
 
@@ -2137,17 +2143,15 @@ async function saveDestForm(){
   const yingest = $('dest-form-youtube-ingest').value;
   const key = $('dest-form-key').value.trim();
   const enabled = $('dest-form-enabled').checked;
-  // VOD-audio knobs only apply to Twitch destinations. Defensive
-  // gating in case the user enabled them then switched platform
-  // without the change handler running.
+  // VOD-audio is Twitch-only. Defensive gating in case the user
+  // enabled it then switched platform without the change handler
+  // running.
   const vodAudio = platform === 'twitch' && $('dest-form-vod-audio').checked;
-  const vodInjectEb = vodAudio && $('dest-form-vod-inject-eb').checked;
   if (!name){ $('dest-form-msg').innerHTML = '<span class="err">Name required</span>'; return; }
   const body = new URLSearchParams({
     name, platform, custom_egress_url:custom, enabled:enabled?'on':'off',
     twitch_ingest:ingest, youtube_ingest:yingest,
     vod_audio: vodAudio ? 'on' : 'off',
-    vod_audio_inject_eb: vodInjectEb ? 'on' : 'off',
   });
   if (id) body.set('id', id);
   if (key) body.set('stream_key', key);
@@ -2164,7 +2168,6 @@ async function toggleDest(d){
   const body = new URLSearchParams({id:d.id, name:d.name, platform:d.platform,
     custom_egress_url:d.custom_egress_url, twitch_ingest:d.twitch_ingest||'', youtube_ingest:d.youtube_ingest||'',
     vod_audio: d.vod_audio ? 'on' : 'off',
-    vod_audio_inject_eb: d.vod_audio_inject_eb ? 'on' : 'off',
     enabled:d.enabled?'off':'on'});
   await fetch('/destinations',{method:'POST', body});
   loadDestinations();
@@ -2659,6 +2662,52 @@ async function toggleObsRegister(){
     if (msg) msg.textContent = String(e);
   }
   await refreshObsRegisterStatus();
+}
+
+// ── Phase C: Launch OBS with --config-url ────────────────────────────
+// Spawns obs64.exe with the Enhanced Broadcasting CLI flag. The user
+// has to use this every time they want EB on a Custom RTMP setup,
+// since OBS only reads --config-url at launch and rtmp_custom's
+// settings plugin discards file-injected URLs. Errors surface inline
+// next to the button so the user can fix install paths or close a
+// running OBS first.
+async function launchObsWithEb(){
+  const btn = $('obs-eb-launch-btn');
+  const msg = $('obs-eb-launch-msg');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  if (msg) msg.textContent = 'Launching…';
+  try {
+    const r = await (await fetch('/obs/launch-with-eb', {method:'POST'})).json();
+    if (r.ok){
+      toast(r.message || 'OBS launched','ok');
+      if (msg) msg.textContent = 'OBS spawned. Multi-track video unlocked for this session.';
+    } else {
+      toast(r.error || 'Failed','err');
+      if (msg) msg.textContent = r.error || 'Failed';
+    }
+  } catch(e){
+    toast('Request failed','err');
+    if (msg) msg.textContent = String(e);
+  }
+  btn.disabled = false;
+}
+async function refreshObsEbLaunchAvailability(){
+  const btn = $('obs-eb-launch-btn');
+  const msg = $('obs-eb-launch-msg');
+  if (!btn) return;
+  try {
+    const r = await (await fetch('/obs/launch-status')).json();
+    if (!r.installed){
+      btn.disabled = true;
+      btn.className = 'ic-btn ic-btn-disabled';
+      if (msg) msg.textContent = 'OBS not found at the standard install path.';
+    } else {
+      btn.disabled = false;
+      btn.className = 'ic-btn ic-btn-primary';
+      if (msg && !msg.textContent) msg.textContent = '';
+    }
+  } catch(_){}
 }
 
 // ── Reset settings / Reset everything ────────────────────────────────
@@ -3227,12 +3276,31 @@ function startStateSSE(){
   } catch(_){ startStatePolling(); }
 }
 
+// One-shot update check: hit GitHub Releases API on dashboard load,
+// surface a small pill in the header if a newer tag is available.
+// Failures are silent - we don't want offline / rate-limited users to
+// see a scary error pill for a passive nicety. Cached server-side for
+// 10 min so a F5 spree doesn't hammer GitHub.
+async function checkForUpdate(){
+  try {
+    const r = await (await fetch('/update-check')).json();
+    if (!r || !r.update_available) return;
+    const pill = $('hdr-update');
+    const label = $('hdr-update-v');
+    if (!pill || !label) return;
+    label.textContent = 'v' + r.latest + ' available';
+    pill.href = r.release_url;
+    pill.hidden = false;
+  } catch(_){}
+}
+
 (async function init(){
   try { platforms = await (await fetch('/platforms')).json(); } catch(_){ platforms = []; }
   fillWizardPlatforms();
   wireChatDock();
   await loadConfig();
   refreshObsRegisterStatus();
+  checkForUpdate();
   startStateSSE();
   setInterval(pollLogs, 1500);
   document.addEventListener('keydown', e => {

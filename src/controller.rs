@@ -142,6 +142,20 @@ pub struct DestinationState {
     /// byte-identical to what beta.6 emitted from the ingest-side
     /// flatten - so existing destinations see no behaviour change.
     pub pass_through_multitrack_video: AtomicBool,
+    /// Twitch only: when true, multi-track AUDIO tags (live track 0 +
+    /// VOD audio track 1, OBS's "Pista VOD de Twitch") pass through to
+    /// the destination bit-faithfully. Twitch's regular ingest has
+    /// supported the VOD audio track for years, predating Enhanced
+    /// Broadcasting - so this is `true` for any enabled Twitch
+    /// destination, not gated on an EB session like the video flag
+    /// above. Non-Twitch destinations still drop TrackId != 0 audio so
+    /// a simulcast YouTube / Kick doesn't get a second track it can't
+    /// decode. Before v0.1.3 we reused `pass_through_multitrack_video`
+    /// for both, which meant a Twitch destination without EB silently
+    /// dropped the VOD audio track and left the live track wrapped in
+    /// Enhanced-RTMP multi-track framing - Twitch's regular ingest
+    /// reads the metadata but the audio renders silent.
+    pub pass_through_multitrack_audio: AtomicBool,
     /// Twitch only: when our /obs/multitrack-config proxy successfully
     /// allocates an Enhanced Broadcasting session, Twitch's API returns
     /// a specific IVS ingest URL like
@@ -188,6 +202,7 @@ impl DestinationState {
             // a DestinationState without going through the supervisor
             // (the destination_state lazy-init in particular).
             pass_through_multitrack_video: AtomicBool::new(false),
+            pass_through_multitrack_audio: AtomicBool::new(false),
         }
     }
 
@@ -1441,7 +1456,7 @@ async fn pace_and_send(
             // borrows through unchanged in both modes.
             let Some(selected) = crate::h264::select_audio_bytes(
                 io_buf,
-                dest.pass_through_multitrack_video.load(Ordering::Relaxed),
+                dest.pass_through_multitrack_audio.load(Ordering::Relaxed),
             ) else {
                 state.consumer_seq = meta.seq + 1;
                 dest.consumer_seq
@@ -1774,12 +1789,18 @@ async fn send_sequence_headers(
             sink.send_video(ts, bytes_out).await?;
         }
     }
-    // Audio seq-headers, same per-track shape as video. Twitch
-    // destinations (passthrough) receive every cached track's
-    // AudioSpecificConfig bit-faithfully so a VOD audio track's
-    // decoder stays configured across egress restarts. Non-Twitch
-    // destinations only get the primary track's config - the
-    // simulcast-second-audio-track simply doesn't exist for them.
+    // Audio seq-headers, same per-track shape as video, but gated on
+    // the AUDIO passthrough flag - which is true for every Twitch
+    // destination regardless of EB session, because Twitch's regular
+    // ingest accepts multi-track audio (VOD audio track 1) without an
+    // EB allocation. v0.1.0..0.1.2 reused the video flag here, which
+    // meant a non-EB Twitch destination only got TrackId 0's
+    // AudioSpecificConfig replayed on egress restart - leaving the
+    // VOD track's decoder unconfigured and the live track wrapped in
+    // multi-track framing the regular ingest didn't decode. Non-Twitch
+    // destinations still only get the primary track's config (the
+    // simulcast-second-audio-track simply doesn't exist for them).
+    let a_passthrough = dest.pass_through_multitrack_audio.load(Ordering::Relaxed);
     let a_headers: Vec<(u8, Vec<u8>)> = ctrl
         .ring
         .audio_seq_headers
@@ -1788,7 +1809,7 @@ async fn send_sequence_headers(
         .iter()
         .map(|(k, v)| (*k, v.clone()))
         .collect();
-    if passthrough {
+    if a_passthrough {
         for (track_id, h) in &a_headers {
             crate::trace::log(
                 "AUDIO_SEQ_HDR_SENT",
@@ -1955,12 +1976,26 @@ mod tests {
     /// the armed threshold so we can exercise phase transitions.
     fn feed_seconds(ctrl: &Controller, start_ms: u32, secs: u32, fps: u32) {
         let frame_ms = 1000 / fps;
+        // Leading byte 0x17 (legacy AVC keyframe) lets the IDR survive
+        // v0.1.3's primary-track gate in `Ring::append`; 0x27 marks the
+        // inter-frames so they get classified the same way the real
+        // wire pattern does. Bytes after the header are filler.
+        let idr_payload: [u8; 50] = {
+            let mut b = [0u8; 50];
+            b[0] = 0x17;
+            b
+        };
+        let p_payload: [u8; 50] = {
+            let mut b = [0u8; 50];
+            b[0] = 0x27;
+            b
+        };
         for s in 0..secs {
             for f in 0..fps {
                 let ts = start_ms + s * 1000 + f * frame_ms;
                 let is_idr = f == 0;
-                // kind 9 = video, ~50 B payload (size doesn't matter for state machine)
-                ctrl.on_tag(9, ts, &[0u8; 50], is_idr, false);
+                let payload = if is_idr { &idr_payload } else { &p_payload };
+                ctrl.on_tag(9, ts, payload, is_idr, false);
             }
         }
     }
@@ -2273,10 +2308,14 @@ mod tests {
         // 2. Populate the audio sequence header cache simulating an active
         //    Twitch VOD-audio session (Tracks 0 and 1).
         for track_id in 0u8..=1 {
-            // OneTrack multi-track audio seq-header: SoundFormat=9,
-            // PacketType=Multitrack(5), MultiTrackType=0, NestedPT=0,
-            // FourCC=mp4a, TrackId at byte 7.
-            let mut tag = vec![0x90, 0x05, 0x00, 0x6d, 0x70, 0x34, 0x61, track_id];
+            // OneTrack multi-track audio seq-header per OBS's
+            // flv_packet_audio_ex wire format:
+            //   byte 0: 0x95 (SoundFormat=9 | PacketType=Multitrack)
+            //   byte 1: MultiTrackType=0 | NestedPacketType=0 (Seq)
+            //   bytes 2..6: FourCC = "mp4a"
+            //   byte 6:    TrackId
+            //   bytes 7..: AudioSpecificConfig
+            let mut tag = vec![0x95, 0x00, 0x6d, 0x70, 0x34, 0x61, track_id];
             tag.extend_from_slice(&[0x12, 0x10, track_id, 0x00]);
             h.ctrl
                 .ring
