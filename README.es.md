@@ -49,7 +49,7 @@ Cuando ya lo tenía hecho, las piezas que de verdad quería eran: una activació
 <tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td></tr>
 <tr><td><b>Deps en runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>132 / 132</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>154 / 154</code></td></tr>
 </table>
 
 </td>
@@ -278,7 +278,7 @@ cargo build --release
 
 Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y comprime con gzip en tiempo de compilación desde `build.rs` (usa `flate2`, solo build-dep) y se embebe en el binario; en runtime se sirve con `Content-Encoding: gzip`.
 
-`cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR en AVC + Enhanced RTMP, codec AMF0 incluyendo Strict Array (la `fourCcList` de Enhanced-RTMP) + guardia de recursión, round-trip de settings, evicción del ring-buffer con protección de lecturas en vuelo, parsing HTTP, política CSRF, pre-flight de puertos, la negociación de contenido `accepts_gzip`, la caché de cabeceras de secuencia por-pista de Enhanced Broadcasting + selección de tags consciente del TrackId, y el parcheado de `services.json` de OBS. 113 tests, todos en verde.
+`cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR en AVC + Enhanced RTMP, codec AMF0 incluyendo Strict Array (la `fourCcList` de Enhanced-RTMP) + guardia de recursión, round-trip de settings, evicción del ring-buffer con protección de lecturas en vuelo, parsing HTTP, política CSRF, pre-flight de puertos, la negociación de contenido `accepts_gzip`, la caché de cabeceras de secuencia por-pista de Enhanced Broadcasting + selección de tags consciente del TrackId, el audio multi-pista de Enhanced-RTMP (pista de VOD de Twitch), el filtro de IDR de pista primaria para que los cortes con EB no glitcheen las escaleras, la resolución de `user.ini` / `global.ini` en OBS 32, el parcheado de `services.json` de OBS, y el parser de releases de GitHub + comparador SemVer-ish para el chequeo de actualizaciones. 154 tests, todos en verde.
 
 <br/>
 
@@ -286,14 +286,15 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 113 tests en cada push, y un tag dispara la build + publicación automática de la release.
+**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 154 tests en cada push, y un tag dispara la build + publicación automática de la release con su `SHA256SUMS.txt` al lado (todavía no hay certificado de firma de código, así que el sistema operativo puede avisar en el primer lanzamiento).
 
 **Lo que está sólido**
 
 - La máquina de estados `arm → activate → cut` en dos fases, con cortes alineados a IDR y reescritura monótona de timestamps. La pieza por la que empecé este proyecto.
 - **Ajuste de delay en vivo**: re-armar o cambiar el delay arriba/abajo sin desarmar primero. El backend ya lo soportaba; el panel ahora lo expone como un valor escrito + CTA "↻ Adjust ↑/↓ to Ns".
 - **Handshake RTMP a la altura de OBS.** `connect` lleva el mismo paquete de capacidades de códec que envía librtmp (`audioCodecs=3191`, `videoCodecs=252`, `videoFunction=1`), la `fourCcList` de Enhanced-RTMP (AVC / HEVC / AV1 / VP9 / Opus / AC-3 / FLAC), `Set Chunk Size` antes del connect, `FCUnpublish → deleteStream` al cerrar, y Acknowledgement RTMP (BYTES_READ_REPORT) cruzando el umbral window/10 declarado por el peer en ingest y egress.
-- **Passthrough de Enhanced Broadcasting a Twitch.** Cuando OBS activa multi-track "Auto" proxyamos la `GetClientConfiguration` de Twitch, enrutamos el egress al endpoint IVS asignado para la sesión, y reenviamos cada SPS/PPS por pista bit a bit para que la escalera transcodificada se ilumine sin depender del tier de la cuenta. Los destinos no-Twitch sólo reciben la pista primaria - los tags de escalera multi-track con `TrackId != 0` se descartan para evitar la avalancha de múltiples frames por PTS que rompía el decoder de YouTube.
+- **Passthrough de Enhanced Broadcasting a Twitch.** Cuando OBS activa multi-track "Auto" proxyamos la `GetClientConfiguration` de Twitch, enrutamos el egress al endpoint IVS asignado para la sesión, y reenviamos cada SPS/PPS por pista bit a bit para que la escalera transcodificada se ilumine sin depender del tier de la cuenta. Los destinos no-Twitch sólo reciben la pista primaria - los tags de escalera multi-track con `TrackId != 0` se descartan para evitar la avalancha de múltiples frames por PTS que rompía el decoder de YouTube. Los cortes con EB aterrizan en el IDR de la pista primaria (no en el de la escalera que toque ganar el partition_point), así el decoder del destino siempre tiene su ancla.
+- **Pista VOD de Twitch (audio multi-pista).** Toggle por destino. Escribimos `EnableCustomServerVodTrack` en el `user.ini` de OBS 32 (con fallback a `global.ini` en instalaciones antiguas) para desbloquear el checkbox de OBS, y luego reenviamos tanto los tags single-track de Enhanced-RTMP (live, TrackId 0) como los OneTrack multi-track (VOD, TrackId 1) bit a bit a Twitch. El lector de formato de cable coincide byte a byte con el `flv_packet_audio_ex` de OBS (`AudioPacketType` en el byte 0, `TrackId` en el byte 6). Live + VOD funcionan junto con los cortes de delay; para combinarlo con EB usa el botón experimental "Launch OBS for EB + VOD" en el editor de destino (spawnea `obs64.exe --config-url <nuestro endpoint>` porque el plugin `rtmp_custom` de OBS descarta cualquier URL inyectada en el `service.json` al cargar).
 - **Registro de servicio en OBS con un click.** El primer paso del wizard añade una entrada "InstantClone" al desplegable de servicios de OBS (escribe `services.json` con `.bak` previo; se refresca si cambia el puerto; surfacea "cierra OBS primero" cuando el fichero está bloqueado).
 - Egress multi-destino con reconexión + bitrate por destino.
 - **UI consciente de la capacidad del buffer**: pista en vivo "X MB → máx Ys de delay a N Mbps", se niega a armar un delay mayor de lo que cabe con una razón explícita "necesita ≥ N MB".
