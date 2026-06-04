@@ -51,6 +51,25 @@ pub struct Settings {
     /// diagnostic data; toggleable in the System tab so users past the
     /// debugging phase can stop the file from growing.
     pub tracing_enabled: bool,
+    /// Behaviour: when OBS's RTMP publisher handshake completes, auto-arm
+    /// the delay at `auto_arm_delay_ms`. Off by default - the
+    /// deliberate-arm-then-activate flow stays the explicit one. Turning
+    /// this on suits streamers who *always* want delay (tournament
+    /// players, IRL streamers behind a delay-for-safety) and don't want
+    /// to remember to arm every session.
+    pub auto_arm_on_connect: bool,
+    /// Behaviour: when the buffer hits the armed amount and phase
+    /// transitions to "ready", auto-fire the activate. Independent of
+    /// `auto_arm_on_connect`; with this on, every manual arm becomes
+    /// a one-step "go live with delay" (you give up the deliberate
+    /// click-when-i'm-ready moment, you get zero-touch delayed streaming).
+    pub auto_activate_when_ready: bool,
+    /// Behaviour: target delay for `auto_arm_on_connect`. Also serves
+    /// as the pre-filled default in the manual delay input. Tracks the
+    /// last value the user manually armed at (saved every time the
+    /// streamer hits Arm with a non-zero value) so "last used" sticks
+    /// across sessions without a separate UI knob to maintain it.
+    pub auto_arm_delay_ms: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +242,16 @@ impl Settings {
             // `tracing_enabled=true` from earlier betas are honoured
             // - only fresh installs default to off.
             tracing_enabled: false,
+            // Behaviour toggles default off so the two-phase
+            // arm/activate ceremony stays the canonical flow. Streamers
+            // who always want delay opt in once via System -> Behavior.
+            auto_arm_on_connect: false,
+            auto_activate_when_ready: false,
+            // 15 s is the same default the wizard suggests and matches
+            // the "Quick" delay profile, so a streamer who flips
+            // auto_arm_on_connect without otherwise customising lands
+            // on a familiar number.
+            auto_arm_delay_ms: 15_000,
         }
     }
 
@@ -298,6 +327,14 @@ impl Settings {
         self.armed_delay_ms = self.armed_delay_ms.min(600_000);
         self.target_delay_ms = self.target_delay_ms.min(600_000);
         self.initial_delay_ms = self.initial_delay_ms.min(600_000);
+        // auto_arm_delay_ms is the value used when auto-arm fires. Clamp
+        // to the same 10-minute ceiling; a 0 from a fresh install or a
+        // hand-edited config falls back to the 15 s default so we never
+        // auto-arm at "0 s of delay" (which would be a no-op + confusing).
+        self.auto_arm_delay_ms = self.auto_arm_delay_ms.min(600_000);
+        if self.auto_arm_delay_ms == 0 {
+            self.auto_arm_delay_ms = 15_000;
+        }
     }
 
     pub fn load_or_default(path: &Path) -> Self {
@@ -397,6 +434,20 @@ impl Settings {
         writeln!(f, "discord_webhook_url={}", self.discord_webhook_url)?;
         writeln!(f, "overlays_dir={}", self.overlays_dir.display())?;
         writeln!(f, "tracing_enabled={}", self.tracing_enabled)?;
+        // Behaviour. Only emit when non-default so a downgrade to a
+        // pre-v0.2 build that doesn't know these keys keeps parsing
+        // (apply_field's `_ => {}` arm drops keys it doesn't recognise,
+        // so this is belt-and-braces; but keeping config files lean on
+        // disk is worth a couple of conditional writes).
+        if self.auto_arm_on_connect {
+            writeln!(f, "auto_arm_on_connect=true")?;
+        }
+        if self.auto_activate_when_ready {
+            writeln!(f, "auto_activate_when_ready=true")?;
+        }
+        if self.auto_arm_delay_ms != 15_000 {
+            writeln!(f, "auto_arm_delay_ms={}", self.auto_arm_delay_ms)?;
+        }
         for (i, p) in self.profiles.iter().enumerate() {
             writeln!(f, "profile.{}.name={}", i, p.name)?;
             writeln!(f, "profile.{}.delay_ms={}", i, p.delay_ms)?;
@@ -471,6 +522,13 @@ impl Settings {
             "discord_webhook_url" => self.discord_webhook_url = value.into(),
             "overlays_dir" => self.overlays_dir = PathBuf::from(value),
             "tracing_enabled" => self.tracing_enabled = value.parse().unwrap_or(false),
+            "auto_arm_on_connect" => self.auto_arm_on_connect = value == "true",
+            "auto_activate_when_ready" => self.auto_activate_when_ready = value == "true",
+            "auto_arm_delay_ms" => {
+                if let Ok(v) = value.parse() {
+                    self.auto_arm_delay_ms = v;
+                }
+            }
             k if k.starts_with("profile.") => {
                 let rest = &k[8..];
                 if let Some(dot) = rest.find('.') {
@@ -642,7 +700,7 @@ impl Settings {
         }
         dests.push(']');
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"initial_delay_ms":{id},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"initial_delay_ms":{id},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"destinations":{dests}}}"#,
             c = self.configured,
             ip = self.ingest_port,
             iba = self.ingest_bind_all,
@@ -657,6 +715,9 @@ impl Settings {
             ws = !self.discord_webhook_url.is_empty(),
             ov = json_str(&self.overlays_dir.display().to_string()),
             te = self.tracing_enabled,
+            aaoc = self.auto_arm_on_connect,
+            aawr = self.auto_activate_when_ready,
+            aadm = self.auto_arm_delay_ms,
             dests = dests,
         )
     }
@@ -1202,6 +1263,130 @@ mod tests {
         assert_eq!(loaded.profiles.len(), 2);
         assert_eq!(loaded.profiles[0].delay_ms, 10_000);
         assert_eq!(loaded.profiles[1].name, "Long");
+    }
+
+    #[test]
+    fn behavior_toggles_round_trip_through_save_and_load() {
+        // v0.1.4 added three Settings fields for the auto-arm /
+        // auto-activate behaviour. Save them, load them back, assert
+        // every field survives. The format::Display writer is
+        // conditional (only emits non-default values) so this also
+        // verifies the apply_field reader sees those conditional keys.
+        let path = std::env::temp_dir().join(format!(
+            "ic-test-behavior-roundtrip-{}-{}.ini",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let mut s = Settings::defaults();
+        s.auto_arm_on_connect = true;
+        s.auto_activate_when_ready = true;
+        s.auto_arm_delay_ms = 30_000;
+        // Need a destination so save() doesn't bail on the
+        // configured-but-empty path.
+        s.destinations.push(Destination {
+            id: "test".into(),
+            name: "Test".into(),
+            enabled: true,
+            platform: "twitch".into(),
+            stream_key: "test".into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+        });
+        s.save(&path).expect("save");
+
+        let loaded = Settings::load(&path).expect("load");
+        assert!(
+            loaded.auto_arm_on_connect,
+            "auto_arm_on_connect must survive round-trip"
+        );
+        assert!(
+            loaded.auto_activate_when_ready,
+            "auto_activate_when_ready must survive round-trip"
+        );
+        assert_eq!(
+            loaded.auto_arm_delay_ms, 30_000,
+            "auto_arm_delay_ms must survive round-trip"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn behavior_defaults_omitted_from_save_to_keep_config_lean() {
+        // The save writer skips default values for the behaviour keys
+        // so a fresh install's config file stays clean. Verify by
+        // saving a defaults() snapshot and grepping the file.
+        let path = std::env::temp_dir().join(format!(
+            "ic-test-behavior-defaults-{}-{}.ini",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let mut s = Settings::defaults();
+        s.destinations.push(Destination {
+            id: "test".into(),
+            name: "Test".into(),
+            enabled: true,
+            platform: "twitch".into(),
+            stream_key: "test".into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+        });
+        s.save(&path).expect("save");
+
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            !text.contains("auto_arm_on_connect"),
+            "default off must not be written"
+        );
+        assert!(
+            !text.contains("auto_activate_when_ready"),
+            "default off must not be written"
+        );
+        assert!(
+            !text.contains("auto_arm_delay_ms"),
+            "default 15000 must not be written"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn behavior_sanitize_clamps_and_fills_zero() {
+        // sanitize_load() runs after load(); it should clamp the
+        // delay to 600s and replace a zero (e.g. from a hand-edited
+        // legacy config or downgrade roundtrip) with the 15 s default
+        // so auto-arm never tries to arm at 0 s (= disarm, confusing).
+        let mut s = Settings::defaults();
+
+        s.auto_arm_delay_ms = 0;
+        s.sanitize_load();
+        assert_eq!(
+            s.auto_arm_delay_ms, 15_000,
+            "zero must fall back to 15 s default"
+        );
+
+        s.auto_arm_delay_ms = 9_999_999;
+        s.sanitize_load();
+        assert_eq!(
+            s.auto_arm_delay_ms, 600_000,
+            "above ceiling must clamp to 10 min"
+        );
     }
 
     #[test]

@@ -1267,6 +1267,9 @@ async fn post_config(
                 | "initial_delay_ms"
                 | "overlays_dir"
                 | "tracing_enabled"
+                | "auto_arm_on_connect"
+                | "auto_activate_when_ready"
+                | "auto_arm_delay_ms"
         ) {
             apply_field_str(&mut new_settings, k, v);
         }
@@ -1548,9 +1551,21 @@ fn persist_delay_state(
     let mut ns = settings.borrow().clone();
     let armed = ctrl.armed_delay_ms();
     let target = ctrl.target_delay_ms();
-    if ns.armed_delay_ms != armed || ns.target_delay_ms != target {
+    // Track "last manually armed delay" in auto_arm_delay_ms so the
+    // System -> Behavior auto-arm picks up wherever the streamer last
+    // explicitly armed. Only updates on non-zero arm so a Disarm
+    // (arm_delay(0)) doesn't wipe the preference.
+    let new_auto_arm = if armed > 0 { Some(armed) } else { None };
+    let auto_arm_changed = match new_auto_arm {
+        Some(v) => ns.auto_arm_delay_ms != v,
+        None => false,
+    };
+    if ns.armed_delay_ms != armed || ns.target_delay_ms != target || auto_arm_changed {
         ns.armed_delay_ms = armed;
         ns.target_delay_ms = target;
+        if let Some(v) = new_auto_arm {
+            ns.auto_arm_delay_ms = v;
+        }
         let _ = ns.save(cfg_path);
         let _ = settings.send(ns);
     }
@@ -2152,6 +2167,17 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
             let on = !matches!(value, "" | "false" | "0" | "off");
             s.tracing_enabled = on;
         }
+        "auto_arm_on_connect" => {
+            s.auto_arm_on_connect = !matches!(value, "" | "false" | "0" | "off");
+        }
+        "auto_activate_when_ready" => {
+            s.auto_activate_when_ready = !matches!(value, "" | "false" | "0" | "off");
+        }
+        "auto_arm_delay_ms" => {
+            if let Ok(v) = value.parse() {
+                s.auto_arm_delay_ms = v;
+            }
+        }
         _ => {}
     }
 }
@@ -2737,6 +2763,49 @@ mod tests {
         assert!(s.tracing_enabled);
         apply_field_str(&mut s, "tracing_enabled", "false");
         assert!(!s.tracing_enabled);
+    }
+
+    // ── Behavior toggles: dispatch path tests ─────────────────────
+    //
+    // Same regression class as the tracing_enabled test above. The
+    // post_config form-key whitelist plus apply_field_str's match arm
+    // both have to know each new behaviour key, or settings silently
+    // round-trip to the default. These tests pin both sides for the
+    // v0.1.4 auto-arm fields.
+
+    #[test]
+    fn apply_field_str_persists_auto_arm_on_connect() {
+        let mut s = crate::config::Settings::defaults();
+        assert!(!s.auto_arm_on_connect);
+        apply_field_str(&mut s, "auto_arm_on_connect", "true");
+        assert!(s.auto_arm_on_connect);
+        apply_field_str(&mut s, "auto_arm_on_connect", "false");
+        assert!(!s.auto_arm_on_connect);
+        apply_field_str(&mut s, "auto_arm_on_connect", "on");
+        assert!(s.auto_arm_on_connect, "checkbox 'on' must read as truthy");
+    }
+
+    #[test]
+    fn apply_field_str_persists_auto_activate_when_ready() {
+        let mut s = crate::config::Settings::defaults();
+        assert!(!s.auto_activate_when_ready);
+        apply_field_str(&mut s, "auto_activate_when_ready", "true");
+        assert!(s.auto_activate_when_ready);
+        apply_field_str(&mut s, "auto_activate_when_ready", "off");
+        assert!(!s.auto_activate_when_ready);
+    }
+
+    #[test]
+    fn apply_field_str_parses_auto_arm_delay_ms() {
+        let mut s = crate::config::Settings::defaults();
+        // defaults() seeds at 15 s; replace via the form-key path.
+        assert_eq!(s.auto_arm_delay_ms, 15_000);
+        apply_field_str(&mut s, "auto_arm_delay_ms", "30000");
+        assert_eq!(s.auto_arm_delay_ms, 30_000);
+        // Garbage values are ignored (parse failure leaves the field
+        // alone) so a hand-edited form doesn't reset to zero.
+        apply_field_str(&mut s, "auto_arm_delay_ms", "not-a-number");
+        assert_eq!(s.auto_arm_delay_ms, 30_000);
     }
 
     // ── OBS multitrack-config proxy helpers ──────────────────────

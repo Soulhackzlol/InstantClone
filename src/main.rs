@@ -306,6 +306,16 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
     let initial_webhook = { rx.borrow().discord_webhook_url.clone() };
     ctrl.update_webhook(initial_webhook);
 
+    // Behaviour-toggle state machine. Both auto-arm and auto-activate
+    // fire on edge transitions (false -> true ingest_alive, "*" -> "ready"
+    // phase) so a snapshot-every-2-seconds supervisor doesn't re-arm
+    // every tick. Initialised pessimistically (assume the worst-case
+    // prior state) so the first iteration's transition detection is
+    // accurate even on a fresh process start where ingest is already
+    // live from a tight relaunch.
+    let mut prev_ingest_alive = ctrl.ingest_alive();
+    let mut prev_phase: &'static str = ctrl.phase();
+
     loop {
         // Snapshot the current desired destinations.
         let desired: Vec<(config::Destination, String)> = { rx.borrow().active_destinations() };
@@ -482,6 +492,65 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // users had to toggle a destination off+on to get the supervisor
         // to look at the world again.) Settings changes still preempt
         // the wait via `rx.changed()` for instant response.
+        // ── Behaviour: auto-arm on connect ─────────────────────────
+        //
+        // Edge-detect ingest_alive going false -> true. That's the
+        // moment OBS's publisher handshake just completed (begin_publish
+        // sets ingest_alive to true at the end). If the user has
+        // auto-arm enabled AND we're not already armed (so the
+        // streamer's manual disarm earlier in the same session sticks),
+        // fire arm_delay with the persisted last-used delay.
+        {
+            let s = rx.borrow();
+            let armed_now = ctrl.armed_delay_ms();
+            if !prev_ingest_alive
+                && ingest_alive
+                && s.auto_arm_on_connect
+                && armed_now == 0
+                && s.auto_arm_delay_ms > 0
+            {
+                ctrl.arm_delay(s.auto_arm_delay_ms);
+                ctrl.log(format!(
+                    "auto-arm: OBS connected -> armed {} s of delay",
+                    s.auto_arm_delay_ms / 1000
+                ));
+            }
+        }
+
+        // ── Behaviour: auto-activate when ready ────────────────────
+        //
+        // Edge-detect phase entering "ready" (buffer just filled past
+        // the armed amount). If the user has auto-activate enabled AND
+        // we haven't already activated (target_delay_ms == 0 means we
+        // haven't transitioned to active yet), fire activate_delay.
+        // The activate_delay() call has its own buffer-sufficiency
+        // guard, so a race where the phase string says "ready" but the
+        // buffer drained slightly below the threshold in the meantime
+        // is handled safely (returns an Err we ignore).
+        {
+            let phase_now = ctrl.phase();
+            let s = rx.borrow();
+            if phase_now == "ready"
+                && prev_phase != "ready"
+                && s.auto_activate_when_ready
+                && ctrl.target_delay_ms() == 0
+            {
+                match ctrl.activate_delay() {
+                    Ok(ms) => ctrl.log(format!(
+                        "auto-activate: buffer ready -> live with {} s delay",
+                        ms / 1000
+                    )),
+                    Err(_) => {
+                        // Phase said "ready" but activate_delay's
+                        // stricter buffer check disagreed. Quietly skip;
+                        // next 2 s tick re-evaluates.
+                    }
+                }
+            }
+            prev_phase = phase_now;
+        }
+        prev_ingest_alive = ingest_alive;
+
         let periodic_wake = tokio::time::sleep(Duration::from_secs(2));
         tokio::select! {
             ch = rx.changed() => {
