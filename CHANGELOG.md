@@ -8,6 +8,49 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.4] - Auto-arm + auto-activate behavior toggles
+
+Two independent System settings, both default off, for streamers who
+don't want to remember the manual arm/activate ceremony every
+session. The deliberate two-phase flow stays canonical for everyone
+else.
+
+**Auto-arm on OBS connect.** When the publisher handshake completes,
+the supervisor detects the false-to-true edge on `ingest_alive` and
+fires `arm_delay(auto_arm_delay_ms)`. Skipped if the streamer
+manually disarmed earlier in the same session (since `armed_delay_ms`
+stays at 0 until the next publisher reconnect). Designed for
+tournament players + IRL streamers who always want a safety buffer.
+
+**Auto-activate when buffer ready.** Independent toggle. The
+supervisor detects the phase transition into `ready` and fires
+`activate_delay()`. With both toggles on, every OBS-connect becomes
+a zero-touch path to live-with-delay. With only auto-activate on,
+every manual arm becomes one-step. Loses the "click when I'm ready"
+deliberate moment but matches casual-stream UX.
+
+**Default delay.** New `auto_arm_delay_ms` field tracks the last
+value the streamer manually armed at, so "default" matches habit
+without a separate UI to maintain it. `persist_delay_state` writes
+this on every non-zero arm; Disarm (`arm_delay(0)`) preserves the
+preference. Default 15s on fresh install. `sanitize_load` clamps to
+the same 10-min ceiling as the other delay fields and replaces 0
+with 15s so a hand-edited config never auto-arms at "0 seconds of
+delay" (which would be a no-op + confusing).
+
+**System tab UI.** New "Behavior" section sits at the top of the
+existing System tab grid: two checkboxes + one number input,
+descriptions below each. Step 1 of the planned multi-step System
+tab redesign; the rest follows in v0.1.6.
+
+**Tests added: 154 -> 160.** Six new regressions in `config::tests`
+and `web::tests` covering the `apply_field_str` dispatch path
+(post_config's whitelist + the match arm), the save/load round-trip
+(conditional emit + parse path), the config-lean default-omission,
+and the sanitize-load clamp + zero-fallback. Modeled after the
+existing `tracing_enabled` regression which caught the same class of
+bug between beta builds.
+
 ## [0.1.3] - VOD audio flag actually works (issue #9)
 
 **VOD audio toggle did nothing on OBS 32.** Reported as issue #9

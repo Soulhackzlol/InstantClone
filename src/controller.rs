@@ -236,6 +236,22 @@ pub struct Controller {
     // consumer cursors; deferred until requested.
     armed_delay_ms: AtomicU32,
     target_delay_ms: AtomicU32,
+    /// "There is an outstanding arm action that hasn't been activated
+    /// yet, and the user hasn't cut since arming." Set true by
+    /// `arm_delay` when arming from a non-active state (target was 0).
+    /// Cleared by `activate_delay` on success, by `stop_delay` (cut),
+    /// and by `begin_publish` (fresh publisher session).
+    ///
+    /// Used by `supervise_egress` to gate the auto-activate-when-ready
+    /// behaviour: fires once per arm action, not once per publisher
+    /// session. So after Cut, this stays false until the next arm
+    /// action - the cut sticks. Re-arming sets it true again, so a
+    /// fresh arm (manual, profile activation, or auto-pre-arm on
+    /// reconnect) gets its own auto-activate. Live-update arms (arming
+    /// a new value while target > 0) do NOT set this, because the
+    /// streamer is already in the active state and a subsequent cut
+    /// shouldn't snap back to "active" via auto-activate.
+    auto_activate_pending: AtomicBool,
     ingest_alive: AtomicBool,
     buffer_building: AtomicBool,
     publisher_token: AtomicU64,
@@ -319,6 +335,7 @@ impl Controller {
             ring,
             armed_delay_ms: AtomicU32::new(initial_armed_delay_ms),
             target_delay_ms: AtomicU32::new(0),
+            auto_activate_pending: AtomicBool::new(false),
             ingest_alive: AtomicBool::new(false),
             buffer_building: AtomicBool::new(false),
             publisher_token: AtomicU64::new(0),
@@ -549,13 +566,26 @@ impl Controller {
     /// rewind once enough buffer has accumulated.
     pub fn arm_delay(&self, ms: u32) {
         let ms = ms.min(600_000);
+        let previous_target = self.target_delay_ms.load(Ordering::Relaxed);
         self.armed_delay_ms.store(ms, Ordering::Relaxed);
         if ms == 0 {
             // Disarm wipes target as well.
             self.target_delay_ms.store(0, Ordering::Relaxed);
-        } else if self.target_delay_ms.load(Ordering::Relaxed) > 0 {
-            // Already active → live-update what we're delivering.
+            // Disarm clears any pending auto-activate too - there's
+            // nothing to auto-activate into anymore.
+            self.auto_activate_pending.store(false, Ordering::Relaxed);
+        } else if previous_target > 0 {
+            // Already active → live-update what we're delivering. This
+            // is NOT a fresh arm action; the streamer is mid-stream and
+            // adjusting the delay value. Leave auto_activate_pending
+            // alone so a subsequent cut doesn't snap back to active via
+            // auto-activate-when-ready.
             self.target_delay_ms.store(ms, Ordering::Relaxed);
+        } else {
+            // Fresh arm: target was 0 (we were disarmed, in cut-hold,
+            // or in passthrough). Mark the auto-activate slot eligible
+            // - one shot when the buffer hits ready.
+            self.auto_activate_pending.store(true, Ordering::Relaxed);
         }
     }
 
@@ -576,6 +606,13 @@ impl Controller {
             return Err(ActivateError::BufferShort { remaining_ms });
         }
         self.target_delay_ms.store(armed, Ordering::Relaxed);
+        // Successful activate consumes the pending slot. Both manual
+        // and auto-activate share this path; either way, the slot is
+        // used up and won't re-fire until the next arm event refills
+        // it. Matters for auto-activate: after Cut, target drops to 0
+        // and phase reverts to "ready", which would otherwise look
+        // like a fresh "*->ready" transition to the supervisor.
+        self.auto_activate_pending.store(false, Ordering::Relaxed);
         Ok(armed)
     }
 
@@ -584,6 +621,18 @@ impl Controller {
     /// behavior the streamer described.
     pub fn stop_delay(&self) {
         self.target_delay_ms.store(0, Ordering::Relaxed);
+        // Cut consumes the pending slot. The streamer made a
+        // deliberate "go live without delay" decision; auto-activate
+        // mustn't override it. The slot stays consumed until the next
+        // arm event (re-arm at a non-zero value with target = 0)
+        // refills it.
+        self.auto_activate_pending.store(false, Ordering::Relaxed);
+    }
+
+    /// Snapshot read of the auto-activate-pending slot. Used by the
+    /// supervisor to gate the auto-activate-when-ready behaviour.
+    pub fn auto_activate_pending(&self) -> bool {
+        self.auto_activate_pending.load(Ordering::Relaxed)
     }
 
     pub fn armed_delay_ms(&self) -> u32 {
@@ -788,6 +837,11 @@ impl Controller {
         // trim_older_than cannot recover from this either: its cutoff
         // also saturates to 0 against the new session's low current_ts.
         self.ring.clear();
+
+        // Defensive: clear any stale auto-activate slot. A fresh
+        // publisher session is a clean slate; the prior session's
+        // arm-or-not state shouldn't leak into the new one.
+        self.auto_activate_pending.store(false, Ordering::Relaxed);
 
         // Bump token so any prior egress reader knows it's stale.
         let token = self.publisher_token.fetch_add(1, Ordering::SeqCst) + 1;
@@ -2087,6 +2141,113 @@ mod tests {
         assert_eq!(h.ctrl.armed_delay_ms(), 2_000, "armed must survive stop");
         // With buffer still full, phase is `ready` again - not `idle`.
         assert_eq!(h.ctrl.phase(), "ready");
+    }
+
+    // ── auto-activate-pending state machine ────────────────────────
+    //
+    // The v0.1.4 "Cut delay didn't stick" bug: auto-activate-when-ready
+    // fired again immediately after the user hit Cut, because phase
+    // reverted from "active" back to "ready" (buffer still full,
+    // armed_delay_ms still set) and the edge detector treated that as
+    // a fresh "*->ready" transition. Fix: Controller tracks an
+    // auto_activate_pending slot - set on arm-from-non-active, cleared
+    // on activate-success, cut, and begin_publish. Supervisor now
+    // reads that slot instead of trying to infer state from phase
+    // transitions. These tests pin the four edges of that machine.
+
+    #[test]
+    fn arm_from_disarmed_sets_auto_activate_pending() {
+        let h = harness(0);
+        assert!(
+            !h.ctrl.auto_activate_pending(),
+            "fresh controller must start clean"
+        );
+        h.ctrl.arm_delay(5_000);
+        assert!(
+            h.ctrl.auto_activate_pending(),
+            "arm from target=0 must arm the pending slot"
+        );
+    }
+
+    #[test]
+    fn activate_consumes_auto_activate_pending() {
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        feed_seconds(&h.ctrl, 0, 3, 30);
+        assert!(h.ctrl.auto_activate_pending());
+        h.ctrl.activate_delay().expect("buffer is full");
+        assert!(
+            !h.ctrl.auto_activate_pending(),
+            "successful activate must consume the pending slot"
+        );
+    }
+
+    #[test]
+    fn cut_consumes_auto_activate_pending_so_it_sticks() {
+        // The bug-of-record: without this clear, the supervisor sees
+        // phase revert to "ready" after cut and re-fires activate_delay.
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        feed_seconds(&h.ctrl, 0, 3, 30);
+        h.ctrl.activate_delay().unwrap();
+        // Slot was already cleared by activate. Re-arm to set it again,
+        // then exercise the cut path explicitly. (arm_delay live-update
+        // path - target > 0, so this DOESN'T set pending; we have to
+        // simulate the post-cut state.)
+        h.ctrl.stop_delay(); // cut: target -> 0, pending -> false
+        assert!(
+            !h.ctrl.auto_activate_pending(),
+            "cut must keep pending false so the supervisor doesn't re-activate"
+        );
+        // Now re-arm (target=0 so this IS a fresh arm event) and verify
+        // the slot refills - so the NEXT arm cycle auto-activates as
+        // expected. This is the "auto-activate works after re-arming"
+        // half of the user-requested semantics.
+        h.ctrl.arm_delay(3_000);
+        assert!(
+            h.ctrl.auto_activate_pending(),
+            "re-arm from cut-hold state must refill the pending slot"
+        );
+    }
+
+    #[test]
+    fn live_update_arm_does_not_set_auto_activate_pending() {
+        // When the streamer is already active and adjusts the armed
+        // value (slider drag, profile click during live), that's a
+        // live-update, not a fresh arm. The pending slot must stay
+        // false so a subsequent cut doesn't snap back to active via
+        // auto-activate-when-ready.
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        feed_seconds(&h.ctrl, 0, 3, 30);
+        h.ctrl.activate_delay().unwrap();
+        assert!(!h.ctrl.auto_activate_pending(), "consumed by activate");
+
+        // Live-update arm: target > 0, so this should NOT set pending.
+        h.ctrl.arm_delay(2_500);
+        assert!(
+            !h.ctrl.auto_activate_pending(),
+            "live-update arm during active must not arm the pending slot"
+        );
+
+        // Cut now → pending stays false → no auto-re-activate.
+        h.ctrl.stop_delay();
+        assert!(
+            !h.ctrl.auto_activate_pending(),
+            "cut after live-update arm must NOT magically refill pending"
+        );
+    }
+
+    #[test]
+    fn disarm_clears_auto_activate_pending() {
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        assert!(h.ctrl.auto_activate_pending());
+        h.ctrl.arm_delay(0); // disarm
+        assert!(
+            !h.ctrl.auto_activate_pending(),
+            "disarm clears pending - there's nothing to auto-activate into"
+        );
     }
 
     #[test]

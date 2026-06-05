@@ -1262,6 +1262,40 @@ input,select,textarea{font-family:inherit;color:inherit}
   <div class="restart-banner hidden" id="restart-banner">⚠ Buffer size or path changed. Restart the app for it to take effect.</div>
   <div class="sys-grid">
     <section class="sys-section">
+      <div class="ic-label">Behavior</div>
+      <div class="tab-sub">How InstantClone reacts when OBS starts streaming and when the buffer fills.</div>
+      <div style="margin-top:14px;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:flex-start;gap:14px">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
+            <input type="checkbox" id="s-auto-arm" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
+            <div>
+              <div style="font-weight:600">Pre-arm delay on stream start</div>
+              <div class="tab-sub" style="margin-top:2px">Start filling the delay buffer the moment OBS starts streaming. Useful if you always stream with delay.</div>
+            </div>
+          </label>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:14px">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
+            <input type="checkbox" id="s-auto-act" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
+            <div>
+              <div style="font-weight:600">Auto-activate when buffer ready</div>
+              <div class="tab-sub" style="margin-top:2px">Skip the manual "Activate" step. Fires every time you arm (manual, profile, or pre-arm). Cut still sticks - the next arm re-enables it.</div>
+            </div>
+          </label>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px">
+          <div style="flex:1">
+            <div style="font-weight:600">Default delay</div>
+            <div class="tab-sub" style="margin-top:2px">Used by pre-arm. Also tracks the last value you manually armed at.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <input id="s-auto-arm-secs" class="ic-input mono" type="number" min="1" max="600" style="width:80px;text-align:right">
+            <span class="muted" style="font-size:12px">s</span>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="sys-section">
       <div class="ic-label">Network</div>
       <div class="form-row tight">
         <div><span class="ic-label">Ingest port</span><input id="s-iport" class="ic-input mono" type="number" min="1" max="65535"></div>
@@ -2275,6 +2309,10 @@ async function loadConfig(){
     $('s-ovdir').value = c.overlays_dir || '';
     $('ov-dir-display').textContent = c.overlays_dir || 'overlays/';
     $('s-trace').checked = c.tracing_enabled !== false;
+    // Behavior section
+    $('s-auto-arm').checked = !!c.auto_arm_on_connect;
+    $('s-auto-act').checked = !!c.auto_activate_when_ready;
+    $('s-auto-arm-secs').value = Math.round((c.auto_arm_delay_ms || 15000) / 1000);
     // OBS panel
     $('obs-srv').textContent = c.obs_url;
     if ($('wiz-obs-srv')) $('wiz-obs-srv').textContent = c.obs_url;
@@ -2588,6 +2626,9 @@ async function saveSettings(){
     discord_webhook_url:$('s-webhook').value.trim(),
     overlays_dir:$('s-ovdir').value.trim(),
     tracing_enabled:$('s-trace').checked?'true':'false',
+    auto_arm_on_connect:$('s-auto-arm').checked?'true':'false',
+    auto_activate_when_ready:$('s-auto-act').checked?'true':'false',
+    auto_arm_delay_ms:String(Math.max(1, Math.min(600, parseInt($('s-auto-arm-secs').value,10)||15)) * 1000),
   });
   const j = await(await fetch('/config',{method:'POST',body})).json();
   if (j.ok){
