@@ -411,6 +411,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   font-size:11px;font-weight:600;letter-spacing:.3px}
 .sys-version-pill.ok{background:color-mix(in oklch,var(--accent) 12%,transparent);color:var(--accent)}
 .sys-version-pill.new{background:color-mix(in oklch,var(--warn,#d6a23a) 18%,transparent);color:var(--warn,#d6a23a)}
+.sys-version-pill.ahead{background:color-mix(in oklch,#a18bff 18%,transparent);color:#a18bff}
 .sys-version-pill.err{background:color-mix(in oklch,var(--err) 14%,transparent);color:var(--err)}
 
 /* ── Pane ────────────────────────────────────── */
@@ -3390,6 +3391,21 @@ function aboutMaybeAutoCheck(){
   aboutAutoCheckedOnce = true;
   aboutCheckUpdate(true);
 }
+// Compare two SemVer-ish strings. Tolerates a leading 'v' and trailing
+// pre-release / build suffixes (anything after '-' or '+'). Missing
+// segments default to 0 so '0.1.4' vs '0.1.4.0' compares equal.
+function semverCmp(a, b){
+  const parse = s => String(s || '').replace(/^v/i,'').split(/[-+]/,1)[0].split('.').map(n => parseInt(n,10) || 0);
+  const pa = parse(a), pb = parse(b);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++){
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x < y) return -1;
+    if (x > y) return 1;
+  }
+  return 0;
+}
+
 async function aboutCheckUpdate(silent){
   const ver = $('sys-about-version');
   const pill = $('sys-about-pill');
@@ -3403,20 +3419,26 @@ async function aboutCheckUpdate(silent){
     if (ver && j.current) ver.textContent = 'v' + j.current;
     if (pill) {
       pill.hidden = false;
-      pill.classList.remove('ok','new','err');
+      pill.classList.remove('ok','new','ahead','err');
       if (j.error) {
         pill.classList.add('err'); pill.textContent = 'check failed';
         if (msg) msg.innerHTML = 'Could not reach GitHub: ' + (j.error || 'unknown') + '. <a href="' + j.release_url + '" target="_blank" rel="noreferrer">View releases</a>';
       } else if (j.update_available && j.latest) {
         pill.classList.add('new'); pill.textContent = 'v' + j.latest + ' available';
         if (msg) msg.innerHTML = 'New release: <a href="' + j.release_url + '" target="_blank" rel="noreferrer">v' + j.latest + '</a>.';
+      } else if (j.latest && semverCmp(j.current, j.latest) > 0) {
+        // Build is ahead of the latest published tag - either a pre-release
+        // dev build, a build off main between tags, or a local checkout.
+        // Either way, the user should know they are not on a shipped artifact.
+        pill.classList.add('ahead'); pill.textContent = 'dev build · ahead of v' + j.latest;
+        if (msg) msg.innerHTML = 'This build is newer than the latest tagged release (<a href="' + j.release_url + '" target="_blank" rel="noreferrer">v' + j.latest + '</a>). Pre-release or local build.';
       } else {
         pill.classList.add('ok'); pill.textContent = 'up to date';
         if (msg) msg.textContent = silent ? '' : 'You are on the latest release.';
       }
     }
   } catch(e) {
-    if (pill) { pill.hidden = false; pill.classList.remove('ok','new'); pill.classList.add('err'); pill.textContent = 'check failed'; }
+    if (pill) { pill.hidden = false; pill.classList.remove('ok','new','ahead'); pill.classList.add('err'); pill.textContent = 'check failed'; }
     if (msg) msg.textContent = 'Check failed: ' + e;
   } finally {
     if (btn) btn.disabled = false;

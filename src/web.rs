@@ -348,7 +348,19 @@ async fn route(
             }
         }
         ("GET", "/update-check") => {
-            let info = crate::update_check::check_update();
+            // check_update() uses blocking ureq with a ~10 s ceiling. Hand
+            // it to a blocking thread so a slow GitHub doesn't pin the
+            // single-threaded web runtime and stall unrelated requests
+            // (most visibly: the About sub-tab's Check button would
+            // freeze /destinations + /state for any open dashboard).
+            let info = tokio::task::spawn_blocking(crate::update_check::check_update)
+                .await
+                .unwrap_or_else(|_| crate::update_check::UpdateInfo {
+                    current: crate::update_check::current_version().to_string(),
+                    latest: None,
+                    update_available: false,
+                    error: Some("update check task panicked".into()),
+                });
             ("200 OK", "application/json", info.to_json())
         }
         ("GET", "/obs/launch-status") => {
