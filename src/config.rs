@@ -5,7 +5,9 @@
 //! editable by hand and trivially parseable without a serde dependency.
 //! For wire transport (web UI), `to_json` emits a small JSON object.
 
+use std::collections::HashMap;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -70,6 +72,51 @@ pub struct Settings {
     /// streamer hits Arm with a non-zero value) so "last used" sticks
     /// across sessions without a separate UI knob to maintain it.
     pub auto_arm_delay_ms: u32,
+
+    /// Per-destination reachability test cache. Keyed by destination id.
+    /// Populated by smart-test triggers (save-with-changed-key, enable-
+    /// of-stale-or-failed, manual re-test) and by user-driven "Re-test
+    /// all" actions. Read by the dashboard to show inline status on each
+    /// destination card without forcing the user to remember to test.
+    ///
+    /// NOT persisted to the on-disk config: this is ephemeral runtime
+    /// state. The signature hash recorded with each entry lets the UI
+    /// detect when a destination has been edited since its last test
+    /// (and the auto-trigger pipeline re-test it).
+    pub last_tests: HashMap<String, DestTest>,
+}
+
+/// Outcome of a per-destination reachability probe. We test the TCP
+/// connect only (not the full RTMP handshake) - the handshake would
+/// burn a publish slot on the platform and can have side effects, the
+/// connect is enough to catch the common failure modes (DNS, firewall,
+/// wrong host/port, expired key on a custom server that rejects early).
+///
+/// `key_hash` is the signature of the destination at test time. If the
+/// destination's signature has since changed (the user edited the
+/// stream key or the egress URL), the cached result is stale and the
+/// UI shows "untested" until a fresh test runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestTest {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub ts_ms: u64,
+    pub key_hash: u64,
+}
+
+/// Stable signature hash for a destination's reachability-relevant
+/// fields. Two destinations with the same hash MUST reach the same
+/// server with the same credentials; if any of stream_key, platform,
+/// custom_egress_url, twitch_ingest, or youtube_ingest changed, the
+/// hash changes and the cached test result is treated as stale.
+pub fn dest_signature_hash(d: &Destination) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    d.platform.hash(&mut h);
+    d.stream_key.hash(&mut h);
+    d.custom_egress_url.hash(&mut h);
+    d.twitch_ingest.hash(&mut h);
+    d.youtube_ingest.hash(&mut h);
+    h.finish()
 }
 
 #[derive(Debug, Clone)]
@@ -252,6 +299,7 @@ impl Settings {
             // auto_arm_on_connect without otherwise customising lands
             // on a familiar number.
             auto_arm_delay_ms: 15_000,
+            last_tests: HashMap::new(),
         }
     }
 

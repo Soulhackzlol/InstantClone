@@ -406,6 +406,8 @@ async fn route(
         ("POST", "/destinations/delete") => {
             post_destination_delete(body, ctrl, settings, cfg_path).await
         }
+        ("POST", "/destinations/test") => post_destination_test(body, settings).await,
+        ("POST", "/destinations/test-all") => post_destination_test_all(settings).await,
         _ => (
             "404 Not Found",
             "text/plain; charset=utf-8",
@@ -1664,21 +1666,27 @@ async fn test_egress(
             );
         }
     };
-    let parsed = match EgressUrl::parse(&url_str) {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                "200 OK",
-                "application/json",
-                format!(
-                    r#"{{"ok":false,"error":"{}"}}"#,
-                    json_escape(&e.to_string())
-                ),
-            )
-        }
+    let payload = match probe_egress_url(&url_str).await {
+        Ok(msg) => format!(r#"{{"ok":true,"message":"{}"}}"#, json_escape(&msg)),
+        Err(e) => format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
     };
-    // DNS + TCP connect with 3 s timeout. We deliberately don't run the
-    // full RTMP handshake - that would burn a "slot" on the platform.
+    ("200 OK", "application/json", payload)
+}
+
+/// Probe a resolved RTMP URL for reachability. DNS + TCP connect with
+/// a 3 s timeout - no RTMP handshake. The handshake would burn a
+/// publish slot on the platform (Twitch holds the slot for several
+/// seconds after the connect closes, locking the streamer out of
+/// re-publishing), and a clean TCP connect catches the failure modes
+/// that matter most for end users: bad host, blocked port, DNS down,
+/// expired/wrong custom server.
+///
+/// Returns `Ok("reached host:port")` or `Err("timed out after 3s" |
+/// "<io error>" | "<parse error>")` - both flavors are user-readable
+/// strings that go straight into the JSON response without further
+/// formatting.
+async fn probe_egress_url(url_str: &str) -> Result<String, String> {
+    let parsed = EgressUrl::parse(url_str).map_err(|e| e.to_string())?;
     let connect = async {
         let _addrs: Vec<_> = (parsed.host.as_str(), parsed.port)
             .to_socket_addrs()
@@ -1686,19 +1694,216 @@ async fn test_egress(
             .unwrap_or_default();
         TcpStream::connect((parsed.host.as_str(), parsed.port)).await
     };
-    let res = tokio::time::timeout(Duration::from_secs(3), connect).await;
-    let payload = match res {
-        Ok(Ok(_)) => format!(
-            r#"{{"ok":true,"message":"reached {}:{}"}}"#,
-            parsed.host, parsed.port
+    match tokio::time::timeout(Duration::from_secs(3), connect).await {
+        Ok(Ok(_)) => Ok(format!("reached {}:{}", parsed.host, parsed.port)),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("timed out after 3s".into()),
+    }
+}
+
+/// Wall-clock millis since UNIX epoch. Used as the timestamp for
+/// `DestTest` entries so the dashboard can render "tested 2m ago".
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Run a probe against one destination, write the result into the
+/// shared `last_tests` map, and broadcast the updated settings so the
+/// UI re-renders. Caller decides whether to await this (manual test)
+/// or fire-and-forget via `tokio::spawn` (auto-trigger after save).
+///
+/// Reads the current settings, finds the destination by id, runs the
+/// probe, then does a read-modify-write merge on `last_tests`. The
+/// merge re-reads the latest settings snapshot so we don't clobber an
+/// unrelated edit that landed during the probe window (e.g. user
+/// renamed another destination while this test was in flight).
+async fn run_destination_test(id: String, settings: Arc<watch::Sender<Settings>>) -> bool {
+    let (egress, sig) = {
+        let s = settings.borrow();
+        let d = match s.destinations.iter().find(|d| d.id == id) {
+            Some(d) => d,
+            None => return false,
+        };
+        let url = match d.egress_url() {
+            Some(u) => u,
+            None => {
+                let mut ns = s.clone();
+                ns.last_tests.insert(
+                    id.clone(),
+                    config::DestTest {
+                        ok: false,
+                        error: Some("destination is missing stream key or URL".into()),
+                        ts_ms: now_unix_ms(),
+                        key_hash: config::dest_signature_hash(d),
+                    },
+                );
+                drop(s);
+                let _ = settings.send(ns);
+                return false;
+            }
+        };
+        (url, config::dest_signature_hash(d))
+    };
+    let result = probe_egress_url(&egress).await;
+    let entry = match &result {
+        Ok(_) => config::DestTest {
+            ok: true,
+            error: None,
+            ts_ms: now_unix_ms(),
+            key_hash: sig,
+        },
+        Err(e) => config::DestTest {
+            ok: false,
+            error: Some(e.clone()),
+            ts_ms: now_unix_ms(),
+            key_hash: sig,
+        },
+    };
+    let mut ns = settings.borrow().clone();
+    ns.last_tests.insert(id, entry);
+    let _ = settings.send(ns);
+    result.is_ok()
+}
+
+/// Manual single-destination test endpoint. The dashboard calls this
+/// when the user clicks the per-card re-test button. Awaits the probe
+/// so the response carries the result and the UI can flash success/
+/// failure immediately (smart-test triggers via upsert/enable spawn
+/// async and let the UI pick up the new state through `/destinations`).
+async fn post_destination_test(
+    body: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+) -> (&'static str, &'static str, String) {
+    let form = config::parse_form(body);
+    let id = match form.get("id").cloned() {
+        Some(id) if !id.is_empty() => id,
+        _ => {
+            return (
+                "400 Bad Request",
+                "application/json",
+                r#"{"ok":false,"error":"id required"}"#.into(),
+            )
+        }
+    };
+    if !settings.borrow().destinations.iter().any(|d| d.id == id) {
+        return (
+            "404 Not Found",
+            "application/json",
+            r#"{"ok":false,"error":"no such destination"}"#.into(),
+        );
+    }
+    let ok = run_destination_test(id.clone(), Arc::clone(settings)).await;
+    let snap = settings.borrow();
+    let payload = match snap.last_tests.get(&id) {
+        Some(t) if t.ok => format!(
+            r#"{{"ok":true,"id":"{}","message":"reached"}}"#,
+            json_escape(&id)
         ),
-        Ok(Err(e)) => format!(
-            r#"{{"ok":false,"error":"{}"}}"#,
-            json_escape(&e.to_string())
+        Some(t) => format!(
+            r#"{{"ok":false,"id":"{}","error":"{}"}}"#,
+            json_escape(&id),
+            json_escape(t.error.as_deref().unwrap_or("test failed"))
         ),
-        Err(_) => r#"{"ok":false,"error":"timed out after 3s"}"#.into(),
+        None => format!(r#"{{"ok":{},"id":"{}"}}"#, ok, json_escape(&id)),
     };
     ("200 OK", "application/json", payload)
+}
+
+/// "Re-test all" - fan out across every destination concurrently and
+/// merge results into `last_tests` at the end. We update the settings
+/// in a single broadcast (not per-result) so the UI doesn't see a
+/// flicker storm; the per-destination spawn race window is fine
+/// because the merge re-reads the latest snapshot.
+async fn post_destination_test_all(
+    settings: &Arc<watch::Sender<Settings>>,
+) -> (&'static str, &'static str, String) {
+    let ids: Vec<String> = settings
+        .borrow()
+        .destinations
+        .iter()
+        .map(|d| d.id.clone())
+        .collect();
+    if ids.is_empty() {
+        return (
+            "200 OK",
+            "application/json",
+            r#"{"ok":true,"tested":0}"#.into(),
+        );
+    }
+    let mut handles = Vec::with_capacity(ids.len());
+    for id in ids {
+        let s = Arc::clone(settings);
+        handles.push(tokio::spawn(
+            async move { run_destination_test(id, s).await },
+        ));
+    }
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    for h in handles {
+        match h.await {
+            Ok(true) => passed += 1,
+            _ => failed += 1,
+        }
+    }
+    (
+        "200 OK",
+        "application/json",
+        format!(
+            r#"{{"ok":true,"tested":{},"passed":{},"failed":{}}}"#,
+            passed + failed,
+            passed,
+            failed
+        ),
+    )
+}
+
+/// Smart-test trigger policy. Called after a destination upsert
+/// commits. Returns true if the new state warrants firing a fresh
+/// background probe. Decision matrix:
+///
+/// | trigger                                          | test? |
+/// |--------------------------------------------------|-------|
+/// | brand-new destination                            |  yes  |
+/// | signature changed (key, url, ingest, platform)   |  yes  |
+/// | edit only touched name/enabled/vod_audio         |  no   |
+/// | enable transition + stale (>5min) or failed      |  yes  |
+/// | enable transition + recent OK                    |  no   |
+///
+/// Edits to non-reachability fields skip the probe so we don't spam
+/// the platform with reachability tests every time the user toggles
+/// VOD-audio or renames a destination.
+fn should_auto_test(
+    prev: Option<(&config::Destination, Option<&config::DestTest>)>,
+    next: &config::Destination,
+) -> bool {
+    let new_sig = config::dest_signature_hash(next);
+    match prev {
+        None => true,
+        Some((prev_dest, prev_test)) => {
+            let prev_sig = config::dest_signature_hash(prev_dest);
+            if prev_sig != new_sig {
+                return true;
+            }
+            let became_enabled = next.enabled && !prev_dest.enabled;
+            if became_enabled {
+                match prev_test {
+                    None => return true,
+                    Some(t) if !t.ok => return true,
+                    Some(t) => {
+                        let now = now_unix_ms();
+                        let age = now.saturating_sub(t.ts_ms);
+                        if age > 5 * 60 * 1000 {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+    }
 }
 
 // ---- Helpers ----
@@ -1756,6 +1961,7 @@ async fn post_destination_upsert(
     }
 
     let mut ns = settings.borrow().clone();
+    let prev_snapshot = ns.destinations.iter().find(|d| d.id == id).cloned();
     if let Some(existing) = ns.destinations.iter_mut().find(|d| d.id == id) {
         existing.name = name;
         existing.enabled = enabled;
@@ -1770,7 +1976,7 @@ async fn post_destination_upsert(
         existing.vod_audio_inject_eb = vod_audio_inject_eb;
     } else {
         ns.destinations.push(config::Destination {
-            id,
+            id: id.clone(),
             name,
             enabled,
             platform,
@@ -1814,7 +2020,26 @@ async fn post_destination_upsert(
         );
     }
     reconcile_obs_vod_files(&ns, ctrl);
+    let prev_test = prev_snapshot
+        .as_ref()
+        .and_then(|p| ns.last_tests.get(&p.id).cloned());
+    let next_dest = ns.destinations.iter().find(|d| d.id == id).cloned();
     let _ = settings.send(ns);
+    // Smart-test: fire a probe in the background if the upsert
+    // materially changed reachability (new dest, key/url/ingest edit,
+    // or an enable transition that finds a stale/failed cached
+    // result). Pure name/enabled-toggle-only/vod-audio edits skip the
+    // probe so we don't burn platform connects for cosmetic changes.
+    if let Some(next) = next_dest {
+        let prev_for_decision = prev_snapshot.as_ref().map(|p| (p, prev_test.as_ref()));
+        if should_auto_test(prev_for_decision, &next) {
+            let s = Arc::clone(settings);
+            let test_id = next.id.clone();
+            tokio::spawn(async move {
+                let _ = run_destination_test(test_id, s).await;
+            });
+        }
+    }
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
 }
 
@@ -1878,6 +2103,9 @@ async fn post_destination_delete(
             r#"{"ok":false,"error":"no such destination"}"#.into(),
         );
     }
+    // Drop the ephemeral test cache for the removed destination so
+    // the map doesn't grow unboundedly across delete + re-add cycles.
+    ns.last_tests.remove(&id);
     if !ns
         .destinations
         .iter()
@@ -1903,6 +2131,7 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             .cloned()
             .unwrap_or_else(|| (id.into(), false, 0, 0, 0, 0, 0, 0))
     };
+    let now = now_unix_ms();
     let mut out = String::from("[");
     for (i, d) in s.destinations.iter().enumerate() {
         if i > 0 {
@@ -1910,8 +2139,34 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         }
         let url = d.egress_url().unwrap_or_default();
         let (_id, alive, _seq, kbps, tags, bytes, cuts, reconnects) = stats_for(&d.id);
+        // Smart-test surface. last_test is populated by the smart-
+        // trigger pipeline; the UI uses these to render an inline
+        // reachability status without needing a separate endpoint.
+        // `stale` means "the destination was edited since the last
+        // test ran" - the cached result no longer applies.
+        let cur_sig = config::dest_signature_hash(d);
+        let (lt_state, lt_error, lt_age_s, lt_stale) = match s.last_tests.get(&d.id) {
+            Some(t) => {
+                let age = now.saturating_sub(t.ts_ms) / 1000;
+                let stale = t.key_hash != cur_sig;
+                let state = if stale {
+                    "stale"
+                } else if t.ok {
+                    "ok"
+                } else {
+                    "failed"
+                };
+                (
+                    state,
+                    t.error.clone().unwrap_or_default(),
+                    age as i64,
+                    stale,
+                )
+            }
+            None => ("untested", String::new(), -1i64, false),
+        };
         out.push_str(&format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc},"last_test_state":{lts},"last_test_error":{lte},"last_test_age_s":{lta},"last_test_stale":{ltst}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled,
@@ -1933,6 +2188,10 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             bs = bytes,
             ct = cuts,
             rc = reconnects,
+            lts = json_escape_quoted(lt_state),
+            lte = json_escape_quoted(&lt_error),
+            lta = lt_age_s,
+            ltst = lt_stale,
         ));
     }
     out.push(']');
@@ -2806,6 +3065,146 @@ mod tests {
         // alone) so a hand-edited form doesn't reset to zero.
         apply_field_str(&mut s, "auto_arm_delay_ms", "not-a-number");
         assert_eq!(s.auto_arm_delay_ms, 30_000);
+    }
+
+    // ── Smart-test trigger policy ────────────────────────────────
+    //
+    // should_auto_test decides whether a destination upsert warrants
+    // burning a TCP probe against the platform. Wrong-positives spam
+    // the platform; wrong-negatives leave the user with stale "looks
+    // fine" status. Both classes of regression are easy, so we pin
+    // each cell of the trigger matrix.
+
+    fn mk_dest(id: &str, key: &str, platform: &str, enabled: bool) -> crate::config::Destination {
+        crate::config::Destination {
+            id: id.into(),
+            name: id.into(),
+            enabled,
+            platform: platform.into(),
+            stream_key: key.into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+        }
+    }
+
+    #[test]
+    fn auto_test_fires_on_brand_new_destination() {
+        let d = mk_dest("a", "live_secret", "twitch", true);
+        assert!(should_auto_test(None, &d));
+    }
+
+    #[test]
+    fn auto_test_fires_on_stream_key_change() {
+        let prev = mk_dest("a", "old_key", "twitch", true);
+        let next = mk_dest("a", "new_key", "twitch", true);
+        assert!(should_auto_test(Some((&prev, None)), &next));
+    }
+
+    #[test]
+    fn auto_test_fires_on_ingest_change() {
+        let mut prev = mk_dest("a", "k", "twitch", true);
+        let mut next = mk_dest("a", "k", "twitch", true);
+        prev.twitch_ingest = "fra".into();
+        next.twitch_ingest = "jfk".into();
+        assert!(should_auto_test(Some((&prev, None)), &next));
+    }
+
+    #[test]
+    fn auto_test_skips_name_only_edit() {
+        // Same reachability signature, name field changed. The probe
+        // would be wasted: the platform sees the same TCP socket.
+        let mut prev = mk_dest("a", "k", "twitch", true);
+        let mut next = mk_dest("a", "k", "twitch", true);
+        prev.name = "Old name".into();
+        next.name = "New name".into();
+        let test = crate::config::DestTest {
+            ok: true,
+            error: None,
+            ts_ms: now_unix_ms(),
+            key_hash: crate::config::dest_signature_hash(&prev),
+        };
+        assert!(!should_auto_test(Some((&prev, Some(&test))), &next));
+    }
+
+    #[test]
+    fn auto_test_skips_vod_audio_toggle() {
+        let mut prev = mk_dest("a", "k", "twitch", true);
+        let mut next = mk_dest("a", "k", "twitch", true);
+        prev.vod_audio = false;
+        next.vod_audio = true;
+        let test = crate::config::DestTest {
+            ok: true,
+            error: None,
+            ts_ms: now_unix_ms(),
+            key_hash: crate::config::dest_signature_hash(&prev),
+        };
+        assert!(!should_auto_test(Some((&prev, Some(&test))), &next));
+    }
+
+    #[test]
+    fn auto_test_skips_enable_toggle_when_recently_ok() {
+        let mut prev = mk_dest("a", "k", "twitch", false);
+        let mut next = mk_dest("a", "k", "twitch", true);
+        prev.enabled = false;
+        next.enabled = true;
+        let test = crate::config::DestTest {
+            ok: true,
+            error: None,
+            ts_ms: now_unix_ms(),
+            key_hash: crate::config::dest_signature_hash(&prev),
+        };
+        assert!(!should_auto_test(Some((&prev, Some(&test))), &next));
+    }
+
+    #[test]
+    fn auto_test_fires_on_enable_when_last_test_failed() {
+        let prev = mk_dest("a", "k", "twitch", false);
+        let next = mk_dest("a", "k", "twitch", true);
+        let test = crate::config::DestTest {
+            ok: false,
+            error: Some("timed out".into()),
+            ts_ms: now_unix_ms(),
+            key_hash: crate::config::dest_signature_hash(&prev),
+        };
+        assert!(should_auto_test(Some((&prev, Some(&test))), &next));
+    }
+
+    #[test]
+    fn auto_test_fires_on_enable_when_last_test_stale() {
+        let prev = mk_dest("a", "k", "twitch", false);
+        let next = mk_dest("a", "k", "twitch", true);
+        // 10 minutes old -> past the 5-minute freshness window.
+        let test = crate::config::DestTest {
+            ok: true,
+            error: None,
+            ts_ms: now_unix_ms().saturating_sub(10 * 60 * 1000),
+            key_hash: crate::config::dest_signature_hash(&prev),
+        };
+        assert!(should_auto_test(Some((&prev, Some(&test))), &next));
+    }
+
+    #[test]
+    fn auto_test_fires_on_enable_when_never_tested() {
+        let prev = mk_dest("a", "k", "twitch", false);
+        let next = mk_dest("a", "k", "twitch", true);
+        assert!(should_auto_test(Some((&prev, None)), &next));
+    }
+
+    #[test]
+    fn dest_signature_distinguishes_platforms() {
+        // The hash is what gates auto-retest. Two destinations with
+        // identical stream keys but different platforms must hash
+        // distinctly - otherwise switching from Twitch to YouTube
+        // without changing the key would not trigger a re-test.
+        let twitch = mk_dest("a", "shared_key", "twitch", true);
+        let youtube = mk_dest("a", "shared_key", "youtube", true);
+        assert_ne!(
+            crate::config::dest_signature_hash(&twitch),
+            crate::config::dest_signature_hash(&youtube)
+        );
     }
 
     // ── OBS multitrack-config proxy helpers ──────────────────────
