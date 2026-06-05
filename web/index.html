@@ -1263,14 +1263,14 @@ input,select,textarea{font-family:inherit;color:inherit}
   <div class="sys-grid">
     <section class="sys-section">
       <div class="ic-label">Behavior</div>
-      <div class="tab-sub">How InstantClone reacts when OBS connects and when the buffer fills.</div>
+      <div class="tab-sub">How InstantClone reacts when OBS starts streaming and when the buffer fills.</div>
       <div style="margin-top:14px;display:flex;flex-direction:column;gap:14px">
         <div style="display:flex;align-items:flex-start;gap:14px">
           <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
             <input type="checkbox" id="s-auto-arm" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
             <div>
-              <div style="font-weight:600">Auto-arm on OBS connect</div>
-              <div class="tab-sub" style="margin-top:2px">Start filling the delay buffer the moment OBS publishes. Useful if you always stream with delay.</div>
+              <div style="font-weight:600">Pre-arm delay on stream start</div>
+              <div class="tab-sub" style="margin-top:2px">Start filling the delay buffer the moment OBS starts streaming. Useful if you always stream with delay.</div>
             </div>
           </label>
         </div>
@@ -1279,14 +1279,14 @@ input,select,textarea{font-family:inherit;color:inherit}
             <input type="checkbox" id="s-auto-act" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
             <div>
               <div style="font-weight:600">Auto-activate when buffer ready</div>
-              <div class="tab-sub" style="margin-top:2px">Skip the manual "Activate" step. Loses the deliberate go-live moment but is the right call for casual streams.</div>
+              <div class="tab-sub" style="margin-top:2px">Skip the manual "Activate" step. Fires every time you arm (manual, profile, or pre-arm). Cut still sticks - the next arm re-enables it.</div>
             </div>
           </label>
         </div>
         <div style="display:flex;align-items:center;gap:14px">
           <div style="flex:1">
             <div style="font-weight:600">Default delay</div>
-            <div class="tab-sub" style="margin-top:2px">Used by auto-arm. Also tracks the last value you manually armed at.</div>
+            <div class="tab-sub" style="margin-top:2px">Used by pre-arm. Also tracks the last value you manually armed at.</div>
           </div>
           <div style="display:flex;align-items:center;gap:6px">
             <input id="s-auto-arm-secs" class="ic-input mono" type="number" min="1" max="600" style="width:80px;text-align:right">

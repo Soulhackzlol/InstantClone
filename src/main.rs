@@ -306,15 +306,18 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
     let initial_webhook = { rx.borrow().discord_webhook_url.clone() };
     ctrl.update_webhook(initial_webhook);
 
-    // Behaviour-toggle state machine. Both auto-arm and auto-activate
-    // fire on edge transitions (false -> true ingest_alive, "*" -> "ready"
-    // phase) so a snapshot-every-2-seconds supervisor doesn't re-arm
-    // every tick. Initialised pessimistically (assume the worst-case
-    // prior state) so the first iteration's transition detection is
-    // accurate even on a fresh process start where ingest is already
-    // live from a tight relaunch.
+    // Behaviour-toggle state. Auto-arm uses the `prev_ingest_alive`
+    // edge detector (fires once per publisher session, on the false ->
+    // true transition). Auto-activate reads the controller's
+    // `auto_activate_pending` slot which fires once per arm action -
+    // arm sets it, cut clears it. See Controller::auto_activate_pending
+    // for the full state semantics.
+    //
+    // Initialised pessimistically (assume the worst-case prior state)
+    // so the first iteration's transition detection is accurate even
+    // on a fresh process start where ingest is already live from a
+    // tight relaunch.
     let mut prev_ingest_alive = ctrl.ingest_alive();
-    let mut prev_phase: &'static str = ctrl.phase();
 
     loop {
         // Snapshot the current desired destinations.
@@ -492,14 +495,14 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // users had to toggle a destination off+on to get the supervisor
         // to look at the world again.) Settings changes still preempt
         // the wait via `rx.changed()` for instant response.
-        // ── Behaviour: auto-arm on connect ─────────────────────────
+        // ── Behaviour: auto-pre-arm on stream start ───────────────
         //
         // Edge-detect ingest_alive going false -> true. That's the
-        // moment OBS's publisher handshake just completed (begin_publish
-        // sets ingest_alive to true at the end). If the user has
-        // auto-arm enabled AND we're not already armed (so the
-        // streamer's manual disarm earlier in the same session sticks),
-        // fire arm_delay with the persisted last-used delay.
+        // moment OBS's publisher handshake just completed. Pre-arm
+        // fires once per publisher session (the edge condition
+        // self-limits) and only when nothing is already armed (so a
+        // user who pre-armed and then manually disarmed in the same
+        // session doesn't get auto-rearmed).
         {
             let s = rx.borrow();
             let armed_now = ctrl.armed_delay_ms();
@@ -509,9 +512,13 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 && armed_now == 0
                 && s.auto_arm_delay_ms > 0
             {
+                // arm_delay sets target=0 -> non-active, so it'll also
+                // flip Controller's auto_activate_pending slot true.
+                // That means a pre-arm + auto-activate combo auto-goes-
+                // live without the streamer touching anything.
                 ctrl.arm_delay(s.auto_arm_delay_ms);
                 ctrl.log(format!(
-                    "auto-arm: OBS connected -> armed {} s of delay",
+                    "pre-arm: stream started -> armed {} s of delay",
                     s.auto_arm_delay_ms / 1000
                 ));
             }
@@ -519,20 +526,26 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
 
         // ── Behaviour: auto-activate when ready ────────────────────
         //
-        // Edge-detect phase entering "ready" (buffer just filled past
-        // the armed amount). If the user has auto-activate enabled AND
-        // we haven't already activated (target_delay_ms == 0 means we
-        // haven't transitioned to active yet), fire activate_delay.
-        // The activate_delay() call has its own buffer-sufficiency
-        // guard, so a race where the phase string says "ready" but the
-        // buffer drained slightly below the threshold in the meantime
-        // is handled safely (returns an Err we ignore).
+        // Fires once per arm action, gated by Controller's
+        // `auto_activate_pending` slot (set by arm_delay when arming
+        // from a non-active state, cleared by activate_delay /
+        // stop_delay / begin_publish). This makes Cut actually stick:
+        // after the streamer cuts, the slot is clear and the next
+        // phase-reverts-to-ready tick doesn't snap us back to active.
+        // A subsequent re-arm refills the slot, so the NEXT arm cycle
+        // still auto-activates as expected.
+        //
+        // Phase check stays as the readiness signal - we fire when the
+        // buffer's actually full enough, not the instant the slot is
+        // pending. If the slot is pending but activate_delay returns
+        // BufferShort (a transient race where phase reports ready but
+        // the stricter buffer check disagrees), we quietly skip; the
+        // slot stays true so the next tick retries.
         {
-            let phase_now = ctrl.phase();
             let s = rx.borrow();
-            if phase_now == "ready"
-                && prev_phase != "ready"
+            if ctrl.auto_activate_pending()
                 && s.auto_activate_when_ready
+                && ctrl.phase() == "ready"
                 && ctrl.target_delay_ms() == 0
             {
                 match ctrl.activate_delay() {
@@ -543,11 +556,12 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                     Err(_) => {
                         // Phase said "ready" but activate_delay's
                         // stricter buffer check disagreed. Quietly skip;
-                        // next 2 s tick re-evaluates.
+                        // next 2 s tick re-evaluates. The pending slot
+                        // stays set (activate_delay didn't reach the
+                        // Ok arm) so the retry actually happens.
                     }
                 }
             }
-            prev_phase = phase_now;
         }
         prev_ingest_alive = ingest_alive;
 
