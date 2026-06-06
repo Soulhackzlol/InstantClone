@@ -71,20 +71,29 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ic-shell{max-width:1280px;margin:0 auto;padding:18px 24px 32px;display:flex;flex-direction:column;gap:14px}
 
 /* ── Header ───────────────────────────────────── */
-.ic-header{display:flex;align-items:center;gap:16px;padding:12px 18px;
+.ic-header{display:flex;align-items:center;gap:16px;padding:11px 18px;
   background:linear-gradient(180deg,var(--surface-2),var(--surface));
   border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-1)}
-.ic-brand{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
-.ic-brand-mark{font-size:16px;font-weight:700;letter-spacing:-.01em;
-  /* Solid warm cream for max contrast vs the dark header. The previous
-     fff-to-accent-mix gradient muddied the bottom half of the letters
-     into ~30% lightness which read as low-contrast on dark themes. */
-  color:#f5efe1}
-.ic-brand-sub{color:var(--fg-3);font-size:12px}
+.ic-brand{display:flex;align-items:baseline;gap:0;min-width:0;flex-wrap:wrap}
+/* Solid cream wordmark - matches the rest of the dashboard's
+   typography (no gradient text fill, no logo glyph) so the header
+   reads as continuous with the panes below. */
+.ic-brand-mark{font-size:16px;font-weight:700;letter-spacing:-.01em;color:#f5efe1}
+.ic-brand-sub{color:var(--fg-3);font-size:12px;letter-spacing:.05px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ic-brand-sep{color:var(--fg-4);opacity:.7;margin:0 8px;font-size:13px}
+/* Credit link uses the same scoped accent treatment as the About
+   message links, so every clickable string in the chrome reads the
+   same: accent colour, soft underline, hover lifts to a tinted pill. */
+.ic-brand-sub a{color:var(--accent);text-decoration:none;font-weight:600;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 35%,transparent);
+  padding:0 2px;border-radius:3px;
+  transition:color .15s,border-color .15s,background .15s}
+.ic-brand-sub a:hover{color:#fff;
+  background:color-mix(in oklch,var(--accent) 18%,transparent);
+  border-bottom-color:var(--accent)}
+.ic-brand-sub a:visited{color:var(--accent)}
 .ic-brand-dot{display:inline-block;width:5px;height:5px;border-radius:999px;background:var(--fg-4);margin:0 6px 2px}
-.ic-brand-credit{color:var(--fg-4);font-size:11px;margin-left:4px}
-.ic-brand-credit a{color:var(--fg-3);text-decoration:none;border-bottom:1px dotted var(--line-2);transition:.15s}
-.ic-brand-credit a:hover{color:var(--accent);border-bottom-color:var(--accent)}
 .ic-spacer{flex:1}
 .ic-header-right{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
 .ic-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border-radius:999px;
@@ -413,6 +422,19 @@ input,select,textarea{font-family:inherit;color:inherit}
 .sys-version-pill.new{background:color-mix(in oklch,var(--warn,#d6a23a) 18%,transparent);color:var(--warn,#d6a23a)}
 .sys-version-pill.ahead{background:color-mix(in oklch,#a18bff 18%,transparent);color:#a18bff}
 .sys-version-pill.err{background:color-mix(in oklch,var(--err) 14%,transparent);color:var(--err)}
+/* Links inside the About status messages need explicit contrast - they */
+/* sit inside .muted, which would otherwise mute them into the body copy. */
+#sys-about-msg a,
+.sys-about-card a{color:var(--accent);text-decoration:none;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 35%,transparent);
+  font-weight:600;transition:color .15s,border-color .15s,background .15s;
+  padding:0 2px;border-radius:3px}
+#sys-about-msg a:hover,
+.sys-about-card a:hover{color:#fff;
+  background:color-mix(in oklch,var(--accent) 18%,transparent);
+  border-bottom-color:var(--accent)}
+#sys-about-msg a:visited,
+.sys-about-card a:visited{color:var(--accent)}
 
 /* ── Pane ────────────────────────────────────── */
 .pane-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
@@ -832,8 +854,8 @@ input,select,textarea{font-family:inherit;color:inherit}
 <header class="ic-header" id="hdr-bar" hidden>
   <div class="ic-brand">
     <span class="ic-brand-mark">InstantClone</span>
-    <span class="ic-brand-sub">RTMP delay proxy</span>
-    <span class="ic-brand-credit">made by <a href="https://github.com/s1moscs" target="_blank" rel="noopener">s1moscs</a></span>
+    <span class="ic-brand-sep">&middot;</span>
+    <span class="ic-brand-sub">made by <a href="https://github.com/Soulhackzlol" target="_blank" rel="noopener">s1moscs</a></span>
   </div>
   <div class="ic-header-right">
     <span class="ic-pill" id="hdr-obs"><span class="dot"></span><span>OBS</span><span class="mono" id="hdr-obs-v">-</span></span>
@@ -1376,10 +1398,11 @@ input,select,textarea{font-family:inherit;color:inherit}
     <section class="sys-section">
       <div class="ic-label">Buffer file</div>
       <div class="tab-sub">Disk-backed ring. Bigger buffer = longer max delay at a given bitrate.</div>
-      <div class="form-row tight" style="margin-top:12px">
-        <div><span class="ic-label">Buffer size (MB)</span><input id="s-bmb" class="ic-input mono" type="number" min="50" max="10000"><div class="muted" id="s-bmb-hint" style="margin-top:6px;font-size:11.5px;line-height:1.4"></div></div>
+      <div class="form-row tight" style="margin-top:12px;align-items:flex-start">
+        <div><span class="ic-label">Buffer size (MB)</span><input id="s-bmb" class="ic-input mono" type="number" min="50" max="10000"></div>
         <div><span class="ic-label">Buffer file</span><input id="s-bpath" class="ic-input mono"></div>
       </div>
+      <div class="muted" id="s-bmb-hint" style="margin-top:8px;font-size:11.5px;line-height:1.4"></div>
     </section>
   </div>
 
