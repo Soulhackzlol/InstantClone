@@ -18,26 +18,38 @@ fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let web_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("web");
 
-    for name in &["index.html", "dock.html"] {
+    // (file, run_minifier). The overlay runtime is gzip-only: it is
+    // regex- and template-literal-heavy (the live overlay JS lives in
+    // String.raw templates), which is exactly where the conservative
+    // line minifier has edge cases - gzip alone compresses it fine.
+    for (name, do_min) in &[
+        ("index.html", true),
+        ("dock.html", true),
+        ("overlay-runtime.js", false),
+    ] {
         let src_path = web_dir.join(name);
         println!("cargo:rerun-if-changed={}", src_path.display());
 
         let raw = fs::read_to_string(&src_path)
             .unwrap_or_else(|e| panic!("read {}: {}", src_path.display(), e));
-        let mini = minify(&raw);
+        let processed: Vec<u8> = if *do_min {
+            minify(&raw)
+        } else {
+            raw.clone().into_bytes()
+        };
 
         let out_path = out_dir.join(format!("{name}.gz"));
         let f = fs::File::create(&out_path).unwrap();
         let mut enc = GzEncoder::new(f, Compression::best());
-        enc.write_all(&mini).unwrap();
+        enc.write_all(&processed).unwrap();
         enc.finish().unwrap();
 
         let gz_size = fs::metadata(&out_path).unwrap().len();
         println!(
-            "cargo:warning={}: {} B raw -> {} B mini -> {} B gz",
+            "cargo:warning={}: {} B raw -> {} B out -> {} B gz",
             name,
             raw.len(),
-            mini.len(),
+            processed.len(),
             gz_size
         );
     }

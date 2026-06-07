@@ -179,7 +179,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ic-check.on{background:var(--accent);border-color:transparent}
 
 /* Toast */
-.ic-toast-rail{position:fixed;right:24px;bottom:24px;z-index:200;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.ic-toast-rail{position:fixed;right:24px;bottom:24px;z-index:500;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 .ic-toast{background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;
   padding:10px 14px 10px 12px;display:flex;align-items:center;gap:10px;
   box-shadow:0 10px 30px rgba(0,0,0,.4);pointer-events:auto;
@@ -598,6 +598,278 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--accent) 5%,var(--surface));
   border:1px solid color-mix(in oklch,var(--accent) 22%,var(--line));border-radius:8px;
   font-size:12px;color:var(--fg-2)}
+
+/* ── Overlay gallery ────────────────────────────── */
+.ovg-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:14px;margin-top:6px}
+@media (max-width:980px){.ovg-grid{grid-template-columns:1fr}}
+.ovg-stage{position:relative;width:100%;aspect-ratio:16/9;margin-top:10px;overflow:hidden;
+  border:1px solid var(--line);border-radius:10px;background:
+  linear-gradient(45deg,#0a0c10 25%,transparent 25%,transparent 75%,#0a0c10 75%),
+  linear-gradient(45deg,#0a0c10 25%,#0e1116 25%,#0e1116 75%,#0a0c10 75%);
+  background-size:22px 22px;background-position:0 0,11px 11px}
+.ovg-scale{position:absolute;top:0;left:0;width:1920px;height:1080px;transform-origin:top left}
+.ovg-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block}
+.ovg-list{display:flex;flex-direction:column;gap:7px;padding:10px 14px 14px;overflow-y:auto;max-height:520px}
+.ovg-cat{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-4);margin:8px 2px 2px}
+.ovg-filter{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 8px}
+.ovg-fchip{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:999px;
+  color:var(--fg-3);font-size:11px;font-weight:600;padding:5px 12px;cursor:pointer;transition:.12s}
+.ovg-fchip:hover{border-color:var(--line-2);color:var(--fg)}
+.ovg-fchip.on{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
+.ovg-card{appearance:none;text-align:left;background:var(--surface);border:1px solid var(--line);
+  border-radius:10px;padding:11px 13px;cursor:pointer;display:flex;flex-direction:column;gap:3px;
+  transition:border-color .12s,transform .12s;position:relative}
+.ovg-card:hover{border-color:var(--line-2);transform:translateY(-1px)}
+.ovg-card.sel{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
+  box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 40%,transparent)}
+.ovg-card-name{font-size:13px;font-weight:600;color:var(--fg)}
+.ovg-card-hint{font-size:10.5px;color:var(--fg-4);line-height:1.4}
+.ovg-card-tag{position:absolute;top:9px;right:11px;font-size:9px;font-weight:700;letter-spacing:.06em;
+  padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.06);color:var(--fg-3)}
+.ovg-card-tag.editable{background:color-mix(in oklch,var(--accent) 16%,transparent);color:var(--accent)}
+.ovg-card-tag.preset{background:color-mix(in oklch,var(--live) 15%,transparent);color:var(--live)}
+.ovg-card-tag.legacy{background:rgba(255,255,255,.06);color:var(--fg-4)}
+
+/* ── Overlay Studio ─────────────────────────────── */
+.st-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.st-toolbar .ic-input{max-width:200px;height:34px}
+.st-grid{display:grid;grid-template-columns:210px minmax(0,1fr) 268px;gap:12px;margin-top:6px;
+  align-items:stretch;min-height:520px}
+@media (max-width:1100px){.st-grid{grid-template-columns:1fr}}
+.st-left,.st-right{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;
+  display:flex;flex-direction:column;overflow:hidden}
+.st-right{padding:0}
+.st-tabs{display:flex;border-bottom:1px solid var(--line)}
+.st-tabs button{flex:1;appearance:none;background:transparent;border:0;color:var(--fg-3);
+  font-size:11.5px;font-weight:600;padding:9px 4px;cursor:pointer;letter-spacing:.02em}
+.st-tabs button.on{color:var(--fg);box-shadow:inset 0 -2px 0 var(--accent)}
+.st-left-body{overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:7px;flex:1}
+.st-palette-group{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-4);
+  margin:6px 2px 2px}
+.st-item{appearance:none;text-align:left;background:var(--surface);border:1px solid var(--line);
+  border-radius:8px;padding:9px 11px;cursor:pointer;color:var(--fg-2);font-size:12.5px;
+  display:flex;align-items:center;justify-content:space-between;gap:8px;transition:border-color .12s,transform .12s}
+.st-item:hover{border-color:var(--line-2);transform:translateY(-1px);color:var(--fg)}
+.st-glyph{width:24px;height:24px;flex:none;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:6px;background:var(--bg-2);border:1px solid var(--line);font-size:11px;color:var(--accent);
+  font-family:'JetBrains Mono',monospace;line-height:1}
+.st-item-l{flex:1;text-align:left}
+.st-item .st-cost{font-size:9px;font-weight:700;letter-spacing:.06em;padding:1px 5px;border-radius:5px;
+  background:color-mix(in oklch,var(--warn) 16%,transparent);color:var(--warn)}
+.st-item .st-tag{font-size:9.5px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
+.st-preset{flex-direction:column;align-items:flex-start;gap:3px}
+.st-preset .st-preset-name{font-size:13px;font-weight:600;color:var(--fg)}
+.st-preset .st-preset-hint{font-size:10.5px;color:var(--fg-4);line-height:1.35}
+.st-canvas-wrap{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
+.st-canvas-frame{position:relative;flex:1;min-height:0;background:#06080c;
+  border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.st-canvas-scale{position:absolute;top:0;left:0;width:1920px;height:1080px;transform-origin:top left;
+  background:
+  linear-gradient(45deg,#0d1016 25%,transparent 25%,transparent 75%,#0d1016 75%),
+  linear-gradient(45deg,#0d1016 25%,#11151c 25%,#11151c 75%,#0d1016 75%);
+  background-size:64px 64px;background-position:0 0,32px 32px}
+/* Crisp 16:9 canvas outline + title-safe guide. Positioned by JS (not
+   scaled) so the border stays a clean 1px and the letterbox is dimmed. */
+.st-canvas-bounds{position:absolute;pointer-events:none;border:1px solid rgba(255,255,255,.34);
+  border-radius:3px;box-shadow:0 0 0 100vmax rgba(3,5,8,.55)}
+.st-canvas-bounds::after{content:'';position:absolute;inset:5%;
+  border:1.5px dashed rgba(90,200,250,.5);border-radius:5px}
+.st-canvas-bounds .lbl{position:absolute;left:calc(5% + 5px);top:calc(5% - 14px);
+  font:700 9px 'JetBrains Mono',monospace;color:rgba(90,200,250,.8);letter-spacing:.12em}
+
+/* Studio as a full-page floating modal (reparented to body so the tab
+   pane's lingering transform can't trap position:fixed). */
+.st-modal{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;
+  padding:18px;background:rgba(4,6,10,.8);backdrop-filter:blur(7px)}
+.st-modal[hidden]{display:none}
+.st-modal-card{width:98vw;height:96vh;display:flex;flex-direction:column;
+  background:var(--bg-2);border:1px solid var(--line-2);border-radius:16px;box-shadow:var(--shadow-2);overflow:hidden}
+.st-modal-head{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:nowrap}
+.st-head-title{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+@media (max-width:760px){.st-head-title{display:none}}
+.st-modal-head .st-toolbar{margin-left:auto;flex-wrap:nowrap}
+.st-toolbar .ic-input{max-width:160px}
+.st-icobtn{padding:8px 11px;font-size:15px;line-height:1;min-width:38px}
+.st-icobtn:disabled{opacity:.35;cursor:default}
+.st-menu{position:relative}
+.st-menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:10;min-width:170px;
+  background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow-2);
+  padding:5px;display:flex;flex-direction:column;gap:2px}
+.st-menu-pop[hidden]{display:none}
+.st-menu-pop button{appearance:none;background:transparent;border:0;text-align:left;color:var(--fg-2);
+  font-size:12.5px;padding:8px 11px;border-radius:7px;cursor:pointer}
+.st-menu-pop button:hover{background:rgba(255,255,255,.06);color:var(--fg)}
+.st-menu-pop button.st-danger:hover{background:color-mix(in oklch,var(--danger) 14%,transparent)}
+.st-modal-body{flex:1;min-height:0;padding:12px;display:grid;
+  grid-template-columns:208px minmax(0,1fr) 290px;grid-template-rows:minmax(0,1fr);gap:12px}
+@media (max-width:1120px){.st-modal-body{grid-template-columns:180px minmax(0,1fr) 250px}}
+.st-modal-foot{padding:9px 16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--fg-3);display:flow;align-items:center}
+.st-perf{font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:6px;text-transform:uppercase;cursor:help}
+.st-perf.ok{background:color-mix(in oklch,var(--live) 15%,transparent);color:var(--live)}
+.st-perf.warn{background:color-mix(in oklch,var(--warn) 16%,transparent);color:var(--warn)}
+.st-perf.err{background:color-mix(in oklch,var(--danger) 16%,transparent);color:var(--danger)}
+
+/* State selector above the canvas: the state you preview IS the state you
+   edit. Colour dots tie each state to its overlay colour. */
+.st-statebar2{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:7px 9px}
+.st-states{display:flex;gap:5px;flex-wrap:wrap}
+.st-st{appearance:none;display:inline-flex;align-items:center;gap:7px;background:var(--surface);
+  border:1px solid var(--line);border-radius:8px;color:var(--fg-3);font-size:12px;font-weight:600;
+  padding:7px 12px;cursor:pointer;transition:border-color .12s,background .12s,color .12s}
+.st-st:hover{color:var(--fg);border-color:var(--line-2)}
+.st-st .dot{width:9px;height:9px;border-radius:50%;flex:none}
+.st-st.on{color:var(--fg);border-color:var(--accent);background:color-mix(in oklch,var(--accent) 13%,var(--surface))}
+.st-state-actions{display:flex;gap:6px}
+
+/* Left panel: layers + add */
+.st-sec{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-4);margin:10px 2px 4px}
+.st-sec:first-child{margin-top:2px}
+.st-layer{display:flex;align-items:center;gap:6px;padding:8px 9px;border:1px solid var(--line);
+  border-radius:8px;background:var(--surface);cursor:pointer;transition:border-color .12s}
+.st-layer:hover{border-color:var(--line-2)}
+.st-layer.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.st-layer-sw{width:12px;height:12px;border-radius:4px;flex:none;box-shadow:0 0 0 1px rgba(255,255,255,.14),0 0 8px -2px currentColor}
+.st-layer-name{flex:1;font-size:12.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-layer.sel .st-layer-name{color:var(--fg)}
+.st-layer-btn{appearance:none;background:transparent;border:0;color:var(--fg-4);cursor:pointer;
+  font-size:13px;line-height:1;padding:3px 5px;border-radius:5px}
+.st-layer-btn:hover{color:var(--fg);background:rgba(255,255,255,.07)}
+.st-empty-hint{padding:18px 12px;text-align:center;color:var(--fg-4);font-size:12px;line-height:1.6}
+
+/* Property panel sections */
+.st-pgroup{border-top:1px solid var(--line);padding-top:12px;margin-top:4px;display:flex;flex-direction:column;gap:11px}
+.st-pgroup:first-of-type{border-top:0;padding-top:0;margin-top:0}
+.st-pgroup-h{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-3);
+  display:flex;align-items:center;gap:8px;font-weight:700}
+.st-pgroup-h .dot{width:9px;height:9px;border-radius:50%;flex:none}
+.st-vis{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;
+  background:var(--surface);border:1px solid var(--line);border-radius:9px}
+.st-vis-l{font-size:12.5px;color:var(--fg-2);font-weight:500}
+.st-vischips{display:flex;gap:5px;flex-wrap:wrap}
+.st-vischip{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:7px;
+  color:var(--fg-4);font-size:11px;font-weight:600;padding:6px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+  transition:color .12s,border-color .12s,background .12s}
+.st-vischip::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--dot,#8a8f9a);opacity:.3;transition:opacity .12s}
+.st-vischip:hover{border-color:var(--line-2)}
+.st-vischip.on{color:var(--fg);border-color:var(--line-2);background:var(--surface-2)}
+.st-vischip.on::before{opacity:1}
+.st-allbtn{appearance:none;background:transparent;border:0;color:var(--accent);font-size:10px;font-weight:600;cursor:pointer;padding:1px 2px;letter-spacing:.01em}
+.st-allbtn:hover{text-decoration:underline}
+.st-hint{font-size:10.5px;color:var(--fg-4);line-height:1.5;margin-top:-2px}
+.st-hint code{font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:10px}
+.st-swatches{display:flex;gap:5px;margin-top:6px}
+.st-sw{width:22px;height:22px;border-radius:6px;border:1px solid var(--line-2);cursor:pointer;padding:0}
+.st-sw:hover{transform:scale(1.1)}
+.st-animrow{padding:7px;border:1px solid var(--line);border-radius:8px;background:var(--surface);margin-bottom:6px;display:flex;flex-direction:column;gap:5px}
+.st-animrow-top{display:flex;gap:5px;align-items:center}
+.st-animrow-top select{flex:1}
+.st-animrow-bot{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
+.st-align{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;max-width:120px}
+.st-alignb{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:6px;
+  color:var(--fg-3);font-size:13px;padding:6px;cursor:pointer;line-height:1}
+.st-alignb:hover{border-color:var(--accent);color:var(--fg)}
+.st-chip{appearance:none;background:color-mix(in oklch,var(--accent) 12%,transparent);border:1px solid color-mix(in oklch,var(--accent) 30%,transparent);
+  color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 6px;border-radius:5px;cursor:pointer;margin:2px 3px 0 0}
+.st-chip:hover{background:color-mix(in oklch,var(--accent) 22%,transparent)}
+/* iOS-style switch */
+.st-switch{position:relative;width:42px;height:24px;flex:none;cursor:pointer}
+.st-switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.st-switch .tr{position:absolute;inset:0;background:rgba(255,255,255,.14);border-radius:999px;transition:background .15s}
+.st-switch .kn{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;
+  transition:transform .15s}
+.st-switch input:checked + .tr{background:var(--accent)}
+.st-switch input:checked + .tr + .kn{transform:translateX(18px)}
+
+/* ── Live phase caption + microinteractions ─────────── */
+/* Live phase caption - sits in the chrome (NOT over the canvas, so it
+   never reads as part of the overlay). */
+.ph-cap{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:999px;
+  background:var(--surface);border:1px solid var(--line);font:600 11px 'Inter',ui-sans-serif,sans-serif;
+  color:var(--fg-3);white-space:nowrap;opacity:0;transition:opacity .2s}
+.ph-cap:not(:empty){opacity:1}
+.ph-cap .ph-dot{width:8px;height:8px;border-radius:50%;flex:none;animation:ph-pulse 1.8s ease-in-out infinite}
+@keyframes ph-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.3);opacity:.6}}
+
+/* Auto-preview toggle (clearly a mode, not an animation pause) */
+.st-auto{appearance:none;display:inline-flex;align-items:center;gap:8px;background:var(--surface);
+  border:1px solid var(--line);border-radius:8px;color:var(--fg-2);font-size:11.5px;font-weight:600;
+  padding:7px 13px;cursor:pointer;transition:background .14s,border-color .14s,color .14s}
+.st-auto:hover{border-color:var(--line-2);color:var(--fg)}
+.st-auto .ic{width:9px;height:9px;border-radius:50%;background:currentColor;flex:none;opacity:.6}
+.st-auto.on{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
+.st-auto.on .ic{opacity:1;animation:ph-pulse 1.3s ease-in-out infinite}
+
+/* modal pop-in */
+@keyframes st-modal-in{from{opacity:0}to{opacity:1}}
+@keyframes st-card-in{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+.st-modal:not([hidden]){animation:st-modal-in .18s ease}
+.st-modal:not([hidden]) .st-modal-card{animation:st-card-in .26s cubic-bezier(.2,.8,.2,1)}
+
+/* button + chip microinteractions */
+.st-sim,.st-st,.st-item,.ovg-card,.st-layer,.st-layer-btn,.st-auto{transition:transform .12s var(--ease-out),border-color .14s,background .14s,color .14s,box-shadow .14s}
+.st-sim:hover,.st-st:hover,.st-auto:hover{transform:translateY(-1px)}
+.st-sim:active,.st-st:active,.st-item:active,.ovg-card:active,.st-auto:active{transform:translateY(0) scale(.985)}
+.st-st.on .dot{animation:ph-pulse 1.8s ease-in-out infinite}
+
+/* selected layer accent stripe */
+.st-layer{position:relative;overflow:hidden}
+.st-layer::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent);
+  transform:scaleY(0);transition:transform .16s var(--ease-out)}
+.st-layer.sel::before{transform:scaleY(1)}
+
+/* gentle fade when panels re-render */
+@keyframes st-fade-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.st-props-body{animation:st-fade-in .2s var(--ease-out)}
+.st-canvas-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block;pointer-events:none}
+.st-hit{position:absolute;inset:0}
+.st-hit .st-box{position:absolute;border:2px solid transparent;cursor:move;border-radius:4px}
+.st-hit .st-box:hover{border-color:color-mix(in oklch,var(--accent) 45%,transparent)}
+.st-hit .st-box.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.st-hit .st-resize{position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;border-radius:50%;
+  background:var(--accent);border:2px solid var(--bg-2);cursor:nwse-resize;display:none}
+.st-hit .st-box.sel .st-resize{display:block}
+/* centre snapping guidelines (in canvas space, scaled with the canvas) */
+.st-guide{position:absolute;background:var(--accent);pointer-events:none;opacity:0;transition:opacity .1s;z-index:6;
+  box-shadow:0 0 10px var(--accent)}
+.st-guide.v{left:960px;top:0;bottom:0;width:2px;margin-left:-1px}
+.st-guide.h{top:540px;left:0;right:0;height:2px;margin-top:-1px}
+.st-guide.on{opacity:.9}
+.st-simbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.st-sim{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:7px;
+  color:var(--fg-3);font-size:11.5px;font-weight:600;padding:6px 11px;cursor:pointer}
+.st-sim.on{color:var(--accent-ink);background:var(--accent);border-color:transparent}
+.st-sim-sep{width:1px;height:20px;background:var(--line);margin:0 3px}
+.st-props-head{padding:12px 14px;border-bottom:1px solid var(--line)}
+.st-props-title{font-size:13px;font-weight:600;color:var(--fg)}
+.st-props-sub{font-size:11px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
+.st-props-body{overflow-y:auto;padding:12px 14px;flex:1;display:flex;flex-direction:column;gap:11px}
+.st-field{display:flex;flex-direction:column;gap:5px}
+.st-field-row{display:flex;gap:8px}
+.st-field-row .st-field{flex:1}
+.st-field label{font-size:11px;color:var(--fg-3);font-weight:500}
+.st-field .ic-input,.st-field select{padding:8px 10px;font-size:12.5px;line-height:1.35;border-radius:8px}
+.st-field select{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237a7d8a' stroke-width='2.4' stroke-linecap='round'><path d='M6 9l6 6 6-6'/></svg>");background-repeat:no-repeat;background-position:right 9px center;padding-right:28px}
+.st-field textarea.ic-input{height:auto;min-height:60px;font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.5}
+.st-statebar{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:10px}
+.st-statebtn{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:6px;
+  color:var(--fg-3);font-size:10.5px;font-weight:600;padding:5px 8px;cursor:pointer}
+.st-statebtn.on{color:var(--fg);border-color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent)}
+.st-color{display:flex;align-items:center;gap:8px}
+.st-color input[type=color]{width:34px;height:30px;border:1px solid var(--line);border-radius:6px;background:transparent;padding:2px;cursor:pointer}
+.st-check{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-2);cursor:pointer}
+.st-check input{width:15px;height:15px;cursor:pointer}
+.st-cheat{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+  font-size:11px;color:var(--fg-3);line-height:1.6}
+.st-cheat code{font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:10.5px}
+.st-props-empty{padding:40px 18px;text-align:center;color:var(--fg-4);font-size:12.5px;line-height:1.6}
+.st-rowbtns{display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;align-items:center}
+.ovg-switch{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--fg2,#c5cad3);cursor:pointer;
+  background:var(--bg2,#0c0e12);border:1px solid var(--line,rgba(255,255,255,.1));border-radius:8px;padding:7px 11px;user-select:none}
+.ovg-switch input{accent-color:var(--accent,#5ac8fa);cursor:pointer;margin:0}
+.ovg-switch:hover{border-color:var(--line2,rgba(255,255,255,.18))}
+.st-danger{color:var(--danger)!important}
 .form-block{display:flex;align-items:center;justify-content:space-between;gap:12px;
   padding:10px 0;border-bottom:1px solid var(--line)}
 .form-block:last-of-type{border-bottom:0}
@@ -1217,74 +1489,128 @@ input,select,textarea{font-family:inherit;color:inherit}
 </section>
 
 <section class="tab-pane" data-pane="overlay" hidden>
-  <div class="tab-head">
-    <div>
-      <div class="tab-title">On-stream overlay</div>
-      <div class="tab-sub">A browser-source widget that shows the current delay. Pick a style or drop your own <code class="mono">.html</code> into the overlays folder.</div>
+  <!-- ===== GALLERY VIEW: browse + preview, open Studio to edit ===== -->
+  <div id="ov-gallery">
+    <div class="tab-head" style="align-items:flex-start">
+      <div>
+        <div class="tab-title">On-stream overlay</div>
+        <div class="tab-sub">A browser-source widget that shows your delay. Pick one, drop the URL into OBS - or open the Studio to design your own.</div>
+      </div>
+      <button class="ic-btn ic-btn-primary" onclick="Studio.openStudio()">✎ Open Studio</button>
+    </div>
+
+    <div class="ovg-grid">
+      <section class="overlay-section">
+        <div class="ic-label" style="display:flex;justify-content:space-between;align-items:baseline">
+          <span>Preview</span>
+          <span class="mono" id="ovg-name" style="font-size:10.5px;text-transform:none;letter-spacing:0;color:var(--fg-4)"></span>
+        </div>
+        <div class="ovg-stage" id="ovg-stage">
+          <div class="ovg-scale" id="ovg-scale"><iframe id="ov-preview" title="Overlay preview"></iframe></div>
+        </div>
+        <div class="st-simbar" style="margin-top:10px">
+          <button class="st-auto on" data-psim="auto" onclick="Studio.previewSim('auto')" title="Auto-cycle the delay states"><span class="ic"></span> Auto preview</button>
+          <span class="st-sim-sep"></span>
+          <button class="st-sim" data-psim="idle" onclick="Studio.previewSim('idle')">Idle</button>
+          <button class="st-sim" data-psim="preparing" onclick="Studio.previewSim('preparing')">Arming</button>
+          <button class="st-sim" data-psim="ready" onclick="Studio.previewSim('ready')">Ready</button>
+          <button class="st-sim" data-psim="active" onclick="Studio.previewSim('active')">Active</button>
+          <button class="st-sim" data-psim="cut" onclick="Studio.previewSim('cut')">Cut</button>
+          <button class="st-sim" data-psim="error" onclick="Studio.previewSim('error')">Error</button>
+          <span class="ph-cap" id="ovg-phase" style="margin-left:auto"></span>
+        </div>
+        <div class="copy-block" style="margin-top:12px">
+          <code class="mono" id="ovg-url">select an overlay</code>
+          <button class="ic-btn ic-btn-primary" id="ovg-copy" onclick="Studio.copyGallery()">Copy URL</button>
+        </div>
+        <div class="ic-hint" id="ovg-copyhint" style="margin-top:6px;font-size:11px;color:var(--fg-4)">Paste this into OBS as a Browser Source.</div>
+        <div class="st-rowbtns" id="ovg-actions" style="margin-top:10px"></div>
+      </section>
+
+      <section class="overlay-section" style="padding:0;overflow:hidden;display:flex;flex-direction:column">
+        <div class="ovg-list-head ic-label" style="padding:14px 16px 0;margin:0">Choose overlay</div>
+        <div class="ovg-list" id="ovg-list"></div>
+      </section>
+    </div>
+
+    <section class="overlay-section" style="margin-top:14px">
+      <div class="ic-label">OBS browser dock</div>
+      <div class="tab-sub">Add as an OBS Custom Browser Dock to control delay from within OBS. Recommended size: ~290 × 360.</div>
+      <div class="copy-block">
+        <code class="mono" id="dock-url">/dock</code>
+        <button class="ic-btn ic-btn-ghost" onclick="copyEl('dock-url','Dock URL')">Copy</button>
+      </div>
+      <div class="tab-sub" style="margin-top:10px">Overlays live in <code class="mono" id="ov-dir-display">overlays/</code>. Hand-written <code class="mono">.html</code> files dropped there still work as before.</div>
+    </section>
+  </div>
+
+  <!-- ===== STUDIO: floating editor modal (opened on demand) ===== -->
+  <div id="ov-studio" class="st-modal" hidden>
+    <div class="st-modal-card">
+      <div class="st-modal-head">
+        <button class="ic-btn ic-btn-ghost" onclick="Studio.backToGallery()">← Back</button>
+        <div class="st-head-title">
+          <div class="tab-title" style="font-size:15px">Overlay Studio</div>
+        </div>
+        <div class="st-toolbar">
+          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-undo" title="Undo (Ctrl+Z)" onclick="Studio.undo()">↶</button>
+          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-redo" title="Redo (Ctrl+Shift+Z)" onclick="Studio.redo()">↷</button>
+          <input id="st-name" class="ic-input" placeholder="Overlay name" value="My overlay">
+          <button class="ic-btn ic-btn-primary" id="st-save" onclick="Studio.save()">Save</button>
+          <button class="ic-btn ic-btn-ghost" onclick="Studio.copyUrl()">Copy URL</button>
+          <div class="st-menu">
+            <button class="ic-btn ic-btn-ghost st-icobtn" title="More" onclick="Studio.toggleMenu(event)">⋯</button>
+            <div class="st-menu-pop" id="st-menu-pop" hidden>
+              <button onclick="Studio.menu('saveas')">Save as a copy</button>
+              <button onclick="Studio.menu('rename')">Rename</button>
+              <button onclick="Studio.menu('export')">Export .json</button>
+              <button onclick="Studio.menu('import')">Import .json</button>
+              <button class="st-danger" onclick="Studio.menu('delete')">Delete overlay</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="st-modal-body">
+        <aside class="st-left">
+          <div class="st-tabs" id="st-left-tabs">
+            <button class="on" data-stleft="layers" onclick="Studio.leftTab('layers')">Layers</button>
+            <button data-stleft="add" onclick="Studio.leftTab('add')">Add</button>
+            <button data-stleft="theme" onclick="Studio.leftTab('theme')">Theme</button>
+          </div>
+          <div class="st-left-body" id="st-left-body"></div>
+        </aside>
+
+        <main class="st-canvas-wrap">
+          <div class="st-statebar2">
+            <div class="st-states" id="st-states"></div>
+            <div class="st-state-actions">
+              <span class="ph-cap" id="st-phase"></span>
+              <button class="st-auto" id="st-play" onclick="Studio.play()" title="Auto-cycle the delay states"><span class="ic"></span> Auto preview</button>
+            </div>
+          </div>
+          <div class="st-canvas-frame" id="st-canvas-frame">
+            <div class="st-canvas-scale" id="st-canvas-scale">
+              <iframe id="st-canvas" title="Overlay canvas"></iframe>
+              <div class="st-hit" id="st-hit"></div>
+              <div class="st-guide v" id="st-guide-v"></div>
+              <div class="st-guide h" id="st-guide-h"></div>
+            </div>
+            <div class="st-canvas-bounds" id="st-canvas-bounds"><span class="lbl">SAFE AREA</span></div>
+          </div>
+        </main>
+
+        <aside class="st-right" id="st-props">
+          <div class="st-props-empty">Pick a widget in <b>Layers</b>, click one on the canvas, or <b>+ Add widget</b> to start.</div>
+        </aside>
+      </div>
+
+      <div class="st-modal-foot">
+        <span class="st-perf ok" id="st-perf" title="">Lightweight</span>
+        &nbsp;Editing the <b id="st-foot-state">Active</b> state &nbsp;·&nbsp; URL: <code class="mono" id="st-url">save to get a URL</code> &nbsp;·&nbsp; <b>Esc</b> to close.
+      </div>
     </div>
   </div>
-  <div class="overlay-grid">
-    <section class="overlay-section">
-      <div class="ic-label" style="display:flex;justify-content:space-between;align-items:baseline">
-        <span>Preview</span>
-        <span class="overlay-style-meta mono" id="ovl-selected-name" style="font-size:10.5px;text-transform:none;letter-spacing:0;color:var(--fg-4)">Minimal</span>
-      </div>
-      <div class="overlay-stage" id="overlay-stage" style="min-height:200px;padding:0;overflow:hidden">
-        <iframe id="overlay-preview" src="about:blank" style="width:100%;height:200px;border:0;background:transparent;display:block"></iframe>
-      </div>
-      <div class="copy-block" style="margin-top:12px">
-        <code class="mono" id="ovl-url">/overlay</code>
-        <button class="ic-btn ic-btn-ghost" onclick="copyEl('ovl-url','Overlay URL')">Copy</button>
-      </div>
-    </section>
-    <section class="overlay-section">
-      <div class="ic-label">Customize</div>
-      <div class="form-block">
-        <span class="form-block-l">Language</span>
-        <select id="ov-lang" class="ic-input" style="max-width:180px">
-          <option value="en">English</option>
-          <option value="es">Español</option>
-          <option value="pt">Português</option>
-          <option value="fr">Français</option>
-          <option value="de">Deutsch</option>
-        </select>
-      </div>
-      <div class="form-block">
-        <span class="form-block-l">Auto-hide</span>
-        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--fg-2)">
-          <input id="ov-autohide" type="checkbox" checked style="width:16px;height:16px;cursor:pointer">
-          <span>Dim when no delay is active</span>
-        </label>
-      </div>
-      <div class="muted" style="font-size:11.5px;margin-top:-2px;line-height:1.5">
-        On (default): overlay fades down to ~30% opacity during passthrough so it doesn't snag the viewer's eye when there's nothing to show.
-        Off: overlay stays fully visible regardless of state.
-      </div>
-      <div class="overlay-tip">
-        <span>Pick any overlay below, customize on the left, copy the URL, drop into OBS as Browser Source. Custom <code class="mono">.html</code> files receive the same <code class="mono">?lang=…</code> query if you read it.</span>
-      </div>
-      <div style="margin-top:4px">
-        <span class="ic-label" style="display:block;margin-bottom:6px">Folder</span>
-        <code class="mono" id="ov-dir-display" style="font-size:11px;color:var(--fg-3)">overlays/</code>
-      </div>
-    </section>
-  </div>
-  <section class="overlay-section" style="margin-top:0">
-    <div class="ic-label" style="display:flex;justify-content:space-between;align-items:baseline">
-      <span>Choose overlay</span>
-      <span class="overlay-style-meta mono" id="ovl-counts" style="font-size:10.5px;text-transform:none;letter-spacing:0;color:var(--fg-4)">3 built-in</span>
-    </div>
-    <div class="tab-sub">Click a card to preview it. Built-ins respond to the language picker; custom overlays can optionally read <code class="mono">?lang=…</code> too.</div>
-    <div class="overlay-files" id="overlay-files"></div>
-  </section>
-  <section class="overlay-section">
-    <div class="ic-label">OBS browser dock</div>
-    <div class="tab-sub">Add as an OBS Custom Browser Dock to control delay from within OBS. Recommended size: ~290 × 360.</div>
-    <div class="copy-block">
-      <code class="mono" id="dock-url">/dock</code>
-      <button class="ic-btn ic-btn-ghost" onclick="copyEl('dock-url','Dock URL')">Copy</button>
-    </div>
-  </section>
 </section>
 
 <section class="tab-pane" data-pane="profiles" hidden>
@@ -1599,6 +1925,8 @@ input,select,textarea{font-family:inherit;color:inherit}
   </div>
 </div>
 
+<!-- Overlay Studio runtime + baker (author-time only; defines window.ICOverlay). -->
+<script src="/overlay-runtime.js"></script>
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
@@ -2448,7 +2776,6 @@ async function loadConfig(){
     $('obs-srv').textContent = c.obs_url;
     if ($('wiz-obs-srv')) $('wiz-obs-srv').textContent = c.obs_url;
     $('dock-url').textContent = location.origin + '/dock';
-    updateOverlayUrl();
     // footer
     $('foot-rtmp').textContent = ':' + c.ingest_port;
     $('foot-web').textContent = ':' + c.web_port;
@@ -2980,91 +3307,857 @@ async function confirmResetModal(){
   }
 }
 
-// ── Overlays ──────────────────────────────────────────────────────────
-// Unified gallery of built-in styles + user-dropped custom .html files.
-// Clicking any card selects it: the preview iframe + URL update in lockstep.
-const BUILTIN_OVERLAYS = [
-  { id:'minimal',   name:'Minimal',    meta:'Built-in · Top-left whisper, auto-dims when idle' },
-  { id:'corner',    name:'Corner',     meta:'Built-in · Bottom-right glass, accent top line' },
-  { id:'strip',     name:'Strip',      meta:'Built-in · Bottom edge bar, rises from below' },
-  { id:'focus',     name:'Focus',      meta:'Built-in · Center modal (tournament intermissions)' },
-  { id:'broadcast', name:'Broadcast',  meta:'Built-in · TV news bar, drops in from above' },
-  { id:'ticker',    name:'Ticker',     meta:'Built-in · Bottom scrolling marquee, accent rule' },
-];
-let customOverlays = [];
-let selectedOverlay = { kind:'builtin', id:'minimal' };
+// ── Overlay Studio ────────────────────────────────────────────────────
+// A no-code editor for browser-source overlays. The heavy lifting lives
+// in /overlay-runtime.js (window.ICOverlay): widget catalogue, animation
+// library, and bake(doc)->self-contained static HTML. The Studio canvas
+// is just an iframe whose srcdoc is bake(doc); we poke the (same-origin)
+// canvas DOM directly during a drag, then re-bake on commit.
+const Studio = (function(){
+  const clone = o => JSON.parse(JSON.stringify(o));
+  // split/join not regex for the quote case - the build-time minifier
+  // misparses a /"/g literal. (Same reason as in overlay-runtime.js.)
+  const escapeHtml = s => String(s==null?'':s).split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;');
+  const escapeAttr = s => String(s==null?'':s).split('&').join('&amp;').split('<').join('&lt;').split('"').join('&quot;');
+  let doc = null;        // current overlay document
+  let slug = null;       // saved slug, or null for an unsaved draft
+  let sel = null;        // selected widget id
+  let editState = 'active'; // the state you preview AND edit (unified)
+  let left = 'layers';
+  let scale = 1;
+  let mounted = false, savedList = [];
+  // Undo/redo: a stack of doc snapshots. Every rebake records (debounced),
+  // so all edits are captured with minimal wiring. `restoring` guards
+  // against re-recording while applying an undo.
+  let history=[], histIndex=-1, recordT=0, restoring=false;
+  function resetHistory(){ history=[JSON.stringify(doc)]; histIndex=0; updateUndoBtns(); }
+  function recordNow(){ if(restoring) return; const s=JSON.stringify(doc); if(history[histIndex]===s) return; history=history.slice(0,histIndex+1); history.push(s); if(history.length>120) history.shift(); histIndex=history.length-1; updateUndoBtns(); }
+  function recordSoon(){ if(restoring) return; clearTimeout(recordT); recordT=setTimeout(recordNow,300); }
+  function undo(){ if(histIndex>0){ histIndex--; applyHistory(); } }
+  function redo(){ if(histIndex<history.length-1){ histIndex++; applyHistory(); } }
+  function applyHistory(){ restoring=true; doc=JSON.parse(history[histIndex]); if(sel&&!widget(sel)) sel=null; renderLeft(); rebake(); renderProps(); restoring=false; updateUndoBtns(); }
+  function updateUndoBtns(){ const u=$('st-undo'),r=$('st-redo'); if(u)u.disabled=histIndex<=0; if(r)r.disabled=histIndex>=history.length-1; }
+  // Semantic colour per state, for the dots in the state selector.
+  const STATE_DOT = { idle:'#8a8f9a', preparing:'#ffb73a', ready:'#5ac8fa', active:'#54e38e', error:'#ff5a5a' };
 
-function overlayUrlFor(sel, lang, autohide){
-  // `autohide=off` only appears in the URL when the user toggles the
-  // checkbox off. The overlay JS treats anything other than 'off' as
-  // 'on', so omitting the param keeps the default dim-when-idle
-  // behaviour we shipped originally - and keeps the URL short.
-  const ah = autohide ? '' : '&autohide=off';
-  if (sel.kind === 'builtin'){
-    return `/overlay?lang=${encodeURIComponent(lang)}&style=${encodeURIComponent(sel.id)}${ah}`;
+  function IC(){ return window.ICOverlay; }
+  function widget(id){ return doc.widgets.find(w => w.id === id); }
+  function nextId(){ let n=1; while(doc.widgets.some(w=>w.id==='w'+n)) n++; return 'w'+n; }
+  function slugify(s){ return (s||'overlay').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,64) || 'overlay'; }
+
+  // ---- views: gallery (browse + preview) vs studio (editor) ----
+  let gsel = null;          // gallery selection {type:'preset'|'saved', id}
+  let galleryFilter = 'all';// preset tag filter
+  let previewState = 'auto'; // 'auto' = run the delay-lifecycle simulation
+  let gallerySim = null, studioSim = null, playing = false;
+  const ARMED_MS = 15000;
+  // A fake /state for a phase at progress p (0..1). Arming ramps the fill.
+  // Bitrate gets a gentle wave so the BitrateMeter sparkline draws a curve.
+  function simFrame(st, p){
+    const br=6200+Math.round(Math.sin(performance.now()/350)*520);
+    const base={ingest_alive:true,armed_delay_ms:ARMED_MS,buffer_target_ms:ARMED_MS,target_delay_ms:ARMED_MS,
+      current_delay_ms:ARMED_MS,destinations_total:2,destinations_alive:2,
+      destinations:[{alive:true},{alive:true}],stats:{cuts:0,bitrate_kbps:br}};
+    if(st==='idle') return {...base,ingest_alive:false,phase:'idle',buffer_fill_ms:0,destinations_alive:0,destinations:[{alive:false},{alive:false}],stats:{cuts:0,bitrate_kbps:0}};
+    if(st==='preparing') return {...base,phase:'preparing',buffer_fill_ms:Math.round((p==null?0.5:Math.min(1,p))*ARMED_MS)};
+    if(st==='ready') return {...base,phase:'ready',buffer_fill_ms:ARMED_MS};
+    if(st==='active') return {...base,phase:'active',buffer_fill_ms:ARMED_MS};
+    if(st==='cut') return {...base,phase:'active',buffer_fill_ms:ARMED_MS,stats:{cuts:3,bitrate_kbps:br}};
+    if(st==='error') return {...base,phase:'active',buffer_fill_ms:ARMED_MS,destinations_alive:0,destinations:[{alive:false},{alive:false}]};
+    return base;
   }
-  return `/overlay/${encodeURIComponent(sel.id)}?lang=${encodeURIComponent(lang)}${ah}`;
-}
-
-function selectOverlay(kind, id){
-  selectedOverlay = { kind, id };
-  updateOverlayUrl();
-  renderOverlayGallery();
-}
-
-function updateOverlayUrl(){
-  const lang = ($('ov-lang') && $('ov-lang').value) || 'en';
-  const autohide = !$('ov-autohide') || $('ov-autohide').checked;
-  const path = overlayUrlFor(selectedOverlay, lang, autohide);
-  $('ovl-url').textContent = location.origin + path;
-  const iframe = $('overlay-preview');
-  if (iframe && iframe.src !== location.origin + path){
-    iframe.src = path;
+  // Delay lifecycle for the 'Auto' simulation. Arming ramps; rest hold.
+  // Active is long so the auto-hide ("show then disappear") is visible in preview.
+  const LIFECYCLE = [['idle',1300],['preparing',3400],['ready',1500],['active',13000]];
+  // makeSim(iframe, mode, onTick, noHide): mode 'auto' runs the lifecycle; a
+  // state key pins it (arming keeps animating its fill). noHide keeps auto-hide
+  // widgets visible (used while editing). onTick drives the live caption.
+  function makeSim(iframe, mode, onTick, noHide){
+    let timer=0, firstPost=true, lastReplay=performance.now(); const t0=performance.now();
+    function post(st,p,forceReplay){ if(iframe && iframe.contentWindow) iframe.contentWindow.postMessage({__ic_sim:true,forceState:st,state:simFrame(st,p),noHide:!!noHide,replay:firstPost||!!forceReplay},'*'); firstPost=false; if(onTick) onTick(st,p); }
+    function loop(){
+      const total=LIFECYCLE.reduce((a,x)=>a+x[1],0);
+      let el=(performance.now()-t0)%total, acc=0, ph='idle', p=0;
+      for(const x of LIFECYCLE){ if(el<acc+x[1]){ ph=x[0]; p=(el-acc)/x[1]; break; } acc+=x[1]; }
+      post(ph, ph==='preparing'?p:1);
+      timer=setTimeout(loop, 90);
+    }
+    function pinned(){
+      if(mode==='preparing'){ const dur=2800, el=(performance.now()-t0)%dur; post('preparing', el/dur); timer=setTimeout(pinned, 90); }
+      else {
+        // When auto-hide can fire (noHide off), re-show the widget every ~5s so
+        // the exit animation is visible on a loop while editing. Otherwise just
+        // keep ticking so live widgets (meter, timer) stay alive.
+        const now=performance.now(); let rep=false;
+        if(!noHide && now-lastReplay>5000){ rep=true; lastReplay=now; }
+        post(mode, 1, rep); timer=setTimeout(pinned, 500);
+      }
+    }
+    if(!mode || mode==='auto'){ loop(); } else { pinned(); }
+    return { stop(){ clearTimeout(timer); } };
   }
-  // Selected name in preview header
-  const name = selectedOverlay.kind === 'builtin'
-    ? (BUILTIN_OVERLAYS.find(o => o.id === selectedOverlay.id) || {}).name || selectedOverlay.id
-    : selectedOverlay.id.replace(/\.html$/i, '');
-  $('ovl-selected-name').textContent = name;
-}
+  // A friendly live caption for the current simulated phase.
+  function phaseInfo(st, p){
+    if(st==='preparing') return { t:'Arming '+Math.round((p||0)*100)+'%', c:STATE_DOT.preparing };
+    if(st==='ready') return { t:'Armed', c:STATE_DOT.ready };
+    if(st==='active') return { t:'On delay '+(ARMED_MS/1000).toFixed(1)+'s', c:STATE_DOT.active };
+    if(st==='cut') return { t:'Cut', c:STATE_DOT.cut };
+    if(st==='error') return { t:'Signal lost', c:STATE_DOT.error };
+    return { t:'Idle - no delay', c:STATE_DOT.idle };
+  }
+  function setCaption(elId, st, p){
+    const el=$(elId); if(!el) return;
+    const inf=phaseInfo(st,p);
+    el.innerHTML='<span class="ph-dot" style="background:'+inf.c+'"></span>'+inf.t;
+  }
+  let pendingSelect = null; // slug to auto-select in the gallery after a save
 
-function renderOverlayGallery(){
-  const c = $('overlay-files'); if (!c) return;
-  c.innerHTML = '';
-  BUILTIN_OVERLAYS.forEach(o => {
-    const sel = selectedOverlay.kind === 'builtin' && selectedOverlay.id === o.id;
-    const b = document.createElement('button');
-    b.className = 'overlay-file' + (sel ? ' selected' : '');
-    b.innerHTML = `<div class="overlay-file-name"></div><div class="overlay-file-meta">${o.meta}</div>`;
-    b.querySelector('.overlay-file-name').textContent = o.name;
-    b.onclick = () => selectOverlay('builtin', o.id);
-    c.appendChild(b);
-  });
-  customOverlays.forEach(f => {
-    const sel = selectedOverlay.kind === 'custom' && selectedOverlay.id === f;
-    const b = document.createElement('button');
-    b.className = 'overlay-file' + (sel ? ' selected' : '');
-    b.innerHTML = `<div class="overlay-file-name"></div><div class="overlay-file-meta mono"></div>
-                   <span class="overlay-file-tag">CUSTOM</span>`;
-    b.querySelector('.overlay-file-name').textContent = f.replace(/\.html$/i,'');
-    b.querySelector('.overlay-file-meta').textContent = '/overlay/'+f;
-    b.onclick = () => selectOverlay('custom', f);
-    c.appendChild(b);
-  });
-  const total = BUILTIN_OVERLAYS.length + customOverlays.length;
-  $('ovl-counts').textContent = `${BUILTIN_OVERLAYS.length} built-in · ${customOverlays.length} custom · ${total} total`;
-}
+  // The studio is a floating modal; the gallery stays mounted behind it.
+  function setView(name){ $('ov-studio').hidden = name!=='studio'; }
 
-async function loadOverlays(){
-  try {
-    const list = await (await fetch('/overlays')).json();
-    customOverlays = Array.isArray(list) ? list : (list.files || []);
-    renderOverlayGallery();
-    updateOverlayUrl();
-  } catch(_){}
-}
-$('ov-lang') && $('ov-lang').addEventListener('change', updateOverlayUrl);
-$('ov-autohide') && $('ov-autohide').addEventListener('change', updateOverlayUrl);
+  // Entry point from the tab switch. Default to the gallery; the studio
+  // editor is only mounted when the user opens it.
+  function show(){
+    if(!window.ICOverlay) return;
+    if($('ov-studio').hidden===false){ fitScale(); return; } // already in studio
+    setView('gallery');
+    loadSaved().then(()=>{ renderGallery(); fitPreview(); });
+  }
+
+  function ensureStudio(){
+    if(mounted) return;
+    mounted = true;
+    // Reparent the modal to <body>: the tab pane keeps a transform from its
+    // entry animation, which would trap position:fixed inside the pane.
+    const m=$('ov-studio'); if(m && m.parentElement!==document.body) document.body.appendChild(m);
+    if(!doc){ doc = clone(IC().PRESETS[0]); doc.widgets.forEach((w,i)=>{ w.id='w'+(i+1); }); $('st-name').value = doc.name; }
+    renderStates();
+    renderLeft();
+    rebake();
+    renderProps();
+    resetHistory();
+  }
+  function openStudio(slug){
+    stopGallerySim(); setView('studio'); ensureStudio();
+    if(slug) openSaved({slug:slug, studio:true});
+    requestAnimationFrame(fitScale);
+  }
+  function openStudioPreset(i){ stopGallerySim(); setView('studio'); ensureStudio(); loadPreset(i); requestAnimationFrame(fitScale); }
+  function backToGallery(){
+    stopPlay();
+    setView('gallery');
+    loadSaved().then(()=>{ renderGallery(); fitPreview(); });
+  }
+
+  // Fit the 1920x1080 canvas into the frame on BOTH axes and centre it, so
+  // the editor always shows a true 16:9 regardless of the modal size.
+  function fitScale(){
+    const frame = $('st-canvas-frame'); if(!frame) return;
+    const fw = frame.clientWidth || 640, fh = frame.clientHeight || 360;
+    scale = Math.max(0.05, Math.min(fw/1920, fh/1080));
+    const tx = Math.max(0,(fw-1920*scale)/2), ty = Math.max(0,(fh-1080*scale)/2);
+    $('st-canvas-scale').style.transform = 'translate('+tx+'px,'+ty+'px) scale('+scale+')';
+    $('st-hit').style.transform = '';
+    // Lay the (non-scaled) 16:9 outline + safe guide exactly over the canvas.
+    const b = $('st-canvas-bounds');
+    if(b){ b.style.left=tx+'px'; b.style.top=ty+'px'; b.style.width=(1920*scale)+'px'; b.style.height=(1080*scale)+'px'; }
+  }
+  function fitPreview(){
+    const stage = $('ovg-stage'); if(!stage) return;
+    const w = stage.clientWidth || 600;
+    $('ovg-scale').style.transform = 'scale('+(w/1920)+')';
+  }
+
+  // ---- gallery ----
+  // Filter by TYPE: built-in presets, your editable saved overlays, or
+  // legacy hand-written .html files.
+  function renderGallery(){
+    const c = $('ovg-list'); if(!c) return;
+    c.innerHTML='';
+    // A just-saved overlay should be visible + selected: show all, target it.
+    if(pendingSelect && savedList.some(o=>o.slug===pendingSelect)){ gsel={type:'saved',id:pendingSelect}; galleryFilter='all'; pendingSelect=null; }
+    const showType=(t)=> galleryFilter==='all' || galleryFilter===t;
+    // type filter chips
+    const types=[['all','All'],['preset','Presets'],['editable','Editable'],['legacy','Legacy']];
+    const fr=document.createElement('div'); fr.className='ovg-filter';
+    types.forEach(t=>{ const b=document.createElement('button'); b.className='ovg-fchip'+(galleryFilter===t[0]?' on':'');
+      b.textContent=t[1]; b.onclick=()=>{ galleryFilter=t[0]; renderGallery(); }; fr.appendChild(b); });
+    c.appendChild(fr);
+
+    function tagCard(card, label, cls){ const t=card.querySelector('.ovg-card-tag'); t.textContent=label; if(cls) t.classList.add(cls); }
+
+    // Saved overlays (editable + legacy)
+    savedList.forEach(o=>{
+      const t = o.studio?'editable':'legacy';
+      if(!showType(t)) return;
+      const card=document.createElement('button'); card.className='ovg-card';
+      card.dataset.gtype='saved'; card.dataset.gid=o.slug;
+      card.innerHTML='<span class="ovg-card-name"></span><span class="ovg-card-hint mono"></span><span class="ovg-card-tag"></span>';
+      card.querySelector('.ovg-card-name').textContent=o.name||o.slug;
+      card.querySelector('.ovg-card-hint').textContent='/overlay/'+o.slug+'.html';
+      tagCard(card, o.studio?'EDITABLE':'LEGACY', o.studio?'editable':'legacy');
+      card.onclick=()=>selectGallery('saved',o.slug);
+      c.appendChild(card);
+    });
+
+    // Built-in presets
+    if(showType('preset')) IC().PRESETS.forEach((p,i)=>{
+      const card=document.createElement('button'); card.className='ovg-card';
+      card.dataset.gtype='preset'; card.dataset.gid=String(i);
+      card.innerHTML='<span class="ovg-card-name"></span><span class="ovg-card-hint"></span><span class="ovg-card-tag"></span>';
+      card.querySelector('.ovg-card-name').textContent=p.name;
+      card.querySelector('.ovg-card-hint').textContent=p.hint;
+      tagCard(card, 'PRESET', 'preset');
+      card.onclick=()=>selectGallery('preset',i);
+      c.appendChild(card);
+    });
+
+    // Keep the current selection if it's still visible; else pick the first.
+    const cur = gsel && c.querySelector('.ovg-card[data-gtype="'+gsel.type+'"][data-gid="'+gsel.id+'"]');
+    if(cur){ selectGallery(gsel.type, gsel.id); }
+    else { const first=c.querySelector('.ovg-card'); if(first) selectGallery(first.dataset.gtype, first.dataset.gtype==='preset'?parseInt(first.dataset.gid,10):first.dataset.gid); }
+  }
+
+  function selectGallery(type,id){
+    gsel={type,id};
+    $$('#ovg-list .ovg-card').forEach(el=>el.classList.toggle('sel', el.dataset.gtype===type && el.dataset.gid===String(id)));
+    updatePreview();
+    updateGalleryMeta();
+  }
+  function stopGallerySim(){ if(gallerySim){ gallerySim.stop(); gallerySim=null; } }
+  // Presets ship with a 4s fade-out after going live. This fast toggle lets a
+  // streamer keep the overlay up instead, without opening the Studio.
+  let presetAutoHide = true;
+  function presetDoc(p){
+    const d=clone(p);
+    d.widgets.forEach((w,i)=>{ w.id='w'+(i+1);
+      if(!presetAutoHide && w.states){ Object.keys(w.states).forEach(k=>{ delete w.states[k].hide_after_ms; delete w.states[k].exit; }); }
+    });
+    return d;
+  }
+  function togglePresetHide(on){ presetAutoHide=on; updatePreview(); }
+  function updatePreview(){
+    const prev=$('ov-preview'); if(!prev) return;
+    stopGallerySim();
+    prev.onload=()=>applyPreviewState();
+    if(gsel.type==='preset'){ prev.removeAttribute('src'); prev.srcdoc=IC().bake(presetDoc(IC().PRESETS[gsel.id])); }
+    else { prev.removeAttribute('srcdoc'); prev.src='/overlay/'+encodeURIComponent(gsel.id)+'.html'; }
+  }
+  // Drive the preview: 'auto' runs the delay-lifecycle simulation, 'live'
+  // shows the real OBS state, anything else pins one state.
+  function applyPreviewState(){
+    const prev=$('ov-preview'); if(!prev) return;
+    stopGallerySim();
+    const cap=$('ovg-phase');
+    if(previewState==='live'){ if(prev.contentWindow) prev.contentWindow.postMessage({__ic_sim:true,forceState:null,state:simFrame('idle',0)},'*'); if(cap) cap.innerHTML='<span class="ph-dot" style="background:#8a8f9a"></span>Live - real OBS state'; return; }
+    gallerySim=makeSim(prev, previewState==='auto'?'auto':previewState, (st,p)=>setCaption('ovg-phase',st,p), previewState!=='auto');
+  }
+  function previewSim(st){
+    previewState=st;
+    $$('.st-simbar [data-psim]').forEach(b=>b.classList.toggle('on',(b.dataset.psim||'')===st));
+    applyPreviewState();
+  }
+  function updateGalleryMeta(){
+    const nameEl=$('ovg-name'), urlEl=$('ovg-url'), act=$('ovg-actions');
+    act.innerHTML='';
+    if(gsel.type==='preset'){
+      const p=IC().PRESETS[gsel.id];
+      // A preset is just a starting point; the URL is what OBS loads, so
+      // show the URL it gets the moment you use it. Copy/Use both create
+      // the file - no Studio detour required.
+      nameEl.textContent=p.name+' · preset';
+      urlEl.textContent=location.origin+'/overlay/'+slugify(p.name)+'.html';
+      act.innerHTML='<label class="ovg-switch" title="Fade the overlay out a few seconds after the delay goes live"><input type="checkbox"'+(presetAutoHide?' checked':'')+' onchange="Studio.togglePresetHide(this.checked)"><span>Auto-hide when live</span></label>'+
+        '<button class="ic-btn ic-btn-ghost" onclick="Studio.openStudioPreset('+gsel.id+')">Customize in Studio</button>';
+    } else {
+      const o=savedList.find(x=>x.slug===gsel.id)||{slug:gsel.id};
+      nameEl.textContent=(o.name||o.slug)+(o.studio?' · saved':' · legacy');
+      urlEl.textContent=location.origin+'/overlay/'+o.slug+'.html';
+      if(o.studio) act.innerHTML='<button class="ic-btn ic-btn-primary" onclick="Studio.openStudio(\''+o.slug+'\')">Edit in Studio</button>'+
+        '<button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.deleteFromGallery(\''+o.slug+'\')">Delete</button>';
+      else act.innerHTML='<span class="muted" style="font-size:11.5px;align-self:center">Hand-written - edit the .html file directly</span>'+
+        '<button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.deleteFromGallery(\''+o.slug+'\')">Delete</button>';
+    }
+  }
+  // Copy from the gallery. For a preset, create the file first (so the URL
+  // actually resolves in OBS) then copy it. For a saved overlay, copy as-is.
+  async function copyGallery(){
+    if(gsel && gsel.type==='preset'){ const sl=await useOverlay(true); if(sl) copyText(location.origin+'/overlay/'+sl+'.html','Overlay URL'); }
+    else copyEl('ovg-url','Overlay URL');
+  }
+  // Bake a preset to disk under its own slug (so the URL resolves in OBS) and
+  // switch the gallery to it. `silent` skips the toast for the copy path, which
+  // shows its own "copied" toast.
+  async function useOverlay(silent){
+    if(!gsel || gsel.type!=='preset') return null;
+    const p=IC().PRESETS[gsel.id];
+    const d=presetDoc(p);
+    const sl=slugify(p.name);
+    try{
+      const r=await fetch('/overlays/'+encodeURIComponent(sl), {method:'POST', headers:{'Content-Type':'text/html'}, body:IC().bake(d)});
+      const j=await r.json();
+      if(!j.ok){ toast(j.error||'Could not save overlay','err'); return null; }
+      await loadSaved(); gsel={type:'saved',id:sl}; renderGallery();
+      if(!silent) toast('Saved to your overlays - URL ready for OBS','ok');
+      return sl;
+    }catch(e){ toast('Could not save overlay','err'); return null; }
+  }
+  async function deleteFromGallery(slugId){
+    const o=savedList.find(x=>x.slug===slugId);
+    if(!confirm('Delete overlay "'+((o&&o.name)||slugId)+'"? This removes its file from the overlays folder.')) return;
+    try{ await fetch('/overlays/'+encodeURIComponent(slugId)+'/delete',{method:'POST'}); }catch(e){}
+    toast('Deleted','info');
+    gsel=null;
+    await loadSaved(); renderGallery();
+  }
+
+  // ---- canvas ----
+  function rebake(){
+    const html = IC().bake(doc);
+    const f = $('st-canvas');
+    f.onload = function(){ studioDrive(); buildHits(); };
+    f.srcdoc = html;
+    updateUrlLabel();
+    recordSoon(); updatePerfBadge();
+  }
+  // Drive the studio canvas: lifecycle while playing, else pin the edited state.
+  function studioDrive(){
+    if(studioSim){ studioSim.stop(); }
+    // While pinned, keep widgets visible for editing (noHide) - UNLESS the
+    // edited state has an auto-hide, in which case let it play so the exit is
+    // visible (makeSim loops it back into view every ~5s).
+    const hasHide = doc.widgets.some(w=> w.states && w.states[editState] && w.states[editState].hide_after_ms>0);
+    studioSim=makeSim($('st-canvas'), playing?'auto':editState, (st,p)=>{
+      setCaption('st-phase',st,p);
+      if(playing) $$('#st-states .st-st').forEach(b=>b.classList.toggle('on',b.dataset.st===st));
+    }, !playing && !hasHide);
+  }
+  function buildHits(){
+    const hit = $('st-hit'); hit.innerHTML='';
+    const f = $('st-canvas'); const cdoc = f.contentDocument; if(!cdoc) return;
+    // Measure with the edited state applied: the baked page starts at
+    // data-state="idle" where most widgets are display:none (rect 0x0),
+    // which would pin every hitbox to the top-left corner.
+    if(cdoc.body) cdoc.body.setAttribute('data-state', editState);
+    doc.widgets.forEach(w=>{
+      const el = cdoc.getElementById((w.id||'').replace(/[^a-zA-Z0-9_-]/g,''));
+      if(!el) return;
+      const r = el.getBoundingClientRect();
+      if(r.width<1 && r.height<1) return; // hidden in this state - no handle
+      const box = document.createElement('div');
+      box.className = 'st-box' + (sel===w.id?' sel':'');
+      box.style.left = r.left+'px'; box.style.top = r.top+'px';
+      box.style.width = Math.max(16,r.width)+'px'; box.style.height = Math.max(16,r.height)+'px';
+      box.dataset.id = w.id;
+      box.addEventListener('mousedown', e=>dragStart(e, w, el, box));
+      const meta = IC().KINDS.find(x=>x.key===w.kind)||{};
+      if(!meta.full){
+        const h = document.createElement('div'); h.className='st-resize';
+        h.addEventListener('mousedown', e=>{ e.stopPropagation(); resizeStart(e, w, meta); });
+        box.appendChild(h);
+      }
+      hit.appendChild(box);
+    });
+  }
+
+  // ---- drag (with centre snapping + guidelines) ----
+  const SNAP = 10; // canvas px
+  function showGuide(v,h){ const gv=$('st-guide-v'),gh=$('st-guide-h'); if(gv)gv.classList.toggle('on',v); if(gh)gh.classList.toggle('on',h); }
+  function dragStart(e, w, el, box){
+    e.preventDefault(); select(w.id);
+    const sx = w.anchor.indexOf('right')>=0 ? -1 : 1;
+    const sy = w.anchor.indexOf('bottom')>=0 ? -1 : 1;
+    const startX=e.clientX, startY=e.clientY;
+    const r0 = el.getBoundingClientRect();
+    const cx0 = r0.left + r0.width/2, cy0 = r0.top + r0.height/2;
+    let lastDx=0, lastDy=0;
+    function mv(ev){
+      let dx=(ev.clientX-startX)/scale, dy=(ev.clientY-startY)/scale;
+      let snapV=false, snapH=false;
+      if(Math.abs(cx0+dx-960)<SNAP){ dx += (960-(cx0+dx)); snapV=true; }
+      if(Math.abs(cy0+dy-540)<SNAP){ dy += (540-(cy0+dy)); snapH=true; }
+      showGuide(snapV,snapH);
+      lastDx=dx; lastDy=dy;
+      el.style.transform = 'translate('+dx+'px,'+dy+'px)';
+      box.style.transform = 'translate('+dx+'px,'+dy+'px)';
+    }
+    function up(){
+      document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up);
+      showGuide(false,false);
+      w.offset.x = Math.round(w.offset.x + sx*lastDx);
+      w.offset.y = Math.round(w.offset.y + sy*lastDy);
+      rebake(); renderProps();
+    }
+    document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+  }
+
+  // ---- resize (bottom-right handle) ----
+  function resizeStart(e, w, meta){
+    e.preventDefault(); select(w.id);
+    const startX=e.clientX, startY=e.clientY;
+    const fontMode = (meta.fields||[]).indexOf('font')>=0;
+    const sf0 = w.font_px||34, sw0=(w.size&&w.size.w)||120, sh0=(w.size&&w.size.h)||80;
+    function mv(ev){
+      const dx=(ev.clientX-startX)/scale, dy=(ev.clientY-startY)/scale;
+      if(fontMode){ w.font_px = Math.max(8, Math.round(sf0 + dx*0.35)); }
+      else { w.size.w = Math.max(20, Math.round(sw0+dx)); w.size.h = Math.max(8, Math.round(sh0+dy)); }
+      softRebake();
+    }
+    function up(){ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); rebake(); renderProps(); }
+    document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+  }
+
+  // ---- state selector (the state you preview IS the state you edit) ----
+  function renderStates(){
+    const c = $('st-states'); if(!c) return; c.innerHTML='';
+    IC().STATES.forEach(st=>{
+      const b=document.createElement('button');
+      b.className='st-st'+(editState===st.key?' on':''); b.dataset.st=st.key; b.title=st.hint;
+      b.innerHTML='<span class="dot" style="background:'+STATE_DOT[st.key]+'"></span>'+st.label;
+      b.onclick=()=>selectState(st.key);
+      c.appendChild(b);
+    });
+  }
+  function selectState(st){
+    playing=false; editState=st; playLabel();
+    $$('#st-states .st-st').forEach(b=>b.classList.toggle('on',b.dataset.st===st));
+    const fl=$('st-foot-state'); if(fl) fl.textContent=(IC().STATES.find(s=>s.key===st)||{label:st}).label;
+    studioDrive(); renderProps();
+  }
+
+  // ---- left panel: Layers + Add ----
+  const WIDGET_GLYPH = { DelayReadout:'0.0', StatePill:'▱', BufferBar:'▬', BufferRing:'◯', BitrateMeter:'∿',
+    DestinationStatus:'•••', CutCounter:'✂', SessionElapsed:'⏱', Text:'T', Icon:'★', Shape:'▭', Divider:'—',
+    CornerFrame:'⌐', PulsingDot:'●', Heartbeat:'♥', Banner:'▭', EdgeAccent:'▢', BackgroundTint:'▦', LiquidFill:'≋',
+    Image:'▥', CustomHTML:'</>' };
+  function leftTab(name){ left=name; $$('#st-left-tabs button').forEach(b=>b.classList.toggle('on',b.dataset.stleft===name)); renderLeft(); }
+  function renderLeft(){
+    const c = $('st-left-body'); c.innerHTML='';
+    if(left==='add'){
+      const groups={data:'Data',ambient:'Ambient',deco:'Decoration',media:'Media',power:'Power user'};
+      Object.keys(groups).forEach(g=>{
+        const items=IC().KINDS.filter(k=>k.group===g); if(!items.length) return;
+        const h=document.createElement('div'); h.className='st-sec'; h.textContent=groups[g]; c.appendChild(h);
+        items.forEach(k=>{
+          const b=document.createElement('button'); b.className='st-item';
+          let cost = k.cost==='mid'?'<span class="st-cost">GPU</span>':(k.cost==='opt'?'<span class="st-cost">CODE</span>':'');
+          b.innerHTML='<span class="st-glyph">'+(WIDGET_GLYPH[k.key]||'▫')+'</span><span class="st-item-l"></span>'+cost;
+          b.querySelector('.st-item-l').textContent=k.label;
+          b.onclick=()=>addWidget(k.key);
+          c.appendChild(b);
+        });
+      });
+    } else if(left==='theme'){
+      const t=ensureTheme();
+      const head=document.createElement('div'); head.className='st-sec'; head.textContent='Theme colours'; c.appendChild(head);
+      [['accent','Accent'],['live','Live'],['warn','Arming'],['error','Error'],['ink','Text / ink'],['grey','Idle / grey']].forEach(k=>{
+        const row=document.createElement('div'); row.className='st-field';
+        row.innerHTML='<label>'+k[1]+'</label><div class="st-color"><input type="color" value="'+t[k[0]]+'" oninput="Studio.setTheme(\''+k[0]+'\',this.value)"><input class="ic-input mono" value="'+t[k[0]]+'" oninput="Studio.setTheme(\''+k[0]+'\',this.value)"></div>';
+        c.appendChild(row);
+      });
+      const hint=document.createElement('div'); hint.className='st-hint'; hint.style.padding='10px 2px';
+      hint.textContent='Pick a theme colour from the swatches under any widget colour. Those widgets recolour instantly when you change the theme here.';
+      c.appendChild(hint);
+    } else {
+      // Layers - the widgets in this overlay, top = front-most.
+      if(!doc || !doc.widgets.length){
+        const e=document.createElement('div'); e.className='st-empty-hint';
+        e.innerHTML='No widgets yet.<br>Hit <b>+ Add widget</b> to place one.';
+        c.appendChild(e); return;
+      }
+      doc.widgets.slice().reverse().forEach(w=>{
+        const k=IC().KINDS.find(x=>x.key===w.kind)||{label:w.kind};
+        const row=document.createElement('div'); row.className='st-layer'+(sel===w.id?' sel':''); row.dataset.id=w.id;
+        const label=(w.base&&w.base.text)?(k.label+' · '+w.base.text):k.label;
+        const col=(w.states&&w.states.active&&w.states.active.color)||(w.base&&w.base.color)||'#5ac8fa';
+        row.innerHTML='<span class="st-layer-sw" style="background:'+col+'"></span><span class="st-layer-name"></span>'+
+          '<button class="st-layer-btn" title="Bring forward" data-act="up">▲</button>'+
+          '<button class="st-layer-btn" title="Send back" data-act="down">▼</button>'+
+          '<button class="st-layer-btn" title="Delete" data-act="del">✕</button>';
+        row.querySelector('.st-layer-name').textContent=label;
+        row.onclick=(ev)=>{ const act=ev.target&&ev.target.dataset?ev.target.dataset.act:null;
+          if(act==='del'){ ev.stopPropagation(); delWidgetById(w.id); }
+          else if(act==='up'){ ev.stopPropagation(); moveWidget(w.id,1); }
+          else if(act==='down'){ ev.stopPropagation(); moveWidget(w.id,-1); }
+          else select(w.id); };
+        c.appendChild(row);
+      });
+    }
+  }
+
+  function loadPreset(i){
+    doc = clone(IC().PRESETS[i]); slug=null; sel=null;
+    doc.widgets.forEach((w,n)=>{ w.id='w'+(n+1); });
+    $('st-name').value = doc.name;
+    renderStates(); renderLeft(); rebake(); renderProps(); resetHistory();
+    toast('Loaded "'+doc.name+'" - edit freely, the original preset is untouched','ok');
+  }
+  function addWidget(kind){
+    const w = IC().defaultWidget(kind, nextId());
+    doc.widgets.push(w); sel=w.id;
+    left='layers'; $$('#st-left-tabs button').forEach(b=>b.classList.toggle('on',b.dataset.stleft==='layers'));
+    renderLeft(); rebake(); renderProps();
+  }
+  async function openSaved(o){
+    try{
+      const html = await (await fetch('/overlay/'+encodeURIComponent(o.slug)+'.html')).text();
+      const d = IC().readDoc(html);
+      if(!d){ toast('That overlay was hand-written - open the .html in the overlays folder to edit it','info'); return; }
+      doc=d; slug=o.slug; sel=null;
+      doc.widgets.forEach((w,n)=>{ if(!w.id) w.id='w'+(n+1); });
+      $('st-name').value = doc.name;
+      renderStates(); renderLeft(); rebake(); renderProps(); resetHistory();
+    }catch(e){ toast('Could not load overlay','err'); }
+  }
+
+  // ---- selection + properties ----
+  function select(id){ sel=id;
+    $$('#st-hit .st-box').forEach(b=>b.classList.toggle('sel',b.dataset.id===id));
+    $$('#st-left-body .st-layer').forEach(b=>b.classList.toggle('sel',b.dataset.id===id));
+    renderProps();
+  }
+  function field(label, inner){ return '<div class="st-field"><label>'+label+'</label>'+inner+'</div>'; }
+
+  function numF(label, path, val){ return field(label,'<input class="ic-input mono" type="number" value="'+val+'" oninput="Studio.setNum(\''+path+'\',this.value)">'); }
+  function renderProps(){
+    const p = $('st-props');
+    const w = sel ? widget(sel) : null;
+    if(!w){ p.innerHTML='<div class="st-props-empty">Pick a widget in <b>Layers</b>, click one on the canvas, or <b>+ Add widget</b> to start.</div>'; return; }
+    const k = IC().KINDS.find(x=>x.key===w.kind)||{fields:[]};
+    const f = k.fields||[];
+    const stLabel = (IC().STATES.find(s=>s.key===editState)||{label:editState}).label;
+    let h = '<div class="st-props-head"><div class="st-props-title">'+escapeHtml(k.label||w.kind)+'</div><div class="st-props-sub">this widget</div></div><div class="st-props-body">';
+
+    // ---- GLOBAL: position & size (same in every state) ----
+    h += '<div class="st-pgroup"><div class="st-pgroup-h">Position &amp; size</div>';
+    let anchorOpts = IC().ANCHORS.map(a=>'<option value="'+a+'"'+(w.anchor===a?' selected':'')+'>'+a+'</option>').join('');
+    h += field('Anchor','<select class="ic-input" oninput="Studio.set(\'anchor\',this.value)">'+anchorOpts+'</select>');
+    h += '<div class="st-field-row">'+numF('Offset X','offset.x',w.offset.x)+numF('Offset Y','offset.y',w.offset.y)+'</div>';
+    if(!k.full){ h += '<div class="st-field"><label>Align</label><div class="st-align">'+
+      [['tl','◰'],['top','△'],['tr','◳'],['left','◁'],['center','✛'],['right','▷'],['bl','◱'],['bottom','▽'],['br','◲']].map(a=>'<button class="st-alignb" title="'+a[0]+'" onclick="Studio.align(\''+a[0]+'\')">'+a[1]+'</button>').join('')+'</div></div>'; }
+    if(f.indexOf('font')>=0) h += numF('Font size','font_px',w.font_px||34);
+    if(!(k.full)) h += '<div class="st-field-row">'+numF('Width','size.w',w.size.w)+numF('Height','size.h',w.size.h)+'</div>';
+    if(f.indexOf('bind')>=0){
+      let bo=Object.keys(IC().BINDINGS).map(b=>'<option value="'+b+'"'+(w.bind===b?' selected':'')+'>'+IC().BINDINGS[b].label+'</option>').join('');
+      h += field('Shows','<select class="ic-input" oninput="Studio.set(\'bind\',this.value)">'+bo+'</select>');
+    }
+    if(f.indexOf('unit')>=0) h += field('Unit','<input class="ic-input" value="'+escapeAttr(w.unit||'')+'" oninput="Studio.set(\'unit\',this.value)">');
+    if(f.indexOf('icon')>=0){ let io=IC().ICONS.map(n=>'<option value="'+n+'"'+(w.icon===n?' selected':'')+'>'+n+'</option>').join(''); h+=field('Icon','<select class="ic-input" oninput="Studio.set(\'icon\',this.value)">'+io+'</select>'); }
+    if(f.indexOf('shape')>=0){ let so=IC().SHAPES.map(n=>'<option value="'+n+'"'+(w.shape===n?' selected':'')+'>'+n+'</option>').join(''); h+=field('Shape','<select class="ic-input" oninput="Studio.set(\'shape\',this.value)">'+so+'</select>'); }
+    if(f.indexOf('src')>=0){ const isData=(w.src||'').slice(0,5)==='data:';
+      h += field('Image','<div class="st-field-row"><input class="ic-input" value="'+(isData?'(uploaded image)':escapeAttr(w.src||''))+'" placeholder="URL or upload" '+(isData?'disabled':'')+' oninput="Studio.set(\'src\',this.value)"><button class="ic-btn ic-btn-ghost" onclick="Studio.uploadImage()">Upload</button></div>'); }
+    if(f.indexOf('text')>=0){ h += field('Default text','<input class="ic-input" value="'+escapeAttr(w.base.text||'')+'" oninput="Studio.setBase(\'text\',this.value)">');
+      h += '<div class="st-hint">Tip: use live data like <code>{{delay}}</code>, <code>{{bitrate}}</code>, <code>{{bufferPct}}</code>, <code>{{phase}}</code>.</div>'; }
+    if(f.indexOf('custom')>=0){
+      const c = w.custom||IC().defaultCustom();
+      h += field('Custom HTML','<textarea class="ic-input" oninput="Studio.setCustom(\'html\',this.value)">'+escapeHtml(c.html||'')+'</textarea>');
+      h += field('Custom CSS','<textarea class="ic-input" oninput="Studio.setCustom(\'css\',this.value)">'+escapeHtml(c.css||'')+'</textarea>');
+      h += field('Custom JS','<textarea class="ic-input" oninput="Studio.setCustom(\'js\',this.value)">'+escapeHtml(c.js||'')+'</textarea>');
+      h += '<div class="st-cheat"><b>Insert live data</b> '+['delay','phase','bufferPct','bitrate','cutCount','destAlive'].map(v=>'<button class="st-chip" onclick="Studio.insertVar(\'#st-props textarea\',\'{{'+v+'}}\')">{{'+v+'}}</button>').join('')+
+        '<br>In JS: <code>ic.onUpdate(s =&gt; ...)</code>, <code>ic.delay</code>, <code>ic.phase</code>, <code>ic.bind(sel,key)</code>.</div>';
+    }
+    h += '</div>';
+
+    // ---- TYPOGRAPHY (global, text-bearing widgets) ----
+    if(['DelayReadout','StatePill','Text','CutCounter','SessionElapsed','Banner'].indexOf(w.kind)>=0){
+      h += '<div class="st-pgroup"><div class="st-pgroup-h">Typography</div>';
+      const wt=String(w.font_weight||'');
+      let wo=['','400','500','600','700','800','900'].map(x=>'<option value="'+x+'"'+(wt===x?' selected':'')+'>'+(x||'default')+'</option>').join('');
+      h += '<div class="st-field-row">'+field('Weight','<select class="ic-input" oninput="Studio.set(\'font_weight\',this.value)">'+wo+'</select>')+
+        field('Letter spacing','<input class="ic-input mono" type="number" step="0.5" value="'+(w.letter_spacing!=null?w.letter_spacing:'')+'" placeholder="default" oninput="Studio.setLS(this.value)">')+'</div>';
+      h += '<label class="st-check" style="margin-top:2px"><input type="checkbox"'+(w.uppercase?' checked':'')+' oninput="Studio.set(\'uppercase\',this.checked)"> Uppercase</label>';
+      h += '</div>';
+    }
+
+    // ---- VISIBILITY across all states (set once, no per-state hopping) ----
+    h += '<div class="st-pgroup"><div class="st-pgroup-h">Show in</div>';
+    let chips = IC().STATES.map(st=>{
+      const visS = !(w.states && w.states[st.key] && w.states[st.key].visible===false);
+      return '<button class="st-vischip'+(visS?' on':'')+'" style="--dot:'+STATE_DOT[st.key]+'" onclick="Studio.toggleVis(\''+st.key+'\')">'+st.label+'</button>';
+    }).join('');
+    h += '<div class="st-vischips">'+chips+'</div>';
+    h += '<div class="st-rowbtns" style="margin-top:8px"><button class="ic-btn ic-btn-ghost" onclick="Studio.visOnly()">Only '+escapeHtml(stLabel)+'</button><button class="ic-btn ic-btn-ghost" onclick="Studio.visAll()">All states</button></div>';
+    h += '</div>';
+
+    // ---- LOOK in the currently-selected state ----
+    const sp = (w.states && w.states[editState]) || {};
+    const vis = sp.visible !== false;
+    h += '<div class="st-pgroup"><div class="st-pgroup-h" style="display:flex;justify-content:space-between;align-items:center"><span><span class="dot" style="background:'+STATE_DOT[editState]+'"></span>Look &middot; '+escapeHtml(stLabel)+'</span>'+(vis?'<button class="st-allbtn" onclick="Studio.copyLookAll()">copy to all states</button>':'')+'</div>';
+    if(!vis){
+      h += '<div class="st-empty-hint" style="padding:8px 2px">Hidden in '+escapeHtml(stLabel)+'. Toggle it in <b>Show in</b> above to style it here.</div>';
+    } else {
+      const col = sp.color || w.base.color || '#5ac8fa';
+      h += '<div class="st-field"><label style="display:flex;justify-content:space-between;align-items:center">Colour <button class="st-allbtn" onclick="Studio.applyColorAll()">apply to all states</button></label>'+
+        '<div class="st-color"><input type="color" value="'+escapeAttr(themeHex(col))+'" oninput="Studio.setState(\'color\',this.value)"><input class="ic-input mono" value="'+escapeAttr(col)+'" oninput="Studio.setState(\'color\',this.value)"></div>'+
+        '<div class="st-swatches">'+['accent','live','warn','error','ink','grey'].map(k=>'<button class="st-sw" style="background:'+themeHex('@'+k)+'" title="theme '+k+'" onclick="Studio.setState(\'color\',\'@'+k+'\')"></button>').join('')+'</div></div>';
+      // Gradient only applies to text glyphs and solid-fill widgets.
+      if(['DelayReadout','StatePill','Text','CutCounter','SessionElapsed','Banner','Shape','Divider'].indexOf(w.kind)>=0){
+        const hasG=sp.grad!=null;
+        h += '<label class="st-check" style="margin-top:2px"><input type="checkbox"'+(hasG?' checked':'')+' oninput="Studio.toggleGrad(this.checked)"> Gradient fill</label>';
+        if(hasG){
+          h += field('Gradient colour','<div class="st-color"><input type="color" value="'+escapeAttr(themeHex(sp.grad))+'" oninput="Studio.setGrad(this.value)"><input class="ic-input mono" value="'+escapeAttr(sp.grad)+'" oninput="Studio.setGrad(this.value)"></div>');
+          h += '<label class="st-check"><input type="checkbox"'+(sp.grad_anim?' checked':'')+' oninput="Studio.setGradAnim(this.checked)"> Animate gradient</label>';
+        }
+      }
+      const op = sp.opacity!=null?sp.opacity:(w.base.opacity!=null?w.base.opacity:1);
+      h += field('Opacity ('+op+')','<input type="range" min="0" max="1" step="0.05" value="'+op+'" oninput="Studio.setStateNum(\'opacity\',this.value)" style="width:100%">');
+      const gl = sp.glow!=null?sp.glow:(w.base.glow||0);
+      h += field('Glow ('+gl+'px)','<input type="range" min="0" max="40" step="1" value="'+gl+'" oninput="Studio.setStateNum(\'glow\',this.value)" style="width:100%">');
+      if(f.indexOf('text')>=0) h += field('Text override','<input class="ic-input" value="'+escapeAttr(sp.text!=null?sp.text:'')+'" placeholder="(uses default text)" oninput="Studio.setStateText(this.value)">');
+      // Multiple animations can run together (a pipeline via per-anim delay).
+      h += '<div class="st-field"><label style="display:flex;justify-content:space-between;align-items:center">Animations <button class="st-allbtn" onclick="Studio.applyAnimAll()">apply to all states</button></label></div>';
+      animsDisplay(sp,w).forEach((a,i)=>{
+        let ao=IC().animsFor(w.kind).map(x=>'<option value="'+x.key+'"'+(a.style===x.key?' selected':'')+'>'+x.label+(x.loop?' (loop)':'')+'</option>').join('');
+        let eo=IC().EASINGS.map(x=>'<option value="'+x.key+'"'+((a.easing||'ease-out')===x.key?' selected':'')+'>'+x.key+'</option>').join('');
+        const amp=(a.amount!=null?+a.amount:1);
+        // Intensity scales the motion (slide distance, pulse depth, etc). Fade
+        // has no magnitude to scale, so the slider is hidden for it.
+        const ampRow=(a.style==='fade'||a.style==='instant')?'':
+          '<div style="display:flex;align-items:center;gap:8px;margin-top:5px;font-size:11px;color:var(--fg3)"><span style="white-space:nowrap">Intensity</span>'+
+          '<input type="range" style="flex:1" min="0.2" max="2.5" step="0.1" value="'+amp+'" oninput="Studio.animSet('+i+',\'amount\',this.value);this.nextElementSibling.textContent=(+this.value).toFixed(1)+\'x\'">'+
+          '<b style="min-width:30px;text-align:right;color:var(--fg)">'+amp.toFixed(1)+'x</b></div>';
+        h += '<div class="st-animrow"><div class="st-animrow-top"><select class="ic-input" oninput="Studio.animSet('+i+',\'style\',this.value)">'+ao+'</select>'+
+          '<button class="st-layer-btn" title="Remove" onclick="Studio.animDel('+i+')">✕</button></div>'+
+          '<div class="st-animrow-bot"><input class="ic-input mono" type="number" value="'+(a.duration_ms||400)+'" title="duration ms" oninput="Studio.animSet('+i+',\'duration_ms\',this.value)">'+
+          '<input class="ic-input mono" type="number" value="'+(a.delay_ms||0)+'" title="delay ms" oninput="Studio.animSet('+i+',\'delay_ms\',this.value)">'+
+          '<select class="ic-input" oninput="Studio.animSet('+i+',\'easing\',this.value)">'+eo+'</select></div>'+ampRow+'</div>';
+      });
+      h += '<button class="ic-btn ic-btn-ghost" style="width:100%;margin-top:4px" onclick="Studio.animAdd()">+ Add animation</button>';
+      const ah = sp.hide_after_ms ? (sp.hide_after_ms/1000) : 0;
+      h += '<label class="st-check" style="margin-top:4px"><input type="checkbox"'+(ah>0?' checked':'')+' oninput="Studio.toggleHide(this.checked)"> Auto-hide in '+escapeHtml(stLabel)+'</label>';
+      if(ah>0){
+        h += field('Hide after seconds','<input class="ic-input mono" type="number" min="0.5" step="0.5" value="'+ah+'" oninput="Studio.setHideAfter(this.value)">');
+        h += '<div class="st-hint">Shows for '+ah+'s, then leaves so viewers see the gameplay.</div>';
+        const ex=sp.exit||'fade'; const exo=[['fade','Fade'],['slide-down','Slide down'],['slide-up','Slide up'],['pop','Pop'],['instant','Instant']].map(o=>'<option value="'+o[0]+'"'+(ex===o[0]?' selected':'')+'>'+o[1]+'</option>').join('');
+        h += field('Exit style','<select class="ic-input" oninput="Studio.setState(\'exit\',this.value)">'+exo+'</select>');
+      }
+      // Per-state position: move the widget in this phase (it glides there).
+      const eff = sp.offset || w.offset;
+      h += '<div class="st-field"><label style="display:flex;justify-content:space-between;align-items:center">Move in '+escapeHtml(stLabel)+
+        (sp.offset?' <button class="st-allbtn" onclick="Studio.resetStateOffset()">reset to base</button>':'')+'</label>'+
+        '<div class="st-field-row"><input class="ic-input mono" type="number" value="'+eff.x+'" oninput="Studio.setStateOffset(\'x\',this.value)" placeholder="X">'+
+        '<input class="ic-input mono" type="number" value="'+eff.y+'" oninput="Studio.setStateOffset(\'y\',this.value)" placeholder="Y"></div></div>';
+    }
+    h += '</div>';
+
+    h += '<div class="st-rowbtns"><button class="ic-btn ic-btn-ghost" onclick="Studio.dupWidget()">Duplicate</button><button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.delWidget()">Delete widget</button></div>';
+    h += '</div>';
+    p.innerHTML = h;
+  }
+
+  // ---- property setters ----
+  // Live-update the canvas WITHOUT reloading the iframe (a reload restarts
+  // every animation). Swap the <style> and reconcile per-widget attributes
+  // in place; fall back to a full rebake only when the structure changes.
+  let rebakeT=0;
+  function liveStyle(){
+    const f=$('st-canvas'); const cdoc=f&&f.contentDocument;
+    if(!cdoc||!cdoc.body){ rebake(); return; }
+    const html=IC().bake(doc);
+    const css=html.split('<style>')[1].split('</style>')[0];
+    const styleEl=cdoc.querySelector('style'); if(styleEl && styleEl.textContent!==css) styleEl.textContent=css;
+    const tmp=document.createElement('div');
+    tmp.innerHTML=html.split(/<body[^>]*>/)[1].split('<scr'+'ipt>')[0];
+    const news=tmp.querySelectorAll('.icw');
+    if(news.length!==cdoc.querySelectorAll('.icw').length){ rebake(); return; }
+    let ok=true;
+    news.forEach(nw=>{
+      const live=cdoc.getElementById(nw.id); if(!live){ ok=false; return; }
+      Array.from(nw.attributes).forEach(a=>{ if(live.getAttribute(a.name)!==a.value) live.setAttribute(a.name,a.value); });
+      Array.from(live.attributes).forEach(a=>{ if(!nw.hasAttribute(a.name)) live.removeAttribute(a.name); });
+    });
+    if(!ok){ rebake(); return; }
+    buildHits(); recordSoon(); updatePerfBadge();
+  }
+  function softRebake(){ clearTimeout(rebakeT); rebakeT=setTimeout(liveStyle, 80); }
+  function ensureState(){ const w=widget(sel); if(!w.states) w.states={}; if(!w.states[editState]) w.states[editState]={}; return w.states[editState]; }
+  function set(k,v){ const w=widget(sel); w[k]=v; if(k==='unit'||k==='icon'||k==='shape'||k==='src'){ rebake(); } else softRebake(); }
+  function setNum(path,v){ const w=widget(sel); const n=parseFloat(v)||0; if(path.indexOf('.')>=0){const[a,b]=path.split('.'); w[a][b]=n;} else w[path]=n; softRebake(); }
+  function setBase(k,v){ widget(sel).base[k]=v; if(k==='text'&&left==='layers') renderLeft(); softRebake(); }
+  // CustomHTML lives inside a sandboxed iframe (the widget's inner content),
+  // which the in-place live update can't touch - so debounce a full rebake.
+  let fullT=0; function softFull(){ clearTimeout(fullT); fullT=setTimeout(rebake,300); }
+  function setCustom(k,v){ const w=widget(sel); if(!w.custom) w.custom=IC().defaultCustom(); w.custom[k]=v; softFull(); }
+  // Re-render only when visibility flips (to show/hide the look fields).
+  // Avoid re-rendering on colour input - it would close the native picker.
+  function setState(k,v){ const sp=ensureState(); sp[k]=v; softRebake(); if(k==='visible') renderProps(); }
+  function setStateNum(k,v){ ensureState()[k]=parseFloat(v)||0; softRebake(); }
+  function setStateText(v){ const sp=ensureState(); if(v==='') delete sp.text; else sp.text=v; softRebake(); }
+  function setAnim(k,v){ const sp=ensureState(); if(!sp.anim) sp.anim=Object.assign({style:'fade',duration_ms:400,easing:'ease-out',delay_ms:0}, widget(sel).base.anim||{}); sp.anim[k]=v; softRebake(); }
+  function setAnimNum(k,v){ const sp=ensureState(); if(!sp.anim) sp.anim=Object.assign({style:'fade',duration_ms:400,easing:'ease-out',delay_ms:0}, widget(sel).base.anim||{}); sp.anim[k]=parseFloat(v)||0; softRebake(); }
+  function setHideAfter(v){ const sp=ensureState(); const had=sp.hide_after_ms>0; const ms=Math.round((parseFloat(v)||0)*1000); if(ms<=0) delete sp.hide_after_ms; else sp.hide_after_ms=ms; softRebake(); studioDrive(); if((ms>0)!==had) renderProps(); }
+  // Auto-hide on/off toggle: on defaults to 4s + fade exit; off clears both.
+  function toggleHide(on){ const sp=ensureState(); if(on){ sp.hide_after_ms=sp.hide_after_ms||4000; if(!sp.exit) sp.exit='fade'; } else { delete sp.hide_after_ms; delete sp.exit; } softRebake(); studioDrive(); renderProps(); }
+  function setLS(v){ const w=widget(sel); if(v==='') delete w.letter_spacing; else w.letter_spacing=parseFloat(v)||0; softRebake(); }
+  // Theme colours (overlay-wide). Editing one recolours every widget that
+  // uses the matching @token.
+  function ensureTheme(){ if(!doc.theme) doc.theme=IC().defaultTheme(); return doc.theme; }
+  function setTheme(key,val){ ensureTheme()[key]=val; softRebake(); renderLeft(); }
+  function themeHex(c){ if(typeof c==='string' && c.charAt(0)==='@'){ const t=ensureTheme(); return t[c.slice(1)]||'#5ac8fa'; } return c||'#5ac8fa'; }
+  // Per-state gradient (a second colour).
+  function setGrad(v){ const sp=ensureState(); if(!v) delete sp.grad; else sp.grad=v; softRebake(); }
+  function toggleGrad(on){ const sp=ensureState(); if(on){ sp.grad=sp.color||widget(sel).base.color||'#54e38e'; } else { delete sp.grad; delete sp.grad_anim; } softRebake(); renderProps(); }
+  function setGradAnim(on){ const sp=ensureState(); if(on) sp.grad_anim=true; else delete sp.grad_anim; softRebake(); }
+  // Alignment helpers - set anchor + offset to a known spot.
+  function align(where){ const w=widget(sel); if(!w) return; const S=64;
+    const map={ 'center':['center',0,0], 'top':['top',0,S], 'bottom':['bottom',0,S],
+      'left':['left',S,0], 'right':['right',S,0],
+      'tl':['top-left',96,62], 'tr':['top-right',96,62], 'bl':['bottom-left',96,62], 'br':['bottom-right',96,62] };
+    const m=map[where]; if(!m) return; w.anchor=m[0]; w.offset={x:m[1],y:m[2]}; rebake(); renderProps(); }
+  // Multi-animation list (per state). Migrates a single `anim` to `anims`.
+  function animsDisplay(sp,w){ if(sp.anims) return sp.anims; if(sp.anim) return [sp.anim]; return [w.base.anim||{style:'fade',duration_ms:400,easing:'ease-out',delay_ms:0}]; }
+  function stAnims(){ const sp=ensureState(); if(!sp.anims){ sp.anims = sp.anim ? [clone(sp.anim)] : [clone(widget(sel).base.anim||{style:'fade',duration_ms:400,easing:'ease-out',delay_ms:0})]; delete sp.anim; } return sp.anims; }
+  function animAdd(){ stAnims().push({style:'pulse',duration_ms:1600,easing:'ease-out',delay_ms:0}); softRebake(); renderProps(); }
+  function animDel(i){ const a=stAnims(); a.splice(i,1); if(!a.length) a.push({style:'instant',duration_ms:400,easing:'ease-out',delay_ms:0}); softRebake(); renderProps(); }
+  function animSet(i,k,v){ const a=stAnims(); if(!a[i]) return;
+    if(k==='duration_ms'||k==='delay_ms') a[i][k]=parseInt(v,10)||0;
+    else if(k==='amount') a[i][k]=parseFloat(v)||1;
+    else a[i][k]=v;
+    softRebake(); if(k==='style') renderProps(); }
+  // Image upload -> embed as a self-contained data URL (no server assets).
+  function uploadImage(){ const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
+    inp.onchange=()=>{ const f=inp.files&&inp.files[0]; if(!f) return;
+      if(f.size>6*1024*1024){ toast('That image is '+Math.round(f.size/1024/1024)+'MB - consider a smaller one so the overlay loads fast in OBS','info'); }
+      const rd=new FileReader(); rd.onload=()=>{ const w=widget(sel); w.src=rd.result; rebake(); renderProps(); toast('Image added','ok'); }; rd.readAsDataURL(f); };
+    inp.click(); }
+  // Insert a {{var}} into a custom/text field at the cursor.
+  function insertVar(fieldSel, v){ const el=document.querySelector(fieldSel); if(!el) return; const s=el.selectionStart||el.value.length;
+    el.value=el.value.slice(0,s)+v+el.value.slice(el.selectionEnd||s); el.dispatchEvent(new Event('input')); el.focus(); }
+  // Reassuring perf estimate (the overlay runs in an OBS browser source).
+  function updatePerfBadge(){ const el=$('st-perf'); if(!el||!doc) return;
+    const full=['EdgeAccent','BackgroundTint','LiquidFill','CornerFrame'];
+    let fs=0, anim=0; const n=doc.widgets.length;
+    doc.widgets.forEach(w=>{ if(full.indexOf(w.kind)>=0) fs++;
+      const ha=(w.base&&w.base.anim&&w.base.anim.style&&w.base.anim.style!=='instant')||Object.keys(w.states||{}).some(k=>{const s=w.states[k];return s.anim&&s.anim.style&&s.anim.style!=='instant';}); if(ha) anim++; });
+    let level='Lightweight', cls='ok';
+    if(fs>=2 || n>10 || anim>8){ level='Moderate'; cls='warn'; }
+    if(fs>=3 || n>16){ level='Heavy'; cls='err'; }
+    el.textContent=level; el.className='st-perf '+cls; el.title=n+' widgets · '+fs+' full-screen · '+anim+' animated — runs in OBS browser source';
+  }
+  function setStateOffset(axis,v){ const w=widget(sel); const sp=ensureState(); if(!sp.offset) sp.offset={x:w.offset.x,y:w.offset.y}; sp.offset[axis]=parseInt(v,10)||0; softRebake(); }
+  function resetStateOffset(){ const sp=ensureState(); delete sp.offset; softRebake(); renderProps(); }
+  // Visibility across states - so you don't have to visit each state.
+  function stEnsure(st){ const w=widget(sel); if(!w.states) w.states={}; if(!w.states[st]) w.states[st]={}; return w.states[st]; }
+  function toggleVis(st){ const o=stEnsure(st); o.visible = o.visible===false; if(o.visible===true) delete o.visible; softRebake(); renderProps(); }
+  function visOnly(){ IC().STATES.forEach(s=>{ const o=stEnsure(s.key); if(s.key===editState) delete o.visible; else o.visible=false; }); softRebake(); renderProps(); }
+  function visAll(){ const w=widget(sel); IC().STATES.forEach(s=>{ if(w.states&&w.states[s.key]) delete w.states[s.key].visible; }); softRebake(); renderProps(); }
+  // Apply-to-all: write the current state's value to base + clear overrides.
+  function applyColorAll(){ const w=widget(sel); const c=(w.states&&w.states[editState]&&w.states[editState].color)||w.base.color; w.base.color=c; IC().STATES.forEach(s=>{ if(w.states&&w.states[s.key]) delete w.states[s.key].color; }); softRebake(); renderProps(); renderLeft(); toast('Colour applied to all states','ok'); }
+  function applyAnimAll(){ const w=widget(sel); const a=(w.states&&w.states[editState]&&w.states[editState].anim)||w.base.anim; w.base.anim=clone(a); IC().STATES.forEach(s=>{ if(w.states&&w.states[s.key]) delete w.states[s.key].anim; }); softRebake(); renderProps(); toast('Animation applied to all states','ok'); }
+  // Copy this state's whole look (colour/opacity/text/anim/hide/move) to all others.
+  function copyLookAll(){ const w=widget(sel); const src=(w.states&&w.states[editState])||{}; const look={};
+    ['color','opacity','text','anim','hide_after_ms','offset'].forEach(k=>{ if(src[k]!==undefined) look[k]=clone(src[k]); });
+    IC().STATES.forEach(s=>{ if(s.key!==editState){ if(!w.states[s.key]) w.states[s.key]={}; Object.assign(w.states[s.key], clone(look)); } });
+    softRebake(); renderProps(); renderLeft(); toast('Look copied to all states','ok'); }
+  function dupWidget(){ const w=clone(widget(sel)); w.id=nextId(); w.offset={x:w.offset.x+20,y:w.offset.y+20}; doc.widgets.push(w); sel=w.id; renderLeft(); rebake(); renderProps(); }
+  function delWidget(){ delWidgetById(sel); }
+  function delWidgetById(id){ doc.widgets=doc.widgets.filter(w=>w.id!==id); if(sel===id) sel=null; renderLeft(); rebake(); renderProps(); }
+  function moveWidget(id,dir){ const i=doc.widgets.findIndex(w=>w.id===id); if(i<0) return; const j=i+dir; if(j<0||j>=doc.widgets.length) return; const t=doc.widgets[i]; doc.widgets[i]=doc.widgets[j]; doc.widgets[j]=t; renderLeft(); rebake(); }
+
+  // ---- play: run the delay-lifecycle simulation without changing what you edit ----
+  function playLabel(){ const pb=$('st-play'); if(pb) pb.classList.toggle('on',playing); }
+  function stopPlay(){ playing=false; playLabel(); if(studioSim){ studioSim.stop(); studioSim=null; } }
+  function play(){ playing=!playing; playLabel(); if(!playing) $$('#st-states .st-st').forEach(b=>b.classList.toggle('on',b.dataset.st===editState)); studioDrive(); }
+
+  // ---- save / url / delete ----
+  function updateUrlLabel(){ $('st-url').textContent = slug ? (location.origin+'/overlay/'+slug+'.html') : 'save to get a URL'; }
+  async function save(){
+    doc.name = $('st-name').value.trim() || 'Untitled overlay';
+    if(!slug) slug = slugify(doc.name);
+    const html = IC().bake(doc);
+    try{
+      const r = await fetch('/overlays/'+encodeURIComponent(slug), {method:'POST', headers:{'Content-Type':'text/html'}, body:html});
+      const j = await r.json();
+      // Auto-select this overlay when we return to the gallery so the
+      // save reflects immediately (no F5).
+      if(j.ok){ updateUrlLabel(); pendingSelect=slug; toast('Saved - URL ready to drop into OBS','ok'); loadSaved(); }
+      else { toast(j.error||'Save failed','err'); slug=null; }
+    }catch(e){ toast('Save failed','err'); slug=null; }
+  }
+  function duplicate(){ slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name; updateUrlLabel(); toast('Duplicated - Save to write a new file','info'); }
+  function copyUrl(){ if(!slug){ toast('Save the overlay first to get a URL','info'); return; } copyText(location.origin+'/overlay/'+slug+'.html','Overlay URL'); }
+  // ---- overflow menu: save-as / rename / export / import / delete ----
+  function toggleMenu(ev){ ev.stopPropagation(); const p=$('st-menu-pop'); if(p) p.hidden=!p.hidden; }
+  function menu(action){ const p=$('st-menu-pop'); if(p) p.hidden=true;
+    if(action==='delete') return deleteOverlay();
+    if(action==='saveas'){ slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name; return save(); }
+    if(action==='rename') return renameOverlay();
+    if(action==='export') return exportDoc();
+    if(action==='import') return importDoc();
+  }
+  async function renameOverlay(){
+    const nn=(prompt('Rename overlay', doc.name)||'').trim(); if(!nn) return;
+    const old=slug; doc.name=nn; $('st-name').value=nn; slug=slugify(nn);
+    await save();
+    if(old && old!==slug){ try{ await fetch('/overlays/'+encodeURIComponent(old)+'/delete',{method:'POST'}); }catch(e){} loadSaved(); }
+  }
+  function exportDoc(){ doc.name=$('st-name').value.trim()||doc.name||'overlay';
+    const blob=new Blob([JSON.stringify(doc,null,2)],{type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=slugify(doc.name)+'.json'; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1500); toast('Exported .json','ok'); }
+  function importDoc(){ const inp=document.createElement('input'); inp.type='file'; inp.accept='.json,application/json';
+    inp.onchange=()=>{ const f=inp.files&&inp.files[0]; if(!f) return; const rd=new FileReader();
+      rd.onload=()=>{ try{ const d=JSON.parse(rd.result); if(!d||!Array.isArray(d.widgets)) throw 0;
+        doc=d; slug=null; sel=null; doc.widgets.forEach((w,n)=>{ if(!w.id) w.id='w'+(n+1); });
+        $('st-name').value=doc.name||'Imported overlay';
+        renderStates(); renderLeft(); rebake(); renderProps(); resetHistory();
+        toast('Imported - Save to keep it','ok');
+      }catch(e){ toast('Not a valid overlay .json','err'); } };
+      rd.readAsText(f); };
+    inp.click(); }
+  async function deleteOverlay(){
+    if(!slug){ toast('This draft is not saved yet','info'); return; }
+    if(!confirm('Delete overlay "'+doc.name+'"? This removes its file from the overlays folder.')) return;
+    try{ await fetch('/overlays/'+encodeURIComponent(slug)+'/delete',{method:'POST'}); }catch(e){}
+    toast('Deleted','info'); slug=null; doc=null; mounted=false; backToGallery();
+  }
+  async function loadSaved(){
+    try{ savedList = await (await fetch('/overlays')).json(); if(!Array.isArray(savedList)) savedList=[]; }catch(e){ savedList=[]; }
+    if(left==='mine' && $('ov-studio') && !$('ov-studio').hidden) renderLeft();
+  }
+
+  window.addEventListener('resize', ()=>{
+    if($('ov-studio') && !$('ov-studio').hidden) fitScale();
+    else if($('ov-gallery')) fitPreview();
+  });
+  document.addEventListener('keydown', (e)=>{
+    const studioOpen = $('ov-studio') && !$('ov-studio').hidden;
+    if(e.key==='Escape' && studioOpen){ backToGallery(); return; }
+    if(!studioOpen) return;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target&&e.target.tagName)||'');
+    const mod = e.ctrlKey || e.metaKey;
+    if(mod && (e.key==='z'||e.key==='Z')){ e.preventDefault(); if(e.shiftKey) redo(); else undo(); return; }
+    if(mod && (e.key==='y'||e.key==='Y')){ e.preventDefault(); redo(); return; }
+    if(typing) return;
+    if(mod && (e.key==='d'||e.key==='D') && sel){ e.preventDefault(); dupWidget(); return; }
+    if((e.key==='Delete'||e.key==='Backspace') && sel){ e.preventDefault(); delWidget(); return; }
+    // Arrow-nudge the selected widget's base offset.
+    if(sel && /^Arrow/.test(e.key)){
+      const w=widget(sel); if(!w) return; e.preventDefault();
+      const step=e.shiftKey?10:1;
+      const sx=w.anchor.indexOf('right')>=0?-1:1, sy=w.anchor.indexOf('bottom')>=0?-1:1;
+      if(e.key==='ArrowLeft') w.offset.x-=sx*step;
+      if(e.key==='ArrowRight') w.offset.x+=sx*step;
+      if(e.key==='ArrowUp') w.offset.y-=sy*step;
+      if(e.key==='ArrowDown') w.offset.y+=sy*step;
+      rebake(); renderProps();
+    }
+  });
+  document.addEventListener('click', ()=>{ const p=$('st-menu-pop'); if(p && !p.hidden) p.hidden=true; });
+
+  return { show, openStudio, openStudioPreset, backToGallery, previewSim, deleteFromGallery,
+    useOverlay, togglePresetHide, copyGallery, undo, redo, toggleMenu, menu,
+    leftTab, selectState, play, save, duplicate, copyUrl, deleteOverlay, loadSaved,
+    set, setNum, setBase, setCustom, setState, setStateNum, setStateText, setAnim, setAnimNum,
+    setHideAfter, toggleHide, setLS, setStateOffset, resetStateOffset, toggleVis, visOnly, visAll, applyColorAll, applyAnimAll, copyLookAll,
+    setTheme, setGrad, toggleGrad, setGradAnim, align, animAdd, animDel, animSet, uploadImage, insertVar,
+    dupWidget, delWidget };
+})();
+
+// Existing init paths call loadOverlays() before the `const Studio`
+// statement runs; the try/catch swallows the temporal-dead-zone error so
+// early calls no-op. The Studio loads its own saved list in init().
+function loadOverlays(){ try { if(window.ICOverlay) Studio.loadSaved(); } catch(_){} }
 
 function copyEl(id, label){ navigator.clipboard.writeText($(id).textContent); toast((label||'Value')+' copied','ok'); }
 function copyText(text, label){ navigator.clipboard.writeText(text); toast((label||'Value')+' copied','ok'); }
@@ -3351,6 +4444,9 @@ function showTab(name){
   $$('.tab-pane').forEach(p => p.hidden = p.dataset.pane !== name);
   moveTabInd();
   if (name === 'obs') refreshObsRegisterStatus();
+  if (name === 'overlay' && window.ICOverlay) Studio.show();
+  // The Studio modal lives on <body>, so close it when leaving the tab.
+  else { const m = $('ov-studio'); if (m) m.hidden = true; }
   // Sub-tab indicators only have a real width after the pane unhides,
   // so reposition any sub-tab indicator inside the freshly shown pane.
   const pane = document.querySelector(`.tab-pane[data-pane="${name}"]`);
