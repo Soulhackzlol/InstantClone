@@ -151,6 +151,34 @@ async fn serve(
         return Ok(());
     }
 
+    // Overlay Studio runtime - static pre-gzipped JS, same fast-path as
+    // the dashboard. Served to the dashboard tab only; baked overlays
+    // inline what they need and never request this.
+    if method == "GET" && bare_path == "/overlay-runtime.js" {
+        if !accept_gzip {
+            let body = b"this build serves gzip-encoded JS; \
+                         retry with Accept-Encoding: gzip" as &[u8];
+            let r = format!(
+                "HTTP/1.1 406 Not Acceptable\r\nContent-Type: text/plain; charset=utf-8\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            sock.write_all(r.as_bytes()).await?;
+            sock.write_all(body).await?;
+            return Ok(());
+        }
+        let r = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\n\
+             Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n\
+             Content-Length: {}\r\n\
+             Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+            OVERLAY_RUNTIME_JS_GZ.len()
+        );
+        sock.write_all(r.as_bytes()).await?;
+        sock.write_all(OVERLAY_RUNTIME_JS_GZ).await?;
+        return Ok(());
+    }
+
     // Server-Sent Events: long-lived stream of state JSON. Beats per-tab
     // 500 ms polling on idle CPU because (a) no HTTP/CSRF overhead per
     // tick and (b) the wire only carries frames when something actually
@@ -160,13 +188,14 @@ async fn serve(
         return handle_sse(sock, ctrl, settings, sysstat).await;
     }
 
-    // Cap POST body size at 1 MB. Our largest legitimate payload is the
-    // settings form (~2 KB). Without this, a local caller advertising a
-    // 4 GB Content-Length would force us to allocate and read 4 GB before
-    // refusing. The listener is 127.0.0.1-only so this is defense-in-depth.
-    const MAX_BODY: usize = 1024 * 1024;
+    // Cap POST body size. The only callers are the local dashboard and OBS
+    // (127.0.0.1-only), so this is just defense-in-depth against a caller
+    // advertising a giant Content-Length and forcing a huge allocation. It
+    // is set generously because a Studio overlay can embed an uploaded image
+    // as a base64 data URL (which rides inside the saved overlay HTML).
+    const MAX_BODY: usize = 32 * 1024 * 1024;
     if content_length > MAX_BODY {
-        let body = br#"{"ok":false,"error":"body too large (max 1 MB)"}"# as &[u8];
+        let body = br#"{"ok":false,"error":"body too large (max 32 MB)"}"# as &[u8];
         let r = format!(
             "HTTP/1.1 413 Payload Too Large\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n\r\n",
@@ -231,6 +260,16 @@ async fn route(
     if method == "GET" && bare_path.starts_with("/overlay/") {
         let name = &bare_path["/overlay/".len()..];
         return serve_overlay_file(name, settings);
+    }
+    // Overlay Studio writes: POST /overlays/<slug> saves a baked overlay,
+    // POST /overlays/<slug>/delete removes it. The slug is restricted to a
+    // safe charset (no separators) so no path can escape overlays_dir.
+    if method == "POST" && bare_path.starts_with("/overlays/") {
+        let rest = &bare_path["/overlays/".len()..];
+        if let Some(slug) = rest.strip_suffix("/delete") {
+            return overlay_delete(slug, settings);
+        }
+        return overlay_save(rest, body, settings);
     }
 
     match (method, bare_path) {
@@ -1978,28 +2017,147 @@ fn generate_dest_id() -> String {
 // Pluggable overlays - files under settings.overlays_dir
 // ----------------------------------------------------------------------
 
+/// List overlays on disk for the Studio. Each entry carries the slug
+/// (filename without extension), a display name (the overlay's `<title>`,
+/// which the baker sets to the doc name), and `studio` - whether the file
+/// is a Studio-authored overlay (carries an `ic-doc` comment) versus a
+/// legacy hand-dropped `.html`. Studio overlays can be re-edited; legacy
+/// ones are still listed and usable as browser sources.
 fn list_overlays(settings: &Arc<watch::Sender<Settings>>) -> String {
     let dir = settings.borrow().overlays_dir.clone();
-    let mut names: Vec<String> = Vec::new();
+    let mut items: Vec<(String, String, bool)> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.flatten() {
-            if let Some(name) = e.file_name().to_str() {
-                if name.ends_with(".html") || name.ends_with(".htm") {
-                    names.push(name.to_string());
-                }
-            }
+            let fname = match e.file_name().into_string() {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let slug = if let Some(s) = fname.strip_suffix(".html") {
+                s.to_string()
+            } else if let Some(s) = fname.strip_suffix(".htm") {
+                s.to_string()
+            } else {
+                continue;
+            };
+            // Files are small; reading them whole to pull the title and
+            // detect the ic-doc marker is cheap and keeps the list honest.
+            let content = std::fs::read_to_string(e.path()).unwrap_or_default();
+            let studio = content.contains("<!--ic-doc:");
+            let name = extract_title(&content).unwrap_or_else(|| slug.clone());
+            items.push((slug, name, studio));
         }
     }
-    names.sort();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = String::from("[");
-    for (i, n) in names.iter().enumerate() {
+    for (i, (slug, name, studio)) in items.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        out.push_str(&json_escape_quoted(n));
+        out.push_str(&format!(
+            r#"{{"slug":{},"name":{},"studio":{}}}"#,
+            json_escape_quoted(slug),
+            json_escape_quoted(name),
+            studio
+        ));
     }
     out.push(']');
     out
+}
+
+/// Pull the text between the first `<title>` and `</title>`. Used by the
+/// overlay list to show a friendly name without parsing the whole doc.
+fn extract_title(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let s = lower.find("<title>")?;
+    let start = s + "<title>".len();
+    let end_rel = lower[start..].find("</title>")?;
+    let title = html[start..start + end_rel].trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
+    }
+}
+
+/// A user overlay slug: ASCII alphanumerics plus `-`/`_`, max 64 chars.
+/// The served artifact is `<slug>.html` inside overlays_dir. Stricter than
+/// `serve_overlay_file`'s filename check (no dots, no separators) because a
+/// slug never carries an extension - the `.html` is appended here, so no
+/// crafted slug can escape the overlays directory.
+fn valid_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && slug.len() <= 64
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Save a Studio-baked overlay. The body is the full self-contained HTML
+/// the Studio produced (lean live overlay + the editable doc embedded as
+/// an `ic-doc` comment). Writes `overlays_dir/<slug>.html`.
+fn overlay_save(
+    slug: &str,
+    body: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+) -> (&'static str, &'static str, String) {
+    if !valid_slug(slug) {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"invalid overlay name - use letters, numbers, - or _ (max 64)"}"#
+                .into(),
+        );
+    }
+    let dir = settings.borrow().overlays_dir.clone();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                e.to_string().replace('"', "'")
+            ),
+        );
+    }
+    let path = dir.join(format!("{slug}.html"));
+    match std::fs::write(&path, body.as_bytes()) {
+        Ok(()) => (
+            "200 OK",
+            "application/json",
+            format!(
+                r#"{{"ok":true,"slug":"{}","url":"/overlay/{}.html"}}"#,
+                slug, slug
+            ),
+        ),
+        Err(e) => (
+            "500 Internal Server Error",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                e.to_string().replace('"', "'")
+            ),
+        ),
+    }
+}
+
+/// Delete a Studio overlay and its per-overlay assets directory.
+fn overlay_delete(
+    slug: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+) -> (&'static str, &'static str, String) {
+    if !valid_slug(slug) {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"invalid overlay name"}"#.into(),
+        );
+    }
+    let dir = settings.borrow().overlays_dir.clone();
+    // Best-effort: removing a non-existent file is not an error worth
+    // surfacing - the end state (overlay gone) is what the caller wants.
+    let _ = std::fs::remove_file(dir.join(format!("{slug}.html")));
+    let _ = std::fs::remove_dir_all(dir.join(slug));
+    ("200 OK", "application/json", r#"{"ok":true}"#.into())
 }
 
 fn serve_overlay_file(
@@ -2342,6 +2500,12 @@ static DOCK_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html
 /// Main dashboard / first-run wizard. Source lives in `web/index.html`;
 /// build-time minified + gzipped (see `build.rs`).
 static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
+
+/// Overlay Studio author-time runtime + baker. Loaded only by the
+/// dashboard (never by a live overlay in OBS). Source lives in
+/// `web/overlay-runtime.js`; build-time gzipped (see `build.rs`).
+static OVERLAY_RUNTIME_JS_GZ: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/overlay-runtime.js.gz"));
 /// Render the OBS browser-source overlay. Supports two query knobs:
 ///   ?lang=en|es|pt|fr|de                         - label localization
 ///   ?style=minimal|corner|strip|focus|broadcast|ticker  - visual variant
@@ -3044,5 +3208,119 @@ mod tests {
     #[test]
     fn find_subslice_returns_none_when_absent() {
         assert!(find_subslice(b"abc", b"xy").is_none());
+    }
+
+    // ── Overlay Studio CRUD ──────────────────────────────────────
+    //
+    // The Studio writes a baked overlay to overlays_dir/<slug>.html and
+    // reads it back through the same list endpoint. These pin the slug
+    // guard (no crafted name escapes the directory), the save/list/delete
+    // round-trip, and back-compat with hand-dropped (non-Studio) .html.
+
+    fn settings_with_overlays_dir(dir: &std::path::Path) -> Arc<watch::Sender<Settings>> {
+        let mut s = crate::config::Settings::defaults();
+        s.overlays_dir = dir.to_path_buf();
+        let (tx, _rx) = watch::channel(s);
+        Arc::new(tx)
+    }
+
+    fn unique_tmp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("ic-overlay-test-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn valid_slug_accepts_safe_names_rejects_traversal() {
+        assert!(valid_slug("my-overlay"));
+        assert!(valid_slug("Tournament_2"));
+        assert!(valid_slug("a"));
+        assert!(!valid_slug(""));
+        assert!(!valid_slug("../evil"));
+        assert!(!valid_slug("a/b"));
+        assert!(!valid_slug("a\\b"));
+        assert!(!valid_slug("c:evil"));
+        assert!(!valid_slug("dot.name")); // no extension/dots - we append .html
+        assert!(!valid_slug("space name"));
+        assert!(!valid_slug(&"x".repeat(65))); // over the 64-char cap
+    }
+
+    #[test]
+    fn overlay_save_list_delete_round_trip() {
+        let dir = unique_tmp_dir("crud");
+        let settings = settings_with_overlays_dir(&dir);
+
+        // A baked overlay carries the ic-doc marker + a <title>.
+        let html = "<!doctype html><!--ic-doc:%7B%22name%22%3A%22Tourney%22%7D-->\
+                    <html><head><title>Tourney</title></head><body>x</body></html>";
+        let (status, _, _) = overlay_save("tourney", html, &settings);
+        assert_eq!(status, "200 OK");
+        assert!(dir.join("tourney.html").is_file());
+
+        // It shows up in the list as a Studio overlay with the title name.
+        let listed = list_overlays(&settings);
+        assert!(listed.contains(r#""slug":"tourney""#));
+        assert!(listed.contains(r#""name":"Tourney""#));
+        assert!(listed.contains(r#""studio":true"#));
+
+        // It serves verbatim from /overlay/<slug>.html.
+        let (sstatus, sctype, sbody) = serve_overlay_file("tourney.html", &settings);
+        assert_eq!(sstatus, "200 OK");
+        assert_eq!(sctype, "text/html; charset=utf-8");
+        assert!(sbody.contains("ic-doc:"));
+
+        // Delete removes the file and drops it from the list.
+        let (dstatus, _, _) = overlay_delete("tourney", &settings);
+        assert_eq!(dstatus, "200 OK");
+        assert!(!dir.join("tourney.html").exists());
+        assert!(!list_overlays(&settings).contains(r#""slug":"tourney""#));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overlay_save_rejects_bad_slug_and_writes_nothing() {
+        let dir = unique_tmp_dir("badslug");
+        let settings = settings_with_overlays_dir(&dir);
+        let (status, _, body) = overlay_save("../escape", "x", &settings);
+        assert_eq!(status, "400 Bad Request");
+        assert!(body.contains("invalid overlay name"));
+        // Nothing leaked outside the dir, and the dir stayed empty.
+        let count = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(count, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_overlays_marks_handwritten_html_as_legacy() {
+        let dir = unique_tmp_dir("legacy");
+        std::fs::write(
+            dir.join("classic.html"),
+            "<!doctype html><html><head><title>Classic</title></head><body>hi</body></html>",
+        )
+        .unwrap();
+        let settings = settings_with_overlays_dir(&dir);
+        let listed = list_overlays(&settings);
+        assert!(listed.contains(r#""slug":"classic""#));
+        assert!(listed.contains(r#""name":"Classic""#));
+        assert!(listed.contains(r#""studio":false"#));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_title_pulls_first_title() {
+        assert_eq!(
+            extract_title("<html><head><title>Hello</title></head>"),
+            Some("Hello".to_string())
+        );
+        assert_eq!(extract_title("<html><body>no title</body></html>"), None);
+        assert_eq!(
+            extract_title("<title>  spaced  </title>"),
+            Some("spaced".to_string())
+        );
     }
 }

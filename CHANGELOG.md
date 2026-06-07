@@ -8,6 +8,50 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.5] - Overlay Studio (experimental)
+
+A no-code visual editor for building OBS browser-source overlays that
+react to the delay state machine, replacing the old fixed style-picker
+on the Overlay tab.
+
+**Experimental, and isolated by design.** The studio is new, so rough
+edges and bugs are expected *in the studio itself*. It cannot affect a
+live broadcast: the delay proxy, buffer, and SSE state stream are
+untouched, and overlays only ever run as an OBS browser-source. The
+hand-written overlays (`minimal`, `corner`, `strip`) still serve
+verbatim, so anyone who wants zero overhead can ignore the studio, pick
+a minimal preset, or keep their own static HTML.
+
+**Author rich, bake to lean static.** A shared JS runtime renders the
+editor canvas, then *bakes* each overlay to a self-contained static HTML
+file with only the CSS and JS it actually uses inlined. `/overlay/<slug>`
+serves that static artifact, so a baked overlay costs about what a
+hand-written one does at stream time, with no shared-runtime fetch.
+
+**Widgets, states, animations.** 21 ready-made widgets (delay readout,
+state pill, buffer bar/ring, graph meter, destination status, heartbeat,
+liquid fill, edge accent, corner frame, banner, image, and more). Every
+property (colour, opacity, position, size, font, gradient, glow,
+animation) is editable per delay-state (idle / arming / ready / active /
+error). 13 compositor-only animations, each with an adjustable intensity,
+plus gradients (including animated) and glow.
+
+**Presets.** 10 built-in presets across minimal / casual / ambient /
+tournament / technical / power styles. Editing forks to a copy; the
+originals stay immutable. Presets fade themselves out 4s after going
+live so the overlay clears once viewers have registered the delay; a
+quick toggle on the Overlay tab keeps it up instead, or tune it per
+state in the Studio. Appending `?autohide=off` to the browser-source
+URL also keeps any overlay up, no re-save needed.
+
+**CustomHTML escape hatch.** A sandboxed widget with live data exposed
+two ways: `{{template}}` vars for non-coders and a `window.ic` JS API
+(`ic.phase`, `ic.delay`, `ic.onUpdate(...)`) for power users.
+
+Studio overlays are stored as `<slug>.json` (editable source) plus the
+baked `<slug>.html`; both are served from `overlays_dir`. Saving, slug
+sanitization, and path-traversal containment are covered by new tests.
+
 ## [0.1.4] - Auto-arm + auto-activate behavior toggles
 
 Two independent System settings, both default off, for streamers who
