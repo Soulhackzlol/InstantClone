@@ -23,6 +23,11 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Restore-only: release runs on tags (rare), so populating the cache
+          # buys nothing and the save step is flaky on Windows runners (tar of
+          # a large release target/), which red-X'd the job after publishing.
+          save-if: false
       - name: fmt check
         run: cargo fmt --all -- --check
       - name: clippy
@@ -39,6 +44,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Restore-only: release runs on tags (rare), so populating the cache
+          # buys nothing and the save step is flaky on Windows runners (tar of
+          # a large release target/), which red-X'd the job after publishing.
+          save-if: false
 
       - name: build release
         run: cargo build --release
