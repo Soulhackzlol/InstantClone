@@ -8,6 +8,33 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.6] - Overlay flow: one list, copy a URL
+
+Reworks the Overlay tab around a single idea: **everything is just an
+overlay with a URL you copy into OBS.**
+
+**One list, presets pre-installed.** The old preset / editable / legacy
+split (and its type filter) is gone. On first run the built-in presets
+are baked to real overlay files, so they show up in the same list as
+anything you make - each with a working URL, no hidden "materialize on
+copy" step. A one-time `overlays_seeded` flag keeps deleted presets from
+reappearing.
+
+**Three real actions.** Per overlay: **Copy URL**, **Edit in Studio**,
+**Duplicate**, **Delete** (hand-written legacy files: Copy URL + Delete).
+The standalone "Open Studio" button is replaced by **+ New overlay**. In
+the Studio, save is now two clear buttons: **Save** (overwrite) and
+**Save as new**.
+
+**Auto-hide as a quick toggle.** A per-overlay **Auto-hide when live**
+switch; turning it off appends `?autohide=off` to the copied URL so the
+overlay stays up, no re-bake. The per-state control in the Studio remains
+the baked default.
+
+**Restore defaults.** A button (and the factory reset) wipes your Studio
+overlays and reinstalls the built-in set, with a confirmation that says
+so plainly. Legacy hand-written files are left untouched.
+
 ## [0.1.5] - Overlay Studio (experimental)
 
 A no-code visual editor for building OBS browser-source overlays that

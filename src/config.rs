@@ -70,6 +70,12 @@ pub struct Settings {
     /// streamer hits Arm with a non-zero value) so "last used" sticks
     /// across sessions without a separate UI knob to maintain it.
     pub auto_arm_delay_ms: u32,
+    /// State: whether the built-in preset overlays have been seeded to the
+    /// overlays folder as real files yet. Set true after the dashboard bakes
+    /// them on first run, so deleting a seeded overlay doesn't bring it back.
+    /// Reset to false (and the overlays wiped) by "Restore default overlays"
+    /// and the factory reset, which re-seeds on the next dashboard load.
+    pub overlays_seeded: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -252,6 +258,9 @@ impl Settings {
             // auto_arm_on_connect without otherwise customising lands
             // on a familiar number.
             auto_arm_delay_ms: 15_000,
+            // Fresh install hasn't seeded the preset overlays yet; the
+            // dashboard does it on first load, then flips this true.
+            overlays_seeded: false,
         }
     }
 
@@ -448,6 +457,9 @@ impl Settings {
         if self.auto_arm_delay_ms != 15_000 {
             writeln!(f, "auto_arm_delay_ms={}", self.auto_arm_delay_ms)?;
         }
+        if self.overlays_seeded {
+            writeln!(f, "overlays_seeded=true")?;
+        }
         for (i, p) in self.profiles.iter().enumerate() {
             writeln!(f, "profile.{}.name={}", i, p.name)?;
             writeln!(f, "profile.{}.delay_ms={}", i, p.delay_ms)?;
@@ -524,6 +536,7 @@ impl Settings {
             "tracing_enabled" => self.tracing_enabled = value.parse().unwrap_or(false),
             "auto_arm_on_connect" => self.auto_arm_on_connect = value == "true",
             "auto_activate_when_ready" => self.auto_activate_when_ready = value == "true",
+            "overlays_seeded" => self.overlays_seeded = value == "true",
             "auto_arm_delay_ms" => {
                 if let Ok(v) = value.parse() {
                     self.auto_arm_delay_ms = v;
@@ -700,7 +713,7 @@ impl Settings {
         }
         dests.push(']');
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"initial_delay_ms":{id},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"initial_delay_ms":{id},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"destinations":{dests}}}"#,
             c = self.configured,
             ip = self.ingest_port,
             iba = self.ingest_bind_all,
@@ -718,6 +731,7 @@ impl Settings {
             aaoc = self.auto_arm_on_connect,
             aawr = self.auto_activate_when_ready,
             aadm = self.auto_arm_delay_ms,
+            os = self.overlays_seeded,
             dests = dests,
         )
     }
@@ -1286,6 +1300,7 @@ mod tests {
         s.auto_arm_on_connect = true;
         s.auto_activate_when_ready = true;
         s.auto_arm_delay_ms = 30_000;
+        s.overlays_seeded = true;
         // Need a destination so save() doesn't bail on the
         // configured-but-empty path.
         s.destinations.push(Destination {
@@ -1314,6 +1329,10 @@ mod tests {
         assert_eq!(
             loaded.auto_arm_delay_ms, 30_000,
             "auto_arm_delay_ms must survive round-trip"
+        );
+        assert!(
+            loaded.overlays_seeded,
+            "overlays_seeded must survive round-trip"
         );
 
         let _ = std::fs::remove_file(&path);

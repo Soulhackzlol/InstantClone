@@ -629,6 +629,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ovg-card-tag.editable{background:color-mix(in oklch,var(--accent) 16%,transparent);color:var(--accent)}
 .ovg-card-tag.preset{background:color-mix(in oklch,var(--live) 15%,transparent);color:var(--live)}
 .ovg-card-tag.legacy{background:rgba(255,255,255,.06);color:var(--fg-4)}
+.ovg-empty{padding:26px 16px;text-align:center;color:var(--fg-4);font-size:13px;line-height:1.6}
 
 /* ── Overlay Studio ─────────────────────────────── */
 .st-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -1494,9 +1495,12 @@ input,select,textarea{font-family:inherit;color:inherit}
     <div class="tab-head" style="align-items:flex-start">
       <div>
         <div class="tab-title">On-stream overlay</div>
-        <div class="tab-sub">A browser-source widget that shows your delay. Pick one, drop the URL into OBS - or open the Studio to design your own.</div>
+        <div class="tab-sub">Browser-source widgets that show your delay. Pick one, copy its URL into OBS - or edit any in the Studio.</div>
       </div>
-      <button class="ic-btn ic-btn-primary" onclick="Studio.openStudio()">✎ Open Studio</button>
+      <div style="display:flex;gap:8px">
+        <button class="ic-btn ic-btn-ghost" onclick="Studio.restoreDefaults()" title="Delete all your overlays and reinstall the built-in set">Restore defaults</button>
+        <button class="ic-btn ic-btn-primary" onclick="Studio.newOverlay()">+ New overlay</button>
+      </div>
     </div>
 
     <div class="ovg-grid">
@@ -1515,7 +1519,6 @@ input,select,textarea{font-family:inherit;color:inherit}
           <button class="st-sim" data-psim="preparing" onclick="Studio.previewSim('preparing')">Arming</button>
           <button class="st-sim" data-psim="ready" onclick="Studio.previewSim('ready')">Ready</button>
           <button class="st-sim" data-psim="active" onclick="Studio.previewSim('active')">Active</button>
-          <button class="st-sim" data-psim="cut" onclick="Studio.previewSim('cut')">Cut</button>
           <button class="st-sim" data-psim="error" onclick="Studio.previewSim('error')">Error</button>
           <span class="ph-cap" id="ovg-phase" style="margin-left:auto"></span>
         </div>
@@ -1556,12 +1559,12 @@ input,select,textarea{font-family:inherit;color:inherit}
           <button class="ic-btn ic-btn-ghost st-icobtn" id="st-undo" title="Undo (Ctrl+Z)" onclick="Studio.undo()">↶</button>
           <button class="ic-btn ic-btn-ghost st-icobtn" id="st-redo" title="Redo (Ctrl+Shift+Z)" onclick="Studio.redo()">↷</button>
           <input id="st-name" class="ic-input" placeholder="Overlay name" value="My overlay">
-          <button class="ic-btn ic-btn-primary" id="st-save" onclick="Studio.save()">Save</button>
+          <button class="ic-btn ic-btn-primary" id="st-save" onclick="Studio.save()" title="Overwrite this overlay">Save</button>
+          <button class="ic-btn ic-btn-ghost" onclick="Studio.saveAsNew()" title="Save a separate copy with a new URL">Save as new</button>
           <button class="ic-btn ic-btn-ghost" onclick="Studio.copyUrl()">Copy URL</button>
           <div class="st-menu">
             <button class="ic-btn ic-btn-ghost st-icobtn" title="More" onclick="Studio.toggleMenu(event)">⋯</button>
             <div class="st-menu-pop" id="st-menu-pop" hidden>
-              <button onclick="Studio.menu('saveas')">Save as a copy</button>
               <button onclick="Studio.menu('rename')">Rename</button>
               <button onclick="Studio.menu('export')">Export .json</button>
               <button onclick="Studio.menu('import')">Import .json</button>
@@ -2752,6 +2755,8 @@ async function loadConfig(){
     const c = await (await fetch('/config')).json();
     lastConfig = c;
     initialBufferMb = c.buffer_mb; initialBufferPath = c.buffer_path;
+    // First run: install the built-in presets as real overlays (once).
+    if (c.configured && !c.overlays_seeded && window.ICOverlay) { Studio.seedPresets(); }
     // wizard
     const first = (c.destinations && c.destinations[0]) || {platform:'twitch', custom_egress_url:'', stream_key_set:false};
     if ($('w-platform').children.length === 0) fillWizardPlatforms();
@@ -3233,6 +3238,7 @@ function openResetModal(scope){
     list.innerHTML = [
       '<li><b>All destinations</b> (Twitch / YouTube / custom keys) - gone</li>',
       '<li><b>All saved delay profiles</b> - gone</li>',
+      '<li><b>All your overlays</b> (presets + custom) - deleted, the built-in set restored</li>',
       '<li>Network ports, buffer settings, webhook, overlays folder - reset to defaults</li>',
       '<li>Diagnostic trace toggle - turned off</li>',
     ].join('');
@@ -3346,8 +3352,8 @@ const Studio = (function(){
   function slugify(s){ return (s||'overlay').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,64) || 'overlay'; }
 
   // ---- views: gallery (browse + preview) vs studio (editor) ----
-  let gsel = null;          // gallery selection {type:'preset'|'saved', id}
-  let galleryFilter = 'all';// preset tag filter
+  let gsel = null;          // selected overlay slug (everything is an overlay now)
+  let autohideOff = false;  // quick "stays up" override for the selection (?autohide=off)
   let previewState = 'auto'; // 'auto' = run the delay-lifecycle simulation
   let gallerySim = null, studioSim = null, playing = false;
   const ARMED_MS = 15000;
@@ -3437,12 +3443,27 @@ const Studio = (function(){
     renderProps();
     resetHistory();
   }
-  function openStudio(slug){
+  function openStudio(slugId){
     stopGallerySim(); setView('studio'); ensureStudio();
-    if(slug) openSaved({slug:slug, studio:true});
+    if(slugId) openSaved({slug:slugId, studio:true});
     requestAnimationFrame(fitScale);
   }
-  function openStudioPreset(i){ stopGallerySim(); setView('studio'); ensureStudio(); loadPreset(i); requestAnimationFrame(fitScale); }
+  // The three real intents: edit (openStudio), create new (blank), duplicate.
+  function newOverlay(){
+    stopGallerySim(); setView('studio'); ensureStudio();
+    doc = IC().defaultDoc('Untitled overlay'); slug=null; sel=null;
+    doc.widgets.forEach((w,n)=>{ if(!w.id) w.id='w'+(n+1); });
+    $('st-name').value = doc.name;
+    renderStates(); renderLeft(); rebake(); renderProps(); resetHistory(); updateUrlLabel();
+    requestAnimationFrame(fitScale);
+  }
+  async function duplicateOverlay(slugId){
+    stopGallerySim(); setView('studio'); ensureStudio();
+    await openSaved({slug:slugId, studio:true});
+    slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name;
+    updateUrlLabel(); resetHistory(); requestAnimationFrame(fitScale);
+    toast('Duplicated - "Save as new" to write it','info');
+  }
   function backToGallery(){
     stopPlay();
     setView('gallery');
@@ -3468,80 +3489,48 @@ const Studio = (function(){
     $('ovg-scale').style.transform = 'scale('+(w/1920)+')';
   }
 
-  // ---- gallery ----
-  // Filter by TYPE: built-in presets, your editable saved overlays, or
-  // legacy hand-written .html files.
+  // ---- gallery: one list of overlays, each with a copyable URL ----
+  function curOverlay(){ return savedList.find(o=>o.slug===gsel)||null; }
+  function selUrl(){ return location.origin+'/overlay/'+encodeURIComponent(gsel)+'.html'+(autohideOff?'?autohide=off':''); }
   function renderGallery(){
     const c = $('ovg-list'); if(!c) return;
     c.innerHTML='';
-    // A just-saved overlay should be visible + selected: show all, target it.
-    if(pendingSelect && savedList.some(o=>o.slug===pendingSelect)){ gsel={type:'saved',id:pendingSelect}; galleryFilter='all'; pendingSelect=null; }
-    const showType=(t)=> galleryFilter==='all' || galleryFilter===t;
-    // type filter chips
-    const types=[['all','All'],['preset','Presets'],['editable','Editable'],['legacy','Legacy']];
-    const fr=document.createElement('div'); fr.className='ovg-filter';
-    types.forEach(t=>{ const b=document.createElement('button'); b.className='ovg-fchip'+(galleryFilter===t[0]?' on':'');
-      b.textContent=t[1]; b.onclick=()=>{ galleryFilter=t[0]; renderGallery(); }; fr.appendChild(b); });
-    c.appendChild(fr);
-
-    function tagCard(card, label, cls){ const t=card.querySelector('.ovg-card-tag'); t.textContent=label; if(cls) t.classList.add(cls); }
-
-    // Saved overlays (editable + legacy)
-    savedList.forEach(o=>{
-      const t = o.studio?'editable':'legacy';
-      if(!showType(t)) return;
+    if(pendingSelect && savedList.some(o=>o.slug===pendingSelect)){ gsel=pendingSelect; pendingSelect=null; }
+    // Studio overlays first, then legacy hand-written, each alphabetical.
+    const list = savedList.slice().sort((a,b)=>
+      a.studio===b.studio ? (a.name||a.slug).localeCompare(b.name||b.slug) : (a.studio?-1:1));
+    list.forEach(o=>{
       const card=document.createElement('button'); card.className='ovg-card';
-      card.dataset.gtype='saved'; card.dataset.gid=o.slug;
+      card.dataset.gid=o.slug;
       card.innerHTML='<span class="ovg-card-name"></span><span class="ovg-card-hint mono"></span><span class="ovg-card-tag"></span>';
       card.querySelector('.ovg-card-name').textContent=o.name||o.slug;
       card.querySelector('.ovg-card-hint').textContent='/overlay/'+o.slug+'.html';
-      tagCard(card, o.studio?'EDITABLE':'LEGACY', o.studio?'editable':'legacy');
-      card.onclick=()=>selectGallery('saved',o.slug);
+      if(!o.studio){ const t=card.querySelector('.ovg-card-tag'); t.textContent='LEGACY'; t.classList.add('legacy'); }
+      card.onclick=()=>selectGallery(o.slug);
       c.appendChild(card);
     });
-
-    // Built-in presets
-    if(showType('preset')) IC().PRESETS.forEach((p,i)=>{
-      const card=document.createElement('button'); card.className='ovg-card';
-      card.dataset.gtype='preset'; card.dataset.gid=String(i);
-      card.innerHTML='<span class="ovg-card-name"></span><span class="ovg-card-hint"></span><span class="ovg-card-tag"></span>';
-      card.querySelector('.ovg-card-name').textContent=p.name;
-      card.querySelector('.ovg-card-hint').textContent=p.hint;
-      tagCard(card, 'PRESET', 'preset');
-      card.onclick=()=>selectGallery('preset',i);
-      c.appendChild(card);
-    });
-
-    // Keep the current selection if it's still visible; else pick the first.
-    const cur = gsel && c.querySelector('.ovg-card[data-gtype="'+gsel.type+'"][data-gid="'+gsel.id+'"]');
-    if(cur){ selectGallery(gsel.type, gsel.id); }
-    else { const first=c.querySelector('.ovg-card'); if(first) selectGallery(first.dataset.gtype, first.dataset.gtype==='preset'?parseInt(first.dataset.gid,10):first.dataset.gid); }
+    if(!list.length){ c.innerHTML='<div class="ovg-empty">No overlays yet. Use <b>+ New overlay</b> to make one.</div>'; gsel=null; updateGalleryMeta(); return; }
+    const cur = gsel && c.querySelector('.ovg-card[data-gid="'+CSS.escape(gsel)+'"]');
+    if(cur) selectGallery(gsel);
+    else { const first=c.querySelector('.ovg-card'); if(first) selectGallery(first.dataset.gid); }
   }
 
-  function selectGallery(type,id){
-    gsel={type,id};
-    $$('#ovg-list .ovg-card').forEach(el=>el.classList.toggle('sel', el.dataset.gtype===type && el.dataset.gid===String(id)));
+  function selectGallery(slugId){
+    gsel=slugId; autohideOff=false;
+    $$('#ovg-list .ovg-card').forEach(el=>el.classList.toggle('sel', el.dataset.gid===slugId));
     updatePreview();
     updateGalleryMeta();
   }
   function stopGallerySim(){ if(gallerySim){ gallerySim.stop(); gallerySim=null; } }
-  // Presets ship with a 4s fade-out after going live. This fast toggle lets a
-  // streamer keep the overlay up instead, without opening the Studio.
-  let presetAutoHide = true;
-  function presetDoc(p){
-    const d=clone(p);
-    d.widgets.forEach((w,i)=>{ w.id='w'+(i+1);
-      if(!presetAutoHide && w.states){ Object.keys(w.states).forEach(k=>{ delete w.states[k].hide_after_ms; delete w.states[k].exit; }); }
-    });
-    return d;
-  }
-  function togglePresetHide(on){ presetAutoHide=on; updatePreview(); }
+  // Quick "keep it up" toggle: off appends ?autohide=off to the copied/preview
+  // URL (the runtime honours it). No re-bake - the baked default is unchanged.
+  function toggleAutohide(on){ autohideOff=!on; updatePreview(); updateGalleryMeta(); }
   function updatePreview(){
-    const prev=$('ov-preview'); if(!prev) return;
+    const prev=$('ov-preview'); if(!prev||!gsel) return;
     stopGallerySim();
     prev.onload=()=>applyPreviewState();
-    if(gsel.type==='preset'){ prev.removeAttribute('src'); prev.srcdoc=IC().bake(presetDoc(IC().PRESETS[gsel.id])); }
-    else { prev.removeAttribute('srcdoc'); prev.src='/overlay/'+encodeURIComponent(gsel.id)+'.html'; }
+    prev.removeAttribute('srcdoc');
+    prev.src='/overlay/'+encodeURIComponent(gsel)+'.html'+(autohideOff?'?autohide=off':'');
   }
   // Drive the preview: 'auto' runs the delay-lifecycle simulation, 'live'
   // shows the real OBS state, anything else pins one state.
@@ -3559,48 +3548,29 @@ const Studio = (function(){
   }
   function updateGalleryMeta(){
     const nameEl=$('ovg-name'), urlEl=$('ovg-url'), act=$('ovg-actions');
-    act.innerHTML='';
-    if(gsel.type==='preset'){
-      const p=IC().PRESETS[gsel.id];
-      // A preset is just a starting point; the URL is what OBS loads, so
-      // show the URL it gets the moment you use it. Copy/Use both create
-      // the file - no Studio detour required.
-      nameEl.textContent=p.name+' · preset';
-      urlEl.textContent=location.origin+'/overlay/'+slugify(p.name)+'.html';
-      act.innerHTML='<label class="ovg-switch" title="Fade the overlay out a few seconds after the delay goes live"><input type="checkbox"'+(presetAutoHide?' checked':'')+' onchange="Studio.togglePresetHide(this.checked)"><span>Auto-hide when live</span></label>'+
-        '<button class="ic-btn ic-btn-ghost" onclick="Studio.openStudioPreset('+gsel.id+')">Customize in Studio</button>';
+    const o=curOverlay();
+    if(!o){ nameEl.textContent=''; urlEl.textContent='select an overlay'; act.innerHTML=''; return; }
+    nameEl.textContent=(o.name||o.slug)+(o.studio?'':' · legacy');
+    urlEl.textContent=selUrl();
+    let h='';
+    // Quick auto-hide toggle (only meaningful when the file bakes one).
+    if(o.autohide) h+='<label class="ovg-switch" title="Off appends ?autohide=off so the overlay stays up"><input type="checkbox"'+(autohideOff?'':' checked')+' onchange="Studio.toggleAutohide(this.checked)"><span>Auto-hide when live</span></label>';
+    if(o.studio){
+      h+='<button class="ic-btn ic-btn-ghost" onclick="Studio.openStudio(\''+o.slug+'\')">Edit in Studio</button>'+
+         '<button class="ic-btn ic-btn-ghost" onclick="Studio.duplicateOverlay(\''+o.slug+'\')">Duplicate</button>';
     } else {
-      const o=savedList.find(x=>x.slug===gsel.id)||{slug:gsel.id};
-      nameEl.textContent=(o.name||o.slug)+(o.studio?' · saved':' · legacy');
-      urlEl.textContent=location.origin+'/overlay/'+o.slug+'.html';
-      if(o.studio) act.innerHTML='<button class="ic-btn ic-btn-primary" onclick="Studio.openStudio(\''+o.slug+'\')">Edit in Studio</button>'+
-        '<button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.deleteFromGallery(\''+o.slug+'\')">Delete</button>';
-      else act.innerHTML='<span class="muted" style="font-size:11.5px;align-self:center">Hand-written - edit the .html file directly</span>'+
-        '<button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.deleteFromGallery(\''+o.slug+'\')">Delete</button>';
+      h+='<span class="muted" style="font-size:11.5px;align-self:center">Hand-written - edit the .html file directly</span>';
     }
+    h+='<button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.deleteFromGallery(\''+o.slug+'\')">Delete</button>';
+    act.innerHTML=h;
   }
-  // Copy from the gallery. For a preset, create the file first (so the URL
-  // actually resolves in OBS) then copy it. For a saved overlay, copy as-is.
-  async function copyGallery(){
-    if(gsel && gsel.type==='preset'){ const sl=await useOverlay(true); if(sl) copyText(location.origin+'/overlay/'+sl+'.html','Overlay URL'); }
-    else copyEl('ovg-url','Overlay URL');
-  }
-  // Bake a preset to disk under its own slug (so the URL resolves in OBS) and
-  // switch the gallery to it. `silent` skips the toast for the copy path, which
-  // shows its own "copied" toast.
-  async function useOverlay(silent){
-    if(!gsel || gsel.type!=='preset') return null;
-    const p=IC().PRESETS[gsel.id];
-    const d=presetDoc(p);
-    const sl=slugify(p.name);
-    try{
-      const r=await fetch('/overlays/'+encodeURIComponent(sl), {method:'POST', headers:{'Content-Type':'text/html'}, body:IC().bake(d)});
-      const j=await r.json();
-      if(!j.ok){ toast(j.error||'Could not save overlay','err'); return null; }
-      await loadSaved(); gsel={type:'saved',id:sl}; renderGallery();
-      if(!silent) toast('Saved to your overlays - URL ready for OBS','ok');
-      return sl;
-    }catch(e){ toast('Could not save overlay','err'); return null; }
+  function copyGallery(){ if(gsel) copyText(selUrl(),'Overlay URL'); }
+  // Restore the built-in overlays: wipe the Studio overlays + re-seed presets.
+  async function restoreDefaults(){
+    if(!confirm('Restore default overlays?\n\nThis DELETES ALL your Studio overlays (the presets and anything you made) and reinstalls the built-in set. Hand-written .html files are kept.\n\nThis cannot be undone.')) return;
+    try{ await fetch('/overlays/reset',{method:'POST'}); }catch(e){ toast('Could not restore overlays','err'); return; }
+    await seedPresets();
+    toast('Default overlays restored','ok');
   }
   async function deleteFromGallery(slugId){
     const o=savedList.find(x=>x.slug===slugId);
@@ -3785,13 +3755,6 @@ const Studio = (function(){
     }
   }
 
-  function loadPreset(i){
-    doc = clone(IC().PRESETS[i]); slug=null; sel=null;
-    doc.widgets.forEach((w,n)=>{ w.id='w'+(n+1); });
-    $('st-name').value = doc.name;
-    renderStates(); renderLeft(); rebake(); renderProps(); resetHistory();
-    toast('Loaded "'+doc.name+'" - edit freely, the original preset is untouched','ok');
-  }
   function addWidget(kind){
     const w = IC().defaultWidget(kind, nextId());
     doc.widgets.push(w); sel=w.id;
@@ -4074,13 +4037,14 @@ const Studio = (function(){
       else { toast(j.error||'Save failed','err'); slug=null; }
     }catch(e){ toast('Save failed','err'); slug=null; }
   }
-  function duplicate(){ slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name; updateUrlLabel(); toast('Duplicated - Save to write a new file','info'); }
   function copyUrl(){ if(!slug){ toast('Save the overlay first to get a URL','info'); return; } copyText(location.origin+'/overlay/'+slug+'.html','Overlay URL'); }
   // ---- overflow menu: save-as / rename / export / import / delete ----
   function toggleMenu(ev){ ev.stopPropagation(); const p=$('st-menu-pop'); if(p) p.hidden=!p.hidden; }
+  // Save a separate copy under a new slug (so it never overwrites the current
+  // overlay). The user can rename afterwards.
+  function saveAsNew(){ slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name; return save(); }
   function menu(action){ const p=$('st-menu-pop'); if(p) p.hidden=true;
     if(action==='delete') return deleteOverlay();
-    if(action==='saveas'){ slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name; return save(); }
     if(action==='rename') return renameOverlay();
     if(action==='export') return exportDoc();
     if(action==='import') return importDoc();
@@ -4115,6 +4079,25 @@ const Studio = (function(){
     try{ savedList = await (await fetch('/overlays')).json(); if(!Array.isArray(savedList)) savedList=[]; }catch(e){ savedList=[]; }
     if(left==='mine' && $('ov-studio') && !$('ov-studio').hidden) renderLeft();
   }
+  // First-run seeding: bake the built-in presets to real overlay files so the
+  // gallery is one uniform list (every item has a working URL). Gated by the
+  // server `overlays_seeded` flag (set via POST /overlays/seeded) so deleted
+  // presets stay gone. Skips any slug that already exists.
+  let seeding=false;
+  async function seedPresets(){
+    if(seeding || !IC()) return; seeding=true;
+    try{
+      await loadSaved();
+      for(let i=0;i<IC().PRESETS.length;i++){
+        const p=IC().PRESETS[i]; const slug=slugify(p.name);
+        if(savedList.some(o=>o.slug===slug)) continue;
+        const d=clone(p); d.widgets.forEach((w,n)=>{ w.id='w'+(n+1); });
+        await fetch('/overlays/'+encodeURIComponent(slug),{method:'POST',headers:{'Content-Type':'text/html'},body:IC().bake(d)});
+      }
+      await fetch('/overlays/seeded',{method:'POST'});
+      await loadSaved(); renderGallery();
+    }catch(e){}finally{ seeding=false; }
+  }
 
   window.addEventListener('resize', ()=>{
     if($('ov-studio') && !$('ov-studio').hidden) fitScale();
@@ -4145,9 +4128,9 @@ const Studio = (function(){
   });
   document.addEventListener('click', ()=>{ const p=$('st-menu-pop'); if(p && !p.hidden) p.hidden=true; });
 
-  return { show, openStudio, openStudioPreset, backToGallery, previewSim, deleteFromGallery,
-    useOverlay, togglePresetHide, copyGallery, undo, redo, toggleMenu, menu,
-    leftTab, selectState, play, save, duplicate, copyUrl, deleteOverlay, loadSaved,
+  return { show, openStudio, newOverlay, duplicateOverlay, backToGallery, previewSim, deleteFromGallery,
+    seedPresets, restoreDefaults, toggleAutohide, copyGallery, undo, redo, toggleMenu, menu,
+    leftTab, selectState, play, save, saveAsNew, copyUrl, deleteOverlay, loadSaved,
     set, setNum, setBase, setCustom, setState, setStateNum, setStateText, setAnim, setAnimNum,
     setHideAfter, toggleHide, setLS, setStateOffset, resetStateOffset, toggleVis, visOnly, visAll, applyColorAll, applyAnimAll, copyLookAll,
     setTheme, setGrad, toggleGrad, setGradAnim, align, animAdd, animDel, animSet, uploadImage, insertVar,
