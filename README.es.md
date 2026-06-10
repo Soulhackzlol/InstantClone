@@ -186,15 +186,13 @@ Un panel de 280×340 con el indicador, los controles de armar/activar/desarmar/c
 
 ### Overlays como browser-source
 
-Mete uno como browser-source para mostrar el delay en directo:
+La pestaña **Overlay** es un Studio sin código. Elige un overlay ya hecho, copia su URL y métela en OBS — o abre cualquiera en el Studio para rediseñarlo (colores por estado, widgets, animaciones) y darle a **Save** o **Save as new**.
 
-<pre><code>http://127.0.0.1:7799/overlay?style=corner&amp;lang=es</code></pre>
+<pre><code>http://127.0.0.1:7799/overlay/whisper.html</code></pre>
 
-<sub><b>Estilos</b></sub> &nbsp;`minimal` · `corner` · `strip` · `focus` · `broadcast` · `ticker`
+<sub><b>¿Sin configurar?</b></sub> &nbsp;Los estilos rápidos de siempre siguen funcionando desde la URL: <code>/overlay?style=corner&amp;lang=es</code> &nbsp;<sub>(`minimal · corner · strip · focus · broadcast · ticker`, idiomas `en · es · pt · fr · de`)</sub>
 
-<sub><b>Idiomas</b></sub> &nbsp;`en` · `es` · `pt` · `fr` · `de`
-
-Suelta cualquier `.html` en `./overlays/` y se sirve en `/overlay/tu-archivo.html`.
+O suelta cualquier `.html` en `./overlays/` y se sirve en `/overlay/tu-archivo.html`.
 
 </td>
 </tr>

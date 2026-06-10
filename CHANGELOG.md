@@ -35,6 +35,12 @@ the baked default.
 overlays and reinstalls the built-in set, with a confirmation that says
 so plainly. Legacy hand-written files are left untouched.
 
+**Legacy overlays retired.** The bundled `minimal` / `corner` / `strip`
+hand-written overlays are removed (superseded by the Studio presets); the
+startup no longer drops them. Serving still works - any `.html` you put in
+`overlays/` is served, and the older `/overlay?style=…` URLs still render.
+The `custom-template.html` hand-write example stays.
+
 ## [0.1.5] - Overlay Studio (experimental)
 
 A no-code visual editor for building OBS browser-source overlays that

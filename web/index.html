@@ -610,12 +610,6 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ovg-scale{position:absolute;top:0;left:0;width:1920px;height:1080px;transform-origin:top left}
 .ovg-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block}
 .ovg-list{display:flex;flex-direction:column;gap:7px;padding:10px 14px 14px;overflow-y:auto;max-height:520px}
-.ovg-cat{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-4);margin:8px 2px 2px}
-.ovg-filter{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 8px}
-.ovg-fchip{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:999px;
-  color:var(--fg-3);font-size:11px;font-weight:600;padding:5px 12px;cursor:pointer;transition:.12s}
-.ovg-fchip:hover{border-color:var(--line-2);color:var(--fg)}
-.ovg-fchip.on{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
 .ovg-card{appearance:none;text-align:left;background:var(--surface);border:1px solid var(--line);
   border-radius:10px;padding:11px 13px;cursor:pointer;display:flex;flex-direction:column;gap:3px;
   transition:border-color .12s,transform .12s;position:relative}
@@ -625,10 +619,8 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ovg-card-name{font-size:13px;font-weight:600;color:var(--fg)}
 .ovg-card-hint{font-size:10.5px;color:var(--fg-4);line-height:1.4}
 .ovg-card-tag{position:absolute;top:9px;right:11px;font-size:9px;font-weight:700;letter-spacing:.06em;
-  padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.06);color:var(--fg-3)}
-.ovg-card-tag.editable{background:color-mix(in oklch,var(--accent) 16%,transparent);color:var(--accent)}
-.ovg-card-tag.preset{background:color-mix(in oklch,var(--live) 15%,transparent);color:var(--live)}
-.ovg-card-tag.legacy{background:rgba(255,255,255,.06);color:var(--fg-4)}
+  padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.06);color:var(--fg-4)}
+.ovg-card-tag:empty{display:none}
 .ovg-empty{padding:26px 16px;text-align:center;color:var(--fg-4);font-size:13px;line-height:1.6}
 
 /* ── Overlay Studio ─────────────────────────────── */
@@ -658,9 +650,6 @@ input,select,textarea{font-family:inherit;color:inherit}
 .st-item .st-cost{font-size:9px;font-weight:700;letter-spacing:.06em;padding:1px 5px;border-radius:5px;
   background:color-mix(in oklch,var(--warn) 16%,transparent);color:var(--warn)}
 .st-item .st-tag{font-size:9.5px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
-.st-preset{flex-direction:column;align-items:flex-start;gap:3px}
-.st-preset .st-preset-name{font-size:13px;font-weight:600;color:var(--fg)}
-.st-preset .st-preset-hint{font-size:10.5px;color:var(--fg-4);line-height:1.35}
 .st-canvas-wrap{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
 .st-canvas-frame{position:relative;flex:1;min-height:0;background:#06080c;
   border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -3539,7 +3528,10 @@ const Studio = (function(){
     stopGallerySim();
     const cap=$('ovg-phase');
     if(previewState==='live'){ if(prev.contentWindow) prev.contentWindow.postMessage({__ic_sim:true,forceState:null,state:simFrame('idle',0)},'*'); if(cap) cap.innerHTML='<span class="ph-dot" style="background:#8a8f9a"></span>Live - real OBS state'; return; }
-    gallerySim=makeSim(prev, previewState==='auto'?'auto':previewState, (st,p)=>setCaption('ovg-phase',st,p), previewState!=='auto');
+    // Always keep the widget on screen in the gallery preview (noHide=true) -
+    // the preview is to SHOW the overlay, not to demo its auto-hide, which
+    // would leave the canvas empty for most of the cycle.
+    gallerySim=makeSim(prev, previewState==='auto'?'auto':previewState, (st,p)=>setCaption('ovg-phase',st,p), true);
   }
   function previewSim(st){
     previewState=st;

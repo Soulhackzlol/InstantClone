@@ -636,10 +636,11 @@ fn open_browser(url: &str) {
     let _ = Command::new("xdg-open").arg(url).spawn();
 }
 
-/// Create the overlays directory (if missing) and write any of the three
-/// built-in templates that don't already exist on disk. Idempotent - safe
-/// to call on every startup. Users can freely edit the files; the next
-/// run won't overwrite them.
+/// Create the overlays directory (if missing) and drop the folder README
+/// plus the hand-write example, if absent. Idempotent - safe on every
+/// startup; user edits are never overwritten. The built-in *overlays*
+/// themselves are no longer dropped here: the dashboard bakes the Studio
+/// presets to real files on first load (see `seedPresets`).
 fn ensure_overlays_dir(dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(dir);
     let drop = |name: &str, body: &str| {
@@ -648,48 +649,12 @@ fn ensure_overlays_dir(dir: &std::path::Path) {
             let _ = std::fs::write(&path, body);
         }
     };
-    drop("minimal.html", OVERLAY_MINIMAL);
-    drop("corner.html", OVERLAY_CORNER);
-    drop("strip.html", OVERLAY_STRIP);
     drop("README.md", OVERLAY_README);
+    drop("custom-template.html", OVERLAY_CUSTOM_TEMPLATE);
 }
 
-const OVERLAY_README: &str = r#"# InstantClone overlay plugins
-
-Any `.html` file you drop into this folder becomes an OBS browser-source
-overlay. The dashboard's *Overlay* tab lists them and gives you the URL
-to paste into OBS.
-
-Each overlay can fetch live state from the proxy:
-
-    GET /state  →  JSON  {
-      phase: "idle"|"preparing"|"ready"|"active",
-      current_delay_ms, armed_delay_ms, buffer_fill_ms, ...
-      ingest_alive, egress_alive,
-      destinations_alive, destinations_total,
-      destinations: [ { id, name, enabled, alive, bitrate_kbps, ... } ],
-      stats: { bitrate_kbps, cuts, ingest_disconnects, ... }
-    }
-
-Recommended pattern:
-
-    <script>
-      async function tick(){
-        try { const s = await (await fetch('/state')).json();
-              document.getElementById('v').textContent = (s.current_delay_ms/1000).toFixed(1);
-            } catch(_) {}
-      }
-      tick(); setInterval(tick, 500);
-    </script>
-
-The three bundled overlays (minimal, corner, strip) are useful starting
-points - copy one and modify.
-"#;
-
-// Overlay templates are embedded straight from the canonical files in
-// ../overlays/ so a fresh install drops the *same* HTML that lives in
-// the repo. include_str! keeps the constant and the on-disk template
-// in lockstep automatically - no risk of the two drifting silently.
-const OVERLAY_MINIMAL: &str = include_str!("../overlays/minimal.html");
-const OVERLAY_CORNER: &str = include_str!("../overlays/corner.html");
-const OVERLAY_STRIP: &str = include_str!("../overlays/strip.html");
+// Embedded straight from the canonical files in ../overlays/ so a binary
+// install drops the *same* content that lives in the repo. include_str!
+// keeps them in lockstep - no risk of drifting silently.
+const OVERLAY_README: &str = include_str!("../overlays/README.md");
+const OVERLAY_CUSTOM_TEMPLATE: &str = include_str!("../overlays/custom-template.html");
