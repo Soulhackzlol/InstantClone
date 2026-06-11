@@ -114,6 +114,27 @@ pub fn is_port_free(addr: &str) -> bool {
     TcpListener::bind(addr).is_ok()
 }
 
+/// Poll until `addr` becomes bindable, up to `timeout`. Returns `true` the
+/// instant a bind succeeds, `false` if the whole window elapses still busy.
+///
+/// Used on a restart / self-update relaunch: the outgoing instance can take a
+/// moment to release its listening socket (Windows may even still attribute
+/// the port to the now-dead PID), and we'd rather wait that out silently than
+/// pop the "switch port?" modal mid-handoff. The window is generous because a
+/// genuine conflict is rare and a spurious modal on every restart is worse.
+pub fn wait_until_bindable(addr: &str, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if is_port_free(addr) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
 /// Find the first port in `[start ..= start+range]` that we can bind
 /// on `host`. Returns `None` if every port in the window is busy.
 pub fn find_free_port(host: &str, start: u16, range: u16) -> Option<u16> {
@@ -232,6 +253,33 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         panic!("released port did not become free");
+    }
+
+    #[test]
+    fn wait_until_bindable_returns_when_socket_released() {
+        use std::time::Duration;
+        let (held, port) = bind_eph();
+        let addr = format!("127.0.0.1:{port}");
+        // Release the socket after a short hold, on another thread.
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            drop(held);
+        });
+        assert!(
+            wait_until_bindable(&addr, Duration::from_secs(5)),
+            "must report bindable once the holder releases within the window"
+        );
+    }
+
+    #[test]
+    fn wait_until_bindable_times_out_on_a_held_port() {
+        use std::time::Duration;
+        let (_held, port) = bind_eph(); // held for the whole test
+        let addr = format!("127.0.0.1:{port}");
+        assert!(
+            !wait_until_bindable(&addr, Duration::from_millis(400)),
+            "a permanently held port must time out as not bindable"
+        );
     }
 
     #[test]

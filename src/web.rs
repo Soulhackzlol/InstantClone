@@ -33,6 +33,9 @@ pub async fn run(
     cfg_path: PathBuf,
 ) -> io::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
+    // Don't let a restart/self-update child inherit this listener, or the port
+    // stays bound after we exit and the new instance can't reclaim it.
+    crate::self_update::dont_inherit(&listener);
     eprintln!("[web] listening on http://{}", addr);
     // Single shared sampler: CPU% needs the previous sample to compute a
     // delta, so we cannot construct one per request.
@@ -410,6 +413,68 @@ async fn route(
                     error: Some("update check task panicked".into()),
                 });
             ("200 OK", "application/json", info.to_json())
+        }
+        ("POST", "/update/apply") => {
+            // Stage (download + verify) inline so any failure surfaces as a
+            // clean JSON error the About tab can show. The actual swap +
+            // relaunch + process exit is deferred to a detached thread so
+            // this 200 flushes to the browser FIRST - the browser then polls
+            // /config until we're back and reloads.
+            match tokio::task::spawn_blocking(crate::self_update::prepare).await {
+                Ok(Ok(staged)) => {
+                    let v = staged.version.replace('"', "'");
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(1200));
+                        crate::self_update::commit_and_relaunch(staged);
+                    });
+                    (
+                        "200 OK",
+                        "application/json",
+                        format!(r#"{{"ok":true,"restarting":true,"version":"{v}"}}"#),
+                    )
+                }
+                Ok(Err(msg)) => (
+                    "200 OK",
+                    "application/json",
+                    format!(
+                        r#"{{"ok":false,"error":"{}"}}"#,
+                        msg.replace('\\', "\\\\").replace('"', "'")
+                    ),
+                ),
+                Err(_) => (
+                    "200 OK",
+                    "application/json",
+                    r#"{"ok":false,"error":"update task panicked"}"#.to_string(),
+                ),
+            }
+        }
+        ("POST", "/app/restart") => {
+            // Relaunch from a detached thread so this 200 flushes first; the
+            // dashboard then polls /config and reloads when we're back.
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                crate::self_update::restart_now();
+            });
+            (
+                "200 OK",
+                "application/json",
+                r#"{"ok":true,"restarting":true}"#.to_string(),
+            )
+        }
+        // Reveal one of our known files in the OS file browser. The keyword
+        // is fixed (not a client-supplied path), so this can only ever open
+        // our own buffer / overlays / trace - never an arbitrary location.
+        ("POST", "/reveal/buffer") => {
+            reveal_path(&settings.borrow().buffer_path.clone());
+            ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
+        }
+        ("POST", "/reveal/overlays") => {
+            reveal_path(&settings.borrow().overlays_dir.clone());
+            ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
+        }
+        ("POST", "/reveal/trace") => {
+            reveal_path(Path::new("./instantclone-trace.log"));
+            ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
         }
         ("GET", "/obs/launch-status") => {
             let exe = crate::obs_register::find_obs_executable();
@@ -2093,6 +2158,39 @@ fn extract_title(html: &str) -> Option<String> {
         None
     } else {
         Some(title.to_string())
+    }
+}
+
+/// Open the OS file browser highlighting `path` (or opening it, when it's a
+/// directory). Backs the System tab's reveal buttons. Callers map a fixed
+/// keyword to a known app path - never a client-supplied one - so this can
+/// only ever surface our own files.
+fn reveal_path(path: &Path) {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|d| d.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    // Open the folder that holds the target (or the folder itself). We open
+    // the directory rather than `/select`-ing the file: explorer's
+    // `/select,PATH` switch is unreliable to spawn (its comma syntax fights
+    // both Rust's arg-escaping and cmd-style quoting, so it tends to land on
+    // a default location), whereas a plain folder path - auto-quoted by
+    // `arg` so spaces are safe - opens reliably.
+    let dir = if abs.is_dir() {
+        abs.clone()
+    } else {
+        abs.parent().map(|p| p.to_path_buf()).unwrap_or(abs.clone())
+    };
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = &dir;
     }
 }
 

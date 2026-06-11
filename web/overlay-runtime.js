@@ -136,6 +136,9 @@
       custom: kind === 'CustomHTML' ? defaultCustom() : null
     };
     if (kind === 'StatePill' || kind === 'Text') { w.base.text = 'DELAY'; }
+    // The meter smooths its line by default so a steady signal reads calm
+    // (0 = raw/jittery, ~1 = glassy). Tunable in the Studio.
+    if (kind === 'BitrateMeter') { w.smooth = 0.6; }
     return w;
   }
 
@@ -282,7 +285,15 @@
     // LiquidFill recedes smoothly first (height -> 0 over .6s), THEN fades,
     // so the tide visibly drains before disappearing.
     '.icw[data-kind="LiquidFill"].ic-gone{transform:none;transition:opacity .5s ease .65s !important}',
-    '.icw[data-kind="LiquidFill"].ic-gone .liquid{height:0 !important}'
+    '.icw[data-kind="LiquidFill"].ic-gone .liquid{height:0 !important}',
+    // Exit animations. We animate (not transition) the auto-hide exit because
+    // the widget is usually mid state-animation, and a transition fired in the
+    // same frame as stopping that animation gets skipped - so every exit used
+    // to "just pop". A forwards keyframe always runs and holds the hidden pose.
+    '@keyframes ic-x-fade{to{opacity:0}}',
+    '@keyframes ic-x-down{to{opacity:0;transform:translateY(48px)}}',
+    '@keyframes ic-x-up{to{opacity:0;transform:translateY(-48px)}}',
+    '@keyframes ic-x-pop{to{opacity:0;transform:scale(.78)}}'
   ].join('\n');
 
   // ---- Per-widget HTML + CSS ----
@@ -302,7 +313,7 @@
       case 'BufferRing':
         return '<svg viewBox="0 0 100 100"><circle class="trk" cx="50" cy="50" r="46"/>' +
           '<circle class="arc" cx="50" cy="50" r="46" stroke-dasharray="289" stroke-dashoffset="289"/></svg>' +
-          '<span class="v">0.0</span>';
+          (w.notext ? '' : '<span class="v">0.0</span>');
       case 'BitrateMeter':
         return '<svg viewBox="0 0 100 32" preserveAspectRatio="none"><polyline class="spark" points=""/></svg>';
       case 'DestinationStatus':
@@ -369,14 +380,14 @@
       case 'BufferBar':
         css = id + '{width:' + w.size.w + 'px;height:' + Math.max(3, w.size.h) + 'px;border-radius:999px;background:rgba(255,255,255,.12);overflow:hidden}' +
           id + ' .fill{display:block;height:100%;width:0;border-radius:999px;background:currentColor;' +
-          'transform-origin:left center;transition:width .42s cubic-bezier(.16,1,.3,1)}';
+          'transform-origin:left center;transition:width var(--ic-sm,.42s) cubic-bezier(.16,1,.3,1)}';
         break;
       case 'BufferRing':
         css = id + '{position:relative;width:' + w.size.w + 'px;height:' + w.size.w + 'px;color:currentColor}' +
           id + ' svg{position:absolute;inset:0;transform:rotate(-90deg)}' +
-          id + ' circle{fill:none;stroke-width:4}' +
+          id + ' circle{fill:none;stroke-width:var(--ic-ring-w,4)}' +
           id + ' .trk{stroke:rgba(255,255,255,.10)}' +
-          id + ' .arc{stroke:currentColor;stroke-linecap:round;transition:stroke-dashoffset .42s cubic-bezier(.16,1,.3,1)}' +
+          id + ' .arc{stroke:currentColor;stroke-linecap:round;transition:stroke-dashoffset var(--ic-sm,.42s) cubic-bezier(.16,1,.3,1)}' +
           id + ' .v{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;' +
           'font-size:' + Math.round(fp * 0.9) + 'px;font-weight:700}';
         break;
@@ -405,7 +416,8 @@
         break;
       case 'CornerFrame':
         css = id + '{position:fixed;inset:0;pointer-events:none;color:currentColor}' +
-          id + ' .c{position:absolute;width:46px;height:46px;border:3px solid currentColor;opacity:.85}' +
+          id + ' .c{position:absolute;width:var(--ic-cf-size,46px);height:var(--ic-cf-size,46px);' +
+          'border:var(--ic-cf-w,3px) solid currentColor;opacity:.85}' +
           id + ' .tl{top:24px;left:24px;border-right:0;border-bottom:0}' +
           id + ' .tr{top:24px;right:24px;border-left:0;border-bottom:0}' +
           id + ' .bl{bottom:24px;left:24px;border-right:0;border-top:0}' +
@@ -420,9 +432,9 @@
         css = id + '{position:relative;width:' + hb + 'px;height:' + hb + 'px;color:currentColor;' +
           'display:flex;align-items:center;justify-content:center}' +
           id + ' .core{width:32%;height:32%;border-radius:50%;background:currentColor;' +
-          'box-shadow:0 0 18px currentColor;animation:ic-beat 1.5s ease-in-out infinite}' +
+          'box-shadow:0 0 18px currentColor;animation:ic-beat calc(1.5s / var(--ic-spd-mul,1)) ease-in-out infinite}' +
           id + ' .ring{position:absolute;left:50%;top:50%;width:' + hb + 'px;height:' + hb + 'px;margin:' + (-hb / 2) + 'px;' +
-          'border:2px solid currentColor;border-radius:50%;opacity:0;animation:ic-ripple 2.4s ease-out infinite}' +
+          'border:2px solid currentColor;border-radius:50%;opacity:0;animation:ic-ripple calc(2.4s / var(--ic-spd-mul,1)) ease-out infinite}' +
           id + ' .r2{animation-delay:1.2s}';
         break;
       }
@@ -434,23 +446,32 @@
         break;
       case 'EdgeAccent':
         // Crisp inner line + a soft inward glow falloff = expressive border.
+        // --ic-edge-w: line thickness, --ic-glow: glow reach.
         css = id + '{position:fixed;inset:0;pointer-events:none;' +
-          'box-shadow:inset 0 0 0 3px currentColor, inset 0 0 38px -6px currentColor, inset 0 0 140px -52px currentColor}';
+          'box-shadow:inset 0 0 0 var(--ic-edge-w,3px) currentColor, ' +
+          'inset 0 0 var(--ic-glow,38px) -6px currentColor, inset 0 0 140px -52px currentColor}';
         break;
       case 'BackgroundTint':
+        // --ic-tint: overall strength.
         css = id + '{position:fixed;inset:0;pointer-events:none;' +
-          'background:radial-gradient(120% 80% at 50% 120%, currentColor, transparent 70%);opacity:.22}';
+          'background:radial-gradient(120% 80% at 50% 120%, currentColor, transparent 70%);opacity:var(--ic-tint,.22)}';
         break;
       case 'LiquidFill':
         // A tide that rises with the buffer and ripples when live. The
         // .liquid height is driven by applyData (buffer fraction).
+        // Tunable: --ic-sm (rise smoothness), --ic-spd-mul (wave speed),
+        // --ic-wav (wave intensity). Fallbacks keep the original look.
         css = id + '{position:fixed;inset:0;pointer-events:none;overflow:hidden}' +
           id + ' .liquid{position:absolute;left:0;right:0;bottom:0;height:0;' +
           'background:linear-gradient(to top, currentColor, transparent);opacity:.3;' +
-          'transition:height .6s cubic-bezier(.2,.8,.2,1)}' +
-          id + ' .wave{position:absolute;left:-25%;right:-25%;top:-14px;height:28px;background:currentColor;' +
-          'border-radius:45%;opacity:.5;animation:ic-tide 5s ease-in-out infinite}' +
-          'body[data-state="active"] ' + id + ' .liquid{animation:ic-swell 5s ease-in-out infinite}';
+          'transition:height var(--ic-sm,.6s) cubic-bezier(.2,.8,.2,1)}' +
+          // Wave (--ic-wav) drives the CREST geometry: height + how it sits, so
+          // 0 reads as a flat surface and 2 as a tall choppy crest - not just a
+          // fade. Opacity stays constant.
+          id + ' .wave{position:absolute;left:-25%;right:-25%;top:calc(-14px * var(--ic-wav,1));' +
+          'height:calc(28px * var(--ic-wav,1));background:currentColor;' +
+          'border-radius:45%;opacity:.5;animation:ic-tide calc(5s / var(--ic-spd-mul,1)) ease-in-out infinite}' +
+          'body[data-state="active"] ' + id + ' .liquid{animation:ic-swell calc(5s / var(--ic-spd-mul,1)) ease-in-out infinite}';
         break;
       case 'Image':
         css = id + ' img{width:' + w.size.w + 'px;height:auto;display:block}';
@@ -466,8 +487,8 @@
         '@keyframes ic-beat{0%,100%{transform:scale(1)}12%{transform:scale(1.32)}24%{transform:scale(1)}38%{transform:scale(1.22)}52%{transform:scale(1)}}' + css;
     }
     if (w.kind === 'LiquidFill') {
-      css = '@keyframes ic-tide{0%,100%{transform:translateX(-4%) rotate(-1deg)}50%{transform:translateX(4%) rotate(1deg)}}' +
-        '@keyframes ic-swell{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.2%)}}' + css;
+      css = '@keyframes ic-tide{0%,100%{transform:translateX(calc(-4% * var(--ic-wav,1))) rotate(calc(-1deg * var(--ic-wav,1)))}50%{transform:translateX(calc(4% * var(--ic-wav,1))) rotate(calc(1deg * var(--ic-wav,1)))}}' +
+        '@keyframes ic-swell{0%,100%{transform:translateY(0)}50%{transform:translateY(calc(-1.2% * var(--ic-wav,1)))}}' + css;
     }
     // Typography controls (text-bearing widgets). Weight targets the inner
     // text nodes so it overrides the per-widget defaults.
@@ -674,7 +695,10 @@
     // LiquidFill: a full-screen tide that rises with the buffer (full when
     // live). Skip while the widget is auto-hiding so the recede plays out.
     document.querySelectorAll('[data-kind="LiquidFill"] .liquid').forEach(function(l){
-      var host=l.parentNode; if(host && host.classList.contains('ic-gone')) return;
+      var host=l.parentNode; if(host && (host.classList.contains('ic-gone')||host.hasAttribute('data-ic-gone'))) return;
+      // Fixed level overrides the buffer-following fill.
+      var lvl=host&&host.getAttribute('data-level');
+      if(lvl!=null&&lvl!==''){ l.style.height=lvl+'%'; return; }
       l.style.height=(Math.max(frac, s.phase==='active'||s.phase==='ready'?1:frac)*100).toFixed(1)+'%';
     });
     document.querySelectorAll('[data-kind="BufferRing"]').forEach(function(el){
@@ -687,8 +711,16 @@
       var bind=el.getAttribute('data-bind')||'bitrate_kbps';
       var hist=el.__spark||(el.__spark=[]);
       hist.push(readout(s,bind).v); if(hist.length>48) hist.shift();
-      var mx=Math.max.apply(null,hist), mn=Math.min.apply(null,hist), rng=(mx-mn)||1;
-      var pts=hist.map(function(y,i){return (i/(Math.max(1,hist.length-1))*100).toFixed(1)+','+(30-((y-mn)/rng)*28).toFixed(1);}).join(' ');
+      // Smoothing: an EMA over the window damps jitter so a rock-steady signal
+      // reads as a calm line, not amplified noise. 0 = raw, ~1 = glassy.
+      var sm=parseFloat(el.getAttribute('data-smooth')); if(isNaN(sm)) sm=0.6;
+      var a=Math.max(0,Math.min(0.95,sm)), prev=hist[0], line=[];
+      for(var i=0;i<hist.length;i++){ prev=i?prev*a+hist[i]*(1-a):hist[i]; line.push(prev); }
+      var mx=Math.max.apply(null,line), mn=Math.min.apply(null,line);
+      // Range floor: tiny variation must NOT blow up to full height - a stable
+      // stream should look stable. Only a real swing earns the full vertical.
+      var rng=Math.max(mx-mn, mx*0.18, 1);
+      var pts=line.map(function(y,i){return (i/(Math.max(1,line.length-1))*100).toFixed(1)+','+(30-((y-mn)/rng)*28).toFixed(1);}).join(' ');
       var p=el.querySelector('.spark'); if(p) p.setAttribute('points',pts);
     });
     // CutCounter
@@ -737,8 +769,8 @@
   function clearHideTimers(){ hideTimers.forEach(clearTimeout); hideTimers=[]; }
   function applyHides(stateKey){
     clearHideTimers();
-    var goners=document.querySelectorAll('.icw.ic-gone');
-    for(var i=0;i<goners.length;i++){ goners[i].classList.remove('ic-gone'); goners[i].style.transform=''; goners[i].style.transition=''; goners[i].style.animation=''; }
+    var goners=document.querySelectorAll('.icw.ic-gone, .icw[data-ic-gone]');
+    for(var i=0;i<goners.length;i++){ var g=goners[i]; g.classList.remove('ic-gone'); g.removeAttribute('data-ic-gone'); g.style.transform=''; g.style.transition=''; g.style.animation=''; g.style.opacity=''; g.style.visibility=''; g.style.pointerEvents=''; }
     // __ic_noHide: editor preview keeps widgets up. !AUTOHIDE: the OBS URL
     // carried ?autohide=off, so the streamer wants the overlay to stay put.
     if(window.__ic_noHide || !AUTOHIDE) return;
@@ -746,14 +778,17 @@
       var ms=parseInt(el.getAttribute('data-ah-'+stateKey),10)||0;
       if(ms>0) hideTimers.push(setTimeout(function(){
         var ex=el.getAttribute('data-exit-'+stateKey)||'fade';
-        // Kill any looping state animation first - otherwise it keeps driving
-        // opacity/transform and overrides the exit, so nothing visibly leaves.
         el.style.animation='none';
-        if(ex==='slide-down') el.style.transform='translateY(48px)';
-        else if(ex==='slide-up') el.style.transform='translateY(-48px)';
-        else if(ex==='pop') el.style.transform='scale(.78)';
-        else if(ex==='instant') el.style.transition='none';
-        el.classList.add('ic-gone');
+        if(ex==='instant'){ el.style.transition='none'; el.classList.add('ic-gone'); return; }
+        // Run an exit KEYFRAME (see base CSS). The reflow
+        // commits the animation:none so the exit animation starts cleanly from
+        // the current pose; the forwards fill holds opacity:0 until re-show.
+        var name = ex==='slide-down'?'ic-x-down':ex==='slide-up'?'ic-x-up':ex==='pop'?'ic-x-pop':'ic-x-fade';
+        void el.offsetWidth;
+        el.style.animation=name+' .8s ease forwards';
+        el.setAttribute('data-ic-gone','1');
+        // Stop painting + block clicks once it's faded out.
+        hideTimers.push(setTimeout(function(){ el.style.visibility='hidden'; el.style.pointerEvents='none'; }, 850));
       }, ms));
     });
   }
@@ -794,6 +829,10 @@
       // replay: drop the state attribute + reflow so one-shot entrance
       // animations restart even when re-selecting the same state.
       if(d.replay){ body.removeAttribute('data-state'); void body.offsetWidth; lastHideKey=''; }
+      // rehide: re-arm every auto-hide timer from the current frame (after a
+      // Studio edit) WITHOUT restarting entrance animations, so all hides stay
+      // in lockstep instead of drifting until the next replay cycle.
+      if(d.rehide){ lastHideKey=''; }
       render(d.state||window.__ic_last||{});
     }
   });
@@ -871,10 +910,37 @@
       // to the base colour (the bug that made all states look identical).
       let style = meta.full ? '' : anchorCss(w.anchor, w.offset);
 
+      // Per-widget effect tuning, emitted as inline CSS vars the widget CSS
+      // reads (with fallbacks, so an untuned widget looks exactly as before).
+      // --ic-spd-mul: animation speed; --ic-sm: data-driven transition
+      // smoothness (seconds); --ic-wav: LiquidFill wave intensity.
+      if (w.speed != null && +w.speed !== 1) style += '--ic-spd-mul:' + r(Math.max(0.1, +w.speed)) + ';';
+      if (w.smooth != null && (w.kind === 'LiquidFill' || w.kind === 'BufferBar' || w.kind === 'BufferRing')) {
+        style += '--ic-sm:' + r(Math.max(0, +w.smooth)) + 's;';
+      }
+      if (w.kind === 'LiquidFill' && w.wave != null && +w.wave !== 1) style += '--ic-wav:' + r(Math.max(0, +w.wave)) + ';';
+      if (w.kind === 'BufferRing' && w.ringWidth != null) style += '--ic-ring-w:' + r(Math.max(1, +w.ringWidth)) + ';';
+      if (w.kind === 'EdgeAccent') {
+        if (w.edgeWidth != null) style += '--ic-edge-w:' + r(Math.max(0, +w.edgeWidth)) + 'px;';
+        if (w.glow != null) style += '--ic-glow:' + r(Math.max(0, +w.glow)) + 'px;';
+      }
+      if (w.kind === 'BackgroundTint' && w.intensity != null) style += '--ic-tint:' + r(Math.max(0, Math.min(1, +w.intensity))) + ';';
+      if (w.kind === 'CornerFrame') {
+        if (w.frameSize != null) style += '--ic-cf-size:' + r(Math.max(8, +w.frameSize)) + 'px;';
+        if (w.frameWidth != null) style += '--ic-cf-w:' + r(Math.max(1, +w.frameWidth)) + 'px;';
+      }
+
       // Per-state text overrides surfaced as data attributes for the runtime.
       let dataAttrs = 'data-kind="' + w.kind + '"';
+      // LiquidFill fixed level (vs the default buffer-following fill).
+      if (w.kind === 'LiquidFill' && w.level != null && w.level !== 'buffer') {
+        dataAttrs += ' data-level="' + r(Math.max(0, Math.min(100, +w.level))) + '"';
+      }
       if (w.kind === 'DelayReadout') dataAttrs += ' data-bind="' + esc(w.bind || 'target_delay_ms') + '"';
-      if (w.kind === 'BitrateMeter') dataAttrs += ' data-bind="' + esc(w.bind || 'bitrate_kbps') + '"';
+      if (w.kind === 'BitrateMeter') {
+        dataAttrs += ' data-bind="' + esc(w.bind || 'bitrate_kbps') + '"';
+        if (w.smooth != null) dataAttrs += ' data-smooth="' + r(Math.max(0, Math.min(0.95, w.smooth))) + '"';
+      }
       // CutCounter is intentionally excluded: its label is the live count
       // (driven by applyData via data-tpl), so per-state text overrides
       // would fight the counter. The rest take per-state text overrides.
@@ -988,9 +1054,9 @@
     return { style: style, duration_ms: duration_ms, easing: easing || 'ease-out', delay_ms: 0 };
   };
   // One colour + motion per delay-state so every state reads at a glance:
-  // grey idle, AMBER filling, CYAN armed, GREEN live, PINK cut, RED error.
+  // grey idle, AMBER filling, CYAN armed, GREEN live, RED error.
   const GREY = '#8a8f9a', AMBER = '#ffb73a', CYAN = '#5ac8fa', GREEN = '#54e38e',
-        PINK = '#ff5aa0', RED = '#ff5a5a';
+        RED = '#ff5a5a';
 
   // Build a 6-state map from a compact spec. idle hides by default; pass
   // `idle` to override (e.g. the technical panel stays visible at idle).
@@ -1030,7 +1096,6 @@
           preparing: { color: AMBER },
           ready: { color: CYAN },
           active: { color: GREEN, anim: A('breathe', 3000) },
-          cut: { color: PINK, anim: A('flash', 240, 'linear') },
           error: { color: RED, anim: A('pulse', 700) }
         })
       })
@@ -1064,7 +1129,6 @@
           preparing: { color: AMBER },
           ready: { color: CYAN },
           active: { color: GREEN },
-          cut: { color: PINK, anim: A('flash', 220, 'linear') },
           error: { color: RED }
         })
       })
@@ -1077,7 +1141,6 @@
           preparing: { color: AMBER, anim: A('glow', 1600) },
           ready: { color: CYAN, anim: A('glow', 3200) },
           active: { color: GREEN, anim: A('glow', 2600) },
-          cut: { color: PINK, anim: A('flash', 240, 'linear') },
           error: { color: RED, anim: A('pulse', 700) }
         })
       }),
@@ -1087,7 +1150,6 @@
           preparing: { text: 'ARMING DELAY', color: AMBER },
           ready: { text: 'DELAY ARMED', color: CYAN },
           active: { text: 'DELAY ON', color: GREEN },
-          cut: { text: 'CUT', color: PINK },
           error: { text: 'DESTINATION DROPPED', color: RED, anim: A('shake', 400) }
         })
       })
@@ -1119,7 +1181,7 @@
         color: CYAN,
         states: S6({
           preparing: { color: AMBER }, ready: { color: CYAN }, active: { color: GREEN },
-          cut: { color: PINK }, error: { color: RED, anim: A('pulse', 700) }
+          error: { color: RED, anim: A('pulse', 700) }
         })
       }),
       W('StatePill', {
@@ -1128,7 +1190,6 @@
           preparing: { text: 'ARMING', color: AMBER, anim: A('slide-down', 400) },
           ready: { text: 'ARMED', color: CYAN },
           active: { text: 'ON AIR', color: GREEN },
-          cut: { text: 'CUT', color: PINK, anim: A('flash', 220, 'linear') },
           error: { text: 'SIGNAL LOST', color: RED, anim: A('flash', 300, 'linear') }
         })
       }),
@@ -1136,7 +1197,7 @@
         anchor: 'top-right', offset: { x: 96, y: 62 }, font_px: 30, bind: 'target_delay_ms', color: CYAN,
         states: S6({
           preparing: { color: AMBER }, ready: { color: CYAN }, active: { color: GREEN },
-          cut: { color: PINK }, error: { color: RED }
+          error: { color: RED }
         })
       })
     ]),
@@ -1155,7 +1216,7 @@
 
     preset('Status Panel', 'Technical', 'Delay, buffer, bitrate and destinations - greyed at idle, lit by state.', [
       W('DelayReadout', { anchor: 'top-left', offset: { x: 96, y: 62 }, font_px: 34, bind: 'target_delay_ms', color: CYAN,
-        states: S6({ idle: { visible: true, color: GREY }, preparing: { color: AMBER }, ready: { color: CYAN }, active: { color: GREEN }, cut: { color: PINK }, error: { color: RED } }) }),
+        states: S6({ idle: { visible: true, color: GREY }, preparing: { color: AMBER }, ready: { color: CYAN }, active: { color: GREEN }, error: { color: RED } }) }),
       W('BufferBar', { anchor: 'top-left', offset: { x: 96, y: 112 }, size: { w: 180, h: 8 }, color: CYAN,
         states: S6({ idle: { visible: true, color: GREY }, preparing: { color: AMBER }, ready: { color: CYAN }, active: { color: GREEN }, error: { color: RED } }) }),
       W('BitrateMeter', { anchor: 'top-left', offset: { x: 96, y: 134 }, size: { w: 180, h: 32 }, color: CYAN,
