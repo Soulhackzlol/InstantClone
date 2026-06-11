@@ -20,7 +20,7 @@ Open a [Discussion](https://github.com/Soulhackzlol/InstantClone/discussions). I
 ## Stuff I'd love help with
 
 - Cross-platform support (macOS, Linux). The code is mostly portable; [tray.rs](src/tray.rs), [portcheck.rs](src/portcheck.rs), and [sysstat.rs](src/sysstat.rs) have Windows-specific paths that need parallel implementations.
-- New overlay styles. Drop new `.html` files into [overlays/](overlays/) and they're served automatically.
+- New overlay presets + Studio widgets. Built-in overlays are the `PRESETS` in [web/overlay-runtime.js](web/overlay-runtime.js) (the dashboard seeds them on first run); new widgets/animations live in the same file. A hand-written `.html` dropped into [overlays/](overlays/) is still served as-is.
 - Real-world bug reports from streaming with the proxy in the loop.
 
 ## Probably not

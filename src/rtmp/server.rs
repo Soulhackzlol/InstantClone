@@ -19,6 +19,9 @@ use tokio::net::TcpListener;
 
 pub async fn run(addr: String, ctrl: Arc<Controller>) -> io::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
+    // Keep this listener out of a restart/self-update child (else the ingest
+    // port stays bound after we exit and the new instance can't reclaim it).
+    crate::self_update::dont_inherit(&listener);
     eprintln!("[ingest] listening on {}", addr);
     loop {
         let (sock, peer) = listener.accept().await?;

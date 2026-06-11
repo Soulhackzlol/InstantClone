@@ -33,6 +33,9 @@ pub async fn run(
     cfg_path: PathBuf,
 ) -> io::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
+    // Don't let a restart/self-update child inherit this listener, or the port
+    // stays bound after we exit and the new instance can't reclaim it.
+    crate::self_update::dont_inherit(&listener);
     eprintln!("[web] listening on http://{}", addr);
     // Single shared sampler: CPU% needs the previous sample to compute a
     // delta, so we cannot construct one per request.
@@ -264,8 +267,17 @@ async fn route(
     // Overlay Studio writes: POST /overlays/<slug> saves a baked overlay,
     // POST /overlays/<slug>/delete removes it. The slug is restricted to a
     // safe charset (no separators) so no path can escape overlays_dir.
+    // POST /overlays/seeded marks the built-in presets as installed; POST
+    // /overlays/reset wipes the Studio overlays and clears that flag so the
+    // dashboard re-seeds the defaults on its next load.
     if method == "POST" && bare_path.starts_with("/overlays/") {
         let rest = &bare_path["/overlays/".len()..];
+        if rest == "seeded" {
+            return overlays_mark_seeded(settings, cfg_path);
+        }
+        if rest == "reset" {
+            return overlays_reset(settings, cfg_path);
+        }
         if let Some(slug) = rest.strip_suffix("/delete") {
             return overlay_delete(slug, settings);
         }
@@ -401,6 +413,68 @@ async fn route(
                     error: Some("update check task panicked".into()),
                 });
             ("200 OK", "application/json", info.to_json())
+        }
+        ("POST", "/update/apply") => {
+            // Stage (download + verify) inline so any failure surfaces as a
+            // clean JSON error the About tab can show. The actual swap +
+            // relaunch + process exit is deferred to a detached thread so
+            // this 200 flushes to the browser FIRST - the browser then polls
+            // /config until we're back and reloads.
+            match tokio::task::spawn_blocking(crate::self_update::prepare).await {
+                Ok(Ok(staged)) => {
+                    let v = staged.version.replace('"', "'");
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(1200));
+                        crate::self_update::commit_and_relaunch(staged);
+                    });
+                    (
+                        "200 OK",
+                        "application/json",
+                        format!(r#"{{"ok":true,"restarting":true,"version":"{v}"}}"#),
+                    )
+                }
+                Ok(Err(msg)) => (
+                    "200 OK",
+                    "application/json",
+                    format!(
+                        r#"{{"ok":false,"error":"{}"}}"#,
+                        msg.replace('\\', "\\\\").replace('"', "'")
+                    ),
+                ),
+                Err(_) => (
+                    "200 OK",
+                    "application/json",
+                    r#"{"ok":false,"error":"update task panicked"}"#.to_string(),
+                ),
+            }
+        }
+        ("POST", "/app/restart") => {
+            // Relaunch from a detached thread so this 200 flushes first; the
+            // dashboard then polls /config and reloads when we're back.
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                crate::self_update::restart_now();
+            });
+            (
+                "200 OK",
+                "application/json",
+                r#"{"ok":true,"restarting":true}"#.to_string(),
+            )
+        }
+        // Reveal one of our known files in the OS file browser. The keyword
+        // is fixed (not a client-supplied path), so this can only ever open
+        // our own buffer / overlays / trace - never an arbitrary location.
+        ("POST", "/reveal/buffer") => {
+            reveal_path(&settings.borrow().buffer_path.clone());
+            ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
+        }
+        ("POST", "/reveal/overlays") => {
+            reveal_path(&settings.borrow().overlays_dir.clone());
+            ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
+        }
+        ("POST", "/reveal/trace") => {
+            reveal_path(Path::new("./instantclone-trace.log"));
+            ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
         }
         ("GET", "/obs/launch-status") => {
             let exe = crate::obs_register::find_obs_executable();
@@ -1483,6 +1557,10 @@ async fn post_config_reset(
         // event-log tab match the "fresh install" feel.
         ctrl.arm_delay(0);
         ctrl.clear_logs();
+        // Wipe the Studio overlays (from the still-current dir, before the
+        // send below swaps in defaults). The seeded flag is back to false in
+        // `next`, so the dashboard re-bakes the presets on its next load.
+        wipe_studio_overlays(&settings.borrow().overlays_dir);
     }
     ctrl.log(format!("config reset (scope={})", scope));
     reconcile_obs_vod_files(&next, ctrl);
@@ -2025,7 +2103,7 @@ fn generate_dest_id() -> String {
 /// ones are still listed and usable as browser sources.
 fn list_overlays(settings: &Arc<watch::Sender<Settings>>) -> String {
     let dir = settings.borrow().overlays_dir.clone();
-    let mut items: Vec<(String, String, bool)> = Vec::new();
+    let mut items: Vec<(String, String, bool, bool)> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.flatten() {
             let fname = match e.file_name().into_string() {
@@ -2043,21 +2121,25 @@ fn list_overlays(settings: &Arc<watch::Sender<Settings>>) -> String {
             // detect the ic-doc marker is cheap and keeps the list honest.
             let content = std::fs::read_to_string(e.path()).unwrap_or_default();
             let studio = content.contains("<!--ic-doc:");
+            // `autohide` lets the dashboard show a "stays up / hides when live"
+            // quick toggle (it appends ?autohide=off to the copied URL).
+            let autohide = content.contains("data-ah-");
             let name = extract_title(&content).unwrap_or_else(|| slug.clone());
-            items.push((slug, name, studio));
+            items.push((slug, name, studio, autohide));
         }
     }
     items.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = String::from("[");
-    for (i, (slug, name, studio)) in items.iter().enumerate() {
+    for (i, (slug, name, studio, autohide)) in items.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
         out.push_str(&format!(
-            r#"{{"slug":{},"name":{},"studio":{}}}"#,
+            r#"{{"slug":{},"name":{},"studio":{},"autohide":{}}}"#,
             json_escape_quoted(slug),
             json_escape_quoted(name),
-            studio
+            studio,
+            autohide
         ));
     }
     out.push(']');
@@ -2076,6 +2158,39 @@ fn extract_title(html: &str) -> Option<String> {
         None
     } else {
         Some(title.to_string())
+    }
+}
+
+/// Open the OS file browser highlighting `path` (or opening it, when it's a
+/// directory). Backs the System tab's reveal buttons. Callers map a fixed
+/// keyword to a known app path - never a client-supplied one - so this can
+/// only ever surface our own files.
+fn reveal_path(path: &Path) {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|d| d.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    // Open the folder that holds the target (or the folder itself). We open
+    // the directory rather than `/select`-ing the file: explorer's
+    // `/select,PATH` switch is unreliable to spawn (its comma syntax fights
+    // both Rust's arg-escaping and cmd-style quoting, so it tends to land on
+    // a default location), whereas a plain folder path - auto-quoted by
+    // `arg` so spaces are safe - opens reliably.
+    let dir = if abs.is_dir() {
+        abs.clone()
+    } else {
+        abs.parent().map(|p| p.to_path_buf()).unwrap_or(abs.clone())
+    };
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = &dir;
     }
 }
 
@@ -2157,6 +2272,83 @@ fn overlay_delete(
     // surfacing - the end state (overlay gone) is what the caller wants.
     let _ = std::fs::remove_file(dir.join(format!("{slug}.html")));
     let _ = std::fs::remove_dir_all(dir.join(slug));
+    ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
+/// Delete every Studio-authored overlay (files carrying the `ic-doc` marker)
+/// in `dir`, plus each one's per-overlay assets directory. Hand-written legacy
+/// `.html` files (no marker) are left alone - they ship with the app and aren't
+/// user data the dashboard can recreate.
+fn wipe_studio_overlays(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        let is_html = path
+            .extension()
+            .and_then(|x| x.to_str())
+            .map(|x| x.eq_ignore_ascii_case("html") || x.eq_ignore_ascii_case("htm"))
+            .unwrap_or(false);
+        if !is_html {
+            continue;
+        }
+        if std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .contains("<!--ic-doc:")
+        {
+            let _ = std::fs::remove_file(&path);
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                let _ = std::fs::remove_dir_all(dir.join(stem));
+            }
+        }
+    }
+}
+
+/// Mark the built-in preset overlays as seeded (the dashboard calls this once,
+/// after it bakes them on first run), so deleted ones don't reappear.
+fn overlays_mark_seeded(
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> (&'static str, &'static str, String) {
+    let mut next = settings.borrow().clone();
+    if !next.overlays_seeded {
+        next.overlays_seeded = true;
+        if let Err(e) = next.save(cfg_path) {
+            return (
+                "500 Internal Server Error",
+                "application/json",
+                format!(
+                    r#"{{"ok":false,"error":"{}"}}"#,
+                    json_escape(&e.to_string())
+                ),
+            );
+        }
+        let _ = settings.send(next);
+    }
+    ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
+/// Restore the default overlays: wipe the Studio overlays and clear the seeded
+/// flag so the dashboard re-bakes the built-in presets on its next load.
+fn overlays_reset(
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> (&'static str, &'static str, String) {
+    let mut next = settings.borrow().clone();
+    wipe_studio_overlays(&next.overlays_dir);
+    next.overlays_seeded = false;
+    if let Err(e) = next.save(cfg_path) {
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&e.to_string())
+            ),
+        );
+    }
+    let _ = settings.send(next);
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
 }
 
@@ -3308,6 +3500,37 @@ mod tests {
         assert!(listed.contains(r#""slug":"classic""#));
         assert!(listed.contains(r#""name":"Classic""#));
         assert!(listed.contains(r#""studio":false"#));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wipe_keeps_legacy_and_list_reports_autohide() {
+        let dir = unique_tmp_dir("wipe");
+        // A Studio overlay (ic-doc marker) that bakes an auto-hide (data-ah-).
+        std::fs::write(
+            dir.join("studio.html"),
+            "<!doctype html><!--ic-doc:%7B%7D--><html><head><title>S</title></head>\
+             <body><div class=\"icw\" data-ah-active=\"4000\"></div></body></html>",
+        )
+        .unwrap();
+        // A hand-written legacy file: no marker, no auto-hide.
+        std::fs::write(
+            dir.join("legacy.html"),
+            "<!doctype html><html><head><title>L</title></head><body>hi</body></html>",
+        )
+        .unwrap();
+
+        // The list reports studio + autohide per file.
+        let settings = settings_with_overlays_dir(&dir);
+        let listed = list_overlays(&settings);
+        assert!(listed.contains(r#""slug":"studio","name":"S","studio":true,"autohide":true"#));
+        assert!(listed.contains(r#""slug":"legacy","name":"L","studio":false,"autohide":false"#));
+
+        // Restore-defaults wipes only the Studio (ic-doc) file; legacy stays.
+        wipe_studio_overlays(&dir);
+        assert!(!dir.join("studio.html").exists());
+        assert!(dir.join("legacy.html").is_file());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

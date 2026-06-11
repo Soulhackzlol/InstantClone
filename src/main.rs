@@ -33,6 +33,8 @@ mod obs_register;
 #[cfg(windows)]
 mod portcheck;
 mod rtmp;
+mod self_update;
+mod sha256;
 mod sink;
 mod sysstat;
 mod trace;
@@ -80,6 +82,21 @@ fn main() -> std::io::Result<()> {
     let suppress_browser = raw_args.iter().any(|a| a == "--no-browser")
         || std::env::var("INSTANTCLONE_NO_BROWSER").ok().as_deref() == Some("1");
 
+    // Sweep any `.old` / `.new` exe left over from a self-update swap. When
+    // we got here via the relauncher, this deletes the previous version we
+    // just replaced; otherwise it's a harmless no-op.
+    self_update::sweep_leftovers();
+
+    // Relaunch handshake: a restart / self-update spawns us with
+    // `--await-pid <old>`. Wait for that instance to fully exit (and release
+    // the ingest/web ports) before the port pre-flight + bind below, so the
+    // two never collide. Capped so a stuck old process can't wedge us.
+    if let Some(i) = raw_args.iter().position(|a| a == "--await-pid") {
+        if let Some(pid) = raw_args.get(i + 1).and_then(|s| s.parse::<u32>().ok()) {
+            self_update::wait_for_pid_exit(pid, 10_000);
+        }
+    }
+
     let cfg_path: PathBuf = std::env::var("CONFIG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("./instantclone.config.json"));
@@ -109,12 +126,21 @@ fn main() -> std::io::Result<()> {
     // and pop a native modal asking the user to switch or quit.
     #[cfg(windows)]
     {
+        // When relaunched by a restart / self-update, the outgoing instance
+        // may still be releasing its listening sockets (the OS can report the
+        // port as busy - even owned by the now-dead PID - for a brief window
+        // after exit). Poll through that window instead of popping the
+        // "switch port?" modal, which would otherwise block the relaunch.
+        let relaunched = raw_args.iter().any(|a| a == "--await-pid");
         let host_ingest = if settings.ingest_bind_all {
             "0.0.0.0"
         } else {
             "127.0.0.1"
         };
-        if !portcheck::is_port_free(&format!("{}:{}", host_ingest, settings.ingest_port)) {
+        if !port_free_with_grace(
+            &format!("{}:{}", host_ingest, settings.ingest_port),
+            relaunched,
+        ) {
             match preflight_resolve("RTMP port", settings.ingest_port, host_ingest) {
                 Some(new_port) => settings.ingest_port = new_port,
                 None => return Ok(()),
@@ -125,7 +151,7 @@ fn main() -> std::io::Result<()> {
         } else {
             "127.0.0.1"
         };
-        if !portcheck::is_port_free(&format!("{}:{}", host_web, settings.web_port)) {
+        if !port_free_with_grace(&format!("{}:{}", host_web, settings.web_port), relaunched) {
             match preflight_resolve("Web port", settings.web_port, host_web) {
                 Some(new_port) => settings.web_port = new_port,
                 None => return Ok(()),
@@ -627,6 +653,20 @@ fn preflight_resolve(label: &str, port: u16, host: &str) -> Option<u16> {
     }
 }
 
+/// Is `addr` bindable? When `grace` is set (we were relaunched by a restart /
+/// self-update), wait out the outgoing instance's socket-release window before
+/// deciding it's taken - so a normal handoff never pops the "switch port?"
+/// modal. Returns the moment the port frees, so the common case is instant; a
+/// genuine conflict still falls through after the window.
+#[cfg(windows)]
+fn port_free_with_grace(addr: &str, grace: bool) -> bool {
+    if grace {
+        portcheck::wait_until_bindable(addr, Duration::from_secs(20))
+    } else {
+        portcheck::is_port_free(addr)
+    }
+}
+
 fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
     let _ = Command::new("cmd").args(["/c", "start", "", url]).spawn();
@@ -636,10 +676,11 @@ fn open_browser(url: &str) {
     let _ = Command::new("xdg-open").arg(url).spawn();
 }
 
-/// Create the overlays directory (if missing) and write any of the three
-/// built-in templates that don't already exist on disk. Idempotent - safe
-/// to call on every startup. Users can freely edit the files; the next
-/// run won't overwrite them.
+/// Create the overlays directory (if missing) and drop the folder README
+/// plus the hand-write example, if absent. Idempotent - safe on every
+/// startup; user edits are never overwritten. The built-in *overlays*
+/// themselves are no longer dropped here: the dashboard bakes the Studio
+/// presets to real files on first load (see `seedPresets`).
 fn ensure_overlays_dir(dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(dir);
     let drop = |name: &str, body: &str| {
@@ -648,48 +689,12 @@ fn ensure_overlays_dir(dir: &std::path::Path) {
             let _ = std::fs::write(&path, body);
         }
     };
-    drop("minimal.html", OVERLAY_MINIMAL);
-    drop("corner.html", OVERLAY_CORNER);
-    drop("strip.html", OVERLAY_STRIP);
     drop("README.md", OVERLAY_README);
+    drop("custom-template.html", OVERLAY_CUSTOM_TEMPLATE);
 }
 
-const OVERLAY_README: &str = r#"# InstantClone overlay plugins
-
-Any `.html` file you drop into this folder becomes an OBS browser-source
-overlay. The dashboard's *Overlay* tab lists them and gives you the URL
-to paste into OBS.
-
-Each overlay can fetch live state from the proxy:
-
-    GET /state  →  JSON  {
-      phase: "idle"|"preparing"|"ready"|"active",
-      current_delay_ms, armed_delay_ms, buffer_fill_ms, ...
-      ingest_alive, egress_alive,
-      destinations_alive, destinations_total,
-      destinations: [ { id, name, enabled, alive, bitrate_kbps, ... } ],
-      stats: { bitrate_kbps, cuts, ingest_disconnects, ... }
-    }
-
-Recommended pattern:
-
-    <script>
-      async function tick(){
-        try { const s = await (await fetch('/state')).json();
-              document.getElementById('v').textContent = (s.current_delay_ms/1000).toFixed(1);
-            } catch(_) {}
-      }
-      tick(); setInterval(tick, 500);
-    </script>
-
-The three bundled overlays (minimal, corner, strip) are useful starting
-points - copy one and modify.
-"#;
-
-// Overlay templates are embedded straight from the canonical files in
-// ../overlays/ so a fresh install drops the *same* HTML that lives in
-// the repo. include_str! keeps the constant and the on-disk template
-// in lockstep automatically - no risk of the two drifting silently.
-const OVERLAY_MINIMAL: &str = include_str!("../overlays/minimal.html");
-const OVERLAY_CORNER: &str = include_str!("../overlays/corner.html");
-const OVERLAY_STRIP: &str = include_str!("../overlays/strip.html");
+// Embedded straight from the canonical files in ../overlays/ so a binary
+// install drops the *same* content that lives in the repo. include_str!
+// keeps them in lockstep - no risk of drifting silently.
+const OVERLAY_README: &str = include_str!("../overlays/README.md");
+const OVERLAY_CUSTOM_TEMPLATE: &str = include_str!("../overlays/custom-template.html");

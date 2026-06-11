@@ -8,6 +8,80 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.6] - Overlay flow: one list, copy a URL
+
+Reworks the Overlay tab around a single idea: **everything is just an
+overlay with a URL you copy into OBS.**
+
+**One list, presets pre-installed.** The old preset / editable / legacy
+split (and its type filter) is gone. On first run the built-in presets
+are baked to real overlay files, so they show up in the same list as
+anything you make - each with a working URL, no hidden "materialize on
+copy" step. A one-time `overlays_seeded` flag keeps deleted presets from
+reappearing.
+
+**Three real actions.** Per overlay: **Copy URL**, **Edit in Studio**,
+**Duplicate**, **Delete** (hand-written legacy files: Copy URL + Delete).
+The standalone "Open Studio" button is replaced by **+ New overlay**. In
+the Studio, save is now two clear buttons: **Save** (overwrite) and
+**Save as new**.
+
+**Auto-hide as a quick toggle.** A per-overlay **Auto-hide when live**
+switch; turning it off appends `?autohide=off` to the copied URL so the
+overlay stays up, no re-bake. The per-state control in the Studio remains
+the baked default.
+
+**Restore defaults.** A button (and the factory reset) wipes your Studio
+overlays and reinstalls the built-in set, with a confirmation that says
+so plainly. Legacy hand-written files are left untouched.
+
+**Legacy overlays retired.** The bundled `minimal` / `corner` / `strip`
+hand-written overlays are removed (superseded by the Studio presets); the
+startup no longer drops them. Serving still works - any `.html` you put in
+`overlays/` is served, and the older `/overlay?style=…` URLs still render.
+The `custom-template.html` hand-write example stays.
+
+**Calmer graph meter.** The line widget now smooths its signal (a
+**Smoothing** slider, on by default) and floors its vertical scale, so a
+steady stream reads as a calm line instead of amplifying tiny jitter into
+a full-height sawtooth - while a real drop still swings the whole graph.
+
+**One-click updates.** When the About tab finds a newer release, an
+**Update** button now does it for you: download the new build, verify it
+against the release's published SHA-256, swap it in, and relaunch - your
+settings, destinations, and overlays are kept. Updating stays optional,
+and the manual download link is still there for anyone who prefers it (or
+when antivirus blocks the swap). Saving settings also shows an in-flight
+state and reports network failures instead of silently doing nothing.
+
+**Effects you can tune.** Liquid fill gained real controls - **Fill level**
+(follow the buffer or a fixed %), **Wave**, **Speed**, and **Smoothness** -
+instead of a hardwired behavior. Heartbeat gained **Speed**; the buffer bar
+and ring gained **Smoothness**. Untuned widgets look exactly as before.
+
+**Studio preview stays in sync.** Editing a setting now re-arms all auto-hide
+timers together immediately (a brief "synced" tag confirms it), instead of
+drifting until the next preview cycle. The **theme colour picker** also no
+longer slams shut the moment you drag the hue.
+
+**Auto-hide exits actually animate.** When a widget hid after its delay, it
+used to just blink out regardless of the chosen exit (fade / slide / pop):
+the browser collapsed the animation-stop and the fade into one frame and
+skipped the transition. The exit now plays its full animation. The Studio
+preview also adapts its replay timing so a hide longer than 5 s plays its
+exit instead of looking like it never fires.
+
+**Unsaved overlay changes are guarded.** The Studio's Save button shows a dot
+when there are unsaved edits, and leaving (Back, switching tabs, or closing
+the page) now asks before discarding them.
+
+**Restart from the dashboard.** The "restart required" banner (and the
+About tab) now has a **Restart now** button that relaunches the app and
+reconnects the dashboard on its own, instead of asking you to find and
+relaunch the exe by hand. **Show in Explorer** buttons on the Buffer and
+Diagnostics sections open the buffer file, trace log, and overlays folder
+straight in Explorer for troubleshooting.
+
 ## [0.1.5] - Overlay Studio (experimental)
 
 A no-code visual editor for building OBS browser-source overlays that

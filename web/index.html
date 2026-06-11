@@ -610,12 +610,6 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ovg-scale{position:absolute;top:0;left:0;width:1920px;height:1080px;transform-origin:top left}
 .ovg-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block}
 .ovg-list{display:flex;flex-direction:column;gap:7px;padding:10px 14px 14px;overflow-y:auto;max-height:520px}
-.ovg-cat{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-4);margin:8px 2px 2px}
-.ovg-filter{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 8px}
-.ovg-fchip{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:999px;
-  color:var(--fg-3);font-size:11px;font-weight:600;padding:5px 12px;cursor:pointer;transition:.12s}
-.ovg-fchip:hover{border-color:var(--line-2);color:var(--fg)}
-.ovg-fchip.on{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
 .ovg-card{appearance:none;text-align:left;background:var(--surface);border:1px solid var(--line);
   border-radius:10px;padding:11px 13px;cursor:pointer;display:flex;flex-direction:column;gap:3px;
   transition:border-color .12s,transform .12s;position:relative}
@@ -625,10 +619,9 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ovg-card-name{font-size:13px;font-weight:600;color:var(--fg)}
 .ovg-card-hint{font-size:10.5px;color:var(--fg-4);line-height:1.4}
 .ovg-card-tag{position:absolute;top:9px;right:11px;font-size:9px;font-weight:700;letter-spacing:.06em;
-  padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.06);color:var(--fg-3)}
-.ovg-card-tag.editable{background:color-mix(in oklch,var(--accent) 16%,transparent);color:var(--accent)}
-.ovg-card-tag.preset{background:color-mix(in oklch,var(--live) 15%,transparent);color:var(--live)}
-.ovg-card-tag.legacy{background:rgba(255,255,255,.06);color:var(--fg-4)}
+  padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.06);color:var(--fg-4)}
+.ovg-card-tag:empty{display:none}
+.ovg-empty{padding:26px 16px;text-align:center;color:var(--fg-4);font-size:13px;line-height:1.6}
 
 /* ── Overlay Studio ─────────────────────────────── */
 .st-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -657,9 +650,6 @@ input,select,textarea{font-family:inherit;color:inherit}
 .st-item .st-cost{font-size:9px;font-weight:700;letter-spacing:.06em;padding:1px 5px;border-radius:5px;
   background:color-mix(in oklch,var(--warn) 16%,transparent);color:var(--warn)}
 .st-item .st-tag{font-size:9.5px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
-.st-preset{flex-direction:column;align-items:flex-start;gap:3px}
-.st-preset .st-preset-name{font-size:13px;font-weight:600;color:var(--fg)}
-.st-preset .st-preset-hint{font-size:10.5px;color:var(--fg-4);line-height:1.35}
 .st-canvas-wrap{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
 .st-canvas-frame{position:relative;flex:1;min-height:0;background:#06080c;
   border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -720,7 +710,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .st-st:hover{color:var(--fg);border-color:var(--line-2)}
 .st-st .dot{width:9px;height:9px;border-radius:50%;flex:none}
 .st-st.on{color:var(--fg);border-color:var(--accent);background:color-mix(in oklch,var(--accent) 13%,var(--surface))}
-.st-state-actions{display:flex;gap:6px}
+.st-state-actions{display:flex;align-items:center;gap:6px}
 
 /* Left panel: layers + add */
 .st-sec{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-4);margin:10px 2px 4px}
@@ -954,8 +944,14 @@ input,select,textarea{font-family:inherit;color:inherit}
 .restart-banner{padding:10px 14px;border-radius:8px;
   background:color-mix(in oklch,var(--warn) 8%,var(--bg-2));
   border:1px solid color-mix(in oklch,var(--warn) 30%,transparent);
-  color:var(--warn);font-size:12.5px;display:flex;align-items:center;gap:8px}
+  color:var(--warn);font-size:12.5px;display:flex;align-items:center;gap:10px;justify-content:space-between}
 .restart-banner.hidden{display:none}
+/* Unsaved-changes cue on the Studio Save button. */
+.st-save-dirty{box-shadow:0 0 0 2px color-mix(in oklch,var(--accent) 55%,transparent);font-weight:700}
+/* Brief "preview re-synced" pulse after a live edit. */
+.st-synced{font-size:11px;color:var(--accent);opacity:0;transform:translateY(-2px);
+  transition:opacity .2s ease,transform .2s ease;pointer-events:none;white-space:nowrap}
+.st-synced.on{opacity:.9;transform:none}
 
 /* ── Logs ────────────────────────────────────── */
 .logs-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
@@ -1135,7 +1131,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     <span class="ic-pill ok" id="hdr-ebroadcast" hidden title="Enhanced Broadcasting active - multi-track simulcast is being forwarded bit-faithfully to Twitch and flattened to the primary track for any non-Twitch destinations. Twitch's transcoder serves the full quality ladder to viewers.">⚡ Enhanced Broadcasting</span>
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
     <span class="ic-pill warn" id="hdr-twitch-cap" hidden>⚠ <span id="hdr-twitch-cap-v">Twitch · Source-Only at 10 Mbps</span></span>
-    <a id="hdr-update" class="ic-pill" href="#" target="_blank" rel="noopener" hidden title="Click to view release notes on GitHub">⬆ <span id="hdr-update-v">update available</span></a>
+    <a id="hdr-update" class="ic-pill" href="#" hidden title="Open the updater" onclick="openUpdateInAbout();return false;" style="cursor:pointer">⬆ <span id="hdr-update-v">update available</span></a>
     <button id="hdr-help" class="ic-btn-tiny" title="How does this work? (?)" onclick="openTour(0)" style="width:30px;height:30px;color:var(--fg-3);font-weight:700;font-size:14px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);position:relative">?
       <span id="hdr-help-hint" class="help-hint" hidden>New here? Quick tour →</span>
     </button>
@@ -1494,9 +1490,12 @@ input,select,textarea{font-family:inherit;color:inherit}
     <div class="tab-head" style="align-items:flex-start">
       <div>
         <div class="tab-title">On-stream overlay</div>
-        <div class="tab-sub">A browser-source widget that shows your delay. Pick one, drop the URL into OBS - or open the Studio to design your own.</div>
+        <div class="tab-sub">Browser-source widgets that show your delay. Pick one, copy its URL into OBS - or edit any in the Studio.</div>
       </div>
-      <button class="ic-btn ic-btn-primary" onclick="Studio.openStudio()">✎ Open Studio</button>
+      <div style="display:flex;gap:8px">
+        <button class="ic-btn ic-btn-ghost" onclick="Studio.restoreDefaults()" title="Delete all your overlays and reinstall the built-in set">Restore defaults</button>
+        <button class="ic-btn ic-btn-primary" onclick="Studio.newOverlay()">+ New overlay</button>
+      </div>
     </div>
 
     <div class="ovg-grid">
@@ -1515,7 +1514,6 @@ input,select,textarea{font-family:inherit;color:inherit}
           <button class="st-sim" data-psim="preparing" onclick="Studio.previewSim('preparing')">Arming</button>
           <button class="st-sim" data-psim="ready" onclick="Studio.previewSim('ready')">Ready</button>
           <button class="st-sim" data-psim="active" onclick="Studio.previewSim('active')">Active</button>
-          <button class="st-sim" data-psim="cut" onclick="Studio.previewSim('cut')">Cut</button>
           <button class="st-sim" data-psim="error" onclick="Studio.previewSim('error')">Error</button>
           <span class="ph-cap" id="ovg-phase" style="margin-left:auto"></span>
         </div>
@@ -1556,12 +1554,12 @@ input,select,textarea{font-family:inherit;color:inherit}
           <button class="ic-btn ic-btn-ghost st-icobtn" id="st-undo" title="Undo (Ctrl+Z)" onclick="Studio.undo()">↶</button>
           <button class="ic-btn ic-btn-ghost st-icobtn" id="st-redo" title="Redo (Ctrl+Shift+Z)" onclick="Studio.redo()">↷</button>
           <input id="st-name" class="ic-input" placeholder="Overlay name" value="My overlay">
-          <button class="ic-btn ic-btn-primary" id="st-save" onclick="Studio.save()">Save</button>
+          <button class="ic-btn ic-btn-primary" id="st-save" onclick="Studio.save()" title="Overwrite this overlay">Save</button>
+          <button class="ic-btn ic-btn-ghost" onclick="Studio.saveAsNew()" title="Save a separate copy with a new URL">Save as new</button>
           <button class="ic-btn ic-btn-ghost" onclick="Studio.copyUrl()">Copy URL</button>
           <div class="st-menu">
             <button class="ic-btn ic-btn-ghost st-icobtn" title="More" onclick="Studio.toggleMenu(event)">⋯</button>
             <div class="st-menu-pop" id="st-menu-pop" hidden>
-              <button onclick="Studio.menu('saveas')">Save as a copy</button>
               <button onclick="Studio.menu('rename')">Rename</button>
               <button onclick="Studio.menu('export')">Export .json</button>
               <button onclick="Studio.menu('import')">Import .json</button>
@@ -1586,6 +1584,7 @@ input,select,textarea{font-family:inherit;color:inherit}
             <div class="st-states" id="st-states"></div>
             <div class="st-state-actions">
               <span class="ph-cap" id="st-phase"></span>
+              <span class="st-synced" id="st-synced" title="Preview re-synced to your latest change">⟳ synced</span>
               <button class="st-auto" id="st-play" onclick="Studio.play()" title="Auto-cycle the delay states"><span class="ic"></span> Auto preview</button>
             </div>
           </div>
@@ -1635,7 +1634,10 @@ input,select,textarea{font-family:inherit;color:inherit}
       <div class="tab-sub">Behavior, network, buffer, notifications, diagnostics.</div>
     </div>
   </div>
-  <div class="restart-banner hidden" id="restart-banner">⚠ Buffer size or path changed. Restart the app for it to take effect.</div>
+  <div class="restart-banner hidden" id="restart-banner">
+    <span>⚠ Buffer size or path changed. Restart the app for it to take effect.</span>
+    <button class="ic-btn ic-btn-warn" style="flex:0 0 auto;white-space:nowrap" onclick="restartApp(this)">Restart now</button>
+  </div>
 
   <nav class="sub-tabs" id="sys-sub-tabs" role="tablist" aria-label="System sub-sections">
     <span class="sub-tab-ind" id="sys-sub-ind"></span>
@@ -1727,6 +1729,9 @@ input,select,textarea{font-family:inherit;color:inherit}
         <div><span class="ic-label">Buffer file</span><input id="s-bpath" class="ic-input mono"></div>
       </div>
       <div class="muted" id="s-bmb-hint" style="margin-top:8px;font-size:11.5px;line-height:1.4"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="ic-btn ic-btn-ghost" onclick="reveal('buffer',this)">Show buffer file in Explorer</button>
+      </div>
     </section>
   </div>
 
@@ -1754,11 +1759,17 @@ input,select,textarea{font-family:inherit;color:inherit}
         <input id="s-trace" type="checkbox" style="width:16px;height:16px;cursor:pointer">
         <span>Capture trace log when streaming</span>
       </label>
+      <div class="row" style="margin-top:10px">
+        <button class="ic-btn ic-btn-ghost" onclick="reveal('trace',this)">Show log file in Explorer</button>
+      </div>
     </section>
     <section class="sys-section">
       <div class="ic-label">Overlays folder</div>
       <div class="tab-sub">Drop your own <code class="mono">.html</code> files here to make them appear in the Overlay tab picker.</div>
       <input id="s-ovdir" class="ic-input mono" style="margin-top:8px">
+      <div class="row" style="margin-top:10px">
+        <button class="ic-btn ic-btn-ghost" onclick="reveal('overlays',this)">Open overlays folder</button>
+      </div>
     </section>
   </div>
 
@@ -1770,8 +1781,13 @@ input,select,textarea{font-family:inherit;color:inherit}
         <span class="sys-version-num" id="sys-about-version">v?.?.?</span>
         <span class="sys-version-pill ok" id="sys-about-pill" hidden>up to date</span>
         <button class="ic-btn ic-btn-ghost" id="sys-about-check-btn" onclick="aboutCheckUpdate()">Check for updates</button>
+        <button class="ic-btn ic-btn-primary" id="sys-about-update-btn" onclick="applyUpdate()" hidden>Update now</button>
       </div>
       <div class="muted" id="sys-about-msg" style="font-size:12px;margin-top:8px;min-height:1.2em"></div>
+      <div class="row" style="gap:10px;margin-top:12px;align-items:center">
+        <button class="ic-btn ic-btn-ghost" onclick="restartApp(this)">Restart InstantClone</button>
+        <span class="muted" style="font-size:12px">Relaunch the app - the dashboard reconnects automatically.</span>
+      </div>
     </section>
     <div class="sys-about-grid">
       <div class="sys-about-card">
@@ -2752,6 +2768,11 @@ async function loadConfig(){
     const c = await (await fetch('/config')).json();
     lastConfig = c;
     initialBufferMb = c.buffer_mb; initialBufferPath = c.buffer_path;
+    // First run: install the built-in presets as real overlays (once).
+    // NOT gated on `configured` - building overlays doesn't need a streaming
+    // destination, so someone who clicks "Not now - let me look around" gets
+    // the full gallery too. seedPresets is a no-op once the flag is set.
+    if (!c.overlays_seeded && window.ICOverlay) { Studio.seedPresets(); }
     // wizard
     const first = (c.destinations && c.destinations[0]) || {platform:'twitch', custom_egress_url:'', stream_key_set:false};
     if ($('w-platform').children.length === 0) fillWizardPlatforms();
@@ -3075,7 +3096,10 @@ function flashFieldErrors(message){
   });
 }
 
+let _savingSettings = false;
 async function saveSettings(){
+  if (_savingSettings) return; // guard against a double-click double-POST
+  const btn = document.querySelector('#sys-foot .ic-btn-primary');
   const body = new URLSearchParams({
     ingest_port:$('s-iport').value, web_port:$('s-wport').value,
     buffer_mb:$('s-bmb').value, buffer_path:$('s-bpath').value,
@@ -3088,15 +3112,25 @@ async function saveSettings(){
     auto_activate_when_ready:$('s-auto-act').checked?'true':'false',
     auto_arm_delay_ms:String(Math.max(1, Math.min(600, parseInt($('s-auto-arm-secs').value,10)||15)) * 1000),
   });
-  const j = await(await fetch('/config',{method:'POST',body})).json();
-  if (j.ok){
-    flashFieldErrors(null);
-    toast('Settings saved','ok');
-    if (j.restart_required || +$('s-bmb').value !== initialBufferMb || $('s-bpath').value !== initialBufferPath){
-      $('restart-banner').classList.remove('hidden');
-    }
-    loadConfig();
-  } else { flashFieldErrors(j.error); toast(`Couldn't save settings: ${j.error}`, 'err'); $('s-msg').innerHTML = '<span class="err">'+j.error+'</span>'; }
+  _savingSettings = true;
+  if (btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const j = await(await fetch('/config',{method:'POST',body})).json();
+    if (j.ok){
+      flashFieldErrors(null);
+      toast('Settings saved','ok');
+      if (j.restart_required || +$('s-bmb').value !== initialBufferMb || $('s-bpath').value !== initialBufferPath){
+        $('restart-banner').classList.remove('hidden');
+      }
+      loadConfig();
+    } else { flashFieldErrors(j.error); toast(`Couldn't save settings: ${j.error}`, 'err'); $('s-msg').innerHTML = '<span class="err">'+j.error+'</span>'; }
+  } catch(e){
+    toast('Couldn\'t save settings - the app may have stopped responding','err');
+    $('s-msg').innerHTML = '<span class="err">Request failed: '+e+'</span>';
+  } finally {
+    _savingSettings = false;
+    if (btn){ btn.disabled = false; btn.textContent = 'Save settings'; }
+  }
 }
 async function testWebhook(){
   const r = await(await fetch('/test-webhook',{method:'POST'})).json();
@@ -3233,6 +3267,7 @@ function openResetModal(scope){
     list.innerHTML = [
       '<li><b>All destinations</b> (Twitch / YouTube / custom keys) - gone</li>',
       '<li><b>All saved delay profiles</b> - gone</li>',
+      '<li><b>All your overlays</b> (presets + custom) - deleted, the built-in set restored</li>',
       '<li>Network ports, buffer settings, webhook, overlays folder - reset to defaults</li>',
       '<li>Diagnostic trace toggle - turned off</li>',
     ].join('');
@@ -3330,12 +3365,21 @@ const Studio = (function(){
   // so all edits are captured with minimal wiring. `restoring` guards
   // against re-recording while applying an undo.
   let history=[], histIndex=-1, recordT=0, restoring=false;
-  function resetHistory(){ history=[JSON.stringify(doc)]; histIndex=0; updateUndoBtns(); }
-  function recordNow(){ if(restoring) return; const s=JSON.stringify(doc); if(history[histIndex]===s) return; history=history.slice(0,histIndex+1); history.push(s); if(history.length>120) history.shift(); histIndex=history.length-1; updateUndoBtns(); }
+  function resetHistory(){ history=[JSON.stringify(doc)]; histIndex=0; updateUndoBtns(); markClean(); }
+  function recordNow(){ if(restoring) return; const s=JSON.stringify(doc); if(history[histIndex]===s) return; history=history.slice(0,histIndex+1); history.push(s); if(history.length>120) history.shift(); histIndex=history.length-1; updateUndoBtns(); updateDirty(); }
   function recordSoon(){ if(restoring) return; clearTimeout(recordT); recordT=setTimeout(recordNow,300); }
   function undo(){ if(histIndex>0){ histIndex--; applyHistory(); } }
   function redo(){ if(histIndex<history.length-1){ histIndex++; applyHistory(); } }
-  function applyHistory(){ restoring=true; doc=JSON.parse(history[histIndex]); if(sel&&!widget(sel)) sel=null; renderLeft(); rebake(); renderProps(); restoring=false; updateUndoBtns(); }
+  function applyHistory(){ restoring=true; doc=JSON.parse(history[histIndex]); if(sel&&!widget(sel)) sel=null; renderLeft(); rebake(); renderProps(); restoring=false; updateUndoBtns(); updateDirty(); }
+  // Unsaved-changes tracking: "dirty" = the doc differs from the snapshot
+  // taken when it was opened (resetHistory) or last saved. Undo back to that
+  // snapshot reads as clean again. Drives the Save indicator + close guards.
+  let savedSnapshot='';
+  function markClean(){ savedSnapshot = doc?JSON.stringify(doc):''; updateDirty(); }
+  function isDirty(){ return !!doc && JSON.stringify(doc)!==savedSnapshot; }
+  function updateDirty(){ const b=$('st-save'); if(!b) return; const d=isDirty();
+    b.textContent = d?'Save ●':'Save'; b.classList.toggle('st-save-dirty',d);
+    b.title = d?'Unsaved changes - click to overwrite this overlay':'Overwrite this overlay'; }
   function updateUndoBtns(){ const u=$('st-undo'),r=$('st-redo'); if(u)u.disabled=histIndex<=0; if(r)r.disabled=histIndex>=history.length-1; }
   // Semantic colour per state, for the dots in the state selector.
   const STATE_DOT = { idle:'#8a8f9a', preparing:'#ffb73a', ready:'#5ac8fa', active:'#54e38e', error:'#ff5a5a' };
@@ -3346,8 +3390,8 @@ const Studio = (function(){
   function slugify(s){ return (s||'overlay').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,64) || 'overlay'; }
 
   // ---- views: gallery (browse + preview) vs studio (editor) ----
-  let gsel = null;          // gallery selection {type:'preset'|'saved', id}
-  let galleryFilter = 'all';// preset tag filter
+  let gsel = null;          // selected overlay slug (everything is an overlay now)
+  let autohideOff = false;  // quick "stays up" override for the selection (?autohide=off)
   let previewState = 'auto'; // 'auto' = run the delay-lifecycle simulation
   let gallerySim = null, studioSim = null, playing = false;
   const ARMED_MS = 15000;
@@ -3362,7 +3406,6 @@ const Studio = (function(){
     if(st==='preparing') return {...base,phase:'preparing',buffer_fill_ms:Math.round((p==null?0.5:Math.min(1,p))*ARMED_MS)};
     if(st==='ready') return {...base,phase:'ready',buffer_fill_ms:ARMED_MS};
     if(st==='active') return {...base,phase:'active',buffer_fill_ms:ARMED_MS};
-    if(st==='cut') return {...base,phase:'active',buffer_fill_ms:ARMED_MS,stats:{cuts:3,bitrate_kbps:br}};
     if(st==='error') return {...base,phase:'active',buffer_fill_ms:ARMED_MS,destinations_alive:0,destinations:[{alive:false},{alive:false}]};
     return base;
   }
@@ -3372,8 +3415,9 @@ const Studio = (function(){
   // makeSim(iframe, mode, onTick, noHide): mode 'auto' runs the lifecycle; a
   // state key pins it (arming keeps animating its fill). noHide keeps auto-hide
   // widgets visible (used while editing). onTick drives the live caption.
-  function makeSim(iframe, mode, onTick, noHide){
+  function makeSim(iframe, mode, onTick, noHide, replayGap){
     let timer=0, firstPost=true, lastReplay=performance.now(); const t0=performance.now();
+    const gap = replayGap||5000;
     function post(st,p,forceReplay){ if(iframe && iframe.contentWindow) iframe.contentWindow.postMessage({__ic_sim:true,forceState:st,state:simFrame(st,p),noHide:!!noHide,replay:firstPost||!!forceReplay},'*'); firstPost=false; if(onTick) onTick(st,p); }
     function loop(){
       const total=LIFECYCLE.reduce((a,x)=>a+x[1],0);
@@ -3385,23 +3429,29 @@ const Studio = (function(){
     function pinned(){
       if(mode==='preparing'){ const dur=2800, el=(performance.now()-t0)%dur; post('preparing', el/dur); timer=setTimeout(pinned, 90); }
       else {
-        // When auto-hide can fire (noHide off), re-show the widget every ~5s so
-        // the exit animation is visible on a loop while editing. Otherwise just
-        // keep ticking so live widgets (meter, timer) stay alive.
+        // When auto-hide can fire (noHide off), re-show the widget once its
+        // hide has had time to play, so the exit loops while editing. The gap
+        // adapts to the configured hide duration - a fixed 5s would re-show
+        // (and re-arm) BEFORE a longer hide ever fired, so it'd never appear
+        // to hide at all. Otherwise just keep ticking so live widgets stay alive.
         const now=performance.now(); let rep=false;
-        if(!noHide && now-lastReplay>5000){ rep=true; lastReplay=now; }
+        if(!noHide && now-lastReplay>gap){ rep=true; lastReplay=now; }
         post(mode, 1, rep); timer=setTimeout(pinned, 500);
       }
     }
     if(!mode || mode==='auto'){ loop(); } else { pinned(); }
-    return { stop(){ clearTimeout(timer); } };
+    // rehide(): after an edit, re-arm all auto-hide timers together from the
+    // current pinned frame so they don't drift out of sync until the next
+    // replay. No-op while auto-playing (the lifecycle re-arms them anyway).
+    function rehide(){ if(!mode||mode==='auto'||!iframe||!iframe.contentWindow) return;
+      iframe.contentWindow.postMessage({__ic_sim:true,forceState:mode,state:simFrame(mode,mode==='preparing'?0.5:1),noHide:!!noHide,rehide:true},'*'); }
+    return { stop(){ clearTimeout(timer); }, rehide:rehide };
   }
   // A friendly live caption for the current simulated phase.
   function phaseInfo(st, p){
     if(st==='preparing') return { t:'Arming '+Math.round((p||0)*100)+'%', c:STATE_DOT.preparing };
     if(st==='ready') return { t:'Armed', c:STATE_DOT.ready };
     if(st==='active') return { t:'On delay '+(ARMED_MS/1000).toFixed(1)+'s', c:STATE_DOT.active };
-    if(st==='cut') return { t:'Cut', c:STATE_DOT.cut };
     if(st==='error') return { t:'Signal lost', c:STATE_DOT.error };
     return { t:'Idle - no delay', c:STATE_DOT.idle };
   }
@@ -3437,13 +3487,29 @@ const Studio = (function(){
     renderProps();
     resetHistory();
   }
-  function openStudio(slug){
+  function openStudio(slugId){
     stopGallerySim(); setView('studio'); ensureStudio();
-    if(slug) openSaved({slug:slug, studio:true});
+    if(slugId) openSaved({slug:slugId, studio:true});
     requestAnimationFrame(fitScale);
   }
-  function openStudioPreset(i){ stopGallerySim(); setView('studio'); ensureStudio(); loadPreset(i); requestAnimationFrame(fitScale); }
+  // The three real intents: edit (openStudio), create new (blank), duplicate.
+  function newOverlay(){
+    stopGallerySim(); setView('studio'); ensureStudio();
+    doc = IC().defaultDoc('Untitled overlay'); slug=null; sel=null;
+    doc.widgets.forEach((w,n)=>{ if(!w.id) w.id='w'+(n+1); });
+    $('st-name').value = doc.name;
+    renderStates(); renderLeft(); rebake(); renderProps(); resetHistory(); updateUrlLabel();
+    requestAnimationFrame(fitScale);
+  }
+  async function duplicateOverlay(slugId){
+    stopGallerySim(); setView('studio'); ensureStudio();
+    await openSaved({slug:slugId, studio:true});
+    slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name;
+    updateUrlLabel(); resetHistory(); requestAnimationFrame(fitScale);
+    toast('Duplicated - "Save as new" to write it','info');
+  }
   function backToGallery(){
+    if(isDirty() && !confirm('You have unsaved changes to this overlay. Discard them and go back to the gallery?')) return;
     stopPlay();
     setView('gallery');
     loadSaved().then(()=>{ renderGallery(); fitPreview(); });
@@ -3468,80 +3534,48 @@ const Studio = (function(){
     $('ovg-scale').style.transform = 'scale('+(w/1920)+')';
   }
 
-  // ---- gallery ----
-  // Filter by TYPE: built-in presets, your editable saved overlays, or
-  // legacy hand-written .html files.
+  // ---- gallery: one list of overlays, each with a copyable URL ----
+  function curOverlay(){ return savedList.find(o=>o.slug===gsel)||null; }
+  function selUrl(){ return location.origin+'/overlay/'+encodeURIComponent(gsel)+'.html'+(autohideOff?'?autohide=off':''); }
   function renderGallery(){
     const c = $('ovg-list'); if(!c) return;
     c.innerHTML='';
-    // A just-saved overlay should be visible + selected: show all, target it.
-    if(pendingSelect && savedList.some(o=>o.slug===pendingSelect)){ gsel={type:'saved',id:pendingSelect}; galleryFilter='all'; pendingSelect=null; }
-    const showType=(t)=> galleryFilter==='all' || galleryFilter===t;
-    // type filter chips
-    const types=[['all','All'],['preset','Presets'],['editable','Editable'],['legacy','Legacy']];
-    const fr=document.createElement('div'); fr.className='ovg-filter';
-    types.forEach(t=>{ const b=document.createElement('button'); b.className='ovg-fchip'+(galleryFilter===t[0]?' on':'');
-      b.textContent=t[1]; b.onclick=()=>{ galleryFilter=t[0]; renderGallery(); }; fr.appendChild(b); });
-    c.appendChild(fr);
-
-    function tagCard(card, label, cls){ const t=card.querySelector('.ovg-card-tag'); t.textContent=label; if(cls) t.classList.add(cls); }
-
-    // Saved overlays (editable + legacy)
-    savedList.forEach(o=>{
-      const t = o.studio?'editable':'legacy';
-      if(!showType(t)) return;
+    if(pendingSelect && savedList.some(o=>o.slug===pendingSelect)){ gsel=pendingSelect; pendingSelect=null; }
+    // Studio overlays first, then legacy hand-written, each alphabetical.
+    const list = savedList.slice().sort((a,b)=>
+      a.studio===b.studio ? (a.name||a.slug).localeCompare(b.name||b.slug) : (a.studio?-1:1));
+    list.forEach(o=>{
       const card=document.createElement('button'); card.className='ovg-card';
-      card.dataset.gtype='saved'; card.dataset.gid=o.slug;
+      card.dataset.gid=o.slug;
       card.innerHTML='<span class="ovg-card-name"></span><span class="ovg-card-hint mono"></span><span class="ovg-card-tag"></span>';
       card.querySelector('.ovg-card-name').textContent=o.name||o.slug;
       card.querySelector('.ovg-card-hint').textContent='/overlay/'+o.slug+'.html';
-      tagCard(card, o.studio?'EDITABLE':'LEGACY', o.studio?'editable':'legacy');
-      card.onclick=()=>selectGallery('saved',o.slug);
+      if(!o.studio){ const t=card.querySelector('.ovg-card-tag'); t.textContent='LEGACY'; t.classList.add('legacy'); }
+      card.onclick=()=>selectGallery(o.slug);
       c.appendChild(card);
     });
-
-    // Built-in presets
-    if(showType('preset')) IC().PRESETS.forEach((p,i)=>{
-      const card=document.createElement('button'); card.className='ovg-card';
-      card.dataset.gtype='preset'; card.dataset.gid=String(i);
-      card.innerHTML='<span class="ovg-card-name"></span><span class="ovg-card-hint"></span><span class="ovg-card-tag"></span>';
-      card.querySelector('.ovg-card-name').textContent=p.name;
-      card.querySelector('.ovg-card-hint').textContent=p.hint;
-      tagCard(card, 'PRESET', 'preset');
-      card.onclick=()=>selectGallery('preset',i);
-      c.appendChild(card);
-    });
-
-    // Keep the current selection if it's still visible; else pick the first.
-    const cur = gsel && c.querySelector('.ovg-card[data-gtype="'+gsel.type+'"][data-gid="'+gsel.id+'"]');
-    if(cur){ selectGallery(gsel.type, gsel.id); }
-    else { const first=c.querySelector('.ovg-card'); if(first) selectGallery(first.dataset.gtype, first.dataset.gtype==='preset'?parseInt(first.dataset.gid,10):first.dataset.gid); }
+    if(!list.length){ c.innerHTML='<div class="ovg-empty">No overlays yet. Use <b>+ New overlay</b> to make one.</div>'; gsel=null; updateGalleryMeta(); return; }
+    const cur = gsel && c.querySelector('.ovg-card[data-gid="'+CSS.escape(gsel)+'"]');
+    if(cur) selectGallery(gsel);
+    else { const first=c.querySelector('.ovg-card'); if(first) selectGallery(first.dataset.gid); }
   }
 
-  function selectGallery(type,id){
-    gsel={type,id};
-    $$('#ovg-list .ovg-card').forEach(el=>el.classList.toggle('sel', el.dataset.gtype===type && el.dataset.gid===String(id)));
+  function selectGallery(slugId){
+    gsel=slugId; autohideOff=false;
+    $$('#ovg-list .ovg-card').forEach(el=>el.classList.toggle('sel', el.dataset.gid===slugId));
     updatePreview();
     updateGalleryMeta();
   }
   function stopGallerySim(){ if(gallerySim){ gallerySim.stop(); gallerySim=null; } }
-  // Presets ship with a 4s fade-out after going live. This fast toggle lets a
-  // streamer keep the overlay up instead, without opening the Studio.
-  let presetAutoHide = true;
-  function presetDoc(p){
-    const d=clone(p);
-    d.widgets.forEach((w,i)=>{ w.id='w'+(i+1);
-      if(!presetAutoHide && w.states){ Object.keys(w.states).forEach(k=>{ delete w.states[k].hide_after_ms; delete w.states[k].exit; }); }
-    });
-    return d;
-  }
-  function togglePresetHide(on){ presetAutoHide=on; updatePreview(); }
+  // Quick "keep it up" toggle: off appends ?autohide=off to the copied/preview
+  // URL (the runtime honours it). No re-bake - the baked default is unchanged.
+  function toggleAutohide(on){ autohideOff=!on; updatePreview(); updateGalleryMeta(); }
   function updatePreview(){
-    const prev=$('ov-preview'); if(!prev) return;
+    const prev=$('ov-preview'); if(!prev||!gsel) return;
     stopGallerySim();
     prev.onload=()=>applyPreviewState();
-    if(gsel.type==='preset'){ prev.removeAttribute('src'); prev.srcdoc=IC().bake(presetDoc(IC().PRESETS[gsel.id])); }
-    else { prev.removeAttribute('srcdoc'); prev.src='/overlay/'+encodeURIComponent(gsel.id)+'.html'; }
+    prev.removeAttribute('srcdoc');
+    prev.src='/overlay/'+encodeURIComponent(gsel)+'.html'+(autohideOff?'?autohide=off':'');
   }
   // Drive the preview: 'auto' runs the delay-lifecycle simulation, 'live'
   // shows the real OBS state, anything else pins one state.
@@ -3550,7 +3584,10 @@ const Studio = (function(){
     stopGallerySim();
     const cap=$('ovg-phase');
     if(previewState==='live'){ if(prev.contentWindow) prev.contentWindow.postMessage({__ic_sim:true,forceState:null,state:simFrame('idle',0)},'*'); if(cap) cap.innerHTML='<span class="ph-dot" style="background:#8a8f9a"></span>Live - real OBS state'; return; }
-    gallerySim=makeSim(prev, previewState==='auto'?'auto':previewState, (st,p)=>setCaption('ovg-phase',st,p), previewState!=='auto');
+    // Always keep the widget on screen in the gallery preview (noHide=true) -
+    // the preview is to SHOW the overlay, not to demo its auto-hide, which
+    // would leave the canvas empty for most of the cycle.
+    gallerySim=makeSim(prev, previewState==='auto'?'auto':previewState, (st,p)=>setCaption('ovg-phase',st,p), true);
   }
   function previewSim(st){
     previewState=st;
@@ -3559,48 +3596,29 @@ const Studio = (function(){
   }
   function updateGalleryMeta(){
     const nameEl=$('ovg-name'), urlEl=$('ovg-url'), act=$('ovg-actions');
-    act.innerHTML='';
-    if(gsel.type==='preset'){
-      const p=IC().PRESETS[gsel.id];
-      // A preset is just a starting point; the URL is what OBS loads, so
-      // show the URL it gets the moment you use it. Copy/Use both create
-      // the file - no Studio detour required.
-      nameEl.textContent=p.name+' · preset';
-      urlEl.textContent=location.origin+'/overlay/'+slugify(p.name)+'.html';
-      act.innerHTML='<label class="ovg-switch" title="Fade the overlay out a few seconds after the delay goes live"><input type="checkbox"'+(presetAutoHide?' checked':'')+' onchange="Studio.togglePresetHide(this.checked)"><span>Auto-hide when live</span></label>'+
-        '<button class="ic-btn ic-btn-ghost" onclick="Studio.openStudioPreset('+gsel.id+')">Customize in Studio</button>';
+    const o=curOverlay();
+    if(!o){ nameEl.textContent=''; urlEl.textContent='select an overlay'; act.innerHTML=''; return; }
+    nameEl.textContent=(o.name||o.slug)+(o.studio?'':' · legacy');
+    urlEl.textContent=selUrl();
+    let h='';
+    // Quick auto-hide toggle (only meaningful when the file bakes one).
+    if(o.autohide) h+='<label class="ovg-switch" title="Off appends ?autohide=off so the overlay stays up"><input type="checkbox"'+(autohideOff?'':' checked')+' onchange="Studio.toggleAutohide(this.checked)"><span>Auto-hide when live</span></label>';
+    if(o.studio){
+      h+='<button class="ic-btn ic-btn-ghost" onclick="Studio.openStudio(\''+o.slug+'\')">Edit in Studio</button>'+
+         '<button class="ic-btn ic-btn-ghost" onclick="Studio.duplicateOverlay(\''+o.slug+'\')">Duplicate</button>';
     } else {
-      const o=savedList.find(x=>x.slug===gsel.id)||{slug:gsel.id};
-      nameEl.textContent=(o.name||o.slug)+(o.studio?' · saved':' · legacy');
-      urlEl.textContent=location.origin+'/overlay/'+o.slug+'.html';
-      if(o.studio) act.innerHTML='<button class="ic-btn ic-btn-primary" onclick="Studio.openStudio(\''+o.slug+'\')">Edit in Studio</button>'+
-        '<button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.deleteFromGallery(\''+o.slug+'\')">Delete</button>';
-      else act.innerHTML='<span class="muted" style="font-size:11.5px;align-self:center">Hand-written - edit the .html file directly</span>'+
-        '<button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.deleteFromGallery(\''+o.slug+'\')">Delete</button>';
+      h+='<span class="muted" style="font-size:11.5px;align-self:center">Hand-written - edit the .html file directly</span>';
     }
+    h+='<button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.deleteFromGallery(\''+o.slug+'\')">Delete</button>';
+    act.innerHTML=h;
   }
-  // Copy from the gallery. For a preset, create the file first (so the URL
-  // actually resolves in OBS) then copy it. For a saved overlay, copy as-is.
-  async function copyGallery(){
-    if(gsel && gsel.type==='preset'){ const sl=await useOverlay(true); if(sl) copyText(location.origin+'/overlay/'+sl+'.html','Overlay URL'); }
-    else copyEl('ovg-url','Overlay URL');
-  }
-  // Bake a preset to disk under its own slug (so the URL resolves in OBS) and
-  // switch the gallery to it. `silent` skips the toast for the copy path, which
-  // shows its own "copied" toast.
-  async function useOverlay(silent){
-    if(!gsel || gsel.type!=='preset') return null;
-    const p=IC().PRESETS[gsel.id];
-    const d=presetDoc(p);
-    const sl=slugify(p.name);
-    try{
-      const r=await fetch('/overlays/'+encodeURIComponent(sl), {method:'POST', headers:{'Content-Type':'text/html'}, body:IC().bake(d)});
-      const j=await r.json();
-      if(!j.ok){ toast(j.error||'Could not save overlay','err'); return null; }
-      await loadSaved(); gsel={type:'saved',id:sl}; renderGallery();
-      if(!silent) toast('Saved to your overlays - URL ready for OBS','ok');
-      return sl;
-    }catch(e){ toast('Could not save overlay','err'); return null; }
+  function copyGallery(){ if(gsel) copyText(selUrl(),'Overlay URL'); }
+  // Restore the built-in overlays: wipe the Studio overlays + re-seed presets.
+  async function restoreDefaults(){
+    if(!confirm('Restore default overlays?\n\nThis DELETES ALL your Studio overlays (the presets and anything you made) and reinstalls the built-in set. Hand-written .html files are kept.\n\nThis cannot be undone.')) return;
+    try{ await fetch('/overlays/reset',{method:'POST'}); }catch(e){ toast('Could not restore overlays','err'); return; }
+    await seedPresets();
+    toast('Default overlays restored','ok');
   }
   async function deleteFromGallery(slugId){
     const o=savedList.find(x=>x.slug===slugId);
@@ -3626,11 +3644,15 @@ const Studio = (function(){
     // While pinned, keep widgets visible for editing (noHide) - UNLESS the
     // edited state has an auto-hide, in which case let it play so the exit is
     // visible (makeSim loops it back into view every ~5s).
-    const hasHide = doc.widgets.some(w=> w.states && w.states[editState] && w.states[editState].hide_after_ms>0);
+    // Longest hide configured in the edited state - the preview re-shows a
+    // hidden widget this long after it appears (+ a beat), so even a 10s hide
+    // actually plays its exit instead of being reset before it fires.
+    const maxHide = doc.widgets.reduce((m,w)=>{ const h=w.states&&w.states[editState]&&w.states[editState].hide_after_ms; return h>m?h:m; }, 0);
+    const hasHide = maxHide>0;
     studioSim=makeSim($('st-canvas'), playing?'auto':editState, (st,p)=>{
       setCaption('st-phase',st,p);
       if(playing) $$('#st-states .st-st').forEach(b=>b.classList.toggle('on',b.dataset.st===st));
-    }, !playing && !hasHide);
+    }, !playing && !hasHide, hasHide ? maxHide+1800 : 5000);
   }
   function buildHits(){
     const hit = $('st-hit'); hit.innerHTML='';
@@ -3731,6 +3753,13 @@ const Studio = (function(){
     CornerFrame:'⌐', PulsingDot:'●', Heartbeat:'♥', Banner:'▭', EdgeAccent:'▢', BackgroundTint:'▦', LiquidFill:'≋',
     Image:'▥', CustomHTML:'</>' };
   function leftTab(name){ left=name; $$('#st-left-tabs button').forEach(b=>b.classList.toggle('on',b.dataset.stleft===name)); renderLeft(); }
+  // Representative colour for a layer swatch: the current edit-state colour if
+  // set, else the base, resolved through the theme so @tokens show real hues.
+  function layerColor(w){ return themeHex((w.states&&w.states[editState]&&w.states[editState].color)||(w.base&&w.base.color)||'#5ac8fa'); }
+  // Update layer swatches in place (no panel rebuild, so open pickers survive).
+  function refreshLayerColors(){ if(left!=='layers') return;
+    document.querySelectorAll('#st-left-body .st-layer').forEach(function(row){
+      const w=widget(row.dataset.id); if(!w) return; const sw=row.querySelector('.st-layer-sw'); if(sw) sw.style.background=layerColor(w); }); }
   function renderLeft(){
     const c = $('st-left-body'); c.innerHTML='';
     if(left==='add'){
@@ -3752,7 +3781,7 @@ const Studio = (function(){
       const head=document.createElement('div'); head.className='st-sec'; head.textContent='Theme colours'; c.appendChild(head);
       [['accent','Accent'],['live','Live'],['warn','Arming'],['error','Error'],['ink','Text / ink'],['grey','Idle / grey']].forEach(k=>{
         const row=document.createElement('div'); row.className='st-field';
-        row.innerHTML='<label>'+k[1]+'</label><div class="st-color"><input type="color" value="'+t[k[0]]+'" oninput="Studio.setTheme(\''+k[0]+'\',this.value)"><input class="ic-input mono" value="'+t[k[0]]+'" oninput="Studio.setTheme(\''+k[0]+'\',this.value)"></div>';
+        row.innerHTML='<label>'+k[1]+'</label><div class="st-color"><input type="color" value="'+t[k[0]]+'" oninput="Studio.setTheme(\''+k[0]+'\',this.value,this)"><input class="ic-input mono" value="'+t[k[0]]+'" oninput="Studio.setTheme(\''+k[0]+'\',this.value,this)"></div>';
         c.appendChild(row);
       });
       const hint=document.createElement('div'); hint.className='st-hint'; hint.style.padding='10px 2px';
@@ -3769,7 +3798,7 @@ const Studio = (function(){
         const k=IC().KINDS.find(x=>x.key===w.kind)||{label:w.kind};
         const row=document.createElement('div'); row.className='st-layer'+(sel===w.id?' sel':''); row.dataset.id=w.id;
         const label=(w.base&&w.base.text)?(k.label+' · '+w.base.text):k.label;
-        const col=(w.states&&w.states.active&&w.states.active.color)||(w.base&&w.base.color)||'#5ac8fa';
+        const col=layerColor(w);
         row.innerHTML='<span class="st-layer-sw" style="background:'+col+'"></span><span class="st-layer-name"></span>'+
           '<button class="st-layer-btn" title="Bring forward" data-act="up">▲</button>'+
           '<button class="st-layer-btn" title="Send back" data-act="down">▼</button>'+
@@ -3785,13 +3814,6 @@ const Studio = (function(){
     }
   }
 
-  function loadPreset(i){
-    doc = clone(IC().PRESETS[i]); slug=null; sel=null;
-    doc.widgets.forEach((w,n)=>{ w.id='w'+(n+1); });
-    $('st-name').value = doc.name;
-    renderStates(); renderLeft(); rebake(); renderProps(); resetHistory();
-    toast('Loaded "'+doc.name+'" - edit freely, the original preset is untouched','ok');
-  }
   function addWidget(kind){
     const w = IC().defaultWidget(kind, nextId());
     doc.widgets.push(w); sel=w.id;
@@ -3840,6 +3862,46 @@ const Studio = (function(){
     if(f.indexOf('bind')>=0){
       let bo=Object.keys(IC().BINDINGS).map(b=>'<option value="'+b+'"'+(w.bind===b?' selected':'')+'>'+IC().BINDINGS[b].label+'</option>').join('');
       h += field('Shows','<select class="ic-input" oninput="Studio.set(\'bind\',this.value)">'+bo+'</select>');
+    }
+    if(w.kind==='BitrateMeter'){
+      const sm=w.smooth!=null?w.smooth:0.6;
+      h += field('Smoothing','<input type="range" min="0" max="0.95" step="0.05" value="'+sm+'" oninput="Studio.setNum(\'smooth\',this.value)" style="width:100%">');
+      h += '<div class="st-hint" style="margin-top:-4px">Higher = calmer line. Lower shows every jitter.</div>';
+    }
+    if(w.kind==='LiquidFill'){
+      const fixed=(w.level!=null&&w.level!=='buffer');
+      h += field('Fill level','<select class="ic-input" oninput="Studio.setLiquidLevel(this.value)"><option value="buffer"'+(!fixed?' selected':'')+'>Follow buffer</option><option value="fixed"'+(fixed?' selected':'')+'>Fixed level</option></select>');
+      if(fixed){ const pv=typeof w.level==='number'?w.level:60; h += field('Level','<input type="range" min="0" max="100" step="5" value="'+pv+'" oninput="Studio.setNum(\'level\',this.value)" style="width:100%">'); }
+      const wav=w.wave!=null?w.wave:1;
+      h += field('Wave','<input type="range" min="0" max="2" step="0.1" value="'+wav+'" oninput="Studio.setNum(\'wave\',this.value)" style="width:100%">');
+      h += '<div class="st-hint" style="margin-top:-4px">0 = flat, 2 = choppy.</div>';
+    }
+    // Animation speed for widgets with their own ongoing motion.
+    if(['LiquidFill','Heartbeat'].indexOf(w.kind)>=0){
+      const spd=w.speed!=null?w.speed:1;
+      h += field('Speed','<input type="range" min="0.25" max="3" step="0.05" value="'+spd+'" oninput="Studio.setNum(\'speed\',this.value)" style="width:100%">');
+      h += '<div class="st-hint" style="margin-top:-4px">Animation pace. 1 = default.</div>';
+    }
+    // Smoothness (transition easing) for data-driven widgets that move.
+    if(['LiquidFill','BufferBar','BufferRing'].indexOf(w.kind)>=0){
+      const smd=w.smooth!=null?w.smooth:(w.kind==='LiquidFill'?0.6:0.42);
+      h += field('Smoothness','<input type="range" min="0" max="1.5" step="0.05" value="'+smd+'" oninput="Studio.setNum(\'smooth\',this.value)" style="width:100%">');
+      h += '<div class="st-hint" style="margin-top:-4px">How softly it eases to a new value (seconds).</div>';
+    }
+    if(w.kind==='BufferRing'){
+      h += '<label class="st-check"><input type="checkbox"'+(!w.notext?' checked':'')+' oninput="Studio.setFlag(\'notext\',!this.checked)"> Show value in centre</label>';
+      h += field('Ring thickness','<input type="range" min="2" max="14" step="1" value="'+(w.ringWidth!=null?w.ringWidth:4)+'" oninput="Studio.setNum(\'ringWidth\',this.value)" style="width:100%">');
+    }
+    if(w.kind==='EdgeAccent'){
+      h += field('Border thickness','<input type="range" min="1" max="14" step="1" value="'+(w.edgeWidth!=null?w.edgeWidth:3)+'" oninput="Studio.setNum(\'edgeWidth\',this.value)" style="width:100%">');
+      h += field('Glow reach','<input type="range" min="0" max="120" step="4" value="'+(w.glow!=null?w.glow:38)+'" oninput="Studio.setNum(\'glow\',this.value)" style="width:100%">');
+    }
+    if(w.kind==='BackgroundTint'){
+      h += field('Intensity','<input type="range" min="0" max="0.7" step="0.02" value="'+(w.intensity!=null?w.intensity:0.22)+'" oninput="Studio.setNum(\'intensity\',this.value)" style="width:100%">');
+    }
+    if(w.kind==='CornerFrame'){
+      h += field('Corner size','<input type="range" min="20" max="140" step="4" value="'+(w.frameSize!=null?w.frameSize:46)+'" oninput="Studio.setNum(\'frameSize\',this.value)" style="width:100%">');
+      h += field('Thickness','<input type="range" min="1" max="12" step="1" value="'+(w.frameWidth!=null?w.frameWidth:3)+'" oninput="Studio.setNum(\'frameWidth\',this.value)" style="width:100%">');
     }
     if(f.indexOf('unit')>=0) h += field('Unit','<input class="ic-input" value="'+escapeAttr(w.unit||'')+'" oninput="Studio.set(\'unit\',this.value)">');
     if(f.indexOf('icon')>=0){ let io=IC().ICONS.map(n=>'<option value="'+n+'"'+(w.icon===n?' selected':'')+'>'+n+'</option>').join(''); h+=field('Icon','<select class="ic-input" oninput="Studio.set(\'icon\',this.value)">'+io+'</select>'); }
@@ -3969,10 +4031,19 @@ const Studio = (function(){
     if(!ok){ rebake(); return; }
     buildHits(); recordSoon(); updatePerfBadge();
   }
-  function softRebake(){ clearTimeout(rebakeT); rebakeT=setTimeout(liveStyle, 80); }
+  function softRebake(){ clearTimeout(rebakeT); rebakeT=setTimeout(function(){ liveStyle(); if(studioSim&&studioSim.rehide) studioSim.rehide(); flashSynced(); }, 80); }
+  // Brief "synced" pulse on the preview after a live edit re-arms the timers,
+  // so it's clear the preview reflects the change (not the previous cycle).
+  let syncedT=0;
+  function flashSynced(){ const b=$('st-synced'); if(!b) return; b.classList.add('on'); clearTimeout(syncedT); syncedT=setTimeout(function(){ b.classList.remove('on'); }, 900); }
   function ensureState(){ const w=widget(sel); if(!w.states) w.states={}; if(!w.states[editState]) w.states[editState]={}; return w.states[editState]; }
   function set(k,v){ const w=widget(sel); w[k]=v; if(k==='unit'||k==='icon'||k==='shape'||k==='src'){ rebake(); } else softRebake(); }
   function setNum(path,v){ const w=widget(sel); const n=parseFloat(v)||0; if(path.indexOf('.')>=0){const[a,b]=path.split('.'); w[a][b]=n;} else w[path]=n; softRebake(); }
+  // LiquidFill: switch between buffer-following and a fixed level (number).
+  function setLiquidLevel(v){ const w=widget(sel); w.level = (v==='buffer') ? 'buffer' : (typeof w.level==='number'?w.level:60); softRebake(); renderProps(); }
+  // Boolean widget flag that changes structure (e.g. BufferRing centre text) -
+  // needs a full rebake since liveStyle only diffs attributes.
+  function setFlag(k,on){ const w=widget(sel); if(on) w[k]=true; else delete w[k]; rebake(); }
   function setBase(k,v){ widget(sel).base[k]=v; if(k==='text'&&left==='layers') renderLeft(); softRebake(); }
   // CustomHTML lives inside a sandboxed iframe (the widget's inner content),
   // which the in-place live update can't touch - so debounce a full rebake.
@@ -3980,7 +4051,7 @@ const Studio = (function(){
   function setCustom(k,v){ const w=widget(sel); if(!w.custom) w.custom=IC().defaultCustom(); w.custom[k]=v; softFull(); }
   // Re-render only when visibility flips (to show/hide the look fields).
   // Avoid re-rendering on colour input - it would close the native picker.
-  function setState(k,v){ const sp=ensureState(); sp[k]=v; softRebake(); if(k==='visible') renderProps(); }
+  function setState(k,v){ const sp=ensureState(); sp[k]=v; softRebake(); if(k==='visible') renderProps(); if(k==='color') refreshLayerColors(); }
   function setStateNum(k,v){ ensureState()[k]=parseFloat(v)||0; softRebake(); }
   function setStateText(v){ const sp=ensureState(); if(v==='') delete sp.text; else sp.text=v; softRebake(); }
   function setAnim(k,v){ const sp=ensureState(); if(!sp.anim) sp.anim=Object.assign({style:'fade',duration_ms:400,easing:'ease-out',delay_ms:0}, widget(sel).base.anim||{}); sp.anim[k]=v; softRebake(); }
@@ -3992,7 +4063,14 @@ const Studio = (function(){
   // Theme colours (overlay-wide). Editing one recolours every widget that
   // uses the matching @token.
   function ensureTheme(){ if(!doc.theme) doc.theme=IC().defaultTheme(); return doc.theme; }
-  function setTheme(key,val){ ensureTheme()[key]=val; softRebake(); renderLeft(); }
+  function setTheme(key,val,srcEl){ ensureTheme()[key]=val; softRebake();
+    // Mirror the value to the paired colour/hex input IN PLACE. We must not
+    // renderLeft() here - rebuilding the panel destroys the open
+    // <input type="color">, which is why the picker slammed shut the instant
+    // you dragged the hue. The canvas still updates live via softRebake.
+    if(srcEl&&srcEl.parentNode){ srcEl.parentNode.querySelectorAll('input').forEach(function(i){ if(i!==srcEl&&i.value!==val) i.value=val; }); }
+    refreshLayerColors(); // theme change recolours @token widgets
+  }
   function themeHex(c){ if(typeof c==='string' && c.charAt(0)==='@'){ const t=ensureTheme(); return t[c.slice(1)]||'#5ac8fa'; } return c||'#5ac8fa'; }
   // Per-state gradient (a second colour).
   function setGrad(v){ const sp=ensureState(); if(!v) delete sp.grad; else sp.grad=v; softRebake(); }
@@ -4070,17 +4148,18 @@ const Studio = (function(){
       const j = await r.json();
       // Auto-select this overlay when we return to the gallery so the
       // save reflects immediately (no F5).
-      if(j.ok){ updateUrlLabel(); pendingSelect=slug; toast('Saved - URL ready to drop into OBS','ok'); loadSaved(); }
+      if(j.ok){ updateUrlLabel(); pendingSelect=slug; markClean(); toast('Saved - URL ready to drop into OBS','ok'); loadSaved(); }
       else { toast(j.error||'Save failed','err'); slug=null; }
     }catch(e){ toast('Save failed','err'); slug=null; }
   }
-  function duplicate(){ slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name; updateUrlLabel(); toast('Duplicated - Save to write a new file','info'); }
   function copyUrl(){ if(!slug){ toast('Save the overlay first to get a URL','info'); return; } copyText(location.origin+'/overlay/'+slug+'.html','Overlay URL'); }
   // ---- overflow menu: save-as / rename / export / import / delete ----
   function toggleMenu(ev){ ev.stopPropagation(); const p=$('st-menu-pop'); if(p) p.hidden=!p.hidden; }
+  // Save a separate copy under a new slug (so it never overwrites the current
+  // overlay). The user can rename afterwards.
+  function saveAsNew(){ slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name; return save(); }
   function menu(action){ const p=$('st-menu-pop'); if(p) p.hidden=true;
     if(action==='delete') return deleteOverlay();
-    if(action==='saveas'){ slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name; return save(); }
     if(action==='rename') return renameOverlay();
     if(action==='export') return exportDoc();
     if(action==='import') return importDoc();
@@ -4113,7 +4192,25 @@ const Studio = (function(){
   }
   async function loadSaved(){
     try{ savedList = await (await fetch('/overlays')).json(); if(!Array.isArray(savedList)) savedList=[]; }catch(e){ savedList=[]; }
-    if(left==='mine' && $('ov-studio') && !$('ov-studio').hidden) renderLeft();
+  }
+  // First-run seeding: bake the built-in presets to real overlay files so the
+  // gallery is one uniform list (every item has a working URL). Gated by the
+  // server `overlays_seeded` flag (set via POST /overlays/seeded) so deleted
+  // presets stay gone. Skips any slug that already exists.
+  let seeding=false;
+  async function seedPresets(){
+    if(seeding || !IC()) return; seeding=true;
+    try{
+      await loadSaved();
+      for(let i=0;i<IC().PRESETS.length;i++){
+        const p=IC().PRESETS[i]; const slug=slugify(p.name);
+        if(savedList.some(o=>o.slug===slug)) continue;
+        const d=clone(p); d.widgets.forEach((w,n)=>{ w.id='w'+(n+1); });
+        await fetch('/overlays/'+encodeURIComponent(slug),{method:'POST',headers:{'Content-Type':'text/html'},body:IC().bake(d)});
+      }
+      await fetch('/overlays/seeded',{method:'POST'});
+      await loadSaved(); renderGallery();
+    }catch(e){}finally{ seeding=false; }
   }
 
   window.addEventListener('resize', ()=>{
@@ -4145,13 +4242,13 @@ const Studio = (function(){
   });
   document.addEventListener('click', ()=>{ const p=$('st-menu-pop'); if(p && !p.hidden) p.hidden=true; });
 
-  return { show, openStudio, openStudioPreset, backToGallery, previewSim, deleteFromGallery,
-    useOverlay, togglePresetHide, copyGallery, undo, redo, toggleMenu, menu,
-    leftTab, selectState, play, save, duplicate, copyUrl, deleteOverlay, loadSaved,
+  return { show, openStudio, newOverlay, duplicateOverlay, backToGallery, previewSim, deleteFromGallery,
+    seedPresets, restoreDefaults, toggleAutohide, copyGallery, undo, redo, toggleMenu, menu,
+    leftTab, selectState, play, save, saveAsNew, copyUrl, deleteOverlay, loadSaved,
     set, setNum, setBase, setCustom, setState, setStateNum, setStateText, setAnim, setAnimNum,
     setHideAfter, toggleHide, setLS, setStateOffset, resetStateOffset, toggleVis, visOnly, visAll, applyColorAll, applyAnimAll, copyLookAll,
     setTheme, setGrad, toggleGrad, setGradAnim, align, animAdd, animDel, animSet, uploadImage, insertVar,
-    dupWidget, delWidget };
+    dupWidget, delWidget, isDirty, setLiquidLevel, setFlag };
 })();
 
 // Existing init paths call loadOverlays() before the `const Studio`
@@ -4415,6 +4512,17 @@ function positionTour(){
   tip.style.top  = ty + 'px';
 }
 
+// Browser close / refresh while the Studio has unsaved edits: trigger the
+// native "leave site?" prompt. (Browsers ignore custom text here.)
+window.addEventListener('beforeunload', e => {
+  try {
+    const m = $('ov-studio');
+    if (m && !m.hidden && window.ICOverlay && Studio.isDirty && Studio.isDirty()){
+      e.preventDefault(); e.returnValue = '';
+    }
+  } catch(_){}
+});
+
 document.addEventListener('keydown', e => {
   if (!$('tour').hidden){
     if (e.key === 'Escape')     { e.preventDefault(); closeTour(); }
@@ -4440,6 +4548,14 @@ async function downloadLogs(){
 
 // ── Tabs ──────────────────────────────────────────────────────────────
 function showTab(name){
+  // Guard unsaved Studio edits: switching away from the Overlay tab hides the
+  // editor and abandons the in-progress doc, so confirm first.
+  if (name !== 'overlay'){
+    const m = $('ov-studio');
+    if (m && !m.hidden && window.ICOverlay && Studio.isDirty && Studio.isDirty()){
+      if (!confirm('You have unsaved overlay changes. Leave the Studio and discard them?')) return;
+    }
+  }
   $$('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === name));
   $$('.tab-pane').forEach(p => p.hidden = p.dataset.pane !== name);
   moveTabInd();
@@ -4469,6 +4585,13 @@ function showSubTab(paneName, subName){
   pane.querySelectorAll('.sub-pane').forEach(p => p.hidden = p.dataset.subpane !== subName);
   moveSubTabInd(pane);
   try { localStorage.setItem('ic-subtab-' + paneName, subName); } catch(e){}
+  // The "Save settings" footer only applies to the editable sub-panes.
+  // About is version info + immediate danger-zone actions, so a Save
+  // button there is meaningless - hide the footer on About.
+  if (paneName === 'system'){
+    const foot = $('sys-foot');
+    if (foot) foot.hidden = (subName === 'about');
+  }
   if (paneName === 'system' && subName === 'about') aboutMaybeAutoCheck();
 }
 function moveSubTabInd(pane){
@@ -4497,6 +4620,11 @@ window.addEventListener('resize', () => {
     if (target) {
       pane.querySelectorAll('.sub-tab').forEach(t => t.classList.toggle('on', t.dataset.subtab === saved));
       pane.querySelectorAll('.sub-pane').forEach(p => p.hidden = p.dataset.subpane !== saved);
+      // Keep the Save footer in sync with the restored sub-tab (see showSubTab).
+      if (pane.dataset.pane === 'system'){
+        const foot = $('sys-foot');
+        if (foot) foot.hidden = (saved === 'about');
+      }
     }
   });
 })();
@@ -4523,11 +4651,14 @@ function semverCmp(a, b){
   return 0;
 }
 
+let latestReleaseUrl = 'https://github.com/Soulhackzlol/InstantClone/releases/latest';
 async function aboutCheckUpdate(silent){
   const ver = $('sys-about-version');
   const pill = $('sys-about-pill');
   const msg = $('sys-about-msg');
   const btn = $('sys-about-check-btn');
+  const upd = $('sys-about-update-btn');
+  if (upd) upd.hidden = true; // only the "update available" branch reveals it
   if (btn) btn.disabled = true;
   if (msg && !silent) msg.textContent = 'Checking github.com/Soulhackzlol/InstantClone…';
   try {
@@ -4542,7 +4673,12 @@ async function aboutCheckUpdate(silent){
         if (msg) msg.innerHTML = 'Could not reach GitHub: ' + (j.error || 'unknown') + '. <a href="' + j.release_url + '" target="_blank" rel="noreferrer">View releases</a>';
       } else if (j.update_available && j.latest) {
         pill.classList.add('new'); pill.textContent = 'v' + j.latest + ' available';
-        if (msg) msg.innerHTML = 'New release: <a href="' + j.release_url + '" target="_blank" rel="noreferrer">v' + j.latest + '</a>.';
+        latestReleaseUrl = j.release_url || latestReleaseUrl;
+        // Updating is optional. The button does it for you (download +
+        // verify + swap + restart); the link is the manual route. Either
+        // way the config survives, so say so.
+        if (upd){ upd.hidden = false; upd.textContent = 'Update to v' + j.latest; }
+        if (msg) msg.innerHTML = 'Optional - your settings, destinations, and overlays are kept either way. Use the button, or <a href="' + j.release_url + '" target="_blank" rel="noreferrer">download v' + j.latest + '</a> and replace the exe yourself.';
       } else if (j.latest && semverCmp(j.current, j.latest) > 0) {
         // Build is ahead of the latest published tag - either a pre-release
         // dev build, a build off main between tags, or a local checkout.
@@ -4560,6 +4696,80 @@ async function aboutCheckUpdate(silent){
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+// One-click update: POST /update/apply stages + verifies the new exe, then
+// the server swaps it in and relaunches. We show progress, then poll until
+// the fresh process answers and reload. Manual download stays as the
+// fallback in every error message.
+let _updating = false;
+async function applyUpdate(){
+  if (_updating) return;
+  const upd = $('sys-about-update-btn');
+  const chk = $('sys-about-check-btn');
+  const msg = $('sys-about-msg');
+  const manual = ' You can still <a href="' + latestReleaseUrl + '" target="_blank" rel="noreferrer">update manually</a>.';
+  _updating = true;
+  if (upd){ upd.disabled = true; upd.textContent = 'Downloading…'; }
+  if (chk) chk.disabled = true;
+  if (msg) msg.textContent = 'Downloading and verifying the new version - keep InstantClone open.';
+  try {
+    const j = await (await fetch('/update/apply', {method:'POST'})).json();
+    if (!j.ok){
+      _updating = false;
+      if (upd){ upd.disabled = false; upd.textContent = 'Update now'; }
+      if (chk) chk.disabled = false;
+      if (msg) msg.innerHTML = '<span class="err">' + (j.error || 'Update failed') + '</span>' + manual;
+      return;
+    }
+    if (upd) upd.textContent = 'Restarting…';
+    if (msg) msg.textContent = 'Verified. InstantClone is restarting - this page reconnects automatically.';
+    waitForRestart();
+  } catch(e){
+    // The swap is deferred until after the response flushes, so a thrown
+    // fetch here is almost always the localhost server already going down
+    // for its restart - start polling rather than crying failure.
+    if (upd) upd.textContent = 'Restarting…';
+    if (msg) msg.textContent = 'InstantClone is restarting - this page reconnects automatically.';
+    waitForRestart();
+  }
+}
+function waitForRestart(){
+  let tries = 0;
+  const iv = setInterval(async () => {
+    tries++;
+    try {
+      const r = await fetch('/config', {cache:'no-store'});
+      if (r.ok){ clearInterval(iv); location.reload(); return; }
+    } catch(_){ /* still down - keep waiting */ }
+    if (tries > 40){ // ~60 s
+      clearInterval(iv);
+      const msg = $('sys-about-msg');
+      if (msg) msg.innerHTML = 'Restart is taking longer than expected. If the dashboard doesn\'t come back, start InstantClone again from where you keep the exe.';
+    }
+  }, 1500);
+}
+
+// Restart the app (e.g. to apply a buffer/port change). Same relaunch
+// mechanism as the updater, minus the swap; we reconnect and reload once
+// the fresh process answers.
+let _restarting = false;
+async function restartApp(btn){
+  if (_restarting) return;
+  _restarting = true;
+  if (btn){ btn.disabled = true; btn.textContent = 'Restarting…'; }
+  toast('Restarting InstantClone…','info');
+  try { await fetch('/app/restart', {method:'POST'}); } catch(_){ /* server going down */ }
+  waitForRestart();
+}
+
+// Open one of our files in Explorer. `what` is a fixed keyword the server
+// maps to a known path - buffer / trace / overlays.
+async function reveal(what, btn){
+  try {
+    const j = await (await fetch('/reveal/' + what, {method:'POST'})).json();
+    if (!j || !j.ok) toast('Could not open Explorer','err');
+  } catch(_){ toast('Could not open Explorer','err'); }
 }
 
 // ── Tick / poll loop ──────────────────────────────────────────────────
@@ -4662,9 +4872,15 @@ async function checkForUpdate(){
     const label = $('hdr-update-v');
     if (!pill || !label) return;
     label.textContent = 'v' + r.latest + ' available';
-    pill.href = r.release_url;
     pill.hidden = false;
   } catch(_){}
+}
+// The header "update available" pill opens the in-app updater (System > About)
+// instead of GitHub, so one click leads to the one-click Update button.
+function openUpdateInAbout(){
+  showTab('system');
+  showSubTab('system','about');
+  try { aboutCheckUpdate(); } catch(_){}
 }
 
 (async function init(){

@@ -186,15 +186,13 @@ A 280×340 panel with the readout, arm / activate / disarm / cut controls, and l
 
 ### Browser-source overlays
 
-Drop one in as a browser-source for an on-stream readout:
+The **Overlay** tab is a no-code Studio. Pick a ready-made overlay, copy its URL, and drop it into OBS — or open any in the Studio to redesign it (per-state colours, widgets, animations) and **Save** or **Save as new**.
 
-<pre><code>http://127.0.0.1:7799/overlay?style=corner&amp;lang=es</code></pre>
+<pre><code>http://127.0.0.1:7799/overlay/whisper.html</code></pre>
 
-<sub><b>Styles</b></sub> &nbsp;`minimal` · `corner` · `strip` · `focus` · `broadcast` · `ticker`
+<sub><b>No setup?</b></sub> &nbsp;The older quick styles still work straight from a URL: <code>/overlay?style=corner&amp;lang=es</code> &nbsp;<sub>(`minimal · corner · strip · focus · broadcast · ticker`, langs `en · es · pt · fr · de`)</sub>
 
-<sub><b>Languages</b></sub> &nbsp;`en` · `es` · `pt` · `fr` · `de`
-
-Drop any `.html` into `./overlays/` and it's served at `/overlay/your-file.html`.
+Or drop any `.html` into `./overlays/` and it's served at `/overlay/your-file.html`.
 
 </td>
 </tr>

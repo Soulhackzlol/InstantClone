@@ -23,5 +23,12 @@ Thumbs.db
 .DS_Store
 desktop.ini
 
+# Studio + seeded overlays are generated per-install at runtime (the
+# dashboard bakes the built-in presets on first run). Only the shipped
+# hand-write example is tracked; everything else here is local.
+overlays/*.html
+!overlays/custom-template.html
+overlays/*/
+
 # Misc
 *.log
