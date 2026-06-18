@@ -1,6 +1,6 @@
 [package]
 name = "instantclone"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 authors = ["s1moscs"]
 license = "GPL-3.0-only"

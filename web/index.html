@@ -1331,6 +1331,19 @@ input,select,textarea{font-family:inherit;color:inherit}
             <b style="color:var(--warn,#d6a23a)">Disables Enhanced Broadcasting</b> (the transcoded quality ladder) unless you use the experimental Launch button below.
             Requires switching OBS to <b>Custom RTMP</b> + enabling the VOD Track checkbox in OBS Output settings.
           </div>
+          <div style="margin-top:6px;font-size:11px;color:var(--warn,#d6a23a);display:flex;align-items:center;gap:5px">
+            <span>⚠</span> Close OBS before saving - the config file can't be updated while OBS is running. Changes take effect on the next OBS launch.
+          </div>
+          <details style="margin-top:8px">
+            <summary style="font-size:11px;color:var(--fg-3);cursor:pointer;user-select:none">How to set this up in OBS</summary>
+            <ol style="margin:7px 0 0;padding-left:16px;font-size:11px;line-height:1.7;color:var(--fg-2)">
+              <li><b>Settings → Stream</b> - set Service to <b>Custom...</b></li>
+              <li>Set Server to the ingest URL from the <b>OBS tab</b>, Stream Key to <code class="mono" style="font-size:10.5px">main</code></li>
+              <li><b>Settings → Output</b> - set Output Mode to <b>Advanced</b></li>
+              <li>Under the <b>Streaming</b> tab, enable the <b>VOD Track</b> checkbox</li>
+              <li>Hit <b>Apply</b>, close OBS, then save this destination and reopen OBS</li>
+            </ol>
+          </details>
         </div>
       </label>
       <div id="dest-form-vod-eb-wrap" hidden style="margin-top:10px;padding:10px;border:1px dashed color-mix(in oklch,var(--err) 32%,var(--line));border-radius:8px;background:color-mix(in oklch,var(--err) 3%,var(--bg-2))">
@@ -4110,7 +4123,7 @@ const Studio = (function(){
     let level='Lightweight', cls='ok';
     if(fs>=2 || n>10 || anim>8){ level='Moderate'; cls='warn'; }
     if(fs>=3 || n>16){ level='Heavy'; cls='err'; }
-    el.textContent=level; el.className='st-perf '+cls; el.title=n+' widgets · '+fs+' full-screen · '+anim+' animated — runs in OBS browser source';
+    el.textContent=level; el.className='st-perf '+cls; el.title=n+' widgets · '+fs+' full-screen · '+anim+' animated - runs in OBS browser source';
   }
   function setStateOffset(axis,v){ const w=widget(sel); const sp=ensureState(); if(!sp.offset) sp.offset={x:w.offset.x,y:w.offset.y}; sp.offset[axis]=parseInt(v,10)||0; softRebake(); }
   function resetStateOffset(){ const sp=ensureState(); delete sp.offset; softRebake(); renderProps(); }
@@ -4366,10 +4379,10 @@ const TOUR = [
   },
   {
     target: '.tab[data-tab="overlay"]', side: 'bottom', tab: 'overlay',
-    title: 'Overlay browser-source',
+    title: 'Overlay Studio',
     body: `
-      <p>Picks one of <b>6 built-in overlay styles</b> (Minimal, Corner, Strip, Focus, Broadcast, Ticker) for OBS to display the live delay on screen. All six share one design language - they differ in position and density, not aesthetic - and auto-dim when nothing's happening so they don't snag the viewer's eye.</p>
-      <p>Drop your own <code>.html</code> file into the overlays folder and it shows up here automatically - fully customisable.</p>
+      <p>Pick a built-in overlay from the gallery, preview it in any delay state (Idle / Arming / Ready / Active), and copy its URL straight into OBS as a Browser Source. Each overlay auto-dims when nothing's happening so it doesn't compete for attention.</p>
+      <p>Hit <b>+ New overlay</b> to open <b>Overlay Studio</b> - a visual editor where you can design your own overlay from scratch, tweak colours, layout, and widgets, then save it back to the gallery. Hand-written <code>.html</code> files dropped into the overlays folder still appear here automatically.</p>
     `,
   },
   {

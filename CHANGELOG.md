@@ -8,6 +8,27 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.7] - Tour + VOD audio UX fixes
+
+**App tour overlay step updated.** The tour bubble for the Overlay tab
+said "Picks one of 6 built-in overlay styles" - that was the old UI
+before Overlay Studio shipped. It now describes what's actually there:
+browse the gallery, preview overlays in any delay state (Idle / Arming /
+Ready / Active), copy the URL into OBS as a Browser Source, and hit
+**+ New overlay** to open Overlay Studio for a full visual editor.
+Hand-written `.html` files in the overlays folder still show up
+automatically.
+
+**VOD audio has a setup guide and a clearer warning.** Enabling VOD
+audio requires switching OBS to Custom RTMP mode first, but that step
+was easy to miss. A collapsible "How to set this up in OBS" guide now
+sits inside the toggle - five steps covering Service: Custom..., ingest
+URL from the OBS tab, Advanced output mode, the VOD Track checkbox under
+Streaming, and the apply-then-restart sequence. A separate warning line
+also flags that OBS must be closed before saving: the config file can't
+be updated while OBS holds it open, so the setting won't take effect
+until the next OBS launch.
+
 ## [0.1.6] - Overlay flow: one list, copy a URL
 
 Reworks the Overlay tab around a single idea: **everything is just an
@@ -881,5 +902,7 @@ See `0.1.0` below for the full feature list.
   port pre-flight, and process / RSS sampler have Windows-specific paths.
 - No automated release pipeline yet. Build from source per the README.
 
-[Unreleased]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.0...v0.1.6
 [0.1.0]: https://github.com/Soulhackzlol/InstantClone/releases/tag/v0.1.0
