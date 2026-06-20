@@ -8,6 +8,42 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.8] - VOD-audio session race fix
+
+**VOD audio could go live Source-Only with duplicate sessions.** On a
+stream with VOD audio enabled, Twitch Inspector sometimes showed several
+short sessions for a single go-live, the first one Transmuxed
+(Source-Only) instead of Transcoded, and viewers hit a playback error.
+
+Root cause: the egress supervisor wakes every ~2s and, for a Twitch
+destination with VOD audio on, asks Twitch's API to allocate an IVS
+session, then points egress at the URL it returns. The old code fired a
+fresh GetClientConfiguration call on every tick until one came back. When
+Twitch answered slower than the 2s tick, the calls stacked. Each one
+allocated its own IVS session and rewrote the destination's override URL,
+and each rewrite restarted egress, so a single OBS stream reached Twitch
+as a string of brief sessions. Whichever session won the race decided
+whether the stream came up Transcoded or Source-Only.
+
+Two guards, both per-destination so multistreaming is unaffected:
+
+- A single-flight latch keeps exactly one session fetch in flight at a
+  time. It re-checks the override under its lock, so a fetch that just
+  finished can't let a duplicate slip in right behind it.
+
+- A session epoch, bumped on every publisher disconnect, records which
+  publisher session a fetch belongs to. A request that returns after OBS
+  disconnected, whose IVS token is now bound to a dead session, is
+  discarded instead of being written into the next stream. The apply check
+  and the disconnect both touch the override under the same lock, so they
+  cannot interleave.
+
+The `/obs/multitrack-config` proxy path (Enhanced Broadcasting via the
+registered OBS service, and the experimental VOD+EB Launch button) was
+never affected: it runs inside OBS's blocking config request, before the
+stream starts, so it always sets the override for the session about to
+begin. Non-Twitch destinations do not use this path at all.
+
 ## [0.1.7] - Tour + VOD audio UX fixes
 
 **App tour overlay step updated.** The tour bubble for the Overlay tab
@@ -902,7 +938,8 @@ See `0.1.0` below for the full feature list.
   port pre-flight, and process / RSS sampler have Windows-specific paths.
 - No automated release pipeline yet. Build from source per the README.
 
-[Unreleased]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.0...v0.1.6
 [0.1.0]: https://github.com/Soulhackzlol/InstantClone/releases/tag/v0.1.0
