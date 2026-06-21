@@ -284,7 +284,7 @@ No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzippe
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 185 tests on every push, and a tagged commit auto-builds + publishes a release artifact with a `SHA256SUMS.txt` checksum file alongside (no code-signing certificate yet, so the OS may warn on first launch).
+**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 197 tests on every push, and a tagged commit auto-builds + publishes a release artifact with a `SHA256SUMS.txt` checksum file alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's solid**
 
@@ -303,8 +303,9 @@ No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzippe
 **What's rough, honestly**
 
 - **Windows only.** macOS / Linux aren't tested or packaged. Several modules (tray, port pre-flight, RSS sampler) have Windows-specific code paths that need parallel implementations.
-- **Multi-hour streams unproven.** Longest validated real-world stream is ~30 minutes. The supervisor + keepalive + ack logic is designed to handle indefinite sessions but nobody has stress-tested an 8-hour run.
-- **Sync disk I/O on the async hot path** for ring append. Page cache absorbs it at typical stream rates, but a flush stall could freeze other tasks. `spawn_blocking` is on the v0.2 list.
+- **Multi-hour streams lightly validated.** Longest single run is ~5 hours, with roughly ~10 hours cumulative across test sessions. The supervisor + keepalive + ack logic is designed to handle indefinite sessions; an 8+ hour daily-driver run still wants more mileage.
+- **Transcoded ladder isn't guaranteed without EB.** Only Twitch Partners get a transcode slot every time. Affiliates get one opportunistically (capacity-dependent, and far less likely above ~6 Mbps); everyone else stays Source-Only. Above ~8 Mbps under Source-Only, some viewers' hardware decoders fail with Error #1000. This is Twitch's allocation behaviour, not the proxy: OBS's native Twitch preset auto-caps bitrate to stay transcode-eligible, but the Custom-server path (which InstantClone has to be) skips that cap. For a guaranteed ladder use Enhanced Broadcasting (or the VOD+EB Launch button); otherwise keep bitrate near ~6000 Kbps.
+- **Sync disk I/O on the ring-append hot path, by choice.** The buffered write lands in the OS page cache in microseconds and the kernel flushes in the background, so the page cache is already acting as the async buffer, and the index and the bytes advance under one lock so a reader never sees a tag whose bytes aren't on disk yet. The tail risk is a writeback stall under memory or slow-disk pressure, which on the current-thread runtime would briefly freeze egress too, not just ingest. Moving the write off-thread adds per-tag overhead and reopens a write-vs-index consistency window, so it isn't worth it for typical hardware. If low-end disks ever become a priority the real lever is the runtime (separate the disk-blocking ingest from egress), not async writes. A someday-maybe I'll revisit, not a blocker.
 - **A handful of `unwrap()` on lock guards.** Fine because `panic = "abort"` means a poison condition can't propagate, but still on the cleanup list.
 - **Hand-rolled HTTP server.** Smaller binary than `hyper`, but I now own the entire HTTP CVE surface. Worth re-evaluating if the surface grows.
 
