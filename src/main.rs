@@ -412,29 +412,50 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 && dest.vod_audio
                 && !dest.stream_key.is_empty()
             {
-                let key = dest.stream_key.clone();
-                let want_eb = dest.vod_audio_inject_eb;
                 let state = ctrl.destination_state(&dest.id);
-                let ctrl_for_log = ctrl.clone();
-                let dest_id = dest.id.clone();
-                tokio::spawn(async move {
-                    match web::fetch_twitch_vod_session(key, want_eb).await {
-                        Some(url) => {
-                            *state.eb_override_url.lock().unwrap() = Some(url);
-                            ctrl_for_log.log(format!(
+                // Single-flight: only one session fetch runs at a time.
+                // Without this the supervisor would spawn a new API call
+                // every ~2 s while no override is set, each allocating a
+                // different IVS session and each triggering its own egress
+                // restart. try_claim_vod_fetch also re-checks the override
+                // under its mutex, so a fetch that just completed on the
+                // previous tick can't race a redundant second one in.
+                if state.try_claim_vod_fetch() {
+                    let key = dest.stream_key.clone();
+                    let want_eb = dest.vod_audio_inject_eb;
+                    let ctrl_for_log = ctrl.clone();
+                    let dest_id = dest.id.clone();
+                    // Capture the session this fetch belongs to. If OBS
+                    // disconnects before it returns, the epoch moves on and
+                    // apply_vod_session_if_current drops the stale result.
+                    let epoch = state.session_epoch();
+                    tokio::spawn(async move {
+                        let result = web::fetch_twitch_vod_session(key, want_eb).await;
+                        // complete_vod_fetch applies the URL only if we're
+                        // still in the session that asked for it, then releases
+                        // the latch whatever the outcome. A tick that then
+                        // observes the latch free re-checks the override (now
+                        // Some on success) and skips, so no duplicate spawns.
+                        match state.complete_vod_fetch(result, epoch) {
+                            controller::VodFetchOutcome::Applied => ctrl_for_log.log(format!(
                                 "[{}] VOD-audio session allocated by Twitch{}",
                                 dest_id,
                                 if want_eb { " (with EB ladder)" } else { "" }
-                            ));
-                        }
-                        None => {
-                            ctrl_for_log.log(format!(
+                            )),
+                            controller::VodFetchOutcome::DiscardedStale => {
+                                ctrl_for_log.log(format!(
+                                    "[{}] VOD-audio: discarded stale session - publisher \
+                                 reconnected while the request was in flight",
+                                    dest_id
+                                ))
+                            }
+                            controller::VodFetchOutcome::Failed => ctrl_for_log.log(format!(
                                 "[{}] VOD-audio: Twitch API call failed - retrying on next tick",
                                 dest_id
-                            ));
+                            )),
                         }
-                    }
-                });
+                    });
+                }
             }
             let effective_url = override_url.as_deref().unwrap_or(url.as_str()).to_string();
             let url = &effective_url;
