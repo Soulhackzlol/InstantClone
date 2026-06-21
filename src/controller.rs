@@ -198,6 +198,19 @@ pub struct DestinationState {
     pub session_epoch: AtomicU64,
 }
 
+/// Outcome of finishing a VOD-session fetch, returned by
+/// `complete_vod_fetch` so the supervisor can log it without re-deriving
+/// what happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VodFetchOutcome {
+    /// Session applied - egress will restart onto the IVS endpoint.
+    Applied,
+    /// Result dropped: the publisher session it was for ended mid-fetch.
+    DiscardedStale,
+    /// Twitch's API returned nothing; the next supervisor tick retries.
+    Failed,
+}
+
 impl DestinationState {
     pub fn new(id: String) -> Self {
         Self {
@@ -290,6 +303,32 @@ impl DestinationState {
         let mut guard = self.eb_override_url.lock().unwrap();
         *guard = None;
         self.session_epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Finish a VOD-session fetch: apply the result if our publisher
+    /// session is still current, then release the in-flight latch no
+    /// matter what. Keeping the release here - not in the supervisor
+    /// closure - puts the whole latch lifecycle (claim in
+    /// `try_claim_vod_fetch`, release here) on one type, so a fetch can
+    /// never leave the latch stuck. Returns the outcome for the caller
+    /// to log.
+    pub fn complete_vod_fetch(
+        &self,
+        result: Option<String>,
+        captured_epoch: u64,
+    ) -> VodFetchOutcome {
+        let outcome = match result {
+            Some(url) => {
+                if self.apply_vod_session_if_current(url, captured_epoch) {
+                    VodFetchOutcome::Applied
+                } else {
+                    VodFetchOutcome::DiscardedStale
+                }
+            }
+            None => VodFetchOutcome::Failed,
+        };
+        self.vod_fetch_pending.store(false, Ordering::Relaxed);
+        outcome
     }
 
     fn note_outbound_bytes(&self, n: usize) {
@@ -2584,6 +2623,33 @@ mod tests {
         );
     }
 
+    /// The single-flight guarantee under real thread contention: when a
+    /// swarm of threads races to claim the same destination (the situation
+    /// the atomic swap exists for), exactly one wins. A sequential test
+    /// can't prove this - it's the concurrent claim that the supervisor's
+    /// every-2s wake-up plus an in-flight fetch can produce. Deterministic
+    /// (no sleeps): the atomic swap has exactly one false -> true edge, so
+    /// the winner count is always 1 regardless of scheduling.
+    #[test]
+    fn try_claim_vod_fetch_admits_exactly_one_under_contention() {
+        let s = DestinationState::new("main".into());
+        let winners = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..32 {
+                scope.spawn(|| {
+                    if s.try_claim_vod_fetch() {
+                        winners.fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            winners.load(Ordering::Relaxed),
+            1,
+            "exactly one racing claimant may hold the single-flight latch"
+        );
+    }
+
     /// A fetch that returns while still in its own session applies normally.
     #[test]
     fn apply_vod_session_if_current_writes_when_session_unchanged() {
@@ -2651,6 +2717,99 @@ mod tests {
             *s.eb_override_url.lock().unwrap(),
             Some("rtmps://ivs/new".into())
         );
+    }
+
+    /// `complete_vod_fetch` on success applies the URL, reports Applied,
+    /// and releases the latch so the override (now Some) is what blocks
+    /// any re-fetch.
+    #[test]
+    fn complete_vod_fetch_applies_and_releases_on_success() {
+        let s = DestinationState::new("main".into());
+        assert!(s.try_claim_vod_fetch(), "latch held, as in production");
+        let epoch = s.session_epoch();
+        assert_eq!(
+            s.complete_vod_fetch(Some("rtmps://ivs/live".into()), epoch),
+            VodFetchOutcome::Applied
+        );
+        assert_eq!(
+            *s.eb_override_url.lock().unwrap(),
+            Some("rtmps://ivs/live".into())
+        );
+        assert!(
+            !s.vod_fetch_pending.load(Ordering::Relaxed),
+            "latch must be released after a successful completion"
+        );
+    }
+
+    /// A result that outlived its session reports DiscardedStale, writes
+    /// nothing, and STILL releases the latch (the previously untested
+    /// release-on-every-path invariant).
+    #[test]
+    fn complete_vod_fetch_discards_stale_and_releases() {
+        let s = DestinationState::new("main".into());
+        assert!(s.try_claim_vod_fetch());
+        let epoch = s.session_epoch();
+        s.invalidate_session_override(); // disconnect mid-fetch
+        assert_eq!(
+            s.complete_vod_fetch(Some("rtmps://ivs/stale".into()), epoch),
+            VodFetchOutcome::DiscardedStale
+        );
+        assert!(s.eb_override_url.lock().unwrap().is_none());
+        assert!(
+            !s.vod_fetch_pending.load(Ordering::Relaxed),
+            "latch must be released even when the result is discarded"
+        );
+    }
+
+    /// A failed fetch reports Failed, leaves no override, and releases the
+    /// latch so the next supervisor tick can retry.
+    #[test]
+    fn complete_vod_fetch_releases_latch_on_failure() {
+        let s = DestinationState::new("main".into());
+        assert!(s.try_claim_vod_fetch());
+        let epoch = s.session_epoch();
+        assert_eq!(s.complete_vod_fetch(None, epoch), VodFetchOutcome::Failed);
+        assert!(s.eb_override_url.lock().unwrap().is_none());
+        assert!(
+            !s.vod_fetch_pending.load(Ordering::Relaxed),
+            "latch must be released on failure"
+        );
+        assert!(
+            s.try_claim_vod_fetch(),
+            "a released latch lets the next tick retry"
+        );
+    }
+
+    /// Stress the apply-vs-disconnect race: a late fetch's apply and the
+    /// disconnect that should invalidate it run on two threads. Both take
+    /// the override mutex for their whole body, so the two orderings are
+    /// the only possibilities and both MUST end with no override - either
+    /// the disconnect clears the just-written URL, or it bumps the epoch
+    /// first so apply discards. A stale Some surviving here would be the
+    /// Source-Only bug. A barrier collides the critical sections; the
+    /// invariant holds every iteration regardless of who wins.
+    #[test]
+    fn apply_and_invalidate_never_leave_a_stale_override() {
+        use std::sync::Barrier;
+        for _ in 0..200 {
+            let s = DestinationState::new("main".into());
+            let epoch = s.session_epoch();
+            let barrier = Barrier::new(2);
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    s.apply_vod_session_if_current("rtmps://ivs/late".into(), epoch);
+                });
+                scope.spawn(|| {
+                    barrier.wait();
+                    s.invalidate_session_override();
+                });
+            });
+            assert!(
+                s.eb_override_url.lock().unwrap().is_none(),
+                "racing apply against the disconnect must never leave a stale override"
+            );
+        }
     }
 
     /// `note_multitrack_video` is sticky-with-decay: once set, the
