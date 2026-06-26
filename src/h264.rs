@@ -952,6 +952,47 @@ mod tests {
         }
     }
 
+    // ── Twitch Dual Format (dual canvas) forwarding ──────────────────
+    //
+    // Dual Format = a horizontal (canvas 0) and a vertical (canvas 1)
+    // layout sent together over the one Enhanced Broadcasting RTMP
+    // connection. `canvas_index` lives only in the GetClientConfiguration
+    // JSON; on the wire the canvases are just more TrackIds. So the
+    // existing per-track passthrough already carries the vertical canvas:
+    // these tests pin that down explicitly with dual-format framing.
+
+    #[test]
+    fn select_video_bytes_forwards_dual_canvas_to_twitch() {
+        // Horizontal primary (TrackId 0) and a vertical-canvas rung
+        // (TrackId 1) both reach Twitch byte-for-byte. Nothing about a
+        // second canvas changes the Twitch passthrough contract.
+        let horizontal = enhanced_rtmp_onetrack_video_bytes_track(0);
+        let vertical = enhanced_rtmp_onetrack_video_bytes_track(1);
+        for tag in [&horizontal, &vertical] {
+            let twitch = select_video_bytes(tag, true).expect("twitch must forward both canvases");
+            assert_eq!(twitch.as_ref(), tag.as_slice());
+            assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
+        }
+    }
+
+    #[test]
+    fn select_video_bytes_keeps_horizontal_drops_vertical_for_non_twitch() {
+        // A non-Twitch destination (YouTube/Kick) running alongside a
+        // Dual Format Twitch session keeps the horizontal primary and
+        // drops the vertical canvas - it has no concept of a second
+        // canvas, and TrackId != 0 is exactly the vertical rungs.
+        let horizontal = enhanced_rtmp_onetrack_video_bytes_track(0);
+        let vertical = enhanced_rtmp_onetrack_video_bytes_track(1);
+        assert!(
+            select_video_bytes(&horizontal, false).is_some(),
+            "horizontal canvas (TrackId 0) must reach non-Twitch"
+        );
+        assert!(
+            select_video_bytes(&vertical, false).is_none(),
+            "vertical canvas (TrackId 1) must be dropped for non-Twitch"
+        );
+    }
+
     // ── is_primary_video_idr: cut-target gate for EB ladder cuts ──
     //
     // Regression test set for the v0.1.3 EB pixel-glitch fix. Before
@@ -995,6 +1036,30 @@ mod tests {
                 "TrackId {track} must not be a cut candidate"
             );
         }
+    }
+
+    #[test]
+    fn is_primary_video_idr_anchors_dual_format_cuts_to_horizontal_canvas() {
+        // Dual Format: the cut-point index is built only from the
+        // horizontal primary (TrackId 0); the vertical canvas's primary
+        // (a nonzero TrackId) is NOT a cut anchor. That means a Cut lands
+        // cleanly on the vertical canvas ONLY IF OBS aligned both
+        // canvases' keyframes to the same input timestamp - which it does
+        // when both encoders share keyint, but that is an OBS behaviour we
+        // can't prove from inside this crate (it needs one real capture).
+        // This test pins our half of the contract: cuts are anchored to
+        // the horizontal canvas. If a future change must make cuts
+        // canvas-aware, this is the regression guard that has to flip.
+        let horizontal_idr = enhanced_rtmp_onetrack_video_bytes_track(0);
+        let vertical_idr = enhanced_rtmp_onetrack_video_bytes_track(1);
+        assert!(
+            is_primary_video_idr(&horizontal_idr),
+            "horizontal canvas IDR must be a cut anchor"
+        );
+        assert!(
+            !is_primary_video_idr(&vertical_idr),
+            "vertical canvas IDR must not (yet) be an independent cut anchor"
+        );
     }
 
     #[test]
