@@ -2669,7 +2669,7 @@ async function saveDestForm(){
   // enabled it then switched platform without the change handler
   // running.
   const vodAudio = platform === 'twitch' && $('dest-form-vod-audio').checked;
-  if (!name){ $('dest-form-msg').innerHTML = '<span class="err">Name required</span>'; return; }
+  if (!name){ $('dest-form-msg').innerHTML = '<span class="err">Name required</span>'; return false; }
   const body = new URLSearchParams({
     name, platform, custom_egress_url:custom, enabled:enabled?'on':'off',
     twitch_ingest:ingest, youtube_ingest:yingest,
@@ -2679,8 +2679,9 @@ async function saveDestForm(){
   if (key) body.set('stream_key', key);
   const r = await fetch('/destinations', {method:'POST', body});
   const j = await r.json();
-  if (j.ok){ toast('Saved','ok'); cancelDestForm(); loadDestinations(); loadConfig(); }
-  else $('dest-form-msg').innerHTML = '<span class="err">'+j.error+'</span>';
+  if (j.ok){ toast('Saved','ok'); cancelDestForm(); loadDestinations(); loadConfig(); return true; }
+  $('dest-form-msg').innerHTML = '<span class="err">'+j.error+'</span>';
+  return false;
 }
 async function toggleDest(d){
   // Preserve every per-destination field on a toggle - the form
@@ -3221,7 +3222,18 @@ async function launchObsWithEb(){
   const btn = $('obs-eb-launch-btn');
   const msg = $('obs-eb-launch-msg');
   if (!btn || btn.disabled) return;
+  // Persist the form before launching. The VOD toggle only takes effect
+  // on save: that's what writes OBS's `EnableCustomServerVodTrack` gate
+  // (user.ini) and flips InstantClone's VOD-track forwarding. Launching
+  // on unsaved state spawns OBS with EB but no VOD - the silent mismatch
+  // this button used to allow. Save first, and only launch if it stuck.
   btn.disabled = true;
+  if (msg) msg.textContent = 'Saving destination…';
+  if (!(await saveDestForm())){
+    if (msg) msg.textContent = 'Fix the destination form, then launch.';
+    btn.disabled = false;
+    return;
+  }
   if (msg) msg.textContent = 'Launching…';
   try {
     const r = await (await fetch('/obs/launch-with-eb', {method:'POST'})).json();
