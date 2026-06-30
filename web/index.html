@@ -109,15 +109,22 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--danger) 8%,var(--surface-3))}
 .ic-pill.bad .dot{background:var(--danger)}
 .ic-pill.live .dot{background:var(--live);animation:pulse-ring 1.8s var(--ease-out) infinite}
+/* Header status pills: muted directional icon + bold label + a value that
+   brightens when the pill is active, so "OBS Live" / "Egress 2/3 live"
+   reads at a glance and a dead state stays visually quiet. */
+.ic-pill-ic{width:13px;height:13px;flex:0 0 auto;opacity:.65;margin:0 -2px 0 -1px;transition:opacity .2s,color .2s}
+.ic-pill.ok .ic-pill-ic{opacity:.9}
+.ic-pill-k{font-weight:600}
+.ic-pill-v{color:var(--fg-3);font-variant-numeric:tabular-nums;transition:color .2s}
+.ic-pill.ok .ic-pill-v{color:var(--fg)}
+.ic-pill-rate{gap:0}
+.ic-pill-rate .ic-pill-v{font-family:'JetBrains Mono',monospace;font-weight:500}
+.ic-pill-rate .unit{color:var(--fg-3);font-size:11px;margin-left:1px}
 @keyframes pulse-ring{
   0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 60%,transparent)}
   70%{box-shadow:0 0 0 8px color-mix(in oklch,var(--live) 0%,transparent)}
   100%{box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 0%,transparent)}
 }
-.ic-bitrate{display:inline-flex;align-items:baseline;gap:6px;padding:6px 11px;border-radius:999px;
-  background:var(--surface-3);border:1px solid var(--line);
-  font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--fg);font-variant-numeric:tabular-nums}
-.ic-bitrate .unit{color:var(--fg-3);font-size:11px}
 
 /* ── Card / labels / buttons / inputs (atoms) ───────────── */
 .ic-card{background:linear-gradient(180deg,var(--surface-2),var(--surface));
@@ -1146,9 +1153,19 @@ input,select,textarea{font-family:inherit;color:inherit}
     <span class="ic-brand-sub">made by <a href="https://github.com/Soulhackzlol" target="_blank" rel="noopener">s1moscs</a></span>
   </div>
   <div class="ic-header-right">
-    <span class="ic-pill" id="hdr-obs"><span class="dot"></span><span>OBS</span><span class="mono" id="hdr-obs-v">-</span></span>
-    <span class="ic-pill" id="hdr-egress"><span class="dot"></span><span>Egress</span><span class="mono" id="hdr-egress-v">-</span></span>
-    <span class="ic-bitrate"><span id="hdr-rate">-</span> <span class="unit">kbps</span></span>
+    <span class="ic-pill" id="hdr-obs" title="Input from OBS.">
+      <span class="dot"></span>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="ic-pill-ic"><path d="M8 2.5v7"/><path d="M5 6.5 8 9.5l3-3"/><path d="M3.5 13h9"/></svg>
+      <span class="ic-pill-k">OBS</span><span class="ic-pill-v" id="hdr-obs-v">Offline</span>
+    </span>
+    <span class="ic-pill" id="hdr-egress" title="Output to your streaming destinations.">
+      <span class="dot"></span>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="ic-pill-ic"><path d="M8 13.5v-7"/><path d="M5 9.5 8 6.5l3 3"/><path d="M3.5 3h9"/></svg>
+      <span class="ic-pill-k">Egress</span><span class="ic-pill-v" id="hdr-egress-v">Off</span>
+    </span>
+    <span class="ic-pill ic-pill-rate" id="hdr-rate-pill" title="Total bitrate flowing through InstantClone right now.">
+      <span class="ic-pill-v mono"><span id="hdr-rate">Idle</span> <span class="unit" id="hdr-rate-u"></span></span>
+    </span>
     <span class="ic-pill" id="hdr-codec" hidden><span class="mono" id="hdr-codec-v">-</span></span>
     <span class="ic-pill ok" id="hdr-ebroadcast" hidden title="Enhanced Broadcasting active - multi-track simulcast is being forwarded bit-faithfully to Twitch and flattened to the primary track for any non-Twitch destinations. Twitch's transcoder serves the full quality ladder to viewers.">⚡ Enhanced Broadcasting</span>
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
@@ -2462,15 +2479,45 @@ function renderCpProfiles(){
 
 // ── Header chips ───────────────────────────────────────────────────────
 function renderHeader(s){
-  // OBS pill
-  const obs = $('hdr-obs'); obs.className = 'ic-pill ' + (s.ingest_alive ? 'live ok' : '');
-  $('hdr-obs-v').textContent = s.ingest_alive ? 'in' : '-';
-  // Egress
-  const eg = $('hdr-egress'); eg.className = 'ic-pill ' + ((s.destinations_alive || 0) > 0 ? 'ok' : '');
-  $('hdr-egress-v').textContent = (s.destinations_total || 0) > 0
-    ? `${s.destinations_alive || 0}/${s.destinations_total || 0}` : '-';
-  // Bitrate
-  animateNumber('hdr-rate', s.stats.bitrate_kbps || 0, 400);
+  // OBS pill - plain-language state + a tooltip that tells the user what
+  // to do when it's not connected yet.
+  const obs = $('hdr-obs');
+  obs.className = 'ic-pill ' + (s.ingest_alive ? 'live ok' : '');
+  $('hdr-obs-v').textContent = s.ingest_alive ? 'Live' : 'Offline';
+  obs.title = s.ingest_alive
+    ? 'OBS is connected and publishing to InstantClone.'
+    : 'Waiting for OBS. In OBS set Service to Custom, Server to rtmp://127.0.0.1:1935/live, then Start Streaming.';
+  // Egress pill - how many destinations are actually connected.
+  const eg = $('hdr-egress');
+  const total = s.destinations_total || 0;
+  const live = s.destinations_alive || 0;
+  eg.className = 'ic-pill ' + (live > 0 ? 'ok' : '');
+  if (total === 0){
+    $('hdr-egress-v').textContent = 'No targets';
+    eg.title = 'No destinations yet. Add Twitch / YouTube / Kick in the Destinations tab.';
+  } else {
+    $('hdr-egress-v').textContent = `${live}/${total} live`;
+    eg.title = live > 0
+      ? `${live} of ${total} destination${total>1?'s':''} connected and receiving.`
+      : `${total} destination${total>1?'s':''} configured, none connected yet.`;
+  }
+  // Bitrate pill - "Idle" when nothing flows, auto kbps -> Mbps otherwise.
+  const kbps = s.stats.bitrate_kbps || 0;
+  const ratePill = $('hdr-rate-pill');
+  const rateU = $('hdr-rate-u');
+  if (kbps <= 0){
+    $('hdr-rate').textContent = 'Idle';
+    rateU.textContent = '';
+    ratePill.classList.remove('ok');
+  } else if (kbps >= 1000){
+    $('hdr-rate').textContent = (kbps / 1000).toFixed(2);
+    rateU.textContent = 'Mbps';
+    ratePill.classList.add('ok');
+  } else {
+    $('hdr-rate').textContent = Math.round(kbps);
+    rateU.textContent = 'kbps';
+    ratePill.classList.add('ok');
+  }
   // Codec chip
   const haveV = s.video_codec && s.video_codec !== '?' && s.video_codec !== '';
   const haveA = s.audio_codec && s.audio_codec !== '?' && s.audio_codec !== '';
