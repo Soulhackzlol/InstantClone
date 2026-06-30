@@ -1344,11 +1344,11 @@ input,select,textarea{font-family:inherit;color:inherit}
         <option value="vertical">Vertical 9:16 - YouTube Shorts, Kick mobile, TikTok</option>
       </select>
       <div class="muted" id="dest-form-format-help" style="font-size:11.5px;margin-top:5px;line-height:1.45">
-        <b style="color:var(--warn,#d6a23a)">Vertical needs Twitch Dual Format (Enhanced Broadcasting) turned ON in OBS</b> - that is what produces the 9:16 canvas this reuses. With it off, this destination simply waits and sends nothing. For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream, Select key, Encoder</b>.
+        <b style="color:var(--warn,#d6a23a)">Vertical reuses the 9:16 canvas that Twitch Dual Format produces</b>, so you must have Twitch <b>Dual Format</b> running in OBS (it needs Enhanced Broadcasting set up first). With it off, this destination just waits and sends nothing. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Dual Format &amp; Enhanced Broadcasting →</a><br>For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream → Select key → Encoder</b>.
       </div>
     </div>
     <div id="dest-form-twitch-native-note" hidden class="muted" style="font-size:11.5px;margin:2px 0 6px;line-height:1.45">
-      Twitch sends <b>both</b> horizontal and vertical automatically once you enable <b>Dual Format</b> in OBS - no format choice is needed here.
+      No format choice here: with <b>Dual Format</b> on, OBS sends Twitch a horizontal <i>and</i> a vertical canvas in one Enhanced Broadcasting stream, and InstantClone forwards both. Dual Format needs Enhanced Broadcasting set up in OBS first. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
     </div>
     <label>Stream key <span class="muted" id="dest-form-key-hint"></span></label>
     <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
