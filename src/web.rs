@@ -398,6 +398,87 @@ async fn route(
                 ),
             }
         }
+        ("POST", "/obs/setup-vod-eb") => {
+            // One-click VOD-audio + Enhanced Broadcasting setup. Runs the
+            // three steps in order and reports each independently so the
+            // dashboard can show a red-to-green checklist: a failure in one
+            // step (e.g. OBS still open, so the flag write is blocked) is
+            // surfaced with its own message instead of failing the whole
+            // operation silently.
+            let web_port = settings.borrow().web_port;
+            let (flag_ok, flag_msg) = match crate::obs_register::set_vod_audio_flag(true) {
+                Ok(true) => (true, "VOD-track flag written to OBS config".to_string()),
+                Ok(false) => (
+                    false,
+                    "OBS config not found - is OBS installed?".to_string(),
+                ),
+                Err(e) => (
+                    false,
+                    format!("could not write OBS config (close OBS and retry): {e}"),
+                ),
+            };
+            let (launch_ok, launch_msg) =
+                match crate::obs_register::launch_obs_with_eb_config(web_port) {
+                    Ok(exe) => {
+                        ctrl.log("[vod-eb setup] launched OBS with --config-url");
+                        (true, format!("OBS launched ({})", exe.display()))
+                    }
+                    Err(e) => (false, e.to_string()),
+                };
+            let verified = crate::obs_register::vod_audio_flag_set();
+            let verify_msg = if verified {
+                "VOD-track flag confirmed in OBS config"
+            } else {
+                "VOD-track flag not present after write - close OBS and try again"
+            };
+            let all_ok = flag_ok && launch_ok && verified;
+            (
+                // Always 200: partial success is still a valid response;
+                // the per-step `ok` flags carry the detail the UI renders.
+                "200 OK",
+                "application/json",
+                format!(
+                    r#"{{"ok":{ok},"steps":[{{"name":"VOD-track flag","ok":{f},"msg":"{fm}"}},{{"name":"Launch OBS (EB)","ok":{l},"msg":"{lm}"}},{{"name":"Verify flag","ok":{v},"msg":"{vm}"}}]}}"#,
+                    ok = all_ok,
+                    f = flag_ok,
+                    fm = json_escape(&flag_msg),
+                    l = launch_ok,
+                    lm = json_escape(&launch_msg),
+                    v = verified,
+                    vm = json_escape(verify_msg),
+                ),
+            )
+        }
+        ("POST", "/shortcut/create-eb") => match crate::obs_register::create_eb_shortcut() {
+            Ok(path) => {
+                ctrl.log(format!(
+                    "created VOD+EB desktop shortcut: {}",
+                    path.display()
+                ));
+                let kind = if path.extension().and_then(|e| e.to_str()) == Some("lnk") {
+                    "shortcut"
+                } else {
+                    "launcher (.cmd fallback)"
+                };
+                (
+                    "200 OK",
+                    "application/json",
+                    format!(
+                        r#"{{"ok":true,"path":"{p}","kind":"{k}"}}"#,
+                        p = json_escape(&path.display().to_string()),
+                        k = kind,
+                    ),
+                )
+            }
+            Err(e) => (
+                "500 Internal Server Error",
+                "application/json",
+                format!(
+                    r#"{{"ok":false,"error":"{}"}}"#,
+                    json_escape(&e.to_string())
+                ),
+            ),
+        },
         ("GET", "/update-check") => {
             // check_update() uses blocking ureq with a ~10 s ceiling. Hand
             // it to a blocking thread so a slow GitHub doesn't pin the
@@ -1429,6 +1510,7 @@ async fn post_config(
                 youtube_ingest: String::new(),
                 vod_audio: false,
                 vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
             });
         }
         let d = &mut new_settings.destinations[0];
@@ -1875,6 +1957,18 @@ async fn post_destination_upsert(
         form.get("vod_audio_inject_eb").map(String::as_str),
         Some("on" | "true" | "1")
     );
+    // Only "vertical" is honored; every other value (incl. an absent
+    // field, "horizontal", or a Twitch destination where the control is
+    // hidden) normalizes to the safe horizontal default. Twitch never
+    // sends vertical - it gets native dual-canvas passthrough - so we
+    // force horizontal there regardless of what the form carried.
+    let stream_format = if platform != "twitch"
+        && form.get("stream_format").map(String::as_str) == Some("vertical")
+    {
+        "vertical".to_string()
+    } else {
+        "horizontal".to_string()
+    };
 
     if name.trim().is_empty() {
         return (
@@ -1897,6 +1991,7 @@ async fn post_destination_upsert(
         existing.youtube_ingest = youtube_ingest;
         existing.vod_audio = vod_audio;
         existing.vod_audio_inject_eb = vod_audio_inject_eb;
+        existing.stream_format = stream_format;
     } else {
         ns.destinations.push(config::Destination {
             id,
@@ -1909,6 +2004,7 @@ async fn post_destination_upsert(
             youtube_ingest,
             vod_audio,
             vod_audio_inject_eb,
+            stream_format,
         });
     }
 
@@ -2039,8 +2135,23 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         }
         let url = d.egress_url().unwrap_or_default();
         let (_id, alive, _seq, kbps, tags, bytes, cuts, reconnects) = stats_for(&d.id);
+        // Vertical destinations report whether their canvas is resolved
+        // yet (Twitch Dual Format live + a portrait track detected). The
+        // dashboard turns this into a green "Vertical" badge vs an amber
+        // "waiting for Dual Format" hint. Non-vertical destinations always
+        // report ready=true so the badge logic stays simple.
+        let vertical = d.wants_vertical();
+        let vertical_ready = if vertical {
+            use std::sync::atomic::Ordering;
+            ctrl.destination_state(&d.id)
+                .vertical_primary_track
+                .load(Ordering::Relaxed)
+                != 0xFF
+        } else {
+            true
+        };
         out.push_str(&format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"vertical_ready":{vr},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled,
@@ -2054,6 +2165,8 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             yi = json_escape_quoted(&d.youtube_ingest),
             va = d.vod_audio,
             vie = d.vod_audio_inject_eb,
+            sf = json_escape_quoted(&d.stream_format),
+            vr = vertical_ready,
             ks = !d.stream_key.is_empty(),
             ur = json_escape_quoted(&redact_url(&url)),
             al = alive,

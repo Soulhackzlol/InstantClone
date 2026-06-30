@@ -8,6 +8,53 @@ All notable changes will land here. Format loosely follows
 
 Nothing yet.
 
+## [0.1.9] - Vertical output + VOD/EB convenience
+
+### Vertical output for non-Twitch destinations (YouTube Shorts, Kick mobile, TikTok)
+
+**Reuse Twitch Dual Format's vertical canvas to simulcast 9:16 anywhere,
+with zero extra encoding.** When you enable Twitch Dual Format (Enhanced
+Broadcasting) in OBS, OBS already produces a vertical 9:16 canvas and
+sends it to InstantClone alongside the horizontal one. Until now every
+non-Twitch destination only ever got the horizontal primary track and the
+vertical canvas was discarded. Each destination now has a **Stream format**
+choice (Horizontal / Vertical); set a YouTube, Kick, or custom destination
+to **Vertical** and it forwards the vertical canvas instead, flattened to a
+standard single-track 9:16 RTMP feed those platforms accept natively (this
+is exactly YouTube's "Dual stream, separate encoder key" path - paste the
+vertical stream key).
+
+How it stays robust:
+
+- The vertical canvas is identified by **decoding each track's SPS for
+  orientation** (portrait = `height > width`), not by guessing track IDs -
+  the canvas-to-track mapping lives only in Twitch's private session JSON,
+  so we read what's actually on the wire instead. The SPS parser is fully
+  bounds-checked and never panics on partial or hostile bytes.
+
+- A vertical destination whose canvas isn't available yet (Dual Format
+  off) **waits and sends no video**, showing "Waiting for Dual Format",
+  while Twitch and every horizontal destination keep streaming untouched.
+  Detection re-runs each supervisor tick, so turning Dual Format on/off
+  mid-stream self-heals with no restart.
+
+- The control is **hidden for Twitch**, which sends both canvases natively
+  via Dual Format - a note explains that so the choice never confuses.
+
+### VOD audio + Enhanced Broadcasting: fewer manual steps
+
+- New **one-click "Set up VOD + EB"** writes OBS's VOD-track unlock flag,
+  launches OBS with the `--config-url` flag (the only path OBS honours for
+  Custom RTMP), and re-verifies the flag landed, reporting a red-to-green
+  checklist with the exact fix when a step fails (partial-success aware,
+  e.g. "close OBS and retry").
+
+- New **"Create desktop shortcut"** generates a Desktop `.lnk` (with a
+  `.cmd` fallback) that cold-starts InstantClone in VOD + EB mode via the
+  new `--launch-eb` flag - one double-click brings up the whole setup with
+  no dashboard clicks. The same one-click launch is available from the
+  tray ("Launch OBS (VOD + EB)").
+
 ## [0.1.8] - VOD-audio session race fix
 
 **VOD audio could go live Source-Only with duplicate sessions.** On a

@@ -387,30 +387,339 @@ pub fn is_primary_video_idr(payload: &[u8]) -> bool {
     payload[6] == 0
 }
 
+/// Per-destination video egress policy, computed by the egress pump from
+/// the destination's platform + format settings:
+///
+/// - `Passthrough`: Twitch destinations with an EB session. Multi-track
+///   tags go through bit-faithfully (the simulcast ladder + every canvas).
+/// - `Track(n)`: every other case. Forward only OneTrack `TrackId == n`,
+///   flattened to a standard single-track tag. `Track(0)` is the
+///   horizontal primary (the default for all non-Twitch destinations);
+///   `Track(n)` with n>0 is the vertical-canvas primary chosen by
+///   `detect_vertical_primary_track`. Single-track / legacy tags pass
+///   through unchanged in either case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoEgress {
+    Passthrough,
+    Track(u8),
+}
+
+/// Locate the AVCDecoderConfigurationRecord inside a *sequence-header*
+/// video tag payload, across the framings OBS emits. Returns `None` for
+/// anything that isn't an AVC seq header we can read (legacy non-AVC,
+/// HEVC/AV1 Enhanced configs, non-seq-header tags, ManyTracks bundles,
+/// or truncated input). Best-effort and fully bounds-checked - never
+/// panics on hostile / partial bytes.
+fn avc_config_record(payload: &[u8]) -> Option<&[u8]> {
+    if payload.is_empty() {
+        return None;
+    }
+    let b0 = payload[0];
+    // Legacy AVC: byte0 low nibble = CodecID (7 = AVC), byte1 = AVCPacketType
+    // (0 = seq header), bytes 2..5 = composition time, then the config record.
+    if b0 & 0x80 == 0 {
+        if b0 & 0x0F != 7 || payload.get(1) != Some(&0) || payload.len() < 5 {
+            return None;
+        }
+        return payload.get(5..);
+    }
+    let packet_type = b0 & 0x0F;
+    if packet_type == 6 {
+        // Multitrack. Only the OneTrack layout (mt_type 0) with a nested
+        // SequenceStart (nested_pt 0) carries a per-track config record at
+        // a known offset (FourCC[4] + TrackId[1] then the record).
+        let mt = *payload.get(1)?;
+        if (mt >> 4) & 0x0F != 0 || mt & 0x0F != 0 {
+            return None;
+        }
+        if payload.len() < 7 || payload.get(2..6) != Some(&FOURCC_AVC1) {
+            return None;
+        }
+        return payload.get(7..);
+    }
+    // Enhanced single-track. Only SequenceStart (packet_type 0) carries the
+    // config record; bytes 1..5 are the FourCC, then the record.
+    if packet_type != 0 || payload.len() < 5 || payload.get(1..5) != Some(&FOURCC_AVC1) {
+        return None;
+    }
+    payload.get(5..)
+}
+
+/// Pull the first SPS NAL (RBSP, NAL header byte included) out of an
+/// AVCDecoderConfigurationRecord. Bounds-checked; `None` on short input.
+fn first_sps_nal(cfg: &[u8]) -> Option<&[u8]> {
+    // cfg: [version, profile, compat, level, lengthSizeMinusOne,
+    //       numOfSPS (low 5 bits), spsLength(2 BE), sps...]
+    let num_sps = cfg.get(5)? & 0x1F;
+    if num_sps == 0 {
+        return None;
+    }
+    let len = u16::from_be_bytes([*cfg.get(6)?, *cfg.get(7)?]) as usize;
+    cfg.get(8..8 + len)
+}
+
+/// Decode (width, height) in pixels from an AVC sequence header tag.
+/// Returns `None` for non-AVC, malformed, or truncated input. Used only
+/// to classify orientation (portrait vs landscape) for vertical-canvas
+/// selection - it parses just enough of the SPS to reach the picture
+/// dimensions and applies frame cropping. Never panics.
+pub fn sps_dimensions(seq_header: &[u8]) -> Option<(u32, u32)> {
+    let cfg = avc_config_record(seq_header)?;
+    let nal = first_sps_nal(cfg)?;
+    // Drop the 1-byte NAL header, then strip emulation-prevention bytes
+    // (0x00 00 03 -> 0x00 00) before Exp-Golomb parsing.
+    let rbsp = strip_emulation_prevention(nal.get(1..)?);
+    let mut r = BitReader::new(&rbsp);
+
+    let profile_idc = r.read_bits(8)?;
+    let _constraints_and_reserved = r.read_bits(8)?;
+    let _level_idc = r.read_bits(8)?;
+    let _sps_id = r.read_ue()?;
+
+    let mut chroma_format_idc = 1u32; // 4:2:0 default for older profiles
+    if matches!(
+        profile_idc,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
+    ) {
+        chroma_format_idc = r.read_ue()?;
+        if chroma_format_idc == 3 {
+            let _separate_colour_plane = r.read_bit()?;
+        }
+        let _bit_depth_luma = r.read_ue()?;
+        let _bit_depth_chroma = r.read_ue()?;
+        let _qpprime = r.read_bit()?;
+        if r.read_bit()? == 1 {
+            // seq_scaling_matrix_present_flag
+            let count = if chroma_format_idc != 3 { 8 } else { 12 };
+            for i in 0..count {
+                if r.read_bit()? == 1 {
+                    let size = if i < 6 { 16 } else { 64 };
+                    r.skip_scaling_list(size)?;
+                }
+            }
+        }
+    }
+
+    let _log2_max_frame_num = r.read_ue()?;
+    let pic_order_cnt_type = r.read_ue()?;
+    if pic_order_cnt_type == 0 {
+        let _log2_max_poc_lsb = r.read_ue()?;
+    } else if pic_order_cnt_type == 1 {
+        let _delta_pic_order_always_zero = r.read_bit()?;
+        let _offset_for_non_ref_pic = r.read_se()?;
+        let _offset_for_top_to_bottom = r.read_se()?;
+        let cycle = r.read_ue()?;
+        for _ in 0..cycle {
+            let _offset = r.read_se()?;
+        }
+    }
+    let _max_num_ref_frames = r.read_ue()?;
+    let _gaps_allowed = r.read_bit()?;
+
+    let pic_width_in_mbs = r.read_ue()?.checked_add(1)?;
+    let pic_height_in_map_units = r.read_ue()?.checked_add(1)?;
+    let frame_mbs_only = r.read_bit()?;
+    if frame_mbs_only == 0 {
+        let _mb_adaptive = r.read_bit()?;
+    }
+    let _direct_8x8 = r.read_bit()?;
+
+    let mut width = pic_width_in_mbs.checked_mul(16)?;
+    let mut height = (2 - frame_mbs_only)
+        .checked_mul(pic_height_in_map_units)?
+        .checked_mul(16)?;
+
+    if r.read_bit()? == 1 {
+        // frame_cropping_flag: subtract the cropped border, scaled by the
+        // chroma subsampling so the result is the real coded resolution.
+        let crop_left = r.read_ue()?;
+        let crop_right = r.read_ue()?;
+        let crop_top = r.read_ue()?;
+        let crop_bottom = r.read_ue()?;
+        let (sub_w, sub_h): (u32, u32) = match chroma_format_idc {
+            0 => (1, 1), // monochrome
+            1 => (2, 2), // 4:2:0
+            2 => (2, 1), // 4:2:2
+            _ => (1, 1), // 4:4:4
+        };
+        let crop_unit_x = sub_w;
+        let crop_unit_y = sub_h * (2 - frame_mbs_only);
+        width = width.saturating_sub(crop_unit_x.checked_mul(crop_left + crop_right)?);
+        height = height.saturating_sub(crop_unit_y.checked_mul(crop_top + crop_bottom)?);
+    }
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some((width, height))
+}
+
+/// Pick the vertical-canvas primary track from the per-TrackId seq-header
+/// cache. The vertical primary is the portrait track (`height > width`)
+/// with the largest pixel area - if Twitch Dual Format emits a vertical
+/// ladder, that is its top rung. Returns `None` when no track is portrait
+/// (EB off, no vertical canvas, or only non-AVC/unparseable headers), in
+/// which case a vertical destination has nothing to send and waits.
+pub fn detect_vertical_primary_track(
+    seq_headers: &std::collections::BTreeMap<u8, Vec<u8>>,
+) -> Option<u8> {
+    let mut best: Option<(u8, u32)> = None;
+    for (&track_id, header) in seq_headers {
+        let Some((w, h)) = sps_dimensions(header) else {
+            continue;
+        };
+        if h <= w {
+            continue; // landscape or square - not the vertical canvas
+        }
+        let area = w.saturating_mul(h);
+        let better = match best {
+            None => true,
+            Some((_, best_area)) => area > best_area,
+        };
+        if better {
+            best = Some((track_id, area));
+        }
+    }
+    best.map(|(track_id, _)| track_id)
+}
+
+/// Remove H.264 emulation-prevention bytes (0x00 00 03 -> 0x00 00) so the
+/// SPS RBSP can be Exp-Golomb decoded directly.
+fn strip_emulation_prevention(nal: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(nal.len());
+    let mut zeros = 0u32;
+    for &b in nal {
+        if zeros >= 2 && b == 0x03 {
+            zeros = 0;
+            continue; // drop the emulation_prevention_three_byte
+        }
+        out.push(b);
+        if b == 0 {
+            zeros += 1;
+        } else {
+            zeros = 0;
+        }
+    }
+    out
+}
+
+/// Minimal MSB-first bit reader for SPS parsing. Every read is bounds
+/// checked and returns `None` past the end, so a truncated SPS aborts the
+/// parse cleanly instead of panicking.
+struct BitReader<'a> {
+    data: &'a [u8],
+    bit_pos: usize,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, bit_pos: 0 }
+    }
+
+    fn read_bit(&mut self) -> Option<u32> {
+        let byte = self.data.get(self.bit_pos / 8)?;
+        let shift = 7 - (self.bit_pos % 8);
+        self.bit_pos += 1;
+        Some(((byte >> shift) & 1) as u32)
+    }
+
+    fn read_bits(&mut self, n: u32) -> Option<u32> {
+        // Cap at 32 so a corrupt length can't loop unboundedly.
+        if n > 32 {
+            return None;
+        }
+        let mut v = 0u32;
+        for _ in 0..n {
+            v = (v << 1) | self.read_bit()?;
+        }
+        Some(v)
+    }
+
+    /// Unsigned Exp-Golomb. The leading-zero count is capped at 31 so
+    /// malformed input can't spin forever.
+    fn read_ue(&mut self) -> Option<u32> {
+        let mut leading_zeros = 0u32;
+        while self.read_bit()? == 0 {
+            leading_zeros += 1;
+            if leading_zeros > 31 {
+                return None;
+            }
+        }
+        if leading_zeros == 0 {
+            return Some(0);
+        }
+        let rest = self.read_bits(leading_zeros)?;
+        Some((1u32 << leading_zeros) - 1 + rest)
+    }
+
+    /// Signed Exp-Golomb.
+    fn read_se(&mut self) -> Option<i32> {
+        let k = self.read_ue()?;
+        // Map 0,1,2,3,... -> 0,+1,-1,+2,...
+        let val = k.div_ceil(2) as i32;
+        Some(if k % 2 == 0 { -val } else { val })
+    }
+
+    /// Skip a scaling list per H.264 7.3.2.1.1.1 without storing it.
+    fn skip_scaling_list(&mut self, size: u32) -> Option<()> {
+        let mut last_scale = 8i32;
+        let mut next_scale = 8i32;
+        for _ in 0..size {
+            if next_scale != 0 {
+                let delta = self.read_se()?;
+                next_scale = (last_scale + delta + 256) % 256;
+            }
+            last_scale = if next_scale == 0 {
+                last_scale
+            } else {
+                next_scale
+            };
+        }
+        Some(())
+    }
+}
+
 pub fn select_video_bytes<'a>(
     payload: &'a [u8],
-    pass_through_multitrack: bool,
+    egress: VideoEgress,
 ) -> Option<std::borrow::Cow<'a, [u8]>> {
     use std::borrow::Cow;
-    if pass_through_multitrack {
-        return Some(Cow::Borrowed(payload));
-    }
+    let target = match egress {
+        VideoEgress::Passthrough => return Some(Cow::Borrowed(payload)),
+        VideoEgress::Track(t) => t,
+    };
     let info = classify_video_tag(payload);
     if !info.is_multitrack {
-        return Some(Cow::Borrowed(payload));
+        // Single-track / legacy tag. For the horizontal primary
+        // (target 0) this IS the stream, so pass it through. For a
+        // vertical destination (target > 0) a single-track tag is the
+        // horizontal primary OBS also emits for legacy ingests - the
+        // vertical canvas must never carry it, so drop it. The vertical
+        // canvas always arrives as OneTrack multi-track tags handled
+        // below.
+        if target == 0 {
+            return Some(Cow::Borrowed(payload));
+        }
+        return None;
     }
     // For OneTrack layout, OBS sends one tag per track per frame.
     // Forwarding every track to a non-Twitch destination would deliver
     // N frames per PTS - decoders read that as a multi-frame storm and
     // either drop the connection (YouTube did, ~12 s per ladder rung)
-    // or render heavy artefacts. The primary stream arrives separately
-    // as a legacy AVC / Enhanced single-track tag, so dropping
-    // TrackId != 0 here is lossless from the destination's POV.
+    // or render heavy artefacts. We keep only the target track (0 for
+    // horizontal primary, the vertical-canvas primary otherwise) and
+    // drop the rest, which is lossless from the destination's POV.
     if payload.len() >= 7 && (payload[1] >> 4) & 0x0F == 0 {
         let track_id = payload[6];
-        if track_id != 0 {
+        if track_id != target {
             return None;
         }
+    } else if target != 0 {
+        // ManyTracks / ManyTracksManyCodecs pack every track into one tag;
+        // a non-zero target can't be isolated from the bundle, so drop it
+        // rather than risk sending the wrong canvas. Twitch Dual Format
+        // uses the OneTrack layout handled above, so this only affects
+        // exotic encoders, and only for vertical destinations.
+        return None;
     }
     match flatten_multitrack_video(payload) {
         Some(flat) => Some(Cow::Owned(flat)),
@@ -898,8 +1207,10 @@ mod tests {
         // pass_through flag is meaningless when there's nothing to
         // flatten - and the borrow path means no copy happens either.
         let tag = avc_single_track_keyframe_bytes();
-        let twitch = select_video_bytes(&tag, true).expect("single-track always forwards");
-        let youtube = select_video_bytes(&tag, false).expect("single-track always forwards");
+        let twitch = select_video_bytes(&tag, VideoEgress::Passthrough)
+            .expect("single-track always forwards");
+        let youtube =
+            select_video_bytes(&tag, VideoEgress::Track(0)).expect("single-track always forwards");
         assert_eq!(twitch.as_ref(), tag.as_slice());
         assert_eq!(youtube.as_ref(), tag.as_slice());
         assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
@@ -913,7 +1224,7 @@ mod tests {
         // True for every TrackId, not just the primary.
         for track in 0u8..=4 {
             let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
-            let twitch = select_video_bytes(&tag, true)
+            let twitch = select_video_bytes(&tag, VideoEgress::Passthrough)
                 .unwrap_or_else(|| panic!("twitch must forward track {track}"));
             assert_eq!(twitch.as_ref(), tag.as_slice());
             assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
@@ -929,7 +1240,8 @@ mod tests {
         // as legacy, so this path rarely fires - but we want a future
         // encoder change not to silently blank YouTube.
         let tag = enhanced_rtmp_onetrack_video_bytes_track(0);
-        let youtube = select_video_bytes(&tag, false).expect("track 0 must be forwarded");
+        let youtube =
+            select_video_bytes(&tag, VideoEgress::Track(0)).expect("track 0 must be forwarded");
         let direct_flat = flatten_multitrack_video(&tag).expect("OneTrack layout must flatten");
         assert_eq!(youtube.as_ref(), direct_flat.as_slice());
         assert!(matches!(youtube, std::borrow::Cow::Owned(_)));
@@ -946,7 +1258,7 @@ mod tests {
         for track in 1u8..=4 {
             let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
             assert!(
-                select_video_bytes(&tag, false).is_none(),
+                select_video_bytes(&tag, VideoEgress::Track(0)).is_none(),
                 "TrackId {track} must be dropped for non-Twitch",
             );
         }
@@ -969,7 +1281,8 @@ mod tests {
         let horizontal = enhanced_rtmp_onetrack_video_bytes_track(0);
         let vertical = enhanced_rtmp_onetrack_video_bytes_track(1);
         for tag in [&horizontal, &vertical] {
-            let twitch = select_video_bytes(tag, true).expect("twitch must forward both canvases");
+            let twitch = select_video_bytes(tag, VideoEgress::Passthrough)
+                .expect("twitch must forward both canvases");
             assert_eq!(twitch.as_ref(), tag.as_slice());
             assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
         }
@@ -984,12 +1297,186 @@ mod tests {
         let horizontal = enhanced_rtmp_onetrack_video_bytes_track(0);
         let vertical = enhanced_rtmp_onetrack_video_bytes_track(1);
         assert!(
-            select_video_bytes(&horizontal, false).is_some(),
+            select_video_bytes(&horizontal, VideoEgress::Track(0)).is_some(),
             "horizontal canvas (TrackId 0) must reach non-Twitch"
         );
         assert!(
-            select_video_bytes(&vertical, false).is_none(),
+            select_video_bytes(&vertical, VideoEgress::Track(0)).is_none(),
             "vertical canvas (TrackId 1) must be dropped for non-Twitch"
+        );
+    }
+
+    // ── Vertical-canvas selection: SPS orientation + Track(n) routing ──
+    //
+    // A vertical destination forwards ONLY the portrait canvas's track,
+    // flattened to single-track, and drops the horizontal primary (both
+    // its legacy single-track tags and its OneTrack ladder rungs).
+
+    /// Minimal MSB-first bit writer for building synthetic SPS test
+    /// vectors. Mirrors `BitReader` so the parse round-trips.
+    struct BitWriter {
+        bytes: Vec<u8>,
+        cur: u8,
+        nbits: u8,
+    }
+    impl BitWriter {
+        fn new() -> Self {
+            Self {
+                bytes: Vec::new(),
+                cur: 0,
+                nbits: 0,
+            }
+        }
+        fn put_bit(&mut self, b: u32) {
+            self.cur = (self.cur << 1) | (b as u8 & 1);
+            self.nbits += 1;
+            if self.nbits == 8 {
+                self.bytes.push(self.cur);
+                self.cur = 0;
+                self.nbits = 0;
+            }
+        }
+        fn put_bits(&mut self, v: u32, n: u32) {
+            for i in (0..n).rev() {
+                self.put_bit((v >> i) & 1);
+            }
+        }
+        fn put_ue(&mut self, v: u32) {
+            let code = v + 1;
+            let bits = 32 - code.leading_zeros();
+            for _ in 0..(bits - 1) {
+                self.put_bit(0);
+            }
+            self.put_bits(code, bits);
+        }
+        fn finish(mut self) -> Vec<u8> {
+            self.put_bit(1); // rbsp_stop_one_bit
+            while self.nbits != 0 {
+                self.put_bit(0);
+            }
+            self.bytes
+        }
+    }
+
+    /// Baseline-profile SPS RBSP (no high-profile block, frame_mbs_only,
+    /// no cropping) sized to `w_mb` x `h_mb` macroblocks.
+    fn build_sps_rbsp(w_mb: u32, h_mb: u32) -> Vec<u8> {
+        let mut w = BitWriter::new();
+        w.put_bits(66, 8); // profile_idc = baseline
+        w.put_bits(0, 8); // constraint flags + reserved
+        w.put_bits(30, 8); // level_idc
+        w.put_ue(0); // seq_parameter_set_id
+        w.put_ue(0); // log2_max_frame_num_minus4
+        w.put_ue(0); // pic_order_cnt_type
+        w.put_ue(0); // log2_max_pic_order_cnt_lsb_minus4
+        w.put_ue(0); // max_num_ref_frames
+        w.put_bit(0); // gaps_in_frame_num_value_allowed_flag
+        w.put_ue(w_mb - 1); // pic_width_in_mbs_minus1
+        w.put_ue(h_mb - 1); // pic_height_in_map_units_minus1
+        w.put_bit(1); // frame_mbs_only_flag
+        w.put_bit(0); // direct_8x8_inference_flag
+        w.put_bit(0); // frame_cropping_flag
+        w.put_bit(0); // vui_parameters_present_flag
+        w.finish()
+    }
+
+    fn build_avc_config(w_mb: u32, h_mb: u32) -> Vec<u8> {
+        let mut sps = vec![0x67u8]; // NAL header: type 7 (SPS)
+        sps.extend(build_sps_rbsp(w_mb, h_mb));
+        let mut cfg = vec![1u8, 66, 0, 30, 0xFF, 0xE1]; // version..numOfSPS(1)
+        cfg.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+        cfg.extend_from_slice(&sps);
+        cfg.push(0); // numOfPictureParameterSets = 0
+        cfg
+    }
+
+    /// Legacy AVC sequence-header tag carrying the given dimensions.
+    fn legacy_avc_seq_header(w_mb: u32, h_mb: u32) -> Vec<u8> {
+        let mut t = vec![0x17u8, 0x00, 0, 0, 0]; // AVC seq header, CT=0
+        t.extend(build_avc_config(w_mb, h_mb));
+        t
+    }
+
+    /// OneTrack Enhanced-RTMP sequence-header tag (avc1) for `track_id`.
+    fn onetrack_avc_seq_header(track_id: u8, w_mb: u32, h_mb: u32) -> Vec<u8> {
+        let mut t = vec![0x96u8, 0x00]; // IsEx|FrameType1|Multitrack, OneTrack|SeqStart
+        t.extend_from_slice(b"avc1");
+        t.push(track_id);
+        t.extend(build_avc_config(w_mb, h_mb));
+        t
+    }
+
+    #[test]
+    fn sps_dimensions_decodes_landscape_and_portrait() {
+        // 40x30 MB = 640x480 landscape; 30x40 MB = 480x640 portrait.
+        assert_eq!(
+            sps_dimensions(&legacy_avc_seq_header(40, 30)),
+            Some((640, 480))
+        );
+        assert_eq!(
+            sps_dimensions(&legacy_avc_seq_header(30, 40)),
+            Some((480, 640))
+        );
+        // Same dims survive the OneTrack Enhanced-RTMP framing.
+        assert_eq!(
+            sps_dimensions(&onetrack_avc_seq_header(2, 30, 40)),
+            Some((480, 640))
+        );
+    }
+
+    #[test]
+    fn sps_dimensions_returns_none_on_unparseable_input() {
+        // Empty, truncated, and non-AVC inputs must all fail cleanly with
+        // no panic (this runs on hostile wire bytes).
+        assert_eq!(sps_dimensions(&[]), None);
+        assert_eq!(sps_dimensions(&[0x17, 0x00]), None);
+        let mut truncated = legacy_avc_seq_header(40, 30);
+        truncated.truncate(9); // cut into the SPS
+        assert_eq!(sps_dimensions(&truncated), None);
+        // HEVC single-track seq header (hvc1) is not AVC - unparseable.
+        let mut hevc = vec![0x90u8];
+        hevc.extend_from_slice(b"hvc1");
+        hevc.extend_from_slice(&[0u8; 16]);
+        assert_eq!(sps_dimensions(&hevc), None);
+    }
+
+    #[test]
+    fn detect_vertical_primary_track_picks_largest_portrait() {
+        let mut headers = std::collections::BTreeMap::new();
+        headers.insert(0u8, legacy_avc_seq_header(120, 68)); // 1920x1088 landscape
+        headers.insert(3u8, onetrack_avc_seq_header(3, 34, 60)); // 544x960 portrait
+        headers.insert(4u8, onetrack_avc_seq_header(4, 68, 120)); // 1088x1920 portrait (bigger)
+        assert_eq!(detect_vertical_primary_track(&headers), Some(4));
+    }
+
+    #[test]
+    fn detect_vertical_primary_track_none_when_all_landscape() {
+        let mut headers = std::collections::BTreeMap::new();
+        headers.insert(0u8, legacy_avc_seq_header(120, 68));
+        headers.insert(1u8, onetrack_avc_seq_header(1, 80, 45));
+        assert_eq!(detect_vertical_primary_track(&headers), None);
+    }
+
+    #[test]
+    fn select_video_bytes_vertical_forwards_only_target_track() {
+        // Track(1) keeps OneTrack TrackId 1 (flattened) and drops every
+        // other track plus the legacy horizontal primary.
+        let track1 = enhanced_rtmp_onetrack_video_bytes_track(1);
+        let track2 = enhanced_rtmp_onetrack_video_bytes_track(2);
+        let legacy_horizontal = avc_single_track_keyframe_bytes();
+
+        let kept = select_video_bytes(&track1, VideoEgress::Track(1))
+            .expect("vertical target track must forward");
+        let flat = flatten_multitrack_video(&track1).expect("OneTrack flattens");
+        assert_eq!(kept.as_ref(), flat.as_slice());
+
+        assert!(
+            select_video_bytes(&track2, VideoEgress::Track(1)).is_none(),
+            "non-target OneTrack rung must be dropped for vertical"
+        );
+        assert!(
+            select_video_bytes(&legacy_horizontal, VideoEgress::Track(1)).is_none(),
+            "legacy horizontal primary must be dropped for a vertical destination"
         );
     }
 
@@ -1089,8 +1576,8 @@ mod tests {
         // error properly. Truncated below the TrackId byte means we
         // can't tell which track it is; treat that as "forward".
         let truncated = vec![0x80 | (1u8 << 4) | 6, 0]; // 2 bytes total
-        let youtube =
-            select_video_bytes(&truncated, false).expect("truncated tags must still forward");
+        let youtube = select_video_bytes(&truncated, VideoEgress::Track(0))
+            .expect("truncated tags must still forward");
         assert_eq!(youtube.as_ref(), truncated.as_slice());
         assert!(matches!(youtube, std::borrow::Cow::Borrowed(_)));
     }
