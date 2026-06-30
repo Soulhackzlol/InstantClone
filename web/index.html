@@ -1344,7 +1344,7 @@ input,select,textarea{font-family:inherit;color:inherit}
         <option value="vertical">Vertical 9:16 - YouTube Shorts, Kick mobile, TikTok</option>
       </select>
       <div class="muted" id="dest-form-format-help" style="font-size:11.5px;margin-top:5px;line-height:1.45">
-        <b style="color:var(--warn,#d6a23a)">Vertical reuses the 9:16 canvas that Twitch Dual Format produces</b>, so you must have Twitch <b>Dual Format</b> running in OBS (it needs Enhanced Broadcasting set up first). With it off, this destination just waits and sends nothing. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Dual Format &amp; Enhanced Broadcasting →</a><br>For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream → Select key → Encoder</b>.
+        <b style="color:var(--warn,#d6a23a)">Vertical reuses the 9:16 canvas that Twitch Dual Format produces.</b> InstantClone standardizes on that one canvas as its vertical source: set Twitch <b>Dual Format</b> (Enhanced Broadcasting) up <b>once</b> in OBS and every vertical destination here reuses it - no second scene, no extra encoder. With Dual Format off there is no vertical canvas, so this destination just waits and sends nothing. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Twitch Dual Format &amp; Enhanced Broadcasting →</a><br>For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream → Select key → Encoder</b>.
       </div>
     </div>
     <div id="dest-form-twitch-native-note" hidden class="muted" style="font-size:11.5px;margin:2px 0 6px;line-height:1.45">
@@ -4538,7 +4538,8 @@ const TOUR = [
     body: `
       <p>Add as many platforms as you want - each gets its own card with a coloured left stripe (Twitch purple, YouTube rose, Kick mint…), live bitrate sparkline, and per-destination status pill.</p>
       <p>Stream keys are <b>per-destination</b>. OBS uses a simple stream identifier, the real platform keys live here.</p>
-      <p><b>Horizontal or vertical?</b> Every card has a small <b>format icon</b> next to its status - hover it to see whether that destination sends <b>horizontal</b> (wide), <b>vertical</b> 9:16, or <b>both</b> (Twitch, via Dual Format). Set any non-Twitch destination to <b>Vertical</b> to reuse Twitch's 9:16 canvas for YouTube Shorts / Kick mobile - it only flows while <b>Dual Format / Enhanced Broadcasting</b> is on in OBS, and the card shows <b>Waiting for Dual Format</b> until then.</p>
+      <p><b>Horizontal or vertical?</b> Every card has a small <b>format icon</b> next to its status - hover it to see whether that destination sends <b>horizontal</b> (wide), <b>vertical</b> 9:16, or <b>both</b> (Twitch, via Dual Format). Set any non-Twitch destination to <b>Vertical</b> to reuse Twitch's 9:16 canvas for YouTube Shorts / Kick mobile.</p>
+      <p>InstantClone standardizes on <b>Twitch Dual Format</b> as its vertical source: set it up once in OBS and every vertical destination reuses that same 9:16 canvas. Vertical only flows while <b>Dual Format / Enhanced Broadcasting</b> is on, and the card shows <b>Waiting for Dual Format</b> until then. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Twitch Dual Format →</a></p>
       <div class="tour-tip"><strong>Streaming vs Connected:</strong> Streaming = bytes flowing. Connected = TCP up but OBS hasn't sent a frame yet.</div>
     `,
   },
