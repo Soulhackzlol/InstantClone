@@ -569,6 +569,21 @@ input,select,textarea{font-family:inherit;color:inherit}
 .dfg-sep{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:9.5px;font-weight:700;
   letter-spacing:.16em;text-transform:uppercase;color:var(--fg-4)}
 .dfg-sep::after{content:"";flex:1;height:1px;background:var(--line)}
+/* VOD audio + EB block - kept calm and progressive (details behind
+   disclosures) so it reads as one toggle with an optional extra. */
+.dest-vod{margin-top:12px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}
+.dest-vod-toggle{display:flex;align-items:flex-start;gap:10px;margin:0;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px}
+.dest-vod-toggle input{margin-top:2px;flex:0 0 auto}
+.dest-vod-title{font-weight:600;color:var(--fg);font-size:13px}
+.dest-vod-desc{font-size:11.5px;margin-top:2px;line-height:1.45}
+.dest-vod details{margin-top:8px}
+.dest-vod details>summary{font-size:11px;color:var(--fg-3);cursor:pointer;user-select:none}
+.dest-vod details ol{margin:7px 0 0;padding-left:16px;font-size:11px;line-height:1.7;color:var(--fg-2)}
+.dest-vod details>div{margin-top:6px;font-size:11px;line-height:1.6;color:var(--fg-2)}
+.dest-eb{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.dest-eb-title{font-weight:600;color:var(--fg);font-size:12.5px}
+.dest-eb-title .tag{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--fg-4);margin-left:6px}
+.dest-eb-desc{font-size:11.5px;margin-top:4px;line-height:1.45}
 .dest-form label{display:block;margin-top:6px;font-size:11px;color:var(--fg-3);text-transform:uppercase;
   letter-spacing:.12em;font-weight:600}
 .dest-form .row{display:flex;gap:8px;margin-top:8px;align-items:center}
@@ -1446,54 +1461,38 @@ input,select,textarea{font-family:inherit;color:inherit}
     <!-- VOD audio (Twitch only). Visible only when platform == twitch.
          The sub-toggle for VOD+EB sits inside this block so it's
          visually subordinate to the parent. -->
-    <div id="dest-form-vod-wrap" hidden style="margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)">
-      <label style="display:flex;align-items:flex-start;gap:10px;margin:0;text-transform:none;letter-spacing:0;font-size:13px;cursor:pointer">
-        <input type="checkbox" id="dest-form-vod-audio" style="margin-top:2px">
+    <div id="dest-form-vod-wrap" hidden class="dest-vod">
+      <label class="dest-vod-toggle">
+        <input type="checkbox" id="dest-form-vod-audio">
         <div>
-          <div style="font-weight:600;color:var(--fg)">VOD audio mode</div>
-          <div class="muted" style="font-size:11.5px;margin-top:2px;line-height:1.45">
-            Records a separate audio track to Twitch's VOD. Useful when your live stream has copyrighted music that should be stripped from the saved recording.
-            <b style="color:var(--warn,#d6a23a)">Disables Enhanced Broadcasting</b> (the transcoded quality ladder) unless you use the experimental Launch button below.
-            Requires switching OBS to <b>Custom RTMP</b> + enabling the VOD Track checkbox in OBS Output settings.
-          </div>
-          <div style="margin-top:6px;font-size:11px;color:var(--warn,#d6a23a);display:flex;align-items:center;gap:5px">
-            <span>⚠</span> Close OBS before saving - the config file can't be updated while OBS is running. Changes take effect on the next OBS launch.
-          </div>
-          <details style="margin-top:8px">
-            <summary style="font-size:11px;color:var(--fg-3);cursor:pointer;user-select:none">How to set this up in OBS</summary>
-            <ol style="margin:7px 0 0;padding-left:16px;font-size:11px;line-height:1.7;color:var(--fg-2)">
-              <li><b>Settings → Stream</b> - set Service to <b>Custom...</b></li>
-              <li>Set Server to the ingest URL from the <b>OBS tab</b>, Stream Key to <code class="mono" style="font-size:10.5px">main</code></li>
-              <li><b>Settings → Output</b> - set Output Mode to <b>Advanced</b></li>
-              <li>Under the <b>Streaming</b> tab, enable the <b>VOD Track</b> checkbox</li>
-              <li>Hit <b>Apply</b>, close OBS, then save this destination and reopen OBS</li>
-            </ol>
-          </details>
+          <div class="dest-vod-title">VOD audio mode <span class="muted" style="font-weight:400">(Twitch)</span></div>
+          <div class="muted dest-vod-desc">Saves a separate audio track to your Twitch VOD - handy for stripping copyrighted music from the saved recording.</div>
         </div>
       </label>
-      <div id="dest-form-vod-eb-wrap" hidden style="margin-top:10px;padding:10px;border:1px dashed color-mix(in oklch,var(--err) 32%,var(--line));border-radius:8px;background:color-mix(in oklch,var(--err) 3%,var(--bg-2))">
-        <div style="display:flex;align-items:flex-start;gap:10px">
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;color:var(--err);font-size:13px">
-              Want Enhanced Broadcasting too?
-              <span style="display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:1.5px;background:color-mix(in oklch,var(--warn,#d6a23a) 22%,transparent);color:var(--warn,#d6a23a);padding:1px 6px;border-radius:99px;margin-left:4px;text-transform:uppercase;vertical-align:1px">experimental</span>
-            </div>
-            <div class="muted" style="font-size:11.5px;margin-top:4px;line-height:1.45">
-              Use this <b>only if you want EB + VOD audio at the same time</b>. Launches OBS with the <code class="mono" style="font-size:11px">--config-url</code> CLI flag - the only path OBS honours for Custom RTMP (its plugin discards <code class="mono" style="font-size:11px">service.json</code> injections at load time). Close OBS first; the flag is per-launch, so reopening OBS normally will lose EB until you click again.
-            </div>
-            <div class="row" style="gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
-              <button type="button" class="ic-btn ic-btn-primary" id="obs-eb-setup-btn" onclick="setupVodEb()">Set up VOD + EB (one-click)</button>
-              <button type="button" class="ic-btn ic-btn-ghost" id="obs-eb-launch-btn" onclick="launchObsWithEb()">Launch OBS only</button>
-              <span class="muted" id="obs-eb-launch-msg" style="font-size:11.5px"></span>
-            </div>
-            <!-- Red-to-green checklist filled in by setupVodEb(). -->
-            <ul id="vod-eb-checklist" class="vod-eb-checklist" hidden style="list-style:none;margin:10px 0 0;padding:0;font-size:11.5px"></ul>
-            <div class="row" style="gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap;border-top:1px solid color-mix(in oklch,var(--err) 18%,var(--line));padding-top:10px">
-              <button type="button" class="ic-btn ic-btn-ghost" id="eb-shortcut-btn" onclick="createEbShortcut()">Create desktop shortcut</button>
-              <span class="muted" id="eb-shortcut-msg" style="font-size:11.5px">One double-click cold-starts InstantClone + OBS in VOD + EB mode.</span>
-            </div>
-          </div>
+      <details>
+        <summary>How to set it up in OBS</summary>
+        <ol>
+          <li><b>Settings → Stream</b>: Service = <b>Custom…</b>, Server = the URL on the <b>OBS tab</b>, Key = <code class="mono">main</code></li>
+          <li><b>Settings → Output</b>: Output Mode = <b>Advanced</b>, then tick <b>VOD Track</b> under the Streaming tab</li>
+          <li><b>Close OBS</b>, save this destination, then reopen OBS. (The config can't change while OBS is running.)</li>
+        </ol>
+      </details>
+
+      <!-- Shown only when VOD audio is on. -->
+      <div id="dest-form-vod-eb-wrap" hidden class="dest-eb">
+        <div class="dest-eb-title">Keep Enhanced Broadcasting too?<span class="tag">experimental</span></div>
+        <div class="muted dest-eb-desc">VOD audio normally turns off EB's quality ladder. To run both, launch OBS from here - it passes a one-time flag OBS needs for Custom RTMP.</div>
+        <div class="row" style="gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="ic-btn ic-btn-primary" id="obs-eb-setup-btn" onclick="setupVodEb()">Launch OBS with VOD + EB</button>
+          <button type="button" class="ic-btn ic-btn-ghost" id="eb-shortcut-btn" onclick="createEbShortcut()">Make a desktop shortcut</button>
+          <span class="muted" id="obs-eb-launch-msg" style="font-size:11.5px"></span>
         </div>
+        <ul id="vod-eb-checklist" class="vod-eb-checklist" hidden style="list-style:none;margin:10px 0 0;padding:0;font-size:11.5px"></ul>
+        <span class="muted" id="eb-shortcut-msg" style="display:block;font-size:11px;margin-top:6px">Shortcut = one double-click to start InstantClone + OBS in this mode.</span>
+        <details>
+          <summary>Why launch from here?</summary>
+          <div>OBS ignores config-URL injections for Custom RTMP, so the only way to enable EB is the <code class="mono">--config-url</code> launch flag. It's per-launch: reopening OBS normally drops EB until you click here again.</div>
+        </details>
       </div>
     </div>
     <div class="row" style="margin-top:14px;justify-content:flex-end">
@@ -3556,38 +3555,6 @@ async function toggleObsRegister(){
 // settings plugin discards file-injected URLs. Errors surface inline
 // next to the button so the user can fix install paths or close a
 // running OBS first.
-async function launchObsWithEb(){
-  const btn = $('obs-eb-launch-btn');
-  const msg = $('obs-eb-launch-msg');
-  if (!btn || btn.disabled) return;
-  // Persist the form before launching. The VOD toggle only takes effect
-  // on save: that's what writes OBS's `EnableCustomServerVodTrack` gate
-  // (user.ini) and flips InstantClone's VOD-track forwarding. Launching
-  // on unsaved state spawns OBS with EB but no VOD - the silent mismatch
-  // this button used to allow. Save first, and only launch if it stuck.
-  btn.disabled = true;
-  if (msg) msg.textContent = 'Saving destination…';
-  if (!(await saveDestForm())){
-    if (msg) msg.textContent = 'Fix the destination form, then launch.';
-    btn.disabled = false;
-    return;
-  }
-  if (msg) msg.textContent = 'Launching…';
-  try {
-    const r = await (await fetch('/obs/launch-with-eb', {method:'POST'})).json();
-    if (r.ok){
-      toast(r.message || 'OBS launched','ok');
-      if (msg) msg.textContent = 'OBS spawned. Multi-track video unlocked for this session.';
-    } else {
-      toast(r.error || 'Failed','err');
-      if (msg) msg.textContent = r.error || 'Failed';
-    }
-  } catch(e){
-    toast('Request failed','err');
-    if (msg) msg.textContent = String(e);
-  }
-  btn.disabled = false;
-}
 // One-click VOD + EB: saves the destination (so the VOD flag is written),
 // then runs the server-side setup and renders a red-to-green checklist so
 // the user can see exactly which step needs attention.
@@ -3643,7 +3610,7 @@ async function createEbShortcut(){
 }
 
 async function refreshObsEbLaunchAvailability(){
-  const btn = $('obs-eb-launch-btn');
+  const btn = $('obs-eb-setup-btn');
   const msg = $('obs-eb-launch-msg');
   if (!btn) return;
   try {
