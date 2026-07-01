@@ -1676,6 +1676,17 @@ async fn pace_and_send(
     // wire-format bug.
     match meta.kind {
         8 => {
+            // A vertical destination whose 9:16 canvas isn't on the wire yet
+            // (Dual Format off) has `video_egress() == None`. Drop its AUDIO
+            // too - otherwise we'd feed the platform an audio-only stream
+            // with no video, which reads as a broken/black broadcast. It
+            // should send nothing until the canvas appears.
+            if dest.video_egress().is_none() {
+                state.consumer_seq = meta.seq + 1;
+                dest.consumer_seq
+                    .store(state.consumer_seq, Ordering::Relaxed);
+                return Ok(());
+            }
             // Mirror the per-destination video selection. Twitch
             // destinations get multi-track audio passthrough (VOD-audio
             // session); non-Twitch destinations drop OneTrack TrackId
