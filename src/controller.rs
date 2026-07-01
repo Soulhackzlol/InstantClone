@@ -1588,6 +1588,13 @@ struct EgressState {
     // --- cut-check throttling ---
     last_cut_check: Instant,
     last_seen_target: u32,
+    /// Vertical egress only: after a (re)seed we may be pointed mid-GOP of
+    /// the vertical canvas (the cut/seed index is built from the HORIZONTAL
+    /// primary's keyframes). Emitting the vertical canvas's P-frames before
+    /// its first IDR makes strict ingests (YouTube) drop the stream ~10 s in,
+    /// waiting for a keyframe our GOP never leads with. While this is set we
+    /// hold vertical video until its first IDR, then stream normally.
+    awaiting_keyframe: bool,
 }
 
 impl EgressState {
@@ -1603,6 +1610,7 @@ impl EgressState {
             last_publisher_token: 0,
             last_cut_check: now,
             last_seen_target: 0,
+            awaiting_keyframe: true,
         }
     }
 }
@@ -1732,10 +1740,40 @@ async fn pace_and_send(
             // full rationale. Single-track tags borrow `io_buf`. A
             // vertical destination with no resolved canvas yet
             // (`video_egress` returns None) drops all video and waits.
-            let dropped = match dest.video_egress() {
-                Some(egress) => crate::h264::select_video_bytes(io_buf, egress),
+            let egress = dest.video_egress();
+            let dropped = match egress {
+                Some(e) => crate::h264::select_video_bytes(io_buf, e),
                 None => None,
             };
+            // Vertical keyframe-lead: after a (re)seed on the horizontal IDR
+            // index, hold this vertical canvas's P-frames until its first
+            // IDR, so YouTube et al. always get a keyframe-led stream and
+            // don't drop the socket ~10 s in. Only vertical tracks (t != 0)
+            // gate; the horizontal primary already seeds on its own IDR.
+            if state.awaiting_keyframe {
+                match egress {
+                    // Vertical canvas: hold its P-frames until the first IDR.
+                    Some(crate::h264::VideoEgress::Track(t)) if t != 0 => {
+                        if dropped.is_some() {
+                            if crate::h264::classify_video_tag(io_buf).is_idr {
+                                state.awaiting_keyframe = false;
+                            } else {
+                                state.consumer_seq = meta.seq + 1;
+                                dest.consumer_seq
+                                    .store(state.consumer_seq, Ordering::Relaxed);
+                                return Ok(());
+                            }
+                        }
+                        // Not our track: falls through, dropped below.
+                    }
+                    // Horizontal (seeds on its own IDR) or Twitch passthrough:
+                    // nothing to hold.
+                    Some(_) => state.awaiting_keyframe = false,
+                    // Vertical canvas not resolved yet: keep waiting; the
+                    // video is dropped below regardless.
+                    None => {}
+                }
+            }
             let Some(selected) = dropped else {
                 // Multi-track ladder tag deliberately dropped; advance
                 // the consumer cursor so we don't replay it next call
@@ -1928,6 +1966,9 @@ async fn apply_cut(
     state.wall_anchor_input_ts = cut.target.ts_ms;
     state.consumer_seq = cut.target.seq;
     state.last_sent_input_ts = cut.target.ts_ms;
+    // The cut target is a horizontal-primary IDR; a vertical dest must
+    // re-lead with its own canvas keyframe before resuming (see EgressState).
+    state.awaiting_keyframe = true;
     // Update the per-dest atomic immediately so the ingest-side trim
     // sees the new (potentially backward) position right away and can't
     // evict tags we just rewound to.
@@ -2153,6 +2194,9 @@ fn reseed_after_publisher_change(state: &mut EgressState, new_idr: TagMeta) {
     state.wall_anchor_input_ts = new_idr.ts_ms;
     state.consumer_seq = new_idr.seq;
     state.last_sent_input_ts = new_idr.ts_ms;
+    // We reseed on a horizontal-primary IDR; a vertical dest must re-lead
+    // with its own canvas's keyframe before streaming (see EgressState).
+    state.awaiting_keyframe = true;
 }
 
 /// Resolve the next tag at `seq`. If the producer hasn't reached `seq` yet,
