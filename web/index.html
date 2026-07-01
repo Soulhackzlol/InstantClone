@@ -127,9 +127,18 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ic-pill-k{font-weight:600}
 .ic-pill-v{color:var(--fg-3);font-variant-numeric:tabular-nums;transition:color .2s}
 .ic-pill.ok .ic-pill-v{color:var(--fg)}
-.ic-pill-rate{gap:0}
+/* Fixed width so "Idle" <-> "6.20 Mbps" doesn't resize the pill and shove
+   the neighbouring header pills sideways on connect/disconnect. */
+.ic-pill-rate{gap:0;min-width:86px;justify-content:center}
 .ic-pill-rate .ic-pill-v{font-family:'JetBrains Mono',monospace;font-weight:500}
 .ic-pill-rate .unit{color:var(--fg-3);font-size:11px;margin-left:1px}
+/* Conditional header pills (codec / EB / backpressure / cap / update) are
+   toggled via [hidden]. When shown, display flips none->inline-flex, which
+   replays this entrance animation once - so they fade+scale in instead of
+   popping. (Exit stays instant; the appearance is the jarring part.) */
+#hdr-codec,#hdr-ebroadcast,#hdr-backpressure,#hdr-twitch-cap,#hdr-update{
+  animation:pillIn .22s var(--ease-out)}
+@keyframes pillIn{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:none}}
 @keyframes pulse-ring{
   0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 60%,transparent)}
   70%{box-shadow:0 0 0 8px color-mix(in oklch,var(--live) 0%,transparent)}
@@ -357,8 +366,11 @@ input,select,textarea{font-family:inherit;color:inherit}
 
 .cp-head{display:flex;align-items:baseline;justify-content:space-between}
 .cp-cap{color:var(--fg-4);font-size:11px}
-.cp-cap-warn{margin-top:8px;padding:8px 10px;border:1px solid var(--danger);border-radius:6px;background:color-mix(in oklch,var(--danger) 8%,var(--bg-2));color:var(--fg-2);font-size:11.5px;line-height:1.45}
+.cp-cap-warn{margin-top:8px;padding:8px 10px;border:1px solid var(--danger);border-radius:6px;background:color-mix(in oklch,var(--danger) 8%,var(--bg-2));color:var(--fg-2);font-size:11.5px;line-height:1.45;animation:softDrop .2s var(--ease-out)}
 .cp-cap-warn b{color:var(--danger);font-weight:600}
+/* Shared soft entrance for elements that appear on state change (capacity
+   warning, restart banner) so they slide+fade in instead of popping. */
+@keyframes softDrop{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
 .cp-input.field-error,.cp-input-row.field-error{border-color:var(--danger);color:var(--danger)}
 .cp-input-row{display:flex;align-items:center;gap:6px;background:var(--bg-2);
   border:1px solid var(--line);border-radius:10px;padding:4px}
@@ -388,6 +400,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--accent)}
 .cp-profile-chip:disabled{opacity:.4;cursor:not-allowed}
 .cp-cta{width:100%;padding:13px 18px;font-size:14px;border-radius:10px}
+#cp-cancel{animation:pillIn .2s var(--ease-out)}
 .cp-cta-pulse{animation:cta-pulse 1.8s var(--ease-out) infinite}
 @keyframes cta-pulse{
   0%{box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 0 0 0 var(--accent-glow)}
@@ -1085,7 +1098,8 @@ input,select,textarea{font-family:inherit;color:inherit}
 .restart-banner{padding:10px 14px;border-radius:8px;
   background:color-mix(in oklch,var(--warn) 8%,var(--bg-2));
   border:1px solid color-mix(in oklch,var(--warn) 30%,transparent);
-  color:var(--warn);font-size:12.5px;display:flex;align-items:center;gap:10px;justify-content:space-between}
+  color:var(--warn);font-size:12.5px;display:flex;align-items:center;gap:10px;justify-content:space-between;
+  animation:softDrop .25s var(--ease-out)}
 .restart-banner.hidden{display:none}
 /* Unsaved-changes cue on the Studio Save button. */
 .st-save-dirty{box-shadow:0 0 0 2px color-mix(in oklch,var(--accent) 55%,transparent);font-weight:700}
