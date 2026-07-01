@@ -935,25 +935,25 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--accent) 15%,var(--surface-3))}
 .profile-name{flex:1;font-weight:500;color:var(--fg);font-size:13.5px}
 .profile-secs{color:var(--accent);font-size:13px;font-weight:500;font-family:'JetBrains Mono',monospace}
-/* Too-big = the current buffer can't hold this delay. Don't fully grey it
-   out (the "fix" button must stay legible); dim the label, amber-tint the
-   lock, and offer a one-click jump to raise the buffer. */
-.profile-row.too-big{cursor:pointer}
-.profile-row.too-big .profile-name,.profile-row.too-big .profile-secs{color:var(--fg-4)}
-.profile-row.too-big:hover{border-color:color-mix(in oklch,var(--warn,#d6a23a) 40%,var(--line))}
-.profile-row.too-big .profile-bolt{color:var(--warn,#d6a23a);
-  border-color:color-mix(in oklch,var(--warn,#d6a23a) 35%,transparent)}
-.profile-fix{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;
-  color:var(--warn,#d6a23a);border:1px solid color-mix(in oklch,var(--warn,#d6a23a) 40%,var(--line));
-  border-radius:999px;padding:3px 9px;white-space:nowrap;cursor:pointer;transition:.15s var(--ease-out)}
-.profile-fix:hover{background:color-mix(in oklch,var(--warn,#d6a23a) 16%,transparent);transform:translateY(-1px)}
+/* Too-big = the current buffer can't hold this delay. Keep it quiet:
+   muted label, not armable. A small inline "Raise buffer" link is the
+   only affordance - it takes you to the setting, nothing auto-changes. */
+.profile-row.too-big{cursor:default}
+.profile-row.too-big:hover{border-color:var(--line)}
+.profile-row.too-big .profile-bolt,.profile-row.too-big .profile-name,.profile-row.too-big .profile-secs{color:var(--fg-4)}
+.profile-row.too-big:hover .profile-bolt{color:var(--fg-4);border-color:var(--line)}
+.profile-warn{margin-left:auto;display:inline-flex;align-items:center;gap:10px;font-size:10.5px;
+  color:var(--warn,#d6a23a);white-space:nowrap}
+.profile-warn a{color:var(--accent);cursor:pointer;font-weight:600;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 32%,transparent);
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.profile-warn a:hover{color:var(--fg);border-color:var(--fg)}
 .ic-input.flash{animation:inputflash 1.2s var(--ease-out)}
 @keyframes inputflash{
   0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--accent) 55%,transparent);border-color:var(--accent)}
   100%{box-shadow:0 0 0 7px transparent}
 }
-.cp-profile-chip.too-big{opacity:.6;cursor:pointer;border-color:color-mix(in oklch,var(--warn,#d6a23a) 30%,var(--line))}
-.cp-profile-chip.too-big:hover{opacity:.85;border-color:color-mix(in oklch,var(--warn,#d6a23a) 45%,var(--line))}
+.cp-profile-chip.too-big{opacity:.45;cursor:not-allowed;border-color:var(--line)}
 .profile-tag{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
   padding:3px 7px;border-radius:999px;background:color-mix(in oklch,var(--accent) 18%,transparent);color:var(--accent)}
 .profile-new{background:transparent;border:1px dashed var(--line-2);margin-top:8px;cursor:default;
@@ -1578,15 +1578,16 @@ input,select,textarea{font-family:inherit;color:inherit}
         <div class="rec"><div class="rec-k">Output &rarr; Video &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
         <div class="rec"><div class="rec-k">Output &rarr; Encoder</div><div class="rec-v">x264 / NVENC</div><div class="rec-why">Anything modern - InstantClone passes through untouched.</div></div>
         <div class="rec"><div class="rec-k">Bitrate</div><div class="rec-v">&le; 80% of upload</div><div class="rec-why">Leave headroom or the "Upload bottleneck" pill lights up.</div></div>
-        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">Disable B-frames</div><div class="rec-why">Kick / AWS IVS rejects them. <a href="#" onclick="event.preventDefault();$('rec-kick-detail').open=!$('rec-kick-detail').open">where?</a></div></div>
+        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">CBR + 2 s keyframe</div><div class="rec-why">The rules that actually matter for Kick. <a href="#" onclick="event.preventDefault();$('rec-kick-detail').open=!$('rec-kick-detail').open">details</a></div></div>
       </div>
       <details class="ic-disclose" id="rec-kick-detail">
-        <summary>Where to disable B-frames in OBS (and does it hurt Twitch?)</summary>
+        <summary>Kick requirements (and the B-frames myth)</summary>
         <div class="ic-disclose-body">
-          <p>OBS &rarr; <b>Settings &rarr; Output</b> &rarr; switch <b>Output Mode</b> to <b>Advanced</b>:</p>
-          <p>x264: <b>B-frames</b> &rarr; <code class="mono">0</code><br>NVENC: <b>Max B-frames</b> &rarr; <code class="mono">0</code></p>
-          <p style="margin-top:8px"><b>Multistreaming Kick + Twitch/YouTube?</b> OBS encodes <b>once</b> and InstantClone fans that one feed out, so you can't have B-frames for Twitch but not Kick. Good news: disabling B-frames is <b>totally safe for Twitch and YouTube</b> - they accept it fine (a hair less compression efficiency, invisible in practice). Kick is the strict one, so set B-frames to 0 and every destination is happy.</p>
-          <p style="margin-top:6px">Delay and cuts work the same either way - InstantClone cuts on keyframes (IDRs), which B-frames don't affect. No B-frames actually makes cuts marginally cleaner.</p>
+          <p>Kick ingests on <b>AWS IVS (low-latency)</b>. The rules it actually enforces: <b>H.264</b>, <b>CBR</b> rate control, <b>keyframe interval 2 s</b>, bitrate <b>&le; 8000 kbps</b>, up to 60 fps.</p>
+          <p style="margin-top:8px"><b>B-frames:</b> despite what a lot of older guides say, Kick's normal RTMP ingest (IVS low-latency, Main profile) <b>accepts B-frames</b>. The strict "no B-frames" rule is AWS IVS <b>real-time / WHIP</b>, a different ingest Kick doesn't use for standard OBS streaming. So you usually don't need to touch B-frames at all.</p>
+          <p style="margin-top:6px">If Kick <i>does</i> reject your stream, set B-frames to 0 in OBS &rarr; <b>Settings &rarr; Output</b> (Advanced): x264 <b>B-frames</b> &rarr; <code class="mono">0</code>, NVENC <b>Max B-frames</b> &rarr; <code class="mono">0</code>. That's safe for Twitch and YouTube too. Note InstantClone forwards <b>one</b> encode without re-encoding, so B-frames can't be stripped for Kick alone - it's an OBS-side toggle that applies to every destination.</p>
+          <p style="margin-top:6px">Using Twitch <b>Enhanced Broadcasting</b>? Twitch picks the encode settings for you (including B-frames), so your manual OBS B-frames box may not apply while EB is on.</p>
+          <p style="margin-top:6px">Delay and cuts work the same either way - InstantClone cuts on keyframes (IDRs), which B-frames don't affect.</p>
         </div>
       </details>
     </section>
@@ -2516,19 +2517,19 @@ function renderCpProfiles(){
     // profiles without disarming first - arm() routes the request to
     // the live-adjust path. Only the "arming" mid-fill state and the
     // explicit current profile are disabled.
-    b.disabled = isCur || ds === 'arming';
-    const needMB = tooBig ? requiredMBForMs(p.delay_ms) : 0;
+    // Too-big chips are quietly disabled with an explaining tooltip - the
+    // Profiles tab is where the "raise buffer" link lives.
+    b.disabled = isCur || ds === 'arming' || tooBig;
     if (tooBig){
-      b.title = `${p.name}: buffer too small - needs ≥ ${needMB} MB at the current bitrate. Click to raise it.`;
+      const needMB = requiredMBForMs(p.delay_ms);
+      b.title = `${p.name}: buffer too small - needs ≥ ${needMB} MB at the current bitrate. Raise it in the Profiles or System tab.`;
     } else if (ds === 'active' && !isCur){
       b.title = `Adjust to ${p.name}`;
     } else {
       b.title = `Arm: ${p.name}`;
     }
-    b.innerHTML = `<span style="color:var(--accent)">${tooBig ? '🔒' : '⚡'}</span><span>${fmtDelay(p.delay_ms)}</span>`;
-    b.onclick = tooBig
-      ? () => jumpToBufferSetting(needMB)
-      : () => { $('delay-input').value = String(Math.round(p.delay_ms / 1000)); arm(p.delay_ms); };
+    b.innerHTML = `<span style="color:var(--accent)">⚡</span><span>${fmtDelay(p.delay_ms)}</span>`;
+    b.onclick = () => { $('delay-input').value = String(Math.round(p.delay_ms / 1000)); arm(p.delay_ms); };
     c.appendChild(b);
   });
 }
@@ -2954,17 +2955,16 @@ function renderProfilesPane(){
     }
     const needMB = tooBig ? requiredMBForMs(p.delay_ms) : 0;
     if (tooBig){
-      // Swap the bolt for a lock and offer a one-click fix instead of a
-      // dead red "needs X MB" label the user has to act on manually.
-      b.querySelector('.profile-bolt').innerHTML =
-        '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><rect x="3.2" y="7" width="9.6" height="6.5" rx="1.5"/><path d="M5.2 7V5a2.8 2.8 0 0 1 5.6 0v2"/></svg>';
-      const fix = document.createElement('span');
-      fix.className = 'profile-fix';
-      fix.textContent = `Raise buffer → ${needMB} MB`;
-      fix.title = `This delay needs a ≥ ${needMB} MB buffer at the current bitrate (you have ${lastConfig?lastConfig.buffer_mb:'?'} MB ≈ ${fmtDelay(cap)}). Click to set it in System → Buffer, then Save + restart.`;
-      fix.onclick = (e) => { e.stopPropagation(); jumpToBufferSetting(needMB); };
-      b.appendChild(fix);
-      b.title = `Buffer too small for ${fmtDelay(p.delay_ms)} at the current bitrate - click to raise it.`;
+      // Quiet: "needs X MB" with a small inline link to the buffer setting.
+      // Nothing auto-changes; the row itself isn't armable.
+      const warn = document.createElement('span'); warn.className = 'profile-warn';
+      warn.append(`needs ≥ ${needMB} MB`);
+      const link = document.createElement('a');
+      link.textContent = 'Raise buffer →';
+      link.onclick = (e) => { e.stopPropagation(); jumpToBufferSetting(needMB); };
+      warn.appendChild(link);
+      b.appendChild(warn);
+      b.title = `Buffer too small for ${fmtDelay(p.delay_ms)} at the current bitrate - needs ≥ ${needMB} MB (you have ${lastConfig?lastConfig.buffer_mb:'?'} MB ≈ ${fmtDelay(cap)}).`;
     } else if (ds === 'active' && !isCur){
       b.title = `Adjust live delay to ${p.name}`;
     } else if (ds === 'armed' && !isCur){
@@ -2973,9 +2973,9 @@ function renderProfilesPane(){
     const x = document.createElement('span'); x.className = 'ic-btn-tiny'; x.textContent = '✕';
     x.onclick = (e) => { e.stopPropagation(); delProfile(p.name); };
     b.appendChild(x);
-    // Too-big rows jump to the buffer setting (the only thing that unblocks
-    // them); usable rows arm the delay.
-    b.onclick = tooBig ? () => jumpToBufferSetting(needMB) : () => arm(p.delay_ms);
+    // Usable rows arm the delay; too-big rows do nothing on click (the
+    // inline link is the only action).
+    b.onclick = tooBig ? null : () => arm(p.delay_ms);
     c.appendChild(b);
   });
 }
@@ -3020,13 +3020,14 @@ function jumpToBufferSetting(mb){
   showSubTab('system', 'buffer');
   const el = $('s-bmb');
   if (el){
-    if (mb) el.value = mb;
-    renderBufferHint();
+    // Navigate + highlight only - never overwrite the user's value. We
+    // just point them at the setting and tell them the target.
     el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
     el.focus();
     el.scrollIntoView({behavior:'smooth', block:'center'});
   }
-  toast('Set the buffer size, hit Save, then restart to use this delay.', 'ok');
+  toast(mb ? `This delay needs a ≥ ${mb} MB buffer. Set it here, Save, then restart.`
+           : 'Raise the buffer size here, Save, then restart.', 'ok');
 }
 
 // ── Config / Settings ─────────────────────────────────────────────────

@@ -300,7 +300,7 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 - **Registro de servicio en OBS con un click.** El primer paso del wizard añade una entrada "InstantClone" al desplegable de servicios de OBS (escribe `services.json` con `.bak` previo; se refresca si cambia el puerto; surfacea "cierra OBS primero" cuando el fichero está bloqueado).
 - Egress multi-destino con reconexión + bitrate por destino.
 - **UI consciente de la capacidad del buffer**: pista en vivo "X MB → máx Ys de delay a N Mbps", se niega a armar un delay mayor de lo que cabe con una razón explícita "necesita ≥ N MB".
-- **Avisos por plataforma**: riesgo de fallo de decodificación en móvil por encima de 8 Mbps en Twitch Source-Only, requerimiento de no-B-frames de Kick (AWS IVS), enlaces directos al dashboard de claves de cada plataforma - todo expuesto en el wizard y el formulario de destino para no aprender cada gotcha en directo.
+- **Avisos por plataforma**: riesgo de fallo de decodificación en móvil por encima de 8 Mbps en Twitch Source-Only, reglas de ingesta AWS IVS de Kick (CBR + keyframe de 2 s; los B-frames en realidad van bien en su RTMP de baja latencia), enlaces directos al dashboard de claves de cada plataforma - todo expuesto en el wizard y el formulario de destino para no aprender cada gotcha en directo.
 - Icono de bandeja con estado en vivo + corte de un click, pre-flight de puertos que identifica el proceso conflictivo por PID + exe.
 - Cobertura de tests sobre la máquina de estados, detección IDR (AVC + Enhanced RTMP + flatten multi-track), codec AMF0 incluyendo Strict Array, evicción del ring con protección de lecturas en vuelo, y la promoción del wrap de timestamps que evita el bug de los 49,7 días.
 
