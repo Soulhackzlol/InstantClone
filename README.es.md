@@ -49,7 +49,7 @@ Cuando ya lo tenía hecho, las piezas que de verdad quería eran: una activació
 <tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td></tr>
 <tr><td><b>Deps en runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>205 / 205</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>207 / 207</code></td></tr>
 </table>
 
 </td>
@@ -279,7 +279,7 @@ cargo build --release
 
 Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y comprime con gzip en tiempo de compilación desde `build.rs` (usa `flate2`, solo build-dep) y se embebe en el binario; en runtime se sirve con `Content-Encoding: gzip`.
 
-`cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR en AVC + Enhanced RTMP, codec AMF0 incluyendo Strict Array (la `fourCcList` de Enhanced-RTMP) + guardia de recursión, round-trip de settings, evicción del ring-buffer con protección de lecturas en vuelo, parsing HTTP, política CSRF, pre-flight de puertos, la negociación de contenido `accepts_gzip`, la caché de cabeceras de secuencia por-pista de Enhanced Broadcasting + selección de tags consciente del TrackId, el audio multi-pista de Enhanced-RTMP (pista de VOD de Twitch), el filtro de IDR de pista primaria para que los cortes con EB no glitcheen las escaleras, el parseo de orientación del SPS para la selección de lienzo vertical (9:16), la resolución de `user.ini` / `global.ini` en OBS 32, el parcheado de `services.json` de OBS, el parser de releases de GitHub + comparador SemVer-ish para el chequeo de actualizaciones, la implementación propia de SHA-256 (vectores NIST), y la descarga + verificación de checksum + intercambio del exe en disco de la auto-actualización. 205 tests, todos en verde.
+`cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR en AVC + Enhanced RTMP, codec AMF0 incluyendo Strict Array (la `fourCcList` de Enhanced-RTMP) + guardia de recursión, round-trip de settings, evicción del ring-buffer con protección de lecturas en vuelo, parsing HTTP, política CSRF, pre-flight de puertos, la negociación de contenido `accepts_gzip`, la caché de cabeceras de secuencia por-pista de Enhanced Broadcasting + selección de tags consciente del TrackId, el audio multi-pista de Enhanced-RTMP (pista de VOD de Twitch), el filtro de IDR de pista primaria para que los cortes con EB no glitcheen las escaleras, el parseo de orientación del SPS para la selección de lienzo vertical (9:16), la resolución de `user.ini` / `global.ini` en OBS 32, el parcheado de `services.json` de OBS, el parser de releases de GitHub + comparador SemVer-ish para el chequeo de actualizaciones, la implementación propia de SHA-256 (vectores NIST), y la descarga + verificación de checksum + intercambio del exe en disco de la auto-actualización. 207 tests, todos en verde.
 
 <br/>
 
@@ -287,7 +287,7 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 205 tests en cada push, y un tag dispara la build + publicación automática de la release con su `SHA256SUMS.txt` al lado (todavía no hay certificado de firma de código, así que el sistema operativo puede avisar en el primer lanzamiento).
+**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 207 tests en cada push, y un tag dispara la build + publicación automática de la release con su `SHA256SUMS.txt` al lado (todavía no hay certificado de firma de código, así que el sistema operativo puede avisar en el primer lanzamiento).
 
 **Lo que está sólido**
 
