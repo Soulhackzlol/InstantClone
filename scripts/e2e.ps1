@@ -26,6 +26,14 @@
 #      include the keys the dashboard reads (phase, ingest_alive,
 #      destinations, stats). Catches accidental endpoint removals
 #      and dashboard-server contract drift.
+#
+#   E. Delay + IDR-aligned cut - arm a 2 s delay against a LIVE stream,
+#      wait for the ring to fill (phase 'ready'), then activate. The
+#      delay must engage (phase 'active', current_delay_ms > 0) and the
+#      cut must NOT tear down the downstream: the sink keeps receiving
+#      frames past the cut on the SAME connection (exactly one publish
+#      accept). This is the core delay+cut feature the other scenarios
+#      run with delay=0 and never exercise on the wire.
 
 $ErrorActionPreference = "Stop"
 
@@ -67,6 +75,20 @@ function Stop-Safe($proc) {
     try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
 }
 
+# Poll GET /state until $predicate (a scriptblock taking the parsed state
+# object) returns true, or the timeout elapses. Returns $true on match.
+function Wait-State($predicate, $timeoutSec) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt $timeoutSec) {
+        try {
+            $s = Invoke-RestMethod "http://127.0.0.1:7799/state" -TimeoutSec 2
+            if (& $predicate $s) { return $true }
+        } catch {}
+        Start-Sleep -Milliseconds 300
+    }
+    return $false
+}
+
 function Push-FfmpegSource($durationSec, $bitrateK = 400) {
     # Synthetic source: 320x240 @ 15 fps, GOP 15 (1 IDR/sec),
     # H.264 + AAC, FLV container, RTMP. Returns the exit code.
@@ -80,6 +102,21 @@ function Push-FfmpegSource($durationSec, $bitrateK = 400) {
     )
     $ff = Start-Process -FilePath "ffmpeg" -ArgumentList $ffArgs -PassThru -NoNewWindow -Wait
     return $ff.ExitCode
+}
+
+function Start-FfmpegSource($durationSec, $bitrateK = 400) {
+    # Non-blocking twin of Push-FfmpegSource: returns the process handle so a
+    # scenario can arm/activate while the stream is still running.
+    $ffArgs = @(
+        "-loglevel","error","-re",
+        "-f","lavfi","-i","testsrc=size=320x240:rate=15:duration=$durationSec",
+        "-f","lavfi","-i","sine=frequency=440:duration=$durationSec",
+        "-c:v","libx264","-preset","ultrafast","-g","15","-b:v","${bitrateK}k",
+        "-c:a","aac","-b:a","64k",
+        "-f","flv","rtmp://127.0.0.1:1935/live/stream"
+    )
+    return Start-Process -FilePath "ffmpeg" -ArgumentList $ffArgs -PassThru -NoNewWindow `
+        -RedirectStandardOutput "ffsrc.out" -RedirectStandardError "ffsrc.err"
 }
 
 # Track per-scenario results. Each scenario appends { name; failed[] }.
@@ -286,6 +323,64 @@ Run-Scenario "D -HTTP API smoke (arm/state/disarm/reset)" {
         Assert ($cfg.configured -eq $false) "configured not flipped to false by scope=all reset" $failed
     } finally {
         Stop-Safe $ic
+        Start-Sleep -Seconds 1
+    }
+}
+
+# --- Scenario E: delay + IDR-aligned cut ------------------------------
+
+Run-Scenario "E -delay + IDR-aligned cut (arm/ready/activate)" {
+    param([ref]$failed)
+    Write-Config @(@{ id="e2e"; name="Sink"; platform="custom"; url="rtmp://127.0.0.1:1936/live"; key="stream" })
+    $sink = Start-Process -FilePath $exe -ArgumentList "sink","--port","1936","--web-port","0","--temp","--max-mb","50" `
+        -RedirectStandardOutput "E.sink.log" -RedirectStandardError "E.sink.err" -PassThru -NoNewWindow
+    $env:INSTANTCLONE_NO_BROWSER = "1"
+    $env:CONFIG_PATH = (Join-Path (Get-Location) "instantclone.config.json")
+    $ic = Start-Process -FilePath $exe -ArgumentList "--no-browser" `
+        -RedirectStandardOutput "E.ic.log" -RedirectStandardError "E.ic.err" -PassThru -NoNewWindow
+    $ff = $null
+    try {
+        Assert (Wait-Port 1936 15) "sink never opened :1936" $failed
+        Assert (Wait-Port 1935 15) "instantclone never opened :1935" $failed
+        Assert (Wait-Http "http://127.0.0.1:7799/state" 15) "web UI never came up on :7799" $failed
+        if ($failed.Value.Count -gt 0) { return }
+
+        # Continuous publisher for the whole scenario (18 s, non-blocking) so
+        # we can arm + activate while the stream is live.
+        $ff = Start-FfmpegSource 18
+        Assert (Wait-State { param($s) $s.ingest_alive -eq $true } 15) "ingest never went live" $failed
+        if ($failed.Value.Count -gt 0) { return }
+
+        # Arm a 2 s delay; the ring must fill to that depth -> phase 'ready'.
+        Invoke-RestMethod "http://127.0.0.1:7799/arm" -Method POST -Body "ms=2000" -ContentType "application/x-www-form-urlencoded" -TimeoutSec 5 | Out-Null
+        Assert (Wait-State { param($s) $s.phase -eq "ready" } 15) "phase never reached 'ready' after arming 2 s (ring did not fill)" $failed
+        if ($failed.Value.Count -gt 0) { return }
+
+        # Snapshot how many 1 s window reports the sink has emitted so far.
+        Start-Sleep -Milliseconds 500
+        $reportsBefore = ([regex]::Matches((Get-Content "E.sink.log" -Raw), '\(\d+ IDR\)')).Count
+
+        # Activate: performs the first IDR-aligned cut (~2 s back in the ring).
+        Invoke-RestMethod "http://127.0.0.1:7799/activate" -Method POST -TimeoutSec 5 | Out-Null
+        Assert (Wait-State { param($s) $s.phase -eq "active" -and $s.current_delay_ms -gt 0 } 10) "delay never engaged after /activate (want phase 'active' + current_delay_ms > 0)" $failed
+        if ($failed.Value.Count -gt 0) { return }
+
+        # Let the delayed stream flow well past the cut.
+        Start-Sleep -Seconds 4
+        $sinkOut = Get-Content "E.sink.log" -Raw
+        $reportsAfter = ([regex]::Matches($sinkOut, '\(\d+ IDR\)')).Count
+        $accepts = ([regex]::Matches($sinkOut, "publish accepted")).Count
+
+        # The cut must NOT tear down the downstream connection: a cut that
+        # shipped a referenceless P-frame would drop the sink -> reconnect,
+        # showing up as a second publish accept.
+        Assert ($accepts -eq 1) "sink saw $accepts publish accepts (expected exactly 1 - the cut broke the downstream connection)" $failed
+        # The delayed stream must keep flowing past the cut (more windows).
+        Assert ($reportsAfter -gt $reportsBefore) "sink stopped receiving after the cut ($reportsBefore -> $reportsAfter windows): the delayed stream stalled" $failed
+        # And real video (IDRs) must still be arriving, not just audio.
+        Assert ([regex]::IsMatch($sinkOut, "\([1-9]\d* IDR\)")) "sink saw no IDR windows across the delayed stream" $failed
+    } finally {
+        Stop-Safe $ff; Stop-Safe $ic; Stop-Safe $sink
         Start-Sleep -Seconds 1
     }
 }
