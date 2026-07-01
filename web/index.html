@@ -599,19 +599,28 @@ input,select,textarea{font-family:inherit;color:inherit}
 .dfg-sep::after{content:"";flex:1;height:1px;background:var(--line)}
 /* VOD audio + EB block - kept calm and progressive (details behind
    disclosures) so it reads as one toggle with an optional extra. */
-.dest-vod{margin-top:12px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}
-.dest-vod-toggle{display:flex;align-items:flex-start;gap:10px;margin:0;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px}
-.dest-vod-toggle input{margin-top:2px;flex:0 0 auto}
-.dest-vod-title{font-weight:600;color:var(--fg);font-size:13px}
-.dest-vod-desc{font-size:11.5px;margin-top:2px;line-height:1.45}
-.dest-vod details{margin-top:8px}
-.dest-vod details>summary{font-size:11px;color:var(--fg-3);cursor:pointer;user-select:none}
-.dest-vod details ol{margin:7px 0 0;padding-left:16px;font-size:11px;line-height:1.7;color:var(--fg-2)}
+.dest-vod{margin-top:12px;padding:13px 15px;border:1px solid var(--line);border-radius:11px;background:var(--bg-1)}
+/* NOTE: `.dest-form label` (uppercase, letter-spaced, block, muted) is more
+   specific than a bare `.dest-vod-toggle`, so these resets are scoped with
+   `.dest-form` to win, and title/desc reset explicitly too. Without this the
+   whole block rendered UPPERCASE and stacked. */
+.dest-form .dest-vod-toggle{display:flex;align-items:flex-start;gap:10px;margin:0;cursor:pointer;
+  text-transform:none;letter-spacing:normal;font-weight:400;font-size:13px;color:var(--fg-2)}
+.dest-form .dest-vod-toggle input{margin-top:2px;flex:0 0 auto;cursor:pointer}
+.dest-vod-title{font-weight:600;color:var(--fg);font-size:13px;text-transform:none;letter-spacing:normal}
+.dest-vod-title .muted{font-weight:400}
+.dest-vod-desc{font-size:11.5px;margin-top:3px;line-height:1.5;color:var(--fg-3);text-transform:none;letter-spacing:normal}
+.dest-vod details{margin-top:10px}
+.dest-vod details>summary{font-size:11px;color:var(--accent);cursor:pointer;user-select:none;list-style:none}
+.dest-vod details>summary::-webkit-details-marker{display:none}
+.dest-vod details>summary::before{content:"▸ ";color:var(--fg-4)}
+.dest-vod details[open]>summary::before{content:"▾ "}
+.dest-vod details ol{margin:8px 0 0;padding-left:16px;font-size:11px;line-height:1.7;color:var(--fg-2)}
 .dest-vod details>div{margin-top:6px;font-size:11px;line-height:1.6;color:var(--fg-2)}
-.dest-eb{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
-.dest-eb-title{font-weight:600;color:var(--fg);font-size:12.5px}
-.dest-eb-title .tag{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--fg-4);margin-left:6px}
-.dest-eb-desc{font-size:11.5px;margin-top:4px;line-height:1.45}
+.dest-eb{margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
+.dest-eb-title{font-weight:600;color:var(--fg);font-size:12.5px;text-transform:none;letter-spacing:normal}
+.dest-eb-title .tag{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--warn,#d6a23a);margin-left:7px}
+.dest-eb-desc{font-size:11.5px;margin-top:4px;line-height:1.5;color:var(--fg-3);text-transform:none;letter-spacing:normal}
 .dest-form label{display:block;margin-top:6px;font-size:11px;color:var(--fg-3);text-transform:uppercase;
   letter-spacing:.12em;font-weight:600}
 .dest-form .row{display:flex;gap:8px;margin-top:8px;align-items:center}
