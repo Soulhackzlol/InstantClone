@@ -93,6 +93,16 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--accent) 18%,transparent);
   border-bottom-color:var(--accent)}
 .ic-brand-sub a:visited{color:var(--accent)}
+/* Unified inline content links: accent colour + animated underline, so
+   every in-body link (help text, tour, notes) matches the app instead of
+   falling back to the default browser blue. */
+.ic-link,.muted a,.tour-body a,.dest-form-help a,#dest-form-format-help a,#dest-form-twitch-native-note a{
+  color:var(--accent);text-decoration:none;font-weight:600;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 32%,transparent);
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.ic-link:hover,.muted a:hover,.tour-body a:hover,#dest-form-format-help a:hover,#dest-form-twitch-native-note a:hover{
+  color:var(--fg);border-color:var(--fg)}
+.ic-link:visited,.muted a:visited,.tour-body a:visited{color:var(--accent)}
 .ic-brand-dot{display:inline-block;width:5px;height:5px;border-radius:999px;background:var(--fg-4);margin:0 6px 2px}
 .ic-header-right{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
 .ic-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border-radius:999px;
@@ -549,8 +559,14 @@ input,select,textarea{font-family:inherit;color:inherit}
 /* ── Stats ───────────────────────────────────── */
 .stats-big{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}
 @media (max-width:880px){.stats-big{grid-template-columns:1fr}}
-.stat-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px}
+.stat-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px;cursor:help;
+  transition:border-color .18s var(--ease-out),transform .18s var(--ease-out),box-shadow .18s var(--ease-out)}
+.stat-card:hover{border-color:color-mix(in oklch,var(--accent) 32%,var(--line-2));transform:translateY(-2px);
+  box-shadow:0 6px 20px -10px color-mix(in oklch,var(--accent) 40%,transparent)}
 .stat-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+.stat-label{display:inline-flex;align-items:center;gap:7px}
+.stat-ic{width:14px;height:14px;color:var(--fg-3);opacity:.85;flex:0 0 auto;transition:color .18s,opacity .18s}
+.stat-card:hover .stat-ic{color:var(--accent);opacity:1}
 .stat-now{font-size:22px;font-weight:500;color:var(--fg);letter-spacing:-.02em;
   font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
 .stat-unit{color:var(--fg-3);font-size:12px;margin-left:4px;font-family:'JetBrains Mono',monospace}
@@ -558,13 +574,20 @@ input,select,textarea{font-family:inherit;color:inherit}
 .stats-small{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
 @media (max-width:980px){.stats-small{grid-template-columns:repeat(3,1fr)}}
 @media (max-width:540px){.stats-small{grid-template-columns:repeat(2,1fr)}}
-.metric-mini{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;
-  transition:border-color .15s var(--ease-out)}
-.metric-mini:hover{border-color:var(--line-2)}
-.metric-mini-v{display:flex;align-items:baseline;gap:4px;margin-top:4px}
+.metric-mini{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:help;
+  transition:border-color .18s var(--ease-out),transform .18s var(--ease-out),background .18s var(--ease-out)}
+.metric-mini:hover{border-color:color-mix(in oklch,var(--accent) 35%,var(--line-2));transform:translateY(-2px);
+  background:color-mix(in oklch,var(--accent) 4%,var(--bg-2))}
+.metric-mini-top{display:flex;align-items:center;gap:6px}
+.metric-ic{width:13px;height:13px;color:var(--fg-3);opacity:.8;flex:0 0 auto;transition:color .18s,opacity .18s}
+.metric-mini:hover .metric-ic{color:var(--accent);opacity:1}
+.metric-mini-v{display:flex;align-items:baseline;gap:4px;margin-top:5px}
 .metric-mini-v .mono{font-size:18px;font-weight:500;color:var(--fg);letter-spacing:-.01em;
   font-variant-numeric:tabular-nums}
 .metric-unit{color:var(--fg-3);font-size:11px;font-family:'JetBrains Mono',monospace}
+/* Sparkline strokes draw in on first paint for a touch of life. */
+.stat-spark path[class$="-line"],.stat-spark path[id$="-line"]{
+  transition:stroke .2s}
 
 /* ── OBS tab ─────────────────────────────────── */
 .obs-grid{display:grid;gap:12px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
@@ -912,11 +935,25 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--accent) 15%,var(--surface-3))}
 .profile-name{flex:1;font-weight:500;color:var(--fg);font-size:13.5px}
 .profile-secs{color:var(--accent);font-size:13px;font-weight:500;font-family:'JetBrains Mono',monospace}
-.profile-row.too-big{opacity:.5;cursor:not-allowed}
-.profile-row.too-big:hover{border-color:var(--line)}
-.profile-row.too-big .profile-secs{color:var(--fg-4)}
-.profile-row .profile-warn{font-size:10.5px;color:var(--danger);margin-left:auto;margin-right:8px;white-space:nowrap}
-.cp-profile-chip.too-big{opacity:.45;cursor:not-allowed;border-color:var(--line)}
+/* Too-big = the current buffer can't hold this delay. Don't fully grey it
+   out (the "fix" button must stay legible); dim the label, amber-tint the
+   lock, and offer a one-click jump to raise the buffer. */
+.profile-row.too-big{cursor:pointer}
+.profile-row.too-big .profile-name,.profile-row.too-big .profile-secs{color:var(--fg-4)}
+.profile-row.too-big:hover{border-color:color-mix(in oklch,var(--warn,#d6a23a) 40%,var(--line))}
+.profile-row.too-big .profile-bolt{color:var(--warn,#d6a23a);
+  border-color:color-mix(in oklch,var(--warn,#d6a23a) 35%,transparent)}
+.profile-fix{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;
+  color:var(--warn,#d6a23a);border:1px solid color-mix(in oklch,var(--warn,#d6a23a) 40%,var(--line));
+  border-radius:999px;padding:3px 9px;white-space:nowrap;cursor:pointer;transition:.15s var(--ease-out)}
+.profile-fix:hover{background:color-mix(in oklch,var(--warn,#d6a23a) 16%,transparent);transform:translateY(-1px)}
+.ic-input.flash{animation:inputflash 1.2s var(--ease-out)}
+@keyframes inputflash{
+  0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--accent) 55%,transparent);border-color:var(--accent)}
+  100%{box-shadow:0 0 0 7px transparent}
+}
+.cp-profile-chip.too-big{opacity:.6;cursor:pointer;border-color:color-mix(in oklch,var(--warn,#d6a23a) 30%,var(--line))}
+.cp-profile-chip.too-big:hover{opacity:.85;border-color:color-mix(in oklch,var(--warn,#d6a23a) 45%,var(--line))}
 .profile-tag{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
   padding:3px 7px;border-radius:999px;background:color-mix(in oklch,var(--accent) 18%,transparent);color:var(--accent)}
 .profile-new{background:transparent;border:1px dashed var(--line-2);margin-top:8px;cursor:default;
@@ -1365,7 +1402,7 @@ input,select,textarea{font-family:inherit;color:inherit}
       </div>
     </div>
     <div id="dest-form-twitch-native-note" hidden class="muted" style="font-size:11.5px;margin:2px 0 6px;line-height:1.45">
-      No format choice here: with <b>Dual Format</b> on, OBS sends Twitch a horizontal <i>and</i> a vertical canvas in one Enhanced Broadcasting stream, and InstantClone forwards both. Dual Format needs Enhanced Broadcasting set up in OBS first. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
+      Nothing to set here - a <b>normal Twitch stream just works</b>, and so does regular <b>Enhanced Broadcasting</b> (that's horizontal too); InstantClone simply forwards whatever OBS sends. Only Twitch's new <b>Dual Format</b> (a beta add-on to Enhanced Broadcasting) also sends a vertical 9:16 canvas - when it's on, InstantClone forwards both automatically, no toggle needed. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
     </div>
     <label>Stream key <span class="muted" id="dest-form-key-hint"></span></label>
     <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
@@ -1442,19 +1479,19 @@ input,select,textarea{font-family:inherit;color:inherit}
     </div>
   </div>
   <div class="stats-big">
-    <div class="stat-card">
+    <div class="stat-card" id="stat-card-rate" title="Incoming video+audio bitrate from OBS, averaged over the last 60 seconds. This is what InstantClone is buffering and forwarding.">
       <div class="stat-head">
-        <span class="ic-label">Bitrate in</span>
-        <span class="mono stat-now"><span id="stat-rate">-</span> <span class="stat-unit">kbps</span></span>
+        <span class="stat-label"><svg class="stat-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8h3l1.8-5 3 11 1.8-6h3.4"/></svg><span class="ic-label">Bitrate in</span></span>
+        <span class="mono stat-now"><span id="stat-rate">-</span> <span class="stat-unit" id="stat-rate-u">kbps</span></span>
       </div>
       <svg class="stat-spark" id="spark-rate" viewBox="0 0 760 70" preserveAspectRatio="none">
         <path id="spark-rate-fill" class="spark-fill" d=""/>
         <path id="spark-rate-line" class="spark-line" d=""/>
       </svg>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" id="stat-card-cpu" title="CPU used by InstantClone itself (not OBS), averaged over the last 60 seconds.">
       <div class="stat-head">
-        <span class="ic-label">CPU</span>
+        <span class="stat-label"><svg class="stat-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M6.5 1.5v2M9.5 1.5v2M6.5 12.5v2M9.5 12.5v2M1.5 6.5h2M1.5 9.5h2M12.5 6.5h2M12.5 9.5h2"/></svg><span class="ic-label">CPU</span></span>
         <span class="mono stat-now"><span id="stat-cpu">-</span><span class="stat-unit">%</span></span>
       </div>
       <svg class="stat-spark" id="spark-cpu" viewBox="0 0 360 48" preserveAspectRatio="none">
@@ -1464,12 +1501,30 @@ input,select,textarea{font-family:inherit;color:inherit}
     </div>
   </div>
   <div class="stats-small">
-    <div class="metric-mini"><div class="ic-label">Frames sent</div><div class="metric-mini-v"><span class="mono" id="m-tags">0</span></div></div>
-    <div class="metric-mini"><div class="ic-label">Data sent</div><div class="metric-mini-v"><span class="mono" id="m-bytes">0</span><span class="metric-unit" id="m-bytes-u"></span></div></div>
-    <div class="metric-mini"><div class="ic-label">IDR cuts</div><div class="metric-mini-v"><span class="mono" id="m-cuts">0</span></div></div>
-    <div class="metric-mini"><div class="ic-label">OBS drops</div><div class="metric-mini-v"><span class="mono" id="m-idis">0</span></div></div>
-    <div class="metric-mini"><div class="ic-label">Egress retry</div><div class="metric-mini-v"><span class="mono" id="m-erec">0</span></div></div>
-    <div class="metric-mini"><div class="ic-label">Memory</div><div class="metric-mini-v"><span class="mono" id="m-rss">-</span><span class="metric-unit" id="m-rss-u"></span></div></div>
+    <div class="metric-mini" title="Total media packets (video + audio) forwarded to all destinations this session.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 1.5 14.5 5 8 8.5 1.5 5z"/><path d="M1.5 8 8 11.5 14.5 8"/><path d="M1.5 11 8 14.5 14.5 11"/></svg><span class="ic-label">Frames sent</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-tags">0</span></div>
+    </div>
+    <div class="metric-mini" title="Total bytes forwarded to all destinations this session.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><ellipse cx="8" cy="4" rx="5.5" ry="2.2"/><path d="M2.5 4v8c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2V4"/><path d="M2.5 8c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2"/></svg><span class="ic-label">Data sent</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-bytes">0</span><span class="metric-unit" id="m-bytes-u"></span></div>
+    </div>
+    <div class="metric-mini" title="Delay cuts performed. Each one snaps the stream to a keyframe (IDR) so cutting back to live is glitch-free.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="4" r="2"/><circle cx="4" cy="12" r="2"/><path d="M5.7 5.2 14 11M5.7 10.8 14 5"/></svg><span class="ic-label">IDR cuts</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-cuts">0</span></div>
+    </div>
+    <div class="metric-mini" title="Times OBS disconnected from InstantClone this session (e.g. you stopped/started streaming).">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v3.5M10 2v3.5"/><rect x="4" y="5.5" width="8" height="4" rx="1"/><path d="M8 9.5V14"/></svg><span class="ic-label">OBS drops</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-idis">0</span></div>
+    </div>
+    <div class="metric-mini" title="Times a destination connection dropped and InstantClone reconnected it this session.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-4"/><path d="M13.5 2v3.5H10"/></svg><span class="ic-label">Egress retry</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-erec">0</span></div>
+    </div>
+    <div class="metric-mini" title="InstantClone's resident memory (RSS) right now.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="5" width="13" height="6" rx="1"/><path d="M4 11v2M7 11v2M10 11v2M13 11v2"/></svg><span class="ic-label">Memory</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-rss">-</span><span class="metric-unit" id="m-rss-u"></span></div>
+    </div>
   </div>
 </section>
 
@@ -1526,10 +1581,12 @@ input,select,textarea{font-family:inherit;color:inherit}
         <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">Disable B-frames</div><div class="rec-why">Kick / AWS IVS rejects them. <a href="#" onclick="event.preventDefault();$('rec-kick-detail').open=!$('rec-kick-detail').open">where?</a></div></div>
       </div>
       <details class="ic-disclose" id="rec-kick-detail">
-        <summary>Where to disable B-frames in OBS</summary>
+        <summary>Where to disable B-frames in OBS (and does it hurt Twitch?)</summary>
         <div class="ic-disclose-body">
           <p>OBS &rarr; <b>Settings &rarr; Output</b> &rarr; switch <b>Output Mode</b> to <b>Advanced</b>:</p>
           <p>x264: <b>B-frames</b> &rarr; <code class="mono">0</code><br>NVENC: <b>Max B-frames</b> &rarr; <code class="mono">0</code></p>
+          <p style="margin-top:8px"><b>Multistreaming Kick + Twitch/YouTube?</b> OBS encodes <b>once</b> and InstantClone fans that one feed out, so you can't have B-frames for Twitch but not Kick. Good news: disabling B-frames is <b>totally safe for Twitch and YouTube</b> - they accept it fine (a hair less compression efficiency, invisible in practice). Kick is the strict one, so set B-frames to 0 and every destination is happy.</p>
+          <p style="margin-top:6px">Delay and cuts work the same either way - InstantClone cuts on keyframes (IDRs), which B-frames don't affect. No B-frames actually makes cuts marginally cleaner.</p>
         </div>
       </details>
     </section>
@@ -2460,19 +2517,18 @@ function renderCpProfiles(){
     // the live-adjust path. Only the "arming" mid-fill state and the
     // explicit current profile are disabled.
     b.disabled = isCur || ds === 'arming';
+    const needMB = tooBig ? requiredMBForMs(p.delay_ms) : 0;
     if (tooBig){
-      const needMB = requiredMBForMs(p.delay_ms);
-      b.title = `${p.name}: buffer too small - needs ≥ ${needMB} MB at the current bitrate (raise in System tab).`;
+      b.title = `${p.name}: buffer too small - needs ≥ ${needMB} MB at the current bitrate. Click to raise it.`;
     } else if (ds === 'active' && !isCur){
       b.title = `Adjust to ${p.name}`;
     } else {
       b.title = `Arm: ${p.name}`;
     }
-    b.innerHTML = `<span style="color:var(--accent)">⚡</span><span>${fmtDelay(p.delay_ms)}</span>`;
-    b.onclick = () => {
-      $('delay-input').value = String(Math.round(p.delay_ms / 1000));
-      arm(p.delay_ms);
-    };
+    b.innerHTML = `<span style="color:var(--accent)">${tooBig ? '🔒' : '⚡'}</span><span>${fmtDelay(p.delay_ms)}</span>`;
+    b.onclick = tooBig
+      ? () => jumpToBufferSetting(needMB)
+      : () => { $('delay-input').value = String(Math.round(p.delay_ms / 1000)); arm(p.delay_ms); };
     c.appendChild(b);
   });
 }
@@ -2536,7 +2592,16 @@ function renderStats(s){
   if (rateHistory.length > HISTORY_LEN) rateHistory.shift();
   cpuHistory.push(s.cpu_pct || 0);
   if (cpuHistory.length > HISTORY_LEN) cpuHistory.shift();
-  animateNumber('stat-rate', s.stats.bitrate_kbps || 0, 500);
+  // Bitrate in: count up, auto kbps -> Mbps so a live stream reads "6.20
+  // Mbps" instead of "6200 kbps".
+  const rkbps = s.stats.bitrate_kbps || 0;
+  if (rkbps >= 1000){
+    animateNumber('stat-rate', rkbps, 500, v => (v/1000).toFixed(2));
+    $('stat-rate-u').textContent = 'Mbps';
+  } else {
+    animateNumber('stat-rate', rkbps, 500, v => Math.round(v).toString());
+    $('stat-rate-u').textContent = 'kbps';
+  }
   animateNumber('stat-cpu', s.cpu_pct || 0, 500, v => v.toFixed(1));
   updateSpark('spark-rate-line', 'spark-rate-fill', rateHistory, 760, 70);
   updateSpark('spark-cpu-line', 'spark-cpu-fill', cpuHistory, 360, 48);
@@ -2585,15 +2650,21 @@ function formatIconSvg(kind){
 }
 
 // Set the card's format icon + hover tooltip from the destination's
-// platform/format/readiness. Twitch shows "both" (native Dual Format);
-// non-Twitch shows horizontal or vertical, with an amber-tinted, distinct
-// tooltip while a vertical canvas is still waiting on Dual Format.
+// *actual* live state, not an assumed config. Twitch reads horizontal by
+// default (the normal case) and only flips to "both" when a vertical canvas
+// is really on the wire (Dual Format live). Non-Twitch shows horizontal, or
+// vertical with a distinct amber state while it waits on Dual Format.
 function updateFormatIcon(r, d){
   if (!r.format) return;
   let kind, title, cls = '';
   if (d.platform === 'twitch'){
-    kind = 'both';
-    title = 'Twitch Dual Format: sends both horizontal (16:9) and vertical (9:16) automatically when Dual Format / Enhanced Broadcasting is on in OBS.';
+    if (d.vertical_canvas_present){
+      kind = 'both'; cls = 'fmt-vertical';
+      title = 'Dual Format active: Twitch is receiving both a horizontal (16:9) and a vertical (9:16) canvas. InstantClone forwards both.';
+    } else {
+      kind = 'horizontal';
+      title = 'Horizontal (16:9) - a normal Twitch stream (Enhanced Broadcasting is horizontal too). Turn on Twitch Dual Format in OBS to also send a vertical 9:16 canvas.';
+    }
   } else if (d.stream_format === 'vertical'){
     kind = 'vertical';
     if (d.vertical_ready === false){
@@ -2881,12 +2952,19 @@ function renderProfilesPane(){
       const tag = document.createElement('span'); tag.className = 'profile-tag'; tag.textContent = ds;
       b.appendChild(tag);
     }
+    const needMB = tooBig ? requiredMBForMs(p.delay_ms) : 0;
     if (tooBig){
-      const needMB = requiredMBForMs(p.delay_ms);
-      const warn = document.createElement('span'); warn.className = 'profile-warn';
-      warn.textContent = `needs ≥ ${needMB} MB`;
-      b.appendChild(warn);
-      b.title = `Buffer too small at the current bitrate - raise buffer in System tab to ≥ ${needMB} MB to use this profile.`;
+      // Swap the bolt for a lock and offer a one-click fix instead of a
+      // dead red "needs X MB" label the user has to act on manually.
+      b.querySelector('.profile-bolt').innerHTML =
+        '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><rect x="3.2" y="7" width="9.6" height="6.5" rx="1.5"/><path d="M5.2 7V5a2.8 2.8 0 0 1 5.6 0v2"/></svg>';
+      const fix = document.createElement('span');
+      fix.className = 'profile-fix';
+      fix.textContent = `Raise buffer → ${needMB} MB`;
+      fix.title = `This delay needs a ≥ ${needMB} MB buffer at the current bitrate (you have ${lastConfig?lastConfig.buffer_mb:'?'} MB ≈ ${fmtDelay(cap)}). Click to set it in System → Buffer, then Save + restart.`;
+      fix.onclick = (e) => { e.stopPropagation(); jumpToBufferSetting(needMB); };
+      b.appendChild(fix);
+      b.title = `Buffer too small for ${fmtDelay(p.delay_ms)} at the current bitrate - click to raise it.`;
     } else if (ds === 'active' && !isCur){
       b.title = `Adjust live delay to ${p.name}`;
     } else if (ds === 'armed' && !isCur){
@@ -2895,7 +2973,9 @@ function renderProfilesPane(){
     const x = document.createElement('span'); x.className = 'ic-btn-tiny'; x.textContent = '✕';
     x.onclick = (e) => { e.stopPropagation(); delProfile(p.name); };
     b.appendChild(x);
-    b.onclick = () => arm(p.delay_ms);  // arm() handles capacity refusal + active/armed live update
+    // Too-big rows jump to the buffer setting (the only thing that unblocks
+    // them); usable rows arm the delay.
+    b.onclick = tooBig ? () => jumpToBufferSetting(needMB) : () => arm(p.delay_ms);
     c.appendChild(b);
   });
 }
@@ -2930,6 +3010,23 @@ async function addProfile(){
 async function delProfile(name){
   await fetch('/profiles/delete',{method:'POST',body:new URLSearchParams({name})});
   loadProfiles();
+}
+// Jump to System -> Buffer with a target size prefilled, so a profile that
+// "needs more MB" is one click from being fixable. Buffer changes need a
+// restart (the DiskRing is immutable once mapped) - the restart banner
+// already communicates that after Save.
+function jumpToBufferSetting(mb){
+  showTab('system');
+  showSubTab('system', 'buffer');
+  const el = $('s-bmb');
+  if (el){
+    if (mb) el.value = mb;
+    renderBufferHint();
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+    el.focus();
+    el.scrollIntoView({behavior:'smooth', block:'center'});
+  }
+  toast('Set the buffer size, hit Save, then restart to use this delay.', 'ok');
 }
 
 // ── Config / Settings ─────────────────────────────────────────────────

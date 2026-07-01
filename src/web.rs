@@ -765,7 +765,7 @@ fn platforms_json() -> String {
     r#"[
   {"slug":"twitch","label":"Twitch","key_url":"https://dashboard.twitch.tv/u/_/settings/stream","key_help":"Twitch Creator Dashboard → Settings → Stream → Primary Stream Key","tip":"Twitch's transcoded quality ladder (1080p / 720p / 480p / 360p / 160p) is account-tier gated - non-Affiliates get Source-Only at any bitrate, Affiliate / Partner get the ladder. In Source-Only mode every viewer must decode your full source bitrate, and above ~8 Mbps mobile devices may fail (Error #1000 / black screen with audio). Stay ≤ 8 Mbps if your audience includes mobile and you're not sure your account gets transcoded."},
   {"slug":"youtube","label":"YouTube Live","key_url":"https://studio.youtube.com/channel/UC/livestreaming","key_help":"YouTube Studio → Go live → Stream tab → Stream key","tip":"First-time live: YouTube requires a 24h verification window after enabling live streaming."},
-  {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream","tip":"Kick runs on AWS IVS - DISABLE B-frames in OBS (Output → Advanced → x264/NVENC) or the stream will be dropped. Keep bitrate ≤ 8500 kbps and keyframe interval 1-2 s."},
+  {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream","tip":"Kick runs on AWS IVS - DISABLE B-frames in OBS (Output → Advanced → x264/NVENC) or the stream will be dropped. Keep bitrate ≤ 8500 kbps and keyframe interval 1-2 s. Multistreaming Kick with Twitch/YouTube? OBS encodes once and InstantClone fans it out, so set B-frames to 0 for everyone - Twitch and YouTube accept no-B-frames just fine, only Kick is strict. Delay and cuts work either way."},
   {"slug":"trovo","label":"Trovo","key_url":"https://studio.trovo.live/channel/myinfo","key_help":"Trovo Studio → Channel → My Info → Stream Key","tip":null},
   {"slug":"restream","label":"Restream.io","key_url":"https://app.restream.io/channel-settings","key_help":"Restream → Channel Settings → Stream Key","tip":"Restream relays your single stream to multiple platforms - per-platform limits apply on the downstream side, not here."},
   {"slug":"custom","label":"Custom RTMP URL","key_url":null,"key_help":null,"tip":null}
@@ -2141,17 +2141,25 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         // "waiting for Dual Format" hint. Non-vertical destinations always
         // report ready=true so the badge logic stays simple.
         let vertical = d.wants_vertical();
-        let vertical_ready = if vertical {
+        // A portrait canvas is present on the wire right now (Twitch Dual
+        // Format is live). Detected globally and stored on every dest each
+        // tick, so it's meaningful for Twitch cards too - that's what lets
+        // the format icon show "both" only when Dual Format is actually on,
+        // not just because the destination is Twitch.
+        let vertical_canvas_present = {
             use std::sync::atomic::Ordering;
             ctrl.destination_state(&d.id)
                 .vertical_primary_track
                 .load(Ordering::Relaxed)
                 != 0xFF
+        };
+        let vertical_ready = if vertical {
+            vertical_canvas_present
         } else {
             true
         };
         out.push_str(&format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"vertical_ready":{vr},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled,
@@ -2167,6 +2175,7 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             vie = d.vod_audio_inject_eb,
             sf = json_escape_quoted(&d.stream_format),
             vr = vertical_ready,
+            vcp = vertical_canvas_present,
             ks = !d.stream_key.is_empty(),
             ur = json_escape_quoted(&redact_url(&url)),
             al = alive,
