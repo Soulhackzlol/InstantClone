@@ -1964,7 +1964,8 @@ async fn post_destination_upsert(
         form.get("vod_audio_inject_eb").map(String::as_str),
         Some("on" | "true" | "1")
     );
-    let stream_format = normalize_stream_format(&platform, form.get("stream_format").map(String::as_str));
+    let stream_format =
+        normalize_stream_format(&platform, form.get("stream_format").map(String::as_str));
 
     if name.trim().is_empty() {
         return (
@@ -3287,16 +3288,34 @@ mod tests {
     #[test]
     fn normalize_stream_format_rules() {
         // Vertical honored on non-Twitch platforms.
-        assert_eq!(normalize_stream_format("youtube", Some("vertical")), "vertical");
-        assert_eq!(normalize_stream_format("kick", Some("vertical")), "vertical");
-        assert_eq!(normalize_stream_format("custom", Some("vertical")), "vertical");
+        assert_eq!(
+            normalize_stream_format("youtube", Some("vertical")),
+            "vertical"
+        );
+        assert_eq!(
+            normalize_stream_format("kick", Some("vertical")),
+            "vertical"
+        );
+        assert_eq!(
+            normalize_stream_format("custom", Some("vertical")),
+            "vertical"
+        );
         // Twitch is always horizontal (native dual-canvas), even if the form
         // somehow carried "vertical".
-        assert_eq!(normalize_stream_format("twitch", Some("vertical")), "horizontal");
+        assert_eq!(
+            normalize_stream_format("twitch", Some("vertical")),
+            "horizontal"
+        );
         // Everything else falls back to horizontal.
-        assert_eq!(normalize_stream_format("youtube", Some("horizontal")), "horizontal");
+        assert_eq!(
+            normalize_stream_format("youtube", Some("horizontal")),
+            "horizontal"
+        );
         assert_eq!(normalize_stream_format("youtube", None), "horizontal");
-        assert_eq!(normalize_stream_format("youtube", Some("garbage")), "horizontal");
+        assert_eq!(
+            normalize_stream_format("youtube", Some("garbage")),
+            "horizontal"
+        );
     }
 
     #[test]

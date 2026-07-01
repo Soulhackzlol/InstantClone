@@ -601,7 +601,8 @@ pub fn sps_dimensions(seq_header: &[u8]) -> Option<(u32, u32)> {
         // near-u32::MAX Exp-Golomb values, and a plain `+` would panic in
         // debug / wrap in release, breaking the "never panics" contract.
         width = width.saturating_sub(crop_unit_x.checked_mul(crop_left.checked_add(crop_right)?)?);
-        height = height.saturating_sub(crop_unit_y.checked_mul(crop_top.checked_add(crop_bottom)?)?);
+        height =
+            height.saturating_sub(crop_unit_y.checked_mul(crop_top.checked_add(crop_bottom)?)?);
     }
     if width == 0 || height == 0 {
         return None;
@@ -1620,8 +1621,14 @@ mod tests {
 
     #[test]
     fn seq_header_codec_detects_framings() {
-        assert_eq!(seq_header_codec(&legacy_avc_seq_header(40, 30)), VideoCodec::Avc);
-        assert_eq!(seq_header_codec(&onetrack_avc_seq_header(1, 30, 40)), VideoCodec::Avc);
+        assert_eq!(
+            seq_header_codec(&legacy_avc_seq_header(40, 30)),
+            VideoCodec::Avc
+        );
+        assert_eq!(
+            seq_header_codec(&onetrack_avc_seq_header(1, 30, 40)),
+            VideoCodec::Avc
+        );
         // Enhanced single-track HEVC seq header (0x90 = IsEx|key|SequenceStart).
         let mut hevc = vec![0x90u8];
         hevc.extend_from_slice(b"hvc1");
@@ -1692,7 +1699,11 @@ mod tests {
         let out = select_video_bytes(&kf, VideoEgress::Track(1)).expect("keyframe forwards");
         assert_eq!(out[0], 0x17, "legacy keyframe head");
         assert_eq!(out[1], 0x01, "AVCPacketType: NALU");
-        assert_eq!(&out[2..5], &[0, 0, 0], "CodedFramesX carries composition time 0");
+        assert_eq!(
+            &out[2..5],
+            &[0, 0, 0],
+            "CodedFramesX carries composition time 0"
+        );
         assert_eq!(&out[5..], &[0, 0, 0, 5, 0x65, 1, 2, 3, 4]);
 
         // CodedFrames inter frame preserves the 3-byte composition time.
@@ -1704,7 +1715,11 @@ mod tests {
         let out = select_video_bytes(&inter, VideoEgress::Track(1)).expect("inter forwards");
         assert_eq!(out[0], 0x27, "legacy inter head");
         assert_eq!(out[1], 0x01);
-        assert_eq!(&out[2..5], &[0x00, 0x00, 0x10], "composition time preserved");
+        assert_eq!(
+            &out[2..5],
+            &[0x00, 0x00, 0x10],
+            "composition time preserved"
+        );
         assert_eq!(&out[5..], &[0, 0, 0, 3, 0x41, 9, 9]);
 
         // A OneTrack avc1 metadata/colour packet has no legacy equivalent
