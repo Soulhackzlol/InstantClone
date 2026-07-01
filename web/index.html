@@ -467,7 +467,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .dest-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
 .dcard{background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:15px;
   display:flex;flex-direction:column;gap:13px;
-  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out);
+  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),opacity .25s var(--ease-out);
   position:relative;overflow:hidden}
 /* Platform-coloured left edge (landing style): subtle when idle, solid +
    glowing when the feed is live. */
@@ -550,12 +550,18 @@ input,select,textarea{font-family:inherit;color:inherit}
 /* Edit / remove: subtle glass buttons over the trace, revealed on hover. */
 .dcard-actions{position:absolute;right:9px;bottom:9px;display:flex;gap:5px;z-index:2;
   opacity:0;transform:translateY(3px);transition:opacity .18s var(--ease-out),transform .18s var(--ease-out)}
-.dcard:hover .dcard-actions,.dcard:focus-within .dcard-actions{opacity:1;transform:none}
+/* Reveal on card hover, or when an action button itself is focused
+   (keyboard). Deliberately NOT the whole card's :focus-within - clicking
+   the toggle switch focuses it, which would leave the actions stuck open
+   after the mouse leaves. */
+.dcard:hover .dcard-actions,.dcard-actions:focus-within{opacity:1;transform:none}
+/* Solid-ish background rather than backdrop-filter: the blur only engaged
+   after the opacity transition finished, which read as a visible "pop". */
 .dcard-act{width:27px;height:27px;border-radius:8px;border:1px solid var(--line);cursor:pointer;
   display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--fg-2);
-  background:color-mix(in oklch,var(--bg-1) 70%,transparent);backdrop-filter:blur(6px);
+  background:color-mix(in oklch,var(--bg-1) 90%,transparent);
   transition:color .15s,background .15s,border-color .15s}
-.dcard-act:hover{color:var(--fg);border-color:var(--line-2);background:color-mix(in oklch,var(--bg-1) 88%,transparent)}
+.dcard-act:hover{color:var(--fg);border-color:var(--line-2);background:var(--bg-1)}
 .dcard-act.dcard-del:hover{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,var(--line))}
 .dest-add{appearance:none;background:transparent;border:1px dashed var(--line-2);border-radius:12px;
   color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
