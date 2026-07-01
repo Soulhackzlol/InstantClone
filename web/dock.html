@@ -8,9 +8,16 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
-  font-family:-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden;
+  font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+  overflow-x:hidden;overflow-y:auto;
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-.wrap{display:flex;flex-direction:column;height:100vh;padding:13px;gap:10px}
+/* Thin scrollbar only when a dock is genuinely too short for the controls. */
+body::-webkit-scrollbar{width:6px}
+body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
+.wrap{display:flex;flex-direction:column;min-height:100vh;padding:12px;gap:9px}
+/* Critical rows never shrink; only the tip/egress lines absorb a squeeze in
+   a short dock, so the big number + controls always render fully. */
+.top,.screen,.input-row,.cta-row{flex:0 0 auto}
 .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
 
 /* Phase chip */
@@ -32,10 +39,12 @@ html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
 
 /* Big delay readout inside an inset "screen" */
 .screen{background:var(--panel-2);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);
-  border-radius:12px;padding:14px 12px 12px;text-align:center;position:relative;overflow:hidden}
-.cur{font-size:42px;font-weight:800;letter-spacing:-2px;font-variant-numeric:tabular-nums;line-height:1;
-  transition:color .25s}
-.cur .u{font-size:16px;color:var(--fg-3);font-weight:600;margin-left:2px;letter-spacing:0}
+  border-radius:12px;padding:12px;text-align:center;position:relative}
+/* Responsive so it never clips in a narrow/short dock; line-height leaves
+   room for the glyphs (line-height:1 was chopping the digits' top/bottom). */
+.cur{font-size:clamp(28px,13vw,42px);font-weight:800;letter-spacing:-1.5px;
+  font-variant-numeric:tabular-nums;line-height:1.14;transition:color .25s}
+.cur .u{font-size:.4em;color:var(--fg-3);font-weight:600;margin-left:2px;letter-spacing:0}
 .cur.changing{color:var(--accent)}
 .bar{position:relative;height:5px;background:var(--panel);border-radius:999px;overflow:hidden;margin-top:12px}
 .bar .fill{position:absolute;inset:0 auto 0 0;width:0;border-radius:999px;
@@ -239,7 +248,7 @@ function applyState(j){
   } else { eg.classList.add('hide'); }
   // Sub-tip (crossfaded)
   setTip(
-    !s.ingest_alive ? 'Point your encoder at rtmp://…/live · key: live' :
+    !s.ingest_alive ? 'Point your encoder at rtmp://…/live' :
     ds==='active'   ? `Live ${(s.current_delay_ms/1000).toFixed(1)}s behind real time.` :
     ds==='armed'    ? 'Buffer full. Hit Activate to go live with delay.' :
     ds==='arming'   ? 'Filling buffer… you can cancel any time.' :
