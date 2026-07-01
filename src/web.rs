@@ -398,6 +398,87 @@ async fn route(
                 ),
             }
         }
+        ("POST", "/obs/setup-vod-eb") => {
+            // One-click VOD-audio + Enhanced Broadcasting setup. Runs the
+            // three steps in order and reports each independently so the
+            // dashboard can show a red-to-green checklist: a failure in one
+            // step (e.g. OBS still open, so the flag write is blocked) is
+            // surfaced with its own message instead of failing the whole
+            // operation silently.
+            let web_port = settings.borrow().web_port;
+            let (flag_ok, flag_msg) = match crate::obs_register::set_vod_audio_flag(true) {
+                Ok(true) => (true, "VOD-track flag written to OBS config".to_string()),
+                Ok(false) => (
+                    false,
+                    "OBS config not found - is OBS installed?".to_string(),
+                ),
+                Err(e) => (
+                    false,
+                    format!("could not write OBS config (close OBS and retry): {e}"),
+                ),
+            };
+            let (launch_ok, launch_msg) =
+                match crate::obs_register::launch_obs_with_eb_config(web_port) {
+                    Ok(exe) => {
+                        ctrl.log("[vod-eb setup] launched OBS with --config-url");
+                        (true, format!("OBS launched ({})", exe.display()))
+                    }
+                    Err(e) => (false, e.to_string()),
+                };
+            let verified = crate::obs_register::vod_audio_flag_set();
+            let verify_msg = if verified {
+                "VOD-track flag confirmed in OBS config"
+            } else {
+                "VOD-track flag not present after write - close OBS and try again"
+            };
+            let all_ok = flag_ok && launch_ok && verified;
+            (
+                // Always 200: partial success is still a valid response;
+                // the per-step `ok` flags carry the detail the UI renders.
+                "200 OK",
+                "application/json",
+                format!(
+                    r#"{{"ok":{ok},"steps":[{{"name":"VOD-track flag","ok":{f},"msg":"{fm}"}},{{"name":"Launch OBS (EB)","ok":{l},"msg":"{lm}"}},{{"name":"Verify flag","ok":{v},"msg":"{vm}"}}]}}"#,
+                    ok = all_ok,
+                    f = flag_ok,
+                    fm = json_escape(&flag_msg),
+                    l = launch_ok,
+                    lm = json_escape(&launch_msg),
+                    v = verified,
+                    vm = json_escape(verify_msg),
+                ),
+            )
+        }
+        ("POST", "/shortcut/create-eb") => match crate::obs_register::create_eb_shortcut() {
+            Ok(path) => {
+                ctrl.log(format!(
+                    "created VOD+EB desktop shortcut: {}",
+                    path.display()
+                ));
+                let kind = if path.extension().and_then(|e| e.to_str()) == Some("lnk") {
+                    "shortcut"
+                } else {
+                    "launcher (.cmd fallback)"
+                };
+                (
+                    "200 OK",
+                    "application/json",
+                    format!(
+                        r#"{{"ok":true,"path":"{p}","kind":"{k}"}}"#,
+                        p = json_escape(&path.display().to_string()),
+                        k = kind,
+                    ),
+                )
+            }
+            Err(e) => (
+                "500 Internal Server Error",
+                "application/json",
+                format!(
+                    r#"{{"ok":false,"error":"{}"}}"#,
+                    json_escape(&e.to_string())
+                ),
+            ),
+        },
         ("GET", "/update-check") => {
             // check_update() uses blocking ureq with a ~10 s ceiling. Hand
             // it to a blocking thread so a slow GitHub doesn't pin the
@@ -634,8 +715,14 @@ fn state_json(
         )
     }).collect::<Vec<_>>().join(",");
 
+    // A portrait canvas is present on the wire (Twitch Dual Format is live).
+    // Drives the header "Dual Format" pill.
+    let vertical_present =
+        crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock().unwrap())
+            .is_some();
+
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"cpu_pct":{cp:.2},"rss_bytes":{rb},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         ad = ctrl.armed_delay_ms(),
         td = ctrl.target_delay_ms(),
@@ -661,6 +748,7 @@ fn state_json(
         ac = ctrl.audio_codec().label(),
         mtv = ctrl.multitrack_video(),
         mta = ctrl.multitrack_audio(),
+        vp = vertical_present,
         cp = cpu_pct,
         rb = rss_bytes,
         pt = ctrl.publisher_token(),
@@ -684,7 +772,7 @@ fn platforms_json() -> String {
     r#"[
   {"slug":"twitch","label":"Twitch","key_url":"https://dashboard.twitch.tv/u/_/settings/stream","key_help":"Twitch Creator Dashboard → Settings → Stream → Primary Stream Key","tip":"Twitch's transcoded quality ladder (1080p / 720p / 480p / 360p / 160p) is account-tier gated - non-Affiliates get Source-Only at any bitrate, Affiliate / Partner get the ladder. In Source-Only mode every viewer must decode your full source bitrate, and above ~8 Mbps mobile devices may fail (Error #1000 / black screen with audio). Stay ≤ 8 Mbps if your audience includes mobile and you're not sure your account gets transcoded."},
   {"slug":"youtube","label":"YouTube Live","key_url":"https://studio.youtube.com/channel/UC/livestreaming","key_help":"YouTube Studio → Go live → Stream tab → Stream key","tip":"First-time live: YouTube requires a 24h verification window after enabling live streaming."},
-  {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream","tip":"Kick runs on AWS IVS - DISABLE B-frames in OBS (Output → Advanced → x264/NVENC) or the stream will be dropped. Keep bitrate ≤ 8500 kbps and keyframe interval 1-2 s."},
+  {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream","tip":"Kick ingests on AWS IVS (low-latency). What it actually enforces: H.264, CBR, keyframe interval 2 s, bitrate ≤ 8000 kbps, up to 60 fps. B-frames: contrary to a lot of older guides, Kick's normal RTMP ingest accepts them - the strict no-B-frames rule is AWS IVS real-time/WHIP, which Kick doesn't use for OBS streaming, so you usually don't need to change anything. If Kick ever rejects your stream, set B-frames to 0 in OBS (Output → Advanced); that's safe for Twitch/YouTube too. InstantClone forwards one encode without re-encoding, so B-frames can't be stripped for Kick alone. And with Twitch Enhanced Broadcasting on, Twitch chooses the encode settings (including B-frames) for you."},
   {"slug":"trovo","label":"Trovo","key_url":"https://studio.trovo.live/channel/myinfo","key_help":"Trovo Studio → Channel → My Info → Stream Key","tip":null},
   {"slug":"restream","label":"Restream.io","key_url":"https://app.restream.io/channel-settings","key_help":"Restream → Channel Settings → Stream Key","tip":"Restream relays your single stream to multiple platforms - per-platform limits apply on the downstream side, not here."},
   {"slug":"custom","label":"Custom RTMP URL","key_url":null,"key_help":null,"tip":null}
@@ -1429,6 +1517,7 @@ async fn post_config(
                 youtube_ingest: String::new(),
                 vod_audio: false,
                 vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
             });
         }
         let d = &mut new_settings.destinations[0];
@@ -1875,6 +1964,8 @@ async fn post_destination_upsert(
         form.get("vod_audio_inject_eb").map(String::as_str),
         Some("on" | "true" | "1")
     );
+    let stream_format =
+        normalize_stream_format(&platform, form.get("stream_format").map(String::as_str));
 
     if name.trim().is_empty() {
         return (
@@ -1897,6 +1988,7 @@ async fn post_destination_upsert(
         existing.youtube_ingest = youtube_ingest;
         existing.vod_audio = vod_audio;
         existing.vod_audio_inject_eb = vod_audio_inject_eb;
+        existing.stream_format = stream_format;
     } else {
         ns.destinations.push(config::Destination {
             id,
@@ -1909,6 +2001,7 @@ async fn post_destination_upsert(
             youtube_ingest,
             vod_audio,
             vod_audio_inject_eb,
+            stream_format,
         });
     }
 
@@ -2032,6 +2125,27 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             .cloned()
             .unwrap_or_else(|| (id.into(), false, 0, 0, 0, 0, 0, 0))
     };
+    // Parse each cached video seq-header once per poll, not once per
+    // destination: the res/codec readout depends only on which TrackId a
+    // dest forwards, and horizontal dests all share track 0 while vertical
+    // dests share the one detected portrait primary. Keeps this
+    // frequently-polled endpoint off a per-dest lock + Exp-Golomb parse.
+    let readouts: std::collections::BTreeMap<u8, (String, String)> = {
+        let headers = ctrl.ring.video_seq_headers.lock().unwrap();
+        headers
+            .iter()
+            .map(|(&track, h)| {
+                let res = crate::h264::sps_dimensions(h)
+                    .map(|(w, hh)| format!("{}x{}", w, hh))
+                    .unwrap_or_default();
+                let codec = match crate::h264::seq_header_codec(h) {
+                    crate::h264::VideoCodec::Unknown => String::new(),
+                    c => c.label().to_string(),
+                };
+                (track, (res, codec))
+            })
+            .collect()
+    };
     let mut out = String::from("[");
     for (i, d) in s.destinations.iter().enumerate() {
         if i > 0 {
@@ -2039,8 +2153,43 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         }
         let url = d.egress_url().unwrap_or_default();
         let (_id, alive, _seq, kbps, tags, bytes, cuts, reconnects) = stats_for(&d.id);
+        // Vertical destinations report whether their canvas is resolved
+        // yet (Twitch Dual Format live + a portrait track detected). The
+        // dashboard turns this into a green "Vertical" badge vs an amber
+        // "waiting for Dual Format" hint. Non-vertical destinations always
+        // report ready=true so the badge logic stays simple.
+        let vertical = d.wants_vertical();
+        // A portrait canvas is present on the wire right now (Twitch Dual
+        // Format is live). Detected globally and stored on every dest each
+        // tick, so it's meaningful for Twitch cards too - that's what lets
+        // the format icon show "both" only when Dual Format is actually on,
+        // not just because the destination is Twitch.
+        use std::sync::atomic::Ordering;
+        let vertical_canvas_present = ctrl
+            .destination_state(&d.id)
+            .vertical_primary_track
+            .load(Ordering::Relaxed)
+            != 0xFF;
+        let vertical_ready = if vertical {
+            vertical_canvas_present
+        } else {
+            true
+        };
+        // Resolution + codec of the track this destination actually forwards
+        // (track 0 for horizontal/Twitch, the detected portrait primary for
+        // vertical), pulled from the per-poll readout map. Empty when the
+        // track isn't cached yet (non-AVC we can't measure, or vertical
+        // canvas not resolved -> target 0xFF isn't a key).
+        let target = if vertical {
+            ctrl.destination_state(&d.id)
+                .vertical_primary_track
+                .load(Ordering::Relaxed)
+        } else {
+            0
+        };
+        let (video_res, video_codec) = readouts.get(&target).cloned().unwrap_or_default();
         out.push_str(&format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled,
@@ -2054,6 +2203,11 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             yi = json_escape_quoted(&d.youtube_ingest),
             va = d.vod_audio,
             vie = d.vod_audio_inject_eb,
+            sf = json_escape_quoted(&d.stream_format),
+            vr = vertical_ready,
+            vcp = vertical_canvas_present,
+            vres = json_escape_quoted(&video_res),
+            vcod = json_escape_quoted(&video_codec),
             ks = !d.stream_key.is_empty(),
             ur = json_escape_quoted(&redact_url(&url)),
             al = alive,
@@ -2089,6 +2243,18 @@ fn generate_dest_id() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("d{:x}", nanos as u64)
+}
+
+/// Normalize the destination form's `stream_format` field. Only "vertical"
+/// on a non-Twitch platform is honored; everything else (absent, "horizontal",
+/// a typo, or ANY value on Twitch - which gets native dual-canvas passthrough)
+/// resolves to the safe horizontal default.
+fn normalize_stream_format(platform: &str, raw: Option<&str>) -> String {
+    if platform != "twitch" && raw == Some("vertical") {
+        "vertical".to_string()
+    } else {
+        "horizontal".to_string()
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -3118,6 +3284,39 @@ mod tests {
     // with `tracing_enabled` between 3f9db09 (toggle added) and
     // 6a3990b (default flipped to off). Invisible until users
     // actually tried to enable the toggle on a fresh install.
+
+    #[test]
+    fn normalize_stream_format_rules() {
+        // Vertical honored on non-Twitch platforms.
+        assert_eq!(
+            normalize_stream_format("youtube", Some("vertical")),
+            "vertical"
+        );
+        assert_eq!(
+            normalize_stream_format("kick", Some("vertical")),
+            "vertical"
+        );
+        assert_eq!(
+            normalize_stream_format("custom", Some("vertical")),
+            "vertical"
+        );
+        // Twitch is always horizontal (native dual-canvas), even if the form
+        // somehow carried "vertical".
+        assert_eq!(
+            normalize_stream_format("twitch", Some("vertical")),
+            "horizontal"
+        );
+        // Everything else falls back to horizontal.
+        assert_eq!(
+            normalize_stream_format("youtube", Some("horizontal")),
+            "horizontal"
+        );
+        assert_eq!(normalize_stream_format("youtube", None), "horizontal");
+        assert_eq!(
+            normalize_stream_format("youtube", Some("garbage")),
+            "horizontal"
+        );
+    }
 
     #[test]
     fn apply_field_str_persists_tracing_enabled_value() {

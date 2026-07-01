@@ -82,6 +82,14 @@ fn main() -> std::io::Result<()> {
     let suppress_browser = raw_args.iter().any(|a| a == "--no-browser")
         || std::env::var("INSTANTCLONE_NO_BROWSER").ok().as_deref() == Some("1");
 
+    // `--launch-eb` cold-starts straight into VOD-audio + Enhanced
+    // Broadcasting mode: once the web server is up we write OBS's
+    // VOD-track unlock flag and launch OBS with the `--config-url` flag.
+    // This is what the "Create desktop shortcut" button targets, so a
+    // double-click brings up the whole VOD+EB setup with no dashboard
+    // clicks. Idempotent and safe to pass on every launch.
+    let launch_eb = raw_args.iter().any(|a| a == "--launch-eb");
+
     // Sweep any `.old` / `.new` exe left over from a self-update swap. When
     // we got here via the relauncher, this deletes the previous version we
     // just replaced; otherwise it's a harmless no-op.
@@ -230,6 +238,35 @@ fn main() -> std::io::Result<()> {
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 open_browser(&url);
+            });
+        }
+
+        // `--launch-eb` (the desktop-shortcut entry point): once the web
+        // server has had a moment to bind, write OBS's VOD-track flag and
+        // launch OBS pointed at our multitrack-config endpoint. Runs on a
+        // blocking thread so the file write + process spawn don't stall
+        // the async runtime, and degrades quietly (a missing OBS just logs
+        // a line) so a stale shortcut never crashes the app.
+        if launch_eb {
+            let web_port = settings.web_port;
+            let ctrl_eb = ctrl.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                let _ =
+                    tokio::task::spawn_blocking(move || {
+                        match obs_register::set_vod_audio_flag(true) {
+                            Ok(true) => ctrl_eb.log("[--launch-eb] VOD-track flag written"),
+                            Ok(false) => ctrl_eb
+                                .log("[--launch-eb] OBS config not found - is OBS installed?"),
+                            Err(e) => ctrl_eb.log(format!("[--launch-eb] flag write failed: {e}")),
+                        }
+                        match obs_register::launch_obs_with_eb_config(web_port) {
+                            Ok(exe) => ctrl_eb
+                                .log(format!("[--launch-eb] launched OBS ({})", exe.display())),
+                            Err(e) => ctrl_eb.log(format!("[--launch-eb] OBS launch failed: {e}")),
+                        }
+                    })
+                    .await;
             });
         }
 
@@ -383,7 +420,53 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         //    bailed out cleanly when ingest went away - we want a fresh
         //    pump now that ingest is back).
         let ingest_alive = ctrl.ingest_alive();
+        // Vertical-canvas detection runs once per supervisor tick (~2 s)
+        // off the shared seq-header cache, so it self-heals as Twitch Dual
+        // Format turns on/off mid-stream. `None` until a portrait track is
+        // seen; we map that to the 0xFF "unresolved" sentinel each tick so
+        // a vanished vertical canvas reverts vertical destinations to
+        // "waiting" without a restart.
+        let vertical_track = {
+            let headers = ctrl.ring.video_seq_headers.lock().unwrap();
+            crate::h264::detect_vertical_primary_track(&headers)
+        };
         for (dest, url) in &desired {
+            // Keep each destination's vertical policy in sync with its
+            // current settings and the detected canvas every tick - this
+            // is cheap (atomic stores) and means a format edit or a newly
+            // appearing vertical canvas takes effect without waiting for
+            // an egress restart.
+            {
+                let state = ctrl.destination_state(&dest.id);
+                state
+                    .egress_vertical
+                    .store(dest.wants_vertical(), std::sync::atomic::Ordering::Relaxed);
+                state.vertical_primary_track.store(
+                    vertical_track.unwrap_or(0xFF),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+            // A vertical destination with no 9:16 canvas on the wire yet has
+            // nothing to send. Don't open the upstream connection - it would
+            // just sit idle, get dropped on the platform's inactivity
+            // timeout, and churn reconnects. Tear down any pump and wait for
+            // the canvas; the card shows "Waiting for Dual Format". It spawns
+            // the moment detection resolves (self-heals within a tick).
+            if dest.wants_vertical() && vertical_track.is_none() {
+                if let Some((_u, handle)) = running.remove(&dest.id) {
+                    let st = ctrl.destination_state(&dest.id);
+                    st.shutdown_requested
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    let abort = handle.abort_handle();
+                    let _ = tokio::time::timeout(Duration::from_millis(1500), handle).await;
+                    abort.abort();
+                    ctrl.log(format!(
+                        "[{}] vertical: no Dual Format canvas yet - holding off connecting",
+                        dest.name
+                    ));
+                }
+                continue;
+            }
             // Enhanced Broadcasting override: when the
             // /obs/multitrack-config proxy gets back a real
             // session-allocated IVS URL from Twitch's API, it stashes

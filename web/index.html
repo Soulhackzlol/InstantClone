@@ -93,6 +93,16 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--accent) 18%,transparent);
   border-bottom-color:var(--accent)}
 .ic-brand-sub a:visited{color:var(--accent)}
+/* Unified inline content links: accent colour + animated underline, so
+   every in-body link (help text, tour, notes) matches the app instead of
+   falling back to the default browser blue. */
+.ic-link,.muted a,.tour-body a,.dest-form-help a,#dest-form-format-help a,#dest-form-twitch-native-note a{
+  color:var(--accent);text-decoration:none;font-weight:600;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 32%,transparent);
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.ic-link:hover,.muted a:hover,.tour-body a:hover,#dest-form-format-help a:hover,#dest-form-twitch-native-note a:hover{
+  color:var(--fg);border-color:var(--fg)}
+.ic-link:visited,.muted a:visited,.tour-body a:visited{color:var(--accent)}
 .ic-brand-dot{display:inline-block;width:5px;height:5px;border-radius:999px;background:var(--fg-4);margin:0 6px 2px}
 .ic-header-right{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
 .ic-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border-radius:999px;
@@ -109,15 +119,31 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--danger) 8%,var(--surface-3))}
 .ic-pill.bad .dot{background:var(--danger)}
 .ic-pill.live .dot{background:var(--live);animation:pulse-ring 1.8s var(--ease-out) infinite}
+/* Header status pills: muted directional icon + bold label + a value that
+   brightens when the pill is active, so "OBS Live" / "Egress 2/3 live"
+   reads at a glance and a dead state stays visually quiet. */
+.ic-pill-ic{width:13px;height:13px;flex:0 0 auto;opacity:.65;margin:0 -2px 0 -1px;transition:opacity .2s,color .2s}
+.ic-pill.ok .ic-pill-ic{opacity:.9}
+.ic-pill-k{font-weight:600}
+.ic-pill-v{color:var(--fg-3);font-variant-numeric:tabular-nums;transition:color .2s}
+.ic-pill.ok .ic-pill-v{color:var(--fg)}
+/* Fixed width so "Idle" <-> "6.20 Mbps" doesn't resize the pill and shove
+   the neighbouring header pills sideways on connect/disconnect. */
+.ic-pill-rate{gap:0;min-width:86px;justify-content:center}
+.ic-pill-rate .ic-pill-v{font-family:'JetBrains Mono',monospace;font-weight:500}
+.ic-pill-rate .unit{color:var(--fg-3);font-size:11px;margin-left:1px}
+/* Conditional header pills (codec / EB / backpressure / cap / update) are
+   toggled via [hidden]. When shown, display flips none->inline-flex, which
+   replays this entrance animation once - so they fade+scale in instead of
+   popping. (Exit stays instant; the appearance is the jarring part.) */
+#hdr-codec,#hdr-ebroadcast,#hdr-dualformat,#hdr-backpressure,#hdr-twitch-cap,#hdr-update{
+  animation:pillIn .22s var(--ease-out)}
+@keyframes pillIn{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:none}}
 @keyframes pulse-ring{
   0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 60%,transparent)}
   70%{box-shadow:0 0 0 8px color-mix(in oklch,var(--live) 0%,transparent)}
   100%{box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 0%,transparent)}
 }
-.ic-bitrate{display:inline-flex;align-items:baseline;gap:6px;padding:6px 11px;border-radius:999px;
-  background:var(--surface-3);border:1px solid var(--line);
-  font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--fg);font-variant-numeric:tabular-nums}
-.ic-bitrate .unit{color:var(--fg-3);font-size:11px}
 
 /* ── Card / labels / buttons / inputs (atoms) ───────────── */
 .ic-card{background:linear-gradient(180deg,var(--surface-2),var(--surface));
@@ -179,7 +205,9 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ic-check.on{background:var(--accent);border-color:transparent}
 
 /* Toast */
-.ic-toast-rail{position:fixed;right:24px;bottom:24px;z-index:500;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+/* Above every overlay (modals 1000, tour 300, studio 400) so a toast
+   fired while the destination modal is open isn't hidden behind it. */
+.ic-toast-rail{position:fixed;right:24px;bottom:24px;z-index:2000;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 .ic-toast{background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;
   padding:10px 14px 10px 12px;display:flex;align-items:center;gap:10px;
   box-shadow:0 10px 30px rgba(0,0,0,.4);pointer-events:auto;
@@ -325,7 +353,9 @@ input,select,textarea{font-family:inherit;color:inherit}
 .hero-delay-num.d-active{color:var(--live)}
 .hero-delay-unit{font-size:32px;color:var(--fg-3);font-weight:400}
 .hero-delay-of{font-size:22px;color:var(--fg-3);margin-left:6px}
-.hero-delay-sub{color:var(--fg-3);font-size:13px;min-height:1.4em}
+.hero-delay-sub{color:var(--fg-3);font-size:13px;min-height:1.4em;
+  transition:opacity .15s var(--ease-out),transform .15s var(--ease-out)}
+.hero-delay-sub.subfade{opacity:0;transform:translateY(2px)}
 .arm-bar{height:4px;width:100%;background:var(--surface-3);border-radius:999px;overflow:hidden;
   margin-top:-4px;position:relative}
 .arm-bar-fill{height:100%;background:linear-gradient(90deg,color-mix(in oklch,var(--warn) 60%,transparent),var(--warn));
@@ -338,8 +368,11 @@ input,select,textarea{font-family:inherit;color:inherit}
 
 .cp-head{display:flex;align-items:baseline;justify-content:space-between}
 .cp-cap{color:var(--fg-4);font-size:11px}
-.cp-cap-warn{margin-top:8px;padding:8px 10px;border:1px solid var(--danger);border-radius:6px;background:color-mix(in oklch,var(--danger) 8%,var(--bg-2));color:var(--fg-2);font-size:11.5px;line-height:1.45}
+.cp-cap-warn{margin-top:8px;padding:8px 10px;border:1px solid var(--danger);border-radius:6px;background:color-mix(in oklch,var(--danger) 8%,var(--bg-2));color:var(--fg-2);font-size:11.5px;line-height:1.45;animation:softDrop .2s var(--ease-out)}
 .cp-cap-warn b{color:var(--danger);font-weight:600}
+/* Shared soft entrance for elements that appear on state change (capacity
+   warning, restart banner) so they slide+fade in instead of popping. */
+@keyframes softDrop{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
 .cp-input.field-error,.cp-input-row.field-error{border-color:var(--danger);color:var(--danger)}
 .cp-input-row{display:flex;align-items:center;gap:6px;background:var(--bg-2);
   border:1px solid var(--line);border-radius:10px;padding:4px}
@@ -369,6 +402,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--accent)}
 .cp-profile-chip:disabled{opacity:.4;cursor:not-allowed}
 .cp-cta{width:100%;padding:13px 18px;font-size:14px;border-radius:10px}
+#cp-cancel{animation:pillIn .2s var(--ease-out)}
 .cp-cta-pulse{animation:cta-pulse 1.8s var(--ease-out) infinite}
 @keyframes cta-pulse{
   0%{box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 0 0 0 var(--accent-glow)}
@@ -446,34 +480,49 @@ input,select,textarea{font-family:inherit;color:inherit}
 
 /* ── Destinations ────────────────────────────── */
 .dest-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
-.dcard{background:var(--bg-2);border:1px solid var(--line);border-radius:12px;padding:16px;
-  display:flex;flex-direction:column;gap:14px;
-  transition:border-color .2s var(--ease-out),transform .2s var(--ease-out);
+.dcard{background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:15px;
+  display:flex;flex-direction:column;gap:13px;
+  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),opacity .25s var(--ease-out);
   position:relative;overflow:hidden}
+/* Platform-coloured left edge (landing style): subtle when idle, solid +
+   glowing when the feed is live. */
 .dcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
-  background:color-mix(in oklch,var(--dc,var(--fg-3)) 60%,transparent);opacity:0;
-  transition:opacity .2s var(--ease-out)}
-.dcard:hover{border-color:var(--line-2)}
-.dcard:hover::before{opacity:.85}
-.dcard.alive::before{opacity:1;box-shadow:0 0 14px var(--dc,var(--accent))}
-.dcard.off{opacity:.65}
+  background:var(--dc,var(--fg-3));opacity:.5;
+  transition:opacity .2s var(--ease-out),box-shadow .2s var(--ease-out)}
+.dcard:hover{border-color:color-mix(in oklch,var(--dc,var(--accent)) 35%,var(--line-2));
+  box-shadow:0 16px 40px -22px color-mix(in oklch,var(--dc,var(--accent)) 70%,transparent)}
+.dcard:hover::before{opacity:.9}
+.dcard.alive{border-color:color-mix(in oklch,var(--dc,var(--accent)) 28%,var(--line))}
+.dcard.alive::before{opacity:1;box-shadow:0 0 16px var(--dc,var(--accent))}
+.dcard.off{opacity:.55}
+.dcard.off::before{opacity:.2}
 .dcard.platform-twitch   {--dc:#a78bfa}
 .dcard.platform-youtube  {--dc:#fda4af}
 .dcard.platform-kick     {--dc:#86efac}
 .dcard.platform-trovo    {--dc:#67e8f9}
 .dcard.platform-restream {--dc:#5eead4}
 .dcard.platform-custom   {--dc:#fcd34d}
-.dcard-head{display:flex;align-items:center;gap:12px}
-.dcard-icon{width:36px;height:36px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
-  background:color-mix(in oklch,var(--dc,var(--fg-3)) 14%,var(--surface-3));
-  border:1px solid color-mix(in oklch,var(--dc,var(--fg-3)) 35%,transparent);
+.dcard-head{display:flex;align-items:center;gap:9px}
+.dcard-icon{width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
+  background:color-mix(in oklch,var(--dc,var(--fg-3)) 16%,var(--surface-3));
+  border:1px solid color-mix(in oklch,var(--dc,var(--fg-3)) 38%,transparent);
   color:var(--dc,var(--fg-3));font-weight:700;font-size:14px;flex:0 0 auto}
-.dcard-name{font-size:14px;font-weight:600;color:var(--fg)}
-.dcard-host{font-size:11px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;
+.dcard-id{flex:1;min-width:0}
+.dcard-name{font-size:14px;font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dcard-host{font-size:11px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;
   font-family:'JetBrains Mono',monospace}
-.dcard-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:500;
-  padding:4px 8px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line);
-  color:var(--fg-3);flex:0 0 auto}
+/* Enable/disable toggle - platform-coloured when on, matching the landing. */
+.dcard-switch{appearance:none;width:34px;height:19px;background:var(--surface-3);border:1px solid var(--line);
+  border-radius:999px;position:relative;cursor:pointer;flex:0 0 auto;padding:0;
+  transition:background .2s var(--ease-out),border-color .2s var(--ease-out)}
+.dcard-switch>span{position:absolute;top:1px;left:1px;width:15px;height:15px;border-radius:999px;
+  background:var(--fg-3);transition:transform .2s var(--ease-spring),background .2s var(--ease-out);display:block}
+.dcard-switch.on{background:color-mix(in oklch,var(--dc,var(--accent)) 80%,transparent);border-color:transparent}
+.dcard-switch.on>span{transform:translateX(15px);background:#fff}
+.dcard-status{display:inline-flex;align-items:center;justify-content:center;gap:5px;font-size:11px;font-weight:500;
+  padding:3px 8px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line);
+  color:var(--fg-3);flex:0 0 auto;min-width:84px;
+  transition:color .2s ease,background .2s ease,border-color .2s ease}
 .dcard-status .d-dot{width:5px;height:5px;border-radius:999px;background:var(--fg-4)}
 .dcard-status.s-ready{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 30%,var(--line));
   background:color-mix(in oklch,var(--accent) 8%,var(--surface-3))}
@@ -482,20 +531,57 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--live) 8%,var(--surface-3))}
 .dcard-status.s-live .d-dot{background:var(--live);box-shadow:0 0 6px var(--live);
   animation:hpulse 1.6s infinite;--sc:var(--live)}
-.dcard-graph{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
-  position:relative;overflow:hidden}
-.dcard-graph-overlay{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
-.dcard-rate-row{display:flex;align-items:baseline;gap:4px}
-.dcard-rate{font-size:22px;font-weight:500;color:var(--fg);letter-spacing:-.02em;
+/* "Waiting for Dual Format": a vertical destination that holds a
+   connection but deliberately sends no video until OBS produces the 9:16
+   canvas. Amber + a slow pulse so it reads as "attention" not "error". */
+.dcard-status.s-wait{color:var(--warn,#d6a23a);border-color:color-mix(in oklch,var(--warn,#d6a23a) 32%,var(--line));
+  background:color-mix(in oklch,var(--warn,#d6a23a) 9%,var(--surface-3))}
+.dcard-status.s-wait .d-dot{background:var(--warn,#d6a23a);box-shadow:0 0 6px var(--warn,#d6a23a);
+  animation:hpulse 2.4s infinite;--sc:var(--warn,#d6a23a)}
+/* Orientation indicator: small glyph in the head; hover/focus shows the
+   full format + Dual Format requirement via the native tooltip. */
+.dcard-format{display:inline-flex;align-items:center;justify-content:center;
+  width:24px;height:24px;border-radius:7px;flex:0 0 auto;color:var(--fg-3);
+  background:var(--surface-3);border:1px solid var(--line);cursor:help;
+  transition:transform .14s ease,color .14s ease,border-color .14s ease}
+.dcard-format:hover{transform:scale(1.1);color:var(--fg);
+  border-color:color-mix(in oklch,var(--fg-3) 45%,var(--line))}
+.dcard-format svg{width:14px;height:14px;display:block}
+.dcard-format.fmt-vertical{color:var(--dc,var(--accent));
+  border-color:color-mix(in oklch,var(--dc,var(--accent)) 32%,var(--line))}
+.dcard-format.fmt-wait{color:var(--warn,#d6a23a);
+  border-color:color-mix(in oklch,var(--warn,#d6a23a) 36%,var(--line))}
+/* Inset "screen": a darker panel holding the live bitrate + trace, exactly
+   like the landing cards. The sparkline bleeds to the screen's edges. */
+.dcard-screen{background:var(--bg-1);border:1px solid color-mix(in oklch,var(--line) 65%,transparent);
+  border-radius:11px;padding:12px 14px 0;overflow:hidden;position:relative}
+.dcard-body{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.dcard-rate-row{display:flex;align-items:baseline;gap:5px}
+.dcard-rate{font-size:24px;font-weight:600;color:var(--fg);letter-spacing:-.02em;line-height:1;
   font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
 .dcard-rate-u{font-size:11px;color:var(--fg-3);font-family:'JetBrains Mono',monospace}
-.dcard-spark{width:100%;height:54px;display:block}
-.dcard-foot{display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid var(--line)}
-.dcard-foot-meta{font-size:11px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
-.dcard-link{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:5px;
-  color:var(--fg-3);font-size:11.5px;cursor:pointer;padding:4px 6px;border-radius:6px;
-  transition:all .15s var(--ease-out)}
-.dcard-link:hover{color:var(--danger);background:color-mix(in oklch,var(--danger) 8%,transparent)}
+.dcard-foot-meta{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;white-space:nowrap}
+/* Detected resolution + codec of the forwarded track (e.g. 1080x1920 · H.264). */
+.dcard-res{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;margin-top:3px;letter-spacing:.02em}
+.dcard-spark{display:block;width:calc(100% + 28px);height:40px;margin:6px -14px 0}
+/* Edit / remove: subtle glass buttons over the trace, revealed on hover. */
+/* Reveal via slide + visibility, NOT opacity. Animating opacity on a
+   backdrop-filter element makes Chromium skip the blur mid-transition and
+   snap it in at the end (the "pop"); keeping opacity fixed means the glass
+   blur is live the whole time. Revealed on card hover, or when an action
+   button itself is focused (keyboard) - deliberately NOT the card's
+   :focus-within, so clicking the toggle switch doesn't pin them open. */
+.dcard-actions{position:absolute;right:9px;bottom:9px;display:flex;gap:5px;z-index:2;
+  transform:translateY(calc(100% + 14px));pointer-events:none;
+  transition:transform .22s var(--ease-out)}
+.dcard:hover .dcard-actions,.dcard-actions:focus-within{transform:none;pointer-events:auto}
+.dcard-act{width:27px;height:27px;border-radius:8px;border:1px solid var(--line);cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--fg-2);
+  background:color-mix(in oklch,var(--bg-1) 52%,transparent);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  transition:color .15s,background .15s,border-color .15s}
+.dcard-act:hover{color:var(--fg);border-color:var(--line-2);background:color-mix(in oklch,var(--bg-1) 78%,transparent)}
+.dcard-act.dcard-del:hover{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,var(--line))}
 .dest-add{appearance:none;background:transparent;border:1px dashed var(--line-2);border-radius:12px;
   color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
@@ -505,11 +591,53 @@ input,select,textarea{font-family:inherit;color:inherit}
 .dest-add-icon{width:36px;height:36px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
   background:var(--surface-3);border:1px solid var(--line-2);font-size:22px;line-height:1}
 
-/* Destination edit form (slides in below grid) */
-.dest-form{margin-top:14px;padding:18px;background:linear-gradient(180deg,var(--bg-2),var(--surface));
+/* Destination editor - a centred floating modal (see .ic-modal shell).
+   Scrolls internally when the VOD/EB section makes it tall. */
+.dest-form{padding:20px 22px;background:linear-gradient(180deg,var(--bg-2),var(--surface));
   border:1px solid color-mix(in oklch,var(--accent) 40%,var(--line));border-radius:var(--radius);
-  animation:paneIn .25s var(--ease-out) both;display:flex;flex-direction:column;gap:10px}
-.dest-form h4{margin:0 0 4px;font-size:14px;font-weight:600}
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.6);
+  animation:modalPop .2s var(--ease-out) both;display:flex;flex-direction:column;gap:9px;
+  position:relative;width:min(600px,100%);max-height:min(90vh,860px);overflow-y:auto}
+@keyframes modalPop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+/* Header row: title + one-click close so editing feels like a focused
+   panel you can dismiss without scrolling to the Cancel button. */
+.dest-form-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:2px}
+.dest-form h4{margin:0;font-size:15px;font-weight:600}
+.dest-form-hint{font-size:11.5px;color:var(--fg-3);margin-top:3px;line-height:1.4}
+.dest-form-x{flex:0 0 auto;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
+  background:var(--surface-3);color:var(--fg-3);font-size:13px;cursor:pointer;line-height:1;
+  transition:color .15s,background .15s,border-color .15s,transform .15s var(--ease-out)}
+.dest-form-x:hover{color:var(--fg);background:color-mix(in oklch,var(--danger) 14%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--danger) 40%,var(--line));transform:rotate(90deg)}
+/* Section separator: a quiet uppercase micro-label with a rule, so the
+   form reads as scannable groups instead of one long list. */
+.dfg-sep{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:9.5px;font-weight:700;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--fg-4)}
+.dfg-sep::after{content:"";flex:1;height:1px;background:var(--line)}
+/* VOD audio + EB block - kept calm and progressive (details behind
+   disclosures) so it reads as one toggle with an optional extra. */
+.dest-vod{margin-top:12px;padding:13px 15px;border:1px solid var(--line);border-radius:11px;background:var(--bg-1)}
+/* NOTE: `.dest-form label` (uppercase, letter-spaced, block, muted) is more
+   specific than a bare `.dest-vod-toggle`, so these resets are scoped with
+   `.dest-form` to win, and title/desc reset explicitly too. Without this the
+   whole block rendered UPPERCASE and stacked. */
+.dest-form .dest-vod-toggle{display:flex;align-items:flex-start;gap:10px;margin:0;cursor:pointer;
+  text-transform:none;letter-spacing:normal;font-weight:400;font-size:13px;color:var(--fg-2)}
+.dest-form .dest-vod-toggle input{margin-top:2px;flex:0 0 auto;cursor:pointer}
+.dest-vod-title{font-weight:600;color:var(--fg);font-size:13px;text-transform:none;letter-spacing:normal}
+.dest-vod-title .muted{font-weight:400}
+.dest-vod-desc{font-size:11.5px;margin-top:3px;line-height:1.5;color:var(--fg-3);text-transform:none;letter-spacing:normal}
+.dest-vod details{margin-top:10px}
+.dest-vod details>summary{font-size:11px;color:var(--accent);cursor:pointer;user-select:none;list-style:none}
+.dest-vod details>summary::-webkit-details-marker{display:none}
+.dest-vod details>summary::before{content:"▸ ";color:var(--fg-4)}
+.dest-vod details[open]>summary::before{content:"▾ "}
+.dest-vod details ol{margin:8px 0 0;padding-left:16px;font-size:11px;line-height:1.7;color:var(--fg-2)}
+.dest-vod details>div{margin-top:6px;font-size:11px;line-height:1.6;color:var(--fg-2)}
+.dest-eb{margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
+.dest-eb-title{font-weight:600;color:var(--fg);font-size:12.5px;text-transform:none;letter-spacing:normal}
+.dest-eb-title .tag{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--warn,#d6a23a);margin-left:7px}
+.dest-eb-desc{font-size:11.5px;margin-top:4px;line-height:1.5;color:var(--fg-3);text-transform:none;letter-spacing:normal}
 .dest-form label{display:block;margin-top:6px;font-size:11px;color:var(--fg-3);text-transform:uppercase;
   letter-spacing:.12em;font-weight:600}
 .dest-form .row{display:flex;gap:8px;margin-top:8px;align-items:center}
@@ -520,8 +648,16 @@ input,select,textarea{font-family:inherit;color:inherit}
 /* ── Stats ───────────────────────────────────── */
 .stats-big{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}
 @media (max-width:880px){.stats-big{grid-template-columns:1fr}}
-.stat-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px}
+.stat-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px;cursor:help;
+  transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
+/* Elevation via shadow + border only - no position change, so the element
+   never moves out from under the cursor (no hover flicker). */
+.stat-card:hover{border-color:color-mix(in oklch,var(--accent) 32%,var(--line-2));
+  box-shadow:0 10px 26px -14px color-mix(in oklch,var(--accent) 55%,transparent)}
 .stat-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+.stat-label{display:inline-flex;align-items:center;gap:7px}
+.stat-ic{width:14px;height:14px;color:var(--fg-3);opacity:.85;flex:0 0 auto;transition:color .18s,opacity .18s}
+.stat-card:hover .stat-ic{color:var(--accent);opacity:1}
 .stat-now{font-size:22px;font-weight:500;color:var(--fg);letter-spacing:-.02em;
   font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
 .stat-unit{color:var(--fg-3);font-size:12px;margin-left:4px;font-family:'JetBrains Mono',monospace}
@@ -529,13 +665,21 @@ input,select,textarea{font-family:inherit;color:inherit}
 .stats-small{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
 @media (max-width:980px){.stats-small{grid-template-columns:repeat(3,1fr)}}
 @media (max-width:540px){.stats-small{grid-template-columns:repeat(2,1fr)}}
-.metric-mini{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;
-  transition:border-color .15s var(--ease-out)}
-.metric-mini:hover{border-color:var(--line-2)}
-.metric-mini-v{display:flex;align-items:baseline;gap:4px;margin-top:4px}
+.metric-mini{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:help;
+  transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
+.metric-mini:hover{border-color:color-mix(in oklch,var(--accent) 35%,var(--line-2));
+  background:color-mix(in oklch,var(--accent) 4%,var(--bg-2));
+  box-shadow:0 8px 20px -14px color-mix(in oklch,var(--accent) 55%,transparent)}
+.metric-mini-top{display:flex;align-items:center;gap:6px}
+.metric-ic{width:13px;height:13px;color:var(--fg-3);opacity:.8;flex:0 0 auto;transition:color .18s,opacity .18s}
+.metric-mini:hover .metric-ic{color:var(--accent);opacity:1}
+.metric-mini-v{display:flex;align-items:baseline;gap:4px;margin-top:5px}
 .metric-mini-v .mono{font-size:18px;font-weight:500;color:var(--fg);letter-spacing:-.01em;
   font-variant-numeric:tabular-nums}
 .metric-unit{color:var(--fg-3);font-size:11px;font-family:'JetBrains Mono',monospace}
+/* Sparkline strokes draw in on first paint for a touch of life. */
+.stat-spark path[class$="-line"],.stat-spark path[id$="-line"]{
+  transition:stroke .2s}
 
 /* ── OBS tab ─────────────────────────────────── */
 .obs-grid{display:grid;gap:12px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
@@ -883,10 +1027,24 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--accent) 15%,var(--surface-3))}
 .profile-name{flex:1;font-weight:500;color:var(--fg);font-size:13.5px}
 .profile-secs{color:var(--accent);font-size:13px;font-weight:500;font-family:'JetBrains Mono',monospace}
-.profile-row.too-big{opacity:.5;cursor:not-allowed}
+/* Too-big = the current buffer can't hold this delay. Keep it quiet:
+   muted label, not armable. A small inline "Raise buffer" link is the
+   only affordance - it takes you to the setting, nothing auto-changes. */
+.profile-row.too-big{cursor:default}
 .profile-row.too-big:hover{border-color:var(--line)}
-.profile-row.too-big .profile-secs{color:var(--fg-4)}
-.profile-row .profile-warn{font-size:10.5px;color:var(--danger);margin-left:auto;margin-right:8px;white-space:nowrap}
+.profile-row.too-big .profile-bolt,.profile-row.too-big .profile-name,.profile-row.too-big .profile-secs{color:var(--fg-4)}
+.profile-row.too-big:hover .profile-bolt{color:var(--fg-4);border-color:var(--line)}
+.profile-warn{margin-left:auto;display:inline-flex;align-items:center;gap:10px;font-size:10.5px;
+  color:var(--warn,#d6a23a);white-space:nowrap}
+.profile-warn a{color:var(--accent);cursor:pointer;font-weight:600;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 32%,transparent);
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.profile-warn a:hover{color:var(--fg);border-color:var(--fg)}
+.ic-input.flash{animation:inputflash 1.2s var(--ease-out)}
+@keyframes inputflash{
+  0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--accent) 55%,transparent);border-color:var(--accent)}
+  100%{box-shadow:0 0 0 7px transparent}
+}
 .cp-profile-chip.too-big{opacity:.45;cursor:not-allowed;border-color:var(--line)}
 .profile-tag{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
   padding:3px 7px;border-radius:999px;background:color-mix(in oklch,var(--accent) 18%,transparent);color:var(--accent)}
@@ -944,7 +1102,8 @@ input,select,textarea{font-family:inherit;color:inherit}
 .restart-banner{padding:10px 14px;border-radius:8px;
   background:color-mix(in oklch,var(--warn) 8%,var(--bg-2));
   border:1px solid color-mix(in oklch,var(--warn) 30%,transparent);
-  color:var(--warn);font-size:12.5px;display:flex;align-items:center;gap:10px;justify-content:space-between}
+  color:var(--warn);font-size:12.5px;display:flex;align-items:center;gap:10px;justify-content:space-between;
+  animation:softDrop .25s var(--ease-out)}
 .restart-banner.hidden{display:none}
 /* Unsaved-changes cue on the Studio Save button. */
 .st-save-dirty{box-shadow:0 0 0 2px color-mix(in oklch,var(--accent) 55%,transparent);font-weight:700}
@@ -1124,11 +1283,22 @@ input,select,textarea{font-family:inherit;color:inherit}
     <span class="ic-brand-sub">made by <a href="https://github.com/Soulhackzlol" target="_blank" rel="noopener">s1moscs</a></span>
   </div>
   <div class="ic-header-right">
-    <span class="ic-pill" id="hdr-obs"><span class="dot"></span><span>OBS</span><span class="mono" id="hdr-obs-v">-</span></span>
-    <span class="ic-pill" id="hdr-egress"><span class="dot"></span><span>Egress</span><span class="mono" id="hdr-egress-v">-</span></span>
-    <span class="ic-bitrate"><span id="hdr-rate">-</span> <span class="unit">kbps</span></span>
+    <span class="ic-pill" id="hdr-obs" title="Input from OBS.">
+      <span class="dot"></span>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="ic-pill-ic"><path d="M8 2.5v7"/><path d="M5 6.5 8 9.5l3-3"/><path d="M3.5 13h9"/></svg>
+      <span class="ic-pill-k">OBS</span><span class="ic-pill-v" id="hdr-obs-v">Offline</span>
+    </span>
+    <span class="ic-pill" id="hdr-egress" title="Output to your streaming destinations.">
+      <span class="dot"></span>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="ic-pill-ic"><path d="M8 13.5v-7"/><path d="M5 9.5 8 6.5l3 3"/><path d="M3.5 3h9"/></svg>
+      <span class="ic-pill-k">Egress</span><span class="ic-pill-v" id="hdr-egress-v">Off</span>
+    </span>
+    <span class="ic-pill ic-pill-rate" id="hdr-rate-pill" title="Total bitrate flowing through InstantClone right now.">
+      <span class="ic-pill-v mono"><span id="hdr-rate">Idle</span> <span class="unit" id="hdr-rate-u"></span></span>
+    </span>
     <span class="ic-pill" id="hdr-codec" hidden><span class="mono" id="hdr-codec-v">-</span></span>
     <span class="ic-pill ok" id="hdr-ebroadcast" hidden title="Enhanced Broadcasting active - multi-track simulcast is being forwarded bit-faithfully to Twitch and flattened to the primary track for any non-Twitch destinations. Twitch's transcoder serves the full quality ladder to viewers.">⚡ Enhanced Broadcasting</span>
+    <span class="ic-pill ok" id="hdr-dualformat" hidden title="Twitch Dual Format is live - a vertical 9:16 canvas is on the wire. Any destination set to Vertical is forwarding it (YouTube Shorts, Kick mobile, etc.).">▯ Dual Format</span>
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
     <span class="ic-pill warn" id="hdr-twitch-cap" hidden>⚠ <span id="hdr-twitch-cap-v">Twitch · Source-Only at 10 Mbps</span></span>
     <a id="hdr-update" class="ic-pill" href="#" hidden title="Open the updater" onclick="openUpdateInAbout();return false;" style="cursor:pointer">⬆ <span id="hdr-update-v">update available</span></a>
@@ -1290,13 +1460,22 @@ input,select,textarea{font-family:inherit;color:inherit}
     <button class="ic-btn ic-btn-primary" id="dest-add-btn" onclick="openDestForm(null)">+ Add destination</button>
   </div>
   <div class="dest-grid" id="dest-grid"></div>
-  <div class="dest-form" id="dest-form" hidden>
-    <h4 id="dest-form-title">New destination</h4>
+  <div class="ic-modal" id="dest-modal" hidden role="dialog" aria-modal="true" aria-labelledby="dest-form-title">
+    <div class="ic-modal-backdrop" onclick="cancelDestForm()"></div>
+    <div class="dest-form" id="dest-form">
+    <div class="dest-form-head">
+      <div>
+        <h4 id="dest-form-title">New destination</h4>
+        <div class="dest-form-hint">Fan your OBS feed out to this platform. Real stream keys live here, not in OBS.</div>
+      </div>
+      <button type="button" class="dest-form-x" onclick="cancelDestForm()" title="Close" aria-label="Close editor">✕</button>
+    </div>
     <input id="dest-form-id" type="hidden">
     <label>Name</label>
     <input id="dest-form-name" class="ic-input" placeholder="Twitch / YouTube / Backup …">
     <label>Platform</label>
     <select id="dest-form-platform" class="ic-input"></select>
+    <div class="dfg-sep">Routing &amp; format</div>
     <div id="dest-form-custom-wrap" hidden>
       <label>Custom RTMP URL</label>
       <input id="dest-form-custom" class="ic-input mono" placeholder="rtmp://host/app">
@@ -1312,6 +1491,26 @@ input,select,textarea{font-family:inherit;color:inherit}
         <option value="backup">Backup (b.rtmp.youtube.com)</option>
       </select>
     </div>
+    <!-- Stream format. Non-Twitch only: Twitch sends BOTH canvases
+         natively via Dual Format, so offering the choice there would
+         only confuse. -->
+    <div id="dest-form-format-wrap" hidden>
+      <label>Stream format</label>
+      <select id="dest-form-format" class="ic-input">
+        <option value="horizontal">Horizontal 16:9 - normal landscape</option>
+        <option value="vertical">Vertical 9:16 - YouTube Shorts, Kick mobile, TikTok</option>
+      </select>
+      <div id="dest-form-format-gate" hidden class="muted" style="font-size:11.5px;margin-top:6px;line-height:1.45;color:var(--warn,#d6a23a)">
+        <b>Vertical needs a Twitch source.</b> It reuses the 9:16 canvas from Twitch <b>Dual Format</b> (Enhanced Broadcasting + Aitum Vertical - not a single OBS toggle), so add and enable a <b>Twitch</b> destination set up for it first - then this option unlocks. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">Set up Dual Format &rarr;</a>
+      </div>
+      <div class="muted" id="dest-form-format-help" style="font-size:11.5px;margin-top:5px;line-height:1.45">
+        <b style="color:var(--warn,#d6a23a)">Vertical reuses the 9:16 canvas that Twitch Dual Format produces.</b> InstantClone standardizes on that one canvas as its vertical source: set Twitch <b>Dual Format</b> up <b>once</b> (Enhanced Broadcasting + the Aitum Vertical canvas, per Twitch's guide - it is not a single OBS toggle) and every vertical destination here reuses it - no second scene, no extra encoder. With Dual Format off there is no vertical canvas, so this destination just waits and sends nothing. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Twitch Dual Format &amp; Enhanced Broadcasting →</a><br>For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream → Select key → Encoder</b>.
+      </div>
+    </div>
+    <div id="dest-form-twitch-native-note" hidden class="muted" style="font-size:11.5px;margin:2px 0 6px;line-height:1.45">
+      Nothing to set here - a <b>normal Twitch stream just works</b>, and so does regular <b>Enhanced Broadcasting</b> (that's horizontal too); InstantClone simply forwards whatever OBS sends. Only Twitch's new <b>Dual Format</b> (a beta add-on to Enhanced Broadcasting) also sends a vertical 9:16 canvas - when it's on, InstantClone forwards both automatically, no toggle needed. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
+    </div>
+    <div class="dfg-sep">Stream key &amp; status</div>
     <label>Stream key <span class="muted" id="dest-form-key-hint"></span></label>
     <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
     <div id="dest-form-key-help" class="w-key-help" hidden></div>
@@ -1321,47 +1520,38 @@ input,select,textarea{font-family:inherit;color:inherit}
     <!-- VOD audio (Twitch only). Visible only when platform == twitch.
          The sub-toggle for VOD+EB sits inside this block so it's
          visually subordinate to the parent. -->
-    <div id="dest-form-vod-wrap" hidden style="margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)">
-      <label style="display:flex;align-items:flex-start;gap:10px;margin:0;text-transform:none;letter-spacing:0;font-size:13px;cursor:pointer">
-        <input type="checkbox" id="dest-form-vod-audio" style="margin-top:2px">
+    <div id="dest-form-vod-wrap" hidden class="dest-vod">
+      <label class="dest-vod-toggle">
+        <input type="checkbox" id="dest-form-vod-audio">
         <div>
-          <div style="font-weight:600;color:var(--fg)">VOD audio mode</div>
-          <div class="muted" style="font-size:11.5px;margin-top:2px;line-height:1.45">
-            Records a separate audio track to Twitch's VOD. Useful when your live stream has copyrighted music that should be stripped from the saved recording.
-            <b style="color:var(--warn,#d6a23a)">Disables Enhanced Broadcasting</b> (the transcoded quality ladder) unless you use the experimental Launch button below.
-            Requires switching OBS to <b>Custom RTMP</b> + enabling the VOD Track checkbox in OBS Output settings.
-          </div>
-          <div style="margin-top:6px;font-size:11px;color:var(--warn,#d6a23a);display:flex;align-items:center;gap:5px">
-            <span>⚠</span> Close OBS before saving - the config file can't be updated while OBS is running. Changes take effect on the next OBS launch.
-          </div>
-          <details style="margin-top:8px">
-            <summary style="font-size:11px;color:var(--fg-3);cursor:pointer;user-select:none">How to set this up in OBS</summary>
-            <ol style="margin:7px 0 0;padding-left:16px;font-size:11px;line-height:1.7;color:var(--fg-2)">
-              <li><b>Settings → Stream</b> - set Service to <b>Custom...</b></li>
-              <li>Set Server to the ingest URL from the <b>OBS tab</b>, Stream Key to <code class="mono" style="font-size:10.5px">main</code></li>
-              <li><b>Settings → Output</b> - set Output Mode to <b>Advanced</b></li>
-              <li>Under the <b>Streaming</b> tab, enable the <b>VOD Track</b> checkbox</li>
-              <li>Hit <b>Apply</b>, close OBS, then save this destination and reopen OBS</li>
-            </ol>
-          </details>
+          <div class="dest-vod-title">VOD audio mode <span class="muted" style="font-weight:400">(Twitch)</span></div>
+          <div class="muted dest-vod-desc">Saves a separate audio track to your Twitch VOD - handy for stripping copyrighted music from the saved recording.</div>
         </div>
       </label>
-      <div id="dest-form-vod-eb-wrap" hidden style="margin-top:10px;padding:10px;border:1px dashed color-mix(in oklch,var(--err) 32%,var(--line));border-radius:8px;background:color-mix(in oklch,var(--err) 3%,var(--bg-2))">
-        <div style="display:flex;align-items:flex-start;gap:10px">
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;color:var(--err);font-size:13px">
-              Want Enhanced Broadcasting too?
-              <span style="display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:1.5px;background:color-mix(in oklch,var(--warn,#d6a23a) 22%,transparent);color:var(--warn,#d6a23a);padding:1px 6px;border-radius:99px;margin-left:4px;text-transform:uppercase;vertical-align:1px">experimental</span>
-            </div>
-            <div class="muted" style="font-size:11.5px;margin-top:4px;line-height:1.45">
-              Use this <b>only if you want EB + VOD audio at the same time</b>. Launches OBS with the <code class="mono" style="font-size:11px">--config-url</code> CLI flag - the only path OBS honours for Custom RTMP (its plugin discards <code class="mono" style="font-size:11px">service.json</code> injections at load time). Close OBS first; the flag is per-launch, so reopening OBS normally will lose EB until you click again.
-            </div>
-            <div class="row" style="gap:8px;margin-top:10px;align-items:center">
-              <button type="button" class="ic-btn ic-btn-primary" id="obs-eb-launch-btn" onclick="launchObsWithEb()">Launch OBS for EB + VOD</button>
-              <span class="muted" id="obs-eb-launch-msg" style="font-size:11.5px"></span>
-            </div>
-          </div>
+      <details>
+        <summary>How to set it up in OBS</summary>
+        <ol>
+          <li><b>Settings → Stream</b>: Service = <b>Custom…</b>, Server = the URL on the <b>OBS tab</b>, Key = <code class="mono">main</code></li>
+          <li><b>Settings → Output</b>: Output Mode = <b>Advanced</b>, then tick <b>VOD Track</b> under the Streaming tab</li>
+          <li><b>Close OBS</b>, save this destination, then reopen OBS. (The config can't change while OBS is running.)</li>
+        </ol>
+      </details>
+
+      <!-- Shown only when VOD audio is on. -->
+      <div id="dest-form-vod-eb-wrap" hidden class="dest-eb">
+        <div class="dest-eb-title">Keep Enhanced Broadcasting too?<span class="tag">experimental</span></div>
+        <div class="muted dest-eb-desc">VOD audio normally turns off EB's quality ladder. To run both, launch OBS from here - it passes a one-time flag OBS needs for Custom RTMP.</div>
+        <div class="row" style="gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="ic-btn ic-btn-primary" id="obs-eb-setup-btn" onclick="setupVodEb()">Launch OBS with VOD + EB</button>
+          <button type="button" class="ic-btn ic-btn-ghost" id="eb-shortcut-btn" onclick="createEbShortcut()">Make a desktop shortcut</button>
+          <span class="muted" id="obs-eb-launch-msg" style="font-size:11.5px"></span>
         </div>
+        <ul id="vod-eb-checklist" class="vod-eb-checklist" hidden style="list-style:none;margin:10px 0 0;padding:0;font-size:11.5px"></ul>
+        <span class="muted" id="eb-shortcut-msg" style="display:block;font-size:11px;margin-top:6px">Shortcut = one double-click to start InstantClone + OBS in this mode.</span>
+        <details>
+          <summary>Why launch from here?</summary>
+          <div>OBS ignores config-URL injections for Custom RTMP, so the only way to enable EB is the <code class="mono">--config-url</code> launch flag. It's per-launch: reopening OBS normally drops EB until you click here again.</div>
+        </details>
       </div>
     </div>
     <div class="row" style="margin-top:14px;justify-content:flex-end">
@@ -1369,6 +1559,7 @@ input,select,textarea{font-family:inherit;color:inherit}
       <button class="ic-btn ic-btn-primary" onclick="saveDestForm()">Save destination</button>
     </div>
     <div class="dest-form-msg" id="dest-form-msg"></div>
+    </div>
   </div>
 </section>
 
@@ -1380,19 +1571,19 @@ input,select,textarea{font-family:inherit;color:inherit}
     </div>
   </div>
   <div class="stats-big">
-    <div class="stat-card">
+    <div class="stat-card" id="stat-card-rate" title="Incoming video+audio bitrate from OBS, averaged over the last 60 seconds. This is what InstantClone is buffering and forwarding.">
       <div class="stat-head">
-        <span class="ic-label">Bitrate in</span>
-        <span class="mono stat-now"><span id="stat-rate">-</span> <span class="stat-unit">kbps</span></span>
+        <span class="stat-label"><svg class="stat-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8h3l1.8-5 3 11 1.8-6h3.4"/></svg><span class="ic-label">Bitrate in</span></span>
+        <span class="mono stat-now"><span id="stat-rate">-</span> <span class="stat-unit" id="stat-rate-u">kbps</span></span>
       </div>
       <svg class="stat-spark" id="spark-rate" viewBox="0 0 760 70" preserveAspectRatio="none">
         <path id="spark-rate-fill" class="spark-fill" d=""/>
         <path id="spark-rate-line" class="spark-line" d=""/>
       </svg>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" id="stat-card-cpu" title="CPU used by InstantClone itself (not OBS), averaged over the last 60 seconds.">
       <div class="stat-head">
-        <span class="ic-label">CPU</span>
+        <span class="stat-label"><svg class="stat-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M6.5 1.5v2M9.5 1.5v2M6.5 12.5v2M9.5 12.5v2M1.5 6.5h2M1.5 9.5h2M12.5 6.5h2M12.5 9.5h2"/></svg><span class="ic-label">CPU</span></span>
         <span class="mono stat-now"><span id="stat-cpu">-</span><span class="stat-unit">%</span></span>
       </div>
       <svg class="stat-spark" id="spark-cpu" viewBox="0 0 360 48" preserveAspectRatio="none">
@@ -1402,12 +1593,30 @@ input,select,textarea{font-family:inherit;color:inherit}
     </div>
   </div>
   <div class="stats-small">
-    <div class="metric-mini"><div class="ic-label">Frames sent</div><div class="metric-mini-v"><span class="mono" id="m-tags">0</span></div></div>
-    <div class="metric-mini"><div class="ic-label">Data sent</div><div class="metric-mini-v"><span class="mono" id="m-bytes">0</span><span class="metric-unit" id="m-bytes-u"></span></div></div>
-    <div class="metric-mini"><div class="ic-label">IDR cuts</div><div class="metric-mini-v"><span class="mono" id="m-cuts">0</span></div></div>
-    <div class="metric-mini"><div class="ic-label">OBS drops</div><div class="metric-mini-v"><span class="mono" id="m-idis">0</span></div></div>
-    <div class="metric-mini"><div class="ic-label">Egress retry</div><div class="metric-mini-v"><span class="mono" id="m-erec">0</span></div></div>
-    <div class="metric-mini"><div class="ic-label">Memory</div><div class="metric-mini-v"><span class="mono" id="m-rss">-</span><span class="metric-unit" id="m-rss-u"></span></div></div>
+    <div class="metric-mini" title="Total media packets (video + audio) forwarded to all destinations this session.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 1.5 14.5 5 8 8.5 1.5 5z"/><path d="M1.5 8 8 11.5 14.5 8"/><path d="M1.5 11 8 14.5 14.5 11"/></svg><span class="ic-label">Frames sent</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-tags">0</span></div>
+    </div>
+    <div class="metric-mini" title="Total bytes forwarded to all destinations this session.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><ellipse cx="8" cy="4" rx="5.5" ry="2.2"/><path d="M2.5 4v8c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2V4"/><path d="M2.5 8c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2"/></svg><span class="ic-label">Data sent</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-bytes">0</span><span class="metric-unit" id="m-bytes-u"></span></div>
+    </div>
+    <div class="metric-mini" title="Delay cuts performed. Each one snaps the stream to a keyframe (IDR) so cutting back to live is glitch-free.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="4" r="2"/><circle cx="4" cy="12" r="2"/><path d="M5.7 5.2 14 11M5.7 10.8 14 5"/></svg><span class="ic-label">IDR cuts</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-cuts">0</span></div>
+    </div>
+    <div class="metric-mini" title="Times OBS disconnected from InstantClone this session (e.g. you stopped/started streaming).">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v3.5M10 2v3.5"/><rect x="4" y="5.5" width="8" height="4" rx="1"/><path d="M8 9.5V14"/></svg><span class="ic-label">OBS drops</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-idis">0</span></div>
+    </div>
+    <div class="metric-mini" title="Times a destination connection dropped and InstantClone reconnected it this session.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-4"/><path d="M13.5 2v3.5H10"/></svg><span class="ic-label">Egress retry</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-erec">0</span></div>
+    </div>
+    <div class="metric-mini" title="InstantClone's resident memory (RSS) right now.">
+      <div class="metric-mini-top"><svg class="metric-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="5" width="13" height="6" rx="1"/><path d="M4 11v2M7 11v2M10 11v2M13 11v2"/></svg><span class="ic-label">Memory</span></div>
+      <div class="metric-mini-v"><span class="mono" id="m-rss">-</span><span class="metric-unit" id="m-rss-u"></span></div>
+    </div>
   </div>
 </section>
 
@@ -1461,13 +1670,16 @@ input,select,textarea{font-family:inherit;color:inherit}
         <div class="rec"><div class="rec-k">Output &rarr; Video &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
         <div class="rec"><div class="rec-k">Output &rarr; Encoder</div><div class="rec-v">x264 / NVENC</div><div class="rec-why">Anything modern - InstantClone passes through untouched.</div></div>
         <div class="rec"><div class="rec-k">Bitrate</div><div class="rec-v">&le; 80% of upload</div><div class="rec-why">Leave headroom or the "Upload bottleneck" pill lights up.</div></div>
-        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">Disable B-frames</div><div class="rec-why">Kick / AWS IVS rejects them. <a href="#" onclick="event.preventDefault();$('rec-kick-detail').open=!$('rec-kick-detail').open">where?</a></div></div>
+        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">CBR + 2 s keyframe</div><div class="rec-why">The rules that actually matter for Kick. <a href="#" onclick="event.preventDefault();$('rec-kick-detail').open=!$('rec-kick-detail').open">details</a></div></div>
       </div>
       <details class="ic-disclose" id="rec-kick-detail">
-        <summary>Where to disable B-frames in OBS</summary>
+        <summary>Kick requirements (and the B-frames myth)</summary>
         <div class="ic-disclose-body">
-          <p>OBS &rarr; <b>Settings &rarr; Output</b> &rarr; switch <b>Output Mode</b> to <b>Advanced</b>:</p>
-          <p>x264: <b>B-frames</b> &rarr; <code class="mono">0</code><br>NVENC: <b>Max B-frames</b> &rarr; <code class="mono">0</code></p>
+          <p>Kick ingests on <b>AWS IVS (low-latency)</b>. The rules it actually enforces: <b>H.264</b>, <b>CBR</b> rate control, <b>keyframe interval 2 s</b>, bitrate <b>&le; 8000 kbps</b>, up to 60 fps.</p>
+          <p style="margin-top:8px"><b>B-frames:</b> despite what a lot of older guides say, Kick's normal RTMP ingest (IVS low-latency, Main profile) <b>accepts B-frames</b>. The strict "no B-frames" rule is AWS IVS <b>real-time / WHIP</b>, a different ingest Kick doesn't use for standard OBS streaming. So you usually don't need to touch B-frames at all.</p>
+          <p style="margin-top:6px">If Kick <i>does</i> reject your stream, set B-frames to 0 in OBS &rarr; <b>Settings &rarr; Output</b> (Advanced): x264 <b>B-frames</b> &rarr; <code class="mono">0</code>, NVENC <b>Max B-frames</b> &rarr; <code class="mono">0</code>. That's safe for Twitch and YouTube too. Note InstantClone forwards <b>one</b> encode without re-encoding, so B-frames can't be stripped for Kick alone - it's an OBS-side toggle that applies to every destination.</p>
+          <p style="margin-top:6px">Using Twitch <b>Enhanced Broadcasting</b>? Twitch picks the encode settings for you (including B-frames), so your manual OBS B-frames box may not apply while EB is on.</p>
+          <p style="margin-top:6px">Delay and cuts work the same either way - InstantClone cuts on keyframes (IDRs), which B-frames don't affect.</p>
         </div>
       </details>
     </section>
@@ -1985,7 +2197,7 @@ const PHASE_TO_STATE = { idle:'off', preparing:'arming', ready:'armed', active:'
 // OFFLINE when ingest is actually down.
 function computeStatePill(s){
   if (!s || !s.ingest_alive){
-    return { label:'OFFLINE', desc:'· OBS not connected', c:'var(--idle)', pulse:false };
+    return { label:'OFFLINE', desc:'· no encoder connected', c:'var(--idle)', pulse:false };
   }
   const ds = PHASE_TO_STATE[s.phase] || 'off';
   if (ds === 'off')    return { label:'LIVE',      desc:'· Passthrough',    c:'var(--live)',   pulse:true };
@@ -2109,14 +2321,47 @@ function animateNumber(id, target, dur, fmt){
 }
 
 // ── Sparkline ─────────────────────────────────────────────────────────
+// Catmull-Rom -> cubic-bezier smoothing so the trace reads as a smooth
+// curve instead of a jagged polyline.
+function smoothLinePath(pts){
+  if (pts.length < 2) return '';
+  if (pts.length === 2) return `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)} L ${pts[1][0].toFixed(1)} ${pts[1][1].toFixed(1)}`;
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++){
+    const p0 = pts[i-1] || pts[i], p1 = pts[i], p2 = pts[i+1], p3 = pts[i+2] || p2;
+    const cp1x = p1[0] + (p2[0]-p0[0])/6, cp2x = p2[0] - (p3[0]-p1[0])/6;
+    let cp1y = p1[1] + (p2[1]-p0[1])/6, cp2y = p2[1] - (p3[1]-p1[1])/6;
+    // Clamp the control points' Y to the segment's own range so the curve
+    // can't overshoot past the data (spiky CPU was bulging into weird humps
+    // and dipping below the baseline). Keeps horizontal easing, kills the
+    // vertical overshoot.
+    const lo = Math.min(p1[1], p2[1]), hi = Math.max(p1[1], p2[1]);
+    cp1y = Math.max(lo, Math.min(hi, cp1y));
+    cp2y = Math.max(lo, Math.min(hi, cp2y));
+    d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+const sparkMaxState = {};
+// Shared sparkline renderer (stats cards + destination cards). Floor
+// anchored at 0 so height reflects the TRUE magnitude; ceiling grows
+// instantly to a new peak but decays slowly (`key`-scoped) so a spike
+// leaving the 60s window doesn't snap the axis - it tracks reality.
+function drawSpark(lineEl, fillEl, data, width, height, key){
+  if (!lineEl || !fillEl) return;
+  if (data.length < 2){ lineEl.setAttribute('d',''); fillEl.setAttribute('d',''); return; }
+  const target = Math.max(...data, 1);
+  const prev = sparkMaxState[key] || target;
+  const max = target >= prev ? target : prev + (target - prev) * 0.1;
+  sparkMaxState[key] = max;
+  const pad = 2, h = height - pad * 2, step = width / (data.length - 1);
+  const pts = data.map((v, i) => [i * step, height - pad - Math.max(0, Math.min(1, v / max)) * h]);
+  const line = smoothLinePath(pts);
+  lineEl.setAttribute('d', line);
+  fillEl.setAttribute('d', line + ` L ${width} ${height} L 0 ${height} Z`);
+}
 function updateSpark(lineId, fillId, data, width, height){
-  if (data.length < 2){ $(lineId).setAttribute('d',''); $(fillId).setAttribute('d',''); return; }
-  const max = Math.max(...data, 1), min = Math.min(...data, 0);
-  const range = max - min || 1, step = width / (data.length - 1), pad = 2;
-  const pts = data.map((v,i) => [i*step, height-pad-((v-min)/range)*(height-pad*2)]);
-  const line = pts.map((p,i) => (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
-  $(lineId).setAttribute('d', line);
-  $(fillId).setAttribute('d', line+` L ${width} ${height} L 0 ${height} Z`);
+  drawSpark($(lineId), $(fillId), data, width, height, lineId);
 }
 
 // ── Action endpoints ──────────────────────────────────────────────────
@@ -2210,6 +2455,14 @@ function disarmClick(ev){
 }
 
 // ── Hero render ───────────────────────────────────────────────────────
+// Crossfade the hero subtext when it changes - a quick fade-out, swap,
+// fade-in. Unchanged text is a no-op so steady states don't flicker.
+function setSubText(el, text){
+  if (!el || el.textContent === text) return;
+  el.classList.add('subfade');
+  clearTimeout(el._subT);
+  el._subT = setTimeout(() => { el.textContent = text; el.classList.remove('subfade'); }, 150);
+}
 function renderHero(s){
   const ds = PHASE_TO_STATE[s.phase] || 'off';
   // Aurora behind the readout: when OBS is forwarding without delay
@@ -2254,9 +2507,14 @@ function renderHero(s){
   const curMs = s.current_delay_ms || 0;
   const armedMs = s.armed_delay_ms || 0;
   const adjusting = ds === 'active' && armedMs > 0 && Math.abs(armedMs - curMs) > 1500;
-  // Sub copy
+  // Sub copy. When OBS hasn't connected there's no signal to forward, so
+  // don't claim we're forwarding anything - say we're waiting for it.
   let sub = '';
-  if (ds === 'off') sub = `Stream forwarded with no delay${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
+  if (ds === 'off'){
+    sub = s.ingest_alive
+      ? `Forwarding live with no delay · ${fmtKbps(s.stats.bitrate_kbps)} in`
+      : `Waiting for your encoder to connect…`;
+  }
   else if (ds === 'arming') sub = `Buffering - ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers still see live until you activate.`;
   else if (ds === 'armed') sub = `Buffer ready. Click Activate to cut your stream over.`;
   else if (ds === 'active' && adjusting){
@@ -2264,7 +2522,7 @@ function renderHero(s){
     sub = `Adjusting → ${dir} to ${fmtDelay(armedMs)} (currently ${fmtDelay(curMs)})…`;
   }
   else if (ds === 'active') sub = `Forwarded with a ${fmtDelay(s.armed_delay_ms)} buffer${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
-  $('delay-sub').textContent = sub;
+  setSubText($('delay-sub'), sub);
 
   renderCta();
 }
@@ -2397,35 +2655,64 @@ function renderCpProfiles(){
     // profiles without disarming first - arm() routes the request to
     // the live-adjust path. Only the "arming" mid-fill state and the
     // explicit current profile are disabled.
-    b.disabled = isCur || ds === 'arming';
+    // Too-big chips are quietly disabled with an explaining tooltip - the
+    // Profiles tab is where the "raise buffer" link lives.
+    b.disabled = isCur || ds === 'arming' || tooBig;
     if (tooBig){
       const needMB = requiredMBForMs(p.delay_ms);
-      b.title = `${p.name}: buffer too small - needs ≥ ${needMB} MB at the current bitrate (raise in System tab).`;
+      b.title = `${p.name}: buffer too small - needs ≥ ${needMB} MB at the current bitrate. Raise it in the Profiles or System tab.`;
     } else if (ds === 'active' && !isCur){
       b.title = `Adjust to ${p.name}`;
     } else {
       b.title = `Arm: ${p.name}`;
     }
     b.innerHTML = `<span style="color:var(--accent)">⚡</span><span>${fmtDelay(p.delay_ms)}</span>`;
-    b.onclick = () => {
-      $('delay-input').value = String(Math.round(p.delay_ms / 1000));
-      arm(p.delay_ms);
-    };
+    b.onclick = () => { $('delay-input').value = String(Math.round(p.delay_ms / 1000)); arm(p.delay_ms); };
     c.appendChild(b);
   });
 }
 
 // ── Header chips ───────────────────────────────────────────────────────
 function renderHeader(s){
-  // OBS pill
-  const obs = $('hdr-obs'); obs.className = 'ic-pill ' + (s.ingest_alive ? 'live ok' : '');
-  $('hdr-obs-v').textContent = s.ingest_alive ? 'in' : '-';
-  // Egress
-  const eg = $('hdr-egress'); eg.className = 'ic-pill ' + ((s.destinations_alive || 0) > 0 ? 'ok' : '');
-  $('hdr-egress-v').textContent = (s.destinations_total || 0) > 0
-    ? `${s.destinations_alive || 0}/${s.destinations_total || 0}` : '-';
-  // Bitrate
-  animateNumber('hdr-rate', s.stats.bitrate_kbps || 0, 400);
+  // OBS pill - plain-language state + a tooltip that tells the user what
+  // to do when it's not connected yet.
+  const obs = $('hdr-obs');
+  obs.className = 'ic-pill ' + (s.ingest_alive ? 'live ok' : '');
+  $('hdr-obs-v').textContent = s.ingest_alive ? 'Live' : 'Offline';
+  obs.title = s.ingest_alive
+    ? 'Your encoder is connected and publishing to InstantClone.'
+    : 'Waiting for your encoder. Point OBS (or any RTMP encoder) at rtmp://127.0.0.1:1935/live and start streaming.';
+  // Egress pill - how many destinations are actually connected.
+  const eg = $('hdr-egress');
+  const total = s.destinations_total || 0;
+  const live = s.destinations_alive || 0;
+  eg.className = 'ic-pill ' + (live > 0 ? 'ok' : '');
+  if (total === 0){
+    $('hdr-egress-v').textContent = 'No targets';
+    eg.title = 'No destinations yet. Add Twitch / YouTube / Kick in the Destinations tab.';
+  } else {
+    $('hdr-egress-v').textContent = `${live}/${total} live`;
+    eg.title = live > 0
+      ? `${live} of ${total} destination${total>1?'s':''} connected and receiving.`
+      : `${total} destination${total>1?'s':''} configured, none connected yet.`;
+  }
+  // Bitrate pill - "Idle" when nothing flows, auto kbps -> Mbps otherwise.
+  const kbps = s.stats.bitrate_kbps || 0;
+  const ratePill = $('hdr-rate-pill');
+  const rateU = $('hdr-rate-u');
+  if (kbps <= 0){
+    $('hdr-rate').textContent = 'Idle';
+    rateU.textContent = '';
+    ratePill.classList.remove('ok');
+  } else if (kbps >= 1000){
+    $('hdr-rate').textContent = (kbps / 1000).toFixed(2);
+    rateU.textContent = 'Mbps';
+    ratePill.classList.add('ok');
+  } else {
+    $('hdr-rate').textContent = Math.round(kbps);
+    rateU.textContent = 'kbps';
+    ratePill.classList.add('ok');
+  }
   // Codec chip
   const haveV = s.video_codec && s.video_codec !== '?' && s.video_codec !== '';
   const haveA = s.audio_codec && s.audio_codec !== '?' && s.audio_codec !== '';
@@ -2434,6 +2721,7 @@ function renderHeader(s){
     $('hdr-codec-v').textContent = (haveV ? s.video_codec : '?') + ' / ' + (haveA ? s.audio_codec : '?');
   } else $('hdr-codec').hidden = true;
   $('hdr-ebroadcast').hidden = !s.multitrack_video;
+  $('hdr-dualformat').hidden = !s.vertical_present;
   $('hdr-backpressure').hidden = !s.backpressure;
   renderTwitchCapPill(s);
 }
@@ -2444,7 +2732,16 @@ function renderStats(s){
   if (rateHistory.length > HISTORY_LEN) rateHistory.shift();
   cpuHistory.push(s.cpu_pct || 0);
   if (cpuHistory.length > HISTORY_LEN) cpuHistory.shift();
-  animateNumber('stat-rate', s.stats.bitrate_kbps || 0, 500);
+  // Bitrate in: count up, auto kbps -> Mbps so a live stream reads "6.20
+  // Mbps" instead of "6200 kbps".
+  const rkbps = s.stats.bitrate_kbps || 0;
+  if (rkbps >= 1000){
+    animateNumber('stat-rate', rkbps, 500, v => (v/1000).toFixed(2));
+    $('stat-rate-u').textContent = 'Mbps';
+  } else {
+    animateNumber('stat-rate', rkbps, 500, v => Math.round(v).toString());
+    $('stat-rate-u').textContent = 'kbps';
+  }
   animateNumber('stat-cpu', s.cpu_pct || 0, 500, v => v.toFixed(1));
   updateSpark('spark-rate-line', 'spark-rate-fill', rateHistory, 760, 70);
   updateSpark('spark-cpu-line', 'spark-cpu-fill', cpuHistory, 360, 48);
@@ -2482,40 +2779,116 @@ function rebuildDests(){
   $('dest-sub').textContent = `${lastDests.length} configured · ${lastDests.filter(d => d.alive).length} forwarding live`;
 }
 
+// Outline glyph for the card's format indicator. 'horizontal' = a wide
+// rect, 'vertical' = a tall rect, 'both' = a wide + a tall side by side
+// (Twitch Dual Format). Stroke uses currentColor so the CSS classes tint it.
+function formatIconSvg(kind){
+  const open = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">';
+  if (kind === 'vertical') return open + '<rect x="4" y="1.5" width="8" height="13" rx="1.6"/></svg>';
+  if (kind === 'both')     return open + '<rect x="0.8" y="4.5" width="8.2" height="6.6" rx="1.2"/><rect x="10" y="2.4" width="4.4" height="11.2" rx="1.2"/></svg>';
+  return open + '<rect x="1.5" y="4" width="13" height="8" rx="1.6"/></svg>'; // horizontal
+}
+
+// Set the card's format icon + hover tooltip from the destination's
+// *actual* live state, not an assumed config. Twitch reads horizontal by
+// default (the normal case) and only flips to "both" when a vertical canvas
+// is really on the wire (Dual Format live). Non-Twitch shows horizontal, or
+// vertical with a distinct amber state while it waits on Dual Format.
+// Is there an enabled Twitch destination that can produce the Dual Format
+// canvas? Vertical is impossible without one - this is the config-time gate.
+function hasEnabledTwitchSource(){
+  return Array.isArray(lastDests) && lastDests.some(x => x.platform === 'twitch' && x.enabled);
+}
+// Diagnose why a non-Twitch vertical destination is (not) ready. Combines the
+// config precondition with the two live /state signals so the message is
+// precise instead of a vague "waiting". Dual Format is NOT a single OBS
+// toggle - it's Twitch Enhanced Broadcasting + the Aitum Vertical canvas,
+// set up per Twitch's guide - so the copy points there, never "turn it on".
+//   - no Twitch source            -> "Needs Twitch EB"
+//   - EB live but no 9:16 canvas  -> "No vertical canvas"
+//   - EB not live yet             -> "Waiting for Dual Format"
+function verticalDiag(d){
+  // d.vertical_ready is the backend truth: the canvas is resolved for this
+  // destination and video is really flowing.
+  if (d.vertical_ready !== false) return {ready:true};
+  const s = lastState || {};
+  if (!hasEnabledTwitchSource())
+    return {ready:false, label:'Needs Twitch EB',
+      title:'Vertical reuses the 9:16 canvas from Twitch Dual Format (Enhanced Broadcasting + Aitum Vertical). Add and enable a Twitch destination set up for it - see Twitch\'s Dual Format guide.'};
+  if (s.multitrack_video)
+    return {ready:false, label:'No vertical canvas',
+      title:'Enhanced Broadcasting is live, but no 9:16 canvas is on the wire. Dual Format needs the vertical canvas too (Enhanced Broadcasting + Aitum Vertical) - follow Twitch\'s Dual Format guide.'};
+  return {ready:false, label:'Waiting for Dual Format',
+    title:'No Dual Format canvas yet. Start streaming with Twitch Dual Format set up (Enhanced Broadcasting + Aitum Vertical, per Twitch\'s guide) to feed this destination.'};
+}
+function updateFormatIcon(r, d){
+  if (!r.format) return;
+  let kind, title, cls = '';
+  if (d.platform === 'twitch'){
+    if (d.vertical_canvas_present){
+      kind = 'both'; cls = 'fmt-vertical';
+      title = 'Dual Format active: Twitch is receiving both a horizontal (16:9) and a vertical (9:16) canvas. InstantClone forwards both.';
+    } else {
+      kind = 'horizontal';
+      title = 'Horizontal (16:9) - a normal Twitch stream (Enhanced Broadcasting is horizontal too). Turn on Twitch Dual Format in OBS to also send a vertical 9:16 canvas.';
+    }
+  } else if (d.stream_format === 'vertical'){
+    kind = 'vertical';
+    const vd = verticalDiag(d);
+    if (!vd.ready){
+      cls = 'fmt-wait';
+      title = vd.title;
+    } else {
+      cls = 'fmt-vertical';
+      title = 'Vertical (9:16): reusing Twitch Dual Format\'s vertical canvas (YouTube Shorts / Kick mobile / TikTok).';
+    }
+  } else {
+    kind = 'horizontal';
+    title = 'Horizontal (16:9): the standard landscape feed.';
+  }
+  if (r.fmtKind !== kind){ r.format.innerHTML = formatIconSvg(kind); r.fmtKind = kind; }
+  const wantClass = 'dcard-format' + (cls ? ' ' + cls : '');
+  if (r.format.className !== wantClass) r.format.className = wantClass;
+  if (r.format.title !== title){ r.format.title = title; r.format.setAttribute('aria-label', title); }
+}
+
 function buildDestCard(d){
   const el = document.createElement('div');
   el.className = 'dcard';
   el.innerHTML = `
     <div class="dcard-head">
       <span class="dcard-icon"></span>
-      <div style="flex:1;min-width:0"><div class="dcard-name"></div><div class="dcard-host mono"></div></div>
+      <div class="dcard-id"><div class="dcard-name"></div><div class="dcard-host mono"></div></div>
+      <span class="dcard-format" tabindex="0"></span>
+      <button class="dcard-switch dcard-toggle" role="switch" title="Enable / disable"><span></span></button>
       <div class="dcard-status"><span class="d-dot"></span><span class="dcard-status-l"></span></div>
     </div>
-    <div class="dcard-graph">
-      <div class="dcard-graph-overlay">
-        <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">Mbps</span></div>
-        <span class="ic-label">Egress · last 60s</span>
+    <div class="dcard-screen">
+      <div class="dcard-body">
+        <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">kbps</span></div>
+        <span class="dcard-foot-meta"><span class="dcard-frames">0</span>f · <span class="dcard-cuts">0</span>c · <span class="dcard-rec">0</span>r</span>
       </div>
-      <svg class="dcard-spark" viewBox="0 0 400 54" preserveAspectRatio="none">
-        <path class="dcard-spark-fill" style="fill:url(#sparkGrad)" d=""/>
-        <path class="dcard-spark-line" style="fill:none;stroke:var(--accent);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round" d=""/>
+      <div class="dcard-res mono" hidden></div>
+      <svg class="dcard-spark" viewBox="0 0 400 40" preserveAspectRatio="none">
+        <path class="dcard-spark-fill" style="fill:color-mix(in oklch,var(--dc,var(--accent)) 16%,transparent)" d=""/>
+        <path class="dcard-spark-line" style="fill:none;stroke:var(--dc,var(--accent));stroke-width:2;stroke-linecap:round;stroke-linejoin:round" d=""/>
       </svg>
     </div>
-    <div class="dcard-foot">
-      <span class="dcard-foot-meta"><span class="dcard-frames">0</span> frames · <span class="dcard-cuts">0</span> cuts · <span class="dcard-rec">0</span> retries</span>
-      <span class="spacer"></span>
-      <button class="ic-btn-tiny dcard-edit" title="Edit">✎</button>
-      <button class="ic-btn-tiny dcard-toggle" title="Toggle"></button>
-      <button class="dcard-link dcard-del">✕ Remove</button>
+    <div class="dcard-actions">
+      <button class="dcard-act dcard-edit" title="Edit">✎</button>
+      <button class="dcard-act dcard-del" title="Remove">✕</button>
     </div>`;
   const refs = {
     el, last: d, history: [],
     icon: el.querySelector('.dcard-icon'),
     name: el.querySelector('.dcard-name'),
     host: el.querySelector('.dcard-host'),
+    format: el.querySelector('.dcard-format'),
+    fmtKind: '',
     statL: el.querySelector('.dcard-status-l'),
     statE: el.querySelector('.dcard-status'),
     rate: el.querySelector('.dcard-rate'),
+    res: el.querySelector('.dcard-res'),
     sparkLine: el.querySelector('.dcard-spark-line'),
     sparkFill: el.querySelector('.dcard-spark-fill'),
     frames: el.querySelector('.dcard-frames'),
@@ -2543,40 +2916,59 @@ function updateDestCard(r, d){
     r.icon.textContent = PLATFORM_INITIAL[d.platform] || (d.platform || '?').charAt(0).toUpperCase();
   }
   if (r.name.textContent !== d.name) r.name.textContent = d.name;
+  // Host stays clean (just the platform). The format is conveyed by the
+  // icon + hover tooltip set below, not by appending text here.
   const platLabel = PLATFORM_LABEL[d.platform] || d.platform;
   if (r.host.textContent !== platLabel) r.host.textContent = platLabel;
+  updateFormatIcon(r, d);
   // alive = TCP connected. bitrate>0 = actually forwarding frames. The
   // sink/Twitch session can be CONNECTED but receiving nothing (OBS hasn't
   // sent the first IDR yet) - UI used to call that "Streaming" which is
   // misleading. Split into three states: Streaming (green pulse), Connected
   // (accent, just sitting on a healthy TCP connection), Idle (gray).
-  const isStreaming = d.alive && (d.bitrate_kbps || 0) > 0;
-  const stat = !d.enabled ? 'off' : isStreaming ? 'live' : d.alive ? 'ready' : 'off';
+  // A vertical destination whose canvas isn't resolved yet (Twitch Dual
+  // Format off) is a fourth state: it holds a connection but deliberately
+  // sends no video, so call it out as "Waiting for Dual Format" rather
+  // than the misleading "Connected".
+  // A vertical dest that can't produce its canvas yet gets a precise,
+  // actionable pill (why it's waiting) instead of a generic "Connected".
+  const vdiag = (d.enabled && d.platform !== 'twitch' && d.stream_format === 'vertical')
+    ? verticalDiag(d) : null;
+  const verticalWaiting = !!vdiag && !vdiag.ready;
+  const isStreaming = d.alive && (d.bitrate_kbps || 0) > 0 && !verticalWaiting;
+  const stat = !d.enabled ? 'off' : verticalWaiting ? 'wait' : isStreaming ? 'live' : d.alive ? 'ready' : 'off';
   r.statE.className = 'dcard-status s-' + stat;
   r.statL.textContent = !d.enabled ? 'Disabled'
+                       : verticalWaiting ? vdiag.label
                        : isStreaming ? 'Streaming'
                        : d.alive ? 'Connected'
                        : 'Idle';
-  // rate + history
-  const rate = d.alive ? (d.bitrate_kbps || 0) : 0;
-  r.history.push(rate); if (r.history.length > HISTORY_LEN) r.history.shift();
-  if (d.alive){
-    const mbps = rate / 1000;
-    r.rate.textContent = mbps >= 1 ? mbps.toFixed(2) : (rate||0);
-  } else r.rate.textContent = '-';
-  if (r.history.length >= 2){
-    const max = Math.max(...r.history, 1), min = Math.min(...r.history, 0);
-    const range = max - min || 1, step = 400 / (r.history.length - 1);
-    const pts = r.history.map((v,i) => [i*step, 54-2-((v-min)/range)*50]);
-    const line = pts.map((p,i) => (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
-    r.sparkLine.setAttribute('d', line);
-    r.sparkFill.setAttribute('d', line+' L 400 54 L 0 54 Z');
+  r.statE.title = verticalWaiting ? vdiag.title : '';
+  // rate + history (auto kbps -> Mbps, matching the header + stats).
+  const kbps = d.alive ? (d.bitrate_kbps || 0) : 0;
+  r.history.push(kbps); if (r.history.length > HISTORY_LEN) r.history.shift();
+  const rateU = r.rateU || (r.rateU = r.el.querySelector('.dcard-rate-u'));
+  if (!d.alive){ r.rate.textContent = '-'; if (rateU) rateU.textContent = ''; }
+  else if (kbps >= 1000){ r.rate.textContent = (kbps/1000).toFixed(2); if (rateU) rateU.textContent = 'Mbps'; }
+  else { r.rate.textContent = Math.round(kbps); if (rateU) rateU.textContent = 'kbps'; }
+  // Detected resolution + codec of the forwarded track (confirms the 9:16
+  // canvas is really flowing). Hidden until known.
+  if (r.res){
+    const parts = [];
+    if (d.video_res) parts.push(d.video_res.replace('x','×'));
+    if (d.video_codec) parts.push(d.video_codec);
+    const txt = parts.join(' · ');
+    r.res.hidden = !txt;
+    if (r.res.textContent !== txt) r.res.textContent = txt;
   }
+  // Smooth, 0-anchored, per-card stable sparkline (same renderer as stats).
+  drawSpark(r.sparkLine, r.sparkFill, r.history, 400, 40, 'dc:' + d.id);
   r.frames.textContent = (d.tags_sent || 0).toLocaleString();
   r.cuts.textContent = d.cuts || 0;
   r.rec.textContent = d.reconnects || 0;
-  r.toggle.title = d.enabled ? 'Disable' : 'Enable';
-  r.toggle.textContent = d.enabled ? '⏸' : '▶';
+  r.toggle.title = d.enabled ? 'Disable this destination' : 'Enable this destination';
+  r.toggle.classList.toggle('on', d.enabled);
+  r.toggle.setAttribute('aria-checked', d.enabled ? 'true' : 'false');
 }
 
 async function loadDestinations(){
@@ -2585,7 +2977,8 @@ async function loadDestinations(){
 
 // ── Destination form ──────────────────────────────────────────────────
 function openDestForm(d){
-  $('dest-form').hidden = false;
+  $('dest-modal').hidden = false;
+  $('dest-form').scrollTop = 0;
   $('dest-form-title').textContent = d ? 'Edit destination' : 'New destination';
   $('dest-form-id').value = d ? d.id : '';
   $('dest-form-name').value = d ? d.name : '';
@@ -2596,6 +2989,8 @@ function openDestForm(d){
   $('dest-form-custom').value = d ? d.custom_egress_url : '';
   $('dest-form-twitch-ingest').value = (d && d.twitch_ingest) || '';
   $('dest-form-youtube-ingest').value = (d && d.youtube_ingest) || '';
+  $('dest-form-format').value = (d && d.stream_format === 'vertical') ? 'vertical' : 'horizontal';
+  refreshFormatOptionAvailability();
   $('dest-form-key').value = '';
   $('dest-form-key').placeholder = d && d.stream_key_set ? 'leave blank to keep current' : 'paste stream key';
   document.getElementById('dest-form-key-hint').textContent = d && d.stream_key_set ? '(currently set)' : '';
@@ -2604,9 +2999,26 @@ function openDestForm(d){
   updateVodVisibility();
   refreshObsEbLaunchAvailability();
   $('dest-form-msg').innerHTML = '';
-  $('dest-form').scrollIntoView({behavior:'smooth',block:'nearest'});
+  // Focus the name field for immediate typing, and wire Esc-to-close.
+  setTimeout(() => { const n = $('dest-form-name'); if (n) n.focus(); }, 60);
+  document.addEventListener('keydown', onDestModalKey);
 }
-function cancelDestForm(){ $('dest-form').hidden = true; }
+function cancelDestForm(){
+  $('dest-modal').hidden = true;
+  document.removeEventListener('keydown', onDestModalKey);
+}
+function onDestModalKey(e){
+  if (e.key === 'Escape'){ e.preventDefault(); cancelDestForm(); }
+}
+// Portal the destination modal to <body>. It lives inside the destinations
+// tab-pane in markup, but .tab-pane keeps a `transform` (animation
+// fill-mode: both), which makes it the containing block for position:fixed
+// - so the modal would anchor to the pane, not the viewport (top cut off).
+// Reparenting to <body> restores true viewport-centred overlay behaviour.
+(function portalDestModal(){
+  const m = document.getElementById('dest-modal');
+  if (m && m.parentElement !== document.body) document.body.appendChild(m);
+})();
 
 // VOD-audio mode is Twitch-only (the gate is hardcoded in OBS). The
 // "Launch OBS for EB + VOD" experimental button below only matters
@@ -2631,6 +3043,22 @@ function updateVodVisibility(){
   }
 }
 
+// Vertical can only exist when a Twitch Enhanced Broadcasting source is on to
+// produce the 9:16 canvas. Gate the choice: disable it when there's no enabled
+// Twitch destination (but never force-flip a dest that's already vertical - its
+// source may reappear), and show the reason inline.
+function refreshFormatOptionAvailability(){
+  const wrap = $('dest-form-format-wrap');
+  if (!wrap) return;
+  const sel = $('dest-form-format');
+  const vopt = sel ? sel.querySelector('option[value="vertical"]') : null;
+  const ok = hasEnabledTwitchSource();
+  const alreadyVertical = sel && sel.value === 'vertical';
+  if (vopt) vopt.disabled = !ok && !alreadyVertical;
+  const gate = $('dest-form-format-gate');
+  if (gate) gate.hidden = ok || wrap.hidden;
+}
+
 function fillDestPlatforms(){
   const sel = $('dest-form-platform'); sel.innerHTML = '';
   platforms.forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.label; sel.appendChild(o); });
@@ -2640,8 +3068,14 @@ function fillDestPlatforms(){
       $('dest-form-custom-wrap').hidden = sel.value !== 'custom';
       $('dest-form-twitch-wrap').hidden = sel.value !== 'twitch';
       $('dest-form-youtube-wrap').hidden = sel.value !== 'youtube';
+      // Format choice is meaningless for Twitch (native dual canvas) -
+      // hide it there and show the "Twitch does both" note instead.
+      const isTwitch = sel.value === 'twitch';
+      $('dest-form-format-wrap').hidden = isTwitch;
+      $('dest-form-twitch-native-note').hidden = !isTwitch;
       renderKeyHelp(sel.value, 'dest-form-key-help');
       updateVodVisibility();
+      refreshFormatOptionAvailability();
     });
     const vodToggle = $('dest-form-vod-audio');
     if (vodToggle) vodToggle.addEventListener('change', updateVodVisibility);
@@ -2669,11 +3103,14 @@ async function saveDestForm(){
   // enabled it then switched platform without the change handler
   // running.
   const vodAudio = platform === 'twitch' && $('dest-form-vod-audio').checked;
+  // Vertical is a non-Twitch concept; Twitch always gets both canvases.
+  const format = platform !== 'twitch' ? $('dest-form-format').value : 'horizontal';
   if (!name){ $('dest-form-msg').innerHTML = '<span class="err">Name required</span>'; return false; }
   const body = new URLSearchParams({
     name, platform, custom_egress_url:custom, enabled:enabled?'on':'off',
     twitch_ingest:ingest, youtube_ingest:yingest,
     vod_audio: vodAudio ? 'on' : 'off',
+    stream_format: format,
   });
   if (id) body.set('id', id);
   if (key) body.set('stream_key', key);
@@ -2691,6 +3128,7 @@ async function toggleDest(d){
   const body = new URLSearchParams({id:d.id, name:d.name, platform:d.platform,
     custom_egress_url:d.custom_egress_url, twitch_ingest:d.twitch_ingest||'', youtube_ingest:d.youtube_ingest||'',
     vod_audio: d.vod_audio ? 'on' : 'off',
+    stream_format: d.stream_format || 'horizontal',
     enabled:d.enabled?'off':'on'});
   await fetch('/destinations',{method:'POST', body});
   loadDestinations();
@@ -2725,12 +3163,18 @@ function renderProfilesPane(){
       const tag = document.createElement('span'); tag.className = 'profile-tag'; tag.textContent = ds;
       b.appendChild(tag);
     }
+    const needMB = tooBig ? requiredMBForMs(p.delay_ms) : 0;
     if (tooBig){
-      const needMB = requiredMBForMs(p.delay_ms);
+      // Quiet: "needs X MB" with a small inline link to the buffer setting.
+      // Nothing auto-changes; the row itself isn't armable.
       const warn = document.createElement('span'); warn.className = 'profile-warn';
-      warn.textContent = `needs ≥ ${needMB} MB`;
+      warn.append(`needs ≥ ${needMB} MB`);
+      const link = document.createElement('a');
+      link.textContent = 'Raise buffer →';
+      link.onclick = (e) => { e.stopPropagation(); jumpToBufferSetting(needMB); };
+      warn.appendChild(link);
       b.appendChild(warn);
-      b.title = `Buffer too small at the current bitrate - raise buffer in System tab to ≥ ${needMB} MB to use this profile.`;
+      b.title = `Buffer too small for ${fmtDelay(p.delay_ms)} at the current bitrate - needs ≥ ${needMB} MB (you have ${lastConfig?lastConfig.buffer_mb:'?'} MB ≈ ${fmtDelay(cap)}).`;
     } else if (ds === 'active' && !isCur){
       b.title = `Adjust live delay to ${p.name}`;
     } else if (ds === 'armed' && !isCur){
@@ -2739,7 +3183,9 @@ function renderProfilesPane(){
     const x = document.createElement('span'); x.className = 'ic-btn-tiny'; x.textContent = '✕';
     x.onclick = (e) => { e.stopPropagation(); delProfile(p.name); };
     b.appendChild(x);
-    b.onclick = () => arm(p.delay_ms);  // arm() handles capacity refusal + active/armed live update
+    // Usable rows arm the delay; too-big rows do nothing on click (the
+    // inline link is the only action).
+    b.onclick = tooBig ? null : () => arm(p.delay_ms);
     c.appendChild(b);
   });
 }
@@ -2774,6 +3220,24 @@ async function addProfile(){
 async function delProfile(name){
   await fetch('/profiles/delete',{method:'POST',body:new URLSearchParams({name})});
   loadProfiles();
+}
+// Jump to System -> Buffer with a target size prefilled, so a profile that
+// "needs more MB" is one click from being fixable. Buffer changes need a
+// restart (the DiskRing is immutable once mapped) - the restart banner
+// already communicates that after Save.
+function jumpToBufferSetting(mb){
+  showTab('system');
+  showSubTab('system', 'buffer');
+  const el = $('s-bmb');
+  if (el){
+    // Navigate + highlight only - never overwrite the user's value. We
+    // just point them at the setting and tell them the target.
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+    el.focus();
+    el.scrollIntoView({behavior:'smooth', block:'center'});
+  }
+  toast(mb ? `This delay needs a ≥ ${mb} MB buffer. Set it here, Save, then restart.`
+           : 'Raise the buffer size here, Save, then restart.', 'ok');
 }
 
 // ── Config / Settings ─────────────────────────────────────────────────
@@ -3218,40 +3682,62 @@ async function toggleObsRegister(){
 // settings plugin discards file-injected URLs. Errors surface inline
 // next to the button so the user can fix install paths or close a
 // running OBS first.
-async function launchObsWithEb(){
-  const btn = $('obs-eb-launch-btn');
-  const msg = $('obs-eb-launch-msg');
+// One-click VOD + EB: saves the destination (so the VOD flag is written),
+// then runs the server-side setup and renders a red-to-green checklist so
+// the user can see exactly which step needs attention.
+async function setupVodEb(){
+  const btn = $('obs-eb-setup-btn');
+  const list = $('vod-eb-checklist');
   if (!btn || btn.disabled) return;
-  // Persist the form before launching. The VOD toggle only takes effect
-  // on save: that's what writes OBS's `EnableCustomServerVodTrack` gate
-  // (user.ini) and flips InstantClone's VOD-track forwarding. Launching
-  // on unsaved state spawns OBS with EB but no VOD - the silent mismatch
-  // this button used to allow. Save first, and only launch if it stuck.
   btn.disabled = true;
-  if (msg) msg.textContent = 'Saving destination…';
+  if (list){ list.hidden = false; list.innerHTML = '<li>Saving destination…</li>'; }
   if (!(await saveDestForm())){
-    if (msg) msg.textContent = 'Fix the destination form, then launch.';
+    if (list) list.innerHTML = '<li class="bad">Fix the destination form, then try again.</li>';
     btn.disabled = false;
     return;
   }
-  if (msg) msg.textContent = 'Launching…';
   try {
-    const r = await (await fetch('/obs/launch-with-eb', {method:'POST'})).json();
-    if (r.ok){
-      toast(r.message || 'OBS launched','ok');
-      if (msg) msg.textContent = 'OBS spawned. Multi-track video unlocked for this session.';
-    } else {
-      toast(r.error || 'Failed','err');
-      if (msg) msg.textContent = r.error || 'Failed';
+    const r = await (await fetch('/obs/setup-vod-eb', {method:'POST'})).json();
+    if (list && r.steps){
+      list.innerHTML = r.steps.map(s =>
+        `<li style="display:flex;gap:7px;align-items:flex-start;margin:3px 0">
+           <span style="color:${s.ok?'var(--ok,#3fb950)':'var(--err)'};font-weight:700">${s.ok?'✓':'✗'}</span>
+           <span><b>${s.name}</b> - ${s.msg}</span>
+         </li>`).join('');
     }
+    toast(r.ok ? 'VOD + EB ready' : 'VOD + EB needs attention', r.ok ? 'ok' : 'err');
   } catch(e){
+    if (list) list.innerHTML = '<li class="bad">Request failed: '+String(e)+'</li>';
     toast('Request failed','err');
-    if (msg) msg.textContent = String(e);
   }
   btn.disabled = false;
 }
+
+// Create a Desktop shortcut that cold-starts the whole VOD + EB flow.
+async function createEbShortcut(){
+  const btn = $('eb-shortcut-btn');
+  const msg = $('eb-shortcut-msg');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  if (msg) msg.textContent = 'Creating shortcut…';
+  try {
+    const r = await (await fetch('/shortcut/create-eb', {method:'POST'})).json();
+    if (r.ok){
+      if (msg) msg.textContent = 'Created '+r.kind+': '+r.path;
+      toast('Desktop shortcut created','ok');
+    } else {
+      if (msg) msg.textContent = r.error || 'Failed';
+      toast(r.error || 'Failed','err');
+    }
+  } catch(e){
+    if (msg) msg.textContent = String(e);
+    toast('Request failed','err');
+  }
+  btn.disabled = false;
+}
+
 async function refreshObsEbLaunchAvailability(){
-  const btn = $('obs-eb-launch-btn');
+  const btn = $('obs-eb-setup-btn');
   const msg = $('obs-eb-launch-msg');
   if (!btn) return;
   try {
@@ -4332,8 +4818,8 @@ const TOUR = [
     body: `
       <p>Big number = your <b>current delivered delay</b>. The pill above + aurora glow tell you the state:</p>
       <ul>
-        <li><b>OFFLINE</b> - OBS isn't streaming to InstantClone yet (where you probably are right now)</li>
-        <li><b>LIVE · Passthrough</b> - OBS forwarding, no delay</li>
+        <li><b>OFFLINE</b> - your encoder isn't streaming to InstantClone yet (where you probably are right now)</li>
+        <li><b>LIVE · Passthrough</b> - forwarding your stream, no delay</li>
         <li><b>BUFFERING</b> - filling toward your armed value</li>
         <li><b>ARMED</b> - buffer ready, click Activate</li>
         <li><b>ACTIVE</b> - delay is live</li>
@@ -4370,11 +4856,18 @@ const TOUR = [
     `,
   },
   {
-    target: '#dest-grid', side: 'top', tab: 'destinations',
+    // Dynamic: highlight a real destination card once one exists (so the
+    // spotlight isn't a viewport-filling grid), otherwise the Add button.
+    target: () => document.querySelector('#dest-grid .dcard')
+      || document.querySelector('#dest-add-btn')
+      || document.querySelector('#dest-grid'),
+    side: 'top', tab: 'destinations',
     title: 'Destinations',
     body: `
-      <p>Add as many platforms as you want - each gets its own card with a coloured left stripe (Twitch purple, YouTube rose, Kick mint…), live bitrate sparkline, and per-destination status pill.</p>
+      <p>Each platform you add gets its own card with a coloured left stripe (Twitch purple, YouTube rose, Kick mint…), a live bitrate sparkline, and a status pill. Hit <b>+ Add destination</b> to create one.</p>
       <p>Stream keys are <b>per-destination</b>. OBS uses a simple stream identifier, the real platform keys live here.</p>
+      <p><b>Horizontal or vertical?</b> Every card has a small <b>format icon</b> next to its status - hover it to see whether that destination sends <b>horizontal</b> (wide), <b>vertical</b> 9:16, or <b>both</b> (Twitch, via Dual Format). Set any non-Twitch destination to <b>Vertical</b> to reuse Twitch's 9:16 canvas for YouTube Shorts / Kick mobile.</p>
+      <p>InstantClone standardizes on <b>Twitch Dual Format</b> as its vertical source: set it up once in OBS and every vertical destination reuses that same 9:16 canvas. Vertical only flows while <b>Dual Format / Enhanced Broadcasting</b> is on, and the card shows <b>Waiting for Dual Format</b> until then. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Twitch Dual Format →</a></p>
       <div class="tour-tip"><strong>Streaming vs Connected:</strong> Streaming = bytes flowing. Connected = TCP up but OBS hasn't sent a frame yet.</div>
     `,
   },
@@ -4385,7 +4878,7 @@ const TOUR = [
       <p>Two ways - pick whichever fits your setup.</p>
       <p><b>Recommended - one click:</b> hit <b>Register with OBS</b> on this tab. InstantClone shows up next to Twitch / YouTube in OBS's <b>Settings → Stream → Service</b> dropdown. Restart OBS once, pick <b>InstantClone</b>, set Stream Key to anything (we suggest <code>main</code>), and hit <b>Start Streaming</b>. Multi-track Video "Auto" works out of the box.</p>
       <p><b>Fallback - Custom RTMP:</b> if you're on older OBS, using a multi-RTMP plugin, or a non-OBS encoder, use the Server URL + key shown below this section instead - Service: <b>Custom…</b>.</p>
-      <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you press <b>Start Streaming</b> in OBS, the dashboard stays <b>OFFLINE</b> and the OBS pill at the top reads "not connected" - that's expected, not a setup mistake.</p>
+      <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you press <b>Start Streaming</b> in your encoder, the dashboard stays <b>OFFLINE</b> and the OBS pill at the top reads "Offline" - that's expected, not a setup mistake.</p>
       <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just an internal label here. Your real Twitch / YouTube / Kick keys go in the <b>Destinations</b> tab - that's what actually reaches the platforms.</div>
     `,
   },
@@ -4472,7 +4965,9 @@ function positionTour(){
     return;
   }
 
-  const el = document.querySelector(t.target);
+  // Target may be a CSS selector or a function returning the best element
+  // for the current state (e.g. a real destination card once some exist).
+  const el = typeof t.target === 'function' ? t.target() : document.querySelector(t.target);
   if (!el){
     // Target missing (maybe hidden) - fall back to centered.
     hl.classList.add('hidden');
@@ -4533,6 +5028,10 @@ function positionTour(){
     tx = hx - tw;
     ty = Math.min(vh - th - 12, Math.max(12, hy));
   }
+  // Final clamp: never let the tooltip land off-screen, even if the target
+  // is larger than the viewport (e.g. a full grid of destination cards).
+  tx = Math.min(vw - tw - 12, Math.max(12, tx));
+  ty = Math.min(vh - th - 12, Math.max(12, ty));
   tip.style.left = tx + 'px';
   tip.style.top  = ty + 'px';
 }

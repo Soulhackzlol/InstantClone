@@ -20,7 +20,7 @@
 <a href="https://github.com/Soulhackzlol/InstantClone/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Soulhackzlol/InstantClone/ci.yml?branch=main&style=flat-square&label=ci&color=34c759&labelColor=11141a"/></a>
 <a href="https://github.com/Soulhackzlol/InstantClone/releases"><img alt="release" src="https://img.shields.io/github/v/release/Soulhackzlol/InstantClone?include_prereleases&style=flat-square&color=5ac8fa&labelColor=11141a&display_name=tag&sort=semver"/></a>
 <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-d4d8e1?style=flat-square&labelColor=11141a"/></a>
-<img alt="Binary" src="https://img.shields.io/badge/binary-1.2%20MB-5ac8fa?style=flat-square&labelColor=11141a"/>
+<img alt="Binary" src="https://img.shields.io/badge/binary-1.3%20MB-5ac8fa?style=flat-square&labelColor=11141a"/>
 <img alt="Windows only" src="https://img.shields.io/badge/windows-only-7a7d8a?style=flat-square&labelColor=11141a"/>
 
 </div>
@@ -45,11 +45,11 @@ Once it existed, the parts I'd actually wanted ended up in: a real two-phase arm
 <td valign="top" width="38%">
 
 <table>
-<tr><td><b>Binary</b></td><td align="right"><code>1.2 MB</code></td></tr>
+<tr><td><b>Binary</b></td><td align="right"><code>1.3 MB</code></td></tr>
 <tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td></tr>
 <tr><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>200 / 200</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>210 / 210</code></td></tr>
 </table>
 
 </td>
@@ -157,6 +157,9 @@ Click **Start Streaming**. The OBS pill in InstantClone turns green. Your real T
 > [!TIP]
 > Fan out one OBS feed to several destinations at once. Add Twitch, YouTube, and a custom RTMP endpoint, toggle each on independently, watch their per-destination bitrate live.
 
+> [!TIP]
+> **Go vertical for free.** Turn on Twitch **Dual Format** (Enhanced Broadcasting) in OBS and set any non-Twitch destination's **Stream format** to **Vertical** - InstantClone reuses the 9:16 canvas OBS is already making for Twitch and sends it to YouTube Shorts, Kick mobile, or any custom RTMP target, with no extra encoding. Vertical only flows while Dual Format is on; until then the destination shows "Waiting for Dual Format" and nothing else is affected. (Twitch handles both canvases itself, so the option is hidden there.)
+
 </td>
 </tr>
 </table>
@@ -186,7 +189,7 @@ A 280×340 panel with the readout, arm / activate / disarm / cut controls, and l
 
 ### Browser-source overlays
 
-The **Overlay** tab is a no-code Studio. Pick a ready-made overlay, copy its URL, and drop it into OBS — or open any in the Studio to redesign it (per-state colours, widgets, animations) and **Save** or **Save as new**.
+The **Overlay** tab is a no-code Studio. Pick a ready-made overlay, copy its URL, and drop it into OBS - or open any in the Studio to redesign it (per-state colours, widgets, animations) and **Save** or **Save as new**.
 
 <pre><code>http://127.0.0.1:7799/overlay/whisper.html</code></pre>
 
@@ -276,7 +279,7 @@ cargo build --release
 
 No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzipped at build time by `build.rs` (uses `flate2`, build-only) and embedded into the binary; at runtime it's served with `Content-Encoding: gzip`.
 
-`cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced RTMP IDR detection, AMF0 codec including Strict Array (Enhanced-RTMP `fourCcList`) + recursion guard, settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, `accepts_gzip` content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, Enhanced-RTMP multi-track audio (Twitch's VOD audio track), primary-track IDR gate so EB cuts don't pixel-glitch ladder rungs, OBS 32 `user.ini` / legacy `global.ini` path resolution, the OBS services.json patcher, the GitHub releases update-check parser + SemVer-ish comparator, the hand-rolled SHA-256 (NIST vectors), and the self-update download + checksum-verify + on-disk exe swap. 200 tests, all green.
+`cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced RTMP IDR detection, AMF0 codec including Strict Array (Enhanced-RTMP `fourCcList`) + recursion guard, settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, `accepts_gzip` content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, Enhanced-RTMP multi-track audio (Twitch's VOD audio track), primary-track IDR gate so EB cuts don't pixel-glitch ladder rungs, SPS orientation parsing for vertical-canvas (9:16) selection, OBS 32 `user.ini` / legacy `global.ini` path resolution, the OBS services.json patcher, the GitHub releases update-check parser + SemVer-ish comparator, the hand-rolled SHA-256 (NIST vectors), and the self-update download + checksum-verify + on-disk exe swap. 210 tests, all green.
 
 <br/>
 
@@ -284,19 +287,20 @@ No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzippe
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 200 tests on every push, and a tagged commit auto-builds + publishes a release artifact with a `SHA256SUMS.txt` checksum file alongside (no code-signing certificate yet, so the OS may warn on first launch).
+**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 210 tests on every push, and a tagged commit auto-builds + publishes a release artifact with a `SHA256SUMS.txt` checksum file alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's solid**
 
 - The two-phase `arm → activate → cut` state machine, with IDR-aligned cuts and monotonic timestamp rewrites. The thing that would have made me build this if it didn't exist.
 - **Live delay adjustment**: re-arm or adjust the delay up / down without disarming first. Backend already supported it; the cockpit now exposes it as a single typed-value + "↻ Adjust ↑/↓ to Ns" CTA.
 - **Full OBS-parity RTMP handshake.** `connect` carries the same codec-capability bag librtmp ships (`audioCodecs=3191`, `videoCodecs=252`, `videoFunction=1`), the Enhanced-RTMP `fourCcList` (AVC / HEVC / AV1 / VP9 / Opus / AC-3 / FLAC), `Set Chunk Size` before connect, `FCUnpublish → deleteStream` on shutdown, and RTMP Acknowledgement (BYTES_READ_REPORT) at the peer-declared window/10 threshold on both ingest and egress.
-- **Enhanced Broadcasting passthrough to Twitch.** When OBS hits multi-track "Auto" we proxy Twitch's `GetClientConfiguration`, route egress to the session-allocated IVS endpoint, and forward every per-track SPS/PPS bit-faithfully so the transcoded ladder lights up regardless of account tier. Non-Twitch destinations get the primary track only - multi-track ladder tags with `TrackId != 0` are dropped to avoid the multi-frame-per-PTS storm that crashes YouTube's decoder. EB cuts land on the primary track's IDR (not whichever ladder rung's keyframe happens to win the partition_point) so the destination decoder always has its anchor.
-- **Twitch VOD audio track (multi-track audio).** Per-destination toggle. We write `EnableCustomServerVodTrack` to OBS 32's `user.ini` (falling back to `global.ini` on older installs) so the OBS gate unlocks, then forward both Enhanced-RTMP single-track (live, TrackId 0) and OneTrack multi-track (VOD, TrackId 1) audio tags bit-faithfully to Twitch. Wire-format reader matches OBS's `flv_packet_audio_ex` byte-for-byte (`AudioPacketType` in byte 0, `TrackId` at byte 6). Live + VOD audio works alongside delay cuts; combine with EB via the experimental "Launch OBS for EB + VOD" button in the destination editor (spawns `obs64.exe --config-url <our endpoint>` because OBS's `rtmp_custom` plugin discards file-injected URLs at load time).
+- **Enhanced Broadcasting passthrough to Twitch.** When OBS hits multi-track "Auto" we proxy Twitch's `GetClientConfiguration`, route egress to the session-allocated IVS endpoint, and forward every per-track SPS/PPS bit-faithfully so the transcoded ladder lights up regardless of account tier. Non-Twitch destinations get the horizontal primary track by default - multi-track ladder tags with `TrackId != 0` are dropped to avoid the multi-frame-per-PTS storm that crashes YouTube's decoder. EB cuts land on the primary track's IDR (not whichever ladder rung's keyframe happens to win the partition_point) so the destination decoder always has its anchor.
+- **Vertical (9:16) output for non-Twitch destinations.** Set a YouTube / Kick / custom destination's **Stream format** to **Vertical** and it forwards Twitch Dual Format's vertical canvas instead of the horizontal one, flattened to a standard single-track feed those platforms accept natively (YouTube Shorts, Kick mobile, TikTok). The vertical canvas is identified by decoding each track's SPS for orientation (portrait, largest area) rather than relying on Twitch's private session JSON, and it self-heals as Dual Format toggles on/off. It only flows while Twitch Dual Format / Enhanced Broadcasting is on in OBS; otherwise the destination card shows "Waiting for Dual Format" and nothing else is affected. Hidden for Twitch, which carries both canvases natively.
+- **Twitch VOD audio track (multi-track audio).** Per-destination toggle. We write `EnableCustomServerVodTrack` to OBS 32's `user.ini` (falling back to `global.ini` on older installs) so the OBS gate unlocks, then forward both Enhanced-RTMP single-track (live, TrackId 0) and OneTrack multi-track (VOD, TrackId 1) audio tags bit-faithfully to Twitch. Wire-format reader matches OBS's `flv_packet_audio_ex` byte-for-byte (`AudioPacketType` in byte 0, `TrackId` at byte 6). Live + VOD audio works alongside delay cuts; combine with EB via the one-click **"Set up VOD + EB"** (writes the unlock flag, launches `obs64.exe --config-url <our endpoint>` because OBS's `rtmp_custom` plugin discards file-injected URLs at load time, then re-verifies with a red-to-green checklist), or generate a **desktop shortcut** that cold-starts the whole flow via `instantclone.exe --launch-eb` (also on the tray).
 - **One-click OBS service registration.** The wizard's primary onboarding path adds an "InstantClone" entry to OBS's Service dropdown (writes `services.json` with a `.bak` first; refreshes on port change; surfaces "close OBS first" when the file is locked).
 - Multi-destination egress with per-destination reconnect + bitrate stats.
 - **Capacity-aware buffer UI**: live "X MB → max Ys delay at N Mbps" hint, refuses to arm a delay larger than the buffer can hold with an explicit "needs ≥ N MB" reason.
-- **Platform-specific warnings**: Twitch mobile-decoder risk above 8 Mbps under Source-Only, Kick's no-B-frames requirement (AWS IVS), per-platform stream-key dashboard links - all surfaced in the wizard / destination form so streamers don't have to learn each platform's gotchas the hard way.
+- **Platform-specific warnings**: Twitch mobile-decoder risk above 8 Mbps under Source-Only, Kick's AWS IVS ingest rules (CBR + 2 s keyframe; B-frames actually fine on its low-latency RTMP), per-platform stream-key dashboard links - all surfaced in the wizard / destination form so streamers don't have to learn each platform's gotchas the hard way.
 - Tray icon with live status + one-click cut, port-conflict pre-flight that names the offending process by PID + exe.
 - Test coverage covers the state machine, AVC + Enhanced RTMP IDR detection + multi-track flatten, AMF0 codec including Strict Array, ring eviction with in-flight-read protection, and the timestamp-wrap promotion that prevents the 49.7-day bug.
 

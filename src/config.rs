@@ -133,6 +133,20 @@ pub struct Destination {
     /// and per-profile; a future OBS update could change the on-disk
     /// shape and break the injection. We write a `.bak` on every edit.
     pub vod_audio_inject_eb: bool,
+    /// Which canvas to forward to this destination. Only meaningful for
+    /// non-Twitch platforms (Twitch gets the native dual-canvas
+    /// passthrough). One of:
+    ///   "horizontal" (default) - the primary 16:9 canvas (TrackId 0)
+    ///   "vertical"             - the 9:16 canvas Twitch Dual Format /
+    ///                            Enhanced Broadcasting produces, reused
+    ///                            for YouTube Shorts / Kick mobile / etc.
+    ///
+    /// Vertical only has data on the wire while Twitch Dual Format (EB)
+    /// is active in OBS. With EB off there is no vertical canvas, so a
+    /// vertical destination waits (sends no video) until one appears -
+    /// see `h264::detect_vertical_primary_track`. Unknown / empty values
+    /// fall back to "horizontal".
+    pub stream_format: String,
 }
 
 impl Destination {
@@ -196,6 +210,15 @@ impl Destination {
             }
             None => false,
         }
+    }
+
+    /// True when this destination should receive the vertical (9:16)
+    /// canvas instead of the horizontal primary. Twitch destinations
+    /// always get native dual-canvas passthrough, so the vertical flag
+    /// is meaningless there and ignored - this guard is the single
+    /// source of truth the egress supervisor reads.
+    pub fn wants_vertical(&self) -> bool {
+        self.platform != "twitch" && self.stream_format == "vertical"
     }
 }
 
@@ -303,6 +326,7 @@ impl Settings {
                 youtube_ingest: String::new(),
                 vod_audio: false,
                 vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
             });
         }
         // Clamp / sanitize on load - hand-edited values can otherwise
@@ -487,6 +511,12 @@ impl Settings {
             if d.vod_audio_inject_eb {
                 writeln!(f, "destination.{}.vod_audio_inject_eb=true", i)?;
             }
+            // Only emit when non-default ("vertical") so a downgrade to a
+            // pre-vertical build still parses cleanly (apply_field drops
+            // unknown keys), and fresh configs stay lean.
+            if d.stream_format == "vertical" {
+                writeln!(f, "destination.{}.stream_format=vertical", i)?;
+            }
         }
         f.sync_all()?;
         Ok(())
@@ -594,6 +624,7 @@ impl Settings {
                                 youtube_ingest: String::new(),
                                 vod_audio: false,
                                 vod_audio_inject_eb: false,
+                                stream_format: "horizontal".into(),
                             });
                         }
                         let d = &mut self.destinations[idx];
@@ -608,6 +639,16 @@ impl Settings {
                             "youtube_ingest" => d.youtube_ingest = value.into(),
                             "vod_audio" => d.vod_audio = value == "true",
                             "vod_audio_inject_eb" => d.vod_audio_inject_eb = value == "true",
+                            "stream_format" => {
+                                // Only "vertical" is honored; anything else
+                                // (incl. "horizontal", empty, or a typo)
+                                // falls back to the safe horizontal default.
+                                d.stream_format = if value == "vertical" {
+                                    "vertical".into()
+                                } else {
+                                    "horizontal".into()
+                                };
+                            }
                             _ => {}
                         }
                     }
@@ -699,7 +740,7 @@ impl Settings {
             }
             let url = d.egress_url().unwrap_or_default();
             dests.push_str(&format!(
-                r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"stream_key_set":{ks},"egress_url_redacted":{red}}}"#,
+                r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"stream_format":{sf},"stream_key_set":{ks},"egress_url_redacted":{red}}}"#,
                 id  = json_str(&d.id),
                 n   = json_str(&d.name),
                 en  = d.enabled,
@@ -707,6 +748,7 @@ impl Settings {
                 cu  = json_str(&d.custom_egress_url),
                 ti  = json_str(&d.twitch_ingest),
                 yi  = json_str(&d.youtube_ingest),
+                sf  = json_str(&d.stream_format),
                 ks  = !d.stream_key.is_empty(),
                 red = json_str(&redact_key(&url)),
             ));
@@ -1095,6 +1137,7 @@ mod tests {
             youtube_ingest: String::new(),
             vod_audio: false,
             vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
         };
         let url = d.egress_url().unwrap();
         assert!(url.starts_with("rtmp://live.twitch.tv/app/"));
@@ -1114,6 +1157,7 @@ mod tests {
             youtube_ingest: String::new(),
             vod_audio: false,
             vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1136,6 +1180,7 @@ mod tests {
             youtube_ingest: String::new(),
             vod_audio: false,
             vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1157,6 +1202,7 @@ mod tests {
             youtube_ingest: "backup".into(),
             vod_audio: false,
             vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1180,6 +1226,7 @@ mod tests {
             youtube_ingest: String::new(),
             vod_audio: false,
             vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
         };
         assert!(!bad.is_well_formed());
     }
@@ -1229,6 +1276,7 @@ mod tests {
             youtube_ingest: String::new(),
             vod_audio: false,
             vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
         });
         s.destinations.push(Destination {
             id: "yt1".into(),
@@ -1241,6 +1289,9 @@ mod tests {
             youtube_ingest: "backup".into(),
             vod_audio: false,
             vod_audio_inject_eb: false,
+            // Non-default value so the round-trip proves stream_format
+            // both writes (only when != "horizontal") and reads back.
+            stream_format: "vertical".into(),
         });
         s.profiles = vec![
             DelayProfile {
@@ -1274,6 +1325,8 @@ mod tests {
         assert!(loaded.destinations[0].enabled);
         assert!(!loaded.destinations[1].enabled);
         assert_eq!(loaded.destinations[1].youtube_ingest, "backup");
+        assert_eq!(loaded.destinations[0].stream_format, "horizontal");
+        assert_eq!(loaded.destinations[1].stream_format, "vertical");
         assert_eq!(loaded.profiles.len(), 2);
         assert_eq!(loaded.profiles[0].delay_ms, 10_000);
         assert_eq!(loaded.profiles[1].name, "Long");
@@ -1314,6 +1367,7 @@ mod tests {
             youtube_ingest: String::new(),
             vod_audio: false,
             vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
         });
         s.save(&path).expect("save");
 
@@ -1365,6 +1419,7 @@ mod tests {
             youtube_ingest: String::new(),
             vod_audio: false,
             vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
         });
         s.save(&path).expect("save");
 

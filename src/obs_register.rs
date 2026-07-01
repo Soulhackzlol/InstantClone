@@ -701,6 +701,89 @@ pub fn launch_obs_with_eb_config(web_port: u16) -> io::Result<PathBuf> {
     Ok(exe)
 }
 
+// ── Desktop shortcut: one-click "Start InstantClone + OBS (VOD + EB)" ──
+//
+// Generates a clickable launcher on the Desktop that cold-starts the app
+// with `--launch-eb`, so a streamer who always wants VOD audio + Enhanced
+// Broadcasting gets the whole setup from a single double-click. We prefer
+// a real Windows .lnk (so it carries the app icon), created via
+// PowerShell's WScript.Shell COM to avoid pulling in a COM crate. If that
+// path is unavailable (PowerShell locked down, non-Windows), we fall back
+// to a .cmd launcher so the user always gets something that works.
+
+/// Best-effort Desktop folder. `%USERPROFILE%\Desktop` covers the vast
+/// majority of Windows installs; OneDrive-redirected desktops are not
+/// auto-discovered (the .cmd/.lnk still lands somewhere clickable if the
+/// user later points us at it). None when we can't resolve a home dir.
+fn desktop_dir() -> Option<PathBuf> {
+    let home = std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())?;
+    Some(PathBuf::from(home).join("Desktop"))
+}
+
+/// PowerShell single-quoted-string escaping: a literal `'` becomes `''`.
+fn ps_single_quote(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+/// Try to create a real Windows `.lnk` shortcut via PowerShell COM.
+/// Returns Ok only when PowerShell reports success AND the file exists.
+fn try_create_lnk(lnk: &Path, exe: &Path) -> io::Result<()> {
+    let workdir = exe.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let script = format!(
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');\
+         $s.TargetPath='{exe}';$s.Arguments='--launch-eb';\
+         $s.IconLocation='{exe}';$s.WorkingDirectory='{wd}';$s.Save()",
+        lnk = ps_single_quote(&lnk.display().to_string()),
+        exe = ps_single_quote(&exe.display().to_string()),
+        wd = ps_single_quote(&workdir.display().to_string()),
+    );
+    let status = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .status()?;
+    if status.success() && lnk.exists() {
+        Ok(())
+    } else {
+        Err(io::Error::other("PowerShell did not create the shortcut"))
+    }
+}
+
+/// Create a Desktop shortcut that launches InstantClone in VOD+EB mode
+/// (`instantclone.exe --launch-eb`). Returns the path of the file actually
+/// created (a `.lnk` when possible, otherwise a `.cmd` fallback) so the UI
+/// can tell the user exactly what to look for.
+pub fn create_eb_shortcut() -> io::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let desktop = desktop_dir().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "could not locate your Desktop folder",
+        )
+    })?;
+    // Make sure the directory exists (it always should, but a redirected
+    // profile mid-setup could briefly not have it).
+    if !desktop.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Desktop folder not found at {}", desktop.display()),
+        ));
+    }
+    let lnk = desktop.join("InstantClone (VOD + EB).lnk");
+    if try_create_lnk(&lnk, &exe).is_ok() {
+        return Ok(lnk);
+    }
+    // Fallback: a plain .cmd launcher. `start "" "<exe>"` detaches so the
+    // console window closes immediately after spawning the app.
+    let cmd = desktop.join("InstantClone (VOD + EB).cmd");
+    let body = format!(
+        "@echo off\r\nstart \"\" \"{}\" --launch-eb\r\n",
+        exe.display()
+    );
+    write_or_friendly(&cmd, &body)?;
+    Ok(cmd)
+}
+
 /// Remove the multitrack-video-configuration-url key (matching our
 /// local URL) from the settings object. We match the FULL key+value
 /// pair plus surrounding whitespace + a trailing comma if present.

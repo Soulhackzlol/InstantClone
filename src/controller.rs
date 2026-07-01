@@ -156,6 +156,20 @@ pub struct DestinationState {
     /// Enhanced-RTMP multi-track framing - Twitch's regular ingest
     /// reads the metadata but the audio renders silent.
     pub pass_through_multitrack_audio: AtomicBool,
+    /// True when this destination wants the vertical (9:16) canvas
+    /// instead of the horizontal primary. Set by the supervisor from the
+    /// destination's `stream_format == "vertical"` (non-Twitch only;
+    /// Twitch always gets native dual-canvas passthrough). When true the
+    /// pump forwards only `vertical_primary_track`, flattened.
+    pub egress_vertical: AtomicBool,
+    /// The OneTrack TrackId of the vertical-canvas primary, discovered by
+    /// `h264::detect_vertical_primary_track` from the per-track seq-header
+    /// cache and refreshed whenever that cache changes. `0xFF` means
+    /// "not resolved yet" (Twitch Dual Format isn't active, or no portrait
+    /// track has been seen): a vertical destination then sends no video
+    /// and surfaces a "waiting for Dual Format" status, while every other
+    /// destination is unaffected.
+    pub vertical_primary_track: AtomicU8,
     /// Twitch only: when our /obs/multitrack-config proxy successfully
     /// allocates an Enhanced Broadcasting session, Twitch's API returns
     /// a specific IVS ingest URL like
@@ -241,9 +255,33 @@ impl DestinationState {
             // (the destination_state lazy-init in particular).
             pass_through_multitrack_video: AtomicBool::new(false),
             pass_through_multitrack_audio: AtomicBool::new(false),
+            egress_vertical: AtomicBool::new(false),
+            // 0xFF = unresolved until a portrait track is detected.
+            vertical_primary_track: AtomicU8::new(0xFF),
             vod_fetch_pending: AtomicBool::new(false),
             session_epoch: AtomicU64::new(0),
         }
+    }
+
+    /// The video egress policy for this destination right now. Read by
+    /// both the live send path and the seq-header replay so they always
+    /// agree on which canvas to forward. Returns `None` when a vertical
+    /// destination has no resolved canvas yet (Twitch Dual Format isn't
+    /// active): the caller drops all video and the dest waits, leaving
+    /// every other destination untouched.
+    pub fn video_egress(&self) -> Option<crate::h264::VideoEgress> {
+        use crate::h264::VideoEgress;
+        if self.pass_through_multitrack_video.load(Ordering::Relaxed) {
+            return Some(VideoEgress::Passthrough);
+        }
+        if self.egress_vertical.load(Ordering::Relaxed) {
+            let track = self.vertical_primary_track.load(Ordering::Relaxed);
+            if track == 0xFF {
+                return None;
+            }
+            return Some(VideoEgress::Track(track));
+        }
+        Some(VideoEgress::Track(0))
     }
 
     /// Try to claim the right to fetch this destination's VOD-audio IVS
@@ -1550,6 +1588,13 @@ struct EgressState {
     // --- cut-check throttling ---
     last_cut_check: Instant,
     last_seen_target: u32,
+    /// Vertical egress only: after a (re)seed we may be pointed mid-GOP of
+    /// the vertical canvas (the cut/seed index is built from the HORIZONTAL
+    /// primary's keyframes). Emitting the vertical canvas's P-frames before
+    /// its first IDR makes strict ingests (YouTube) drop the stream ~10 s in,
+    /// waiting for a keyframe our GOP never leads with. While this is set we
+    /// hold vertical video until its first IDR, then stream normally.
+    awaiting_keyframe: bool,
 }
 
 impl EgressState {
@@ -1565,6 +1610,7 @@ impl EgressState {
             last_publisher_token: 0,
             last_cut_check: now,
             last_seen_target: 0,
+            awaiting_keyframe: true,
         }
     }
 }
@@ -1638,6 +1684,17 @@ async fn pace_and_send(
     // wire-format bug.
     match meta.kind {
         8 => {
+            // A vertical destination whose 9:16 canvas isn't on the wire yet
+            // (Dual Format off) has `video_egress() == None`. Drop its AUDIO
+            // too - otherwise we'd feed the platform an audio-only stream
+            // with no video, which reads as a broken/black broadcast. It
+            // should send nothing until the canvas appears.
+            if dest.video_egress().is_none() {
+                state.consumer_seq = meta.seq + 1;
+                dest.consumer_seq
+                    .store(state.consumer_seq, Ordering::Relaxed);
+                return Ok(());
+            }
             // Mirror the per-destination video selection. Twitch
             // destinations get multi-track audio passthrough (VOD-audio
             // session); non-Twitch destinations drop OneTrack TrackId
@@ -1680,11 +1737,48 @@ async fn pace_and_send(
             // simulcast: OneTrack TrackId != 0 tags are dropped to
             // avoid the multi-frame-per-PTS storm that crashes
             // YouTube's decoder. See `select_video_bytes` for the
-            // full rationale. Single-track tags borrow `io_buf`.
-            let Some(selected) = crate::h264::select_video_bytes(
-                io_buf,
-                dest.pass_through_multitrack_video.load(Ordering::Relaxed),
-            ) else {
+            // full rationale. Single-track tags borrow `io_buf`. A
+            // vertical destination with no resolved canvas yet
+            // (`video_egress` returns None) drops all video and waits.
+            let egress = dest.video_egress();
+            let dropped = match egress {
+                Some(e) => crate::h264::select_video_bytes(io_buf, e),
+                None => None,
+            };
+            // Vertical keyframe-lead: after a (re)seed on the horizontal IDR
+            // index, hold this vertical canvas's P-frames until its first
+            // IDR, so YouTube et al. always get a keyframe-led stream and
+            // don't drop the socket ~10 s in. Only vertical tracks (t != 0)
+            // gate; the horizontal primary already seeds on its own IDR.
+            if state.awaiting_keyframe {
+                match egress {
+                    // Vertical canvas: hold its P-frames until the first IDR.
+                    Some(crate::h264::VideoEgress::Track(t)) if t != 0 => {
+                        if dropped.is_some() {
+                            // `meta.is_idr` is the any-track classification
+                            // (set from classify_video_tag on ingest), which
+                            // is exactly what we need here - it's true for the
+                            // vertical track's own IDR, not just track 0.
+                            if meta.is_idr {
+                                state.awaiting_keyframe = false;
+                            } else {
+                                state.consumer_seq = meta.seq + 1;
+                                dest.consumer_seq
+                                    .store(state.consumer_seq, Ordering::Relaxed);
+                                return Ok(());
+                            }
+                        }
+                        // Not our track: falls through, dropped below.
+                    }
+                    // Horizontal (seeds on its own IDR) or Twitch passthrough:
+                    // nothing to hold.
+                    Some(_) => state.awaiting_keyframe = false,
+                    // Vertical canvas not resolved yet: keep waiting; the
+                    // video is dropped below regardless.
+                    None => {}
+                }
+            }
+            let Some(selected) = dropped else {
                 // Multi-track ladder tag deliberately dropped; advance
                 // the consumer cursor so we don't replay it next call
                 // but skip every per-tag side-effect (send, byte
@@ -1876,6 +1970,9 @@ async fn apply_cut(
     state.wall_anchor_input_ts = cut.target.ts_ms;
     state.consumer_seq = cut.target.seq;
     state.last_sent_input_ts = cut.target.ts_ms;
+    // The cut target is a horizontal-primary IDR; a vertical dest must
+    // re-lead with its own canvas keyframe before resuming (see EgressState).
+    state.awaiting_keyframe = true;
     // Update the per-dest atomic immediately so the ingest-side trim
     // sees the new (potentially backward) position right away and can't
     // evict tags we just rewound to.
@@ -1948,30 +2045,38 @@ async fn send_sequence_headers(
             );
             sink.send_video(ts, h).await?;
         }
-    } else {
-        // Non-Twitch destinations get the single-track-flattened
-        // form of the primary track (TrackId 0) - same behaviour
-        // beta.6 had via the single-Option cache. Falls back to the
-        // first entry the BTreeMap iterates if track 0 is missing
-        // (defensive - every real stream we've seen has a track 0).
-        if let Some(h) = v_headers
-            .iter()
-            .find(|(k, _)| *k == 0)
-            .or_else(|| v_headers.first())
-            .map(|(_, v)| v)
-        {
-            // We pre-selected TrackId 0 (or the only entry as a
-            // defensive fallback), so select_video_bytes will always
-            // return Some for seq headers. The unwrap_or_else is just
-            // belt-and-suspenders for a pathological ring state.
-            let selected = crate::h264::select_video_bytes(h, false)
-                .unwrap_or(std::borrow::Cow::Borrowed(h.as_slice()));
+    } else if let Some(crate::h264::VideoEgress::Track(target)) = dest.video_egress() {
+        // Non-Twitch destinations get the single-track-flattened form of
+        // the canvas this destination wants: TrackId 0 for horizontal
+        // (the default), or the vertical-canvas primary for a vertical
+        // destination. Horizontal falls back to the only cached entry if
+        // track 0 is missing (defensive - every real stream has a
+        // track 0). Vertical requires an exact match: we must never
+        // replay a landscape header to a vertical destination.
+        //
+        // A vertical destination whose canvas isn't resolved yet has
+        // `video_egress() == None`, so this branch is skipped entirely
+        // and no stale header is sent - the header arrives once Twitch
+        // Dual Format is live. Audio replay below still runs.
+        let pick = if target == 0 {
+            v_headers
+                .iter()
+                .find(|(k, _)| *k == 0)
+                .or_else(|| v_headers.first())
+        } else {
+            v_headers.iter().find(|(k, _)| *k == target)
+        };
+        if let Some((_, h)) = pick {
+            let selected =
+                crate::h264::select_video_bytes(h, crate::h264::VideoEgress::Track(target))
+                    .unwrap_or(std::borrow::Cow::Borrowed(h.as_slice()));
             let bytes_out: &[u8] = &selected;
             crate::trace::log(
                 "VIDEO_SEQ_HDR_SENT",
                 &format!(
-                    "ts=0x{:08x} flattened bytes={} hex={}",
+                    "ts=0x{:08x} track={} flattened bytes={} hex={}",
                     ts,
+                    target,
                     bytes_out.len(),
                     crate::trace::hex_prefix(bytes_out, 64)
                 ),
@@ -2093,6 +2198,9 @@ fn reseed_after_publisher_change(state: &mut EgressState, new_idr: TagMeta) {
     state.wall_anchor_input_ts = new_idr.ts_ms;
     state.consumer_seq = new_idr.seq;
     state.last_sent_input_ts = new_idr.ts_ms;
+    // We reseed on a horizontal-primary IDR; a vertical dest must re-lead
+    // with its own canvas's keyframe before streaming (see EgressState).
+    state.awaiting_keyframe = true;
 }
 
 /// Resolve the next tag at `seq`. If the producer hasn't reached `seq` yet,
