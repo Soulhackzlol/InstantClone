@@ -20,7 +20,7 @@
 <a href="https://github.com/Soulhackzlol/InstantClone/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Soulhackzlol/InstantClone/ci.yml?branch=main&style=flat-square&label=ci&color=34c759&labelColor=11141a"/></a>
 <a href="https://github.com/Soulhackzlol/InstantClone/releases"><img alt="release" src="https://img.shields.io/github/v/release/Soulhackzlol/InstantClone?include_prereleases&style=flat-square&color=5ac8fa&labelColor=11141a&display_name=tag&sort=semver"/></a>
 <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/licencia-GPL--3.0-d4d8e1?style=flat-square&labelColor=11141a"/></a>
-<img alt="Binario" src="https://img.shields.io/badge/binario-1.2%20MB-5ac8fa?style=flat-square&labelColor=11141a"/>
+<img alt="Binario" src="https://img.shields.io/badge/binario-1.3%20MB-5ac8fa?style=flat-square&labelColor=11141a"/>
 <img alt="Solo Windows" src="https://img.shields.io/badge/windows-solo-7a7d8a?style=flat-square&labelColor=11141a"/>
 
 </div>

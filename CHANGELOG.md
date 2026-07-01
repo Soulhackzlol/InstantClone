@@ -53,6 +53,25 @@ How it stays robust:
   destination also **leads with its own keyframe** after every (re)connect or
   cut, so viewers get a clean picture instead of a mid-GOP glitch.
 
+### Clearer vertical / Dual Format status in the dashboard
+
+- The **Stream format** picker now **disables Vertical when no enabled Twitch
+  destination exists** (with an inline reason + a link to Twitch's guide).
+  Vertical has no source without Twitch Enhanced Broadcasting, so the choice
+  is no longer a silent dead-end. A destination already set to vertical is
+  never force-flipped - the option stays available in case its source returns.
+
+- A waiting vertical destination now says **why** it isn't live instead of a
+  generic "waiting": **Needs Twitch EB** (no Twitch source at all), **No
+  vertical canvas** (Enhanced Broadcasting is live but the 9:16 canvas isn't
+  on the wire), or **Waiting for Dual Format** (nothing streaming yet). The
+  copy makes clear Dual Format is **Enhanced Broadcasting + Aitum Vertical**
+  (per Twitch's guide), not a single OBS toggle, so the setup path is honest.
+
+- The per-destination status endpoint now parses each cached video sequence
+  header **once per poll** instead of once per destination - less work on the
+  frequently-polled dashboard path.
+
 ### VOD audio + Enhanced Broadcasting: fewer manual steps
 
 - New **one-click "Set up VOD + EB"** writes OBS's VOD-track unlock flag,

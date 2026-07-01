@@ -1500,8 +1500,11 @@ input,select,textarea{font-family:inherit;color:inherit}
         <option value="horizontal">Horizontal 16:9 - normal landscape</option>
         <option value="vertical">Vertical 9:16 - YouTube Shorts, Kick mobile, TikTok</option>
       </select>
+      <div id="dest-form-format-gate" hidden class="muted" style="font-size:11.5px;margin-top:6px;line-height:1.45;color:var(--warn,#d6a23a)">
+        <b>Vertical needs a Twitch source.</b> It reuses the 9:16 canvas from Twitch <b>Dual Format</b> (Enhanced Broadcasting + Aitum Vertical - not a single OBS toggle), so add and enable a <b>Twitch</b> destination set up for it first - then this option unlocks. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">Set up Dual Format &rarr;</a>
+      </div>
       <div class="muted" id="dest-form-format-help" style="font-size:11.5px;margin-top:5px;line-height:1.45">
-        <b style="color:var(--warn,#d6a23a)">Vertical reuses the 9:16 canvas that Twitch Dual Format produces.</b> InstantClone standardizes on that one canvas as its vertical source: set Twitch <b>Dual Format</b> (Enhanced Broadcasting) up <b>once</b> in OBS and every vertical destination here reuses it - no second scene, no extra encoder. With Dual Format off there is no vertical canvas, so this destination just waits and sends nothing. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Twitch Dual Format &amp; Enhanced Broadcasting →</a><br>For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream → Select key → Encoder</b>.
+        <b style="color:var(--warn,#d6a23a)">Vertical reuses the 9:16 canvas that Twitch Dual Format produces.</b> InstantClone standardizes on that one canvas as its vertical source: set Twitch <b>Dual Format</b> up <b>once</b> (Enhanced Broadcasting + the Aitum Vertical canvas, per Twitch's guide - it is not a single OBS toggle) and every vertical destination here reuses it - no second scene, no extra encoder. With Dual Format off there is no vertical canvas, so this destination just waits and sends nothing. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Twitch Dual Format &amp; Enhanced Broadcasting →</a><br>For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream → Select key → Encoder</b>.
       </div>
     </div>
     <div id="dest-form-twitch-native-note" hidden class="muted" style="font-size:11.5px;margin:2px 0 6px;line-height:1.45">
@@ -2791,6 +2794,33 @@ function formatIconSvg(kind){
 // default (the normal case) and only flips to "both" when a vertical canvas
 // is really on the wire (Dual Format live). Non-Twitch shows horizontal, or
 // vertical with a distinct amber state while it waits on Dual Format.
+// Is there an enabled Twitch destination that can produce the Dual Format
+// canvas? Vertical is impossible without one - this is the config-time gate.
+function hasEnabledTwitchSource(){
+  return Array.isArray(lastDests) && lastDests.some(x => x.platform === 'twitch' && x.enabled);
+}
+// Diagnose why a non-Twitch vertical destination is (not) ready. Combines the
+// config precondition with the two live /state signals so the message is
+// precise instead of a vague "waiting". Dual Format is NOT a single OBS
+// toggle - it's Twitch Enhanced Broadcasting + the Aitum Vertical canvas,
+// set up per Twitch's guide - so the copy points there, never "turn it on".
+//   - no Twitch source            -> "Needs Twitch EB"
+//   - EB live but no 9:16 canvas  -> "No vertical canvas"
+//   - EB not live yet             -> "Waiting for Dual Format"
+function verticalDiag(d){
+  // d.vertical_ready is the backend truth: the canvas is resolved for this
+  // destination and video is really flowing.
+  if (d.vertical_ready !== false) return {ready:true};
+  const s = lastState || {};
+  if (!hasEnabledTwitchSource())
+    return {ready:false, label:'Needs Twitch EB',
+      title:'Vertical reuses the 9:16 canvas from Twitch Dual Format (Enhanced Broadcasting + Aitum Vertical). Add and enable a Twitch destination set up for it - see Twitch\'s Dual Format guide.'};
+  if (s.multitrack_video)
+    return {ready:false, label:'No vertical canvas',
+      title:'Enhanced Broadcasting is live, but no 9:16 canvas is on the wire. Dual Format needs the vertical canvas too (Enhanced Broadcasting + Aitum Vertical) - follow Twitch\'s Dual Format guide.'};
+  return {ready:false, label:'Waiting for Dual Format',
+    title:'No Dual Format canvas yet. Start streaming with Twitch Dual Format set up (Enhanced Broadcasting + Aitum Vertical, per Twitch\'s guide) to feed this destination.'};
+}
 function updateFormatIcon(r, d){
   if (!r.format) return;
   let kind, title, cls = '';
@@ -2804,9 +2834,10 @@ function updateFormatIcon(r, d){
     }
   } else if (d.stream_format === 'vertical'){
     kind = 'vertical';
-    if (d.vertical_ready === false){
+    const vd = verticalDiag(d);
+    if (!vd.ready){
       cls = 'fmt-wait';
-      title = 'Vertical (9:16): waiting for Twitch Dual Format. Turn on Dual Format / Enhanced Broadcasting in OBS to produce the 9:16 canvas this destination sends.';
+      title = vd.title;
     } else {
       cls = 'fmt-vertical';
       title = 'Vertical (9:16): reusing Twitch Dual Format\'s vertical canvas (YouTube Shorts / Kick mobile / TikTok).';
@@ -2899,18 +2930,20 @@ function updateDestCard(r, d){
   // Format off) is a fourth state: it holds a connection but deliberately
   // sends no video, so call it out as "Waiting for Dual Format" rather
   // than the misleading "Connected".
-  const verticalWaiting = d.enabled && d.stream_format === 'vertical' && d.vertical_ready === false;
+  // A vertical dest that can't produce its canvas yet gets a precise,
+  // actionable pill (why it's waiting) instead of a generic "Connected".
+  const vdiag = (d.enabled && d.platform !== 'twitch' && d.stream_format === 'vertical')
+    ? verticalDiag(d) : null;
+  const verticalWaiting = !!vdiag && !vdiag.ready;
   const isStreaming = d.alive && (d.bitrate_kbps || 0) > 0 && !verticalWaiting;
   const stat = !d.enabled ? 'off' : verticalWaiting ? 'wait' : isStreaming ? 'live' : d.alive ? 'ready' : 'off';
   r.statE.className = 'dcard-status s-' + stat;
   r.statL.textContent = !d.enabled ? 'Disabled'
-                       : verticalWaiting ? 'Waiting for Dual Format'
+                       : verticalWaiting ? vdiag.label
                        : isStreaming ? 'Streaming'
                        : d.alive ? 'Connected'
                        : 'Idle';
-  r.statE.title = verticalWaiting
-    ? 'Turn on Twitch Dual Format (Enhanced Broadcasting) in OBS to produce the 9:16 canvas this destination sends.'
-    : '';
+  r.statE.title = verticalWaiting ? vdiag.title : '';
   // rate + history (auto kbps -> Mbps, matching the header + stats).
   const kbps = d.alive ? (d.bitrate_kbps || 0) : 0;
   r.history.push(kbps); if (r.history.length > HISTORY_LEN) r.history.shift();
@@ -2957,6 +2990,7 @@ function openDestForm(d){
   $('dest-form-twitch-ingest').value = (d && d.twitch_ingest) || '';
   $('dest-form-youtube-ingest').value = (d && d.youtube_ingest) || '';
   $('dest-form-format').value = (d && d.stream_format === 'vertical') ? 'vertical' : 'horizontal';
+  refreshFormatOptionAvailability();
   $('dest-form-key').value = '';
   $('dest-form-key').placeholder = d && d.stream_key_set ? 'leave blank to keep current' : 'paste stream key';
   document.getElementById('dest-form-key-hint').textContent = d && d.stream_key_set ? '(currently set)' : '';
@@ -3009,6 +3043,22 @@ function updateVodVisibility(){
   }
 }
 
+// Vertical can only exist when a Twitch Enhanced Broadcasting source is on to
+// produce the 9:16 canvas. Gate the choice: disable it when there's no enabled
+// Twitch destination (but never force-flip a dest that's already vertical - its
+// source may reappear), and show the reason inline.
+function refreshFormatOptionAvailability(){
+  const wrap = $('dest-form-format-wrap');
+  if (!wrap) return;
+  const sel = $('dest-form-format');
+  const vopt = sel ? sel.querySelector('option[value="vertical"]') : null;
+  const ok = hasEnabledTwitchSource();
+  const alreadyVertical = sel && sel.value === 'vertical';
+  if (vopt) vopt.disabled = !ok && !alreadyVertical;
+  const gate = $('dest-form-format-gate');
+  if (gate) gate.hidden = ok || wrap.hidden;
+}
+
 function fillDestPlatforms(){
   const sel = $('dest-form-platform'); sel.innerHTML = '';
   platforms.forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.label; sel.appendChild(o); });
@@ -3025,6 +3075,7 @@ function fillDestPlatforms(){
       $('dest-form-twitch-native-note').hidden = !isTwitch;
       renderKeyHelp(sel.value, 'dest-form-key-help');
       updateVodVisibility();
+      refreshFormatOptionAvailability();
     });
     const vodToggle = $('dest-form-vod-audio');
     if (vodToggle) vodToggle.addEventListener('change', updateVodVisibility);

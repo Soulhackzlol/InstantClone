@@ -2124,6 +2124,27 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             .cloned()
             .unwrap_or_else(|| (id.into(), false, 0, 0, 0, 0, 0, 0))
     };
+    // Parse each cached video seq-header once per poll, not once per
+    // destination: the res/codec readout depends only on which TrackId a
+    // dest forwards, and horizontal dests all share track 0 while vertical
+    // dests share the one detected portrait primary. Keeps this
+    // frequently-polled endpoint off a per-dest lock + Exp-Golomb parse.
+    let readouts: std::collections::BTreeMap<u8, (String, String)> = {
+        let headers = ctrl.ring.video_seq_headers.lock().unwrap();
+        headers
+            .iter()
+            .map(|(&track, h)| {
+                let res = crate::h264::sps_dimensions(h)
+                    .map(|(w, hh)| format!("{}x{}", w, hh))
+                    .unwrap_or_default();
+                let codec = match crate::h264::seq_header_codec(h) {
+                    crate::h264::VideoCodec::Unknown => String::new(),
+                    c => c.label().to_string(),
+                };
+                (track, (res, codec))
+            })
+            .collect()
+    };
     let mut out = String::from("[");
     for (i, d) in s.destinations.iter().enumerate() {
         if i > 0 {
@@ -2142,13 +2163,12 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         // tick, so it's meaningful for Twitch cards too - that's what lets
         // the format icon show "both" only when Dual Format is actually on,
         // not just because the destination is Twitch.
-        let vertical_canvas_present = {
-            use std::sync::atomic::Ordering;
-            ctrl.destination_state(&d.id)
-                .vertical_primary_track
-                .load(Ordering::Relaxed)
-                != 0xFF
-        };
+        use std::sync::atomic::Ordering;
+        let vertical_canvas_present = ctrl
+            .destination_state(&d.id)
+            .vertical_primary_track
+            .load(Ordering::Relaxed)
+            != 0xFF;
         let vertical_ready = if vertical {
             vertical_canvas_present
         } else {
@@ -2156,34 +2176,17 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         };
         // Resolution + codec of the track this destination actually forwards
         // (track 0 for horizontal/Twitch, the detected portrait primary for
-        // vertical), for the card readout. Empty when not yet known (non-AVC
-        // codec we can't measure, or vertical canvas not resolved).
-        let (video_res, video_codec) = {
-            use std::sync::atomic::Ordering;
-            let target = if vertical {
-                ctrl.destination_state(&d.id)
-                    .vertical_primary_track
-                    .load(Ordering::Relaxed)
-            } else {
-                0
-            };
-            let headers = ctrl.ring.video_seq_headers.lock().unwrap();
-            match headers.get(&target) {
-                Some(h) => {
-                    let res = crate::h264::sps_dimensions(h)
-                        .map(|(w, hh)| format!("{}x{}", w, hh))
-                        .unwrap_or_default();
-                    let c = crate::h264::seq_header_codec(h);
-                    let codec = if c == crate::h264::VideoCodec::Unknown {
-                        String::new()
-                    } else {
-                        c.label().to_string()
-                    };
-                    (res, codec)
-                }
-                None => (String::new(), String::new()),
-            }
+        // vertical), pulled from the per-poll readout map. Empty when the
+        // track isn't cached yet (non-AVC we can't measure, or vertical
+        // canvas not resolved -> target 0xFF isn't a key).
+        let target = if vertical {
+            ctrl.destination_state(&d.id)
+                .vertical_primary_track
+                .load(Ordering::Relaxed)
+        } else {
+            0
         };
+        let (video_res, video_codec) = readouts.get(&target).cloned().unwrap_or_default();
         out.push_str(&format!(
             r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
             id = json_escape_quoted(&d.id),
