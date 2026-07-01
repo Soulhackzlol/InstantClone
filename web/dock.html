@@ -1,67 +1,115 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>InstantClone</title>
 <style>
+:root{
+  --bg:#0b0d13;--panel:#141824;--panel-2:#0e111a;--line:#232838;--line-2:#333a4d;
+  --fg:#e9eaf0;--fg-2:#c3c6d4;--fg-3:#868a9a;--fg-4:#565b6b;
+  --accent:#5ac8fa;--accent-ink:#04121c;--live:#34d06a;--warn:#e0a33a;--danger:#ff5a4d;
+}
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;background:#0c0d12;color:#e9eaf0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
-.wrap{display:flex;flex-direction:column;height:100vh;padding:12px;gap:9px}
-.row{display:flex;gap:6px}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11px;border:1px solid #262936;background:#161922}
-.pill .dot{width:6px;height:6px;border-radius:50%;background:#666}
-.pill .dot.on{background:#34c759;box-shadow:0 0 6px #34c759}
-.pill .dot.bad{background:#ff453a}
-.pill .dot.warn{background:#ff9f0a}
-.phase{padding:3px 9px;border-radius:6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;transition:.2s}
-.phase.off{background:#262936;color:#999}
-.phase.live{background:rgba(52,199,89,.15);color:#34c759}
-.phase.arming{background:rgba(255,159,10,.15);color:#ff9f0a}
-.phase.armed{background:rgba(90,200,250,.15);color:#5ac8fa}
-.phase.active{background:rgba(52,199,89,.18);color:#34c759;box-shadow:0 0 0 1px rgba(52,199,89,.4)}
-.cur{font-size:40px;font-weight:800;letter-spacing:-1.5px;font-variant-numeric:tabular-nums;text-align:center;line-height:1.05}
-.cur .u{font-size:17px;color:#7a7d8a;font-weight:500;margin-left:2px}
-.cur.changing{color:#5ac8fa}
-.bar{position:relative;height:6px;background:#1a1d28;border-radius:999px;overflow:hidden}
-.bar .fill{height:100%;width:0;background:linear-gradient(90deg,#ff9f0a,#ffb340);transition:width .35s cubic-bezier(.32,.72,0,1)}
-.bar .fill.ready{background:linear-gradient(90deg,#5ac8fa,#42b8e8)}
-.bar .fill.active{background:linear-gradient(90deg,#34c759,#28a745)}
-.tip{font-size:11px;color:#7a7d8a;text-align:center;min-height:14px;line-height:1.3}
-.input-row{display:flex;gap:4px;align-items:center;background:#1a1d28;border:1px solid #262936;border-radius:9px;padding:3px;transition:.15s}
-.input-row.disabled{opacity:.45;pointer-events:none}
-.input-row input{flex:1;background:transparent;border:0;color:#e9eaf0;font-size:14px;font-weight:600;text-align:center;font-variant-numeric:tabular-nums;outline:none;-moz-appearance:textfield;width:100%}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
+  font-family:-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+.wrap{display:flex;flex-direction:column;height:100vh;padding:13px;gap:10px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+
+/* Phase chip */
+.phase{padding:3px 10px;border-radius:999px;font-size:10.5px;font-weight:700;
+  text-transform:uppercase;letter-spacing:1.2px;border:1px solid var(--line);
+  background:var(--panel);color:var(--fg-3);transition:.25s cubic-bezier(.32,.72,0,1)}
+.phase.live  {color:var(--live);  border-color:color-mix(in srgb,var(--live) 40%,var(--line));  background:color-mix(in srgb,var(--live) 12%,var(--panel))}
+.phase.arming{color:var(--warn);  border-color:color-mix(in srgb,var(--warn) 40%,var(--line));  background:color-mix(in srgb,var(--warn) 12%,var(--panel))}
+.phase.armed {color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line));background:color-mix(in srgb,var(--accent) 12%,var(--panel))}
+.phase.active{color:var(--live);  border-color:color-mix(in srgb,var(--live) 50%,var(--line));  background:color-mix(in srgb,var(--live) 16%,var(--panel));box-shadow:0 0 0 1px color-mix(in srgb,var(--live) 30%,transparent)}
+
+/* Signal pill */
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+  font-size:11px;font-weight:500;border:1px solid var(--line);background:var(--panel);color:var(--fg-3)}
+.pill .dot{width:6px;height:6px;border-radius:50%;background:var(--fg-4);transition:.2s}
+.pill.on{color:var(--fg)}
+.pill.on .dot{background:var(--live);box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 18%,transparent)}
+.pill.bad .dot{background:var(--fg-4)}
+
+/* Big delay readout inside an inset "screen" */
+.screen{background:var(--panel-2);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);
+  border-radius:12px;padding:14px 12px 12px;text-align:center;position:relative;overflow:hidden}
+.cur{font-size:42px;font-weight:800;letter-spacing:-2px;font-variant-numeric:tabular-nums;line-height:1;
+  transition:color .25s}
+.cur .u{font-size:16px;color:var(--fg-3);font-weight:600;margin-left:2px;letter-spacing:0}
+.cur.changing{color:var(--accent)}
+.bar{position:relative;height:5px;background:var(--panel);border-radius:999px;overflow:hidden;margin-top:12px}
+.bar .fill{position:absolute;inset:0 auto 0 0;width:0;border-radius:999px;
+  background:linear-gradient(90deg,var(--warn),color-mix(in srgb,var(--warn) 60%,#fff));
+  transition:width .35s cubic-bezier(.32,.72,0,1)}
+.bar .fill.ready {background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 55%,#fff))}
+.bar .fill.active{background:linear-gradient(90deg,var(--live),color-mix(in srgb,var(--live) 55%,#fff))}
+
+/* Egress glance (destinations + bitrate), shown only while a source is live */
+.eg{display:flex;align-items:center;justify-content:center;gap:7px;font-size:11px;color:var(--fg-3);
+  font-variant-numeric:tabular-nums;min-height:15px;transition:opacity .18s}
+.eg.hide{opacity:0}
+.eg b{color:var(--fg-2);font-weight:600}
+.eg .sep{color:var(--fg-4)}
+
+/* Sub-tip with crossfade */
+.tip{font-size:11px;color:var(--fg-3);text-align:center;min-height:14px;line-height:1.35;
+  transition:opacity .15s,transform .15s}
+.tip.fade{opacity:0;transform:translateY(2px)}
+
+/* Delay input */
+.input-row{display:flex;gap:4px;align-items:center;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;padding:3px;transition:.15s}
+.input-row:focus-within{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.input-row.disabled{opacity:.4;pointer-events:none}
+.input-row input{flex:1;background:transparent;border:0;color:var(--fg);font-size:15px;font-weight:700;
+  text-align:center;font-variant-numeric:tabular-nums;outline:none;-moz-appearance:textfield;width:100%}
 .input-row input::-webkit-outer-spin-button,.input-row input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-.input-row .step{background:transparent;border:0;color:#999;font-size:16px;width:26px;height:26px;border-radius:6px;cursor:pointer;transition:.15s}
-.input-row .step:hover{background:#262936;color:#fff}
-.input-row .suf{color:#7a7d8a;font-size:11px;padding:0 6px}
-.btn{padding:9px;border-radius:9px;border:1px solid #262936;background:#161922;color:#e9eaf0;font-size:13px;font-weight:600;cursor:pointer;transition:.15s;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px}
-.btn:hover:not(:disabled){background:#1f2330;border-color:#363a47}
-.btn:active:not(:disabled){transform:scale(.97)}
-.btn.primary{background:linear-gradient(180deg,#5ac8fa,#42b8e8);color:#001220;border-color:transparent}
-.btn.primary:hover:not(:disabled){box-shadow:0 4px 14px rgba(90,200,250,.35);transform:translateY(-1px)}
-.btn.go{background:linear-gradient(180deg,#34c759,#28a745);color:#001b08;border-color:transparent}
-.btn.go:hover:not(:disabled){box-shadow:0 4px 14px rgba(52,199,89,.35);transform:translateY(-1px)}
-.btn.danger{background:linear-gradient(180deg,#ff453a,#d63a30);color:#fff;border-color:transparent}
-.btn.danger:hover:not(:disabled){box-shadow:0 4px 14px rgba(255,69,58,.35);transform:translateY(-1px)}
-.btn.ghost{background:transparent;border-color:#262936;color:#bdbfc9}
-.btn.ghost:hover:not(:disabled){background:#161922;color:#fff}
+.input-row .step{background:transparent;border:0;color:var(--fg-3);font-size:17px;width:28px;height:28px;
+  border-radius:7px;cursor:pointer;transition:.15s;line-height:1}
+.input-row .step:hover{background:var(--line);color:var(--fg)}
+.input-row .step:active{transform:scale(.9)}
+.input-row .suf{color:var(--fg-3);font-size:11px;padding:0 6px}
+
+/* Buttons */
+.btn{padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--fg);
+  font-size:13px;font-weight:600;cursor:pointer;transition:.15s cubic-bezier(.32,.72,0,1);font-family:inherit;
+  display:flex;align-items:center;justify-content:center;gap:7px}
+.btn:hover:not(:disabled){border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line))}
+.btn:active:not(:disabled){transform:scale(.98)}
+.btn.primary{background:linear-gradient(180deg,var(--accent),color-mix(in srgb,var(--accent) 82%,#000));color:var(--accent-ink);border-color:transparent}
+.btn.primary:hover:not(:disabled){box-shadow:0 6px 18px -6px color-mix(in srgb,var(--accent) 70%,transparent)}
+.btn.go{background:linear-gradient(180deg,var(--live),color-mix(in srgb,var(--live) 82%,#000));color:#04140a;border-color:transparent}
+.btn.go:hover:not(:disabled){box-shadow:0 6px 18px -6px color-mix(in srgb,var(--live) 70%,transparent)}
+.btn.danger{background:linear-gradient(180deg,var(--danger),color-mix(in srgb,var(--danger) 82%,#000));color:#fff;border-color:transparent}
+.btn.danger:hover:not(:disabled){box-shadow:0 6px 18px -6px color-mix(in srgb,var(--danger) 70%,transparent)}
+.btn.ghost{background:transparent;border-color:var(--line);color:var(--fg-2)}
+.btn.ghost:hover:not(:disabled){background:var(--panel);color:var(--fg)}
 .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
 .btn.full{width:100%}
 .spin{display:inline-block;width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
 .cta-row{display:flex;gap:6px}
 .cta-row .btn{flex:1}
-.cta-row .btn.disarm{flex:0 0 auto;padding:9px 12px}
-#toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%) translateY(40px);background:#1a1d28;border:1px solid #363a47;color:#e9eaf0;font-size:11px;padding:6px 12px;border-radius:8px;pointer-events:none;opacity:0;transition:.25s;white-space:nowrap;max-width:90%}
+.cta-row .btn.disarm{flex:0 0 auto;padding:10px 13px}
+
+#toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%) translateY(40px);
+  background:var(--panel);border:1px solid var(--line-2);color:var(--fg);font-size:11px;padding:6px 12px;
+  border-radius:9px;pointer-events:none;opacity:0;transition:.25s cubic-bezier(.32,.72,0,1);white-space:nowrap;max-width:90%}
 #toast.show{transform:translateX(-50%) translateY(0);opacity:1}
-#toast.err{border-color:#ff453a;color:#ff8b85}
-#toast.ok{border-color:#34c759;color:#7be38f}
+#toast.err{border-color:var(--danger);color:color-mix(in srgb,var(--danger) 60%,#fff)}
+#toast.ok{border-color:var(--live);color:color-mix(in srgb,var(--live) 55%,#fff)}
 </style></head><body>
 <div class="wrap">
-  <div class="row" style="justify-content:space-between;align-items:center">
-    <span class="phase off" id="ph">Idle</span>
-    <span class="pill"><span class="dot" id="obs"></span><span id="obs-lbl">OBS</span></span>
+  <div class="top">
+    <span class="phase" id="ph">Idle</span>
+    <span class="pill bad" id="src"><span class="dot"></span><span id="src-lbl">Offline</span></span>
   </div>
-  <div class="cur"><span id="v">0.0</span><span class="u">s</span></div>
-  <div class="bar"><div class="fill" id="bar"></div></div>
-  <div class="tip" id="sub">No source.</div>
+  <div class="screen">
+    <div class="cur"><span id="v">0.0</span><span class="u">s</span></div>
+    <div class="bar"><div class="fill" id="bar"></div></div>
+  </div>
+  <div class="eg hide" id="eg"></div>
+  <div class="tip" id="sub">Waiting for your encoder…</div>
   <div class="input-row" id="d-row">
     <button class="step" onclick="bump(-5)" title="-5s">−</button>
     <input id="d" type="number" min="0" max="600" value="0" inputmode="numeric">
@@ -83,6 +131,9 @@ function bump(n){const i=$('d');i.value=Math.max(0,Math.min(600,(+i.value||0)+n)
 $('d').addEventListener('input',renderCta);
 function toast(msg,kind){const t=$('toast');t.className='show '+(kind||'');t.textContent=msg;clearTimeout(t._h);t._h=setTimeout(()=>t.className='',1800)}
 function setPending(p){pending=p;setTimeout(()=>pending=null,1500);tick()}
+function fmtRate(k){if(!k||k<=0)return '';return k>=1000?(k/1000).toFixed(2)+' Mbps':Math.round(k)+' kbps'}
+// Crossfade helper so the sub-tip swaps smoothly instead of snapping.
+function setTip(text){const el=$('sub');if(el.textContent===text)return;el.classList.add('fade');clearTimeout(el._t);el._t=setTimeout(()=>{el.textContent=text;el.classList.remove('fade')},140)}
 async function arm(ms){
   setPending('arming');
   const r=await fetchJ('/arm',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'ms='+ms});
@@ -145,28 +196,28 @@ function renderCta(){
     cancel.hidden=false;
   } else {
     const ms=(+$('d').value||0)*1000;
-    if(!ingest){m.textContent='Waiting for OBS…';m.disabled=true}
-    else if(ms<=0){m.textContent='Set delay above';m.disabled=true}
+    if(!ingest){m.textContent='Waiting for encoder…';m.disabled=true}
+    else if(ms<=0){m.textContent='Set a delay above';m.disabled=true}
     else {m.innerHTML=`<span>⏱</span> Arm ${(ms/1000).toFixed(0)}s`;m.classList.add('primary')}
   }
 }
 function applyState(j){
   s=j;
   const ds=PHASE_TO_STATE[s.phase]||'off';
-  // Phase pill - distinguishes idle vs passthrough vs arming/armed/active
+  // Phase chip - distinguishes idle vs passthrough vs arming/armed/active
   const phMap={off:s.ingest_alive?['live','Live']:['off','Idle'],arming:['arming','Buffering'],armed:['armed','Armed'],active:['active','Active']};
   const [cls,txt]=phMap[ds];
   $('ph').className='phase '+cls;
   $('ph').textContent=txt;
-  // OBS pill - alive vs not
-  $('obs').className='dot '+(s.ingest_alive?'on':'bad');
-  $('obs-lbl').textContent=s.ingest_alive?'OBS':'no signal';
+  // Source pill - encoder connected or not (any RTMP encoder, not just OBS)
+  $('src').className='pill '+(s.ingest_alive?'on':'bad');
+  $('src-lbl').textContent=s.ingest_alive?'Live':'Offline';
   // Current delay
   const nv=fmt(s.current_delay_ms);
   if(nv!==lastVal){$('v').textContent=nv;lastVal=nv;
     $('v').parentElement.classList.add('changing');setTimeout(()=>$('v').parentElement.classList.remove('changing'),350);
   }
-  // Bar
+  // Progress bar
   const target=s.armed_delay_ms||s.buffer_target_ms||0;
   const fill=$('bar');
   fill.classList.remove('ready','active');
@@ -176,18 +227,28 @@ function applyState(j){
     fill.style.width=pct+'%';
     if(pct>=99)fill.classList.add('ready');
   } else {fill.style.width='0%'}
-  // Sub-tip
-  $('sub').textContent =
-    !s.ingest_alive ? 'Point OBS to rtmp://…/live · stream key: live' :
+  // Egress glance: where the feed is going + live bitrate. Only meaningful
+  // once a source is connected.
+  const eg=$('eg');
+  if(s.ingest_alive){
+    const alive=s.destinations_alive||0, tot=s.destinations_total||0;
+    const rate=fmtRate(s.stats&&s.stats.bitrate_kbps);
+    let html=`<span>▲</span><b>${alive}/${tot||0}</b> live`;
+    if(rate) html+=`<span class="sep">·</span><b>${rate}</b> in`;
+    eg.innerHTML=html; eg.classList.remove('hide');
+  } else { eg.classList.add('hide'); }
+  // Sub-tip (crossfaded)
+  setTip(
+    !s.ingest_alive ? 'Point your encoder at rtmp://…/live · key: live' :
     ds==='active'   ? `Live ${(s.current_delay_ms/1000).toFixed(1)}s behind real time.` :
     ds==='armed'    ? 'Buffer full. Hit Activate to go live with delay.' :
     ds==='arming'   ? 'Filling buffer… you can cancel any time.' :
-                      'Passthrough - no delay applied.';
+                      'Passthrough - no delay applied.');
   renderCta();
 }
 async function tick(){
   const r=await fetchJ('/state');
-  if(!r.ok||!r.j){$('obs').className='dot bad';$('obs-lbl').textContent='offline';return}
+  if(!r.ok||!r.j){$('src').className='pill bad';$('src-lbl').textContent='Offline';return}
   applyState(r.j);
 }
 // Prefer Server-Sent Events for state updates - one long-lived connection
