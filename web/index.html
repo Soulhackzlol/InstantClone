@@ -465,12 +465,12 @@ input,select,textarea{font-family:inherit;color:inherit}
 .dest-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
 .dcard{background:var(--bg-2);border:1px solid var(--line);border-radius:12px;padding:16px;
   display:flex;flex-direction:column;gap:14px;
-  transition:border-color .2s var(--ease-out),transform .2s var(--ease-out);
+  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out);
   position:relative;overflow:hidden}
 .dcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
   background:color-mix(in oklch,var(--dc,var(--fg-3)) 60%,transparent);opacity:0;
   transition:opacity .2s var(--ease-out)}
-.dcard:hover{border-color:var(--line-2)}
+.dcard:hover{border-color:var(--line-2);box-shadow:0 12px 30px -18px color-mix(in oklch,var(--dc,var(--accent)) 55%,transparent)}
 .dcard:hover::before{opacity:.85}
 .dcard.alive::before{opacity:1;box-shadow:0 0 14px var(--dc,var(--accent))}
 .dcard.off{opacity:.65}
@@ -514,7 +514,9 @@ input,select,textarea{font-family:inherit;color:inherit}
   width:26px;height:26px;border-radius:7px;flex:0 0 auto;color:var(--fg-3);
   background:var(--surface-3);border:1px solid var(--line);cursor:help;
   transition:transform .14s ease,color .14s ease,border-color .14s ease}
-.dcard-format:hover{transform:translateY(-1px) scale(1.06);color:var(--fg);
+/* Scale-up only (grows around its centre, so the pointer stays inside -
+   no hover flicker). No translate, which would vacate space below it. */
+.dcard-format:hover{transform:scale(1.1);color:var(--fg);
   border-color:color-mix(in oklch,var(--fg-3) 45%,var(--line))}
 .dcard-format svg{width:15px;height:15px;display:block}
 .dcard-format.fmt-vertical{color:var(--dc,var(--accent));
@@ -544,12 +546,14 @@ input,select,textarea{font-family:inherit;color:inherit}
 .dest-add-icon{width:36px;height:36px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
   background:var(--surface-3);border:1px solid var(--line-2);font-size:22px;line-height:1}
 
-/* Destination edit form (slides in below grid) */
-.dest-form{margin-top:14px;padding:20px 22px;background:linear-gradient(180deg,var(--bg-2),var(--surface));
+/* Destination editor - a centred floating modal (see .ic-modal shell).
+   Scrolls internally when the VOD/EB section makes it tall. */
+.dest-form{padding:20px 22px;background:linear-gradient(180deg,var(--bg-2),var(--surface));
   border:1px solid color-mix(in oklch,var(--accent) 40%,var(--line));border-radius:var(--radius);
-  box-shadow:0 12px 40px -18px color-mix(in oklch,var(--accent) 40%,transparent);
-  animation:paneIn .25s var(--ease-out) both;display:flex;flex-direction:column;gap:9px;
-  max-width:620px}
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.6);
+  animation:modalPop .2s var(--ease-out) both;display:flex;flex-direction:column;gap:9px;
+  position:relative;width:min(600px,100%);max-height:min(90vh,860px);overflow-y:auto}
+@keyframes modalPop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
 /* Header row: title + one-click close so editing feels like a focused
    panel you can dismiss without scrolling to the Cancel button. */
 .dest-form-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:2px}
@@ -576,9 +580,11 @@ input,select,textarea{font-family:inherit;color:inherit}
 .stats-big{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}
 @media (max-width:880px){.stats-big{grid-template-columns:1fr}}
 .stat-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px;cursor:help;
-  transition:border-color .18s var(--ease-out),transform .18s var(--ease-out),box-shadow .18s var(--ease-out)}
-.stat-card:hover{border-color:color-mix(in oklch,var(--accent) 32%,var(--line-2));transform:translateY(-2px);
-  box-shadow:0 6px 20px -10px color-mix(in oklch,var(--accent) 40%,transparent)}
+  transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
+/* Elevation via shadow + border only - no position change, so the element
+   never moves out from under the cursor (no hover flicker). */
+.stat-card:hover{border-color:color-mix(in oklch,var(--accent) 32%,var(--line-2));
+  box-shadow:0 10px 26px -14px color-mix(in oklch,var(--accent) 55%,transparent)}
 .stat-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
 .stat-label{display:inline-flex;align-items:center;gap:7px}
 .stat-ic{width:14px;height:14px;color:var(--fg-3);opacity:.85;flex:0 0 auto;transition:color .18s,opacity .18s}
@@ -591,9 +597,10 @@ input,select,textarea{font-family:inherit;color:inherit}
 @media (max-width:980px){.stats-small{grid-template-columns:repeat(3,1fr)}}
 @media (max-width:540px){.stats-small{grid-template-columns:repeat(2,1fr)}}
 .metric-mini{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:help;
-  transition:border-color .18s var(--ease-out),transform .18s var(--ease-out),background .18s var(--ease-out)}
-.metric-mini:hover{border-color:color-mix(in oklch,var(--accent) 35%,var(--line-2));transform:translateY(-2px);
-  background:color-mix(in oklch,var(--accent) 4%,var(--bg-2))}
+  transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
+.metric-mini:hover{border-color:color-mix(in oklch,var(--accent) 35%,var(--line-2));
+  background:color-mix(in oklch,var(--accent) 4%,var(--bg-2));
+  box-shadow:0 8px 20px -14px color-mix(in oklch,var(--accent) 55%,transparent)}
 .metric-mini-top{display:flex;align-items:center;gap:6px}
 .metric-ic{width:13px;height:13px;color:var(--fg-3);opacity:.8;flex:0 0 auto;transition:color .18s,opacity .18s}
 .metric-mini:hover .metric-ic{color:var(--accent);opacity:1}
@@ -1382,7 +1389,9 @@ input,select,textarea{font-family:inherit;color:inherit}
     <button class="ic-btn ic-btn-primary" id="dest-add-btn" onclick="openDestForm(null)">+ Add destination</button>
   </div>
   <div class="dest-grid" id="dest-grid"></div>
-  <div class="dest-form" id="dest-form" hidden>
+  <div class="ic-modal" id="dest-modal" hidden role="dialog" aria-modal="true" aria-labelledby="dest-form-title">
+    <div class="ic-modal-backdrop" onclick="cancelDestForm()"></div>
+    <div class="dest-form" id="dest-form">
     <div class="dest-form-head">
       <div>
         <h4 id="dest-form-title">New destination</h4>
@@ -1492,6 +1501,7 @@ input,select,textarea{font-family:inherit;color:inherit}
       <button class="ic-btn ic-btn-primary" onclick="saveDestForm()">Save destination</button>
     </div>
     <div class="dest-form-msg" id="dest-form-msg"></div>
+    </div>
   </div>
 </section>
 
@@ -2253,14 +2263,39 @@ function animateNumber(id, target, dur, fmt){
 }
 
 // ── Sparkline ─────────────────────────────────────────────────────────
+// Catmull-Rom -> cubic-bezier smoothing so the trace reads as a smooth
+// curve instead of a jagged polyline.
+function smoothLinePath(pts){
+  if (pts.length < 2) return '';
+  if (pts.length === 2) return `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)} L ${pts[1][0].toFixed(1)} ${pts[1][1].toFixed(1)}`;
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++){
+    const p0 = pts[i-1] || pts[i], p1 = pts[i], p2 = pts[i+1], p3 = pts[i+2] || p2;
+    const cp1x = p1[0] + (p2[0]-p0[0])/6, cp1y = p1[1] + (p2[1]-p0[1])/6;
+    const cp2x = p2[0] - (p3[0]-p1[0])/6, cp2y = p2[1] - (p3[1]-p1[1])/6;
+    d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+const sparkMaxState = {};
 function updateSpark(lineId, fillId, data, width, height){
-  if (data.length < 2){ $(lineId).setAttribute('d',''); $(fillId).setAttribute('d',''); return; }
-  const max = Math.max(...data, 1), min = Math.min(...data, 0);
-  const range = max - min || 1, step = width / (data.length - 1), pad = 2;
-  const pts = data.map((v,i) => [i*step, height-pad-((v-min)/range)*(height-pad*2)]);
-  const line = pts.map((p,i) => (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
-  $(lineId).setAttribute('d', line);
-  $(fillId).setAttribute('d', line+` L ${width} ${height} L 0 ${height} Z`);
+  const lineEl = $(lineId), fillEl = $(fillId);
+  if (!lineEl || !fillEl) return;
+  if (data.length < 2){ lineEl.setAttribute('d',''); fillEl.setAttribute('d',''); return; }
+  // Floor anchored at 0 so the line's height reflects the TRUE magnitude
+  // (a steady 6 Mbps sits high and steady, not rescaled to fill). The
+  // ceiling grows instantly to a new peak but decays slowly, so a spike
+  // scrolling out of the 60s window doesn't snap the whole axis - the
+  // graph tracks reality instead of jittering.
+  const target = Math.max(...data, 1);
+  const prev = sparkMaxState[lineId] || target;
+  const max = target >= prev ? target : prev + (target - prev) * 0.1;
+  sparkMaxState[lineId] = max;
+  const pad = 2, h = height - pad * 2, step = width / (data.length - 1);
+  const pts = data.map((v, i) => [i * step, height - pad - Math.max(0, Math.min(1, v / max)) * h]);
+  const line = smoothLinePath(pts);
+  lineEl.setAttribute('d', line);
+  fillEl.setAttribute('d', line + ` L ${width} ${height} L 0 ${height} Z`);
 }
 
 // ── Action endpoints ──────────────────────────────────────────────────
@@ -2827,7 +2862,8 @@ async function loadDestinations(){
 
 // ── Destination form ──────────────────────────────────────────────────
 function openDestForm(d){
-  $('dest-form').hidden = false;
+  $('dest-modal').hidden = false;
+  $('dest-form').scrollTop = 0;
   $('dest-form-title').textContent = d ? 'Edit destination' : 'New destination';
   $('dest-form-id').value = d ? d.id : '';
   $('dest-form-name').value = d ? d.name : '';
@@ -2847,9 +2883,17 @@ function openDestForm(d){
   updateVodVisibility();
   refreshObsEbLaunchAvailability();
   $('dest-form-msg').innerHTML = '';
-  $('dest-form').scrollIntoView({behavior:'smooth',block:'nearest'});
+  // Focus the name field for immediate typing, and wire Esc-to-close.
+  setTimeout(() => { const n = $('dest-form-name'); if (n) n.focus(); }, 60);
+  document.addEventListener('keydown', onDestModalKey);
 }
-function cancelDestForm(){ $('dest-form').hidden = true; }
+function cancelDestForm(){
+  $('dest-modal').hidden = true;
+  document.removeEventListener('keydown', onDestModalKey);
+}
+function onDestModalKey(e){
+  if (e.key === 'Escape'){ e.preventDefault(); cancelDestForm(); }
+}
 
 // VOD-audio mode is Twitch-only (the gate is hardcoded in OBS). The
 // "Launch OBS for EB + VOD" experimental button below only matters
@@ -4702,10 +4746,15 @@ const TOUR = [
     `,
   },
   {
-    target: '#dest-grid', side: 'top', tab: 'destinations',
+    // Dynamic: highlight a real destination card once one exists (so the
+    // spotlight isn't a viewport-filling grid), otherwise the Add button.
+    target: () => document.querySelector('#dest-grid .dcard')
+      || document.querySelector('#dest-add-btn')
+      || document.querySelector('#dest-grid'),
+    side: 'top', tab: 'destinations',
     title: 'Destinations',
     body: `
-      <p>Add as many platforms as you want - each gets its own card with a coloured left stripe (Twitch purple, YouTube rose, Kick mint…), live bitrate sparkline, and per-destination status pill.</p>
+      <p>Each platform you add gets its own card with a coloured left stripe (Twitch purple, YouTube rose, Kick mint…), a live bitrate sparkline, and a status pill. Hit <b>+ Add destination</b> to create one.</p>
       <p>Stream keys are <b>per-destination</b>. OBS uses a simple stream identifier, the real platform keys live here.</p>
       <p><b>Horizontal or vertical?</b> Every card has a small <b>format icon</b> next to its status - hover it to see whether that destination sends <b>horizontal</b> (wide), <b>vertical</b> 9:16, or <b>both</b> (Twitch, via Dual Format). Set any non-Twitch destination to <b>Vertical</b> to reuse Twitch's 9:16 canvas for YouTube Shorts / Kick mobile.</p>
       <p>InstantClone standardizes on <b>Twitch Dual Format</b> as its vertical source: set it up once in OBS and every vertical destination reuses that same 9:16 canvas. Vertical only flows while <b>Dual Format / Enhanced Broadcasting</b> is on, and the card shows <b>Waiting for Dual Format</b> until then. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Twitch Dual Format →</a></p>
@@ -4806,7 +4855,9 @@ function positionTour(){
     return;
   }
 
-  const el = document.querySelector(t.target);
+  // Target may be a CSS selector or a function returning the best element
+  // for the current state (e.g. a real destination card once some exist).
+  const el = typeof t.target === 'function' ? t.target() : document.querySelector(t.target);
   if (!el){
     // Target missing (maybe hidden) - fall back to centered.
     hl.classList.add('hidden');
@@ -4867,6 +4918,10 @@ function positionTour(){
     tx = hx - tw;
     ty = Math.min(vh - th - 12, Math.max(12, hy));
   }
+  // Final clamp: never let the tooltip land off-screen, even if the target
+  // is larger than the viewport (e.g. a full grid of destination cards).
+  tx = Math.min(vw - tw - 12, Math.max(12, tx));
+  ty = Math.min(vh - th - 12, Math.max(12, ty));
   tip.style.left = tx + 'px';
   tip.style.top  = ty + 'px';
 }
