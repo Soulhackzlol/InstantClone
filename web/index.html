@@ -205,7 +205,9 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ic-check.on{background:var(--accent);border-color:transparent}
 
 /* Toast */
-.ic-toast-rail{position:fixed;right:24px;bottom:24px;z-index:500;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+/* Above every overlay (modals 1000, tour 300, studio 400) so a toast
+   fired while the destination modal is open isn't hidden behind it. */
+.ic-toast-rail{position:fixed;right:24px;bottom:24px;z-index:2000;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 .ic-toast{background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;
   padding:10px 14px 10px 12px;display:flex;align-items:center;gap:10px;
   box-shadow:0 10px 30px rgba(0,0,0,.4);pointer-events:auto;
