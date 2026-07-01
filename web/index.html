@@ -465,33 +465,47 @@ input,select,textarea{font-family:inherit;color:inherit}
 
 /* ── Destinations ────────────────────────────── */
 .dest-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
-.dcard{background:var(--bg-2);border:1px solid var(--line);border-radius:12px;padding:16px;
-  display:flex;flex-direction:column;gap:14px;
+.dcard{background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:15px;
+  display:flex;flex-direction:column;gap:13px;
   transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out);
   position:relative;overflow:hidden}
+/* Platform-coloured left edge (landing style): subtle when idle, solid +
+   glowing when the feed is live. */
 .dcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
-  background:color-mix(in oklch,var(--dc,var(--fg-3)) 60%,transparent);opacity:0;
-  transition:opacity .2s var(--ease-out)}
-.dcard:hover{border-color:var(--line-2);box-shadow:0 12px 30px -18px color-mix(in oklch,var(--dc,var(--accent)) 55%,transparent)}
-.dcard:hover::before{opacity:.85}
-.dcard.alive::before{opacity:1;box-shadow:0 0 14px var(--dc,var(--accent))}
-.dcard.off{opacity:.65}
+  background:var(--dc,var(--fg-3));opacity:.5;
+  transition:opacity .2s var(--ease-out),box-shadow .2s var(--ease-out)}
+.dcard:hover{border-color:color-mix(in oklch,var(--dc,var(--accent)) 35%,var(--line-2));
+  box-shadow:0 16px 40px -22px color-mix(in oklch,var(--dc,var(--accent)) 70%,transparent)}
+.dcard:hover::before{opacity:.9}
+.dcard.alive{border-color:color-mix(in oklch,var(--dc,var(--accent)) 28%,var(--line))}
+.dcard.alive::before{opacity:1;box-shadow:0 0 16px var(--dc,var(--accent))}
+.dcard.off{opacity:.55}
+.dcard.off::before{opacity:.2}
 .dcard.platform-twitch   {--dc:#a78bfa}
 .dcard.platform-youtube  {--dc:#fda4af}
 .dcard.platform-kick     {--dc:#86efac}
 .dcard.platform-trovo    {--dc:#67e8f9}
 .dcard.platform-restream {--dc:#5eead4}
 .dcard.platform-custom   {--dc:#fcd34d}
-.dcard-head{display:flex;align-items:center;gap:12px}
-.dcard-icon{width:36px;height:36px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
-  background:color-mix(in oklch,var(--dc,var(--fg-3)) 14%,var(--surface-3));
-  border:1px solid color-mix(in oklch,var(--dc,var(--fg-3)) 35%,transparent);
+.dcard-head{display:flex;align-items:center;gap:9px}
+.dcard-icon{width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
+  background:color-mix(in oklch,var(--dc,var(--fg-3)) 16%,var(--surface-3));
+  border:1px solid color-mix(in oklch,var(--dc,var(--fg-3)) 38%,transparent);
   color:var(--dc,var(--fg-3));font-weight:700;font-size:14px;flex:0 0 auto}
-.dcard-name{font-size:14px;font-weight:600;color:var(--fg)}
-.dcard-host{font-size:11px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;
+.dcard-id{flex:1;min-width:0}
+.dcard-name{font-size:14px;font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dcard-host{font-size:11px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;
   font-family:'JetBrains Mono',monospace}
-.dcard-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:500;
-  padding:4px 8px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line);
+/* Enable/disable toggle - platform-coloured when on, matching the landing. */
+.dcard-switch{appearance:none;width:34px;height:19px;background:var(--surface-3);border:1px solid var(--line);
+  border-radius:999px;position:relative;cursor:pointer;flex:0 0 auto;padding:0;
+  transition:background .2s var(--ease-out),border-color .2s var(--ease-out)}
+.dcard-switch>span{position:absolute;top:1px;left:1px;width:15px;height:15px;border-radius:999px;
+  background:var(--fg-3);transition:transform .2s var(--ease-spring),background .2s var(--ease-out);display:block}
+.dcard-switch.on{background:color-mix(in oklch,var(--dc,var(--accent)) 80%,transparent);border-color:transparent}
+.dcard-switch.on>span{transform:translateX(15px);background:#fff}
+.dcard-status{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:500;
+  padding:3px 8px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line);
   color:var(--fg-3);flex:0 0 auto;
   transition:color .2s ease,background .2s ease,border-color .2s ease}
 .dcard-status .d-dot{width:5px;height:5px;border-radius:999px;background:var(--fg-4)}
@@ -509,44 +523,39 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:color-mix(in oklch,var(--warn,#d6a23a) 9%,var(--surface-3))}
 .dcard-status.s-wait .d-dot{background:var(--warn,#d6a23a);box-shadow:0 0 6px var(--warn,#d6a23a);
   animation:hpulse 2.4s infinite;--sc:var(--warn,#d6a23a)}
-/* Format indicator: a small outline glyph in the card head. Hover (or
-   focus) surfaces the full format + the Dual Format requirement via the
-   native tooltip - no extra layout, reads at a glance. */
+/* Orientation indicator: small glyph in the head; hover/focus shows the
+   full format + Dual Format requirement via the native tooltip. */
 .dcard-format{display:inline-flex;align-items:center;justify-content:center;
-  width:26px;height:26px;border-radius:7px;flex:0 0 auto;color:var(--fg-3);
+  width:24px;height:24px;border-radius:7px;flex:0 0 auto;color:var(--fg-3);
   background:var(--surface-3);border:1px solid var(--line);cursor:help;
   transition:transform .14s ease,color .14s ease,border-color .14s ease}
-/* Scale-up only (grows around its centre, so the pointer stays inside -
-   no hover flicker). No translate, which would vacate space below it. */
 .dcard-format:hover{transform:scale(1.1);color:var(--fg);
   border-color:color-mix(in oklch,var(--fg-3) 45%,var(--line))}
-.dcard-format svg{width:15px;height:15px;display:block}
+.dcard-format svg{width:14px;height:14px;display:block}
 .dcard-format.fmt-vertical{color:var(--dc,var(--accent));
   border-color:color-mix(in oklch,var(--dc,var(--accent)) 32%,var(--line))}
 .dcard-format.fmt-wait{color:var(--warn,#d6a23a);
   border-color:color-mix(in oklch,var(--warn,#d6a23a) 36%,var(--line))}
-/* Metrics row: prominent live bitrate on the left, terse counters on the
-   right. No boxed "graph widget" - the trace lives as a full-bleed strip. */
+/* Inset "screen": a darker panel holding the live bitrate + trace, exactly
+   like the landing cards. The sparkline bleeds to the screen's edges. */
+.dcard-screen{background:var(--bg-1);border:1px solid color-mix(in oklch,var(--line) 65%,transparent);
+  border-radius:11px;padding:12px 14px 0;overflow:hidden;position:relative}
 .dcard-body{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
 .dcard-rate-row{display:flex;align-items:baseline;gap:5px}
-.dcard-rate{font-size:27px;font-weight:600;color:var(--fg);letter-spacing:-.03em;line-height:1;
+.dcard-rate{font-size:24px;font-weight:600;color:var(--fg);letter-spacing:-.02em;line-height:1;
   font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
 .dcard-rate-u{font-size:11px;color:var(--fg-3);font-family:'JetBrains Mono',monospace}
-.dcard-foot-meta{font-size:10.5px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;white-space:nowrap}
-/* Signal strip: the sparkline bleeds to the card's bottom + side edges and
-   fades into it, so the card reads as one object, not a widget stack. */
-.dcard-spark{display:block;width:calc(100% + 32px);height:42px;margin:2px -16px -16px;
-  -webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent);
-  mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
-/* Actions: subtle glass icon buttons, bottom-right, revealed on hover. */
-.dcard-actions{position:absolute;right:10px;bottom:10px;display:flex;gap:5px;z-index:2;
+.dcard-foot-meta{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;white-space:nowrap}
+.dcard-spark{display:block;width:calc(100% + 28px);height:40px;margin:8px -14px 0}
+/* Edit / remove: subtle glass buttons over the trace, revealed on hover. */
+.dcard-actions{position:absolute;right:9px;bottom:9px;display:flex;gap:5px;z-index:2;
   opacity:0;transform:translateY(3px);transition:opacity .18s var(--ease-out),transform .18s var(--ease-out)}
 .dcard:hover .dcard-actions,.dcard:focus-within .dcard-actions{opacity:1;transform:none}
-.dcard-act{width:28px;height:28px;border-radius:8px;border:1px solid var(--line);cursor:pointer;
+.dcard-act{width:27px;height:27px;border-radius:8px;border:1px solid var(--line);cursor:pointer;
   display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--fg-2);
-  background:color-mix(in oklch,var(--bg-1) 62%,transparent);backdrop-filter:blur(6px);
+  background:color-mix(in oklch,var(--bg-1) 70%,transparent);backdrop-filter:blur(6px);
   transition:color .15s,background .15s,border-color .15s}
-.dcard-act:hover{color:var(--fg);border-color:var(--line-2);background:color-mix(in oklch,var(--bg-1) 82%,transparent)}
+.dcard-act:hover{color:var(--fg);border-color:var(--line-2);background:color-mix(in oklch,var(--bg-1) 88%,transparent)}
 .dcard-act.dcard-del:hover{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,var(--line))}
 .dest-add{appearance:none;background:transparent;border:1px dashed var(--line-2);border-radius:12px;
   color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
@@ -2149,7 +2158,7 @@ const PHASE_TO_STATE = { idle:'off', preparing:'arming', ready:'armed', active:'
 // OFFLINE when ingest is actually down.
 function computeStatePill(s){
   if (!s || !s.ingest_alive){
-    return { label:'OFFLINE', desc:'· OBS not connected', c:'var(--idle)', pulse:false };
+    return { label:'OFFLINE', desc:'· no encoder connected', c:'var(--idle)', pulse:false };
   }
   const ds = PHASE_TO_STATE[s.phase] || 'off';
   if (ds === 'off')    return { label:'LIVE',      desc:'· Passthrough',    c:'var(--live)',   pulse:true };
@@ -2465,7 +2474,7 @@ function renderHero(s){
   if (ds === 'off'){
     sub = s.ingest_alive
       ? `Forwarding live with no delay · ${fmtKbps(s.stats.bitrate_kbps)} in`
-      : `Waiting for OBS to connect…`;
+      : `Waiting for your encoder to connect…`;
   }
   else if (ds === 'arming') sub = `Buffering - ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers still see live until you activate.`;
   else if (ds === 'armed') sub = `Buffer ready. Click Activate to cut your stream over.`;
@@ -2632,8 +2641,8 @@ function renderHeader(s){
   obs.className = 'ic-pill ' + (s.ingest_alive ? 'live ok' : '');
   $('hdr-obs-v').textContent = s.ingest_alive ? 'Live' : 'Offline';
   obs.title = s.ingest_alive
-    ? 'OBS is connected and publishing to InstantClone.'
-    : 'Waiting for OBS. In OBS set Service to Custom, Server to rtmp://127.0.0.1:1935/live, then Start Streaming.';
+    ? 'Your encoder is connected and publishing to InstantClone.'
+    : 'Waiting for your encoder. Point OBS (or any RTMP encoder) at rtmp://127.0.0.1:1935/live and start streaming.';
   // Egress pill - how many destinations are actually connected.
   const eg = $('hdr-egress');
   const total = s.destinations_total || 0;
@@ -2781,20 +2790,22 @@ function buildDestCard(d){
   el.innerHTML = `
     <div class="dcard-head">
       <span class="dcard-icon"></span>
-      <div class="dcard-id" style="flex:1;min-width:0"><div class="dcard-name"></div><div class="dcard-host mono"></div></div>
+      <div class="dcard-id"><div class="dcard-name"></div><div class="dcard-host mono"></div></div>
       <span class="dcard-format" tabindex="0"></span>
+      <button class="dcard-switch dcard-toggle" role="switch" title="Enable / disable"><span></span></button>
       <div class="dcard-status"><span class="d-dot"></span><span class="dcard-status-l"></span></div>
     </div>
-    <div class="dcard-body">
-      <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">Mbps</span></div>
-      <span class="dcard-foot-meta"><span class="dcard-frames">0</span>f · <span class="dcard-cuts">0</span>c · <span class="dcard-rec">0</span>r</span>
+    <div class="dcard-screen">
+      <div class="dcard-body">
+        <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">kbps</span></div>
+        <span class="dcard-foot-meta"><span class="dcard-frames">0</span>f · <span class="dcard-cuts">0</span>c · <span class="dcard-rec">0</span>r</span>
+      </div>
+      <svg class="dcard-spark" viewBox="0 0 400 40" preserveAspectRatio="none">
+        <path class="dcard-spark-fill" style="fill:color-mix(in oklch,var(--dc,var(--accent)) 16%,transparent)" d=""/>
+        <path class="dcard-spark-line" style="fill:none;stroke:var(--dc,var(--accent));stroke-width:2;stroke-linecap:round;stroke-linejoin:round" d=""/>
+      </svg>
     </div>
-    <svg class="dcard-spark" viewBox="0 0 400 42" preserveAspectRatio="none">
-      <path class="dcard-spark-fill" style="fill:color-mix(in oklch,var(--dc,var(--accent)) 16%,transparent)" d=""/>
-      <path class="dcard-spark-line" style="fill:none;stroke:var(--dc,var(--accent));stroke-width:2;stroke-linecap:round;stroke-linejoin:round" d=""/>
-    </svg>
     <div class="dcard-actions">
-      <button class="dcard-act dcard-toggle" title="Enable / disable"></button>
       <button class="dcard-act dcard-edit" title="Edit">✎</button>
       <button class="dcard-act dcard-del" title="Remove">✕</button>
     </div>`;
@@ -2869,12 +2880,13 @@ function updateDestCard(r, d){
   else if (kbps >= 1000){ r.rate.textContent = (kbps/1000).toFixed(2); if (rateU) rateU.textContent = 'Mbps'; }
   else { r.rate.textContent = Math.round(kbps); if (rateU) rateU.textContent = 'kbps'; }
   // Smooth, 0-anchored, per-card stable sparkline (same renderer as stats).
-  drawSpark(r.sparkLine, r.sparkFill, r.history, 400, 42, 'dc:' + d.id);
+  drawSpark(r.sparkLine, r.sparkFill, r.history, 400, 40, 'dc:' + d.id);
   r.frames.textContent = (d.tags_sent || 0).toLocaleString();
   r.cuts.textContent = d.cuts || 0;
   r.rec.textContent = d.reconnects || 0;
-  r.toggle.title = d.enabled ? 'Disable' : 'Enable';
-  r.toggle.textContent = d.enabled ? '⏸' : '▶';
+  r.toggle.title = d.enabled ? 'Disable this destination' : 'Enable this destination';
+  r.toggle.classList.toggle('on', d.enabled);
+  r.toggle.setAttribute('aria-checked', d.enabled ? 'true' : 'false');
 }
 
 async function loadDestinations(){
@@ -4706,8 +4718,8 @@ const TOUR = [
     body: `
       <p>Big number = your <b>current delivered delay</b>. The pill above + aurora glow tell you the state:</p>
       <ul>
-        <li><b>OFFLINE</b> - OBS isn't streaming to InstantClone yet (where you probably are right now)</li>
-        <li><b>LIVE · Passthrough</b> - OBS forwarding, no delay</li>
+        <li><b>OFFLINE</b> - your encoder isn't streaming to InstantClone yet (where you probably are right now)</li>
+        <li><b>LIVE · Passthrough</b> - forwarding your stream, no delay</li>
         <li><b>BUFFERING</b> - filling toward your armed value</li>
         <li><b>ARMED</b> - buffer ready, click Activate</li>
         <li><b>ACTIVE</b> - delay is live</li>
@@ -4766,7 +4778,7 @@ const TOUR = [
       <p>Two ways - pick whichever fits your setup.</p>
       <p><b>Recommended - one click:</b> hit <b>Register with OBS</b> on this tab. InstantClone shows up next to Twitch / YouTube in OBS's <b>Settings → Stream → Service</b> dropdown. Restart OBS once, pick <b>InstantClone</b>, set Stream Key to anything (we suggest <code>main</code>), and hit <b>Start Streaming</b>. Multi-track Video "Auto" works out of the box.</p>
       <p><b>Fallback - Custom RTMP:</b> if you're on older OBS, using a multi-RTMP plugin, or a non-OBS encoder, use the Server URL + key shown below this section instead - Service: <b>Custom…</b>.</p>
-      <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you press <b>Start Streaming</b> in OBS, the dashboard stays <b>OFFLINE</b> and the OBS pill at the top reads "not connected" - that's expected, not a setup mistake.</p>
+      <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you press <b>Start Streaming</b> in your encoder, the dashboard stays <b>OFFLINE</b> and the OBS pill at the top reads "Offline" - that's expected, not a setup mistake.</p>
       <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just an internal label here. Your real Twitch / YouTube / Kick keys go in the <b>Destinations</b> tab - that's what actually reaches the platforms.</div>
     `,
   },
