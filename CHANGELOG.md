@@ -41,6 +41,11 @@ How it stays robust:
 - The control is **hidden for Twitch**, which sends both canvases natively
   via Dual Format - a note explains that so the choice never confuses.
 
+- Each destination card shows the **detected resolution + codec** of the
+  track it forwards (e.g. `1080x1920 · H.264`), so you can confirm the 9:16
+  canvas is really flowing - and a **Dual Format** header pill lights up
+  whenever a vertical canvas is on the wire.
+
 ### VOD audio + Enhanced Broadcasting: fewer manual steps
 
 - New **one-click "Set up VOD + EB"** writes OBS's VOD-track unlock flag,

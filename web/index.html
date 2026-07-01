@@ -136,7 +136,7 @@ input,select,textarea{font-family:inherit;color:inherit}
    toggled via [hidden]. When shown, display flips none->inline-flex, which
    replays this entrance animation once - so they fade+scale in instead of
    popping. (Exit stays instant; the appearance is the jarring part.) */
-#hdr-codec,#hdr-ebroadcast,#hdr-backpressure,#hdr-twitch-cap,#hdr-update{
+#hdr-codec,#hdr-ebroadcast,#hdr-dualformat,#hdr-backpressure,#hdr-twitch-cap,#hdr-update{
   animation:pillIn .22s var(--ease-out)}
 @keyframes pillIn{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:none}}
 @keyframes pulse-ring{
@@ -561,7 +561,9 @@ input,select,textarea{font-family:inherit;color:inherit}
   font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
 .dcard-rate-u{font-size:11px;color:var(--fg-3);font-family:'JetBrains Mono',monospace}
 .dcard-foot-meta{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;white-space:nowrap}
-.dcard-spark{display:block;width:calc(100% + 28px);height:40px;margin:8px -14px 0}
+/* Detected resolution + codec of the forwarded track (e.g. 1080x1920 · H.264). */
+.dcard-res{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;margin-top:3px;letter-spacing:.02em}
+.dcard-spark{display:block;width:calc(100% + 28px);height:40px;margin:6px -14px 0}
 /* Edit / remove: subtle glass buttons over the trace, revealed on hover. */
 /* Reveal via slide + visibility, NOT opacity. Animating opacity on a
    backdrop-filter element makes Chromium skip the blur mid-transition and
@@ -1296,6 +1298,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     </span>
     <span class="ic-pill" id="hdr-codec" hidden><span class="mono" id="hdr-codec-v">-</span></span>
     <span class="ic-pill ok" id="hdr-ebroadcast" hidden title="Enhanced Broadcasting active - multi-track simulcast is being forwarded bit-faithfully to Twitch and flattened to the primary track for any non-Twitch destinations. Twitch's transcoder serves the full quality ladder to viewers.">⚡ Enhanced Broadcasting</span>
+    <span class="ic-pill ok" id="hdr-dualformat" hidden title="Twitch Dual Format is live - a vertical 9:16 canvas is on the wire. Any destination set to Vertical is forwarding it (YouTube Shorts, Kick mobile, etc.).">▯ Dual Format</span>
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
     <span class="ic-pill warn" id="hdr-twitch-cap" hidden>⚠ <span id="hdr-twitch-cap-v">Twitch · Source-Only at 10 Mbps</span></span>
     <a id="hdr-update" class="ic-pill" href="#" hidden title="Open the updater" onclick="openUpdateInAbout();return false;" style="cursor:pointer">⬆ <span id="hdr-update-v">update available</span></a>
@@ -2715,6 +2718,7 @@ function renderHeader(s){
     $('hdr-codec-v').textContent = (haveV ? s.video_codec : '?') + ' / ' + (haveA ? s.audio_codec : '?');
   } else $('hdr-codec').hidden = true;
   $('hdr-ebroadcast').hidden = !s.multitrack_video;
+  $('hdr-dualformat').hidden = !s.vertical_present;
   $('hdr-backpressure').hidden = !s.backpressure;
   renderTwitchCapPill(s);
 }
@@ -2833,6 +2837,7 @@ function buildDestCard(d){
         <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">kbps</span></div>
         <span class="dcard-foot-meta"><span class="dcard-frames">0</span>f · <span class="dcard-cuts">0</span>c · <span class="dcard-rec">0</span>r</span>
       </div>
+      <div class="dcard-res mono" hidden></div>
       <svg class="dcard-spark" viewBox="0 0 400 40" preserveAspectRatio="none">
         <path class="dcard-spark-fill" style="fill:color-mix(in oklch,var(--dc,var(--accent)) 16%,transparent)" d=""/>
         <path class="dcard-spark-line" style="fill:none;stroke:var(--dc,var(--accent));stroke-width:2;stroke-linecap:round;stroke-linejoin:round" d=""/>
@@ -2852,6 +2857,7 @@ function buildDestCard(d){
     statL: el.querySelector('.dcard-status-l'),
     statE: el.querySelector('.dcard-status'),
     rate: el.querySelector('.dcard-rate'),
+    res: el.querySelector('.dcard-res'),
     sparkLine: el.querySelector('.dcard-spark-line'),
     sparkFill: el.querySelector('.dcard-spark-fill'),
     frames: el.querySelector('.dcard-frames'),
@@ -2912,6 +2918,16 @@ function updateDestCard(r, d){
   if (!d.alive){ r.rate.textContent = '-'; if (rateU) rateU.textContent = ''; }
   else if (kbps >= 1000){ r.rate.textContent = (kbps/1000).toFixed(2); if (rateU) rateU.textContent = 'Mbps'; }
   else { r.rate.textContent = Math.round(kbps); if (rateU) rateU.textContent = 'kbps'; }
+  // Detected resolution + codec of the forwarded track (confirms the 9:16
+  // canvas is really flowing). Hidden until known.
+  if (r.res){
+    const parts = [];
+    if (d.video_res) parts.push(d.video_res.replace('x','×'));
+    if (d.video_codec) parts.push(d.video_codec);
+    const txt = parts.join(' · ');
+    r.res.hidden = !txt;
+    if (r.res.textContent !== txt) r.res.textContent = txt;
+  }
   // Smooth, 0-anchored, per-card stable sparkline (same renderer as stats).
   drawSpark(r.sparkLine, r.sparkFill, r.history, 400, 40, 'dc:' + d.id);
   r.frames.textContent = (d.tags_sent || 0).toLocaleString();

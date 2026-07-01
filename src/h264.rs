@@ -556,6 +556,39 @@ pub fn sps_dimensions(seq_header: &[u8]) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
+/// Best-effort codec of a sequence-header tag, across the framings OBS
+/// emits (legacy AVC, Enhanced single-track, Enhanced OneTrack multi-track).
+/// Used for the per-destination "1080x1920 · H.264" readout. Returns
+/// `Unknown` for anything unrecognised or truncated; never panics.
+pub fn seq_header_codec(payload: &[u8]) -> VideoCodec {
+    if payload.is_empty() {
+        return VideoCodec::Unknown;
+    }
+    let b0 = payload[0];
+    if b0 & 0x80 == 0 {
+        // Legacy: low nibble is the CodecID; 7 = AVC is the only one we map.
+        return if b0 & 0x0F == 7 {
+            VideoCodec::Avc
+        } else {
+            VideoCodec::Unknown
+        };
+    }
+    // Enhanced-RTMP: OneTrack multi-track carries the FourCC at bytes 2..6
+    // (after the mt header), single-track at bytes 1..5.
+    let fourcc = if b0 & 0x0F == 6 {
+        payload.get(2..6)
+    } else {
+        payload.get(1..5)
+    };
+    match fourcc {
+        Some(f) if f == FOURCC_AVC1 => VideoCodec::Avc,
+        Some(f) if f == FOURCC_HVC1 || f == FOURCC_HEV1 => VideoCodec::Hevc,
+        Some(f) if f == FOURCC_AV01 => VideoCodec::Av1,
+        Some(f) if f == FOURCC_VP09 => VideoCodec::Vp9,
+        _ => VideoCodec::Unknown,
+    }
+}
+
 /// Pick the vertical-canvas primary track from the per-TrackId seq-header
 /// cache. The vertical primary is the portrait track (`height > width`)
 /// with the largest pixel area - if Twitch Dual Format emits a vertical
@@ -1503,6 +1536,17 @@ mod tests {
             m.insert((seed & 0x7) as u8, tag);
             let _ = detect_vertical_primary_track(&m);
         }
+    }
+
+    #[test]
+    fn seq_header_codec_detects_framings() {
+        assert_eq!(seq_header_codec(&legacy_avc_seq_header(40, 30)), VideoCodec::Avc);
+        assert_eq!(seq_header_codec(&onetrack_avc_seq_header(1, 30, 40)), VideoCodec::Avc);
+        // Enhanced single-track HEVC seq header (0x90 = IsEx|key|SequenceStart).
+        let mut hevc = vec![0x90u8];
+        hevc.extend_from_slice(b"hvc1");
+        assert_eq!(seq_header_codec(&hevc), VideoCodec::Hevc);
+        assert_eq!(seq_header_codec(&[]), VideoCodec::Unknown);
     }
 
     #[test]

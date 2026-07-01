@@ -715,8 +715,14 @@ fn state_json(
         )
     }).collect::<Vec<_>>().join(",");
 
+    // A portrait canvas is present on the wire (Twitch Dual Format is live).
+    // Drives the header "Dual Format" pill.
+    let vertical_present =
+        crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock().unwrap())
+            .is_some();
+
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"cpu_pct":{cp:.2},"rss_bytes":{rb},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         ad = ctrl.armed_delay_ms(),
         td = ctrl.target_delay_ms(),
@@ -742,6 +748,7 @@ fn state_json(
         ac = ctrl.audio_codec().label(),
         mtv = ctrl.multitrack_video(),
         mta = ctrl.multitrack_audio(),
+        vp = vertical_present,
         cp = cpu_pct,
         rb = rss_bytes,
         pt = ctrl.publisher_token(),
@@ -1957,18 +1964,7 @@ async fn post_destination_upsert(
         form.get("vod_audio_inject_eb").map(String::as_str),
         Some("on" | "true" | "1")
     );
-    // Only "vertical" is honored; every other value (incl. an absent
-    // field, "horizontal", or a Twitch destination where the control is
-    // hidden) normalizes to the safe horizontal default. Twitch never
-    // sends vertical - it gets native dual-canvas passthrough - so we
-    // force horizontal there regardless of what the form carried.
-    let stream_format = if platform != "twitch"
-        && form.get("stream_format").map(String::as_str) == Some("vertical")
-    {
-        "vertical".to_string()
-    } else {
-        "horizontal".to_string()
-    };
+    let stream_format = normalize_stream_format(&platform, form.get("stream_format").map(String::as_str));
 
     if name.trim().is_empty() {
         return (
@@ -2158,8 +2154,38 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         } else {
             true
         };
+        // Resolution + codec of the track this destination actually forwards
+        // (track 0 for horizontal/Twitch, the detected portrait primary for
+        // vertical), for the card readout. Empty when not yet known (non-AVC
+        // codec we can't measure, or vertical canvas not resolved).
+        let (video_res, video_codec) = {
+            use std::sync::atomic::Ordering;
+            let target = if vertical {
+                ctrl.destination_state(&d.id)
+                    .vertical_primary_track
+                    .load(Ordering::Relaxed)
+            } else {
+                0
+            };
+            let headers = ctrl.ring.video_seq_headers.lock().unwrap();
+            match headers.get(&target) {
+                Some(h) => {
+                    let res = crate::h264::sps_dimensions(h)
+                        .map(|(w, hh)| format!("{}x{}", w, hh))
+                        .unwrap_or_default();
+                    let c = crate::h264::seq_header_codec(h);
+                    let codec = if c == crate::h264::VideoCodec::Unknown {
+                        String::new()
+                    } else {
+                        c.label().to_string()
+                    };
+                    (res, codec)
+                }
+                None => (String::new(), String::new()),
+            }
+        };
         out.push_str(&format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled,
@@ -2176,6 +2202,8 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             sf = json_escape_quoted(&d.stream_format),
             vr = vertical_ready,
             vcp = vertical_canvas_present,
+            vres = json_escape_quoted(&video_res),
+            vcod = json_escape_quoted(&video_codec),
             ks = !d.stream_key.is_empty(),
             ur = json_escape_quoted(&redact_url(&url)),
             al = alive,
@@ -2211,6 +2239,18 @@ fn generate_dest_id() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("d{:x}", nanos as u64)
+}
+
+/// Normalize the destination form's `stream_format` field. Only "vertical"
+/// on a non-Twitch platform is honored; everything else (absent, "horizontal",
+/// a typo, or ANY value on Twitch - which gets native dual-canvas passthrough)
+/// resolves to the safe horizontal default.
+fn normalize_stream_format(platform: &str, raw: Option<&str>) -> String {
+    if platform != "twitch" && raw == Some("vertical") {
+        "vertical".to_string()
+    } else {
+        "horizontal".to_string()
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -3240,6 +3280,21 @@ mod tests {
     // with `tracing_enabled` between 3f9db09 (toggle added) and
     // 6a3990b (default flipped to off). Invisible until users
     // actually tried to enable the toggle on a fresh install.
+
+    #[test]
+    fn normalize_stream_format_rules() {
+        // Vertical honored on non-Twitch platforms.
+        assert_eq!(normalize_stream_format("youtube", Some("vertical")), "vertical");
+        assert_eq!(normalize_stream_format("kick", Some("vertical")), "vertical");
+        assert_eq!(normalize_stream_format("custom", Some("vertical")), "vertical");
+        // Twitch is always horizontal (native dual-canvas), even if the form
+        // somehow carried "vertical".
+        assert_eq!(normalize_stream_format("twitch", Some("vertical")), "horizontal");
+        // Everything else falls back to horizontal.
+        assert_eq!(normalize_stream_format("youtube", Some("horizontal")), "horizontal");
+        assert_eq!(normalize_stream_format("youtube", None), "horizontal");
+        assert_eq!(normalize_stream_format("youtube", Some("garbage")), "horizontal");
+    }
 
     #[test]
     fn apply_field_str_persists_tracing_enabled_value() {
