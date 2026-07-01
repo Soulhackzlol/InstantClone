@@ -335,22 +335,6 @@ fn onetrack_avc_to_legacy(payload: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Per-destination video-tag selection. Decides which bytes to put on
-/// the wire given the destination's Enhanced Broadcasting policy:
-///
-/// - `pass_through_multitrack = true`: Twitch destinations. Multi-track
-///   tags go through bit-faithfully so Twitch's edge can populate the
-///   transcoded ladder from the simulcast.
-/// - `pass_through_multitrack = false`: every other RTMP ingest we
-///   know of. Multi-track tags get flattened down to the primary
-///   track (matching what beta.6 emitted from the ingest-side flatten),
-///   single-track tags pass through unchanged.
-///
-/// Single-track tags ALWAYS pass through unchanged regardless of the
-/// flag - there's nothing to flatten and no destination policy that
-/// would want them changed. Returns a borrow when no copy is needed
-/// (the common case) and an owned `Vec` only when a flatten was
-/// actually performed.
 /// Best-effort extraction of the Enhanced-RTMP TrackId carried by an
 /// Enhanced-RTMP `OneTrack`-layout multi-track video tag (the format
 /// OBS uses for Enhanced Broadcasting seq-headers, where each track's
@@ -783,6 +767,21 @@ impl<'a> BitReader<'a> {
     }
 }
 
+/// Decide what video bytes to put on the wire for a destination given its
+/// [`VideoEgress`] policy:
+///
+/// - [`VideoEgress::Passthrough`] (Twitch): every tag goes through
+///   bit-faithfully so Twitch's edge gets the full EB bundle it negotiated.
+/// - [`VideoEgress::Track(n)`]: forward only OneTrack `TrackId == n`
+///   (`0` = horizontal primary, `n>0` = the vertical-canvas primary),
+///   dropping every other track. An AVC track is rewritten to *legacy* AVC
+///   (see [`onetrack_avc_to_legacy`]); non-AVC codecs and ManyTracks
+///   bundles fall back to the generic E-RTMP flatten. Single-track / legacy
+///   tags pass through for `Track(0)` and are dropped for a vertical target.
+///
+/// Returns `None` when the tag must be skipped on this destination, a
+/// borrow when no copy is needed, and an owned `Vec` only when a rewrite or
+/// flatten actually happened.
 pub fn select_video_bytes<'a>(
     payload: &'a [u8],
     egress: VideoEgress,

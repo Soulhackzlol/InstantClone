@@ -1755,7 +1755,11 @@ async fn pace_and_send(
                     // Vertical canvas: hold its P-frames until the first IDR.
                     Some(crate::h264::VideoEgress::Track(t)) if t != 0 => {
                         if dropped.is_some() {
-                            if crate::h264::classify_video_tag(io_buf).is_idr {
+                            // `meta.is_idr` is the any-track classification
+                            // (set from classify_video_tag on ingest), which
+                            // is exactly what we need here - it's true for the
+                            // vertical track's own IDR, not just track 0.
+                            if meta.is_idr {
                                 state.awaiting_keyframe = false;
                             } else {
                                 state.consumer_seq = meta.seq + 1;
