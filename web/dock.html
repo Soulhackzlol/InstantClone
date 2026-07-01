@@ -14,7 +14,7 @@ html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
 /* Thin scrollbar only when a dock is genuinely too short for the controls. */
 body::-webkit-scrollbar{width:6px}
 body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
-.wrap{display:flex;flex-direction:column;min-height:100vh;padding:12px;gap:9px}
+.wrap{display:flex;flex-direction:column;min-height:100vh;padding:10px;gap:6px}
 /* Critical rows never shrink; only the tip/egress lines absorb a squeeze in
    a short dock, so the big number + controls always render fully. */
 .top,.screen,.input-row,.cta-row{flex:0 0 auto}
@@ -39,14 +39,14 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 
 /* Big delay readout inside an inset "screen" */
 .screen{background:var(--panel-2);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);
-  border-radius:12px;padding:12px;text-align:center;position:relative}
+  border-radius:11px;padding:9px 11px;text-align:center;position:relative}
 /* Responsive so it never clips in a narrow/short dock; line-height leaves
    room for the glyphs (line-height:1 was chopping the digits' top/bottom). */
-.cur{font-size:clamp(28px,13vw,42px);font-weight:800;letter-spacing:-1.5px;
-  font-variant-numeric:tabular-nums;line-height:1.14;transition:color .25s}
+.cur{font-size:clamp(23px,11vw,34px);font-weight:800;letter-spacing:-1.5px;
+  font-variant-numeric:tabular-nums;line-height:1.08;transition:color .25s}
 .cur .u{font-size:.4em;color:var(--fg-3);font-weight:600;margin-left:2px;letter-spacing:0}
 .cur.changing{color:var(--accent)}
-.bar{position:relative;height:5px;background:var(--panel);border-radius:999px;overflow:hidden;margin-top:12px}
+.bar{position:relative;height:4px;background:var(--panel);border-radius:999px;overflow:hidden;margin-top:8px}
 .bar .fill{position:absolute;inset:0 auto 0 0;width:0;border-radius:999px;
   background:linear-gradient(90deg,var(--warn),color-mix(in srgb,var(--warn) 60%,#fff));
   transition:width .35s cubic-bezier(.32,.72,0,1)}
@@ -55,13 +55,15 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 
 /* Egress glance (destinations + bitrate), shown only while a source is live */
 .eg{display:flex;align-items:center;justify-content:center;gap:7px;font-size:11px;color:var(--fg-3);
-  font-variant-numeric:tabular-nums;min-height:15px;transition:opacity .18s}
-.eg.hide{opacity:0}
+  font-variant-numeric:tabular-nums}
+/* Fully removed from layout when offline (not just transparent) so the dock
+   stays compact and the controls sit higher. */
+.eg.hide{display:none}
 .eg b{color:var(--fg-2);font-weight:600}
 .eg .sep{color:var(--fg-4)}
 
 /* Sub-tip with crossfade */
-.tip{font-size:11px;color:var(--fg-3);text-align:center;min-height:14px;line-height:1.35;
+.tip{font-size:10.5px;color:var(--fg-3);text-align:center;min-height:0;line-height:1.3;
   transition:opacity .15s,transform .15s}
 .tip.fade{opacity:0;transform:translateY(2px)}
 
@@ -70,17 +72,17 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
   border-radius:10px;padding:3px;transition:.15s}
 .input-row:focus-within{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
 .input-row.disabled{opacity:.4;pointer-events:none}
-.input-row input{flex:1;background:transparent;border:0;color:var(--fg);font-size:15px;font-weight:700;
+.input-row input{flex:1;background:transparent;border:0;color:var(--fg);font-size:14px;font-weight:700;
   text-align:center;font-variant-numeric:tabular-nums;outline:none;-moz-appearance:textfield;width:100%}
 .input-row input::-webkit-outer-spin-button,.input-row input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-.input-row .step{background:transparent;border:0;color:var(--fg-3);font-size:17px;width:28px;height:28px;
+.input-row .step{background:transparent;border:0;color:var(--fg-3);font-size:16px;width:26px;height:26px;
   border-radius:7px;cursor:pointer;transition:.15s;line-height:1}
 .input-row .step:hover{background:var(--line);color:var(--fg)}
 .input-row .step:active{transform:scale(.9)}
 .input-row .suf{color:var(--fg-3);font-size:11px;padding:0 6px}
 
 /* Buttons */
-.btn{padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--fg);
+.btn{padding:9px 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--fg);
   font-size:13px;font-weight:600;cursor:pointer;transition:.15s cubic-bezier(.32,.72,0,1);font-family:inherit;
   display:flex;align-items:center;justify-content:center;gap:7px}
 .btn:hover:not(:disabled){border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line))}
