@@ -46,6 +46,13 @@ How it stays robust:
   canvas is really flowing - and a **Dual Format** header pill lights up
   whenever a vertical canvas is on the wire.
 
+- The vertical AVC feed is forwarded as **legacy AVC framing**, matching the
+  horizontal primary. YouTube's vertical ingest is viewable but flaky with
+  Enhanced-RTMP `avc1` (it aborts the connection on a ~11 s cycle); rewriting
+  the vertical track to legacy AVC keeps the connection stable. A vertical
+  destination also **leads with its own keyframe** after every (re)connect or
+  cut, so viewers get a clean picture instead of a mid-GOP glitch.
+
 ### VOD audio + Enhanced Broadcasting: fewer manual steps
 
 - New **one-click "Set up VOD + EB"** writes OBS's VOD-track unlock flag,

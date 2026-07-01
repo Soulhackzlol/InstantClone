@@ -49,7 +49,7 @@ Once it existed, the parts I'd actually wanted ended up in: a real two-phase arm
 <tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td></tr>
 <tr><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>209 / 209</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>210 / 210</code></td></tr>
 </table>
 
 </td>
@@ -279,7 +279,7 @@ cargo build --release
 
 No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzipped at build time by `build.rs` (uses `flate2`, build-only) and embedded into the binary; at runtime it's served with `Content-Encoding: gzip`.
 
-`cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced RTMP IDR detection, AMF0 codec including Strict Array (Enhanced-RTMP `fourCcList`) + recursion guard, settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, `accepts_gzip` content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, Enhanced-RTMP multi-track audio (Twitch's VOD audio track), primary-track IDR gate so EB cuts don't pixel-glitch ladder rungs, SPS orientation parsing for vertical-canvas (9:16) selection, OBS 32 `user.ini` / legacy `global.ini` path resolution, the OBS services.json patcher, the GitHub releases update-check parser + SemVer-ish comparator, the hand-rolled SHA-256 (NIST vectors), and the self-update download + checksum-verify + on-disk exe swap. 209 tests, all green.
+`cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced RTMP IDR detection, AMF0 codec including Strict Array (Enhanced-RTMP `fourCcList`) + recursion guard, settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, `accepts_gzip` content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, Enhanced-RTMP multi-track audio (Twitch's VOD audio track), primary-track IDR gate so EB cuts don't pixel-glitch ladder rungs, SPS orientation parsing for vertical-canvas (9:16) selection, OBS 32 `user.ini` / legacy `global.ini` path resolution, the OBS services.json patcher, the GitHub releases update-check parser + SemVer-ish comparator, the hand-rolled SHA-256 (NIST vectors), and the self-update download + checksum-verify + on-disk exe swap. 210 tests, all green.
 
 <br/>
 
@@ -287,7 +287,7 @@ No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzippe
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 209 tests on every push, and a tagged commit auto-builds + publishes a release artifact with a `SHA256SUMS.txt` checksum file alongside (no code-signing certificate yet, so the OS may warn on first launch).
+**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 210 tests on every push, and a tagged commit auto-builds + publishes a release artifact with a `SHA256SUMS.txt` checksum file alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's solid**
 

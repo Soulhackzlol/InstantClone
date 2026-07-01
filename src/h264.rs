@@ -266,6 +266,75 @@ pub fn flatten_multitrack_video(payload: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// Convert an Enhanced-RTMP `OneTrack` **AVC** video tag into a *legacy*
+/// AVC FLV tag (`0x17`/`0x27` ...). Some ingests - notably YouTube's
+/// vertical / secondary ingest - accept legacy AVC rock-solid but are
+/// flaky with Enhanced-RTMP `avc1` framing: the stream is viewable yet
+/// the socket is aborted on a ~11 s cycle. The horizontal primary reaches
+/// those ingests as legacy AVC already (OBS emits it that way), so a
+/// vertical destination - which only exists as a multi-track tag - is the
+/// one that hits the E-RTMP path. Rewriting it to legacy AVC gives the
+/// vertical feed the exact framing YouTube already ingests happily.
+///
+/// Returns `None` (caller falls back to the generic E-RTMP flatten) when
+/// the tag is not a OneTrack AVC coded-frame / seq-header tag we can
+/// safely convert - non-AVC codecs (HEVC/AV1 can't be legacy-framed),
+/// ManyTracks bundles, metadata/colour packets, or truncated input.
+fn onetrack_avc_to_legacy(payload: &[u8]) -> Option<Vec<u8>> {
+    // [b0][mt_header][FourCC(4)][TrackId(1)][body..] - at least 8 bytes.
+    if payload.len() < 8 {
+        return None;
+    }
+    let b0 = payload[0];
+    if (b0 & 0x80) == 0 || (b0 & 0x0F) != 6 {
+        return None; // not an Enhanced-RTMP multi-track tag
+    }
+    let mt_header = payload[1];
+    if (mt_header >> 4) & 0x0F != 0 {
+        return None; // only the OneTrack layout carries a single track here
+    }
+    if payload[2..6] != FOURCC_AVC1 {
+        return None; // legacy framing only covers AVC
+    }
+    let frame_type = (b0 >> 4) & 0x07;
+    let nested_pt = mt_header & 0x0F;
+    let body = &payload[7..];
+    // FrameType 1 = keyframe -> 0x17, anything else -> inter -> 0x27.
+    let legacy_head = if frame_type == 1 { 0x17u8 } else { 0x27u8 };
+    let mut out = Vec::with_capacity(body.len() + 5);
+    match nested_pt {
+        // SequenceStart: body IS the AVCDecoderConfigurationRecord.
+        0 => {
+            out.push(0x17); // seq header is always sent on a keyframe head
+            out.push(0x00); // AVCPacketType: sequence header
+            out.extend_from_slice(&[0, 0, 0]); // composition time = 0
+            out.extend_from_slice(body);
+        }
+        // CodedFrames: body = [CompositionTime(3)][length-prefixed NALs].
+        1 => {
+            if body.len() < 3 {
+                return None;
+            }
+            out.push(legacy_head);
+            out.push(0x01); // AVCPacketType: NALU
+            out.extend_from_slice(&body[0..3]); // preserve composition time
+            out.extend_from_slice(&body[3..]);
+        }
+        // CodedFramesX: body = [length-prefixed NALs], composition time 0.
+        3 => {
+            out.push(legacy_head);
+            out.push(0x01);
+            out.extend_from_slice(&[0, 0, 0]);
+            out.extend_from_slice(body);
+        }
+        // Metadata / colour info (nested_pt 4) and anything else have no
+        // legacy AVC equivalent - drop rather than mix E-RTMP into an
+        // otherwise-legacy stream.
+        _ => return None,
+    }
+    Some(out)
+}
+
 /// Per-destination video-tag selection. Decides which bytes to put on
 /// the wire given the destination's Enhanced Broadcasting policy:
 ///
@@ -744,7 +813,8 @@ pub fn select_video_bytes<'a>(
     // or render heavy artefacts. We keep only the target track (0 for
     // horizontal primary, the vertical-canvas primary otherwise) and
     // drop the rest, which is lossless from the destination's POV.
-    if payload.len() >= 7 && (payload[1] >> 4) & 0x0F == 0 {
+    let is_onetrack = payload.len() >= 7 && (payload[1] >> 4) & 0x0F == 0;
+    if is_onetrack {
         let track_id = payload[6];
         if track_id != target {
             return None;
@@ -756,6 +826,17 @@ pub fn select_video_bytes<'a>(
         // uses the OneTrack layout handled above, so this only affects
         // exotic encoders, and only for vertical destinations.
         return None;
+    }
+    // Prefer legacy AVC framing for a OneTrack AVC track. YouTube's vertical
+    // ingest (and other secondary ingests) accept legacy AVC reliably but
+    // abort Enhanced-RTMP `avc1` on a ~11 s cycle; the horizontal primary
+    // already arrives as legacy, so this gives the vertical feed the same
+    // framing. Coded frames / seq headers convert; metadata / colour packets
+    // return None and are dropped rather than smuggling E-RTMP into an
+    // otherwise-legacy stream. Non-AVC codecs and ManyTracks bundles fall
+    // through to the generic E-RTMP flatten below.
+    if is_onetrack && payload[2..6] == FOURCC_AVC1 {
+        return onetrack_avc_to_legacy(payload).map(Cow::Owned);
     }
     match flatten_multitrack_video(payload) {
         Some(flat) => Some(Cow::Owned(flat)),
@@ -1586,6 +1667,56 @@ mod tests {
         assert!(
             select_video_bytes(&legacy_horizontal, VideoEgress::Track(1)).is_none(),
             "legacy horizontal primary must be dropped for a vertical destination"
+        );
+    }
+
+    #[test]
+    fn select_video_bytes_vertical_avc_rewrites_to_legacy() {
+        // A OneTrack avc1 vertical track must reach a non-Twitch dest as
+        // LEGACY AVC (0x17/0x27 ...), not Enhanced-RTMP - YouTube's vertical
+        // ingest is flaky with E-RTMP avc1 and aborts on a ~11 s cycle.
+
+        // Sequence header -> legacy AVC seq header, config record intact.
+        let seq = onetrack_avc_seq_header(1, 30, 40);
+        let out = select_video_bytes(&seq, VideoEgress::Track(1))
+            .expect("vertical avc seq header forwards");
+        assert_eq!(out[0], 0x17, "legacy AVC seq-header frame byte");
+        assert_eq!(out[1], 0x00, "AVCPacketType: sequence header");
+        assert_eq!(&out[2..5], &[0, 0, 0], "composition time zero");
+        assert_eq!(&out[5..], &build_avc_config(30, 40)[..]);
+
+        // CodedFramesX keyframe (no composition time) -> legacy 0x17 NALU.
+        let mut kf = vec![0x96u8, 0x03]; // key|Multitrack, OneTrack|CodedFramesX
+        kf.extend_from_slice(b"avc1");
+        kf.push(1);
+        kf.extend_from_slice(&[0, 0, 0, 5, 0x65, 1, 2, 3, 4]); // len-prefixed IDR
+        let out = select_video_bytes(&kf, VideoEgress::Track(1)).expect("keyframe forwards");
+        assert_eq!(out[0], 0x17, "legacy keyframe head");
+        assert_eq!(out[1], 0x01, "AVCPacketType: NALU");
+        assert_eq!(&out[2..5], &[0, 0, 0], "CodedFramesX carries composition time 0");
+        assert_eq!(&out[5..], &[0, 0, 0, 5, 0x65, 1, 2, 3, 4]);
+
+        // CodedFrames inter frame preserves the 3-byte composition time.
+        let mut inter = vec![0xA6u8, 0x01]; // inter|Multitrack, OneTrack|CodedFrames
+        inter.extend_from_slice(b"avc1");
+        inter.push(1);
+        inter.extend_from_slice(&[0x00, 0x00, 0x10]); // composition time
+        inter.extend_from_slice(&[0, 0, 0, 3, 0x41, 9, 9]); // len-prefixed P NAL
+        let out = select_video_bytes(&inter, VideoEgress::Track(1)).expect("inter forwards");
+        assert_eq!(out[0], 0x27, "legacy inter head");
+        assert_eq!(out[1], 0x01);
+        assert_eq!(&out[2..5], &[0x00, 0x00, 0x10], "composition time preserved");
+        assert_eq!(&out[5..], &[0, 0, 0, 3, 0x41, 9, 9]);
+
+        // A OneTrack avc1 metadata/colour packet has no legacy equivalent
+        // and is dropped rather than mixing E-RTMP into a legacy stream.
+        let mut meta = vec![0x96u8, 0x04]; // OneTrack | Metadata(4)
+        meta.extend_from_slice(b"avc1");
+        meta.push(1);
+        meta.extend_from_slice(&[1, 2, 3, 4]);
+        assert!(
+            select_video_bytes(&meta, VideoEgress::Track(1)).is_none(),
+            "avc1 metadata packet must be dropped for a legacy vertical stream"
         );
     }
 
