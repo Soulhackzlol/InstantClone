@@ -446,6 +446,27 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                     std::sync::atomic::Ordering::Relaxed,
                 );
             }
+            // A vertical destination with no 9:16 canvas on the wire yet has
+            // nothing to send. Don't open the upstream connection - it would
+            // just sit idle, get dropped on the platform's inactivity
+            // timeout, and churn reconnects. Tear down any pump and wait for
+            // the canvas; the card shows "Waiting for Dual Format". It spawns
+            // the moment detection resolves (self-heals within a tick).
+            if dest.wants_vertical() && vertical_track.is_none() {
+                if let Some((_u, handle)) = running.remove(&dest.id) {
+                    let st = ctrl.destination_state(&dest.id);
+                    st.shutdown_requested
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    let abort = handle.abort_handle();
+                    let _ = tokio::time::timeout(Duration::from_millis(1500), handle).await;
+                    abort.abort();
+                    ctrl.log(format!(
+                        "[{}] vertical: no Dual Format canvas yet - holding off connecting",
+                        dest.name
+                    ));
+                }
+                continue;
+            }
             // Enhanced Broadcasting override: when the
             // /obs/multitrack-config proxy gets back a real
             // session-allocated IVS URL from Twitch's API, it stashes
