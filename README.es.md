@@ -45,7 +45,7 @@ Cuando ya lo tenía hecho, las piezas que de verdad quería eran: una activació
 <td valign="top" width="38%">
 
 <table>
-<tr><td><b>Binario</b></td><td align="right"><code>1.2 MB</code></td></tr>
+<tr><td><b>Binario</b></td><td align="right"><code>1.3 MB</code></td></tr>
 <tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td></tr>
 <tr><td><b>Deps en runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
