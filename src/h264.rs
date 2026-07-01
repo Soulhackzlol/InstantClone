@@ -544,8 +544,11 @@ pub fn sps_dimensions(seq_header: &[u8]) -> Option<(u32, u32)> {
         };
         let crop_unit_x = sub_w;
         let crop_unit_y = sub_h * (2 - frame_mbs_only);
-        width = width.saturating_sub(crop_unit_x.checked_mul(crop_left + crop_right)?);
-        height = height.saturating_sub(crop_unit_y.checked_mul(crop_top + crop_bottom)?);
+        // checked_add on the crop pairs too: a malformed SPS can carry
+        // near-u32::MAX Exp-Golomb values, and a plain `+` would panic in
+        // debug / wrap in release, breaking the "never panics" contract.
+        width = width.saturating_sub(crop_unit_x.checked_mul(crop_left.checked_add(crop_right)?)?);
+        height = height.saturating_sub(crop_unit_y.checked_mul(crop_top.checked_add(crop_bottom)?)?);
     }
     if width == 0 || height == 0 {
         return None;
@@ -1438,6 +1441,68 @@ mod tests {
         hevc.extend_from_slice(b"hvc1");
         hevc.extend_from_slice(&[0u8; 16]);
         assert_eq!(sps_dimensions(&hevc), None);
+    }
+
+    #[test]
+    fn sps_dimensions_huge_crop_returns_none_not_panic() {
+        // A malformed SPS can carry near-u32::MAX frame-crop Exp-Golomb
+        // values; the crop math must stay checked so this returns None
+        // instead of overflow-panicking in debug builds.
+        let mut w = BitWriter::new();
+        w.put_bits(66, 8); // baseline profile (skips the high-profile block)
+        w.put_bits(0, 8);
+        w.put_bits(30, 8);
+        w.put_ue(0); // sps_id
+        w.put_ue(0); // log2_max_frame_num_minus4
+        w.put_ue(0); // pic_order_cnt_type
+        w.put_ue(0); // log2_max_pic_order_cnt_lsb_minus4
+        w.put_ue(0); // max_num_ref_frames
+        w.put_bit(0); // gaps_in_frame_num_value_allowed_flag
+        w.put_ue(39); // pic_width_in_mbs_minus1
+        w.put_ue(21); // pic_height_in_map_units_minus1
+        w.put_bit(1); // frame_mbs_only_flag
+        w.put_bit(0); // direct_8x8_inference_flag
+        w.put_bit(1); // frame_cropping_flag
+        w.put_ue(4_000_000_000); // crop_left
+        w.put_ue(4_000_000_000); // crop_right -> left + right overflows u32
+        w.put_ue(0);
+        w.put_ue(0);
+        w.put_bit(0); // vui_parameters_present_flag
+        let mut sps = vec![0x67u8];
+        sps.extend(w.finish());
+        let mut cfg = vec![1u8, 66, 0, 30, 0xFF, 0xE1];
+        cfg.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+        cfg.extend_from_slice(&sps);
+        cfg.push(0);
+        let mut tag = vec![0x17u8, 0x00, 0, 0, 0];
+        tag.extend(cfg);
+        assert_eq!(sps_dimensions(&tag), None);
+    }
+
+    #[test]
+    fn sps_and_selection_never_panic_on_fuzz() {
+        // Deterministic pseudo-random byte blobs, wrapped as AVC seq
+        // headers, pushed through the parser + selector. These run on
+        // hostile wire input, so the invariant is simply: never panic.
+        let mut seed: u32 = 0x9e3779b9;
+        for _ in 0..3000 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let n = (seed as usize % 48) + 1;
+            let mut blob = Vec::with_capacity(n);
+            let mut x = seed;
+            for _ in 0..n {
+                x = x.wrapping_mul(1103515245).wrapping_add(12345);
+                blob.push((x >> 16) as u8);
+            }
+            // Legacy AVC framing so the bytes reach the SPS Exp-Golomb path.
+            let mut tag = vec![0x17u8, 0x00, 0, 0, 0];
+            tag.extend_from_slice(&blob);
+            let _ = sps_dimensions(&tag);
+            let _ = select_video_bytes(&tag, VideoEgress::Track((seed & 0xFF) as u8));
+            let mut m = std::collections::BTreeMap::new();
+            m.insert((seed & 0x7) as u8, tag);
+            let _ = detect_vertical_primary_track(&m);
+        }
     }
 
     #[test]
