@@ -189,7 +189,7 @@ Un panel de 280×340 con el indicador, los controles de armar/activar/desarmar/c
 
 ### Overlays como browser-source
 
-La pestaña **Overlay** es un Studio sin código. Elige un overlay ya hecho, copia su URL y métela en OBS — o abre cualquiera en el Studio para rediseñarlo (colores por estado, widgets, animaciones) y darle a **Save** o **Save as new**.
+La pestaña **Overlay** es un Studio sin código. Elige un overlay ya hecho, copia su URL y métela en OBS - o abre cualquiera en el Studio para rediseñarlo (colores por estado, widgets, animaciones) y darle a **Save** o **Save as new**.
 
 <pre><code>http://127.0.0.1:7799/overlay/whisper.html</code></pre>
 

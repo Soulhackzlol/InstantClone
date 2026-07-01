@@ -189,7 +189,7 @@ A 280×340 panel with the readout, arm / activate / disarm / cut controls, and l
 
 ### Browser-source overlays
 
-The **Overlay** tab is a no-code Studio. Pick a ready-made overlay, copy its URL, and drop it into OBS — or open any in the Studio to redesign it (per-state colours, widgets, animations) and **Save** or **Save as new**.
+The **Overlay** tab is a no-code Studio. Pick a ready-made overlay, copy its URL, and drop it into OBS - or open any in the Studio to redesign it (per-state colours, widgets, animations) and **Save** or **Save as new**.
 
 <pre><code>http://127.0.0.1:7799/overlay/whisper.html</code></pre>
 

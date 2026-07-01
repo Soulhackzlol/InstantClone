@@ -545,10 +545,26 @@ input,select,textarea{font-family:inherit;color:inherit}
   background:var(--surface-3);border:1px solid var(--line-2);font-size:22px;line-height:1}
 
 /* Destination edit form (slides in below grid) */
-.dest-form{margin-top:14px;padding:18px;background:linear-gradient(180deg,var(--bg-2),var(--surface));
+.dest-form{margin-top:14px;padding:20px 22px;background:linear-gradient(180deg,var(--bg-2),var(--surface));
   border:1px solid color-mix(in oklch,var(--accent) 40%,var(--line));border-radius:var(--radius);
-  animation:paneIn .25s var(--ease-out) both;display:flex;flex-direction:column;gap:10px}
-.dest-form h4{margin:0 0 4px;font-size:14px;font-weight:600}
+  box-shadow:0 12px 40px -18px color-mix(in oklch,var(--accent) 40%,transparent);
+  animation:paneIn .25s var(--ease-out) both;display:flex;flex-direction:column;gap:9px;
+  max-width:620px}
+/* Header row: title + one-click close so editing feels like a focused
+   panel you can dismiss without scrolling to the Cancel button. */
+.dest-form-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:2px}
+.dest-form h4{margin:0;font-size:15px;font-weight:600}
+.dest-form-hint{font-size:11.5px;color:var(--fg-3);margin-top:3px;line-height:1.4}
+.dest-form-x{flex:0 0 auto;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
+  background:var(--surface-3);color:var(--fg-3);font-size:13px;cursor:pointer;line-height:1;
+  transition:color .15s,background .15s,border-color .15s,transform .15s var(--ease-out)}
+.dest-form-x:hover{color:var(--fg);background:color-mix(in oklch,var(--danger) 14%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--danger) 40%,var(--line));transform:rotate(90deg)}
+/* Section separator: a quiet uppercase micro-label with a rule, so the
+   form reads as scannable groups instead of one long list. */
+.dfg-sep{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:9.5px;font-weight:700;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--fg-4)}
+.dfg-sep::after{content:"";flex:1;height:1px;background:var(--line)}
 .dest-form label{display:block;margin-top:6px;font-size:11px;color:var(--fg-3);text-transform:uppercase;
   letter-spacing:.12em;font-weight:600}
 .dest-form .row{display:flex;gap:8px;margin-top:8px;align-items:center}
@@ -1367,12 +1383,19 @@ input,select,textarea{font-family:inherit;color:inherit}
   </div>
   <div class="dest-grid" id="dest-grid"></div>
   <div class="dest-form" id="dest-form" hidden>
-    <h4 id="dest-form-title">New destination</h4>
+    <div class="dest-form-head">
+      <div>
+        <h4 id="dest-form-title">New destination</h4>
+        <div class="dest-form-hint">Fan your OBS feed out to this platform. Real stream keys live here, not in OBS.</div>
+      </div>
+      <button type="button" class="dest-form-x" onclick="cancelDestForm()" title="Close" aria-label="Close editor">✕</button>
+    </div>
     <input id="dest-form-id" type="hidden">
     <label>Name</label>
     <input id="dest-form-name" class="ic-input" placeholder="Twitch / YouTube / Backup …">
     <label>Platform</label>
     <select id="dest-form-platform" class="ic-input"></select>
+    <div class="dfg-sep">Routing &amp; format</div>
     <div id="dest-form-custom-wrap" hidden>
       <label>Custom RTMP URL</label>
       <input id="dest-form-custom" class="ic-input mono" placeholder="rtmp://host/app">
@@ -1404,6 +1427,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     <div id="dest-form-twitch-native-note" hidden class="muted" style="font-size:11.5px;margin:2px 0 6px;line-height:1.45">
       Nothing to set here - a <b>normal Twitch stream just works</b>, and so does regular <b>Enhanced Broadcasting</b> (that's horizontal too); InstantClone simply forwards whatever OBS sends. Only Twitch's new <b>Dual Format</b> (a beta add-on to Enhanced Broadcasting) also sends a vertical 9:16 canvas - when it's on, InstantClone forwards both automatically, no toggle needed. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
     </div>
+    <div class="dfg-sep">Stream key &amp; status</div>
     <label>Stream key <span class="muted" id="dest-form-key-hint"></span></label>
     <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
     <div id="dest-form-key-help" class="w-key-help" hidden></div>
