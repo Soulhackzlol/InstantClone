@@ -342,7 +342,9 @@ input,select,textarea{font-family:inherit;color:inherit}
 .hero-delay-num.d-active{color:var(--live)}
 .hero-delay-unit{font-size:32px;color:var(--fg-3);font-weight:400}
 .hero-delay-of{font-size:22px;color:var(--fg-3);margin-left:6px}
-.hero-delay-sub{color:var(--fg-3);font-size:13px;min-height:1.4em}
+.hero-delay-sub{color:var(--fg-3);font-size:13px;min-height:1.4em;
+  transition:opacity .15s var(--ease-out),transform .15s var(--ease-out)}
+.hero-delay-sub.subfade{opacity:0;transform:translateY(2px)}
 .arm-bar{height:4px;width:100%;background:var(--surface-3);border-radius:999px;overflow:hidden;
   margin-top:-4px;position:relative}
 .arm-bar-fill{height:100%;background:linear-gradient(90deg,color-mix(in oklch,var(--warn) 60%,transparent),var(--warn));
@@ -523,20 +525,29 @@ input,select,textarea{font-family:inherit;color:inherit}
   border-color:color-mix(in oklch,var(--dc,var(--accent)) 32%,var(--line))}
 .dcard-format.fmt-wait{color:var(--warn,#d6a23a);
   border-color:color-mix(in oklch,var(--warn,#d6a23a) 36%,var(--line))}
-.dcard-graph{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;
-  position:relative;overflow:hidden}
-.dcard-graph-overlay{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
-.dcard-rate-row{display:flex;align-items:baseline;gap:4px}
-.dcard-rate{font-size:22px;font-weight:500;color:var(--fg);letter-spacing:-.02em;
+/* Metrics row: prominent live bitrate on the left, terse counters on the
+   right. No boxed "graph widget" - the trace lives as a full-bleed strip. */
+.dcard-body{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.dcard-rate-row{display:flex;align-items:baseline;gap:5px}
+.dcard-rate{font-size:27px;font-weight:600;color:var(--fg);letter-spacing:-.03em;line-height:1;
   font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
 .dcard-rate-u{font-size:11px;color:var(--fg-3);font-family:'JetBrains Mono',monospace}
-.dcard-spark{width:100%;height:54px;display:block}
-.dcard-foot{display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid var(--line)}
-.dcard-foot-meta{font-size:11px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
-.dcard-link{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:5px;
-  color:var(--fg-3);font-size:11.5px;cursor:pointer;padding:4px 6px;border-radius:6px;
-  transition:all .15s var(--ease-out)}
-.dcard-link:hover{color:var(--danger);background:color-mix(in oklch,var(--danger) 8%,transparent)}
+.dcard-foot-meta{font-size:10.5px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;white-space:nowrap}
+/* Signal strip: the sparkline bleeds to the card's bottom + side edges and
+   fades into it, so the card reads as one object, not a widget stack. */
+.dcard-spark{display:block;width:calc(100% + 32px);height:42px;margin:2px -16px -16px;
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent);
+  mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
+/* Actions: subtle glass icon buttons, bottom-right, revealed on hover. */
+.dcard-actions{position:absolute;right:10px;bottom:10px;display:flex;gap:5px;z-index:2;
+  opacity:0;transform:translateY(3px);transition:opacity .18s var(--ease-out),transform .18s var(--ease-out)}
+.dcard:hover .dcard-actions,.dcard:focus-within .dcard-actions{opacity:1;transform:none}
+.dcard-act{width:28px;height:28px;border-radius:8px;border:1px solid var(--line);cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--fg-2);
+  background:color-mix(in oklch,var(--bg-1) 62%,transparent);backdrop-filter:blur(6px);
+  transition:color .15s,background .15s,border-color .15s}
+.dcard-act:hover{color:var(--fg);border-color:var(--line-2);background:color-mix(in oklch,var(--bg-1) 82%,transparent)}
+.dcard-act.dcard-del:hover{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,var(--line))}
 .dest-add{appearance:none;background:transparent;border:1px dashed var(--line-2);border-radius:12px;
   color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
@@ -2284,24 +2295,25 @@ function smoothLinePath(pts){
   return d;
 }
 const sparkMaxState = {};
-function updateSpark(lineId, fillId, data, width, height){
-  const lineEl = $(lineId), fillEl = $(fillId);
+// Shared sparkline renderer (stats cards + destination cards). Floor
+// anchored at 0 so height reflects the TRUE magnitude; ceiling grows
+// instantly to a new peak but decays slowly (`key`-scoped) so a spike
+// leaving the 60s window doesn't snap the axis - it tracks reality.
+function drawSpark(lineEl, fillEl, data, width, height, key){
   if (!lineEl || !fillEl) return;
   if (data.length < 2){ lineEl.setAttribute('d',''); fillEl.setAttribute('d',''); return; }
-  // Floor anchored at 0 so the line's height reflects the TRUE magnitude
-  // (a steady 6 Mbps sits high and steady, not rescaled to fill). The
-  // ceiling grows instantly to a new peak but decays slowly, so a spike
-  // scrolling out of the 60s window doesn't snap the whole axis - the
-  // graph tracks reality instead of jittering.
   const target = Math.max(...data, 1);
-  const prev = sparkMaxState[lineId] || target;
+  const prev = sparkMaxState[key] || target;
   const max = target >= prev ? target : prev + (target - prev) * 0.1;
-  sparkMaxState[lineId] = max;
+  sparkMaxState[key] = max;
   const pad = 2, h = height - pad * 2, step = width / (data.length - 1);
   const pts = data.map((v, i) => [i * step, height - pad - Math.max(0, Math.min(1, v / max)) * h]);
   const line = smoothLinePath(pts);
   lineEl.setAttribute('d', line);
   fillEl.setAttribute('d', line + ` L ${width} ${height} L 0 ${height} Z`);
+}
+function updateSpark(lineId, fillId, data, width, height){
+  drawSpark($(lineId), $(fillId), data, width, height, lineId);
 }
 
 // ── Action endpoints ──────────────────────────────────────────────────
@@ -2395,6 +2407,14 @@ function disarmClick(ev){
 }
 
 // ── Hero render ───────────────────────────────────────────────────────
+// Crossfade the hero subtext when it changes - a quick fade-out, swap,
+// fade-in. Unchanged text is a no-op so steady states don't flicker.
+function setSubText(el, text){
+  if (!el || el.textContent === text) return;
+  el.classList.add('subfade');
+  clearTimeout(el._subT);
+  el._subT = setTimeout(() => { el.textContent = text; el.classList.remove('subfade'); }, 150);
+}
 function renderHero(s){
   const ds = PHASE_TO_STATE[s.phase] || 'off';
   // Aurora behind the readout: when OBS is forwarding without delay
@@ -2439,9 +2459,14 @@ function renderHero(s){
   const curMs = s.current_delay_ms || 0;
   const armedMs = s.armed_delay_ms || 0;
   const adjusting = ds === 'active' && armedMs > 0 && Math.abs(armedMs - curMs) > 1500;
-  // Sub copy
+  // Sub copy. When OBS hasn't connected there's no signal to forward, so
+  // don't claim we're forwarding anything - say we're waiting for it.
   let sub = '';
-  if (ds === 'off') sub = `Stream forwarded with no delay${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
+  if (ds === 'off'){
+    sub = s.ingest_alive
+      ? `Forwarding live with no delay · ${fmtKbps(s.stats.bitrate_kbps)} in`
+      : `Waiting for OBS to connect…`;
+  }
   else if (ds === 'arming') sub = `Buffering - ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers still see live until you activate.`;
   else if (ds === 'armed') sub = `Buffer ready. Click Activate to cut your stream over.`;
   else if (ds === 'active' && adjusting){
@@ -2449,7 +2474,7 @@ function renderHero(s){
     sub = `Adjusting → ${dir} to ${fmtDelay(armedMs)} (currently ${fmtDelay(curMs)})…`;
   }
   else if (ds === 'active') sub = `Forwarded with a ${fmtDelay(s.armed_delay_ms)} buffer${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
-  $('delay-sub').textContent = sub;
+  setSubText($('delay-sub'), sub);
 
   renderCta();
 }
@@ -2756,26 +2781,22 @@ function buildDestCard(d){
   el.innerHTML = `
     <div class="dcard-head">
       <span class="dcard-icon"></span>
-      <div style="flex:1;min-width:0"><div class="dcard-name"></div><div class="dcard-host mono"></div></div>
+      <div class="dcard-id" style="flex:1;min-width:0"><div class="dcard-name"></div><div class="dcard-host mono"></div></div>
       <span class="dcard-format" tabindex="0"></span>
       <div class="dcard-status"><span class="d-dot"></span><span class="dcard-status-l"></span></div>
     </div>
-    <div class="dcard-graph">
-      <div class="dcard-graph-overlay">
-        <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">Mbps</span></div>
-        <span class="ic-label">Egress · last 60s</span>
-      </div>
-      <svg class="dcard-spark" viewBox="0 0 400 54" preserveAspectRatio="none">
-        <path class="dcard-spark-fill" style="fill:url(#sparkGrad)" d=""/>
-        <path class="dcard-spark-line" style="fill:none;stroke:var(--accent);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round" d=""/>
-      </svg>
+    <div class="dcard-body">
+      <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">Mbps</span></div>
+      <span class="dcard-foot-meta"><span class="dcard-frames">0</span>f · <span class="dcard-cuts">0</span>c · <span class="dcard-rec">0</span>r</span>
     </div>
-    <div class="dcard-foot">
-      <span class="dcard-foot-meta"><span class="dcard-frames">0</span> frames · <span class="dcard-cuts">0</span> cuts · <span class="dcard-rec">0</span> retries</span>
-      <span class="spacer"></span>
-      <button class="ic-btn-tiny dcard-edit" title="Edit">✎</button>
-      <button class="ic-btn-tiny dcard-toggle" title="Toggle"></button>
-      <button class="dcard-link dcard-del">✕ Remove</button>
+    <svg class="dcard-spark" viewBox="0 0 400 42" preserveAspectRatio="none">
+      <path class="dcard-spark-fill" style="fill:color-mix(in oklch,var(--dc,var(--accent)) 16%,transparent)" d=""/>
+      <path class="dcard-spark-line" style="fill:none;stroke:var(--dc,var(--accent));stroke-width:2;stroke-linecap:round;stroke-linejoin:round" d=""/>
+    </svg>
+    <div class="dcard-actions">
+      <button class="dcard-act dcard-toggle" title="Enable / disable"></button>
+      <button class="dcard-act dcard-edit" title="Edit">✎</button>
+      <button class="dcard-act dcard-del" title="Remove">✕</button>
     </div>`;
   const refs = {
     el, last: d, history: [],
@@ -2840,21 +2861,15 @@ function updateDestCard(r, d){
   r.statE.title = verticalWaiting
     ? 'Turn on Twitch Dual Format (Enhanced Broadcasting) in OBS to produce the 9:16 canvas this destination sends.'
     : '';
-  // rate + history
-  const rate = d.alive ? (d.bitrate_kbps || 0) : 0;
-  r.history.push(rate); if (r.history.length > HISTORY_LEN) r.history.shift();
-  if (d.alive){
-    const mbps = rate / 1000;
-    r.rate.textContent = mbps >= 1 ? mbps.toFixed(2) : (rate||0);
-  } else r.rate.textContent = '-';
-  if (r.history.length >= 2){
-    const max = Math.max(...r.history, 1), min = Math.min(...r.history, 0);
-    const range = max - min || 1, step = 400 / (r.history.length - 1);
-    const pts = r.history.map((v,i) => [i*step, 54-2-((v-min)/range)*50]);
-    const line = pts.map((p,i) => (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
-    r.sparkLine.setAttribute('d', line);
-    r.sparkFill.setAttribute('d', line+' L 400 54 L 0 54 Z');
-  }
+  // rate + history (auto kbps -> Mbps, matching the header + stats).
+  const kbps = d.alive ? (d.bitrate_kbps || 0) : 0;
+  r.history.push(kbps); if (r.history.length > HISTORY_LEN) r.history.shift();
+  const rateU = r.rateU || (r.rateU = r.el.querySelector('.dcard-rate-u'));
+  if (!d.alive){ r.rate.textContent = '-'; if (rateU) rateU.textContent = ''; }
+  else if (kbps >= 1000){ r.rate.textContent = (kbps/1000).toFixed(2); if (rateU) rateU.textContent = 'Mbps'; }
+  else { r.rate.textContent = Math.round(kbps); if (rateU) rateU.textContent = 'kbps'; }
+  // Smooth, 0-anchored, per-card stable sparkline (same renderer as stats).
+  drawSpark(r.sparkLine, r.sparkFill, r.history, 400, 42, 'dc:' + d.id);
   r.frames.textContent = (d.tags_sent || 0).toLocaleString();
   r.cuts.textContent = d.cuts || 0;
   r.rec.textContent = d.reconnects || 0;
