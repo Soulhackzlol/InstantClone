@@ -6,6 +6,34 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+### "Cut after this airs" - scheduled safe cut
+
+**Stop counting your delay down in your head.** With a delay active, a new
+**⏱ Cut after this airs** button appears under Cut in the dashboard. Press
+it the moment your match reaction ends: InstantClone records that exact
+live-edge timestamp, lets everything up to it reach your viewers, then
+fires the normal IDR-aligned cut to live on its own. Built for competitive
+streamers who finish a match on a 30 s delay and want the win/lose
+reaction to air in full before snapping back - without the mental
+countdown or the risk of clipping the reaction short.
+
+How it behaves:
+
+- The cut fires only when the **slowest** live destination has aired past
+  the mark, so a faster destination can never cut a slower one short of
+  it. Exactly one pump fires the cut (compare-exchange), and it rides the
+  same IDR-aligned, connection-preserving machinery as a manual Cut - the
+  new e2e scenario F verifies the downstream connection survives.
+- While the mark is pending, the button becomes a live countdown
+  ("auto-cut in ~27s"); tapping it again cancels without cutting. A
+  manual Cut, a disarm, or a fresh OBS publish session all clear the
+  mark (a mark on a dead session's timeline could never be reached).
+- New HTTP endpoints: `POST /cut-after` (409 when no delay is active) and
+  `POST /cut-after/cancel`; `/state` gains `safe_cut_pending` +
+  `safe_cut_remaining_ms`.
+- The setup wizard and the onboarding tour both explain the flow, and the
+  button carries a hovercard with the press → airs → auto-cut timeline.
+
 ### Tests
 
 - Added a unit suite for the RTMP chunk-stream layer (`rtmp/chunk.rs`),
@@ -18,7 +46,13 @@ All notable changes will land here. Format loosely follows
   assert an error is returned rather than a panic.
 - Added pure-function tests for `trace::hex_prefix` (formatting, boundary,
   and truncation-suffix behaviour).
-- Test count: 210 -> 229, all green.
+- Added 5 controller tests for the scheduled safe cut: refusal without an
+  active delay, schedule/cancel round-trip, slowest-consumer firing gate,
+  clearing on manual cut / disarm, and clearing on publisher reconnect.
+- New e2e scenario F drives `/cut-after` against a live ffmpeg stream:
+  409 refusal, cancel-without-cutting, auto-fire back to passthrough, and
+  the sink's connection surviving the auto-cut.
+- Test count: 210 -> 234, all green.
 
 ## [0.1.9] - Vertical output + VOD/EB convenience
 

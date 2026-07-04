@@ -34,6 +34,13 @@
 #      frames past the cut on the SAME connection (exactly one publish
 #      accept). This is the core delay+cut feature the other scenarios
 #      run with delay=0 and never exercise on the wire.
+#
+#   F. Scheduled cut ("cut after this airs") - with a delay active,
+#      POST /cut-after marks the live edge; the proxy must auto-cut to
+#      passthrough once the mark has aired downstream, without breaking
+#      the sink connection. Also checks the 409 refusal when no delay
+#      is active and that /cut-after/cancel drops the mark without
+#      cutting anything.
 
 $ErrorActionPreference = "Stop"
 
@@ -379,6 +386,71 @@ Run-Scenario "E -delay + IDR-aligned cut (arm/ready/activate)" {
         Assert ($reportsAfter -gt $reportsBefore) "sink stopped receiving after the cut ($reportsBefore -> $reportsAfter windows): the delayed stream stalled" $failed
         # And real video (IDRs) must still be arriving, not just audio.
         Assert ([regex]::IsMatch($sinkOut, "\([1-9]\d* IDR\)")) "sink saw no IDR windows across the delayed stream" $failed
+    } finally {
+        Stop-Safe $ff; Stop-Safe $ic; Stop-Safe $sink
+        Start-Sleep -Seconds 1
+    }
+}
+
+# --- Scenario F: scheduled cut ("cut after this airs") ----------------
+
+Run-Scenario "F -scheduled cut (/cut-after fires once the mark airs)" {
+    param([ref]$failed)
+    Write-Config @(@{ id="e2e"; name="Sink"; platform="custom"; url="rtmp://127.0.0.1:1936/live"; key="stream" })
+    $sink = Start-Process -FilePath $exe -ArgumentList "sink","--port","1936","--web-port","0","--temp","--max-mb","50" `
+        -RedirectStandardOutput "F.sink.log" -RedirectStandardError "F.sink.err" -PassThru -NoNewWindow
+    $env:INSTANTCLONE_NO_BROWSER = "1"
+    $env:CONFIG_PATH = (Join-Path (Get-Location) "instantclone.config.json")
+    $ic = Start-Process -FilePath $exe -ArgumentList "--no-browser" `
+        -RedirectStandardOutput "F.ic.log" -RedirectStandardError "F.ic.err" -PassThru -NoNewWindow
+    $ff = $null
+    try {
+        Assert (Wait-Port 1936 15) "sink never opened :1936" $failed
+        Assert (Wait-Port 1935 15) "instantclone never opened :1935" $failed
+        Assert (Wait-Http "http://127.0.0.1:7799/state" 15) "web UI never came up on :7799" $failed
+        if ($failed.Value.Count -gt 0) { return }
+
+        # No delay active -> /cut-after must refuse with 409.
+        $code = 0
+        try {
+            Invoke-WebRequest "http://127.0.0.1:7799/cut-after" -Method POST -UseBasicParsing -TimeoutSec 5 | Out-Null
+            $code = 200
+        } catch { $code = [int]$_.Exception.Response.StatusCode }
+        Assert ($code -eq 409) "POST /cut-after with no active delay returned $code (want 409)" $failed
+
+        # Live publisher for the whole scenario.
+        $ff = Start-FfmpegSource 25
+        Assert (Wait-State { param($s) $s.ingest_alive -eq $true } 15) "ingest never went live" $failed
+        if ($failed.Value.Count -gt 0) { return }
+
+        # Arm 2 s, wait ready, activate - same ramp as scenario E.
+        Invoke-RestMethod "http://127.0.0.1:7799/arm" -Method POST -Body "ms=2000" -ContentType "application/x-www-form-urlencoded" -TimeoutSec 5 | Out-Null
+        Assert (Wait-State { param($s) $s.phase -eq "ready" } 15) "phase never reached 'ready' after arming 2 s" $failed
+        if ($failed.Value.Count -gt 0) { return }
+        Invoke-RestMethod "http://127.0.0.1:7799/activate" -Method POST -TimeoutSec 5 | Out-Null
+        Assert (Wait-State { param($s) $s.phase -eq "active" -and $s.current_delay_ms -gt 0 } 10) "delay never engaged after /activate" $failed
+        if ($failed.Value.Count -gt 0) { return }
+
+        # Schedule, then cancel: the mark must drop WITHOUT cutting.
+        $r = Invoke-RestMethod "http://127.0.0.1:7799/cut-after" -Method POST -TimeoutSec 5
+        Assert ($r.safe_cut_pending -eq $true) "/cut-after did not set safe_cut_pending" $failed
+        Assert ($r.safe_cut_remaining_ms -gt 0) "/cut-after reported a zero countdown" $failed
+        Invoke-RestMethod "http://127.0.0.1:7799/cut-after/cancel" -Method POST -TimeoutSec 5 | Out-Null
+        $s = Invoke-RestMethod "http://127.0.0.1:7799/state" -TimeoutSec 5
+        Assert ($s.safe_cut_pending -eq $false) "cancel did not clear the pending mark" $failed
+        Assert ($s.phase -eq "active") "cancel cut the delay (phase '$($s.phase)', want 'active')" $failed
+
+        # Re-schedule and let it fire: within delay + slack the proxy must
+        # cut itself back to passthrough (target 0 + full buffer = 'ready').
+        Invoke-RestMethod "http://127.0.0.1:7799/cut-after" -Method POST -TimeoutSec 5 | Out-Null
+        Assert (Wait-State { param($s) $s.safe_cut_pending -eq $false -and $s.phase -eq "ready" } 12) "scheduled cut never fired (want pending=false + phase 'ready')" $failed
+
+        # The auto-cut must ride the same IDR-aligned machinery as a manual
+        # cut: downstream connection intact, exactly one publish accept.
+        Start-Sleep -Seconds 2
+        $sinkOut = Get-Content "F.sink.log" -Raw
+        $accepts = ([regex]::Matches($sinkOut, "publish accepted")).Count
+        Assert ($accepts -eq 1) "sink saw $accepts publish accepts (expected exactly 1 - the scheduled cut broke the downstream connection)" $failed
     } finally {
         Stop-Safe $ff; Stop-Safe $ic; Stop-Safe $sink
         Start-Sleep -Seconds 1
