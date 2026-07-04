@@ -506,3 +506,255 @@ fn push_u24_be(out: &mut Vec<u8>, v: u32) {
 fn u24_be(b: &[u8]) -> u32 {
     ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    // A `Cursor<Vec<u8>>` is a tokio `AsyncRead`, so it feeds the reader
+    // straight from an in-memory wire capture - no socket, no task.
+    fn reader(bytes: Vec<u8>) -> ChunkReader<Cursor<Vec<u8>>> {
+        ChunkReader::new(Cursor::new(bytes))
+    }
+
+    // Encode one full message with the real writer, then decode it with the
+    // real reader. Proves the encoder and decoder agree on the wire format -
+    // the single most valuable invariant for this module.
+    async fn roundtrip(csid: u32, ts: u32, type_id: u8, msid: u32, payload: &[u8]) -> Message {
+        let mut wire: Vec<u8> = Vec::new();
+        {
+            // `&mut Vec<u8>` is a tokio `AsyncWrite`; scoping the borrow lets
+            // us inspect `wire` afterwards without a test-only accessor.
+            let mut w = ChunkWriter::new(&mut wire);
+            w.write_message(csid, ts, type_id, msid, payload)
+                .await
+                .unwrap();
+        }
+        reader(wire).read_message().await.unwrap()
+    }
+
+    fn u24(v: u32) -> [u8; 3] {
+        [(v >> 16) as u8, (v >> 8) as u8, v as u8]
+    }
+
+    // --- Hand-built chunks the WRITER never emits ---------------------
+    // ChunkWriter only ever produces fmt-0 + fmt-3 continuations, so the
+    // reader's fmt-1 / fmt-2 / fmt-3-replay decode paths are exercised only
+    // here - even though OBS and Twitch send them constantly. Each helper
+    // assumes csid < 64 (1-byte basic header), ts/delta < 0xFF_FFFF (no
+    // extended timestamp), and a payload that fits in one chunk.
+    fn fmt0(csid: u8, ts: u32, type_id: u8, msid: u32, payload: &[u8]) -> Vec<u8> {
+        let mut b = vec![csid & 0x3F]; // fmt bits are 0
+        b.extend_from_slice(&u24(ts));
+        b.extend_from_slice(&u24(payload.len() as u32));
+        b.push(type_id);
+        b.extend_from_slice(&msid.to_le_bytes());
+        b.extend_from_slice(payload);
+        b
+    }
+
+    fn fmt1(csid: u8, delta: u32, type_id: u8, payload: &[u8]) -> Vec<u8> {
+        let mut b = vec![(1 << 6) | (csid & 0x3F)];
+        b.extend_from_slice(&u24(delta));
+        b.extend_from_slice(&u24(payload.len() as u32));
+        b.push(type_id);
+        b.extend_from_slice(payload);
+        b
+    }
+
+    fn fmt2(csid: u8, delta: u32, payload: &[u8]) -> Vec<u8> {
+        let mut b = vec![(2 << 6) | (csid & 0x3F)];
+        b.extend_from_slice(&u24(delta));
+        b.extend_from_slice(payload);
+        b
+    }
+
+    fn fmt3(csid: u8, payload: &[u8]) -> Vec<u8> {
+        let mut b = vec![(3 << 6) | (csid & 0x3F)];
+        b.extend_from_slice(payload);
+        b
+    }
+
+    #[tokio::test]
+    async fn roundtrip_small_message() {
+        let payload = b"hello-rtmp";
+        let msg = roundtrip(6, 1000, 9, 1, payload).await;
+        assert_eq!(msg.timestamp, 1000);
+        assert_eq!(msg.type_id, 9);
+        assert_eq!(msg.stream_id, 1);
+        assert_eq!(&msg.payload[..], payload);
+    }
+
+    #[tokio::test]
+    async fn roundtrip_fragmented_message() {
+        // 300 bytes at the default 128-byte chunk size forces one fmt-0
+        // header chunk plus two fmt-3 continuations; the reader must
+        // reassemble them back into the exact original payload.
+        let payload: Vec<u8> = (0..300u32).map(|i| i as u8).collect();
+        let msg = roundtrip(6, 42, 8, 3, &payload).await;
+        assert_eq!(msg.payload.len(), 300);
+        assert_eq!(&msg.payload[..], &payload[..]);
+    }
+
+    #[tokio::test]
+    async fn extended_timestamp_roundtrips() {
+        // >= 0xFF_FFFF triggers the 32-bit extended-timestamp field - the
+        // "single most-broken-in-practice corner of RTMP" per the module doc.
+        let msg = roundtrip(6, 0x0100_0000, 9, 1, b"x").await;
+        assert_eq!(msg.timestamp, 0x0100_0000);
+    }
+
+    #[tokio::test]
+    async fn extended_timestamp_fragmented_roundtrips() {
+        // With an extended timestamp AND fragmentation, every continuation
+        // chunk must repeat the 4-byte ext-ts; the reader must consume it on
+        // each fmt-3 or the payload bytes desync.
+        let payload: Vec<u8> = (0..300u32).map(|i| (i * 7) as u8).collect();
+        let msg = roundtrip(6, 0x00FF_FFFF + 5, 9, 1, &payload).await;
+        assert_eq!(msg.timestamp, 0x00FF_FFFF + 5);
+        assert_eq!(&msg.payload[..], &payload[..]);
+    }
+
+    #[tokio::test]
+    async fn set_chunk_size_control_is_consumed_and_applied() {
+        // Writer announces a 4096-byte chunk size, then sends a 200-byte
+        // message (now a single chunk). The reader must apply the new size
+        // in-band and surface ONLY the media message, never the control one.
+        let mut wire: Vec<u8> = Vec::new();
+        {
+            let mut w = ChunkWriter::new(&mut wire);
+            w.send_set_chunk_size(4096).await.unwrap();
+            let payload = vec![0xABu8; 200];
+            w.write_message(6, 5, 9, 1, &payload).await.unwrap();
+        }
+        let mut r = reader(wire);
+        let msg = r.read_message().await.unwrap();
+        assert_eq!(msg.type_id, 9);
+        assert_eq!(msg.payload.len(), 200);
+    }
+
+    #[tokio::test]
+    async fn fmt1_reuses_stream_id_and_advances_timestamp() {
+        let mut wire = fmt0(4, 1000, 9, 7, b"aaaa");
+        wire.extend(fmt1(4, 33, 8, b"bb")); // new delta/length/type, reuse msid
+        let mut r = reader(wire);
+        let m1 = r.read_message().await.unwrap();
+        let m2 = r.read_message().await.unwrap();
+        assert_eq!((m1.timestamp, m1.type_id, m1.stream_id), (1000, 9, 7));
+        // fmt-1 carries a delta and inherits the fmt-0 message-stream-id.
+        assert_eq!((m2.timestamp, m2.type_id, m2.stream_id), (1033, 8, 7));
+        assert_eq!(&m2.payload[..], b"bb");
+    }
+
+    #[tokio::test]
+    async fn fmt2_reuses_length_type_and_stream() {
+        // fmt-2 carries only a timestamp delta; length, type, and stream-id
+        // all come from the prior chunk, so the payload MUST match the
+        // reused length (4 bytes here).
+        let mut wire = fmt0(4, 1000, 9, 7, b"aaaa");
+        wire.extend(fmt2(4, 33, b"bbbb"));
+        let mut r = reader(wire);
+        let _ = r.read_message().await.unwrap();
+        let m2 = r.read_message().await.unwrap();
+        assert_eq!((m2.timestamp, m2.type_id, m2.stream_id), (1033, 9, 7));
+        assert_eq!(&m2.payload[..], b"bbbb");
+    }
+
+    #[tokio::test]
+    async fn fmt3_replays_previous_message_header() {
+        // A fmt-3 basic header with no message in flight replays the last
+        // header: same length/type/stream, timestamp advanced by the last
+        // delta. Because fmt-0 seeds the delta to its absolute timestamp,
+        // the replayed message lands at 2000 (1000 + 1000).
+        let mut wire = fmt0(4, 1000, 9, 7, b"aaaa");
+        wire.extend(fmt3(4, b"cccc"));
+        let mut r = reader(wire);
+        let _ = r.read_message().await.unwrap();
+        let m2 = r.read_message().await.unwrap();
+        assert_eq!((m2.timestamp, m2.type_id, m2.stream_id), (2000, 9, 7));
+        assert_eq!(&m2.payload[..], b"cccc");
+    }
+
+    #[tokio::test]
+    async fn truncated_header_errors_not_panics() {
+        // fmt-0 basic header promises an 11-byte message header but only 5
+        // are present. The reader must return an error, never panic.
+        let wire = vec![0x06u8, 0, 0, 1, 0, 0]; // 1 basic + 5 of 11 header bytes
+        let r = reader(wire).read_message().await;
+        assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn truncated_payload_errors_not_panics() {
+        // Header claims a 300-byte payload but the stream ends after 100.
+        let mut wire = {
+            let mut b = vec![0x06u8];
+            b.extend_from_slice(&u24(0)); // ts
+            b.extend_from_slice(&u24(300)); // length
+            b.push(9); // type
+            b.extend_from_slice(&1u32.to_le_bytes()); // msid
+            b
+        };
+        wire.extend(std::iter::repeat_n(0u8, 100));
+        let r = reader(wire).read_message().await;
+        assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn zero_length_message_yields_empty_payload() {
+        // A length-0 message (e.g. some script-data pings) must complete
+        // immediately with an empty payload and not stall or divide-by-zero.
+        let wire = fmt0(6, 5, 18, 0, b"");
+        let msg = reader(wire).read_message().await.unwrap();
+        assert_eq!(msg.type_id, 18);
+        assert!(msg.payload.is_empty());
+    }
+
+    #[tokio::test]
+    async fn take_pending_ack_none_before_threshold() {
+        // Fresh reader: 0 bytes in, default 2.5 MB window -> nothing to ack.
+        let mut r = reader(vec![]);
+        assert!(r.take_pending_ack().is_none());
+    }
+
+    #[tokio::test]
+    async fn window_ack_size_message_lowers_ack_threshold() {
+        // A type-5 Window Ack Size message shrinks the window to 200, so the
+        // ack threshold drops to 20 bytes. After reading a media message we
+        // are well past it, so one ack is due - and only one, because
+        // take_pending_ack advances its watermark.
+        let mut wire = fmt0(2, 0, 5, 0, &200u32.to_be_bytes()); // Window Ack Size
+        wire.extend(fmt0(6, 100, 9, 1, &[0u8; 10])); // media
+        let mut r = reader(wire);
+        let msg = r.read_message().await.unwrap();
+        assert_eq!(msg.type_id, 9); // control consumed in-band, media surfaced
+        assert!(r.take_pending_ack().is_some());
+        assert!(r.take_pending_ack().is_none());
+    }
+
+    #[test]
+    fn basic_header_encodes_all_csid_ranges() {
+        // 1-byte form (csid < 64), 2-byte form (< 320), 3-byte form (>= 320).
+        let mut out = Vec::new();
+        write_basic_header(&mut out, 0, 3);
+        assert_eq!(out, [0x03]);
+
+        out.clear();
+        write_basic_header(&mut out, 0, 200);
+        assert_eq!(out, [0x00, 200 - 64]);
+
+        out.clear();
+        write_basic_header(&mut out, 0, 1000);
+        let v = 1000u32 - 64;
+        assert_eq!(out, [0x01, (v & 0xFF) as u8, (v >> 8) as u8]);
+    }
+
+    #[test]
+    fn u24_roundtrip() {
+        let mut out = Vec::new();
+        push_u24_be(&mut out, 0x12_3456);
+        assert_eq!(out, [0x12, 0x34, 0x56]);
+        assert_eq!(u24_be(&out), 0x12_3456);
+    }
+}

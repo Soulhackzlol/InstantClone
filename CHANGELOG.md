@@ -6,7 +6,19 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Tests
+
+- Added a unit suite for the RTMP chunk-stream layer (`rtmp/chunk.rs`),
+  previously covered only by the end-to-end job. 15 new cases exercise the
+  reader's fmt-1 / fmt-2 / fmt-3 decode paths (which the writer never emits
+  but OBS and Twitch send constantly), extended-timestamp encode+decode
+  including across fragmentation, in-band Set-Chunk-Size and Window-Ack
+  control handling, basic-header CSID range encoding, and malformed-input
+  guards (truncated header, truncated payload, zero-length message) that
+  assert an error is returned rather than a panic.
+- Added pure-function tests for `trace::hex_prefix` (formatting, boundary,
+  and truncation-suffix behaviour).
+- Test count: 210 -> 229, all green.
 
 ## [0.1.9] - Vertical output + VOD/EB convenience
 
