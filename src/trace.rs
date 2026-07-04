@@ -192,3 +192,35 @@ pub fn flush() {
         let _ = f.flush();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // hex_prefix is pure (no global STATE), so these run without init().
+
+    #[test]
+    fn hex_prefix_empty_is_blank() {
+        assert_eq!(hex_prefix(&[], 16), "");
+    }
+
+    #[test]
+    fn hex_prefix_formats_lowercase_space_separated() {
+        assert_eq!(
+            hex_prefix(&[0x00, 0xde, 0xad, 0xbe, 0xef], 16),
+            "00 de ad be ef"
+        );
+    }
+
+    #[test]
+    fn hex_prefix_no_suffix_when_within_max() {
+        // Exactly `max` bytes: fully shown, no "(+N more)" tail.
+        assert_eq!(hex_prefix(&[0x01, 0x02], 2), "01 02");
+    }
+
+    #[test]
+    fn hex_prefix_truncates_with_remaining_count() {
+        // Over `max`: shows the prefix plus a grep-friendly remainder note.
+        assert_eq!(hex_prefix(&[1, 2, 3, 4, 5], 2), "01 02  (+3 more)");
+    }
+}
