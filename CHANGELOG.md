@@ -6,6 +6,32 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+### Local test sink destination
+
+**Try the whole pipeline with zero risk.** The in-binary RTMP sink
+(`instantclone sink`, until now a CLI-only tool) is available as a
+destination: pick **Local test sink** in the Destinations tab and
+InstantClone spawns its own tiny receiver on this PC and streams to it.
+No platform account, no stream key, nothing leaves your machine - test
+arm / activate / cut (and vertical) end to end before touching a real
+key.
+
+- The managed child process follows the destination's lifecycle: spawned
+  when a sink destination is enabled (one child serves any number of
+  them), killed when the last one is disabled or removed, reaped and
+  respawned if it dies, and taken down with the app. It lives on fixed
+  high ports (rtmp :19350, player :19351) so manual `instantclone sink`
+  runs on the documented defaults (:1936/:1937) never collide with it.
+- The destination card gets a **▶ Watch output** link to the sink's
+  built-in live player - watch exactly what a platform would receive,
+  delay and cuts included.
+- The sink's own log lines (`publish accepted`, the 1 Hz stat windows)
+  are forwarded into the dashboard's Logs tab, so the feedback loop is
+  visible without a terminal.
+- The destination form hides the stream-key field for it (any key works)
+  and explains the feature inline; the first-run wizard deliberately
+  does not offer it - the wizard wires your real platform.
+
 ### "Cut after this airs" - scheduled safe cut
 
 **Stop counting your delay down in your head.** With a delay active, a new

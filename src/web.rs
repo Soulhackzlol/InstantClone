@@ -779,8 +779,9 @@ fn platforms_json() -> String {
   {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream","tip":"Kick ingests on AWS IVS (low-latency). What it actually enforces: H.264, CBR, keyframe interval 2 s, bitrate ≤ 8000 kbps, up to 60 fps. B-frames: contrary to a lot of older guides, Kick's normal RTMP ingest accepts them - the strict no-B-frames rule is AWS IVS real-time/WHIP, which Kick doesn't use for OBS streaming, so you usually don't need to change anything. If Kick ever rejects your stream, set B-frames to 0 in OBS (Output → Advanced); that's safe for Twitch/YouTube too. InstantClone forwards one encode without re-encoding, so B-frames can't be stripped for Kick alone. And with Twitch Enhanced Broadcasting on, Twitch chooses the encode settings (including B-frames) for you."},
   {"slug":"trovo","label":"Trovo","key_url":"https://studio.trovo.live/channel/myinfo","key_help":"Trovo Studio → Channel → My Info → Stream Key","tip":null},
   {"slug":"restream","label":"Restream.io","key_url":"https://app.restream.io/channel-settings","key_help":"Restream → Channel Settings → Stream Key","tip":"Restream relays your single stream to multiple platforms - per-platform limits apply on the downstream side, not here."},
-  {"slug":"custom","label":"Custom RTMP URL","key_url":null,"key_help":null,"tip":null}
-]"#.to_string()
+  {"slug":"custom","label":"Custom RTMP URL","key_url":null,"key_help":null,"tip":null},
+  {"slug":"sink","label":"Local test sink (nothing leaves your PC)","key_url":null,"key_help":null,"tip":"InstantClone runs its own tiny RTMP receiver on this PC and streams to it - test arm / activate / cut end to end with zero risk: no real platform, no stream key, nothing leaves your machine. While it's receiving, open http://127.0.0.1:SINK_WEB_PORT/ to watch exactly what a platform would get (including the delay)."}
+]"#.replace("SINK_WEB_PORT", &crate::config::SINK_WEB_PORT.to_string())
 }
 
 /// Serve the multi-track-video config endpoint OBS calls when its

@@ -532,6 +532,10 @@ input,select,textarea{font-family:inherit;color:inherit}
 .dcard.platform-trovo    {--dc:#67e8f9}
 .dcard.platform-restream {--dc:#5eead4}
 .dcard.platform-custom   {--dc:#fcd34d}
+.dcard.platform-sink     {--dc:#93c5fd}
+.dcard-player{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--dc,var(--accent));
+  text-decoration:none;margin-left:auto}
+.dcard-player:hover{text-decoration:underline;text-underline-offset:2px}
 .dcard-head{display:flex;align-items:center;gap:9px}
 .dcard-icon{width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
   background:color-mix(in oklch,var(--dc,var(--fg-3)) 16%,var(--surface-3));
@@ -1564,7 +1568,7 @@ input,select,textarea{font-family:inherit;color:inherit}
       Nothing to set here - a <b>normal Twitch stream just works</b>, and so does regular <b>Enhanced Broadcasting</b> (that's horizontal too); InstantClone simply forwards whatever OBS sends. Only Twitch's new <b>Dual Format</b> (a beta add-on to Enhanced Broadcasting) also sends a vertical 9:16 canvas - when it's on, InstantClone forwards both automatically, no toggle needed. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
     </div>
     <div class="dfg-sep">Stream key &amp; status</div>
-    <label>Stream key <span class="muted" id="dest-form-key-hint"></span></label>
+    <label id="dest-form-key-label">Stream key <span class="muted" id="dest-form-key-hint"></span></label>
     <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
     <div id="dest-form-key-help" class="w-key-help" hidden></div>
     <div class="row"><label style="display:inline-flex;align-items:center;gap:8px;margin:0;text-transform:none;letter-spacing:0;font-size:13px">
@@ -2259,8 +2263,11 @@ function computeStatePill(s){
   if (ds === 'active') return { label:'ACTIVE',    desc:'· Delay live',     c:'var(--live)',   pulse:true };
   return { label:'IDLE', desc:'', c:'var(--idle)', pulse:false };
 }
-const PLATFORM_INITIAL = { twitch:'T', youtube:'Y', kick:'K', trovo:'V', restream:'R', custom:'·' };
-const PLATFORM_LABEL = { twitch:'Twitch', youtube:'YouTube', kick:'Kick', trovo:'Trovo', restream:'Restream', custom:'Custom' };
+const PLATFORM_INITIAL = { twitch:'T', youtube:'Y', kick:'K', trovo:'V', restream:'R', custom:'·', sink:'⌂' };
+const PLATFORM_LABEL = { twitch:'Twitch', youtube:'YouTube', kick:'Kick', trovo:'Trovo', restream:'Restream', custom:'Custom', sink:'Local test sink' };
+// Fixed ports of the managed test-sink child - mirror config.rs
+// SINK_RTMP_PORT / SINK_WEB_PORT (documented as non-configurable).
+const SINK_PLAYER_URL = 'http://127.0.0.1:19351/';
 const SETTINGS_FIELDS = {
   'ingest_port':'s-iport','web_port':'s-wport','buffer_mb':'s-bmb','buffer_path':'s-bpath',
   'discord webhook':'s-webhook','webhook':'s-webhook','overlays_dir':'s-ovdir',
@@ -2992,6 +2999,7 @@ function buildDestCard(d){
       <div class="dcard-body">
         <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">kbps</span></div>
         <span class="dcard-foot-meta"><span class="dcard-frames">0</span>f · <span class="dcard-cuts">0</span>c · <span class="dcard-rec">0</span>r</span>
+        <a class="dcard-player" target="_blank" rel="noopener" hidden title="Open the sink's built-in live player - watch exactly what a platform would receive, delay included">▶ Watch output</a>
       </div>
       <div class="dcard-res mono" hidden></div>
       <svg class="dcard-spark" viewBox="0 0 400 40" preserveAspectRatio="none">
@@ -3022,6 +3030,7 @@ function buildDestCard(d){
     toggle: el.querySelector('.dcard-toggle'),
     edit: el.querySelector('.dcard-edit'),
     del: el.querySelector('.dcard-del'),
+    player: el.querySelector('.dcard-player'),
     lastPlatform: '',
   };
   refs.edit.onclick = () => openDestForm(refs.last);
@@ -3094,6 +3103,14 @@ function updateDestCard(r, d){
   r.toggle.title = d.enabled ? 'Disable this destination' : 'Enable this destination';
   r.toggle.classList.toggle('on', d.enabled);
   r.toggle.setAttribute('aria-checked', d.enabled ? 'true' : 'false');
+  // Test-sink card: link to the sink's built-in live player. The
+  // managed child runs whenever the destination is enabled, so gate on
+  // enabled (not alive - the player page is up even between publishes).
+  if (r.player){
+    const showPlayer = d.platform === 'sink' && d.enabled;
+    r.player.hidden = !showPlayer;
+    if (showPlayer && r.player.href !== SINK_PLAYER_URL) r.player.href = SINK_PLAYER_URL;
+  }
 }
 
 async function loadDestinations(){
@@ -3198,6 +3215,12 @@ function fillDestPlatforms(){
       const isTwitch = sel.value === 'twitch';
       $('dest-form-format-wrap').hidden = isTwitch;
       $('dest-form-twitch-native-note').hidden = !isTwitch;
+      // The local test sink takes any key, so asking for one would just
+      // be a fake required field. The key-help block stays visible - it
+      // carries the "what is this / where's the player" explainer.
+      const isSink = sel.value === 'sink';
+      $('dest-form-key-label').hidden = isSink;
+      $('dest-form-key').hidden = isSink;
       renderKeyHelp(sel.value, 'dest-form-key-help');
       updateVodVisibility();
       refreshFormatOptionAvailability();
@@ -3533,7 +3556,11 @@ function wireChatDock(){
 
 function fillWizardPlatforms(){
   const sel = $('w-platform'); sel.innerHTML = '';
-  platforms.forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.label; sel.appendChild(o); });
+  // The test sink is excluded here on purpose: the wizard writes the
+  // legacy single-destination config (which requires a key), and its
+  // job is wiring your REAL platform. The sink lives in Destinations.
+  platforms.filter(p => p.slug !== 'sink')
+    .forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.label; sel.appendChild(o); });
   if (!sel._wired){
     sel._wired = true;
     sel.addEventListener('change', () => {
@@ -3634,10 +3661,15 @@ function renderKeyHelp(slug, hostId){
     // exception - its B-frames rule silently drops the stream, so
     // we expand it by default for that one platform.
     const isKick = slug === 'kick';
-    const label = isKick ? '⚠ Things to know about Kick' : `Things to know about ${p.label || 'this platform'}`;
+    // The sink's tip IS the feature explanation (what it does, where
+    // the player lives) - open it by default like Kick's warning.
+    const isSink = slug === 'sink';
+    const label = isKick ? '⚠ Things to know about Kick'
+                : isSink ? 'What is the local test sink?'
+                : `Things to know about ${p.label || 'this platform'}`;
     const cls = isKick ? 'w-key-tip warn' : 'w-key-tip';
     parts.push(`
-      <details class="ic-disclose w-key-disclose"${isKick ? ' open' : ''}>
+      <details class="ic-disclose w-key-disclose"${isKick || isSink ? ' open' : ''}>
         <summary class="${cls}">${label}</summary>
         <div class="ic-disclose-body">${p.tip}</div>
       </details>

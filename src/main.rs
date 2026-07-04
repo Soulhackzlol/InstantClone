@@ -369,6 +369,14 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
     let initial_webhook = { rx.borrow().discord_webhook_url.clone() };
     ctrl.update_webhook(initial_webhook);
 
+    // Managed "Local test sink" child process. Spawned while any
+    // enabled destination has platform "sink"; killed when the last
+    // one is disabled or removed. Lives here (not in the pump) because
+    // several sink destinations share the one child, exactly like
+    // several Twitch destinations share the one Twitch edge.
+    let mut sink_child: Option<tokio::process::Child> = None;
+    let mut sink_last_spawn: Option<std::time::Instant> = None;
+
     // Behaviour-toggle state. Auto-arm uses the `prev_ingest_alive`
     // edge detector (fires once per publisher session, on the false ->
     // true transition). Auto-activate reads the controller's
@@ -385,6 +393,13 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
     loop {
         // Snapshot the current desired destinations.
         let desired: Vec<(config::Destination, String)> = { rx.borrow().active_destinations() };
+
+        // Keep the managed test-sink child in sync with the desired set
+        // BEFORE the pump diff below, so a freshly enabled sink
+        // destination has its receiver listening by the time its pump
+        // dials 127.0.0.1.
+        let wants_sink = desired.iter().any(|(d, _)| d.platform == "sink");
+        manage_test_sink(&mut sink_child, &mut sink_last_spawn, wants_sink, &ctrl).await;
 
         // 1) Stop any pump whose dest is no longer desired (or whose URL changed).
         let desired_ids: std::collections::HashSet<String> =
@@ -708,6 +723,109 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 // so the diff loop above respawns them.
                 running.retain(|_, (_, h)| !h.is_finished());
             }
+        }
+    }
+}
+
+/// Spawn / reap / kill the `instantclone sink` child that backs "Local
+/// test sink" destinations. Called every supervisor tick.
+///
+/// Lifecycle rules:
+/// * want && not running  → spawn (throttled to one attempt / 10 s so a
+///   port conflict doesn't respawn-spam every 2 s tick)
+/// * want && running      → no-op (one child serves all sink dests)
+/// * !want && running     → kill; the destination was disabled/removed
+/// * child died on its own → reap + log, next tick may respawn
+///
+/// The child's `[sink]`-prefixed lines are forwarded into the dashboard
+/// log ring, so "publish accepted" and the 1 Hz stat lines show up in
+/// the Logs tab - that's the whole point of a testing destination.
+async fn manage_test_sink(
+    child: &mut Option<tokio::process::Child>,
+    last_spawn: &mut Option<std::time::Instant>,
+    want: bool,
+    ctrl: &Arc<controller::Controller>,
+) {
+    // Reap first: a child that died (port conflict, crash) must not
+    // count as running, or we would never respawn it.
+    if let Some(c) = child.as_mut() {
+        if let Ok(Some(status)) = c.try_wait() {
+            ctrl.log(format!("[test-sink] exited ({status})"));
+            *child = None;
+        }
+    }
+    if !want {
+        if let Some(mut c) = child.take() {
+            let _ = c.kill().await;
+            ctrl.log("[test-sink] stopped - no sink destination enabled");
+        }
+        return;
+    }
+    if child.is_some() {
+        return;
+    }
+    if let Some(t) = last_spawn {
+        if t.elapsed() < Duration::from_secs(10) {
+            return;
+        }
+    }
+    *last_spawn = Some(std::time::Instant::now());
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            ctrl.log(format!("[test-sink] can't locate own exe: {e}"));
+            return;
+        }
+    };
+    let mut cmd = tokio::process::Command::new(exe);
+    cmd.args([
+        "sink",
+        "--port",
+        &config::SINK_RTMP_PORT.to_string(),
+        "--web-port",
+        &config::SINK_WEB_PORT.to_string(),
+    ])
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    // The runtime dropping the supervisor task (app quit) takes the
+    // child with it - no orphaned sink holding the ports.
+    .kill_on_drop(true);
+    // The parent runs without a console (windows_subsystem = windows);
+    // without this flag the child would flash one open.
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    match cmd.spawn() {
+        Ok(mut c) => {
+            if let Some(out) = c.stdout.take() {
+                tokio::spawn(forward_sink_lines(out, ctrl.clone()));
+            }
+            if let Some(err) = c.stderr.take() {
+                tokio::spawn(forward_sink_lines(err, ctrl.clone()));
+            }
+            ctrl.log(format!(
+                "[test-sink] started - rtmp :{}, live player http://127.0.0.1:{}/",
+                config::SINK_RTMP_PORT,
+                config::SINK_WEB_PORT
+            ));
+            *child = Some(c);
+        }
+        Err(e) => ctrl.log(format!("[test-sink] failed to spawn: {e}")),
+    }
+}
+
+/// Pipe one of the sink child's output streams into the dashboard log.
+/// Only `[sink...]`-prefixed lines pass - the startup banner box art and
+/// blank lines stay out of the 512-entry log ring.
+async fn forward_sink_lines(
+    stream: impl tokio::io::AsyncRead + Unpin,
+    ctrl: Arc<controller::Controller>,
+) {
+    use tokio::io::AsyncBufReadExt;
+    let mut lines = tokio::io::BufReader::new(stream).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        if line.starts_with("[sink") {
+            ctrl.log(line);
         }
     }
 }

@@ -49,7 +49,7 @@ Cuando ya lo tenía hecho, las piezas que de verdad quería eran: una activació
 <tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td></tr>
 <tr><td><b>Deps en runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>234 / 234</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>235 / 235</code></td></tr>
 </table>
 
 </td>
@@ -155,7 +155,7 @@ Seguramente desaparezca tu chat de twitch en OBS porque OBS detecta que no "vas 
 </table>
 
 > [!TIP]
-> Haz fan-out de un único feed de OBS a varios destinos a la vez. Añade Twitch, YouTube y un endpoint RTMP personalizado, activa cada uno por separado y mira su bitrate en vivo por destino.
+> Haz fan-out de un único feed de OBS a varios destinos a la vez. Añade Twitch, YouTube y un endpoint RTMP personalizado, activa cada uno por separado y mira su bitrate en vivo por destino. También hay un destino **Local test sink**: InstantClone lanza su propio receptor diminuto en tu PC y emite hacia él, para ensayar armar/activar/cortar de punta a punta - sin stream key, sin que nada salga de tu máquina, y con un enlace **Watch output** que muestra exactamente lo que recibiría una plataforma.
 
 > [!TIP]
 > **Vertical gratis.** Activa el **Formato Dual** de Twitch (Enhanced Broadcasting) en OBS y pon el **Formato de stream** de cualquier destino que no sea Twitch en **Vertical**: InstantClone reutiliza el lienzo 9:16 que OBS ya genera para Twitch y lo envía a YouTube Shorts, Kick móvil o cualquier RTMP personalizado, sin codificación extra. El vertical solo fluye mientras el Formato Dual está activo; hasta entonces el destino muestra "Esperando Formato Dual" y nada más se ve afectado. (Twitch gestiona ambos lienzos por su cuenta, así que ahí la opción se oculta.)
@@ -281,7 +281,7 @@ cargo build --release
 
 Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y comprime con gzip en tiempo de compilación desde `build.rs` (usa `flate2`, solo build-dep) y se embebe en el binario; en runtime se sirve con `Content-Encoding: gzip`.
 
-`cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR en AVC + Enhanced RTMP, codec AMF0 incluyendo Strict Array (la `fourCcList` de Enhanced-RTMP) + guardia de recursión, round-trip de settings, evicción del ring-buffer con protección de lecturas en vuelo, parsing HTTP, política CSRF, pre-flight de puertos, la negociación de contenido `accepts_gzip`, la caché de cabeceras de secuencia por-pista de Enhanced Broadcasting + selección de tags consciente del TrackId, el audio multi-pista de Enhanced-RTMP (pista de VOD de Twitch), el filtro de IDR de pista primaria para que los cortes con EB no glitcheen las escaleras, el parseo de orientación del SPS para la selección de lienzo vertical (9:16), la resolución de `user.ini` / `global.ini` en OBS 32, el parcheado de `services.json` de OBS, el parser de releases de GitHub + comparador SemVer-ish para el chequeo de actualizaciones, la implementación propia de SHA-256 (vectores NIST), el lector/escritor del flujo de chunks RTMP (cabeceras fmt 0-3, timestamps extendidos, fragmentación entre chunks, control Set-Chunk-Size / Window-Ack en banda, y guardias ante entrada malformada), la máquina de estados del corte programado ("cortar cuando esto salga"), y la descarga + verificación de checksum + intercambio del exe en disco de la auto-actualización. 234 tests, todos en verde.
+`cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR en AVC + Enhanced RTMP, codec AMF0 incluyendo Strict Array (la `fourCcList` de Enhanced-RTMP) + guardia de recursión, round-trip de settings, evicción del ring-buffer con protección de lecturas en vuelo, parsing HTTP, política CSRF, pre-flight de puertos, la negociación de contenido `accepts_gzip`, la caché de cabeceras de secuencia por-pista de Enhanced Broadcasting + selección de tags consciente del TrackId, el audio multi-pista de Enhanced-RTMP (pista de VOD de Twitch), el filtro de IDR de pista primaria para que los cortes con EB no glitcheen las escaleras, el parseo de orientación del SPS para la selección de lienzo vertical (9:16), la resolución de `user.ini` / `global.ini` en OBS 32, el parcheado de `services.json` de OBS, el parser de releases de GitHub + comparador SemVer-ish para el chequeo de actualizaciones, la implementación propia de SHA-256 (vectores NIST), el lector/escritor del flujo de chunks RTMP (cabeceras fmt 0-3, timestamps extendidos, fragmentación entre chunks, control Set-Chunk-Size / Window-Ack en banda, y guardias ante entrada malformada), la máquina de estados del corte programado ("cortar cuando esto salga"), y la descarga + verificación de checksum + intercambio del exe en disco de la auto-actualización. 235 tests, todos en verde.
 
 <br/>
 
@@ -289,7 +289,7 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 234 tests en cada push, y un tag dispara la build + publicación automática de la release con su `SHA256SUMS.txt` al lado (todavía no hay certificado de firma de código, así que el sistema operativo puede avisar en el primer lanzamiento).
+**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 235 tests en cada push, y un tag dispara la build + publicación automática de la release con su `SHA256SUMS.txt` al lado (todavía no hay certificado de firma de código, así que el sistema operativo puede avisar en el primer lanzamiento).
 
 **Lo que está sólido**
 
