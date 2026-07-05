@@ -6,6 +6,15 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixes
+
+- The OBS dock showed a phantom **1.0s** delay in passthrough. It fed
+  the big number from `current_delay_ms`, which includes the pipeline's
+  own transit latency (encoder → ingest → ring → egress) even with no
+  delay armed. The dock now mirrors the dashboard: the armed target
+  while a delay is engaged (or the fill while arming), and 0 in
+  passthrough.
+
 ### OBS quick launch from the System tab
 
 The Enhanced Broadcasting launchers no longer hide inside the Twitch

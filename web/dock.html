@@ -223,8 +223,14 @@ function applyState(j){
   // Source pill - encoder connected or not (any RTMP encoder, not just OBS)
   $('src').className='pill '+(s.ingest_alive?'on':'bad');
   $('src-lbl').textContent=s.ingest_alive?'Live':'Offline';
-  // Current delay
-  const nv=fmt(s.current_delay_ms);
+  // Current delay - mirror the dashboard: show the armed target while a
+  // delay is engaged (or the fill while arming) and 0 in passthrough.
+  // Using current_delay_ms directly showed the pipeline's own ~1s
+  // transit latency as "1.0s" even in passthrough, a phantom delay.
+  const tgtSec=(s.armed_delay_ms||0)/1000, fillSec=(s.buffer_fill_ms||0)/1000;
+  const showSec = ds==='arming' ? Math.min(fillSec,tgtSec)
+                : (ds==='armed'||ds==='active') ? tgtSec : 0;
+  const nv=fmt(showSec*1000);
   if(nv!==lastVal){$('v').textContent=nv;lastVal=nv;
     $('v').parentElement.classList.add('changing');setTimeout(()=>$('v').parentElement.classList.remove('changing'),350);
   }
