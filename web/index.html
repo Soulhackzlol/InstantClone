@@ -2026,6 +2026,26 @@ input,select,textarea{font-family:inherit;color:inherit}
         </div>
       </div>
     </section>
+
+    <!-- OBS quick launch: the EB / VOD+EB launchers used to live only
+         inside the Twitch destination editor behind the VOD toggle.
+         Surfaced here so a streamer can start OBS pre-wired without
+         opening any destination's settings. -->
+    <section class="sys-section">
+      <div class="ic-label">OBS quick launch</div>
+      <div class="tab-sub">Start OBS pre-wired for Twitch <b>Enhanced Broadcasting</b> - no destination editing needed. The launch is session-only: closing OBS and reopening it normally streams plain again.</div>
+      <div id="sys-eb-twitch-warn" class="tab-sub" hidden style="margin-top:8px;color:var(--warn,#d6a23a)">
+        <b>Heads-up:</b> Enhanced Broadcasting needs an enabled <b>Twitch</b> destination with a stream key. OBS will still launch, but EB won't engage until you add one in the Destinations tab.
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="ic-btn ic-btn-primary" id="sys-eb-btn" onclick="sysLaunchEb()">Launch OBS · Enhanced Broadcasting</button>
+        <button class="ic-btn ic-btn-primary" id="sys-vodeb-btn" onclick="sysLaunchVodEb()">Launch OBS · EB + VOD audio track</button>
+        <button class="ic-btn ic-btn-ghost" id="sys-eb-shortcut-btn" onclick="createEbShortcut('sys-eb-shortcut-btn','sys-eb-msg')">Make a desktop shortcut</button>
+      </div>
+      <div class="tab-sub" style="margin-top:8px">The <b>EB + VOD</b> button also turns on <b>VOD audio mode</b> on your Twitch destination (so the OBS setting survives future saves) and writes OBS's VOD-track unlock flag - close OBS before pressing it or the flag write is blocked.</div>
+      <ul id="sys-vodeb-checklist" hidden style="list-style:none;margin:10px 0 0;padding:0;font-size:12.5px"></ul>
+      <div class="tab-sub" id="sys-eb-msg" style="margin-top:8px"></div>
+    </section>
   </div>
 
   <!-- Network sub-pane -->
@@ -3256,6 +3276,9 @@ function updateDestCard(r, d){
 
 async function loadDestinations(){
   try { lastDests = await (await fetch('/destinations')).json(); rebuildDests(); } catch(_){}
+  // Keep the System tab's quick-launch warning/buttons in sync with the
+  // current destination set (covers startup and every dest change).
+  refreshSysEbLaunch();
 }
 
 // ── Destination form ──────────────────────────────────────────────────
@@ -3991,6 +4014,17 @@ async function toggleObsRegister(){
 // One-click VOD + EB: saves the destination (so the VOD flag is written),
 // then runs the server-side setup and renders a red-to-green checklist so
 // the user can see exactly which step needs attention.
+// Render a red-to-green step checklist (shared by the destination-form
+// and System-tab VOD+EB flows).
+function renderEbChecklist(list, steps){
+  if (!list || !steps) return;
+  list.innerHTML = steps.map(s =>
+    `<li style="display:flex;gap:7px;align-items:flex-start;margin:3px 0">
+       <span style="color:${s.ok?'var(--ok,#3fb950)':'var(--err)'};font-weight:700">${s.ok?'✓':'✗'}</span>
+       <span><b>${s.name}</b> - ${s.msg}</span>
+     </li>`).join('');
+}
+
 async function setupVodEb(){
   const btn = $('obs-eb-setup-btn');
   const list = $('vod-eb-checklist');
@@ -4004,13 +4038,7 @@ async function setupVodEb(){
   }
   try {
     const r = await (await fetch('/obs/setup-vod-eb', {method:'POST'})).json();
-    if (list && r.steps){
-      list.innerHTML = r.steps.map(s =>
-        `<li style="display:flex;gap:7px;align-items:flex-start;margin:3px 0">
-           <span style="color:${s.ok?'var(--ok,#3fb950)':'var(--err)'};font-weight:700">${s.ok?'✓':'✗'}</span>
-           <span><b>${s.name}</b> - ${s.msg}</span>
-         </li>`).join('');
-    }
+    if (r.steps) renderEbChecklist(list, r.steps);
     toast(r.ok ? 'VOD + EB ready' : 'VOD + EB needs attention', r.ok ? 'ok' : 'err');
   } catch(e){
     if (list) list.innerHTML = '<li class="bad">Request failed: '+String(e)+'</li>';
@@ -4020,9 +4048,10 @@ async function setupVodEb(){
 }
 
 // Create a Desktop shortcut that cold-starts the whole VOD + EB flow.
-async function createEbShortcut(){
-  const btn = $('eb-shortcut-btn');
-  const msg = $('eb-shortcut-msg');
+// Callable from the destination form (default ids) and the System tab.
+async function createEbShortcut(btnId, msgId){
+  const btn = $(btnId || 'eb-shortcut-btn');
+  const msg = $(msgId || 'eb-shortcut-msg');
   if (!btn || btn.disabled) return;
   btn.disabled = true;
   if (msg) msg.textContent = 'Creating shortcut…';
@@ -4058,6 +4087,109 @@ async function refreshObsEbLaunchAvailability(){
       if (msg && !msg.textContent) msg.textContent = '';
     }
   } catch(_){}
+}
+
+// ── System tab: OBS quick launch ──────────────────────────────────────
+// EB / VOD+EB launchers that work without opening any destination's
+// settings. They reuse the same backend endpoints as the destination
+// form; the only extra logic is the VOD+EB pre-step that persists
+// vod_audio on the Twitch destination - without it, the next
+// destination save would flip OBS's VOD flag straight back off
+// (reconcile_obs_vod_files derives the flag from the destinations).
+
+function firstTwitchDest(){
+  return (lastDests || []).find(d => d.enabled && d.platform === 'twitch' && d.stream_key_set);
+}
+
+// OBS-installed probe, cached for the session - the exe doesn't
+// appear/disappear between clicks, and loadDestinations() calls this
+// on every refresh.
+let _obsInstalled = null;
+async function refreshSysEbLaunch(){
+  const warn = $('sys-eb-twitch-warn');
+  if (warn) warn.hidden = !!firstTwitchDest();
+  if (_obsInstalled === null){
+    try { _obsInstalled = !!(await (await fetch('/obs/launch-status')).json()).installed; } catch(_){}
+  }
+  const dis = _obsInstalled === false;
+  ['sys-eb-btn','sys-vodeb-btn'].forEach(id => {
+    const b = $(id);
+    if (b){ b.disabled = dis; b.className = dis ? 'ic-btn ic-btn-disabled' : 'ic-btn ic-btn-primary'; }
+  });
+  if (dis){
+    const msg = $('sys-eb-msg');
+    if (msg && !msg.textContent) msg.textContent = 'OBS not found at the standard install path.';
+  }
+}
+
+async function sysLaunchEb(){
+  const btn = $('sys-eb-btn');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  const msg = $('sys-eb-msg');
+  const list = $('sys-vodeb-checklist');
+  if (list) list.hidden = true;
+  try {
+    const r = await (await fetch('/obs/launch-with-eb', {method:'POST'})).json();
+    if (msg) msg.textContent = r.ok ? r.message : (r.error || 'Launch failed');
+    toast(r.ok ? 'OBS launched with Enhanced Broadcasting' : 'Launch failed', r.ok ? 'ok' : 'err');
+  } catch(e){
+    if (msg) msg.textContent = String(e);
+    toast('Request failed','err');
+  }
+  btn.disabled = false;
+}
+
+async function sysLaunchVodEb(){
+  const btn = $('sys-vodeb-btn');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  const list = $('sys-vodeb-checklist');
+  const msg = $('sys-eb-msg');
+  if (msg) msg.textContent = '';
+  if (list){ list.hidden = false; list.innerHTML = '<li>Preparing…</li>'; }
+  const steps = [];
+  try {
+    const d = firstTwitchDest();
+    if (!d){
+      renderEbChecklist(list, [{name:'Twitch destination', ok:false,
+        msg:'none enabled with a stream key - add one in the Destinations tab first'}]);
+      toast('Add a Twitch destination first','err');
+      btn.disabled = false;
+      return;
+    }
+    if (d.vod_audio){
+      steps.push({name:'VOD audio mode', ok:true, msg:`already on for "${d.name}"`});
+    } else {
+      // Same full-field resend discipline as toggleDest: anything not
+      // passed through resets to its default on the server.
+      const body = new URLSearchParams({
+        id:d.id, name:d.name, platform:d.platform,
+        custom_egress_url:d.custom_egress_url||'', twitch_ingest:d.twitch_ingest||'',
+        youtube_ingest:d.youtube_ingest||'',
+        vod_audio:'on',
+        vod_audio_inject_eb: d.vod_audio_inject_eb ? 'on' : 'off',
+        stream_format:d.stream_format||'horizontal', enabled:'on',
+      });
+      const rr = await (await fetch('/destinations', {method:'POST', body})).json();
+      steps.push({name:'VOD audio mode', ok:!!rr.ok,
+        msg: rr.ok ? `enabled on "${d.name}"` : (rr.error || 'destination update failed')});
+      if (!rr.ok){
+        renderEbChecklist(list, steps);
+        toast('Could not update the Twitch destination','err');
+        btn.disabled = false;
+        return;
+      }
+      loadDestinations();
+    }
+    const r = await (await fetch('/obs/setup-vod-eb', {method:'POST'})).json();
+    renderEbChecklist(list, steps.concat(r.steps || []));
+    toast(r.ok ? 'VOD + EB ready' : 'VOD + EB needs attention', r.ok ? 'ok' : 'err');
+  } catch(e){
+    if (list) list.innerHTML = '<li class="bad">Request failed: '+String(e)+'</li>';
+    toast('Request failed','err');
+  }
+  btn.disabled = false;
 }
 
 // ── Reset settings / Reset everything ────────────────────────────────

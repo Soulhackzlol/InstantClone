@@ -6,6 +6,26 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+### OBS quick launch from the System tab
+
+The Enhanced Broadcasting launchers no longer hide inside the Twitch
+destination editor. **System → Behavior → OBS quick launch** now offers:
+
+- **Launch OBS · Enhanced Broadcasting** - starts OBS with the
+  `--config-url` flag pointed at InstantClone, session-only.
+- **Launch OBS · EB + VOD audio track** - same, plus it enables VOD
+  audio mode on your enabled Twitch destination and writes OBS's
+  VOD-track unlock flag, reporting each step as a red-to-green
+  checklist. Persisting the destination flag matters: OBS's on-disk
+  flag is derived from the destinations on every save, so a launch that
+  skipped it would be silently reverted later.
+- **Make a desktop shortcut** - the existing VOD+EB cold-start shortcut,
+  now reachable without opening a destination.
+
+The card warns inline when no enabled Twitch destination with a stream
+key exists (OBS still launches, but EB has nothing to engage), and the
+buttons disable with a reason when OBS isn't installed.
+
 ### Smooth aurora + hero text state transitions
 
 The hero now changes state as one coordinated sweep - glow, number, and
