@@ -6,6 +6,35 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixes
+
+- The OBS dock showed a phantom **1.0s** delay in passthrough. It fed
+  the big number from `current_delay_ms`, which includes the pipeline's
+  own transit latency (encoder → ingest → ring → egress) even with no
+  delay armed. The dock now mirrors the dashboard: the armed target
+  while a delay is engaged (or the fill while arming), and 0 in
+  passthrough.
+
+### OBS quick launch from the System tab
+
+The Enhanced Broadcasting launchers no longer hide inside the Twitch
+destination editor. **System → Behavior → OBS quick launch** now offers:
+
+- **Launch OBS · Enhanced Broadcasting** - starts OBS with the
+  `--config-url` flag pointed at InstantClone, session-only.
+- **Launch OBS · EB + VOD audio track** - same, plus it enables VOD
+  audio mode on your enabled Twitch destination and writes OBS's
+  VOD-track unlock flag, reporting each step as a red-to-green
+  checklist. Persisting the destination flag matters: OBS's on-disk
+  flag is derived from the destinations on every save, so a launch that
+  skipped it would be silently reverted later.
+- **Make a desktop shortcut** - the existing VOD+EB cold-start shortcut,
+  now reachable without opening a destination.
+
+The card warns inline when no enabled Twitch destination with a stream
+key exists (OBS still launches, but EB has nothing to engage), and the
+buttons disable with a reason when OBS isn't installed.
+
 ### Smooth aurora + hero text state transitions
 
 The hero now changes state as one coordinated sweep - glow, number, and
@@ -31,22 +60,20 @@ is gone.
   the auto-cut countdown update up to 4x/s - each tick used to replay
   the fade, a constant pulse). Message changes get a cleaner
   directional swap: the old line drops out, the new one drops in.
-- The arming counter counts continuously instead of stuttering: it
-  animates linearly with a duration longer than the update cadence, so
-  it never finishes early and freezes between ticks (the old 80 ms
-  ease-out sprinted then froze ~170 ms every update). The fill bar
-  fills at constant speed, and phase jumps (arm / activate / cut) keep
-  a longer eased sweep. Retargeting mid-flight no longer stacks
-  duplicate animation loops on the element.
-- Fixed the counter SNAPPING instead of animating. `animateNumber` is
-  called with the same target on every state tick, and its no-change
-  branch hard-set the text to the end value - killing any roll in
-  progress. That was the "disarm 15s→0s with no animation" report: the
-  idle state repeats ~4x/s and each repeat snapped the count-down to 0.
-  It now lets an in-flight animation finish.
-- Disarm / cancel rolls the big number down to 0.0 over the same 1.1 s
-  as the color sweep, so the count-down and the fade-to-idle land as
-  one motion instead of the number vanishing ahead of the glow.
+- The big delay number now actually animates - it never did. The shared
+  `animateNumber` helper only stored per-element state on its animate
+  path, which a fresh id could never reach (its throwaway object always
+  had `to === target`), so the state map stayed empty and every number
+  SNAPPED to each value. The counter has been a direct-set since it was
+  written; the arming "stutter" and the "disarm 15s→0s with no
+  animation" were both this. The helper now seeds its map on first
+  sight, so the stat readouts ease properly too.
+- The hero delay figure is driven by a dedicated critically-damped
+  spring (SmoothDamp) on one persistent rAF, not a per-update tween. It
+  tracks the buffer fill at smooth near-constant velocity while arming
+  (no jerk from retargeting a varying gap over a fixed time) and eases
+  the big jumps - notably the roll DOWN to 0 on cut / disarm - to rest
+  with no overshoot, snap, or freeze, independent of update cadence.
 - The hero delay-profile chips and the Profiles pane no longer flicker.
   Both rebuilt their whole DOM on every state tick (~4x/s); they now
   skip the rebuild unless the rendered content actually changed.
