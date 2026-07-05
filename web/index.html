@@ -404,6 +404,36 @@ input,select,textarea{font-family:inherit;color:inherit}
 .cp-cta{width:100%;padding:13px 18px;font-size:14px;border-radius:10px}
 #cp-cancel{animation:pillIn .2s var(--ease-out)}
 .cp-cta-pulse{animation:cta-pulse 1.8s var(--ease-out) infinite}
+/* ── "Cut after this airs" + hovercard ─────────────────────────────
+   Visible only while a delay is active, sharing the CTA row at a 3:1
+   split (Cut delay : Cut after) so the control column's height never
+   changes with state. The hovercard is a pure-CSS tooltip
+   (opacity+translate on :hover / :focus-within) so keyboard users get
+   it too. It floats ABOVE the button, right-anchored with a fixed
+   width - the wrap itself is too narrow to host readable copy. */
+.cutafter-wrap{position:relative;flex:1;min-width:0;animation:pillIn .2s var(--ease-out)}
+/* display:none must survive the class's own display value - [hidden]
+   loses to any author display rule otherwise. */
+.cutafter-wrap[hidden]{display:none}
+.cp-cutafter{width:100%;height:100%;padding:13px 8px;font-size:12px;border-radius:10px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-cutafter.pending{color:var(--accent);
+  border-color:color-mix(in oklch,var(--accent) 55%,transparent);
+  background:color-mix(in oklch,var(--accent) 10%,var(--surface-3));
+  animation:cta-pulse 1.8s var(--ease-out) infinite}
+.cutafter-card{position:absolute;bottom:calc(100% + 10px);right:0;z-index:30;
+  width:min(300px,78vw);
+  display:flex;flex-direction:column;gap:7px;padding:12px 14px;border-radius:12px;
+  background:var(--surface-3);border:1px solid var(--line-2);
+  box-shadow:0 12px 32px rgba(0,0,0,.35);
+  font-size:12px;line-height:1.5;color:var(--fg-2);text-align:left;
+  opacity:0;transform:translateY(5px);pointer-events:none;
+  transition:opacity .18s var(--ease-out),transform .18s var(--ease-out)}
+.cutafter-card b{color:var(--fg);font-size:12.5px}
+.cutafter-mini{font-size:10.5px;color:var(--accent);letter-spacing:.02em;
+  padding-top:7px;border-top:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cutafter-wrap:hover .cutafter-card,
+.cutafter-wrap:focus-within .cutafter-card{opacity:1;transform:none}
 @keyframes cta-pulse{
   0%{box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 0 0 0 var(--accent-glow)}
   50%{box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 0 0 10px transparent}
@@ -1223,11 +1253,13 @@ input,select,textarea{font-family:inherit;color:inherit}
   padding:1px 6px;border-radius:5px;font-family:'JetBrains Mono',monospace;font-size:12px}
 .tour-body ul{margin:6px 0 8px 16px;padding:0}
 .tour-body li{margin:3px 0}
-.tour-body .tour-tip{display:flex;align-items:flex-start;gap:8px;
+/* Not scoped to .tour-body: the wizard reuses the same accent callout
+   for the "cut after this airs" teaser, so both stay in lockstep. */
+.tour-tip{display:flex;align-items:flex-start;gap:8px;
   padding:9px 11px;background:color-mix(in oklch,var(--accent) 5%,var(--bg-2));
   border:1px solid color-mix(in oklch,var(--accent) 25%,var(--line));
   border-radius:8px;font-size:12px;margin-top:8px}
-.tour-body .tour-tip strong{color:var(--accent);margin-right:4px}
+.tour-tip strong{color:var(--accent);margin-right:4px}
 .tour-foot{display:flex;align-items:center;gap:6px;padding:10px 16px;
   border-top:1px solid var(--line);background:rgba(0,0,0,.15);
   border-bottom-left-radius:14px;border-bottom-right-radius:14px}
@@ -1367,6 +1399,15 @@ input,select,textarea{font-family:inherit;color:inherit}
   <label for="w-key">Stream key <span class="muted" id="w-key-optional-hint" hidden>(optional for Custom if URL has key)</span></label>
   <input id="w-key" type="password" class="ic-input mono" placeholder="paste your stream key" autocomplete="off">
   <div id="w-key-help" class="w-key-help" hidden></div>
+  <!-- Competitive-streamer teaser: the "cut after this airs" flow is the
+       single biggest quality-of-life trick in the app, so it gets told
+       here (before first stream) instead of waiting to be discovered. -->
+  <div class="tour-tip" style="margin-top:12px">
+    <strong>Playing ranked behind a delay?</strong> Once your delay is live, a
+    <b>⏱ Cut after this airs</b> button appears next to Cut. Press it the moment
+    your match reaction ends - InstantClone lets that moment reach your viewers,
+    then cuts to live on its own. No counting seconds in your head.
+  </div>
   <div class="wizard-row">
     <button class="ic-btn ic-btn-primary" onclick="saveWizard()">Save &amp; Start</button>
     <button class="ic-btn ic-btn-ghost" onclick="testConn()">Test connection</button>
@@ -1416,8 +1457,20 @@ input,select,textarea{font-family:inherit;color:inherit}
       <div class="cp-hint">Save common delays in <b>Profiles</b> for one-click insta-arm.</div>
       <div class="cp-profiles" id="cp-profiles"></div>
       <div style="display:flex;gap:8px;width:100%">
-        <button class="ic-btn ic-btn-disabled cp-cta" id="cp-cta" onclick="ctaClick(event)" style="flex:1">Arm delay</button>
+        <button class="ic-btn ic-btn-disabled cp-cta" id="cp-cta" onclick="ctaClick(event)" style="flex:3;min-width:0">Arm delay</button>
         <button class="ic-btn ic-btn-ghost" id="cp-cancel" hidden onclick="disarmClick(event)" style="flex:0 0 auto;padding:13px 18px">Disarm</button>
+        <!-- "Cut after this airs" - only visible while a delay is active.
+             Shares the row with the Cut button (3:1 split) so the control
+             column's height never changes with state. The hovercard
+             explains the trick (mark now, auto-cut when the mark has
+             aired) so competitive streamers stop counting the delay in
+             their head after a match. -->
+        <span class="cutafter-wrap" id="cp-cutafter-wrap" hidden>
+          <button class="ic-btn ic-btn-ghost cp-cutafter" id="cp-cutafter" onclick="cutAfterClick(event)">⏱ Cut after</button>
+          <!-- Copy injected by renderCutAfter() - it swaps between the
+               explainer (idle) and the "mark set" card (pending). -->
+          <span class="cutafter-card" id="cp-cutafter-card" role="tooltip"></span>
+        </span>
       </div>
     </div>
   </div>
@@ -2411,6 +2464,32 @@ async function disarm(){
   tick();
 }
 
+// "Cut after this airs" - mark the current live moment; the backend
+// auto-cuts once every destination has aired past it. Clicking while a
+// mark is pending cancels it. No setPending here: the phase doesn't
+// change until the mark actually fires.
+async function cutAfter(){
+  if (lastState && lastState.safe_cut_pending){
+    await fetch('/cut-after/cancel',{method:'POST'});
+    toast('Scheduled cut cancelled', 'info');
+    tick();
+    return;
+  }
+  const r = await fetch('/cut-after',{method:'POST'});
+  if (r.status === 409){
+    try{ const j = await r.json(); toast(j.error, 'err'); }catch(_){ toast('Could not schedule the cut', 'err'); }
+  } else {
+    toast('Marked. Cutting to live once this moment airs.', 'ok');
+  }
+  tick();
+}
+function cutAfterClick(ev){
+  const btn = ev.currentTarget;
+  if (btn._busy) return;
+  btn._busy = true; setTimeout(() => { btn._busy = false; }, 300);
+  cutAfter();
+}
+
 function bumpDelay(d){
   const inp = $('delay-input');
   const cur = parseInt(inp.value || '0', 10) || 0;
@@ -2521,6 +2600,10 @@ function renderHero(s){
     const dir = armedMs > curMs ? 'rewinding' : 'jumping forward';
     sub = `Adjusting → ${dir} to ${fmtDelay(armedMs)} (currently ${fmtDelay(curMs)})…`;
   }
+  else if (ds === 'active' && s.safe_cut_pending){
+    const cd = Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000));
+    sub = `Auto-cut armed - going live in ~${cd}s, everything up to your mark still airs.`;
+  }
   else if (ds === 'active') sub = `Forwarded with a ${fmtDelay(s.armed_delay_ms)} buffer${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
   setSubText($('delay-sub'), sub);
 
@@ -2541,12 +2624,14 @@ function renderCta(){
     btn.textContent = '… Applying';
     btn.disabled = true;
     if (cancel) cancel.hidden = true;
+    renderCutAfter('off');
     clearWarn();
     return;
   }
   if (!lastState){
     btn.className = 'ic-btn ic-btn-disabled cp-cta'; btn.textContent = 'Arm delay'; btn.disabled = true;
     if (cancel) cancel.hidden = true;
+    renderCutAfter('off');
     clearWarn();
     return;
   }
@@ -2635,6 +2720,46 @@ function renderCta(){
     } else {
       btn.className = 'ic-btn ic-btn-disabled cp-cta'; btn.textContent = 'Arm delay'; btn.disabled = true;
       clearWarn();
+    }
+  }
+  renderCutAfter(ds);
+}
+
+// ── "Cut after this airs" secondary action ────────────────────────────
+// Only offered while a delay is active - there's nothing to schedule
+// otherwise (the backend refuses too, this just keeps the button from
+// teasing a dead action). Shares the CTA row at 1/4 width, so labels
+// stay compact and the full story lives in the hovercard + title.
+// While a mark is pending the button becomes a live countdown and
+// clicking it cancels. The hovercard copy swaps with the mode; guarded
+// by data-mode so the ~1 Hz state ticks don't rebuild identical DOM
+// under the user's cursor.
+function renderCutAfter(ds){
+  const wrap = $('cp-cutafter-wrap');
+  if (!wrap) return;
+  const show = !pendingPhase && !!lastState && ds === 'active';
+  wrap.hidden = !show;
+  if (!show) return;
+  const btn = $('cp-cutafter');
+  const card = $('cp-cutafter-card');
+  const pending = !!lastState.safe_cut_pending;
+  btn.classList.toggle('pending', pending);
+  if (pending){
+    const s = Math.max(0, Math.round((lastState.safe_cut_remaining_ms || 0) / 1000));
+    btn.textContent = `⏱ ~${s}s ✕`;
+    if (card && card.dataset.mode !== 'pending'){
+      card.dataset.mode = 'pending';
+      card.innerHTML = `<b>Mark set.</b>
+        <span>Everything up to your press is still going out to viewers. The instant it has aired on every destination, the delay cuts itself to live.</span>
+        <span class="cutafter-mini mono">tap the button again to cancel</span>`;
+    }
+  } else {
+    btn.textContent = '⏱ Cut after';
+    if (card && card.dataset.mode !== 'idle'){
+      card.dataset.mode = 'idle';
+      card.innerHTML = `<b>Stop counting your delay.</b>
+        <span>Match over? Press this the moment your reaction ends. Everything up to that press still reaches your viewers - then the delay cuts itself to live.</span>
+        <span class="cutafter-mini mono">press now&ensp;▸&ensp;reaction airs&ensp;▸&ensp;auto-cut&ensp;▸&ensp;live</span>`;
     }
   }
 }
@@ -4843,6 +4968,7 @@ const TOUR = [
         <li><b>Arm delay</b> → starts buffering (you can still cancel)</li>
         <li><b>Activate</b> → once buffer is ready, click to cut your stream over</li>
         <li><b>Cut delay</b> → return to passthrough live</li>
+        <li><b>⏱ Cut after this airs</b> → appears while the delay is active. Press it the second your match reaction ends: everything up to that press still airs, then the delay cuts itself to live. No more counting 30 seconds in your head.</li>
       </ul>
       <div class="tour-tip"><strong>Shortcut:</strong> press <b>Space</b> anywhere to fire this button.</div>
     `,

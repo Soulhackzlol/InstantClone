@@ -49,7 +49,7 @@ Cuando ya lo tenía hecho, las piezas que de verdad quería eran: una activació
 <tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td></tr>
 <tr><td><b>Deps en runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>229 / 229</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>234 / 234</code></td></tr>
 </table>
 
 </td>
@@ -151,7 +151,7 @@ Seguramente desaparezca tu chat de twitch en OBS porque OBS detecta que no "vas 
 <table>
 <tr><td align="center" width="40"><b>1</b></td><td>Pon un delay (p. ej. <kbd>15</kbd>s) → <b>Armar</b>.</td></tr>
 <tr><td align="center"><b>2</b></td><td>Mira cómo se llena el buffer. Cuando indique <kbd>ARMED</kbd>, pulsa <b>Activar</b>.</td></tr>
-<tr><td align="center"><b>3</b></td><td><b>Cortar delay</b> cuando quieras para volver al directo.</td></tr>
+<tr><td align="center"><b>3</b></td><td><b>Cortar delay</b> cuando quieras para volver al directo - o pulsa <b>&#9201; Cortar cuando esto salga</b> justo al acabar tu reacción de fin de partida, e InstantClone corta solo cuando ese momento ha llegado a tus viewers. Sin contar el delay de cabeza.</td></tr>
 </table>
 
 > [!TIP]
@@ -217,6 +217,8 @@ O suelta cualquier `.html` en `./overlays/` y se sirve en `/overlay/tu-archivo.h
 | <kbd>POST</kbd> | `/activate` | | Activa el delay armado. <kbd>409</kbd> si el buffer no está listo. |
 | <kbd>POST</kbd> | `/disarm` | | Cancela el armado. Descarta el buffer sin salir al aire. |
 | <kbd>POST</kbd> | `/stop` | | Corta el delay y vuelve al directo. |
+| <kbd>POST</kbd> | `/cut-after` | | Marca el borde en vivo; auto-corta cuando haya salido en todos los destinos (409 si no hay delay activo). |
+| <kbd>POST</kbd> | `/cut-after/cancel` | | Descarta un corte programado pendiente sin cortar. |
 | <kbd>POST</kbd> | `/delay` | `ms=NNN` | Atajo: arma y activa en cuanto esté listo. |
 | <kbd>GET</kbd> | `/state` | | JSON instantáneo del estado. |
 | <kbd>GET</kbd> | `/events` | | Flujo SSE del JSON de estado, solo push. |
@@ -279,7 +281,7 @@ cargo build --release
 
 Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y comprime con gzip en tiempo de compilación desde `build.rs` (usa `flate2`, solo build-dep) y se embebe en el binario; en runtime se sirve con `Content-Encoding: gzip`.
 
-`cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR en AVC + Enhanced RTMP, codec AMF0 incluyendo Strict Array (la `fourCcList` de Enhanced-RTMP) + guardia de recursión, round-trip de settings, evicción del ring-buffer con protección de lecturas en vuelo, parsing HTTP, política CSRF, pre-flight de puertos, la negociación de contenido `accepts_gzip`, la caché de cabeceras de secuencia por-pista de Enhanced Broadcasting + selección de tags consciente del TrackId, el audio multi-pista de Enhanced-RTMP (pista de VOD de Twitch), el filtro de IDR de pista primaria para que los cortes con EB no glitcheen las escaleras, el parseo de orientación del SPS para la selección de lienzo vertical (9:16), la resolución de `user.ini` / `global.ini` en OBS 32, el parcheado de `services.json` de OBS, el parser de releases de GitHub + comparador SemVer-ish para el chequeo de actualizaciones, la implementación propia de SHA-256 (vectores NIST), el lector/escritor del flujo de chunks RTMP (cabeceras fmt 0-3, timestamps extendidos, fragmentación entre chunks, control Set-Chunk-Size / Window-Ack en banda, y guardias ante entrada malformada), y la descarga + verificación de checksum + intercambio del exe en disco de la auto-actualización. 229 tests, todos en verde.
+`cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR en AVC + Enhanced RTMP, codec AMF0 incluyendo Strict Array (la `fourCcList` de Enhanced-RTMP) + guardia de recursión, round-trip de settings, evicción del ring-buffer con protección de lecturas en vuelo, parsing HTTP, política CSRF, pre-flight de puertos, la negociación de contenido `accepts_gzip`, la caché de cabeceras de secuencia por-pista de Enhanced Broadcasting + selección de tags consciente del TrackId, el audio multi-pista de Enhanced-RTMP (pista de VOD de Twitch), el filtro de IDR de pista primaria para que los cortes con EB no glitcheen las escaleras, el parseo de orientación del SPS para la selección de lienzo vertical (9:16), la resolución de `user.ini` / `global.ini` en OBS 32, el parcheado de `services.json` de OBS, el parser de releases de GitHub + comparador SemVer-ish para el chequeo de actualizaciones, la implementación propia de SHA-256 (vectores NIST), el lector/escritor del flujo de chunks RTMP (cabeceras fmt 0-3, timestamps extendidos, fragmentación entre chunks, control Set-Chunk-Size / Window-Ack en banda, y guardias ante entrada malformada), la máquina de estados del corte programado ("cortar cuando esto salga"), y la descarga + verificación de checksum + intercambio del exe en disco de la auto-actualización. 234 tests, todos en verde.
 
 <br/>
 
@@ -287,7 +289,7 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 229 tests en cada push, y un tag dispara la build + publicación automática de la release con su `SHA256SUMS.txt` al lado (todavía no hay certificado de firma de código, así que el sistema operativo puede avisar en el primer lanzamiento).
+**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 234 tests en cada push, y un tag dispara la build + publicación automática de la release con su `SHA256SUMS.txt` al lado (todavía no hay certificado de firma de código, así que el sistema operativo puede avisar en el primer lanzamiento).
 
 **Lo que está sólido**
 

@@ -415,6 +415,20 @@ pub struct Controller {
     /// streamer is already in the active state and a subsequent cut
     /// shouldn't snap back to "active" via auto-activate.
     auto_activate_pending: AtomicBool,
+    /// Input-timeline timestamp (u64, expand_ts domain) of a scheduled
+    /// "cut after this airs" mark. 0 = none pending. Set by
+    /// `schedule_safe_cut` to the live-edge ts at the moment the
+    /// streamer pressed the button; the pump loops watch the slowest
+    /// live consumer and fire `stop_delay` once every destination has
+    /// aired past the mark. This is the "match-end reaction" cut: the
+    /// streamer marks the moment their reaction ends (on their live
+    /// timeline) instead of counting the delay down in their head, and
+    /// nothing before the mark ever gets clipped. Cleared by
+    /// `cancel_safe_cut`, by a manual `stop_delay`, by disarm
+    /// (`arm_delay(0)`), and by `begin_publish` (the mark belongs to
+    /// the old session's timeline - a fresh publisher restarts ts near
+    /// 0, so a stale mark could never be reached).
+    safe_cut_input_ts: AtomicU64,
     ingest_alive: AtomicBool,
     buffer_building: AtomicBool,
     publisher_token: AtomicU64,
@@ -499,6 +513,7 @@ impl Controller {
             armed_delay_ms: AtomicU32::new(initial_armed_delay_ms),
             target_delay_ms: AtomicU32::new(0),
             auto_activate_pending: AtomicBool::new(false),
+            safe_cut_input_ts: AtomicU64::new(0),
             ingest_alive: AtomicBool::new(false),
             buffer_building: AtomicBool::new(false),
             publisher_token: AtomicU64::new(0),
@@ -737,6 +752,9 @@ impl Controller {
             // Disarm clears any pending auto-activate too - there's
             // nothing to auto-activate into anymore.
             self.auto_activate_pending.store(false, Ordering::Relaxed);
+            // A pending "cut after this airs" mark dies with the delay
+            // it was going to cut.
+            self.safe_cut_input_ts.store(0, Ordering::Relaxed);
         } else if previous_target > 0 {
             // Already active → live-update what we're delivering. This
             // is NOT a fresh arm action; the streamer is mid-stream and
@@ -790,6 +808,116 @@ impl Controller {
         // arm event (re-arm at a non-zero value with target = 0)
         // refills it.
         self.auto_activate_pending.store(false, Ordering::Relaxed);
+        // A manual cut supersedes any scheduled "cut after this airs" -
+        // the streamer chose "now" over "when the mark airs".
+        self.safe_cut_input_ts.store(0, Ordering::Relaxed);
+    }
+
+    // --- "Cut after this airs" (scheduled safe cut) -------------------
+    //
+    // The competitive-streamer workflow: a match ends on a 30 s delay,
+    // the streamer reacts, and the moment the reaction is over they
+    // want to snap back to live WITHOUT clipping the reaction off the
+    // delayed output - which today means counting the delay in their
+    // head. Instead they press one button at the safe moment; we record
+    // the live-edge input timestamp and fire the normal cut machinery
+    // once the slowest destination has aired past it.
+
+    /// Schedule a cut for the moment the CURRENT live edge has aired on
+    /// every destination. Returns the estimated wait (ms) for the UI
+    /// countdown. Only meaningful while a delay is active - refuses
+    /// otherwise so the button can't arm a mark that fires surprisingly
+    /// on some future activate.
+    pub fn schedule_safe_cut(&self) -> Result<u32, &'static str> {
+        if self.target_delay_ms.load(Ordering::Relaxed) == 0 {
+            return Err("no delay is active - nothing to schedule");
+        }
+        let Some(latest) = self.ring.latest_ts() else {
+            return Err("no stream data yet");
+        };
+        // 0 is the "none pending" sentinel; a genuine ts of 0 (first
+        // tag of a session) shifts by 1 ms, which is far below the
+        // IDR-quantisation the cut lands on anyway.
+        self.safe_cut_input_ts
+            .store(latest.max(1), Ordering::Relaxed);
+        Ok(self.safe_cut_remaining_ms())
+    }
+
+    /// Drop a pending scheduled cut. No-op if none is pending.
+    pub fn cancel_safe_cut(&self) {
+        self.safe_cut_input_ts.store(0, Ordering::Relaxed);
+    }
+
+    pub fn safe_cut_pending(&self) -> bool {
+        self.safe_cut_input_ts.load(Ordering::Relaxed) != 0
+    }
+
+    /// How long until the pending mark has aired, for the dashboard
+    /// countdown. 0 when nothing is pending. When no destination is
+    /// live to measure against, fall back to the target delay - the
+    /// honest "roughly this long" number the streamer armed.
+    pub fn safe_cut_remaining_ms(&self) -> u32 {
+        let mark = self.safe_cut_input_ts.load(Ordering::Relaxed);
+        if mark == 0 {
+            return 0;
+        }
+        match self.slowest_live_consumer_ts() {
+            Some(ts) => mark.saturating_sub(ts).min(u32::MAX as u64) as u32,
+            None => self.target_delay_ms.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Called from each pump's throttled cut-check. If a mark is pending
+    /// and the SLOWEST live destination has aired past it, fire the
+    /// normal cut (stop_delay → compute_delay_cut sees target 0 on the
+    /// same pump iteration and seeks to live). Gating on the slowest
+    /// consumer is what makes the promise hold per-destination: a
+    /// faster pump must not cut a slower one short of the mark. The
+    /// compare_exchange makes exactly one pump the firing pump, so the
+    /// log line and the stop_delay don't multiply across destinations.
+    pub fn maybe_fire_safe_cut(&self) {
+        let mark = self.safe_cut_input_ts.load(Ordering::Relaxed);
+        if mark == 0 {
+            return;
+        }
+        let Some(consumer_ts) = self.slowest_live_consumer_ts() else {
+            return;
+        };
+        // Strictly greater: the next-to-send tag being AT the mark
+        // means the mark's own frame hasn't gone out yet.
+        if consumer_ts <= mark {
+            return;
+        }
+        if self
+            .safe_cut_input_ts
+            .compare_exchange(mark, 0, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            self.stop_delay();
+            self.log("scheduled cut: marked moment has aired everywhere - cutting to live");
+        }
+    }
+
+    /// Input-timeline position of the slowest live destination: the ts
+    /// of the next tag it will send. `None` when no destination is
+    /// alive, or the cursor fell behind the ring front (transient -
+    /// next_or_wait realigns it). A cursor PAST the newest tag means
+    /// fully caught up, which reads as the live edge.
+    fn slowest_live_consumer_ts(&self) -> Option<u64> {
+        let min_consumer = {
+            let map = self.destinations.read().unwrap();
+            map.values()
+                .filter(|d| d.egress_alive.load(Ordering::Relaxed))
+                .map(|d| d.consumer_seq.load(Ordering::Relaxed))
+                .min()
+        }?;
+        if let Some((_, m)) = self.ring.find_by_seq(min_consumer) {
+            return Some(m.ts_ms);
+        }
+        match self.ring.latest_seq() {
+            Some(latest_seq) if min_consumer > latest_seq => self.ring.latest_ts(),
+            _ => None,
+        }
     }
 
     /// Snapshot read of the auto-activate-pending slot. Used by the
@@ -813,18 +941,11 @@ impl Controller {
         let Some(latest) = self.ring.latest_ts() else {
             return 0;
         };
-        let min_consumer = {
-            let map = self.destinations.read().unwrap();
-            map.values()
-                .filter(|d| d.egress_alive.load(Ordering::Relaxed))
-                .map(|d| d.consumer_seq.load(Ordering::Relaxed))
-                .min()
-        };
-        match min_consumer.and_then(|c| self.ring.find_by_seq(c).map(|(_, m)| m)) {
+        match self.slowest_live_consumer_ts() {
             // Clamp to u32: a u64 delta can't realistically exceed
             // 600_000 ms (our hard armed-delay ceiling) but we cap to
             // be safe - the UI consumes a u32 number anyway.
-            Some(meta) => latest.saturating_sub(meta.ts_ms).min(u32::MAX as u64) as u32,
+            Some(ts) => latest.saturating_sub(ts).min(u32::MAX as u64) as u32,
             None => 0,
         }
     }
@@ -1005,6 +1126,11 @@ impl Controller {
         // publisher session is a clean slate; the prior session's
         // arm-or-not state shouldn't leak into the new one.
         self.auto_activate_pending.store(false, Ordering::Relaxed);
+        // Same for a pending "cut after this airs" mark: it's an input
+        // timestamp on the OLD session's timeline. The new session
+        // restarts near ts 0, so the mark would sit unreachable and
+        // fire hours later (or never) - clear it with the session.
+        self.safe_cut_input_ts.store(0, Ordering::Relaxed);
 
         // Bump token so any prior egress reader knows it's stale.
         let token = self.publisher_token.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1554,6 +1680,11 @@ async fn pump_dest(
             if due {
                 state.last_cut_check = Instant::now();
                 state.last_seen_target = target_now;
+                // Scheduled "cut after this airs": if the slowest live
+                // destination has aired past the mark, this flips target
+                // to 0 - and compute_delay_cut below reads the atomic
+                // fresh, so the cut lands on this same iteration.
+                ctrl.maybe_fire_safe_cut();
                 if let Some(cut) = compute_delay_cut(ctrl, &meta) {
                     apply_cut(ctrl, dest, &mut sink, &mut state, cut).await?;
                     continue;
@@ -2306,6 +2437,105 @@ mod tests {
         assert_eq!(h.ctrl.phase(), "idle");
         assert_eq!(h.ctrl.armed_delay_ms(), 0);
         assert_eq!(h.ctrl.target_delay_ms(), 0);
+    }
+
+    // ── "Cut after this airs" (scheduled safe cut) ───────────────────
+
+    #[test]
+    fn safe_cut_requires_active_delay() {
+        let h = harness(0);
+        // Idle: nothing to schedule against.
+        assert!(h.ctrl.schedule_safe_cut().is_err());
+        // Armed-but-not-activated is still target=0 - output is at the
+        // live edge, so a mark would fire (or hang) surprisingly.
+        h.ctrl.arm_delay(2_000);
+        feed_seconds(&h.ctrl, 0, 3, 30);
+        assert!(h.ctrl.schedule_safe_cut().is_err());
+        assert!(!h.ctrl.safe_cut_pending());
+    }
+
+    #[test]
+    fn safe_cut_schedules_and_cancels() {
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        feed_seconds(&h.ctrl, 0, 3, 30);
+        h.ctrl.activate_delay().expect("buffer is past armed");
+        assert!(h.ctrl.schedule_safe_cut().is_ok());
+        assert!(h.ctrl.safe_cut_pending());
+        // No live consumer to measure against → remaining falls back to
+        // the armed target, not 0 (0 would render a lying countdown).
+        assert_eq!(h.ctrl.safe_cut_remaining_ms(), 2_000);
+        h.ctrl.cancel_safe_cut();
+        assert!(!h.ctrl.safe_cut_pending());
+        assert_eq!(h.ctrl.safe_cut_remaining_ms(), 0);
+        // Cancel must not have touched the active delay itself.
+        assert_eq!(h.ctrl.target_delay_ms(), 2_000);
+    }
+
+    #[test]
+    fn safe_cut_fires_only_after_slowest_consumer_passes_mark() {
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        feed_seconds(&h.ctrl, 0, 4, 30);
+        h.ctrl.activate_delay().expect("buffer is past armed");
+
+        // A live destination whose consumer is still early in the ring.
+        let st = h.ctrl.destination_state("d1");
+        st.egress_alive.store(true, Ordering::Relaxed);
+        st.consumer_seq.store(10, Ordering::Relaxed);
+
+        h.ctrl.schedule_safe_cut().expect("delay is active");
+        let before = h.ctrl.safe_cut_remaining_ms();
+        assert!(before > 0, "mark is ahead of the consumer");
+
+        // Consumer hasn't aired the mark yet → must NOT fire.
+        h.ctrl.maybe_fire_safe_cut();
+        assert!(h.ctrl.safe_cut_pending());
+        assert_eq!(h.ctrl.target_delay_ms(), 2_000);
+
+        // More stream arrives, and the consumer advances past the mark
+        // (the newest tag's ts is beyond the mark by construction).
+        feed_seconds(&h.ctrl, 4_000, 2, 30);
+        let latest_seq = h.ctrl.ring.latest_seq().expect("ring has tags");
+        st.consumer_seq.store(latest_seq, Ordering::Relaxed);
+
+        h.ctrl.maybe_fire_safe_cut();
+        assert!(!h.ctrl.safe_cut_pending(), "mark aired - must fire");
+        assert_eq!(h.ctrl.target_delay_ms(), 0, "fire runs the normal cut");
+        // The armed value survives, same as a manual Cut - the next
+        // activate is instant.
+        assert_eq!(h.ctrl.armed_delay_ms(), 2_000);
+    }
+
+    #[test]
+    fn manual_cut_and_disarm_clear_scheduled_cut() {
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        feed_seconds(&h.ctrl, 0, 3, 30);
+        h.ctrl.activate_delay().expect("buffer is past armed");
+        h.ctrl.schedule_safe_cut().expect("delay is active");
+        // Manual cut supersedes the mark.
+        h.ctrl.stop_delay();
+        assert!(!h.ctrl.safe_cut_pending());
+        // Re-activate, schedule again, then disarm - mark dies with the delay.
+        h.ctrl.activate_delay().expect("buffer still full");
+        h.ctrl.schedule_safe_cut().expect("delay is active");
+        h.ctrl.arm_delay(0);
+        assert!(!h.ctrl.safe_cut_pending());
+    }
+
+    #[tokio::test]
+    async fn new_publisher_session_clears_scheduled_cut() {
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        feed_seconds(&h.ctrl, 0, 3, 30);
+        h.ctrl.activate_delay().expect("buffer is past armed");
+        h.ctrl.schedule_safe_cut().expect("delay is active");
+        // Fresh publisher: the mark's timestamp belongs to the OLD
+        // session's timeline (the new one restarts near 0), so keeping
+        // it would leave an unreachable mark pending forever.
+        h.ctrl.begin_publish("key").await.expect("slot is free");
+        assert!(!h.ctrl.safe_cut_pending());
     }
 
     #[test]

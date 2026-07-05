@@ -598,6 +598,8 @@ async fn route(
         // Legacy one-shot endpoints (Stream Deck etc.)
         ("POST", "/delay") => post_delay(body, ctrl, settings, cfg_path, sysstat).await,
         ("POST", "/go-live") => post_stop(ctrl, settings, cfg_path, sysstat).await,
+        ("POST", "/cut-after") => post_cut_after(ctrl, settings, sysstat).await,
+        ("POST", "/cut-after/cancel") => post_cut_after_cancel(ctrl, settings, sysstat).await,
         ("POST", "/test-egress") => test_egress(settings).await,
         ("POST", "/test-webhook") => post_test_webhook(ctrl).await,
         ("POST", "/logs/clear") => {
@@ -722,8 +724,10 @@ fn state_json(
             .is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
+        scp = ctrl.safe_cut_pending(),
+        scr = ctrl.safe_cut_remaining_ms(),
         ad = ctrl.armed_delay_ms(),
         td = ctrl.target_delay_ms(),
         cd = ctrl.current_delay_ms(),
@@ -1754,6 +1758,44 @@ async fn post_disarm(
 ) -> (&'static str, &'static str, String) {
     ctrl.arm_delay(0); // arm(0) also resets target
     persist_delay_state(ctrl, settings, cfg_path);
+    (
+        "200 OK",
+        "application/json",
+        state_json(ctrl, settings, sysstat),
+    )
+}
+
+// ---- "Cut after this airs" (scheduled safe cut) ----
+//
+// No persist_delay_state here: scheduling doesn't change armed/target,
+// and when the mark fires it goes through the same stop_delay path the
+// supervisor behaviours use - the next explicit delay action persists.
+
+async fn post_cut_after(
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    sysstat: &Arc<SysStat>,
+) -> (&'static str, &'static str, String) {
+    match ctrl.schedule_safe_cut() {
+        Ok(_) => (
+            "200 OK",
+            "application/json",
+            state_json(ctrl, settings, sysstat),
+        ),
+        Err(e) => (
+            "409 Conflict",
+            "application/json",
+            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(e)),
+        ),
+    }
+}
+
+async fn post_cut_after_cancel(
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    sysstat: &Arc<SysStat>,
+) -> (&'static str, &'static str, String) {
+    ctrl.cancel_safe_cut();
     (
         "200 OK",
         "application/json",

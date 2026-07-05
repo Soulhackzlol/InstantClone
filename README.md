@@ -49,7 +49,7 @@ Once it existed, the parts I'd actually wanted ended up in: a real two-phase arm
 <tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td></tr>
 <tr><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>229 / 229</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>234 / 234</code></td></tr>
 </table>
 
 </td>
@@ -151,7 +151,7 @@ Click **Start Streaming**. The OBS pill in InstantClone turns green. Your real T
 <table>
 <tr><td align="center" width="40"><b>1</b></td><td>Type a delay (e.g. <kbd>15</kbd>s) → <b>Arm</b>.</td></tr>
 <tr><td align="center"><b>2</b></td><td>Watch the buffer fill. When it says <kbd>ARMED</kbd>, hit <b>Activate</b>.</td></tr>
-<tr><td align="center"><b>3</b></td><td><b>Cut delay</b> at any time to snap back to live.</td></tr>
+<tr><td align="center"><b>3</b></td><td><b>Cut delay</b> at any time to snap back to live - or hit <b>&#9201; Cut after this airs</b> right when your match reaction ends, and InstantClone auto-cuts once that moment has reached your viewers. No counting the delay in your head.</td></tr>
 </table>
 
 > [!TIP]
@@ -217,6 +217,8 @@ Or drop any `.html` into `./overlays/` and it's served at `/overlay/your-file.ht
 | <kbd>POST</kbd> | `/activate` | | Activate the armed delay. <kbd>409</kbd> if the buffer isn't ready. |
 | <kbd>POST</kbd> | `/disarm` | | Cancel arming. Drop the buffer without going live. |
 | <kbd>POST</kbd> | `/stop` | | Cut the delay, return to live. |
+| <kbd>POST</kbd> | `/cut-after` | | Mark the live edge; auto-cut once it has aired on every destination (409 if no delay is active). |
+| <kbd>POST</kbd> | `/cut-after/cancel` | | Drop a pending scheduled cut without cutting. |
 | <kbd>POST</kbd> | `/delay` | `ms=NNN` | One-shot: arm, auto-activate as soon as ready. |
 | <kbd>GET</kbd> | `/state` | | One-shot JSON snapshot. |
 | <kbd>GET</kbd> | `/events` | | Server-sent stream of state JSON. Push-only. |
@@ -279,7 +281,7 @@ cargo build --release
 
 No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzipped at build time by `build.rs` (uses `flate2`, build-only) and embedded into the binary; at runtime it's served with `Content-Encoding: gzip`.
 
-`cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced RTMP IDR detection, AMF0 codec including Strict Array (Enhanced-RTMP `fourCcList`) + recursion guard, settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, `accepts_gzip` content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, Enhanced-RTMP multi-track audio (Twitch's VOD audio track), primary-track IDR gate so EB cuts don't pixel-glitch ladder rungs, SPS orientation parsing for vertical-canvas (9:16) selection, OBS 32 `user.ini` / legacy `global.ini` path resolution, the OBS services.json patcher, the GitHub releases update-check parser + SemVer-ish comparator, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer (fmt 0-3 headers, extended timestamps, cross-chunk fragmentation, in-band Set-Chunk-Size / Window-Ack control, and malformed-input guards), and the self-update download + checksum-verify + on-disk exe swap. 229 tests, all green.
+`cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced RTMP IDR detection, AMF0 codec including Strict Array (Enhanced-RTMP `fourCcList`) + recursion guard, settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, `accepts_gzip` content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, Enhanced-RTMP multi-track audio (Twitch's VOD audio track), primary-track IDR gate so EB cuts don't pixel-glitch ladder rungs, SPS orientation parsing for vertical-canvas (9:16) selection, OBS 32 `user.ini` / legacy `global.ini` path resolution, the OBS services.json patcher, the GitHub releases update-check parser + SemVer-ish comparator, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer (fmt 0-3 headers, extended timestamps, cross-chunk fragmentation, in-band Set-Chunk-Size / Window-Ack control, and malformed-input guards), the scheduled safe-cut ("cut after this airs") state machine, and the self-update download + checksum-verify + on-disk exe swap. 234 tests, all green.
 
 <br/>
 
@@ -287,7 +289,7 @@ No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzippe
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 229 tests on every push, and a tagged commit auto-builds + publishes a release artifact with a `SHA256SUMS.txt` checksum file alongside (no code-signing certificate yet, so the OS may warn on first launch).
+**Daily-driver ready on Windows.** I use it on my own streams. CI runs fmt + clippy (with `-D warnings`) + 234 tests on every push, and a tagged commit auto-builds + publishes a release artifact with a `SHA256SUMS.txt` checksum file alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's solid**
 
