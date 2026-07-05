@@ -6,11 +6,11 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
-### Smooth aurora state transitions
+### Smooth aurora + hero text state transitions
 
-The hero's aurora glow now sweeps between state colors instead of
-snapping, and the blobs no longer teleport when buffering starts or
-ends.
+The hero now changes state as one coordinated sweep - glow, number, and
+pill move together - and the per-second stutter in the text and counter
+is gone.
 
 - The two aurora colors are registered CSS custom properties
   (`@property`), so a state change interpolates the colors themselves
@@ -23,6 +23,20 @@ ends.
   enter/exit of buffering. Arming's energy is a new dedicated breathing
   layer instead: a bottom glow that fades in over 0.9 s and pulses
   gently (transform only, so its restart never fights the fade).
+- The big delay number's color rides the same 1.1 s sweep as the aurora
+  (it used to snap a second ahead of the glow), and the state pill's
+  text/background/border colors sweep too instead of hard-cutting.
+- The subtext under the number only animates when the MESSAGE changes,
+  not when the live numbers inside it tick (buffer fill, bitrate, and
+  the auto-cut countdown update up to 4x/s - each tick used to replay
+  the fade, a constant pulse). Message changes get a cleaner
+  directional swap: the old line drops out, the new one drops in.
+- The arming counter counts continuously instead of stuttering: each
+  ~250 ms state update now animates linearly into the next (the old
+  80 ms ease-out sprinted then froze between updates), the fill bar
+  fills at constant speed, and phase jumps (arm / activate / cut) keep
+  a longer eased sweep. Retargeting the counter mid-flight also no
+  longer stacks duplicate animation loops on the element.
 
 ### Local test sink destination
 
