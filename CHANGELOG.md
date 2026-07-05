@@ -6,6 +6,66 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+### Smooth aurora + hero text state transitions
+
+The hero now changes state as one coordinated sweep - glow, number, and
+pill move together - and the per-second stutter in the text and counter
+is gone.
+
+- The two aurora colors are registered CSS custom properties
+  (`@property`), so a state change interpolates the colors themselves
+  over ~1.1 s - the old `transition: background` never worked because
+  gradients aren't transitionable as images. Browsers without
+  `@property` keep the previous instant swap.
+- The drift animation is now identical in every state. The old "arming"
+  speed-up overrode `animation-duration` (14 s → 4 s) mid-flight, which
+  remaps elapsed time and visibly teleported the blobs on every
+  enter/exit of buffering. Arming's energy is a new dedicated breathing
+  layer instead: a bottom glow that fades in over 0.9 s and pulses
+  gently (transform only, so its restart never fights the fade).
+- The big delay number's color rides the same 1.1 s sweep as the aurora
+  (it used to snap a second ahead of the glow), and the state pill's
+  text/background/border colors sweep too instead of hard-cutting.
+- The subtext under the number only animates when the MESSAGE changes,
+  not when the live numbers inside it tick (buffer fill, bitrate, and
+  the auto-cut countdown update up to 4x/s - each tick used to replay
+  the fade, a constant pulse). Message changes get a cleaner
+  directional swap: the old line drops out, the new one drops in.
+- The arming counter counts continuously instead of stuttering: it
+  animates linearly with a duration longer than the update cadence, so
+  it never finishes early and freezes between ticks (the old 80 ms
+  ease-out sprinted then froze ~170 ms every update). The fill bar
+  fills at constant speed, and phase jumps (arm / activate / cut) keep
+  a longer eased sweep. Retargeting mid-flight no longer stacks
+  duplicate animation loops on the element.
+- Fixed the counter SNAPPING instead of animating. `animateNumber` is
+  called with the same target on every state tick, and its no-change
+  branch hard-set the text to the end value - killing any roll in
+  progress. That was the "disarm 15s→0s with no animation" report: the
+  idle state repeats ~4x/s and each repeat snapped the count-down to 0.
+  It now lets an in-flight animation finish.
+- Disarm / cancel rolls the big number down to 0.0 over the same 1.1 s
+  as the color sweep, so the count-down and the fade-to-idle land as
+  one motion instead of the number vanishing ahead of the glow.
+- The hero delay-profile chips and the Profiles pane no longer flicker.
+  Both rebuilt their whole DOM on every state tick (~4x/s); they now
+  skip the rebuild unless the rendered content actually changed.
+- The "delay too big for your buffer" gate is stable instead of jumpy.
+  It planned from the raw instantaneous bitrate, so a momentary dip
+  inflated the computed capacity and briefly unlocked a delay the
+  buffer can't hold - and during that flicker the chip was clickable,
+  arming a delay that could then never fill. Planning now uses a
+  slow-decaying peak-hold of the bitrate (worst case), so the gate
+  can't flicker or transiently unlock an unfillable delay.
+- The "Adjusting → rewinding to 15s (currently 0s)…" line told a story
+  the engine doesn't do - the delay never rewinds gradually; it waits
+  for enough buffered history, then makes ONE IDR-aligned jump. The
+  copy now says exactly that ("Building history - jumps to 15s once
+  … buffered reaches it", then "Jumping back to 15s of delay…"), and
+  the adjusting detector is gated on a live destination - with none
+  connected, delivered delay reads 0 and the old line showed a fake
+  permanent "rewinding" state.
+
 ### Local test sink destination
 
 **Try the whole pipeline with zero risk.** The in-binary RTMP sink

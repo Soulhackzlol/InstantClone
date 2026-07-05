@@ -740,8 +740,10 @@ impl Controller {
     ///
     /// If a delay is currently *active*, arming a smaller delay
     /// live-updates the target (no buffer wait needed); arming a larger
-    /// delay updates the target too, and the controller will smoothly
-    /// rewind once enough buffer has accumulated.
+    /// delay updates the target too, and the controller holds position
+    /// until the ring has enough history, then performs ONE IDR-aligned
+    /// jump back to it (there is no gradual rewind - see
+    /// `compute_delay_cut`'s build-buffer-first branch).
     pub fn arm_delay(&self, ms: u32) {
         let ms = ms.min(600_000);
         let previous_target = self.target_delay_ms.load(Ordering::Relaxed);

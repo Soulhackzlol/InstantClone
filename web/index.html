@@ -307,9 +307,25 @@ input,select,textarea{font-family:inherit;color:inherit}
 .hero-readout{display:flex;flex-direction:column;gap:14px;padding:28px 32px;min-width:0;
   border-right:1px solid var(--line);position:relative;overflow:hidden}
 @media (max-width:880px){.hero-readout{border-right:0;border-bottom:1px solid var(--line)}}
+/* Registered custom properties so the aurora COLORS interpolate on a
+   state change. Without @property, swapping a var() consumed inside a
+   radial-gradient snaps instantly - gradients aren't transitionable as
+   background-image, only the registered variable is. Browsers without
+   @property (old CEF) simply fall back to the old hard swap. */
+@property --aurora-a{syntax:'<color>';inherits:true;initial-value:#5a7a8a}
+@property --aurora-b{syntax:'<color>';inherits:true;initial-value:#5a7a8a}
+/* The vars live (and transition) on the readout; the ::before/::after
+   blobs inherit the interpolating value and repaint every frame, so a
+   state flip reads as one continuous color sweep instead of a cut. */
+.hero-readout{transition:--aurora-a 1.1s var(--ease-out),--aurora-b 1.1s var(--ease-out)}
 .hero-readout::before,.hero-readout::after{content:'';position:absolute;pointer-events:none;
   border-radius:50%;filter:blur(60px);opacity:.22;z-index:0;
-  transition:background .6s var(--ease-out),opacity .6s var(--ease-out)}
+  transition:opacity .9s var(--ease-out)}
+/* The drift animations are deliberately IDENTICAL in every state and
+   never overridden per-state: changing animation-duration mid-flight
+   remaps elapsed time to a different progress fraction, teleporting the
+   blobs on every arming enter/exit (the old behaviour). State "energy"
+   is conveyed by the separate .aurora-pulse layer instead. */
 .hero-readout::before{width:360px;height:360px;left:-80px;top:-80px;
   background:radial-gradient(circle at 30% 30%,var(--aurora-a,var(--accent)),transparent 70%);
   animation:aurora-drift-a 14s ease-in-out infinite alternate}
@@ -321,11 +337,22 @@ input,select,textarea{font-family:inherit;color:inherit}
 .hero-readout[data-state="armed"] {--aurora-a:var(--accent);--aurora-b:oklch(0.78 0.13 200)}
 .hero-readout[data-state="active"]{--aurora-a:var(--live);--aurora-b:oklch(0.75 0.16 165)}
 .hero-readout[data-state="active"]::before,.hero-readout[data-state="active"]::after{opacity:.32}
-.hero-readout[data-state="arming"]::before{animation-duration:4s;opacity:.30}
-.hero-readout[data-state="arming"]::after{animation-duration:5s;opacity:.30}
+.hero-readout[data-state="arming"]::before,.hero-readout[data-state="arming"]::after{opacity:.30}
 @keyframes aurora-drift-a{0%{transform:translate(0,0) scale(1)} 100%{transform:translate(80px,40px) scale(1.15)}}
 @keyframes aurora-drift-b{0%{transform:translate(0,0) scale(1.1)} 100%{transform:translate(-60px,-40px) scale(.9)}}
 .hero-readout>*{position:relative;z-index:1}
+/* Breathing layer: the "buffer is filling" heartbeat. Fades in/out via
+   the opacity transition (smooth entry/exit even though its keyframes
+   restart), and only animates transform - opacity stays owned by the
+   transition so the two never fight. Sits under the content like the
+   blobs; the `.hero-readout>*` z-index lift above is overridden here. */
+.hero-readout>.aurora-pulse{position:absolute;inset:0;z-index:0;pointer-events:none;opacity:0;
+  background:radial-gradient(70% 90% at 50% 115%,var(--aurora-a,var(--accent)),transparent 72%);
+  filter:blur(46px);transform-origin:50% 100%;
+  transition:opacity .9s var(--ease-out)}
+.hero-readout[data-state="arming"]>.aurora-pulse{opacity:.26;
+  animation:aurora-breathe 2.4s ease-in-out infinite}
+@keyframes aurora-breathe{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.18)}}
 
 .hero-control{display:flex;flex-direction:column;gap:14px;padding:28px 32px;min-width:0;
   justify-content:space-between;
@@ -335,8 +362,13 @@ input,select,textarea{font-family:inherit;color:inherit}
 .state-pill{display:inline-flex;align-items:center;gap:8px;padding:5px 11px;border-radius:999px;
   background:color-mix(in oklch,var(--sc,var(--idle)) 8%,var(--surface-3));
   border:1px solid color-mix(in oklch,var(--sc,var(--idle)) 30%,transparent);
-  color:var(--sc,var(--idle));align-self:flex-start}
-.state-pill .state-dot{width:7px;height:7px;border-radius:999px;background:var(--sc,var(--idle))}
+  color:var(--sc,var(--idle));align-self:flex-start;
+  /* Sweep the pill's colors on a state change instead of snapping -
+     the consuming properties (not the --sc var itself) interpolate,
+     shadowing the aurora's 1.1 s color sweep at a snappier pace. */
+  transition:color .8s var(--ease-out),background .8s var(--ease-out),border-color .8s var(--ease-out)}
+.state-pill .state-dot{width:7px;height:7px;border-radius:999px;background:var(--sc,var(--idle));
+  transition:background .8s var(--ease-out)}
 .state-pill .state-dot.pulse{animation:hpulse 1.6s cubic-bezier(.2,.7,.2,1) infinite}
 @keyframes hpulse{
   0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--sc) 60%,transparent)}
@@ -346,7 +378,10 @@ input,select,textarea{font-family:inherit;color:inherit}
 
 .hero-delay-row{display:flex;align-items:baseline;gap:4px;line-height:.9;margin-top:-4px}
 .hero-delay-num{font-size:116px;font-weight:500;letter-spacing:-.045em;color:var(--fg);
-  font-variant-numeric:tabular-nums;transition:color .25s var(--ease-out)}
+  /* Color rides the same 1.1 s sweep as the aurora behind it, so the
+     number and the glow change hue together instead of the number
+     snapping a second ahead of the background. */
+  font-variant-numeric:tabular-nums;transition:color 1.1s var(--ease-out)}
 .hero-delay-num.d-off   {color:var(--fg-3)}
 .hero-delay-num.d-arming{color:var(--warn)}
 .hero-delay-num.d-armed {color:var(--accent)}
@@ -354,13 +389,22 @@ input,select,textarea{font-family:inherit;color:inherit}
 .hero-delay-unit{font-size:32px;color:var(--fg-3);font-weight:400}
 .hero-delay-of{font-size:22px;color:var(--fg-3);margin-left:6px}
 .hero-delay-sub{color:var(--fg-3);font-size:13px;min-height:1.4em;
-  transition:opacity .15s var(--ease-out),transform .15s var(--ease-out)}
-.hero-delay-sub.subfade{opacity:0;transform:translateY(2px)}
+  transition:opacity .22s var(--ease-out),transform .22s var(--ease-out)}
+/* Message swap: old text slides down + fades, new text drops in from
+   above. `.subenter` is the pre-swap frame (parked above, invisible,
+   transitions off so the jump is instant); removing it lands the new
+   text with the normal transition. Declared after .subfade so its
+   transition:none wins while both are present mid-swap. */
+.hero-delay-sub.subfade{opacity:0;transform:translateY(4px)}
+.hero-delay-sub.subenter{transition:none;opacity:0;transform:translateY(-4px)}
 .arm-bar{height:4px;width:100%;background:var(--surface-3);border-radius:999px;overflow:hidden;
   margin-top:-4px;position:relative}
 .arm-bar-fill{height:100%;background:linear-gradient(90deg,color-mix(in oklch,var(--warn) 60%,transparent),var(--warn));
   border-radius:999px;box-shadow:0 0 12px color-mix(in oklch,var(--warn) 50%,transparent);
-  transition:width .3s var(--ease-out)}
+  /* Linear, sized to the ~250 ms SSE cadence: each update hands off to
+     the next at constant speed, so the bar fills continuously instead
+     of easing-out into a sawtooth 4x a second. */
+  transition:width .35s linear}
 .arm-bar::after{content:'';position:absolute;inset:0;
   background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,.15) 50%,transparent 100%);
   animation:arm-shimmer 1.6s linear infinite;pointer-events:none}
@@ -1428,6 +1472,9 @@ input,select,textarea{font-family:inherit;color:inherit}
 <section class="ic-card hero-card" id="hero" hidden>
   <div class="hero">
     <div class="hero-readout" id="hero-readout" data-state="off">
+      <!-- Breathing glow layer for the "arming" state - see the aurora
+           CSS block for why this is a real element and not a pseudo. -->
+      <span class="aurora-pulse" aria-hidden="true"></span>
       <div class="hero-status-row">
         <span class="state-pill" id="state-pill" style="--sc:var(--idle)">
           <span class="state-dot" id="state-dot"></span>
@@ -2297,7 +2344,22 @@ const BUF_OVERHEAD_PCT = 5;
 const BUF_HEADROOM_PCT = 3;
 const BUF_REF_KBPS = 10000;  // when we have no measured bitrate, plan for 10 Mbps
 
+// Peak-hold of the measured bitrate, used for capacity planning. Using
+// the raw instantaneous bitrate made the "too big" gate flicker: a
+// momentary dip lowered the planning bitrate, which RAISED the computed
+// capacity and briefly unlocked a delay the buffer can't actually hold
+// - and during that flicker the (e.g. 5 min) chip was clickable, arming
+// a delay that can then never fill. We plan for the highest recent
+// bitrate (worst case) and decay it slowly (~1.5%/update, ~30 s to
+// reflect a genuine bitrate drop) so the gate is stable, not jumpy.
+let bitrateHoldKbps = 0;
+function updateBitrateHold(s){
+  const m = s && s.stats && s.stats.bitrate_kbps;
+  if (!m || m <= 1000) return; // no signal - keep the last hold
+  bitrateHoldKbps = Math.max(m, (bitrateHoldKbps || m) * 0.985);
+}
 function planningKbps(){
+  if (bitrateHoldKbps > 1000) return bitrateHoldKbps;
   const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
   if (m && m > 1000) return m;
   return BUF_REF_KBPS;
@@ -2359,19 +2421,36 @@ function toast(msg, kind){
 
 // ── Animated number helper ────────────────────────────────────────────
 const numState = new Map(); // id → {from, to, start}
-function animateNumber(id, target, dur, fmt){
+// `ease`: 'linear' for values that stream in continuously (the arming
+// fill arrives ~4x/s - each segment must hand off to the next at
+// constant velocity or the count reads as a stutter); default cubic
+// ease-out for one-shot jumps (arm, activate, cut).
+function animateNumber(id, target, dur, fmt, ease){
   const el = $(id); if(!el) return;
   const cur = numState.get(id) || { from: target, to: target, start: 0, last: target };
-  if (cur.to === target){ // no change → make sure final text is right
-    if(!el._wired){ el._wired=true; }
-    el.textContent = fmt ? fmt(target) : Math.round(target).toLocaleString();
+  if (cur.to === target){
+    // Same target as the current animation. If one is still in flight
+    // (last hasn't reached target), LET IT FINISH - writing the final
+    // text here would snap to the end and kill the visible motion.
+    // That was the "disarm 15s→0s with no animation" bug: the idle
+    // state repeats ~4x/s, and each repeat re-entered here mid-roll and
+    // hard-set the text to 0.0. Only commit text once actually settled.
+    if (cur.last === target){
+      el.textContent = fmt ? fmt(target) : Math.round(target).toLocaleString();
+    }
     return;
   }
   cur.from = cur.last; cur.to = target; cur.start = performance.now();
+  // Generation guard: a retarget mid-flight abandons the older rAF loop
+  // instead of leaving two loops writing the same element every frame
+  // (arming retargets ~4x/s with a 300 ms duration, so loops overlap).
+  cur.gen = (cur.gen || 0) + 1;
+  const gen = cur.gen;
   numState.set(id, cur);
   const tick = (now) => {
+    if (cur.gen !== gen) return;
     const t = Math.min(1, (now - cur.start) / (dur || 600));
-    const eased = 1 - Math.pow(1 - t, 3);
+    const eased = ease === 'linear' ? t : 1 - Math.pow(1 - t, 3);
     const v = cur.from + (cur.to - cur.from) * eased;
     cur.last = v;
     el.textContent = fmt ? fmt(v) : Math.round(v).toLocaleString();
@@ -2541,13 +2620,32 @@ function disarmClick(ev){
 }
 
 // ── Hero render ───────────────────────────────────────────────────────
-// Crossfade the hero subtext when it changes - a quick fade-out, swap,
-// fade-in. Unchanged text is a no-op so steady states don't flicker.
-function setSubText(el, text){
-  if (!el || el.textContent === text) return;
-  el.classList.add('subfade');
+// Swap the hero subtext with a directional micro-slide (old line drops
+// out, new line drops in) - but ONLY when the message KIND changes.
+// `key` names the kind; several messages embed live numbers (bitrate,
+// buffer fill, the auto-cut countdown) that tick up to 4x/s, and
+// animating those swaps made the line pulse constantly. Same kind =
+// silent in-place text update; changed kind = animated swap.
+function setSubText(el, text, key){
+  if (!el) return;
+  const kind = key || text;
+  const sameKind = el._subKey === kind;
+  el._subKey = kind;
+  if (el.textContent === text) return;
+  if (sameKind && !el._subT){ el.textContent = text; return; }
   clearTimeout(el._subT);
-  el._subT = setTimeout(() => { el.textContent = text; el.classList.remove('subfade'); }, 150);
+  el.classList.add('subfade');
+  el._subT = setTimeout(() => {
+    el._subT = null;
+    el.textContent = text;
+    // Pre-swap frame: park the new text above, invisible, transitions
+    // off. Committing that frame (offsetWidth) then releasing the class
+    // lets the normal transition land it - a drop-in, not a reappear.
+    el.classList.add('subenter');
+    el.classList.remove('subfade');
+    void el.offsetWidth;
+    el.classList.remove('subenter');
+  }, 220);
 }
 function renderHero(s){
   const ds = PHASE_TO_STATE[s.phase] || 'off';
@@ -2571,7 +2669,18 @@ function renderHero(s){
   const showSec = ds === 'arming' ? Math.min(fillSec, targetSec)
                  : ds === 'armed' || ds === 'active' ? targetSec
                  : 0;
-  animateNumber('delay-big', showSec, ds === 'arming' ? 80 : 500, v => v.toFixed(1));
+  // Arming counts LINEARLY, and the duration must be >= the state-update
+  // cadence or the number finishes early and FREEZES until the next
+  // update - the stutter you see. SSE pushes ~4x/s, but the polling
+  // fallback is every 500 ms, so 600 ms guarantees the animation is
+  // still running when the next value lands (with the generation guard,
+  // a retarget mid-flight just continues at constant speed). Phase jumps
+  // get an eased sweep; the roll DOWN to zero (disarm / cancel) takes
+  // 1.1 s to match the aurora + number color sweep, so the count-down
+  // and the fade-to-idle land together.
+  const numDur = ds === 'arming' ? 600 : showSec === 0 ? 1100 : 700;
+  animateNumber('delay-big', showSec, numDur, v => v.toFixed(1),
+    ds === 'arming' ? 'linear' : null);
   if (ds === 'arming'){
     $('delay-of').hidden = false; $('delay-of').textContent = `/ ${targetSec.toFixed(1)}s`;
     $('arm-bar').hidden = false;
@@ -2592,27 +2701,48 @@ function renderHero(s){
   // skips the natural ~1s jitter from the per-IDR cut quantum.
   const curMs = s.current_delay_ms || 0;
   const armedMs = s.armed_delay_ms || 0;
-  const adjusting = ds === 'active' && armedMs > 0 && Math.abs(armedMs - curMs) > 1500;
+  // Gated on egress_alive: current_delay_ms is derived from the slowest
+  // LIVE destination and reads 0 when none is connected - without the
+  // gate, an active delay with no destination showed a permanent (and
+  // fake) "adjusting to Xs (currently 0s)" line.
+  const adjusting = ds === 'active' && armedMs > 0 && s.egress_alive
+    && Math.abs(armedMs - curMs) > 1500;
   // Sub copy. When OBS hasn't connected there's no signal to forward, so
   // don't claim we're forwarding anything - say we're waiting for it.
-  let sub = '';
+  // `subKey` names the message KIND: setSubText only animates the swap
+  // when the kind changes, so the live numbers embedded in these lines
+  // (buffer fill, bitrate, countdown) tick in place without pulsing.
+  let sub = '', subKey = ds;
   if (ds === 'off'){
     sub = s.ingest_alive
       ? `Forwarding live with no delay · ${fmtKbps(s.stats.bitrate_kbps)} in`
       : `Waiting for your encoder to connect…`;
+    subKey = s.ingest_alive ? 'off-live' : 'off-wait';
   }
   else if (ds === 'arming') sub = `Buffering - ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers still see live until you activate.`;
   else if (ds === 'armed') sub = `Buffer ready. Click Activate to cut your stream over.`;
   else if (ds === 'active' && adjusting){
-    const dir = armedMs > curMs ? 'rewinding' : 'jumping forward';
-    sub = `Adjusting → ${dir} to ${fmtDelay(armedMs)} (currently ${fmtDelay(curMs)})…`;
+    // Honest copy: the delay never "rewinds" gradually - the cut
+    // machinery waits until the ring holds enough history, then does
+    // ONE IDR-aligned jump. While waiting, the server sets
+    // buffer_building; the brief pre-jump window (< ~1 s, the cut
+    // check's throttle) is the only other way to land here.
+    if (s.buffer_building){
+      sub = `Building history - jumps to ${fmtDelay(armedMs)} once ${fillSec.toFixed(1)}s buffered reaches it.`;
+      subKey = 'adjust-building';
+    } else {
+      const dir = armedMs > curMs ? 'back' : 'forward';
+      sub = `Jumping ${dir} to ${fmtDelay(armedMs)} of delay…`;
+      subKey = 'adjust-' + dir;
+    }
   }
   else if (ds === 'active' && s.safe_cut_pending){
     const cd = Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000));
     sub = `Auto-cut armed - going live in ~${cd}s, everything up to your mark still airs.`;
+    subKey = 'safecut';
   }
   else if (ds === 'active') sub = `Forwarded with a ${fmtDelay(s.armed_delay_ms)} buffer${s.ingest_alive ? ` · `+fmtKbps(s.stats.bitrate_kbps)+' in' : '.'}`;
-  setSubText($('delay-sub'), sub);
+  setSubText($('delay-sub'), sub, subKey);
 
   renderCta();
 }
@@ -2773,12 +2903,23 @@ function renderCutAfter(ds){
 
 // ── Profile chips in hero ──────────────────────────────────────────────
 function renderCpProfiles(){
-  const c = $('cp-profiles'); c.innerHTML = '';
-  if (!profiles || profiles.length === 0) return;
+  const c = $('cp-profiles');
   const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
   const target = lastState ? lastState.armed_delay_ms : 0;
   const cap = currentBufferCapMs();
-  profiles.slice(0, 5).forEach(p => {
+  // applyState calls this every state tick (~4x/s). Wiping innerHTML and
+  // rebuilding every time made the chips visibly flicker. Skip the
+  // rebuild unless something that affects the chips actually changed -
+  // the profile list, the armed target, the phase-group, or which chips
+  // are over capacity (now stable thanks to the bitrate peak-hold).
+  const list = (profiles || []).slice(0, 5);
+  const sig = JSON.stringify([list.map(p => [p.name, p.delay_ms]), ds, target,
+    list.map(p => (cap > 0 && p.delay_ms > cap) ? 1 : 0)]);
+  if (c._sig === sig) return;
+  c._sig = sig;
+  c.innerHTML = '';
+  if (list.length === 0) return;
+  list.forEach(p => {
     const tooBig = cap > 0 && p.delay_ms > cap;
     const isCur = target === p.delay_ms && ds !== 'off';
     const b = document.createElement('button');
@@ -3296,9 +3437,17 @@ async function loadProfiles(){
   } catch(_){}
 }
 function renderProfilesPane(){
-  const c = $('profile-list'); c.innerHTML = '';
+  const c = $('profile-list');
   const cap = currentBufferCapMs();
   const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
+  const armed = lastState ? lastState.armed_delay_ms : 0;
+  // Same anti-flicker guard as the hero chips: rebuilt every tick, this
+  // pane flickered too. Only rebuild when the rendered content changes.
+  const sig = JSON.stringify([(profiles || []).map(p => [p.name, p.delay_ms]), ds, armed,
+    (profiles || []).map(p => (cap > 0 && p.delay_ms > cap) ? requiredMBForMs(p.delay_ms) : 0)]);
+  if (c._sig === sig) return;
+  c._sig = sig;
+  c.innerHTML = '';
   profiles.forEach(p => {
     const isCur = ds !== 'off' && lastState && lastState.armed_delay_ms === p.delay_ms;
     const tooBig = cap > 0 && p.delay_ms > cap;
@@ -5467,6 +5616,10 @@ function applyState(s){
       toast('OBS reconnected - re-aligned timeline','info');
   }
   lastState = s;
+  // Update the capacity planning bitrate BEFORE any render that reads it
+  // (the profile chips + CTA capacity gate), so a transient dip can't
+  // flash a too-big delay unlocked mid-tick.
+  updateBitrateHold(s);
   if ($('hero').hidden) return; // not configured
   if (pendingPhase && pendingPhase === PHASE_TO_STATE[s.phase]) clearPending();
   renderHero(s);
