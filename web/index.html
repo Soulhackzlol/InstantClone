@@ -2650,9 +2650,12 @@ function renderHero(s){
   // Arming counts LINEARLY over ~the 250 ms SSE cadence, so each update
   // hands off to the next at constant speed and the fill reads as one
   // continuous count (the old 80 ms ease-out sprinted then froze ~170 ms
-  // between updates - a visible stutter 4x a second). Phase jumps
-  // (0 -> 15 on arm, 15 -> 0 on cut) get a longer eased sweep instead.
-  animateNumber('delay-big', showSec, ds === 'arming' ? 300 : 700, v => v.toFixed(1),
+  // between updates - a visible stutter 4x a second). Phase jumps get an
+  // eased sweep instead - and the roll DOWN to zero (disarm / cancel)
+  // takes 1.1 s to ride the aurora + number color sweep of the same
+  // length, so the count-down and the fade-to-idle land together.
+  const numDur = ds === 'arming' ? 300 : showSec === 0 ? 1100 : 700;
+  animateNumber('delay-big', showSec, numDur, v => v.toFixed(1),
     ds === 'arming' ? 'linear' : null);
   if (ds === 'arming'){
     $('delay-of').hidden = false; $('delay-of').textContent = `/ ${targetSec.toFixed(1)}s`;
@@ -2674,7 +2677,12 @@ function renderHero(s){
   // skips the natural ~1s jitter from the per-IDR cut quantum.
   const curMs = s.current_delay_ms || 0;
   const armedMs = s.armed_delay_ms || 0;
-  const adjusting = ds === 'active' && armedMs > 0 && Math.abs(armedMs - curMs) > 1500;
+  // Gated on egress_alive: current_delay_ms is derived from the slowest
+  // LIVE destination and reads 0 when none is connected - without the
+  // gate, an active delay with no destination showed a permanent (and
+  // fake) "adjusting to Xs (currently 0s)" line.
+  const adjusting = ds === 'active' && armedMs > 0 && s.egress_alive
+    && Math.abs(armedMs - curMs) > 1500;
   // Sub copy. When OBS hasn't connected there's no signal to forward, so
   // don't claim we're forwarding anything - say we're waiting for it.
   // `subKey` names the message KIND: setSubText only animates the swap
@@ -2690,9 +2698,19 @@ function renderHero(s){
   else if (ds === 'arming') sub = `Buffering - ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers still see live until you activate.`;
   else if (ds === 'armed') sub = `Buffer ready. Click Activate to cut your stream over.`;
   else if (ds === 'active' && adjusting){
-    const dir = armedMs > curMs ? 'rewinding' : 'jumping forward';
-    sub = `Adjusting → ${dir} to ${fmtDelay(armedMs)} (currently ${fmtDelay(curMs)})…`;
-    subKey = 'adjust-' + dir;
+    // Honest copy: the delay never "rewinds" gradually - the cut
+    // machinery waits until the ring holds enough history, then does
+    // ONE IDR-aligned jump. While waiting, the server sets
+    // buffer_building; the brief pre-jump window (< ~1 s, the cut
+    // check's throttle) is the only other way to land here.
+    if (s.buffer_building){
+      sub = `Building history - jumps to ${fmtDelay(armedMs)} once ${fillSec.toFixed(1)}s buffered reaches it.`;
+      subKey = 'adjust-building';
+    } else {
+      const dir = armedMs > curMs ? 'back' : 'forward';
+      sub = `Jumping ${dir} to ${fmtDelay(armedMs)} of delay…`;
+      subKey = 'adjust-' + dir;
+    }
   }
   else if (ds === 'active' && s.safe_cut_pending){
     const cd = Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000));

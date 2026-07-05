@@ -37,6 +37,17 @@ is gone.
   fills at constant speed, and phase jumps (arm / activate / cut) keep
   a longer eased sweep. Retargeting the counter mid-flight also no
   longer stacks duplicate animation loops on the element.
+- Disarm / cancel rolls the big number down to 0.0 over the same 1.1 s
+  as the color sweep, so the count-down and the fade-to-idle land as
+  one motion instead of the number vanishing ahead of the glow.
+- The "Adjusting → rewinding to 15s (currently 0s)…" line told a story
+  the engine doesn't do - the delay never rewinds gradually; it waits
+  for enough buffered history, then makes ONE IDR-aligned jump. The
+  copy now says exactly that ("Building history - jumps to 15s once
+  … buffered reaches it", then "Jumping back to 15s of delay…"), and
+  the adjusting detector is gated on a live destination - with none
+  connected, delivered delay reads 0 and the old line showed a fake
+  permanent "rewinding" state.
 
 ### Local test sink destination
 
