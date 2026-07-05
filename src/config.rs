@@ -22,6 +22,15 @@ const MAX_PROFILES: usize = 256;
 /// hand-edited config sets `buffer_mb=0`.
 const MIN_BUFFER_MB: u64 = 50;
 
+/// Ports for the built-in "Local test sink" destination (platform
+/// `"sink"`). The egress supervisor spawns `instantclone sink` as a
+/// child process on these when such a destination is enabled. Fixed
+/// (not configurable) on purpose: the sink's own CLI defaults (1936 /
+/// 1937) are what people use for MANUAL sink runs and the e2e script,
+/// so the managed instance stays out of their way on a high pair.
+pub const SINK_RTMP_PORT: u16 = 19350;
+pub const SINK_WEB_PORT: u16 = 19351;
+
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub ingest_port: u16,
@@ -92,7 +101,9 @@ pub struct Destination {
     pub id: String,   // stable across renames; UI key
     pub name: String, // user label ("Twitch", "Backup", etc.)
     pub enabled: bool,
-    pub platform: String, // "twitch" | "youtube" | "kick" | "trovo" | "restream" | "custom"
+    // "twitch" | "youtube" | "kick" | "trovo" | "restream" | "custom"
+    // | "sink" (the built-in local test sink - see SINK_RTMP_PORT)
+    pub platform: String,
     pub stream_key: String,
     pub custom_egress_url: String, // used when platform == "custom"
     /// Only meaningful when platform == "twitch". Empty = auto-route via
@@ -154,6 +165,14 @@ impl Destination {
     /// rules as the top-level single-dest path: if a custom URL already has
     /// app+key, the key field is ignored; otherwise the key is appended.
     pub fn egress_url(&self) -> Option<String> {
+        // Local test sink: fully self-contained. The URL is fixed (the
+        // supervisor spawns the matching `instantclone sink` child on
+        // SINK_RTMP_PORT) and the stream key is ignored - the sink
+        // accepts any key, so requiring one would just add a fake
+        // field to fill in.
+        if self.platform == "sink" {
+            return Some(format!("rtmp://127.0.0.1:{}/live/test", SINK_RTMP_PORT));
+        }
         if self.platform == "custom" {
             let base = non_empty(&self.custom_egress_url)?
                 .trim_end_matches('/')
@@ -811,6 +830,8 @@ impl Settings {
                     errs.push(format!("{}: custom URL must start with rtmp://", d.name));
                     continue;
                 }
+            } else if d.platform == "sink" {
+                // Self-contained: fixed local URL, no key needed.
             } else if platform_base(&d.platform).is_none() {
                 errs.push(format!("{}: unknown platform '{}'", d.name, d.platform));
                 continue;
@@ -1122,6 +1143,38 @@ mod tests {
         assert!(is_path_safe(&PathBuf::from("./instantclone.buf")));
         assert!(is_path_safe(&PathBuf::from("D:\\streams\\buffer.bin")));
         assert!(is_path_safe(&PathBuf::from("/home/user/buf")));
+    }
+
+    #[test]
+    fn sink_destination_is_self_contained() {
+        // No stream key, no custom URL - the local test sink needs
+        // neither. The URL is the fixed managed-child endpoint, and
+        // validate() must not demand a key for it.
+        let d = Destination {
+            id: "x".into(),
+            name: "Test sink".into(),
+            enabled: true,
+            platform: "sink".into(),
+            stream_key: String::new(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+        };
+        assert_eq!(
+            d.egress_url().as_deref(),
+            Some(format!("rtmp://127.0.0.1:{}/live/test", SINK_RTMP_PORT).as_str())
+        );
+        assert!(d.is_well_formed());
+        let mut s = Settings::defaults();
+        s.destinations.push(d);
+        assert!(
+            s.validate().is_empty(),
+            "sink destination must validate without a key: {:?}",
+            s.validate()
+        );
     }
 
     #[test]
