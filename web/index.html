@@ -307,9 +307,25 @@ input,select,textarea{font-family:inherit;color:inherit}
 .hero-readout{display:flex;flex-direction:column;gap:14px;padding:28px 32px;min-width:0;
   border-right:1px solid var(--line);position:relative;overflow:hidden}
 @media (max-width:880px){.hero-readout{border-right:0;border-bottom:1px solid var(--line)}}
+/* Registered custom properties so the aurora COLORS interpolate on a
+   state change. Without @property, swapping a var() consumed inside a
+   radial-gradient snaps instantly - gradients aren't transitionable as
+   background-image, only the registered variable is. Browsers without
+   @property (old CEF) simply fall back to the old hard swap. */
+@property --aurora-a{syntax:'<color>';inherits:true;initial-value:#5a7a8a}
+@property --aurora-b{syntax:'<color>';inherits:true;initial-value:#5a7a8a}
+/* The vars live (and transition) on the readout; the ::before/::after
+   blobs inherit the interpolating value and repaint every frame, so a
+   state flip reads as one continuous color sweep instead of a cut. */
+.hero-readout{transition:--aurora-a 1.1s var(--ease-out),--aurora-b 1.1s var(--ease-out)}
 .hero-readout::before,.hero-readout::after{content:'';position:absolute;pointer-events:none;
   border-radius:50%;filter:blur(60px);opacity:.22;z-index:0;
-  transition:background .6s var(--ease-out),opacity .6s var(--ease-out)}
+  transition:opacity .9s var(--ease-out)}
+/* The drift animations are deliberately IDENTICAL in every state and
+   never overridden per-state: changing animation-duration mid-flight
+   remaps elapsed time to a different progress fraction, teleporting the
+   blobs on every arming enter/exit (the old behaviour). State "energy"
+   is conveyed by the separate .aurora-pulse layer instead. */
 .hero-readout::before{width:360px;height:360px;left:-80px;top:-80px;
   background:radial-gradient(circle at 30% 30%,var(--aurora-a,var(--accent)),transparent 70%);
   animation:aurora-drift-a 14s ease-in-out infinite alternate}
@@ -321,11 +337,22 @@ input,select,textarea{font-family:inherit;color:inherit}
 .hero-readout[data-state="armed"] {--aurora-a:var(--accent);--aurora-b:oklch(0.78 0.13 200)}
 .hero-readout[data-state="active"]{--aurora-a:var(--live);--aurora-b:oklch(0.75 0.16 165)}
 .hero-readout[data-state="active"]::before,.hero-readout[data-state="active"]::after{opacity:.32}
-.hero-readout[data-state="arming"]::before{animation-duration:4s;opacity:.30}
-.hero-readout[data-state="arming"]::after{animation-duration:5s;opacity:.30}
+.hero-readout[data-state="arming"]::before,.hero-readout[data-state="arming"]::after{opacity:.30}
 @keyframes aurora-drift-a{0%{transform:translate(0,0) scale(1)} 100%{transform:translate(80px,40px) scale(1.15)}}
 @keyframes aurora-drift-b{0%{transform:translate(0,0) scale(1.1)} 100%{transform:translate(-60px,-40px) scale(.9)}}
 .hero-readout>*{position:relative;z-index:1}
+/* Breathing layer: the "buffer is filling" heartbeat. Fades in/out via
+   the opacity transition (smooth entry/exit even though its keyframes
+   restart), and only animates transform - opacity stays owned by the
+   transition so the two never fight. Sits under the content like the
+   blobs; the `.hero-readout>*` z-index lift above is overridden here. */
+.hero-readout>.aurora-pulse{position:absolute;inset:0;z-index:0;pointer-events:none;opacity:0;
+  background:radial-gradient(70% 90% at 50% 115%,var(--aurora-a,var(--accent)),transparent 72%);
+  filter:blur(46px);transform-origin:50% 100%;
+  transition:opacity .9s var(--ease-out)}
+.hero-readout[data-state="arming"]>.aurora-pulse{opacity:.26;
+  animation:aurora-breathe 2.4s ease-in-out infinite}
+@keyframes aurora-breathe{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.18)}}
 
 .hero-control{display:flex;flex-direction:column;gap:14px;padding:28px 32px;min-width:0;
   justify-content:space-between;
@@ -1428,6 +1455,9 @@ input,select,textarea{font-family:inherit;color:inherit}
 <section class="ic-card hero-card" id="hero" hidden>
   <div class="hero">
     <div class="hero-readout" id="hero-readout" data-state="off">
+      <!-- Breathing glow layer for the "arming" state - see the aurora
+           CSS block for why this is a real element and not a pseudo. -->
+      <span class="aurora-pulse" aria-hidden="true"></span>
       <div class="hero-status-row">
         <span class="state-pill" id="state-pill" style="--sc:var(--idle)">
           <span class="state-dot" id="state-dot"></span>

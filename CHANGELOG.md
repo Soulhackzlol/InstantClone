@@ -6,6 +6,24 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+### Smooth aurora state transitions
+
+The hero's aurora glow now sweeps between state colors instead of
+snapping, and the blobs no longer teleport when buffering starts or
+ends.
+
+- The two aurora colors are registered CSS custom properties
+  (`@property`), so a state change interpolates the colors themselves
+  over ~1.1 s - the old `transition: background` never worked because
+  gradients aren't transitionable as images. Browsers without
+  `@property` keep the previous instant swap.
+- The drift animation is now identical in every state. The old "arming"
+  speed-up overrode `animation-duration` (14 s → 4 s) mid-flight, which
+  remaps elapsed time and visibly teleported the blobs on every
+  enter/exit of buffering. Arming's energy is a new dedicated breathing
+  layer instead: a bottom glow that fades in over 0.9 s and pulses
+  gently (transform only, so its restart never fights the fade).
+
 ### Local test sink destination
 
 **Try the whole pipeline with zero risk.** The in-binary RTMP sink
