@@ -51,22 +51,20 @@ is gone.
   the auto-cut countdown update up to 4x/s - each tick used to replay
   the fade, a constant pulse). Message changes get a cleaner
   directional swap: the old line drops out, the new one drops in.
-- The arming counter counts continuously instead of stuttering: it
-  animates linearly with a duration longer than the update cadence, so
-  it never finishes early and freezes between ticks (the old 80 ms
-  ease-out sprinted then froze ~170 ms every update). The fill bar
-  fills at constant speed, and phase jumps (arm / activate / cut) keep
-  a longer eased sweep. Retargeting mid-flight no longer stacks
-  duplicate animation loops on the element.
-- Fixed the counter SNAPPING instead of animating. `animateNumber` is
-  called with the same target on every state tick, and its no-change
-  branch hard-set the text to the end value - killing any roll in
-  progress. That was the "disarm 15s→0s with no animation" report: the
-  idle state repeats ~4x/s and each repeat snapped the count-down to 0.
-  It now lets an in-flight animation finish.
-- Disarm / cancel rolls the big number down to 0.0 over the same 1.1 s
-  as the color sweep, so the count-down and the fade-to-idle land as
-  one motion instead of the number vanishing ahead of the glow.
+- The big delay number now actually animates - it never did. The shared
+  `animateNumber` helper only stored per-element state on its animate
+  path, which a fresh id could never reach (its throwaway object always
+  had `to === target`), so the state map stayed empty and every number
+  SNAPPED to each value. The counter has been a direct-set since it was
+  written; the arming "stutter" and the "disarm 15s→0s with no
+  animation" were both this. The helper now seeds its map on first
+  sight, so the stat readouts ease properly too.
+- The hero delay figure is driven by a dedicated critically-damped
+  spring (SmoothDamp) on one persistent rAF, not a per-update tween. It
+  tracks the buffer fill at smooth near-constant velocity while arming
+  (no jerk from retargeting a varying gap over a fixed time) and eases
+  the big jumps - notably the roll DOWN to 0 on cut / disarm - to rest
+  with no overshoot, snap, or freeze, independent of update cadence.
 - The hero delay-profile chips and the Profiles pane no longer flicker.
   Both rebuilt their whole DOM on every state tick (~4x/s); they now
   skip the rebuild unless the rendered content actually changed.

@@ -2440,43 +2440,78 @@ function toast(msg, kind){
 }
 
 // ── Animated number helper ────────────────────────────────────────────
-const numState = new Map(); // id → {from, to, start}
-// `ease`: 'linear' for values that stream in continuously (the arming
-// fill arrives ~4x/s - each segment must hand off to the next at
-// constant velocity or the count reads as a stutter); default cubic
-// ease-out for one-shot jumps (arm, activate, cut).
-function animateNumber(id, target, dur, fmt, ease){
+const numState = new Map(); // id → {to, last, gen}
+// Fixed-duration ease-out tween for the stat readouts. NOTE the fix: the
+// map is now SEEDED on first sight of an id. The old version only stored
+// state on the animate path, which a fresh id could never reach (its
+// throwaway object always had `to === target`), so the map stayed empty
+// and every number SNAPPED - animateNumber never actually animated.
+function animateNumber(id, target, dur, fmt){
   const el = $(id); if(!el) return;
-  const cur = numState.get(id) || { from: target, to: target, start: 0, last: target };
-  if (cur.to === target){
-    // Same target as the current animation. If one is still in flight
-    // (last hasn't reached target), LET IT FINISH - writing the final
-    // text here would snap to the end and kill the visible motion.
-    // That was the "disarm 15s→0s with no animation" bug: the idle
-    // state repeats ~4x/s, and each repeat re-entered here mid-roll and
-    // hard-set the text to 0.0. Only commit text once actually settled.
-    if (cur.last === target){
-      el.textContent = fmt ? fmt(target) : Math.round(target).toLocaleString();
-    }
+  const fmtv = v => fmt ? fmt(v) : Math.round(v).toLocaleString();
+  let cur = numState.get(id);
+  if (!cur){                       // first sighting: show + seed, no anim
+    numState.set(id, { to: target, last: target, gen: 0 });
+    el.textContent = fmtv(target);
     return;
   }
+  if (cur.to === target){          // already heading here
+    if (cur.last === target) el.textContent = fmtv(target); // settled: exact
+    return;                        // in-flight: let the running loop finish
+  }
   cur.from = cur.last; cur.to = target; cur.start = performance.now();
-  // Generation guard: a retarget mid-flight abandons the older rAF loop
-  // instead of leaving two loops writing the same element every frame
-  // (arming retargets ~4x/s with a 300 ms duration, so loops overlap).
-  cur.gen = (cur.gen || 0) + 1;
-  const gen = cur.gen;
-  numState.set(id, cur);
+  const gen = (cur.gen = (cur.gen || 0) + 1);
   const tick = (now) => {
-    if (cur.gen !== gen) return;
+    if (cur.gen !== gen) return;   // a newer retarget owns the element now
     const t = Math.min(1, (now - cur.start) / (dur || 600));
-    const eased = ease === 'linear' ? t : 1 - Math.pow(1 - t, 3);
-    const v = cur.from + (cur.to - cur.from) * eased;
-    cur.last = v;
-    el.textContent = fmt ? fmt(v) : Math.round(v).toLocaleString();
+    const v = cur.from + (cur.to - cur.from) * (1 - Math.pow(1 - t, 3));
+    cur.last = v; el.textContent = fmtv(v);
     if (t < 1) requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
+}
+
+// ── Hero delay number: continuous critically-damped motion ────────────
+// The big delay figure is special: it COUNTS UP as the buffer fills
+// (target moves ~4x/s) and ROLLS DOWN on cut/disarm (one big jump). A
+// fixed-duration tween handles the jump but makes the count-up jerk -
+// each state update retargets a varying gap over a fixed time, so the
+// velocity keeps changing. Instead we run ONE persistent rAF that chases
+// the latest target with a critically-damped spring (Unity SmoothDamp):
+// it tracks a moving target at smooth, near-constant velocity (buttery
+// count-up) and eases a big jump to rest with no overshoot (clean
+// roll-down) - immune to update cadence, with no snap and no freeze.
+const heroNum = { cur: 0, vel: 0, target: 0, smooth: 0.3, prev: 0, raf: 0 };
+function setHeroDelayNumber(sec, smoothTime){
+  heroNum.target = sec;
+  heroNum.smooth = smoothTime || 0.3;
+  if (!heroNum.raf){
+    heroNum.prev = performance.now();
+    heroNum.raf = requestAnimationFrame(heroNumTick);
+  }
+}
+function heroNumTick(now){
+  const el = $('delay-big');
+  if (!el){ heroNum.raf = 0; return; }
+  const dt = Math.min(0.05, Math.max(0.001, (now - heroNum.prev) / 1000));
+  heroNum.prev = now;
+  const smoothTime = Math.max(0.02, heroNum.smooth);
+  const omega = 2 / smoothTime;
+  const x = omega * dt;
+  const exp = 1 / (1 + x + 0.48*x*x + 0.235*x*x*x);
+  const to = heroNum.target;
+  const change = heroNum.cur - to;
+  const temp = (heroNum.vel + omega * change) * dt;
+  heroNum.vel = (heroNum.vel - omega * temp) * exp;
+  let out = to + (change + temp) * exp;
+  // Overshoot clamp (SmoothDamp): if we crossed the target, land on it.
+  if ((to - heroNum.cur > 0) === (out > to)){ out = to; heroNum.vel = (out - to) / dt; }
+  heroNum.cur = out;
+  el.textContent = heroNum.cur.toFixed(1);
+  if (Math.abs(heroNum.cur - to) < 0.02 && Math.abs(heroNum.vel) < 0.1){
+    heroNum.cur = to; el.textContent = to.toFixed(1); heroNum.raf = 0; return;
+  }
+  heroNum.raf = requestAnimationFrame(heroNumTick);
 }
 
 // ── Sparkline ─────────────────────────────────────────────────────────
@@ -2689,18 +2724,10 @@ function renderHero(s){
   const showSec = ds === 'arming' ? Math.min(fillSec, targetSec)
                  : ds === 'armed' || ds === 'active' ? targetSec
                  : 0;
-  // Arming counts LINEARLY, and the duration must be >= the state-update
-  // cadence or the number finishes early and FREEZES until the next
-  // update - the stutter you see. SSE pushes ~4x/s, but the polling
-  // fallback is every 500 ms, so 600 ms guarantees the animation is
-  // still running when the next value lands (with the generation guard,
-  // a retarget mid-flight just continues at constant speed). Phase jumps
-  // get an eased sweep; the roll DOWN to zero (disarm / cancel) takes
-  // 1.1 s to match the aurora + number color sweep, so the count-down
-  // and the fade-to-idle land together.
-  const numDur = ds === 'arming' ? 600 : showSec === 0 ? 1100 : 700;
-  animateNumber('delay-big', showSec, numDur, v => v.toFixed(1),
-    ds === 'arming' ? 'linear' : null);
+  // Continuous smooth motion (see setHeroDelayNumber). Tighter spring
+  // while arming so the count-up tracks the buffer fill closely; a touch
+  // softer for the big jumps (arm / activate / cut / disarm roll-down).
+  setHeroDelayNumber(showSec, ds === 'arming' ? 0.22 : 0.34);
   if (ds === 'arming'){
     $('delay-of').hidden = false; $('delay-of').textContent = `/ ${targetSec.toFixed(1)}s`;
     $('arm-bar').hidden = false;
