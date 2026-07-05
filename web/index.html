@@ -2344,7 +2344,22 @@ const BUF_OVERHEAD_PCT = 5;
 const BUF_HEADROOM_PCT = 3;
 const BUF_REF_KBPS = 10000;  // when we have no measured bitrate, plan for 10 Mbps
 
+// Peak-hold of the measured bitrate, used for capacity planning. Using
+// the raw instantaneous bitrate made the "too big" gate flicker: a
+// momentary dip lowered the planning bitrate, which RAISED the computed
+// capacity and briefly unlocked a delay the buffer can't actually hold
+// - and during that flicker the (e.g. 5 min) chip was clickable, arming
+// a delay that can then never fill. We plan for the highest recent
+// bitrate (worst case) and decay it slowly (~1.5%/update, ~30 s to
+// reflect a genuine bitrate drop) so the gate is stable, not jumpy.
+let bitrateHoldKbps = 0;
+function updateBitrateHold(s){
+  const m = s && s.stats && s.stats.bitrate_kbps;
+  if (!m || m <= 1000) return; // no signal - keep the last hold
+  bitrateHoldKbps = Math.max(m, (bitrateHoldKbps || m) * 0.985);
+}
 function planningKbps(){
+  if (bitrateHoldKbps > 1000) return bitrateHoldKbps;
   const m = lastState && lastState.stats && lastState.stats.bitrate_kbps;
   if (m && m > 1000) return m;
   return BUF_REF_KBPS;
@@ -2413,9 +2428,16 @@ const numState = new Map(); // id → {from, to, start}
 function animateNumber(id, target, dur, fmt, ease){
   const el = $(id); if(!el) return;
   const cur = numState.get(id) || { from: target, to: target, start: 0, last: target };
-  if (cur.to === target){ // no change → make sure final text is right
-    if(!el._wired){ el._wired=true; }
-    el.textContent = fmt ? fmt(target) : Math.round(target).toLocaleString();
+  if (cur.to === target){
+    // Same target as the current animation. If one is still in flight
+    // (last hasn't reached target), LET IT FINISH - writing the final
+    // text here would snap to the end and kill the visible motion.
+    // That was the "disarm 15s→0s with no animation" bug: the idle
+    // state repeats ~4x/s, and each repeat re-entered here mid-roll and
+    // hard-set the text to 0.0. Only commit text once actually settled.
+    if (cur.last === target){
+      el.textContent = fmt ? fmt(target) : Math.round(target).toLocaleString();
+    }
     return;
   }
   cur.from = cur.last; cur.to = target; cur.start = performance.now();
@@ -2647,14 +2669,16 @@ function renderHero(s){
   const showSec = ds === 'arming' ? Math.min(fillSec, targetSec)
                  : ds === 'armed' || ds === 'active' ? targetSec
                  : 0;
-  // Arming counts LINEARLY over ~the 250 ms SSE cadence, so each update
-  // hands off to the next at constant speed and the fill reads as one
-  // continuous count (the old 80 ms ease-out sprinted then froze ~170 ms
-  // between updates - a visible stutter 4x a second). Phase jumps get an
-  // eased sweep instead - and the roll DOWN to zero (disarm / cancel)
-  // takes 1.1 s to ride the aurora + number color sweep of the same
-  // length, so the count-down and the fade-to-idle land together.
-  const numDur = ds === 'arming' ? 300 : showSec === 0 ? 1100 : 700;
+  // Arming counts LINEARLY, and the duration must be >= the state-update
+  // cadence or the number finishes early and FREEZES until the next
+  // update - the stutter you see. SSE pushes ~4x/s, but the polling
+  // fallback is every 500 ms, so 600 ms guarantees the animation is
+  // still running when the next value lands (with the generation guard,
+  // a retarget mid-flight just continues at constant speed). Phase jumps
+  // get an eased sweep; the roll DOWN to zero (disarm / cancel) takes
+  // 1.1 s to match the aurora + number color sweep, so the count-down
+  // and the fade-to-idle land together.
+  const numDur = ds === 'arming' ? 600 : showSec === 0 ? 1100 : 700;
   animateNumber('delay-big', showSec, numDur, v => v.toFixed(1),
     ds === 'arming' ? 'linear' : null);
   if (ds === 'arming'){
@@ -2879,12 +2903,23 @@ function renderCutAfter(ds){
 
 // ── Profile chips in hero ──────────────────────────────────────────────
 function renderCpProfiles(){
-  const c = $('cp-profiles'); c.innerHTML = '';
-  if (!profiles || profiles.length === 0) return;
+  const c = $('cp-profiles');
   const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
   const target = lastState ? lastState.armed_delay_ms : 0;
   const cap = currentBufferCapMs();
-  profiles.slice(0, 5).forEach(p => {
+  // applyState calls this every state tick (~4x/s). Wiping innerHTML and
+  // rebuilding every time made the chips visibly flicker. Skip the
+  // rebuild unless something that affects the chips actually changed -
+  // the profile list, the armed target, the phase-group, or which chips
+  // are over capacity (now stable thanks to the bitrate peak-hold).
+  const list = (profiles || []).slice(0, 5);
+  const sig = JSON.stringify([list.map(p => [p.name, p.delay_ms]), ds, target,
+    list.map(p => (cap > 0 && p.delay_ms > cap) ? 1 : 0)]);
+  if (c._sig === sig) return;
+  c._sig = sig;
+  c.innerHTML = '';
+  if (list.length === 0) return;
+  list.forEach(p => {
     const tooBig = cap > 0 && p.delay_ms > cap;
     const isCur = target === p.delay_ms && ds !== 'off';
     const b = document.createElement('button');
@@ -3402,9 +3437,17 @@ async function loadProfiles(){
   } catch(_){}
 }
 function renderProfilesPane(){
-  const c = $('profile-list'); c.innerHTML = '';
+  const c = $('profile-list');
   const cap = currentBufferCapMs();
   const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
+  const armed = lastState ? lastState.armed_delay_ms : 0;
+  // Same anti-flicker guard as the hero chips: rebuilt every tick, this
+  // pane flickered too. Only rebuild when the rendered content changes.
+  const sig = JSON.stringify([(profiles || []).map(p => [p.name, p.delay_ms]), ds, armed,
+    (profiles || []).map(p => (cap > 0 && p.delay_ms > cap) ? requiredMBForMs(p.delay_ms) : 0)]);
+  if (c._sig === sig) return;
+  c._sig = sig;
+  c.innerHTML = '';
   profiles.forEach(p => {
     const isCur = ds !== 'off' && lastState && lastState.armed_delay_ms === p.delay_ms;
     const tooBig = cap > 0 && p.delay_ms > cap;
@@ -5573,6 +5616,10 @@ function applyState(s){
       toast('OBS reconnected - re-aligned timeline','info');
   }
   lastState = s;
+  // Update the capacity planning bitrate BEFORE any render that reads it
+  // (the profile chips + CTA capacity gate), so a transient dip can't
+  // flash a too-big delay unlocked mid-tick.
+  updateBitrateHold(s);
   if ($('hero').hidden) return; // not configured
   if (pendingPhase && pendingPhase === PHASE_TO_STATE[s.phase]) clearPending();
   renderHero(s);

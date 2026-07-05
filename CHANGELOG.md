@@ -31,15 +31,32 @@ is gone.
   the auto-cut countdown update up to 4x/s - each tick used to replay
   the fade, a constant pulse). Message changes get a cleaner
   directional swap: the old line drops out, the new one drops in.
-- The arming counter counts continuously instead of stuttering: each
-  ~250 ms state update now animates linearly into the next (the old
-  80 ms ease-out sprinted then froze between updates), the fill bar
+- The arming counter counts continuously instead of stuttering: it
+  animates linearly with a duration longer than the update cadence, so
+  it never finishes early and freezes between ticks (the old 80 ms
+  ease-out sprinted then froze ~170 ms every update). The fill bar
   fills at constant speed, and phase jumps (arm / activate / cut) keep
-  a longer eased sweep. Retargeting the counter mid-flight also no
-  longer stacks duplicate animation loops on the element.
+  a longer eased sweep. Retargeting mid-flight no longer stacks
+  duplicate animation loops on the element.
+- Fixed the counter SNAPPING instead of animating. `animateNumber` is
+  called with the same target on every state tick, and its no-change
+  branch hard-set the text to the end value - killing any roll in
+  progress. That was the "disarm 15s→0s with no animation" report: the
+  idle state repeats ~4x/s and each repeat snapped the count-down to 0.
+  It now lets an in-flight animation finish.
 - Disarm / cancel rolls the big number down to 0.0 over the same 1.1 s
   as the color sweep, so the count-down and the fade-to-idle land as
   one motion instead of the number vanishing ahead of the glow.
+- The hero delay-profile chips and the Profiles pane no longer flicker.
+  Both rebuilt their whole DOM on every state tick (~4x/s); they now
+  skip the rebuild unless the rendered content actually changed.
+- The "delay too big for your buffer" gate is stable instead of jumpy.
+  It planned from the raw instantaneous bitrate, so a momentary dip
+  inflated the computed capacity and briefly unlocked a delay the
+  buffer can't hold - and during that flicker the chip was clickable,
+  arming a delay that could then never fill. Planning now uses a
+  slow-decaying peak-hold of the bitrate (worst case), so the gate
+  can't flicker or transiently unlock an unfillable delay.
 - The "Adjusting → rewinding to 15s (currently 0s)…" line told a story
   the engine doesn't do - the delay never rewinds gradually; it waits
   for enough buffered history, then makes ONE IDR-aligned jump. The
