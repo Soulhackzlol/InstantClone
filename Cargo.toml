@@ -1,12 +1,12 @@
 [package]
 name = "instantclone"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 authors = ["s1moscs"]
 license = "GPL-3.0-only"
 description = "Free open-source RTMP delay proxy for Windows streamers. Two-phase arm/activate, IDR-aligned cuts, multi-destination egress, Twitch Enhanced Broadcasting + VOD audio, OBS-native dock and overlay."
 repository = "https://github.com/Soulhackzlol/InstantClone"
-homepage = "https://github.com/Soulhackzlol/InstantClone"
+homepage = "https://s1moscs.dev/instantclone"
 readme = "README.md"
 keywords = ["rtmp", "obs", "twitch", "streaming", "delay"]
 categories = ["multimedia::video", "command-line-utilities"]

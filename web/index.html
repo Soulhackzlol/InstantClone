@@ -2581,7 +2581,16 @@ async function arm(ms){
       return;
     }
   }
-  await fetch('/arm',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'ms='+ms});
+  const r = await fetch('/arm',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'ms='+ms});
+  // The server enforces the same capacity wall (defence in depth); surface
+  // its message if bitrate rose between our check above and the request.
+  if (!r.ok){
+    let msg = 'Could not arm';
+    try { const j = await r.json(); if (j && j.error) msg = j.error; } catch(_){}
+    toast(msg, 'err');
+    tick();
+    return;
+  }
   toast(ms > 0 ? `Arming ${fmtDelay(ms)}…` : 'Disarmed', 'ok');
   tick();
 }

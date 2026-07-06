@@ -5,6 +5,7 @@
 //! editable by hand and trivially parseable without a serde dependency.
 //! For wire transport (web UI), `to_json` emits a small JSON object.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -16,6 +17,13 @@ use std::path::{Path, PathBuf};
 /// are both already absurd for a single streamer.
 const MAX_DESTINATIONS: usize = 128;
 const MAX_PROFILES: usize = 256;
+/// Ceiling on saved dock layouts (each is one OBS browser dock's widget
+/// arrangement). Persisted server-side so a layout survives OBS clearing
+/// its browser cache; capped so a runaway client can't bloat the config.
+pub const MAX_DOCKS: usize = 64;
+/// Max serialized length of one dock layout blob. Comfortably fits the
+/// widget list; guards the on-disk file against a giant POST body.
+pub const MAX_DOCK_LAYOUT_LEN: usize = 8 * 1024;
 /// Minimum on-disk buffer size (MB). Below this, the ring is too small
 /// to hold a single typical IDR (which can be 100 KB at 1080p60).
 /// Also guards against the `% 0` panic in `DiskRing::append` if a
@@ -85,6 +93,11 @@ pub struct Settings {
     /// Reset to false (and the overlays wiped) by "Restore default overlays"
     /// and the factory reset, which re-seeds on the next dashboard load.
     pub overlays_seeded: bool,
+    /// Saved OBS dock layouts, keyed by the dock's `?dock=<id>` slot. The
+    /// value is the dock's own opaque layout JSON (the server never parses
+    /// it - the dock owns its schema). Persisted here so a customized dock
+    /// survives OBS wiping its browser cache or the machine restarting.
+    pub docks: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -303,6 +316,7 @@ impl Settings {
             // Fresh install hasn't seeded the preset overlays yet; the
             // dashboard does it on first load, then flips this true.
             overlays_seeded: false,
+            docks: BTreeMap::new(),
         }
     }
 
@@ -503,6 +517,12 @@ impl Settings {
         if self.overlays_seeded {
             writeln!(f, "overlays_seeded=true")?;
         }
+        // Dock layouts. The value is single-line JSON (no `=`/newline in
+        // compact JSON), so it round-trips through the line-based parser
+        // even though it is opaque to us.
+        for (id, layout) in &self.docks {
+            writeln!(f, "dock.{}={}", id, layout)?;
+        }
         for (i, p) in self.profiles.iter().enumerate() {
             writeln!(f, "profile.{}.name={}", i, p.name)?;
             writeln!(f, "profile.{}.delay_ms={}", i, p.delay_ms)?;
@@ -589,6 +609,12 @@ impl Settings {
             "auto_arm_delay_ms" => {
                 if let Ok(v) = value.parse() {
                     self.auto_arm_delay_ms = v;
+                }
+            }
+            k if k.starts_with("dock.") => {
+                let id = &k["dock.".len()..];
+                if !id.is_empty() && id.len() <= 40 && self.docks.len() < MAX_DOCKS {
+                    self.docks.insert(id.to_string(), value.to_string());
                 }
             }
             k if k.starts_with("profile.") => {
@@ -1383,6 +1409,38 @@ mod tests {
         assert_eq!(loaded.profiles.len(), 2);
         assert_eq!(loaded.profiles[0].delay_ms, 10_000);
         assert_eq!(loaded.profiles[1].name, "Long");
+    }
+
+    #[test]
+    fn dock_layouts_round_trip_through_save_and_load() {
+        // Dock layouts are opaque single-line JSON blobs stored as
+        // `dock.<id>=<json>`. Prove a value containing `=`, `:`, and quotes
+        // survives the line parser (it splits on the first `=` only, so the
+        // JSON body is preserved verbatim).
+        let mut s = Settings::defaults();
+        s.docks.insert(
+            "default".into(),
+            r#"{"v":1,"preset":"minimal","w":{"number":{"on":true,"step":5}}}"#.into(),
+        );
+        s.docks
+            .insert("gaming".into(), r#"{"preset":"delay","eq":"a=b"}"#.into());
+
+        let path = std::env::temp_dir().join(format!("ic-test-docks-{}.ini", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        s.save(&path).expect("save");
+        let loaded = Settings::load(&path).expect("load");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.docks.len(), 2);
+        assert_eq!(
+            loaded.docks.get("default").map(String::as_str),
+            Some(r#"{"v":1,"preset":"minimal","w":{"number":{"on":true,"step":5}}}"#)
+        );
+        assert_eq!(
+            loaded.docks.get("gaming").map(String::as_str),
+            Some(r#"{"preset":"delay","eq":"a=b"}"#),
+            "value after the first = (including embedded =) must survive"
+        );
     }
 
     #[test]
