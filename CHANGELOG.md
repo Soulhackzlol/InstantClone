@@ -6,6 +6,30 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+### Customizable OBS browser dock
+
+A composable, per-slot browser dock so you can drive InstantClone from
+inside OBS without opening the full dashboard - competitive players keep
+the CPU free and only show what they need.
+
+- **Widgets + presets** - status bar, delay number, buffer bar, egress
+  glance, hint, destinations, delay profiles, health stats, auto
+  behavior, live-safe settings, and an overlays picker. Toggle, reorder
+  (drag), and restyle each from an in-dock editor. Presets range from
+  **Delay only** to a full **Dashboard**.
+- **Multiple docks** - `?dock=<id>` slots, each with its own saved
+  layout, plus copy-URL flows to run a second dock in OBS. Layouts save
+  server-side (survive OBS wiping its cache) and sync live across docks.
+- **Destinations on the dock** - rows or icons, platform-coded colors,
+  and a two-tap misclick guard on every toggle.
+- **Safe cut on the dock** - schedule "cut after this airs" and watch a
+  live, cancellable countdown; a cut scheduled anywhere shows on every
+  dock.
+- **Buffer-capacity gate** - a delay too big to fill at the current
+  bitrate is greyed out and refused, with a tooltip naming the buffer
+  size it needs. Enforced on the dock, the dashboard, and server-side on
+  `/arm` so a stale page or scripted call can't stall in "arming".
+
 ### Fixes
 
 - The OBS dock showed a phantom **1.0s** delay in passthrough. It fed
