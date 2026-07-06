@@ -34,6 +34,16 @@ the CPU free and only show what they need.
 
 ### Fixes
 
+- The first-run wizard could reappear after setup was already done (thanks
+  **fashionxd** for the report). Two causes: (1) `configured` was recomputed
+  live on every destination toggle/delete, so turning off or removing your
+  last destination flipped it back to false and reopened the wizard - it is
+  now a one-way first-run latch that only an explicit full reset clears;
+  (2) every settings write did an unsynchronized clone -> mutate -> `send()`
+  of the whole struct, so two overlapping POSTs lost one update (which could
+  resurrect a stale `configured=false`). All settings mutations now
+  serialize through a single process-wide write lock, closing the
+  lost-update race for every field, not just this flag.
 - The OBS dock showed a phantom **1.0s** delay in passthrough. It fed
   the big number from `current_delay_ms`, which includes the pipeline's
   own transit latency (encoder → ingest → ring → egress) even with no

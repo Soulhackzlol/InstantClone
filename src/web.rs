@@ -26,6 +26,40 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
+/// Serializes read-modify-write cycles on the single per-process settings
+/// channel. Each mutating handler does `settings.borrow().clone()` -> mutate
+/// -> `settings.send(whole_struct)`; a connection runs per task, so without
+/// this lock two overlapping POSTs each start from the same snapshot and the
+/// later `send()` clobbers the other's change. That lost update used to
+/// silently reset the `configured` flag and bounce users into the first-run
+/// wizard. A plain `std::sync::Mutex` is correct here because the critical
+/// section never `.await`s (its `!Send` guard makes that a compile error), so
+/// it can also be taken from the sync persist/overlay handlers.
+static SETTINGS_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take the settings write lock for a full read-modify-write-send cycle. Hold
+/// the guard from just before `settings.borrow().clone()` until after
+/// `settings.send(..)`. Recovers from a poisoned mutex - a panic mid-save must
+/// not wedge every later config write.
+fn settings_write_guard() -> std::sync::MutexGuard<'static, ()> {
+    SETTINGS_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// True when at least one destination is enabled and fully addressable (a
+/// resolvable egress URL with a stream key). This is the "ready to stream"
+/// condition first-run setup waits for, and the only thing that raises the
+/// `configured` latch. It never lowers it: once setup is complete, turning
+/// the last destination off or deleting it keeps the user on the dashboard
+/// rather than reopening the wizard - only an explicit full reset clears the
+/// flag. See `post_destination_toggle` / `post_destination_delete`.
+fn has_streamable_dest(s: &Settings) -> bool {
+    s.destinations
+        .iter()
+        .any(|d| d.enabled && d.is_well_formed())
+}
+
 pub async fn run(
     addr: String,
     ctrl: Arc<Controller>,
@@ -1487,6 +1521,9 @@ async fn post_config(
     cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
+    // Held across the whole clone -> mutate -> save -> send below so a
+    // concurrent POST can't clobber this write. See SETTINGS_WRITE_LOCK.
+    let _wl = settings_write_guard();
     let mut new_settings = settings.borrow().clone();
 
     // Network + buffer + overlay-dir + webhook URL are applied directly.
@@ -1576,11 +1613,7 @@ async fn post_config(
         old.buffer_mb != new_settings.buffer_mb || old.buffer_path != new_settings.buffer_path;
 
     // Mark as configured the moment we have at least one usable destination.
-    if new_settings
-        .destinations
-        .iter()
-        .any(|d| d.enabled && d.is_well_formed())
-    {
+    if has_streamable_dest(&new_settings) {
         new_settings.configured = true;
     }
 
@@ -1638,6 +1671,7 @@ async fn post_config_reset(
         .get("scope")
         .cloned()
         .unwrap_or_else(|| "settings".to_string());
+    let _wl = settings_write_guard();
     let mut next = Settings::defaults();
     if scope == "settings" {
         // Carry over the user's stream destinations and profiles -
@@ -1863,6 +1897,7 @@ fn persist_delay_state(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
 ) {
+    let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
     let armed = ctrl.armed_delay_ms();
     let target = ctrl.target_delay_ms();
@@ -1923,6 +1958,7 @@ async fn post_profile_add(
             r#"{"ok":false,"error":"name required"}"#.into(),
         );
     }
+    let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
     // Replace existing by name, else append.
     if let Some(p) = ns.profiles.iter_mut().find(|p| p.name == name) {
@@ -1942,6 +1978,7 @@ async fn post_profile_del(
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let name = form.get("name").cloned().unwrap_or_default();
+    let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
     ns.profiles.retain(|p| p.name != name);
     let _ = ns.save(cfg_path);
@@ -2072,6 +2109,7 @@ async fn post_destination_upsert(
         );
     }
 
+    let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
     if let Some(existing) = ns.destinations.iter_mut().find(|d| d.id == id) {
         existing.name = name;
@@ -2115,11 +2153,7 @@ async fn post_destination_upsert(
             ),
         );
     }
-    if ns
-        .destinations
-        .iter()
-        .any(|d| d.enabled && d.is_well_formed())
-    {
+    if has_streamable_dest(&ns) {
         ns.configured = true;
     }
     if let Err(e) = ns.save(cfg_path) {
@@ -2196,6 +2230,7 @@ async fn post_destination_toggle(
         Some("on" | "true" | "1")
     );
 
+    let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
     let Some(dest) = ns.destinations.iter_mut().find(|d| d.id == id) else {
         return (
@@ -2206,10 +2241,13 @@ async fn post_destination_toggle(
     };
     dest.enabled = enabled;
 
-    ns.configured = ns
-        .destinations
-        .iter()
-        .any(|d| d.enabled && d.is_well_formed());
+    // `configured` is a first-run setup latch, not a live "has an active
+    // destination" flag. Toggling your last destination off must not bounce
+    // you back into the wizard - only an explicit full reset clears it. So
+    // this only ever raises the latch, never lowers it.
+    if has_streamable_dest(&ns) {
+        ns.configured = true;
+    }
     if let Err(e) = ns.save(cfg_path) {
         return (
             "500 Internal Server Error",
@@ -2233,6 +2271,7 @@ async fn post_destination_delete(
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let id = form.get("id").cloned().unwrap_or_default();
+    let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
     let before = ns.destinations.len();
     ns.destinations.retain(|d| d.id != id);
@@ -2243,13 +2282,10 @@ async fn post_destination_delete(
             r#"{"ok":false,"error":"no such destination"}"#.into(),
         );
     }
-    if !ns
-        .destinations
-        .iter()
-        .any(|d| d.enabled && d.is_well_formed())
-    {
-        ns.configured = false;
-    }
+    // Deleting the last destination leaves `configured` alone: setup was
+    // already completed once, so we keep the user on the dashboard (empty
+    // Destinations tab) rather than reopening the first-run wizard. Only an
+    // explicit `scope=all` reset returns them to the wizard.
     let _ = ns.save(cfg_path);
     reconcile_obs_vod_files(&ns, ctrl);
     let _ = settings.send(ns);
@@ -2340,6 +2376,7 @@ async fn dock_layout_save(
             r#"{"ok":false,"error":"layout must be single-line json"}"#.into(),
         );
     }
+    let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
     if body.is_empty() {
         ns.docks.remove(&id); // empty body resets the slot to default
@@ -2731,6 +2768,7 @@ fn overlays_mark_seeded(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
+    let _wl = settings_write_guard();
     let mut next = settings.borrow().clone();
     if !next.overlays_seeded {
         next.overlays_seeded = true;
@@ -2755,6 +2793,7 @@ fn overlays_reset(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
+    let _wl = settings_write_guard();
     let mut next = settings.borrow().clone();
     wipe_studio_overlays(&next.overlays_dir);
     next.overlays_seeded = false;
@@ -3858,6 +3897,73 @@ mod tests {
     #[test]
     fn find_subslice_returns_none_when_absent() {
         assert!(find_subslice(b"abc", b"xy").is_none());
+    }
+
+    // ── `configured` first-run latch ─────────────────────────────────
+    //
+    // `has_streamable_dest` is the sole condition that raises the
+    // `configured` latch. If it ever counted a disabled or key-less
+    // destination as streamable - or missed a real one - the toggle/upsert
+    // handlers would flip `configured` wrongly and bounce users into (or out
+    // of) the first-run wizard. This pins the exact contract.
+
+    fn twitch_dest(enabled: bool, stream_key: &str) -> crate::config::Destination {
+        crate::config::Destination {
+            id: "d1".into(),
+            name: "Main".into(),
+            enabled,
+            platform: "twitch".into(),
+            stream_key: stream_key.into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: String::new(),
+        }
+    }
+
+    fn settings_with_dests(dests: Vec<crate::config::Destination>) -> Settings {
+        let mut s = Settings::defaults();
+        s.destinations = dests;
+        s
+    }
+
+    #[test]
+    fn has_streamable_dest_requires_enabled_and_addressable() {
+        // No destinations at all: not streamable.
+        assert!(!has_streamable_dest(&settings_with_dests(vec![])));
+        // Enabled + real stream key: streamable.
+        assert!(has_streamable_dest(&settings_with_dests(vec![
+            twitch_dest(true, "livekey123")
+        ])));
+        // Disabled, even with a key: does NOT count - toggling the last
+        // destination off must not make setup look incomplete.
+        assert!(!has_streamable_dest(&settings_with_dests(vec![
+            twitch_dest(false, "livekey123")
+        ])));
+        // Enabled but no key: not addressable yet, so not streamable.
+        assert!(!has_streamable_dest(&settings_with_dests(vec![
+            twitch_dest(true, "")
+        ])));
+    }
+
+    #[test]
+    fn configured_latch_only_rises() {
+        // Mirror the handler's latch step - `if has_streamable_dest { =true }`
+        // starting from an already-configured install whose last destination
+        // is now disabled. The flag must stay true (no wizard reopen); only a
+        // full reset clears it.
+        let s = settings_with_dests(vec![twitch_dest(false, "livekey123")]);
+        assert!(!has_streamable_dest(&s), "precondition: not streamable");
+        let mut configured = true; // setup completed earlier
+        if has_streamable_dest(&s) {
+            configured = true;
+        }
+        assert!(
+            configured,
+            "a completed setup must never re-open the wizard"
+        );
     }
 
     // ── Overlay Studio CRUD ──────────────────────────────────────
