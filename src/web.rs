@@ -293,8 +293,7 @@ async fn route(
     // `null`); POST /docks/<id> saves the request body as that dock's
     // layout, or clears it when the body is empty. Persisted in settings
     // so a customized dock survives OBS wiping its browser cache.
-    if bare_path.starts_with("/docks/") {
-        let id = &bare_path["/docks/".len()..];
+    if let Some(id) = bare_path.strip_prefix("/docks/") {
         if method == "GET" {
             return dock_layout_get(id, settings);
         }
