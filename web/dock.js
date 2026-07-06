@@ -147,6 +147,45 @@ function mergeCfg(raw) {
 }
 let cfg = defaultCfg();
 
+// -------------------------------------------------------- capacity gate ----
+// The disk ring holds a finite amount of video. A delay bigger than it can
+// fill at the current bitrate silently stalls in "arming" forever, which
+// reads as a bug. Mirror the dashboard's estimate so the dock greys out (and
+// refuses to arm) delays the buffer can't hold. Soft estimate: ~160 kbps
+// audio, ~5% RTMP framing, a little headroom, and a peak-hold on bitrate so
+// the gate doesn't flicker a chip in/out on a momentary dip. The server
+// enforces the same wall on /arm, so this is UX, not the last line of defence.
+const BUF_AUDIO_KBPS = 160, BUF_OVERHEAD_PCT = 5, BUF_HEADROOM_PCT = 3, BUF_REF_KBPS = 10000;
+let bufferMB = 0;          // persisted buffer size, from /config
+let bitrateHoldKbps = 0;   // worst-case recent bitrate (peak-hold, slow decay)
+function updateBitrateHold() {
+  const m = s && s.stats && s.stats.bitrate_kbps;
+  if (!m || m <= 1000) return;                         // no signal - keep last hold
+  bitrateHoldKbps = Math.max(m, (bitrateHoldKbps || m) * 0.985);
+}
+function planningKbps() {
+  if (bitrateHoldKbps > 1000) return bitrateHoldKbps;
+  const m = s && s.stats && s.stats.bitrate_kbps;
+  return (m && m > 1000) ? m : BUF_REF_KBPS;           // plan for 10 Mbps before we know
+}
+function capMsFor(mb, kbps) {
+  if (!mb || mb <= 0) return 0;
+  const total = (Math.max(1, kbps) + BUF_AUDIO_KBPS) * (1 + BUF_OVERHEAD_PCT / 100);
+  return Math.floor((mb * 8192) / total * (1 - BUF_HEADROOM_PCT / 100)) * 1000;
+}
+function currentCapMs() { return bufferMB > 0 ? capMsFor(bufferMB, planningKbps()) : 0; }
+function requiredMB(ms) {
+  if (!ms || ms <= 0) return 0;
+  const total = (planningKbps() + BUF_AUDIO_KBPS) * (1 + BUF_OVERHEAD_PCT / 100);
+  return Math.ceil((ms / 1000) * total / (1 - BUF_HEADROOM_PCT / 100) / 8192);
+}
+function overCap(ms) { const c = currentCapMs(); return c > 0 && ms > c; }
+async function fetchBufferMB() {
+  const r = await fetchJ('/config');
+  if (r.ok && r.j && typeof r.j.buffer_mb === 'number') bufferMB = r.j.buffer_mb;
+  renderProfiles();   // re-gate chips now that capacity is known
+}
+
 // ---------------------------------------------------------- delay controls --
 
 function bump(n) {
@@ -166,6 +205,12 @@ function setTip(text) {
 }
 
 async function arm(ms) {
+  // Capacity guard, matched by the server's own /arm check. Skip for ms===0
+  // (disarm). The toast names the buffer size the delay actually needs.
+  if (ms > 0 && overCap(ms)) {
+    toast(`Buffer too small - ${(ms / 1000).toFixed(0)}s needs about ${requiredMB(ms)} MB. Raise it in the dashboard.`, 'err');
+    return;
+  }
   setPending('arming');
   const r = await fetchJ('/arm', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'ms=' + ms });
   if (!r.ok) { toast(r.j?.error || 'Failed to arm', 'err'); pending = null; }
@@ -281,6 +326,7 @@ function renderCta() {
 
 function applyState(j) {
   s = j;
+  updateBitrateHold();   // feed the capacity peak-hold before anything reads it
   const ds = PHASE_TO_STATE[s.phase] || 'off';
   setNumberMode(ds);
   // Phase chip: idle vs passthrough vs arming/armed/active.
@@ -463,9 +509,14 @@ function renderProfiles() {
   if (!profileCache.length) { box.innerHTML = '<div class="empty">No profiles yet. Add them in the dashboard.</div>'; return; }
   box.innerHTML = '';
   for (const p of profileCache) {
-    const sec = Math.round((p.delay_ms || 0) / 1000);
+    const ms = p.delay_ms || 0, sec = Math.round(ms / 1000);
+    // Too big for the buffer at the current bitrate: greyed + disabled, with
+    // a tooltip naming the size it needs. Same wall the arm path enforces.
+    const tooBig = overCap(ms);
     const b = document.createElement('button');
-    b.className = list ? 'prow' : 'pchip';
+    b.className = (list ? 'prow' : 'pchip') + (tooBig ? ' toobig' : '');
+    b.disabled = tooBig;
+    b.title = tooBig ? `Buffer too small - needs about ${requiredMB(ms)} MB. Raise it in the dashboard.` : `Set ${sec}s delay`;
     b.innerHTML = list
       ? `<span>${esc(p.name || sec + 's')}</span><span class="pv">${sec}s</span>`
       : esc(p.name || sec + 's') + (cfg.w.profiles.value ? `<span class="pv">${sec}s</span>` : '');
@@ -474,6 +525,10 @@ function renderProfiles() {
   }
 }
 function profileSet(sec) {
+  if (overCap(sec * 1000)) {
+    toast(`Buffer too small for ${sec}s - raise it in the dashboard.`, 'err');
+    return;
+  }
   $('d').value = sec; renderCta();
   const ds = s ? (PHASE_TO_STATE[s.phase] || 'off') : 'off';
   if (cfg.w.profiles.arm && ds === 'off' && sec > 0) arm(sec * 1000);
@@ -508,6 +563,7 @@ async function fetchServerCfg() {
   srvCfg.auto_activate_when_ready = !!r.j.auto_activate_when_ready;
   srvCfg.tracing_enabled = !!r.j.tracing_enabled;
   srvCfg.webhook_set = !!r.j.webhook_set;
+  if (typeof r.j.buffer_mb === 'number') { bufferMB = r.j.buffer_mb; renderProfiles(); }
   renderBehavior(); renderSettings();
 }
 // A label + switch row bound to a boolean server-config key.
@@ -671,7 +727,7 @@ function applyCfg(c) {
   const wrap = document.querySelector('.wrap');
   for (const id of c.order) { const el = $(WEL[id]); if (el) wrap.appendChild(el); }
   if (on('dest')) { startDests(); if (destCache.length) renderDests(destCache); } else stopDests();
-  if (on('profiles')) fetchProfiles();
+  if (on('profiles')) { fetchProfiles(); if (!bufferMB) fetchBufferMB(); }   // capacity gate needs buffer size
   if (on('behavior') || on('settings')) { renderBehavior(); renderSettings(); fetchServerCfg(); }
   if (on('overlays')) fetchOverlays();
   if (s) applyState(s); else renderCta();   // re-render with the new options
@@ -949,7 +1005,7 @@ window.addEventListener('storage', e => {
 // channel, so refresh it whenever the dock regains focus or visibility -
 // e.g. after editing profiles in the dashboard and clicking back into OBS.
 function refreshAux() {
-  if (cfg.w.profiles.on) fetchProfiles();
+  if (cfg.w.profiles.on) { fetchProfiles(); fetchBufferMB(); }   // buffer size may have changed in the dashboard
   if (cfg.w.overlays.on) fetchOverlays();
   if (cfg.w.behavior.on || cfg.w.settings.on) fetchServerCfg();
   if (cfg.w.dest.on) fetchDests();

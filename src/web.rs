@@ -1726,8 +1726,40 @@ async fn post_arm(
     sysstat: &Arc<SysStat>,
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
-    let ms: u32 = form.get("ms").and_then(|v| v.parse().ok()).unwrap_or(0);
-    ctrl.arm_delay(ms.min(600_000));
+    let ms: u32 = form
+        .get("ms")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+        .min(600_000);
+
+    // Server-side capacity guard. A delay bigger than the ring can hold at
+    // the current bitrate never fills - it stalls in "arming" forever, which
+    // looks like a hang. The dashboard and dock both gate this client-side,
+    // but a stale page, a second dock, or a scripted call could still ask for
+    // the impossible, so we refuse it here too. Same estimate we publish as
+    // buffer_capacity_ms_est; bitrate is floored at 2 Mbps so an idle or
+    // low-bitrate stream stays generous and never blocks a reasonable pre-arm.
+    // ms == 0 is disarm and always allowed.
+    if ms > 0 {
+        let cap_ms = {
+            let s = settings.borrow();
+            let kbps = ctrl.bitrate_kbps().max(2_000) as u64;
+            (s.buffer_mb * 1024 * 1024 * 8 / kbps) as u32
+        };
+        if cap_ms > 0 && ms > cap_ms {
+            return (
+                "409 Conflict",
+                "application/json",
+                format!(
+                    r#"{{"ok":false,"error":"Buffer too small for {}s - it holds about {}s at the current bitrate. Raise the buffer size in the dashboard."}}"#,
+                    ms / 1000,
+                    cap_ms / 1000
+                ),
+            );
+        }
+    }
+
+    ctrl.arm_delay(ms);
     persist_delay_state(ctrl, settings, cfg_path);
     (
         "200 OK",
