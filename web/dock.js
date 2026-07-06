@@ -44,7 +44,7 @@ const WIDGETS = {
   behavior: { label: 'Auto behavior', def: { on: false } },
   settings: { label: 'Settings',      def: { on: false } },
   overlays: { label: 'Overlays',      def: { on: false, autohide: false, search: true, group: true } },
-  activate: { label: 'Action button', def: { on: true, confirmcut: false } },
+  activate: { label: 'Action button', def: { on: true, confirmcut: false, safecut: true } },
 };
 // Every widget that has stored options. phase + source are sub-widgets of the
 // status bar; bar rides along with the number screen it lives in.
@@ -102,7 +102,7 @@ const OPTS = {
   overlays: [
     { k: 'search', label: 'Search bar' }, { k: 'group', label: 'Folders' }, { k: 'autohide', label: 'Copy with autohide off' },
   ],
-  activate: [{ k: 'confirmcut', label: 'Confirm cut' }],
+  activate: [{ k: 'safecut', label: 'Cut after airs' }, { k: 'confirmcut', label: 'Confirm cut' }],
 };
 
 function defaultCfg() {
@@ -202,9 +202,27 @@ function mainClick() {
   const ms = (+$('d').value || 0) * 1000;
   if (ms > 0) arm(ms); else toast('Enter a delay', 'err');
 }
-function disarmClick() {
-  const b = $('cancel'); if (b._busy) return;
+// Scheduled safe cut ("cut after this airs"): mark now, keep forwarding the
+// buffered footage, auto-cut to live once the mark has aired everywhere.
+// Same endpoints as the dashboard's Cut-after; state carries the countdown.
+async function cutAfter() {
+  const r = await fetchJ('/cut-after', { method: 'POST' });
+  if (!r.ok) toast(r.j?.error || 'Cannot schedule cut', 'err');
+  else toast('Mark set - cuts once this airs', 'ok');
+  tick();
+}
+async function cutAfterCancel() {
+  await fetchJ('/cut-after/cancel', { method: 'POST' });
+  toast('Auto-cut cancelled', 'ok');
+  tick();
+}
+// The secondary button next to the main CTA: cancels arming while the buffer
+// fills, and schedules / cancels the safe cut while the delay is active.
+function secondaryClick() {
+  const b = $('cancel'); if (b._busy || !s) return;
   b._busy = true; setTimeout(() => b._busy = false, 300);
+  const ds = PHASE_TO_STATE[s.phase] || 'off';
+  if (ds === 'active') { if (s.safe_cut_pending) cutAfterCancel(); else cutAfter(); return; }
   disarm();
 }
 
@@ -229,9 +247,21 @@ function renderCta() {
   // Drop a pending cut-confirm if we left the active state by any route, so a
   // stale arm can't skip the guard next time.
   if (ds !== 'active' && m._cutArm) { m._cutArm = false; clearTimeout(m._cutT); }
-  m.className = 'btn full'; m.disabled = false; cancel.hidden = true;
+  m.className = 'btn full'; m.disabled = false;
+  cancel.hidden = true; cancel.className = 'btn ghost disarm'; cancel.innerHTML = '&times;'; cancel.title = 'Cancel arming';
   if (ds === 'active') {
     m.textContent = m._cutArm ? 'Tap again to cut' : 'Cut delay'; m.classList.add('danger');
+    // Secondary becomes the safe cut: schedule, then a live countdown a second
+    // tap cancels. A pending cut always shows even with the option off - it
+    // may have been scheduled from the dashboard, and hiding it would lie.
+    if (s.safe_cut_pending) {
+      const cd = Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000));
+      cancel.hidden = false; cancel.className = 'btn ghost cutafter pending';
+      cancel.textContent = `⏱ ~${cd}s ✕`; cancel.title = 'Auto-cut armed - tap to cancel';
+    } else if (cfg.w.activate.safecut) {
+      cancel.hidden = false; cancel.className = 'btn ghost cutafter';
+      cancel.textContent = '⏱ Cut after'; cancel.title = 'Cut to live after everything buffered has aired';
+    }
   } else if (ds === 'armed') {
     m.innerHTML = '<span>&#9654;</span> Activate'; m.classList.add('go'); cancel.hidden = false;
   } else if (ds === 'arming') {
@@ -292,6 +322,7 @@ function applyState(j) {
   } else eg.hidden = true;
   // Hint text: full sentences, or errors-only (encoder offline) if opted.
   const tip = !s.ingest_alive ? 'Point your encoder at rtmp://…/live'
+    : ds === 'active' && s.safe_cut_pending ? `Auto-cut in ~${Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000))}s - marked footage still airs.`
     : ds === 'active' ? `Live ${(s.current_delay_ms / 1000).toFixed(1)}s behind real time.`
     : ds === 'armed' ? 'Buffer full. Hit Activate to go live with delay.'
     : ds === 'arming' ? 'Filling buffer… you can cancel any time.'
@@ -343,7 +374,10 @@ function renderDests(list) {
   // toggled back on. "Active only" is the opt-in filter for a clean look.
   const show = cfg.w.dest.active ? list.filter(d => d.enabled || d.alive) : list;
   box.className = 'dests' + (icons ? ' icons' : '');
-  if (!show.length) { box.innerHTML = '<div class="empty">No destinations yet. Add them in the dashboard.</div>'; return; }
+  if (!show.length) {
+    box.innerHTML = `<div class="empty">${list.length ? 'No active destinations right now.' : 'No destinations yet. Add them in the dashboard.'}</div>`;
+    return;
+  }
   box.innerHTML = '';
   for (const d of show) box.appendChild(icons ? destIcon(d) : destRow(d));
 }

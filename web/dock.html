@@ -247,6 +247,14 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .cta-row{display:flex;gap:6px}
 .cta-row .btn{flex:1}
 .cta-row .btn.disarm{flex:0 0 auto;padding:10px 13px}
+/* Safe cut ("cut after airs") secondary: text button; pending state counts
+   down in warn amber with a soft pulse so the armed auto-cut is unmissable. */
+.cta-row .btn.cutafter{flex:0 0 auto;padding:10px 11px;font-size:11.5px;white-space:nowrap}
+.cta-row .btn.cutafter.pending{border-color:color-mix(in srgb,var(--warn) 55%,var(--line));color:var(--warn);
+  font-variant-numeric:tabular-nums;animation:cutpulse 1.6s ease-in-out infinite}
+@keyframes cutpulse{
+  0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--warn) 22%,transparent)}
+  50%{box-shadow:0 0 0 4px color-mix(in srgb,var(--warn) 10%,transparent)}}
 
 /* Status-as-dot mode: collapse the chip to a colored dot of the state hue. */
 .phase.asdot{width:14px;height:14px;min-width:14px;padding:0;font-size:0;border-radius:50%;
@@ -423,7 +431,7 @@ body.boot .wrap>*:nth-child(n+8){animation-delay:.28s}
   <div class="overlays" id="w-overlays" hidden></div>
   <div class="cta-row" id="w-cta">
     <button class="btn full" id="main" onclick="mainClick()" disabled>-</button>
-    <button class="btn ghost disarm" id="cancel" onclick="disarmClick()" hidden title="Cancel arming">&times;</button>
+    <button class="btn ghost disarm" id="cancel" onclick="secondaryClick()" hidden title="Cancel arming">&times;</button>
   </div>
 </div>
 <div id="toast"></div>
