@@ -157,7 +157,7 @@ async fn serve(
     // Overlay Studio runtime - static pre-gzipped JS, same fast-path as
     // the dashboard. Served to the dashboard tab only; baked overlays
     // inline what they need and never request this.
-    if method == "GET" && bare_path == "/overlay-runtime.js" {
+    if method == "GET" && (bare_path == "/overlay-runtime.js" || bare_path == "/dock.js") {
         if !accept_gzip {
             let body = b"this build serves gzip-encoded JS; \
                          retry with Accept-Encoding: gzip" as &[u8];
@@ -170,15 +170,20 @@ async fn serve(
             sock.write_all(body).await?;
             return Ok(());
         }
+        let blob: &'static [u8] = if bare_path == "/dock.js" {
+            DOCK_JS_GZ
+        } else {
+            OVERLAY_RUNTIME_JS_GZ
+        };
         let r = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\n\
              Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n\
              Content-Length: {}\r\n\
              Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-            OVERLAY_RUNTIME_JS_GZ.len()
+            blob.len()
         );
         sock.write_all(r.as_bytes()).await?;
-        sock.write_all(OVERLAY_RUNTIME_JS_GZ).await?;
+        sock.write_all(blob).await?;
         return Ok(());
     }
 
@@ -284,6 +289,20 @@ async fn route(
         return overlay_save(rest, body, settings);
     }
 
+    // Dock layouts: GET /docks/<id> returns the saved layout JSON (or
+    // `null`); POST /docks/<id> saves the request body as that dock's
+    // layout, or clears it when the body is empty. Persisted in settings
+    // so a customized dock survives OBS wiping its browser cache.
+    if bare_path.starts_with("/docks/") {
+        let id = &bare_path["/docks/".len()..];
+        if method == "GET" {
+            return dock_layout_get(id, settings);
+        }
+        if method == "POST" {
+            return dock_layout_save(id, body, settings, cfg_path).await;
+        }
+    }
+
     match (method, bare_path) {
         // GET / and GET /dock are handled in serve() as a fast-path
         // (static gz blob, no allocation, no String round-trip).
@@ -294,6 +313,7 @@ async fn route(
             state_json(ctrl, settings, sysstat),
         ),
         ("GET", "/config") => ("200 OK", "application/json", settings.borrow().to_json()),
+        ("GET", "/docks") => dock_list_json(settings),
         ("GET", "/platforms") => ("200 OK", "application/json", platforms_json()),
         // OBS sends a POST with a system-info payload (CPU/GPU/encoder
         // capabilities + the user's stream-key field as the auth
@@ -611,6 +631,9 @@ async fn route(
         ("POST", "/profiles/delete") => post_profile_del(body, settings, cfg_path).await,
         // Destinations CRUD
         ("POST", "/destinations") => post_destination_upsert(body, ctrl, settings, cfg_path).await,
+        ("POST", "/destinations/toggle") => {
+            post_destination_toggle(body, ctrl, settings, cfg_path).await
+        }
         ("POST", "/destinations/delete") => {
             post_destination_delete(body, ctrl, settings, cfg_path).await
         }
@@ -2125,6 +2148,49 @@ fn reconcile_obs_vod_files(s: &Settings, ctrl: &Arc<Controller>) {
     }
 }
 
+/// Flip a single destination's `enabled` flag and nothing else. The dock's
+/// quick-toggle strip calls this instead of `/destinations` because the full
+/// upsert rebuilds the destination from its form and would blank the fields
+/// the dock doesn't send (stream key, custom URL, VOD-audio, etc.).
+async fn post_destination_toggle(
+    body: &str,
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> (&'static str, &'static str, String) {
+    let form = config::parse_form(body);
+    let id = form.get("id").cloned().unwrap_or_default();
+    let enabled = matches!(
+        form.get("enabled").map(String::as_str),
+        Some("on" | "true" | "1")
+    );
+
+    let mut ns = settings.borrow().clone();
+    let Some(dest) = ns.destinations.iter_mut().find(|d| d.id == id) else {
+        return (
+            "404 Not Found",
+            "application/json",
+            r#"{"ok":false,"error":"no such destination"}"#.into(),
+        );
+    };
+    dest.enabled = enabled;
+
+    ns.configured = ns
+        .destinations
+        .iter()
+        .any(|d| d.enabled && d.is_well_formed());
+    if let Err(e) = ns.save(cfg_path) {
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e.to_string())),
+        );
+    }
+    reconcile_obs_vod_files(&ns, ctrl);
+    let _ = settings.send(ns);
+    ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
 async fn post_destination_delete(
     body: &str,
     ctrl: &Arc<Controller>,
@@ -2152,6 +2218,114 @@ async fn post_destination_delete(
     }
     let _ = ns.save(cfg_path);
     reconcile_obs_vod_files(&ns, ctrl);
+    let _ = settings.send(ns);
+    ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
+/// Restrict a dock slot id to a filesystem/config-safe charset so it can
+/// key a `dock.<id>=` line without needing escaping. Returns the trimmed
+/// id or None if it is empty, too long, or has a disallowed character.
+fn sanitize_dock_id(id: &str) -> Option<String> {
+    let id = id.trim();
+    if id.is_empty() || id.len() > 40 {
+        return None;
+    }
+    if id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        Some(id.to_string())
+    } else {
+        None
+    }
+}
+
+/// JSON array of the saved dock slot ids, so the editor can show which docks
+/// exist and offer to copy their URLs.
+fn dock_list_json(settings: &Arc<watch::Sender<Settings>>) -> (&'static str, &'static str, String) {
+    let s = settings.borrow();
+    let mut out = String::from("[");
+    for (i, id) in s.docks.keys().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(&json_escape(id));
+        out.push('"');
+    }
+    out.push(']');
+    ("200 OK", "application/json", out)
+}
+
+fn dock_layout_get(
+    id: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+) -> (&'static str, &'static str, String) {
+    let Some(id) = sanitize_dock_id(id) else {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"bad dock id"}"#.into(),
+        );
+    };
+    // Return the opaque layout blob verbatim, or JSON null so the dock
+    // falls back to its built-in default preset.
+    match settings.borrow().docks.get(&id) {
+        Some(layout) => ("200 OK", "application/json", layout.clone()),
+        None => ("200 OK", "application/json", "null".into()),
+    }
+}
+
+async fn dock_layout_save(
+    id: &str,
+    body: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> (&'static str, &'static str, String) {
+    let Some(id) = sanitize_dock_id(id) else {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"bad dock id"}"#.into(),
+        );
+    };
+    let body = body.trim();
+    if body.len() > config::MAX_DOCK_LAYOUT_LEN {
+        return (
+            "413 Payload Too Large",
+            "application/json",
+            r#"{"ok":false,"error":"layout too large"}"#.into(),
+        );
+    }
+    // The blob lives on one line of the key=value config file, so a
+    // newline would corrupt the next parse. Compact JSON never has one.
+    if body.contains('\n') || body.contains('\r') {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"layout must be single-line json"}"#.into(),
+        );
+    }
+    let mut ns = settings.borrow().clone();
+    if body.is_empty() {
+        ns.docks.remove(&id); // empty body resets the slot to default
+    } else {
+        if !ns.docks.contains_key(&id) && ns.docks.len() >= config::MAX_DOCKS {
+            return (
+                "400 Bad Request",
+                "application/json",
+                r#"{"ok":false,"error":"too many saved docks"}"#.into(),
+            );
+        }
+        ns.docks.insert(id, body.to_string());
+    }
+    if let Err(e) = ns.save(cfg_path) {
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e.to_string())),
+        );
+    }
     let _ = settings.send(ns);
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
 }
@@ -2897,6 +3071,11 @@ fn json_escape(s: &str) -> String {
 /// as the main dashboard so behavior stays identical. Source lives in
 /// `web/dock.html` - built-time minified + gzipped (see `build.rs`).
 static DOCK_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html.gz"));
+
+/// Dock logic (widget rendering, gear editor, state polling). Split out of
+/// `dock.html` so the page stays markup+CSS; source in `web/dock.js`,
+/// build-time gzipped (see `build.rs`).
+static DOCK_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js.gz"));
 
 /// Main dashboard / first-run wizard. Source lives in `web/index.html`;
 /// build-time minified + gzipped (see `build.rs`).

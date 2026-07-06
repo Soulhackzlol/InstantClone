@@ -11,13 +11,13 @@ html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
   font-family:-apple-system,Segoe UI,Roboto,sans-serif;
   overflow-x:hidden;overflow-y:auto;
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-/* Thin scrollbar only when a dock is genuinely too short for the controls. */
 body::-webkit-scrollbar{width:6px}
 body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .wrap{display:flex;flex-direction:column;min-height:100vh;padding:10px;gap:6px}
-/* Critical rows never shrink; only the tip/egress lines absorb a squeeze in
-   a short dock, so the big number + controls always render fully. */
-.top,.screen,.input-row,.cta-row{flex:0 0 auto}
+.top,.screen,.cta-row{flex:0 0 auto}
+/* Any widget can be switched off from the gear editor. */
+[hidden]{display:none!important}
+
 .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
 
 /* Phase chip */
@@ -36,29 +36,48 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .pill.on{color:var(--fg)}
 .pill.on .dot{background:var(--live);box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 18%,transparent)}
 .pill.bad .dot{background:var(--fg-4)}
+/* Live-as-dot mode: collapse the pill to just its signal dot. */
+.pill.asdot{padding:4px;gap:0}
+.pill.asdot #src-lbl{display:none}
+.pill.asdot .dot{width:9px;height:9px}
 
-/* Big delay readout inside an inset "screen" */
+/* Big delay readout / setter inside an inset "screen" */
 .screen{background:var(--panel-2);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);
-  border-radius:11px;padding:9px 11px;text-align:center;position:relative}
-/* Responsive so it never clips in a narrow/short dock; line-height leaves
-   room for the glyphs (line-height:1 was chopping the digits' top/bottom). */
+  border-radius:11px;padding:9px 11px;position:relative}
+.num-row{display:flex;align-items:center;justify-content:center;gap:6px}
 .cur{font-size:clamp(23px,11vw,34px);font-weight:800;letter-spacing:-1.5px;
-  font-variant-numeric:tabular-nums;line-height:1.08;transition:color .25s}
+  font-variant-numeric:tabular-nums;line-height:1.08;transition:color .25s;
+  display:inline-flex;align-items:baseline}
+/* The idle setter shares the readout's exact type so nothing jumps when the
+   dock crosses from passthrough into an armed delay. */
+.cur input{font:inherit;letter-spacing:inherit;color:inherit;background:transparent;border:0;
+  outline:none;text-align:center;width:2.7em;font-variant-numeric:tabular-nums;
+  -moz-appearance:textfield}
+.cur input::-webkit-outer-spin-button,.cur input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .cur .u{font-size:.4em;color:var(--fg-3);font-weight:600;margin-left:2px;letter-spacing:0}
 .cur.changing{color:var(--accent)}
+/* Number size modes */
+.sz-sm .cur{font-size:clamp(18px,7vw,24px)}
+.sz-lg .cur{font-size:clamp(30px,14vw,48px)}
+/* Round nudge buttons that flank the number; they retire once a delay is
+   engaged so the screen becomes a clean readout. */
+.np{width:30px;height:30px;flex:0 0 auto;border-radius:50%;border:1px solid var(--line);
+  background:var(--panel);color:var(--fg-2);font-size:18px;line-height:1;cursor:pointer;
+  transition:.15s cubic-bezier(.32,.72,0,1)}
+.np:hover{border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line));color:var(--fg)}
+.np:active{transform:scale(.9)}
 .bar{position:relative;height:4px;background:var(--panel);border-radius:999px;overflow:hidden;margin-top:8px}
 .bar .fill{position:absolute;inset:0 auto 0 0;width:0;border-radius:999px;
   background:linear-gradient(90deg,var(--warn),color-mix(in srgb,var(--warn) 60%,#fff));
   transition:width .35s cubic-bezier(.32,.72,0,1)}
 .bar .fill.ready {background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 55%,#fff))}
 .bar .fill.active{background:linear-gradient(90deg,var(--live),color-mix(in srgb,var(--live) 55%,#fff))}
+.bar .pct{position:absolute;right:0;top:-14px;font-size:9.5px;color:var(--fg-3);font-variant-numeric:tabular-nums}
+.bar.thick{height:8px}
 
-/* Egress glance (destinations + bitrate), shown only while a source is live */
+/* Egress glance (destinations + bitrate) */
 .eg{display:flex;align-items:center;justify-content:center;gap:7px;font-size:11px;color:var(--fg-3);
   font-variant-numeric:tabular-nums}
-/* Fully removed from layout when offline (not just transparent) so the dock
-   stays compact and the controls sit higher. */
-.eg.hide{display:none}
 .eg b{color:var(--fg-2);font-weight:600}
 .eg .sep{color:var(--fg-4)}
 
@@ -67,19 +86,91 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
   transition:opacity .15s,transform .15s}
 .tip.fade{opacity:0;transform:translateY(2px)}
 
-/* Delay input */
-.input-row{display:flex;gap:4px;align-items:center;background:var(--panel);border:1px solid var(--line);
-  border-radius:10px;padding:3px;transition:.15s}
-.input-row:focus-within{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
-.input-row.disabled{opacity:.4;pointer-events:none}
-.input-row input{flex:1;background:transparent;border:0;color:var(--fg);font-size:14px;font-weight:700;
-  text-align:center;font-variant-numeric:tabular-nums;outline:none;-moz-appearance:textfield;width:100%}
-.input-row input::-webkit-outer-spin-button,.input-row input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-.input-row .step{background:transparent;border:0;color:var(--fg-3);font-size:16px;width:26px;height:26px;
-  border-radius:7px;cursor:pointer;transition:.15s;line-height:1}
-.input-row .step:hover{background:var(--line);color:var(--fg)}
-.input-row .step:active{transform:scale(.9)}
-.input-row .suf{color:var(--fg-3);font-size:11px;padding:0 6px}
+/* Destination quick-toggle strip */
+.dests{display:flex;flex-direction:column;gap:4px}
+.dest{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);
+  border-radius:9px;background:var(--panel);font-size:11.5px}
+.dest .d-dot{width:7px;height:7px;border-radius:50%;background:var(--fg-4);flex:0 0 auto;transition:.2s}
+.dest.alive .d-dot{background:var(--live);box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 18%,transparent)}
+.dest .d-name{flex:1;font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dest .d-plat{color:var(--fg-3);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+.dest .d-rate{color:var(--live);font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums}
+/* iOS-style switch */
+.sw{width:34px;height:20px;flex:0 0 auto;border-radius:999px;border:0;background:var(--line-2);
+  position:relative;cursor:pointer;transition:.2s cubic-bezier(.32,.72,0,1)}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+  background:#fff;transition:.2s cubic-bezier(.32,.72,0,1)}
+.sw.on{background:var(--live)}
+.sw.on::after{transform:translateX(14px)}
+/* Misclick guard: the row swaps to a Sure? / cancel pair for ~3s. */
+.dest .confirm{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.dest .confirm .q{color:var(--warn);font-weight:700;font-size:10.5px}
+.dest .cbtn{width:24px;height:22px;border-radius:6px;border:1px solid var(--line-2);
+  background:var(--panel-2);cursor:pointer;font-size:12px;line-height:1;color:var(--fg-2)}
+.dest .cbtn.yes{color:var(--live);border-color:color-mix(in srgb,var(--live) 45%,var(--line-2))}
+.dest .cbtn.no{color:var(--fg-3)}
+.dest .cbtn:active{transform:scale(.9)}
+.dests .empty{font-size:10.5px;color:var(--fg-3);text-align:center;padding:4px}
+/* Icons layout: destinations as compact circular badges (hover for name). */
+.dests.icons{flex-direction:row;flex-wrap:wrap;gap:7px;justify-content:center}
+.dico{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:var(--panel);
+  display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--fg-3);
+  cursor:pointer;transition:transform .12s cubic-bezier(.32,.72,0,1),border-color .15s,color .15s,box-shadow .2s,opacity .15s}
+.dico:hover{border-color:var(--line-2);color:var(--fg);transform:translateY(-1px)}
+.dico:active{transform:scale(.94)}
+.dico.on{color:var(--fg);border-color:var(--line-2)}
+.dico.off{opacity:.4}
+.dico.alive{border-color:color-mix(in srgb,var(--live) 55%,var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 16%,transparent)}
+.dico.arm{border-color:var(--warn);color:var(--warn);font-size:15px;animation:dico-pulse 1s ease-in-out infinite}
+@keyframes dico-pulse{0%,100%{box-shadow:0 0 0 2px color-mix(in srgb,var(--warn) 28%,transparent)}50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--warn) 8%,transparent)}}
+
+/* Delay profile chips */
+.profiles{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.pchip{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:9px;
+  border:1px solid var(--line);background:var(--panel);color:var(--fg);font-size:11.5px;font-weight:600;
+  cursor:pointer;transition:border-color .15s,color .15s,background .15s,transform .12s cubic-bezier(.32,.72,0,1)}
+.pchip:hover{border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line))}
+.pchip:active{transform:scale(.96)}
+.pchip .pv{font-size:10px;font-weight:700;color:var(--fg-3);font-variant-numeric:tabular-nums}
+
+/* Health stats glance */
+.stats{display:flex;flex-wrap:wrap;gap:5px 10px;justify-content:center;font-size:11px;color:var(--fg-3);
+  font-variant-numeric:tabular-nums}
+.stats .st b{color:var(--fg-2);font-weight:700}
+.stats .st.bad{color:var(--warn);font-weight:600}
+.stats .st.muted{color:var(--fg-4)}
+
+/* Auto behavior + settings toggle rows */
+.behavior,.settings{display:flex;flex-direction:column;gap:5px}
+.brow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;
+  border:1px solid var(--line);border-radius:9px;background:var(--panel);font-size:11.5px}
+.blbl{color:var(--fg-2);font-weight:600}
+.srow-btns{display:flex;gap:5px;flex:0 0 auto;align-items:center}
+.cq{font-size:10px;color:var(--warn);font-weight:600;margin-right:1px}
+
+/* Overlays list */
+.overlays{display:flex;flex-direction:column;gap:4px}
+.orow{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);
+  border-radius:9px;background:var(--panel);font-size:11.5px}
+.o-name{flex:1;display:flex;align-items:center;gap:6px;font-weight:600;color:var(--fg);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.o-tag{font-size:8.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:999px;padding:1px 5px}
+.overlays .empty{font-size:10.5px;color:var(--fg-3);text-align:center;padding:4px}
+.osearch{width:100%;font:inherit;font-size:11.5px;color:var(--fg);background:var(--panel-2);
+  border:1px solid var(--line);border-radius:8px;padding:6px 9px;outline:none;margin-bottom:5px}
+.osearch::placeholder{color:var(--fg-4)}
+.osearch:focus{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.olist{display:flex;flex-direction:column;gap:4px}
+.ogroup{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--fg-4);font-weight:700;margin:6px 2px 1px}
+
+/* Mini action buttons (settings + overlays) */
+.minibtn{flex:0 0 auto;padding:5px 9px;border-radius:7px;border:1px solid var(--line);background:var(--panel-2);
+  color:var(--fg-2);font-size:10.5px;font-weight:600;cursor:pointer;font-family:inherit;
+  transition:border-color .15s,color .15s,transform .12s}
+.minibtn:hover:not(:disabled){border-color:var(--line-2);color:var(--fg)}
+.minibtn:active:not(:disabled){transform:scale(.95)}
+.minibtn:disabled{opacity:.4;cursor:not-allowed}
 
 /* Buttons */
 .btn{padding:9px 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--fg);
@@ -103,192 +194,150 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .cta-row .btn{flex:1}
 .cta-row .btn.disarm{flex:0 0 auto;padding:10px 13px}
 
+/* Status-as-dot mode: collapse the chip to a colored dot of the state hue. */
+.phase.asdot{width:14px;height:14px;min-width:14px;padding:0;font-size:0;border-radius:50%;
+  background:currentColor;box-shadow:none}
+
+/* Compact density: tighten spacing + type for gamers who want minimal chrome. */
+body.compact .wrap{padding:7px;gap:4px}
+body.compact .screen{padding:6px 9px}
+body.compact .cur{font-size:clamp(20px,9vw,28px)}
+body.compact .btn{padding:7px 9px;font-size:12px}
+body.compact .dest{padding:5px 7px}
+body.compact .eg,body.compact .tip{font-size:10px}
+
+/* Gear button - hidden until you mouse over the dock, so a live dock stays
+   clean and the control only surfaces when you go to configure it. */
+.gear{position:fixed;top:5px;right:5px;width:26px;height:26px;border-radius:8px;border:0;
+  background:transparent;color:var(--fg-3);cursor:pointer;font-size:15px;line-height:1;z-index:5;
+  opacity:0;transition:opacity .18s,color .15s,background .15s,transform .15s}
+body:hover .gear{opacity:.5}
+.gear:hover{opacity:1;color:var(--fg);background:var(--panel)}
+.gear:active{transform:scale(.92) rotate(35deg)}
+
+/* Editor: a bottom sheet that slides up over the dock */
+.editor{position:fixed;inset:0;z-index:10;display:flex;align-items:flex-end;justify-content:center;
+  background:color-mix(in srgb,#000 55%,transparent);backdrop-filter:blur(3px);
+  opacity:0;transition:opacity .22s cubic-bezier(.32,.72,0,1)}
+.editor.show{opacity:1}
+.sheet{width:100%;max-height:92vh;overflow-y:auto;background:var(--panel);
+  border:1px solid var(--line);border-bottom:0;border-radius:20px 20px 0 0;padding:8px 12px 14px;
+  box-shadow:0 -8px 40px -12px rgba(0,0,0,.6),0 -1px 0 color-mix(in srgb,#fff 6%,transparent) inset;
+  transform:translateY(16px);transition:transform .24s cubic-bezier(.32,.72,0,1)}
+.editor.show .sheet{transform:translateY(0)}
+.grabber{width:34px;height:4px;border-radius:999px;background:var(--line-2);margin:2px auto 10px}
+.ehead{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+.ehead h3{margin:0;font-size:13px;font-weight:700;color:var(--fg);letter-spacing:.2px}
+.ehead .slot{font-size:10px;font-weight:600;color:var(--fg-3);background:var(--panel-2);
+  border:1px solid var(--line);border-radius:999px;padding:2px 7px}
+.eclose{margin-left:auto;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel-2);color:var(--fg-3);font-size:16px;line-height:1;cursor:pointer;transition:.15s}
+.eclose:hover{color:var(--fg);border-color:var(--line-2)}
+.eclose:active{transform:scale(.92)}
+.lbl{font-size:9.5px;text-transform:uppercase;letter-spacing:1px;color:var(--fg-4);font-weight:700;margin:13px 2px 6px}
+.lbl.inline{margin:0}
+
+/* Preset chips */
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{padding:7px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);
+  color:var(--fg-2);font-size:12px;font-weight:600;cursor:pointer;
+  transition:border-color .15s,color .15s,background .15s,transform .12s}
+.chip:hover{border-color:var(--line-2);color:var(--fg)}
+.chip:active{transform:scale(.96)}
+.chip.sel{background:color-mix(in srgb,var(--accent) 18%,var(--panel));
+  border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.chip.add{color:var(--fg-3);border-style:dashed}
+.chip.add:hover{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.newdock{font:inherit;font-size:12px;font-weight:600;color:var(--fg);background:var(--panel-2);
+  border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));border-radius:10px;padding:6px 10px;outline:none;width:96px}
+.hint{font-size:10px;color:var(--fg-4);line-height:1.4;margin:7px 2px 0}
+
+/* Appearance rows: label + control on one line */
+.densrow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:9px 2px 2px}
+.swatches{display:flex;gap:7px}
+.swatch{width:22px;height:22px;border-radius:50%;border:2px solid transparent;background:var(--sw);
+  cursor:pointer;padding:0;box-shadow:0 0 0 1px var(--line) inset;transition:transform .12s cubic-bezier(.32,.72,0,1),border-color .15s}
+.swatch:hover{transform:scale(1.12)}
+.swatch:active{transform:scale(.94)}
+.swatch.sel{border-color:var(--fg)}
+
+/* Segmented "mode" control */
+.seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:2px;gap:2px}
+.segb{border:0;background:transparent;color:var(--fg-3);font:inherit;font-size:11.5px;font-weight:600;
+  padding:5px 11px;border-radius:8px;cursor:pointer;font-variant-numeric:tabular-nums;
+  transition:color .15s,background .15s,box-shadow .15s,transform .12s}
+.segb:hover{color:var(--fg-2)}
+.segb:active{transform:scale(.96)}
+.segb.sel{background:var(--panel);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25),0 0 0 1px var(--line)}
+
+/* Widget rows */
+.wlist{display:flex;flex-direction:column;gap:6px}
+.wrow{border:1px solid var(--line);border-radius:12px;background:var(--panel-2);
+  transition:border-color .15s,opacity .15s,box-shadow .15s}
+.wrow.off{opacity:.62}
+.wrow.dragging{opacity:.5;border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.wrow.drop{border-color:var(--accent);box-shadow:0 -2px 0 var(--accent)}
+.wrow .head{display:flex;align-items:center;gap:9px;padding:9px 10px}
+.grip{color:var(--fg-4);font-size:14px;line-height:1;letter-spacing:1px;cursor:grab;padding:6px 3px;user-select:none}
+.grip:hover{color:var(--fg-2)}
+.grip:active{cursor:grabbing}
+.wrow .nm{flex:1;font-size:12.5px;font-weight:600;color:var(--fg)}
+.wrow.off .nm{color:var(--fg-4)}
+.wrow .cv{color:var(--fg-4);font-size:16px;line-height:1;transition:transform .2s cubic-bezier(.32,.72,0,1)}
+.wrow.open .cv{transform:rotate(90deg)}
+.wrow .opts{display:none;flex-direction:column;gap:0;padding:0 10px 6px}
+.wrow.open .opts{display:flex}
+.optrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;
+  border-top:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
+.optlbl{font-size:11.5px;color:var(--fg-2)}
+
+/* Switch size variant for option rows (base .sw defined in the dest section) */
+.sw.sm{width:30px;height:18px}
+.sw.sm::after{width:14px;height:14px}
+.sw.sm.on::after{transform:translateX(12px)}
+
+.ed-actions{display:flex;gap:8px;margin-top:14px}
+.ed-actions .btn{font-size:12px;padding:10px;border-radius:10px}
+.ed-actions .btn.ghost{flex:1}
+.ed-actions .btn.primary{flex:0 0 auto;padding:10px 18px}
+
 #toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%) translateY(40px);
   background:var(--panel);border:1px solid var(--line-2);color:var(--fg);font-size:11px;padding:6px 12px;
-  border-radius:9px;pointer-events:none;opacity:0;transition:.25s cubic-bezier(.32,.72,0,1);white-space:nowrap;max-width:90%}
+  border-radius:9px;pointer-events:none;opacity:0;transition:.25s cubic-bezier(.32,.72,0,1);white-space:nowrap;max-width:90%;z-index:20}
 #toast.show{transform:translateX(-50%) translateY(0);opacity:1}
 #toast.err{border-color:var(--danger);color:color-mix(in srgb,var(--danger) 60%,#fff)}
 #toast.ok{border-color:var(--live);color:color-mix(in srgb,var(--live) 55%,#fff)}
 </style></head><body>
+<button class="gear" id="gear" title="Customize dock" onclick="openEditor()">&#9881;</button>
 <div class="wrap">
-  <div class="top">
+  <div class="top" id="w-top">
     <span class="phase" id="ph">Idle</span>
     <span class="pill bad" id="src"><span class="dot"></span><span id="src-lbl">Offline</span></span>
   </div>
-  <div class="screen">
-    <div class="cur"><span id="v">0.0</span><span class="u">s</span></div>
-    <div class="bar"><div class="fill" id="bar"></div></div>
+  <div class="screen" id="w-screen">
+    <div class="num-row">
+      <button class="np" id="minus" onclick="bump(-1)" title="less delay">&minus;</button>
+      <span class="cur" id="cur">
+        <input id="d" type="number" min="0" max="600" value="0" inputmode="numeric">
+        <span id="v" hidden>0.0</span><span class="u">s</span>
+      </span>
+      <button class="np" id="plus" onclick="bump(1)" title="more delay">+</button>
+    </div>
+    <div class="bar" id="w-bar"><span class="pct" id="pct" hidden></span><div class="fill" id="bar"></div></div>
   </div>
-  <div class="eg hide" id="eg"></div>
-  <div class="tip" id="sub">Waiting for your encoder…</div>
-  <div class="input-row" id="d-row">
-    <button class="step" onclick="bump(-5)" title="-5s">−</button>
-    <input id="d" type="number" min="0" max="600" value="0" inputmode="numeric">
-    <span class="suf">s</span>
-    <button class="step" onclick="bump(5)" title="+5s">+</button>
-  </div>
-  <div class="cta-row">
+  <div class="eg" id="w-eg" hidden></div>
+  <div class="tip" id="w-tip">Waiting for your encoder&hellip;</div>
+  <div class="dests" id="w-dests" hidden></div>
+  <div class="profiles" id="w-profiles" hidden></div>
+  <div class="stats" id="w-stats" hidden></div>
+  <div class="behavior" id="w-behavior" hidden></div>
+  <div class="settings" id="w-settings" hidden></div>
+  <div class="overlays" id="w-overlays" hidden></div>
+  <div class="cta-row" id="w-cta">
     <button class="btn full" id="main" onclick="mainClick()" disabled>-</button>
-    <button class="btn ghost disarm" id="cancel" onclick="disarmClick()" hidden title="Cancel arming">✕</button>
+    <button class="btn ghost disarm" id="cancel" onclick="disarmClick()" hidden title="Cancel arming">&times;</button>
   </div>
 </div>
 <div id="toast"></div>
-<script>
-const $=id=>document.getElementById(id);
-const PHASE_TO_STATE={idle:'off',preparing:'arming',ready:'armed',active:'active'};
-let s=null, lastVal='0.0', pending=null;
-async function fetchJ(u,o){try{const r=await fetch(u,o);const j=r.headers.get('content-type')?.includes('json')?await r.json():null;return {ok:r.ok,status:r.status,j}}catch(_){return {ok:false,status:0,j:null}}}
-function bump(n){const i=$('d');i.value=Math.max(0,Math.min(600,(+i.value||0)+n));renderCta()}
-$('d').addEventListener('input',renderCta);
-function toast(msg,kind){const t=$('toast');t.className='show '+(kind||'');t.textContent=msg;clearTimeout(t._h);t._h=setTimeout(()=>t.className='',1800)}
-function setPending(p){pending=p;setTimeout(()=>pending=null,1500);tick()}
-function fmtRate(k){if(!k||k<=0)return '';return k>=1000?(k/1000).toFixed(2)+' Mbps':Math.round(k)+' kbps'}
-// Crossfade helper so the sub-tip swaps smoothly instead of snapping.
-function setTip(text){const el=$('sub');if(el.textContent===text)return;el.classList.add('fade');clearTimeout(el._t);el._t=setTimeout(()=>{el.textContent=text;el.classList.remove('fade')},140)}
-async function arm(ms){
-  setPending('arming');
-  const r=await fetchJ('/arm',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'ms='+ms});
-  if(!r.ok){toast(r.j?.error||'Failed to arm','err');pending=null}
-  else toast(`Arming ${(ms/1000).toFixed(0)}s`,'ok');
-  tick();
-}
-async function activate(){
-  setPending('active');
-  const r=await fetchJ('/activate',{method:'POST'});
-  if(!r.ok){toast(r.j?.error||'Cannot activate yet','err');pending=null}
-  else toast('Delay active','ok');
-  tick();
-}
-async function stop(){
-  setPending('off');
-  await fetchJ('/stop',{method:'POST'});
-  toast('Back to live','ok');
-  tick();
-}
-async function disarm(){
-  setPending('off');
-  await fetchJ('/disarm',{method:'POST'});
-  toast('Disarmed','ok');
-  tick();
-}
-function mainClick(){
-  const m=$('main'); if(m._busy||m.disabled)return;
-  m._busy=true;setTimeout(()=>m._busy=false,300);
-  if(!s)return;
-  const ds=PHASE_TO_STATE[s.phase]||'off';
-  if(ds==='active')return stop();
-  if(ds==='armed') return activate();
-  if(ds==='arming')return disarm();   // double-click safety: arming primary disarms too
-  const ms=(+$('d').value||0)*1000;
-  if(ms>0)arm(ms); else toast('Enter a delay','err');
-}
-function disarmClick(){
-  const b=$('cancel'); if(b._busy)return;
-  b._busy=true;setTimeout(()=>b._busy=false,300);
-  disarm();
-}
-function fmt(ms){if(ms<100)return '0.0';const x=Math.round(ms/100)/10;return x<10?x.toFixed(1):Math.round(x).toString()}
-function renderCta(){
-  if(!s){return}
-  const m=$('main'),cancel=$('cancel');
-  const ds=pending||PHASE_TO_STATE[s.phase]||'off';
-  const ingest=s.ingest_alive;
-  m.className='btn full';m.disabled=false;cancel.hidden=true;
-  $('d-row').classList.toggle('disabled',ds==='arming'||ds==='armed'||ds==='active');
-  if(ds==='active'){
-    m.textContent='Cut delay';m.classList.add('danger');
-  } else if(ds==='armed'){
-    m.innerHTML='<span>▶</span> Activate';m.classList.add('go');
-    cancel.hidden=false;
-  } else if(ds==='arming'){
-    const tgt=s.armed_delay_ms||1;
-    const pct=Math.min(99,Math.round((s.buffer_fill_ms/tgt)*100));
-    m.innerHTML=`<span class="spin"></span> Buffering ${pct}%`;m.disabled=true;
-    cancel.hidden=false;
-  } else {
-    const ms=(+$('d').value||0)*1000;
-    if(!ingest){m.textContent='Waiting for encoder…';m.disabled=true}
-    else if(ms<=0){m.textContent='Set a delay above';m.disabled=true}
-    else {m.innerHTML=`<span>⏱</span> Arm ${(ms/1000).toFixed(0)}s`;m.classList.add('primary')}
-  }
-}
-function applyState(j){
-  s=j;
-  const ds=PHASE_TO_STATE[s.phase]||'off';
-  // Phase chip - distinguishes idle vs passthrough vs arming/armed/active
-  const phMap={off:s.ingest_alive?['live','Live']:['off','Idle'],arming:['arming','Buffering'],armed:['armed','Armed'],active:['active','Active']};
-  const [cls,txt]=phMap[ds];
-  $('ph').className='phase '+cls;
-  $('ph').textContent=txt;
-  // Source pill - encoder connected or not (any RTMP encoder, not just OBS)
-  $('src').className='pill '+(s.ingest_alive?'on':'bad');
-  $('src-lbl').textContent=s.ingest_alive?'Live':'Offline';
-  // Current delay - mirror the dashboard: show the armed target while a
-  // delay is engaged (or the fill while arming) and 0 in passthrough.
-  // Using current_delay_ms directly showed the pipeline's own ~1s
-  // transit latency as "1.0s" even in passthrough, a phantom delay.
-  const tgtSec=(s.armed_delay_ms||0)/1000, fillSec=(s.buffer_fill_ms||0)/1000;
-  const showSec = ds==='arming' ? Math.min(fillSec,tgtSec)
-                : (ds==='armed'||ds==='active') ? tgtSec : 0;
-  const nv=fmt(showSec*1000);
-  if(nv!==lastVal){$('v').textContent=nv;lastVal=nv;
-    $('v').parentElement.classList.add('changing');setTimeout(()=>$('v').parentElement.classList.remove('changing'),350);
-  }
-  // Progress bar
-  const target=s.armed_delay_ms||s.buffer_target_ms||0;
-  const fill=$('bar');
-  fill.classList.remove('ready','active');
-  if(ds==='active'){fill.style.width='100%';fill.classList.add('active')}
-  else if(target>0){
-    const pct=Math.min(100,(Math.min(s.buffer_fill_ms,target)/target)*100);
-    fill.style.width=pct+'%';
-    if(pct>=99)fill.classList.add('ready');
-  } else {fill.style.width='0%'}
-  // Egress glance: where the feed is going + live bitrate. Only meaningful
-  // once a source is connected.
-  const eg=$('eg');
-  if(s.ingest_alive){
-    const alive=s.destinations_alive||0, tot=s.destinations_total||0;
-    const rate=fmtRate(s.stats&&s.stats.bitrate_kbps);
-    let html=`<span>▲</span><b>${alive}/${tot||0}</b> live`;
-    if(rate) html+=`<span class="sep">·</span><b>${rate}</b> in`;
-    eg.innerHTML=html; eg.classList.remove('hide');
-  } else { eg.classList.add('hide'); }
-  // Sub-tip (crossfaded)
-  setTip(
-    !s.ingest_alive ? 'Point your encoder at rtmp://…/live' :
-    ds==='active'   ? `Live ${(s.current_delay_ms/1000).toFixed(1)}s behind real time.` :
-    ds==='armed'    ? 'Buffer full. Hit Activate to go live with delay.' :
-    ds==='arming'   ? 'Filling buffer… you can cancel any time.' :
-                      'Passthrough - no delay applied.');
-  renderCta();
-}
-async function tick(){
-  const r=await fetchJ('/state');
-  if(!r.ok||!r.j){$('src').className='pill bad';$('src-lbl').textContent='Offline';return}
-  applyState(r.j);
-}
-// Prefer Server-Sent Events for state updates - one long-lived connection
-// the server writes to only when something changes. Falls back to 500 ms
-// polling if EventSource is missing or the stream drops.
-let _pollTimer=null;
-function startPolling(){
-  if(_pollTimer)return;
-  tick();
-  _pollTimer=setInterval(tick,500);
-}
-function stopPolling(){
-  if(_pollTimer){clearInterval(_pollTimer);_pollTimer=null}
-}
-let _es=null;
-function startSSE(){
-  if(!window.EventSource){startPolling();return}
-  try{
-    _es=new EventSource('/events');
-    _es.onmessage=ev=>{try{applyState(JSON.parse(ev.data));stopPolling()}catch(_){}};
-    _es.onerror=()=>{try{_es.close()}catch(_){}_es=null;startPolling()};
-  }catch(_){startPolling()}
-}
-startSSE();
-window.addEventListener('focus',()=>{ if(!_es)tick(); });
-</script></body></html>
+<script src="/dock.js"></script>
+</body></html>

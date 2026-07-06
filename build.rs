@@ -25,6 +25,9 @@ fn main() {
     for (name, do_min) in &[
         ("index.html", true),
         ("dock.html", true),
+        // Dock logic is template-literal / regex heavy (same reasons as the
+        // overlay runtime), so skip the line minifier and let gzip do it.
+        ("dock.js", false),
         ("overlay-runtime.js", false),
     ] {
         let src_path = web_dir.join(name);
