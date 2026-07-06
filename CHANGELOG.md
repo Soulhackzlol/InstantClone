@@ -6,6 +6,8 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.1.10] - Improving visuals, adding "sink" test mode as destination, UX improvements and OBS dock
+
 ### Customizable OBS browser dock
 
 A composable, per-slot browser dock so you can drive InstantClone from
