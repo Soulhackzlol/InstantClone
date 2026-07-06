@@ -23,7 +23,8 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 /* Phase chip */
 .phase{padding:3px 10px;border-radius:999px;font-size:10.5px;font-weight:700;
   text-transform:uppercase;letter-spacing:1.2px;border:1px solid var(--line);
-  background:var(--panel);color:var(--fg-3);transition:.25s cubic-bezier(.32,.72,0,1)}
+  background:var(--panel);color:var(--fg-3);
+  transition:color .25s,background-color .25s,border-color .25s,box-shadow .25s}
 .phase.live  {color:var(--live);  border-color:color-mix(in srgb,var(--live) 40%,var(--line));  background:color-mix(in srgb,var(--live) 12%,var(--panel))}
 .phase.arming{color:var(--warn);  border-color:color-mix(in srgb,var(--warn) 40%,var(--line));  background:color-mix(in srgb,var(--warn) 12%,var(--panel))}
 .phase.armed {color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line));background:color-mix(in srgb,var(--accent) 12%,var(--panel))}
@@ -32,9 +33,14 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 /* Signal pill */
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
   font-size:11px;font-weight:500;border:1px solid var(--line);background:var(--panel);color:var(--fg-3)}
-.pill .dot{width:6px;height:6px;border-radius:50%;background:var(--fg-4);transition:.2s}
+.pill .dot{width:6px;height:6px;border-radius:50%;background:var(--fg-4);
+  transition:background-color .2s,box-shadow .2s}
 .pill.on{color:var(--fg)}
-.pill.on .dot{background:var(--live);box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 18%,transparent)}
+/* Gentle breathing on the live dot - the dock reads "alive" at a glance. */
+.pill.on .dot{background:var(--live);animation:breathe 2.4s ease-in-out infinite}
+@keyframes breathe{
+  0%,100%{box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 18%,transparent)}
+  50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--live) 7%,transparent)}}
 .pill.bad .dot{background:var(--fg-4)}
 /* Live-as-dot mode: collapse the pill to just its signal dot. */
 .pill.asdot{padding:4px;gap:0}
@@ -46,7 +52,8 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
   border-radius:11px;padding:9px 11px;position:relative}
 .num-row{display:flex;align-items:center;justify-content:center;gap:6px}
 .cur{font-size:clamp(23px,11vw,34px);font-weight:800;letter-spacing:-1.5px;
-  font-variant-numeric:tabular-nums;line-height:1.08;transition:color .25s;
+  font-variant-numeric:tabular-nums;line-height:1.08;
+  transition:color .25s,transform .25s cubic-bezier(.32,.72,0,1);
   display:inline-flex;align-items:baseline}
 /* The idle setter shares the readout's exact type so nothing jumps when the
    dock crosses from passthrough into an armed delay. */
@@ -55,7 +62,7 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
   -moz-appearance:textfield}
 .cur input::-webkit-outer-spin-button,.cur input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .cur .u{font-size:.4em;color:var(--fg-3);font-weight:600;margin-left:2px;letter-spacing:0}
-.cur.changing{color:var(--accent)}
+.cur.changing{color:var(--accent);transform:scale(1.04)}
 /* Number size modes */
 .sz-sm .cur{font-size:clamp(18px,7vw,24px)}
 .sz-lg .cur{font-size:clamp(30px,14vw,48px)}
@@ -63,9 +70,11 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
    engaged so the screen becomes a clean readout. */
 .np{width:30px;height:30px;flex:0 0 auto;border-radius:50%;border:1px solid var(--line);
   background:var(--panel);color:var(--fg-2);font-size:18px;line-height:1;cursor:pointer;
-  transition:.15s cubic-bezier(.32,.72,0,1)}
-.np:hover{border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line));color:var(--fg)}
-.np:active{transform:scale(.9)}
+  transition:border-color .15s,background-color .15s,color .15s,opacity .15s,
+    transform .15s cubic-bezier(.32,.72,0,1)}
+.np:hover:not(:disabled){border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line));color:var(--fg)}
+.np:active:not(:disabled){transform:scale(.96)}
+.np:disabled{opacity:.3;cursor:default;pointer-events:none}
 .bar{position:relative;height:4px;background:var(--panel);border-radius:999px;overflow:hidden;margin-top:8px}
 .bar .fill{position:absolute;inset:0 auto 0 0;width:0;border-radius:999px;
   background:linear-gradient(90deg,var(--warn),color-mix(in srgb,var(--warn) 60%,#fff));
@@ -90,26 +99,33 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .dests{display:flex;flex-direction:column;gap:4px}
 .dest{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);
   border-radius:9px;background:var(--panel);font-size:11.5px}
-.dest .d-dot{width:7px;height:7px;border-radius:50%;background:var(--fg-4);flex:0 0 auto;transition:.2s}
+.dest .d-dot{width:7px;height:7px;border-radius:50%;background:var(--fg-4);flex:0 0 auto;
+  transition:background-color .2s,box-shadow .2s}
 .dest.alive .d-dot{background:var(--live);box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 18%,transparent)}
 .dest .d-name{flex:1;font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dest .d-plat{color:var(--fg-3);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
 .dest .d-rate{color:var(--live);font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums}
 /* iOS-style switch */
 .sw{width:34px;height:20px;flex:0 0 auto;border-radius:999px;border:0;background:var(--line-2);
-  position:relative;cursor:pointer;transition:.2s cubic-bezier(.32,.72,0,1)}
+  position:relative;cursor:pointer;transition:background-color .2s cubic-bezier(.32,.72,0,1)}
+/* Invisible halo so the small switch is comfortable to hit. */
+.sw::before{content:"";position:absolute;inset:-6px -5px}
 .sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
-  background:#fff;transition:.2s cubic-bezier(.32,.72,0,1)}
+  background:#fff;transition:transform .2s cubic-bezier(.32,.72,0,1)}
+.sw:active::after{transform:scale(.92)}
+.sw.on:active::after{transform:translateX(14px) scale(.92)}
 .sw.on{background:var(--live)}
 .sw.on::after{transform:translateX(14px)}
 /* Misclick guard: the row swaps to a Sure? / cancel pair for ~3s. */
 .dest .confirm{display:flex;align-items:center;gap:6px;flex:0 0 auto}
 .dest .confirm .q{color:var(--warn);font-weight:700;font-size:10.5px}
 .dest .cbtn{width:24px;height:22px;border-radius:6px;border:1px solid var(--line-2);
-  background:var(--panel-2);cursor:pointer;font-size:12px;line-height:1;color:var(--fg-2)}
+  background:var(--panel-2);cursor:pointer;font-size:12px;line-height:1;color:var(--fg-2);
+  position:relative;transition:transform .12s cubic-bezier(.32,.72,0,1)}
+.dest .cbtn::before{content:"";position:absolute;inset:-5px}
 .dest .cbtn.yes{color:var(--live);border-color:color-mix(in srgb,var(--live) 45%,var(--line-2))}
 .dest .cbtn.no{color:var(--fg-3)}
-.dest .cbtn:active{transform:scale(.9)}
+.dest .cbtn:active{transform:scale(.96)}
 .dests .empty{font-size:10.5px;color:var(--fg-3);text-align:center;padding:4px}
 /* Icons layout: destinations as compact circular badges (hover for name). */
 .dests.icons{flex-direction:row;flex-wrap:wrap;gap:7px;justify-content:center}
@@ -139,7 +155,7 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
   font-size:11.5px;font-weight:600;cursor:pointer;font-family:inherit;
   transition:border-color .15s,background .15s,transform .12s cubic-bezier(.32,.72,0,1)}
 .prow:hover{border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line))}
-.prow:active{transform:scale(.98)}
+.prow:active{transform:scale(.96)}
 .prow .pv{color:var(--fg-3);font-variant-numeric:tabular-nums;font-weight:700;font-size:10.5px}
 
 /* Health stats glance: inline row, or a tile grid for glanceability */
@@ -184,19 +200,26 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
   color:var(--fg-2);font-size:10.5px;font-weight:600;cursor:pointer;font-family:inherit;
   transition:border-color .15s,color .15s,transform .12s}
 .minibtn:hover:not(:disabled){border-color:var(--line-2);color:var(--fg)}
-.minibtn:active:not(:disabled){transform:scale(.95)}
+.minibtn:active:not(:disabled){transform:scale(.96)}
 .minibtn:disabled{opacity:.4;cursor:not-allowed}
 
 /* Buttons */
 .btn{padding:9px 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--fg);
-  font-size:13px;font-weight:600;cursor:pointer;transition:.15s cubic-bezier(.32,.72,0,1);font-family:inherit;
+  font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
+  transition:border-color .15s,background-color .15s,color .15s,box-shadow .2s,opacity .15s,
+    transform .15s cubic-bezier(.32,.72,0,1);
   display:flex;align-items:center;justify-content:center;gap:7px}
 .btn:hover:not(:disabled){border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line))}
-.btn:active:not(:disabled){transform:scale(.98)}
+.btn:active:not(:disabled){transform:scale(.96)}
 .btn.primary{background:linear-gradient(180deg,var(--accent),color-mix(in srgb,var(--accent) 82%,#000));color:var(--accent-ink);border-color:transparent}
 .btn.primary:hover:not(:disabled){box-shadow:0 6px 18px -6px color-mix(in srgb,var(--accent) 70%,transparent)}
-.btn.go{background:linear-gradient(180deg,var(--live),color-mix(in srgb,var(--live) 82%,#000));color:#04140a;border-color:transparent}
+.btn.go{background:linear-gradient(180deg,var(--live),color-mix(in srgb,var(--live) 82%,#000));color:#04140a;border-color:transparent;
+  animation:readyglow 1.8s ease-in-out infinite}
 .btn.go:hover:not(:disabled){box-shadow:0 6px 18px -6px color-mix(in srgb,var(--live) 70%,transparent)}
+/* Buffer is full and waiting on the streamer - breathe so the eye lands here. */
+@keyframes readyglow{
+  0%,100%{box-shadow:0 2px 8px -4px color-mix(in srgb,var(--live) 30%,transparent)}
+  50%{box-shadow:0 6px 22px -6px color-mix(in srgb,var(--live) 60%,transparent)}}
 .btn.danger{background:linear-gradient(180deg,var(--danger),color-mix(in srgb,var(--danger) 82%,#000));color:#fff;border-color:transparent}
 .btn.danger:hover:not(:disabled){box-shadow:0 6px 18px -6px color-mix(in srgb,var(--danger) 70%,transparent)}
 .btn.ghost{background:transparent;border-color:var(--line);color:var(--fg-2)}
@@ -225,10 +248,12 @@ body.compact .eg,body.compact .tip{font-size:10px}
    clean and the control only surfaces when you go to configure it. */
 .gear{position:fixed;top:5px;right:5px;width:26px;height:26px;border-radius:8px;border:0;
   background:transparent;color:var(--fg-3);cursor:pointer;font-size:15px;line-height:1;z-index:5;
-  opacity:0;transition:opacity .18s,color .15s,background .15s,transform .15s}
+  opacity:0;transition:opacity .18s,color .15s,background-color .15s,transform .15s}
+/* Invisible halo: the gear is the dock's main entry point, keep it easy to hit. */
+.gear::before{content:"";position:absolute;inset:-8px}
 body:hover .gear{opacity:.5}
 .gear:hover{opacity:1;color:var(--fg);background:var(--panel)}
-.gear:active{transform:scale(.92) rotate(35deg)}
+.gear:active{transform:scale(.96) rotate(30deg)}
 
 /* Editor: a bottom sheet that slides up over the dock */
 .editor{position:fixed;inset:0;z-index:10;display:flex;align-items:flex-end;justify-content:center;
@@ -246,9 +271,10 @@ body:hover .gear{opacity:.5}
 .ehead .slot{font-size:10px;font-weight:600;color:var(--fg-3);background:var(--panel-2);
   border:1px solid var(--line);border-radius:999px;padding:2px 7px}
 .eclose{margin-left:auto;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
-  background:var(--panel-2);color:var(--fg-3);font-size:16px;line-height:1;cursor:pointer;transition:.15s}
+  background:var(--panel-2);color:var(--fg-3);font-size:16px;line-height:1;cursor:pointer;
+  transition:color .15s,border-color .15s,transform .15s}
 .eclose:hover{color:var(--fg);border-color:var(--line-2)}
-.eclose:active{transform:scale(.92)}
+.eclose:active{transform:scale(.96)}
 .lbl{font-size:9.5px;text-transform:uppercase;letter-spacing:1px;color:var(--fg-4);font-weight:700;margin:13px 2px 6px}
 .lbl.inline{margin:0}
 
@@ -273,7 +299,7 @@ body:hover .gear{opacity:.5}
 .swatch{width:22px;height:22px;border-radius:50%;border:2px solid transparent;background:var(--sw);
   cursor:pointer;padding:0;box-shadow:0 0 0 1px var(--line) inset;transition:transform .12s cubic-bezier(.32,.72,0,1),border-color .15s}
 .swatch:hover{transform:scale(1.12)}
-.swatch:active{transform:scale(.94)}
+.swatch:active{transform:scale(.96)}
 .swatch.sel{border-color:var(--fg)}
 
 /* Segmented "mode" control */
@@ -287,7 +313,7 @@ body:hover .gear{opacity:.5}
 
 /* Widget rows */
 .wlist{display:flex;flex-direction:column;gap:6px}
-.wrow{border:1px solid var(--line);border-radius:12px;background:var(--panel-2);
+.wrow{border:1px solid var(--line);border-radius:10px;background:var(--panel-2);
   transition:border-color .15s,opacity .15s,box-shadow .15s}
 .wrow.off{opacity:.62}
 .wrow.dragging{opacity:.5;border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
@@ -310,6 +336,7 @@ body:hover .gear{opacity:.5}
 .sw.sm{width:30px;height:18px}
 .sw.sm::after{width:14px;height:14px}
 .sw.sm.on::after{transform:translateX(12px)}
+.sw.sm.on:active::after{transform:translateX(12px) scale(.92)}
 
 .ed-actions{display:flex;gap:8px;margin-top:14px}
 .ed-actions .btn{font-size:12px;padding:10px;border-radius:10px}
@@ -320,10 +347,38 @@ body:hover .gear{opacity:.5}
 
 #toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%) translateY(40px);
   background:var(--panel);border:1px solid var(--line-2);color:var(--fg);font-size:11px;padding:6px 12px;
-  border-radius:9px;pointer-events:none;opacity:0;transition:.25s cubic-bezier(.32,.72,0,1);white-space:nowrap;max-width:90%;z-index:20}
+  border-radius:9px;pointer-events:none;opacity:0;white-space:nowrap;max-width:90%;z-index:20;
+  transition:transform .25s cubic-bezier(.32,.72,0,1),opacity .25s,border-color .25s,color .25s}
 #toast.show{transform:translateX(-50%) translateY(0);opacity:1}
 #toast.err{border-color:var(--danger);color:color-mix(in srgb,var(--danger) 60%,#fff)}
 #toast.ok{border-color:var(--live);color:color-mix(in srgb,var(--live) 55%,#fff)}
+
+/* First-paint entrance: widgets rise in with a small stagger. The `boot`
+   class comes off after one pass so saves/reorders never replay it. */
+body.boot .wrap>*{animation:rise .38s cubic-bezier(.32,.72,0,1) both}
+body.boot .wrap>*:nth-child(2){animation-delay:.04s}
+body.boot .wrap>*:nth-child(3){animation-delay:.08s}
+body.boot .wrap>*:nth-child(4){animation-delay:.12s}
+body.boot .wrap>*:nth-child(5){animation-delay:.16s}
+body.boot .wrap>*:nth-child(6){animation-delay:.20s}
+body.boot .wrap>*:nth-child(7){animation-delay:.24s}
+body.boot .wrap>*:nth-child(n+8){animation-delay:.28s}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}}
+
+/* Keyboard focus ring, only for keyboard (not mouse) focus. */
+:where(button,input):focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 70%,transparent);outline-offset:1px}
+
+/* Very narrow dock: shave the chrome so content keeps breathing room. */
+@media (max-width:220px){
+  .wrap{padding:7px;gap:5px}
+  .top,.eg{flex-wrap:wrap}
+  .btn{font-size:12px;padding:8px}
+}
+
+/* Respect the OS motion preference: kill entrances and looping pulses. */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
 </style></head><body>
 <button class="gear" id="gear" title="Customize dock" onclick="openEditor()">&#9881;</button>
 <div class="wrap">

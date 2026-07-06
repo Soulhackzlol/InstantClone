@@ -237,10 +237,13 @@ function renderCta() {
     const pct = Math.min(99, Math.round((s.buffer_fill_ms / tgt) * 100));
     m.innerHTML = `<span class="spin"></span> Buffering ${pct}%`; m.disabled = true; cancel.hidden = false;
   } else {
-    const ms = (+$('d').value || 0) * 1000;
+    const sec = +$('d').value || 0;
     if (!ingest) { m.textContent = 'Waiting for encoder…'; m.disabled = true; }
-    else if (ms <= 0) { m.textContent = 'Set a delay above'; m.disabled = true; }
-    else { m.innerHTML = `<span>&#9201;</span> Arm ${(ms / 1000).toFixed(0)}s`; m.classList.add('primary'); }
+    else if (sec <= 0) { m.textContent = 'Set a delay above'; m.disabled = true; }
+    else { m.innerHTML = `<span>&#9201;</span> Arm ${sec.toFixed(0)}s`; m.classList.add('primary'); }
+    // Dead-end nudges read as disabled: can't go below 0 or above the cap.
+    $('minus').disabled = sec <= 0;
+    $('plus').disabled = sec >= 600;
   }
 }
 
@@ -856,6 +859,12 @@ function newDock(addChip) {
 // -------------------------------------------------------------------- boot --
 
 $('d').addEventListener('input', renderCta);
+// Enter in the delay field = press the main button (arm). Keyboard-first flow.
+$('d').addEventListener('keydown', e => { if (e.key === 'Enter') mainClick(); });
+// Staggered first paint (see body.boot CSS); the class comes off after one
+// pass so later saves/reorders never replay the entrance.
+document.body.classList.add('boot');
+setTimeout(() => document.body.classList.remove('boot'), 800);
 applyCfg(cfg);   // paint defaults immediately
 loadCfg();       // then hydrate from url / localStorage / server
 
