@@ -49,7 +49,7 @@ Cuando ya lo tenía hecho, las piezas que de verdad quería eran: una activació
 <tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td></tr>
 <tr><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td></tr>
 <tr><td><b>Deps en runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>236 / 236</code></td></tr>
+<tr><td><b>Tests</b></td><td align="right"><code>238 / 238</code></td></tr>
 </table>
 
 </td>
@@ -289,7 +289,7 @@ Sin npm, sin submódulos, sin SDK de plataforma. El HTML del panel se minifica y
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 236 tests en cada push, y un tag dispara la build + publicación automática de la release con su `SHA256SUMS.txt` al lado (todavía no hay certificado de firma de código, así que el sistema operativo puede avisar en el primer lanzamiento).
+**Listo para uso diario en Windows.** Lo uso en mis propios directos. CI corre fmt + clippy (con `-D warnings`) + 238 tests en cada push, y un tag dispara la build + publicación automática de la release con su `SHA256SUMS.txt` al lado (todavía no hay certificado de firma de código, así que el sistema operativo puede avisar en el primer lanzamiento).
 
 **Lo que está sólido**
 
