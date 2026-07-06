@@ -34,11 +34,11 @@ const WIDGETS = {
   status:   { label: 'Status bar',    def: { on: true } },
   phase:    { label: 'Phase chip',    def: { on: true, style: 'chip' } },
   source:   { label: 'Live pill',     def: { on: true, style: 'pill' } },
-  number:   { label: 'Delay number',  def: { on: true, units: true, step: 5, controls: true, size: 'md' } },
-  bar:      { label: 'Buffer bar',    def: { on: true, pct: false, thick: false } },
+  number:   { label: 'Delay number',  def: { on: true, units: true, step: 5, controls: true, size: 'md', tint: false } },
+  bar:      { label: 'Buffer bar',    def: { on: true, pct: false, thick: false, mono: false } },
   egress:   { label: 'Egress glance', def: { on: true, dests: true, bitrate: true, codec: false } },
   tips:     { label: 'Hint text',     def: { on: true, errorsOnly: false } },
-  dest:     { label: 'Destinations',  def: { on: false, confirm: true, view: 'rows', active: false, stats: false } },
+  dest:     { label: 'Destinations',  def: { on: false, confirm: true, view: 'rows', active: false, stats: false, brand: true } },
   profiles: { label: 'Delay profiles',def: { on: false, arm: false, value: true, view: 'chips' } },
   stats:    { label: 'Health stats',  def: { on: false, cpu: true, mem: true, recon: true, bitrate: false, cuts: false, view: 'row' } },
   behavior: { label: 'Auto behavior', def: { on: false } },
@@ -79,13 +79,15 @@ const OPTS = {
   number: [
     { k: 'size', label: 'Size', modes: [['sm', 'S'], ['md', 'M'], ['lg', 'L']] },
     { k: 'step', label: 'Step', sel: [1, 5, 10] },
-    { k: 'controls', label: '+/- buttons' }, { k: 'units', label: 'Unit' },
-    { k: 'on', label: 'Buffer bar', w: 'bar' }, { k: 'pct', label: 'Show %', w: 'bar' }, { k: 'thick', label: 'Thick bar', w: 'bar' },
+    { k: 'controls', label: '+/- buttons' }, { k: 'units', label: 'Unit' }, { k: 'tint', label: 'Accent number' },
+    { k: 'on', label: 'Buffer bar', w: 'bar' }, { k: 'pct', label: 'Show %', w: 'bar' },
+    { k: 'thick', label: 'Thick bar', w: 'bar' }, { k: 'mono', label: 'Accent bar', w: 'bar' },
   ],
   egress: [{ k: 'dests', label: 'Dest count' }, { k: 'bitrate', label: 'Bitrate' }, { k: 'codec', label: 'Codec' }],
   tips:   [{ k: 'errorsOnly', label: 'Errors only' }],
   dest:   [
     { k: 'view', label: 'Layout', modes: [['rows', 'Rows'], ['icons', 'Icons']] },
+    { k: 'brand', label: 'Platform colors' },
     { k: 'confirm', label: 'Confirm tap' }, { k: 'stats', label: 'Show bitrate' }, { k: 'active', label: 'Active only' },
   ],
   profiles: [
@@ -316,6 +318,17 @@ async function tick() {
 let _destTimer = null;
 let destCache = [];   // last /destinations payload, for instant re-render on option change
 let _destSig = '';    // enabled/alive fingerprint from the state stream (sync trigger)
+
+// Brand hues so a glance says WHICH platform is live (user feedback: "color
+// coded by platform"). Reds/greens tuned for the dark panel; custom/sink
+// stay neutral. Applied via a --pc custom property + .pc class.
+const PLATFORM_COLORS = {
+  twitch: '#9146ff', youtube: '#ff4d4d', kick: '#53fc18', trovo: '#21c26d', restream: '#f27a3f',
+};
+function brandColor(el, platform) {
+  const pc = cfg.w.dest.brand && PLATFORM_COLORS[platform];
+  if (pc) { el.style.setProperty('--pc', pc); el.classList.add('pc'); }
+}
 function startDests() { if (_destTimer) return; fetchDests(); _destTimer = setInterval(fetchDests, 4000); }
 function stopDests() { if (_destTimer) { clearInterval(_destTimer); _destTimer = null; } }
 async function fetchDests() {
@@ -340,6 +353,7 @@ function destRow(d) {
   const rate = cfg.w.dest.stats && d.alive ? fmtRate(d.bitrate_kbps) : '';
   const meta = rate ? `<span class="d-rate">${rate}</span>` : `<span class="d-plat">${esc(d.platform || '')}</span>`;
   row.innerHTML = `<span class="d-dot"></span><span class="d-name">${esc(d.name || 'Destination')}</span>${meta}`;
+  brandColor(row, d.platform);
   const sw = document.createElement('button');
   sw.className = 'sw' + (d.enabled ? ' on' : '');
   sw.title = d.enabled ? 'Turn off' : 'Turn on';
@@ -354,6 +368,7 @@ function destIcon(d) {
   b.className = 'dico' + (d.enabled ? ' on' : ' off') + (d.alive ? ' alive' : '');
   b.textContent = (d.platform || d.name || '?').slice(0, 1).toUpperCase();
   b.title = `${d.name || 'Destination'} · ${d.enabled ? 'on' : 'off'}`;
+  brandColor(b, d.platform);
   b.onclick = () => onDestIcon(d, b);
   return b;
 }
@@ -612,8 +627,10 @@ function applyCfg(c) {
   // off hides the whole screen, bar included.
   $('w-screen').hidden = !on('number');
   $('w-screen').className = 'screen sz-' + (c.w.number.size || 'md');
+  $('cur').classList.toggle('tint', !!c.w.number.tint);
   $('w-bar').hidden = !on('bar');
   $('w-bar').classList.toggle('thick', !!c.w.bar.thick);
+  $('w-bar').classList.toggle('mono', !!c.w.bar.mono);
   for (const id of ['egress', 'tips', 'dest', 'profiles', 'stats', 'behavior', 'settings', 'overlays', 'activate']) $(WEL[id]).hidden = !on(id);
   document.querySelectorAll('.cur .u').forEach(u => u.hidden = !c.w.number.units);
   // Apply the saved drag order by re-appending containers in sequence.

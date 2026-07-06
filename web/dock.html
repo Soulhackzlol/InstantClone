@@ -63,6 +63,8 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .cur input::-webkit-outer-spin-button,.cur input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .cur .u{font-size:.4em;color:var(--fg-3);font-weight:600;margin-left:2px;letter-spacing:0}
 .cur.changing{color:var(--accent);transform:scale(1.04)}
+/* Accent-tinted readout: the number always wears the dock's accent hue. */
+.cur.tint{color:var(--accent)}
 /* Number size modes */
 .sz-sm .cur{font-size:clamp(18px,7vw,24px)}
 .sz-lg .cur{font-size:clamp(30px,14vw,48px)}
@@ -83,6 +85,10 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .bar .fill.active{background:linear-gradient(90deg,var(--live),color-mix(in srgb,var(--live) 55%,#fff))}
 .bar .pct{position:absolute;right:0;top:-14px;font-size:9.5px;color:var(--fg-3);font-variant-numeric:tabular-nums}
 .bar.thick{height:8px}
+/* Accent-only bar: one hue through fill/ready/active instead of the
+   amber -> cyan -> green state ramp - for single-color themed docks. */
+.bar.mono .fill,.bar.mono .fill.ready,.bar.mono .fill.active{
+  background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 55%,#fff))}
 
 /* Egress glance (destinations + bitrate) */
 .eg{display:flex;align-items:center;justify-content:center;gap:7px;font-size:11px;color:var(--fg-3);
@@ -105,6 +111,11 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .dest .d-name{flex:1;font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dest .d-plat{color:var(--fg-3);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
 .dest .d-rate{color:var(--live);font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums}
+/* Platform-coded rows: label, live dot, and the on-switch take the brand hue
+   ("the little buttons colored" feedback). */
+.dest.pc .d-plat{color:color-mix(in srgb,var(--pc) 80%,var(--fg-3))}
+.dest.pc.alive .d-dot{background:var(--pc);box-shadow:0 0 0 3px color-mix(in srgb,var(--pc) 20%,transparent)}
+.dest.pc .sw.on{background:var(--pc)}
 /* iOS-style switch */
 .sw{width:34px;height:20px;flex:0 0 auto;border-radius:999px;border:0;background:var(--line-2);
   position:relative;cursor:pointer;transition:background-color .2s cubic-bezier(.32,.72,0,1)}
@@ -137,7 +148,12 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .dico.on{color:var(--fg);border-color:var(--line-2)}
 .dico.off{opacity:.4}
 .dico.alive{border-color:color-mix(in srgb,var(--live) 55%,var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 16%,transparent)}
-.dico.arm{border-color:var(--warn);color:var(--warn);font-size:15px;animation:dico-pulse 1s ease-in-out infinite}
+/* Platform-coded badges (--pc set per element): letter + ring take the
+   platform's brand hue so a glance says WHICH service is live. */
+.dico.pc{color:color-mix(in srgb,var(--pc) 75%,var(--fg-3))}
+.dico.pc.on{color:var(--pc);border-color:color-mix(in srgb,var(--pc) 50%,var(--line))}
+.dico.pc.alive{border-color:color-mix(in srgb,var(--pc) 70%,var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--pc) 20%,transparent)}
+.dico.arm,.dico.pc.arm{border-color:var(--warn);color:var(--warn);font-size:15px;animation:dico-pulse 1s ease-in-out infinite}
 @keyframes dico-pulse{0%,100%{box-shadow:0 0 0 2px color-mix(in srgb,var(--warn) 28%,transparent)}50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--warn) 8%,transparent)}}
 
 /* Delay profile chips */
