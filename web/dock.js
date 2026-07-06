@@ -39,8 +39,8 @@ const WIDGETS = {
   egress:   { label: 'Egress glance', def: { on: true, dests: true, bitrate: true, codec: false } },
   tips:     { label: 'Hint text',     def: { on: true, errorsOnly: false } },
   dest:     { label: 'Destinations',  def: { on: false, confirm: true, view: 'rows', active: false, stats: false } },
-  profiles: { label: 'Delay profiles',def: { on: false, arm: false, value: true } },
-  stats:    { label: 'Health stats',  def: { on: false, cpu: true, mem: true, recon: true, bitrate: false, cuts: false } },
+  profiles: { label: 'Delay profiles',def: { on: false, arm: false, value: true, view: 'chips' } },
+  stats:    { label: 'Health stats',  def: { on: false, cpu: true, mem: true, recon: true, bitrate: false, cuts: false, view: 'row' } },
   behavior: { label: 'Auto behavior', def: { on: false } },
   settings: { label: 'Settings',      def: { on: false } },
   overlays: { label: 'Overlays',      def: { on: false, autohide: false, search: true, group: true } },
@@ -88,8 +88,12 @@ const OPTS = {
     { k: 'view', label: 'Layout', modes: [['rows', 'Rows'], ['icons', 'Icons']] },
     { k: 'confirm', label: 'Confirm tap' }, { k: 'stats', label: 'Show bitrate' }, { k: 'active', label: 'Active only' },
   ],
-  profiles: [{ k: 'arm', label: 'Arm on tap' }, { k: 'value', label: 'Show seconds' }],
+  profiles: [
+    { k: 'view', label: 'Layout', modes: [['chips', 'Chips'], ['list', 'List']] },
+    { k: 'arm', label: 'Arm on tap' }, { k: 'value', label: 'Show seconds' },
+  ],
   stats:  [
+    { k: 'view', label: 'Layout', modes: [['row', 'Row'], ['tiles', 'Tiles']] },
     { k: 'cpu', label: 'CPU' }, { k: 'mem', label: 'RAM' }, { k: 'recon', label: 'Reconnects' },
     { k: 'bitrate', label: 'Bitrate' }, { k: 'cuts', label: 'Cuts' },
   ],
@@ -289,6 +293,11 @@ function applyState(j) {
     : 'Passthrough - no delay applied.';
   const showTip = cfg.w.tips.on && (!cfg.w.tips.errorsOnly || !s.ingest_alive);
   $('w-tip').hidden = !showTip; if (showTip) setTip(tip);
+  // Cross-dock sync: the state stream carries per-dest enabled/alive, so a
+  // toggle made anywhere (dashboard or another dock) refreshes the strip
+  // immediately instead of waiting out the 4 s poll.
+  const dsig = (s.destinations || []).map(d => `${d.id}:${+d.enabled}:${+d.alive}`).join();
+  if (dsig !== _destSig) { _destSig = dsig; if (cfg.w.dest.on) fetchDests(); }
   renderStats();
   renderCta();
 }
@@ -303,6 +312,7 @@ async function tick() {
 
 let _destTimer = null;
 let destCache = [];   // last /destinations payload, for instant re-render on option change
+let _destSig = '';    // enabled/alive fingerprint from the state stream (sync trigger)
 function startDests() { if (_destTimer) return; fetchDests(); _destTimer = setInterval(fetchDests, 4000); }
 function stopDests() { if (_destTimer) { clearInterval(_destTimer); _destTimer = null; } }
 async function fetchDests() {
@@ -396,12 +406,17 @@ async function fetchProfiles() {
 }
 function renderProfiles() {
   const box = $('w-profiles'); if (box.hidden) return;
+  const list = cfg.w.profiles.view === 'list';
+  box.className = 'profiles' + (list ? ' plist' : '');
   if (!profileCache.length) { box.innerHTML = '<div class="empty">No profiles yet. Add them in the dashboard.</div>'; return; }
   box.innerHTML = '';
   for (const p of profileCache) {
     const sec = Math.round((p.delay_ms || 0) / 1000);
-    const b = document.createElement('button'); b.className = 'pchip';
-    b.innerHTML = esc(p.name || sec + 's') + (cfg.w.profiles.value ? `<span class="pv">${sec}s</span>` : '');
+    const b = document.createElement('button');
+    b.className = list ? 'prow' : 'pchip';
+    b.innerHTML = list
+      ? `<span>${esc(p.name || sec + 's')}</span><span class="pv">${sec}s</span>`
+      : esc(p.name || sec + 's') + (cfg.w.profiles.value ? `<span class="pv">${sec}s</span>` : '');
     b.onclick = () => profileSet(sec);
     box.appendChild(b);
   }
@@ -416,14 +431,19 @@ function profileSet(sec) {
 // from the state stream, so no extra polling.
 function renderStats() {
   const box = $('w-stats'); if (box.hidden || !s) return;
-  const o = cfg.w.stats, st = s.stats || {}, parts = [];
-  if (o.cpu) parts.push(`<span class="st"><b>${(s.cpu_pct || 0).toFixed(0)}</b>% cpu</span>`);
-  if (o.mem) parts.push(`<span class="st"><b>${Math.round((s.rss_bytes || 0) / 1048576)}</b> MB</span>`);
-  if (o.bitrate) { const rate = fmtRate(st.bitrate_kbps); if (rate) parts.push(`<span class="st"><b>${rate}</b></span>`); }
-  if (o.recon) parts.push(`<span class="st"><b>${(st.egress_reconnects || 0) + (st.ingest_disconnects || 0)}</b> recon</span>`);
-  if (o.cuts) parts.push(`<span class="st"><b>${st.cuts || 0}</b> cuts</span>`);
-  if (s.backpressure) parts.push('<span class="st bad">&#9888; buffer lag</span>');
-  box.innerHTML = parts.join('') || '<span class="st muted">no metrics selected</span>';
+  const o = cfg.w.stats, st = s.stats || {}, tiles = o.view === 'tiles';
+  box.className = 'stats' + (tiles ? ' tiles' : '');
+  const items = [];
+  if (o.cpu) items.push([(s.cpu_pct || 0).toFixed(0) + '%', 'cpu']);
+  if (o.mem) items.push([Math.round((s.rss_bytes || 0) / 1048576), 'MB']);
+  if (o.bitrate) { const rate = fmtRate(st.bitrate_kbps); if (rate) items.push([rate, 'in']); }
+  if (o.recon) items.push([(st.egress_reconnects || 0) + (st.ingest_disconnects || 0), 'recon']);
+  if (o.cuts) items.push([st.cuts || 0, 'cuts']);
+  let html = items.map(([v, l]) => tiles
+    ? `<span class="tile"><b>${v}</b><span>${l}</span></span>`
+    : `<span class="st"><b>${v}</b> ${l}</span>`).join('');
+  if (s.backpressure) html += '<span class="st bad">&#9888; buffer lag</span>';
+  box.innerHTML = html || '<span class="st muted">no metrics selected</span>';
 }
 
 // Server settings mirrored on the dock (Auto behavior + Settings widgets).
@@ -786,9 +806,19 @@ function buildEditor() {
   body.appendChild(hint);
 
   const act = document.createElement('div'); act.className = 'ed-actions';
+  // Escape hatch for a messed-up layout: two-tap reset back to defaults.
+  const reset = document.createElement('button'); reset.className = 'btn ghost reset'; reset.textContent = 'Reset';
+  reset.onclick = () => {
+    if (!reset._arm) {
+      reset._arm = true; reset.textContent = 'Sure?'; reset.classList.add('warn');
+      setTimeout(() => { reset._arm = false; reset.textContent = 'Reset'; reset.classList.remove('warn'); }, 3000);
+      return;
+    }
+    openRows.clear(); cfg = defaultCfg(); saveAndApply(); buildEditor(); toast('Dock reset to defaults', 'ok');
+  };
   const copy = document.createElement('button'); copy.className = 'btn ghost'; copy.innerHTML = '<span>&#128279;</span> Copy dock URL'; copy.onclick = copyDockUrl;
   const done = document.createElement('button'); done.className = 'btn primary'; done.textContent = 'Done'; done.onclick = closeEditor;
-  act.append(copy, done); body.appendChild(act);
+  act.append(reset, copy, done); body.appendChild(act);
 }
 function applyPreset(k) {
   const p = PRESETS[k]; if (!p) return;
@@ -843,4 +873,26 @@ function startSSE() {
   } catch (_) { startPolling(); }
 }
 startSSE();
-window.addEventListener('focus', () => { if (!_es) tick(); });
+
+// Same-slot layout sync: OBS docks share one browser profile, so when
+// another instance of this slot saves (persist writes localStorage), the
+// storage event fires here and we adopt the new layout live - no reload.
+window.addEventListener('storage', e => {
+  if (e.key !== 'ic.dock.' + SLOT || !e.newValue) return;
+  try {
+    const next = mergeCfg(JSON.parse(e.newValue));
+    if (JSON.stringify(next) !== JSON.stringify(cfg)) applyCfg(next);
+  } catch (_) {}
+});
+
+// Aux data (profiles, overlays, server config, destinations) has no push
+// channel, so refresh it whenever the dock regains focus or visibility -
+// e.g. after editing profiles in the dashboard and clicking back into OBS.
+function refreshAux() {
+  if (cfg.w.profiles.on) fetchProfiles();
+  if (cfg.w.overlays.on) fetchOverlays();
+  if (cfg.w.behavior.on || cfg.w.settings.on) fetchServerCfg();
+  if (cfg.w.dest.on) fetchDests();
+}
+window.addEventListener('focus', () => { if (!_es) tick(); refreshAux(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAux(); });
