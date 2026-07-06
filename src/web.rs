@@ -2215,7 +2215,10 @@ async fn post_destination_toggle(
         return (
             "500 Internal Server Error",
             "application/json",
-            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e.to_string())),
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&e.to_string())
+            ),
         );
     }
     reconcile_obs_vod_files(&ns, ctrl);
@@ -2355,7 +2358,10 @@ async fn dock_layout_save(
         return (
             "500 Internal Server Error",
             "application/json",
-            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e.to_string())),
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&e.to_string())
+            ),
         );
     }
     let _ = settings.send(ns);

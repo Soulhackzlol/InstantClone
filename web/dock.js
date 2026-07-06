@@ -474,7 +474,7 @@ function onDestToggle(d, row, sw) {
   if (row._confirm) return;
   const next = !d.enabled;
   const box = document.createElement('span'); box.className = 'confirm';
-  box.innerHTML = `<span class="q">${next ? 'Go live?' : 'Turn off?'}</span>`;
+  box.innerHTML = `<span class="q">${next ? 'Turn on?' : 'Turn off?'}</span>`;
   const yes = document.createElement('button'); yes.className = 'cbtn yes'; yes.innerHTML = '&#10003;';
   const no = document.createElement('button'); no.className = 'cbtn no'; no.innerHTML = '&times;';
   const cancel = () => { clearTimeout(row._ct); row._confirm = false; box.replaceWith(sw); };
