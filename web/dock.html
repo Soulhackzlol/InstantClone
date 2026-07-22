@@ -408,6 +408,15 @@ body.boot .wrap>*:nth-child(n+8){animation-delay:.28s}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
 }
+/* Reduced transparency: solidify the editor scrim instead of relying on blur. */
+@media (prefers-reduced-transparency:reduce){
+  .editor{background:color-mix(in srgb,#000 90%,transparent);backdrop-filter:none;-webkit-backdrop-filter:none}
+}
+/* Higher contrast: brighter borders and faint ink, token-level so it lands
+   on every chip, pill, row and switch at once. */
+@media (prefers-contrast:more){
+  :root{--line:#454b60;--line-2:#5b6178;--fg-4:#7a8091;--fg-3:#9ca1b2}
+}
 </style></head><body>
 <button class="gear" id="gear" title="Customize dock" onclick="openEditor()">&#9881;</button>
 <div class="wrap">

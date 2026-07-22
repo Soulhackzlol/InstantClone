@@ -345,7 +345,11 @@ async fn route(
             "application/json",
             state_json(ctrl, settings, sysstat),
         ),
-        ("GET", "/config") => ("200 OK", "application/json", settings.borrow().to_json()),
+        ("GET", "/config") => (
+            "200 OK",
+            "application/json",
+            settings.borrow().to_json(crate::autostart::is_enabled()),
+        ),
         ("GET", "/docks") => dock_list_json(settings),
         ("GET", "/platforms") => ("200 OK", "application/json", platforms_json()),
         // OBS sends a POST with a system-info payload (CPU/GPU/encoder
@@ -374,8 +378,9 @@ async fn route(
                 "200 OK",
                 "application/json",
                 format!(
-                    r#"{{"registered":{},"vod_audio_flag":{},"vod_eb_injected":{},"active_profile":{},"path":{}}}"#,
+                    r#"{{"registered":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"active_profile":{},"path":{}}}"#,
                     crate::obs_register::is_registered(),
+                    crate::obs_register::is_obs_running(),
                     crate::obs_register::vod_audio_flag_set(),
                     crate::obs_register::vod_eb_injection_present(s.web_port),
                     match crate::obs_register::active_profile() {
@@ -739,6 +744,82 @@ async fn handle_sse(
 
 // ---- Endpoints ----
 
+/// Parse each cached video seq-header once per poll, not once per
+/// destination: the res/codec readout depends only on which TrackId a
+/// dest forwards, and horizontal dests all share track 0 while vertical
+/// dests share the one detected portrait primary. Keeps the
+/// frequently-polled `/state` and `/destinations` endpoints off a
+/// per-dest lock + Exp-Golomb parse.
+fn video_readouts(ctrl: &Controller) -> std::collections::BTreeMap<u8, (String, String)> {
+    let headers = ctrl.ring.video_seq_headers.lock().unwrap();
+    headers
+        .iter()
+        .map(|(&track, h)| {
+            let res = crate::h264::sps_dimensions(h)
+                .map(|(w, hh)| format!("{}x{}", w, hh))
+                .unwrap_or_default();
+            let codec = match crate::h264::seq_header_codec(h) {
+                crate::h264::VideoCodec::Unknown => String::new(),
+                c => c.label().to_string(),
+            };
+            (track, (res, codec))
+        })
+        .collect()
+}
+
+/// Live video state for one destination: whether the Dual Format canvas
+/// is on the wire, whether this destination can forward yet, and the
+/// resolution + codec of the track it actually sends.
+///
+/// Shared by `/state` and `/destinations` so the two endpoints cannot
+/// drift. They previously derived this independently and `/state` omitted
+/// it entirely, which froze the dashboard's format icon and res/codec
+/// readout at whatever was true when the page last fetched
+/// `/destinations`.
+struct DestVideo {
+    vertical_canvas_present: bool,
+    vertical_ready: bool,
+    res: String,
+    codec: String,
+}
+
+fn dest_video(
+    ctrl: &Controller,
+    dest: &crate::config::Destination,
+    readouts: &std::collections::BTreeMap<u8, (String, String)>,
+) -> DestVideo {
+    use std::sync::atomic::Ordering;
+    // Detected globally and stored on every dest each supervisor tick, so
+    // it is meaningful for Twitch cards too - that's what lets the format
+    // icon show "both" only when Dual Format is actually on, rather than
+    // just because the destination is Twitch.
+    let track = ctrl
+        .destination_state(&dest.id)
+        .vertical_primary_track
+        .load(Ordering::Relaxed);
+    let vertical_canvas_present = track != 0xFF;
+    let vertical = dest.wants_vertical();
+    // The track this destination actually forwards: the detected portrait
+    // primary for vertical dests, track 0 (horizontal primary) otherwise.
+    // Misses resolve to empty when the track isn't cached yet (non-AVC we
+    // can't measure, or an unresolved vertical canvas whose 0xFF sentinel
+    // is never a map key).
+    let target = if vertical { track } else { 0 };
+    let (res, codec) = readouts.get(&target).cloned().unwrap_or_default();
+    DestVideo {
+        vertical_canvas_present,
+        // Non-vertical destinations always report ready so the badge logic
+        // stays simple; vertical ones wait for the canvas to resolve.
+        vertical_ready: if vertical {
+            vertical_canvas_present
+        } else {
+            true
+        },
+        res,
+        codec,
+    }
+}
+
 fn state_json(
     ctrl: &Controller,
     settings: &Arc<watch::Sender<Settings>>,
@@ -760,18 +841,39 @@ fn state_json(
     // Per-destination summary array - joined from settings (the configured
     // list) with the controller's live runtime stats.
     let snap = ctrl.destination_snapshot();
+    // `/state` is the dashboard's per-tick source of truth, so it carries
+    // every per-dest field that can change mid-session. `/destinations` is
+    // only refetched on config edits; anything live that lives solely
+    // there freezes on the cards until the user reloads.
+    let readouts = video_readouts(ctrl);
     let dest_list = s.destinations.iter().map(|d| {
         let st = snap.iter().find(|t| t.0 == d.id);
         let (alive, kbps, tags, bytes, cuts, recon) = st
             .map(|t| (t.1, t.3, t.4, t.5, t.6, t.7))
             .unwrap_or((false, 0u32, 0u64, 0u64, 0u32, 0u32));
+        let v = dest_video(ctrl, d, &readouts);
         format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"reconnects":{rc}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"reconnects":{rc},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled, al = alive, br = kbps, ts = tags, bs = bytes, cu = cuts, rc = recon,
+            vr = v.vertical_ready,
+            vcp = v.vertical_canvas_present,
+            vres = json_escape_quoted(&v.res),
+            vcod = json_escape_quoted(&v.codec),
         )
     }).collect::<Vec<_>>().join(",");
+
+    // Encoder settings that will bite one of the enabled destinations.
+    // Empty far more often than not - see `compat::compat_warning`. Only
+    // computed while OBS is actually publishing: with no live stream the
+    // measured params are stale or zero, and a warning about a session
+    // that already ended is pure noise.
+    let compat_warning = if ctrl.ingest_alive() {
+        crate::compat::compat_warning(&ctrl.stream_params(), &s.destinations).unwrap_or_default()
+    } else {
+        String::new()
+    };
 
     // A portrait canvas is present on the wire (Twitch Dual Format is live).
     // Drives the header "Dual Format" pill.
@@ -780,10 +882,11 @@ fn state_json(
             .is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
+        cw = json_escape_quoted(&compat_warning),
         ad = ctrl.armed_delay_ms(),
         td = ctrl.target_delay_ms(),
         cd = ctrl.current_delay_ms(),
@@ -1541,12 +1644,13 @@ async fn post_config(
                 | "web_bind_all"
                 | "buffer_mb"
                 | "buffer_path"
-                | "initial_delay_ms"
                 | "overlays_dir"
                 | "tracing_enabled"
                 | "auto_arm_on_connect"
                 | "auto_activate_when_ready"
                 | "auto_arm_delay_ms"
+                | "update_check_enabled"
+                | "open_dashboard_on_launch"
         ) {
             apply_field_str(&mut new_settings, k, v);
         }
@@ -1559,6 +1663,20 @@ async fn post_config(
     }
     if form.get("webhook_clear").map(|s| s.as_str()) == Some("1") {
         new_settings.discord_webhook_url.clear();
+    }
+
+    // Autostart lives in the registry, not in Settings, so it is applied
+    // here rather than through `apply_field_str`. A failure is logged and
+    // surfaced but must not abort the save - the rest of the settings the
+    // user just edited are unrelated and should still land.
+    if let Some(v) = form.get("start_with_windows") {
+        let want = v == "on" || v == "true";
+        if let Err(e) = crate::autostart::set(want) {
+            ctrl.log(format!(
+                "start with Windows: could not {} the startup entry - {e}",
+                if want { "create" } else { "remove" }
+            ));
+        }
     }
 
     // Backward-compat wizard fields: when the wizard POSTs
@@ -1595,6 +1713,12 @@ async fn post_config(
         }
         if let Some(v) = wizard_custom {
             d.custom_egress_url = v;
+        }
+        // The Twitch step of the wizard can opt into VOD audio mode. Only
+        // meaningful for Twitch; the wizard only shows the toggle there, so
+        // whatever it posts is already platform-correct.
+        if let Some(v) = form.get("vod_audio") {
+            d.vod_audio = v == "on" || v == "true";
         }
     }
 
@@ -2094,10 +2218,14 @@ async fn post_destination_upsert(
         form.get("vod_audio").map(String::as_str),
         Some("on" | "true" | "1")
     );
-    let vod_audio_inject_eb = matches!(
-        form.get("vod_audio_inject_eb").map(String::as_str),
-        Some("on" | "true" | "1")
-    );
+    // Present only when a caller explicitly sends it (the dedicated EB-inject
+    // flow does; the dashboard's save/toggle deliberately don't). `None` means
+    // "leave it alone" on an edit, so a plain save or enable/disable toggle
+    // can't silently blank this Twitch EB-inject flag; a fresh insert falls
+    // back to false.
+    let vod_audio_inject_eb = form
+        .get("vod_audio_inject_eb")
+        .map(|v| matches!(v.as_str(), "on" | "true" | "1"));
     let stream_format =
         normalize_stream_format(&platform, form.get("stream_format").map(String::as_str));
 
@@ -2122,7 +2250,9 @@ async fn post_destination_upsert(
         existing.twitch_ingest = twitch_ingest;
         existing.youtube_ingest = youtube_ingest;
         existing.vod_audio = vod_audio;
-        existing.vod_audio_inject_eb = vod_audio_inject_eb;
+        if let Some(v) = vod_audio_inject_eb {
+            existing.vod_audio_inject_eb = v;
+        }
         existing.stream_format = stream_format;
     } else {
         ns.destinations.push(config::Destination {
@@ -2135,7 +2265,7 @@ async fn post_destination_upsert(
             twitch_ingest,
             youtube_ingest,
             vod_audio,
-            vod_audio_inject_eb,
+            vod_audio_inject_eb: vod_audio_inject_eb.unwrap_or(false),
             stream_format,
         });
     }
@@ -2416,27 +2546,7 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             .cloned()
             .unwrap_or_else(|| (id.into(), false, 0, 0, 0, 0, 0, 0))
     };
-    // Parse each cached video seq-header once per poll, not once per
-    // destination: the res/codec readout depends only on which TrackId a
-    // dest forwards, and horizontal dests all share track 0 while vertical
-    // dests share the one detected portrait primary. Keeps this
-    // frequently-polled endpoint off a per-dest lock + Exp-Golomb parse.
-    let readouts: std::collections::BTreeMap<u8, (String, String)> = {
-        let headers = ctrl.ring.video_seq_headers.lock().unwrap();
-        headers
-            .iter()
-            .map(|(&track, h)| {
-                let res = crate::h264::sps_dimensions(h)
-                    .map(|(w, hh)| format!("{}x{}", w, hh))
-                    .unwrap_or_default();
-                let codec = match crate::h264::seq_header_codec(h) {
-                    crate::h264::VideoCodec::Unknown => String::new(),
-                    c => c.label().to_string(),
-                };
-                (track, (res, codec))
-            })
-            .collect()
-    };
+    let readouts = video_readouts(ctrl);
     let mut out = String::from("[");
     for (i, d) in s.destinations.iter().enumerate() {
         if i > 0 {
@@ -2447,38 +2557,8 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         // Vertical destinations report whether their canvas is resolved
         // yet (Twitch Dual Format live + a portrait track detected). The
         // dashboard turns this into a green "Vertical" badge vs an amber
-        // "waiting for Dual Format" hint. Non-vertical destinations always
-        // report ready=true so the badge logic stays simple.
-        let vertical = d.wants_vertical();
-        // A portrait canvas is present on the wire right now (Twitch Dual
-        // Format is live). Detected globally and stored on every dest each
-        // tick, so it's meaningful for Twitch cards too - that's what lets
-        // the format icon show "both" only when Dual Format is actually on,
-        // not just because the destination is Twitch.
-        use std::sync::atomic::Ordering;
-        let vertical_canvas_present = ctrl
-            .destination_state(&d.id)
-            .vertical_primary_track
-            .load(Ordering::Relaxed)
-            != 0xFF;
-        let vertical_ready = if vertical {
-            vertical_canvas_present
-        } else {
-            true
-        };
-        // Resolution + codec of the track this destination actually forwards
-        // (track 0 for horizontal/Twitch, the detected portrait primary for
-        // vertical), pulled from the per-poll readout map. Empty when the
-        // track isn't cached yet (non-AVC we can't measure, or vertical
-        // canvas not resolved -> target 0xFF isn't a key).
-        let target = if vertical {
-            ctrl.destination_state(&d.id)
-                .vertical_primary_track
-                .load(Ordering::Relaxed)
-        } else {
-            0
-        };
-        let (video_res, video_codec) = readouts.get(&target).cloned().unwrap_or_default();
+        // "waiting for Dual Format" hint.
+        let v = dest_video(ctrl, d, &readouts);
         out.push_str(&format!(
             r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
             id = json_escape_quoted(&d.id),
@@ -2495,10 +2575,10 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             va = d.vod_audio,
             vie = d.vod_audio_inject_eb,
             sf = json_escape_quoted(&d.stream_format),
-            vr = vertical_ready,
-            vcp = vertical_canvas_present,
-            vres = json_escape_quoted(&video_res),
-            vcod = json_escape_quoted(&video_codec),
+            vr = v.vertical_ready,
+            vcp = v.vertical_canvas_present,
+            vres = json_escape_quoted(&v.res),
+            vcod = json_escape_quoted(&v.codec),
             ks = !d.stream_key.is_empty(),
             ur = json_escape_quoted(&redact_url(&url)),
             al = alive,
@@ -2975,11 +3055,6 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
             }
         }
         "buffer_path" => s.buffer_path = std::path::PathBuf::from(value),
-        "initial_delay_ms" => {
-            if let Ok(v) = value.parse() {
-                s.initial_delay_ms = v;
-            }
-        }
         "overlays_dir" => s.overlays_dir = std::path::PathBuf::from(value),
         "discord_webhook_url" => s.discord_webhook_url = value.into(),
         "tracing_enabled" => {
@@ -2998,6 +3073,12 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
             if let Ok(v) = value.parse() {
                 s.auto_arm_delay_ms = v;
             }
+        }
+        "update_check_enabled" => {
+            s.update_check_enabled = !matches!(value, "" | "false" | "0" | "off");
+        }
+        "open_dashboard_on_launch" => {
+            s.open_dashboard_on_launch = !matches!(value, "" | "false" | "0" | "off");
         }
         _ => {}
     }

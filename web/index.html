@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <style>
-/* ── Design tokens (ported from instantclone design system, OKLCH-based) ─────── */
+/* - Design tokens (ported from instantclone design system, OKLCH-based) ---─ */
 :root{
   /* Surfaces - five stacked elevations from the page background up.
      Tuned to a near-blue-black so the OKLCH accent doesn't bleed into
@@ -52,12 +52,22 @@
   --ease-out:cubic-bezier(.2,.7,.2,1); --ease-spring:cubic-bezier(.32,1.4,.5,1);
 }
 *{box-sizing:border-box}
+/* This is a dark UI. Declaring it means native controls the page can't
+   fully restyle - scrollbars, the select popup list, form autofill - render
+   in their dark variant instead of a bright flash against everything else. */
+/* Reserve the scrollbar gutter so the page never jumps sideways when content
+   grows past the viewport (e.g. the tab-height morph adding/removing scroll). */
+html{color-scheme:dark;scrollbar-gutter:stable}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
   font-family:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif;font-size:14px;
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 .mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 button{font-family:inherit}
 input,select,textarea{font-family:inherit;color:inherit}
+/* Type detail: balance headings so a title never drops a lone word onto its
+   own line; pretty on descriptive copy trims orphans. Both no-op on one line. */
+h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
+.tab-sub,.lead,.wiz-step-s{text-wrap:pretty}
 :focus-visible{outline:2px solid color-mix(in oklch,var(--accent) 60%,transparent);outline-offset:2px}
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -70,7 +80,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   var(--bg)}
 .ic-shell{max-width:1280px;margin:0 auto;padding:18px 24px 32px;display:flex;flex-direction:column;gap:14px}
 
-/* ── Header ───────────────────────────────────── */
+/* - Header ------------------─ */
 .ic-header{display:flex;align-items:center;gap:16px;padding:11px 18px;
   background:linear-gradient(180deg,var(--surface-2),var(--surface));
   border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-1)}
@@ -114,6 +124,30 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ic-pill.ok{color:var(--fg)}
 .ic-pill.warn{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 35%,transparent);
   background:color-mix(in oklch,var(--warn) 8%,var(--surface-3))}
+
+/* Encoder-compatibility strip. Deliberately ONE line and deliberately
+   absent whenever the stream is fine - the dashboard already carries a
+   lot, so this only earns its space when it has something actionable to
+   say. Long text ellipsises rather than wrapping to a second row; the
+   full sentence stays reachable via the title tooltip. */
+#compat-warn{display:flex;align-items:center;gap:10px;margin:0 0 14px;padding:9px 12px;
+  border:1px solid color-mix(in oklch,var(--warn) 30%,transparent);border-radius:10px;
+  background:color-mix(in oklch,var(--warn) 7%,var(--surface-2));font-size:12.5px}
+#compat-warn .cw-ic{flex:none;color:var(--warn);font-size:13px;line-height:1}
+#compat-warn .cw-text{flex:1;min-width:0;color:var(--fg-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#compat-warn .cw-x{flex:none;width:22px;height:22px;border-radius:6px;border:0;cursor:pointer;
+  background:transparent;color:var(--fg-4);font-size:14px;line-height:1;
+  transition:color .15s var(--ease-out),background .15s var(--ease-out)}
+#compat-warn .cw-x:hover{color:var(--fg-1);background:var(--surface-3)}
+
+/* LAN-exposure warning. Only rendered while the box is actually ticked,
+   so the default (loopback-only) setup never sees it. */
+.lan-warn{display:flex;gap:8px;align-items:flex-start;margin-top:10px;padding:9px 11px;
+  border:1px solid color-mix(in oklch,var(--warn) 30%,transparent);border-radius:9px;
+  background:color-mix(in oklch,var(--warn) 7%,var(--surface-2));
+  font-size:12px;line-height:1.5;color:var(--fg-2)}
+.lan-warn .lw-ic{flex:none;color:var(--warn)}
 .ic-pill.warn .dot{background:var(--warn)}
 .ic-pill.bad{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 35%,transparent);
   background:color-mix(in oklch,var(--danger) 8%,var(--surface-3))}
@@ -145,18 +179,27 @@ input,select,textarea{font-family:inherit;color:inherit}
   100%{box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 0%,transparent)}
 }
 
-/* ── Card / labels / buttons / inputs (atoms) ───────────── */
+/* - Card / labels / buttons / inputs (atoms) ------─ */
 .ic-card{background:linear-gradient(180deg,var(--surface-2),var(--surface));
   border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-1)}
 .ic-label{font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3)}
 
 .ic-btn{appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;
   padding:10px 16px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface-3);
-  color:var(--fg);font-size:13px;font-weight:500;cursor:pointer;
+  color:var(--fg);font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;
   transition:transform .15s var(--ease-out),background .15s var(--ease-out),border-color .15s var(--ease-out),
              box-shadow .15s var(--ease-out)}
 .ic-btn:hover{background:color-mix(in oklch,#fff 4%,var(--surface-3));border-color:rgba(255,255,255,.16)}
 .ic-btn:active{transform:translateY(1px)}
+/* Copy confirmation: the button turns success-green with a check that pops
+   in (scale + blur per motion guidelines). Applied by flashCopied(). */
+.ic-btn.is-copied{color:var(--live) !important;
+  border-color:color-mix(in oklch,var(--live) 40%,transparent) !important;
+  background:color-mix(in oklch,var(--live) 12%,var(--surface-3)) !important}
+.ic-btn.is-copied .cp-ico{display:inline-block;margin-right:5px;font-weight:700;
+  animation:cpIcoIn .3s cubic-bezier(0.2,0,0,1)}
+@keyframes cpIcoIn{from{opacity:0;transform:scale(.25);filter:blur(4px)}
+  to{opacity:1;transform:none;filter:blur(0)}}
 .ic-btn-primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;
   box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 6px 24px var(--accent-glow);
   font-weight:600}
@@ -176,7 +219,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ic-btn-ghost:hover{background:var(--surface-3);color:var(--fg)}
 .ic-btn-tiny{appearance:none;background:transparent;border:0;width:28px;height:28px;border-radius:6px;
   display:inline-flex;align-items:center;justify-content:center;color:var(--fg-3);cursor:pointer;
-  transition:all .15s var(--ease-out);flex:0 0 auto}
+  transition:background .15s var(--ease-out),color .15s var(--ease-out);flex:0 0 auto}
 .ic-btn-tiny:hover{background:var(--surface-3);color:var(--fg)}
 .ic-btn.big{padding:12px 22px;font-size:14px}
 
@@ -201,7 +244,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 
 .ic-check{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;
   border-radius:5px;border:1px solid var(--line-2);background:var(--bg-2);
-  color:var(--accent-ink);transition:all .15s var(--ease-out);cursor:pointer}
+  color:var(--accent-ink);transition:background .15s var(--ease-out),border-color .15s var(--ease-out);cursor:pointer}
 .ic-check.on{background:var(--accent);border-color:transparent}
 
 /* Toast */
@@ -219,21 +262,104 @@ input,select,textarea{font-family:inherit;color:inherit}
 @keyframes toast-in{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
 .ic-toast.leaving{opacity:0;transform:translateX(12px);transition:.25s var(--ease-out)}
 
-/* ── Wizard (when !configured) ───────────────── */
-.wizard-card{max-width:640px;margin:60px auto;padding:32px;display:flex;flex-direction:column;gap:14px}
-.wizard-step-label{margin-top:14px;font-size:11px;text-transform:uppercase;letter-spacing:1.6px;color:var(--accent);font-weight:600}
+/* - Wizard (when !configured) --------─ */
+.wizard-card{width:min(880px,92vw);max-width:880px;margin:40px auto;padding:38px 44px;display:flex;flex-direction:column;gap:18px}
 .wizard-step-sub{color:var(--fg-3);font-size:12px;margin:0 0 6px}
-.wizard-obs-options{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px}
-@media (max-width:560px){.wizard-obs-options{grid-template-columns:1fr}}
-.wizard-obs-card{padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);display:flex;flex-direction:column;gap:8px}
-.wizard-obs-title{font-size:13px;font-weight:600;color:var(--fg);display:flex;justify-content:space-between;align-items:center;gap:8px}
-.wizard-obs-badge{font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:var(--accent);background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));padding:2px 7px;border-radius:999px}
-.wizard-obs-body{margin:0;font-size:11.5px;color:var(--fg-3);line-height:1.45}
-.wizard-obs-action{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+/* Cards size to their own content (align-items:start) instead of stretching
+   to the taller one - no dead space padding out the shorter card. */
+/* Single column: Register is the recommended primary path; Custom is the
+   secondary fallback under an "or" divider. Reads top-to-bottom. */
+.wizard-obs-options{display:flex;flex-direction:column;margin-bottom:2px}
+.obs-or{display:flex;align-items:center;gap:12px;margin:14px 2px;font-size:10px;font-weight:700;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--fg-4)}
+.obs-or::before,.obs-or::after{content:"";flex:1;height:1px;background:var(--line)}
+.wizard-obs-after{margin:0;font-size:12px;color:var(--fg-3);line-height:1.5}
+.wizard-obs-card{padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--bg-2);display:flex;flex-direction:column;gap:12px}
+.wizard-obs-title{font-size:13.5px;font-weight:600;color:var(--fg);display:flex;justify-content:space-between;align-items:center;gap:8px;line-height:1.3}
+.wizard-obs-badge{flex:0 0 auto;font-size:9.5px;text-transform:uppercase;letter-spacing:1.2px;color:var(--accent);background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));padding:3px 8px;border-radius:999px}
+.wizard-obs-body{margin:0;font-size:12.5px;color:var(--fg-3);line-height:1.55}
+.wizard-obs-action{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:2px}
 .wizard-obs-action .muted{font-size:11px}
-.wizard-obs-copy-row{display:flex;align-items:center;gap:8px;font-size:11.5px;flex-wrap:wrap}
-.wizard-obs-copy-row code{flex:1 1 200px;padding:6px 10px;background:var(--surface);border:1px solid var(--line);border-radius:6px;font-size:11.5px}
-.wizard-obs-status{margin:6px 0 0;font-size:11.5px;line-height:1.45;color:var(--fg-3)}
+/* Guided OBS flow, light typographic treatment: a small "Step N" eyebrow (no
+   rail, no numbered circles), hairline divider between steps. A node expands
+   when active and collapses when done; the eyebrow gains a ✓ and turns green.
+   State is [data-state] = locked | active | done (+ [data-verified] on verify). */
+.obs-flow{list-style:none;margin:18px 0 0;padding:0}
+.obs-node{padding:0}
+.obs-node + .obs-node{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
+.obs-node-head{appearance:none;background:none;border:0;padding:2px 0;width:100%;text-align:left;
+  cursor:pointer;display:flex;flex-direction:column;gap:3px;color:var(--fg);font:inherit;border-radius:6px}
+.obs-node-head:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+.obs-eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--fg-4);
+  display:inline-flex;align-items:center;gap:6px;transition:color .25s var(--ease-out)}
+.obs-node[data-state="active"] .obs-eyebrow{color:var(--accent)}
+.obs-node[data-state="done"] .obs-eyebrow,
+.obs-node[data-node="verify"][data-verified] .obs-eyebrow{color:var(--live)}
+.obs-node[data-state="done"] .obs-eyebrow::after,
+.obs-node[data-node="verify"][data-verified] .obs-eyebrow::after{content:"\2713";font-size:12px}
+.obs-node-title{font-size:15px;font-weight:600;letter-spacing:-.01em;transition:color .25s var(--ease-out)}
+.obs-node[data-state="locked"] .obs-node-head{cursor:default;pointer-events:none}
+.obs-node[data-state="locked"] .obs-eyebrow,
+.obs-node[data-state="locked"] .obs-node-title{color:var(--fg-4)}
+.obs-node[data-state="done"] .obs-node-title{color:var(--fg-3)}
+.obs-node-hint{margin:12px 0;font-size:12.5px;color:var(--fg-3);line-height:1.5;text-wrap:pretty}
+/* Body expands/collapses via grid-rows (0fr<->1fr); only the active node is open. */
+.obs-node-clip{display:grid;grid-template-rows:0fr;opacity:0;
+  transition:grid-template-rows .34s var(--ease-out),opacity .26s var(--ease-out)}
+.obs-node[data-state="active"] .obs-node-clip{grid-template-rows:1fr;opacity:1}
+.obs-node-clip>.obs-node-body{overflow:hidden;min-height:0}
+.obs-advance{margin-top:14px}
+/* Shake to point the eye here when Next is clicked before confirming. */
+.obs-advance.nudge{animation:obsNudge .5s var(--ease-out)}
+@keyframes obsNudge{0%,100%{transform:none}20%{transform:translateX(-4px)}
+  40%{transform:translateX(4px)}60%{transform:translateX(-3px)}80%{transform:translateX(2px)}}
+/* Method cards: recommended one wears a soft accent frame; both lift on hover. */
+.wizard-obs-card{transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
+.wizard-obs-card:hover{border-color:var(--line-2)}
+.wizard-obs-card.obs-recommended{border-color:color-mix(in oklch,var(--accent) 30%,var(--line));
+  background:linear-gradient(180deg,color-mix(in oklch,var(--accent) 7%,var(--bg-2)),var(--bg-2));
+  box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 12%,transparent),0 8px 26px -18px color-mix(in oklch,var(--accent) 60%,transparent)}
+/* "no restart" reassurance tag on the custom card. */
+.obs-norestart{flex:0 0 auto;font-size:9px;text-transform:uppercase;letter-spacing:1px;font-weight:700;
+  color:var(--live);background:color-mix(in oklch,var(--live) 14%,transparent);
+  border:1px solid color-mix(in oklch,var(--live) 30%,transparent);padding:2px 7px;border-radius:999px}
+/* Inside a node the check panel drops its own card chrome - the node is the container. */
+.obs-node-body .wiz-obs-verify{margin:0;padding:0;border:0;background:none}
+.obs-node-body .wiz-obs-verify[data-state="ok"]{background:none}
+.obs-node-body .wov-sub{margin-top:0}
+.wizard-obs-copy-row{display:flex;align-items:center;gap:8px;font-size:12px}
+/* flex:1 (basis 0) + min-width:0 + overflow:hidden: the URL takes the leftover
+   width and shrinks/ellipsises as needed, so the Copy button always stays on
+   the same line. A non-zero flex-basis made flexbox wrap the button under the
+   input before shrink could apply. Matches the proven .copy-block pattern. */
+.wizard-obs-copy-row code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;padding:7px 10px;background:var(--surface);border:1px solid var(--line);
+  border-radius:6px;font-size:11.5px}
+/* Optional local-only OBS-connection check. One sub-state shows at a time,
+   driven by [data-state] (idle -> waiting -> ok). */
+.wiz-obs-verify{margin-top:14px;padding:14px 16px;border-radius:12px;background:var(--surface-2);
+  border:1px solid var(--line);transition:border-color .25s var(--ease-out),background .25s var(--ease-out)}
+.wov-head{display:flex;align-items:center;gap:8px}
+.wov-title{font-weight:600;font-size:13.5px}
+.wov-optional{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-4);
+  border:1px solid var(--line-2);border-radius:999px;padding:1px 7px}
+.wov-sub{margin:6px 0 12px;font-size:12px;color:var(--fg-3);line-height:1.5;text-wrap:pretty}
+.wov-body>*{display:none}
+.wiz-obs-verify[data-state="idle"] .wov-start{display:inline-flex}
+.wiz-obs-verify[data-state="waiting"] .wov-waiting{display:flex;align-items:center;gap:11px}
+.wiz-obs-verify[data-state="ok"] .wov-ok{display:flex;align-items:center;gap:9px}
+.wov-status{font-size:12.5px;color:var(--fg-2)}
+.wov-cancel{margin-left:auto;flex:0 0 auto}
+.wov-status-ok{font-size:12.5px;color:var(--fg);font-weight:500}
+.wov-check{width:22px;height:22px;flex:0 0 auto;border-radius:50%;background:var(--live);color:#04120a;
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;
+  animation:cpIcoIn .3s cubic-bezier(0.2,0,0,1)}
+.wov-spinner{width:15px;height:15px;flex:0 0 auto;border:2px solid var(--line-2);
+  border-top-color:var(--accent);border-radius:50%;animation:wovspin .7s linear infinite}
+@keyframes wovspin{to{transform:rotate(360deg)}}
+.wiz-obs-verify[data-state="ok"]{border-color:color-mix(in oklch,var(--live) 40%,var(--line));
+  background:color-mix(in oklch,var(--live) 8%,var(--surface-2))}
+.wizard-obs-status{margin:4px 0 0;font-size:12px;line-height:1.5;color:var(--fg-3)}
 .wizard-obs-status:empty{display:none}
 .wizard-obs-tip{margin:0;font-size:11px;color:var(--fg-4)}
 /* Progressive disclosure primitive - `<details class="ic-disclose">`
@@ -246,7 +372,9 @@ input,select,textarea{font-family:inherit;color:inherit}
   cursor:pointer;display:inline-flex;align-items:center;gap:6px;
   color:var(--fg-3);font-size:11.5px;
   -webkit-user-select:none;user-select:none;list-style:none;
-  padding:2px 0;border-radius:4px;
+  /* Roomier padding grows the click/tap target (~30px tall vs 18) without a
+     40px pseudo, which would overlap the next stacked summary (8px gap). */
+  padding:6px 4px;margin-left:-4px;border-radius:6px;
   transition:color .15s var(--ease-out);
 }
 .ic-disclose summary::-webkit-details-marker{display:none}
@@ -255,29 +383,190 @@ input,select,textarea{font-family:inherit;color:inherit}
   border-left:4px solid currentColor;border-top:3px solid transparent;border-bottom:3px solid transparent;
   transition:transform .18s var(--ease-out);transform-origin:35% 50%;
 }
-.ic-disclose[open] summary::before{transform:rotate(90deg)}
+.ic-disclose.is-open summary::before{transform:rotate(90deg)}
 .ic-disclose summary:hover{color:var(--fg-2)}
+.ic-disclose summary:active{color:var(--fg)}   /* instant feedback on press-down */
 .ic-disclose summary:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+/* Reveal system (see wireDisclosure). The `.disc-sleeve` height is driven
+   frame-by-frame by a critically-damped SPRING in JS - not a CSS transition -
+   so a reversal mid-flight carries the current velocity through instead of
+   restarting a fixed ease (that velocity reset was the "brick wall"). No
+   `transition` here on purpose: it would fight the per-frame updates. The
+   padded body rides a GPU-composited opacity + translateY (--disc-ms) so the
+   content materialises in step with the spring without a second layout tween. */
+.disc-sleeve{height:0;overflow:hidden}
 .ic-disclose-body{
   margin-top:6px;padding:10px 12px;border-radius:8px;
   background:color-mix(in oklch,var(--bg-2) 60%,var(--surface));
   border:1px solid var(--line);
-  color:var(--fg-3);font-size:11.5px;line-height:1.55;
-  animation:discloseIn .22s var(--ease-out) both;
+  color:var(--fg-3);font-size:11.5px;line-height:1.55;text-wrap:pretty;
+  opacity:0;transform:translateY(-4px);
+  transition:opacity var(--disc-ms,.26s) var(--ease-out),
+    transform var(--disc-ms,.26s) var(--ease-out);
 }
+.ic-disclose.is-open > .disc-sleeve > .ic-disclose-body{opacity:1;transform:none}
+/* Safety net: if a disclosure is ever shown before JS wires it (dynamic
+   injection, script error), fall back to native <details> behaviour so the
+   body is never invisibly hidden - the managed path adds `.disc-ready`. */
+.ic-disclose:not(.disc-ready)[open] > .ic-disclose-body{opacity:1;transform:none}
 .ic-disclose-body p{margin:0}
 .ic-disclose-body p + p{margin-top:8px}
 .ic-disclose-body code.mono{background:var(--surface);padding:1px 5px;border-radius:4px;font-size:11px}
-@keyframes discloseIn{
-  from{opacity:0;transform:translateY(-4px)}
-  to{opacity:1;transform:none}
-}
 .wizard-card h2{font-size:22px;margin:0;letter-spacing:-.01em}
 .wizard-card .lead{color:var(--fg-3);font-size:13px;margin:0 0 8px}
-.wizard-card label{display:block;margin-top:8px;font-size:11px;color:var(--fg-3);
+/* Field labels are uppercase eyebrow text. The `:not` guard is load-bearing:
+   `.wizard-card label` is more specific than `.wiz-feature-toggle`, so
+   without it the VOD-audio toggle (a <label>) inherited both uppercase AND
+   display:block - stacking its checkbox above ALL-CAPS body text. */
+.wizard-card label:not(.wiz-feature-toggle){display:block;margin-top:8px;font-size:11px;color:var(--fg-3);
   text-transform:uppercase;letter-spacing:.12em;font-weight:600}
 .wizard-row{display:flex;gap:8px;margin-top:8px}
 .wizard-row .ic-btn{flex:1}
+
+/* Visual platform picker (Step 2). Tiles reuse the exact per-platform
+   accent (--dc) the destination cards use, so the choice you make here
+   matches the card you'll see afterwards. The real value lives in a
+   hidden <select> so the save/test logic never had to change. Sized to
+   be the visual centrepiece of the step: ~3 per row on the 640px card. */
+.w-platform-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+  gap:12px;margin-top:12px}
+.w-ptile{--dc:var(--line-2);appearance:none;cursor:pointer;position:relative;display:flex;
+  flex-direction:column;align-items:center;gap:12px;padding:20px 14px;border-radius:15px;
+  text-align:center;color:var(--fg-2);overflow:hidden;
+  background:linear-gradient(180deg,color-mix(in oklch,var(--surface-3) 55%,var(--surface-2)),var(--surface-2));
+  border:1px solid var(--line);
+  transition:border-color .18s var(--ease-out),background .18s var(--ease-out),
+    color .18s var(--ease-out),transform .14s var(--ease-spring),box-shadow .2s var(--ease-out)}
+/* Soft radial wash in the platform colour, revealed on hover/selected. A
+   pseudo-element so it can fade independently of the tile's own bg. */
+.w-ptile::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:radial-gradient(120% 80% at 50% -10%,color-mix(in oklch,var(--dc) 22%,transparent),transparent 70%);
+  opacity:0;transition:opacity .2s var(--ease-out)}
+.w-ptile:hover{border-color:color-mix(in oklch,var(--dc) 50%,var(--line-2));color:var(--fg);
+  transform:translateY(-3px);
+  box-shadow:0 10px 26px -12px color-mix(in oklch,var(--dc) 65%,transparent)}
+.w-ptile:hover::before{opacity:.7}
+.w-ptile:active{transform:scale(.96)}
+.w-ptile.on{border-color:color-mix(in oklch,var(--dc) 80%,transparent);color:var(--fg);
+  background:linear-gradient(180deg,color-mix(in oklch,var(--dc) 16%,var(--surface-2)),
+    color-mix(in oklch,var(--dc) 7%,var(--surface-2)));
+  box-shadow:0 0 0 1px color-mix(in oklch,var(--dc) 60%,transparent) inset,
+    0 10px 30px -12px color-mix(in oklch,var(--dc) 55%,transparent)}
+.w-ptile.on::before{opacity:1}
+/* Badge: a lit chip with a colour-matched glow and a top sheen, so it reads
+   as a physical object rather than a flat square. */
+.w-ptile-badge{position:relative;width:48px;height:48px;border-radius:14px;display:flex;
+  align-items:center;justify-content:center;font-weight:700;font-size:21px;color:#0b0d12;
+  background:linear-gradient(150deg,color-mix(in oklch,var(--dc) 82%,#fff),var(--dc) 62%,
+    color-mix(in oklch,var(--dc) 82%,#000));
+  box-shadow:0 4px 12px -3px color-mix(in oklch,var(--dc) 60%,transparent),
+    inset 0 1px 0 rgba(255,255,255,.4),inset 0 -2px 5px rgba(0,0,0,.18);
+  transition:box-shadow .2s var(--ease-out),transform .14s var(--ease-spring)}
+.w-ptile:hover .w-ptile-badge{transform:scale(1.05)}
+.w-ptile.on .w-ptile-badge{box-shadow:0 6px 18px -4px color-mix(in oklch,var(--dc) 70%,transparent),
+    inset 0 1px 0 rgba(255,255,255,.45),inset 0 -2px 5px rgba(0,0,0,.2)}
+.w-ptile-label{font-size:13px;font-weight:600;line-height:1.2;letter-spacing:0;
+  text-transform:none;color:inherit;position:relative}
+/* Corner check appears only on the chosen tile. Scales in so the
+   selection has a beat of feedback rather than snapping. */
+.w-ptile-check{position:absolute;top:8px;right:8px;width:18px;height:18px;border-radius:999px;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;
+  color:#0d0f14;background:var(--dc);opacity:0;transform:scale(.4);
+  transition:opacity .15s var(--ease-out),transform .15s var(--ease-out)}
+.w-ptile.on .w-ptile-check{opacity:1;transform:scale(1)}
+
+/* - Multi-step wizard chrome ---------─ */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.wiz-head{margin-bottom:4px}
+/* Segmented progress bar - one segment per step in the current sequence,
+   so it grows to 4 segments the moment Twitch is chosen. Each segment
+   carries a fill layer (::after) that sweeps left-to-right, so advancing
+   a step reads as the bar filling forward rather than a colour snap. */
+.wiz-progress{display:flex;margin-top:14px}
+/* Every possible step has a permanent segment; the optional Twitch one
+   collapses (flex-grow + its own gap animate to 0) instead of being ripped
+   from the DOM, so switching platform slides the bar between 3 and 4
+   segments smoothly. Spacing is an adjacent-sibling margin, not flex gap,
+   so a collapsed segment leaves no orphan gap. */
+.wiz-seg{position:relative;height:4px;flex:1 1 0;min-width:0;border-radius:2px;background:var(--line);
+  overflow:hidden;transition:flex-grow .35s var(--ease-out),opacity .3s var(--ease-out),
+    margin-left .35s var(--ease-out)}
+.wiz-seg + .wiz-seg{margin-left:6px}
+.wiz-seg.collapsed{flex-grow:0;opacity:0;margin-left:0;pointer-events:none}
+.wiz-seg::after{content:"";position:absolute;inset:0;border-radius:2px;background:var(--accent);
+  transform:scaleX(0);transform-origin:left;transition:transform .4s var(--ease-out),background .3s var(--ease-out)}
+.wiz-seg.done::after{transform:scaleX(1);background:color-mix(in oklch,var(--accent) 50%,var(--line))}
+.wiz-seg.on::after{transform:scaleX(1)}
+/* Reassurance note under the platform tiles. */
+/* One callout system for the whole wizard: a left icon square + text with
+   consistent padding / radius / type, differing only by intent colour:
+   .info (neutral reassurance), .warn (do this first), .tip (helpful aside). */
+.wiz-callout{display:flex;gap:10px;align-items:flex-start;margin-top:14px;padding:10px 13px;
+  border-radius:10px;font-size:12px;line-height:1.5;color:var(--fg-2)}
+.wiz-callout .ic{flex:0 0 auto;width:18px;height:18px;border-radius:6px;display:flex;align-items:center;
+  justify-content:center;font-weight:700;font-size:12px;line-height:1;margin-top:1px}
+.wiz-callout b,.wiz-callout strong{color:var(--fg);font-weight:600}
+.wiz-callout-t{display:block;font-weight:600;color:var(--fg);margin-bottom:2px}
+.wiz-callout.info{background:var(--surface-2);border:1px solid var(--line)}
+.wiz-callout.info .ic{color:var(--accent);background:color-mix(in oklch,var(--accent) 15%,transparent)}
+.wiz-callout.tip{background:color-mix(in oklch,var(--accent) 6%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--accent) 22%,var(--line))}
+.wiz-callout.tip .ic{color:var(--accent-ink);background:var(--accent)}
+.wiz-callout.warn{background:color-mix(in oklch,var(--warn,#d6a23a) 9%,var(--surface-2));
+  border:1px solid color-mix(in oklch,var(--warn,#d6a23a) 26%,var(--line))}
+.wiz-callout.warn .ic{color:#0d0f14;background:var(--warn,#d6a23a)}
+/* Directional step transition: incoming panel slides in from the side you
+   are travelling toward (right on Next, left on Back), so movement through
+   the flow has a consistent physical direction. */
+#wizard[data-dir="fwd"] .wiz-step:not([hidden]){animation:wizInFwd .3s var(--ease-out)}
+#wizard[data-dir="back"] .wiz-step:not([hidden]){animation:wizInBack .3s var(--ease-out)}
+@keyframes wizInFwd{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+@keyframes wizInBack{from{opacity:0;transform:translateX(-24px)}to{opacity:1;transform:none}}
+@keyframes wizStepIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.wiz-step-h{margin-bottom:10px}
+.wiz-step-t{font-size:16px;font-weight:600;letter-spacing:-.01em}
+.wiz-step-s{font-size:12.5px;color:var(--fg-3);margin-top:3px;line-height:1.45}
+.wiz-nav{display:flex;align-items:center;gap:10px;margin-top:20px}
+.wiz-nav .spacer{flex:1}
+.wiz-nav #wiz-back,.wiz-nav #wiz-next{flex:0 0 auto;min-width:116px}
+/* Tactile press on the nav buttons + a soft glow lift on the primary CTA. */
+.wiz-nav .ic-btn{transition:transform .12s var(--ease-out),box-shadow .18s var(--ease-out),
+  background .15s var(--ease-out),border-color .15s var(--ease-out),color .15s var(--ease-out)}
+.wiz-nav .ic-btn:active{transform:scale(.96)}
+.wiz-nav #wiz-next:hover{transform:translateY(-1px);
+  box-shadow:0 6px 20px -8px color-mix(in oklch,var(--accent) 70%,transparent)}
+.wiz-nav #wiz-next:active{transform:scale(.96)}
+.wiz-skip{background:none;border:0;color:var(--fg-4);font:inherit;font-size:12px;cursor:pointer;
+  padding:6px 2px;text-decoration:underline;text-underline-offset:3px;
+  text-decoration-color:var(--line-2);transition:color .15s var(--ease-out)}
+.wiz-skip:hover{color:var(--fg-3)}
+/* Staggered tile entrance - re-fires each time the platform step becomes
+   visible (its parent was display:none, so child animations restart). The
+   per-tile delay is set inline in JS. */
+#wizard .wiz-step[data-wstep="platform"]:not([hidden]) .w-ptile{animation:tileIn .34s var(--ease-out) both}
+@keyframes tileIn{from{opacity:0;transform:translateY(10px) scale(.96)}to{opacity:1;transform:none}}
+/* Twitch-extras feature cards */
+.wiz-feature{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;
+  padding:14px;margin-top:10px;transition:border-color .15s var(--ease-out),background .15s var(--ease-out)}
+.wiz-feature-toggle{display:flex;gap:12px;align-items:flex-start;cursor:pointer}
+.wiz-feature-toggle:hover{border-color:var(--line-2);background:var(--surface-3)}
+.wiz-feature-toggle input{width:18px;height:18px;margin-top:2px;flex:0 0 auto;cursor:pointer;
+  accent-color:var(--accent)}
+.wiz-feature-h{font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.wiz-feature-b{font-size:12.5px;color:var(--fg-3);line-height:1.5;margin:6px 0 0}
+/* Provenance tag so a reader can tell a Twitch/OBS feature from an
+   InstantClone one at a glance. */
+.wiz-tag{font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+  padding:2px 7px;border-radius:999px;white-space:nowrap}
+.wiz-tag-twitch{color:#a78bfa;background:color-mix(in oklch,#a78bfa 14%,transparent);
+  border:1px solid color-mix(in oklch,#a78bfa 35%,transparent)}
+.wiz-vod-how{margin-top:10px;padding:12px 14px;background:var(--bg-2);border:1px solid var(--line);
+  border-radius:10px;font-size:12.5px;line-height:1.55;color:var(--fg-2);
+  animation:wizStepIn .2s var(--ease-out)}
+.wiz-vod-how-t{font-weight:600;margin-bottom:6px}
+.wiz-vod-how ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
+.wiz-vod-how .w-hint{margin-top:8px}
 #w-custom-wrap{margin-top:8px}
 .w-hint{font-size:11.5px;color:var(--fg-4);margin-top:4px}
 /* Container for the per-platform help under the wizard / destination
@@ -299,7 +588,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 #w-msg .err{color:var(--danger)}
 #w-msg .ok{color:var(--live)}
 
-/* ── Hero ────────────────────────────────────── */
+/* - Hero ------------------- */
 .hero-card{padding:0;overflow:hidden}
 .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:stretch;position:relative}
 @media (max-width:880px){.hero{grid-template-columns:1fr}}
@@ -423,7 +712,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .cp-input-row:focus-within{border-color:color-mix(in oklch,var(--accent) 60%,transparent);background:var(--bg)}
 .cp-step{appearance:none;background:var(--surface-3);border:0;width:36px;height:36px;border-radius:7px;
   color:var(--fg-2);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
-  transition:all .15s var(--ease-out);flex:0 0 auto;font-size:18px;line-height:1}
+  transition:background .15s var(--ease-out),color .15s var(--ease-out),transform .15s var(--ease-out);flex:0 0 auto;font-size:18px;line-height:1}
 .cp-step:hover:not(:disabled){background:color-mix(in oklch,var(--accent) 18%,var(--surface-3));color:var(--fg)}
 .cp-step:active:not(:disabled){transform:scale(.94)}
 .cp-step:disabled{opacity:.4;cursor:not-allowed}
@@ -440,7 +729,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .cp-profiles{display:flex;flex-wrap:wrap;gap:6px}
 .cp-profile-chip{appearance:none;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;
   border-radius:999px;background:var(--bg-2);border:1px solid var(--line);color:var(--fg-2);
-  font-size:12px;font-weight:500;cursor:pointer;transition:all .15s var(--ease-out)}
+  font-size:12px;font-weight:500;cursor:pointer;transition:background .15s var(--ease-out),border-color .15s var(--ease-out),color .15s var(--ease-out)}
 .cp-profile-chip:hover:not(:disabled){background:var(--surface-3);border-color:var(--line-2);color:var(--fg)}
 .cp-profile-chip.on{background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));
   border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--accent)}
@@ -448,7 +737,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .cp-cta{width:100%;padding:13px 18px;font-size:14px;border-radius:10px}
 #cp-cancel{animation:pillIn .2s var(--ease-out)}
 .cp-cta-pulse{animation:cta-pulse 1.8s var(--ease-out) infinite}
-/* ── "Cut after this airs" + hovercard ─────────────────────────────
+/* - "Cut after this airs" + hovercard --------------─
    Visible only while a delay is active, sharing the CTA row at a 3:1
    split (Cut delay : Cut after) so the control column's height never
    changes with state. The hovercard is a pure-CSS tooltip
@@ -484,7 +773,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   100%{box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),0 0 0 0 transparent}
 }
 
-/* ── Tabs ────────────────────────────────────── */
+/* - Tabs ------------------- */
 .tabs{display:flex;align-items:center;padding:4px;background:var(--surface);border:1px solid var(--line);
   border-radius:10px;gap:2px;position:relative;overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
@@ -500,7 +789,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .tab-ind{position:absolute;top:4px;bottom:4px;background:var(--surface-3);border-radius:7px;
   transition:left .28s var(--ease-spring),width .28s var(--ease-spring);z-index:1;border:1px solid var(--line-2)}
 
-/* ── Sub-tabs (nested nav, currently used by System pane) ─── */
+/* - Sub-tabs (nested nav, currently used by System pane) -─ */
 .sub-tabs{position:relative;display:flex;gap:2px;padding:4px;background:var(--surface-2);
   border:1px solid var(--line);border-radius:9px;align-items:stretch;overflow-x:auto;scrollbar-width:none}
 .sub-tabs::-webkit-scrollbar{display:none}
@@ -543,16 +832,24 @@ input,select,textarea{font-family:inherit;color:inherit}
 #sys-about-msg a:visited,
 .sys-about-card a:visited{color:var(--accent)}
 
-/* ── Pane ────────────────────────────────────── */
+/* - Pane ------------------- */
 .pane-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
   padding:22px;min-height:360px;max-height:70vh;overflow-y:auto;overflow-x:hidden}
-.tab-pane{animation:paneIn .25s var(--ease-out) both;display:flex;flex-direction:column;gap:18px}
-@keyframes paneIn{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
+/* Directional enter: the body slides in from the side the tab moved toward
+   (showTab sets --pane-dx: + for a rightward move, - for leftward, 0 on first
+   paint / sub-panes), echoing the sliding tab indicator. Transform + opacity
+   only so it's GPU-composited; .pane-card clips overflow-x so the slide never
+   flashes a scrollbar. Reduced-motion collapses it globally. */
+.tab-pane{animation:paneIn .28s var(--ease-out) both;display:flex;flex-direction:column;gap:18px}
+@keyframes paneIn{
+  from{opacity:0;transform:translate3d(var(--pane-dx,0),0,0)}
+  to{opacity:1;transform:translate3d(0,0,0)}
+}
 .tab-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
 .tab-title{font-size:15px;font-weight:600;color:var(--fg);letter-spacing:-.01em}
 .tab-sub{color:var(--fg-3);font-size:12.5px;margin-top:3px;max-width:60ch}
 
-/* ── Destinations ────────────────────────────── */
+/* - Destinations --------------- */
 .dest-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
 .dcard{background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:15px;
   display:flex;flex-direction:column;gap:13px;
@@ -663,7 +960,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .dest-add{appearance:none;background:transparent;border:1px dashed var(--line-2);border-radius:12px;
   color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
-  min-height:140px;transition:all .2s var(--ease-out);font-family:inherit}
+  min-height:140px;transition:color .2s var(--ease-out),border-color .2s var(--ease-out),background .2s var(--ease-out);font-family:inherit}
 .dest-add:hover{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 50%,transparent);
   background:color-mix(in oklch,var(--accent) 4%,transparent)}
 .dest-add-icon{width:36px;height:36px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
@@ -723,7 +1020,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .dest-form-msg{min-height:1.2em;font-size:12px;margin-top:6px}
 .dest-form-msg .err{color:var(--danger)}
 
-/* ── Stats ───────────────────────────────────── */
+/* - Stats ------------------─ */
 .stats-big{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}
 @media (max-width:880px){.stats-big{grid-template-columns:1fr}}
 .stat-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px;cursor:help;
@@ -759,7 +1056,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .stat-spark path[class$="-line"],.stat-spark path[id$="-line"]{
   transition:stroke .2s}
 
-/* ── OBS tab ─────────────────────────────────── */
+/* - OBS tab -----------------─ */
 .obs-grid{display:grid;gap:12px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
 @media (max-width:880px){.obs-grid{grid-template-columns:1fr}}
 .obs-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px;
@@ -790,7 +1087,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .chat-dock-row select{flex:0 0 160px}
 .chat-dock-row input{flex:1 1 200px;min-width:160px}
 
-/* ── Overlay tab ─────────────────────────────── */
+/* - Overlay tab ---------------─ */
 .overlay-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}
 @media (max-width:880px){.overlay-grid{grid-template-columns:1fr}}
 .overlay-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px;
@@ -803,7 +1100,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .overlay-files{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:10px}
 .overlay-file{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:10px;
   padding:10px;display:flex;flex-direction:column;gap:8px;cursor:pointer;text-align:left;
-  position:relative;transition:all .15s var(--ease-out);color:inherit;font:inherit}
+  position:relative;transition:border-color .15s var(--ease-out),background .15s var(--ease-out),transform .15s var(--ease-out);color:inherit;font:inherit}
 .overlay-file:hover{border-color:var(--line-2);transform:translateY(-1px)}
 .overlay-file.selected{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
   background:color-mix(in oklch,var(--accent) 6%,var(--surface));
@@ -821,7 +1118,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   border:1px solid color-mix(in oklch,var(--accent) 22%,var(--line));border-radius:8px;
   font-size:12px;color:var(--fg-2)}
 
-/* ── Overlay gallery ────────────────────────────── */
+/* - Overlay gallery --------------- */
 .ovg-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:14px;margin-top:6px}
 @media (max-width:980px){.ovg-grid{grid-template-columns:1fr}}
 .ovg-stage{position:relative;width:100%;aspect-ratio:16/9;margin-top:10px;overflow:hidden;
@@ -830,8 +1127,17 @@ input,select,textarea{font-family:inherit;color:inherit}
   linear-gradient(45deg,#0a0c10 25%,#0e1116 25%,#0e1116 75%,#0a0c10 75%);
   background-size:22px 22px;background-position:0 0,11px 11px}
 .ovg-scale{position:absolute;top:0;left:0;width:1920px;height:1080px;transform-origin:top left}
-.ovg-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block}
+/* color-scheme:normal is load-bearing: the dashboard root sets
+   color-scheme:dark, which makes a transparent child iframe paint an opaque
+   (white) canvas in Chromium - covering the checkerboard stage. Opting the
+   overlay iframes back to normal restores true transparency so the overlay
+   sits on the stage, exactly as it will over video in OBS. */
+.ovg-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block;
+  color-scheme:normal}
 .ovg-list{display:flex;flex-direction:column;gap:7px;padding:10px 14px 14px;overflow-y:auto;max-height:520px}
+.ov-dir-row{display:flex;gap:8px;align-items:center;margin-top:8px}
+.ov-dir-row input{flex:1;min-width:0}
+.ov-dir-row .ic-btn{flex:0 0 auto}
 .ovg-card{appearance:none;text-align:left;background:var(--surface);border:1px solid var(--line);
   border-radius:10px;padding:11px 13px;cursor:pointer;display:flex;flex-direction:column;gap:3px;
   transition:border-color .12s,transform .12s;position:relative}
@@ -845,7 +1151,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .ovg-card-tag:empty{display:none}
 .ovg-empty{padding:26px 16px;text-align:center;color:var(--fg-4);font-size:13px;line-height:1.6}
 
-/* ── Overlay Studio ─────────────────────────────── */
+/* - Overlay Studio ---------------─ */
 .st-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .st-toolbar .ic-input{max-width:200px;height:34px}
 .st-grid{display:grid;grid-template-columns:210px minmax(0,1fr) 268px;gap:12px;margin-top:6px;
@@ -993,7 +1299,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .st-switch input:checked + .tr{background:var(--accent)}
 .st-switch input:checked + .tr + .kn{transform:translateX(18px)}
 
-/* ── Live phase caption + microinteractions ─────────── */
+/* - Live phase caption + microinteractions -----─ */
 /* Live phase caption - sits in the chrome (NOT over the canvas, so it
    never reads as part of the overlay). */
 .ph-cap{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:999px;
@@ -1033,7 +1339,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 /* gentle fade when panels re-render */
 @keyframes st-fade-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .st-props-body{animation:st-fade-in .2s var(--ease-out)}
-.st-canvas-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block;pointer-events:none}
+.st-canvas-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block;pointer-events:none;color-scheme:normal}
 .st-hit{position:absolute;inset:0}
 .st-hit .st-box{position:absolute;border:2px solid transparent;cursor:move;border-radius:4px}
 .st-hit .st-box:hover{border-color:color-mix(in oklch,var(--accent) 45%,transparent)}
@@ -1088,11 +1394,11 @@ input,select,textarea{font-family:inherit;color:inherit}
 .form-block-l{font-size:12.5px;color:var(--fg-2);font-weight:500}
 .form-block .ic-input{max-width:180px}
 
-/* ── Profiles ────────────────────────────────── */
+/* - Profiles ----------------- */
 .profile-list{display:flex;flex-direction:column;gap:4px}
 .profile-row{display:flex;align-items:center;gap:16px;padding:11px 14px;background:var(--bg-2);
   border:1px solid var(--line);border-radius:9px;cursor:pointer;text-align:left;appearance:none;
-  color:inherit;font:inherit;transition:all .12s var(--ease-out)}
+  color:inherit;font:inherit;transition:border-color .12s var(--ease-out),background .12s var(--ease-out)}
 .profile-row:hover{border-color:color-mix(in oklch,var(--accent) 40%,var(--line-2))}
 .profile-row.current{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
   background:color-mix(in oklch,var(--accent) 7%,var(--bg-2));
@@ -1131,7 +1437,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .profile-new .ic-input{flex:1;min-width:0}
 .profile-new .ic-input.mono{max-width:110px;font-family:'JetBrains Mono',monospace}
 
-/* ── System ──────────────────────────────────── */
+/* - System ------------------ */
 .sys-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px}
 /* Danger zone - visually fenced from Save with an err-tinted top border
    so a click reaching for Save can't drift into Reset by accident. */
@@ -1190,7 +1496,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   transition:opacity .2s ease,transform .2s ease;pointer-events:none;white-space:nowrap}
 .st-synced.on{opacity:.9;transform:none}
 
-/* ── Logs ────────────────────────────────────── */
+/* - Logs ------------------- */
 .logs-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
 .logs-wrap{position:relative;min-height:420px}
 .logs{background:#050608;border:1px solid var(--line);border-radius:10px;padding:10px 14px;
@@ -1214,7 +1520,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 .spark-fill{fill:url(#sparkGrad)}
 .spark-line{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 
-/* ── Spotlight tour ─────────────────────────────────────
+/* - Spotlight tour ------------------─
    Layout:
      #tour      = full-screen layer (pointer-events: none so clicks
                   fall through everywhere except the tooltip)
@@ -1342,6 +1648,35 @@ input,select,textarea{font-family:inherit;color:inherit}
 .row-end{display:flex;justify-content:flex-end;gap:8px}
 .spacer{flex:1}
 [hidden]{display:none !important}
+
+/* Respect the OS "reduce motion" setting. The dashboard leans on several
+   always-running decorative loops - the aurora drift behind the hero, the
+   live-dot pulse rings, the arming shimmer - which are exactly the kind of
+   sustained movement that triggers vestibular discomfort. Kill those, and
+   collapse one-shot transitions/animations to near-instant so state still
+   changes visibly without sweeping. Last in the sheet so it wins on order;
+   the functional state machine is untouched - only the motion is. */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.001ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.001ms !important;
+    scroll-behavior:auto !important;
+  }
+}
+/* Reduced transparency: the glass surfaces stop leaning on blur and become
+   frosted/solid so text stays legible when the OS asks for it (Apple HIG). */
+@media (prefers-reduced-transparency: reduce){
+  .dcard-act{backdrop-filter:none;-webkit-backdrop-filter:none;background:var(--surface-3)}
+  .dcard-act:hover{background:color-mix(in oklch,#fff 6%,var(--surface-3))}
+  .st-modal{background:rgba(4,6,10,.97);backdrop-filter:none}
+  .ic-modal-backdrop{background:rgba(0,0,0,.84);backdrop-filter:none}
+}
+/* Higher contrast: firm up the hairline borders and lift the faintest ink,
+   token-level so every bordered surface benefits from one change. */
+@media (prefers-contrast: more){
+  :root{--line:rgba(255,255,255,.24);--line-2:rgba(255,255,255,.40);--fg-4:oklch(0.63 0.018 230)}
+}
 </style>
 </head>
 <body>
@@ -1355,7 +1690,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 
 <div class="ic-shell">
 
-<!-- ── Header ───────────────────────────────────── -->
+<!-- - Header ------------------─ -->
 <header class="ic-header" id="hdr-bar" hidden>
   <div class="ic-brand">
     <span class="ic-brand-mark">InstantClone</span>
@@ -1378,7 +1713,7 @@ input,select,textarea{font-family:inherit;color:inherit}
     </span>
     <span class="ic-pill" id="hdr-codec" hidden><span class="mono" id="hdr-codec-v">-</span></span>
     <span class="ic-pill ok" id="hdr-ebroadcast" hidden title="Enhanced Broadcasting active - multi-track simulcast is being forwarded bit-faithfully to Twitch and flattened to the primary track for any non-Twitch destinations. Twitch's transcoder serves the full quality ladder to viewers.">⚡ Enhanced Broadcasting</span>
-    <span class="ic-pill ok" id="hdr-dualformat" hidden title="Twitch Dual Format is live - a vertical 9:16 canvas is on the wire. Any destination set to Vertical is forwarding it (YouTube Shorts, Kick mobile, etc.).">▯ Dual Format</span>
+    <span class="ic-pill ok" id="hdr-dualformat" hidden title="Twitch Dual Format is live - a vertical 9:16 canvas is on the wire. Any destination set to Vertical is forwarding it (YouTube Shorts, Kick mobile, etc.)."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" class="ic-pill-ic"><rect x="0.8" y="4.5" width="8.2" height="6.6" rx="1.2"/><rect x="10" y="2.4" width="4.4" height="11.2" rx="1.2"/></svg>Dual Format</span>
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
     <span class="ic-pill warn" id="hdr-twitch-cap" hidden>⚠ <span id="hdr-twitch-cap-v">Twitch · Source-Only at 10 Mbps</span></span>
     <a id="hdr-update" class="ic-pill" href="#" hidden title="Open the updater" onclick="openUpdateInAbout();return false;" style="cursor:pointer">⬆ <span id="hdr-update-v">update available</span></a>
@@ -1388,87 +1723,211 @@ input,select,textarea{font-family:inherit;color:inherit}
   </div>
 </header>
 
-<!-- ── Wizard (only when !configured) ──────────── -->
+<!-- - Encoder compatibility (only when something is actually wrong) - -->
+<div id="compat-warn" role="status" aria-live="polite" hidden>
+  <span class="cw-ic" aria-hidden="true">⚠</span>
+  <span class="cw-text" id="compat-warn-text"></span>
+  <button class="cw-x" id="compat-warn-x" title="Dismiss until this changes" aria-label="Dismiss compatibility warning" onclick="dismissCompatWarning()">✕</button>
+</div>
+
+<!-- - Wizard (only when !configured) ------ -->
+<!-- Multi-step questionnaire. Each `.wiz-step` is one screen; the JS state
+     machine (wizStepIds / renderWizStep / wizNext / wizBack) shows one at a
+     time. The Twitch step is dynamic - it only joins the sequence when the
+     chosen platform is Twitch. Every referenced id is preserved from the
+     old single-screen wizard so the save/test/tile logic is untouched. -->
 <section class="ic-card wizard-card" id="wizard" hidden>
-  <h2>Welcome to InstantClone</h2>
-  <p class="lead">Two short steps and you're live.</p>
+  <div class="wiz-head">
+    <h2 id="wiz-title">Welcome to InstantClone</h2>
+    <p class="lead" id="wiz-lead">A few quick questions and you're live.</p>
+    <div class="wiz-progress" id="wiz-progress" aria-hidden="true"></div>
+  </div>
 
-  <!-- Step 1: how OBS finds us -->
-  <div class="wizard-step-label">Step 1 &middot; Connect OBS</div>
-  <div class="wizard-obs-options">
-    <div class="wizard-obs-card" id="wiz-obs-service">
-      <div class="wizard-obs-title">
-        <span>⚡ Register as an OBS service</span>
-        <span class="wizard-obs-badge">recommended</span>
-      </div>
-      <p class="wizard-obs-body">One click adds InstantClone to OBS's Service dropdown.</p>
-      <div class="wizard-obs-action">
-        <button class="ic-btn ic-btn-primary" id="wiz-obs-register-btn" onclick="wizRegisterObs()">Register with OBS</button>
-      </div>
-      <p class="wizard-obs-status muted" id="wiz-obs-status">Checking your OBS install&hellip;</p>
+  <!-- STEP 1: how OBS finds us -->
+  <div class="wiz-step" data-wstep="obs">
+    <div class="wiz-step-h">
+      <div class="wiz-step-t">How does OBS reach InstantClone?</div>
+      <div class="wiz-step-s">Pick whichever fits your setup - you can switch later on the OBS tab.</div>
+    </div>
+    <!-- Guided 2-step flow: set OBS up, then verify. A step expands when active
+         and collapses to a check when done; a "Step N" eyebrow turns green as it
+         completes. [data-state] = locked | active | done; see wizObs* in JS. -->
+    <ol class="obs-flow" id="obs-flow">
+      <li class="obs-node" data-node="connect" data-state="active">
+        <div class="obs-node-main">
+          <button type="button" class="obs-node-head" onclick="wizObsReopen('connect')">
+            <span class="obs-eyebrow">Step 1</span>
+            <span class="obs-node-title">Point OBS at InstantClone</span>
+          </button>
+          <div class="obs-node-clip"><div class="obs-node-body">
+            <p class="obs-node-hint">Two ways to connect. The recommended one takes a click.</p>
+            <div class="wizard-obs-options">
+              <div class="wizard-obs-card obs-recommended" id="wiz-obs-service">
+                <div class="wizard-obs-title">
+                  <span>Register as an OBS service</span>
+                  <span class="wizard-obs-badge">recommended</span>
+                </div>
+                <p class="wizard-obs-body">Adds InstantClone to OBS's <b>Service</b> dropdown, so you just pick it.</p>
+                <div class="wiz-callout warn" id="wiz-obs-close-warn" hidden>
+                  <span class="ic" aria-hidden="true">!</span>
+                  <span><b>Close OBS first.</b> It's open right now, and it overwrites its service list when it quits, so register while it's shut or the entry won't stick.</span>
+                </div>
+                <div class="wizard-obs-action">
+                  <button class="ic-btn ic-btn-primary" id="wiz-obs-register-btn" onclick="wizRegisterObs()">Register with OBS</button>
+                </div>
+                <p class="wizard-obs-status muted" id="wiz-obs-status">Checking your OBS install&hellip;</p>
+                <p class="wizard-obs-after">Then reopen OBS and choose <b>InstantClone</b> in <b>Settings &rarr; Stream</b>.</p>
+                <details class="ic-disclose">
+                  <summary>How it works</summary>
+                  <div class="ic-disclose-body">
+                    <p>InstantClone appears next to Twitch / YouTube in OBS's <b>Settings &rarr; Stream &rarr; Service</b> list. Multi-track Video "Auto" works out of the box, so pick InstantClone and stream.</p>
+                    <p>Edits OBS's <code class="mono">services.json</code> in <code class="mono">%APPDATA%</code> with a <code class="mono">.bak</code> backup. Unregister any time from the <b>OBS</b> tab.</p>
+                  </div>
+                </details>
+              </div>
+              <div class="obs-or">or</div>
+              <div class="wizard-obs-card" id="wiz-obs-custom">
+                <div class="wizard-obs-title">
+                  <span>Custom RTMP server</span>
+                  <span class="obs-norestart">no restart</span>
+                </div>
+                <p class="wizard-obs-body">Prefer pasting a URL? Set <b>Service: Custom</b> in OBS. It applies live, nothing to close.</p>
+                <div class="wizard-obs-copy-row">
+                  <span class="muted">Server</span>
+                  <code class="mono" id="wiz-obs-srv">rtmp://127.0.0.1:1935/live</code>
+                  <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'wiz-obs-srv','Server URL')">Copy</button>
+                </div>
+                <div class="wizard-obs-copy-row">
+                  <span class="muted">Stream key</span>
+                  <code class="mono">anything (e.g. main)</code>
+                </div>
+                <details class="ic-disclose">
+                  <summary>When to pick this</summary>
+                  <div class="ic-disclose-body">
+                    <p>Older OBS (before 30.2), multi-RTMP plugins, or non-OBS encoders. Your real platform key goes in the next step, not in OBS.</p>
+                  </div>
+                </details>
+              </div>
+            </div>
+            <button class="ic-btn ic-btn-primary obs-advance" onclick="wizObsAdvance('connect')">I've set this up in OBS &rarr;</button>
+          </div></div>
+        </div>
+      </li>
+
+      <li class="obs-node" data-node="verify" data-state="locked">
+        <div class="obs-node-main">
+          <button type="button" class="obs-node-head" onclick="wizObsReopen('verify')">
+            <span class="obs-eyebrow">Step 2 · Optional</span>
+            <span class="obs-node-title">Check it's connected</span>
+          </button>
+          <div class="obs-node-clip"><div class="obs-node-body">
+            <!-- Local-only: passive read of ingest, no destination saved yet, OBS
+                 points at 127.0.0.1, so nothing can reach a platform during this. -->
+            <div class="wiz-obs-verify" id="wiz-obs-verify" data-state="idle">
+              <p class="wov-sub">A private local test. We just watch for OBS's video arriving here, so <b>nothing is sent to Twitch or any platform.</b></p>
+              <div class="wov-body">
+                <button class="ic-btn ic-btn-primary wov-start" onclick="wizStartObsCheck()">Check connection</button>
+                <div class="wov-waiting">
+                  <span class="wov-spinner" aria-hidden="true"></span>
+                  <span class="wov-status">In OBS, click <b>Start Streaming</b> now, watching for it&hellip;</span>
+                  <button class="ic-btn ic-btn-ghost wov-cancel" onclick="wizStopObsCheck()">Cancel</button>
+                </div>
+                <div class="wov-ok">
+                  <span class="wov-check" aria-hidden="true">&#10003;</span>
+                  <span class="wov-status-ok">OBS is reaching InstantClone. Nothing left your PC. You can stop streaming now.</span>
+                </div>
+              </div>
+            </div>
+            <button class="ic-btn ic-btn-primary obs-advance" id="wiz-obs-confirm" onclick="wizObsAdvance('connect')">I've set this up in OBS &rarr;</button>
+          </div></div>
+        </div>
+      </li>
+    </ol>
+  </div>
+
+  <!-- STEP 2: platform -->
+  <div class="wiz-step" data-wstep="platform" hidden>
+    <div class="wiz-step-h">
+      <div class="wiz-step-t">Which platform are you streaming to?</div>
+      <div class="wiz-step-s">Pick the one to get you live now - you can stream to several at once.</div>
+    </div>
+    <label id="w-platform-label" class="sr-only">Streaming platform</label>
+    <div class="w-platform-tiles" id="w-platform-tiles" role="radiogroup" aria-labelledby="w-platform-label"></div>
+    <select id="w-platform" hidden></select>
+    <div class="wiz-callout info">
+      <span class="ic" aria-hidden="true">+</span>
+      <span>This is just your first destination. Add YouTube, Kick, and more, plus a local test sink, any time from the <b>Destinations</b> tab.</span>
+    </div>
+  </div>
+
+  <!-- STEP 3: stream key -->
+  <div class="wiz-step" data-wstep="key" hidden>
+    <div class="wiz-step-h">
+      <div class="wiz-step-t">Paste your <span id="w-key-platform-name">platform</span> stream key</div>
+      <div class="wiz-step-s">This is the real key from your platform dashboard. It never leaves this PC except to that platform.</div>
+    </div>
+    <div id="w-custom-wrap" hidden>
+      <label for="w-custom">Custom RTMP URL (without the stream key)</label>
+      <input id="w-custom" class="ic-input mono" placeholder="rtmp://127.0.0.1:1936/live">
+      <div class="w-hint">Either put the stream key in the field below (recommended) or paste the full URL with the key embedded.</div>
+    </div>
+    <label for="w-key">Stream key <span class="muted" id="w-key-optional-hint" hidden>(optional for Custom if URL has key)</span></label>
+    <input id="w-key" type="password" class="ic-input mono" placeholder="paste your stream key" autocomplete="off">
+    <div id="w-key-help" class="w-key-help" hidden></div>
+    <div class="wiz-callout tip">
+      <span class="ic" aria-hidden="true">&#9733;</span>
+      <span><span class="wiz-callout-t">Playing ranked behind a delay?</span>While the delay is live, a <b>Cut after this airs</b> button lets your reaction air in full, then cuts to live on its own, no counting seconds.</span>
+    </div>
+  </div>
+
+  <!-- STEP 4 (Twitch only): Enhanced Broadcasting + VOD audio -->
+  <div class="wiz-step" data-wstep="twitch" hidden>
+    <div class="wiz-step-h">
+      <div class="wiz-step-t">Twitch extras <span class="muted" style="font-weight:400;font-size:13px">(optional)</span></div>
+      <div class="wiz-step-s">Both are optional. Skip straight to Save &amp; Start if you just want to go live.</div>
+    </div>
+
+    <div class="wiz-feature">
+      <div class="wiz-feature-h">Enhanced Broadcasting <span class="wiz-tag wiz-tag-twitch">Twitch feature</span></div>
+      <p class="wiz-feature-b">Twitch's multi-track quality ladder (1080p / 720p / 480p&hellip;) so every viewer gets a smooth stream. <b>It just works</b> - InstantClone forwards it untouched. Nothing to set here.</p>
       <details class="ic-disclose">
-        <summary>How it works</summary>
+        <summary>How to turn it on in OBS</summary>
         <div class="ic-disclose-body">
-          <p>InstantClone appears next to Twitch / YouTube in OBS's <b>Settings &rarr; Stream &rarr; Service</b> list. Multi-track Video "Auto" works out of the box &mdash; pick InstantClone, restart OBS, and stream.</p>
-          <p>Edits OBS's <code class="mono">services.json</code> in <code class="mono">%APPDATA%</code> with a <code class="mono">.bak</code> backup. You can unregister any time from the <b>OBS</b> tab.</p>
+          <p><b>In OBS:</b> if you registered InstantClone as a service (previous step), set <b>Settings &rarr; Output &rarr; Video Encoder</b> to <b>Multi-track Video</b> with <b>Auto</b> - EB engages on its own.</p>
+          <p>On Custom RTMP, open the <b>InstantClone dashboard</b> after setup and use <b>System &rarr; Behavior &rarr; OBS quick launch</b> - it starts OBS with the one flag EB needs.</p>
         </div>
       </details>
     </div>
-    <div class="wizard-obs-card" id="wiz-obs-custom">
-      <div class="wizard-obs-title"><span>🔧 Custom RTMP server</span></div>
-      <p class="wizard-obs-body">Paste these in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service: Custom</b>.</p>
-      <div class="wizard-obs-copy-row">
-        <span class="muted">Server</span>
-        <code class="mono" id="wiz-obs-srv">rtmp://127.0.0.1:1935/live</code>
-        <button class="ic-btn ic-btn-ghost" onclick="copyEl('wiz-obs-srv','Server URL')">Copy</button>
+
+    <label class="wiz-feature wiz-feature-toggle">
+      <input type="checkbox" id="w-vod-audio">
+      <div>
+        <div class="wiz-feature-h" style="margin:0">Save a VOD audio track <span class="wiz-tag wiz-tag-twitch">Twitch feature</span></div>
+        <p class="wiz-feature-b">A second audio track on your Twitch VOD - handy for stripping copyrighted music from the <b>recording</b> while your live audio stays intact.</p>
       </div>
-      <div class="wizard-obs-copy-row">
-        <span class="muted">Stream key</span>
-        <code class="mono">anything (e.g. main)</code>
-      </div>
-      <details class="ic-disclose">
-        <summary>When to pick this</summary>
-        <div class="ic-disclose-body">
-          <p>Older OBS (before 30.2), multi-RTMP plugins, or non-OBS encoders. The real platform stream key goes in Step 2 &mdash; not in OBS.</p>
-        </div>
-      </details>
+    </label>
+    <div id="w-vod-how" hidden class="wiz-vod-how">
+      <div class="wiz-vod-how-t">Three steps <b>in OBS</b> (after this wizard):</div>
+      <ol>
+        <li><b>Settings &rarr; Stream:</b> Service = <b>Custom&hellip;</b>, Server = the URL shown on the <b>InstantClone dashboard's OBS tab</b>, Key = <code class="mono">main</code></li>
+        <li><b>Settings &rarr; Output:</b> Output Mode = <b>Advanced</b>, then tick <b>VOD Track</b> under Streaming</li>
+        <li><b>Close OBS</b>, then reopen it. (OBS can't change this while running.)</li>
+      </ol>
+      <div class="w-hint">We'll remember the choice - these are the OBS-side steps you do once.</div>
     </div>
   </div>
 
-  <!-- Step 2: destination -->
-  <div class="wizard-step-label">Step 2 &middot; Where to send your stream</div>
-  <label for="w-platform">Streaming platform</label>
-  <select id="w-platform" class="ic-input"></select>
-  <div id="w-custom-wrap" hidden>
-    <label for="w-custom">Custom RTMP URL (without the stream key)</label>
-    <input id="w-custom" class="ic-input mono" placeholder="rtmp://127.0.0.1:1936/live">
-    <div class="w-hint">Either put the stream key in the field below (recommended) or paste the full URL with the key embedded.</div>
-  </div>
-  <label for="w-key">Stream key <span class="muted" id="w-key-optional-hint" hidden>(optional for Custom if URL has key)</span></label>
-  <input id="w-key" type="password" class="ic-input mono" placeholder="paste your stream key" autocomplete="off">
-  <div id="w-key-help" class="w-key-help" hidden></div>
-  <!-- Competitive-streamer teaser: the "cut after this airs" flow is the
-       single biggest quality-of-life trick in the app, so it gets told
-       here (before first stream) instead of waiting to be discovered. -->
-  <div class="tour-tip" style="margin-top:12px">
-    <strong>Playing ranked behind a delay?</strong> Once your delay is live, a
-    <b>⏱ Cut after this airs</b> button appears next to Cut. Press it the moment
-    your match reaction ends - InstantClone lets that moment reach your viewers,
-    then cuts to live on its own. No counting seconds in your head.
-  </div>
-  <div class="wizard-row">
-    <button class="ic-btn ic-btn-primary" onclick="saveWizard()">Save &amp; Start</button>
-    <button class="ic-btn ic-btn-ghost" onclick="testConn()">Test connection</button>
-  </div>
   <div id="w-msg"></div>
-  <div style="margin-top:14px;text-align:center">
-    <button onclick="skipWizard()" style="background:none;border:0;color:var(--fg-3);font:inherit;font-size:12px;cursor:pointer;padding:6px 10px;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line)" onmouseover="this.style.color='var(--fg-3)'" onmouseout="this.style.color='var(--fg-3)'">
-      Not now &mdash; let me look around first
-    </button>
+
+  <div class="wiz-nav">
+    <button class="wiz-skip" onclick="skipWizard()">Skip setup</button>
+    <span class="spacer"></span>
+    <button class="ic-btn ic-btn-ghost" id="wiz-back" onclick="wizBack()" hidden>&larr; Back</button>
+    <button class="ic-btn ic-btn-primary" id="wiz-next" onclick="wizNext()">Next &rarr;</button>
   </div>
 </section>
 
-<!-- ── Hero ─────────────────────────────────────── -->
+<!-- - Hero -------------------─ -->
 <section class="ic-card hero-card" id="hero" hidden>
   <div class="hero">
     <div class="hero-readout" id="hero-readout" data-state="off">
@@ -1527,7 +1986,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   </div>
 </section>
 
-<!-- ── Tabs ─────────────────────────────────────── -->
+<!-- - Tabs -------------------─ -->
 <nav class="tabs" id="tabs" hidden>
   <span class="tab-ind" id="tab-ind"></span>
   <button class="tab on" data-tab="destinations">
@@ -1755,14 +2214,14 @@ input,select,textarea{font-family:inherit;color:inherit}
           <div class="ic-label">Server URL</div>
           <div class="copy-block">
             <code class="mono" id="obs-srv">rtmp://127.0.0.1:1935/live</code>
-            <button class="ic-btn ic-btn-ghost" onclick="copyEl('obs-srv','Server URL')">Copy</button>
+            <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-srv','Server URL')">Copy</button>
           </div>
         </div>
         <div class="obs-manual-field">
           <div class="ic-label">Stream key</div>
           <div class="copy-block">
             <code class="mono">main</code>
-            <button class="ic-btn ic-btn-ghost" onclick="copyText('main','Stream key')">Copy</button>
+            <button class="ic-btn ic-btn-ghost" onclick="copyText(this,'main','Stream key')">Copy</button>
           </div>
           <div class="tab-sub" style="margin-top:6px">Any string works - the real platform key lives in <b>Destinations</b>.</div>
         </div>
@@ -1774,7 +2233,7 @@ input,select,textarea{font-family:inherit;color:inherit}
         <div class="rec"><div class="rec-k">Output &rarr; Video &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
         <div class="rec"><div class="rec-k">Output &rarr; Encoder</div><div class="rec-v">x264 / NVENC</div><div class="rec-why">Anything modern - InstantClone passes through untouched.</div></div>
         <div class="rec"><div class="rec-k">Bitrate</div><div class="rec-v">&le; 80% of upload</div><div class="rec-why">Leave headroom or the "Upload bottleneck" pill lights up.</div></div>
-        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">CBR + 2 s keyframe</div><div class="rec-why">The rules that actually matter for Kick. <a href="#" onclick="event.preventDefault();$('rec-kick-detail').open=!$('rec-kick-detail').open">details</a></div></div>
+        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">CBR + 2 s keyframe</div><div class="rec-why">The rules that actually matter for Kick. <a href="#" onclick="event.preventDefault();toggleDisclosure('rec-kick-detail')">details</a></div></div>
       </div>
       <details class="ic-disclose" id="rec-kick-detail">
         <summary>Kick requirements (and the B-frames myth)</summary>
@@ -1801,7 +2260,7 @@ input,select,textarea{font-family:inherit;color:inherit}
       </div>
       <div class="copy-block" style="margin-top:8px">
         <code class="mono" id="chat-dock-url">enter your channel name above</code>
-        <button class="ic-btn ic-btn-ghost" onclick="copyEl('chat-dock-url','Chat URL')">Copy</button>
+        <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'chat-dock-url','Chat URL')">Copy</button>
       </div>
       <details class="ic-disclose">
         <summary>How to add it to OBS</summary>
@@ -1848,7 +2307,7 @@ input,select,textarea{font-family:inherit;color:inherit}
         </div>
         <div class="copy-block" style="margin-top:12px">
           <code class="mono" id="ovg-url">select an overlay</code>
-          <button class="ic-btn ic-btn-primary" id="ovg-copy" onclick="Studio.copyGallery()">Copy URL</button>
+          <button class="ic-btn ic-btn-primary" id="ovg-copy" onclick="Studio.copyGallery(this)">Copy URL</button>
         </div>
         <div class="ic-hint" id="ovg-copyhint" style="margin-top:6px;font-size:11px;color:var(--fg-4)">Paste this into OBS as a Browser Source.</div>
         <div class="st-rowbtns" id="ovg-actions" style="margin-top:10px"></div>
@@ -1865,9 +2324,15 @@ input,select,textarea{font-family:inherit;color:inherit}
       <div class="tab-sub">Add as an OBS Custom Browser Dock to control delay from within OBS. Recommended size: ~290 × 360.</div>
       <div class="copy-block">
         <code class="mono" id="dock-url">/dock</code>
-        <button class="ic-btn ic-btn-ghost" onclick="copyEl('dock-url','Dock URL')">Copy</button>
+        <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'dock-url','Dock URL')">Copy</button>
       </div>
-      <div class="tab-sub" style="margin-top:10px">Overlays live in <code class="mono" id="ov-dir-display">overlays/</code>. Hand-written <code class="mono">.html</code> files dropped there still work as before.</div>
+      <div class="ic-label" style="margin-top:18px">Overlays folder</div>
+      <div class="tab-sub">Drop your own <code class="mono">.html</code> files here and they appear in the picker above. <span id="ov-dir-display" hidden></span></div>
+      <div class="ov-dir-row">
+        <input id="s-ovdir" class="ic-input mono" placeholder="overlays/">
+        <button class="ic-btn ic-btn-primary" id="ov-dir-save" onclick="saveOverlaysDir(this)">Save</button>
+        <button class="ic-btn ic-btn-ghost" onclick="reveal('overlays',this)">Open</button>
+      </div>
     </section>
   </div>
 
@@ -1880,14 +2345,14 @@ input,select,textarea{font-family:inherit;color:inherit}
           <div class="tab-title" style="font-size:15px">Overlay Studio</div>
         </div>
         <div class="st-toolbar">
-          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-undo" title="Undo (Ctrl+Z)" onclick="Studio.undo()">↶</button>
-          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-redo" title="Redo (Ctrl+Shift+Z)" onclick="Studio.redo()">↷</button>
+          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-undo" title="Undo (Ctrl+Z)" aria-label="Undo" onclick="Studio.undo()">↶</button>
+          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" onclick="Studio.redo()">↷</button>
           <input id="st-name" class="ic-input" placeholder="Overlay name" value="My overlay">
           <button class="ic-btn ic-btn-primary" id="st-save" onclick="Studio.save()" title="Overwrite this overlay">Save</button>
           <button class="ic-btn ic-btn-ghost" onclick="Studio.saveAsNew()" title="Save a separate copy with a new URL">Save as new</button>
-          <button class="ic-btn ic-btn-ghost" onclick="Studio.copyUrl()">Copy URL</button>
+          <button class="ic-btn ic-btn-ghost" onclick="Studio.copyUrl(this)">Copy URL</button>
           <div class="st-menu">
-            <button class="ic-btn ic-btn-ghost st-icobtn" title="More" onclick="Studio.toggleMenu(event)">⋯</button>
+            <button class="ic-btn ic-btn-ghost st-icobtn" title="More" aria-label="More options" onclick="Studio.toggleMenu(event)">⋯</button>
             <div class="st-menu-pop" id="st-menu-pop" hidden>
               <button onclick="Studio.menu('rename')">Rename</button>
               <button onclick="Studio.menu('export')">Export .json</button>
@@ -1960,7 +2425,6 @@ input,select,textarea{font-family:inherit;color:inherit}
   <div class="tab-head">
     <div>
       <div class="tab-title">System</div>
-      <div class="tab-sub">Behavior, network, buffer, notifications, diagnostics.</div>
     </div>
   </div>
   <div class="restart-banner hidden" id="restart-banner">
@@ -1998,10 +2462,28 @@ input,select,textarea{font-family:inherit;color:inherit}
       <div style="margin-top:14px;display:flex;flex-direction:column;gap:14px">
         <div style="display:flex;align-items:flex-start;gap:14px">
           <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
+            <input type="checkbox" id="s-startup" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
+            <div>
+              <div style="font-weight:600">Start with Windows</div>
+              <div class="tab-sub" style="margin-top:2px">Launches at login and waits in the tray, so OBS always has somewhere to publish.</div>
+            </div>
+          </label>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:14px">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
+            <input type="checkbox" id="s-open-dash" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
+            <div>
+              <div style="font-weight:600">Open dashboard on launch</div>
+              <div class="tab-sub" style="margin-top:2px">Opens this page in your browser each time the app starts. Turn off to stay in the tray.</div>
+            </div>
+          </label>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:14px">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
             <input type="checkbox" id="s-auto-arm" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
             <div>
               <div style="font-weight:600">Pre-arm delay on stream start</div>
-              <div class="tab-sub" style="margin-top:2px">Start filling the delay buffer the moment OBS starts streaming. Useful if you always stream with delay.</div>
+              <div class="tab-sub" style="margin-top:2px">Fills the buffer as soon as OBS connects. Best if you always stream delayed.</div>
             </div>
           </label>
         </div>
@@ -2010,7 +2492,7 @@ input,select,textarea{font-family:inherit;color:inherit}
             <input type="checkbox" id="s-auto-act" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
             <div>
               <div style="font-weight:600">Auto-activate when buffer ready</div>
-              <div class="tab-sub" style="margin-top:2px">Skip the manual "Activate" step. Fires every time you arm (manual, profile, or pre-arm). Cut still sticks - the next arm re-enables it.</div>
+              <div class="tab-sub" style="margin-top:2px" title="Applies to every arm: manual, profile, or pre-arm. A cut still sticks; the next arm re-enables the delay.">Skip the manual Activate step - every arm activates once the buffer is ready.</div>
             </div>
           </label>
         </div>
@@ -2062,8 +2544,19 @@ input,select,textarea{font-family:inherit;color:inherit}
       <div class="ic-label">LAN access</div>
       <div class="tab-sub">By default both ports are bound to 127.0.0.1. Open them to your LAN if OBS or your browser run on a different machine.</div>
       <div class="checkbox-row" style="margin-top:10px">
-        <label><input type="checkbox" id="s-ibind"> Allow LAN to publish</label>
-        <label><input type="checkbox" id="s-wbind"> Allow LAN to access Web UI</label>
+        <label><input type="checkbox" id="s-ibind" onchange="renderLanWarning()"> Allow LAN to publish</label>
+        <label><input type="checkbox" id="s-wbind" onchange="renderLanWarning()"> Allow LAN to access Web UI</label>
+      </div>
+      <!-- Shown only while the web UI is actually exposed. The control API
+           has no authentication - the CSRF guard stops cross-origin browser
+           POSTs, but a direct request (curl, script) carries no Origin
+           header and is allowed through by design so CLI and Stream Deck
+           keep working. On loopback that is exactly right; on a LAN it
+           means every machine on the network can drive the delay. Say so
+           rather than letting someone discover it. -->
+      <div id="lan-warn" class="lan-warn" hidden>
+        <span class="lw-ic" aria-hidden="true">⚠</span>
+        <span id="lan-warn-text"></span>
       </div>
     </section>
   </div>
@@ -2112,14 +2605,6 @@ input,select,textarea{font-family:inherit;color:inherit}
         <button class="ic-btn ic-btn-ghost" onclick="reveal('trace',this)">Show log file in Explorer</button>
       </div>
     </section>
-    <section class="sys-section">
-      <div class="ic-label">Overlays folder</div>
-      <div class="tab-sub">Drop your own <code class="mono">.html</code> files here to make them appear in the Overlay tab picker.</div>
-      <input id="s-ovdir" class="ic-input mono" style="margin-top:8px">
-      <div class="row" style="margin-top:10px">
-        <button class="ic-btn ic-btn-ghost" onclick="reveal('overlays',this)">Open overlays folder</button>
-      </div>
-    </section>
   </div>
 
   <!-- About sub-pane -->
@@ -2133,6 +2618,10 @@ input,select,textarea{font-family:inherit;color:inherit}
         <button class="ic-btn ic-btn-primary" id="sys-about-update-btn" onclick="applyUpdate()" hidden>Update now</button>
       </div>
       <div class="muted" id="sys-about-msg" style="font-size:12px;margin-top:8px;min-height:1.2em"></div>
+      <label style="display:flex;align-items:center;gap:10px;margin-top:12px;cursor:pointer">
+        <input id="s-update-check" type="checkbox" style="width:16px;height:16px;cursor:pointer">
+        <span>Automatically check for updates<span class="muted" style="margin-left:6px;font-size:12px">on launch, from GitHub</span></span>
+      </label>
       <div class="row" style="gap:10px;margin-top:12px;align-items:center">
         <button class="ic-btn ic-btn-ghost" onclick="restartApp(this)">Restart InstantClone</button>
         <span class="muted" style="font-size:12px">Relaunch the app - the dashboard reconnects automatically.</span>
@@ -2149,7 +2638,7 @@ input,select,textarea{font-family:inherit;color:inherit}
       </div>
       <div class="sys-about-card">
         <div class="ic-label">License</div>
-        <div class="tab-sub" style="margin-top:6px">InstantClone is open source under the MIT License.</div>
+        <div class="tab-sub" style="margin-top:6px">InstantClone is free software under the GPL-3.0 License.</div>
         <div class="row" style="gap:8px;margin-top:10px">
           <a class="ic-btn ic-btn-ghost" href="https://github.com/Soulhackzlol/InstantClone/blob/main/LICENSE" target="_blank" rel="noreferrer">View license</a>
         </div>
@@ -2224,7 +2713,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 </div><!-- /ic-app -->
 <div class="ic-toast-rail" id="toast-rail"></div>
 
-<!-- ── Reset confirmation modal ─────────────────────────────────
+<!-- - Reset confirmation modal ----------------─
      Two-step destructive flow: scope-dependent. The "settings" scope
      just needs a click-through; the "all" scope additionally requires
      typing the literal word RESET so a stray double-click can't wipe
@@ -2256,7 +2745,7 @@ input,select,textarea{font-family:inherit;color:inherit}
   </div>
 </div>
 
-<!-- ── Tour: spotlight cutout + floating tooltip ───────────── -->
+<!-- - Tour: spotlight cutout + floating tooltip ------─ -->
 <!-- The backdrop SVG draws a full-screen dark rect with a clear hole
      punched over the current target element. Tooltip floats next to
      the hole, auto-placed by JS. -->
@@ -2278,7 +2767,7 @@ input,select,textarea{font-family:inherit;color:inherit}
         <div class="tour-step" id="tour-step">1 / 9</div>
         <div class="tour-title" id="tour-title">Welcome to InstantClone</div>
       </div>
-      <button class="ic-btn-tiny" onclick="closeTour()" title="Close (Esc)">✕</button>
+      <button class="ic-btn-tiny" onclick="closeTour()" title="Close (Esc)" aria-label="Close tour">✕</button>
     </div>
     <div class="tour-body" id="tour-body"></div>
     <div class="tour-foot">
@@ -2297,7 +2786,7 @@ input,select,textarea{font-family:inherit;color:inherit}
 const $ = id => document.getElementById(id);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
 
-// ── State ─────────────────────────────────────────────────────────────
+// - State ------------------------------─
 let lastState = null;
 // Last /config snapshot - cached so the capacity-math helpers can read
 // buffer_mb without re-fetching. Updated by loadConfig() and by the
@@ -2340,13 +2829,13 @@ const SETTINGS_FIELDS = {
   'discord webhook':'s-webhook','webhook':'s-webhook','overlays_dir':'s-ovdir',
 };
 
-// ── Formatting ─────────────────────────────────────────────────────────
+// - Formatting ----------------------------─
 const fmtSecs = ms => { const s = ms/1000; return s < 10 ? s.toFixed(1) : Math.round(s).toString(); };
 const fmtDelay = ms => { const s = Math.round(ms/1000); if (s < 60) return s+'s'; const m = Math.floor(s/60), r = s%60; return r ? `${m}m${r}s` : `${m}m`; };
 const fmtKbps = k => k >= 1000 ? (k/1000).toFixed(2)+' Mbps' : k+' kbps';
 function fmtBytesPair(b){ const u=['B','KB','MB','GB','TB']; let i=0; while(b>=1024 && i<u.length-1){b/=1024;i++} return [b.toFixed(b<10&&i?1:0), u[i]]; }
 
-// ── Buffer capacity math ──────────────────────────────────────────────
+// - Buffer capacity math -----------------------
 // The disk-backed ring caps how much delay we can actually fill. At
 // 10 Mbps the 500 MB default holds ~6m 50s of video+audio+overhead;
 // arming above that capacity silently stalls during the "preparing"
@@ -2427,8 +2916,8 @@ function renderBufferHint(){
   el.textContent = txt;
 }
 
-// ── Toast ─────────────────────────────────────────────────────────────
-function toast(msg, kind){
+// - Toast ------------------------------─
+function toast(msg, kind, ms){
   const k = kind || 'info';
   const icon = { ok:'✓', err:'!', info:'i' }[k] || 'i';
   const el = document.createElement('div');
@@ -2436,10 +2925,10 @@ function toast(msg, kind){
   el.innerHTML = `<span class="ic-toast-icon">${icon}</span><span></span>`;
   el.lastChild.textContent = msg;
   $('toast-rail').appendChild(el);
-  setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 350); }, 2400);
+  setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 350); }, ms || 2400);
 }
 
-// ── Animated number helper ────────────────────────────────────────────
+// - Animated number helper ----------------------
 const numState = new Map(); // id → {to, last, gen}
 // Fixed-duration ease-out tween for the stat readouts. NOTE the fix: the
 // map is now SEEDED on first sight of an id. The old version only stored
@@ -2471,7 +2960,7 @@ function animateNumber(id, target, dur, fmt){
   requestAnimationFrame(tick);
 }
 
-// ── Hero delay number: continuous critically-damped motion ────────────
+// - Hero delay number: continuous critically-damped motion ------
 // The big delay figure is special: it COUNTS UP as the buffer fills
 // (target moves ~4x/s) and ROLLS DOWN on cut/disarm (one big jump). A
 // fixed-duration tween handles the jump but makes the count-up jerk -
@@ -2514,7 +3003,7 @@ function heroNumTick(now){
   heroNum.raf = requestAnimationFrame(heroNumTick);
 }
 
-// ── Sparkline ─────────────────────────────────────────────────────────
+// - Sparkline ----------------------------─
 // Catmull-Rom -> cubic-bezier smoothing so the trace reads as a smooth
 // curve instead of a jagged polyline.
 function smoothLinePath(pts){
@@ -2558,7 +3047,7 @@ function updateSpark(lineId, fillId, data, width, height){
   drawSpark($(lineId), $(fillId), data, width, height, lineId);
 }
 
-// ── Action endpoints ──────────────────────────────────────────────────
+// - Action endpoints -------------------------
 function setPending(p){
   pendingPhase = p;
   clearTimeout(pendingClearT);
@@ -2683,7 +3172,7 @@ function disarmClick(ev){
   disarm();
 }
 
-// ── Hero render ───────────────────────────────────────────────────────
+// - Hero render ---------------------------─
 // Swap the hero subtext with a directional micro-slide (old line drops
 // out, new line drops in) - but ONLY when the message KIND changes.
 // `key` names the kind; several messages embed live numbers (bitrate,
@@ -2918,7 +3407,7 @@ function renderCta(){
   renderCutAfter(ds);
 }
 
-// ── "Cut after this airs" secondary action ────────────────────────────
+// - "Cut after this airs" secondary action --------------
 // Only offered while a delay is active - there's nothing to schedule
 // otherwise (the backend refuses too, this just keeps the button from
 // teasing a dead action). Shares the CTA row at 1/4 width, so labels
@@ -2957,7 +3446,7 @@ function renderCutAfter(ds){
   }
 }
 
-// ── Profile chips in hero ──────────────────────────────────────────────
+// - Profile chips in hero -----------------------
 function renderCpProfiles(){
   const c = $('cp-profiles');
   const ds = lastState ? PHASE_TO_STATE[lastState.phase] : 'off';
@@ -3001,7 +3490,7 @@ function renderCpProfiles(){
   });
 }
 
-// ── Header chips ───────────────────────────────────────────────────────
+// - Header chips ---------------------------─
 function renderHeader(s){
   // OBS pill - plain-language state + a tooltip that tells the user what
   // to do when it's not connected yet.
@@ -3053,9 +3542,39 @@ function renderHeader(s){
   $('hdr-dualformat').hidden = !s.vertical_present;
   $('hdr-backpressure').hidden = !s.backpressure;
   renderTwitchCapPill(s);
+  renderCompatWarning(s);
 }
 
-// ── Stats render ───────────────────────────────────────────────────────
+// - Encoder compatibility strip --------------------
+// Dismissal is keyed by the MESSAGE, not by a plain "hidden" flag: if the
+// user fixes their keyframe interval and a different problem appears, the
+// strip comes back on its own. Dismissal belongs to the publishing session
+// that raised it: it clears when ingest drops, so a fresh dashboard load OR
+// a new stream on the same page starts clean instead of inheriting a stale
+// "already dismissed" that would silence a genuinely broken new session.
+let compatDismissed = '';
+function renderCompatWarning(s){
+  if (!s.ingest_alive) compatDismissed = '';
+  const msg = s.compat_warning || '';
+  const el = $('compat-warn');
+  const show = msg !== '' && msg !== compatDismissed;
+  el.hidden = !show;
+  if (!show) return;
+  // Skip the DOM write when the text is unchanged - this runs ~4x/s and
+  // rewriting textContent every tick would fight the ellipsis and defeat
+  // text selection mid-read.
+  const t = $('compat-warn-text');
+  if (t.textContent !== msg){
+    t.textContent = msg;
+    t.title = msg;
+  }
+}
+function dismissCompatWarning(){
+  compatDismissed = ($('compat-warn-text').textContent) || '';
+  $('compat-warn').hidden = true;
+}
+
+// - Stats render ---------------------------─
 function renderStats(s){
   rateHistory.push(s.stats.bitrate_kbps || 0);
   if (rateHistory.length > HISTORY_LEN) rateHistory.shift();
@@ -3084,7 +3603,7 @@ function renderStats(s){
   $('m-rss').textContent = rv; $('m-rss-u').textContent = ru;
 }
 
-// ── Destinations ───────────────────────────────────────────────────────
+// - Destinations ---------------------------─
 function rebuildDests(){
   const c = $('dest-grid');
   // remove old "+Add" if present so we can re-append at end
@@ -3317,7 +3836,7 @@ async function loadDestinations(){
   refreshSysEbLaunch();
 }
 
-// ── Destination form ──────────────────────────────────────────────────
+// - Destination form -------------------------
 function openDestForm(d){
   $('dest-modal').hidden = false;
   $('dest-form').scrollTop = 0;
@@ -3486,7 +4005,7 @@ async function deleteDest(id){
   loadDestinations(); loadConfig();
 }
 
-// ── Profiles ──────────────────────────────────────────────────────────
+// - Profiles -----------------------------
 async function loadProfiles(){
   try {
     const r = await fetch('/profiles');
@@ -3596,7 +4115,7 @@ function jumpToBufferSetting(mb){
            : 'Raise the buffer size here, Save, then restart.', 'ok');
 }
 
-// ── Config / Settings ─────────────────────────────────────────────────
+// - Config / Settings ------------------------─
 async function loadConfig(){
   try {
     const c = await (await fetch('/config')).json();
@@ -3617,12 +4136,19 @@ async function loadConfig(){
     $('s-bmb').value = c.buffer_mb; $('s-bpath').value = c.buffer_path;
     renderBufferHint();
     $('s-ibind').checked = c.ingest_bind_all; $('s-wbind').checked = c.web_bind_all;
+    renderLanWarning();
     $('s-webhook').value = '';
     $('s-webhook').placeholder = c.webhook_set ? '(set - paste a new one to replace)' : 'https://discord.com/api/webhooks/…';
     $('s-webhook-hint').textContent = c.webhook_set ? '(currently set)' : '';
     $('s-ovdir').value = c.overlays_dir || '';
     $('ov-dir-display').textContent = c.overlays_dir || 'overlays/';
     $('s-trace').checked = c.tracing_enabled !== false;
+    // Reflects the actual Run-key entry, not a stored preference - so if
+    // the user removed it via Task Manager's Startup tab, this shows off.
+    $('s-startup').checked = !!c.start_with_windows;
+    // Both default true server-side; treat a missing field as on.
+    $('s-open-dash').checked = c.open_dashboard_on_launch !== false;
+    $('s-update-check').checked = c.update_check_enabled !== false;
     // Behavior section
     $('s-auto-arm').checked = !!c.auto_arm_on_connect;
     $('s-auto-act').checked = !!c.auto_activate_when_ready;
@@ -3637,7 +4163,7 @@ async function loadConfig(){
     // visibility
     const configured = c.configured;
     $('wizard').hidden = configured;
-    if (!configured) { refreshWizObsStatus(); }
+    if (!configured) { refreshWizObsStatus(); wizCurrent = 'obs'; wizDir = 'fwd'; renderWizStep(); }
     $('hdr-bar').hidden = !configured;
     $('hero').hidden = !configured;
     $('tabs').hidden = !configured;
@@ -3762,13 +4288,315 @@ function wireChatDock(){
   inp.addEventListener('input', update);
 }
 
+// Per-platform accent, mirroring the .dcard.platform-* CSS so a wizard
+// tile matches the destination card the same choice produces.
+const PLATFORM_COLOR = { twitch:'#a78bfa', youtube:'#fda4af', kick:'#86efac',
+  trovo:'#67e8f9', restream:'#5eead4', custom:'#fcd34d', sink:'#93c5fd' };
+
+// - Multi-step wizard state machine -----------------
+// Steps are computed live so the Twitch step joins/leaves the sequence
+// the instant the platform changes. We track the CURRENT step by id, not
+// index, so a platform switch that removes the Twitch step can never
+// strand the wizard on a panel that no longer exists.
+let wizCurrent = 'obs';
+// Travel direction for the slide transition: 'fwd' on Next/initial,
+// 'back' on Back. Read by CSS via #wizard[data-dir].
+let wizDir = 'fwd';
+
+// Every step that can ever appear, in order. The progress bar renders one
+// permanent segment per entry; `wizStepIds()` is the ACTIVE subset for the
+// current platform. Twitch is the only optional one today.
+const WIZ_ALL_STEPS = ['obs', 'platform', 'key', 'twitch'];
+
+function wizStepIds(){
+  const ids = ['obs', 'platform', 'key'];
+  if ($('w-platform').value === 'twitch') ids.push('twitch');
+  return ids;
+}
+
+function renderWizStep(){
+  const ids = wizStepIds();
+  if (!ids.includes(wizCurrent)) wizCurrent = ids[ids.length - 1];
+  const i = ids.indexOf(wizCurrent);
+  $('wizard').dataset.dir = wizDir;
+  // Show the active panel only.
+  document.querySelectorAll('#wizard .wiz-step').forEach(el => {
+    el.hidden = el.dataset.wstep !== wizCurrent;
+  });
+  // Stop the optional OBS-connection poll when leaving its step, and clear a
+  // stuck spinner so returning shows the idle button (a confirmed ✓ stays).
+  if (wizCurrent !== 'obs'){
+    wizStopObsCheckTimer();
+    const wov = $('wiz-obs-verify');
+    if (wov && wov.dataset.state === 'waiting') wov.dataset.state = 'idle';
+  }
+  // Segmented progress. One PERMANENT segment per possible step (segments
+  // are never added/removed) so the optional Twitch segment animates its
+  // collapse/expand instead of popping in and out. done/on are computed in
+  // the active-step space; inactive steps (Twitch when not chosen) collapse.
+  const prog = $('wiz-progress');
+  if (prog.children.length !== WIZ_ALL_STEPS.length){
+    prog.innerHTML = '';
+    WIZ_ALL_STEPS.forEach(() => prog.appendChild(document.createElement('span')));
+  }
+  WIZ_ALL_STEPS.forEach((sid, idx) => {
+    const pos = ids.indexOf(sid);
+    let cls = 'wiz-seg';
+    if (pos === -1) cls += ' collapsed';
+    else if (pos < i) cls += ' done';
+    else if (pos === i) cls += ' on';
+    prog.children[idx].className = cls;
+  });
+  const last = (i === ids.length - 1);
+  $('wiz-back').hidden = (i === 0);
+  $('wiz-next').innerHTML = last ? 'Save &amp; Start' : 'Next &rarr;';
+  // Step 1 doubles as the welcome: name the app and say what it does, so a
+  // first-time user understands the tool before answering anything. Later
+  // steps drop to a plain position counter (the progress bar shows the
+  // rest visually).
+  if (i === 0){
+    $('wiz-title').textContent = 'Welcome to InstantClone';
+    $('wiz-lead').textContent = 'A live, glitch-free stream delay for OBS. A few quick questions and you’re streaming.';
+  } else {
+    $('wiz-title').textContent = 'Set up your stream';
+    $('wiz-lead').textContent = `Step ${i + 1} of ${ids.length}`;
+  }
+  // Name the platform in the key-step heading.
+  const pn = $('w-key-platform-name');
+  if (pn){
+    const opt = $('w-platform').selectedOptions[0];
+    pn.textContent = opt ? opt.textContent : 'platform';
+  }
+  clearWizMsg();
+  wireAllDisclosures($('wizard'));
+  reserveCopyButtons($('wizard'));
+  if (wizCurrent === 'key') setTimeout(() => { const k = $('w-key'); if (k) k.focus(); }, 60);
+}
+
+function wizNext(){
+  if (!validateWizStep(wizCurrent)) return;
+  const ids = wizStepIds();
+  const i = ids.indexOf(wizCurrent);
+  if (i >= ids.length - 1){ saveWizard(); return; }
+  wizDir = 'fwd';
+  wizCurrent = ids[i + 1];
+  renderWizStep();
+}
+
+function wizBack(){
+  const ids = wizStepIds();
+  const i = ids.indexOf(wizCurrent);
+  if (i > 0){ wizDir = 'back'; wizCurrent = ids[i - 1]; renderWizStep(); }
+}
+
+// Optional, local-only "did OBS reach us?" check. Polls /state for ingest_alive
+// (OBS publishing into our RTMP server) - a passive read that sends nothing
+// anywhere. No destination is saved during the wizard, and OBS points only at
+// 127.0.0.1, so nothing can egress to a platform while this runs.
+let _obsCheckTimer = null;
+function wizStopObsCheckTimer(){ if (_obsCheckTimer){ clearInterval(_obsCheckTimer); _obsCheckTimer = null; } }
+function wizStartObsCheck(){
+  const panel = $('wiz-obs-verify'); if (!panel) return;
+  panel.dataset.state = 'waiting';
+  wizStopObsCheckTimer();
+  _obsCheckTimer = setInterval(async () => {
+    try {
+      const s = await (await fetch('/state')).json();
+      if (s && s.ingest_alive){
+        wizStopObsCheckTimer();
+        panel.dataset.state = 'ok';
+        const codec = (s.video_codec && s.video_codec !== 'unknown') ? ' (' + s.video_codec + ')' : '';
+        const ok = panel.querySelector('.wov-status-ok');
+        if (ok) ok.textContent = 'OBS is reaching InstantClone' + codec + '. Nothing left your PC. You can stop streaming now.';
+        const node = document.querySelector('.obs-node[data-node="verify"]');
+        if (node) node.dataset.verified = '1';   // turn the step's dot green ✓
+      }
+    } catch(_){ /* transient fetch error - keep polling */ }
+  }, 700);
+}
+function wizStopObsCheck(){
+  wizStopObsCheckTimer();
+  const panel = $('wiz-obs-verify');
+  if (panel && panel.dataset.state !== 'ok') panel.dataset.state = 'idle';
+}
+
+// - Guided OBS flow (the 2-node stepper) ---------------
+const OBS_FLOW = ['connect','verify'];
+// True once the user clicks "I've set this up in OBS" (advances past connect).
+// The wizard's Next is gated on it (validateWizStep) so nobody skips wiring OBS.
+let wizObsConfirmed = false;
+function wizObsNode(node){ return document.querySelector(`.obs-node[data-node="${node}"]`); }
+// Mark a node done and open the next one.
+function wizObsAdvance(node){
+  const el = wizObsNode(node); if (!el) return;
+  el.dataset.state = 'done';
+  const next = OBS_FLOW[OBS_FLOW.indexOf(node) + 1];
+  if (next){ const nx = wizObsNode(next); if (nx && nx.dataset.state !== 'done') nx.dataset.state = 'active'; }
+  if (node === 'connect'){ wizObsConfirmed = true; clearWizMsg(); }
+}
+// Re-open a completed node to review or redo it; collapses whatever was open.
+function wizObsReopen(node){
+  const el = wizObsNode(node);
+  if (!el || el.dataset.state === 'locked' || el.dataset.state === 'active') return;
+  OBS_FLOW.forEach(n => { const e = wizObsNode(n); if (e && e.dataset.state === 'active') e.dataset.state = 'done'; });
+  el.dataset.state = 'active';
+}
+
+// Gated steps: the OBS step needs an explicit "I've set this up" confirmation
+// before Next proceeds; the key step needs a key. Platform (always has a
+// selection) and the optional Twitch step never block.
+function validateWizStep(id){
+  if (id === 'obs'){
+    if (wizObsConfirmed) return true;
+    wizMsg('Set OBS up above, then click "I\'ve set this up in OBS" to continue.', 'err');
+    const c = $('wiz-obs-confirm');   // draw the eye to the button that unblocks
+    if (c){ c.classList.remove('nudge'); void c.offsetWidth; c.classList.add('nudge'); }
+    return false;
+  }
+  if (id !== 'key') return true;
+  const platform = $('w-platform').value;
+  const key = $('w-key').value.trim(), custom = $('w-custom').value.trim();
+  if (platform === 'custom' && !custom){ wizMsg('Enter your custom RTMP URL to continue.', 'err'); return false; }
+  if (platform !== 'custom' && !key){ wizMsg('Paste your stream key to continue.', 'err'); return false; }
+  return true;
+}
+
+function wizMsg(text, kind){ $('w-msg').innerHTML = `<span class="${kind || ''}">${text}</span>`; }
+function clearWizMsg(){ $('w-msg').innerHTML = ''; }
+
+// A tiny critically-damped spring driving one scalar (px height). Springs are
+// interruptible and velocity-aware by nature: re-targeting mid-flight keeps the
+// live position AND velocity, so a rapid open/close reverses without the
+// "brick wall" a re-started CSS ease produces (velocity snaps to 0 there).
+// Damping ratio is fixed at 1.0 - no overshoot, because a click that just
+// revealed a panel carried no momentum to justify a bounce (Apple, Designing
+// Fluid Interfaces). `response` is the settle feel in seconds, not a duration.
+function makeSpring(onFrame, response){
+  const w = 2 * Math.PI / response;   // natural frequency; zeta = 1 (critical)
+  let value = 0, velocity = 0, target = 0, raf = 0, last = 0;
+  function frame(now){
+    let dt = (now - last) / 1000; last = now;
+    if (dt > 0.064) dt = 0.064;       // clamp after a tab stall / dropped frames
+    const steps = Math.max(1, Math.ceil(dt / 0.008));  // substeps keep it stable
+    const h = dt / steps;
+    for (let i = 0; i < steps; i++){
+      velocity += (-w * w * (value - target) - 2 * w * velocity) * h;
+      value += velocity * h;
+    }
+    if (Math.abs(value - target) < 0.3 && Math.abs(velocity) < 2){
+      value = target; velocity = 0; raf = 0; onFrame(value, true); return;
+    }
+    onFrame(value, false);
+    raf = requestAnimationFrame(frame);
+  }
+  return {
+    set(v){ value = v; },
+    to(t){ target = t; if (!raf){ last = performance.now(); raf = requestAnimationFrame(frame); } },
+    get active(){ return !!raf; }
+  };
+}
+
+// Reusable disclosure reveal. Upgrades any <details class="ic-disclose"> into a
+// spring-animated collapsible while keeping native keyboard + screen-reader
+// semantics. The wrapping "sleeve" height is spring-driven (interruptible,
+// velocity-carrying); the padded body rides a composited opacity + translateY.
+// The native <details> is pinned open so content is always mounted and
+// measurable; the `is-open` class drives the visual state and the arrow.
+const DISC_RESPONSE = 0.34;   // spring settle feel, seconds (see makeSpring)
+
+function wireDisclosure(det){
+  if (det._wired) return;
+  const summary = det.querySelector(':scope > summary');
+  const body = summary && summary.nextElementSibling;
+  if (!summary || !body) return;
+  det._wired = true;
+  det.classList.add('disc-ready');   // marks it as spring-managed (see CSS fallback)
+
+  const sleeve = document.createElement('div');
+  sleeve.className = 'disc-sleeve';
+  body.parentNode.insertBefore(sleeve, body);
+  sleeve.appendChild(body);
+
+  const startOpen = det.hasAttribute('open');
+  det.open = true;                                    // keep content mounted
+  det.classList.toggle('is-open', startOpen);
+  summary.setAttribute('aria-expanded', String(startOpen));
+  sleeve.style.height = startOpen ? 'auto' : '0px';
+
+  const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Natural height without a visible flash: swap to auto, read, restore.
+  // Layout read only, no paint between, so nothing flickers.
+  function naturalHeight(){
+    const prev = sleeve.style.height;
+    sleeve.style.height = 'auto';
+    const h = sleeve.getBoundingClientRect().height;
+    sleeve.style.height = prev;
+    return h;
+  }
+
+  const spring = makeSpring((v, done) => {
+    // When fully settled open, release to `auto` so later reflow (font swap,
+    // rewrap, resize) is never clipped to a stale pixel height.
+    if (done && det.classList.contains('is-open')) sleeve.style.height = 'auto';
+    else sleeve.style.height = Math.max(0, v) + 'px';
+  }, DISC_RESPONSE);
+
+  function toggle(){
+    const open = !det.classList.contains('is-open');
+    det.classList.toggle('is-open', open);
+    summary.setAttribute('aria-expanded', String(open));
+    if (reduced()){ sleeve.style.height = open ? 'auto' : '0px'; return; }
+    // Only re-seed the spring's value from the DOM when it's at rest (e.g.
+    // height was 'auto'); mid-flight we leave value/velocity intact so the
+    // reversal carries momentum instead of jumping.
+    if (!spring.active) spring.set(sleeve.getBoundingClientRect().height);
+    spring.to(open ? naturalHeight() : 0);
+  }
+  det._toggle = toggle;
+
+  summary.addEventListener('click', (e) => { e.preventDefault(); toggle(); });
+}
+
+function wireAllDisclosures(root){
+  (root || document).querySelectorAll('details.ic-disclose').forEach(wireDisclosure);
+}
+
+// Programmatic open/close (e.g. an inline "details" link). Wires on demand.
+function toggleDisclosure(id){
+  const det = document.getElementById(id);
+  if (!det) return;
+  wireDisclosure(det);
+  det._toggle();
+}
+
 function fillWizardPlatforms(){
   const sel = $('w-platform'); sel.innerHTML = '';
+  const tiles = $('w-platform-tiles'); if (tiles) tiles.innerHTML = '';
   // The test sink is excluded here on purpose: the wizard writes the
   // legacy single-destination config (which requires a key), and its
   // job is wiring your REAL platform. The sink lives in Destinations.
-  platforms.filter(p => p.slug !== 'sink')
-    .forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.label; sel.appendChild(o); });
+  platforms.filter(p => p.slug !== 'sink').forEach((p, idx) => {
+    const o = document.createElement('option');
+    o.value = p.slug; o.textContent = p.label; sel.appendChild(o);
+    if (!tiles) return;
+    // A tile drives the hidden select: set value + dispatch 'change' so
+    // every existing listener (custom reveal, key help) fires unchanged.
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'w-ptile'; b.dataset.slug = p.slug;
+    b.setAttribute('role', 'radio');
+    b.style.setProperty('--dc', PLATFORM_COLOR[p.slug] || 'var(--line-2)');
+    // Staggered entrance when the platform step appears.
+    b.style.animationDelay = (idx * 40) + 'ms';
+    b.innerHTML = `<span class="w-ptile-check" aria-hidden="true">✓</span>`
+      + `<span class="w-ptile-badge">${PLATFORM_INITIAL[p.slug] || '·'}</span>`
+      + `<span class="w-ptile-label"></span>`;
+    b.querySelector('.w-ptile-label').textContent = p.label;
+    b.addEventListener('click', () => {
+      sel.value = p.slug; sel.dispatchEvent(new Event('change'));
+    });
+    tiles.appendChild(b);
+  });
   if (!sel._wired){
     sel._wired = true;
     sel.addEventListener('change', () => {
@@ -3781,11 +4609,37 @@ function fillWizardPlatforms(){
       const optHint = $('w-key-optional-hint');
       if (optHint) optHint.hidden = !isCustom;
       renderKeyHelp(sel.value, 'w-key-help');
+      syncWizPlatformTiles();
+      // Re-render the step chrome: changing to/from Twitch adds or drops
+      // the Twitch step, so the progress bar and Next label must update.
+      if (!$('wizard').hidden) renderWizStep();
+    });
+    // VOD-audio opt-in reveals its OBS how-to inline.
+    const vod = $('w-vod-audio');
+    if (vod) vod.addEventListener('change', () => { $('w-vod-how').hidden = !vod.checked; });
+    // Enter in the key field advances, like a real form.
+    const keyInput = $('w-key');
+    if (keyInput) keyInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter'){ e.preventDefault(); wizNext(); }
     });
   }
   const optHint = $('w-key-optional-hint');
   if (optHint) optHint.hidden = sel.value !== 'custom';
   renderKeyHelp(sel.value, 'w-key-help');
+  syncWizPlatformTiles();
+}
+
+// Reflect the hidden select's value onto the tiles. Driven by the
+// select's 'change' event, so tile clicks, the initial config load, and
+// any programmatic set all keep the highlight correct.
+function syncWizPlatformTiles(){
+  const sel = $('w-platform'); const tiles = $('w-platform-tiles');
+  if (!tiles) return;
+  tiles.querySelectorAll('.w-ptile').forEach(b => {
+    const on = b.dataset.slug === sel.value;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
 }
 
 // First-run OBS-service registration card in the wizard. Renders the
@@ -3801,6 +4655,10 @@ async function refreshWizObsStatus(){
   if (!btn || !status) return;
   try {
     const r = await (await fetch('/obs/register-status')).json();
+    // "Close OBS first" only matters when OBS is actually running AND we still
+    // need to register (a running OBS overwrites services.json on exit).
+    const closeWarn = $('wiz-obs-close-warn');
+    if (closeWarn) closeWarn.hidden = !(r.obs_running && !r.registered);
     if (r.path === null){
       status.innerHTML = '<span style="color:var(--warn,#d6a23a)">⚠ OBS not detected on this machine - use the Custom RTMP card on the right.</span>';
       btn.disabled = true;
@@ -3810,12 +4668,12 @@ async function refreshWizObsStatus(){
     }
     btn.disabled = false;
     if (r.registered){
-      status.innerHTML = '<span style="color:var(--live)">✓ Registered.</span> Restart OBS, then choose <b>InstantClone</b> from Settings → Stream → Service.';
+      status.innerHTML = '<span style="color:var(--live)">✓ Registered.</span> Reopen OBS, then choose <b>InstantClone</b> from Settings → Stream → Service.';
       btn.textContent = 'Unregister';
       btn.className = 'ic-btn ic-btn-ghost';
       btn.onclick = wizUnregisterObs;
     } else {
-      status.textContent = "We'll add an InstantClone entry to OBS's service list - one click, no restart needed before clicking.";
+      status.textContent = "We'll add an InstantClone entry to OBS's service list.";
       btn.textContent = 'Register with OBS';
       btn.className = 'ic-btn ic-btn-primary';
       btn.onclick = wizRegisterObs;
@@ -3824,6 +4682,12 @@ async function refreshWizObsStatus(){
     status.textContent = "Couldn't query OBS - the Custom RTMP card on the right also works.";
   }
 }
+// Re-check OBS's running state when the window regains focus - e.g. the user
+// alt-tabbed to OBS and closed it - so the "close OBS first" note clears itself.
+window.addEventListener('focus', () => {
+  const wiz = $('wizard');
+  if (wiz && !wiz.hidden && wizCurrent === 'obs') refreshWizObsStatus();
+});
 async function wizRegisterObs(){
   const btn = $('wiz-obs-register-btn');
   if (btn) btn.disabled = true;
@@ -3851,6 +4715,23 @@ async function wizUnregisterObs(){
 // tip). For Kick we mark the tip as a warning because its no-B-frames
 // rule is the kind of thing that drops the stream silently - worth a
 // visual nudge, not just plain grey text.
+// Break a long single-string platform tip into breathable paragraphs at
+// sentence boundaries (~130+ chars each), so a 700-char wall like Twitch's
+// transcoding note reads as a few short paragraphs instead of one slab.
+// Short tips pass through untouched.
+function formatTip(tip){
+  const t = (tip || '').trim();
+  if (t.length <= 220) return `<p>${t}</p>`;
+  const sentences = t.split(/(?<=\.)\s+(?=[A-Z])/);
+  const paras = []; let buf = '';
+  for (const s of sentences){
+    buf = buf ? buf + ' ' + s : s;
+    if (buf.length >= 130){ paras.push(buf); buf = ''; }
+  }
+  if (buf) paras.push(buf);
+  return paras.map(s => `<p>${s}</p>`).join('');
+}
+
 function renderKeyHelp(slug, hostId){
   const host = document.getElementById(hostId);
   if (!host) return;
@@ -3879,12 +4760,13 @@ function renderKeyHelp(slug, hostId){
     parts.push(`
       <details class="ic-disclose w-key-disclose"${isKick || isSink ? ' open' : ''}>
         <summary class="${cls}">${label}</summary>
-        <div class="ic-disclose-body">${p.tip}</div>
+        <div class="ic-disclose-body">${formatTip(p.tip)}</div>
       </details>
     `);
   }
   host.innerHTML = parts.join('');
   host.hidden = false;
+  wireAllDisclosures(host);   // freshly injected <details> need the spring wiring
 }
 
 // Wizard escape hatch. Reveals the dashboard without writing any
@@ -3912,20 +4794,36 @@ function skipWizard(){
 
 async function saveWizard(){
   const platform = $('w-platform').value, key = $('w-key').value.trim(), custom = $('w-custom').value.trim();
-  if (platform !== 'custom' && !key){ $('w-msg').innerHTML = '<span class="err">Stream key required.</span>'; return; }
-  if (platform === 'custom' && !custom){ $('w-msg').innerHTML = '<span class="err">Custom RTMP URL required.</span>'; return; }
-  const body = new URLSearchParams({platform, stream_key:key, custom_egress_url:custom});
-  const j = await(await fetch('/config',{method:'POST',body})).json();
-  if (j.ok){ $('w-msg').innerHTML = '<span class="ok">Saved - starting up…</span>'; setTimeout(loadConfig, 500); }
-  else $('w-msg').innerHTML = '<span class="err">'+j.error+'</span>';
-}
-async function testConn(){
-  const platform = $('w-platform').value, key = $('w-key').value || '', custom = $('w-custom').value || '';
-  if (key || custom) await fetch('/config',{method:'POST', body:new URLSearchParams({platform, stream_key:key, custom_egress_url:custom})});
-  const r = await(await fetch('/test-egress',{method:'POST'})).json();
-  if (r.ok) toast('Reached '+r.message,'ok'); else toast('Failed: '+(r.error||'?'),'err');
+  // Defensive: the key step validates before you can reach Save, but if we
+  // ever land here empty, bounce back to that step rather than erroring.
+  if ((platform !== 'custom' && !key) || (platform === 'custom' && !custom)){
+    wizCurrent = 'key'; renderWizStep();
+    wizMsg(platform === 'custom' ? 'Enter your custom RTMP URL to continue.' : 'Paste your stream key to continue.', 'err');
+    return;
+  }
+  const params = {platform, stream_key:key, custom_egress_url:custom};
+  // The Twitch step's VOD-audio choice rides along on the same save.
+  if (platform === 'twitch') params.vod_audio = $('w-vod-audio').checked ? 'on' : 'off';
+  const btn = $('wiz-next'); if (btn){ btn.disabled = true; }
+  const j = await(await fetch('/config',{method:'POST',body:new URLSearchParams(params)})).json();
+  if (j.ok){ wizMsg('Saved - starting up…', 'ok'); nudgeObsWiringIfNeeded(); setTimeout(loadConfig, 500); }
+  else { if (btn) btn.disabled = false; wizMsg(j.error, 'err'); }
 }
 
+// Soft catch for the beginner who breezed past the OBS step: if OBS still isn't
+// wired to InstantClone when the wizard finishes, remind them how - never a
+// blocker. A registered user already saw "restart OBS + pick InstantClone", so
+// only the not-registered case (the actual silent dead-end onto OFFLINE) nudges.
+async function nudgeObsWiringIfNeeded(){
+  try {
+    const r = await (await fetch('/obs/register-status')).json();
+    if (r.registered) return;
+    const how = (r.path === null)
+      ? 'In OBS → Settings → Stream: Service = Custom, Server = rtmp://127.0.0.1:1935/live, then restart OBS.'
+      : 'In OBS → Settings → Stream, pick InstantClone (or Custom: rtmp://127.0.0.1:1935/live), then restart OBS.';
+    toast('One more step to go live: point OBS at InstantClone. ' + how, 'info', 11000);
+  } catch(_){ /* status endpoint unreachable; the first-run tour still covers OBS wiring */ }
+}
 function flashFieldErrors(message){
   $$('input.field-error').forEach(el => el.classList.remove('field-error'));
   if (!message) return;
@@ -3939,7 +4837,38 @@ function flashFieldErrors(message){
   });
 }
 
+// - LAN exposure warning -----------------------─
+// The two toggles carry different risks, so say the one that applies:
+// the web UI is an unauthenticated control surface, while the ingest port
+// lets anyone on the network publish into the buffer. Both default off,
+// and this stays hidden until one is actually ticked.
+function renderLanWarning(){
+  const web = $('s-wbind').checked;
+  const ingest = $('s-ibind').checked;
+  const parts = [];
+  if (web) parts.push('The web UI has no password - anyone on your network can change the delay, cut, and edit destinations.');
+  if (ingest) parts.push('The ingest port accepts any stream key, so anyone on your network can publish into your buffer.');
+  const on = parts.length > 0;
+  $('lan-warn').hidden = !on;
+  if (on) $('lan-warn-text').textContent = parts.join(' ') + ' Only enable on a network you trust.';
+}
+
 let _savingSettings = false;
+// Overlays folder lives on the Overlay tab now, so it saves itself rather
+// than riding the System tab's Save button. POSTs just overlays_dir and
+// refreshes the gallery from the new location.
+async function saveOverlaysDir(btn){
+  const dir = $('s-ovdir').value.trim();
+  const label = btn && btn.textContent;
+  if (btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const j = await (await fetch('/config', {method:'POST', body:new URLSearchParams({overlays_dir:dir})})).json();
+    if (j.ok){ toast('Overlays folder saved', 'ok'); await loadConfig(); if (typeof loadOverlays === 'function') loadOverlays(); }
+    else toast(`Couldn't save: ${j.error}`, 'err');
+  } catch(e){ toast('Save failed - the app may have stopped responding', 'err'); }
+  finally { if (btn){ btn.disabled = false; btn.textContent = label || 'Save'; } }
+}
+
 async function saveSettings(){
   if (_savingSettings) return; // guard against a double-click double-POST
   const btn = document.querySelector('#sys-foot .ic-btn-primary');
@@ -3949,8 +4878,10 @@ async function saveSettings(){
     ingest_bind_all:$('s-ibind').checked?'on':'off',
     web_bind_all:$('s-wbind').checked?'on':'off',
     discord_webhook_url:$('s-webhook').value.trim(),
-    overlays_dir:$('s-ovdir').value.trim(),
     tracing_enabled:$('s-trace').checked?'true':'false',
+    start_with_windows:$('s-startup').checked?'on':'off',
+    open_dashboard_on_launch:$('s-open-dash').checked?'true':'false',
+    update_check_enabled:$('s-update-check').checked?'true':'false',
     auto_arm_on_connect:$('s-auto-arm').checked?'true':'false',
     auto_activate_when_ready:$('s-auto-act').checked?'true':'false',
     auto_arm_delay_ms:String(Math.max(1, Math.min(600, parseInt($('s-auto-arm-secs').value,10)||15)) * 1000),
@@ -3981,7 +4912,7 @@ async function testWebhook(){
   else toast(`Webhook test failed: ${r.error || 'no response from Discord'}`, 'err');
 }
 
-// ── OBS service registration ─────────────────────────────────────────
+// - OBS service registration --------------------─
 // Patches OBS's services.json so InstantClone shows up in the Service
 // dropdown like Twitch/YouTube. Polls /obs/register-status on System-tab
 // activation so the button + status reflect whatever the user last did
@@ -4040,7 +4971,7 @@ async function toggleObsRegister(){
   await refreshObsRegisterStatus();
 }
 
-// ── Phase C: Launch OBS with --config-url ────────────────────────────
+// - Phase C: Launch OBS with --config-url --------------
 // Spawns obs64.exe with the Enhanced Broadcasting CLI flag. The user
 // has to use this every time they want EB on a Custom RTMP setup,
 // since OBS only reads --config-url at launch and rtmp_custom's
@@ -4125,7 +5056,7 @@ async function refreshObsEbLaunchAvailability(){
   } catch(_){}
 }
 
-// ── System tab: OBS quick launch ──────────────────────────────────────
+// - System tab: OBS quick launch -------------------
 // EB / VOD+EB launchers that work without opening any destination's
 // settings. They reuse the same backend endpoints as the destination
 // form; the only extra logic is the VOD+EB pre-step that persists
@@ -4228,7 +5159,7 @@ async function sysLaunchVodEb(){
   btn.disabled = false;
 }
 
-// ── Reset settings / Reset everything ────────────────────────────────
+// - Reset settings / Reset everything ----------------
 // Two-step destructive flow. The "settings" scope is recoverable in
 // practice (the user can just re-enter their port/buffer/webhook
 // values) so a single click-through is fine. The "all" scope wipes
@@ -4327,7 +5258,7 @@ async function confirmResetModal(){
   }
 }
 
-// ── Overlay Studio ────────────────────────────────────────────────────
+// - Overlay Studio --------------------------
 // A no-code editor for browser-source overlays. The heavy lifting lives
 // in /overlay-runtime.js (window.ICOverlay): widget catalogue, animation
 // library, and bake(doc)->self-contained static HTML. The Studio canvas
@@ -4597,7 +5528,7 @@ const Studio = (function(){
     h+='<button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.deleteFromGallery(\''+o.slug+'\')">Delete</button>';
     act.innerHTML=h;
   }
-  function copyGallery(){ if(gsel) copyText(selUrl(),'Overlay URL'); }
+  function copyGallery(btn){ if(gsel) copyText(btn, selUrl(),'Overlay URL'); }
   // Restore the built-in overlays: wipe the Studio overlays + re-seed presets.
   async function restoreDefaults(){
     if(!confirm('Restore default overlays?\n\nThis DELETES ALL your Studio overlays (the presets and anything you made) and reinstalls the built-in set. Hand-written .html files are kept.\n\nThis cannot be undone.')) return;
@@ -5137,7 +6068,7 @@ const Studio = (function(){
       else { toast(j.error||'Save failed','err'); slug=null; }
     }catch(e){ toast('Save failed','err'); slug=null; }
   }
-  function copyUrl(){ if(!slug){ toast('Save the overlay first to get a URL','info'); return; } copyText(location.origin+'/overlay/'+slug+'.html','Overlay URL'); }
+  function copyUrl(btn){ if(!slug){ toast('Save the overlay first to get a URL','info'); return; } copyText(btn, location.origin+'/overlay/'+slug+'.html','Overlay URL'); }
   // ---- overflow menu: save-as / rename / export / import / delete ----
   function toggleMenu(ev){ ev.stopPropagation(); const p=$('st-menu-pop'); if(p) p.hidden=!p.hidden; }
   // Save a separate copy under a new slug (so it never overwrites the current
@@ -5241,10 +6172,61 @@ const Studio = (function(){
 // early calls no-op. The Studio loads its own saved list in init().
 function loadOverlays(){ try { if(window.ICOverlay) Studio.loadSaved(); } catch(_){} }
 
-function copyEl(id, label){ navigator.clipboard.writeText($(id).textContent); toast((label||'Value')+' copied','ok'); }
-function copyText(text, label){ navigator.clipboard.writeText(text); toast((label||'Value')+' copied','ok'); }
+// Turn the clicked button into its own confirmation: "Copy" -> "✓ Copied"
+// for ~1.5s. Immediate, on-the-thing-you-touched feedback beats a detached
+// toast. The button is passed in explicitly (callers forward `this` from the
+// inline handler) rather than read from the deprecated global `window.event`.
+const COPIED_HTML = '<span class="cp-ico" aria-hidden="true">✓</span><span>Copied</span>';
 
-// ── Logs ──────────────────────────────────────────────────────────────
+// Pin a copy button's width to the wider of its "Copy" / "Copied" states so the
+// label swap can never resize it or knock it onto a new line. Measured once,
+// lazily, with a hidden probe while the button is on-screen (tab-hidden buttons
+// would measure 0). Runs before the first swap, so even that first click is
+// shift-free.
+function reserveCopyWidth(btn){
+  if (btn._copyW != null) return;
+  const cur = btn.getBoundingClientRect().width;
+  if (!cur) return;                     // hidden (inactive tab) - defer to a later click
+  const probe = btn.cloneNode(false);
+  probe.removeAttribute('id');
+  probe.innerHTML = COPIED_HTML;
+  probe.style.cssText += ';position:absolute;left:-9999px;top:0;visibility:hidden;min-width:0;pointer-events:none';
+  (btn.parentNode || document.body).appendChild(probe);
+  btn._copyW = Math.max(cur, probe.getBoundingClientRect().width);
+  probe.remove();
+  btn.style.minWidth = btn._copyW + 'px';
+}
+
+// Reserve every copy button that's currently on-screen, so its width is locked
+// before the first click - no one-time widen on the "Copy" -> "Copied" swap.
+// Idempotent and skips off-screen (0-width) buttons, so it's safe to call on
+// every tab switch / wizard render; hidden tabs get reserved when shown.
+function reserveCopyButtons(root){
+  (root || document).querySelectorAll('.ic-btn[onclick*="copy"]').forEach(reserveCopyWidth);
+}
+
+function flashCopied(btn){
+  // Tolerate an element or an event (defensive: an inline handler that passed
+  // `event` still resolves to its button) and no-op if neither yields one.
+  if (btn && !(btn instanceof Element) && btn.currentTarget) btn = btn.currentTarget;
+  if (!(btn instanceof Element)) return;
+  btn = btn.closest('.ic-btn');
+  if (!btn) return;
+  if (btn._copyT) clearTimeout(btn._copyT);
+  if (btn._copyHTML == null) btn._copyHTML = btn.innerHTML;
+  reserveCopyWidth(btn);                // lock footprint before the swap
+  btn.classList.add('is-copied');
+  btn.innerHTML = COPIED_HTML;
+  btn._copyT = setTimeout(() => {
+    if (btn._copyHTML != null){ btn.innerHTML = btn._copyHTML; btn._copyHTML = null; }
+    btn.classList.remove('is-copied');
+    btn._copyT = null;
+  }, 1500);
+}
+function copyEl(btn, id, label){ navigator.clipboard.writeText($(id).textContent); flashCopied(btn); }
+function copyText(btn, text, label){ navigator.clipboard.writeText(text); flashCopied(btn); }
+
+// - Logs -------------------------------
 async function pollLogs(){
   try {
     const j = await (await fetch('/logs')).json();
@@ -5271,7 +6253,7 @@ async function clearLogs(){
   if (empty) empty.hidden = false;
   toast('Logs cleared','info');
 }
-// ── Spotlight onboarding tour ─────────────────────────────────────────
+// - Spotlight onboarding tour --------------------─
 // Each step optionally points at a real DOM element. The SVG mask
 // punches a hole over it, the tooltip floats next to it. Steps with
 // `tab` switch tabs first. Steps with `target: null` show a centered
@@ -5339,22 +6321,25 @@ const TOUR = [
     side: 'top', tab: 'destinations',
     title: 'Destinations',
     body: `
-      <p>Each platform you add gets its own card with a coloured left stripe (Twitch purple, YouTube rose, Kick mint…), a live bitrate sparkline, and a status pill. Hit <b>+ Add destination</b> to create one.</p>
-      <p>Stream keys are <b>per-destination</b>. OBS uses a simple stream identifier, the real platform keys live here.</p>
-      <p><b>Horizontal or vertical?</b> Every card has a small <b>format icon</b> next to its status - hover it to see whether that destination sends <b>horizontal</b> (wide), <b>vertical</b> 9:16, or <b>both</b> (Twitch, via Dual Format). Set any non-Twitch destination to <b>Vertical</b> to reuse Twitch's 9:16 canvas for YouTube Shorts / Kick mobile.</p>
-      <p>InstantClone standardizes on <b>Twitch Dual Format</b> as its vertical source: set it up once in OBS and every vertical destination reuses that same 9:16 canvas. Vertical only flows while <b>Dual Format / Enhanced Broadcasting</b> is on, and the card shows <b>Waiting for Dual Format</b> until then. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Twitch Dual Format →</a></p>
-      <div class="tour-tip"><strong>Streaming vs Connected:</strong> Streaming = bytes flowing. Connected = TCP up but OBS hasn't sent a frame yet.</div>
+      <p>Every platform you add gets a colour-coded card with a live bitrate sparkline and a status pill. Hit <b>+ Add destination</b> to create one.</p>
+      <p>Stream keys are <b>per-destination</b> and live here - OBS only needs a placeholder identifier.</p>
+      <details class="ic-disclose">
+        <summary>Vertical (9:16) for Shorts / mobile</summary>
+        <div class="ic-disclose-body">
+          <p>Set any non-Twitch destination to <b>Vertical</b> and it reuses Twitch's Dual Format 9:16 canvas - one setup in OBS feeds every vertical destination. The card reads <b>Waiting for Dual Format</b> until Enhanced Broadcasting is on. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">Set up Dual Format →</a></p>
+        </div>
+      </details>
+      <div class="tour-tip"><strong>Streaming vs Connected:</strong> Streaming = bytes flowing. Connected = TCP up, but OBS hasn't sent a frame yet.</div>
     `,
   },
   {
     target: '.tab[data-tab="obs"]', side: 'bottom', tab: 'obs',
     title: 'Wire OBS to InstantClone',
     body: `
-      <p>Two ways - pick whichever fits your setup.</p>
-      <p><b>Recommended - one click:</b> hit <b>Register with OBS</b> on this tab. InstantClone shows up next to Twitch / YouTube in OBS's <b>Settings → Stream → Service</b> dropdown. Restart OBS once, pick <b>InstantClone</b>, set Stream Key to anything (we suggest <code>main</code>), and hit <b>Start Streaming</b>. Multi-track Video "Auto" works out of the box.</p>
-      <p><b>Fallback - Custom RTMP:</b> if you're on older OBS, using a multi-RTMP plugin, or a non-OBS encoder, use the Server URL + key shown below this section instead - Service: <b>Custom…</b>.</p>
-      <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you press <b>Start Streaming</b> in your encoder, the dashboard stays <b>OFFLINE</b> and the OBS pill at the top reads "Offline" - that's expected, not a setup mistake.</p>
-      <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just an internal label here. Your real Twitch / YouTube / Kick keys go in the <b>Destinations</b> tab - that's what actually reaches the platforms.</div>
+      <p><b>Recommended:</b> hit <b>Register with OBS</b>. InstantClone appears in OBS's <b>Settings → Stream → Service</b> list - restart OBS once, pick it, set any Stream Key (we suggest <code>main</code>), and Start Streaming.</p>
+      <p><b>Fallback:</b> on older OBS, a multi-RTMP plugin, or a non-OBS encoder, use the Server URL + key shown below with Service: <b>Custom…</b>.</p>
+      <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you Start Streaming, the dashboard reads <b>OFFLINE</b> - that's expected, not a mistake.</p>
+      <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just a label here. Your real platform keys live in <b>Destinations</b>.</div>
     `,
   },
   {
@@ -5545,7 +6530,8 @@ async function downloadLogs(){
   } catch(e){ toast('Download failed: '+e,'err'); }
 }
 
-// ── Tabs ──────────────────────────────────────────────────────────────
+// - Tabs -------------------------------
+let _tabIdx = -1;   // index of the current tab, for slide direction (see showTab)
 function showTab(name){
   // Guard unsaved Studio edits: switching away from the Overlay tab hides the
   // editor and abandons the in-progress doc, so confirm first.
@@ -5555,8 +6541,24 @@ function showTab(name){
       if (!confirm('You have unsaved overlay changes. Leave the Studio and discard them?')) return;
     }
   }
+  // Direction of travel across the tab strip, so the pane slides in from the
+  // side you moved toward. -1 (unseen) on first switch => no slide, just fade.
+  const tabEls = $$('.tab');
+  const newIdx = tabEls.findIndex(t => t.dataset.tab === name);
+  const dir = (_tabIdx < 0 || newIdx < 0) ? 0 : Math.sign(newIdx - _tabIdx);
+  if (newIdx >= 0) _tabIdx = newIdx;
+  const incoming = document.querySelector(`.tab-pane[data-pane="${name}"]`);
+  if (incoming) incoming.style.setProperty('--pane-dx', dir === 0 ? '0px' : (dir > 0 ? '20px' : '-20px'));
+
+  // Capture the card height BEFORE the swap so we can tween it to the new
+  // pane's height (panes vary; without this the card snaps taller/shorter).
+  const card = document.querySelector('.pane-card');
+  const reduceMo = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const cardH0 = (card && !reduceMo) ? card.offsetHeight : null;
+
   $$('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === name));
   $$('.tab-pane').forEach(p => p.hidden = p.dataset.pane !== name);
+  if (card && cardH0 != null) morphCardHeight(card, cardH0);
   moveTabInd();
   if (name === 'obs') refreshObsRegisterStatus();
   if (name === 'overlay' && window.ICOverlay) Studio.show();
@@ -5565,7 +6567,7 @@ function showTab(name){
   // Sub-tab indicators only have a real width after the pane unhides,
   // so reposition any sub-tab indicator inside the freshly shown pane.
   const pane = document.querySelector(`.tab-pane[data-pane="${name}"]`);
-  if (pane) moveSubTabInd(pane);
+  if (pane){ moveSubTabInd(pane); reserveCopyButtons(pane); }
 }
 function moveTabInd(){
   const cur = document.querySelector('.tab.on'); if (!cur) return;
@@ -5573,10 +6575,36 @@ function moveTabInd(){
   ind.style.left = cur.offsetLeft + 'px';
   ind.style.width = cur.offsetWidth + 'px';
 }
+
+// Tween the pane card from its previous height (h0) to the new pane's natural
+// height, so switching between panes of different length morphs instead of
+// snapping. Height is a layout property, but this is one short click-driven
+// transition (not per-frame), and .pane-card clips overflow during it so no
+// scrollbar flashes. Interruptible: a rapid re-switch re-targets from the
+// live height. Releases back to `auto` on finish so dynamic content (logs,
+// stats) can still grow the card afterwards.
+function morphCardHeight(card, h0){
+  card.style.height = 'auto';
+  const h1 = card.offsetHeight;              // new pane's clamped natural height
+  if (h1 === h0){ card.style.height = ''; return; }
+  card.style.overflow = 'hidden';
+  card.style.height = h0 + 'px';
+  void card.offsetHeight;                     // lock the start before transitioning
+  card.style.transition = 'height .28s var(--ease-out)';
+  card.style.height = h1 + 'px';
+  if (card._morphDone) card.removeEventListener('transitionend', card._morphDone);
+  card._morphDone = (e) => {
+    if (e.propertyName !== 'height' || e.target !== card) return;
+    card.style.transition = ''; card.style.height = ''; card.style.overflow = '';
+    card.removeEventListener('transitionend', card._morphDone);
+    card._morphDone = null;
+  };
+  card.addEventListener('transitionend', card._morphDone);
+}
 $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
 window.addEventListener('resize', moveTabInd);
 
-// ── Sub-tabs (currently only the System pane uses these) ──────────────
+// - Sub-tabs (currently only the System pane uses these) -------
 function showSubTab(paneName, subName){
   const pane = document.querySelector(`.tab-pane[data-pane="${paneName}"]`);
   if (!pane) return;
@@ -5628,7 +6656,7 @@ window.addEventListener('resize', () => {
   });
 })();
 
-// ── About sub-tab: version + update check ─────────────────────────────
+// - About sub-tab: version + update check --------------─
 let aboutAutoCheckedOnce = false;
 function aboutMaybeAutoCheck(){
   if (aboutAutoCheckedOnce) return;
@@ -5704,6 +6732,13 @@ async function aboutCheckUpdate(silent){
 let _updating = false;
 async function applyUpdate(){
   if (_updating) return;
+  // Applying an update restarts the exe, which tears down every egress -
+  // same live-stream drop the tray Quit guards against. Confirm only while
+  // OBS is actually publishing; when nothing is live this stays one click.
+  if (lastState && lastState.ingest_alive &&
+      !confirm('OBS is streaming through InstantClone right now. Updating restarts the app and drops every destination.\n\nUpdate anyway?')){
+    return;
+  }
   const upd = $('sys-about-update-btn');
   const chk = $('sys-about-check-btn');
   const msg = $('sys-about-msg');
@@ -5771,7 +6806,7 @@ async function reveal(what, btn){
   } catch(_){ toast('Could not open Explorer','err'); }
 }
 
-// ── Tick / poll loop ──────────────────────────────────────────────────
+// - Tick / poll loop -------------------------
 // applyState() is the pure render side - used by both the poll path
 // and the SSE push path so we don't have two copies of the dashboard
 // reconciliation logic.
@@ -5808,15 +6843,14 @@ function applyState(s){
   if (Array.isArray(s.destinations) && lastDests.length > 0){
     s.destinations.forEach(sd => {
       const ld = lastDests.find(d => d.id === sd.id);
-      if (ld){
-        ld.alive = sd.alive;
-        ld.bitrate_kbps = sd.bitrate_kbps;
-        ld.tags_sent = sd.tags_sent;
-        ld.bytes_sent = sd.bytes_sent;
-        ld.cuts = sd.cuts;
-        ld.reconnects = sd.reconnects;
-        ld.enabled = sd.enabled;
-      }
+      // Copy whatever /state sends instead of a hand-maintained field list.
+      // The old whitelist silently froze any live field it didn't know
+      // about - both the Dual Format icon and the res/codec readout
+      // shipped broken that way, stuck at whatever was true when the page
+      // last fetched /destinations. Adding a field to /state now just
+      // works. Config-only fields (platform, stream_format, stream_key_set,
+      // url_redacted) aren't in /state, so they survive untouched.
+      if (ld) Object.assign(ld, sd);
     });
     rebuildDests();
   }
@@ -5868,6 +6902,10 @@ function startStateSSE(){
 // see a scary error pill for a passive nicety. Cached server-side for
 // 10 min so a F5 spree doesn't hammer GitHub.
 async function checkForUpdate(){
+  // Respect the opt-out. loadConfig() runs before this in init(), so
+  // lastConfig is populated; a missing field defaults to on. The manual
+  // "Check for updates" button bypasses this and always works.
+  if (lastConfig && lastConfig.update_check_enabled === false) return;
   try {
     const r = await (await fetch('/update-check')).json();
     if (!r || !r.update_available) return;
@@ -5889,6 +6927,8 @@ function openUpdateInAbout(){
 (async function init(){
   try { platforms = await (await fetch('/platforms')).json(); } catch(_){ platforms = []; }
   fillWizardPlatforms();
+  wireAllDisclosures();
+  reserveCopyButtons();
   wireChatDock();
   await loadConfig();
   refreshObsRegisterStatus();
