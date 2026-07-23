@@ -17,11 +17,7 @@
 <br/>
 <br/>
 
-<a href="https://youtu.be/y3aj88gTAOs"><img src="https://img.shields.io/badge/-%E2%96%B6%20Tutorial%20en%20v%C3%ADdeo-ff3b30?style=for-the-badge&labelColor=11141a"/></a>
-
-<br/>
-
-<sub>Tutorial de instalación y demostración de uso · audio en español, subtítulos en inglés</sub>
+<sub><a href="https://youtu.be/y3aj88gTAOs"><b>▶ Ver el tutorial</b></a> &nbsp;·&nbsp; audio en español, subtítulos en inglés</sub>
 
 <br/>
 <br/>
