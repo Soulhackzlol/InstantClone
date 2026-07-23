@@ -40,11 +40,12 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics,
-    GetWindowLongPtrW, LoadIconW, LookupIconIdFromDirectoryEx, PostMessageW, PostQuitMessage,
-    RegisterClassW, SetForegroundWindow, SetWindowLongPtrW, TrackPopupMenu, TranslateMessage,
-    GWLP_USERDATA, HMENU, IDI_APPLICATION, LR_DEFAULTCOLOR, MF_DISABLED, MF_GRAYED, MF_SEPARATOR,
-    MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
-    WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
+    GetWindowLongPtrW, LoadIconW, LookupIconIdFromDirectoryEx, MessageBoxW, PostMessageW,
+    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW, TrackPopupMenu,
+    TranslateMessage, GWLP_USERDATA, HMENU, IDI_APPLICATION, IDYES, LR_DEFAULTCOLOR,
+    MB_ICONWARNING, MB_YESNO, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON,
+    SM_CYSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY,
+    WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
 };
 
 const TRAY_MSG: u32 = WM_APP + 1;
@@ -273,6 +274,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     }
                 }
                 ID_QUIT => {
+                    // Quitting kills every egress, so if OBS is publishing
+                    // right now a stray click here drops the live stream.
+                    // Confirm in that case only - when nothing is streaming,
+                    // quit stays a single click.
+                    if state.ctrl.ingest_alive() && !confirm_quit_while_live(hwnd) {
+                        return 0;
+                    }
                     // Take the sender so a second click can't double-send.
                     // Ignore the Err: it just means the main task already shut
                     // down (race with ctrl-c) and dropped the receiver.
@@ -291,6 +299,23 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
+}
+
+/// Modal Yes/No shown when the user hits Quit while OBS is publishing.
+/// Returns true only if they confirm. Blocks the tray thread, which is
+/// fine - a tray click has nothing else in flight.
+unsafe fn confirm_quit_while_live(hwnd: HWND) -> bool {
+    let text = wide(
+        "OBS is streaming through InstantClone right now. Quitting stops the \
+         delay and drops every destination.\n\nQuit anyway?",
+    );
+    let title = wide("Quit InstantClone?");
+    MessageBoxW(
+        hwnd,
+        text.as_ptr(),
+        title.as_ptr(),
+        MB_YESNO | MB_ICONWARNING,
+    ) == IDYES
 }
 
 unsafe fn show_menu(hwnd: HWND) {

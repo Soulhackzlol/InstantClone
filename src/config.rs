@@ -57,16 +57,16 @@ pub struct Settings {
     pub buffer_path: PathBuf,
     pub target_delay_ms: u32,
     pub armed_delay_ms: u32,
-    pub initial_delay_ms: u32,
     pub configured: bool,
     pub profiles: Vec<DelayProfile>,
     pub destinations: Vec<Destination>,
     pub discord_webhook_url: String,
     pub overlays_dir: PathBuf,
     /// Whether the wire-level egress trace (instantclone-trace.log) is
-    /// actively writing. Default true so a fresh install captures
-    /// diagnostic data; toggleable in the System tab so users past the
-    /// debugging phase can stop the file from growing.
+    /// actively writing. Defaults to false (fresh installs ship it off);
+    /// toggleable in the System tab so users can turn it on when diagnosing
+    /// an issue, then off again so the file stops growing. Configs saved by
+    /// early betas with `tracing_enabled=true` are still honoured on load.
     pub tracing_enabled: bool,
     /// Behaviour: when OBS's RTMP publisher handshake completes, auto-arm
     /// the delay at `auto_arm_delay_ms`. Off by default - the
@@ -87,6 +87,18 @@ pub struct Settings {
     /// streamer hits Arm with a non-zero value) so "last used" sticks
     /// across sessions without a separate UI knob to maintain it.
     pub auto_arm_delay_ms: u32,
+    /// Whether the dashboard checks GitHub for a newer release on load.
+    /// Default true - the check is a passive nicety (cached 10 min
+    /// server-side, failures silent). Off for the privacy-minded or
+    /// air-gapped: it is the app's one routine outbound call, so it gets
+    /// an explicit opt-out in System -> About.
+    pub update_check_enabled: bool,
+    /// Whether a normal launch opens the dashboard in the browser. Default
+    /// true. Turning it off suits streamers who keep InstantClone running
+    /// in the tray (or autostart it) and don't want a tab every launch -
+    /// the same effect as the `--no-browser` CLI flag, but persisted and
+    /// reachable from the UI. The flag still forces suppression regardless.
+    pub open_dashboard_on_launch: bool,
     /// State: whether the built-in preset overlays have been seeded to the
     /// overlays folder as real files yet. Set true after the dashboard bakes
     /// them on first run, so deleting a seeded overlay doesn't bring it back.
@@ -276,7 +288,6 @@ impl Settings {
             buffer_path: PathBuf::from("./instantclone.buf"),
             target_delay_ms: 0,
             armed_delay_ms: 0,
-            initial_delay_ms: 0,
             configured: false,
             profiles: vec![
                 DelayProfile {
@@ -313,6 +324,11 @@ impl Settings {
             // auto_arm_on_connect without otherwise customising lands
             // on a familiar number.
             auto_arm_delay_ms: 15_000,
+            // Both default on: the update check is a convenience most users
+            // want, and opening the dashboard is the expected first-run
+            // behaviour. Each has an explicit opt-out in the System tab.
+            update_check_enabled: true,
+            open_dashboard_on_launch: true,
             // Fresh install hasn't seeded the preset overlays yet; the
             // dashboard does it on first load, then flips this true.
             overlays_seeded: false,
@@ -392,7 +408,6 @@ impl Settings {
         // Cap delay values to the same 10-minute ceiling the runtime uses.
         self.armed_delay_ms = self.armed_delay_ms.min(600_000);
         self.target_delay_ms = self.target_delay_ms.min(600_000);
-        self.initial_delay_ms = self.initial_delay_ms.min(600_000);
         // auto_arm_delay_ms is the value used when auto-arm fires. Clamp
         // to the same 10-minute ceiling; a 0 from a fresh install or a
         // hand-edited config falls back to the 15 s default so we never
@@ -495,7 +510,6 @@ impl Settings {
         writeln!(f, "buffer_mb={}", self.buffer_mb)?;
         writeln!(f, "buffer_path={}", self.buffer_path.display())?;
         writeln!(f, "target_delay_ms={}", self.target_delay_ms)?;
-        writeln!(f, "initial_delay_ms={}", self.initial_delay_ms)?;
         writeln!(f, "armed_delay_ms={}", self.armed_delay_ms)?;
         writeln!(f, "discord_webhook_url={}", self.discord_webhook_url)?;
         writeln!(f, "overlays_dir={}", self.overlays_dir.display())?;
@@ -513,6 +527,13 @@ impl Settings {
         }
         if self.auto_arm_delay_ms != 15_000 {
             writeln!(f, "auto_arm_delay_ms={}", self.auto_arm_delay_ms)?;
+        }
+        // Both default true, so only the opt-out is worth writing.
+        if !self.update_check_enabled {
+            writeln!(f, "update_check_enabled=false")?;
+        }
+        if !self.open_dashboard_on_launch {
+            writeln!(f, "open_dashboard_on_launch=false")?;
         }
         if self.overlays_seeded {
             writeln!(f, "overlays_seeded=true")?;
@@ -595,16 +616,13 @@ impl Settings {
                     self.armed_delay_ms = v;
                 }
             }
-            "initial_delay_ms" => {
-                if let Ok(v) = value.parse() {
-                    self.initial_delay_ms = v;
-                }
-            }
             "discord_webhook_url" => self.discord_webhook_url = value.into(),
             "overlays_dir" => self.overlays_dir = PathBuf::from(value),
             "tracing_enabled" => self.tracing_enabled = value.parse().unwrap_or(false),
             "auto_arm_on_connect" => self.auto_arm_on_connect = value == "true",
             "auto_activate_when_ready" => self.auto_activate_when_ready = value == "true",
+            "update_check_enabled" => self.update_check_enabled = value != "false",
+            "open_dashboard_on_launch" => self.open_dashboard_on_launch = value != "false",
             "overlays_seeded" => self.overlays_seeded = value == "true",
             "auto_arm_delay_ms" => {
                 if let Ok(v) = value.parse() {
@@ -774,7 +792,13 @@ impl Settings {
         self.buffer_mb * 1024 * 1024
     }
 
-    pub fn to_json(&self) -> String {
+    /// Serialize for the dashboard's `/config` fetch.
+    ///
+    /// `start_with_windows` is passed in rather than read here because it
+    /// does not live in `Settings` at all - the Run-key entry is its own
+    /// source of truth (see `crate::autostart`). Taking it as an argument
+    /// keeps this function free of hidden I/O.
+    pub fn to_json(&self, start_with_windows: bool) -> String {
         // Build the destinations array. Stream keys are NEVER echoed back
         // (security); we expose a redacted form of the resolved URL plus
         // a `stream_key_set` boolean per destination.
@@ -800,8 +824,9 @@ impl Settings {
         }
         dests.push(']');
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"initial_delay_ms":{id},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"destinations":{dests}}}"#,
             c = self.configured,
+            sww = start_with_windows,
             ip = self.ingest_port,
             iba = self.ingest_bind_all,
             wp = self.web_port,
@@ -809,7 +834,6 @@ impl Settings {
             bm = self.buffer_mb,
             bp = json_str(&self.buffer_path.display().to_string()),
             td = self.target_delay_ms,
-            id = self.initial_delay_ms,
             ou = json_str(&self.obs_url()),
             dw = json_str(&redact_webhook(&self.discord_webhook_url)),
             ws = !self.discord_webhook_url.is_empty(),
@@ -819,6 +843,8 @@ impl Settings {
             aawr = self.auto_activate_when_ready,
             aadm = self.auto_arm_delay_ms,
             os = self.overlays_seeded,
+            uce = self.update_check_enabled,
+            odol = self.open_dashboard_on_launch,
             dests = dests,
         )
     }
@@ -942,6 +968,23 @@ pub fn platform_base(slug: &str) -> Option<&'static str> {
         "restream" => "rtmp://live.restream.io/live",
         _ => return None,
     })
+}
+
+/// Human-facing name for a platform slug. Falls back to the slug itself so
+/// an unknown value still renders as something rather than blank. Kept
+/// beside `platform_base` because they describe the same table - a new
+/// platform needs an entry in both.
+pub fn platform_label(slug: &str) -> &'static str {
+    match slug {
+        "twitch" => "Twitch",
+        "youtube" => "YouTube",
+        "kick" => "Kick",
+        "trovo" => "Trovo",
+        "restream" => "Restream",
+        "custom" => "Custom RTMP",
+        "sink" => "Local test sink",
+        _ => "this destination",
+    }
 }
 
 /// Curated list of regional Twitch ingests. Slug → human label. The slug
@@ -1129,6 +1172,30 @@ fn url_decode(s: &str) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// `start_with_windows` is not a `Settings` field - it comes from the
+    /// registry via the caller. This guards the wire contract the dashboard
+    /// reads, which a signature change could otherwise drop silently.
+    #[test]
+    fn to_json_reflects_the_passed_autostart_state() {
+        let s = Settings::defaults();
+        assert!(s.to_json(true).contains(r#""start_with_windows":true"#));
+        assert!(s.to_json(false).contains(r#""start_with_windows":false"#));
+    }
+
+    #[test]
+    fn platform_label_covers_every_known_platform() {
+        // Any slug with an ingest base must also have a human label, or a
+        // compatibility warning would read "this destination expects 2s".
+        for slug in ["twitch", "youtube", "kick", "trovo", "restream"] {
+            assert!(platform_base(slug).is_some(), "{slug} lost its base");
+            assert_ne!(
+                platform_label(slug),
+                "this destination",
+                "{slug} is missing a label"
+            );
+        }
+    }
 
     #[test]
     fn parse_form_handles_basic_encoding() {
@@ -1499,6 +1566,59 @@ mod tests {
             loaded.overlays_seeded,
             "overlays_seeded must survive round-trip"
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn default_true_toggles_round_trip_when_disabled() {
+        // update_check_enabled and open_dashboard_on_launch both default
+        // true and are written only when turned off. Flipping them off must
+        // survive a save/load, or a privacy opt-out would silently revert.
+        let path = std::env::temp_dir().join(format!(
+            "ic-test-optout-roundtrip-{}-{}.ini",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let mut s = Settings::defaults();
+        assert!(s.update_check_enabled, "defaults on");
+        assert!(s.open_dashboard_on_launch, "defaults on");
+        s.update_check_enabled = false;
+        s.open_dashboard_on_launch = false;
+        s.destinations.push(Destination {
+            id: "test".into(),
+            name: "Test".into(),
+            enabled: true,
+            platform: "twitch".into(),
+            stream_key: "test".into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+        });
+        s.save(&path).expect("save");
+
+        let loaded = Settings::load(&path).expect("load");
+        assert!(
+            !loaded.update_check_enabled,
+            "update_check_enabled opt-out must survive round-trip"
+        );
+        assert!(
+            !loaded.open_dashboard_on_launch,
+            "open_dashboard_on_launch opt-out must survive round-trip"
+        );
+
+        // A fresh config with neither key present must read as the on
+        // default, not accidentally inherit the false above.
+        let fresh = Settings::defaults();
+        assert!(fresh.update_check_enabled && fresh.open_dashboard_on_launch);
 
         let _ = std::fs::remove_file(&path);
     }

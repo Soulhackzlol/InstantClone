@@ -678,9 +678,7 @@ function overlayRow(o) {
   const row = document.createElement('div'); row.className = 'orow';
   const nm = document.createElement('span'); nm.className = 'o-name'; nm.textContent = o.name || o.slug;
   if (o.studio && !cfg.w.overlays.group) { const tag = document.createElement('span'); tag.className = 'o-tag'; tag.textContent = 'studio'; nm.appendChild(tag); }
-  //const open = document.createElement('button'); open.className = 'minibtn'; open.textContent = 'Open'; open.title = 'Preview in a new tab'; open.onclick = () => openOverlay(o.slug);
   const copy = document.createElement('button'); copy.className = 'minibtn'; copy.innerHTML = '&#128279;'; copy.title = 'Copy browser-source URL'; copy.onclick = () => copyOverlay(o.slug);
-  //row.append(nm, open, copy);
   row.append(nm, copy);
   return row;
 }

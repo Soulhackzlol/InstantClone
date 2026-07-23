@@ -24,7 +24,9 @@
 //! full restart (the DiskRing is immutable once mapped). The UI shows a
 //! sticky "restart required" banner when those are pending.
 
+mod autostart;
 mod buffer;
+mod compat;
 mod config;
 mod controller;
 mod h264;
@@ -215,10 +217,7 @@ fn main() -> std::io::Result<()> {
         // back the moment the stream resumes. They explicitly hit
         // "Activate" once the buffer is ready (or auto-activate via the
         // config flag, if we add one later).
-        let initial_armed = settings
-            .armed_delay_ms
-            .max(settings.target_delay_ms)
-            .max(settings.initial_delay_ms);
+        let initial_armed = settings.armed_delay_ms.max(settings.target_delay_ms);
         let ctrl = Arc::new(controller::Controller::new(ring, initial_armed));
 
         let (tx, rx) = watch::channel(settings.clone());
@@ -232,8 +231,10 @@ fn main() -> std::io::Result<()> {
         // the dashboard within a second of double-clicking the exe. The
         // tray icon stays running in the background - closing the tab
         // doesn't kill the proxy. `--no-browser` skips this for autostart
-        // / headless setups.
-        if !suppress_browser {
+        // / headless setups; the persisted `open_dashboard_on_launch`
+        // toggle (System -> Behavior) does the same from the UI, so a
+        // tray-resident user isn't forced into a tab every launch.
+        if !suppress_browser && settings.open_dashboard_on_launch {
             let url = format!("http://127.0.0.1:{}/", settings.web_port);
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(300)).await;

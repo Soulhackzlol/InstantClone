@@ -668,6 +668,54 @@ pub fn find_obs_executable() -> Option<PathBuf> {
     obs_executable_candidates().into_iter().find(|p| p.exists())
 }
 
+/// Whether an `obs64.exe` process is currently running. Used by the setup
+/// wizard to show the "close OBS first" note only when it actually applies:
+/// registering edits `services.json`, which a running OBS overwrites on exit,
+/// so the warning is noise if OBS is already shut. Any enumeration failure
+/// reads as "not running" - the note just stays hidden, which is harmless.
+#[cfg(windows)]
+pub fn is_obs_running() -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut running = false;
+        if Process32FirstW(snapshot, &mut entry) != 0 {
+            loop {
+                let end = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                if String::from_utf16_lossy(&entry.szExeFile[..end])
+                    .eq_ignore_ascii_case("obs64.exe")
+                {
+                    running = true;
+                    break;
+                }
+                if Process32NextW(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snapshot);
+        running
+    }
+}
+
+#[cfg(not(windows))]
+pub fn is_obs_running() -> bool {
+    false
+}
+
 /// Spawn OBS Studio with the `--config-url` flag pointing at
 /// InstantClone's multitrack-config endpoint. Detaches from our
 /// process group so closing InstantClone afterwards doesn't take OBS

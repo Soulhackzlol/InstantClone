@@ -4,7 +4,79 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.11] - Encoder compatibility warnings, Start with Windows, adaptive re-cut, and UX polish
+
+### Encoder compatibility warnings
+
+InstantClone now measures what OBS is actually sending and says something
+only when it will bite one of your **enabled** destinations.
+
+- **Keyframe interval** is measured from the IDR index (mean of the first
+  5 gaps, then frozen for the session) and flagged above 2.6 s. OBS's
+  "auto" typically lands at 4 s, which causes rebuffering on Kick and
+  YouTube. The 0.6 s of headroom means a correctly-set 2 s stream, which
+  measures ~2.0-2.1 s in practice, never trips it.
+- **Resolution** is decoded from the SPS and checked against Kick's 1080p
+  ceiling.
+- **Codec** is flagged when HEVC/AV1/VP9 is heading for Kick's H.264-only
+  ingest. Twitch and YouTube are deliberately excluded - Twitch negotiates
+  codecs under Enhanced Broadcasting and YouTube has HEVC ingest paths, so
+  warning about either would risk a false positive.
+
+The design constraint was not adding clutter: **nothing renders when the
+stream is healthy**, every problem collapses into a single line naming the
+affected platforms (never per-check badges), disabled destinations and the
+local sink are ignored, and the line is dismissible. Dismissal is keyed by
+the message, so fixing one problem and hitting a different one brings the
+strip back on its own. Custom RTMP gets no opinion at all - we have no idea
+what a user's own ingest wants.
+
+The measurement freezes once its sample budget is spent, on purpose. A
+value that keeps drifting is what made the buffer-capacity gate strobe in
+0.1.10, and a warning that flickers mid-stream is worse than no warning.
+
+### Start with Windows
+
+**System → Behavior → Start with Windows** registers InstantClone under the
+per-user `Run` key (HKCU, so no elevation) with `--no-browser`, so it waits
+in the tray at login instead of throwing a dashboard tab at you.
+
+The registry entry is its own source of truth rather than a mirrored
+setting: Windows gives users their own switches for startup entries (Task
+Manager's Startup tab), and a stored copy of the flag would sit there
+claiming "on" after someone turned it off elsewhere. Enabling always
+rewrites the command, so an entry left behind by a previous install
+location gets corrected instead of pointing at a missing executable.
+
+### LAN exposure warning
+
+The **LAN access** toggles now say what they actually do. The control API
+has no authentication - the CSRF guard blocks cross-origin browser POSTs,
+but a direct request (curl, Stream Deck) carries no `Origin` header and is
+allowed through by design so CLI integrations keep working. On loopback,
+the default, that is exactly right. Exposed to a LAN it means anyone on the
+network can change the delay, cut, and edit destinations, and the ingest
+port accepts any stream key. Both toggles remain off by default; the
+warning appears only while one is ticked.
+
+### Fixes
+
+- The keyframe-interval sampler discarded the real first keyframe of every
+  session. It used `first_idr_ts_ms == 0` as its "not started yet"
+  sentinel, but an RTMP session normally starts at timestamp 0, so the
+  window re-opened on the *second* keyframe and every subsequent mean was
+  computed from the wrong origin. Caught by its own regression test before
+  shipping; the window now has an explicit flag.
+- The compatibility strip's dismissal is scoped to the publishing session:
+  it clears when the stream stops, so a new session that hits the same
+  problem warns again instead of inheriting a stale dismissal.
+- The one-click updater now confirms before restarting while OBS is
+  publishing, matching the tray Quit guard - an update tears down every
+  egress the same way a quit does.
+
+### Dependencies
+
+- `tokio` 1.52.3 -> 1.53.0, `bytes` 1.12.0 -> 1.12.1.
 
 ## [0.1.10] - Improving visuals, adding "sink" test mode as destination, UX improvements and OBS dock
 

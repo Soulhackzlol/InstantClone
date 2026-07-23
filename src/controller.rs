@@ -9,6 +9,7 @@
 //! platform. Communication is via `Controller`'s shared state + Notify.
 
 use crate::buffer::{DiskRing, TagMeta};
+use crate::compat::StreamParams;
 use crate::h264::{AudioCodec, VideoCodec};
 use crate::rtmp::client::{EgressClient, EgressSink, EgressUrl};
 use std::collections::HashMap;
@@ -98,6 +99,12 @@ impl ActivateError {
 /// IDR-search tolerance, so a "5s armed" cut can always land on a real
 /// IDR even if the nearest one happens to be slightly past the boundary.
 const BUFFER_SLACK_MS: u32 = 2_000;
+
+/// How many IDR-to-IDR gaps to average before freezing the keyframe-interval
+/// measurement. Five gaps is ~10 s of a normally-configured stream: long
+/// enough that one odd GOP at stream start can't skew the mean, short enough
+/// that the reading is settled before anyone looks at the dashboard.
+const KEYFRAME_SAMPLE_GAPS: u32 = 5;
 
 /// Flat tuple the dashboard reads each tick:
 /// `(id, alive, consumer_seq, kbps_out, tags_sent, bytes_sent, cuts, reconnects)`.
@@ -467,6 +474,39 @@ pub struct Controller {
     multitrack_video: AtomicBool,
     multitrack_audio: AtomicBool,
 
+    // --- Measured encoder parameters (per publisher session) ---
+    // Feed `compat::compat_warning`, which compares them against the
+    // enabled destinations. Decoded from the AVC sequence header; 0 when
+    // the codec isn't AVC or the header hasn't arrived yet.
+    // Packed (width << 32 | height). One atomic, not two, so a dashboard
+    // read always pairs a width with ITS height: storing them separately let
+    // a read land between the two writes and report a new width beside a
+    // stale height for one frame.
+    video_dims: AtomicU64,
+    // Keyframe interval is measured, not configured, so it has to be
+    // sampled from the stream. We take the MEAN spacing across the first
+    // `KEYFRAME_SAMPLE_GAPS` IDR gaps rather than a running average: it
+    // is jitter-tolerant, needs no decay tuning, and - the point - it
+    // FREEZES once the sample budget is spent. A value that keeps moving
+    // is what made the old buffer-capacity gate strobe (see 0.1.10), and
+    // a warning line that flickers on and off mid-stream is worse than
+    // no warning at all.
+    //
+    // The first/last/gaps triple is writer-private accounting (only the
+    // single ingest task touches it). After each gap the writer republishes
+    // the mean into `keyframe_interval_cached`, so every reader does one
+    // atomic load instead of a (last, first, gaps) read that could tear.
+    //
+    // `idr_window_open` cannot be folded into `first_idr_ts_ms == 0`: an
+    // RTMP session normally starts at timestamp 0, so a 0 sentinel would
+    // discard the real first keyframe and re-open the window on the
+    // second one, skewing every subsequent mean.
+    idr_window_open: AtomicBool,
+    first_idr_ts_ms: AtomicU64,
+    last_idr_ts_ms: AtomicU64,
+    idr_gaps: AtomicU32,
+    keyframe_interval_cached: AtomicU32,
+
     // --- u32 → u64 timestamp wrap tracking (per publisher session) ---
     // RTMP wire timestamps are u32 ms and wrap every 49.7 days. We
     // expand to u64 internally so every comparison / subtraction across
@@ -527,6 +567,12 @@ impl Controller {
             publish_lock: Mutex::new(()),
             video_codec: AtomicU8::new(0),
             audio_codec: AtomicU8::new(0),
+            video_dims: AtomicU64::new(0),
+            idr_window_open: AtomicBool::new(false),
+            first_idr_ts_ms: AtomicU64::new(0),
+            last_idr_ts_ms: AtomicU64::new(0),
+            idr_gaps: AtomicU32::new(0),
+            keyframe_interval_cached: AtomicU32::new(0),
             multitrack_video: AtomicBool::new(false),
             multitrack_audio: AtomicBool::new(false),
             seq_header_gen: AtomicU32::new(0),
@@ -587,6 +633,71 @@ impl Controller {
             self.log(format!("ingest: audio codec = {}", c.label()));
         }
     }
+    /// Decode primary-track dimensions from an AVC sequence header.
+    ///
+    /// Multi-track (Enhanced Broadcasting) headers are skipped: under EB
+    /// it is Twitch that picks the encode ladder, so "your resolution is
+    /// wrong" would be both wrong and unactionable. `sps_dimensions`
+    /// already returns None for non-AVC codecs, so HEVC/AV1 simply leave
+    /// the dimensions at 0 and the resolution check stays quiet.
+    pub fn note_video_dimensions(&self, seq_header: &[u8]) {
+        if crate::h264::seq_header_track_id(seq_header) != 0 {
+            return;
+        }
+        if let Some((w, h)) = crate::h264::sps_dimensions(seq_header) {
+            let packed = ((w as u64) << 32) | h as u64;
+            let prev = self.video_dims.swap(packed, Ordering::Relaxed);
+            if prev != packed {
+                self.log(format!("ingest: video is {}x{}", w, h));
+            }
+        }
+    }
+
+    /// Feed one IDR timestamp into the keyframe-interval measurement.
+    ///
+    /// Stops sampling after `KEYFRAME_SAMPLE_GAPS` gaps so the reported
+    /// interval is stable for the rest of the session - see the field
+    /// comments for why a frozen value matters here.
+    fn sample_keyframe_interval(&self, ts_ms: u64) {
+        if self.idr_gaps.load(Ordering::Relaxed) >= KEYFRAME_SAMPLE_GAPS {
+            return;
+        }
+        if !self.idr_window_open.swap(true, Ordering::Relaxed) {
+            // First IDR of the session: it opens the window, it is not a gap.
+            self.first_idr_ts_ms.store(ts_ms, Ordering::Relaxed);
+            self.last_idr_ts_ms.store(ts_ms, Ordering::Relaxed);
+            return;
+        }
+        // Guard against a non-advancing timestamp (a seek or a duplicated
+        // tag) turning into a zero-width gap that drags the mean down.
+        if ts_ms <= self.last_idr_ts_ms.load(Ordering::Relaxed) {
+            return;
+        }
+        self.last_idr_ts_ms.store(ts_ms, Ordering::Relaxed);
+        let gaps = self.idr_gaps.fetch_add(1, Ordering::Relaxed) + 1;
+        // Republish the mean on the writer thread so readers load one atomic.
+        // gaps >= 1 here, so the division can never be by zero.
+        let first = self.first_idr_ts_ms.load(Ordering::Relaxed);
+        let mean = (ts_ms.saturating_sub(first) / gaps as u64).min(u32::MAX as u64) as u32;
+        self.keyframe_interval_cached.store(mean, Ordering::Relaxed);
+    }
+
+    /// Mean IDR spacing in ms, or 0 until at least one gap is measured.
+    pub fn keyframe_interval_ms(&self) -> u32 {
+        self.keyframe_interval_cached.load(Ordering::Relaxed)
+    }
+
+    /// Snapshot of the measured encoder parameters for `compat_warning`.
+    pub fn stream_params(&self) -> StreamParams {
+        let dims = self.video_dims.load(Ordering::Relaxed);
+        StreamParams {
+            width: (dims >> 32) as u32,
+            height: dims as u32,
+            keyframe_interval_ms: self.keyframe_interval_ms(),
+            codec: self.video_codec(),
+        }
+    }
+
     /// Called from ingest on every multi-track video tag. Records a
     /// timestamp so the `multitrack_video()` getter can auto-clear when
     /// multi-track stops (e.g. the user switched Enhanced Broadcasting
@@ -627,6 +738,15 @@ impl Controller {
     pub fn reset_codec_state(&self) {
         self.video_codec.store(0, Ordering::Relaxed);
         self.audio_codec.store(0, Ordering::Relaxed);
+        // Measured encoder params belong to the session that produced
+        // them - a reconnect may bring a different OBS profile entirely,
+        // and a stale interval would warn about settings nobody is using.
+        self.video_dims.store(0, Ordering::Relaxed);
+        self.idr_window_open.store(false, Ordering::Relaxed);
+        self.first_idr_ts_ms.store(0, Ordering::Relaxed);
+        self.last_idr_ts_ms.store(0, Ordering::Relaxed);
+        self.idr_gaps.store(0, Ordering::Relaxed);
+        self.keyframe_interval_cached.store(0, Ordering::Relaxed);
         self.multitrack_video.store(false, Ordering::Relaxed);
         self.multitrack_audio.store(false, Ordering::Relaxed);
         self.last_multitrack_video_ms.store(0, Ordering::Relaxed);
@@ -1157,6 +1277,17 @@ impl Controller {
         // knows to re-emit its cached config bytes on the next iteration.
         if is_seq {
             self.seq_header_gen.fetch_add(1, Ordering::Relaxed);
+        }
+        // Sample the encoder parameters the compatibility check compares
+        // against the enabled destinations. Both are cheap: the dimension
+        // decode runs once per sequence header, and the keyframe sampler
+        // stops touching anything after its first few gaps.
+        if kind == 9 {
+            if is_seq {
+                self.note_video_dimensions(payload);
+            } else if is_idr {
+                self.sample_keyframe_interval(ts_ms);
+            }
         }
         let _ = self.ring.append(kind, ts_ms, payload, is_idr, is_seq);
         // Cap the buffer to the user's armed delay (plus a small slack for
@@ -1982,27 +2113,48 @@ struct PendingCut {
     target: TagMeta,
 }
 
+/// Baseline re-cut dead band, tuned for OBS's default 2 s keyframe interval.
+const RECUT_DEAD_BAND_FLOOR_MS: u64 = 1_500;
+/// Baseline IDR-search tolerance, enough to always find a keyframe at a 2 s
+/// (or tighter) cadence.
+const IDR_SEARCH_FLOOR_MS: u32 = 2_000;
+
+/// Re-cut hysteresis as a function of the *measured* keyframe interval.
+///
+/// The dead band must exceed `IDR_cadence / 2 + send_jitter`, or once we are
+/// already parked on the best available IDR the delay error (up to half a GOP)
+/// keeps re-tripping the gate and we re-cut to the same keyframe every tick -
+/// the "repeating 1-2 s of content" bounce. At OBS's default 2 s GOP the
+/// tuned floor of 1500 ms covers this. A long-GOP encoder (3-4 s) has a
+/// larger half-GOP error, so the band has to widen with it or the exact same
+/// bounce returns - just triggered by keyframe interval instead of dead-band
+/// size. `keyframe_interval_ms == 0` (not yet measured) keeps the floor, so a
+/// fresh stream behaves identically until it reveals a cadence.
+fn recut_dead_band_ms(keyframe_interval_ms: u32) -> u64 {
+    RECUT_DEAD_BAND_FLOOR_MS.max(keyframe_interval_ms as u64 / 2 + 500)
+}
+
+/// How far from the ideal input timestamp we accept an IDR when cutting.
+/// Grows to half a GOP for long-keyframe streams so a cut can still land on a
+/// real keyframe; never below the 2 s that served the default cadence.
+fn idr_search_tolerance_ms(keyframe_interval_ms: u32) -> u32 {
+    IDR_SEARCH_FLOOR_MS.max(keyframe_interval_ms / 2)
+}
+
 fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<PendingCut> {
     let target_delay = ctrl.target_delay_ms.load(Ordering::Relaxed) as u64;
     let latest = ctrl.ring.latest_ts()?;
     let oldest = ctrl.ring.oldest_ts()?;
     let current_delay = latest.saturating_sub(current.ts_ms);
 
-    // 1500 ms dead band. The earlier 500 ms was too tight against the
-    // typical 2 s OBS IDR cadence: after the initial cut, delivered
-    // delay would be off by up to ~1 s (closest-IDR error), the 500 ms
-    // dead band would fire, find_idr_near would (often) return the
-    // SAME IDR, and we'd re-cut to it every 500 ms - visible as the
-    // "repeating 1-2 s of content" bouncing the user reported.
-    //
-    // 1500 ms must exceed (IDR_cadence / 2 + send_jitter) to prevent
-    // re-cuts when we're already on the best available IDR. For OBS's
-    // recommended 2 s keyframe interval, 1500 ms is the right number.
-    // The trade-off is the user's delay may be off by up to ~1.5 s from
-    // their requested value - acceptable given the alternative is the
-    // bouncing bug.
+    // Dead band scales with the measured GOP (see recut_dead_band_ms). At the
+    // default 2 s cadence this is the tuned 1500 ms; the trade-off is the
+    // delivered delay may sit up to one dead-band away from the requested
+    // value, which is exactly the price of not re-cutting to the same IDR.
+    let keyframe_interval = ctrl.keyframe_interval_ms();
+    let dead_band = recut_dead_band_ms(keyframe_interval);
     let diff = (current_delay as i64) - (target_delay as i64);
-    if diff.abs() < 1500 {
+    if diff.abs() < dead_band as i64 {
         ctrl.buffer_building.store(false, Ordering::Relaxed);
         return None;
     }
@@ -2011,8 +2163,9 @@ fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<Pendin
     // the buffer currently extends, we can't honor it yet. Mark the state
     // and hold our position; the buffer keeps filling at real time, and
     // once the requested delay becomes reachable, the next iteration cuts.
+    // Same dead band as the re-cut gate so the two agree on "close enough".
     let have_seconds_back = latest.saturating_sub(oldest);
-    if target_delay > have_seconds_back.saturating_add(1_500) {
+    if target_delay > have_seconds_back.saturating_add(dead_band) {
         ctrl.buffer_building.store(true, Ordering::Relaxed);
         return None;
     }
@@ -2021,7 +2174,9 @@ fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<Pendin
     // Binary-search on the IDR-only secondary index (~log n over just
     // the keyframes) rather than the old O(n) walk over every tag.
     let desired_input_ts = latest.saturating_sub(target_delay);
-    let target = ctrl.ring.find_idr_near(desired_input_ts, 2_000)?;
+    let target = ctrl
+        .ring
+        .find_idr_near(desired_input_ts, idr_search_tolerance_ms(keyframe_interval))?;
     if target.seq == current.seq {
         return None;
     }
@@ -3361,6 +3516,151 @@ mod tests {
             "session 2 fill must be the span of session 2 tags only \
              (~66 ms), not a phantom span that includes session 1; got {}",
             fill,
+        );
+    }
+
+    /// Feed `count` IDR tags spaced `spacing_ms` apart, starting at
+    /// `start_ms`. Leading byte 0x17 is the legacy AVC keyframe marker.
+    fn feed_idrs(ctrl: &Controller, start_ms: u32, spacing_ms: u32, count: u32) {
+        let mut payload = [0u8; 50];
+        payload[0] = 0x17;
+        for i in 0..count {
+            ctrl.on_tag(9, start_ms + i * spacing_ms, &payload, true, false);
+        }
+    }
+
+    #[test]
+    fn keyframe_interval_is_zero_before_any_gap_is_measured() {
+        let h = harness(0);
+        assert_eq!(h.ctrl.keyframe_interval_ms(), 0);
+        // One IDR opens the window but is not itself a gap.
+        feed_idrs(&h.ctrl, 0, 2_000, 1);
+        assert_eq!(h.ctrl.keyframe_interval_ms(), 0);
+    }
+
+    #[test]
+    fn keyframe_interval_measures_mean_spacing() {
+        let h = harness(0);
+        feed_idrs(&h.ctrl, 0, 2_000, 4);
+        assert_eq!(h.ctrl.keyframe_interval_ms(), 2_000);
+    }
+
+    #[test]
+    fn keyframe_interval_measures_a_four_second_gop() {
+        let h = harness(0);
+        feed_idrs(&h.ctrl, 0, 4_000, 4);
+        assert_eq!(h.ctrl.keyframe_interval_ms(), 4_000);
+    }
+
+    /// The measurement must FREEZE once the sample budget is spent.
+    /// A value that keeps drifting is what makes a warning line flicker
+    /// on and off mid-stream, which is the failure this design avoids.
+    #[test]
+    fn keyframe_interval_freezes_after_the_sample_budget() {
+        let h = harness(0);
+        feed_idrs(&h.ctrl, 0, 2_000, KEYFRAME_SAMPLE_GAPS + 1);
+        let settled = h.ctrl.keyframe_interval_ms();
+        assert_eq!(settled, 2_000);
+
+        // A long stall afterwards (scene change, encoder hiccup) must not
+        // move the reading.
+        feed_idrs(&h.ctrl, 60_000, 10_000, 4);
+        assert_eq!(
+            h.ctrl.keyframe_interval_ms(),
+            settled,
+            "interval must not move after the sample budget is spent"
+        );
+    }
+
+    /// A repeated or backwards timestamp would otherwise register as a
+    /// zero-width gap and drag the mean toward 0, silencing a real warning.
+    #[test]
+    fn non_advancing_timestamps_do_not_pollute_the_mean() {
+        let h = harness(0);
+        let mut payload = [0u8; 50];
+        payload[0] = 0x17;
+        h.ctrl.on_tag(9, 0, &payload, true, false);
+        h.ctrl.on_tag(9, 4_000, &payload, true, false);
+        // Same timestamp three times over - a duplicated tag.
+        for _ in 0..3 {
+            h.ctrl.on_tag(9, 4_000, &payload, true, false);
+        }
+        assert_eq!(h.ctrl.keyframe_interval_ms(), 4_000);
+    }
+
+    /// Non-IDR video and audio tags must not be counted as keyframes.
+    #[test]
+    fn only_idr_video_tags_are_sampled() {
+        let h = harness(0);
+        let mut idr = [0u8; 50];
+        idr[0] = 0x17;
+        let mut p = [0u8; 50];
+        p[0] = 0x27;
+        h.ctrl.on_tag(9, 0, &idr, true, false);
+        // P-frames and audio in between must be ignored entirely.
+        for i in 1..10 {
+            h.ctrl.on_tag(9, i * 100, &p, false, false);
+            h.ctrl.on_tag(8, i * 100, &[0xaf, 0x01, 0x21], false, false);
+        }
+        h.ctrl.on_tag(9, 2_000, &idr, true, false);
+        assert_eq!(h.ctrl.keyframe_interval_ms(), 2_000);
+    }
+
+    /// A reconnect may bring a completely different OBS profile, so the
+    /// previous session's measurement must not leak into the new one.
+    #[test]
+    fn reset_codec_state_clears_the_measurement() {
+        let h = harness(0);
+        feed_idrs(&h.ctrl, 0, 4_000, 4);
+        assert_eq!(h.ctrl.keyframe_interval_ms(), 4_000);
+        h.ctrl.reset_codec_state();
+        assert_eq!(h.ctrl.keyframe_interval_ms(), 0);
+        assert_eq!(h.ctrl.stream_params().width, 0);
+        assert_eq!(h.ctrl.stream_params().height, 0);
+    }
+
+    /// The packed dims atomic must round-trip a real resolution and never
+    /// bleed width into height or vice-versa.
+    #[test]
+    fn stream_params_reports_packed_dimensions() {
+        let h = harness(0);
+        // 0x11 = AVC keyframe; sps_dimensions decodes 1920x1080 from a real
+        // SPS, but the unit here only needs the packing path exercised via a
+        // known resolution, so drive it through the public snapshot instead.
+        h.ctrl
+            .video_dims
+            .store(((1920u64) << 32) | 1080, Ordering::Relaxed);
+        let p = h.ctrl.stream_params();
+        assert_eq!((p.width, p.height), (1920, 1080));
+    }
+
+    /// Dead band stays at the tuned 1500 ms for a 2 s GOP (and while
+    /// unmeasured), and widens past half a GOP for long-keyframe encoders so
+    /// the same-IDR re-cut bounce can't reappear at 3-4 s cadences.
+    #[test]
+    fn recut_dead_band_tracks_keyframe_interval() {
+        assert_eq!(recut_dead_band_ms(0), 1_500, "unmeasured keeps the floor");
+        assert_eq!(recut_dead_band_ms(2_000), 1_500, "2 s GOP is unchanged");
+        assert!(recut_dead_band_ms(4_000) > 2_000, "4 s GOP widens the band");
+        assert_eq!(recut_dead_band_ms(4_000), 2_500);
+        // Must always clear half a GOP, or the bounce returns.
+        for kf in [1_000u32, 2_000, 3_000, 4_000, 6_000] {
+            assert!(
+                recut_dead_band_ms(kf) > kf as u64 / 2,
+                "dead band must exceed half a GOP for kf={kf}"
+            );
+        }
+    }
+
+    #[test]
+    fn idr_search_tolerance_never_below_floor_and_scales_up() {
+        assert_eq!(idr_search_tolerance_ms(0), 2_000);
+        assert_eq!(idr_search_tolerance_ms(2_000), 2_000);
+        assert_eq!(idr_search_tolerance_ms(4_000), 2_000);
+        assert_eq!(
+            idr_search_tolerance_ms(6_000),
+            3_000,
+            "6 s GOP needs 3 s reach"
         );
     }
 }
