@@ -4,6 +4,41 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Kick now works (RTMPS egress)
+
+Kick was never reachable before: the egress spoke plain RTMP on a hardcoded
+host, but Kick ingests over **RTMPS** (TLS on :443) and hands each streamer
+their own **Server URL** in the dashboard. Both are fixed.
+
+- **RTMPS egress.** A destination whose URL is `rtmps://` now transparently
+  upgrades the egress socket to TLS before the RTMP handshake, reusing the
+  same `native-tls` (schannel) backend already linked for the HTTPS webhook
+  client - no second TLS stack, ~120 KB of binary growth rather than the
+  ~1.4 MB a rustls + ring stack would cost. Plain `rtmp://` destinations are
+  unchanged.
+- **Kick is a paste-your-Server-URL platform.** The destination form and the
+  first-run wizard both show a **Kick Server URL** field (copied from the
+  Kick dashboard: Settings -> Stream) alongside the stream key, validated
+  and with a link to the dashboard. There is no hardcoded host, because the
+  Server value is per-streamer. If you leave the `/app` path off, it is
+  added for you (Kick's ingest app is always `app`).
+- **Custom RTMP accepts `rtmps://` too.** Any TLS ingest (a non-standard
+  Kick host, Facebook, etc.) works through the Custom platform now.
+- **Simulcast is unaffected.** Kick over RTMPS runs alongside Twitch over
+  plain RTMP on independent per-destination connections; a Twitch Enhanced
+  Broadcasting ladder is still flattened to the single primary H.264 track
+  for Kick automatically.
+
+### Wizard fix
+
+The OBS-wiring step showed a duplicate "I've set this up in OBS" button on
+its optional Step 2 ("Check it's connected"), and the validation nudge that
+highlights the confirm button pointed at that hidden Step 2 copy. Removed
+the duplicate and moved the id onto the real Step 1 button, so the nudge now
+draws the eye to the button you can actually see.
+
 ## [0.1.11] - Encoder compatibility warnings, Start with Windows, adaptive re-cut, and UX polish
 
 ### Encoder compatibility warnings

@@ -198,13 +198,24 @@ impl Destination {
         if self.platform == "sink" {
             return Some(format!("rtmp://127.0.0.1:{}/live/test", SINK_RTMP_PORT));
         }
-        if self.platform == "custom" {
-            let base = non_empty(&self.custom_egress_url)?
+        // Custom and Kick both take a user-supplied Server URL and append
+        // the stream key if it isn't already embedded. Kick shows each
+        // streamer a distinct (masked) Server value in its dashboard
+        // (Settings -> Stream) alongside the key, so we can't hardcode one
+        // host for everyone - the streamer pastes their own. Kick's URL is
+        // rtmps://, which the egress socket upgrades to TLS transparently.
+        if self.platform == "custom" || self.platform == "kick" {
+            let mut base = non_empty(&self.custom_egress_url)?
                 .trim_end_matches('/')
                 .to_string();
-            let path = base
-                .strip_prefix("rtmp://")
-                .unwrap_or(&base)
+            // Kick's ingest app is always "app". Streamers sometimes paste
+            // just the host (rtmps://<id>.global-contribute.live-video.net)
+            // and leave the "/app" off; add it so the resolved URL has the
+            // app path Kick needs instead of failing the app+key check.
+            if self.platform == "kick" && !strip_rtmp_scheme(&base).contains('/') {
+                base.push_str("/app");
+            }
+            let path = strip_rtmp_scheme(&base)
                 .split_once('/')
                 .map(|x| x.1)
                 .unwrap_or("");
@@ -244,9 +255,7 @@ impl Destination {
     pub fn is_well_formed(&self) -> bool {
         match self.egress_url() {
             Some(url) => {
-                let path = url
-                    .strip_prefix("rtmp://")
-                    .unwrap_or(&url)
+                let path = strip_rtmp_scheme(&url)
                     .split_once('/')
                     .map(|x| x.1)
                     .unwrap_or("");
@@ -873,13 +882,31 @@ impl Settings {
                 errs.push("destination is missing a name".into());
                 continue;
             }
-            if d.platform == "custom" {
+            if d.platform == "custom" || d.platform == "kick" {
                 if d.custom_egress_url.is_empty() {
-                    errs.push(format!("{}: custom RTMP URL required", d.name));
+                    let need = if d.platform == "kick" {
+                        "Kick Server URL required - copy it from your Kick dashboard (Settings -> Stream)"
+                    } else {
+                        "custom RTMP URL required"
+                    };
+                    errs.push(format!("{}: {}", d.name, need));
                     continue;
                 }
-                if !d.custom_egress_url.starts_with("rtmp://") {
-                    errs.push(format!("{}: custom URL must start with rtmp://", d.name));
+                if !is_rtmp_scheme(&d.custom_egress_url) {
+                    errs.push(format!(
+                        "{}: server URL must start with rtmp:// or rtmps://",
+                        d.name
+                    ));
+                    continue;
+                }
+                // Kick shows Server and Key as separate fields, so its key
+                // is required here. A custom URL may embed the key in the
+                // path instead, so custom doesn't force a separate key.
+                if d.platform == "kick" && d.stream_key.is_empty() {
+                    errs.push(format!(
+                        "{}: Kick stream key required - it's next to the Server field in your dashboard",
+                        d.name
+                    ));
                     continue;
                 }
             } else if d.platform == "sink" {
@@ -958,12 +985,37 @@ pub fn is_path_safe(p: &std::path::Path) -> bool {
     true
 }
 
+/// True when the URL uses an RTMP-family scheme the egress can dial
+/// (`rtmp://` plaintext or `rtmps://` TLS). Used to validate custom
+/// destination URLs - Kick, Facebook and other TLS-only ingests need
+/// the `rtmps://` form.
+pub fn is_rtmp_scheme(url: &str) -> bool {
+    url.starts_with("rtmp://") || url.starts_with("rtmps://")
+}
+
+/// Strip an `rtmp://` or `rtmps://` scheme, returning the host/path
+/// remainder. Tries the longer `rtmps://` first so it isn't shadowed by
+/// the `rtmp://` prefix check.
+fn strip_rtmp_scheme(url: &str) -> &str {
+    url.strip_prefix("rtmps://")
+        .or_else(|| url.strip_prefix("rtmp://"))
+        .unwrap_or(url)
+}
+
 /// Mapping of platform slug → RTMP ingest base. New platforms go here.
 pub fn platform_base(slug: &str) -> Option<&'static str> {
     Some(match slug {
         "twitch" => "rtmp://live.twitch.tv/app",
         "youtube" => "rtmp://a.rtmp.youtube.com/live2",
-        "kick" => "rtmp://fa723fc1b171.global-contribute.live-video.net/app",
+        // Kick ingests over RTMPS (TLS) only - plain rtmp:// on 1935 is
+        // not accepted, which is why the old rtmp:// value never
+        // connected. The `global-contribute` host is Kick's shared geo-
+        // router (a CNAME for g.contribute.live-video.net), not a per-
+        // account endpoint, so one entry works for everyone. A streamer
+        // whose dashboard shows a different host can use the Custom RTMP
+        // platform with their full rtmps:// URL instead. Port defaults to
+        // 443 for the rtmps scheme (see EgressUrl::parse).
+        "kick" => "rtmps://fa723fc1b171.global-contribute.live-video.net/app",
         "trovo" => "rtmp://livepush.trovo.live/live",
         "restream" => "rtmp://live.restream.io/live",
         _ => return None,
@@ -1356,6 +1408,114 @@ mod tests {
             "YouTube backup ingest needs the ?backup=1 suffix so their \
              edge enables real fail-over, not just a duplicate stream"
         );
+    }
+
+    #[test]
+    fn destination_egress_url_for_kick_uses_pasted_server_plus_key() {
+        // Kick gives each streamer a distinct Server URL (rtmps) in the
+        // dashboard; we store it in custom_egress_url and append the key.
+        // The rtmps scheme makes the egress socket upgrade to TLS - the
+        // old hardcoded rtmp:// host connected on 1935 and silently failed.
+        let d = Destination {
+            id: "x".into(),
+            name: "K".into(),
+            enabled: true,
+            platform: "kick".into(),
+            stream_key: "sk_test_key".into(),
+            custom_egress_url: "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
+                .into(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+        };
+        let url = d.egress_url().unwrap();
+        assert!(url.starts_with("rtmps://"), "kick must use rtmps: {url}");
+        assert!(url.ends_with("/app/sk_test_key"));
+        assert!(d.is_well_formed());
+    }
+
+    #[test]
+    fn kick_server_url_without_app_path_gets_app_appended() {
+        // Streamer pastes just the host (or host with a trailing slash),
+        // leaving off "/app". We add Kick's fixed app so it still resolves
+        // to a well-formed host/app/key URL instead of erroring.
+        for server in [
+            "rtmps://fa723fc1b171.global-contribute.live-video.net/",
+            "rtmps://fa723fc1b171.global-contribute.live-video.net",
+        ] {
+            let d = Destination {
+                id: "x".into(),
+                name: "K".into(),
+                enabled: true,
+                platform: "kick".into(),
+                stream_key: "sk_test_key".into(),
+                custom_egress_url: server.into(),
+                twitch_ingest: String::new(),
+                youtube_ingest: String::new(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
+            };
+            assert_eq!(
+                d.egress_url().as_deref(),
+                Some("rtmps://fa723fc1b171.global-contribute.live-video.net/app/sk_test_key"),
+                "host-only Kick server URL '{server}' should gain /app"
+            );
+            assert!(d.is_well_formed());
+        }
+    }
+
+    #[test]
+    fn kick_without_server_url_fails_validation() {
+        let mut s = Settings::defaults();
+        s.destinations.push(Destination {
+            id: "k".into(),
+            name: "Kick".into(),
+            enabled: true,
+            platform: "kick".into(),
+            stream_key: "sk_test".into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+        });
+        assert!(
+            s.validate().iter().any(|e| e.contains("Kick Server URL")),
+            "kick with no server URL must report a clear error: {:?}",
+            s.validate()
+        );
+    }
+
+    #[test]
+    fn destination_custom_rtmps_url_is_accepted() {
+        // The Custom platform is the escape hatch for any TLS ingest
+        // (a non-standard Kick host, Facebook, etc.). rtmps:// must
+        // validate and pass through, well-formed with app+key.
+        let d = Destination {
+            id: "x".into(),
+            name: "C".into(),
+            enabled: true,
+            platform: "custom".into(),
+            stream_key: "ignored".into(),
+            custom_egress_url: "rtmps://edge.example.net/app/streamkey".into(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+        };
+        assert_eq!(
+            d.egress_url().as_deref(),
+            Some("rtmps://edge.example.net/app/streamkey")
+        );
+        assert!(d.is_well_formed());
+        assert!(is_rtmp_scheme("rtmps://edge.example.net/app/k"));
+        assert!(is_rtmp_scheme("rtmp://edge.example.net/app/k"));
+        assert!(!is_rtmp_scheme("https://edge.example.net/app/k"));
     }
 
     #[test]
