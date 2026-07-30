@@ -38,6 +38,13 @@ bytes = "1"
 ureq = { version = "3", default-features = false, features = ["native-tls"] }
 native-tls = "0.2"
 
+# Async TLS for RTMPS egress (Kick and any rtmps:// destination). Wraps
+# the SAME `native-tls`/schannel already linked above, so it reuses the
+# Windows TLS stack already in the process instead of pulling a second
+# one (rustls + ring would add ~1.4 MB - the exact cost the ureq note
+# above avoids). Only the thin async adapter is new.
+tokio-native-tls = "0.3"
+
 # Windows-only: system-tray icon + opening the default browser via a real
 # shell call. Same `windows-sys` crate that tokio's `mio` already pulls in
 # transitively, so adding it explicitly costs ~0 binary bytes - we just

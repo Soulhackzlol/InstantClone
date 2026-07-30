@@ -1809,7 +1809,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
                 </details>
               </div>
             </div>
-            <button class="ic-btn ic-btn-primary obs-advance" onclick="wizObsAdvance('connect')">I've set this up in OBS &rarr;</button>
+            <button class="ic-btn ic-btn-primary obs-advance" id="wiz-obs-confirm" onclick="wizObsAdvance('connect')">I've set this up in OBS &rarr;</button>
           </div></div>
         </div>
       </li>
@@ -1838,7 +1838,6 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
                 </div>
               </div>
             </div>
-            <button class="ic-btn ic-btn-primary obs-advance" id="wiz-obs-confirm" onclick="wizObsAdvance('connect')">I've set this up in OBS &rarr;</button>
           </div></div>
         </div>
       </li>
@@ -1867,7 +1866,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
       <div class="wiz-step-s">This is the real key from your platform dashboard. It never leaves this PC except to that platform.</div>
     </div>
     <div id="w-custom-wrap" hidden>
-      <label for="w-custom">Custom RTMP URL (without the stream key)</label>
+      <label for="w-custom" id="w-custom-label">Custom RTMP URL (without the stream key)</label>
       <input id="w-custom" class="ic-input mono" placeholder="rtmp://127.0.0.1:1936/live">
       <div class="w-hint">Either put the stream key in the field below (recommended) or paste the full URL with the key embedded.</div>
     </div>
@@ -2040,8 +2039,9 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
     <select id="dest-form-platform" class="ic-input"></select>
     <div class="dfg-sep">Routing &amp; format</div>
     <div id="dest-form-custom-wrap" hidden>
-      <label>Custom RTMP URL</label>
+      <label id="dest-form-custom-label">Custom RTMP URL</label>
       <input id="dest-form-custom" class="ic-input mono" placeholder="rtmp://host/app">
+      <div id="dest-form-custom-help" class="muted" hidden style="font-size:11.5px;margin-top:5px;line-height:1.45"></div>
     </div>
     <div id="dest-form-twitch-wrap" hidden>
       <label>Twitch ingest server <span class="muted">- pin a region if auto-routing is flaky</span></label>
@@ -3926,7 +3926,24 @@ function fillDestPlatforms(){
   if (!sel._wired){
     sel._wired = true;
     sel.addEventListener('change', () => {
-      $('dest-form-custom-wrap').hidden = sel.value !== 'custom';
+      // Custom AND Kick both take a user-supplied Server URL. Kick shows
+      // each streamer a distinct Server value in its dashboard (Settings
+      // -> Stream), so there is no single host we can hardcode - the
+      // streamer pastes their own, exactly like a custom RTMP endpoint.
+      const isKick = sel.value === 'kick';
+      $('dest-form-custom-wrap').hidden = sel.value !== 'custom' && !isKick;
+      const clabel = $('dest-form-custom-label');
+      const chelp = $('dest-form-custom-help');
+      const cinput = $('dest-form-custom');
+      if (isKick){
+        if (clabel) clabel.textContent = 'Kick Server URL';
+        if (cinput) cinput.placeholder = 'rtmps://…global-contribute.live-video.net:443/app';
+        if (chelp){ chelp.hidden = false; chelp.innerHTML = 'Copy the <b>Server</b> field from your <a href="https://kick.com/dashboard/settings/stream" target="_blank" rel="noopener">Kick dashboard</a> (Settings &rarr; Stream), and the <b>Stream key</b> below it. Kick uses <b>rtmps</b> (TLS) - InstantClone connects over it automatically.'; }
+      } else {
+        if (clabel) clabel.textContent = 'Custom RTMP URL';
+        if (cinput) cinput.placeholder = 'rtmp://host/app  (rtmps:// also supported)';
+        if (chelp){ chelp.hidden = true; chelp.innerHTML = ''; }
+      }
       $('dest-form-twitch-wrap').hidden = sel.value !== 'twitch';
       $('dest-form-youtube-wrap').hidden = sel.value !== 'youtube';
       // Format choice is meaningless for Twitch (native dual canvas) -
@@ -4456,6 +4473,9 @@ function validateWizStep(id){
   if (id !== 'key') return true;
   const platform = $('w-platform').value;
   const key = $('w-key').value.trim(), custom = $('w-custom').value.trim();
+  // Kick needs BOTH a Server URL (from its dashboard) and a key, like a
+  // custom endpoint that also has a separate key field.
+  if (platform === 'kick' && !custom){ wizMsg('Paste your Kick Server URL (from the Kick dashboard) to continue.', 'err'); return false; }
   if (platform === 'custom' && !custom){ wizMsg('Enter your custom RTMP URL to continue.', 'err'); return false; }
   if (platform !== 'custom' && !key){ wizMsg('Paste your stream key to continue.', 'err'); return false; }
   return true;
@@ -4601,7 +4621,18 @@ function fillWizardPlatforms(){
     sel._wired = true;
     sel.addEventListener('change', () => {
       const isCustom = sel.value === 'custom';
-      $('w-custom-wrap').hidden = !isCustom;
+      const isKick = sel.value === 'kick';
+      // Custom and Kick both need a Server URL field. Kick's Server is
+      // shown per-streamer in its dashboard, so it can't be hardcoded.
+      $('w-custom-wrap').hidden = !isCustom && !isKick;
+      const wclabel = $('w-custom-label'), wcinput = $('w-custom');
+      if (isKick){
+        if (wclabel) wclabel.textContent = 'Kick Server URL (from your Kick dashboard)';
+        if (wcinput) wcinput.placeholder = 'rtmps://…global-contribute.live-video.net:443/app';
+      } else {
+        if (wclabel) wclabel.textContent = 'Custom RTMP URL (without the stream key)';
+        if (wcinput) wcinput.placeholder = 'rtmp://127.0.0.1:1936/live';
+      }
       // Only Custom destinations can embed the stream key in the URL
       // and skip the key field. Twitch/YouTube/Kick keys are always
       // required, so the "(optional…)" hint would mislead - hide it
@@ -4796,9 +4827,15 @@ async function saveWizard(){
   const platform = $('w-platform').value, key = $('w-key').value.trim(), custom = $('w-custom').value.trim();
   // Defensive: the key step validates before you can reach Save, but if we
   // ever land here empty, bounce back to that step rather than erroring.
-  if ((platform !== 'custom' && !key) || (platform === 'custom' && !custom)){
+  // Kick needs both a Server URL and a key; custom needs the URL; everyone
+  // else needs a key.
+  const kickMissing = platform === 'kick' && (!custom || !key);
+  if (kickMissing || (platform !== 'custom' && platform !== 'kick' && !key) || (platform === 'custom' && !custom)){
     wizCurrent = 'key'; renderWizStep();
-    wizMsg(platform === 'custom' ? 'Enter your custom RTMP URL to continue.' : 'Paste your stream key to continue.', 'err');
+    const m = platform === 'kick' ? 'Paste your Kick Server URL and stream key to continue.'
+      : platform === 'custom' ? 'Enter your custom RTMP URL to continue.'
+      : 'Paste your stream key to continue.';
+    wizMsg(m, 'err');
     return;
   }
   const params = {platform, stream_key:key, custom_egress_url:custom};

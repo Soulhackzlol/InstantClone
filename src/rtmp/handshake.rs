@@ -8,7 +8,7 @@
 //! No HMAC, no digest. Just byte equality and a version check.
 
 use std::io;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 const HS_SIZE: usize = 1536;
@@ -39,7 +39,9 @@ pub async fn perform_server(sock: &mut TcpStream) -> io::Result<()> {
 }
 
 /// Client-side handshake (we're connecting outbound to Twitch/YouTube).
-pub async fn perform_client(sock: &mut TcpStream) -> io::Result<()> {
+/// Generic over the socket type so it works over both a plain TCP stream
+/// and a TLS stream (RTMPS egress to Kick).
+pub async fn perform_client<S: AsyncRead + AsyncWrite + Unpin>(sock: &mut S) -> io::Result<()> {
     let mut out = Vec::with_capacity(1 + HS_SIZE);
     out.push(3);
     let c1 = fill_handshake_payload();

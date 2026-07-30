@@ -3,15 +3,19 @@
 //! `publish`, then expose a simple `send_audio`/`send_video`/`send_data`
 //! API that the controller drives.
 //!
-//! URL form: rtmp://host[:port]/app/stream_key
-//! Default port is 1935.
+//! URL form: rtmp://host[:port]/app/stream_key (default port 1935), or
+//! rtmps://host[:port]/app/stream_key for TLS (default port 443). Kick's
+//! ingest is RTMPS-only, so the egress socket transparently upgrades to
+//! TLS when the URL scheme is `rtmps://` - see `EgressStream`.
 
 use crate::rtmp::amf0::{self, Amf0};
 use crate::rtmp::chunk::{ChunkReader, ChunkWriter, Message};
 use crate::rtmp::handshake;
 use bytes::BytesMut;
 use std::io;
-use tokio::io::{split, ReadHalf, WriteHalf};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::io::{split, AsyncRead, AsyncWrite, ReadBuf, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 
 pub struct EgressUrl {
@@ -20,13 +24,26 @@ pub struct EgressUrl {
     pub app: String,
     pub stream_key: String,
     pub tc_url: String,
+    /// True when the URL scheme was `rtmps://` - the socket must be
+    /// wrapped in TLS before the RTMP handshake. Kick requires this.
+    pub tls: bool,
 }
 
 impl EgressUrl {
     pub fn parse(url: &str) -> io::Result<Self> {
-        let rest = url
-            .strip_prefix("rtmp://")
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not an rtmp:// url"))?;
+        // Accept both schemes. Default port follows the scheme: 1935 for
+        // plain RTMP, 443 for RTMPS (the port Kick and other TLS ingests
+        // publish on). An explicit `:port` in the URL always wins.
+        let (tls, rest, default_port) = if let Some(r) = url.strip_prefix("rtmps://") {
+            (true, r, 443u16)
+        } else if let Some(r) = url.strip_prefix("rtmp://") {
+            (false, r, 1935u16)
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not an rtmp:// or rtmps:// url",
+            ));
+        };
         let slash = rest
             .find('/')
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing app path"))?;
@@ -39,27 +56,83 @@ impl EgressUrl {
                     .parse()
                     .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad port"))?,
             ),
-            None => (host_part.to_string(), 1935u16),
+            None => (host_part.to_string(), default_port),
         };
         let last_slash = path
             .rfind('/')
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing stream key"))?;
         let app = path[..last_slash].to_string();
         let stream_key = path[last_slash + 1..].to_string();
-        let tc_url = format!("rtmp://{}:{}/{}", host, port, app);
+        let scheme = if tls { "rtmps" } else { "rtmp" };
+        let tc_url = format!("{}://{}:{}/{}", scheme, host, port, app);
         Ok(Self {
             host,
             port,
             app,
             stream_key,
             tc_url,
+            tls,
         })
     }
 }
 
+/// Egress socket that is either a plain TCP stream or a TLS stream over
+/// TCP. One concrete type keeps `EgressClient` / `EgressSink` free of a
+/// generic IO parameter (so the controller's egress supervisor never has
+/// to name it), while still letting a single destination pick RTMP or
+/// RTMPS at connect time. Both variants are `Unpin`, so the delegating
+/// poll impls below can use `Pin::new` on the inner stream directly. The
+/// TLS variant is boxed because a `TlsStream` is far larger than a bare
+/// `TcpStream` - boxing keeps the enum small (and clippy quiet) so the
+/// common plain-RTMP path doesn't carry the TLS struct's footprint.
+pub enum EgressStream {
+    Plain(TcpStream),
+    Tls(Box<tokio_native_tls::TlsStream<TcpStream>>),
+}
+
+impl AsyncRead for EgressStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            EgressStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            EgressStream::Tls(s) => Pin::new(&mut **s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for EgressStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            EgressStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            EgressStream::Tls(s) => Pin::new(&mut **s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            EgressStream::Plain(s) => Pin::new(s).poll_flush(cx),
+            EgressStream::Tls(s) => Pin::new(&mut **s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            EgressStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            EgressStream::Tls(s) => Pin::new(&mut **s).poll_shutdown(cx),
+        }
+    }
+}
+
 pub struct EgressClient {
-    reader: ChunkReader<ReadHalf<TcpStream>>,
-    writer: ChunkWriter<WriteHalf<TcpStream>>,
+    reader: ChunkReader<ReadHalf<EgressStream>>,
+    writer: ChunkWriter<WriteHalf<EgressStream>>,
     stream_id: u32,
 }
 
@@ -69,15 +142,16 @@ impl EgressClient {
             "EGRESS_DIAL",
             &format!("host={} port={} app={}", url.host, url.port, url.app),
         );
-        let mut sock = TcpStream::connect((url.host.as_str(), url.port)).await?;
-        sock.set_nodelay(true)?;
+        let tcp = TcpStream::connect((url.host.as_str(), url.port)).await?;
+        tcp.set_nodelay(true)?;
         // Aggressive TCP keepalive (Windows-only - best-effort no-op on
         // other platforms). Twitch's edge sometimes silently drops idle
         // sessions; without keepalive probes we'd not notice until the
         // first frame post-pause failed with EPIPE. 30 s probe + 10 s
         // retry interval gives us reliable disconnect detection well
-        // before the user's viewers see a frozen stream.
-        let _ = crate::rtmp::tcp::set_aggressive_keepalive(&sock);
+        // before the user's viewers see a frozen stream. Set on the raw
+        // TCP socket before any TLS wrap - the options live on the fd.
+        let _ = crate::rtmp::tcp::set_aggressive_keepalive(&tcp);
         // Larger SO_SNDBUF for high-bitrate streamers. Windows default is
         // ~64 KB which is enough at ≤ 6 Mbps but starts blocking writes
         // at 10+ Mbps when the egress receiver (Twitch / YouTube) is
@@ -85,8 +159,27 @@ impl EgressClient {
         // 10 Mbps - plenty of slack without pinning huge per-connection
         // memory. Best-effort: errors are logged-only because not every
         // platform / firewall stack honours setsockopt(SO_SNDBUF).
-        let _ = crate::rtmp::tcp::set_send_buffer(&sock, 1024 * 1024);
-        crate::trace::log("TCP_CONNECTED", &format!("host={}", url.host));
+        let _ = crate::rtmp::tcp::set_send_buffer(&tcp, 1024 * 1024);
+        crate::trace::log(
+            "TCP_CONNECTED",
+            &format!("host={} tls={}", url.host, url.tls),
+        );
+        // Upgrade to TLS for rtmps:// endpoints (Kick). SNI uses the
+        // hostname from the URL. Reuses the same native-tls (schannel on
+        // Windows) backend already linked for the HTTPS webhook client.
+        let mut sock = if url.tls {
+            let connector = native_tls::TlsConnector::new()
+                .map_err(|e| io::Error::other(format!("TLS init failed: {e}")))?;
+            let connector = tokio_native_tls::TlsConnector::from(connector);
+            let tls = connector
+                .connect(url.host.as_str(), tcp)
+                .await
+                .map_err(|e| io::Error::other(format!("TLS handshake failed: {e}")))?;
+            crate::trace::log("TLS_HANDSHAKE_OK", &format!("host={}", url.host));
+            EgressStream::Tls(Box::new(tls))
+        } else {
+            EgressStream::Plain(tcp)
+        };
         handshake::perform_client(&mut sock).await?;
         crate::trace::log("RTMP_HANDSHAKE_OK", &format!("host={}", url.host));
 
@@ -303,7 +396,7 @@ impl EgressClient {
 }
 
 pub struct EgressSink {
-    writer: ChunkWriter<WriteHalf<TcpStream>>,
+    writer: ChunkWriter<WriteHalf<EgressStream>>,
     pub stream_id: u32,
     /// Pings the drain task has captured from the server, queued for the
     /// pump loop to acknowledge. Unbounded because pings arrive at most
@@ -525,5 +618,54 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
                 expect
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_plain_rtmp_defaults_to_1935_no_tls() {
+        let u = EgressUrl::parse("rtmp://live.twitch.tv/app/key123").unwrap();
+        assert_eq!(u.host, "live.twitch.tv");
+        assert_eq!(u.port, 1935);
+        assert_eq!(u.app, "app");
+        assert_eq!(u.stream_key, "key123");
+        assert!(!u.tls);
+        assert_eq!(u.tc_url, "rtmp://live.twitch.tv:1935/app");
+    }
+
+    #[test]
+    fn parse_rtmps_defaults_to_443_with_tls() {
+        // Kick's dashboard form: rtmps host on 443, /app path.
+        let u = EgressUrl::parse(
+            "rtmps://fa723fc1b171.global-contribute.live-video.net/app/sk_test_abc",
+        )
+        .unwrap();
+        assert_eq!(u.host, "fa723fc1b171.global-contribute.live-video.net");
+        assert_eq!(u.port, 443);
+        assert_eq!(u.app, "app");
+        assert_eq!(u.stream_key, "sk_test_abc");
+        assert!(u.tls);
+        assert_eq!(
+            u.tc_url,
+            "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
+        );
+    }
+
+    #[test]
+    fn parse_rtmps_honours_explicit_port() {
+        let u = EgressUrl::parse("rtmps://host.example/app/k").unwrap();
+        assert_eq!(u.port, 443);
+        let u = EgressUrl::parse("rtmps://host.example:1936/app/k").unwrap();
+        assert_eq!(u.port, 1936);
+        assert!(u.tls);
+    }
+
+    #[test]
+    fn parse_rejects_unknown_scheme() {
+        assert!(EgressUrl::parse("http://host/app/k").is_err());
+        assert!(EgressUrl::parse("host/app/k").is_err());
     }
 }
