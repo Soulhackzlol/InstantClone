@@ -149,20 +149,23 @@ pub struct DestinationState {
     /// byte-identical to what beta.6 emitted from the ingest-side
     /// flatten - so existing destinations see no behaviour change.
     pub pass_through_multitrack_video: AtomicBool,
-    /// Twitch only: when true, multi-track AUDIO tags (live track 0 +
-    /// VOD audio track 1, OBS's "Pista VOD de Twitch") pass through to
-    /// the destination bit-faithfully. Twitch's regular ingest has
-    /// supported the VOD audio track for years, predating Enhanced
-    /// Broadcasting - so this is `true` for any enabled Twitch
-    /// destination, not gated on an EB session like the video flag
-    /// above. Non-Twitch destinations still drop TrackId != 0 audio so
-    /// a simulcast YouTube / Kick doesn't get a second track it can't
-    /// decode. Before v0.1.3 we reused `pass_through_multitrack_video`
-    /// for both, which meant a Twitch destination without EB silently
-    /// dropped the VOD audio track and left the live track wrapped in
-    /// Enhanced-RTMP multi-track framing - Twitch's regular ingest
-    /// reads the metadata but the audio renders silent.
-    pub pass_through_multitrack_audio: AtomicBool,
+    /// When true, multi-track AUDIO tags pass through to this destination
+    /// bit-faithfully - a Twitch destination keeping the live track (wire
+    /// TrackId 0) and the VOD-audio track (TrackId 1, OBS's "Pista VOD de
+    /// Twitch") together. Twitch's regular ingest has supported the VOD
+    /// audio track for years, predating Enhanced Broadcasting, so this is
+    /// the default for any enabled Twitch destination, not gated on an EB
+    /// session like the video flag above. When false, the pump keeps only
+    /// `audio_track` (below), flattened - so a simulcast YouTube / Kick
+    /// gets exactly one audio track it can decode. Set by the supervisor
+    /// from the destination's `audio_track` setting + platform; see
+    /// `audio_egress`.
+    pub audio_passthrough: AtomicBool,
+    /// The single wire TrackId this destination keeps when `audio_passthrough`
+    /// is false. `0` = the live track (default for every non-Twitch
+    /// platform); `1` = the second / clean track (copyright-safe audio for
+    /// YouTube / Kick). Only read when `audio_passthrough` is false.
+    pub audio_track: AtomicU8,
     /// True when this destination wants the vertical (9:16) canvas
     /// instead of the horizontal primary. Set by the supervisor from the
     /// destination's `stream_format == "vertical"` (non-Twitch only;
@@ -261,7 +264,10 @@ impl DestinationState {
             // a DestinationState without going through the supervisor
             // (the destination_state lazy-init in particular).
             pass_through_multitrack_video: AtomicBool::new(false),
-            pass_through_multitrack_audio: AtomicBool::new(false),
+            // Default: single live track (TrackId 0), the safe non-Twitch
+            // behaviour until the supervisor sets the real policy.
+            audio_passthrough: AtomicBool::new(false),
+            audio_track: AtomicU8::new(0),
             egress_vertical: AtomicBool::new(false),
             // 0xFF = unresolved until a portrait track is detected.
             vertical_primary_track: AtomicU8::new(0xFF),
@@ -289,6 +295,18 @@ impl DestinationState {
             return Some(VideoEgress::Track(track));
         }
         Some(VideoEgress::Track(0))
+    }
+
+    /// The audio egress policy for this destination right now, the audio
+    /// twin of `video_egress`. Read by both the live send path and the
+    /// seq-header replay so they agree on which track(s) to forward.
+    pub fn audio_egress(&self) -> crate::h264::AudioEgress {
+        use crate::h264::AudioEgress;
+        if self.audio_passthrough.load(Ordering::Relaxed) {
+            AudioEgress::Passthrough
+        } else {
+            AudioEgress::Track(self.audio_track.load(Ordering::Relaxed))
+        }
     }
 
     /// Try to claim the right to fetch this destination's VOD-audio IVS
@@ -1961,14 +1979,12 @@ async fn pace_and_send(
             }
             // Mirror the per-destination video selection. Twitch
             // destinations get multi-track audio passthrough (VOD-audio
-            // session); non-Twitch destinations drop OneTrack TrackId
-            // != 0 so a simulcast YouTube / Kick doesn't choke on a
-            // second audio track they don't decode. Single-track audio
-            // borrows through unchanged in both modes.
-            let Some(selected) = crate::h264::select_audio_bytes(
-                io_buf,
-                dest.pass_through_multitrack_audio.load(Ordering::Relaxed),
-            ) else {
+            // session); every other destination keeps a single track
+            // (`audio_egress`), flattened, so a simulcast YouTube / Kick
+            // gets exactly one audio track it can decode. Single-track
+            // audio borrows through unchanged.
+            let Some(selected) = crate::h264::select_audio_bytes(io_buf, dest.audio_egress())
+            else {
                 state.consumer_seq = meta.seq + 1;
                 dest.consumer_seq
                     .store(state.consumer_seq, Ordering::Relaxed);
@@ -2372,18 +2388,15 @@ async fn send_sequence_headers(
             sink.send_video(ts, bytes_out).await?;
         }
     }
-    // Audio seq-headers, same per-track shape as video, but gated on
-    // the AUDIO passthrough flag - which is true for every Twitch
-    // destination regardless of EB session, because Twitch's regular
-    // ingest accepts multi-track audio (VOD audio track 1) without an
-    // EB allocation. v0.1.0..0.1.2 reused the video flag here, which
-    // meant a non-EB Twitch destination only got TrackId 0's
-    // AudioSpecificConfig replayed on egress restart - leaving the
-    // VOD track's decoder unconfigured and the live track wrapped in
-    // multi-track framing the regular ingest didn't decode. Non-Twitch
-    // destinations still only get the primary track's config (the
-    // simulcast-second-audio-track simply doesn't exist for them).
-    let a_passthrough = dest.pass_through_multitrack_audio.load(Ordering::Relaxed);
+    // Audio seq-headers, same per-track shape as video, but keyed on the
+    // AUDIO egress policy - Passthrough for every Twitch destination
+    // regardless of EB session (Twitch's regular ingest accepts multi-track
+    // audio / VOD audio track 1 without an EB allocation), a single flattened
+    // track for everyone else. Run the cached header through the very same
+    // `select_audio_bytes` the live path uses so the replayed config matches
+    // the frames byte-for-byte (a non-Twitch dest gets its one track's
+    // AudioSpecificConfig, flattened; the second-audio-track config is
+    // dropped for platforms that can't decode it).
     let a_headers: Vec<(u8, Vec<u8>)> = ctrl
         .ring
         .audio_seq_headers
@@ -2392,36 +2405,50 @@ async fn send_sequence_headers(
         .iter()
         .map(|(k, v)| (*k, v.clone()))
         .collect();
-    if a_passthrough {
-        for (track_id, h) in &a_headers {
-            crate::trace::log(
-                "AUDIO_SEQ_HDR_SENT",
-                &format!(
-                    "ts=0x{:08x} track={} bytes={} hex={}",
-                    ts,
-                    track_id,
-                    h.len(),
-                    crate::trace::hex_prefix(h, 32)
-                ),
-            );
-            sink.send_audio(ts, h).await?;
+    match dest.audio_egress() {
+        crate::h264::AudioEgress::Passthrough => {
+            for (track_id, h) in &a_headers {
+                crate::trace::log(
+                    "AUDIO_SEQ_HDR_SENT",
+                    &format!(
+                        "ts=0x{:08x} track={} bytes={} hex={}",
+                        ts,
+                        track_id,
+                        h.len(),
+                        crate::trace::hex_prefix(h, 32)
+                    ),
+                );
+                sink.send_audio(ts, h).await?;
+            }
         }
-    } else if let Some(h) = a_headers
-        .iter()
-        .find(|(k, _)| *k == 0)
-        .or_else(|| a_headers.first())
-        .map(|(_, v)| v)
-    {
-        crate::trace::log(
-            "AUDIO_SEQ_HDR_SENT",
-            &format!(
-                "ts=0x{:08x} bytes={} hex={}",
-                ts,
-                h.len(),
-                crate::trace::hex_prefix(h, 32)
-            ),
-        );
-        sink.send_audio(ts, h).await?;
+        egress @ crate::h264::AudioEgress::Track(target) => {
+            // Prefer the exact track's cached config; fall back to the live
+            // track 0 (then whatever is first) when the requested track isn't
+            // cached, matching select_audio_bytes' live-track fallback so the
+            // replayed config always agrees with the frames on the wire. A
+            // legacy single-track config lands under key 0.
+            let header = a_headers
+                .iter()
+                .find(|(k, _)| *k == target)
+                .or_else(|| a_headers.iter().find(|(k, _)| *k == 0))
+                .or_else(|| a_headers.first())
+                .map(|(_, v)| v);
+            if let Some(h) = header {
+                if let Some(bytes) = crate::h264::select_audio_bytes(h, egress) {
+                    crate::trace::log(
+                        "AUDIO_SEQ_HDR_SENT",
+                        &format!(
+                            "ts=0x{:08x} track={} bytes={} hex={}",
+                            ts,
+                            target,
+                            bytes.len(),
+                            crate::trace::hex_prefix(&bytes, 32)
+                        ),
+                    );
+                    sink.send_audio(ts, &bytes).await?;
+                }
+            }
+        }
     }
     sink.flush().await
 }

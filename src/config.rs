@@ -183,6 +183,21 @@ pub struct Destination {
     /// see `h264::detect_vertical_primary_track`. Unknown / empty values
     /// fall back to "horizontal".
     pub stream_format: String,
+    /// Which OBS audio track(s) this destination receives. Only meaningful
+    /// once OBS sends a second audio track (the VOD-unlocker script, or
+    /// Enhanced Broadcasting). One of:
+    ///   "auto" (default) - Twitch gets every track (so the VOD-audio track
+    ///                      keeps flowing); every other platform gets the
+    ///                      single live track (wire TrackId 0).
+    ///   "both"           - pass every track through. Only Twitch consumes a
+    ///                      second audio track, so for other platforms this
+    ///                      degrades to the live track.
+    ///   "1"              - the live track only (wire TrackId 0).
+    ///   "2"              - the second / clean track only (wire TrackId 1),
+    ///                      flattened to a single track. Routes copyright-safe
+    ///                      audio to YouTube / Kick while Twitch keeps both.
+    /// Unknown / empty values fall back to "auto".
+    pub audio_track: String,
 }
 
 impl Destination {
@@ -385,6 +400,7 @@ impl Settings {
                 vod_audio: false,
                 vod_audio_inject_eb: false,
                 stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
             });
         }
         // Clamp / sanitize on load - hand-edited values can otherwise
@@ -586,6 +602,10 @@ impl Settings {
             if d.stream_format == "vertical" {
                 writeln!(f, "destination.{}.stream_format=vertical", i)?;
             }
+            // Only emit when non-default ("auto"), same downgrade-safe reason.
+            if d.audio_track != "auto" && !d.audio_track.is_empty() {
+                writeln!(f, "destination.{}.audio_track={}", i, d.audio_track)?;
+            }
         }
         f.sync_all()?;
         Ok(())
@@ -697,6 +717,7 @@ impl Settings {
                                 vod_audio: false,
                                 vod_audio_inject_eb: false,
                                 stream_format: "horizontal".into(),
+                                audio_track: "auto".into(),
                             });
                         }
                         let d = &mut self.destinations[idx];
@@ -719,6 +740,14 @@ impl Settings {
                                     "vertical".into()
                                 } else {
                                     "horizontal".into()
+                                };
+                            }
+                            "audio_track" => {
+                                // Known routing modes only; anything else
+                                // (empty, a typo) falls back to "auto".
+                                d.audio_track = match value {
+                                    "both" | "1" | "2" => value.into(),
+                                    _ => "auto".into(),
                                 };
                             }
                             _ => {}
@@ -1307,6 +1336,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1336,6 +1366,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         };
         let url = d.egress_url().unwrap();
         assert!(url.starts_with("rtmp://live.twitch.tv/app/"));
@@ -1356,6 +1387,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1379,6 +1411,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1401,6 +1434,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1429,6 +1463,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         };
         let url = d.egress_url().unwrap();
         assert!(url.starts_with("rtmps://"), "kick must use rtmps: {url}");
@@ -1457,6 +1492,7 @@ mod tests {
                 vod_audio: false,
                 vod_audio_inject_eb: false,
                 stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
             };
             assert_eq!(
                 d.egress_url().as_deref(),
@@ -1482,6 +1518,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         });
         assert!(
             s.validate().iter().any(|e| e.contains("Kick Server URL")),
@@ -1507,6 +1544,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         };
         assert_eq!(
             d.egress_url().as_deref(),
@@ -1533,6 +1571,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         };
         assert!(!bad.is_well_formed());
     }
@@ -1583,6 +1622,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         });
         s.destinations.push(Destination {
             id: "yt1".into(),
@@ -1598,6 +1638,9 @@ mod tests {
             // Non-default value so the round-trip proves stream_format
             // both writes (only when != "horizontal") and reads back.
             stream_format: "vertical".into(),
+            // Non-default: the clean track routed to YouTube (copyright).
+            // Proves audio_track writes only when != "auto" and reads back.
+            audio_track: "2".into(),
         });
         s.profiles = vec![
             DelayProfile {
@@ -1633,6 +1676,9 @@ mod tests {
         assert_eq!(loaded.destinations[1].youtube_ingest, "backup");
         assert_eq!(loaded.destinations[0].stream_format, "horizontal");
         assert_eq!(loaded.destinations[1].stream_format, "vertical");
+        // audio_track: default stays "auto", the non-default "2" survives.
+        assert_eq!(loaded.destinations[0].audio_track, "auto");
+        assert_eq!(loaded.destinations[1].audio_track, "2");
         assert_eq!(loaded.profiles.len(), 2);
         assert_eq!(loaded.profiles[0].delay_ms, 10_000);
         assert_eq!(loaded.profiles[1].name, "Long");
@@ -1706,6 +1752,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         });
         s.save(&path).expect("save");
 
@@ -1762,6 +1809,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         });
         s.save(&path).expect("save");
 
@@ -1811,6 +1859,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         });
         s.save(&path).expect("save");
 

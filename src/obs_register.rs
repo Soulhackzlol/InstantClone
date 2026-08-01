@@ -181,7 +181,7 @@ fn looks_like_services_json(file: &str) -> io::Result<()> {
 
 /// Wrap `fs::write` with a friendlier error when Windows reports the
 /// file is locked by another process - usually OBS holding it open.
-fn write_or_friendly(path: &std::path::Path, contents: &str) -> io::Result<()> {
+fn write_or_friendly(path: &std::path::Path, contents: impl AsRef<[u8]>) -> io::Result<()> {
     match fs::write(path, contents) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -193,7 +193,7 @@ fn write_or_friendly(path: &std::path::Path, contents: &str) -> io::Result<()> {
             if locked {
                 Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    "services.json is locked - close OBS Studio first, then try again.",
+                    "the OBS config file is locked - close OBS Studio first, then try again.",
                 ))
             } else {
                 Err(e)
@@ -668,6 +668,101 @@ pub fn find_obs_executable() -> Option<PathBuf> {
     obs_executable_candidates().into_iter().find(|p| p.exists())
 }
 
+// ── OBS version + optional VOD-unlocker script install ──────────────
+
+/// Pull the first `<maj>.<min>.<patch>` triple out of a string. Used to
+/// read OBS's version from its log header line
+/// (`... OBS 32.2.1 (64-bit, windows)`). Ignores 2-part numbers.
+fn first_version_triple(s: &str) -> Option<(u32, u32, u32)> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            let parts: Vec<&str> = s[start..i].split('.').collect();
+            if parts.len() >= 3 {
+                if let (Ok(a), Ok(b), Ok(c)) =
+                    (parts[0].parse(), parts[1].parse(), parts[2].parse())
+                {
+                    return Some((a, b, c));
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// Best-effort OBS version, parsed from the newest log file's header line
+/// (`... OBS 32.2.1 (64-bit, windows)`). `None` when OBS has never run or
+/// its logs can't be read. Callers treat `None` as "unknown - allow with
+/// a note", not a hard block: this only gates the experimental
+/// VOD-unlocker script.
+pub fn obs_version() -> Option<(u32, u32, u32)> {
+    let logs_dir = std::env::var("APPDATA")
+        .ok()
+        .map(|p| PathBuf::from(p).join("obs-studio").join("logs"))?;
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in fs::read_dir(&logs_dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+            continue;
+        }
+        if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
+            if newest.as_ref().is_none_or(|(t, _)| modified > *t) {
+                newest = Some((modified, path));
+            }
+        }
+    }
+    let contents = fs::read_to_string(newest?.1).ok()?;
+    contents
+        .lines()
+        .take(30)
+        .filter(|l| l.contains("OBS"))
+        .find_map(first_version_triple)
+}
+
+/// OBS's per-user scripts folder (`%APPDATA%/obs-studio/scripts`). This is
+/// just a stable home for the file - OBS loads scripts by absolute path,
+/// so the location isn't load-bearing, only tidy.
+fn obs_scripts_dir() -> Option<PathBuf> {
+    std::env::var("APPDATA")
+        .ok()
+        .map(|p| PathBuf::from(p).join("obs-studio").join("scripts"))
+}
+
+/// Write the optional VOD-unlocker Lua script (bytes fetched from the
+/// release) into OBS's scripts folder and return its path. The user still
+/// adds it once via Tools -> Scripts; we only place the file so they never
+/// have to hunt for it on GitHub.
+pub fn install_vod_script(bytes: &[u8]) -> io::Result<PathBuf> {
+    let dir = obs_scripts_dir().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "OBS config folder not found (is %APPDATA% set / OBS installed?)",
+        )
+    })?;
+    fs::create_dir_all(&dir)?;
+    let path = dir.join("optional-vod-unlocker.lua");
+    write_or_friendly(&path, bytes)?;
+    Ok(path)
+}
+
+/// Whether the VOD-unlocker script is already sitting in OBS's scripts folder
+/// (placed by `install_vod_script`). The dashboard uses this to show "already
+/// downloaded - add it in Tools -> Scripts" instead of prompting to fetch it
+/// again. This only checks the file exists on disk; whether the user has
+/// actually added it inside OBS is something we can't see from here.
+pub fn vod_script_installed() -> bool {
+    obs_scripts_dir()
+        .map(|d| d.join("optional-vod-unlocker.lua").is_file())
+        .unwrap_or(false)
+}
+
 /// Whether an `obs64.exe` process is currently running. Used by the setup
 /// wizard to show the "close OBS first" note only when it actually applies:
 /// registering edits `services.json`, which a running OBS overwrites on exit,
@@ -882,6 +977,19 @@ mod tests {
 }
 "#
         .to_string()
+    }
+
+    #[test]
+    fn first_version_triple_reads_obs_log_header() {
+        // The real OBS log header line.
+        assert_eq!(
+            first_version_triple("18:52:33.123: OBS 32.2.1 (64-bit, windows)"),
+            Some((32, 2, 1))
+        );
+        assert_eq!(first_version_triple("OBS 30.0.0"), Some((30, 0, 0)));
+        // Two-part numbers don't count; need major.minor.patch.
+        assert_eq!(first_version_triple("version 1.2 only"), None);
+        assert_eq!(first_version_triple("no digits here"), None);
     }
 
     #[test]

@@ -818,6 +818,17 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .sys-version-pill.new{background:color-mix(in oklch,var(--warn,#d6a23a) 18%,transparent);color:var(--warn,#d6a23a)}
 .sys-version-pill.ahead{background:color-mix(in oklch,#a18bff 18%,transparent);color:#a18bff}
 .sys-version-pill.err{background:color-mix(in oklch,var(--err) 14%,transparent);color:var(--err)}
+/* Version-aware requirement callout (VOD unlocker section). `.req` = a hard
+   requirement (OBS 32.2+ must use the script), `.info` = softer guidance. */
+.sys-callout{margin-top:12px;padding:10px 13px;border-radius:9px;font-size:12.5px;
+  line-height:1.5;border:1px solid var(--line);display:flex;gap:9px;align-items:flex-start}
+.sys-callout .sys-callout-ic{flex:0 0 auto;font-size:14px;line-height:1.35}
+.sys-callout.req{border-color:color-mix(in oklch,var(--warn,#d6a23a) 45%,var(--line));
+  background:color-mix(in oklch,var(--warn,#d6a23a) 12%,transparent)}
+.sys-callout.req .sys-callout-ic{color:var(--warn,#d6a23a)}
+.sys-callout.info{border-color:color-mix(in oklch,var(--accent) 32%,var(--line));
+  background:color-mix(in oklch,var(--accent) 8%,transparent)}
+.sys-callout.info .sys-callout-ic{color:var(--accent)}
 /* Links inside the About status messages need explicit contrast - they */
 /* sit inside .muted, which would otherwise mute them into the body copy. */
 #sys-about-msg a,
@@ -1901,18 +1912,18 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
     <label class="wiz-feature wiz-feature-toggle">
       <input type="checkbox" id="w-vod-audio">
       <div>
-        <div class="wiz-feature-h" style="margin:0">Save a VOD audio track <span class="wiz-tag wiz-tag-twitch">Twitch feature</span></div>
-        <p class="wiz-feature-b">A second audio track on your Twitch VOD - handy for stripping copyrighted music from the <b>recording</b> while your live audio stays intact.</p>
+        <div class="wiz-feature-h" style="margin:0">Save a VOD audio track <span class="wiz-tag wiz-tag-twitch">Twitch feature</span> <span class="tag">experimental</span></div>
+        <p class="wiz-feature-b">A second audio track on your Twitch VOD - handy for keeping copyrighted music in the <b>live</b> stream but out of the <b>recording</b>. On the InstantClone service you enable it with a tiny optional script.</p>
       </div>
     </label>
     <div id="w-vod-how" hidden class="wiz-vod-how">
-      <div class="wiz-vod-how-t">Three steps <b>in OBS</b> (after this wizard):</div>
+      <div class="wiz-vod-how-t">Why a script? OBS hardcodes its VOD Track to the service named "Twitch", so it's locked on the InstantClone service. The <b>optional VOD unlocker script</b> adds the same second audio track OBS won't - nothing else. <b>OBS 32.2+ needs it</b> (older OBS can still use the built-in VOD Track checkbox).</div>
       <ol>
-        <li><b>Settings &rarr; Stream:</b> Service = <b>Custom&hellip;</b>, Server = the URL shown on the <b>InstantClone dashboard's OBS tab</b>, Key = <code class="mono">main</code></li>
-        <li><b>Settings &rarr; Output:</b> Output Mode = <b>Advanced</b>, then tick <b>VOD Track</b> under Streaming</li>
-        <li><b>Close OBS</b>, then reopen it. (OBS can't change this while running.)</li>
+        <li>Finish this wizard, then open <b>System &rarr; Behavior &rarr; Twitch VOD audio unlocker</b> and click <b>Download</b>.</li>
+        <li>In OBS: <b>Tools &rarr; Scripts &rarr; +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
+        <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>).</li>
       </ol>
-      <div class="w-hint">We'll remember the choice - these are the OBS-side steps you do once.</div>
+      <div class="w-hint">Nothing to configure here - these are the OBS-side steps you do once, after setup.</div>
     </div>
   </div>
 
@@ -2073,6 +2084,21 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
     <div id="dest-form-twitch-native-note" hidden class="muted" style="font-size:11.5px;margin:2px 0 6px;line-height:1.45">
       Nothing to set here - a <b>normal Twitch stream just works</b>, and so does regular <b>Enhanced Broadcasting</b> (that's horizontal too); InstantClone simply forwards whatever OBS sends. Only Twitch's new <b>Dual Format</b> (a beta add-on to Enhanced Broadcasting) also sends a vertical 9:16 canvas - when it's on, InstantClone forwards both automatically, no toggle needed. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
     </div>
+    <!-- Per-destination audio track routing (issue #44). Only bites when OBS
+         sends a 2nd audio track (VOD unlocker script or Enhanced Broadcasting);
+         with one track everything stays on the live audio regardless. -->
+    <div id="dest-form-audio-wrap" style="margin-top:12px">
+      <label>Audio track <span class="muted" style="text-transform:none;letter-spacing:0">- only if OBS sends a second track</span></label>
+      <select id="dest-form-audio" class="ic-input">
+        <option value="auto">Auto - Twitch keeps both, other platforms use the live track</option>
+        <option value="both">Both tracks - Twitch VOD audio (other platforms fall back to the live track)</option>
+        <option value="1">Track 1 only - live audio</option>
+        <option value="2">Track 2 only - clean / no-copyright audio</option>
+      </select>
+      <div class="muted" id="dest-form-audio-help" style="font-size:11.5px;margin-top:5px;line-height:1.45">
+        If OBS sends a second audio track (via the <b>VOD unlocker script</b> or Enhanced Broadcasting), choose what <i>this</i> destination gets. Classic use: send <b>Track 2</b> (music stripped) to YouTube to dodge copyright while Twitch keeps <b>Both</b>. Only Twitch consumes a second audio track, so other platforms always send a single one. If the track you pick isn't being sent, the live track is used instead, so a destination never goes silent. Most setups can leave this on <b>Auto</b>.
+      </div>
+    </div>
     <div class="dfg-sep">Stream key &amp; status</div>
     <label id="dest-form-key-label">Stream key <span class="muted" id="dest-form-key-hint"></span></label>
     <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
@@ -2080,15 +2106,40 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
     <div class="row"><label style="display:inline-flex;align-items:center;gap:8px;margin:0;text-transform:none;letter-spacing:0;font-size:13px">
       <input type="checkbox" id="dest-form-enabled" checked> Enabled
     </label></div>
-    <!-- VOD audio (Twitch only). Visible only when platform == twitch.
-         The sub-toggle for VOD+EB sits inside this block so it's
-         visually subordinate to the parent. -->
+    <!-- Twitch VOD audio (Twitch only). Visible only when platform == twitch.
+         Leads with the VOD-unlocker script (the path on OBS 32.2+); the old
+         VOD-Track-checkbox method + EB launcher live in the version-gated
+         "dest-vod-legacy" details below (hidden on OBS 32.2+). -->
     <div id="dest-form-vod-wrap" hidden class="dest-vod">
-      <label class="dest-vod-toggle">
+      <div class="dest-vod-title">Twitch VOD audio <span class="tag">experimental</span></div>
+      <div class="muted dest-vod-desc">A second audio track saved only to your Twitch <b>VOD</b> - keep copyrighted music in the live stream but out of the recording. OBS locks its built-in VOD Track to the service literally named "Twitch", so on the <b>InstantClone</b> service you unlock it with a tiny optional script.</div>
+
+      <!-- Recommended path: the VOD unlocker script. Required on OBS 32.2+. -->
+      <div id="dest-vod-script" style="margin-top:12px">
+        <div class="dest-vod-title" style="font-size:12.5px">VOD unlocker script <span class="muted" id="dest-vod-script-badge" style="font-weight:400"></span></div>
+        <div class="row" style="gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="ic-btn ic-btn-primary" id="vod-script-btn" onclick="installVodScript('vod-script-btn','vod-script-msg')">Download VOD unlocker script</button>
+          <span class="muted" id="vod-script-msg" style="font-size:11.5px"></span>
+        </div>
+        <ol style="margin:10px 0 0;padding-left:16px;font-size:11.5px;line-height:1.7;color:var(--fg-2)">
+          <li>Click <b>Download</b> - it drops <code class="mono">optional-vod-unlocker.lua</code> into OBS's scripts folder.</li>
+          <li>In OBS: <b>Tools → Scripts → +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
+          <li>In the script panel, set <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>). Your live mix stays on track 1.</li>
+        </ol>
+        <details style="margin-top:8px">
+          <summary>Why a script?</summary>
+          <div>OBS hardcodes the VOD Track to the service named "Twitch". The script attaches the exact same second audio encoder OBS's built-in VOD Track would - just without that lock - so it works on the InstantClone service. It touches nothing else.</div>
+        </details>
+      </div>
+
+      <!-- Legacy path: OBS's built-in VOD Track checkbox. OBS before 32.2 only. -->
+      <details id="dest-vod-legacy" style="margin-top:12px">
+        <summary>On OBS older than 32.2? Old VOD Track method</summary>
+      <label class="dest-vod-toggle" style="margin-top:10px">
         <input type="checkbox" id="dest-form-vod-audio">
         <div>
-          <div class="dest-vod-title">VOD audio mode <span class="muted" style="font-weight:400">(Twitch)</span></div>
-          <div class="muted dest-vod-desc">Saves a separate audio track to your Twitch VOD - handy for stripping copyrighted music from the saved recording.</div>
+          <div class="dest-vod-title">VOD audio mode <span class="muted" style="font-weight:400">(Custom RTMP)</span></div>
+          <div class="muted dest-vod-desc">Uses OBS's built-in VOD Track checkbox on a Custom RTMP setup. Only works on OBS before 32.2 - newer OBS locks it, so use the script above.</div>
         </div>
       </label>
       <details>
@@ -2116,6 +2167,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
           <div>OBS ignores config-URL injections for Custom RTMP, so the only way to enable EB is the <code class="mono">--config-url</code> launch flag. It's per-launch: reopening OBS normally drops EB until you click here again.</div>
         </details>
       </div>
+      </details>
     </div>
     <div class="row" style="margin-top:14px;justify-content:flex-end">
       <button class="ic-btn ic-btn-ghost" onclick="cancelDestForm()">Cancel</button>
@@ -2509,13 +2561,33 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
       </div>
     </section>
 
-    <!-- OBS quick launch: the EB / VOD+EB launchers used to live only
-         inside the Twitch destination editor behind the VOD toggle.
-         Surfaced here so a streamer can start OBS pre-wired without
-         opening any destination's settings. -->
+    <!-- Twitch VOD audio via the optional unlocker script. Surfaced here so
+         a streamer can grab it without opening a destination's settings. -->
+    <section class="sys-section">
+      <div class="ic-label">Twitch VOD audio <span class="tag">experimental</span></div>
+      <div class="tab-sub">Keep copyrighted music in your live stream but out of the <b>VOD</b>. OBS locks its built-in <b>VOD Track</b> to the service literally named "Twitch", so on the InstantClone service you add the second audio track with a tiny optional script.</div>
+
+      <!-- Version-aware requirement callout, filled by refreshSysVodScript(). -->
+      <div id="sys-vod-req" class="sys-callout info" hidden></div>
+
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="ic-btn ic-btn-primary" id="sys-vod-script-btn" onclick="installVodScript('sys-vod-script-btn','sys-vod-script-msg')">Download VOD unlocker script</button>
+        <span class="muted" id="sys-vod-script-msg" style="font-size:12px"></span>
+      </div>
+      <ol class="tab-sub" style="margin:10px 0 0;padding-left:18px;line-height:1.7">
+        <li>Click <b>Download</b> - it drops <code class="mono">optional-vod-unlocker.lua</code> into OBS's scripts folder.</li>
+        <li>In OBS: <b>Tools → Scripts → +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
+        <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>). Your live mix stays on track 1.</li>
+      </ol>
+      <div class="tab-sub" style="margin-top:8px">Then, per destination, use <b>Audio track</b> to route it - Twitch keeps <b>Both</b>, send <b>Track 2</b> (music stripped) to YouTube to dodge copyright.</div>
+    </section>
+
+    <!-- OBS quick launch: Enhanced Broadcasting (video) launcher. The legacy
+         "EB + VOD" launcher is version-gated off on OBS 32.2+, where the VOD
+         track comes from the unlocker script above instead. -->
     <section class="sys-section">
       <div class="ic-label">OBS quick launch</div>
-      <div class="tab-sub">Start OBS pre-wired for Twitch <b>Enhanced Broadcasting</b> - no destination editing needed. The launch is session-only: closing OBS and reopening it normally streams plain again.</div>
+      <div class="tab-sub">Start OBS pre-wired for Twitch <b>Enhanced Broadcasting</b> (the multi-resolution video ladder) - no destination editing needed. Session-only: reopen OBS normally and it streams plain again. You can run InstantClone and OBS side by side.</div>
       <div id="sys-eb-twitch-warn" class="tab-sub" hidden style="margin-top:8px;color:var(--warn,#d6a23a)">
         <b>Heads-up:</b> Enhanced Broadcasting needs an enabled <b>Twitch</b> destination with a stream key. OBS will still launch, but EB won't engage until you add one in the Destinations tab.
       </div>
@@ -2524,7 +2596,10 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
         <button class="ic-btn ic-btn-primary" id="sys-vodeb-btn" onclick="sysLaunchVodEb()">Launch OBS · EB + VOD audio track</button>
         <button class="ic-btn ic-btn-ghost" id="sys-eb-shortcut-btn" onclick="createEbShortcut('sys-eb-shortcut-btn','sys-eb-msg')">Make a desktop shortcut</button>
       </div>
-      <div class="tab-sub" style="margin-top:8px">The <b>EB + VOD</b> button also turns on <b>VOD audio mode</b> on your Twitch destination (so the OBS setting survives future saves) and writes OBS's VOD-track unlock flag - close OBS before pressing it or the flag write is blocked.</div>
+      <!-- Shown on OBS 32.2+ where the legacy VOD+EB launcher is hidden. -->
+      <div class="tab-sub" id="sys-vodeb-legacy-note" hidden style="margin-top:8px">For <b>VOD audio</b> on your OBS version, use the <b>VOD unlocker script</b> above - launch <b>Enhanced Broadcasting</b> here for the video ladder and the two work together.</div>
+      <!-- Shown on older OBS where the legacy VOD+EB launcher still applies. -->
+      <div class="tab-sub" id="sys-vodeb-hint" style="margin-top:8px">The <b>EB + VOD</b> button is the <b>legacy VOD path</b> (OBS before 32.2): it turns on VOD audio mode on your Twitch destination and writes OBS's VOD-track unlock flag - close OBS before pressing it or the flag write is blocked.</div>
       <ul id="sys-vodeb-checklist" hidden style="list-style:none;margin:10px 0 0;padding:0;font-size:12.5px"></ul>
       <div class="tab-sub" id="sys-eb-msg" style="margin-top:8px"></div>
     </section>
@@ -3857,6 +3932,7 @@ function openDestForm(d){
   document.getElementById('dest-form-key-hint').textContent = d && d.stream_key_set ? '(currently set)' : '';
   $('dest-form-enabled').checked = d ? d.enabled : true;
   $('dest-form-vod-audio').checked = !!(d && d.vod_audio);
+  $('dest-form-audio').value = (d && d.audio_track) || 'auto';
   updateVodVisibility();
   refreshObsEbLaunchAvailability();
   $('dest-form-msg').innerHTML = '';
@@ -3902,6 +3978,80 @@ function updateVodVisibility(){
   if (vodEbWrap){
     vodEbWrap.hidden = !$('dest-form-vod-audio').checked;
   }
+  // Steer script vs legacy method by the detected OBS version (async).
+  refreshVodMethods();
+}
+
+// Cached /obs/register-status (5s TTL) - shared by the VOD-method steering
+// and any other caller that just needs the OBS version / script state.
+let _obsRegCache = null, _obsRegAt = 0;
+async function obsRegInfo(force){
+  const now = Date.now();
+  if (!force && _obsRegCache && now - _obsRegAt < 5000) return _obsRegCache;
+  try { _obsRegCache = await (await fetch('/obs/register-status')).json(); }
+  catch(_){ _obsRegCache = {}; }
+  _obsRegAt = now;
+  return _obsRegCache;
+}
+// Compare a "maj.min.patch" string against a target. Returns true/false, or
+// null when the version is unknown (OBS never run / logs unreadable).
+function obsVerAtLeast(ver, a, b, c){
+  if (!ver) return null;
+  const m = String(ver).split('.').map(n => parseInt(n, 10) || 0);
+  const t = [a, b, c];
+  for (let i = 0; i < 3; i++){
+    if ((m[i]||0) > t[i]) return true;
+    if ((m[i]||0) < t[i]) return false;
+  }
+  return true;
+}
+// OBS 32.2+ locks the built-in VOD Track method, so the script is the only
+// path there; older/unknown OBS can also use the legacy checkbox.
+async function refreshVodMethods(){
+  const badge = $('dest-vod-script-badge');
+  if (!badge) return;
+  const info = await obsRegInfo();
+  const atLeast = obsVerAtLeast(info.obs_version, 32, 2, 0);
+  const btn = $('vod-script-btn');
+  const msg = $('vod-script-msg');
+  if (btn) btn.textContent = info.vod_script_installed ? 'Re-download VOD unlocker script' : 'Download VOD unlocker script';
+  if (info.vod_script_installed && msg && !msg.textContent){
+    msg.textContent = 'Already in your scripts folder - add it once via Tools → Scripts.';
+  }
+  const verLabel = info.obs_version ? ('OBS ' + info.obs_version) : 'your OBS version';
+  const legacy = $('dest-vod-legacy');
+  if (atLeast === true){
+    badge.textContent = '(required on ' + verLabel + ')';
+    if (legacy) legacy.hidden = true;
+  } else {
+    badge.textContent = '(recommended)';
+    if (legacy) legacy.hidden = false;
+  }
+}
+// Fetch the VOD-unlocker script from the latest release into OBS's scripts
+// folder. Gated server-side to OBS 32.2+ (older is told to use the legacy
+// method). Callable from the destination form and the System tab.
+async function installVodScript(btnId, msgId){
+  const btn = $(btnId || 'vod-script-btn');
+  const msg = $(msgId || 'vod-script-msg');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  if (msg) msg.textContent = 'Downloading…';
+  try {
+    const r = await (await fetch('/obs/vod-script/install', {method:'POST'})).json();
+    if (r.ok){
+      if (msg) msg.textContent = 'Done. In OBS: Tools → Scripts → + → optional-vod-unlocker.lua';
+      toast('VOD unlocker downloaded','ok');
+      await obsRegInfo(true);
+    } else {
+      if (msg) msg.textContent = r.error || 'Failed';
+      toast(r.error || 'Failed','err');
+    }
+  } catch(e){
+    if (msg) msg.textContent = String(e);
+    toast('Request failed','err');
+  }
+  btn.disabled = false;
 }
 
 // Vertical can only exist when a Twitch Enhanced Broadcasting source is on to
@@ -3995,6 +4145,7 @@ async function saveDestForm(){
     twitch_ingest:ingest, youtube_ingest:yingest,
     vod_audio: vodAudio ? 'on' : 'off',
     stream_format: format,
+    audio_track: $('dest-form-audio').value || 'auto',
   });
   if (id) body.set('id', id);
   if (key) body.set('stream_key', key);
@@ -4013,6 +4164,7 @@ async function toggleDest(d){
     custom_egress_url:d.custom_egress_url, twitch_ingest:d.twitch_ingest||'', youtube_ingest:d.youtube_ingest||'',
     vod_audio: d.vod_audio ? 'on' : 'off',
     stream_format: d.stream_format || 'horizontal',
+    audio_track: d.audio_track || 'auto',
     enabled:d.enabled?'off':'on'});
   await fetch('/destinations',{method:'POST', body});
   loadDestinations();
@@ -4839,8 +4991,11 @@ async function saveWizard(){
     return;
   }
   const params = {platform, stream_key:key, custom_egress_url:custom};
-  // The Twitch step's VOD-audio choice rides along on the same save.
-  if (platform === 'twitch') params.vod_audio = $('w-vod-audio').checked ? 'on' : 'off';
+  // The wizard's VOD-audio toggle is informational only: on OBS 32.2+ the
+  // VOD track comes from the unlocker script (set up after the wizard, needs
+  // no InstantClone flag), so we deliberately do NOT set the legacy
+  // vod_audio / IVS-override flag here. The user can still enable the old
+  // method later per-destination for OBS before 32.2.
   const btn = $('wiz-next'); if (btn){ btn.disabled = true; }
   const j = await(await fetch('/config',{method:'POST',body:new URLSearchParams(params)})).json();
   if (j.ok){ wizMsg('Saved - starting up…', 'ok'); nudgeObsWiringIfNeeded(); setTimeout(loadConfig, 500); }
@@ -6657,6 +6812,49 @@ function showSubTab(paneName, subName){
     if (foot) foot.hidden = (subName === 'about');
   }
   if (paneName === 'system' && subName === 'about') aboutMaybeAutoCheck();
+  if (paneName === 'system' && subName === 'behavior') refreshSysVodScript();
+}
+// Fill the System-tab VOD sections: the script button label, the
+// version-aware requirement callout, and - crucially - gate the legacy
+// "EB + VOD audio track" launcher off on OBS 32.2+, where the VOD track
+// must come from the unlocker script instead.
+async function refreshSysVodScript(){
+  const req = $('sys-vod-req');
+  if (!req) return;
+  const info = await obsRegInfo();
+  const btn = $('sys-vod-script-btn');
+  const msg = $('sys-vod-script-msg');
+  if (btn) btn.textContent = info.vod_script_installed ? 'Re-download VOD unlocker script' : 'Download VOD unlocker script';
+  if (info.vod_script_installed && msg && !msg.textContent){
+    msg.textContent = 'Already in your scripts folder - add it once via Tools → Scripts.';
+  }
+  const atLeast = obsVerAtLeast(info.obs_version, 32, 2, 0);
+  const ver = info.obs_version ? ('OBS ' + info.obs_version) : null;
+  const legacyBtn = $('sys-vodeb-btn');
+  const legacyHint = $('sys-vodeb-hint');
+  const legacySteer = $('sys-vodeb-legacy-note');
+  req.hidden = false;
+  if (atLeast === true){
+    // Hard requirement: 32.2 locked the built-in VOD Track to Custom services.
+    req.className = 'sys-callout req';
+    req.innerHTML = '<span class="sys-callout-ic">⚠</span><span><b>' + ver + ' requires this script for VOD audio.</b> OBS 32.2 locked the built-in VOD Track to Custom services, so the old checkbox and the "EB + VOD" launcher no longer add it - use the script.</span>';
+    if (legacyBtn) legacyBtn.hidden = true;
+    if (legacyHint) legacyHint.hidden = true;
+    if (legacySteer) legacySteer.hidden = false;
+  } else if (atLeast === false){
+    req.className = 'sys-callout info';
+    req.innerHTML = '<span class="sys-callout-ic">ℹ</span><span>On ' + ver + ' the built-in VOD Track checkbox still works too, but this script is simpler and keeps working after you update OBS.</span>';
+    if (legacyBtn) legacyBtn.hidden = false;
+    if (legacyHint) legacyHint.hidden = false;
+    if (legacySteer) legacySteer.hidden = true;
+  } else {
+    // OBS version unknown (never launched / logs unreadable).
+    req.className = 'sys-callout info';
+    req.innerHTML = '<span class="sys-callout-ic">ℹ</span><span><b>On OBS 32.2+ this script is required</b> - that version locked the built-in VOD Track to Custom services. Older OBS can still use the built-in VOD Track checkbox.</span>';
+    if (legacyBtn) legacyBtn.hidden = false;
+    if (legacyHint) legacyHint.hidden = false;
+    if (legacySteer) legacySteer.hidden = true;
+  }
 }
 function moveSubTabInd(pane){
   const cur = pane.querySelector('.sub-tab.on'); if (!cur) return;
