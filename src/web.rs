@@ -378,11 +378,16 @@ async fn route(
                 "200 OK",
                 "application/json",
                 format!(
-                    r#"{{"registered":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"active_profile":{},"path":{}}}"#,
+                    r#"{{"registered":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"vod_script_installed":{},"active_profile":{},"path":{}}}"#,
                     crate::obs_register::is_registered(),
                     crate::obs_register::is_obs_running(),
                     crate::obs_register::vod_audio_flag_set(),
                     crate::obs_register::vod_eb_injection_present(s.web_port),
+                    match crate::obs_register::obs_version() {
+                        Some((a, b, c)) => format!(r#""{a}.{b}.{c}""#),
+                        None => "null".to_string(),
+                    },
+                    crate::obs_register::vod_script_installed(),
                     match crate::obs_register::active_profile() {
                         Some(p) => format!(r#""{}""#, p.replace('\\', "\\\\").replace('"', "\\\"")),
                         None => "null".to_string(),
@@ -454,6 +459,75 @@ async fn route(
                         e.to_string().replace('"', "'")
                     ),
                 ),
+            }
+        }
+        ("POST", "/obs/vod-script/install") => {
+            // Experimental: fetch the optional VOD-unlocker OBS script from
+            // the latest release and drop it into OBS's scripts folder, so
+            // the Twitch VOD audio track works while on the InstantClone
+            // service (OBS locks its native VOD track to the "Twitch"
+            // service). Gated to OBS 32.2+ - the version that locked the
+            // built-in VOD Track to Custom services, so the script is the
+            // way from there on. Older OBS still has the working built-in
+            // method; an unknown version is allowed with a note rather than
+            // hard-blocked.
+            match crate::obs_register::obs_version() {
+                Some((a, b, c)) if (a, b, c) < (32, 2, 0) => (
+                    "400 Bad Request",
+                    "application/json",
+                    format!(
+                        r#"{{"ok":false,"error":"This targets OBS 32.2 or newer - detected OBS {a}.{b}.{c}. On older OBS, use the built-in VOD Track checkbox."}}"#
+                    ),
+                ),
+                _ => {
+                    // ureq is blocking - keep it off the async runtime.
+                    let dl = tokio::task::spawn_blocking(|| {
+                        crate::self_update::download_latest_asset("optional-vod-unlocker.lua")
+                    })
+                    .await;
+                    match dl {
+                        Ok(Ok(bytes)) => match crate::obs_register::install_vod_script(&bytes) {
+                            Ok(path) => {
+                                ctrl.log(format!("vod-script: installed {}", path.display()));
+                                (
+                                    "200 OK",
+                                    "application/json",
+                                    format!(
+                                        r#"{{"ok":true,"path":"{}","message":"Downloaded the VOD unlocker into OBS's scripts folder. In OBS: Tools -> Scripts -> + -> pick optional-vod-unlocker.lua (one time)."}}"#,
+                                        path.display()
+                                            .to_string()
+                                            .replace('\\', "\\\\")
+                                            .replace('"', "'")
+                                    ),
+                                )
+                            }
+                            Err(e) => (
+                                "500 Internal Server Error",
+                                "application/json",
+                                format!(
+                                    r#"{{"ok":false,"error":"downloaded but couldn't save it: {}"}}"#,
+                                    e.to_string().replace('"', "'")
+                                ),
+                            ),
+                        },
+                        Ok(Err(e)) => (
+                            "502 Bad Gateway",
+                            "application/json",
+                            format!(
+                                r#"{{"ok":false,"error":"download failed: {}"}}"#,
+                                e.replace('"', "'")
+                            ),
+                        ),
+                        Err(e) => (
+                            "500 Internal Server Error",
+                            "application/json",
+                            format!(
+                                r#"{{"ok":false,"error":"download task failed: {}"}}"#,
+                                e.to_string().replace('"', "'")
+                            ),
+                        ),
+                    }
+                }
             }
         }
         ("POST", "/obs/setup-vod-eb") => {
@@ -1700,6 +1774,7 @@ async fn post_config(
                 vod_audio: false,
                 vod_audio_inject_eb: false,
                 stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
             });
         }
         let d = &mut new_settings.destinations[0];
@@ -2228,6 +2303,7 @@ async fn post_destination_upsert(
         .map(|v| matches!(v.as_str(), "on" | "true" | "1"));
     let stream_format =
         normalize_stream_format(&platform, form.get("stream_format").map(String::as_str));
+    let audio_track = normalize_audio_track(form.get("audio_track").map(String::as_str));
 
     if name.trim().is_empty() {
         return (
@@ -2254,6 +2330,7 @@ async fn post_destination_upsert(
             existing.vod_audio_inject_eb = v;
         }
         existing.stream_format = stream_format;
+        existing.audio_track = audio_track;
     } else {
         ns.destinations.push(config::Destination {
             id,
@@ -2267,6 +2344,7 @@ async fn post_destination_upsert(
             vod_audio,
             vod_audio_inject_eb: vod_audio_inject_eb.unwrap_or(false),
             stream_format,
+            audio_track,
         });
     }
 
@@ -2560,7 +2638,7 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         // "waiting for Dual Format" hint.
         let v = dest_video(ctrl, d, &readouts);
         out.push_str(&format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"audio_track":{at},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled,
@@ -2575,6 +2653,7 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
             va = d.vod_audio,
             vie = d.vod_audio_inject_eb,
             sf = json_escape_quoted(&d.stream_format),
+            at = json_escape_quoted(&d.audio_track),
             vr = v.vertical_ready,
             vcp = v.vertical_canvas_present,
             vres = json_escape_quoted(&v.res),
@@ -2625,6 +2704,17 @@ fn normalize_stream_format(platform: &str, raw: Option<&str>) -> String {
         "vertical".to_string()
     } else {
         "horizontal".to_string()
+    }
+}
+
+/// Normalize the destination form's `audio_track` field. Known routing modes
+/// ("both", "1", "2") pass through; everything else (absent, "auto", a typo)
+/// resolves to the "auto" default. The platform-specific meaning is applied
+/// later by the egress supervisor (see main.rs), not here.
+fn normalize_audio_track(raw: Option<&str>) -> String {
+    match raw {
+        Some("both") | Some("1") | Some("2") => raw.unwrap().to_string(),
+        _ => "auto".to_string(),
     }
 }
 
@@ -4001,6 +4091,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: String::new(),
+            audio_track: "auto".into(),
         }
     }
 

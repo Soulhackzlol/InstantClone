@@ -45,8 +45,8 @@ appropriate.
 
 ## Scope
 
-This Code of Conduct applies within all project spaces — issues, pull
-requests, discussions, and the codebase — and also applies when an individual
+This Code of Conduct applies within all project spaces - issues, pull
+requests, discussions, and the codebase - and also applies when an individual
 is officially representing the project in public spaces.
 
 ## Reporting

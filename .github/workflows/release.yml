@@ -59,8 +59,14 @@ jobs:
           New-Item -ItemType Directory -Path artifacts | Out-Null
           $tag = "${{ github.ref_name }}"
           Copy-Item .\target\release\instantclone.exe "artifacts\instantclone-$tag-windows-x64.exe"
+          # Ship the optional VOD-unlocker OBS script under a version-less
+          # name so `releases/latest/download/optional-vod-unlocker.lua`
+          # always resolves for the in-app auto-downloader.
+          Copy-Item .\obs\instantclone-vod-track.lua "artifacts\optional-vod-unlocker.lua"
           $hash = (Get-FileHash "artifacts\instantclone-$tag-windows-x64.exe" -Algorithm SHA256).Hash.ToLower()
+          $luaHash = (Get-FileHash "artifacts\optional-vod-unlocker.lua" -Algorithm SHA256).Hash.ToLower()
           "$hash  instantclone-$tag-windows-x64.exe" | Out-File -FilePath "artifacts\SHA256SUMS.txt" -Encoding ascii
+          "$luaHash  optional-vod-unlocker.lua" | Out-File -FilePath "artifacts\SHA256SUMS.txt" -Encoding ascii -Append
           Get-ChildItem artifacts
 
       - name: publish release
@@ -72,4 +78,5 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             artifacts/instantclone-*.exe
+            artifacts/optional-vod-unlocker.lua
             artifacts/SHA256SUMS.txt

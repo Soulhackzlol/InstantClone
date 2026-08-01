@@ -600,22 +600,34 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 state
                     .pass_through_multitrack_video
                     .store(has_eb_session, std::sync::atomic::Ordering::Relaxed);
-                // Audio multi-track passthrough is decoupled from EB.
-                // Twitch's regular ingest (live.twitch.tv) has supported
-                // VOD audio (OBS "Pista VOD de Twitch", wire TrackId 1)
-                // for years and accepts Enhanced-RTMP multi-track audio
-                // bit-faithfully. So pass through for any Twitch
-                // destination, with or without an EB session. Non-Twitch
-                // destinations still drop TrackId != 0 so a simulcast
-                // YouTube / Kick doesn't get a track its decoder can't
-                // map. Before v0.1.3 we reused the video flag here,
-                // which silently dropped VOD audio on every non-EB
-                // Twitch destination and wrapped the live audio in
-                // multi-track framing the regular ingest renders silent.
+                // Audio egress policy from the destination's audio_track
+                // setting + platform. Multi-track passthrough is decoupled
+                // from EB: Twitch's regular ingest (live.twitch.tv) has
+                // accepted VOD audio (OBS "Pista VOD de Twitch", wire
+                // TrackId 1) bit-faithfully for years, so any Twitch dest
+                // passes through by default. Only Twitch consumes a second
+                // audio track, so every other platform keeps a single track
+                // (the live track by default, or the clean track 1 for
+                // copyright-safe routing to YouTube / Kick).
                 let is_twitch = dest.platform == "twitch";
+                let (audio_passthrough, audio_track) = match dest.audio_track.as_str() {
+                    // Live track only, on every platform.
+                    "1" => (false, 0u8),
+                    // The clean / second track only, flattened to one track.
+                    "2" => (false, 1u8),
+                    // "both" is meaningful only on Twitch; elsewhere it
+                    // degrades to the single live track.
+                    "both" => (is_twitch, 0u8),
+                    // "auto" (and any legacy value): Twitch keeps both tracks,
+                    // everyone else keeps the live track.
+                    _ => (is_twitch, 0u8),
+                };
                 state
-                    .pass_through_multitrack_audio
-                    .store(is_twitch, std::sync::atomic::Ordering::Relaxed);
+                    .audio_passthrough
+                    .store(audio_passthrough, std::sync::atomic::Ordering::Relaxed);
+                state
+                    .audio_track
+                    .store(audio_track, std::sync::atomic::Ordering::Relaxed);
                 let label = dest.name.clone();
                 let url_clone = url.clone();
                 let handle = tokio::spawn(controller::run_egress(

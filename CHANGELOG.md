@@ -6,6 +6,50 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.1.13] - Twitch VOD audio on the InstantClone service + per-destination audio routing
+
+### Twitch VOD audio, unlocked with an optional script
+
+OBS hardcodes its built-in **VOD Track** to the service literally named
+"Twitch" (`ServiceSupportsVodTrack == {"Twitch"}`), so it was unavailable
+while using the InstantClone service. A tiny optional OBS script now unlocks
+it on *any* service, with no config spoofing and no plugin.
+
+- **One-click VOD unlocker.** A new **System -> Behavior -> Twitch VOD audio
+  unlocker** card (and the Twitch destination editor) downloads
+  `optional-vod-unlocker.lua` straight into OBS's scripts folder. You add it
+  once via **Tools -> Scripts**, and OBS starts sending a second audio track:
+  the script attaches the same AAC encoder OBS's own VOD Track would, just
+  without the service gate. **Required on OBS 32.2+** (that release locked the
+  built-in VOD Track to Custom services); older OBS can still use the classic
+  checkbox, and the dashboard steers you based on your detected OBS version.
+- **Wizard rework.** The Twitch step now explains the script flow and no
+  longer flips the legacy VOD-audio flag, so new setups don't trip the old
+  IVS-override path.
+
+### Per-destination audio track routing
+
+Once OBS sends a second audio track, each destination picks what it receives.
+
+- **Audio track selector.** Per destination: **Auto**, **Both** (Twitch VOD),
+  **Track 1** (live) or **Track 2** (clean). Send the music-free track to
+  YouTube to dodge copyright while Twitch keeps both, or the live track to
+  Kick. Only Twitch consumes a second audio track, so every other platform
+  always receives a single, flattened track (AAC is rewritten to legacy so
+  every ingest accepts it), mirroring the existing video-side flatten. If the
+  chosen track isn't being sent, the live track is used instead, so a
+  destination never goes silent. Defaults to **Auto**, so existing
+  destinations are unchanged.
+
+### Fixes
+
+- **Permanent "update available" nag.** The 0.1.12 build reported itself as
+  0.1.11 (its package version was never bumped), so its update check flagged
+  an update forever. The version now tracks the release and the About tab
+  shows the real number.
+
+## [0.1.12] - Kick RTMPS egress + per-streamer Server URL
+
 ### Kick now works (RTMPS egress)
 
 Kick was never reachable before: the egress spoke plain RTMP on a hardcoded

@@ -457,6 +457,24 @@ pub enum VideoEgress {
     Track(u8),
 }
 
+/// Per-destination AUDIO egress policy, the audio twin of [`VideoEgress`].
+/// Computed by the egress pump from the destination's platform + audio-track
+/// setting (see `DestinationState::audio_egress`):
+///
+/// - `Passthrough`: a Twitch destination sending every audio track
+///   bit-faithfully, so the VOD-audio track (wire `TrackId 1`) keeps reaching
+///   Twitch alongside the live track (`TrackId 0`).
+/// - `Track(n)`: this destination gets exactly ONE audio track, wire
+///   `TrackId n`, flattened to a clean single-track tag. Every non-Twitch
+///   platform is always `Track(_)` - only Twitch consumes a second audio
+///   track, so the rest each take a single track (live `Track(0)` by default,
+///   or the clean/second `Track(1)` for copyright-safe routing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioEgress {
+    Passthrough,
+    Track(u8),
+}
+
 /// Locate the AVCDecoderConfigurationRecord inside a *sequence-header*
 /// video tag payload, across the framings OBS emits. Returns `None` for
 /// anything that isn't an AVC seq header we can read (legacy non-AVC,
@@ -848,59 +866,139 @@ pub fn select_video_bytes<'a>(
     }
 }
 
-/// Decide what audio bytes to put on the wire given the destination's
-/// EB policy. Mirrors `select_video_bytes`:
+/// True when `payload` is an Enhanced-RTMP multi-track audio tag
+/// (SoundFormat=9 in byte 0's high nibble, PacketType=Multitrack=5 in the
+/// low nibble). Everything else - legacy AAC/MP3, Enhanced single-track -
+/// is a single audio track.
+fn is_multitrack_audio(payload: &[u8]) -> bool {
+    payload.len() >= 2 && (payload[0] >> 4) & 0x0F == 9 && (payload[0] & 0x0F) == 5
+}
+
+/// Flatten an Enhanced-RTMP multi-track AUDIO tag down to a standard
+/// single-track tag carrying only `target_track`. The audio twin of
+/// [`flatten_multitrack_video`], shifted by one byte: the multitrack header
+/// is byte 1, the FourCC is bytes 2..6, and (OneTrack) the TrackId is byte 6.
 ///
-/// - `pass_through_multitrack = true`: Twitch destination. Multi-track
-///   audio passes through bit-faithfully so the VOD-audio session
-///   that Twitch allocated (track 1 separate from live track 0) keeps
-///   being fed. Single-track audio also passes through unchanged.
-/// - `pass_through_multitrack = false`: every other RTMP ingest. We
-///   only forward audio from TrackId 0; TrackId != 0 OneTrack-format
-///   multi-track audio tags are dropped, so a YouTube / Kick
-///   destination running alongside a Twitch-EB simulcast doesn't
-///   choke on a second audio track it doesn't know how to handle.
-///   Legacy / single-track audio always passes through.
+/// AAC (`mp4a`) is rewritten to a *legacy* AAC tag (`0xAF` ...), the form
+/// every RTMP ingest accepts - the same reason the vertical AVC path drops to
+/// legacy for finicky ingests. Other codecs (Opus / AC-3 / FLAC) have no
+/// legacy FLV audio representation, so they are re-emitted as an Enhanced-RTMP
+/// single-track audio tag (`0x90 | nested`, FourCC, payload).
 ///
-/// Returns `None` when the tag must be skipped on this destination.
-pub fn select_audio_bytes<'a>(
-    payload: &'a [u8],
-    pass_through_multitrack: bool,
-) -> Option<std::borrow::Cow<'a, [u8]>> {
-    use std::borrow::Cow;
-    if pass_through_multitrack {
-        return Some(Cow::Borrowed(payload));
-    }
-    // Pre-checks mirror audio_seq_header_track_id. Anything that isn't
-    // an Enhanced-RTMP OneTrack multi-track audio tag passes through
-    // unchanged - single-track audio (Enhanced or legacy), MP3, or
-    // ManyTracks / ManyTracksManyCodecs layouts.
-    if payload.is_empty() {
-        return Some(Cow::Borrowed(payload));
-    }
-    if (payload[0] >> 4) & 0x0F != 9 {
-        return Some(Cow::Borrowed(payload));
-    }
-    // PacketType in byte 0's low nibble; 5 = Multitrack.
-    if payload[0] & 0x0F != 5 {
-        return Some(Cow::Borrowed(payload));
-    }
-    if payload.len() < 2 {
-        return Some(Cow::Borrowed(payload));
-    }
-    // OneTrack only (mt_type=0). ManyTracks layouts pack every track
-    // into one tag so there is nothing to drop.
-    if (payload[1] >> 4) & 0x0F != 0 {
-        return Some(Cow::Borrowed(payload));
-    }
-    if payload.len() < 7 {
-        return Some(Cow::Borrowed(payload));
-    }
-    let track_id = payload[6];
-    if track_id != 0 {
+/// Returns `None` when the payload isn't a recognised multi-track audio
+/// layout or `target_track` isn't present, so the caller drops the tag for
+/// this destination.
+pub fn flatten_multitrack_audio(payload: &[u8], target_track: u8) -> Option<Vec<u8>> {
+    if payload.len() < 7 || !is_multitrack_audio(payload) {
         return None;
     }
-    Some(Cow::Borrowed(payload))
+    let mt_type = (payload[1] >> 4) & 0x0F;
+    let nested_pt = payload[1] & 0x0F;
+
+    // Locate the requested track's FourCC + payload across the three
+    // multi-track layouts (offsets mirror flatten_multitrack_video).
+    let (fourcc, track_payload): (&[u8], &[u8]) = match mt_type {
+        0 => {
+            // OneTrack: [FourCC(4)][TrackId(1)][payload..]
+            if payload[6] != target_track {
+                return None;
+            }
+            (&payload[2..6], &payload[7..])
+        }
+        1 => {
+            // ManyTracks: [FourCC(4)] then repeated
+            //   [TrackId(1)][SizeOfAudioTrack(3 BE)][payload]
+            let fourcc = &payload[2..6];
+            let mut rest = &payload[6..];
+            loop {
+                if rest.len() < 4 {
+                    return None;
+                }
+                let len = u32::from_be_bytes([0, rest[1], rest[2], rest[3]]) as usize;
+                if rest.len() < 4 + len {
+                    return None;
+                }
+                if rest[0] == target_track {
+                    break (fourcc, &rest[4..4 + len]);
+                }
+                rest = &rest[4 + len..];
+            }
+        }
+        2 => {
+            // ManyTracksManyCodecs: repeated
+            //   [TrackId(1)][FourCC(4)][SizeOfAudioTrack(3 BE)][payload]
+            let mut rest = &payload[2..];
+            loop {
+                if rest.len() < 8 {
+                    return None;
+                }
+                let len = u32::from_be_bytes([0, rest[5], rest[6], rest[7]]) as usize;
+                if rest.len() < 8 + len {
+                    return None;
+                }
+                if rest[0] == target_track {
+                    break (&rest[1..5], &rest[8..8 + len]);
+                }
+                rest = &rest[8 + len..];
+            }
+        }
+        _ => return None,
+    };
+
+    let mut out = Vec::with_capacity(track_payload.len() + 5);
+    if fourcc == FOURCC_MP4A && nested_pt <= 1 {
+        // Legacy AAC: [0xAF][AACPacketType 0=seq/1=raw][data]. The nested
+        // audio packet type maps 1:1 (SequenceStart=0, CodedFrames=1).
+        out.push(0xAF);
+        out.push(nested_pt);
+        out.extend_from_slice(track_payload);
+    } else {
+        // Enhanced-RTMP single-track audio tag (non-AAC, or an AAC packet
+        // type legacy FLV can't express such as MultichannelConfig).
+        out.push(0x90 | (nested_pt & 0x0F));
+        out.extend_from_slice(fourcc);
+        out.extend_from_slice(track_payload);
+    }
+    Some(out)
+}
+
+/// Decide what audio bytes to put on the wire given the destination's
+/// [`AudioEgress`] policy. The audio twin of `select_video_bytes`:
+///
+/// - [`AudioEgress::Passthrough`] (Twitch): every tag goes through
+///   bit-faithfully, so the VOD-audio track (`TrackId 1`) keeps being fed
+///   alongside the live track.
+/// - [`AudioEgress::Track(n)`]: this destination gets exactly one audio
+///   track, `TrackId n`, flattened - and never goes silent, falling back to
+///   the primary live track when the requested one isn't there:
+///   * a single-track / legacy tag is the only audio there is, so it always
+///     passes through unchanged (even for `Track(1)`: a live track beats a
+///     silent destination if the 2nd track never arrived);
+///   * a multi-track tag is flattened to `TrackId n`, falling back to
+///     `TrackId 0` (live) when track `n` isn't present.
+///
+/// Returns `None` only when the tag can't be represented at all.
+pub fn select_audio_bytes(
+    payload: &[u8],
+    egress: AudioEgress,
+) -> Option<std::borrow::Cow<'_, [u8]>> {
+    use std::borrow::Cow;
+    let target = match egress {
+        AudioEgress::Passthrough => return Some(Cow::Borrowed(payload)),
+        AudioEgress::Track(t) => t,
+    };
+    if !is_multitrack_audio(payload) {
+        // Single track = the only audio there is. Always forward it, whatever
+        // track was requested - a live track beats a silent destination when
+        // the 2nd track isn't being sent.
+        return Some(Cow::Borrowed(payload));
+    }
+    // Flatten the requested track; fall back to the primary live track 0 when
+    // it isn't present, so picking "Track 2" on a single-track stream still
+    // sends audio instead of silence.
+    flatten_multitrack_audio(payload, target)
+        .or_else(|| flatten_multitrack_audio(payload, 0))
+        .map(Cow::Owned)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1976,51 +2074,123 @@ mod tests {
     }
 
     #[test]
-    fn select_audio_bytes_passes_single_track_through_unchanged() {
-        // Legacy AAC and Enhanced single-track must always pass
-        // through, both in passthrough and flatten mode. The helper
-        // is only allowed to drop OneTrack multi-track tags with
-        // TrackId != 0.
+    fn select_audio_bytes_single_track_always_forwards() {
+        // Legacy AAC / Enhanced single-track is the only audio there is, so it
+        // forwards unchanged for EVERY policy - including Track(1): a live
+        // track beats a silent destination when the 2nd track never arrived.
         let legacy_aac = vec![0xaf, 0x01, 0x12, 0x10, 0x56];
-        for passthrough in [true, false] {
-            let out = select_audio_bytes(&legacy_aac, passthrough)
-                .expect("single-track audio must forward");
+        for egress in [
+            AudioEgress::Passthrough,
+            AudioEgress::Track(0),
+            AudioEgress::Track(1),
+        ] {
+            let out =
+                select_audio_bytes(&legacy_aac, egress).expect("single-track audio must forward");
             assert_eq!(out.as_ref(), legacy_aac.as_slice());
             assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
         }
     }
 
     #[test]
+    fn select_audio_bytes_falls_back_to_live_track_when_target_absent() {
+        // A dest pinned to Track(1) but a stream that only carries the live
+        // track (OneTrack TrackId 0) still gets audio: the requested track is
+        // missing, so it falls back to the live track 0, flattened to legacy.
+        let live_only = enhanced_audio_onetrack(0, 1);
+        let out = select_audio_bytes(&live_only, AudioEgress::Track(1))
+            .expect("must fall back to the live track, not go silent");
+        assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
+    }
+
+    #[test]
     fn select_audio_bytes_passes_multitrack_through_for_twitch() {
-        // Twitch destination: every track's bytes flow through
-        // bit-faithfully. The IVS pipeline binds each track id to
-        // its session-allocated slot.
+        // Twitch destination (Passthrough): every track's bytes flow
+        // through bit-faithfully so Twitch's VOD-audio slot keeps its feed.
         for track in 0u8..=3 {
             let tag = enhanced_audio_onetrack(track, 1);
-            let out = select_audio_bytes(&tag, true)
+            let out = select_audio_bytes(&tag, AudioEgress::Passthrough)
                 .unwrap_or_else(|| panic!("twitch must forward track {track}"));
             assert_eq!(out.as_ref(), tag.as_slice());
         }
     }
 
     #[test]
-    fn select_audio_bytes_drops_nonzero_track_for_non_twitch() {
-        // Non-Twitch destinations only get TrackId 0. Track 1 (VOD
-        // audio) is meaningless to YouTube / Kick - drop it rather
-        // than confuse the destination's decoder.
+    fn select_audio_bytes_drops_untargeted_track_for_single_track_dest() {
+        // A single-track destination pinned to Track(0) drops every other
+        // OneTrack rung (e.g. the VOD track), which is meaningless to
+        // YouTube / Kick.
         for track in 1u8..=3 {
             let tag = enhanced_audio_onetrack(track, 1);
             assert!(
-                select_audio_bytes(&tag, false).is_none(),
-                "TrackId {track} must be dropped on non-Twitch egress",
+                select_audio_bytes(&tag, AudioEgress::Track(0)).is_none(),
+                "TrackId {track} must be dropped when the dest wants Track(0)",
             );
         }
     }
 
     #[test]
-    fn select_audio_bytes_keeps_track_zero_for_non_twitch() {
+    fn select_audio_bytes_flattens_target_track_to_legacy_aac() {
+        // The clean/second audio track routed to a single-track dest is
+        // flattened to legacy AAC (0xAF ...), the universally-accepted form.
+        let live = enhanced_audio_onetrack(0, 1);
+        let out = select_audio_bytes(&live, AudioEgress::Track(0))
+            .expect("track 0 must reach a Track(0) destination");
+        assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
+
+        let clean = enhanced_audio_onetrack(1, 1);
+        let out = select_audio_bytes(&clean, AudioEgress::Track(1))
+            .expect("track 1 must reach a Track(1) destination");
+        assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
+    }
+
+    #[test]
+    fn flatten_multitrack_audio_maps_seq_and_frame_packet_types() {
+        // SequenceStart (nested 0) -> AACPacketType 0; CodedFrames (1) -> 1.
+        let seq = enhanced_audio_onetrack(1, 0);
+        assert_eq!(
+            flatten_multitrack_audio(&seq, 1).unwrap(),
+            vec![0xAF, 0x00, 0x12, 0x10, 0x56, 0xe5],
+        );
+        let frame = enhanced_audio_onetrack(1, 1);
+        assert_eq!(
+            flatten_multitrack_audio(&frame, 1).unwrap(),
+            vec![0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5],
+        );
+    }
+
+    #[test]
+    fn flatten_multitrack_audio_missing_track_returns_none() {
         let tag = enhanced_audio_onetrack(0, 1);
-        let out = select_audio_bytes(&tag, false).expect("track 0 must reach every destination");
-        assert_eq!(out.as_ref(), tag.as_slice());
+        assert!(
+            flatten_multitrack_audio(&tag, 2).is_none(),
+            "a track not present in the tag must return None (drop)",
+        );
+    }
+
+    #[test]
+    fn flatten_multitrack_audio_many_tracks_layouts() {
+        // ManyTracks (mt_type 1): [0x95][0x1X][FourCC] then repeated
+        //   [TrackId][Size(3 BE)][payload]. Two AAC tracks; pick track 1.
+        let mut many = vec![0x95, 0x11, b'm', b'p', b'4', b'a'];
+        for (tid, data) in [(0u8, [0xAAu8, 0xBB]), (1u8, [0xCC, 0xDD])] {
+            many.push(tid);
+            many.extend_from_slice(&[0, 0, data.len() as u8]);
+            many.extend_from_slice(&data);
+        }
+        assert_eq!(
+            flatten_multitrack_audio(&many, 1).unwrap(),
+            vec![0xAF, 0x01, 0xCC, 0xDD],
+        );
+
+        // ManyTracksManyCodecs (mt_type 2): repeated
+        //   [TrackId][FourCC][Size(3 BE)][payload]. Track 1 is Opus ->
+        //   Enhanced single-track output (0x90 | nested, FourCC, payload).
+        let mut mtmc = vec![0x95, 0x21];
+        mtmc.extend_from_slice(&[0, b'm', b'p', b'4', b'a', 0, 0, 2, 0x11, 0x22]);
+        mtmc.extend_from_slice(&[1, b'O', b'p', b'u', b's', 0, 0, 2, 0x33, 0x44]);
+        assert_eq!(
+            flatten_multitrack_audio(&mtmc, 1).unwrap(),
+            vec![0x91, b'O', b'p', b'u', b's', 0x33, 0x44],
+        );
     }
 }

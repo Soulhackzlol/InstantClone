@@ -189,6 +189,7 @@ mod tests {
             vod_audio: false,
             vod_audio_inject_eb: false,
             stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
         }
     }
 
