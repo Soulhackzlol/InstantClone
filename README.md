@@ -143,10 +143,11 @@ In OBS, go to **Settings → Stream** and change:
 - Service:    Twitch (or whatever you had)
 - Server:     auto
 - Stream Key: <your real key>
-+ Service:    Custom
-+ Server:     rtmp://127.0.0.1:1935/live
-+ Stream Key: live
++ Service:    InstantClone
++ Server:     auto
++ Stream Key: live (doesn't matter heh)
 ```
+Note: Instatclone has a built in first time wizard to guide you!
 
 Click **Start Streaming**. The OBS pill in InstantClone turns green. Your real Twitch/YouTube/Kick keys go into InstantClone's **Destinations** tab, not OBS. OBS only ever talks to InstantClone.
 
