@@ -143,10 +143,11 @@ En OBS, ve a **Ajustes → Emisión** y cambia:
 - Servicio:   Twitch (o lo que tuvieras)
 - Servidor:   auto
 - Stream Key: <tu clave real>
-+ Servicio:   Personalizado
-+ Servidor:   rtmp://127.0.0.1:1935/live
-+ Stream Key: live
++ Servicio:   InstantClone
++ Servidor:   auto
++ Stream Key: live (no importa kek)
 ```
+Nota: InstantClone tiene un setup interactivo la primera vez que lo uses!
 
 Pulsa **Iniciar transmisión**. La cápsula OBS de InstantClone se pone verde. Tus claves reales de Twitch/YouTube/Kick van en la pestaña **Destinos** de InstantClone, no en OBS. OBS solo habla con InstantClone.
 Seguramente desaparezca tu chat de twitch en OBS porque OBS detecta que no "vas a transmitir en Twitch", añade el panel manualmente.
