@@ -221,6 +221,25 @@ async fn serve(
         return Ok(());
     }
 
+    // Optional VOD-unlocker OBS script, handed to the browser as a Save-As
+    // attachment. Serving it (rather than writing it server-side to a fixed
+    // path) lets the user drop it wherever their OBS scripts folder actually
+    // lives - portable installs vary, and OBS loads scripts by absolute path.
+    // The bytes are embedded (see VOD_UNLOCKER_LUA), so this always matches
+    // the running binary and needs no network round-trip.
+    if method == "GET" && bare_path == "/obs/vod-script/download" {
+        let blob = VOD_UNLOCKER_LUA.as_bytes();
+        let r = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/x-lua; charset=utf-8\r\n\
+             Content-Disposition: attachment; filename=\"optional-vod-unlocker.lua\"\r\n\
+             Content-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+            blob.len()
+        );
+        sock.write_all(r.as_bytes()).await?;
+        sock.write_all(blob).await?;
+        return Ok(());
+    }
+
     // Server-Sent Events: long-lived stream of state JSON. Beats per-tab
     // 500 ms polling on idle CPU because (a) no HTTP/CSRF overhead per
     // tick and (b) the wire only carries frames when something actually
@@ -378,7 +397,7 @@ async fn route(
                 "200 OK",
                 "application/json",
                 format!(
-                    r#"{{"registered":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"vod_script_installed":{},"active_profile":{},"path":{}}}"#,
+                    r#"{{"registered":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"active_profile":{},"path":{}}}"#,
                     crate::obs_register::is_registered(),
                     crate::obs_register::is_obs_running(),
                     crate::obs_register::vod_audio_flag_set(),
@@ -387,7 +406,6 @@ async fn route(
                         Some((a, b, c)) => format!(r#""{a}.{b}.{c}""#),
                         None => "null".to_string(),
                     },
-                    crate::obs_register::vod_script_installed(),
                     match crate::obs_register::active_profile() {
                         Some(p) => format!(r#""{}""#, p.replace('\\', "\\\\").replace('"', "\\\"")),
                         None => "null".to_string(),
@@ -459,75 +477,6 @@ async fn route(
                         e.to_string().replace('"', "'")
                     ),
                 ),
-            }
-        }
-        ("POST", "/obs/vod-script/install") => {
-            // Experimental: fetch the optional VOD-unlocker OBS script from
-            // the latest release and drop it into OBS's scripts folder, so
-            // the Twitch VOD audio track works while on the InstantClone
-            // service (OBS locks its native VOD track to the "Twitch"
-            // service). Gated to OBS 32.2+ - the version that locked the
-            // built-in VOD Track to Custom services, so the script is the
-            // way from there on. Older OBS still has the working built-in
-            // method; an unknown version is allowed with a note rather than
-            // hard-blocked.
-            match crate::obs_register::obs_version() {
-                Some((a, b, c)) if (a, b, c) < (32, 2, 0) => (
-                    "400 Bad Request",
-                    "application/json",
-                    format!(
-                        r#"{{"ok":false,"error":"This targets OBS 32.2 or newer - detected OBS {a}.{b}.{c}. On older OBS, use the built-in VOD Track checkbox."}}"#
-                    ),
-                ),
-                _ => {
-                    // ureq is blocking - keep it off the async runtime.
-                    let dl = tokio::task::spawn_blocking(|| {
-                        crate::self_update::download_latest_asset("optional-vod-unlocker.lua")
-                    })
-                    .await;
-                    match dl {
-                        Ok(Ok(bytes)) => match crate::obs_register::install_vod_script(&bytes) {
-                            Ok(path) => {
-                                ctrl.log(format!("vod-script: installed {}", path.display()));
-                                (
-                                    "200 OK",
-                                    "application/json",
-                                    format!(
-                                        r#"{{"ok":true,"path":"{}","message":"Downloaded the VOD unlocker into OBS's scripts folder. In OBS: Tools -> Scripts -> + -> pick optional-vod-unlocker.lua (one time)."}}"#,
-                                        path.display()
-                                            .to_string()
-                                            .replace('\\', "\\\\")
-                                            .replace('"', "'")
-                                    ),
-                                )
-                            }
-                            Err(e) => (
-                                "500 Internal Server Error",
-                                "application/json",
-                                format!(
-                                    r#"{{"ok":false,"error":"downloaded but couldn't save it: {}"}}"#,
-                                    e.to_string().replace('"', "'")
-                                ),
-                            ),
-                        },
-                        Ok(Err(e)) => (
-                            "502 Bad Gateway",
-                            "application/json",
-                            format!(
-                                r#"{{"ok":false,"error":"download failed: {}"}}"#,
-                                e.replace('"', "'")
-                            ),
-                        ),
-                        Err(e) => (
-                            "500 Internal Server Error",
-                            "application/json",
-                            format!(
-                                r#"{{"ok":false,"error":"download task failed: {}"}}"#,
-                                e.to_string().replace('"', "'")
-                            ),
-                        ),
-                    }
-                }
             }
         }
         ("POST", "/obs/setup-vod-eb") => {
@@ -3333,6 +3282,12 @@ static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.ht
 /// `web/overlay-runtime.js`; build-time gzipped (see `build.rs`).
 static OVERLAY_RUNTIME_JS_GZ: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/overlay-runtime.js.gz"));
+
+/// Optional VOD-unlocker OBS Lua script, embedded from `obs/`. Served by
+/// `GET /obs/vod-script/download` as a Save-As attachment. Embedding keeps it
+/// in lockstep with the running binary (no release-asset version skew) and
+/// needs no network. ~8 KB of text; not worth gzipping for a one-off download.
+static VOD_UNLOCKER_LUA: &str = include_str!("../obs/instantclone-vod-track.lua");
 /// Render the OBS browser-source overlay. Supports two query knobs:
 ///   ?lang=en|es|pt|fr|de                         - label localization
 ///   ?style=minimal|corner|strip|focus|broadcast|ticker  - visual variant

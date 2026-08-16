@@ -1450,6 +1450,13 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 
 /* - System ------------------ */
 .sys-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px}
+/* Collapsible System section (e.g. legacy OBS quick launch). Native
+   <details>; the summary carries the section label + a rotating caret. */
+details.sys-collapse>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;-webkit-user-select:none;user-select:none}
+details.sys-collapse>summary::-webkit-details-marker{display:none}
+details.sys-collapse>summary::before{content:"";flex:none;width:0;height:0;border-left:5px solid var(--fg-3);border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .18s var(--ease-out)}
+details.sys-collapse[open]>summary::before{transform:rotate(90deg)}
+details.sys-collapse>summary .ic-label{margin:0}
 /* Danger zone - visually fenced from Save with an err-tinted top border
    so a click reaching for Save can't drift into Reset by accident. */
 .sys-reset{margin-top:24px;padding-top:18px;border-top:1px dashed color-mix(in oklch,var(--err) 32%,var(--line))}
@@ -2122,7 +2129,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
           <span class="muted" id="vod-script-msg" style="font-size:11.5px"></span>
         </div>
         <ol style="margin:10px 0 0;padding-left:16px;font-size:11.5px;line-height:1.7;color:var(--fg-2)">
-          <li>Click <b>Download</b> - it drops <code class="mono">optional-vod-unlocker.lua</code> into OBS's scripts folder.</li>
+          <li>Click <b>Download</b> and pick where to save <code class="mono">optional-vod-unlocker.lua</code> (your OBS scripts folder is tidiest).</li>
           <li>In OBS: <b>Tools → Scripts → +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
           <li>In the script panel, set <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>). Your live mix stays on track 1.</li>
         </ol>
@@ -2575,7 +2582,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
         <span class="muted" id="sys-vod-script-msg" style="font-size:12px"></span>
       </div>
       <ol class="tab-sub" style="margin:10px 0 0;padding-left:18px;line-height:1.7">
-        <li>Click <b>Download</b> - it drops <code class="mono">optional-vod-unlocker.lua</code> into OBS's scripts folder.</li>
+        <li>Click <b>Download</b> and pick where to save <code class="mono">optional-vod-unlocker.lua</code> (your OBS scripts folder is tidiest).</li>
         <li>In OBS: <b>Tools → Scripts → +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
         <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>). Your live mix stays on track 1.</li>
       </ol>
@@ -2585,9 +2592,9 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
     <!-- OBS quick launch: Enhanced Broadcasting (video) launcher. The legacy
          "EB + VOD" launcher is version-gated off on OBS 32.2+, where the VOD
          track comes from the unlocker script above instead. -->
-    <section class="sys-section">
-      <div class="ic-label">OBS quick launch</div>
-      <div class="tab-sub">Start OBS pre-wired for Twitch <b>Enhanced Broadcasting</b> (the multi-resolution video ladder) - no destination editing needed. Session-only: reopen OBS normally and it streams plain again. You can run InstantClone and OBS side by side.</div>
+    <details class="sys-section sys-collapse" id="sys-eb-launch">
+      <summary><span class="ic-label">OBS quick launch</span><span class="muted" id="sys-eb-launch-note" style="font-weight:400;font-size:12px;margin-left:6px"></span></summary>
+      <div class="tab-sub" style="margin-top:10px">Start OBS pre-wired for Twitch <b>Enhanced Broadcasting</b> (the multi-resolution video ladder) - no destination editing needed. Session-only: reopen OBS normally and it streams plain again. You can run InstantClone and OBS side by side.</div>
       <div id="sys-eb-twitch-warn" class="tab-sub" hidden style="margin-top:8px;color:var(--warn,#d6a23a)">
         <b>Heads-up:</b> Enhanced Broadcasting needs an enabled <b>Twitch</b> destination with a stream key. OBS will still launch, but EB won't engage until you add one in the Destinations tab.
       </div>
@@ -2602,7 +2609,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
       <div class="tab-sub" id="sys-vodeb-hint" style="margin-top:8px">The <b>EB + VOD</b> button is the <b>legacy VOD path</b> (OBS before 32.2): it turns on VOD audio mode on your Twitch destination and writes OBS's VOD-track unlock flag - close OBS before pressing it or the flag write is blocked.</div>
       <ul id="sys-vodeb-checklist" hidden style="list-style:none;margin:10px 0 0;padding:0;font-size:12.5px"></ul>
       <div class="tab-sub" id="sys-eb-msg" style="margin-top:8px"></div>
-    </section>
+    </details>
   </div>
 
   <!-- Network sub-pane -->
@@ -4012,12 +4019,6 @@ async function refreshVodMethods(){
   if (!badge) return;
   const info = await obsRegInfo();
   const atLeast = obsVerAtLeast(info.obs_version, 32, 2, 0);
-  const btn = $('vod-script-btn');
-  const msg = $('vod-script-msg');
-  if (btn) btn.textContent = info.vod_script_installed ? 'Re-download VOD unlocker script' : 'Download VOD unlocker script';
-  if (info.vod_script_installed && msg && !msg.textContent){
-    msg.textContent = 'Already in your scripts folder - add it once via Tools → Scripts.';
-  }
   const verLabel = info.obs_version ? ('OBS ' + info.obs_version) : 'your OBS version';
   const legacy = $('dest-vod-legacy');
   if (atLeast === true){
@@ -4028,30 +4029,59 @@ async function refreshVodMethods(){
     if (legacy) legacy.hidden = false;
   }
 }
-// Fetch the VOD-unlocker script from the latest release into OBS's scripts
-// folder. Gated server-side to OBS 32.2+ (older is told to use the legacy
-// method). Callable from the destination form and the System tab.
+// Save the VOD-unlocker script wherever the user wants it (portable OBS
+// installs vary; OBS loads scripts by absolute path). The bytes are embedded
+// in the app and served at /obs/vod-script/download - no network, no fixed
+// server-side path. We prompt for a location with the File System Access API
+// when the browser has it (a real native Save dialog), and fall back to a
+// plain download otherwise. Callable from the destination form and System tab.
 async function installVodScript(btnId, msgId){
   const btn = $(btnId || 'vod-script-btn');
   const msg = $(msgId || 'vod-script-msg');
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  if (msg) msg.textContent = 'Downloading…';
-  try {
-    const r = await (await fetch('/obs/vod-script/install', {method:'POST'})).json();
-    if (r.ok){
-      if (msg) msg.textContent = 'Done. In OBS: Tools → Scripts → + → optional-vod-unlocker.lua';
-      toast('VOD unlocker downloaded','ok');
-      await obsRegInfo(true);
-    } else {
-      if (msg) msg.textContent = r.error || 'Failed';
-      toast(r.error || 'Failed','err');
+  const FILENAME = 'optional-vod-unlocker.lua';
+  const done = (t) => { if (msg) msg.textContent = t; };
+
+  // Preferred path: showSaveFilePicker lets the user choose the folder.
+  if (window.showSaveFilePicker){
+    let handle;
+    try {
+      handle = await window.showSaveFilePicker({
+        suggestedName: FILENAME,
+        types: [{ description: 'OBS Lua script', accept: { 'text/x-lua': ['.lua'] } }],
+      });
+    } catch (e){
+      if (e && e.name === 'AbortError') return; // user cancelled - no noise
+      handle = null; // any other failure: fall through to plain download
     }
-  } catch(e){
-    if (msg) msg.textContent = String(e);
-    toast('Request failed','err');
+    if (handle){
+      if (btn) btn.disabled = true;
+      done('Saving…');
+      try {
+        const bytes = await (await fetch('/obs/vod-script/download')).arrayBuffer();
+        const w = await handle.createWritable();
+        await w.write(bytes);
+        await w.close();
+        done('Saved. In OBS: Tools → Scripts → + → ' + FILENAME);
+        toast('VOD unlocker saved','ok');
+      } catch (e){
+        done('Could not save: ' + (e && e.message ? e.message : e));
+        toast('Save failed','err');
+      }
+      if (btn) btn.disabled = false;
+      return;
+    }
   }
-  btn.disabled = false;
+
+  // Fallback: browsers without the picker (e.g. Firefox) get a normal
+  // download; where it lands is up to their download settings.
+  const a = document.createElement('a');
+  a.href = '/obs/vod-script/download';
+  a.download = FILENAME;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  done('Downloaded ' + FILENAME + ' - move it into OBS, then Tools → Scripts → +.');
+  toast('VOD unlocker downloaded','ok');
 }
 
 // Vertical can only exist when a Twitch Enhanced Broadcasting source is on to
@@ -6822,12 +6852,6 @@ async function refreshSysVodScript(){
   const req = $('sys-vod-req');
   if (!req) return;
   const info = await obsRegInfo();
-  const btn = $('sys-vod-script-btn');
-  const msg = $('sys-vod-script-msg');
-  if (btn) btn.textContent = info.vod_script_installed ? 'Re-download VOD unlocker script' : 'Download VOD unlocker script';
-  if (info.vod_script_installed && msg && !msg.textContent){
-    msg.textContent = 'Already in your scripts folder - add it once via Tools → Scripts.';
-  }
   const atLeast = obsVerAtLeast(info.obs_version, 32, 2, 0);
   const ver = info.obs_version ? ('OBS ' + info.obs_version) : null;
   const legacyBtn = $('sys-vodeb-btn');
@@ -6854,6 +6878,17 @@ async function refreshSysVodScript(){
     if (legacyBtn) legacyBtn.hidden = false;
     if (legacyHint) legacyHint.hidden = false;
     if (legacySteer) legacySteer.hidden = true;
+  }
+  // OBS quick launch is the pre-32.2 Enhanced Broadcasting path - it relies
+  // on OBS's --config-url flag, which 32.2+ ignores for custom services. On
+  // new OBS it's superseded (turn EB on in OBS directly), so collapse it out
+  // of the way but keep it reachable. On older / unknown OBS it's the working
+  // launcher, so leave it open.
+  const ebWrap = $('sys-eb-launch');
+  const ebNote = $('sys-eb-launch-note');
+  if (ebWrap){
+    ebWrap.open = atLeast !== true;
+    if (ebNote) ebNote.textContent = atLeast === true ? '(legacy - for OBS before 32.2)' : '';
   }
 }
 function moveSubTabInd(pane){
