@@ -29,6 +29,7 @@
 <a href="https://github.com/Soulhackzlol/InstantClone/releases"><img alt="release" src="https://img.shields.io/github/v/release/Soulhackzlol/InstantClone?include_prereleases&style=flat-square&color=5ac8fa&labelColor=11141a&display_name=tag&sort=semver"/></a>
 <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-d4d8e1?style=flat-square&labelColor=11141a"/></a>
 <img alt="Windows only" src="https://img.shields.io/badge/windows-only-7a7d8a?style=flat-square&labelColor=11141a"/>
+<a href="https://alternativeto.net/software/instantclone/about/"><img alt="Listed on AlternativeTo" src="https://img.shields.io/badge/AlternativeTo-listed-5ac8fa?style=flat-square&labelColor=11141a&logo=alternativeto&logoColor=white"/></a>
 
 </div>
 
