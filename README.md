@@ -54,6 +54,8 @@ One feed in. A buffered delay you **arm**, **activate**, and **cut** on the fly,
 
 ## Quickstart
 
+<sub>First launch opens a setup wizard that walks you through all of this. The steps below are the same thing by hand.</sub>
+
 <table>
 <tr>
 <td valign="top" width="50%">

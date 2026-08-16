@@ -54,6 +54,8 @@ Una señal entra. Un delay con buffer que **armas**, **activas** y **cortas** al
 
 ## Inicio rápido
 
+<sub>El primer arranque abre un asistente que te guía por todo esto. Los pasos de abajo son lo mismo a mano.</sub>
+
 <table>
 <tr>
 <td valign="top" width="50%">
