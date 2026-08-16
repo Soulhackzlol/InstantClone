@@ -38,6 +38,7 @@ mod rtmp;
 mod self_update;
 mod sha256;
 mod sink;
+mod sync;
 mod sysstat;
 mod trace;
 #[cfg(windows)]
@@ -443,7 +444,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // a vanished vertical canvas reverts vertical destinations to
         // "waiting" without a restart.
         let vertical_track = {
-            let headers = ctrl.ring.video_seq_headers.lock().unwrap();
+            let headers = ctrl.ring.video_seq_headers.lock();
             crate::h264::detect_vertical_primary_track(&headers)
         };
         for (dest, url) in &desired {
@@ -496,7 +497,6 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 .destination_state(&dest.id)
                 .eb_override_url
                 .lock()
-                .unwrap()
                 .clone();
             // VOD-audio mode: when this is a Twitch destination with
             // vod_audio=true and we haven't yet fetched an IVS session

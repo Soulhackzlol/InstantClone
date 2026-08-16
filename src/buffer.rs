@@ -9,11 +9,11 @@
 //! buffer. Each entry is 32 bytes, so 10 minutes of audio+video indexes in
 //! under 2 MB regardless of the bitrate of the underlying media.
 
+use crate::sync::Mutex;
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Result, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::sync::Mutex;
 use tokio::sync::Notify;
 
 #[derive(Clone, Copy, Debug)]
@@ -155,7 +155,6 @@ impl DiskRing {
                     let track_id = crate::h264::seq_header_track_id(payload);
                     self.video_seq_headers
                         .lock()
-                        .unwrap()
                         .insert(track_id, payload.to_vec());
                 }
                 8 => {
@@ -165,7 +164,6 @@ impl DiskRing {
                     let track_id = crate::h264::audio_seq_header_track_id(payload);
                     self.audio_seq_headers
                         .lock()
-                        .unwrap()
                         .insert(track_id, payload.to_vec());
                 }
                 _ => {}
@@ -173,7 +171,7 @@ impl DiskRing {
             return Ok(None);
         }
         if kind == 18 {
-            *self.metadata.lock().unwrap() = Some(payload.to_vec());
+            *self.metadata.lock() = Some(payload.to_vec());
             return Ok(None);
         }
 
@@ -184,7 +182,7 @@ impl DiskRing {
         }
 
         let len = payload.len() as u64;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         let offset = inner.write_cursor;
         let new_cursor = (offset + len) % self.capacity;
         let wraps = offset + len > self.capacity;
@@ -214,7 +212,7 @@ impl DiskRing {
         // of the syscalls; the index lock is held for the whole append so the
         // index and write cursor advance atomically together.
         {
-            let mut file = self.file.lock().unwrap();
+            let mut file = self.file.lock();
             if !wraps {
                 file.seek(SeekFrom::Start(offset))?;
                 file.write_all(payload)?;
@@ -264,7 +262,7 @@ impl DiskRing {
     /// cannot overwrite the bytes mid-read. Lock order matches `append`'s,
     /// so deadlock is impossible.
     pub fn try_read_seq(&self, seq: u64, buf: &mut Vec<u8>) -> Result<Option<()>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         let front = match inner.index.front() {
             Some(m) => m.seq,
             None => return Ok(None),
@@ -281,7 +279,7 @@ impl DiskRing {
         buf.clear();
         buf.resize(meta.len as usize, 0);
         let end = meta.offset + meta.len as u64;
-        let mut file = self.file.lock().unwrap();
+        let mut file = self.file.lock();
         if end <= self.capacity {
             file.seek(SeekFrom::Start(meta.offset))?;
             file.read_exact(buf)?;
@@ -298,7 +296,7 @@ impl DiskRing {
     /// Find the entry with the given seq, returning its position in the
     /// VecDeque and the meta. `None` if it's been evicted or never existed.
     pub fn find_by_seq(&self, seq: u64) -> Option<(usize, TagMeta)> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         let front = inner.index.front()?.seq;
         if seq < front {
             return None;
@@ -308,15 +306,15 @@ impl DiskRing {
     }
 
     pub fn front_seq(&self) -> Option<u64> {
-        self.inner.lock().unwrap().index.front().map(|m| m.seq)
+        self.inner.lock().index.front().map(|m| m.seq)
     }
 
     pub fn latest_ts(&self) -> Option<u64> {
-        self.inner.lock().unwrap().index.back().map(|m| m.ts_ms)
+        self.inner.lock().index.back().map(|m| m.ts_ms)
     }
 
     pub fn oldest_ts(&self) -> Option<u64> {
-        self.inner.lock().unwrap().index.front().map(|m| m.ts_ms)
+        self.inner.lock().index.front().map(|m| m.ts_ms)
     }
 
     /// Pick the IDR closest to `target_ts` within ±`tolerance_ms`.
@@ -335,7 +333,7 @@ impl DiskRing {
     /// 500 ms, replaying the same content. Closest-pick lets us land
     /// nearer the target on the first try and converges cleanly.
     pub fn find_idr_near(&self, target_ts: u64, tolerance_ms: u32) -> Option<TagMeta> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         let tol = tolerance_ms as u64;
         let pos = inner.idr_index.partition_point(|m| m.ts_ms <= target_ts);
         let below = if pos > 0 {
@@ -390,7 +388,7 @@ impl DiskRing {
     /// Return the most recent IDR (used to seed the egress state cleanly
     /// without walking the entire index entry-by-entry).
     pub fn newest_idr(&self) -> Option<TagMeta> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner.index.iter().rev().find(|m| m.is_idr).copied()
     }
 
@@ -398,7 +396,7 @@ impl DiskRing {
     /// Used after a publisher reconnect to skip stale IDRs from the
     /// previous session that still happen to live in the ring.
     pub fn newest_idr_after(&self, min_seq: u64) -> Option<TagMeta> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner
             .index
             .iter()
@@ -414,7 +412,7 @@ impl DiskRing {
     /// the *earliest* IDR at or after the skip target loses the least
     /// content while keeping the decode chain valid.
     pub fn oldest_idr_at_or_after(&self, min_seq: u64) -> Option<TagMeta> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner
             .index
             .iter()
@@ -424,7 +422,7 @@ impl DiskRing {
 
     /// Seq of the most recently appended tag, or None if the ring is empty.
     pub fn latest_seq(&self) -> Option<u64> {
-        self.inner.lock().unwrap().index.back().map(|m| m.seq)
+        self.inner.lock().index.back().map(|m| m.seq)
     }
 
     /// Trim oldest indexed tags whose timestamp is older than
@@ -437,7 +435,7 @@ impl DiskRing {
     /// buffer's *useful contents* exactly at the user's armed delay
     /// without juggling actual disk layout.
     pub fn trim_older_than(&self, max_age_ms: u32, current_ts: u64, min_seq: u64) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         let cutoff = current_ts.saturating_sub(max_age_ms as u64);
         while let Some(front) = inner.index.front().copied() {
             // Never evict a tag the consumer is still reading or hasn't
@@ -476,7 +474,7 @@ impl DiskRing {
     /// onto fresh data), and the disk bytes get overwritten as new tags
     /// land.
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner.index.clear();
         inner.idr_index.clear();
     }
@@ -616,7 +614,7 @@ mod tests {
         assert!(r.is_none(), "seq headers must not return a ring seq");
         // Single-track seq headers cache under track id 0 - same slot
         // they used before the per-track refactor for multi-track.
-        let map = t.0.video_seq_headers.lock().unwrap();
+        let map = t.0.video_seq_headers.lock();
         assert_eq!(map.get(&0), Some(&b"AVCDecoderConfig".to_vec()));
     }
 
@@ -636,7 +634,7 @@ mod tests {
         ];
         t.0.append(9, 0, &track_0, false, true).unwrap();
         t.0.append(9, 0, &track_4, false, true).unwrap();
-        let map = t.0.video_seq_headers.lock().unwrap();
+        let map = t.0.video_seq_headers.lock();
         assert_eq!(map.get(&0), Some(&track_0));
         assert_eq!(map.get(&4), Some(&track_4));
         assert_eq!(map.len(), 2);
@@ -659,7 +657,7 @@ mod tests {
         ];
         t.0.append(8, 0, &live, false, true).unwrap();
         t.0.append(8, 0, &vod, false, true).unwrap();
-        let map = t.0.audio_seq_headers.lock().unwrap();
+        let map = t.0.audio_seq_headers.lock();
         assert_eq!(map.get(&0), Some(&live));
         assert_eq!(map.get(&1), Some(&vod));
         assert_eq!(map.len(), 2);
@@ -672,7 +670,7 @@ mod tests {
         let t = tmp(4096);
         let aac = vec![0xaf, 0x00, 0x12, 0x10, 0x56, 0xe5];
         t.0.append(8, 0, &aac, false, true).unwrap();
-        let map = t.0.audio_seq_headers.lock().unwrap();
+        let map = t.0.audio_seq_headers.lock();
         assert_eq!(map.get(&0), Some(&aac));
         assert_eq!(map.len(), 1);
     }
@@ -682,7 +680,7 @@ mod tests {
         let t = tmp(4096);
         let r = t.0.append(18, 0, b"onMetaData", false, false).unwrap();
         assert!(r.is_none());
-        assert_eq!(*t.0.metadata.lock().unwrap(), Some(b"onMetaData".to_vec()));
+        assert_eq!(*t.0.metadata.lock(), Some(b"onMetaData".to_vec()));
     }
 
     #[test]

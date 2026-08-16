@@ -22,11 +22,11 @@
 //! always-on default is the wrong call for a typical streamer; reserve
 //! the cost for users who are actively diagnosing.
 
+use crate::sync::Mutex;
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -125,7 +125,7 @@ pub fn log(category: &str, msg: &str) {
         // Try to be the thread that emits the final notice. swap to
         // false; only the winner sees `true` and writes the line.
         if ENABLED.swap(false, Ordering::Relaxed) {
-            let mut f = s.file.lock().unwrap();
+            let mut f = s.file.lock();
             let _ = writeln!(
                 f,
                 "T+{:>11.3}ms  {:<22}  trace cap reached ({} MB) - disabling. \
@@ -138,7 +138,7 @@ pub fn log(category: &str, msg: &str) {
         }
         return;
     }
-    let mut f = s.file.lock().unwrap();
+    let mut f = s.file.lock();
     let _ = writeln!(f, "T+{:>11.3}ms  {:<22}  {}", ms, category, msg);
 }
 
@@ -188,7 +188,7 @@ pub fn hex_prefix(bytes: &[u8], max: usize) -> String {
 /// don't get lost in the BufWriter when the process exits.
 pub fn flush() {
     if let Some(s) = STATE.get() {
-        let mut f = s.file.lock().unwrap();
+        let mut f = s.file.lock();
         let _ = f.flush();
     }
 }

@@ -260,7 +260,7 @@ async fn handle_one(
                 // pre-framed once into an Arc so every connected client
                 // receives a cheap pointer clone, not a copy.
                 let bytes = Arc::new(flv_tag_bytes(18, msg.timestamp, &msg.payload));
-                *live.metadata.lock().unwrap() = Some(bytes.clone());
+                *live.metadata.lock() = Some(bytes.clone());
                 let _ = live.tx.send(bytes);
                 println!("[sink] metadata received ({} bytes)", msg.payload.len());
             }
@@ -270,7 +270,7 @@ async fn handle_one(
                 }
                 let bytes = Arc::new(flv_tag_bytes(8, msg.timestamp, &msg.payload));
                 if h264::is_aac_seq_header(&msg.payload) {
-                    *live.seq_audio.lock().unwrap() = Some(bytes.clone());
+                    *live.seq_audio.lock() = Some(bytes.clone());
                 }
                 let _ = live.tx.send(bytes);
                 stats.note_audio(msg.timestamp, msg.payload.len());
@@ -282,7 +282,7 @@ async fn handle_one(
                 }
                 let bytes = Arc::new(flv_tag_bytes(9, msg.timestamp, &msg.payload));
                 if info.is_seq_header {
-                    *live.seq_video.lock().unwrap() = Some(bytes.clone());
+                    *live.seq_video.lock() = Some(bytes.clone());
                 }
                 let _ = live.tx.send(bytes);
                 stats.note_video(msg.timestamp, msg.payload.len(), info.is_idr, info.is_seq_header);
@@ -576,9 +576,9 @@ fn truncate(s: &str, max: usize) -> String {
 /// Shared state for the live web preview. Cheap to clone (Arc-ed).
 pub struct LiveStream {
     tx: broadcast::Sender<Arc<Vec<u8>>>,
-    seq_video: std::sync::Mutex<Option<Arc<Vec<u8>>>>,
-    seq_audio: std::sync::Mutex<Option<Arc<Vec<u8>>>>,
-    metadata: std::sync::Mutex<Option<Arc<Vec<u8>>>>,
+    seq_video: crate::sync::Mutex<Option<Arc<Vec<u8>>>>,
+    seq_audio: crate::sync::Mutex<Option<Arc<Vec<u8>>>>,
+    metadata: crate::sync::Mutex<Option<Arc<Vec<u8>>>>,
 }
 
 impl LiveStream {
@@ -589,9 +589,9 @@ impl LiveStream {
         let (tx, _) = broadcast::channel(1024);
         Arc::new(Self {
             tx,
-            seq_video: std::sync::Mutex::new(None),
-            seq_audio: std::sync::Mutex::new(None),
-            metadata: std::sync::Mutex::new(None),
+            seq_video: crate::sync::Mutex::new(None),
+            seq_audio: crate::sync::Mutex::new(None),
+            metadata: crate::sync::Mutex::new(None),
         })
     }
 }
@@ -696,9 +696,9 @@ async fn serve_live_flv(sock: &mut TcpStream, live: Arc<LiveStream>) -> io::Resu
     // Bootstrap: cached onMetaData + AAC seq header + AVC seq header.
     // Without these flv.js can't initialize its decoder.
     let snapshots = {
-        let m = live.metadata.lock().unwrap().clone();
-        let a = live.seq_audio.lock().unwrap().clone();
-        let v = live.seq_video.lock().unwrap().clone();
+        let m = live.metadata.lock().clone();
+        let a = live.seq_audio.lock().clone();
+        let v = live.seq_video.lock().clone();
         [m, a, v]
     };
     for slot in snapshots.iter().flatten() {
