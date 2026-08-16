@@ -30,13 +30,6 @@ use std::path::{Path, PathBuf};
 
 const RELEASE_DL_BASE: &str = "https://github.com/Soulhackzlol/InstantClone/releases/download";
 
-/// GitHub serves the newest release's assets at a stable, version-less
-/// URL (`.../releases/latest/download/<asset>`). The optional VOD-unlocker
-/// script downloader uses this so it always fetches the current script
-/// without knowing the tag.
-const RELEASE_LATEST_DL: &str =
-    "https://github.com/Soulhackzlol/InstantClone/releases/latest/download";
-
 /// A verified update staged on disk, ready for [`commit_and_relaunch`].
 pub struct Staged {
     /// Path of the currently running exe (the swap target).
@@ -270,14 +263,6 @@ fn http_get_bytes(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
         .limit(64 * 1024 * 1024)
         .read_to_vec()
         .map_err(|e| format!("read failed: {e}"))
-}
-
-/// Download a named asset from the LATEST GitHub release over HTTPS.
-/// Blocking (ureq) - async callers (the web handler) must wrap this in
-/// `spawn_blocking`. Used by the optional VOD-unlocker script installer.
-pub fn download_latest_asset(asset: &str) -> Result<Vec<u8>, String> {
-    let agent = crate::https::https_agent();
-    http_get_bytes(&agent, &format!("{RELEASE_LATEST_DL}/{asset}"))
 }
 
 #[cfg(test)]

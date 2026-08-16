@@ -5,13 +5,16 @@
 <br/>
 <br/>
 
-<img src="docs/preview.svg" alt="InstantClone, free open-source RTMP delay proxy" width="100%"/>
+<img src="docs/preview.svg" alt="InstantClone, free open-source OBS stream delay and multistream (simulcast) RTMP proxy" width="100%"/>
 
 <br/>
 
-<a href="#install"><img src="https://img.shields.io/badge/-Install-5ac8fa?style=for-the-badge&labelColor=11141a"/></a>
+<a href="https://github.com/Soulhackzlol/InstantClone/releases/latest"><img alt="Download for Windows" src="https://img.shields.io/badge/Download%20for%20Windows-5ac8fa?style=for-the-badge&labelColor=11141a&logo=windows&logoColor=white"/></a>
+
+
+<a href="#quickstart"><img src="https://img.shields.io/badge/-Quickstart-1c2129?style=for-the-badge&labelColor=11141a"/></a>
+<a href="#features"><img src="https://img.shields.io/badge/-Features-1c2129?style=for-the-badge&labelColor=11141a"/></a>
 <a href="#how-it-works"><img src="https://img.shields.io/badge/-How%20it%20works-1c2129?style=for-the-badge&labelColor=11141a"/></a>
-<a href="#obs-setup"><img src="https://img.shields.io/badge/-OBS%20setup-1c2129?style=for-the-badge&labelColor=11141a"/></a>
 <a href="#http-control"><img src="https://img.shields.io/badge/-HTTP%20API-1c2129?style=for-the-badge&labelColor=11141a"/></a>
 
 <br/>
@@ -25,41 +28,166 @@
 <a href="https://github.com/Soulhackzlol/InstantClone/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Soulhackzlol/InstantClone/ci.yml?branch=main&style=flat-square&label=ci&color=34c759&labelColor=11141a"/></a>
 <a href="https://github.com/Soulhackzlol/InstantClone/releases"><img alt="release" src="https://img.shields.io/github/v/release/Soulhackzlol/InstantClone?include_prereleases&style=flat-square&color=5ac8fa&labelColor=11141a&display_name=tag&sort=semver"/></a>
 <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-d4d8e1?style=flat-square&labelColor=11141a"/></a>
-<img alt="Binary" src="https://img.shields.io/badge/binary-1.3%20MB-5ac8fa?style=flat-square&labelColor=11141a"/>
 <img alt="Windows only" src="https://img.shields.io/badge/windows-only-7a7d8a?style=flat-square&labelColor=11141a"/>
 
 </div>
 
 <br/>
 
+<div align="center">
+
+### A zero-glitch stream delay for OBS.
+
+One feed in. A buffered delay you **arm**, **activate**, and **cut** on the fly, fanned out to every platform at once. Free and open source.
+
+</div>
+
+<br/>
+
+<div align="center">
+<img src="docs/pipeline.svg" alt="One OBS feed enters InstantClone's disk-backed ring buffer, is held N seconds, then fans out to Twitch, YouTube, Kick and custom RTMP at once" width="100%"/>
+</div>
+
+<br/>
+
 <div align="center"><img src="docs/divider.svg" alt="" width="100%"/></div>
+
+## Quickstart
+
+<sub>First launch opens a setup wizard that walks you through all of this. The steps below are the same thing by hand.</sub>
 
 <table>
 <tr>
-<td valign="top" width="62%">
+<td valign="top" width="50%">
+
+**1 · Run it**
+
+```text
+Download instantclone.exe → double-click.
+Dashboard opens at http://127.0.0.1:7799
+```
+
+That's the whole install. A tray icon sits in the systray while it runs; right-click for the dashboard, dock, one-click **Cut**, or **Quit**. Closing the tab doesn't kill the proxy, only Quit does.
+
+<sub>First launch, Windows SmartScreen may say "unknown publisher" because the build isn't code-signed yet. Click **More info → Run anyway**, or check it against the `SHA256SUMS.txt` on the release.</sub>
+
+</td>
+<td valign="top" width="50%">
+
+**2 · Point OBS at it**
+
+Click **Register with OBS** in the dashboard, restart OBS once, then in **Settings → Stream** pick:
+
+```text
+Service:  InstantClone
+Key:      main          (any string works)
+```
+
+Multi-track "Auto" works out of the box. Your real platform keys go into the **Destinations** tab, not OBS.
+
+<sub>Prefer manual? Service <b>Custom</b>, Server <code>rtmp://127.0.0.1:1935/live</code>, Key <code>main</code>.</sub>
+
+</td>
+</tr>
+</table>
+
+**3 · Arm, activate, cut**
+
+<div align="center">
+<img src="docs/states.svg" alt="Three steps to a stream delay: Arm fills the buffer while you stay live, Activate goes delayed with zero glitch, Cut snaps back to live" width="100%"/>
+</div>
+
+<table>
+<tr><td align="center" width="40"><b>1</b></td><td>Type a delay (e.g. <kbd>15</kbd>s) and hit <b>Arm</b>. The buffer pre-fills from the live feed without touching what's going out.</td></tr>
+<tr><td align="center"><b>2</b></td><td>When it reads <code>ARMED</code>, hit <b>Activate</b>. The switch to delayed is instant on screen, no reconnect, no glitch.</td></tr>
+<tr><td align="center"><b>3</b></td><td><b>Cut</b> to snap back to live any time, or <b>&#9201; Cut after this airs</b> to auto-cut the moment your reaction reaches viewers. No counting the delay in your head.</td></tr>
+</table>
+
+> [!IMPORTANT]
+> Windows Firewall prompts on first launch because the proxy listens on <code>:1935</code> (RTMP) and <code>:7799</code> (web). Allow it on **Private networks** only.
+
+> [!WARNING]
+> Windows 10/11 only. macOS and Linux are not supported, tested, or packaged.
+
+<br/>
+
+<div align="center"><img src="docs/divider.svg" alt="" width="100%"/></div>
 
 ## Why
 
 I wanted a delay buffer for my own stream and went looking. The polished option I found was [InstantDelay](https://instant-delay.com/), which is paid. I'd rather have something I could rebuild from scratch, understand end-to-end, and adapt to my setup, so I wrote this instead.
 
-Once it existed, the parts I'd actually wanted ended up in: a real two-phase arm/activate (so the moment you go live with delay is **zero glitch** on the destination player), multiple egress destinations at once, an OBS browser-dock, and a stats overlay you can drop in as a browser-source.
+Once it existed, the parts I'd actually wanted ended up in it: a real two-phase arm/activate (so the moment you go live with delay is **zero glitch** on the destination player), multiple egress destinations at once (so it doubles as a free multistream / simulcast tool, a self-hosted alternative to Restream), an OBS browser-dock, and a stats overlay you can drop in as a browser-source.
 
 <sub>InstantClone is an independent project, not affiliated with or endorsed by InstantDelay or its developers.</sub>
 
-</td>
-<td valign="top" width="38%">
+<br/>
+
+<div align="center"><img src="docs/divider.svg" alt="" width="100%"/></div>
+
+## Features
 
 <table>
-<tr><td><b>Binary</b></td><td align="right"><code>1.3 MB</code></td></tr>
-<tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td></tr>
-<tr><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td></tr>
-<tr><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td></tr>
-<tr><td><b>Tests</b></td><td align="right"><code>282 / 282</code></td></tr>
-</table>
+<tr>
+<td valign="top" width="50%">
+
+**🎯 Multistream to every platform**
+Simulcast one OBS feed to Twitch, YouTube, Kick, and custom RTMP at once, a free self-hosted alternative to Restream. Toggle each independently, watch per-destination bitrate live. A **Local test sink** streams to a tiny receiver on your PC so you can rehearse arm/activate/cut with no key and nothing leaving your machine.
+
+</td>
+<td valign="top" width="50%">
+
+**⏱ Scheduled safe cut**
+**Cut after this airs** marks the live edge and auto-cuts once it has reached viewers on every destination. Perfect for match-end reactions without doing delay math in your head.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**📱 Vertical (9:16) for free**
+Turn on Twitch **Dual Format** (Enhanced Broadcasting) and set any non-Twitch destination's format to **Vertical**. InstantClone reuses the 9:16 canvas OBS already makes for Twitch and sends it to YouTube Shorts, Kick mobile, or TikTok, with no extra encoding.
+
+</td>
+<td valign="top">
+
+**🎚 VOD audio + copyright-safe routing**
+Keep music live but out of the recording. One click adds a second audio track (via a bundled OBS script); then per destination pick an **Audio track**, Twitch keeps **Both**, send the clean **Track 2** to YouTube to dodge copyright, or **Track 1** to Kick.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**📡 Enhanced Broadcasting passthrough**
+When OBS goes multi-track "Auto", InstantClone proxies Twitch's config, routes to the session IVS endpoint, and forwards every per-track SPS/PPS bit-faithfully so the transcode ladder lights up. Non-Twitch destinations get a clean flattened single track.
+
+</td>
+<td valign="top">
+
+**🔒 RTMPS egress (Kick + any `rtmps://`)**
+The egress socket upgrades to TLS for `rtmps://` URLs, reusing the Windows schannel already linked, so no second TLS stack. Kick is a paste-your-Server-URL platform in the wizard, with the `/app` path added automatically.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**🎛 OBS dock + no-code overlays**
+A 280×340 control dock lives inside OBS so you're not alt-tabbing mid-match. The **Overlay** tab is a Studio: pick a ready-made stats overlay, copy its URL, drop it into OBS as a browser-source, or redesign it live.
+
+</td>
+<td valign="top">
+
+**⚡ Live delay adjustment**
+Re-arm or nudge the delay up/down without disarming first, exposed as a single typed-value **↻ Adjust to Ns** control. Capacity-aware: it refuses a delay the buffer can't hold and tells you exactly how many MB it needs.
 
 </td>
 </tr>
 </table>
+
+> [!TIP]
+> **One-click OBS registration.** The setup wizard can add an "InstantClone" entry to OBS's Service dropdown for you (writes `services.json` with a `.bak` first, refreshes on port change, and warns "close OBS first" when the file is locked).
 
 <br/>
 
@@ -67,148 +195,23 @@ Once it existed, the parts I'd actually wanted ended up in: a real two-phase arm
 
 ## How it works
 
-<div align="center">
-<img src="docs/states.svg" alt="Delay state machine" width="100%"/>
-</div>
-
-<br/>
-
 <table>
 <tr>
 <td valign="top" width="50%">
 
-**Two-phase by design.** You **arm** a buffer (target size in seconds). InstantClone pre-fills it from the live OBS feed without affecting what's going out. Once it's full, the state moves from <kbd>BUFFERING</kbd> to <kbd>ARMED</kbd> and you hit **Activate** when you're ready. The transition is instant on screen: the reader just swaps from the live tail to a position N seconds back in the ring.
+**Two-phase by design.** You **arm** a buffer (a target size in seconds). InstantClone pre-fills it from the live OBS feed without touching what's going out. Once it's full you hit **Activate**, and the switch to delayed is instant on screen: the player just jumps from the live edge to a point N seconds back.
 
 </td>
 <td valign="top" width="50%">
 
-**Cutting is the same trick in reverse.** You hit **Cut**, the reader seeks to the nearest IDR near the live tail, rewrites timestamps so they continue monotonically from where the destination player thinks "now" is, and resumes. No re-handshake, no reconnect, no glitch.
+**Cutting is the same trick in reverse.** You hit **Cut**, InstantClone lines up on the nearest keyframe near the live edge, fixes the timestamps so they keep counting forward smoothly, and resumes. No reconnect, no black frame, no glitch.
 
 </td>
 </tr>
 </table>
-
-```mermaid
-flowchart LR
-  obs([OBS]) --> ic
-  subgraph ic[InstantClone]
-    direction TB
-    ring[/disk-backed ring buffer<br/>in-memory IDR index, O log n seek/]
-    cut[cut-aware reader<br/>IDR-aligned, monotonic timestamps]
-    ring --> cut
-  end
-  ic --> tw([Twitch])
-  ic --> yt([YouTube])
-  ic --> kk([Kick])
-  ic --> rs([Restream])
-  ic --> any([custom RTMP])
-```
 
 > [!NOTE]
-> The buffer is on disk by default (`./instantclone.buf`, 500 MB ≈ 11 minutes at 6 Mbps, ≈ 6 min 50 s at 10 Mbps), kept off RAM because it can be hundreds of MB. The only thing in RAM is the IDR index, about 1 MB for 10 minutes at 60 fps. The file is reset on every clean shutdown, so it doesn't accumulate between sessions. The UI refuses to arm a delay larger than the buffer can hold at the current bitrate, with an explicit "needs ≥ N MB" reason - no silent stalls.
-
-<br/>
-
-<div align="center"><img src="docs/divider.svg" alt="" width="100%"/></div>
-
-## Install
-
-```text
-1.  Download instantclone.exe
-2.  Double-click it
-3.  Dashboard opens at http://127.0.0.1:7799
-```
-
-That's the whole install. A tray icon sits in the systray while it's running. Right-click it for the dashboard, the OBS dock, a one-click **Cut delay**, or **Quit**. Closing the browser tab doesn't kill the proxy; only Quit does.
-
-> [!IMPORTANT]
-> Windows Firewall will prompt on first launch because the proxy listens on <kbd>:1935</kbd> (RTMP) and <kbd>:7799</kbd> (web). Allow it on **Private networks** only.
-
-> [!WARNING]
-> Windows 10/11 only. macOS and Linux are not supported, not tested, and not packaged.
-
-<br/>
-
-<div align="center"><img src="docs/divider.svg" alt="" width="100%"/></div>
-
-## OBS setup
-
-<table>
-<tr>
-<td valign="top" width="58%">
-
-In OBS, go to **Settings → Stream** and change:
-
-```diff
-- Service:    Twitch (or whatever you had)
-- Server:     auto
-- Stream Key: <your real key>
-+ Service:    InstantClone
-+ Server:     auto
-+ Stream Key: live (doesn't matter heh)
-```
-Note: Instatclone has a built in first time wizard to guide you!
-
-Click **Start Streaming**. The OBS pill in InstantClone turns green. Your real Twitch/YouTube/Kick keys go into InstantClone's **Destinations** tab, not OBS. OBS only ever talks to InstantClone.
-
-</td>
-<td valign="top" width="42%">
-
-<table>
-<tr><td align="center" width="40"><b>1</b></td><td>Type a delay (e.g. <kbd>15</kbd>s) → <b>Arm</b>.</td></tr>
-<tr><td align="center"><b>2</b></td><td>Watch the buffer fill. When it says <kbd>ARMED</kbd>, hit <b>Activate</b>.</td></tr>
-<tr><td align="center"><b>3</b></td><td><b>Cut delay</b> at any time to snap back to live - or hit <b>&#9201; Cut after this airs</b> right when your match reaction ends, and InstantClone auto-cuts once that moment has reached your viewers. No counting the delay in your head.</td></tr>
-</table>
-
-> [!TIP]
-> Fan out one OBS feed to several destinations at once. Add Twitch, YouTube, and a custom RTMP endpoint, toggle each on independently, watch their per-destination bitrate live. There is also a **Local test sink** destination: InstantClone spawns its own tiny receiver on your PC and streams to it, so you can rehearse arm/activate/cut end to end - stream key not needed, nothing leaves your machine, and a **Watch output** link shows exactly what a platform would receive.
-
-> [!TIP]
-> **Go vertical for free.** Turn on Twitch **Dual Format** (Enhanced Broadcasting) in OBS and set any non-Twitch destination's **Stream format** to **Vertical** - InstantClone reuses the 9:16 canvas OBS is already making for Twitch and sends it to YouTube Shorts, Kick mobile, or any custom RTMP target, with no extra encoding. Vertical only flows while Dual Format is on; until then the destination shows "Waiting for Dual Format" and nothing else is affected. (Twitch handles both canvases itself, so the option is hidden there.)
-
-> [!TIP]
-> **Twitch VOD audio + copyright-safe routing.** Keep music in your live stream but out of the recording: one click on **System → Behavior → Twitch VOD audio unlocker** drops a tiny OBS script that adds a second audio track (OBS otherwise locks its VOD Track to the "Twitch" service, so it's unavailable on the InstantClone service). Then, per destination, pick an **Audio track** - Twitch keeps **Both**, send the clean **Track 2** to YouTube to dodge copyright, or the live **Track 1** to Kick. Needed on OBS 32.2+; older OBS can still use the built-in VOD Track checkbox.
-
-</td>
-</tr>
-</table>
-
-<br/>
-
-<div align="center"><img src="docs/divider.svg" alt="" width="100%"/></div>
-
-## Dock and overlays
-
-<table>
-<tr>
-<td valign="top" width="40%">
-
-<img src="docs/dock-preview.svg" alt="OBS dock" width="100%"/>
-
-</td>
-<td valign="top" width="60%">
-
-### OBS browser-dock
-
-Add a custom dock in OBS pointing at:
-
-<pre><code>http://127.0.0.1:7799/dock</code></pre>
-
-A 280×340 panel with the readout, arm / activate / disarm / cut controls, and live status. Lives inside OBS so you're not alt-tabbing mid-match.
-
-### Browser-source overlays
-
-The **Overlay** tab is a no-code Studio. Pick a ready-made overlay, copy its URL, and drop it into OBS - or open any in the Studio to redesign it (per-state colours, widgets, animations) and **Save** or **Save as new**.
-
-<pre><code>http://127.0.0.1:7799/overlay/whisper.html</code></pre>
-
-<sub><b>No setup?</b></sub> &nbsp;The older quick styles still work straight from a URL: <code>/overlay?style=corner&amp;lang=es</code> &nbsp;<sub>(`minimal · corner · strip · focus · broadcast · ticker`, langs `en · es · pt · fr · de`)</sub>
-
-Or drop any `.html` into `./overlays/` and it's served at `/overlay/your-file.html`.
-
-</td>
-</tr>
-</table>
+> The delay buffer lives on disk and resets every time you close the app, so nothing piles up between sessions. Ask for more delay than it can hold and the app tells you exactly what it needs instead of stalling.
 
 <br/>
 
@@ -222,12 +225,12 @@ Or drop any `.html` into `./overlays/` and it's served at `/overlay/your-file.ht
 
 | | Endpoint | Body | What it does |
 |:---|---|---|---|
-| <kbd>POST</kbd> | `/arm` | `ms=15000` | Start filling a 15 s buffer. Does not go live yet. |
-| <kbd>POST</kbd> | `/activate` | | Activate the armed delay. <kbd>409</kbd> if the buffer isn't ready. |
-| <kbd>POST</kbd> | `/disarm` | | Cancel arming. Drop the buffer without going live. |
-| <kbd>POST</kbd> | `/stop` | | Cut the delay, return to live. |
-| <kbd>POST</kbd> | `/cut-after` | | Mark the live edge; auto-cut once it has aired on every destination (409 if no delay is active). |
-| <kbd>POST</kbd> | `/cut-after/cancel` | | Drop a pending scheduled cut without cutting. |
+| <kbd>POST</kbd> | `/arm` | `ms=15000` | Start filling a 15 s buffer. Not live yet. |
+| <kbd>POST</kbd> | `/activate` | | Activate the armed delay. <code>409</code> if not ready. |
+| <kbd>POST</kbd> | `/disarm` | | Cancel arming, drop the buffer without going live. |
+| <kbd>POST</kbd> | `/stop` | | Cut back to live (same as the **Cut** button). |
+| <kbd>POST</kbd> | `/cut-after` | | Mark the live edge; auto-cut once it airs everywhere. |
+| <kbd>POST</kbd> | `/cut-after/cancel` | | Drop a pending scheduled cut. |
 | <kbd>POST</kbd> | `/delay` | `ms=NNN` | One-shot: arm, auto-activate as soon as ready. |
 | <kbd>GET</kbd> | `/state` | | One-shot JSON snapshot. |
 | <kbd>GET</kbd> | `/events` | | Server-sent stream of state JSON. Push-only. |
@@ -247,7 +250,7 @@ Method: POST
 Body:   ms=15000
 ```
 
-One-button arming. Add `/activate` and `/stop` to a second and third button and you have full delay control from your deck.
+One-button arming. Add `/activate` and `/stop` to two more buttons for full delay control from your deck.
 
 </td>
 </tr>
@@ -277,9 +280,33 @@ One-button arming. Add `/activate` and `/stop` to a second and third button and 
 
 <div align="center"><img src="docs/divider.svg" alt="" width="100%"/></div>
 
-## Build
+## Under the hood
 
-Rust 1.74+ stable.
+<details>
+<summary><b>RTMP + Enhanced Broadcasting internals</b></summary>
+
+<br/>
+
+- **Full OBS-parity RTMP handshake.** `connect` carries the same codec-capability bag librtmp ships (`audioCodecs=3191`, `videoCodecs=252`, `videoFunction=1`), the Enhanced-RTMP `fourCcList` (AVC / HEVC / AV1 / VP9 / Opus / AC-3 / FLAC), `Set Chunk Size` before connect, `FCUnpublish → deleteStream` on shutdown, and RTMP Acknowledgement (BYTES_READ_REPORT) at the peer-declared window/10 threshold on both ingest and egress.
+- **Enhanced Broadcasting passthrough to Twitch.** When OBS hits multi-track "Auto" we proxy Twitch's `GetClientConfiguration`, route egress to the session-allocated IVS endpoint, and forward every per-track SPS/PPS bit-faithfully so the transcoded ladder lights up regardless of account tier. Non-Twitch destinations get the horizontal primary track by default; ladder tags with `TrackId != 0` are dropped to avoid the multi-frame-per-PTS storm that crashes YouTube's decoder. EB cuts land on the primary track's IDR (not whichever ladder rung's keyframe wins the `partition_point`) so the destination decoder always has its anchor.
+- **Vertical (9:16) canvas selection.** The vertical canvas is identified by decoding each track's SPS for orientation (portrait, largest area) rather than trusting Twitch's private session JSON, and it self-heals as Dual Format toggles on/off.
+- **Twitch VOD audio, unlocked on the InstantClone service.** OBS hardcodes its VOD Track to the service literally named "Twitch" (`ServiceSupportsVodTrack == {"Twitch"}`), so it's locked on the InstantClone service. A tiny bundled OBS script (`optional-vod-unlocker.lua`, downloaded from the dashboard) attaches the same second audio encoder OBS's own VOD Track would, without the gate. Its wire-format reader matches OBS's `flv_packet_audio_ex` byte-for-byte (`AudioPacketType` in byte 0, `TrackId` at byte 6). OBS 32.2+ needs the script; older OBS can still use the built-in VOD Track checkbox (we write `EnableCustomServerVodTrack` to OBS 32's `user.ini`, falling back to `global.ini`).
+- **Per-destination audio routing.** Non-selected tracks are dropped and the chosen one is flattened to a standard single-track tag (AAC rewritten to legacy `0xAF`), mirroring the video-side `flatten_multitrack_video`. If the chosen track isn't being sent, it falls back to the live track rather than going silent.
+
+</details>
+
+<details>
+<summary><b>Buffer, build, and test coverage</b></summary>
+
+<br/>
+
+<table>
+<tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>282 / 282</code></td></tr>
+</table>
+
+**Buffer.** Disk-backed by default (`./instantclone.buf`, 500 MB ≈ 11 min at 6 Mbps, ≈ 6 min 50 s at 10 Mbps), kept off RAM because it can run to hundreds of MB. The only thing in RAM is the IDR index, ~1 MB for 10 minutes at 60 fps. The file resets on every clean shutdown, so nothing accumulates between sessions, and the UI refuses to arm a delay larger than the buffer can hold, with an explicit "needs ≥ N MB" reason.
+
+**Build.** Rust 1.74+ stable. No npm, no submodules, no platform SDKs.
 
 ```powershell
 git clone <repo>
@@ -288,9 +315,13 @@ cargo build --release
 .\target\release\instantclone.exe
 ```
 
-No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzipped at build time by `build.rs` (uses `flate2`, build-only) and embedded into the binary; at runtime it's served with `Content-Encoding: gzip`.
+The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, build-only) and embedded into the binary; at runtime it's served with `Content-Encoding: gzip`. The optional VOD-unlocker OBS script is embedded too and handed to the browser as a Save-As download, so it always matches the running binary and needs no network.
 
-`cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced RTMP IDR detection, AMF0 codec including Strict Array (Enhanced-RTMP `fourCcList`) + recursion guard, settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, `accepts_gzip` content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, Enhanced-RTMP multi-track audio (Twitch's VOD audio track) plus per-destination audio-track routing (flatten any track to a clean single-track feed), primary-track IDR gate so EB cuts don't pixel-glitch ladder rungs, SPS orientation parsing for vertical-canvas (9:16) selection, OBS 32 `user.ini` / legacy `global.ini` path resolution, the OBS services.json patcher, the GitHub releases update-check parser + SemVer-ish comparator, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer (fmt 0-3 headers, extended timestamps, cross-chunk fragmentation, in-band Set-Chunk-Size / Window-Ack control, and malformed-input guards), the scheduled safe-cut ("cut after this airs") state machine, and the self-update download + checksum-verify + on-disk exe swap. 282 tests, all green.
+**Sync disk I/O on the ring-append hot path, by choice.** The buffered write lands in the OS page cache in microseconds and the kernel flushes in the background, so the page cache is already the async buffer; the index and the bytes advance under one lock so a reader never sees a tag whose bytes aren't on disk yet.
+
+**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, and the self-update download + checksum-verify + exe swap. **282 tests, all green.**
+
+</details>
 
 <br/>
 
@@ -298,36 +329,79 @@ No npm. No submodules. No platform SDKs. The dashboard HTML is minified + gzippe
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (with `-D warnings`) + 282 tests on every push, and a tagged commit auto-builds + publishes a release artifact with a `SHA256SUMS.txt` checksum file alongside (no code-signing certificate yet, so the OS may warn on first launch).
-
-**What's solid**
-
-- The two-phase `arm → activate → cut` state machine, with IDR-aligned cuts and monotonic timestamp rewrites. The thing that would have made me build this if it didn't exist.
-- **Live delay adjustment**: re-arm or adjust the delay up / down without disarming first. Backend already supported it; the cockpit now exposes it as a single typed-value + "↻ Adjust ↑/↓ to Ns" CTA.
-- **Full OBS-parity RTMP handshake.** `connect` carries the same codec-capability bag librtmp ships (`audioCodecs=3191`, `videoCodecs=252`, `videoFunction=1`), the Enhanced-RTMP `fourCcList` (AVC / HEVC / AV1 / VP9 / Opus / AC-3 / FLAC), `Set Chunk Size` before connect, `FCUnpublish → deleteStream` on shutdown, and RTMP Acknowledgement (BYTES_READ_REPORT) at the peer-declared window/10 threshold on both ingest and egress.
-- **Enhanced Broadcasting passthrough to Twitch.** When OBS hits multi-track "Auto" we proxy Twitch's `GetClientConfiguration`, route egress to the session-allocated IVS endpoint, and forward every per-track SPS/PPS bit-faithfully so the transcoded ladder lights up regardless of account tier. Non-Twitch destinations get the horizontal primary track by default - multi-track ladder tags with `TrackId != 0` are dropped to avoid the multi-frame-per-PTS storm that crashes YouTube's decoder. EB cuts land on the primary track's IDR (not whichever ladder rung's keyframe happens to win the partition_point) so the destination decoder always has its anchor.
-- **Vertical (9:16) output for non-Twitch destinations.** Set a YouTube / Kick / custom destination's **Stream format** to **Vertical** and it forwards Twitch Dual Format's vertical canvas instead of the horizontal one, flattened to a standard single-track feed those platforms accept natively (YouTube Shorts, Kick mobile, TikTok). The vertical canvas is identified by decoding each track's SPS for orientation (portrait, largest area) rather than relying on Twitch's private session JSON, and it self-heals as Dual Format toggles on/off. It only flows while Twitch Dual Format / Enhanced Broadcasting is on in OBS; otherwise the destination card shows "Waiting for Dual Format" and nothing else is affected. Hidden for Twitch, which carries both canvases natively.
-- **Twitch VOD audio track, unlocked on the InstantClone service.** OBS hardcodes its VOD Track to the service literally named "Twitch" (the gate is `ServiceSupportsVodTrack == {"Twitch"}`), so it's locked while you use the InstantClone service. A tiny bundled OBS script (`optional-vod-unlocker.lua`, one-click download from the dashboard straight into OBS's scripts folder) attaches the same second audio encoder OBS's own VOD Track would - without the gate - so OBS sends both the live track (wire TrackId 0) and the VOD track (TrackId 1). InstantClone forwards them to Twitch bit-faithfully; its wire-format reader matches OBS's `flv_packet_audio_ex` byte-for-byte (`AudioPacketType` in byte 0, `TrackId` at byte 6). **OBS 32.2+ needs the script** (that release locked the built-in VOD Track to Custom services); on older OBS the classic checkbox path still works - we write `EnableCustomServerVodTrack` to OBS 32's `user.ini` (falling back to `global.ini`) to unlock it, optionally paired with EB via the one-click **"Set up VOD + EB"** launcher or a cold-start **desktop shortcut**. Live + VOD audio works alongside delay cuts.
-- **Per-destination audio track routing.** Once OBS sends a second audio track (via the unlocker script or Enhanced Broadcasting), each destination chooses what it gets: Twitch keeps **both** (VOD audio), while you send only the clean **Track 2** to YouTube to dodge copyright, or only the live **Track 1** to Kick. Non-selected tracks are dropped and the chosen one is flattened to a standard single-track tag (AAC rewritten to legacy `0xAF`, the form every ingest accepts), mirroring the video-side `flatten_multitrack_video`. If the chosen track isn't being sent, it falls back to the live track rather than going silent. Only Twitch consumes a second audio track, so every other platform always receives exactly one.
-- **One-click OBS service registration.** The wizard's primary onboarding path adds an "InstantClone" entry to OBS's Service dropdown (writes `services.json` with a `.bak` first; refreshes on port change; surfaces "close OBS first" when the file is locked).
-- Multi-destination egress with per-destination reconnect + bitrate stats.
-- **RTMPS egress (Kick + any `rtmps://` destination).** The egress socket transparently upgrades to TLS for `rtmps://` URLs, reusing the Windows schannel already linked for the HTTPS client, so there's no second TLS stack (rustls + ring would have added ~1.4 MB). Kick is a paste-your-Server-URL platform in the wizard and destination form, with the `/app` path added automatically when it's missing.
-- **Capacity-aware buffer UI**: live "X MB → max Ys delay at N Mbps" hint, refuses to arm a delay larger than the buffer can hold with an explicit "needs ≥ N MB" reason.
-- **Platform-specific warnings**: Twitch mobile-decoder risk above 8 Mbps under Source-Only, Kick's AWS IVS ingest rules (CBR + 2 s keyframe; B-frames actually fine on its low-latency RTMP), per-platform stream-key dashboard links - all surfaced in the wizard / destination form so streamers don't have to learn each platform's gotchas the hard way.
-- Tray icon with live status + one-click cut, port-conflict pre-flight that names the offending process by PID + exe.
-- Test coverage covers the state machine, AVC + Enhanced RTMP IDR detection + multi-track flatten, AMF0 codec including Strict Array, ring eviction with in-flight-read protection, and the timestamp-wrap promotion that prevents the 49.7-day bug.
+**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 282 tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's rough, honestly**
 
-- **Windows only.** macOS / Linux aren't tested or packaged. Several modules (tray, port pre-flight, RSS sampler) have Windows-specific code paths that need parallel implementations.
-- **Multi-hour streams, real mileage now.** Multi-hour daily-driver runs across a growing set of streamers, with the supervisor + keepalive + ack logic built for indefinite sessions. Still worth periodic long soak runs as the user base scales.
-- **Transcoded ladder isn't guaranteed without EB.** Only Twitch Partners get a transcode slot every time. Affiliates get one opportunistically (capacity-dependent, and far less likely above ~6 Mbps); everyone else stays Source-Only. Above ~8 Mbps under Source-Only, some viewers' hardware decoders fail with Error #1000. This is Twitch's allocation behaviour, not the proxy: OBS's native Twitch preset auto-caps bitrate to stay transcode-eligible, but the Custom-server path (which InstantClone has to be) skips that cap. For a guaranteed ladder use Enhanced Broadcasting (or the VOD+EB Launch button); otherwise keep bitrate near ~6000 Kbps.
-- **Sync disk I/O on the ring-append hot path, by choice.** The buffered write lands in the OS page cache in microseconds and the kernel flushes in the background, so the page cache is already acting as the async buffer, and the index and the bytes advance under one lock so a reader never sees a tag whose bytes aren't on disk yet. The tail risk is a writeback stall under memory or slow-disk pressure, which on the current-thread runtime would briefly freeze egress too, not just ingest. Moving the write off-thread adds per-tag overhead and reopens a write-vs-index consistency window, so it isn't worth it for typical hardware. If low-end disks ever become a priority the real lever is the runtime (separate the disk-blocking ingest from egress), not async writes. A someday-maybe I'll revisit, not a blocker.
-- **A handful of `unwrap()` on lock guards.** Fine because `panic = "abort"` means a poison condition can't propagate, but still on the cleanup list.
-- **Hand-rolled HTTP server.** Smaller binary than `hyper`, but I now own the entire HTTP CVE surface. Worth re-evaluating if the surface grows.
+- **Windows only today.** Several modules (tray, port pre-flight, RSS sampler) use Windows-specific paths. A Linux build (including a headless/terminal server version) is on the roadmap; macOS isn't planned yet.
+- **Transcoded ladder isn't guaranteed without EB.** Only Twitch Partners get a transcode slot every time; everyone else stays Source-Only, where some hardware decoders fail above ~8 Mbps (Twitch's allocation behaviour, not the proxy). For a guaranteed ladder use Enhanced Broadcasting; otherwise keep bitrate near ~6000 Kbps.
+- **A handful of `unwrap()` on lock guards.** Safe because `panic = "abort"` means a poison condition can't propagate, but still on the cleanup list.
+- **Hand-rolled HTTP server.** Smaller binary than `hyper`, but I own the entire HTTP surface. Worth re-evaluating if it grows.
 
 > [!WARNING]
 > This is a hobby project I use myself, not a vendor product. If you stream paid esports, validate it against your own pipeline before trusting it on a tournament night.
+
+<br/>
+
+<div align="center"><img src="docs/divider.svg" alt="" width="100%"/></div>
+
+## FAQ
+
+<details>
+<summary><b>Does streaming to several platforms lower my quality?</b></summary>
+
+<br/>
+
+No. InstantClone forwards the exact encoded feed from OBS to each destination without re-encoding, so every platform gets the same quality OBS produced. What it does use is **upload bandwidth**: each destination receives the full bitrate, so three destinations need roughly three times the upload. The dashboard shows an "Upload bottleneck" warning and suggests keeping your OBS bitrate under ~80% of your upload.
+
+</details>
+
+<details>
+<summary><b>Is the delay applied to every platform at once?</b></summary>
+
+<br/>
+
+Yes. The buffer sits before the fan-out, so every destination plays from the same delayed position. Arm, activate, and cut affect all of them together.
+
+</details>
+
+<details>
+<summary><b>How much delay can I set?</b></summary>
+
+<br/>
+
+As much as the buffer holds. The default 500 MB file is about 11 minutes at 6 Mbps (less at higher bitrates). You can make it bigger; the dashboard refuses a delay the buffer can't hold and tells you exactly how many MB it needs, so it never stalls silently.
+
+</details>
+
+<details>
+<summary><b>Does it re-encode or touch my video?</b></summary>
+
+<br/>
+
+No. Video is passed through bit-for-bit. The only rewriting happens on the audio container when you route a specific track to a destination (AAC is rewritten to the legacy tag every ingest accepts); the audio samples themselves are untouched.
+
+</details>
+
+<details>
+<summary><b>Where do my real stream keys go?</b></summary>
+
+<br/>
+
+In InstantClone's **Destinations** tab, never in OBS. OBS only ever points at InstantClone with one service and a throwaway key; InstantClone holds each platform's real key and fans your feed out to them. So your keys live in one place, and you toggle destinations on and off without touching OBS.
+
+**Your keys never leave your PC.** InstantClone has no servers of its own and no telemetry: keys are stored locally on your machine and only ever sent to the platform ingest servers you choose to stream to. Running the app sends us nothing, we never see your keys, your stream, or anything else. It's open source, so you can verify that yourself.
+
+</details>
+
+<details>
+<summary><b>Does it run on macOS or Linux?</b></summary>
+
+<br/>
+
+Windows 10/11 today. A **Linux build is on the roadmap**, including a headless/terminal server version for boxes with no desktop. macOS isn't planned yet. A few parts (tray, port pre-flight, memory sampling) use Windows-specific code that needs porting first.
+
+</details>
 
 <br/>
 
@@ -350,6 +424,6 @@ Catch me streaming while building this, or just chat about the project. Bug repo
 
 ## License
 
-[GPL-3.0](LICENSE). You can use it, modify it, run it on whatever stream you like. If you distribute a modified version (including a "Pro" fork, a bundled installer with extras, or a paid front-end), your source has to ship under the same license, publicly. I built this as a free alternative because I wanted one for myself; GPL is what keeps forks free too.
+[GPL-3.0](LICENSE). Use it, modify it, run it on whatever stream you like. If you distribute a modified version (including a "Pro" fork, a bundled installer, or a paid front-end), your source has to ship under the same license, publicly. I built this as a free alternative because I wanted one for myself; GPL is what keeps forks free too.
 
 Built by [s1moscs](https://s1moscs.dev).

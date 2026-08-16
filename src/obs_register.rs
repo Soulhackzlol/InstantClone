@@ -726,43 +726,6 @@ pub fn obs_version() -> Option<(u32, u32, u32)> {
         .find_map(first_version_triple)
 }
 
-/// OBS's per-user scripts folder (`%APPDATA%/obs-studio/scripts`). This is
-/// just a stable home for the file - OBS loads scripts by absolute path,
-/// so the location isn't load-bearing, only tidy.
-fn obs_scripts_dir() -> Option<PathBuf> {
-    std::env::var("APPDATA")
-        .ok()
-        .map(|p| PathBuf::from(p).join("obs-studio").join("scripts"))
-}
-
-/// Write the optional VOD-unlocker Lua script (bytes fetched from the
-/// release) into OBS's scripts folder and return its path. The user still
-/// adds it once via Tools -> Scripts; we only place the file so they never
-/// have to hunt for it on GitHub.
-pub fn install_vod_script(bytes: &[u8]) -> io::Result<PathBuf> {
-    let dir = obs_scripts_dir().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "OBS config folder not found (is %APPDATA% set / OBS installed?)",
-        )
-    })?;
-    fs::create_dir_all(&dir)?;
-    let path = dir.join("optional-vod-unlocker.lua");
-    write_or_friendly(&path, bytes)?;
-    Ok(path)
-}
-
-/// Whether the VOD-unlocker script is already sitting in OBS's scripts folder
-/// (placed by `install_vod_script`). The dashboard uses this to show "already
-/// downloaded - add it in Tools -> Scripts" instead of prompting to fetch it
-/// again. This only checks the file exists on disk; whether the user has
-/// actually added it inside OBS is something we can't see from here.
-pub fn vod_script_installed() -> bool {
-    obs_scripts_dir()
-        .map(|d| d.join("optional-vod-unlocker.lua").is_file())
-        .unwrap_or(false)
-}
-
 /// Whether an `obs64.exe` process is currently running. Used by the setup
 /// wizard to show the "close OBS first" note only when it actually applies:
 /// registering edits `services.json`, which a running OBS overwrites on exit,

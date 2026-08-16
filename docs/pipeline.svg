@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 210" width="900" height="210" role="img" aria-label="Zero-glitch stream delay, multistream simulcast to every platform at once, free and open source">
+  <defs>
+    <linearGradient id="bgP" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a0c12"/>
+      <stop offset="100%" stop-color="#07080a"/>
+    </linearGradient>
+    <linearGradient id="cardP" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#141922"/>
+      <stop offset="100%" stop-color="#0d1015"/>
+    </linearGradient>
+    <filter id="glowP" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.6"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.7"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadowP" x="-25%" y="-25%" width="150%" height="170%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <style>
+    .kick { font-family: -apple-system, Segoe UI, Inter, sans-serif; font-weight: 600; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; }
+    .head { font-family: -apple-system, Segoe UI, Inter, sans-serif; font-weight: 800; font-size: 22px; letter-spacing: -0.3px; fill: #f2f5fa; }
+    .sub  { font-family: -apple-system, Segoe UI, Inter, sans-serif; font-weight: 500; font-size: 11.5px; fill: #8b909d; }
+  </style>
+
+  <rect width="900" height="210" rx="14" fill="url(#bgP)"/>
+
+  <!-- ═══ CARD 1 · ZERO-GLITCH DELAY (cyan) ═════════════════════ -->
+  <g transform="translate(14, 12)" filter="url(#shadowP)">
+    <rect width="281" height="186" rx="16" fill="url(#cardP)" stroke="rgba(90,200,250,0.28)"/>
+    <rect width="281" height="3" rx="1.5" fill="#5ac8fa" opacity="0.9"/>
+    <g transform="translate(50, 54)">
+      <circle r="24" fill="rgba(90,200,250,0.12)" stroke="rgba(90,200,250,0.5)"/>
+      <g fill="#5ac8fa" filter="url(#glowP)">
+        <path d="M 3 -10 L -8 0 L 3 10 Z"/>
+        <path d="M 14 -10 L 3 0 L 14 10 Z"/>
+      </g>
+    </g>
+    <text class="kick" x="94" y="42" fill="#5ac8fa">the point</text>
+    <text class="head" x="94" y="66">Zero-glitch</text>
+    <text class="head" x="94" y="92">stream delay</text>
+    <text class="sub" x="28" y="132">Arm a buffer, activate on the fly, and</text>
+    <text class="sub" x="28" y="150">cut back to live. No reconnect, no stutter.</text>
+  </g>
+
+  <!-- ═══ CARD 2 · EVERY PLATFORM AT ONCE (multi) ═══════════════ -->
+  <g transform="translate(309, 12)" filter="url(#shadowP)">
+    <rect width="281" height="186" rx="16" fill="url(#cardP)" stroke="rgba(145,70,255,0.28)"/>
+    <rect width="281" height="3" rx="1.5" fill="#9146ff" opacity="0.9"/>
+    <g transform="translate(50, 54)">
+      <circle r="24" fill="rgba(145,70,255,0.12)" stroke="rgba(145,70,255,0.5)"/>
+      <!-- fan-out glyph -->
+      <line x1="-11" y1="0" x2="9" y2="-12" stroke="#9146ff" stroke-width="1.8"/>
+      <line x1="-11" y1="0" x2="12" y2="0"  stroke="#9146ff" stroke-width="1.8"/>
+      <line x1="-11" y1="0" x2="9" y2="12"  stroke="#9146ff" stroke-width="1.8"/>
+      <circle cx="-11" cy="0" r="4" fill="#eef1f6"/>
+      <circle cx="9"  cy="-12" r="3.5" fill="#9146ff"/>
+      <circle cx="12" cy="0"   r="3.5" fill="#ff4d4d"/>
+      <circle cx="9"  cy="12"  r="3.5" fill="#53fc18"/>
+    </g>
+    <text class="kick" x="94" y="42" fill="#b98bff">the reach</text>
+    <text class="head" x="94" y="66">Every platform</text>
+    <text class="head" x="94" y="92">at once</text>
+    <text class="sub" x="28" y="132">One OBS feed to Twitch, YouTube, Kick</text>
+    <text class="sub" x="28" y="150">and custom RTMP, with live per-target stats.</text>
+  </g>
+
+  <!-- ═══ CARD 3 · FREE & OPEN SOURCE (green) ════════════════════ -->
+  <g transform="translate(604, 12)" filter="url(#shadowP)">
+    <rect width="281" height="186" rx="16" fill="url(#cardP)" stroke="rgba(52,199,89,0.28)"/>
+    <rect width="281" height="3" rx="1.5" fill="#34c759" opacity="0.9"/>
+    <g transform="translate(50, 54)">
+      <circle r="24" fill="rgba(52,199,89,0.12)" stroke="rgba(52,199,89,0.5)"/>
+      <!-- lightning glyph -->
+      <path d="M 3 -13 L -8 3 L -1 3 L -3 13 L 10 -4 L 2 -4 Z" fill="#34c759" filter="url(#glowP)"/>
+    </g>
+    <text class="kick" x="94" y="42" fill="#5fd97e">the price</text>
+    <text class="head" x="94" y="66">Free &amp;</text>
+    <text class="head" x="94" y="92">open source</text>
+    <text class="sub" x="28" y="132">No installer, no account, no upsell.</text>
+    <text class="sub" x="28" y="150">GPL-3.0. Fork it, run it, keep it.</text>
+  </g>
+</svg>
