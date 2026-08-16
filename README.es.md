@@ -336,7 +336,6 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 - **Solo Windows por ahora.** Varios módulos (bandeja, pre-flight de puerto, muestreo de RSS) usan rutas específicas de Windows. Hay una versión para Linux (incluida una variante headless/terminal para servidor) en la hoja de ruta; macOS aún no está planeado.
 - **La escalera de transcodificado no está garantizada sin EB.** Solo los Twitch Partner tienen slot de transcodificado siempre; el resto se queda en Source-Only, donde algunos decodificadores por hardware fallan por encima de ~8 Mbps (es el comportamiento de asignación de Twitch, no del proxy). Para una escalera garantizada usa Enhanced Broadcasting; si no, mantén el bitrate cerca de ~6000 Kbps.
-- **Un puñado de `unwrap()` sobre guards de lock.** Seguro porque `panic = "abort"` hace que una condición de poison no pueda propagarse, pero sigue en la lista de limpieza.
 - **Servidor HTTP hecho a mano.** Binario más pequeño que con `hyper`, pero soy dueño de toda la superficie HTTP. A revisar si crece.
 
 > [!WARNING]

@@ -32,9 +32,12 @@ use tokio::sync::watch;
 /// this lock two overlapping POSTs each start from the same snapshot and the
 /// later `send()` clobbers the other's change. That lost update used to
 /// silently reset the `configured` flag and bounce users into the first-run
-/// wizard. A plain `std::sync::Mutex` is correct here because the critical
-/// section never `.await`s (its `!Send` guard makes that a compile error), so
-/// it can also be taken from the sync persist/overlay handlers.
+/// wizard. This is the one lock that deliberately keeps `std`'s poison
+/// handling (rather than `crate::sync`): a panic mid-save should not wedge
+/// every later config write, so `settings_write_guard` recovers the guard
+/// instead of propagating. A plain `std::sync::Mutex` is also correct here
+/// because the critical section never `.await`s (its `!Send` guard makes that
+/// a compile error), so it can be taken from the sync persist/overlay handlers.
 static SETTINGS_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Take the settings write lock for a full read-modify-write-send cycle. Hold
@@ -774,7 +777,7 @@ async fn handle_sse(
 /// frequently-polled `/state` and `/destinations` endpoints off a
 /// per-dest lock + Exp-Golomb parse.
 fn video_readouts(ctrl: &Controller) -> std::collections::BTreeMap<u8, (String, String)> {
-    let headers = ctrl.ring.video_seq_headers.lock().unwrap();
+    let headers = ctrl.ring.video_seq_headers.lock();
     headers
         .iter()
         .map(|(&track, h)| {
@@ -901,8 +904,7 @@ fn state_json(
     // A portrait canvas is present on the wire (Twitch Dual Format is live).
     // Drives the header "Dual Format" pill.
     let vertical_present =
-        crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock().unwrap())
-            .is_some();
+        crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock()).is_some();
 
     format!(
         r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
@@ -1256,7 +1258,7 @@ async fn obs_multitrack_config_proxy(
         };
         if let Some(id) = chosen_id {
             let state = ctrl.destination_state(&id);
-            *state.eb_override_url.lock().unwrap() = Some(ivs.clone());
+            *state.eb_override_url.lock() = Some(ivs.clone());
         }
         // Clean up any stale override on OTHER Twitch destinations -
         // the proxy might have run before and left stale state from a
@@ -1272,7 +1274,7 @@ async fn obs_multitrack_config_proxy(
                 .collect();
             for id in &other_ids {
                 let state = ctrl.destination_state(id);
-                *state.eb_override_url.lock().unwrap() = None;
+                *state.eb_override_url.lock() = None;
             }
         }
         if twitch_count > 1 {
@@ -2137,7 +2139,7 @@ async fn post_profile_del(
 // ---- Logs viewer ----
 
 fn logs_json(ctrl: &Controller) -> String {
-    let q = ctrl.logs.lock().unwrap();
+    let q = ctrl.logs.lock();
     let mut out = String::from(r#"{"lines":["#);
     for (i, line) in q.iter().enumerate() {
         if i > 0 {

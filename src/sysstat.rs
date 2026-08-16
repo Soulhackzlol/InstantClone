@@ -3,7 +3,7 @@
 //! dependency); other platforms compile to inert no-op stubs that report
 //! zero. Adding /proc and Mach impls later is a few dozen lines.
 
-use std::sync::Mutex;
+use crate::sync::Mutex;
 use std::time::Instant;
 
 /// One sampler per process. Cheap to create; calling `sample()` more
@@ -107,7 +107,7 @@ mod platform {
                 != 0
             {
                 let total = ft_to_100ns(&kernel).saturating_add(ft_to_100ns(&user));
-                let mut prev = s.prev.lock().unwrap();
+                let mut prev = s.prev.lock();
                 let pct = if let Some((prev_total, prev_t)) = *prev {
                     let dt_ns = now.duration_since(prev_t).as_nanos() as u64;
                     let dt_100ns = dt_ns / 100;

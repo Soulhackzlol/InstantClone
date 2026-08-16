@@ -336,7 +336,6 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 - **Windows only today.** Several modules (tray, port pre-flight, RSS sampler) use Windows-specific paths. A Linux build (including a headless/terminal server version) is on the roadmap; macOS isn't planned yet.
 - **Transcoded ladder isn't guaranteed without EB.** Only Twitch Partners get a transcode slot every time; everyone else stays Source-Only, where some hardware decoders fail above ~8 Mbps (Twitch's allocation behaviour, not the proxy). For a guaranteed ladder use Enhanced Broadcasting; otherwise keep bitrate near ~6000 Kbps.
-- **A handful of `unwrap()` on lock guards.** Safe because `panic = "abort"` means a poison condition can't propagate, but still on the cleanup list.
 - **Hand-rolled HTTP server.** Smaller binary than `hyper`, but I own the entire HTTP surface. Worth re-evaluating if it grows.
 
 > [!WARNING]

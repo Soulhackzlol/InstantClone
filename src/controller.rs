@@ -194,7 +194,7 @@ pub struct DestinationState {
     /// uses it instead of the configured destination URL. Cleared on
     /// publisher disconnect so the next normal stream goes back to
     /// the configured URL.
-    pub eb_override_url: std::sync::Mutex<Option<String>>,
+    pub eb_override_url: crate::sync::Mutex<Option<String>>,
     /// In-flight latch for the VOD-audio IVS session fetch. Invariant:
     /// `true` for exactly as long as one `fetch_twitch_vod_session` task is
     /// running, `false` otherwise. The supervisor fires every ~2 s; without
@@ -255,7 +255,7 @@ impl DestinationState {
             bitrate_kbps_out: AtomicU32::new(0),
             shutdown_requested: AtomicBool::new(false),
             last_seq_header_gen: AtomicU32::new(0),
-            eb_override_url: std::sync::Mutex::new(None),
+            eb_override_url: crate::sync::Mutex::new(None),
             rate_window_bytes: AtomicU64::new(0),
             rate_window_start_ms: AtomicU64::new(0),
             // Default false: every newly-spawned destination flattens
@@ -328,7 +328,7 @@ impl DestinationState {
         if self.vod_fetch_pending.swap(true, Ordering::Relaxed) {
             return false;
         }
-        if self.eb_override_url.lock().unwrap().is_some() {
+        if self.eb_override_url.lock().is_some() {
             self.vod_fetch_pending.store(false, Ordering::Relaxed);
             return false;
         }
@@ -350,7 +350,7 @@ impl DestinationState {
     /// The epoch is read under the override mutex, so it cannot race
     /// `invalidate_session_override`'s clear+bump.
     pub fn apply_vod_session_if_current(&self, url: String, captured_epoch: u64) -> bool {
-        let mut guard = self.eb_override_url.lock().unwrap();
+        let mut guard = self.eb_override_url.lock();
         if self.session_epoch.load(Ordering::Relaxed) != captured_epoch {
             return false;
         }
@@ -363,7 +363,7 @@ impl DestinationState {
     /// section, so a fetch still in flight discards its (now-stale) result
     /// rather than writing it into the next session.
     pub fn invalidate_session_override(&self) {
-        let mut guard = self.eb_override_url.lock().unwrap();
+        let mut guard = self.eb_override_url.lock();
         *guard = None;
         self.session_epoch.fetch_add(1, Ordering::Relaxed);
     }
@@ -465,7 +465,7 @@ pub struct Controller {
     // `dest.consumer_seq.store` write the pumps do. RwLock lets the
     // hot read path go through concurrently; writes (add/remove dest)
     // are rare so the write-side contention is fine.
-    destinations: std::sync::RwLock<HashMap<String, Arc<DestinationState>>>,
+    destinations: crate::sync::RwLock<HashMap<String, Arc<DestinationState>>>,
 
     // Ingest-side stats
     ingest_disconnects: AtomicU32,
@@ -474,7 +474,7 @@ pub struct Controller {
     rate_window_start_ms: AtomicU64,
 
     // Discord webhook URL. Empty = disabled. Updated live via update_webhook.
-    webhook_url: std::sync::Mutex<String>,
+    webhook_url: crate::sync::Mutex<String>,
     // Wall-clock ms (since UNIX epoch) of last webhook fire. Throttles
     // rapid event sequences (e.g. reconnect flapping) so we never spawn
     // more than one curl every ~2 s.
@@ -556,7 +556,7 @@ pub struct Controller {
     seq_header_gen: AtomicU32,
 
     // In-process log ring (most recent N lines).
-    pub logs: std::sync::Mutex<std::collections::VecDeque<String>>,
+    pub logs: crate::sync::Mutex<std::collections::VecDeque<String>>,
 }
 
 impl Controller {
@@ -575,12 +575,12 @@ impl Controller {
             ingest_alive: AtomicBool::new(false),
             buffer_building: AtomicBool::new(false),
             publisher_token: AtomicU64::new(0),
-            destinations: std::sync::RwLock::new(HashMap::new()),
+            destinations: crate::sync::RwLock::new(HashMap::new()),
             ingest_disconnects: AtomicU32::new(0),
             bitrate_kbps: AtomicU32::new(0),
             rate_window_bytes: AtomicU64::new(0),
             rate_window_start_ms: AtomicU64::new(0),
-            webhook_url: std::sync::Mutex::new(String::new()),
+            webhook_url: crate::sync::Mutex::new(String::new()),
             webhook_last_fire_ms: AtomicU64::new(0),
             publish_lock: Mutex::new(()),
             video_codec: AtomicU8::new(0),
@@ -598,7 +598,7 @@ impl Controller {
             input_ts_wrap_high: AtomicU32::new(0),
             last_multitrack_video_ms: AtomicU64::new(0),
             backpressure_since_ms: AtomicU64::new(0),
-            logs: std::sync::Mutex::new(std::collections::VecDeque::with_capacity(512)),
+            logs: crate::sync::Mutex::new(std::collections::VecDeque::with_capacity(512)),
         }
     }
 
@@ -804,10 +804,10 @@ impl Controller {
     pub fn destination_state(&self, id: &str) -> Arc<DestinationState> {
         // Fast path: existing entry. Use read() so concurrent destination_state
         // calls don't serialise (e.g. supervisor + state endpoint).
-        if let Some(s) = self.destinations.read().unwrap().get(id) {
+        if let Some(s) = self.destinations.read().get(id) {
             return s.clone();
         }
-        let mut map = self.destinations.write().unwrap();
+        let mut map = self.destinations.write();
         map.entry(id.to_string())
             .or_insert_with(|| Arc::new(DestinationState::new(id.to_string())))
             .clone()
@@ -815,7 +815,7 @@ impl Controller {
 
     /// Drop a destination's state - call when the user removes it.
     pub fn remove_destination_state(&self, id: &str) {
-        self.destinations.write().unwrap().remove(id);
+        self.destinations.write().remove(id);
     }
 
     /// Snapshot of every (id → state) pair. Used by graceful-shutdown
@@ -823,7 +823,6 @@ impl Controller {
     pub fn all_destination_states(&self) -> Vec<(String, Arc<DestinationState>)> {
         self.destinations
             .read()
-            .unwrap()
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
@@ -831,7 +830,7 @@ impl Controller {
 
     /// Snapshot for the dashboard: (id, alive, consumer_seq, kbps_out, tags, bytes, cuts, reconnects).
     pub fn destination_snapshot(&self) -> Vec<DestinationSnapshot> {
-        let map = self.destinations.read().unwrap();
+        let map = self.destinations.read();
         map.values()
             .map(|d| {
                 (
@@ -852,14 +851,13 @@ impl Controller {
     pub fn any_destination_alive(&self) -> bool {
         self.destinations
             .read()
-            .unwrap()
             .values()
             .any(|d| d.egress_alive.load(Ordering::Relaxed))
     }
 
     /// (alive_count, total_count) - for "2/3 destinations live" chips.
     pub fn destination_alive_summary(&self) -> (u32, u32) {
-        let map = self.destinations.read().unwrap();
+        let map = self.destinations.read();
         let total = map.len() as u32;
         let alive = map
             .values()
@@ -1045,7 +1043,7 @@ impl Controller {
     /// fully caught up, which reads as the live edge.
     fn slowest_live_consumer_ts(&self) -> Option<u64> {
         let min_consumer = {
-            let map = self.destinations.read().unwrap();
+            let map = self.destinations.read();
             map.values()
                 .filter(|d| d.egress_alive.load(Ordering::Relaxed))
                 .map(|d| d.consumer_seq.load(Ordering::Relaxed))
@@ -1135,7 +1133,6 @@ impl Controller {
     pub fn tags_sent(&self) -> u64 {
         self.destinations
             .read()
-            .unwrap()
             .values()
             .map(|d| d.tags_sent.load(Ordering::Relaxed))
             .sum()
@@ -1143,7 +1140,6 @@ impl Controller {
     pub fn bytes_sent(&self) -> u64 {
         self.destinations
             .read()
-            .unwrap()
             .values()
             .map(|d| d.bytes_sent.load(Ordering::Relaxed))
             .sum()
@@ -1151,7 +1147,6 @@ impl Controller {
     pub fn cuts_performed(&self) -> u32 {
         self.destinations
             .read()
-            .unwrap()
             .values()
             .map(|d| d.cuts_performed.load(Ordering::Relaxed))
             .sum()
@@ -1159,7 +1154,6 @@ impl Controller {
     pub fn egress_reconnects(&self) -> u32 {
         self.destinations
             .read()
-            .unwrap()
             .values()
             .map(|d| d.reconnects.load(Ordering::Relaxed))
             .sum()
@@ -1206,7 +1200,7 @@ impl Controller {
     /// other - invaluable for diagnosing "the bouncing happened around
     /// 30 seconds in".
     pub fn log(&self, line: impl Into<String>) {
-        let mut q = self.logs.lock().unwrap();
+        let mut q = self.logs.lock();
         if q.len() >= 1500 {
             q.pop_front();
         }
@@ -1215,7 +1209,7 @@ impl Controller {
     }
 
     pub fn clear_logs(&self) {
-        self.logs.lock().unwrap().clear();
+        self.logs.lock().clear();
     }
 
     // ---- Ingest entry points (called from rtmp::server) ----
@@ -1239,18 +1233,12 @@ impl Controller {
         // we clear them only when a new publisher takes the slot -
         // otherwise stale multi-track SPS/PPS leak into a non-EB
         // session and freeze the destination's decoder.
-        if let Ok(mut hdrs) = self.ring.video_seq_headers.lock() {
-            hdrs.clear();
-        }
-        if let Ok(mut hdrs) = self.ring.audio_seq_headers.lock() {
-            hdrs.clear();
-        }
+        self.ring.video_seq_headers.lock().clear();
+        self.ring.audio_seq_headers.lock().clear();
         // onMetaData leaks the same way: the prior publisher's
         // resolution / fps / encoder fields would be replayed at every
         // pump start until the new publisher's first onMetaData arrives.
-        if let Ok(mut meta) = self.ring.metadata.lock() {
-            *meta = None;
-        }
+        *self.ring.metadata.lock() = None;
         // The ring's indexed tags also have to go. OBS's RTMP wire
         // timestamps restart from ~0 on every fresh stream session
         // (Start Streaming -> Stop -> Start), but the ring still holds
@@ -1324,7 +1312,7 @@ impl Controller {
     /// no in-flight read can be invalidated. If no destinations exist or
     /// none have produced a seq yet, returns u64::MAX so trim is a no-op.
     fn min_consumer_seq(&self) -> u64 {
-        let map = self.destinations.read().unwrap();
+        let map = self.destinations.read();
         map.values()
             .map(|d| d.consumer_seq.load(Ordering::Relaxed))
             .min()
@@ -1341,7 +1329,7 @@ impl Controller {
             return 0;
         };
         let min_consumer = {
-            let map = self.destinations.read().unwrap();
+            let map = self.destinations.read();
             map.values()
                 .filter(|d| d.egress_alive.load(Ordering::Relaxed))
                 .map(|d| d.consumer_seq.load(Ordering::Relaxed))
@@ -1372,7 +1360,7 @@ impl Controller {
         // Skip the check entirely if there's no live destination - the
         // signal is meaningless when nothing is being sent.
         let any_alive = {
-            let map = self.destinations.read().unwrap();
+            let map = self.destinations.read();
             map.values().any(|d| d.egress_alive.load(Ordering::Relaxed))
         };
         if !any_alive {
@@ -1429,7 +1417,7 @@ impl Controller {
     }
 
     pub fn on_metadata(&self, payload: Vec<u8>) {
-        *self.ring.metadata.lock().unwrap() = Some(payload);
+        *self.ring.metadata.lock() = Some(payload);
     }
 
     pub fn mark_ingest_dead(&self) {
@@ -1466,7 +1454,7 @@ impl Controller {
     /// Update the Discord webhook URL - call when settings change. Empty
     /// string disables webhook delivery entirely.
     pub fn update_webhook(&self, url: String) {
-        *self.webhook_url.lock().unwrap() = url;
+        *self.webhook_url.lock() = url;
     }
 
     /// Snapshot the current webhook URL. Used by the test endpoint so it
@@ -1474,7 +1462,7 @@ impl Controller {
     /// going through `fire_webhook` (which is fire-and-forget and
     /// silently swallows everything from empty-URL to TLS failures).
     pub fn webhook_url_snapshot(&self) -> String {
-        self.webhook_url.lock().unwrap().clone()
+        self.webhook_url.lock().clone()
     }
 
     /// Fire-and-forget Discord post. Skips silently when no webhook is
@@ -1487,7 +1475,7 @@ impl Controller {
     /// (a) silently failed when `curl.exe` wasn't on PATH and (b) made
     /// "runtime deps" technically include the system curl binary.
     pub fn fire_webhook(&self, emoji: &str, message: &str) {
-        let url = self.webhook_url.lock().unwrap().clone();
+        let url = self.webhook_url.lock().clone();
         if url.is_empty() {
             return;
         }
@@ -1708,7 +1696,7 @@ async fn pump_dest(
     dest: &Arc<DestinationState>,
     mut sink: EgressSink,
 ) -> io::Result<()> {
-    let meta = ctrl.ring.metadata.lock().unwrap().clone();
+    let meta = ctrl.ring.metadata.lock().clone();
     if let Some(meta) = meta {
         let _ = sink.send_metadata(&meta).await;
     }
@@ -2323,7 +2311,6 @@ async fn send_sequence_headers(
         .ring
         .video_seq_headers
         .lock()
-        .unwrap()
         .iter()
         .map(|(k, v)| (*k, v.clone()))
         .collect();
@@ -2401,7 +2388,6 @@ async fn send_sequence_headers(
         .ring
         .audio_seq_headers
         .lock()
-        .unwrap()
         .iter()
         .map(|(k, v)| (*k, v.clone()))
         .collect();
@@ -3044,10 +3030,10 @@ mod tests {
         // the seq-header cache itself belongs to the ring and only
         // gets wiped by a fresh publisher session - verify it stays.
         let dest = h.ctrl.destination_state("d1");
-        *dest.eb_override_url.lock().unwrap() = Some("rtmps://stale".into());
+        *dest.eb_override_url.lock() = Some("rtmps://stale".into());
         h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
         h.ctrl.mark_ingest_dead();
-        let cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+        let cache = h.ctrl.ring.video_seq_headers.lock();
         assert_eq!(cache.len(), 4, "all 4 tracks must persist across cut");
         for track in 0u8..=3 {
             assert!(cache.contains_key(&track), "track {track} dropped");
@@ -3064,13 +3050,13 @@ mod tests {
         let h = harness(0);
         for id in ["dest-a", "dest-b", "dest-c"] {
             let s = h.ctrl.destination_state(id);
-            *s.eb_override_url.lock().unwrap() = Some(format!("rtmps://ivs/{id}"));
+            *s.eb_override_url.lock() = Some(format!("rtmps://ivs/{id}"));
         }
         h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
         h.ctrl.mark_ingest_dead();
         for (id, s) in h.ctrl.all_destination_states() {
             assert!(
-                s.eb_override_url.lock().unwrap().is_none(),
+                s.eb_override_url.lock().is_none(),
                 "override for {id} survived ingest cut"
             );
         }
@@ -3109,7 +3095,7 @@ mod tests {
     #[test]
     fn try_claim_vod_fetch_skips_when_session_already_allocated() {
         let s = DestinationState::new("main".into());
-        *s.eb_override_url.lock().unwrap() = Some("rtmps://ivs/session".into());
+        *s.eb_override_url.lock() = Some("rtmps://ivs/session".into());
         assert!(
             !s.try_claim_vod_fetch(),
             "must not claim when a session already exists"
@@ -3131,14 +3117,14 @@ mod tests {
     fn try_claim_vod_fetch_reclaims_after_override_cleared() {
         let s = DestinationState::new("main".into());
         // Post-success state: session allocated, latch released by the task.
-        *s.eb_override_url.lock().unwrap() = Some("rtmps://ivs/session".into());
+        *s.eb_override_url.lock() = Some("rtmps://ivs/session".into());
         s.vod_fetch_pending.store(false, Ordering::Relaxed);
         assert!(
             !s.try_claim_vod_fetch(),
             "a live session must block a re-fetch"
         );
         // Override cleared elsewhere (proxy cleanup / disconnect).
-        *s.eb_override_url.lock().unwrap() = None;
+        *s.eb_override_url.lock() = None;
         assert!(
             s.try_claim_vod_fetch(),
             "cleared override must allow a fresh fetch - no permanent lockout"
@@ -3181,10 +3167,7 @@ mod tests {
             s.apply_vod_session_if_current("rtmps://ivs/live".into(), epoch),
             "same-session fetch must apply"
         );
-        assert_eq!(
-            *s.eb_override_url.lock().unwrap(),
-            Some("rtmps://ivs/live".into())
-        );
+        assert_eq!(*s.eb_override_url.lock(), Some("rtmps://ivs/live".into()));
     }
 
     /// Regression guard for the late-completion race: a VOD-session fetch
@@ -3202,7 +3185,7 @@ mod tests {
             "a fetch outliving its session must be discarded"
         );
         assert!(
-            s.eb_override_url.lock().unwrap().is_none(),
+            s.eb_override_url.lock().is_none(),
             "the stale URL must not leak into the next session"
         );
     }
@@ -3213,13 +3196,10 @@ mod tests {
     #[test]
     fn invalidate_session_override_clears_url_and_bumps_epoch() {
         let s = DestinationState::new("main".into());
-        *s.eb_override_url.lock().unwrap() = Some("rtmps://ivs/old".into());
+        *s.eb_override_url.lock() = Some("rtmps://ivs/old".into());
         let before = s.session_epoch();
         s.invalidate_session_override();
-        assert!(
-            s.eb_override_url.lock().unwrap().is_none(),
-            "url must clear"
-        );
+        assert!(s.eb_override_url.lock().is_none(), "url must clear");
         assert_eq!(s.session_epoch(), before + 1, "epoch must advance");
     }
 
@@ -3235,10 +3215,7 @@ mod tests {
             s.apply_vod_session_if_current("rtmps://ivs/new".into(), fresh_epoch),
             "a fetch from the new session must apply"
         );
-        assert_eq!(
-            *s.eb_override_url.lock().unwrap(),
-            Some("rtmps://ivs/new".into())
-        );
+        assert_eq!(*s.eb_override_url.lock(), Some("rtmps://ivs/new".into()));
     }
 
     /// `complete_vod_fetch` on success applies the URL, reports Applied,
@@ -3253,10 +3230,7 @@ mod tests {
             s.complete_vod_fetch(Some("rtmps://ivs/live".into()), epoch),
             VodFetchOutcome::Applied
         );
-        assert_eq!(
-            *s.eb_override_url.lock().unwrap(),
-            Some("rtmps://ivs/live".into())
-        );
+        assert_eq!(*s.eb_override_url.lock(), Some("rtmps://ivs/live".into()));
         assert!(
             !s.vod_fetch_pending.load(Ordering::Relaxed),
             "latch must be released after a successful completion"
@@ -3276,7 +3250,7 @@ mod tests {
             s.complete_vod_fetch(Some("rtmps://ivs/stale".into()), epoch),
             VodFetchOutcome::DiscardedStale
         );
-        assert!(s.eb_override_url.lock().unwrap().is_none());
+        assert!(s.eb_override_url.lock().is_none());
         assert!(
             !s.vod_fetch_pending.load(Ordering::Relaxed),
             "latch must be released even when the result is discarded"
@@ -3291,7 +3265,7 @@ mod tests {
         assert!(s.try_claim_vod_fetch());
         let epoch = s.session_epoch();
         assert_eq!(s.complete_vod_fetch(None, epoch), VodFetchOutcome::Failed);
-        assert!(s.eb_override_url.lock().unwrap().is_none());
+        assert!(s.eb_override_url.lock().is_none());
         assert!(
             !s.vod_fetch_pending.load(Ordering::Relaxed),
             "latch must be released on failure"
@@ -3328,7 +3302,7 @@ mod tests {
                 });
             });
             assert!(
-                s.eb_override_url.lock().unwrap().is_none(),
+                s.eb_override_url.lock().is_none(),
                 "racing apply against the disconnect must never leave a stale override"
             );
         }
@@ -3401,16 +3375,16 @@ mod tests {
         }
 
         // 3. Populate metadata cache simulating Publisher A's onMetaData.
-        *h.ctrl.ring.metadata.lock().unwrap() = Some(b"onMetaData-publisher-A".to_vec());
+        *h.ctrl.ring.metadata.lock() = Some(b"onMetaData-publisher-A".to_vec());
 
         // Validate baseline assumptions: caches must be fully loaded.
         {
-            let video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+            let video_cache = h.ctrl.ring.video_seq_headers.lock();
             assert_eq!(video_cache.len(), 4, "video cache must start with 4 tracks");
-            let audio_cache = h.ctrl.ring.audio_seq_headers.lock().unwrap();
+            let audio_cache = h.ctrl.ring.audio_seq_headers.lock();
             assert_eq!(audio_cache.len(), 2, "audio cache must start with 2 tracks");
             assert!(
-                h.ctrl.ring.metadata.lock().unwrap().is_some(),
+                h.ctrl.ring.metadata.lock().is_some(),
                 "metadata cache must be active"
             );
         }
@@ -3422,8 +3396,8 @@ mod tests {
         h.ctrl.mark_ingest_dead();
 
         {
-            let video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
-            let audio_cache = h.ctrl.ring.audio_seq_headers.lock().unwrap();
+            let video_cache = h.ctrl.ring.video_seq_headers.lock();
+            let audio_cache = h.ctrl.ring.audio_seq_headers.lock();
             assert_eq!(
                 video_cache.len(),
                 4,
@@ -3444,7 +3418,7 @@ mod tests {
             .expect("begin_publish must accept the new session token assignment");
 
         // 5. Hard assertions to guarantee a zeroed cache allocation before streaming starts.
-        let post_video_cache = h.ctrl.ring.video_seq_headers.lock().unwrap();
+        let post_video_cache = h.ctrl.ring.video_seq_headers.lock();
         assert!(
             post_video_cache.is_empty(),
             "leak detected: begin_publish failed to purge video_seq_headers cache. \
@@ -3452,7 +3426,7 @@ mod tests {
             post_video_cache.keys()
         );
 
-        let post_audio_cache = h.ctrl.ring.audio_seq_headers.lock().unwrap();
+        let post_audio_cache = h.ctrl.ring.audio_seq_headers.lock();
         assert!(
             post_audio_cache.is_empty(),
             "leak detected: begin_publish failed to clear stale audio_seq_headers cache. \
@@ -3460,7 +3434,7 @@ mod tests {
             post_audio_cache.keys()
         );
 
-        let post_metadata_cache = h.ctrl.ring.metadata.lock().unwrap();
+        let post_metadata_cache = h.ctrl.ring.metadata.lock();
         assert!(
             post_metadata_cache.is_none(),
             "leak detected: begin_publish failed to clear stale onMetaData. \

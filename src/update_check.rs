@@ -10,7 +10,7 @@
 //! us, or the JSON shape changes, we silently report "couldn't check"
 //! and the dashboard hides the pill.
 
-use std::sync::Mutex;
+use crate::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const RELEASES_URL: &str = "https://api.github.com/repos/Soulhackzlol/InstantClone/releases/latest";
@@ -57,13 +57,13 @@ pub fn current_version() -> &'static str {
 /// call site is the dashboard endpoint, which already runs on the web
 /// worker thread - a 10-second timeout caps the worst case.
 pub fn check_update() -> UpdateInfo {
-    if let Some((when, info)) = CACHE.lock().unwrap().as_ref() {
+    if let Some((when, info)) = CACHE.lock().as_ref() {
         if when.elapsed() < CACHE_TTL {
             return info.clone();
         }
     }
     let info = fetch_latest();
-    *CACHE.lock().unwrap() = Some((Instant::now(), info.clone()));
+    *CACHE.lock() = Some((Instant::now(), info.clone()));
     info
 }
 

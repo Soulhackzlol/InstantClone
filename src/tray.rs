@@ -17,10 +17,11 @@
 
 #![cfg(windows)]
 
+use crate::sync::Mutex;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use tokio::sync::watch;
 
@@ -284,7 +285,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     // Take the sender so a second click can't double-send.
                     // Ignore the Err: it just means the main task already shut
                     // down (race with ctrl-c) and dropped the receiver.
-                    if let Some(tx) = state.quit.lock().unwrap().take() {
+                    if let Some(tx) = state.quit.lock().take() {
                         let _ = tx.send(());
                     }
                     PostQuitMessage(0);
