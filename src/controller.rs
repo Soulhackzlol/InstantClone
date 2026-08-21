@@ -2736,7 +2736,11 @@ mod tests {
     #[tokio::test]
     async fn empty_ingest_key_accepts_any_publisher() {
         let h = harness(0);
-        assert!(h.ctrl.begin_publish("literally-anything", "127.0.0.1").await.is_ok());
+        assert!(h
+            .ctrl
+            .begin_publish("literally-anything", "127.0.0.1")
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -2745,7 +2749,11 @@ mod tests {
         h.ctrl.update_ingest_key("secret123".into());
         // Wrong key is rejected by the auth check, before the slot is taken,
         // so a following correct publish still succeeds.
-        let err = h.ctrl.begin_publish("wrong", "127.0.0.1").await.unwrap_err();
+        let err = h
+            .ctrl
+            .begin_publish("wrong", "127.0.0.1")
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
         assert!(h.ctrl.begin_publish("secret123", "127.0.0.1").await.is_ok());
     }
@@ -2845,7 +2853,10 @@ mod tests {
         // Fresh publisher: the mark's timestamp belongs to the OLD
         // session's timeline (the new one restarts near 0), so keeping
         // it would leave an unreachable mark pending forever.
-        h.ctrl.begin_publish("key", "127.0.0.1").await.expect("slot is free");
+        h.ctrl
+            .begin_publish("key", "127.0.0.1")
+            .await
+            .expect("slot is free");
         assert!(!h.ctrl.safe_cut_pending());
     }
 

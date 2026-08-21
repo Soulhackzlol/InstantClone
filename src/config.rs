@@ -557,7 +557,11 @@ impl Settings {
         // Auth secrets: only written when set (auth on), so a default install's
         // config carries neither and a downgrade stays clean.
         if !self.dashboard_password_hash.is_empty() {
-            writeln!(f, "dashboard_password_hash={}", self.dashboard_password_hash)?;
+            writeln!(
+                f,
+                "dashboard_password_hash={}",
+                self.dashboard_password_hash
+            )?;
         }
         if !self.dock_token.is_empty() {
             writeln!(f, "dock_token={}", self.dock_token)?;
@@ -1379,7 +1383,10 @@ mod tests {
         let plain_text = std::fs::read_to_string(&plain_path).unwrap();
         assert!(!plain_text.contains("dashboard_password_hash"));
         assert!(!plain_text.contains("ingest_key"));
-        assert!(Settings::load(&plain_path).unwrap().dashboard_password_hash.is_empty());
+        assert!(Settings::load(&plain_path)
+            .unwrap()
+            .dashboard_password_hash
+            .is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1389,7 +1396,11 @@ mod tests {
     #[test]
     fn to_json_carries_the_os_tag() {
         let json = Settings::defaults().to_json(false);
-        assert!(json.contains(r#""os":"windows""#) || json.contains(r#""os":"linux""#) || json.contains(r#""os":"macos""#));
+        assert!(
+            json.contains(r#""os":"windows""#)
+                || json.contains(r#""os":"linux""#)
+                || json.contains(r#""os":"macos""#)
+        );
     }
 
     #[test]

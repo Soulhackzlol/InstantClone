@@ -235,7 +235,10 @@ mod linux_tests {
         );
         // A relative XDG value is ignored per the base-dir spec.
         assert_eq!(
-            autostart_dir_from(Some(PathBuf::from("rel/ative")), Some(PathBuf::from("/home/u"))),
+            autostart_dir_from(
+                Some(PathBuf::from("rel/ative")),
+                Some(PathBuf::from("/home/u"))
+            ),
             Some(PathBuf::from("/home/u/.config/autostart"))
         );
     }
@@ -256,7 +259,10 @@ mod linux_tests {
 
     #[test]
     fn entry_includes_icon_when_supplied() {
-        let body = desktop_entry(Path::new("/usr/bin/instantclone"), Some("/x/instantclone.svg"));
+        let body = desktop_entry(
+            Path::new("/usr/bin/instantclone"),
+            Some("/x/instantclone.svg"),
+        );
         assert!(body.contains("Icon=/x/instantclone.svg\n"));
     }
 }

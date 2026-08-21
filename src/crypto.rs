@@ -176,7 +176,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
             _ => None,
         }
     };
-    for pair in b.chunks_exact(2) {
+    for pair in b.as_chunks::<2>().0 {
         out.push((val(pair[0])? << 4) | val(pair[1])?);
     }
     Some(out)

@@ -81,11 +81,7 @@ impl RateLimiter {
         if a.len() >= MAX_TRACKED {
             a.retain(|_, e| now.duration_since(e.last) <= self.window);
             if a.len() >= MAX_TRACKED {
-                if let Some(oldest) = a
-                    .iter()
-                    .min_by_key(|(_, e)| e.last)
-                    .map(|(k, _)| k.clone())
-                {
+                if let Some(oldest) = a.iter().min_by_key(|(_, e)| e.last).map(|(k, _)| k.clone()) {
                     a.remove(&oldest);
                 }
             }

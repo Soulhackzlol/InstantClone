@@ -63,9 +63,9 @@ fn obs_config_dirs_from(home: Option<PathBuf>, xdg: Option<PathBuf>) -> Vec<Path
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| home.join(".config"));
     vec![
-        xdg.join("obs-studio"),                                        // native / deb / ppa
+        xdg.join("obs-studio"), // native / deb / ppa
         home.join(".var/app/com.obsproject.Studio/config/obs-studio"), // flatpak
-        home.join("snap/obs-studio/current/.config/obs-studio"),       // snap
+        home.join("snap/obs-studio/current/.config/obs-studio"), // snap
     ]
 }
 
@@ -955,7 +955,11 @@ fn eb_config_url(web_port: u16, dock_token: &str) -> String {
 #[cfg(target_os = "linux")]
 fn flatpak_obs_present() -> bool {
     std::env::var_os("HOME")
-        .map(|h| PathBuf::from(h).join(".var/app/com.obsproject.Studio").exists())
+        .map(|h| {
+            PathBuf::from(h)
+                .join(".var/app/com.obsproject.Studio")
+                .exists()
+        })
         .unwrap_or(false)
 }
 
@@ -1066,7 +1070,10 @@ pub fn create_eb_shortcut() -> io::Result<PathBuf> {
 pub fn create_eb_shortcut() -> io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
     let desktop = desktop_dir().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "could not locate your Desktop folder")
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "could not locate your Desktop folder",
+        )
     })?;
     if !desktop.exists() {
         return Err(io::Error::new(
@@ -1143,7 +1150,8 @@ mod tests {
     #[test]
     fn linux_obs_config_dirs_cover_native_flatpak_snap() {
         use std::path::PathBuf;
-        let dirs = obs_config_dirs_from(Some(PathBuf::from("/home/u")), Some(PathBuf::from("/xdg")));
+        let dirs =
+            obs_config_dirs_from(Some(PathBuf::from("/home/u")), Some(PathBuf::from("/xdg")));
         assert_eq!(
             dirs,
             vec![
