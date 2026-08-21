@@ -1291,8 +1291,18 @@ impl Controller {
         {
             let required = self.ingest_key.lock().clone();
             if !required.is_empty() {
+                // The wrong-key throttle defends a network-exposed ingest port.
+                // A loopback publisher is a local process - RTMP ingest is never
+                // behind an HTTP reverse proxy that could mask its IP - so it is
+                // no brute-force threat and must not be locked out of its own
+                // machine for a mistyped key. Apply the limiter to remote peers
+                // only; an unparseable IP is treated as remote (fail-safe).
+                let remote = !peer_ip
+                    .parse::<std::net::IpAddr>()
+                    .map(|a| a.is_loopback())
+                    .unwrap_or(false);
                 // Throttle first so a locked-out guesser burns no work.
-                if self.ingest_limiter.check(peer_ip).is_err() {
+                if remote && self.ingest_limiter.check(peer_ip).is_err() {
                     self.log("ingest: rejected publisher (rate limited)");
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
@@ -1303,14 +1313,18 @@ impl Controller {
                 // token: a plain `!=` early-exits on the first differing byte
                 // and leaks the match length to a timing attacker.
                 if !crate::crypto::constant_time_eq(stream_key.as_bytes(), required.as_bytes()) {
-                    self.ingest_limiter.record_failure(peer_ip);
+                    if remote {
+                        self.ingest_limiter.record_failure(peer_ip);
+                    }
                     self.log("ingest: rejected publisher (wrong stream key)");
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
                         "invalid stream key",
                     ));
                 }
-                self.ingest_limiter.record_success(peer_ip);
+                if remote {
+                    self.ingest_limiter.record_success(peer_ip);
+                }
             }
         }
         let _g = self.publish_lock.lock().await;

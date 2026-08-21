@@ -580,6 +580,14 @@ async fn auth_gate(
         return Ok(AuthDecision::Handled);
     }
     if method == "POST" && bare_path == "/auth/disable" {
+        // Already disabled when no password is set: a no-op without a config
+        // write (and there is no session this request could have proven). When
+        // auth is on, the gate above already required an admin session to reach
+        // this point.
+        if settings.borrow().dashboard_password_hash.is_empty() {
+            write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, "").await?;
+            return Ok(AuthDecision::Handled);
+        }
         {
             let _wl = settings_write_guard();
             let mut ns = settings.borrow().clone();
@@ -594,6 +602,21 @@ async fn auth_gate(
         return Ok(AuthDecision::Handled);
     }
     if method == "POST" && bare_path == "/auth/regen-dock" {
+        // The dock token only gates anything once a password is set, so refuse
+        // to rotate it (and churn config) from an unauthenticated request while
+        // auth is off. When auth is on, the gate above already required an admin
+        // session to reach this point.
+        if settings.borrow().dashboard_password_hash.is_empty() {
+            write_simple(
+                sock,
+                "400 Bad Request",
+                "application/json",
+                r#"{"ok":false,"error":"enable a dashboard password before rotating the dock token"}"#,
+                "",
+            )
+            .await?;
+            return Ok(AuthDecision::Handled);
+        }
         let new_token;
         {
             let _wl = settings_write_guard();

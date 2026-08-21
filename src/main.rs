@@ -219,6 +219,11 @@ fn main() -> std::io::Result<()> {
         // config flag, if we add one later).
         let initial_armed = settings.armed_delay_ms.max(settings.target_delay_ms);
         let ctrl = Arc::new(controller::Controller::new(ring, initial_armed));
+        // Seed the ingest key from config now, before the ingest listener is
+        // spawned below, so a publisher connecting in the first moments of
+        // startup can never slip in with any key while the mirror is still
+        // pending. supervise_egress keeps it in sync on later edits.
+        ctrl.update_ingest_key(settings.ingest_key.clone());
 
         let (tx, rx) = watch::channel(settings.clone());
         let tx = Arc::new(tx);
