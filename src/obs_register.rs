@@ -17,31 +17,65 @@
 //! write goes via a `.bak` copy first; if anything goes sideways the
 //! user can restore manually.
 //!
-//! Location resolution priority:
-//!   1. `$APPDATA\obs-studio\plugin_config\rtmp-services\services.json`
-//!      (the OBS-on-Windows standard path)
-//!   2. `$LOCALAPPDATA\obs-studio\plugin_config\rtmp-services\services.json`
-//!      (rare - some portable installs land here)
-//!
-//! macOS / Linux paths are not handled - the rest of the app is
-//! Windows-only by design.
+//! Config-dir resolution (services.json + logs both live under it):
+//!   * Windows: `%APPDATA%\obs-studio`, then `%LOCALAPPDATA%\obs-studio`.
+//!   * Linux: `$XDG_CONFIG_HOME/obs-studio` (native / deb), then the Flatpak
+//!     and Snap locations.
+//!   * macOS: not handled yet (no candidates).
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Locate the user's `services.json`. Returns `None` if neither
-/// candidate path exists - typical when OBS isn't installed at all.
+/// Candidate OBS config directories for this platform, in priority order.
+/// Both `services.json` and the log folder are resolved relative to these,
+/// so one list drives every OBS-path lookup.
+fn obs_config_dirs() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        ["APPDATA", "LOCALAPPDATA"]
+            .iter()
+            .filter_map(|v| std::env::var(v).ok())
+            .map(|base| PathBuf::from(base).join("obs-studio"))
+            .collect()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        obs_config_dirs_from(
+            std::env::var_os("HOME").map(PathBuf::from),
+            std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        )
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        Vec::new()
+    }
+}
+
+/// Pure builder for the Linux OBS config-dir candidates - no env reads, so the
+/// XDG / Flatpak / Snap layout is unit-testable. Empty when no home resolves.
+#[cfg(target_os = "linux")]
+fn obs_config_dirs_from(home: Option<PathBuf>, xdg: Option<PathBuf>) -> Vec<PathBuf> {
+    let Some(home) = home else {
+        return Vec::new();
+    };
+    let xdg = xdg
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    vec![
+        xdg.join("obs-studio"),                                        // native / deb / ppa
+        home.join(".var/app/com.obsproject.Studio/config/obs-studio"), // flatpak
+        home.join("snap/obs-studio/current/.config/obs-studio"),       // snap
+    ]
+}
+
+/// Locate the user's `services.json`. Returns `None` when no candidate path
+/// exists - typical when OBS isn't installed at all.
 pub fn services_json_path() -> Option<PathBuf> {
-    let candidates = [
-        std::env::var("APPDATA")
-            .ok()
-            .map(|p| PathBuf::from(p).join("obs-studio/plugin_config/rtmp-services/services.json")),
-        std::env::var("LOCALAPPDATA")
-            .ok()
-            .map(|p| PathBuf::from(p).join("obs-studio/plugin_config/rtmp-services/services.json")),
-    ];
-    candidates.into_iter().flatten().find(|c| c.exists())
+    obs_config_dirs()
+        .into_iter()
+        .map(|d| d.join("plugin_config/rtmp-services/services.json"))
+        .find(|p| p.exists())
 }
 
 /// True when the user's services.json already contains an entry whose
@@ -657,6 +691,7 @@ pub fn revert_vod_eb(web_port: u16) -> io::Result<bool> {
 /// Standard Windows install paths for obs64.exe. The first match wins.
 /// Portable / non-standard installs aren't auto-discovered (rare and
 /// the user can always launch OBS themselves with the flag).
+#[cfg(windows)]
 fn obs_executable_candidates() -> [PathBuf; 2] {
     [
         PathBuf::from("C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe"),
@@ -664,8 +699,31 @@ fn obs_executable_candidates() -> [PathBuf; 2] {
     ]
 }
 
+#[cfg(windows)]
 pub fn find_obs_executable() -> Option<PathBuf> {
     obs_executable_candidates().into_iter().find(|p| p.exists())
+}
+
+/// Native `obs` binary from the standard prefixes, then a PATH scan. Flatpak
+/// / Snap installs expose no plain binary path (they launch via `flatpak run`
+/// / the snap wrapper), so those users launch OBS themselves.
+#[cfg(target_os = "linux")]
+pub fn find_obs_executable() -> Option<PathBuf> {
+    for p in ["/usr/bin/obs", "/usr/local/bin/obs", "/bin/obs"] {
+        let pb = PathBuf::from(p);
+        if pb.exists() {
+            return Some(pb);
+        }
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("obs"))
+        .find(|p| p.exists())
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn find_obs_executable() -> Option<PathBuf> {
+    None
 }
 
 // ── OBS version + optional VOD-unlocker script install ──────────────
@@ -703,9 +761,10 @@ fn first_version_triple(s: &str) -> Option<(u32, u32, u32)> {
 /// a note", not a hard block: this only gates the experimental
 /// VOD-unlocker script.
 pub fn obs_version() -> Option<(u32, u32, u32)> {
-    let logs_dir = std::env::var("APPDATA")
-        .ok()
-        .map(|p| PathBuf::from(p).join("obs-studio").join("logs"))?;
+    let logs_dir = obs_config_dirs()
+        .into_iter()
+        .map(|d| d.join("logs"))
+        .find(|p| p.is_dir())?;
     let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
     for entry in fs::read_dir(&logs_dir).ok()?.flatten() {
         let path = entry.path();
@@ -769,58 +828,165 @@ pub fn is_obs_running() -> bool {
     }
 }
 
-#[cfg(not(windows))]
+/// Whether an `obs` process is currently running, by scanning `/proc/*/comm`.
+/// Any read failure reads as "not running" - the setup note just stays hidden,
+/// which is harmless.
+#[cfg(target_os = "linux")]
+pub fn is_obs_running() -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        // Only numeric PID dirs carry a comm file worth reading.
+        let name = entry.file_name();
+        let Some(pid) = name.to_str() else { continue };
+        if !pid.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        if let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) {
+            if comm.trim() == "obs" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn is_obs_running() -> bool {
     false
 }
 
-/// Spawn OBS Studio with the `--config-url` flag pointing at
-/// InstantClone's multitrack-config endpoint. Detaches from our
-/// process group so closing InstantClone afterwards doesn't take OBS
-/// down with it.
+/// Spawn OBS Studio with the `--config-url` flag pointing at InstantClone's
+/// multitrack-config endpoint, so Enhanced Broadcasting comes up pre-wired.
 ///
-/// Returns Ok when the spawn syscall succeeded (NOT when OBS finishes
-/// loading - that's async). Errors surface "OBS not installed" or
-/// permission failures to the dashboard so the user can act.
-pub fn launch_obs_with_eb_config(web_port: u16) -> io::Result<PathBuf> {
+/// Returns Ok when the spawn syscall succeeded (NOT when OBS finishes loading,
+/// which is async). Errors carry an actionable "OBS not found" message so the
+/// dashboard can tell the user what to do.
+#[cfg(windows)]
+pub fn launch_obs_with_eb_config(web_port: u16, dock_token: &str) -> io::Result<PathBuf> {
     let exe = find_obs_executable().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "obs64.exe not found at C:\\Program Files\\obs-studio\\bin\\64bit\\ \
-             (or the x86 path). Launch OBS manually with the \
-             --config-url <our endpoint> flag from the directory where you installed it.",
+            "obs64.exe not found in the standard install locations. Launch OBS \
+             manually with the --config-url <endpoint> flag.",
         )
     })?;
-    let config_url = format!("http://127.0.0.1:{web_port}/obs/multitrack-config");
-    // CREATE_NEW_PROCESS_GROUP (0x00000200) gives OBS its own console
-    // group so InstantClone closing doesn't propagate a SIGTERM-
-    // equivalent. We also pass the launcher's parent dir as the working
-    // directory because OBS's logging and locale paths are resolved
-    // relative to the bin/64bit folder.
-    use std::os::windows::process::CommandExt;
+    let config_url = eb_config_url(web_port, dock_token);
+    // Working dir = OBS's own folder: its logging and locale paths resolve
+    // relative to bin/64bit.
     let workdir = exe.parent().unwrap_or(&exe);
+    use std::os::windows::process::CommandExt;
     std::process::Command::new(&exe)
         .args(["--config-url", &config_url])
         .current_dir(workdir)
+        // CREATE_NEW_PROCESS_GROUP: OBS gets its own console group so
+        // InstantClone closing doesn't propagate a break to it.
         .creation_flags(0x0000_0200)
         .spawn()?;
     Ok(exe)
+}
+
+/// Linux: try a native `obs` binary, then the Flatpak app, then the Snap.
+/// Ubuntu's default OBS is commonly a Flatpak or Snap with no plain binary on
+/// PATH, so covering those is what makes the launch button actually work
+/// instead of failing for most desktop users.
+#[cfg(target_os = "linux")]
+pub fn launch_obs_with_eb_config(web_port: u16, dock_token: &str) -> io::Result<PathBuf> {
+    let config_url = eb_config_url(web_port, dock_token);
+
+    // 1) Native binary (deb / ppa / most distros).
+    if let Some(exe) = find_obs_executable() {
+        let workdir = exe.parent().unwrap_or(&exe);
+        std::process::Command::new(&exe)
+            .args(["--config-url", &config_url])
+            .current_dir(workdir)
+            .spawn()?;
+        return Ok(exe);
+    }
+
+    // 2) Flatpak: present when its per-app data dir exists; launched via
+    //    `flatpak run`, which forwards our flag to OBS.
+    if flatpak_obs_present() && command_on_path("flatpak") {
+        std::process::Command::new("flatpak")
+            .args(["run", "com.obsproject.Studio", "--config-url", &config_url])
+            .spawn()?;
+        return Ok(PathBuf::from("flatpak run com.obsproject.Studio"));
+    }
+
+    // 3) Snap.
+    if snap_obs_present() && command_on_path("snap") {
+        std::process::Command::new("snap")
+            .args(["run", "obs-studio", "--config-url", &config_url])
+            .spawn()?;
+        return Ok(PathBuf::from("snap run obs-studio"));
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "OBS not found. Looked for a native obs binary, the Flatpak \
+         com.obsproject.Studio, and the obs-studio snap. Launch OBS manually \
+         with the --config-url <endpoint> flag.",
+    ))
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn launch_obs_with_eb_config(_web_port: u16, _dock_token: &str) -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "launching OBS is not supported on this platform",
+    ))
+}
+
+/// The `--config-url` OBS should hit for Enhanced Broadcasting. When the
+/// dashboard password is on, the dock token rides in the query so OBS (which
+/// cannot sign in) still passes the auth gate to the control-plane multitrack
+/// endpoint; empty token = the plain URL for the default (no-auth) install.
+#[cfg(any(windows, target_os = "linux"))]
+fn eb_config_url(web_port: u16, dock_token: &str) -> String {
+    if dock_token.is_empty() {
+        format!("http://127.0.0.1:{web_port}/obs/multitrack-config")
+    } else {
+        format!("http://127.0.0.1:{web_port}/obs/multitrack-config?token={dock_token}")
+    }
+}
+
+/// A `~/.var/app/com.obsproject.Studio` dir means the Flatpak OBS is installed.
+#[cfg(target_os = "linux")]
+fn flatpak_obs_present() -> bool {
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".var/app/com.obsproject.Studio").exists())
+        .unwrap_or(false)
+}
+
+/// A `~/snap/obs-studio` dir means the Snap OBS is installed.
+#[cfg(target_os = "linux")]
+fn snap_obs_present() -> bool {
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join("snap/obs-studio").exists())
+        .unwrap_or(false)
+}
+
+/// True if `name` resolves to a file on PATH.
+#[cfg(target_os = "linux")]
+fn command_on_path(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d.join(name).exists()))
+        .unwrap_or(false)
 }
 
 // ── Desktop shortcut: one-click "Start InstantClone + OBS (VOD + EB)" ──
 //
 // Generates a clickable launcher on the Desktop that cold-starts the app
 // with `--launch-eb`, so a streamer who always wants VOD audio + Enhanced
-// Broadcasting gets the whole setup from a single double-click. We prefer
-// a real Windows .lnk (so it carries the app icon), created via
-// PowerShell's WScript.Shell COM to avoid pulling in a COM crate. If that
-// path is unavailable (PowerShell locked down, non-Windows), we fall back
-// to a .cmd launcher so the user always gets something that works.
+// Broadcasting gets the whole setup from a single double-click. On Windows
+// we prefer a real .lnk (so it carries the app icon), created via
+// PowerShell's WScript.Shell COM to avoid a COM crate, falling back to a
+// .cmd launcher. On Linux we write a freedesktop `.desktop` launcher.
 
-/// Best-effort Desktop folder. `%USERPROFILE%\Desktop` covers the vast
-/// majority of Windows installs; OneDrive-redirected desktops are not
-/// auto-discovered (the .cmd/.lnk still lands somewhere clickable if the
-/// user later points us at it). None when we can't resolve a home dir.
+/// Best-effort Desktop folder. `%USERPROFILE%\Desktop` / `$HOME/Desktop`
+/// covers the vast majority of installs; localized or redirected desktops
+/// are not auto-discovered. None when we can't resolve a home dir.
 fn desktop_dir() -> Option<PathBuf> {
     let home = std::env::var("USERPROFILE")
         .ok()
@@ -829,12 +995,14 @@ fn desktop_dir() -> Option<PathBuf> {
 }
 
 /// PowerShell single-quoted-string escaping: a literal `'` becomes `''`.
+#[cfg(windows)]
 fn ps_single_quote(s: &str) -> String {
     s.replace('\'', "''")
 }
 
 /// Try to create a real Windows `.lnk` shortcut via PowerShell COM.
 /// Returns Ok only when PowerShell reports success AND the file exists.
+#[cfg(windows)]
 fn try_create_lnk(lnk: &Path, exe: &Path) -> io::Result<()> {
     let workdir = exe.parent().map(|p| p.to_path_buf()).unwrap_or_default();
     let script = format!(
@@ -856,9 +1024,10 @@ fn try_create_lnk(lnk: &Path, exe: &Path) -> io::Result<()> {
 }
 
 /// Create a Desktop shortcut that launches InstantClone in VOD+EB mode
-/// (`instantclone.exe --launch-eb`). Returns the path of the file actually
+/// (`instantclone --launch-eb`). Returns the path of the file actually
 /// created (a `.lnk` when possible, otherwise a `.cmd` fallback) so the UI
 /// can tell the user exactly what to look for.
+#[cfg(windows)]
 pub fn create_eb_shortcut() -> io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
     let desktop = desktop_dir().ok_or_else(|| {
@@ -888,6 +1057,54 @@ pub fn create_eb_shortcut() -> io::Result<PathBuf> {
     );
     write_or_friendly(&cmd, &body)?;
     Ok(cmd)
+}
+
+/// Linux: write a freedesktop `.desktop` launcher on the Desktop. It must be
+/// marked executable (GNOME also treats that as the "trusted" bit) to run on
+/// double-click.
+#[cfg(target_os = "linux")]
+pub fn create_eb_shortcut() -> io::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let desktop = desktop_dir().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "could not locate your Desktop folder")
+    })?;
+    if !desktop.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Desktop folder not found at {}", desktop.display()),
+        ));
+    }
+    let file = desktop.join("InstantClone (VOD + EB).desktop");
+    let icon = crate::autostart::ensure_icon();
+    let icon_line = icon
+        .as_ref()
+        .and_then(|p| p.to_str())
+        .map(|i| format!("Icon={i}\n"))
+        .unwrap_or_default();
+    let entry = format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=InstantClone (VOD + EB)\n\
+         Comment=Start InstantClone in VOD + EB mode and launch OBS\n\
+         {icon_line}\
+         Exec=\"{}\" --launch-eb\n\
+         Terminal=false\n",
+        exe.display()
+    );
+    write_or_friendly(&file, &entry)?;
+    use std::os::unix::fs::PermissionsExt;
+    let mut perm = std::fs::metadata(&file)?.permissions();
+    perm.set_mode(0o755);
+    std::fs::set_permissions(&file, perm)?;
+    Ok(file)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn create_eb_shortcut() -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "desktop shortcut creation is not supported on this platform",
+    ))
 }
 
 /// Remove the multitrack-video-configuration-url key (matching our
@@ -921,6 +1138,26 @@ fn strip_service_json_key(file: &str, web_port: u16) -> String {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32 as TestUniq, Ordering as TestOrd};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_obs_config_dirs_cover_native_flatpak_snap() {
+        use std::path::PathBuf;
+        let dirs = obs_config_dirs_from(Some(PathBuf::from("/home/u")), Some(PathBuf::from("/xdg")));
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/xdg/obs-studio"),
+                PathBuf::from("/home/u/.var/app/com.obsproject.Studio/config/obs-studio"),
+                PathBuf::from("/home/u/snap/obs-studio/current/.config/obs-studio"),
+            ]
+        );
+        // No home -> no candidates (every OBS lookup then returns None).
+        assert!(obs_config_dirs_from(None, None).is_empty());
+        // A relative XDG value is ignored; falls back to ~/.config.
+        let fb = obs_config_dirs_from(Some(PathBuf::from("/home/u")), Some(PathBuf::from("rel")));
+        assert_eq!(fb[0], PathBuf::from("/home/u/.config/obs-studio"));
+    }
 
     fn fake_services_json() -> String {
         // Minimal but realistic shape. OBS's actual file has many more

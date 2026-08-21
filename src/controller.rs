@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 /// Process-anchored monotonic millisecond counter for hot-path
 /// bandwidth / throttle math. `SystemTime::now()` on Windows is a
@@ -415,6 +415,14 @@ impl DestinationState {
     }
 }
 
+/// What the main loop should do after a graceful shutdown: exit for good, or
+/// relaunch a fresh process in place.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShutdownKind {
+    Quit,
+    Restart,
+}
+
 pub struct Controller {
     pub ring: Arc<DiskRing>,
 
@@ -475,6 +483,13 @@ pub struct Controller {
 
     // Discord webhook URL. Empty = disabled. Updated live via update_webhook.
     webhook_url: crate::sync::Mutex<String>,
+    // Required RTMP stream key. Empty = accept any publisher (local default).
+    // Mirrored from Settings via update_ingest_key so `begin_publish` can
+    // enforce it without the ingest task needing a settings handle.
+    ingest_key: crate::sync::Mutex<String>,
+    // Per-peer wrong-key throttle so a weak ingest key can't be brute-forced at
+    // wire speed. Only engages once a key is configured.
+    ingest_limiter: crate::auth::RateLimiter,
     // Wall-clock ms (since UNIX epoch) of last webhook fire. Throttles
     // rapid event sequences (e.g. reconnect flapping) so we never spawn
     // more than one curl every ~2 s.
@@ -555,6 +570,17 @@ pub struct Controller {
     /// AVC→HEVC switch) don't desync the downstream decoder.
     seq_header_gen: AtomicU32,
 
+    // --- Graceful shutdown signal -------------------------------------
+    // Fired by the web Quit/Restart routes and (on Windows) the tray Quit.
+    // The main loop parks on `shutdown_notify`; `shutdown_kind` carries the
+    // intent (0 = none, 1 = quit, 2 = restart). Unified here so every exit
+    // path runs the same clean egress teardown.
+    shutdown_notify: Notify,
+    shutdown_kind: AtomicU8,
+
+    // Process start, for the dashboard's uptime readout.
+    started: std::time::Instant,
+
     // In-process log ring (most recent N lines).
     pub logs: crate::sync::Mutex<std::collections::VecDeque<String>>,
 }
@@ -581,6 +607,16 @@ impl Controller {
             rate_window_bytes: AtomicU64::new(0),
             rate_window_start_ms: AtomicU64::new(0),
             webhook_url: crate::sync::Mutex::new(String::new()),
+            ingest_key: crate::sync::Mutex::new(String::new()),
+            // 5 wrong keys then a short exponential lockout. A legit OBS uses
+            // the right key and clears its record on the first accept, so this
+            // only ever bites a guesser.
+            ingest_limiter: crate::auth::RateLimiter::new(
+                5,
+                std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(10 * 60),
+                std::time::Duration::from_secs(10 * 60),
+            ),
             webhook_last_fire_ms: AtomicU64::new(0),
             publish_lock: Mutex::new(()),
             video_codec: AtomicU8::new(0),
@@ -598,7 +634,40 @@ impl Controller {
             input_ts_wrap_high: AtomicU32::new(0),
             last_multitrack_video_ms: AtomicU64::new(0),
             backpressure_since_ms: AtomicU64::new(0),
+            shutdown_notify: Notify::new(),
+            shutdown_kind: AtomicU8::new(0),
+            started: std::time::Instant::now(),
             logs: crate::sync::Mutex::new(std::collections::VecDeque::with_capacity(512)),
+        }
+    }
+
+    /// Seconds since the process started, for the dashboard uptime readout.
+    pub fn uptime_secs(&self) -> u64 {
+        self.started.elapsed().as_secs()
+    }
+
+    /// Ask the main loop to shut down cleanly and then exit for good.
+    /// Idempotent: a second call before the loop wakes just re-arms the same
+    /// notification. Safe to call from any thread (tray) or task (web).
+    pub fn request_quit(&self) {
+        self.shutdown_kind.store(1, Ordering::SeqCst);
+        self.shutdown_notify.notify_one();
+    }
+
+    /// Ask the main loop to shut down cleanly and then relaunch in place.
+    pub fn request_restart(&self) {
+        self.shutdown_kind.store(2, Ordering::SeqCst);
+        self.shutdown_notify.notify_one();
+    }
+
+    /// Park until a quit/restart is requested, then report which. `notify_one`
+    /// stores a permit if it fires before this is awaited, so the signal can
+    /// never be lost to a race with the main loop entering its select.
+    pub async fn wait_shutdown(&self) -> ShutdownKind {
+        self.shutdown_notify.notified().await;
+        match self.shutdown_kind.load(Ordering::SeqCst) {
+            2 => ShutdownKind::Restart,
+            _ => ShutdownKind::Quit,
         }
     }
 
@@ -1214,7 +1283,36 @@ impl Controller {
 
     // ---- Ingest entry points (called from rtmp::server) ----
 
-    pub async fn begin_publish(&self, _stream_key: &str) -> io::Result<u64> {
+    pub async fn begin_publish(&self, stream_key: &str, peer_ip: &str) -> io::Result<u64> {
+        // Ingest auth: when a key is configured, only a publisher using that
+        // exact key gets in. Empty key (the default) accepts anyone, which is
+        // the right behaviour on a local machine. Checked before the slot lock
+        // so a wrong key never even contends for the publisher slot.
+        {
+            let required = self.ingest_key.lock().clone();
+            if !required.is_empty() {
+                // Throttle first so a locked-out guesser burns no work.
+                if self.ingest_limiter.check(peer_ip).is_err() {
+                    self.log("ingest: rejected publisher (rate limited)");
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "too many attempts",
+                    ));
+                }
+                // Constant-time compare, same as the dashboard password / dock
+                // token: a plain `!=` early-exits on the first differing byte
+                // and leaks the match length to a timing attacker.
+                if !crate::crypto::constant_time_eq(stream_key.as_bytes(), required.as_bytes()) {
+                    self.ingest_limiter.record_failure(peer_ip);
+                    self.log("ingest: rejected publisher (wrong stream key)");
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "invalid stream key",
+                    ));
+                }
+                self.ingest_limiter.record_success(peer_ip);
+            }
+        }
         let _g = self.publish_lock.lock().await;
         // One publisher at a time - a second OBS connecting would
         // interleave its tags into the buffer with its own timestamp
@@ -1455,6 +1553,12 @@ impl Controller {
     /// string disables webhook delivery entirely.
     pub fn update_webhook(&self, url: String) {
         *self.webhook_url.lock() = url;
+    }
+
+    /// Mirror the required ingest stream key from Settings. Empty disables the
+    /// check (any key accepted). Called on startup and on every settings edit.
+    pub fn update_ingest_key(&self, key: String) {
+        *self.ingest_key.lock() = key;
     }
 
     /// Snapshot the current webhook URL. Used by the test endpoint so it
@@ -2609,6 +2713,43 @@ mod tests {
         assert_eq!(h.ctrl.target_delay_ms(), 0);
     }
 
+    // ── Shutdown signal (web Quit/Restart + tray Quit converge here) ──
+
+    #[tokio::test]
+    async fn shutdown_signal_reports_restart() {
+        let h = harness(0);
+        // notify_one stores a permit, so wait_shutdown resolves immediately
+        // even though the request fires before we await - no lost wakeup.
+        h.ctrl.request_restart();
+        assert_eq!(h.ctrl.wait_shutdown().await, ShutdownKind::Restart);
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_reports_quit() {
+        let h = harness(0);
+        h.ctrl.request_quit();
+        assert_eq!(h.ctrl.wait_shutdown().await, ShutdownKind::Quit);
+    }
+
+    // ── Ingest key (optional publisher auth, off by default) ─────────
+
+    #[tokio::test]
+    async fn empty_ingest_key_accepts_any_publisher() {
+        let h = harness(0);
+        assert!(h.ctrl.begin_publish("literally-anything", "127.0.0.1").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn set_ingest_key_rejects_wrong_and_accepts_right() {
+        let h = harness(0);
+        h.ctrl.update_ingest_key("secret123".into());
+        // Wrong key is rejected by the auth check, before the slot is taken,
+        // so a following correct publish still succeeds.
+        let err = h.ctrl.begin_publish("wrong", "127.0.0.1").await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(h.ctrl.begin_publish("secret123", "127.0.0.1").await.is_ok());
+    }
+
     // ── "Cut after this airs" (scheduled safe cut) ───────────────────
 
     #[test]
@@ -2704,7 +2845,7 @@ mod tests {
         // Fresh publisher: the mark's timestamp belongs to the OLD
         // session's timeline (the new one restarts near 0), so keeping
         // it would leave an unreachable mark pending forever.
-        h.ctrl.begin_publish("key").await.expect("slot is free");
+        h.ctrl.begin_publish("key", "127.0.0.1").await.expect("slot is free");
         assert!(!h.ctrl.safe_cut_pending());
     }
 
@@ -3413,7 +3554,7 @@ mod tests {
         // 4. Critical transition: A brand new publisher hits the RTMP stack.
         //    `begin_publish` must perform atomic state purging of the ring caches.
         h.ctrl
-            .begin_publish("fresh_incoming_stream_key")
+            .begin_publish("fresh_incoming_stream_key", "127.0.0.1")
             .await
             .expect("begin_publish must accept the new session token assignment");
 
@@ -3487,7 +3628,7 @@ mod tests {
         // ring so the new session's ts_ms (starting near 0) is
         // measured against an empty index.
         h.ctrl
-            .begin_publish("fresh-session-after-stop-start")
+            .begin_publish("fresh-session-after-stop-start", "127.0.0.1")
             .await
             .expect("begin_publish must succeed on fresh session");
 

@@ -43,6 +43,11 @@ pub const SINK_WEB_PORT: u16 = 19351;
 pub struct Settings {
     pub ingest_port: u16,
     pub ingest_bind_all: bool, // true → 0.0.0.0, false → 127.0.0.1
+    /// Optional shared secret an RTMP publisher must use as its stream key.
+    /// Empty (the default) accepts any key, which is the right behaviour on a
+    /// local machine. Set it to lock the ingest down when it is exposed to a
+    /// network, so only OBS configured with this exact key can publish.
+    pub ingest_key: String,
 
     // Legacy single-destination fields. Still present on disk for backward
     // compatibility - on load they get migrated into destinations[0] if
@@ -53,6 +58,15 @@ pub struct Settings {
 
     pub web_port: u16,
     pub web_bind_all: bool,
+    /// Optional PBKDF2 hash of the dashboard password. Empty (the default)
+    /// means auth is OFF and the dashboard/API are open exactly as before. Set
+    /// means a login is required. Never sent to the client; the wire only
+    /// carries an `auth_enabled` bool.
+    pub dashboard_password_hash: String,
+    /// Secret that lets the OBS dock (which cannot show a login form) through
+    /// the gate for delay CONTROL only, never settings. Generated when auth is
+    /// enabled, regenerable, empty when auth is off.
+    pub dock_token: String,
     pub buffer_mb: u64,
     pub buffer_path: PathBuf,
     pub target_delay_ms: u32,
@@ -295,11 +309,14 @@ impl Settings {
         Self {
             ingest_port: 1935,
             ingest_bind_all: false,
+            ingest_key: String::new(),
             platform: "twitch".into(),
             stream_key: String::new(),
             custom_egress_url: String::new(),
             web_port: 7799,
             web_bind_all: false,
+            dashboard_password_hash: String::new(),
+            dock_token: String::new(),
             // 500 MB ≈ 6m 50s at 10 Mbps, ~11 min at 6 Mbps. The cap on
             // what the user could ever arm at the current bitrate; with
             // the trim logic the *actual* used portion matches the armed
@@ -530,8 +547,21 @@ impl Settings {
         )?;
         writeln!(f, "ingest_port={}", self.ingest_port)?;
         writeln!(f, "ingest_bind_all={}", self.ingest_bind_all)?;
+        // Secret: only written when set, so a default install's config never
+        // carries an empty key line and a downgrade stays clean.
+        if !self.ingest_key.is_empty() {
+            writeln!(f, "ingest_key={}", self.ingest_key)?;
+        }
         writeln!(f, "web_port={}", self.web_port)?;
         writeln!(f, "web_bind_all={}", self.web_bind_all)?;
+        // Auth secrets: only written when set (auth on), so a default install's
+        // config carries neither and a downgrade stays clean.
+        if !self.dashboard_password_hash.is_empty() {
+            writeln!(f, "dashboard_password_hash={}", self.dashboard_password_hash)?;
+        }
+        if !self.dock_token.is_empty() {
+            writeln!(f, "dock_token={}", self.dock_token)?;
+        }
         writeln!(f, "buffer_mb={}", self.buffer_mb)?;
         writeln!(f, "buffer_path={}", self.buffer_path.display())?;
         writeln!(f, "target_delay_ms={}", self.target_delay_ms)?;
@@ -623,12 +653,23 @@ impl Settings {
                 }
             }
             "ingest_bind_all" => self.ingest_bind_all = value == "true",
+            "ingest_key" => self.ingest_key = value.into(),
             "web_port" => {
                 if let Ok(v) = value.parse() {
                     self.web_port = v;
                 }
             }
             "web_bind_all" => self.web_bind_all = value == "true",
+            "dashboard_password_hash" => self.dashboard_password_hash = value.into(),
+            // Only accept a hex token from disk: it is written into a Set-Cookie
+            // header, so a hand-edited value with CR/LF (or anything non-hex)
+            // must never reach header construction. Generated tokens are always
+            // hex, so this rejects only tampering.
+            "dock_token" => {
+                if !value.is_empty() && value.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    self.dock_token = value.into();
+                }
+            }
             "buffer_mb" => {
                 if let Ok(v) = value.parse() {
                     self.buffer_mb = v;
@@ -862,9 +903,14 @@ impl Settings {
         }
         dests.push(']');
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"destinations":{dests}}}"#,
             c = self.configured,
             sww = start_with_windows,
+            ik = json_str(&self.ingest_key),
+            ae = !self.dashboard_password_hash.is_empty(),
+            dt = json_str(&self.dock_token),
+            osname = json_str(os_name()),
+            ver = json_str(crate::update_check::current_version()),
             ip = self.ingest_port,
             iba = self.ingest_bind_all,
             wp = self.web_port,
@@ -1134,6 +1180,23 @@ fn non_empty(s: &String) -> Option<&String> {
     }
 }
 
+/// Compile-time OS tag the dashboard reads to pick platform-correct copy
+/// (the start-at-login wording, the file-manager name, the tray mention).
+fn os_name() -> &'static str {
+    #[cfg(windows)]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "macos"
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "linux"
+    }
+}
+
 fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -1230,14 +1293,21 @@ fn url_decode(s: &str) -> String {
                 out.push(b' ');
                 i += 1;
             }
+            // Decode `%XX` straight from the raw bytes. NEVER slice `s` here:
+            // `&s[i+1..i+3]` panics when the offset lands inside a multi-byte
+            // UTF-8 char (e.g. a `%` before `€`), which under panic=abort is a
+            // remote process kill from any form field.
             b'%' if i + 2 < bytes.len() => {
-                let hex = &s[i + 1..i + 3];
-                if let Ok(b) = u8::from_str_radix(hex, 16) {
-                    out.push(b);
-                    i += 3;
-                } else {
-                    out.push(bytes[i]);
-                    i += 1;
+                match (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2])) {
+                    (Some(hi), Some(lo)) => {
+                        out.push((hi << 4) | lo);
+                        i += 3;
+                    }
+                    // Not a valid `%XX`; keep the literal `%` and move on.
+                    _ => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
                 }
             }
             b => {
@@ -1247,6 +1317,17 @@ fn url_decode(s: &str) -> String {
         }
     }
     String::from_utf8(out).unwrap_or_default()
+}
+
+/// Value of a single ASCII hex digit, or None. Used by `url_decode` so it can
+/// decode `%XX` from bytes without ever slicing a `&str` on a non-char boundary.
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1262,6 +1343,53 @@ mod tests {
         let s = Settings::defaults();
         assert!(s.to_json(true).contains(r#""start_with_windows":true"#));
         assert!(s.to_json(false).contains(r#""start_with_windows":false"#));
+    }
+
+    /// The auth + ingest secrets must survive a save/load round-trip, and the
+    /// hash must NEVER appear in the client-facing JSON (only `auth_enabled`).
+    #[test]
+    fn secret_fields_round_trip_and_hash_stays_server_side() {
+        let dir = std::env::temp_dir().join(format!("ic-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sec.config.json");
+
+        let mut s = Settings::defaults();
+        s.ingest_key = "streamsecret".into();
+        s.dashboard_password_hash = "pbkdf2-sha256$210000$aa$bb".into();
+        s.dock_token = "a1b2c3d4e5f60718".into();
+        s.save(&path).unwrap();
+
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded.ingest_key, "streamsecret");
+        assert_eq!(loaded.dashboard_password_hash, "pbkdf2-sha256$210000$aa$bb");
+        assert_eq!(loaded.dock_token, "a1b2c3d4e5f60718");
+
+        // Wire JSON: auth_enabled true, ingest_key + dock_token present, but
+        // the password hash must not leak.
+        let json = loaded.to_json(false);
+        assert!(json.contains(r#""auth_enabled":true"#));
+        assert!(json.contains(r#""dock_token":"a1b2c3d4e5f60718""#));
+        assert!(!json.contains("pbkdf2-sha256"));
+        assert!(!json.contains("dashboard_password_hash"));
+
+        // A default install writes neither secret line and reads auth as off.
+        let plain = Settings::defaults();
+        let plain_path = dir.join("plain.config.json");
+        plain.save(&plain_path).unwrap();
+        let plain_text = std::fs::read_to_string(&plain_path).unwrap();
+        assert!(!plain_text.contains("dashboard_password_hash"));
+        assert!(!plain_text.contains("ingest_key"));
+        assert!(Settings::load(&plain_path).unwrap().dashboard_password_hash.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The dashboard swaps platform-specific copy off this field, so it must
+    /// always be present and non-empty.
+    #[test]
+    fn to_json_carries_the_os_tag() {
+        let json = Settings::defaults().to_json(false);
+        assert!(json.contains(r#""os":"windows""#) || json.contains(r#""os":"linux""#) || json.contains(r#""os":"macos""#));
     }
 
     #[test]
@@ -1293,6 +1421,19 @@ mod tests {
         assert_eq!(h.get("a"), Some(&"hello world".to_string()));
         assert_eq!(h.get("b"), Some(&"!".to_string()));
         assert_eq!(h.get("c"), Some(&"é".to_string()));
+    }
+
+    /// Regression: a bare `%` before a multi-byte UTF-8 char used to slice the
+    /// `&str` on a non-char boundary and panic (a remote process abort under
+    /// panic=abort). It must now decode losslessly and never panic.
+    #[test]
+    fn url_decode_survives_percent_before_multibyte_char() {
+        // `%€`, a stray `%` at the very end, and a truncated `%A`.
+        assert_eq!(url_decode("%€"), "%€");
+        assert_eq!(url_decode("abc%"), "abc%");
+        assert_eq!(url_decode("x%Ay"), "x%Ay");
+        // A real escape still works, and mixed content round-trips.
+        assert_eq!(url_decode("a%20b%E2%82%ACc"), "a b€c");
     }
 
     #[test]

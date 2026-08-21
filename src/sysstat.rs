@@ -1,7 +1,8 @@
 //! Self-process CPU% and resident-set-size sampling for the dashboard
-//! metric grid. Windows-only hand-rolled FFI (no `sysinfo` / `procfs`
-//! dependency); other platforms compile to inert no-op stubs that report
-//! zero. Adding /proc and Mach impls later is a few dozen lines.
+//! metric grid. Hand-rolled per platform, no `sysinfo` / `procfs`
+//! dependency: Windows uses kernel32/psapi FFI, Linux reads `/proc/self`.
+//! Any other Unix (macOS) compiles to an inert stub that reports zero
+//! until a Mach impl is added.
 
 use crate::sync::Mutex;
 use std::time::Instant;
@@ -149,10 +150,114 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+mod platform {
+    use super::SysStat;
+    use std::time::Instant;
+
+    /// (cpu_percent, rss_bytes) from `/proc/self`. Mirrors the Windows
+    /// sampler's contract: CPU% is the process's user+system time consumed
+    /// since the previous call over the wall-clock delta, clamped so a
+    /// multi-core spike can't render as "700%". Any read/parse failure
+    /// degrades to zero rather than 500-ing the /state endpoint.
+    pub fn sample(s: &SysStat) -> (f32, u64) {
+        let now = Instant::now();
+        let cpu_pct = match read_proc_ticks() {
+            Some(ticks) => {
+                let mut prev = s.prev.lock();
+                let pct = match *prev {
+                    Some((prev_ticks, prev_t)) => {
+                        let dt = now.duration_since(prev_t).as_secs_f64();
+                        let work = ticks.saturating_sub(prev_ticks) as f64 / clk_tck();
+                        if dt <= 0.0 {
+                            0.0
+                        } else {
+                            (work / dt) as f32 * 100.0
+                        }
+                    }
+                    None => 0.0,
+                };
+                *prev = Some((ticks, now));
+                pct
+            }
+            None => 0.0,
+        };
+        let rss = read_proc_rss().unwrap_or(0);
+        (cpu_pct.clamp(0.0, 100.0 * num_cpus_hint() as f32), rss)
+    }
+
+    /// Sum of utime + stime (clock ticks) from `/proc/self/stat`. The comm
+    /// field (field 2) can contain spaces and parentheses, so we split after
+    /// the final ')': the first token past it is `state` (field 3), which
+    /// puts utime at index 11 and stime at index 12.
+    fn read_proc_ticks() -> Option<u64> {
+        let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+        let rest = &stat[stat.rfind(')')? + 1..];
+        let fields: Vec<&str> = rest.split_whitespace().collect();
+        let utime: u64 = fields.get(11)?.parse().ok()?;
+        let stime: u64 = fields.get(12)?.parse().ok()?;
+        Some(utime.saturating_add(stime))
+    }
+
+    /// Resident set size in bytes: field 2 of `/proc/self/statm` (pages)
+    /// times the page size.
+    fn read_proc_rss() -> Option<u64> {
+        let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+        let resident_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+        Some(resident_pages.saturating_mul(page_size()))
+    }
+
+    /// Ticks per second. Effectively always 100 on Linux, but read it so an
+    /// exotic kernel config can't skew the percentage. Falls back to 100.
+    fn clk_tck() -> f64 {
+        let v = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        if v > 0 {
+            v as f64
+        } else {
+            100.0
+        }
+    }
+
+    fn page_size() -> u64 {
+        let v = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if v > 0 {
+            v as u64
+        } else {
+            4096
+        }
+    }
+
+    fn num_cpus_hint() -> u32 {
+        std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1)
+    }
+}
+
+// Any Unix that is not Linux (macOS) has no /proc; report zero until a
+// native sampler is added. Windows and Linux are handled above.
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod platform {
     use super::SysStat;
     pub fn sample(_s: &SysStat) -> (f32, u64) {
         (0.0, 0)
+    }
+}
+
+// Linux-only: the /proc sampler is the only platform impl worth a self-test
+// here (Windows FFI needs a live process to mean anything). Gating the whole
+// module to Linux keeps the `SysStat` import from reading as unused elsewhere.
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::SysStat;
+
+    /// The sampler must read a real resident-set size from /proc/self/statm - a
+    /// non-zero RSS is the whole point of the port (the old stub returned 0).
+    /// CPU% is 0 on the first sample by design (no prior reading to diff), so
+    /// we only assert RSS here.
+    #[test]
+    fn linux_sampler_reports_nonzero_rss() {
+        let (_cpu, rss) = SysStat::new().sample();
+        assert!(rss > 0, "expected a real RSS from /proc/self/statm, got 0");
     }
 }

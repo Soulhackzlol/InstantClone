@@ -57,6 +57,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_Registry",
     "Win32_System_LibraryLoader",
+    "Win32_Security_Cryptography",
     "Win32_System_Threading",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_DataExchange",
@@ -66,6 +67,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_NetworkManagement_IpHelper",
     "Win32_Networking_WinSock",
 ] }
+
+# Unix-only: `statvfs` for the free-space query and `/proc` sampling for the
+# dashboard metric grid. Windows uses its own kernel32 FFI for the same,
+# declared inline. Directly used by config.rs / sysstat.rs, so it's declared
+# here rather than leaned on transitively.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # Build-time only: minify + gzip the dashboard HTML so the binary embeds
 # only the compressed bytes. Does NOT add to the release binary.

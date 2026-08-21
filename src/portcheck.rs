@@ -1,29 +1,38 @@
-//! Startup port pre-flight: detect if the configured RTMP / web ports
-//! are already in use, identify the owning process, ask the user via a
-//! native MessageBox whether to fall back to the next free port or quit.
+//! Startup port pre-flight: detect if the configured RTMP / web ports are
+//! already in use before we try to bind them.
 //!
-//! All FFI is Windows-only; the non-Windows stubs make this a no-op.
+//! The bind checks (`is_port_free`, `find_free_port`, `wait_until_bindable`)
+//! are pure `std::net` and run on every platform. The extras that identify
+//! the owning process (IpHelper) and prompt the user (MessageBox) are
+//! Windows-only, gated below; the caller in main.rs supplies a headless
+//! stderr path for those on other platforms.
 //!
-//! Why we have it: with `windows_subsystem = "windows"` there is no
-//! console, so a silent bind-loop on a busy port is the worst possible
-//! first-run UX. A modal dialog with the offending process's name is
-//! the cheapest fix that doesn't add a runtime dep.
+//! Why we have it: a silent bind-loop on a busy port is the worst possible
+//! first-run UX - on Windows there's no console (`windows_subsystem =
+//! "windows"`), on a headless VPS there's no one watching a hung process.
 
-#![cfg(windows)]
-
-use std::ffi::OsStr;
 use std::net::TcpListener;
+
+#[cfg(windows)]
+use std::ffi::OsStr;
+#[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
 use std::ptr;
 
+#[cfg(windows)]
 use windows_sys::Win32::Foundation::{CloseHandle, NO_ERROR};
+#[cfg(windows)]
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
 };
+#[cfg(windows)]
 use windows_sys::Win32::Networking::WinSock::{ntohs, AF_INET};
+#[cfg(windows)]
 use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+#[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, IDYES, MB_ICONWARNING, MB_OK, MB_YESNO,
 };
@@ -31,6 +40,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 /// Header struct of the variable-length table returned by
 /// `GetExtendedTcpTable(TCP_TABLE_OWNER_PID_LISTENER)`. We never
 /// instantiate this - we cast a `Vec<u8>` buffer to it.
+#[cfg(windows)]
 #[repr(C)]
 struct MibTcpTableOwnerPid {
     num_entries: u32,
@@ -40,6 +50,7 @@ struct MibTcpTableOwnerPid {
 /// Pid + executable filename of the process owning a given listening
 /// TCP port. Returns `None` if no listener is on that port, or if the
 /// OS-level lookup failed entirely.
+#[cfg(windows)]
 pub fn find_process_on_port(port: u16) -> Option<(u32, Option<String>)> {
     unsafe {
         // First call: get required buffer size.
@@ -89,6 +100,7 @@ pub fn find_process_on_port(port: u16) -> Option<(u32, Option<String>)> {
 /// Best-effort executable basename for a PID. `None` if the OS denies
 /// us access (e.g. PID belongs to an elevated process) - the caller
 /// still has the PID to show.
+#[cfg(windows)]
 fn process_name(pid: u32) -> Option<String> {
     unsafe {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
@@ -147,6 +159,7 @@ pub fn find_free_port(host: &str, start: u16, range: u16) -> Option<u16> {
     None
 }
 
+#[cfg(windows)]
 pub enum ConflictChoice {
     SwitchPort(u16),
     Quit,
@@ -154,6 +167,7 @@ pub enum ConflictChoice {
 
 /// Pop a native modal asking the user what to do about a port conflict.
 /// `label` is shown to the user as "RTMP port" / "web port".
+#[cfg(windows)]
 pub fn ask_user(
     label: &str,
     port: u16,
@@ -202,7 +216,8 @@ pub fn ask_user(
 /// Pop a one-shot native error dialog. Used by main.rs for fatal
 /// cold-start failures that would otherwise leave the user staring at
 /// a closed (or never-opened) console - buffer file unwritable, etc.
-/// Safe to call from any thread; on non-Windows it's a no-op.
+/// Windows-only; other platforms print to stderr at the call site.
+#[cfg(windows)]
 pub fn show_error(title: &str, body: &str) {
     let title_w = wide(title);
     let body_w = wide(body);
@@ -216,6 +231,7 @@ pub fn show_error(title: &str, body: &str) {
     }
 }
 
+#[cfg(windows)]
 fn wide(s: &str) -> Vec<u16> {
     OsStr::new(s)
         .encode_wide()
@@ -294,6 +310,7 @@ mod tests {
         drop(held);
     }
 
+    #[cfg(windows)]
     #[test]
     fn find_process_on_port_finds_self_when_holding_socket() {
         // Bind a port in this very process, then ask the FFI who owns

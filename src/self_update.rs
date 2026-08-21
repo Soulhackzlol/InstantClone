@@ -40,6 +40,24 @@ pub struct Staged {
     pub version: String,
 }
 
+/// Release asset filename for the running platform. MUST match the names
+/// produced by `.github/workflows/release.yml`. `tag` includes the leading
+/// `v` (e.g. `v0.1.13`).
+fn release_asset_name(tag: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("instantclone-{tag}-windows-x64.exe")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        format!("instantclone-{tag}-linux-x64")
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        format!("instantclone-{tag}-unknown")
+    }
+}
+
 /// Sibling path `exe` + `.` + `ext`, e.g. `instantclone.exe.new`.
 fn sidecar(exe: &Path, ext: &str) -> PathBuf {
     let mut s = exe.as_os_str().to_owned();
@@ -81,6 +99,20 @@ pub fn prepare() -> Result<Staged, String> {
     std::fs::write(&staged, &bytes)
         .map_err(|e| format!("can't write the update next to the exe: {e}"))?;
 
+    // A downloaded Linux binary lands non-executable; the swap-then-relaunch
+    // would fail with EACCES without this. Windows keys off the extension,
+    // so this is unix-only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(&staged)
+            .map_err(|e| format!("can't stat the staged update: {e}"))?
+            .permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&staged, perm)
+            .map_err(|e| format!("can't make the staged update executable: {e}"))?;
+    }
+
     Ok(Staged {
         exe,
         staged,
@@ -94,7 +126,7 @@ pub fn prepare() -> Result<Staged, String> {
 /// download-and-verify path with no GitHub round-trip (see tests).
 fn fetch_verified(agent: &ureq::Agent, base: &str, version: &str) -> Result<Vec<u8>, String> {
     let tag = format!("v{version}");
-    let exe_name = format!("instantclone-{tag}-windows-x64.exe");
+    let exe_name = release_asset_name(&tag);
     let exe_url = format!("{base}/{tag}/{exe_name}");
     let sums_url = format!("{base}/{tag}/SHA256SUMS.txt");
 
@@ -271,6 +303,18 @@ mod tests {
 
     const NAME: &str = "instantclone-v0.1.6-windows-x64.exe";
 
+    /// The self-update asset name MUST match what release.yml publishes, or
+    /// the checksum lookup can never find its line. This locks that contract
+    /// per platform.
+    #[test]
+    fn release_asset_name_matches_release_workflow() {
+        let n = super::release_asset_name("v1.2.3");
+        #[cfg(windows)]
+        assert_eq!(n, "instantclone-v1.2.3-windows-x64.exe");
+        #[cfg(target_os = "linux")]
+        assert_eq!(n, "instantclone-v1.2.3-linux-x64");
+    }
+
     #[test]
     fn parses_standard_sha256sums_line() {
         let body = format!("{}  {NAME}\n", "a".repeat(64));
@@ -355,7 +399,10 @@ mod e2e {
     fn fetch_verified_accepts_matching_checksum() {
         let exe = b"FAKE-INSTANTCLONE-EXE-BODY-v9.9.9".to_vec();
         let hash = crate::sha256::hex(&exe);
-        let sums = format!("{hash}  instantclone-v9.9.9-windows-x64.exe\n");
+        // Name the asset per the running platform, exactly as fetch_verified
+        // resolves it - a Windows-only literal fails the checksum lookup on
+        // the Linux build.
+        let sums = format!("{hash}  {}\n", super::release_asset_name("v9.9.9"));
         let port = serve_release(exe.clone(), sums);
         let base = format!("http://127.0.0.1:{port}");
         let agent = crate::https::https_agent();
@@ -369,7 +416,7 @@ mod e2e {
         // (tampered) body - verification must reject it.
         let genuine = b"GENUINE-BODY".to_vec();
         let hash = crate::sha256::hex(&genuine);
-        let sums = format!("{hash}  instantclone-v9.9.9-windows-x64.exe\n");
+        let sums = format!("{hash}  {}\n", super::release_asset_name("v9.9.9"));
         let tampered = b"TAMPERED-PAYLOAD-PRETENDING-TO-BE-THE-RELEASE".to_vec();
         let port = serve_release(tampered, sums);
         let base = format!("http://127.0.0.1:{port}");

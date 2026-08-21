@@ -222,6 +222,7 @@ version = "0.1.13"
 dependencies = [
  "bytes",
  "flate2",
+ "libc",
  "native-tls",
  "tokio",
  "tokio-native-tls",
