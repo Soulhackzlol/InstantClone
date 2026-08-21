@@ -15,6 +15,9 @@ set -u
 
 EXE="${INSTANTCLONE_EXE:-./target/release/instantclone}"
 [ -x "$EXE" ] || { echo "instantclone not found/executable at '$EXE' - build it first (cargo build --release)"; exit 1; }
+# Pin EXE to an absolute path now: each scenario cd's into a fresh temp work
+# dir, so the relative default would stop resolving once the cwd changes.
+EXE="$(cd "$(dirname "$EXE")" && pwd)/$(basename "$EXE")"
 for tool in ffmpeg jq curl; do
   command -v "$tool" >/dev/null || { echo "$tool not on PATH"; exit 1; }
 done
