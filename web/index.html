@@ -2296,18 +2296,7 @@ details.sys-collapse>summary .ic-label{margin:0}
             <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-key','Stream key')">Copy</button>
           </div>
           <div class="tab-sub" id="obs-key-note" style="margin-top:6px">Any string works. The real platform key lives in <b>Destinations</b>.</div>
-          <details class="ic-disclose" style="margin-top:8px">
-            <summary>Require a key (lock the ingest)</summary>
-            <div class="ic-disclose-body">
-              <p style="margin:0 0 8px">Set a secret here and only OBS using it can publish. Worth doing when the ingest is reachable over a network. Leave blank to accept any key.</p>
-              <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
-                <input id="s-ingest-key" class="ic-input mono" style="flex:1;min-width:180px" placeholder="blank = accept any key" autocomplete="off" spellcheck="false">
-                <button class="ic-btn ic-btn-ghost" onclick="genIngestKey()">Generate</button>
-                <button class="ic-btn ic-btn-primary" onclick="saveIngestKey(this)">Save key</button>
-              </div>
-              <div class="muted" id="ingest-key-msg" style="font-size:11.5px;margin-top:6px"></div>
-            </div>
-          </details>
+          <div class="tab-sub" style="margin-top:8px">Want only OBS with a secret to publish? Set an <b>ingest key</b> in <a href="#" onclick="goNetworkSettings();return false">System &rarr; Network</a>; it becomes the Stream key here.</div>
         </div>
       </div>
     </section>
@@ -2665,6 +2654,16 @@ details.sys-collapse>summary .ic-label{margin:0}
         <span class="lw-ic" aria-hidden="true">⚠</span>
         <span id="lan-warn-text"></span>
       </div>
+    </section>
+    <section class="sys-section">
+      <div class="ic-label">Ingest key</div>
+      <div class="tab-sub">Off by default. Set a secret and only OBS publishing with it can connect - worth doing whenever the ingest port is reachable over a network. It becomes the Stream key you paste into OBS. Leave blank to accept any key.</div>
+      <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+        <input id="s-ingest-key" class="ic-input mono" style="flex:1;min-width:180px" placeholder="blank = accept any key" autocomplete="off" spellcheck="false">
+        <button class="ic-btn ic-btn-ghost" onclick="genIngestKey()">Generate</button>
+        <button class="ic-btn ic-btn-primary" onclick="saveIngestKey(this)">Save key</button>
+      </div>
+      <div class="muted" id="ingest-key-msg" style="font-size:11.5px;margin-top:6px"></div>
     </section>
     <section class="sys-section">
       <div class="ic-label">Dashboard password</div>
@@ -7054,6 +7053,10 @@ $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)
 window.addEventListener('resize', moveTabInd);
 
 // - Sub-tabs (currently only the System pane uses these) -------
+// Jump straight to System -> Network (used by the "set an ingest key" pointer
+// on the OBS tab, now that the key control lives under Network settings).
+function goNetworkSettings(){ showTab('system'); showSubTab('system', 'network'); }
+
 function showSubTab(paneName, subName){
   const pane = document.querySelector(`.tab-pane[data-pane="${paneName}"]`);
   if (!pane) return;
