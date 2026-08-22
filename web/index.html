@@ -810,6 +810,10 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 @media (max-width:680px){.sys-about-grid{grid-template-columns:1fr}}
 .sys-about-card{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px}
 .sys-about-card .ic-label{margin-bottom:4px}
+/* One input that grows + its action buttons, on a single line (wrapping only
+   when the row gets genuinely narrow). Used by the Security controls. */
+.sec-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sec-row .ic-input{flex:1 1 180px;min-width:0}
 .sys-version-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}
 .sys-version-num{font-family:var(--mono);font-size:13px;color:var(--fg);font-weight:600}
 .sys-version-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:99px;
@@ -818,6 +822,25 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .sys-version-pill.new{background:color-mix(in oklch,var(--warn,#d6a23a) 18%,transparent);color:var(--warn,#d6a23a)}
 .sys-version-pill.ahead{background:color-mix(in oklch,#a18bff 18%,transparent);color:#a18bff}
 .sys-version-pill.err{background:color-mix(in oklch,var(--err) 14%,transparent);color:var(--err)}
+.sys-version-pill.off{background:color-mix(in oklch,var(--fg-3) 16%,transparent);color:var(--fg-3)}
+.sys-os-chip{display:inline-flex;align-items:center;padding:2px 9px;border-radius:99px;font-size:11px;
+  font-weight:600;letter-spacing:.3px;background:var(--surface-3);color:var(--fg-2);border:1px solid var(--line)}
+/* Secrets (dock token URL) blurred by default so they can't leak on a stream
+   or screen-share; the Show button reveals on demand. Copy still works blurred. */
+.blur-secret{filter:blur(6px);transition:filter .1s ease;user-select:none}
+.blur-secret.revealed{filter:none;user-select:text}
+/* A blurred secret INPUT stays editable: unblur while focused (so typing is
+   never blurred) and while empty (so the placeholder is readable). It only
+   blurs a saved value sitting idle on screen. */
+.ic-input.blur-secret:focus,
+.ic-input.blur-secret:placeholder-shown{filter:none;user-select:text}
+/* Live system-info tiles in the About tab. Hairline-separated grid. */
+.sysinfo{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;margin-top:16px;
+  background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.sysinfo .si{background:var(--surface-2);padding:10px 12px;min-width:0}
+.sysinfo .si .k{display:block;font-size:10.5px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.5px}
+.sysinfo .si .v{display:block;font-size:14px;color:var(--fg);font-weight:600;margin-top:4px;
+  font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Version-aware requirement callout (VOD unlocker section). `.req` = a hard
    requirement (OBS 32.2+ must use the script), `.info` = softer guidance. */
 .sys-callout{margin-top:12px;padding:10px 13px;border-radius:9px;font-size:12.5px;
@@ -2279,10 +2302,11 @@ details.sys-collapse>summary .ic-label{margin:0}
         <div class="obs-manual-field">
           <div class="ic-label">Stream key</div>
           <div class="copy-block">
-            <code class="mono">main</code>
-            <button class="ic-btn ic-btn-ghost" onclick="copyText(this,'main','Stream key')">Copy</button>
+            <code class="mono" id="obs-key">main</code>
+            <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-key','Stream key')">Copy</button>
           </div>
-          <div class="tab-sub" style="margin-top:6px">Any string works - the real platform key lives in <b>Destinations</b>.</div>
+          <div class="tab-sub" id="obs-key-note" style="margin-top:6px">Any string works. The real platform key lives in <b>Destinations</b>.</div>
+          <div class="tab-sub" style="margin-top:8px">Want only OBS with a secret to publish? Set an <b>ingest key</b> in <a href="#" onclick="goNetworkSettings();return false">System &rarr; Network</a>; it becomes the Stream key here.</div>
         </div>
       </div>
     </section>
@@ -2523,8 +2547,8 @@ details.sys-collapse>summary .ic-label{margin:0}
           <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
             <input type="checkbox" id="s-startup" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
             <div>
-              <div style="font-weight:600">Start with Windows</div>
-              <div class="tab-sub" style="margin-top:2px">Launches at login and waits in the tray, so OBS always has somewhere to publish.</div>
+              <div style="font-weight:600" id="s-startup-title">Start with Windows</div>
+              <div class="tab-sub" style="margin-top:2px" id="s-startup-sub">Launches at login and waits in the tray, so OBS always has somewhere to publish.</div>
             </div>
           </label>
         </div>
@@ -2533,7 +2557,7 @@ details.sys-collapse>summary .ic-label{margin:0}
             <input type="checkbox" id="s-open-dash" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
             <div>
               <div style="font-weight:600">Open dashboard on launch</div>
-              <div class="tab-sub" style="margin-top:2px">Opens this page in your browser each time the app starts. Turn off to stay in the tray.</div>
+              <div class="tab-sub" style="margin-top:2px" id="s-open-dash-sub">Opens this page in your browser each time the app starts. Turn off to stay in the tray.</div>
             </div>
           </label>
         </div>
@@ -2641,6 +2665,65 @@ details.sys-collapse>summary .ic-label{margin:0}
         <span id="lan-warn-text"></span>
       </div>
     </section>
+    <section class="sys-section">
+      <div class="ic-label">Ingest key</div>
+      <div class="sys-version-row">
+        <span class="sys-version-pill off" id="ingest-status">Open</span>
+        <span class="muted" id="ingest-status-note" style="font-size:12.5px">Any stream key is accepted</span>
+      </div>
+      <div class="tab-sub" style="margin-top:8px">Set a secret and only OBS publishing with it can connect - worth doing whenever the ingest port is reachable over a network. It becomes the Stream key you paste into OBS. Leave blank to accept any key.</div>
+      <div class="sec-row" style="margin-top:12px">
+        <input id="s-ingest-key" class="ic-input mono blur-secret" placeholder="blank = accept any key" aria-label="Ingest key" autocomplete="off" spellcheck="false">
+        <button class="ic-btn ic-btn-ghost" id="ingest-key-toggle" onclick="toggleSecret('s-ingest-key',this)">Show</button>
+        <button class="ic-btn ic-btn-ghost" onclick="genIngestKey()">Generate</button>
+        <button class="ic-btn ic-btn-primary" onclick="saveIngestKey(this)">Save key</button>
+      </div>
+      <div class="muted" id="ingest-key-msg" style="font-size:11.5px;margin-top:8px"></div>
+    </section>
+    <section class="sys-section">
+      <div class="ic-label">Dashboard password</div>
+      <div class="sys-version-row">
+        <span class="sys-version-pill off" id="pw-status">Off</span>
+        <span class="muted" id="pw-status-note" style="font-size:12.5px">Local-only use needs none</span>
+      </div>
+      <div class="tab-sub" style="margin-top:8px">When the web UI is open to a network, a password stops anyone who finds it from touching your stream.</div>
+
+      <div id="sec-off" style="margin-top:14px">
+        <div class="ic-label">New password</div>
+        <div class="sec-row" style="margin-top:6px">
+          <input id="sec-pw" type="password" class="ic-input" placeholder="at least 8 characters" aria-label="New dashboard password" autocomplete="new-password" spellcheck="false">
+          <button class="ic-btn ic-btn-primary" onclick="enableAuth(this,'sec-pw')">Enable</button>
+        </div>
+        <div class="muted" id="sec-off-msg" style="font-size:11.5px;margin-top:8px"></div>
+      </div>
+
+      <div id="sec-on" hidden style="margin-top:14px">
+        <div class="ic-label">Change password</div>
+        <div class="sec-row" style="margin-top:6px">
+          <input id="sec-pw2" type="password" class="ic-input" placeholder="new password" aria-label="Change dashboard password" autocomplete="new-password" spellcheck="false">
+          <button class="ic-btn ic-btn-ghost" onclick="enableAuth(this,'sec-pw2')">Update</button>
+        </div>
+
+        <div class="sys-about-card" style="margin-top:14px">
+          <div class="ic-label">OBS dock URL</div>
+          <div class="tab-sub" style="margin-top:4px">The OBS dock can't sign in, so paste this token URL as its Custom Browser Dock. It runs the stream (delay, cut, destination on/off) but never reveals your keys or changes settings.</div>
+          <div class="copy-block" style="margin-top:8px">
+            <code class="mono blur-secret" id="sec-dock-url" style="overflow-x:auto;white-space:nowrap;min-width:0" title="Hidden to prevent leaks on stream. Use Show to reveal."></code>
+            <button class="ic-btn ic-btn-ghost" id="sec-dock-toggle" onclick="toggleSecret('sec-dock-url',this)">Show</button>
+            <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'sec-dock-url','Dock URL')">Copy</button>
+          </div>
+          <div class="sec-row" style="margin-top:10px">
+            <button class="ic-btn ic-btn-ghost" onclick="regenDock(this)">Regenerate</button>
+          </div>
+        </div>
+
+        <div class="sec-row" style="margin-top:14px">
+          <button class="ic-btn ic-btn-ghost" onclick="logoutNow()">Log out</button>
+          <button class="ic-btn ic-btn-warn" onclick="disableAuth(this)">Turn off password</button>
+        </div>
+        <div class="muted" id="sec-on-msg" style="font-size:11.5px;margin-top:8px"></div>
+      </div>
+    </section>
   </div>
 
   <!-- Buffer sub-pane -->
@@ -2654,7 +2737,7 @@ details.sys-collapse>summary .ic-label{margin:0}
       </div>
       <div class="muted" id="s-bmb-hint" style="margin-top:8px;font-size:11.5px;line-height:1.4"></div>
       <div class="row" style="margin-top:10px">
-        <button class="ic-btn ic-btn-ghost" onclick="reveal('buffer',this)">Show buffer file in Explorer</button>
+        <button class="ic-btn ic-btn-ghost reveal-btn" onclick="reveal('buffer',this)">Show buffer file in Explorer</button>
       </div>
     </section>
   </div>
@@ -2684,7 +2767,7 @@ details.sys-collapse>summary .ic-label{margin:0}
         <span>Capture trace log when streaming</span>
       </label>
       <div class="row" style="margin-top:10px">
-        <button class="ic-btn ic-btn-ghost" onclick="reveal('trace',this)">Show log file in Explorer</button>
+        <button class="ic-btn ic-btn-ghost reveal-btn" onclick="reveal('trace',this)">Show log file in Explorer</button>
       </div>
     </section>
   </div>
@@ -2695,18 +2778,32 @@ details.sys-collapse>summary .ic-label{margin:0}
       <div class="ic-label">InstantClone</div>
       <div class="sys-version-row">
         <span class="sys-version-num" id="sys-about-version">v?.?.?</span>
+        <span class="sys-os-chip" id="sys-os-chip" hidden></span>
         <span class="sys-version-pill ok" id="sys-about-pill" hidden>up to date</span>
         <button class="ic-btn ic-btn-ghost" id="sys-about-check-btn" onclick="aboutCheckUpdate()">Check for updates</button>
         <button class="ic-btn ic-btn-primary" id="sys-about-update-btn" onclick="applyUpdate()" hidden>Update now</button>
       </div>
-      <div class="muted" id="sys-about-msg" style="font-size:12px;margin-top:8px;min-height:1.2em"></div>
-      <label style="display:flex;align-items:center;gap:10px;margin-top:12px;cursor:pointer">
+      <div class="sysinfo">
+        <div class="si"><span class="k">Uptime</span><span class="v" id="si-uptime">-</span></div>
+        <div class="si"><span class="k">Memory</span><span class="v" id="si-mem">-</span></div>
+        <div class="si"><span class="k">CPU</span><span class="v" id="si-cpu">-</span></div>
+        <div class="si"><span class="k">Ingest</span><span class="v" id="si-ingest">-</span></div>
+        <div class="si"><span class="k">Dashboard</span><span class="v" id="si-web">-</span></div>
+        <div class="si"><span class="k">Delay buffer</span><span class="v" id="si-buffer">-</span></div>
+        <div class="si"><span class="k">Destinations</span><span class="v" id="si-dests">-</span></div>
+      </div>
+      <div class="muted" id="sys-about-msg" style="font-size:12px;margin-top:12px;min-height:1.2em"></div>
+      <label style="display:flex;align-items:center;gap:10px;margin-top:8px;cursor:pointer">
         <input id="s-update-check" type="checkbox" style="width:16px;height:16px;cursor:pointer">
         <span>Automatically check for updates<span class="muted" style="margin-left:6px;font-size:12px">on launch, from GitHub</span></span>
       </label>
-      <div class="row" style="gap:10px;margin-top:12px;align-items:center">
+    </section>
+    <section class="sys-section">
+      <div class="ic-label">Application</div>
+      <div class="tab-sub">Restart to apply a buffer or port change. Quit stops every destination cleanly and takes the dashboard offline until you launch the app again.</div>
+      <div class="row" style="gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap">
         <button class="ic-btn ic-btn-ghost" onclick="restartApp(this)">Restart InstantClone</button>
-        <span class="muted" style="font-size:12px">Relaunch the app - the dashboard reconnects automatically.</span>
+        <button class="ic-btn ic-btn-warn" onclick="quitApp(this)">Quit InstantClone</button>
       </div>
     </section>
     <div class="sys-about-grid">
@@ -4345,6 +4442,7 @@ async function loadConfig(){
     // Reflects the actual Run-key entry, not a stored preference - so if
     // the user removed it via Task Manager's Startup tab, this shows off.
     $('s-startup').checked = !!c.start_with_windows;
+    applyPlatformCopy(c.os);
     // Both default true server-side; treat a missing field as on.
     $('s-open-dash').checked = c.open_dashboard_on_launch !== false;
     $('s-update-check').checked = c.update_check_enabled !== false;
@@ -4355,6 +4453,24 @@ async function loadConfig(){
     // OBS panel
     $('obs-srv').textContent = c.obs_url;
     if ($('wiz-obs-srv')) $('wiz-obs-srv').textContent = c.obs_url;
+    applyIngestKey(c.ingest_key || '');
+    applyAuthState(!!c.auth_enabled, c.dock_token || '');
+    if ($('sys-os-chip')){
+      const osLabel = {windows:'Windows', linux:'Linux', macos:'macOS'}[c.os] || (c.os || '');
+      if (osLabel){ $('sys-os-chip').textContent = osLabel; $('sys-os-chip').hidden = false; }
+    }
+    // The version row shows v0.1.13 from /update-check; seed it from /config so
+    // it's correct immediately even before the (async) update check returns.
+    if ($('sys-about-version') && c.version && $('sys-about-version').textContent === 'v?.?.?'){
+      $('sys-about-version').textContent = 'v' + c.version;
+    }
+    // System-info tiles: static bits from /config (live bits filled per tick).
+    // Show the port + exposure scope, never an IP - no address should be
+    // readable off a screen-share or stream.
+    const scope = b => b ? 'network' : 'local';
+    if ($('si-ingest')) $('si-ingest').textContent = c.ingest_port + ' · ' + scope(c.ingest_bind_all);
+    if ($('si-web')) $('si-web').textContent = c.web_port + ' · ' + scope(c.web_bind_all);
+    if ($('si-buffer')) $('si-buffer').textContent = (c.buffer_mb || 0) + ' MB';
     $('dock-url').textContent = location.origin + '/dock';
     // footer
     $('foot-rtmp').textContent = ':' + c.ingest_port;
@@ -5064,15 +5180,157 @@ function flashFieldErrors(message){
 // the web UI is an unauthenticated control surface, while the ingest port
 // lets anyone on the network publish into the buffer. Both default off,
 // and this stays hidden until one is actually ticked.
+// --- Optional dashboard auth (Security section) --------------------------
+let _authEnabled = false;
+function applyAuthState(enabled, dockToken){
+  _authEnabled = !!enabled;
+  if ($('sec-off')) $('sec-off').hidden = _authEnabled;
+  if ($('sec-on')) $('sec-on').hidden = !_authEnabled;
+  const st = $('pw-status');
+  if (st){
+    st.textContent = _authEnabled ? 'On' : 'Off';
+    st.className = 'sys-version-pill ' + (_authEnabled ? 'ok' : 'off');
+  }
+  const stn = $('pw-status-note');
+  if (stn) stn.textContent = _authEnabled ? 'Sign-in required' : 'Local-only use needs none';
+  const url = $('sec-dock-url');
+  if (url){
+    url.textContent = dockToken ? (location.origin + '/dock?token=' + dockToken) : '';
+    url.classList.remove('revealed'); // always start hidden
+  }
+  if ($('sec-dock-toggle')) $('sec-dock-toggle').textContent = 'Show';
+  renderLanWarning();
+}
+
+// Reveal/hide a blurred secret without ever changing what Copy grabs.
+function toggleSecret(id, btn){
+  const el = $(id);
+  if (!el) return;
+  const showing = el.classList.toggle('revealed');
+  if (btn) btn.textContent = showing ? 'Hide' : 'Show';
+}
+
+async function enableAuth(btn, inputId){
+  const inp = $(inputId);
+  const pw = inp ? inp.value : '';
+  if (!pw || pw.length < 8){ toast('Use at least 8 characters', 'err'); return; }
+  const label = btn && btn.textContent;
+  if (btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const r = await fetch('/auth/set-password', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'password=' + encodeURIComponent(pw)});
+    if (r.ok){ if (inp) inp.value=''; toast('Password set', 'ok'); await loadConfig(); }
+    else { const j = await r.json().catch(()=>({})); toast((j&&j.error)?j.error:'Could not set password', 'err'); }
+  } catch(_){ toast('Network error', 'err'); }
+  finally { if (btn){ btn.disabled = false; btn.textContent = label || 'Enable password'; } }
+}
+
+async function disableAuth(btn){
+  if (!confirm('Turn off the password? The dashboard becomes open to anyone who can reach it.')) return;
+  if (btn){ btn.disabled = true; }
+  try {
+    const r = await fetch('/auth/disable', {method:'POST'});
+    if (r.ok){ toast('Password disabled', 'ok'); await loadConfig(); } else toast('Could not disable', 'err');
+  } catch(_){ toast('Network error', 'err'); }
+  finally { if (btn){ btn.disabled = false; } }
+}
+
+async function regenDock(btn){
+  if (!confirm('Regenerate the dock URL? The current one stops working and you must repaste the new URL into OBS.')) return;
+  if (btn){ btn.disabled = true; }
+  try {
+    const r = await fetch('/auth/regen-dock', {method:'POST'});
+    if (r.ok){
+      const j = await r.json().catch(()=>({}));
+      if ($('sec-dock-url') && j && j.dock_token){
+        $('sec-dock-url').textContent = location.origin + '/dock?token=' + j.dock_token;
+        $('sec-dock-url').classList.remove('revealed');
+        if ($('sec-dock-toggle')) $('sec-dock-toggle').textContent = 'Show';
+      }
+      toast('New dock URL generated', 'ok');
+    } else toast('Could not regenerate', 'err');
+  } catch(_){ toast('Network error', 'err'); }
+  finally { if (btn){ btn.disabled = false; } }
+}
+
+async function logoutNow(){
+  try { await fetch('/logout', {method:'POST'}); } catch(_){}
+  location.href = '/login';
+}
+
 function renderLanWarning(){
   const web = $('s-wbind').checked;
   const ingest = $('s-ibind').checked;
+  const hasKey = !!($('s-ingest-key') && $('s-ingest-key').value.trim());
   const parts = [];
-  if (web) parts.push('The web UI has no password - anyone on your network can change the delay, cut, and edit destinations.');
-  if (ingest) parts.push('The ingest port accepts any stream key, so anyone on your network can publish into your buffer.');
+  if (web && !_authEnabled) parts.push('The web UI has no password, so anyone on your network can change the delay, cut, and edit destinations. Set one in Security below.');
+  if (ingest && !hasKey) parts.push('The ingest port accepts any stream key, so anyone on your network can publish into your buffer. Set a required key in the OBS tab to lock it.');
   const on = parts.length > 0;
   $('lan-warn').hidden = !on;
   if (on) $('lan-warn-text').textContent = parts.join(' ') + ' Only enable on a network you trust.';
+}
+
+// Reflect the current ingest key across the OBS tab: the copyable Stream key,
+// the helper note, the input, and the LAN warning (a set key removes the
+// "anyone can publish" line).
+function applyIngestKey(key){
+  const codeEl = $('obs-key');
+  if (codeEl) codeEl.textContent = key || 'main';
+  const inp = $('s-ingest-key');
+  if (inp && document.activeElement !== inp) inp.value = key || '';
+  const note = $('obs-key-note');
+  if (note) note.innerHTML = key
+    ? 'The ingest is locked. OBS must use <b>this exact key</b> to publish.'
+    : 'Any string works. The real platform key lives in <b>Destinations</b>.';
+  const st = $('ingest-status');
+  if (st){
+    st.textContent = key ? 'Locked' : 'Open';
+    st.className = 'sys-version-pill ' + (key ? 'ok' : 'off');
+  }
+  const stn = $('ingest-status-note');
+  if (stn) stn.textContent = key ? 'Only OBS with your key can publish' : 'Any stream key is accepted';
+  renderLanWarning();
+}
+
+function genIngestKey(){
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const inp = $('s-ingest-key');
+  if (inp){
+    inp.value = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    // Reveal the freshly generated key so it can be read and copied; it
+    // re-blurs on its own once focus leaves the field.
+    inp.classList.add('revealed');
+    const t = $('ingest-key-toggle'); if (t) t.textContent = 'Hide';
+  }
+}
+
+async function saveIngestKey(btn){
+  const inp = $('s-ingest-key');
+  const key = inp ? inp.value.trim() : '';
+  const msg = $('ingest-key-msg');
+  if (btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const resp = await fetch('/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'ingest_key=' + encodeURIComponent(key),
+    });
+    if (resp.ok){
+      applyIngestKey(key);
+      if (msg) msg.textContent = key
+        ? 'Ingest locked. Set this as your OBS stream key.'
+        : 'Ingest key cleared. Any key is accepted again.';
+      toast(key ? 'Ingest key saved' : 'Ingest key cleared', 'ok');
+    } else {
+      if (msg) msg.textContent = 'Could not save (server returned ' + resp.status + ').';
+      toast('Could not save ingest key', 'err');
+    }
+  } catch(_){
+    if (msg) msg.textContent = 'Could not save (network error).';
+    toast('Could not save ingest key', 'err');
+  } finally {
+    if (btn){ btn.disabled = false; btn.textContent = 'Save key'; }
+  }
 }
 
 let _savingSettings = false;
@@ -6827,6 +7085,10 @@ $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)
 window.addEventListener('resize', moveTabInd);
 
 // - Sub-tabs (currently only the System pane uses these) -------
+// Jump straight to System -> Network (used by the "set an ingest key" pointer
+// on the OBS tab, now that the key control lives under Network settings).
+function goNetworkSettings(){ showTab('system'); showSubTab('system', 'network'); }
+
 function showSubTab(paneName, subName){
   const pane = document.querySelector(`.tab-pane[data-pane="${paneName}"]`);
   if (!pane) return;
@@ -7054,12 +7316,17 @@ function waitForRestart(){
   }, 1500);
 }
 
-// Restart the app (e.g. to apply a buffer/port change). Same relaunch
-// mechanism as the updater, minus the swap; we reconnect and reload once
-// the fresh process answers.
-let _restarting = false;
+// Restart the app (e.g. to apply a buffer/port change). The server tears
+// down every egress cleanly (deleteStream upstream) and THEN relaunches, so
+// this is safe to run mid-stream - but it still drops the live edge for a few
+// seconds, so we confirm first when OBS is actually publishing.
+let _restarting = false, _quitting = false;
 async function restartApp(btn){
-  if (_restarting) return;
+  if (_restarting || _quitting) return;
+  if (lastState && lastState.ingest_alive &&
+      !confirm('OBS is streaming through InstantClone right now. Restarting relaunches the app and drops every destination for a few seconds.\n\nRestart anyway?')){
+    return;
+  }
   _restarting = true;
   if (btn){ btn.disabled = true; btn.textContent = 'Restarting…'; }
   toast('Restarting InstantClone…','info');
@@ -7067,19 +7334,89 @@ async function restartApp(btn){
   waitForRestart();
 }
 
-// Open one of our files in Explorer. `what` is a fixed keyword the server
-// maps to a known path - buffer / trace / overlays.
+// Quit the app for good - no relaunch. Same clean egress teardown as the
+// Windows tray Quit. Unlike restart we do NOT poll for reconnect: the process
+// is gone, so we replace the view with a terminal farewell instead of leaving
+// a frozen dashboard that looks broken.
+async function quitApp(btn){
+  if (_quitting || _restarting) return;
+  if (lastState && lastState.ingest_alive &&
+      !confirm('OBS is streaming through InstantClone right now. Quitting stops the delay and drops every destination.\n\nQuit anyway?')){
+    return;
+  }
+  if (!confirm('Quit InstantClone? The dashboard will go offline until you launch the app again.')) return;
+  _quitting = true;
+  if (btn){ btn.disabled = true; btn.textContent = 'Quitting…'; }
+  toast('Stopping InstantClone…','info');
+  try { await fetch('/app/quit', {method:'POST'}); } catch(_){ /* server going down */ }
+  showQuitFarewell();
+}
+
+// Full-screen "stopped" overlay shown after Quit. Covers the dashboard so the
+// dead poll loop (whose fetches now just fail silently) isn't visible behind a
+// frozen UI. Uses theme tokens so it reads correctly in the current palette.
+function showQuitFarewell(){
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;'+
+    'justify-content:center;text-align:center;padding:24px;background:var(--bg);color:var(--fg)';
+  el.innerHTML =
+    '<div style="max-width:440px">'+
+      '<div style="font-size:34px;line-height:1;margin-bottom:14px;color:var(--fg-3)">■</div>'+
+      '<h2 style="margin:0 0 10px;font-size:20px">InstantClone has stopped</h2>'+
+      '<p style="margin:0;font-size:14px;line-height:1.55;color:var(--fg-2)">'+
+        'Every destination was disconnected cleanly and the delay buffer released. '+
+        'You can close this tab - launch InstantClone again to bring the dashboard back.'+
+      '</p>'+
+    '</div>';
+  document.body.appendChild(el);
+}
+
+// Swap the handful of OS-specific strings so the dashboard reads native on
+// whatever platform the server runs. `os` comes from /config ("windows",
+// "linux", "macos"). Called on every config load. The file-manager name is
+// cached for the reveal() error toast.
+let _fileManager = 'Explorer';
+function applyPlatformCopy(os){
+  os = os || 'windows';
+  _fileManager = os === 'linux' ? 'file manager' : os === 'macos' ? 'Finder' : 'Explorer';
+  const onWindows = os === 'windows';
+  const title = $('s-startup-title');
+  if (title) title.textContent = onWindows ? 'Start with Windows' : 'Start at login';
+  const sub = $('s-startup-sub');
+  if (sub) sub.textContent = onWindows
+    ? 'Launches at login and waits in the tray, so OBS always has somewhere to publish.'
+    : 'Launches at login and keeps running in the background, so OBS always has somewhere to publish.';
+  const odSub = $('s-open-dash-sub');
+  if (odSub) odSub.textContent = onWindows
+    ? 'Opens this page in your browser each time the app starts. Turn off to stay in the tray.'
+    : 'Opens this page in your browser each time the app starts. Turn off to keep it running in the background.';
+  document.querySelectorAll('.reveal-btn').forEach(b => {
+    const which = /reveal\('trace'/.test(b.getAttribute('onclick') || '') ? 'log file' : 'buffer file';
+    b.textContent = `Show ${which} in ${_fileManager}`;
+  });
+}
+
+// Open one of our files in the OS file browser. `what` is a fixed keyword the
+// server maps to a known path (buffer / trace / overlays).
 async function reveal(what, btn){
   try {
     const j = await (await fetch('/reveal/' + what, {method:'POST'})).json();
-    if (!j || !j.ok) toast('Could not open Explorer','err');
-  } catch(_){ toast('Could not open Explorer','err'); }
+    if (!j || !j.ok) toast('Could not open ' + _fileManager,'err');
+  } catch(_){ toast('Could not open ' + _fileManager,'err'); }
 }
 
 // - Tick / poll loop -------------------------
 // applyState() is the pure render side - used by both the poll path
 // and the SSE push path so we don't have two copies of the dashboard
 // reconciliation logic.
+function fmtUptime(sec){
+  sec = Math.max(0, Math.floor(sec));
+  const d = Math.floor(sec/86400), h = Math.floor(sec%86400/3600), m = Math.floor(sec%3600/60), r = sec%60;
+  if (d) return d+'d '+h+'h';
+  if (h) return h+'h '+m+'m';
+  if (m) return m+'m '+r+'s';
+  return r+'s';
+}
 function applyState(s){
   const prev = lastState;
   if (prev){
@@ -7089,6 +7426,14 @@ function applyState(s){
       toast('OBS reconnected - re-aligned timeline','info');
   }
   lastState = s;
+  // System-info tiles (About tab): live bits, every tick, tab-independent.
+  if ($('si-uptime')) $('si-uptime').textContent = fmtUptime(s.uptime_secs || 0);
+  if ($('si-mem')) $('si-mem').textContent = Math.round((s.rss_bytes || 0) / 1048576) + ' MB';
+  if ($('si-cpu')) $('si-cpu').textContent = Math.round(s.cpu_pct || 0) + '%';
+  if ($('si-dests')){
+    const t = s.destinations_total || 0, a = s.destinations_alive || 0;
+    $('si-dests').textContent = t ? (a + ' of ' + t + ' live') : 'none';
+  }
   // Update the capacity planning bitrate BEFORE any render that reads it
   // (the profile chips + CTA capacity gate), so a transient dip can't
   // flash a too-big delay unlocked mid-tick.

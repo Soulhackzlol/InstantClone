@@ -17,7 +17,6 @@
 
 #![cfg(windows)]
 
-use crate::sync::Mutex;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
@@ -70,28 +69,18 @@ struct TrayState {
     dock_url: String,
     ctrl: Arc<Controller>,
     settings: watch::Receiver<Settings>,
-    /// `Mutex<Option<…>>` so the WNDPROC can `take()` the sender on the
-    /// Quit click and `send(())` once. (`oneshot::Sender::send` consumes
-    /// `self`, hence the `take` shape.) Previous design used Notify which
-    /// was a no-op if no receiver was awaiting at that moment; oneshot
-    /// has no such race.
-    quit: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 /// Spawn the tray on its own OS thread. Returns immediately; the thread
 /// runs the message loop until the user picks Quit (or the process dies).
-pub fn spawn(
-    settings: watch::Receiver<Settings>,
-    ctrl: Arc<Controller>,
-    quit: tokio::sync::oneshot::Sender<()>,
-) {
+pub fn spawn(settings: watch::Receiver<Settings>, ctrl: Arc<Controller>) {
     let s = settings.borrow().clone();
     let web_url = format!("http://127.0.0.1:{}/", s.web_port);
     let dock_url = format!("http://127.0.0.1:{}/dock", s.web_port);
     std::thread::Builder::new()
         .name("instantclone-tray".into())
         .spawn(move || {
-            if let Err(e) = run(web_url, dock_url, ctrl, settings, quit) {
+            if let Err(e) = run(web_url, dock_url, ctrl, settings) {
                 eprintln!("[tray] init failed: {e}");
             }
         })
@@ -103,7 +92,6 @@ fn run(
     dock_url: String,
     ctrl: Arc<Controller>,
     settings: watch::Receiver<Settings>,
-    quit: tokio::sync::oneshot::Sender<()>,
 ) -> Result<(), String> {
     unsafe {
         let h_instance = GetModuleHandleW(ptr::null());
@@ -152,7 +140,6 @@ fn run(
             dock_url,
             ctrl,
             settings,
-            quit: Mutex::new(Some(quit)),
         });
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
@@ -264,9 +251,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     // VOD-track flag, then launch OBS with --config-url.
                     // Both are synchronous and degrade quietly (missing
                     // OBS just logs) so a click never wedges the tray.
-                    let web_port = state.settings.borrow().web_port;
+                    let (web_port, dock_token) = {
+                        let s = state.settings.borrow();
+                        (s.web_port, s.dock_token.clone())
+                    };
                     let _ = crate::obs_register::set_vod_audio_flag(true);
-                    match crate::obs_register::launch_obs_with_eb_config(web_port) {
+                    match crate::obs_register::launch_obs_with_eb_config(web_port, &dock_token) {
                         Ok(exe) => state.ctrl.log(format!(
                             "[tray] launched OBS for VOD + EB ({})",
                             exe.display()
@@ -282,12 +272,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     if state.ctrl.ingest_alive() && !confirm_quit_while_live(hwnd) {
                         return 0;
                     }
-                    // Take the sender so a second click can't double-send.
-                    // Ignore the Err: it just means the main task already shut
-                    // down (race with ctrl-c) and dropped the receiver.
-                    if let Some(tx) = state.quit.lock().take() {
-                        let _ = tx.send(());
-                    }
+                    // Signal the main loop to tear down egress cleanly and exit
+                    // - the same path the web Quit route uses. Idempotent, so a
+                    // second click is harmless.
+                    state.ctrl.request_quit();
                     PostQuitMessage(0);
                 }
                 _ => {}

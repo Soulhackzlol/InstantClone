@@ -29,6 +29,8 @@ pub const MAX_DOCK_LAYOUT_LEN: usize = 8 * 1024;
 /// Also guards against the `% 0` panic in `DiskRing::append` if a
 /// hand-edited config sets `buffer_mb=0`.
 const MIN_BUFFER_MB: u64 = 50;
+// 1 TiB. Guards `buffer_bytes()` against overflow from a hand-edited config.
+const MAX_BUFFER_MB: u64 = 1024 * 1024;
 
 /// Ports for the built-in "Local test sink" destination (platform
 /// `"sink"`). The egress supervisor spawns `instantclone sink` as a
@@ -43,6 +45,11 @@ pub const SINK_WEB_PORT: u16 = 19351;
 pub struct Settings {
     pub ingest_port: u16,
     pub ingest_bind_all: bool, // true → 0.0.0.0, false → 127.0.0.1
+    /// Optional shared secret an RTMP publisher must use as its stream key.
+    /// Empty (the default) accepts any key, which is the right behaviour on a
+    /// local machine. Set it to lock the ingest down when it is exposed to a
+    /// network, so only OBS configured with this exact key can publish.
+    pub ingest_key: String,
 
     // Legacy single-destination fields. Still present on disk for backward
     // compatibility - on load they get migrated into destinations[0] if
@@ -53,6 +60,15 @@ pub struct Settings {
 
     pub web_port: u16,
     pub web_bind_all: bool,
+    /// Optional PBKDF2 hash of the dashboard password. Empty (the default)
+    /// means auth is OFF and the dashboard/API are open exactly as before. Set
+    /// means a login is required. Never sent to the client; the wire only
+    /// carries an `auth_enabled` bool.
+    pub dashboard_password_hash: String,
+    /// Secret that lets the OBS dock (which cannot show a login form) through
+    /// the gate for delay CONTROL only, never settings. Generated when auth is
+    /// enabled, regenerable, empty when auth is off.
+    pub dock_token: String,
     pub buffer_mb: u64,
     pub buffer_path: PathBuf,
     pub target_delay_ms: u32,
@@ -295,11 +311,14 @@ impl Settings {
         Self {
             ingest_port: 1935,
             ingest_bind_all: false,
+            ingest_key: String::new(),
             platform: "twitch".into(),
             stream_key: String::new(),
             custom_egress_url: String::new(),
             web_port: 7799,
             web_bind_all: false,
+            dashboard_password_hash: String::new(),
+            dock_token: String::new(),
             // 500 MB ≈ 6m 50s at 10 Mbps, ~11 min at 6 Mbps. The cap on
             // what the user could ever arm at the current bitrate; with
             // the trim logic the *actual* used portion matches the armed
@@ -418,6 +437,10 @@ impl Settings {
         if self.buffer_mb < MIN_BUFFER_MB {
             self.buffer_mb = MIN_BUFFER_MB;
         }
+        // Ceiling as well as floor: a hand-edited absurd value would overflow
+        // `buffer_bytes()` (buffer_mb * 1024 * 1024) and hand DiskRing a
+        // nonsensical size. 1 TiB is far past any real delay buffer.
+        self.buffer_mb = self.buffer_mb.min(MAX_BUFFER_MB);
         if self.ingest_port == 0 {
             self.ingest_port = 1935;
         }
@@ -510,34 +533,69 @@ impl Settings {
         writeln!(
             f,
             "platform={}",
-            mirror
-                .map(|d| d.platform.as_str())
-                .unwrap_or(&self.platform)
+            one_line(
+                mirror
+                    .map(|d| d.platform.as_str())
+                    .unwrap_or(&self.platform)
+            )
         )?;
         writeln!(
             f,
             "stream_key={}",
-            mirror
-                .map(|d| d.stream_key.as_str())
-                .unwrap_or(&self.stream_key)
+            one_line(
+                mirror
+                    .map(|d| d.stream_key.as_str())
+                    .unwrap_or(&self.stream_key)
+            )
         )?;
         writeln!(
             f,
             "custom_egress_url={}",
-            mirror
-                .map(|d| d.custom_egress_url.as_str())
-                .unwrap_or(&self.custom_egress_url)
+            one_line(
+                mirror
+                    .map(|d| d.custom_egress_url.as_str())
+                    .unwrap_or(&self.custom_egress_url)
+            )
         )?;
         writeln!(f, "ingest_port={}", self.ingest_port)?;
         writeln!(f, "ingest_bind_all={}", self.ingest_bind_all)?;
+        // Secret: only written when set, so a default install's config never
+        // carries an empty key line and a downgrade stays clean.
+        if !self.ingest_key.is_empty() {
+            writeln!(f, "ingest_key={}", one_line(&self.ingest_key))?;
+        }
         writeln!(f, "web_port={}", self.web_port)?;
         writeln!(f, "web_bind_all={}", self.web_bind_all)?;
+        // Auth secrets: only written when set (auth on), so a default install's
+        // config carries neither and a downgrade stays clean.
+        if !self.dashboard_password_hash.is_empty() {
+            writeln!(
+                f,
+                "dashboard_password_hash={}",
+                self.dashboard_password_hash
+            )?;
+        }
+        if !self.dock_token.is_empty() {
+            writeln!(f, "dock_token={}", self.dock_token)?;
+        }
         writeln!(f, "buffer_mb={}", self.buffer_mb)?;
-        writeln!(f, "buffer_path={}", self.buffer_path.display())?;
+        writeln!(
+            f,
+            "buffer_path={}",
+            one_line(&self.buffer_path.to_string_lossy())
+        )?;
         writeln!(f, "target_delay_ms={}", self.target_delay_ms)?;
         writeln!(f, "armed_delay_ms={}", self.armed_delay_ms)?;
-        writeln!(f, "discord_webhook_url={}", self.discord_webhook_url)?;
-        writeln!(f, "overlays_dir={}", self.overlays_dir.display())?;
+        writeln!(
+            f,
+            "discord_webhook_url={}",
+            one_line(&self.discord_webhook_url)
+        )?;
+        writeln!(
+            f,
+            "overlays_dir={}",
+            one_line(&self.overlays_dir.to_string_lossy())
+        )?;
         writeln!(f, "tracing_enabled={}", self.tracing_enabled)?;
         // Behaviour. Only emit when non-default so a downgrade to a
         // pre-v0.2 build that doesn't know these keys keeps parsing
@@ -567,22 +625,28 @@ impl Settings {
         // compact JSON), so it round-trips through the line-based parser
         // even though it is opaque to us.
         for (id, layout) in &self.docks {
-            writeln!(f, "dock.{}={}", id, layout)?;
+            writeln!(f, "dock.{}={}", one_line(id), one_line(layout))?;
         }
         for (i, p) in self.profiles.iter().enumerate() {
-            writeln!(f, "profile.{}.name={}", i, p.name)?;
+            writeln!(f, "profile.{}.name={}", i, one_line(&p.name))?;
             writeln!(f, "profile.{}.delay_ms={}", i, p.delay_ms)?;
         }
         for (i, d) in self.destinations.iter().enumerate() {
-            writeln!(f, "destination.{}.id={}", i, d.id)?;
-            writeln!(f, "destination.{}.name={}", i, d.name)?;
+            writeln!(f, "destination.{}.id={}", i, one_line(&d.id))?;
+            writeln!(f, "destination.{}.name={}", i, one_line(&d.name))?;
             writeln!(f, "destination.{}.enabled={}", i, d.enabled)?;
-            writeln!(f, "destination.{}.platform={}", i, d.platform)?;
-            writeln!(f, "destination.{}.stream_key={}", i, d.stream_key)?;
+            writeln!(f, "destination.{}.platform={}", i, one_line(&d.platform))?;
+            writeln!(
+                f,
+                "destination.{}.stream_key={}",
+                i,
+                one_line(&d.stream_key)
+            )?;
             writeln!(
                 f,
                 "destination.{}.custom_egress_url={}",
-                i, d.custom_egress_url
+                i,
+                one_line(&d.custom_egress_url)
             )?;
             writeln!(f, "destination.{}.twitch_ingest={}", i, d.twitch_ingest)?;
             writeln!(f, "destination.{}.youtube_ingest={}", i, d.youtube_ingest)?;
@@ -604,7 +668,12 @@ impl Settings {
             }
             // Only emit when non-default ("auto"), same downgrade-safe reason.
             if d.audio_track != "auto" && !d.audio_track.is_empty() {
-                writeln!(f, "destination.{}.audio_track={}", i, d.audio_track)?;
+                writeln!(
+                    f,
+                    "destination.{}.audio_track={}",
+                    i,
+                    one_line(&d.audio_track)
+                )?;
             }
         }
         f.sync_all()?;
@@ -623,12 +692,23 @@ impl Settings {
                 }
             }
             "ingest_bind_all" => self.ingest_bind_all = value == "true",
+            "ingest_key" => self.ingest_key = value.into(),
             "web_port" => {
                 if let Ok(v) = value.parse() {
                     self.web_port = v;
                 }
             }
             "web_bind_all" => self.web_bind_all = value == "true",
+            "dashboard_password_hash" => self.dashboard_password_hash = value.into(),
+            // Only accept a hex token from disk: it is written into a Set-Cookie
+            // header, so a hand-edited value with CR/LF (or anything non-hex)
+            // must never reach header construction. Generated tokens are always
+            // hex, so this rejects only tampering.
+            "dock_token" => {
+                if !value.is_empty() && value.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    self.dock_token = value.into();
+                }
+            }
             "buffer_mb" => {
                 if let Ok(v) = value.parse() {
                     self.buffer_mb = v;
@@ -836,7 +916,11 @@ impl Settings {
     /// does not live in `Settings` at all - the Run-key entry is its own
     /// source of truth (see `crate::autostart`). Taking it as an argument
     /// keeps this function free of hidden I/O.
-    pub fn to_json(&self, start_with_windows: bool) -> String {
+    /// `include_secrets` gates the two raw credentials in the payload: the
+    /// ingest key and the dock token. A full dashboard session gets them (the
+    /// Network settings UI needs to show them); a dock-token caller does not,
+    /// so the dock can render without ever learning a secret it could leak.
+    pub fn to_json(&self, start_with_windows: bool, include_secrets: bool) -> String {
         // Build the destinations array. Stream keys are NEVER echoed back
         // (security); we expose a redacted form of the resolved URL plus
         // a `stream_key_set` boolean per destination.
@@ -846,13 +930,23 @@ impl Settings {
                 dests.push(',');
             }
             let url = d.egress_url().unwrap_or_default();
+            // A custom URL can carry the stream key in its path
+            // (rtmp://host/app/SECRET), so it's a credential: show it only to a
+            // full session (the edit form needs it), never to a dock-token
+            // caller - the redacted `egress_url_redacted` below is enough to
+            // render. Consistent with how ingest_key / dock_token are gated.
+            let custom_url_shown = if include_secrets {
+                d.custom_egress_url.as_str()
+            } else {
+                ""
+            };
             dests.push_str(&format!(
                 r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"stream_format":{sf},"stream_key_set":{ks},"egress_url_redacted":{red}}}"#,
                 id  = json_str(&d.id),
                 n   = json_str(&d.name),
                 en  = d.enabled,
                 p   = json_str(&d.platform),
-                cu  = json_str(&d.custom_egress_url),
+                cu  = json_str(custom_url_shown),
                 ti  = json_str(&d.twitch_ingest),
                 yi  = json_str(&d.youtube_ingest),
                 sf  = json_str(&d.stream_format),
@@ -861,10 +955,27 @@ impl Settings {
             ));
         }
         dests.push(']');
+        // The two raw credentials are emitted only for a full session; a
+        // dock-token caller gets them blanked (see the doc comment above).
+        let ik_shown = if include_secrets {
+            self.ingest_key.as_str()
+        } else {
+            ""
+        };
+        let dt_shown = if include_secrets {
+            self.dock_token.as_str()
+        } else {
+            ""
+        };
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"destinations":{dests}}}"#,
             c = self.configured,
             sww = start_with_windows,
+            ik = json_str(ik_shown),
+            ae = !self.dashboard_password_hash.is_empty(),
+            dt = json_str(dt_shown),
+            osname = json_str(os_name()),
+            ver = json_str(crate::update_check::current_version()),
             ip = self.ingest_port,
             iba = self.ingest_bind_all,
             wp = self.web_port,
@@ -900,6 +1011,22 @@ impl Settings {
         }
         if self.buffer_mb < MIN_BUFFER_MB {
             errs.push(format!("buffer_mb must be at least {}", MIN_BUFFER_MB));
+        }
+        // The ingest key travels as an RTMP stream key and is matched after the
+        // playpath query is stripped (OBS appends `?clientConfigId=...` under
+        // Enhanced Broadcasting). A key with a '?', whitespace, or other char an
+        // RTMP client can't carry verbatim could never match - reject it up front
+        // rather than let it silently lock the owner out of their own ingest.
+        if !self.ingest_key.is_empty()
+            && !self
+                .ingest_key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            errs.push(
+                "ingest key may only contain letters, numbers, '-' and '_' (no spaces or '?')"
+                    .into(),
+            );
         }
         if self.destinations.len() > MAX_DESTINATIONS {
             errs.push(format!("too many destinations (max {})", MAX_DESTINATIONS));
@@ -1134,6 +1261,38 @@ fn non_empty(s: &String) -> Option<&String> {
     }
 }
 
+/// Compile-time OS tag the dashboard reads to pick platform-correct copy
+/// (the start-at-login wording, the file-manager name, the tray mention).
+fn os_name() -> &'static str {
+    #[cfg(windows)]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "macos"
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "linux"
+    }
+}
+
+/// Strip control characters (notably CR/LF) from a value bound for the
+/// line-based config file. The format is `key=value` per line, so a newline in
+/// a value would inject a spurious second setting on the next load - e.g. a
+/// webhook URL carrying `\ningest_bind_all=true` could flip an unrelated flag
+/// and expose the ingest port. No legitimate config value is multi-line, so
+/// dropping control chars on write is loss-free and closes the injection at the
+/// serializer. Borrows unchanged when already clean.
+fn one_line(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.chars().any(|c| c.is_control()) {
+        std::borrow::Cow::Owned(s.chars().filter(|c| !c.is_control()).collect())
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -1230,14 +1389,21 @@ fn url_decode(s: &str) -> String {
                 out.push(b' ');
                 i += 1;
             }
+            // Decode `%XX` straight from the raw bytes. NEVER slice `s` here:
+            // `&s[i+1..i+3]` panics when the offset lands inside a multi-byte
+            // UTF-8 char (e.g. a `%` before `€`), which under panic=abort is a
+            // remote process kill from any form field.
             b'%' if i + 2 < bytes.len() => {
-                let hex = &s[i + 1..i + 3];
-                if let Ok(b) = u8::from_str_radix(hex, 16) {
-                    out.push(b);
-                    i += 3;
-                } else {
-                    out.push(bytes[i]);
-                    i += 1;
+                match (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2])) {
+                    (Some(hi), Some(lo)) => {
+                        out.push((hi << 4) | lo);
+                        i += 3;
+                    }
+                    // Not a valid `%XX`; keep the literal `%` and move on.
+                    _ => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
                 }
             }
             b => {
@@ -1247,6 +1413,17 @@ fn url_decode(s: &str) -> String {
         }
     }
     String::from_utf8(out).unwrap_or_default()
+}
+
+/// Value of a single ASCII hex digit, or None. Used by `url_decode` so it can
+/// decode `%XX` from bytes without ever slicing a `&str` on a non-char boundary.
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1260,8 +1437,147 @@ mod tests {
     #[test]
     fn to_json_reflects_the_passed_autostart_state() {
         let s = Settings::defaults();
-        assert!(s.to_json(true).contains(r#""start_with_windows":true"#));
-        assert!(s.to_json(false).contains(r#""start_with_windows":false"#));
+        assert!(s
+            .to_json(true, true)
+            .contains(r#""start_with_windows":true"#));
+        assert!(s
+            .to_json(false, true)
+            .contains(r#""start_with_windows":false"#));
+    }
+
+    /// The auth + ingest secrets must survive a save/load round-trip, and the
+    /// hash must NEVER appear in the client-facing JSON (only `auth_enabled`).
+    #[test]
+    fn secret_fields_round_trip_and_hash_stays_server_side() {
+        let dir = std::env::temp_dir().join(format!("ic-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sec.config.json");
+
+        let mut s = Settings::defaults();
+        s.ingest_key = "streamsecret".into();
+        s.dashboard_password_hash = "pbkdf2-sha256$210000$aa$bb".into();
+        s.dock_token = "a1b2c3d4e5f60718".into();
+        s.save(&path).unwrap();
+
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded.ingest_key, "streamsecret");
+        assert_eq!(loaded.dashboard_password_hash, "pbkdf2-sha256$210000$aa$bb");
+        assert_eq!(loaded.dock_token, "a1b2c3d4e5f60718");
+
+        // Admin wire JSON: auth_enabled true, ingest_key + dock_token present,
+        // but the password hash must not leak.
+        let json = loaded.to_json(false, true);
+        assert!(json.contains(r#""auth_enabled":true"#));
+        assert!(json.contains(r#""dock_token":"a1b2c3d4e5f60718""#));
+        assert!(!json.contains("pbkdf2-sha256"));
+        assert!(!json.contains("dashboard_password_hash"));
+
+        // Dock-token wire JSON: same shape, but the two raw secrets are blanked
+        // so a dock-only caller can never read them.
+        let redacted = loaded.to_json(false, false);
+        assert!(redacted.contains(r#""auth_enabled":true"#));
+        assert!(!redacted.contains("streamsecret"));
+        assert!(!redacted.contains("a1b2c3d4e5f60718"));
+        assert!(redacted.contains(r#""ingest_key":"""#));
+        assert!(redacted.contains(r#""dock_token":"""#));
+
+        // A default install writes neither secret line and reads auth as off.
+        let plain = Settings::defaults();
+        let plain_path = dir.join("plain.config.json");
+        plain.save(&plain_path).unwrap();
+        let plain_text = std::fs::read_to_string(&plain_path).unwrap();
+        assert!(!plain_text.contains("dashboard_password_hash"));
+        assert!(!plain_text.contains("ingest_key"));
+        assert!(Settings::load(&plain_path)
+            .unwrap()
+            .dashboard_password_hash
+            .is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A newline smuggled into a string setting must not inject a second
+    /// `key=value` line on reload (which could flip an unrelated flag like
+    /// ingest_bind_all). The writer strips control chars.
+    #[test]
+    fn config_write_blocks_newline_injection() {
+        let dir = std::env::temp_dir().join(format!("ic-inj-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("inj.config.json");
+
+        let mut s = Settings::defaults();
+        assert!(!s.ingest_bind_all);
+        // The classic payload: try to append an unrelated setting via a newline.
+        s.discord_webhook_url = "https://x/y\ningest_bind_all=true".into();
+        s.save(&path).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        // No standalone injected line, and the value is now single-line.
+        assert!(!text.contains("\ningest_bind_all=true\n"));
+        let loaded = Settings::load(&path).unwrap();
+        assert!(!loaded.ingest_bind_all, "injection flipped ingest_bind_all");
+        assert!(!loaded.discord_webhook_url.contains('\n'));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_rejects_unsafe_ingest_key() {
+        let mut s = Settings::defaults();
+        s.ingest_key = "good-key_123".into();
+        assert!(!s.validate().iter().any(|e| e.contains("ingest key")));
+        for bad in ["has space", "has?query", "tab\tinside"] {
+            s.ingest_key = bad.into();
+            assert!(
+                s.validate().iter().any(|e| e.contains("ingest key")),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_egress_url_hidden_from_non_admin() {
+        // A custom URL can carry the key in its path, so a dock-token caller
+        // must not see it; a full session (the edit form) may.
+        let mut s = Settings::defaults();
+        s.destinations.push(Destination {
+            id: "d1".into(),
+            name: "Custom".into(),
+            enabled: true,
+            platform: "custom".into(),
+            stream_key: String::new(),
+            custom_egress_url: "rtmp://host/app/SECRETKEY".into(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
+        });
+        assert!(s.to_json(false, true).contains("SECRETKEY")); // admin sees it
+        assert!(!s.to_json(false, false).contains("SECRETKEY")); // dock does not
+    }
+
+    #[test]
+    fn buffer_mb_is_clamped_to_a_sane_ceiling() {
+        let mut s = Settings::defaults();
+        s.buffer_mb = u64::MAX;
+        s.sanitize_load();
+        assert_eq!(s.buffer_mb, MAX_BUFFER_MB);
+        // And buffer_bytes no longer overflows.
+        assert_eq!(s.buffer_bytes(), MAX_BUFFER_MB * 1024 * 1024);
+    }
+
+    /// The dashboard swaps platform-specific copy off this field, so it must
+    /// always be present and non-empty.
+    #[test]
+    fn to_json_carries_the_os_tag() {
+        let json = Settings::defaults().to_json(false, true);
+        assert!(
+            json.contains(r#""os":"windows""#)
+                || json.contains(r#""os":"linux""#)
+                || json.contains(r#""os":"macos""#)
+        );
     }
 
     #[test]
@@ -1293,6 +1609,19 @@ mod tests {
         assert_eq!(h.get("a"), Some(&"hello world".to_string()));
         assert_eq!(h.get("b"), Some(&"!".to_string()));
         assert_eq!(h.get("c"), Some(&"é".to_string()));
+    }
+
+    /// Regression: a bare `%` before a multi-byte UTF-8 char used to slice the
+    /// `&str` on a non-char boundary and panic (a remote process abort under
+    /// panic=abort). It must now decode losslessly and never panic.
+    #[test]
+    fn url_decode_survives_percent_before_multibyte_char() {
+        // `%€`, a stray `%` at the very end, and a truncated `%A`.
+        assert_eq!(url_decode("%€"), "%€");
+        assert_eq!(url_decode("abc%"), "abc%");
+        assert_eq!(url_decode("x%Ay"), "x%Ay");
+        // A real escape still works, and mixed content round-trips.
+        assert_eq!(url_decode("a%20b%E2%82%ACc"), "a b€c");
     }
 
     #[test]

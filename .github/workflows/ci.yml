@@ -93,3 +93,75 @@ jobs:
           path: ${{ runner.temp }}/ic-e2e-*
           retention-days: 7
           if-no-files-found: ignore
+
+  # Linux mirror of the `test` job. Clippy here lints the Linux-only cfg code
+  # (the /proc sampler, .desktop autostart, OBS path resolution) that the
+  # Windows runner never compiles, so it's the real gate for the Linux port.
+  test-linux:
+    name: test + clippy (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: install rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # native-tls links system OpenSSL on Linux (schannel on Windows), so the
+      # headers must be present for the build to link.
+      - name: install build deps
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: build
+        run: cargo build --release
+
+      - name: test
+        run: cargo test --release
+
+      - name: upload binary for e2e
+        uses: actions/upload-artifact@v7
+        with:
+          name: instantclone-linux-${{ github.sha }}
+          path: target/release/instantclone
+          retention-days: 1
+
+  # Linux mirror of the e2e job: ffmpeg -> proxy -> sink over a real RTMP peer.
+  # Runs the SAME six scenarios as e2e.ps1 via the bash port, so the whole wire
+  # path (handshake / AMF0 / chunking / delay+cut) is proven on Linux too.
+  e2e-linux:
+    name: e2e linux (ffmpeg → proxy → sink)
+    needs: test-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: download binary
+        uses: actions/download-artifact@v8
+        with:
+          name: instantclone-linux-${{ github.sha }}
+          path: target/release
+
+      - name: install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: make binary executable
+        run: chmod +x target/release/instantclone
+
+      - name: run e2e
+        run: bash scripts/e2e.sh
+
+      - name: upload e2e logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-linux-logs-${{ github.sha }}
+          path: /tmp/ic-e2e-*
+          retention-days: 7
+          if-no-files-found: ignore

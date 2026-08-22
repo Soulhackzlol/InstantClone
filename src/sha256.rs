@@ -22,9 +22,14 @@ const K: [u32; 64] = [
 
 /// Lowercase hex of the SHA-256 digest of `data`.
 pub fn hex(data: &[u8]) -> String {
-    let d = digest(data);
-    let mut s = String::with_capacity(64);
-    for b in d {
+    hex_bytes(&digest(data))
+}
+
+/// Lowercase hex encoding of arbitrary bytes (no hashing). Used by
+/// `crate::crypto` for salts, tokens, and derived keys.
+pub fn hex_bytes(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
         s.push_str(&format!("{b:02x}"));
     }
     s
@@ -47,7 +52,7 @@ pub fn digest(data: &[u8]) -> [u8; 32] {
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in msg.chunks_exact(64) {
+    for chunk in msg.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
         for (i, word) in w.iter_mut().take(16).enumerate() {
             *word = u32::from_be_bytes([

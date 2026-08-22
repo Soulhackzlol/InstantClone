@@ -24,15 +24,16 @@
 //! full restart (the DiskRing is immutable once mapped). The UI shows a
 //! sticky "restart required" banner when those are pending.
 
+mod auth;
 mod autostart;
 mod buffer;
 mod compat;
 mod config;
 mod controller;
+mod crypto;
 mod h264;
 mod https;
 mod obs_register;
-#[cfg(windows)]
 mod portcheck;
 mod rtmp;
 mod self_update;
@@ -130,12 +131,12 @@ fn main() -> std::io::Result<()> {
         let _ = settings.save(&cfg_path);
     }
 
-    // Port pre-flight (Windows only). Without this, a busy port leaves
-    // us in a silent retry loop with no console to print to - the worst
-    // possible first-run UX. If either port is taken we identify the
-    // owning process, propose the next free port in the +0..+9 window,
-    // and pop a native modal asking the user to switch or quit.
-    #[cfg(windows)]
+    // Port pre-flight. Without this, a busy port leaves us in a silent
+    // retry loop - the worst possible first-run UX (no console on Windows,
+    // no one watching on a headless VPS). If either port is taken we resolve
+    // the conflict: a native "switch or quit" modal on Windows, an automatic
+    // fall-forward to the next free port with a loud stderr line elsewhere
+    // (see `resolve_port_conflict`).
     {
         // When relaunched by a restart / self-update, the outgoing instance
         // may still be releasing its listening sockets (the OS can report the
@@ -152,7 +153,7 @@ fn main() -> std::io::Result<()> {
             &format!("{}:{}", host_ingest, settings.ingest_port),
             relaunched,
         ) {
-            match preflight_resolve("RTMP port", settings.ingest_port, host_ingest) {
+            match resolve_port_conflict("RTMP port", settings.ingest_port, host_ingest) {
                 Some(new_port) => settings.ingest_port = new_port,
                 None => return Ok(()),
             }
@@ -163,7 +164,7 @@ fn main() -> std::io::Result<()> {
             "127.0.0.1"
         };
         if !port_free_with_grace(&format!("{}:{}", host_web, settings.web_port), relaunched) {
-            match preflight_resolve("Web port", settings.web_port, host_web) {
+            match resolve_port_conflict("Web port", settings.web_port, host_web) {
                 Some(new_port) => settings.web_port = new_port,
                 None => return Ok(()),
             }
@@ -189,7 +190,7 @@ fn main() -> std::io::Result<()> {
                 // there's no console to print this to, so pop a native
                 // dialog before exiting - otherwise the binary appears
                 // to do nothing and the user has no path to diagnose.
-                // Mirrors how `preflight_resolve` surfaces port
+                // Mirrors how `resolve_port_conflict` surfaces port
                 // conflicts before the runtime starts.
                 let msg = format!(
                     "InstantClone couldn't open or create the delay buffer file.\n\n\
@@ -207,9 +208,7 @@ fn main() -> std::io::Result<()> {
                     settings.buffer_mb,
                     e,
                 );
-                #[cfg(windows)]
-                portcheck::show_error("InstantClone -buffer error", &msg);
-                eprintln!("{}", msg);
+                notify_fatal("InstantClone buffer error", &msg);
                 return Err(e);
             }
         };
@@ -220,6 +219,11 @@ fn main() -> std::io::Result<()> {
         // config flag, if we add one later).
         let initial_armed = settings.armed_delay_ms.max(settings.target_delay_ms);
         let ctrl = Arc::new(controller::Controller::new(ring, initial_armed));
+        // Seed the ingest key from config now, before the ingest listener is
+        // spawned below, so a publisher connecting in the first moments of
+        // startup can never slip in with any key while the mirror is still
+        // pending. supervise_egress keeps it in sync on later edits.
+        ctrl.update_ingest_key(settings.ingest_key.clone());
 
         let (tx, rx) = watch::channel(settings.clone());
         let tx = Arc::new(tx);
@@ -251,6 +255,7 @@ fn main() -> std::io::Result<()> {
         // a line) so a stale shortcut never crashes the app.
         if launch_eb {
             let web_port = settings.web_port;
+            let dock_token = settings.dock_token.clone();
             let ctrl_eb = ctrl.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(600)).await;
@@ -262,7 +267,7 @@ fn main() -> std::io::Result<()> {
                                 .log("[--launch-eb] OBS config not found - is OBS installed?"),
                             Err(e) => ctrl_eb.log(format!("[--launch-eb] flag write failed: {e}")),
                         }
-                        match obs_register::launch_obs_with_eb_config(web_port) {
+                        match obs_register::launch_obs_with_eb_config(web_port, &dock_token) {
                             Ok(exe) => ctrl_eb
                                 .log(format!("[--launch-eb] launched OBS ({})", exe.display())),
                             Err(e) => ctrl_eb.log(format!("[--launch-eb] OBS launch failed: {e}")),
@@ -272,16 +277,19 @@ fn main() -> std::io::Result<()> {
             });
         }
 
-        // System-tray icon (Windows): hidden message-only window in its
-        // own OS thread, signals shutdown back here via a oneshot. The
-        // tray gives us the exit affordance that the dropped console
-        // window used to provide. The tray also reaches into the
-        // controller for status + Cut delay, and into settings for the
-        // RTMP URL clipboard action. On non-Windows the receiver just
-        // sits pending forever (the matching `tray::spawn` is gated by cfg).
-        let (_tray_tx, tray_rx) = tokio::sync::oneshot::channel::<()>();
+        // System-tray icon (Windows): hidden message-only window in its own
+        // OS thread. Its Quit calls straight into the controller's shutdown
+        // signal - the same path the web Quit route uses - so both converge on
+        // the one graceful-teardown epilogue below. The tray also reaches into
+        // the controller for status + Cut delay, and into settings for the
+        // RTMP URL clipboard action.
         #[cfg(windows)]
-        tray::spawn(rx.clone(), ctrl.clone(), _tray_tx);
+        tray::spawn(rx.clone(), ctrl.clone());
+
+        // Shared dashboard-auth state (sessions + login rate limiter). Created
+        // here, not inside the web supervisor, so a web restart (port change)
+        // does not log everyone out. Inert until a password is set.
+        let auth = Arc::new(auth::AuthState::new());
 
         let ingest_sup = tokio::spawn(supervise_ingest(rx.clone(), ctrl.clone()));
         let egress_sup = tokio::spawn(supervise_egress(rx.clone(), ctrl.clone()));
@@ -290,15 +298,24 @@ fn main() -> std::io::Result<()> {
             ctrl.clone(),
             tx.clone(),
             cfg_path.clone(),
+            auth.clone(),
         ));
 
         let shutdown_reason: &str;
+        // Default to Quit; only an explicit restart request flips this.
+        let mut exit_kind = controller::ShutdownKind::Quit;
         tokio::select! {
             _ = ingest_sup => { shutdown_reason = "ingest supervisor exited"; }
             _ = egress_sup => { shutdown_reason = "egress supervisor exited"; }
             _ = web_sup    => { shutdown_reason = "web supervisor exited"; }
             _ = tokio::signal::ctrl_c() => { shutdown_reason = "ctrl-c"; }
-            _ = tray_rx                 => { shutdown_reason = "tray quit"; }
+            kind = ctrl.wait_shutdown() => {
+                exit_kind = kind;
+                shutdown_reason = match kind {
+                    controller::ShutdownKind::Restart => "restart requested",
+                    controller::ShutdownKind::Quit => "quit requested",
+                };
+            }
         }
         eprintln!("\nShutting down ({shutdown_reason}) - closing active streams cleanly...");
         // Flush the egress trace so the last few thousand events make
@@ -326,6 +343,14 @@ fn main() -> std::io::Result<()> {
             if meta.is_file() && meta.len() == cleanup_cap {
                 let _ = std::fs::remove_file(&cleanup_path);
             }
+        }
+
+        // Restart request: now that egress has been torn down cleanly, relaunch
+        // a fresh process in place. `restart_now` spawns the relauncher (which
+        // waits for our PID to release the ports) and hard-exits, so this never
+        // returns on the restart path. A plain Quit just falls through.
+        if let controller::ShutdownKind::Restart = exit_kind {
+            self_update::restart_now();
         }
         Ok::<_, std::io::Error>(())
     })
@@ -367,9 +392,11 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         (String, tokio::task::JoinHandle<std::io::Result<()>>),
     > = std::collections::HashMap::new();
 
-    // Mirror webhook URL into the controller on every settings change.
+    // Mirror webhook URL + ingest key into the controller on every settings
+    // change (the ingest task enforces the key but has no settings handle).
     let initial_webhook = { rx.borrow().discord_webhook_url.clone() };
     ctrl.update_webhook(initial_webhook);
+    ctrl.update_ingest_key(rx.borrow().ingest_key.clone());
 
     // Managed "Local test sink" child process. Spawned while any
     // enabled destination has platform "sink"; killed when the last
@@ -727,9 +754,10 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         tokio::select! {
             ch = rx.changed() => {
                 if ch.is_err() { return; }
-                // Mirror webhook URL on every settings change.
+                // Mirror webhook URL + ingest key on every settings change.
                 let new_webhook = { rx.borrow().discord_webhook_url.clone() };
                 ctrl.update_webhook(new_webhook);
+                ctrl.update_ingest_key(rx.borrow().ingest_key.clone());
             }
             _ = periodic_wake => {
                 // One or more pumps exited unexpectedly. Drop dead ones
@@ -848,10 +876,18 @@ async fn supervise_web(
     ctrl: Arc<controller::Controller>,
     tx: Arc<watch::Sender<Settings>>,
     cfg_path: PathBuf,
+    auth: Arc<auth::AuthState>,
 ) {
     let mut current_addr = rx.borrow().web_addr();
-    let spawn_one =
-        |addr: String| tokio::spawn(web::run(addr, ctrl.clone(), tx.clone(), cfg_path.clone()));
+    let spawn_one = |addr: String| {
+        tokio::spawn(web::run(
+            addr,
+            ctrl.clone(),
+            tx.clone(),
+            cfg_path.clone(),
+            auth.clone(),
+        ))
+    };
     let mut handle = spawn_one(current_addr.clone());
     loop {
         tokio::select! {
@@ -875,11 +911,13 @@ async fn supervise_web(
     }
 }
 
-/// Run the port-conflict dialog and return the user's choice.
-/// Returns `Some(new_port)` if the user accepted a fallback,
-/// or `None` if they chose to quit (or no free port was available).
+/// Resolve a port conflict. Returns `Some(new_port)` to bind a fallback,
+/// or `None` to exit cleanly.
+///
+/// Windows pops a native "switch to the next free port or quit" modal, since
+/// the release build has no console to print to.
 #[cfg(windows)]
-fn preflight_resolve(label: &str, port: u16, host: &str) -> Option<u16> {
+fn resolve_port_conflict(label: &str, port: u16, host: &str) -> Option<u16> {
     let owner = portcheck::find_process_on_port(port);
     let proposed = portcheck::find_free_port(host, port.saturating_add(1), 9);
     match portcheck::ask_user(label, port, owner, proposed) {
@@ -888,12 +926,60 @@ fn preflight_resolve(label: &str, port: u16, host: &str) -> Option<u16> {
     }
 }
 
+/// Headless resolution (VPS / Linux desktop): there is no modal to show, so
+/// fall forward to the next free port in the +1..+9 window and print the move
+/// loudly, mirroring what the Windows modal proposes. The new port is
+/// persisted by the caller so OBS / the dashboard can be repointed once. If
+/// the whole window is busy, print an actionable error and exit.
+#[cfg(not(windows))]
+fn resolve_port_conflict(label: &str, port: u16, host: &str) -> Option<u16> {
+    match portcheck::find_free_port(host, port.saturating_add(1), 9) {
+        Some(new_port) => {
+            eprintln!(
+                "[preflight] {label} :{port} is already in use. Moved to :{new_port} - \
+                 point OBS (and the dashboard URL) at the new port."
+            );
+            Some(new_port)
+        }
+        None => {
+            let msg = format!(
+                "{label} :{port} is already in use and no free port was found in \
+                 :{port}..:{}. Free the port or set a different one in \
+                 instantclone.config.json, then relaunch.",
+                port.saturating_add(9)
+            );
+            notify_fatal("InstantClone port conflict", &msg);
+            None
+        }
+    }
+}
+
+/// Surface a fatal, pre-runtime error on every platform. The Windows release
+/// build has no console, and a Linux desktop launched from a `.desktop` entry
+/// has none either, so a bare stderr line would vanish. Always print, then add
+/// the platform's native surface on top.
+fn notify_fatal(title: &str, body: &str) {
+    eprintln!("{body}");
+    #[cfg(windows)]
+    portcheck::show_error(title, body);
+    #[cfg(target_os = "linux")]
+    {
+        // Desktop toast via libnotify. Best effort: on a headless box notify-send
+        // is absent and the spawn just fails, which is fine because stderr is
+        // already visible in the terminal / journal there.
+        let _ = std::process::Command::new("notify-send")
+            .args(["-u", "critical", title, body])
+            .spawn();
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = title;
+}
+
 /// Is `addr` bindable? When `grace` is set (we were relaunched by a restart /
 /// self-update), wait out the outgoing instance's socket-release window before
-/// deciding it's taken - so a normal handoff never pops the "switch port?"
-/// modal. Returns the moment the port frees, so the common case is instant; a
+/// deciding it's taken - so a normal handoff never trips the conflict path.
+/// Returns the moment the port frees, so the common case is instant; a
 /// genuine conflict still falls through after the window.
-#[cfg(windows)]
 fn port_free_with_grace(addr: &str, grace: bool) -> bool {
     if grace {
         portcheck::wait_until_bindable(addr, Duration::from_secs(20))

@@ -33,7 +33,7 @@ pub async fn run(addr: String, ctrl: Arc<Controller>) -> io::Result<()> {
         let _ = crate::rtmp::tcp::set_aggressive_keepalive(&sock);
         let ctrl = ctrl.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle(sock, ctrl).await {
+            if let Err(e) = handle(sock, ctrl, peer).await {
                 eprintln!("[ingest] {} closed: {}", peer, e);
             }
         });
@@ -55,8 +55,16 @@ impl Drop for PublishGuard {
     }
 }
 
-async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::Result<()> {
+async fn handle(
+    mut sock: tokio::net::TcpStream,
+    ctrl: Arc<Controller>,
+    peer: std::net::SocketAddr,
+) -> io::Result<()> {
     handshake::perform_server(&mut sock).await?;
+
+    // Keys the ingest-key rate limiter; the port pre-flight already resolved a
+    // stable bind, so the connecting peer's IP is the right client identity.
+    let peer_ip = peer.ip().to_string();
 
     let (rd, wr) = split(sock);
     let mut reader = ChunkReader::new(rd);
@@ -87,7 +95,7 @@ async fn handle(mut sock: tokio::net::TcpStream, ctrl: Arc<Controller>) -> io::R
         }
         match msg.type_id {
             20 /* AMF0 command */ => {
-                handle_command(&mut writer, &ctrl, &msg, &mut guard).await?;
+                handle_command(&mut writer, &ctrl, &msg, &mut guard, &peer_ip).await?;
             }
             18 /* AMF0 data - onMetaData et al */ => {
                 ctrl.on_metadata(msg.payload.to_vec());
@@ -163,6 +171,7 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
     ctrl: &Arc<Controller>,
     msg: &Message,
     guard: &mut PublishGuard,
+    peer_ip: &str,
 ) -> io::Result<()> {
     let values = amf0::decode_all(&msg.payload)?;
     let name = values
@@ -214,7 +223,7 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            match ctrl.begin_publish(&stream_key).await {
+            match ctrl.begin_publish(&stream_key, peer_ip).await {
                 Ok(_token) => {
                     guard.active = true;
                     // onStatus NetStream.Publish.Start

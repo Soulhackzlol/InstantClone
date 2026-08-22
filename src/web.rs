@@ -33,21 +33,19 @@ use tokio::sync::watch;
 /// later `send()` clobbers the other's change. That lost update used to
 /// silently reset the `configured` flag and bounce users into the first-run
 /// wizard. This is the one lock that deliberately keeps `std`'s poison
-/// handling (rather than `crate::sync`): a panic mid-save should not wedge
-/// every later config write, so `settings_write_guard` recovers the guard
-/// instead of propagating. A plain `std::sync::Mutex` is also correct here
-/// because the critical section never `.await`s (its `!Send` guard makes that
-/// a compile error), so it can be taken from the sync persist/overlay handlers.
-static SETTINGS_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// serializes the read-modify-write-send cycle so concurrent POSTs can't
+/// clobber each other. Uses `crate::sync::Mutex` like the rest of the codebase:
+/// under `panic = "abort"` a poisoned lock is unreachable in release, and the
+/// fail-fast path in debug is the right signal (see `crate::sync`). The
+/// critical section never `.await`s (the `!Send` guard makes that a compile
+/// error), so it is safe to take from the sync persist/overlay handlers.
+static SETTINGS_WRITE_LOCK: crate::sync::Mutex<()> = crate::sync::Mutex::new(());
 
 /// Take the settings write lock for a full read-modify-write-send cycle. Hold
 /// the guard from just before `settings.borrow().clone()` until after
-/// `settings.send(..)`. Recovers from a poisoned mutex - a panic mid-save must
-/// not wedge every later config write.
+/// `settings.send(..)`.
 fn settings_write_guard() -> std::sync::MutexGuard<'static, ()> {
-    SETTINGS_WRITE_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+    SETTINGS_WRITE_LOCK.lock()
 }
 
 /// True when at least one destination is enabled and fully addressable (a
@@ -68,6 +66,7 @@ pub async fn run(
     ctrl: Arc<Controller>,
     settings: Arc<watch::Sender<Settings>>,
     cfg_path: PathBuf,
+    auth: Arc<crate::auth::AuthState>,
 ) -> io::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
     // Don't let a restart/self-update child inherit this listener, or the port
@@ -78,13 +77,18 @@ pub async fn run(
     // delta, so we cannot construct one per request.
     let sysstat = Arc::new(SysStat::new());
     loop {
-        let (sock, _) = listener.accept().await?;
+        let (sock, peer) = listener.accept().await?;
         let ctrl = ctrl.clone();
         let settings = settings.clone();
         let cfg_path = cfg_path.clone();
         let sysstat = sysstat.clone();
+        let auth = auth.clone();
+        // Peer IP keys the login rate limiter. Behind a reverse proxy every
+        // request shares the proxy's IP, which just makes the limit global -
+        // safe, since a spoofed X-Forwarded-For must never relax it.
+        let peer_ip = peer.ip().to_string();
         tokio::spawn(async move {
-            let _ = serve(sock, ctrl, settings, cfg_path, sysstat).await;
+            let _ = serve(sock, ctrl, settings, cfg_path, sysstat, auth, peer_ip).await;
         });
     }
 }
@@ -95,14 +99,23 @@ async fn serve(
     settings: Arc<watch::Sender<Settings>>,
     cfg_path: PathBuf,
     sysstat: Arc<SysStat>,
+    auth: Arc<crate::auth::AuthState>,
+    peer_ip: String,
 ) -> io::Result<()> {
     // Read until the headers terminator. For our POST bodies (config form,
     // <2 KB) this single read is enough - but be defensive about partials.
     let mut buf = vec![0u8; 16 * 1024];
     let mut used = 0usize;
     let head_end;
+    // Total deadline for the whole request-head read, so a slowloris client
+    // dripping one byte at a time can't pin a connection (and its buffers / FD)
+    // open forever. A deadline bounds the aggregate, unlike a per-read timeout.
+    let head_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
-        let n = sock.read(&mut buf[used..]).await?;
+        let n = match tokio::time::timeout_at(head_deadline, sock.read(&mut buf[used..])).await {
+            Ok(r) => r?,
+            Err(_) => return Ok(()), // headers took too long; drop
+        };
         if n == 0 {
             return Ok(());
         }
@@ -156,6 +169,62 @@ async fn serve(
     // `path` here still carries the `?...` suffix.
     let bare_path = path.split_once('?').map(|(p, _)| p).unwrap_or(path);
 
+    // Request body: only POST routes (the config form, login, the auth
+    // mutations) consume one, so we read a body for POST alone. A GET or HEAD
+    // that advertises a large Content-Length therefore never makes us allocate
+    // or block reading a body it has no business sending - it is served (or
+    // gated) straight from the head we already have.
+    const MAX_BODY: usize = 32 * 1024 * 1024;
+    let body_buf = if method == "POST" {
+        if content_length > MAX_BODY {
+            let body = br#"{"ok":false,"error":"body too large (max 32 MB)"}"# as &[u8];
+            let r = format!(
+                "HTTP/1.1 413 Payload Too Large\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            sock.write_all(r.as_bytes()).await?;
+            sock.write_all(body).await?;
+            return Ok(());
+        }
+        let mut b = buf[head_end..used].to_vec();
+        // Same idea as the header deadline: bound the whole body read so a
+        // client advertising a large Content-Length can't feed it one slow
+        // byte at a time.
+        let body_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        while b.len() < content_length {
+            let mut tmp = [0u8; 4096];
+            let n = match tokio::time::timeout_at(body_deadline, sock.read(&mut tmp)).await {
+                Ok(r) => r?,
+                Err(_) => break, // body took too long; use what we have
+            };
+            if n == 0 {
+                break;
+            }
+            b.extend_from_slice(&tmp[..n]);
+        }
+        // Drop any pipelined bytes past this request (we always Connection:
+        // close, so there is no next request on this socket anyway).
+        b.truncate(content_length);
+        b
+    } else {
+        Vec::new()
+    };
+    let body = std::str::from_utf8(&body_buf).unwrap_or("");
+
+    // Optional dashboard auth. Off by default (a single is_empty() inside),
+    // fail-closed once a password is set. The whole security-critical surface
+    // lives in one auditable function; a `Handled` result means it already
+    // wrote a response (login page, 401, redirect, an /auth/* mutation).
+    let (dock_set_cookie, is_admin) = match auth_gate(
+        &mut sock, method, path, bare_path, head_str, body, &settings, &cfg_path, &auth, &peer_ip,
+    )
+    .await?
+    {
+        AuthDecision::Handled => return Ok(()),
+        AuthDecision::Allow { cookie, is_admin } => (cookie, is_admin),
+    };
+
     // Fast-path: static, pre-gzipped dashboard + dock. These two pages
     // dominate the binary (~125 KB raw); shipping only the gz blob saves
     // ~100 KB. Every real browser sends `Accept-Encoding: gzip`; for the
@@ -183,8 +252,9 @@ async fn serve(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
              Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n\
              Content-Length: {}\r\n\
-             Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-            blob.len()
+             Access-Control-Allow-Origin: *\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+            blob.len(),
+            dock_set_cookie
         );
         sock.write_all(r.as_bytes()).await?;
         sock.write_all(blob).await?;
@@ -252,41 +322,32 @@ async fn serve(
         return handle_sse(sock, ctrl, settings, sysstat).await;
     }
 
-    // Cap POST body size. The only callers are the local dashboard and OBS
-    // (127.0.0.1-only), so this is just defense-in-depth against a caller
-    // advertising a giant Content-Length and forcing a huge allocation. It
-    // is set generously because a Studio overlay can embed an uploaded image
-    // as a base64 data URL (which rides inside the saved overlay HTML).
-    const MAX_BODY: usize = 32 * 1024 * 1024;
-    if content_length > MAX_BODY {
-        let body = br#"{"ok":false,"error":"body too large (max 32 MB)"}"# as &[u8];
-        let r = format!(
-            "HTTP/1.1 413 Payload Too Large\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        sock.write_all(r.as_bytes()).await?;
-        sock.write_all(body).await?;
+    // Lifecycle controls (admin-gated by auth_gate above): acknowledge and
+    // flush the 200 to the client BEFORE tripping the shutdown signal. The main
+    // loop can exit the process the instant its egress teardown finishes, so
+    // signalling first would race our own exit and drop the response. Write,
+    // half-close so the FIN follows the bytes, then signal.
+    if method == "POST" && (bare_path == "/app/restart" || bare_path == "/app/quit") {
+        let restart = bare_path == "/app/restart";
+        let payload = if restart {
+            r#"{"ok":true,"restarting":true}"#
+        } else {
+            r#"{"ok":true,"quitting":true}"#
+        };
+        write_simple(&mut sock, "200 OK", "application/json", payload, "").await?;
+        let _ = sock.shutdown().await;
+        if restart {
+            ctrl.request_restart();
+        } else {
+            ctrl.request_quit();
+        }
         return Ok(());
     }
 
-    // For POST: ensure we have the full body.
-    let mut body_buf = buf[head_end..used].to_vec();
-    while body_buf.len() < content_length {
-        let mut tmp = [0u8; 4096];
-        let n = sock.read(&mut tmp).await?;
-        if n == 0 {
-            break;
-        }
-        body_buf.extend_from_slice(&tmp[..n]);
-    }
-    if body_buf.len() > content_length {
-        body_buf.truncate(content_length);
-    }
-    let body = std::str::from_utf8(&body_buf).unwrap_or("");
-
-    let (status, ctype, payload) =
-        route(method, path, body, &ctrl, &settings, &cfg_path, &sysstat).await;
+    let (status, ctype, payload) = route(
+        method, path, body, &ctrl, &settings, &cfg_path, &sysstat, is_admin,
+    )
+    .await;
 
     // ACAO is intentionally restrictive now - only set on GET responses
     // so overlays / docks loaded as foreign origins can still read state.
@@ -306,6 +367,298 @@ async fn serve(
     Ok(())
 }
 
+/// Result of the auth gate: either it already wrote a response (login page,
+/// 401, redirect, or an /auth/* mutation) and the caller returns, or the
+/// request is allowed through with an optional `/dock` Set-Cookie header.
+enum AuthDecision {
+    Handled,
+    /// The request may proceed. `cookie` is an optional Set-Cookie line (the
+    /// dock-token handoff); `is_admin` is true for a full dashboard session or
+    /// when auth is off, false for a dock-token-only caller. Routes use it to
+    /// redact secrets and refuse settings writes for the dock.
+    Allow {
+        cookie: String,
+        is_admin: bool,
+    },
+}
+
+/// The optional dashboard-auth gate, kept in one auditable place so `serve()`
+/// stays readable and the entire security surface (login, logout, the
+/// fail-closed public/control/admin gate, and the /auth/* management endpoints)
+/// is reviewable together. Off by default: with no password set it returns
+/// `Allow` after a single `is_empty()`.
+#[allow(clippy::too_many_arguments)]
+async fn auth_gate(
+    sock: &mut TcpStream,
+    method: &str,
+    path: &str,
+    bare_path: &str,
+    head_str: &str,
+    body: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+    auth: &Arc<crate::auth::AuthState>,
+    peer_ip: &str,
+) -> io::Result<AuthDecision> {
+    let mut dock_set_cookie = String::new();
+    // True for a full dashboard session and (below) when auth is off entirely.
+    // Flipped to the session state once a password is set, so a dock-token
+    // caller is marked non-admin and routes can redact secrets from it.
+    let mut is_admin = true;
+
+    // OFF BY DEFAULT: with no password set this is a single is_empty() on the
+    // borrow (no allocation, no clone) and we fall straight through. Once a
+    // password is set it fails closed - see `classify_access` (default = admin).
+    if !settings.borrow().dashboard_password_hash.is_empty() {
+        let (pw_hash, dock_token) = {
+            let s = settings.borrow();
+            (s.dashboard_password_hash.clone(), s.dock_token.clone())
+        };
+        let cookies = parse_cookies(head_str);
+        let session_cookie = cookies.get("ic_session").cloned().unwrap_or_default();
+        let has_session = auth.validate_session(&session_cookie);
+        // Only a real session is admin; a dock token authorizes Control routes
+        // but never confers admin, so it never sees a redacted-away secret.
+        is_admin = has_session;
+
+        // --- login page + login/logout (reachable without a session) ---
+        if method == "GET" && bare_path == "/login" {
+            write_simple(sock, "200 OK", "text/html; charset=utf-8", LOGIN_HTML, "").await?;
+            return Ok(AuthDecision::Handled);
+        }
+        if method == "POST" && bare_path == "/login" {
+            // Rate-limit BEFORE hashing so a locked-out or spamming client
+            // burns no CPU. Vital on the single-threaded runtime, where a
+            // 230ms hash on every attempt would otherwise stall the stream.
+            // begin_login_attempt counts this try as it checks, so N concurrent
+            // requests can't all clear the gate before the hash below resolves.
+            if let Err(wait) = auth.begin_login_attempt(peer_ip) {
+                let msg = format!(
+                    r#"{{"ok":false,"error":"too many attempts, wait {}s"}}"#,
+                    wait.as_secs() + 1
+                );
+                write_simple(sock, "429 Too Many Requests", "application/json", &msg, "").await?;
+                return Ok(AuthDecision::Handled);
+            }
+            let password = crate::config::parse_form(body)
+                .get("password")
+                .cloned()
+                .unwrap_or_default();
+            // PBKDF2 off the runtime thread so the stream never hitches.
+            let hash_for = pw_hash.clone();
+            let ok = tokio::task::spawn_blocking(move || {
+                crate::crypto::verify_password(&password, &hash_for)
+            })
+            .await
+            .unwrap_or(false);
+            if ok {
+                auth.record_success(peer_ip);
+                let token = auth.create_session();
+                let set = format!(
+                    "Set-Cookie: ic_session={}; HttpOnly; SameSite=Strict; Path=/{}\r\n",
+                    token,
+                    secure_flag(head_str)
+                );
+                write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, &set).await?;
+                return Ok(AuthDecision::Handled);
+            }
+            // The attempt was already counted by begin_login_attempt above.
+            write_simple(
+                sock,
+                "401 Unauthorized",
+                "application/json",
+                r#"{"ok":false,"error":"wrong password"}"#,
+                "",
+            )
+            .await?;
+            return Ok(AuthDecision::Handled);
+        }
+        if method == "POST" && bare_path == "/logout" {
+            if !session_cookie.is_empty() {
+                auth.revoke_session(&session_cookie);
+            }
+            let clear = "Set-Cookie: ic_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0\r\n";
+            write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, clear).await?;
+            return Ok(AuthDecision::Handled);
+        }
+
+        // --- the gate for every other route ---
+        let access = classify_access(method, bare_path);
+        let dock_supplied = query_param(path, "token")
+            .or_else(|| cookies.get("ic_dock").cloned())
+            .unwrap_or_default();
+        let has_dock = !dock_token.is_empty()
+            && crate::crypto::constant_time_eq(dock_supplied.as_bytes(), dock_token.as_bytes());
+        let allowed = match access {
+            Access::Public => true,
+            Access::Control => has_session || has_dock,
+            Access::Admin => has_session,
+        };
+        if !allowed {
+            // Browser navigation to a protected page bounces to /login; an
+            // API/XHR call gets a clean 401 the dashboard can react to.
+            if method == "GET" && wants_html(head_str) {
+                let r = "HTTP/1.1 302 Found\r\nLocation: /login\r\n\
+                         Content-Length: 0\r\nConnection: close\r\n\r\n";
+                sock.write_all(r.as_bytes()).await?;
+                return Ok(AuthDecision::Handled);
+            }
+            write_simple(
+                sock,
+                "401 Unauthorized",
+                "application/json",
+                r#"{"ok":false,"error":"authentication required"}"#,
+                "",
+            )
+            .await?;
+            return Ok(AuthDecision::Handled);
+        }
+        // Dock authenticated via ?token: hand it a cookie so its later
+        // same-origin control calls (which won't carry the query) are allowed.
+        if bare_path == "/dock" && has_dock && query_param(path, "token").is_some() {
+            dock_set_cookie = format!(
+                "Set-Cookie: ic_dock={}; HttpOnly; SameSite=Strict; Path=/{}\r\n",
+                dock_token,
+                secure_flag(head_str)
+            );
+        }
+    }
+
+    // Auth management (cookie-bearing responses). Reached only after the gate
+    // above (these classify as admin, so session-gated when auth is on); open
+    // when auth is off so the very first password can be set locally.
+    if method == "POST" && bare_path == "/auth/set-password" {
+        // Bootstrapping the FIRST password is the one admin action reachable
+        // without a session (there is no session to require yet), so restrict
+        // that single case to loopback. On a bind-all box this stops a LAN peer
+        // from seizing the dashboard before the owner sets a password; changing
+        // an existing password already required an admin session at the gate.
+        let first_time = settings.borrow().dashboard_password_hash.is_empty();
+        if first_time && !is_loopback(peer_ip) {
+            write_simple(
+                sock,
+                "403 Forbidden",
+                "application/json",
+                r#"{"ok":false,"error":"the first password must be set from the local machine"}"#,
+                "",
+            )
+            .await?;
+            return Ok(AuthDecision::Handled);
+        }
+        let pw = crate::config::parse_form(body)
+            .get("password")
+            .cloned()
+            .unwrap_or_default();
+        // Enforce a minimum server-side, not just in the UI, so a short
+        // password can't be set via a direct API call.
+        if pw.chars().count() < 8 {
+            write_simple(
+                sock,
+                "400 Bad Request",
+                "application/json",
+                r#"{"ok":false,"error":"password must be at least 8 characters"}"#,
+                "",
+            )
+            .await?;
+            return Ok(AuthDecision::Handled);
+        }
+        let hash = tokio::task::spawn_blocking(move || crate::crypto::hash_password(&pw))
+            .await
+            .unwrap_or_default();
+        if hash.is_empty() {
+            write_simple(
+                sock,
+                "500 Internal Server Error",
+                "application/json",
+                r#"{"ok":false,"error":"hashing failed"}"#,
+                "",
+            )
+            .await?;
+            return Ok(AuthDecision::Handled);
+        }
+        {
+            let _wl = settings_write_guard();
+            let mut ns = settings.borrow().clone();
+            ns.dashboard_password_hash = hash;
+            if ns.dock_token.is_empty() {
+                ns.dock_token = crate::crypto::random_token();
+            }
+            let _ = ns.save(cfg_path);
+            let _ = settings.send(ns);
+        }
+        // Every prior session dies; issue a fresh one for whoever set it.
+        auth.revoke_all();
+        let token = auth.create_session();
+        let set = format!(
+            "Set-Cookie: ic_session={}; HttpOnly; SameSite=Strict; Path=/{}\r\n",
+            token,
+            secure_flag(head_str)
+        );
+        write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, &set).await?;
+        return Ok(AuthDecision::Handled);
+    }
+    if method == "POST" && bare_path == "/auth/disable" {
+        // Already disabled when no password is set: a no-op without a config
+        // write (and there is no session this request could have proven). When
+        // auth is on, the gate above already required an admin session to reach
+        // this point.
+        if settings.borrow().dashboard_password_hash.is_empty() {
+            write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, "").await?;
+            return Ok(AuthDecision::Handled);
+        }
+        {
+            let _wl = settings_write_guard();
+            let mut ns = settings.borrow().clone();
+            ns.dashboard_password_hash.clear();
+            ns.dock_token.clear();
+            let _ = ns.save(cfg_path);
+            let _ = settings.send(ns);
+        }
+        auth.revoke_all();
+        let clear = "Set-Cookie: ic_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0\r\n";
+        write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, clear).await?;
+        return Ok(AuthDecision::Handled);
+    }
+    if method == "POST" && bare_path == "/auth/regen-dock" {
+        // The dock token only gates anything once a password is set, so refuse
+        // to rotate it (and churn config) from an unauthenticated request while
+        // auth is off. When auth is on, the gate above already required an admin
+        // session to reach this point.
+        if settings.borrow().dashboard_password_hash.is_empty() {
+            write_simple(
+                sock,
+                "400 Bad Request",
+                "application/json",
+                r#"{"ok":false,"error":"enable a dashboard password before rotating the dock token"}"#,
+                "",
+            )
+            .await?;
+            return Ok(AuthDecision::Handled);
+        }
+        let new_token;
+        {
+            let _wl = settings_write_guard();
+            let mut ns = settings.borrow().clone();
+            ns.dock_token = crate::crypto::random_token();
+            new_token = ns.dock_token.clone();
+            let _ = ns.save(cfg_path);
+            let _ = settings.send(ns);
+        }
+        let msg = format!(r#"{{"ok":true,"dock_token":"{}"}}"#, new_token);
+        write_simple(sock, "200 OK", "application/json", &msg, "").await?;
+        return Ok(AuthDecision::Handled);
+    }
+
+    Ok(AuthDecision::Allow {
+        cookie: dock_set_cookie,
+        is_admin,
+    })
+}
+
+// The central request dispatcher genuinely needs all of these: the request
+// parts, the shared runtime handles, and the caller's admin flag. Bundling them
+// into a struct would only move the argument list, not remove it.
+#[allow(clippy::too_many_arguments)]
 async fn route(
     method: &str,
     path: &str,
@@ -314,6 +667,7 @@ async fn route(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
     sysstat: &Arc<SysStat>,
+    is_admin: bool,
 ) -> (&'static str, &'static str, String) {
     // Strip ?query - we only read it for /overlay.
     let (bare_path, query) = match path.split_once('?') {
@@ -370,7 +724,11 @@ async fn route(
         ("GET", "/config") => (
             "200 OK",
             "application/json",
-            settings.borrow().to_json(crate::autostart::is_enabled()),
+            // A dock-token caller (is_admin == false) gets the config with the
+            // raw ingest key and dock token blanked; a full session gets them.
+            settings
+                .borrow()
+                .to_json(crate::autostart::is_enabled(), is_admin),
         ),
         ("GET", "/docks") => dock_list_json(settings),
         ("GET", "/platforms") => ("200 OK", "application/json", platforms_json()),
@@ -454,7 +812,7 @@ async fn route(
         },
         ("POST", "/obs/launch-with-eb") => {
             let s = settings.borrow();
-            match crate::obs_register::launch_obs_with_eb_config(s.web_port) {
+            match crate::obs_register::launch_obs_with_eb_config(s.web_port, &s.dock_token) {
                 Ok(exe) => {
                     ctrl.log(format!(
                         "obs-eb-launch: spawned {} with --config-url",
@@ -489,7 +847,10 @@ async fn route(
             // step (e.g. OBS still open, so the flag write is blocked) is
             // surfaced with its own message instead of failing the whole
             // operation silently.
-            let web_port = settings.borrow().web_port;
+            let (web_port, dock_token) = {
+                let s = settings.borrow();
+                (s.web_port, s.dock_token.clone())
+            };
             let (flag_ok, flag_msg) = match crate::obs_register::set_vod_audio_flag(true) {
                 Ok(true) => (true, "VOD-track flag written to OBS config".to_string()),
                 Ok(false) => (
@@ -502,7 +863,7 @@ async fn route(
                 ),
             };
             let (launch_ok, launch_msg) =
-                match crate::obs_register::launch_obs_with_eb_config(web_port) {
+                match crate::obs_register::launch_obs_with_eb_config(web_port, &dock_token) {
                     Ok(exe) => {
                         ctrl.log("[vod-eb setup] launched OBS with --config-url");
                         (true, format!("OBS launched ({})", exe.display()))
@@ -613,19 +974,10 @@ async fn route(
                 ),
             }
         }
-        ("POST", "/app/restart") => {
-            // Relaunch from a detached thread so this 200 flushes first; the
-            // dashboard then polls /config and reloads when we're back.
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_millis(600));
-                crate::self_update::restart_now();
-            });
-            (
-                "200 OK",
-                "application/json",
-                r#"{"ok":true,"restarting":true}"#.to_string(),
-            )
-        }
+        // POST /app/restart and /app/quit are handled in `serve` (they must
+        // flush their 200 before the shutdown signal exits the process), so
+        // they never reach the router.
+
         // Reveal one of our known files in the OS file browser. The keyword
         // is fixed (not a client-supplied path), so this can only ever open
         // our own buffer / overlays / trace - never an arbitrary location.
@@ -907,7 +1259,7 @@ fn state_json(
         crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock()).is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
@@ -939,6 +1291,7 @@ fn state_json(
         vp = vertical_present,
         cp = cpu_pct,
         rb = rss_bytes,
+        up = ctrl.uptime_secs(),
         pt = ctrl.publisher_token(),
         cl = consumer_lag,
         bp = backpressure,
@@ -1022,6 +1375,25 @@ async fn obs_multitrack_config_proxy(
     ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
 ) -> String {
+    // Enforce the InstantClone ingest key at the Enhanced Broadcasting entry
+    // point. Under proxy EB, OBS publishes with the Twitch session token (which
+    // we broker), so begin_publish never sees the user's key - the ONLY place it
+    // is presented is the `authentication` field of THIS request (OBS puts its
+    // Stream Key field there). If we don't check it here, a wrong key still gets
+    // a brokered session and streams. Empty ingest key = open, same as
+    // begin_publish. Strip any query the user appended, matching begin_publish.
+    if !eb_request_authorized(body, &settings.borrow().ingest_key) {
+        ctrl.log(
+            "[OBS multitrack] rejected config request - wrong InstantClone key in the \
+             OBS Stream Key field. Returning static config; the publish will be refused.",
+        );
+        crate::trace::log(
+            "OBS_MULTITRACK",
+            "wrong ingest key in request - refusing to broker an EB session",
+        );
+        return obs_multitrack_config_static(query, settings);
+    }
+
     // The streamer's real Twitch key lives in our destinations list.
     // Pick the first enabled Twitch destination with a non-empty key.
     // Also report what we found in the dashboard event log - the
@@ -1181,11 +1553,12 @@ async fn obs_multitrack_config_proxy(
     // Twitch's response has one or more `ingest_endpoints` entries
     // with `url_template` values like
     // `rtmps://<region>.contribute.live-video.net/app/{stream_key}`.
-    // Replace every rtmp:// or rtmps:// URL in url_template fields
-    // with our localhost ingest so OBS sends the multi-track stream
-    // to us instead. We keep `{stream_key}` as the literal token -
-    // OBS substitutes it with whatever's in its Stream Key field
-    // (which the streamer can type as anything; we ignore it).
+    // Replace every rtmp:// or rtmps:// URL in url_template fields with our
+    // localhost ingest so OBS sends the multi-track stream to us instead. We
+    // keep `{stream_key}` as the literal token - OBS substitutes it with the
+    // session `authentication` token from this config. When an ingest key is
+    // set that token would not match it, so we remember the token below and
+    // begin_publish accepts it (see Controller::remember_eb_key).
     let rewritten = rewrite_url_templates(
         &twitch_json,
         &format!("rtmp://127.0.0.1:{}/live/{{stream_key}}", ingest_port),
@@ -1231,6 +1604,24 @@ async fn obs_multitrack_config_proxy(
         .map(|e| (Some(e.url_template), e.authentication))
         .unwrap_or((None, None));
     let substitution = ivs_auth.as_deref().unwrap_or(&twitch_key);
+    // OBS will publish the EB stream to our ingest using an endpoint's session
+    // token as the stream key (it fills the {stream_key} token in the url_template
+    // we returned). Remember EVERY endpoint's token, not just the first: OBS's
+    // create_service picks the first endpoint matching its RTMP/RTMPS preference
+    // and publishes with THAT one's token. Twitch currently returns the same
+    // token for its RTMP and RTMPS endpoints, but we don't rely on that. Each is
+    // remembered so begin_publish accepts the EB publish once an ingest key is set
+    // - the token and the ingest key are different by design.
+    let endpoint_auths = all_ingest_endpoint_auths(&twitch_json);
+    for auth in &endpoint_auths {
+        ctrl.remember_eb_key(auth.clone());
+    }
+    // Non-IVS multitrack (no token on any endpoint): OBS falls back to its Stream
+    // Key field, which our proxy swapped for the real Twitch key - remember that
+    // so the publish is still accepted.
+    if endpoint_auths.is_empty() {
+        ctrl.remember_eb_key(twitch_key.clone());
+    }
     let ivs_url = ivs_template.map(|t| t.replace("{stream_key}", substitution));
     if let Some(ivs) = ivs_url.as_ref() {
         // Apply the override to EXACTLY one Twitch destination: the
@@ -1321,6 +1712,22 @@ struct IngestEndpoint {
     authentication: Option<String>,
 }
 
+/// Whether an OBS multitrack-config request may broker an Enhanced Broadcasting
+/// session. Under proxy EB, OBS publishes with the Twitch session token (not the
+/// user's key), so `begin_publish` can't enforce the ingest key - the user's key
+/// is presented only here, as the request's `authentication` field (OBS's Stream
+/// Key field). An empty ingest key means auth is off, so everything is allowed.
+/// The query is stripped to match `Controller::begin_publish`; constant-time
+/// compare matches the ingest-key / password / dock-token paths.
+fn eb_request_authorized(body: &str, ingest_key: &str) -> bool {
+    if ingest_key.is_empty() {
+        return true;
+    }
+    let presented = read_string_field(body, "authentication").unwrap_or_default();
+    let presented = presented.split('?').next().unwrap_or("");
+    crate::crypto::constant_time_eq(presented.as_bytes(), ingest_key.as_bytes())
+}
+
 /// Pull the first `ingest_endpoints[…]` entry's `url_template` and
 /// optional `authentication` out of Twitch's response. The parser is
 /// scoped to the substring starting at the first `"ingest_endpoints"`
@@ -1337,6 +1744,36 @@ fn first_ingest_endpoint(json: &str) -> Option<IngestEndpoint> {
         url_template,
         authentication,
     })
+}
+
+/// Every `authentication` token inside the `ingest_endpoints` array. OBS may
+/// publish with any endpoint's token (it picks the first matching its RTMP/RTMPS
+/// preference), so the broker remembers all of them. Scoped to the array - the
+/// endpoint objects hold only string fields, so the first `]` after the array
+/// key closes it, which keeps us from scooping an `authentication` from
+/// elsewhere in the response.
+fn all_ingest_endpoint_auths(json: &str) -> Vec<String> {
+    let Some(start) = json.find("\"ingest_endpoints\"") else {
+        return Vec::new();
+    };
+    let region = &json[start..];
+    let region = match region.find(']') {
+        Some(end) => &region[..end],
+        None => region,
+    };
+    let needle = "\"authentication\"";
+    let mut auths = Vec::new();
+    let mut cursor = 0;
+    while let Some(pos) = region[cursor..].find(needle) {
+        let abs = cursor + pos;
+        if let Some(val) = read_string_field(&region[abs..], "authentication") {
+            if !val.is_empty() {
+                auths.push(val);
+            }
+        }
+        cursor = abs + needle.len();
+    }
+    auths
 }
 
 /// Find `"<key>": "<value>"` in a JSON-ish substring and return the
@@ -1665,6 +2102,7 @@ async fn post_config(
             k.as_str(),
             "ingest_port"
                 | "ingest_bind_all"
+                | "ingest_key"
                 | "web_port"
                 | "web_bind_all"
                 | "buffer_mb"
@@ -1780,6 +2218,12 @@ async fn post_config(
     // Mirror webhook into the controller so events fire correctly even
     // before the next supervisor settings-change tick.
     ctrl.update_webhook(new_settings.discord_webhook_url.clone());
+    // Same for the ingest key: mirror it inline so locking down the ingest port
+    // takes effect this instant. Waiting for the supervisor tick would leave a
+    // brief window where begin_publish still enforces the previous (usually
+    // empty) key and accepts any publisher - exactly the exposure the user just
+    // moved to close.
+    ctrl.update_ingest_key(new_settings.ingest_key.clone());
     // Flip the trace switch right away so a toggle in the System tab
     // takes effect this instant - no need to wait for a restart.
     crate::trace::set_enabled(new_settings.tracing_enabled);
@@ -2766,9 +3210,13 @@ fn reveal_path(path: &Path) {
     {
         let _ = std::process::Command::new("explorer").arg(&dir).spawn();
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = &dir;
+        let _ = std::process::Command::new("open").arg(&dir).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
     }
 }
 
@@ -3084,6 +3532,7 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
             }
         }
         "ingest_bind_all" => s.ingest_bind_all = value == "on" || value == "true" || value == "1",
+        "ingest_key" => s.ingest_key = value.into(),
         "web_port" => {
             if let Ok(v) = value.parse() {
                 s.web_port = v;
@@ -3244,6 +3693,202 @@ fn strip_prefix_icase<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
+
+// ---- Optional dashboard auth: request classification + helpers -----------
+
+/// Access level a route requires WHEN auth is enabled. The default is `Admin`,
+/// so any route not explicitly listed below is protected (fail closed): a new
+/// endpoint is locked down unless someone deliberately opens it here.
+enum Access {
+    /// No auth: the login page and overlay DISPLAY (OBS browser sources).
+    Public,
+    /// Session cookie OR the least-privilege dock token: status, delay
+    /// control, and the dock itself. Never anything that reveals a secret.
+    Control,
+    /// Session cookie only: everything that changes config, destinations,
+    /// files, or the app lifecycle, or that could disclose a stream key.
+    Admin,
+}
+
+fn classify_access(method: &str, path: &str) -> Access {
+    if path == "/login" {
+        return Access::Public;
+    }
+    // Overlay DISPLAY only (browser sources can't log in); saving overlays is
+    // a POST to /overlays/ which stays Admin.
+    if path == "/overlay" || path.starts_with("/overlay/") {
+        return Access::Public;
+    }
+    // OBS fetches the multitrack (Enhanced Broadcasting) config when it starts
+    // streaming, with no session cookie and often no token - the config URL is
+    // saved in OBS before any password is set. It returns only the encoder
+    // ladder plus a local ingest template ("rtmp://127.0.0.1:<port>/live/
+    // {stream_key}"), never a secret, and cannot control anything, so it stays
+    // public like the overlay display. Gating it would break Start Streaming the
+    // moment a dashboard password is enabled.
+    if path == "/obs/multitrack-config" {
+        return Access::Public;
+    }
+    match (method, path) {
+        ("GET", "/state")
+        | ("GET", "/events")
+        | ("GET", "/dock")
+        | ("GET", "/dock.js")
+        | ("GET", "/docks")
+        | ("GET", "/profiles")
+        | ("GET", "/platforms")
+        // Read + operational routes the OBS dock needs so it can render and run
+        // the stream. GET /config is redacted for a dock caller (no raw ingest
+        // key or dock token - see route + to_json); GET /destinations is already
+        // redacted (a "key set" boolean, never the raw key); toggling a
+        // destination on/off is operational, not a settings change. Editing
+        // settings, upserting destinations, and every secret write stay Admin.
+        | ("GET", "/config")
+        | ("GET", "/destinations")
+        | ("GET", "/overlays")
+        | ("POST", "/destinations/toggle")
+        | ("POST", "/arm")
+        | ("POST", "/activate")
+        | ("POST", "/stop")
+        | ("POST", "/disarm")
+        | ("POST", "/delay")
+        | ("POST", "/go-live")
+        | ("POST", "/cut-after")
+        | ("POST", "/cut-after/cancel") => Access::Control,
+        ("POST", p) if p.starts_with("/docks/") => Access::Control,
+        // GET a saved dock layout (the dock loads its own persisted layout).
+        ("GET", p) if p.starts_with("/docks/") => Access::Control,
+        _ => Access::Admin,
+    }
+}
+
+/// Parse the Cookie header into name -> value (`a=b; c=d`).
+fn parse_cookies(head: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for line in head.split("\r\n") {
+        if let Some(v) = strip_prefix_icase(line, "cookie:") {
+            for pair in v.split(';') {
+                if let Some((k, val)) = pair.split_once('=') {
+                    out.insert(k.trim().to_string(), val.trim().to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// First value of query parameter `name` in a `path?a=b&c=d` string. Tokens
+/// are hex, so no URL-decoding is needed.
+fn query_param(path: &str, name: &str) -> Option<String> {
+    let q = path.split_once('?')?.1;
+    for pair in q.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == name {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// "; Secure" when the request reached us over HTTPS (a reverse proxy sets
+/// `X-Forwarded-Proto: https`), so the auth cookie is never sent in the clear
+/// once TLS is in front. Empty over plain HTTP so local use still works.
+///
+/// This trusts the header, which is correct because it is fail-safe in the only
+/// two ways that matter: a spoofed `https` from a direct plain-HTTP client only
+/// makes the cookie MORE restrictive (a `Secure` cookie the browser then won't
+/// resend over that same plain connection), and a proxy that omits the header
+/// over real TLS merely drops `Secure` (the cookie still works, just without
+/// that one hardening bit). Neither weakens auth; the documented deployment is
+/// a proxy that sets the header.
+fn secure_flag(head: &str) -> &'static str {
+    for line in head.split("\r\n") {
+        if let Some(v) = strip_prefix_icase(line, "x-forwarded-proto:") {
+            if v.trim().eq_ignore_ascii_case("https") {
+                return "; Secure";
+            }
+        }
+    }
+    ""
+}
+
+/// True when the client prefers HTML (a browser navigation), so an
+/// unauthorized response should redirect to the login page rather than 401.
+fn wants_html(head: &str) -> bool {
+    for line in head.split("\r\n") {
+        if let Some(v) = strip_prefix_icase(line, "accept:") {
+            return v.contains("text/html");
+        }
+    }
+    false
+}
+
+/// Write a small response with an optional extra header block (Set-Cookie).
+/// True if `ip` (a peer address string like "127.0.0.1" or "::1") is an
+/// IPv4/IPv6 loopback address. Used to keep first-time password bootstrap on
+/// the local machine. An unparseable value is treated as non-loopback so the
+/// restriction fails closed.
+fn is_loopback(ip: &str) -> bool {
+    ip.parse::<std::net::IpAddr>()
+        .map(|a| a.is_loopback())
+        .unwrap_or(false)
+}
+
+async fn write_simple(
+    sock: &mut TcpStream,
+    status: &str,
+    ctype: &str,
+    body: &str,
+    extra_headers: &str,
+) -> io::Result<()> {
+    let resp = format!(
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n{}",
+        status, ctype, body.len(), extra_headers, body
+    );
+    sock.write_all(resp.as_bytes()).await
+}
+
+/// Self-contained login page (no external assets, so it renders before any
+/// authenticated request). Served at GET /login only when auth is enabled.
+const LOGIN_HTML: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>InstantClone - Sign in</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#07080a;color:#e8edf3;font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.card{width:320px;max-width:88vw;background:#11141a;border:1px solid #1f242d;border-radius:14px;padding:26px}
+h1{margin:0 0 4px;font-size:18px}
+p{margin:0 0 18px;color:#8b95a3;font-size:13px}
+input{width:100%;box-sizing:border-box;padding:11px 12px;border-radius:9px;border:1px solid #2a313c;background:#0c0e12;color:#e8edf3;font-size:14px}
+input:focus{outline:none;border-color:#5ac8fa}
+button{width:100%;margin-top:12px;padding:11px;border:0;border-radius:9px;background:#5ac8fa;color:#04121a;font-weight:700;font-size:14px;cursor:pointer}
+button:disabled{opacity:.6;cursor:default}
+.err{margin-top:12px;color:#ff6b6b;font-size:13px;min-height:1.2em}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#5ac8fa;margin-right:8px}
+</style></head><body>
+<form class="card" onsubmit="return signIn(event)">
+<h1><span class="dot"></span>InstantClone</h1>
+<p>Enter the dashboard password to continue.</p>
+<input id="pw" type="password" placeholder="Password" autocomplete="current-password" autofocus>
+<button id="btn" type="submit">Sign in</button>
+<div class="err" id="err"></div>
+</form>
+<script>
+async function signIn(e){
+  e.preventDefault();
+  var btn=document.getElementById('btn'),err=document.getElementById('err');
+  btn.disabled=true;btn.textContent='Signing in...';err.textContent='';
+  try{
+    var r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'password='+encodeURIComponent(document.getElementById('pw').value)});
+    if(r.ok){location.href='/';return false;}
+    var j=await r.json().catch(function(){return {};});
+    err.textContent=(j&&j.error)?j.error:'Sign in failed';
+  }catch(_){err.textContent='Network error';}
+  btn.disabled=false;btn.textContent='Sign in';
+  return false;
+}
+</script></body></html>"##;
 
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -3745,6 +4390,19 @@ mod tests {
     }
 
     #[test]
+    fn apply_field_str_persists_ingest_key() {
+        // Regression: ingest_key is in post_config's form whitelist, so
+        // apply_field_str must have a matching arm or the "Save key" button
+        // silently no-ops and the ingest is never actually locked.
+        let mut s = crate::config::Settings::defaults();
+        assert!(s.ingest_key.is_empty());
+        apply_field_str(&mut s, "ingest_key", "hunter2ingest");
+        assert_eq!(s.ingest_key, "hunter2ingest");
+        apply_field_str(&mut s, "ingest_key", "");
+        assert!(s.ingest_key.is_empty());
+    }
+
+    #[test]
     fn apply_field_str_persists_tracing_enabled_value() {
         // The dispatch in post_config gates which keys reach this
         // function. The test below asserts the gate includes our
@@ -4117,6 +4775,66 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ic-overlay-test-{tag}-{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn multitrack_config_keeps_stream_key_token() {
+        // The ingest url_template we hand OBS always keeps the {stream_key}
+        // token; OBS fills it (with its Stream Key field, or the EB session
+        // token). EB publishes are accepted via Controller::remember_eb_key, not
+        // by embedding a key in this URL.
+        let mut s = crate::config::Settings::defaults();
+        s.ingest_port = 1935;
+        s.ingest_key = "abc123def".into();
+        let (tx, _rx) = watch::channel(s);
+        let cfg = obs_multitrack_config_static("encoder=x264&tracks=1", &Arc::new(tx));
+        assert!(cfg.contains("/live/{stream_key}"));
+    }
+
+    #[test]
+    fn all_ingest_endpoint_auths_collects_every_endpoint() {
+        // Real Twitch shape: an RTMP and an RTMPS endpoint. OBS picks one by its
+        // RTMPS preference, so the broker must remember both tokens. (Twitch here
+        // returns the same token for both, but distinct tokens must also work.)
+        let json = r#"{"meta":{"config_id":"x"},"ingest_endpoints":[
+            {"protocol":"RTMP","url_template":"rtmp://a/app/{stream_key}","authentication":"tok_rtmp"},
+            {"protocol":"RTMPS","url_template":"rtmps://a/app/{stream_key}","authentication":"tok_rtmps"}
+        ],"encoder_configurations":[{"authentication":"NOT_AN_ENDPOINT_TOKEN"}]}"#;
+        let auths = all_ingest_endpoint_auths(json);
+        assert_eq!(auths, vec!["tok_rtmp".to_string(), "tok_rtmps".to_string()]);
+        // The `authentication` in encoder_configurations is outside the array and
+        // must not be scooped up.
+        assert!(!auths.iter().any(|a| a.contains("NOT_AN_ENDPOINT")));
+
+        // No endpoints / no tokens -> empty, and the proxy's twitch-key fallback
+        // covers it.
+        assert!(all_ingest_endpoint_auths(r#"{"meta":{}}"#).is_empty());
+        assert!(all_ingest_endpoint_auths(
+            r#"{"ingest_endpoints":[{"protocol":"RTMP","url_template":"rtmp://a/{stream_key}"}]}"#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn eb_request_authorized_enforces_ingest_key() {
+        // OBS presents the user's Stream Key field as the request's
+        // `authentication`. This is the ONLY place the ingest key is checkable
+        // under proxy EB (the publish itself carries the Twitch token).
+        let body = r#"{"schema_version":"2024-06-04","authentication":"secretkey","client":{}}"#;
+
+        // No ingest key configured: auth off, anything allowed.
+        assert!(eb_request_authorized(body, ""));
+
+        // Correct key allowed; wrong key (the reported bug) refused.
+        assert!(eb_request_authorized(body, "secretkey"));
+        assert!(!eb_request_authorized(body, "wrongkey"));
+
+        // A user-appended query on the key field is stripped before matching.
+        let body_q = r#"{"authentication":"secretkey?bandwidthtest=true","client":{}}"#;
+        assert!(eb_request_authorized(body_q, "secretkey"));
+
+        // Missing authentication field with a key set: refused, not allowed.
+        assert!(!eb_request_authorized(r#"{"client":{}}"#, "secretkey"));
     }
 
     #[test]

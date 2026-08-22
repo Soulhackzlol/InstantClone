@@ -28,7 +28,7 @@
 <a href="https://github.com/Soulhackzlol/InstantClone/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Soulhackzlol/InstantClone/ci.yml?branch=main&style=flat-square&label=ci&color=34c759&labelColor=11141a"/></a>
 <a href="https://github.com/Soulhackzlol/InstantClone/releases"><img alt="release" src="https://img.shields.io/github/v/release/Soulhackzlol/InstantClone?include_prereleases&style=flat-square&color=5ac8fa&labelColor=11141a&display_name=tag&sort=semver"/></a>
 <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-d4d8e1?style=flat-square&labelColor=11141a"/></a>
-<img alt="Windows only" src="https://img.shields.io/badge/windows-only-7a7d8a?style=flat-square&labelColor=11141a"/>
+<img alt="Windows and Linux" src="https://img.shields.io/badge/platform-windows%20%7C%20linux-7a7d8a?style=flat-square&labelColor=11141a"/>
 <a href="https://alternativeto.net/software/instantclone/about/"><img alt="Listed on AlternativeTo" src="https://img.shields.io/badge/AlternativeTo-listed-5ac8fa?style=flat-square&labelColor=11141a&logo=alternativeto&logoColor=white"/></a>
 
 </div>
@@ -107,8 +107,8 @@ Multi-track "Auto" works out of the box. Your real platform keys go into the **D
 > [!IMPORTANT]
 > Windows Firewall prompts on first launch because the proxy listens on <code>:1935</code> (RTMP) and <code>:7799</code> (web). Allow it on **Private networks** only.
 
-> [!WARNING]
-> Windows 10/11 only. macOS and Linux are not supported, tested, or packaged.
+> [!NOTE]
+> Windows 10/11 and Linux (x86-64) are supported. On Linux it runs headless on a VPS or on an Ubuntu desktop; the browser dashboard is the control surface (there is no native tray). macOS is not supported yet.
 
 <br/>
 
@@ -334,7 +334,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 **What's rough, honestly**
 
-- **Windows only today.** Several modules (tray, port pre-flight, RSS sampler) use Windows-specific paths. A Linux build (including a headless/terminal server version) is on the roadmap; macOS isn't planned yet.
+- **No native tray on Linux.** Windows has a system-tray icon; on Linux the control surface is the web dashboard (Quit and Restart live in its System tab). macOS isn't supported yet.
 - **Transcoded ladder isn't guaranteed without EB.** Only Twitch Partners get a transcode slot every time; everyone else stays Source-Only, where some hardware decoders fail above ~8 Mbps (Twitch's allocation behaviour, not the proxy). For a guaranteed ladder use Enhanced Broadcasting; otherwise keep bitrate near ~6000 Kbps.
 - **Hand-rolled HTTP server.** Smaller binary than `hyper`, but I own the entire HTTP surface. Worth re-evaluating if it grows.
 
@@ -399,7 +399,7 @@ In InstantClone's **Destinations** tab, never in OBS. OBS only ever points at In
 
 <br/>
 
-Windows 10/11 today. A **Linux build is on the roadmap**, including a headless/terminal server version for boxes with no desktop. macOS isn't planned yet. A few parts (tray, port pre-flight, memory sampling) use Windows-specific code that needs porting first.
+Windows 10/11 and **Linux (x86-64)** both run it. On Linux it works headless on a VPS or on an Ubuntu desktop, driven by the browser dashboard (there is no native tray, so Quit and Restart live in the dashboard's System tab). For a network-exposed setup, turn on the optional dashboard password and pair it with TLS via a reverse proxy. macOS isn't supported yet.
 
 </details>
 

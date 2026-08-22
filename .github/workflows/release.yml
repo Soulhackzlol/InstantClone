@@ -35,9 +35,56 @@ jobs:
       - name: test
         run: cargo test --release
 
-  # Gate 2: only runs if `test` succeeded. Builds, stages, publishes.
+  # Linux gate: same checks on Ubuntu so we never ship a Linux binary that
+  # fails clippy or tests on its own platform (the Linux-only cfg code is
+  # invisible to the Windows `test` job above).
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: install build deps
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test
+        run: cargo test --release
+
+  # Builds the Linux binary and hands it to the publish job as an artifact, so
+  # the single GitHub Release carries both OS builds under one SHA256SUMS.
+  build-linux:
+    needs: test-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: install build deps
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: build release
+        run: cargo build --release
+      - name: stage linux binary
+        run: |
+          mkdir -p dist
+          cp target/release/instantclone "dist/instantclone-${{ github.ref_name }}-linux-x64"
+      - name: upload linux binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-binary
+          path: dist/instantclone-*-linux-x64
+          retention-days: 1
+
+  # Gate 2: only runs if BOTH platforms' tests passed and the Linux binary is
+  # built. Stages every artifact, hashes them into one SHA256SUMS, publishes.
   build:
-    needs: test
+    needs: [test, build-linux]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -53,19 +100,36 @@ jobs:
       - name: build release
         run: cargo build --release
 
+      # The Linux binary was built by build-linux; pull it in so it lands in
+      # the same release under the same SHA256SUMS.
+      - name: download linux binary
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-binary
+          path: artifacts
+
       - name: stage artifacts
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path artifacts | Out-Null
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
           $tag = "${{ github.ref_name }}"
-          Copy-Item .\target\release\instantclone.exe "artifacts\instantclone-$tag-windows-x64.exe"
+          $win = "instantclone-$tag-windows-x64.exe"
+          $lin = "instantclone-$tag-linux-x64"
+          Copy-Item .\target\release\instantclone.exe "artifacts\$win"
           # Ship the optional VOD-unlocker OBS script under a version-less
           # name so `releases/latest/download/optional-vod-unlocker.lua`
           # always resolves for the in-app auto-downloader.
           Copy-Item .\obs\instantclone-vod-track.lua "artifacts\optional-vod-unlocker.lua"
-          $hash = (Get-FileHash "artifacts\instantclone-$tag-windows-x64.exe" -Algorithm SHA256).Hash.ToLower()
+          # One SHA256SUMS covering every published file. self_update.rs looks
+          # up its line by the exact asset name, so these MUST match
+          # release_asset_name() (locked by a unit test).
+          $winHash = (Get-FileHash "artifacts\$win" -Algorithm SHA256).Hash.ToLower()
           $luaHash = (Get-FileHash "artifacts\optional-vod-unlocker.lua" -Algorithm SHA256).Hash.ToLower()
-          "$hash  instantclone-$tag-windows-x64.exe" | Out-File -FilePath "artifacts\SHA256SUMS.txt" -Encoding ascii
+          "$winHash  $win" | Out-File -FilePath "artifacts\SHA256SUMS.txt" -Encoding ascii
+          if (Test-Path "artifacts\$lin") {
+            $linHash = (Get-FileHash "artifacts\$lin" -Algorithm SHA256).Hash.ToLower()
+            "$linHash  $lin" | Out-File -FilePath "artifacts\SHA256SUMS.txt" -Encoding ascii -Append
+          }
           "$luaHash  optional-vod-unlocker.lua" | Out-File -FilePath "artifacts\SHA256SUMS.txt" -Encoding ascii -Append
           Get-ChildItem artifacts
 
@@ -77,6 +141,7 @@ jobs:
           # v0.1.0-rc.2) is a pre-release. Stable tags (v0.1.0) ship as full.
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            artifacts/instantclone-*.exe
+            artifacts/instantclone-*-windows-x64.exe
+            artifacts/instantclone-*-linux-x64
             artifacts/optional-vod-unlocker.lua
             artifacts/SHA256SUMS.txt
