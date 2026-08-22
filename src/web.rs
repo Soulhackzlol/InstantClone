@@ -3598,6 +3598,16 @@ fn classify_access(method: &str, path: &str) -> Access {
     if path == "/overlay" || path.starts_with("/overlay/") {
         return Access::Public;
     }
+    // OBS fetches the multitrack (Enhanced Broadcasting) config when it starts
+    // streaming, with no session cookie and often no token - the config URL is
+    // saved in OBS before any password is set. It returns only the encoder
+    // ladder plus a local ingest template ("rtmp://127.0.0.1:<port>/live/
+    // {stream_key}"), never a secret, and cannot control anything, so it stays
+    // public like the overlay display. Gating it would break Start Streaming the
+    // moment a dashboard password is enabled.
+    if path == "/obs/multitrack-config" {
+        return Access::Public;
+    }
     match (method, path) {
         ("GET", "/state")
         | ("GET", "/events")
@@ -3606,11 +3616,6 @@ fn classify_access(method: &str, path: &str) -> Access {
         | ("GET", "/docks")
         | ("GET", "/profiles")
         | ("GET", "/platforms")
-        // OBS itself hits this (no session cookie); it authenticates with the
-        // dock token embedded in the --config-url we hand it. Control-only:
-        // it returns the EB ladder config, never a secret.
-        | ("GET", "/obs/multitrack-config")
-        | ("POST", "/obs/multitrack-config")
         | ("POST", "/arm")
         | ("POST", "/activate")
         | ("POST", "/stop")
