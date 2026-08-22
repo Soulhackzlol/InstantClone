@@ -9,6 +9,8 @@
 #  - instantclone.config.json: per-user settings (may contain stream keys)
 /instantclone.buf
 /instantclone.config.json
+# Any ring-buffer file (custom buffer_path names used in local/e2e runs).
+*.buf
 
 # Editor / IDE
 /.vscode/
