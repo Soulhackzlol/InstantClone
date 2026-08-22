@@ -1532,14 +1532,18 @@ async fn obs_multitrack_config_proxy(
     // Twitch's response has one or more `ingest_endpoints` entries
     // with `url_template` values like
     // `rtmps://<region>.contribute.live-video.net/app/{stream_key}`.
-    // Replace every rtmp:// or rtmps:// URL in url_template fields
-    // with our localhost ingest so OBS sends the multi-track stream
-    // to us instead. We keep `{stream_key}` as the literal token -
-    // OBS substitutes it with whatever's in its Stream Key field
-    // (which the streamer can type as anything; we ignore it).
+    // Replace every rtmp:// or rtmps:// URL in url_template fields with our
+    // localhost ingest so OBS sends the multi-track stream to us instead. The
+    // path segment carries our ingest key when one is set (so EB publishes with
+    // the key begin_publish enforces); otherwise it stays the `{stream_key}`
+    // token OBS fills from its Stream Key field (any key accepted).
     let rewritten = rewrite_url_templates(
         &twitch_json,
-        &format!("rtmp://127.0.0.1:{}/live/{{stream_key}}", ingest_port),
+        &format!(
+            "rtmp://127.0.0.1:{}/live/{}",
+            ingest_port,
+            multitrack_ingest_segment(settings)
+        ),
     );
     // Extract the *original* IVS ingest URL from Twitch's response
     // BEFORE rewriting it to localhost, substitute the streamer's real
@@ -1835,6 +1839,26 @@ fn rewrite_url_templates(json: &str, new_value: &str) -> String {
     out
 }
 
+/// The path segment OBS publishes to in the multitrack (Enhanced Broadcasting)
+/// config we hand it. With an ingest key set we embed it so OBS publishes with
+/// the exact key `Controller::begin_publish` enforces - otherwise EB would send
+/// its own session key and get rejected. Without a key (or with a key that
+/// isn't URL/JSON-safe, which a stray character could use to corrupt the config
+/// OBS parses) we leave the `{stream_key}` token for OBS to fill; generated
+/// keys are hex, so the safe path is the normal path.
+fn multitrack_ingest_segment(settings: &Arc<watch::Sender<Settings>>) -> String {
+    let key = settings.borrow().ingest_key.clone();
+    let safe = !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if safe {
+        key
+    } else {
+        "{stream_key}".to_string()
+    }
+}
+
 fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settings>>) -> String {
     let params = config::parse_form(query);
     let encoder = params.get("encoder").map(|s| s.as_str()).unwrap_or("x264");
@@ -1929,9 +1953,10 @@ fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settin
     }
 
     format!(
-        r#"{{"meta":{{"service":"InstantClone","schema_version":"2024-06-04","config_id":"{cid}"}},"ingest_endpoints":[{{"protocol":"RTMP","url_template":"rtmp://127.0.0.1:{port}/live/{{stream_key}}"}}],"encoder_configurations":[{encs}],"audio_configurations":{{"live":[{{"codec":"aac","track_id":0,"channels":2,"settings":{{"bitrate":160}}}}]}}}}"#,
+        r#"{{"meta":{{"service":"InstantClone","schema_version":"2024-06-04","config_id":"{cid}"}},"ingest_endpoints":[{{"protocol":"RTMP","url_template":"rtmp://127.0.0.1:{port}/live/{seg}"}}],"encoder_configurations":[{encs}],"audio_configurations":{{"live":[{{"codec":"aac","track_id":0,"channels":2,"settings":{{"bitrate":160}}}}]}}}}"#,
         cid = config_id,
         port = ingest_port,
+        seg = multitrack_ingest_segment(settings),
         encs = enc_configs,
     )
 }
@@ -4683,6 +4708,31 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ic-overlay-test-{tag}-{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn multitrack_config_embeds_ingest_key_when_set() {
+        // No key: OBS keeps the {stream_key} token, so any key is accepted.
+        let mut s = crate::config::Settings::defaults();
+        s.ingest_port = 1935;
+        let (tx, _rx) = watch::channel(s.clone());
+        let open = obs_multitrack_config_static("encoder=x264&tracks=1", &Arc::new(tx));
+        assert!(open.contains("/live/{stream_key}"));
+
+        // Safe key: embedded directly so Enhanced Broadcasting publishes with
+        // exactly the key begin_publish enforces (no more "wrong stream key").
+        s.ingest_key = "abc123def".into();
+        let (tx2, _rx2) = watch::channel(s.clone());
+        let locked = obs_multitrack_config_static("encoder=x264&tracks=1", &Arc::new(tx2));
+        assert!(locked.contains("/live/abc123def"));
+        assert!(!locked.contains("{stream_key}"));
+
+        // Unsafe key (a stray quote could corrupt the config JSON): fall back
+        // to the token rather than emit a malformed config.
+        s.ingest_key = "bad key\"".into();
+        let (tx3, _rx3) = watch::channel(s);
+        let fb = obs_multitrack_config_static("encoder=x264&tracks=1", &Arc::new(tx3));
+        assert!(fb.contains("/live/{stream_key}"));
     }
 
     #[test]
