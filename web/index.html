@@ -829,6 +829,11 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
    or screen-share; the Show button reveals on demand. Copy still works blurred. */
 .blur-secret{filter:blur(6px);transition:filter .1s ease;user-select:none}
 .blur-secret.revealed{filter:none;user-select:text}
+/* A blurred secret INPUT stays editable: unblur while focused (so typing is
+   never blurred) and while empty (so the placeholder is readable). It only
+   blurs a saved value sitting idle on screen. */
+.ic-input.blur-secret:focus,
+.ic-input.blur-secret:placeholder-shown{filter:none;user-select:text}
 /* Live system-info tiles in the About tab. Hairline-separated grid. */
 .sysinfo{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;margin-top:16px;
   background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -2668,7 +2673,8 @@ details.sys-collapse>summary .ic-label{margin:0}
       </div>
       <div class="tab-sub" style="margin-top:8px">Set a secret and only OBS publishing with it can connect - worth doing whenever the ingest port is reachable over a network. It becomes the Stream key you paste into OBS. Leave blank to accept any key.</div>
       <div class="sec-row" style="margin-top:12px">
-        <input id="s-ingest-key" class="ic-input mono" placeholder="blank = accept any key" aria-label="Ingest key" autocomplete="off" spellcheck="false">
+        <input id="s-ingest-key" class="ic-input mono blur-secret" placeholder="blank = accept any key" aria-label="Ingest key" autocomplete="off" spellcheck="false">
+        <button class="ic-btn ic-btn-ghost" id="ingest-key-toggle" onclick="toggleSecret('s-ingest-key',this)">Show</button>
         <button class="ic-btn ic-btn-ghost" onclick="genIngestKey()">Generate</button>
         <button class="ic-btn ic-btn-primary" onclick="saveIngestKey(this)">Save key</button>
       </div>
@@ -5289,7 +5295,13 @@ function genIngestKey(){
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   const inp = $('s-ingest-key');
-  if (inp) inp.value = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  if (inp){
+    inp.value = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    // Reveal the freshly generated key so it can be read and copied; it
+    // re-blurs on its own once focus leaves the field.
+    inp.classList.add('revealed');
+    const t = $('ingest-key-toggle'); if (t) t.textContent = 'Hide';
+  }
 }
 
 async function saveIngestKey(btn){
