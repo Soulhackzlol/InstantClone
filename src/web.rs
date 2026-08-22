@@ -344,8 +344,10 @@ async fn serve(
         return Ok(());
     }
 
-    let (status, ctype, payload) =
-        route(method, path, body, &ctrl, &settings, &cfg_path, &sysstat, is_admin).await;
+    let (status, ctype, payload) = route(
+        method, path, body, &ctrl, &settings, &cfg_path, &sysstat, is_admin,
+    )
+    .await;
 
     // ACAO is intentionally restrictive now - only set on GET responses
     // so overlays / docks loaded as foreign origins can still read state.
@@ -374,7 +376,10 @@ enum AuthDecision {
     /// dock-token handoff); `is_admin` is true for a full dashboard session or
     /// when auth is off, false for a dock-token-only caller. Routes use it to
     /// redact secrets and refuse settings writes for the dock.
-    Allow { cookie: String, is_admin: bool },
+    Allow {
+        cookie: String,
+        is_admin: bool,
+    },
 }
 
 /// The optional dashboard-auth gate, kept in one auditable place so `serve()`
