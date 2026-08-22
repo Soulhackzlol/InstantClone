@@ -399,10 +399,12 @@ fn legacy_global_ini_in(obs_dir: &Path) -> Option<PathBuf> {
 /// `[Basic] Profile=` lives in this file too, so the active-profile
 /// detection below shares the same lookup.
 fn obs_user_config_path() -> Option<PathBuf> {
-    let obs_dir = std::env::var("APPDATA")
-        .ok()
-        .map(|p| PathBuf::from(p).join("obs-studio"))?;
-    resolve_user_config_in(&obs_dir)
+    // Walk the same cross-platform candidate dirs as services.json (Windows
+    // APPDATA/LOCALAPPDATA, Linux XDG/Flatpak/Snap). The old %APPDATA%-only
+    // lookup returned None on Linux, silently no-op'ing the VOD-audio flag.
+    obs_config_dirs()
+        .into_iter()
+        .find_map(|obs_dir| resolve_user_config_in(&obs_dir))
 }
 
 /// Legacy global.ini path - only consulted for the post-upgrade
@@ -410,10 +412,9 @@ fn obs_user_config_path() -> Option<PathBuf> {
 /// left behind by v0.1.0..0.1.2. None on pre-32 installs where
 /// `obs_user_config_path` already points at global.ini.
 fn legacy_global_ini_path_for_cleanup() -> Option<PathBuf> {
-    let obs_dir = std::env::var("APPDATA")
-        .ok()
-        .map(|p| PathBuf::from(p).join("obs-studio"))?;
-    legacy_global_ini_in(&obs_dir)
+    obs_config_dirs()
+        .into_iter()
+        .find_map(|obs_dir| legacy_global_ini_in(&obs_dir))
 }
 
 /// Read `[General] EnableCustomServerVodTrack` from OBS's user config.
@@ -605,7 +606,8 @@ fn ini_set(file: &str, section: &str, key: &str, enable: bool) -> String {
 // is the user-chosen scope from the dashboard: minimal footprint, the
 // user is warned that switching OBS profiles disables the injection.
 
-const PROFILES_DIR_REL: &str = "obs-studio/basic/profiles";
+// Relative to an OBS config dir (the `.../obs-studio` paths from obs_config_dirs).
+const PROFILES_DIR_REL: &str = "basic/profiles";
 
 /// Active OBS profile name, read from `[Basic] Profile=<name>` in
 /// OBS's user config (user.ini on 32+, global.ini on older installs).
@@ -620,12 +622,15 @@ pub fn active_profile() -> Option<String> {
 /// installed / no profile is selected.
 pub fn active_profile_service_json_path() -> Option<PathBuf> {
     let profile = active_profile()?;
-    let base = std::env::var("APPDATA").ok().map(PathBuf::from)?;
-    let p = base
-        .join(PROFILES_DIR_REL)
-        .join(&profile)
-        .join("service.json");
-    p.exists().then_some(p)
+    obs_config_dirs()
+        .into_iter()
+        .map(|obs_dir| {
+            obs_dir
+                .join(PROFILES_DIR_REL)
+                .join(&profile)
+                .join("service.json")
+        })
+        .find(|p| p.exists())
 }
 
 /// True when our `multitrack_video_configuration_url` is currently
