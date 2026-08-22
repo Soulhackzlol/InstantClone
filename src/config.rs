@@ -29,6 +29,8 @@ pub const MAX_DOCK_LAYOUT_LEN: usize = 8 * 1024;
 /// Also guards against the `% 0` panic in `DiskRing::append` if a
 /// hand-edited config sets `buffer_mb=0`.
 const MIN_BUFFER_MB: u64 = 50;
+// 1 TiB. Guards `buffer_bytes()` against overflow from a hand-edited config.
+const MAX_BUFFER_MB: u64 = 1024 * 1024;
 
 /// Ports for the built-in "Local test sink" destination (platform
 /// `"sink"`). The egress supervisor spawns `instantclone sink` as a
@@ -435,6 +437,10 @@ impl Settings {
         if self.buffer_mb < MIN_BUFFER_MB {
             self.buffer_mb = MIN_BUFFER_MB;
         }
+        // Ceiling as well as floor: a hand-edited absurd value would overflow
+        // `buffer_bytes()` (buffer_mb * 1024 * 1024) and hand DiskRing a
+        // nonsensical size. 1 TiB is far past any real delay buffer.
+        self.buffer_mb = self.buffer_mb.min(MAX_BUFFER_MB);
         if self.ingest_port == 0 {
             self.ingest_port = 1935;
         }
@@ -527,30 +533,36 @@ impl Settings {
         writeln!(
             f,
             "platform={}",
-            mirror
-                .map(|d| d.platform.as_str())
-                .unwrap_or(&self.platform)
+            one_line(
+                mirror
+                    .map(|d| d.platform.as_str())
+                    .unwrap_or(&self.platform)
+            )
         )?;
         writeln!(
             f,
             "stream_key={}",
-            mirror
-                .map(|d| d.stream_key.as_str())
-                .unwrap_or(&self.stream_key)
+            one_line(
+                mirror
+                    .map(|d| d.stream_key.as_str())
+                    .unwrap_or(&self.stream_key)
+            )
         )?;
         writeln!(
             f,
             "custom_egress_url={}",
-            mirror
-                .map(|d| d.custom_egress_url.as_str())
-                .unwrap_or(&self.custom_egress_url)
+            one_line(
+                mirror
+                    .map(|d| d.custom_egress_url.as_str())
+                    .unwrap_or(&self.custom_egress_url)
+            )
         )?;
         writeln!(f, "ingest_port={}", self.ingest_port)?;
         writeln!(f, "ingest_bind_all={}", self.ingest_bind_all)?;
         // Secret: only written when set, so a default install's config never
         // carries an empty key line and a downgrade stays clean.
         if !self.ingest_key.is_empty() {
-            writeln!(f, "ingest_key={}", self.ingest_key)?;
+            writeln!(f, "ingest_key={}", one_line(&self.ingest_key))?;
         }
         writeln!(f, "web_port={}", self.web_port)?;
         writeln!(f, "web_bind_all={}", self.web_bind_all)?;
@@ -567,11 +579,23 @@ impl Settings {
             writeln!(f, "dock_token={}", self.dock_token)?;
         }
         writeln!(f, "buffer_mb={}", self.buffer_mb)?;
-        writeln!(f, "buffer_path={}", self.buffer_path.display())?;
+        writeln!(
+            f,
+            "buffer_path={}",
+            one_line(&self.buffer_path.to_string_lossy())
+        )?;
         writeln!(f, "target_delay_ms={}", self.target_delay_ms)?;
         writeln!(f, "armed_delay_ms={}", self.armed_delay_ms)?;
-        writeln!(f, "discord_webhook_url={}", self.discord_webhook_url)?;
-        writeln!(f, "overlays_dir={}", self.overlays_dir.display())?;
+        writeln!(
+            f,
+            "discord_webhook_url={}",
+            one_line(&self.discord_webhook_url)
+        )?;
+        writeln!(
+            f,
+            "overlays_dir={}",
+            one_line(&self.overlays_dir.to_string_lossy())
+        )?;
         writeln!(f, "tracing_enabled={}", self.tracing_enabled)?;
         // Behaviour. Only emit when non-default so a downgrade to a
         // pre-v0.2 build that doesn't know these keys keeps parsing
@@ -601,22 +625,28 @@ impl Settings {
         // compact JSON), so it round-trips through the line-based parser
         // even though it is opaque to us.
         for (id, layout) in &self.docks {
-            writeln!(f, "dock.{}={}", id, layout)?;
+            writeln!(f, "dock.{}={}", one_line(id), one_line(layout))?;
         }
         for (i, p) in self.profiles.iter().enumerate() {
-            writeln!(f, "profile.{}.name={}", i, p.name)?;
+            writeln!(f, "profile.{}.name={}", i, one_line(&p.name))?;
             writeln!(f, "profile.{}.delay_ms={}", i, p.delay_ms)?;
         }
         for (i, d) in self.destinations.iter().enumerate() {
-            writeln!(f, "destination.{}.id={}", i, d.id)?;
-            writeln!(f, "destination.{}.name={}", i, d.name)?;
+            writeln!(f, "destination.{}.id={}", i, one_line(&d.id))?;
+            writeln!(f, "destination.{}.name={}", i, one_line(&d.name))?;
             writeln!(f, "destination.{}.enabled={}", i, d.enabled)?;
-            writeln!(f, "destination.{}.platform={}", i, d.platform)?;
-            writeln!(f, "destination.{}.stream_key={}", i, d.stream_key)?;
+            writeln!(f, "destination.{}.platform={}", i, one_line(&d.platform))?;
+            writeln!(
+                f,
+                "destination.{}.stream_key={}",
+                i,
+                one_line(&d.stream_key)
+            )?;
             writeln!(
                 f,
                 "destination.{}.custom_egress_url={}",
-                i, d.custom_egress_url
+                i,
+                one_line(&d.custom_egress_url)
             )?;
             writeln!(f, "destination.{}.twitch_ingest={}", i, d.twitch_ingest)?;
             writeln!(f, "destination.{}.youtube_ingest={}", i, d.youtube_ingest)?;
@@ -638,7 +668,12 @@ impl Settings {
             }
             // Only emit when non-default ("auto"), same downgrade-safe reason.
             if d.audio_track != "auto" && !d.audio_track.is_empty() {
-                writeln!(f, "destination.{}.audio_track={}", i, d.audio_track)?;
+                writeln!(
+                    f,
+                    "destination.{}.audio_track={}",
+                    i,
+                    one_line(&d.audio_track)
+                )?;
             }
         }
         f.sync_all()?;
@@ -895,13 +930,23 @@ impl Settings {
                 dests.push(',');
             }
             let url = d.egress_url().unwrap_or_default();
+            // A custom URL can carry the stream key in its path
+            // (rtmp://host/app/SECRET), so it's a credential: show it only to a
+            // full session (the edit form needs it), never to a dock-token
+            // caller - the redacted `egress_url_redacted` below is enough to
+            // render. Consistent with how ingest_key / dock_token are gated.
+            let custom_url_shown = if include_secrets {
+                d.custom_egress_url.as_str()
+            } else {
+                ""
+            };
             dests.push_str(&format!(
                 r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"stream_format":{sf},"stream_key_set":{ks},"egress_url_redacted":{red}}}"#,
                 id  = json_str(&d.id),
                 n   = json_str(&d.name),
                 en  = d.enabled,
                 p   = json_str(&d.platform),
-                cu  = json_str(&d.custom_egress_url),
+                cu  = json_str(custom_url_shown),
                 ti  = json_str(&d.twitch_ingest),
                 yi  = json_str(&d.youtube_ingest),
                 sf  = json_str(&d.stream_format),
@@ -966,6 +1011,22 @@ impl Settings {
         }
         if self.buffer_mb < MIN_BUFFER_MB {
             errs.push(format!("buffer_mb must be at least {}", MIN_BUFFER_MB));
+        }
+        // The ingest key travels as an RTMP stream key and is matched after the
+        // playpath query is stripped (OBS appends `?clientConfigId=...` under
+        // Enhanced Broadcasting). A key with a '?', whitespace, or other char an
+        // RTMP client can't carry verbatim could never match - reject it up front
+        // rather than let it silently lock the owner out of their own ingest.
+        if !self.ingest_key.is_empty()
+            && !self
+                .ingest_key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            errs.push(
+                "ingest key may only contain letters, numbers, '-' and '_' (no spaces or '?')"
+                    .into(),
+            );
         }
         if self.destinations.len() > MAX_DESTINATIONS {
             errs.push(format!("too many destinations (max {})", MAX_DESTINATIONS));
@@ -1217,6 +1278,21 @@ fn os_name() -> &'static str {
     }
 }
 
+/// Strip control characters (notably CR/LF) from a value bound for the
+/// line-based config file. The format is `key=value` per line, so a newline in
+/// a value would inject a spurious second setting on the next load - e.g. a
+/// webhook URL carrying `\ningest_bind_all=true` could flip an unrelated flag
+/// and expose the ingest port. No legitimate config value is multi-line, so
+/// dropping control chars on write is loss-free and closes the injection at the
+/// serializer. Borrows unchanged when already clean.
+fn one_line(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.chars().any(|c| c.is_control()) {
+        std::borrow::Cow::Owned(s.chars().filter(|c| !c.is_control()).collect())
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -1418,6 +1494,78 @@ mod tests {
             .is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A newline smuggled into a string setting must not inject a second
+    /// `key=value` line on reload (which could flip an unrelated flag like
+    /// ingest_bind_all). The writer strips control chars.
+    #[test]
+    fn config_write_blocks_newline_injection() {
+        let dir = std::env::temp_dir().join(format!("ic-inj-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("inj.config.json");
+
+        let mut s = Settings::defaults();
+        assert!(!s.ingest_bind_all);
+        // The classic payload: try to append an unrelated setting via a newline.
+        s.discord_webhook_url = "https://x/y\ningest_bind_all=true".into();
+        s.save(&path).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        // No standalone injected line, and the value is now single-line.
+        assert!(!text.contains("\ningest_bind_all=true\n"));
+        let loaded = Settings::load(&path).unwrap();
+        assert!(!loaded.ingest_bind_all, "injection flipped ingest_bind_all");
+        assert!(!loaded.discord_webhook_url.contains('\n'));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_rejects_unsafe_ingest_key() {
+        let mut s = Settings::defaults();
+        s.ingest_key = "good-key_123".into();
+        assert!(!s.validate().iter().any(|e| e.contains("ingest key")));
+        for bad in ["has space", "has?query", "tab\tinside"] {
+            s.ingest_key = bad.into();
+            assert!(
+                s.validate().iter().any(|e| e.contains("ingest key")),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_egress_url_hidden_from_non_admin() {
+        // A custom URL can carry the key in its path, so a dock-token caller
+        // must not see it; a full session (the edit form) may.
+        let mut s = Settings::defaults();
+        s.destinations.push(Destination {
+            id: "d1".into(),
+            name: "Custom".into(),
+            enabled: true,
+            platform: "custom".into(),
+            stream_key: String::new(),
+            custom_egress_url: "rtmp://host/app/SECRETKEY".into(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
+        });
+        assert!(s.to_json(false, true).contains("SECRETKEY")); // admin sees it
+        assert!(!s.to_json(false, false).contains("SECRETKEY")); // dock does not
+    }
+
+    #[test]
+    fn buffer_mb_is_clamped_to_a_sane_ceiling() {
+        let mut s = Settings::defaults();
+        s.buffer_mb = u64::MAX;
+        s.sanitize_load();
+        assert_eq!(s.buffer_mb, MAX_BUFFER_MB);
+        // And buffer_bytes no longer overflows.
+        assert_eq!(s.buffer_bytes(), MAX_BUFFER_MB * 1024 * 1024);
     }
 
     /// The dashboard swaps platform-specific copy off this field, so it must
