@@ -490,6 +490,12 @@ pub struct Controller {
     // Per-peer wrong-key throttle so a weak ingest key can't be brute-forced at
     // wire speed. Only engages once a key is configured.
     ingest_limiter: crate::auth::RateLimiter,
+    // Stream keys from Enhanced Broadcasting sessions we brokered via
+    // /obs/multitrack-config. OBS publishes an EB stream with the Twitch session
+    // token (not the configured ingest key), and we are the one that handed that
+    // token out, so `begin_publish` trusts it alongside the ingest key. Bounded
+    // and TTL'd (see remember_eb_key) so tokens never accumulate.
+    eb_keys: crate::sync::Mutex<Vec<(String, Instant)>>,
     // Wall-clock ms (since UNIX epoch) of last webhook fire. Throttles
     // rapid event sequences (e.g. reconnect flapping) so we never spawn
     // more than one curl every ~2 s.
@@ -617,6 +623,7 @@ impl Controller {
                 std::time::Duration::from_secs(10 * 60),
                 std::time::Duration::from_secs(10 * 60),
             ),
+            eb_keys: crate::sync::Mutex::new(Vec::new()),
             webhook_last_fire_ms: AtomicU64::new(0),
             publish_lock: Mutex::new(()),
             video_codec: AtomicU8::new(0),
@@ -1284,6 +1291,14 @@ impl Controller {
     // ---- Ingest entry points (called from rtmp::server) ----
 
     pub async fn begin_publish(&self, stream_key: &str, peer_ip: &str) -> io::Result<u64> {
+        // OBS's multitrack / Enhanced Broadcasting output appends query params to
+        // the stream key before publishing: always `?clientConfigId=<id>`, plus
+        // any query the user typed into their Stream Key field (e.g.
+        // `?bandwidthtest=1`). See create_service() in OBS's
+        // MultitrackVideoOutput.cpp. An RTMP playpath query is not part of the
+        // stream-key identity, so strip it here - otherwise the exact ingest key
+        // arrives as `mykey?clientConfigId=...` and gets rejected as a wrong key.
+        let stream_key = stream_key.split('?').next().unwrap_or(stream_key);
         // Ingest auth: when a key is configured, only a publisher using that
         // exact key gets in. Empty key (the default) accepts anyone, which is
         // the right behaviour on a local machine. Checked before the slot lock
@@ -1309,10 +1324,17 @@ impl Controller {
                         "too many attempts",
                     ));
                 }
-                // Constant-time compare, same as the dashboard password / dock
-                // token: a plain `!=` early-exits on the first differing byte
-                // and leaks the match length to a timing attacker.
-                if !crate::crypto::constant_time_eq(stream_key.as_bytes(), required.as_bytes()) {
+                // Accept the configured ingest key (constant-time compare, same
+                // as the dashboard password / dock token: a plain `!=` early
+                // exits on the first differing byte and leaks the match length)
+                // OR a stream key from an Enhanced Broadcasting session we
+                // brokered. In EB, OBS publishes with the Twitch session token,
+                // not the ingest key; we handed that token out via
+                // /obs/multitrack-config, so it is trusted.
+                let accepted =
+                    crate::crypto::constant_time_eq(stream_key.as_bytes(), required.as_bytes())
+                        || self.is_brokered_eb_key(stream_key);
+                if !accepted {
                     if remote {
                         self.ingest_limiter.record_failure(peer_ip);
                     }
@@ -1573,6 +1595,40 @@ impl Controller {
     /// check (any key accepted). Called on startup and on every settings edit.
     pub fn update_ingest_key(&self, key: String) {
         *self.ingest_key.lock() = key;
+    }
+
+    /// Remember a stream key from an Enhanced Broadcasting session we just
+    /// brokered - the Twitch session token OBS will publish with. `begin_publish`
+    /// accepts these alongside the configured ingest key, so an EB publish is not
+    /// rejected as a "wrong stream key" when an ingest key is set. Bounded and
+    /// TTL'd so tokens do not accumulate; only ever populated while EB is in use.
+    pub fn remember_eb_key(&self, key: String) {
+        if key.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let ttl = Duration::from_secs(600);
+        let mut v = self.eb_keys.lock();
+        // Drop expired entries and any prior copy of this key, then re-add it.
+        v.retain(|(k, t)| k != &key && now.duration_since(*t) < ttl);
+        v.push((key, now));
+        const MAX_EB_KEYS: usize = 8;
+        if v.len() > MAX_EB_KEYS {
+            let drop = v.len() - MAX_EB_KEYS;
+            v.drain(0..drop);
+        }
+    }
+
+    /// True if `key` is a still-valid EB session token we brokered. Constant-time
+    /// compare per candidate, matching the ingest-key / password / dock-token
+    /// paths (a plain `==` leaks the match length to a timing attacker).
+    fn is_brokered_eb_key(&self, key: &str) -> bool {
+        let now = Instant::now();
+        let ttl = Duration::from_secs(600);
+        self.eb_keys.lock().iter().any(|(k, t)| {
+            now.duration_since(*t) < ttl
+                && crate::crypto::constant_time_eq(k.as_bytes(), key.as_bytes())
+        })
     }
 
     /// Snapshot the current webhook URL. Used by the test endpoint so it
@@ -2770,6 +2826,47 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
         assert!(h.ctrl.begin_publish("secret123", "127.0.0.1").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn ingest_key_ignores_obs_multitrack_query_suffix() {
+        // Under Enhanced Broadcasting, OBS publishes the stream key with a
+        // `?clientConfigId=<id>` suffix appended (see create_service in OBS's
+        // MultitrackVideoOutput.cpp). The exact ingest key must still be
+        // accepted despite that suffix - the query is not part of the identity.
+        let h = harness(0);
+        h.ctrl.update_ingest_key("secret123".into());
+        assert!(h
+            .ctrl
+            .begin_publish(
+                "secret123?clientConfigId=instantclone-1723300000",
+                "127.0.0.1"
+            )
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn ingest_accepts_a_brokered_eb_key() {
+        // Enhanced Broadcasting publishes with the Twitch session token, not the
+        // ingest key. With an ingest key set, that token is rejected until the
+        // /obs/multitrack-config proxy brokers it via remember_eb_key.
+        let h = harness(0);
+        h.ctrl.update_ingest_key("myingestkey".into());
+        let err = h
+            .ctrl
+            .begin_publish("v1_eb_session_token", "127.0.0.1")
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        h.ctrl.remember_eb_key("v1_eb_session_token".into());
+        // OBS appends `?clientConfigId=<id>` to the token it publishes with;
+        // begin_publish strips that query before matching the brokered token.
+        assert!(h
+            .ctrl
+            .begin_publish("v1_eb_session_token?clientConfigId=abc123", "127.0.0.1")
+            .await
+            .is_ok());
     }
 
     // ── "Cut after this airs" (scheduled safe cut) ───────────────────

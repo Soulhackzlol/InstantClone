@@ -1375,6 +1375,25 @@ async fn obs_multitrack_config_proxy(
     ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
 ) -> String {
+    // Enforce the InstantClone ingest key at the Enhanced Broadcasting entry
+    // point. Under proxy EB, OBS publishes with the Twitch session token (which
+    // we broker), so begin_publish never sees the user's key - the ONLY place it
+    // is presented is the `authentication` field of THIS request (OBS puts its
+    // Stream Key field there). If we don't check it here, a wrong key still gets
+    // a brokered session and streams. Empty ingest key = open, same as
+    // begin_publish. Strip any query the user appended, matching begin_publish.
+    if !eb_request_authorized(body, &settings.borrow().ingest_key) {
+        ctrl.log(
+            "[OBS multitrack] rejected config request - wrong InstantClone key in the \
+             OBS Stream Key field. Returning static config; the publish will be refused.",
+        );
+        crate::trace::log(
+            "OBS_MULTITRACK",
+            "wrong ingest key in request - refusing to broker an EB session",
+        );
+        return obs_multitrack_config_static(query, settings);
+    }
+
     // The streamer's real Twitch key lives in our destinations list.
     // Pick the first enabled Twitch destination with a non-empty key.
     // Also report what we found in the dashboard event log - the
@@ -1535,17 +1554,14 @@ async fn obs_multitrack_config_proxy(
     // with `url_template` values like
     // `rtmps://<region>.contribute.live-video.net/app/{stream_key}`.
     // Replace every rtmp:// or rtmps:// URL in url_template fields with our
-    // localhost ingest so OBS sends the multi-track stream to us instead. The
-    // path segment carries our ingest key when one is set (so EB publishes with
-    // the key begin_publish enforces); otherwise it stays the `{stream_key}`
-    // token OBS fills from its Stream Key field (any key accepted).
+    // localhost ingest so OBS sends the multi-track stream to us instead. We
+    // keep `{stream_key}` as the literal token - OBS substitutes it with the
+    // session `authentication` token from this config. When an ingest key is
+    // set that token would not match it, so we remember the token below and
+    // begin_publish accepts it (see Controller::remember_eb_key).
     let rewritten = rewrite_url_templates(
         &twitch_json,
-        &format!(
-            "rtmp://127.0.0.1:{}/live/{}",
-            ingest_port,
-            multitrack_ingest_segment(settings)
-        ),
+        &format!("rtmp://127.0.0.1:{}/live/{{stream_key}}", ingest_port),
     );
     // Extract the *original* IVS ingest URL from Twitch's response
     // BEFORE rewriting it to localhost, substitute the streamer's real
@@ -1588,6 +1604,24 @@ async fn obs_multitrack_config_proxy(
         .map(|e| (Some(e.url_template), e.authentication))
         .unwrap_or((None, None));
     let substitution = ivs_auth.as_deref().unwrap_or(&twitch_key);
+    // OBS will publish the EB stream to our ingest using an endpoint's session
+    // token as the stream key (it fills the {stream_key} token in the url_template
+    // we returned). Remember EVERY endpoint's token, not just the first: OBS's
+    // create_service picks the first endpoint matching its RTMP/RTMPS preference
+    // and publishes with THAT one's token. Twitch currently returns the same
+    // token for its RTMP and RTMPS endpoints, but we don't rely on that. Each is
+    // remembered so begin_publish accepts the EB publish once an ingest key is set
+    // - the token and the ingest key are different by design.
+    let endpoint_auths = all_ingest_endpoint_auths(&twitch_json);
+    for auth in &endpoint_auths {
+        ctrl.remember_eb_key(auth.clone());
+    }
+    // Non-IVS multitrack (no token on any endpoint): OBS falls back to its Stream
+    // Key field, which our proxy swapped for the real Twitch key - remember that
+    // so the publish is still accepted.
+    if endpoint_auths.is_empty() {
+        ctrl.remember_eb_key(twitch_key.clone());
+    }
     let ivs_url = ivs_template.map(|t| t.replace("{stream_key}", substitution));
     if let Some(ivs) = ivs_url.as_ref() {
         // Apply the override to EXACTLY one Twitch destination: the
@@ -1678,6 +1712,22 @@ struct IngestEndpoint {
     authentication: Option<String>,
 }
 
+/// Whether an OBS multitrack-config request may broker an Enhanced Broadcasting
+/// session. Under proxy EB, OBS publishes with the Twitch session token (not the
+/// user's key), so `begin_publish` can't enforce the ingest key - the user's key
+/// is presented only here, as the request's `authentication` field (OBS's Stream
+/// Key field). An empty ingest key means auth is off, so everything is allowed.
+/// The query is stripped to match `Controller::begin_publish`; constant-time
+/// compare matches the ingest-key / password / dock-token paths.
+fn eb_request_authorized(body: &str, ingest_key: &str) -> bool {
+    if ingest_key.is_empty() {
+        return true;
+    }
+    let presented = read_string_field(body, "authentication").unwrap_or_default();
+    let presented = presented.split('?').next().unwrap_or("");
+    crate::crypto::constant_time_eq(presented.as_bytes(), ingest_key.as_bytes())
+}
+
 /// Pull the first `ingest_endpoints[…]` entry's `url_template` and
 /// optional `authentication` out of Twitch's response. The parser is
 /// scoped to the substring starting at the first `"ingest_endpoints"`
@@ -1694,6 +1744,36 @@ fn first_ingest_endpoint(json: &str) -> Option<IngestEndpoint> {
         url_template,
         authentication,
     })
+}
+
+/// Every `authentication` token inside the `ingest_endpoints` array. OBS may
+/// publish with any endpoint's token (it picks the first matching its RTMP/RTMPS
+/// preference), so the broker remembers all of them. Scoped to the array - the
+/// endpoint objects hold only string fields, so the first `]` after the array
+/// key closes it, which keeps us from scooping an `authentication` from
+/// elsewhere in the response.
+fn all_ingest_endpoint_auths(json: &str) -> Vec<String> {
+    let Some(start) = json.find("\"ingest_endpoints\"") else {
+        return Vec::new();
+    };
+    let region = &json[start..];
+    let region = match region.find(']') {
+        Some(end) => &region[..end],
+        None => region,
+    };
+    let needle = "\"authentication\"";
+    let mut auths = Vec::new();
+    let mut cursor = 0;
+    while let Some(pos) = region[cursor..].find(needle) {
+        let abs = cursor + pos;
+        if let Some(val) = read_string_field(&region[abs..], "authentication") {
+            if !val.is_empty() {
+                auths.push(val);
+            }
+        }
+        cursor = abs + needle.len();
+    }
+    auths
 }
 
 /// Find `"<key>": "<value>"` in a JSON-ish substring and return the
@@ -1841,26 +1921,6 @@ fn rewrite_url_templates(json: &str, new_value: &str) -> String {
     out
 }
 
-/// The path segment OBS publishes to in the multitrack (Enhanced Broadcasting)
-/// config we hand it. With an ingest key set we embed it so OBS publishes with
-/// the exact key `Controller::begin_publish` enforces - otherwise EB would send
-/// its own session key and get rejected. Without a key (or with a key that
-/// isn't URL/JSON-safe, which a stray character could use to corrupt the config
-/// OBS parses) we leave the `{stream_key}` token for OBS to fill; generated
-/// keys are hex, so the safe path is the normal path.
-fn multitrack_ingest_segment(settings: &Arc<watch::Sender<Settings>>) -> String {
-    let key = settings.borrow().ingest_key.clone();
-    let safe = !key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if safe {
-        key
-    } else {
-        "{stream_key}".to_string()
-    }
-}
-
 fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settings>>) -> String {
     let params = config::parse_form(query);
     let encoder = params.get("encoder").map(|s| s.as_str()).unwrap_or("x264");
@@ -1955,10 +2015,9 @@ fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settin
     }
 
     format!(
-        r#"{{"meta":{{"service":"InstantClone","schema_version":"2024-06-04","config_id":"{cid}"}},"ingest_endpoints":[{{"protocol":"RTMP","url_template":"rtmp://127.0.0.1:{port}/live/{seg}"}}],"encoder_configurations":[{encs}],"audio_configurations":{{"live":[{{"codec":"aac","track_id":0,"channels":2,"settings":{{"bitrate":160}}}}]}}}}"#,
+        r#"{{"meta":{{"service":"InstantClone","schema_version":"2024-06-04","config_id":"{cid}"}},"ingest_endpoints":[{{"protocol":"RTMP","url_template":"rtmp://127.0.0.1:{port}/live/{{stream_key}}"}}],"encoder_configurations":[{encs}],"audio_configurations":{{"live":[{{"codec":"aac","track_id":0,"channels":2,"settings":{{"bitrate":160}}}}]}}}}"#,
         cid = config_id,
         port = ingest_port,
-        seg = multitrack_ingest_segment(settings),
         encs = enc_configs,
     )
 }
@@ -2159,6 +2218,12 @@ async fn post_config(
     // Mirror webhook into the controller so events fire correctly even
     // before the next supervisor settings-change tick.
     ctrl.update_webhook(new_settings.discord_webhook_url.clone());
+    // Same for the ingest key: mirror it inline so locking down the ingest port
+    // takes effect this instant. Waiting for the supervisor tick would leave a
+    // brief window where begin_publish still enforces the previous (usually
+    // empty) key and accepts any publisher - exactly the exposure the user just
+    // moved to close.
+    ctrl.update_ingest_key(new_settings.ingest_key.clone());
     // Flip the trace switch right away so a toggle in the System tab
     // takes effect this instant - no need to wait for a restart.
     crate::trace::set_enabled(new_settings.tracing_enabled);
@@ -4713,28 +4778,63 @@ mod tests {
     }
 
     #[test]
-    fn multitrack_config_embeds_ingest_key_when_set() {
-        // No key: OBS keeps the {stream_key} token, so any key is accepted.
+    fn multitrack_config_keeps_stream_key_token() {
+        // The ingest url_template we hand OBS always keeps the {stream_key}
+        // token; OBS fills it (with its Stream Key field, or the EB session
+        // token). EB publishes are accepted via Controller::remember_eb_key, not
+        // by embedding a key in this URL.
         let mut s = crate::config::Settings::defaults();
         s.ingest_port = 1935;
-        let (tx, _rx) = watch::channel(s.clone());
-        let open = obs_multitrack_config_static("encoder=x264&tracks=1", &Arc::new(tx));
-        assert!(open.contains("/live/{stream_key}"));
-
-        // Safe key: embedded directly so Enhanced Broadcasting publishes with
-        // exactly the key begin_publish enforces (no more "wrong stream key").
         s.ingest_key = "abc123def".into();
-        let (tx2, _rx2) = watch::channel(s.clone());
-        let locked = obs_multitrack_config_static("encoder=x264&tracks=1", &Arc::new(tx2));
-        assert!(locked.contains("/live/abc123def"));
-        assert!(!locked.contains("{stream_key}"));
+        let (tx, _rx) = watch::channel(s);
+        let cfg = obs_multitrack_config_static("encoder=x264&tracks=1", &Arc::new(tx));
+        assert!(cfg.contains("/live/{stream_key}"));
+    }
 
-        // Unsafe key (a stray quote could corrupt the config JSON): fall back
-        // to the token rather than emit a malformed config.
-        s.ingest_key = "bad key\"".into();
-        let (tx3, _rx3) = watch::channel(s);
-        let fb = obs_multitrack_config_static("encoder=x264&tracks=1", &Arc::new(tx3));
-        assert!(fb.contains("/live/{stream_key}"));
+    #[test]
+    fn all_ingest_endpoint_auths_collects_every_endpoint() {
+        // Real Twitch shape: an RTMP and an RTMPS endpoint. OBS picks one by its
+        // RTMPS preference, so the broker must remember both tokens. (Twitch here
+        // returns the same token for both, but distinct tokens must also work.)
+        let json = r#"{"meta":{"config_id":"x"},"ingest_endpoints":[
+            {"protocol":"RTMP","url_template":"rtmp://a/app/{stream_key}","authentication":"tok_rtmp"},
+            {"protocol":"RTMPS","url_template":"rtmps://a/app/{stream_key}","authentication":"tok_rtmps"}
+        ],"encoder_configurations":[{"authentication":"NOT_AN_ENDPOINT_TOKEN"}]}"#;
+        let auths = all_ingest_endpoint_auths(json);
+        assert_eq!(auths, vec!["tok_rtmp".to_string(), "tok_rtmps".to_string()]);
+        // The `authentication` in encoder_configurations is outside the array and
+        // must not be scooped up.
+        assert!(!auths.iter().any(|a| a.contains("NOT_AN_ENDPOINT")));
+
+        // No endpoints / no tokens -> empty, and the proxy's twitch-key fallback
+        // covers it.
+        assert!(all_ingest_endpoint_auths(r#"{"meta":{}}"#).is_empty());
+        assert!(all_ingest_endpoint_auths(
+            r#"{"ingest_endpoints":[{"protocol":"RTMP","url_template":"rtmp://a/{stream_key}"}]}"#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn eb_request_authorized_enforces_ingest_key() {
+        // OBS presents the user's Stream Key field as the request's
+        // `authentication`. This is the ONLY place the ingest key is checkable
+        // under proxy EB (the publish itself carries the Twitch token).
+        let body = r#"{"schema_version":"2024-06-04","authentication":"secretkey","client":{}}"#;
+
+        // No ingest key configured: auth off, anything allowed.
+        assert!(eb_request_authorized(body, ""));
+
+        // Correct key allowed; wrong key (the reported bug) refused.
+        assert!(eb_request_authorized(body, "secretkey"));
+        assert!(!eb_request_authorized(body, "wrongkey"));
+
+        // A user-appended query on the key field is stripped before matching.
+        let body_q = r#"{"authentication":"secretkey?bandwidthtest=true","client":{}}"#;
+        assert!(eb_request_authorized(body_q, "secretkey"));
+
+        // Missing authentication field with a key set: refused, not allowed.
+        assert!(!eb_request_authorized(r#"{"client":{}}"#, "secretkey"));
     }
 
     #[test]
