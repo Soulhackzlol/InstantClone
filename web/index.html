@@ -818,6 +818,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .sys-version-pill.new{background:color-mix(in oklch,var(--warn,#d6a23a) 18%,transparent);color:var(--warn,#d6a23a)}
 .sys-version-pill.ahead{background:color-mix(in oklch,#a18bff 18%,transparent);color:#a18bff}
 .sys-version-pill.err{background:color-mix(in oklch,var(--err) 14%,transparent);color:var(--err)}
+.sys-version-pill.off{background:color-mix(in oklch,var(--fg-3) 16%,transparent);color:var(--fg-3)}
 .sys-os-chip{display:inline-flex;align-items:center;padding:2px 9px;border-radius:99px;font-size:11px;
   font-weight:600;letter-spacing:.3px;background:var(--surface-3);color:var(--fg-2);border:1px solid var(--line)}
 /* Secrets (dock token URL) blurred by default so they can't leak on a stream
@@ -1095,7 +1096,6 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .ic-badge{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
   padding:2px 7px;border-radius:99px;margin-right:8px;vertical-align:1px}
 .ic-badge-ok{background:rgba(90,200,250,.18);color:#5ac8fa;border:1px solid rgba(90,200,250,.4)}
-.ic-badge-muted{background:rgba(139,149,163,.14);color:#8b95a3;border:1px solid var(--line)}
 .copy-block{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface);
   border:1px solid var(--line);border-radius:8px;margin-top:10px}
 .copy-block code{flex:1;font-size:12.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -2657,59 +2657,57 @@ details.sys-collapse>summary .ic-label{margin:0}
       </div>
     </section>
     <section class="sys-section">
-      <div class="row" style="align-items:center;gap:8px;justify-content:space-between">
-        <div class="ic-label" style="margin:0">Ingest key</div>
-        <span id="ingest-status" class="ic-badge ic-badge-muted" style="margin:0">open</span>
+      <div class="ic-label">Ingest key</div>
+      <div class="sys-version-row">
+        <span class="sys-version-pill off" id="ingest-status">Open</span>
+        <span class="muted" id="ingest-status-note" style="font-size:12.5px">Any stream key is accepted</span>
       </div>
-      <div class="tab-sub" style="margin-top:6px">Set a secret and only OBS publishing with it can connect - worth doing whenever the ingest port is reachable over a network. It becomes the Stream key you paste into OBS. Leave blank to accept any key.</div>
-      <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
-        <input id="s-ingest-key" class="ic-input mono" style="flex:1;min-width:180px" placeholder="blank = accept any key" autocomplete="off" spellcheck="false">
-        <button class="ic-btn ic-btn-ghost" onclick="genIngestKey()">Generate</button>
-        <button class="ic-btn ic-btn-primary" onclick="saveIngestKey(this)">Save key</button>
+      <div class="tab-sub" style="margin-top:8px">Set a secret and only OBS publishing with it can connect - worth doing whenever the ingest port is reachable over a network. It becomes the Stream key you paste into OBS. Leave blank to accept any key.</div>
+      <div class="row" style="gap:8px;align-items:center;margin-top:12px">
+        <input id="s-ingest-key" class="ic-input mono" style="flex:1;min-width:160px" placeholder="blank = accept any key" autocomplete="off" spellcheck="false">
+        <button class="ic-btn ic-btn-ghost" style="flex:0 0 auto" onclick="genIngestKey()">Generate</button>
+        <button class="ic-btn ic-btn-primary" style="flex:0 0 auto" onclick="saveIngestKey(this)">Save key</button>
       </div>
-      <div class="muted" id="ingest-key-msg" style="font-size:11.5px;margin-top:6px"></div>
+      <div class="muted" id="ingest-key-msg" style="font-size:11.5px;margin-top:8px"></div>
     </section>
     <section class="sys-section">
-      <div class="row" style="align-items:center;gap:8px;justify-content:space-between">
-        <div class="ic-label" style="margin:0">Dashboard password</div>
-        <span id="pw-status" class="ic-badge ic-badge-muted" style="margin:0">off</span>
+      <div class="ic-label">Dashboard password</div>
+      <div class="sys-version-row">
+        <span class="sys-version-pill off" id="pw-status">Off</span>
+        <span class="muted" id="pw-status-note" style="font-size:12.5px">Local-only use needs none</span>
       </div>
-      <div class="tab-sub" style="margin-top:6px">When the web UI is open to a network, a password stops anyone who finds it from touching your stream. Local-only use needs none.</div>
+      <div class="tab-sub" style="margin-top:8px">When the web UI is open to a network, a password stops anyone who finds it from touching your stream.</div>
 
-      <div id="sec-off" style="margin-top:12px">
-        <div class="form-row tight" style="align-items:end">
-          <div style="flex:1;min-width:0">
-            <span class="ic-label">New password</span>
-            <input id="sec-pw" type="password" class="ic-input" placeholder="at least 8 characters" autocomplete="new-password" spellcheck="false">
-          </div>
+      <div id="sec-off" style="margin-top:14px">
+        <div class="ic-label">New password</div>
+        <div class="row" style="gap:8px;align-items:center;margin-top:6px">
+          <input id="sec-pw" type="password" class="ic-input" style="flex:1;min-width:160px" placeholder="at least 8 characters" autocomplete="new-password" spellcheck="false">
           <button class="ic-btn ic-btn-primary" style="flex:0 0 auto" onclick="enableAuth(this,'sec-pw')">Enable</button>
         </div>
-        <div class="muted" id="sec-off-msg" style="font-size:11.5px;margin-top:6px"></div>
+        <div class="muted" id="sec-off-msg" style="font-size:11.5px;margin-top:8px"></div>
       </div>
 
-      <div id="sec-on" hidden style="margin-top:12px">
-        <div class="muted" style="font-size:12px">The dashboard requires sign-in. Manage the password and dock access below.</div>
-
-        <div class="form-row tight" style="align-items:end;margin-top:12px">
-          <div style="flex:1;min-width:0">
-            <span class="ic-label">Change password</span>
-            <input id="sec-pw2" type="password" class="ic-input" placeholder="new password" autocomplete="new-password" spellcheck="false">
-          </div>
+      <div id="sec-on" hidden style="margin-top:14px">
+        <div class="ic-label">Change password</div>
+        <div class="row" style="gap:8px;align-items:center;margin-top:6px">
+          <input id="sec-pw2" type="password" class="ic-input" style="flex:1;min-width:160px" placeholder="new password" autocomplete="new-password" spellcheck="false">
           <button class="ic-btn ic-btn-ghost" style="flex:0 0 auto" onclick="enableAuth(this,'sec-pw2')">Update</button>
         </div>
 
-        <div class="ic-card" style="margin-top:14px;padding:14px">
-          <span class="ic-label">OBS dock URL</span>
-          <div class="tab-sub" style="margin-top:2px">The OBS dock can't sign in, so paste this token URL as its Custom Browser Dock. It runs the stream (delay, cut, destination on/off) but never reveals your keys or changes settings.</div>
-          <div class="copy-block" style="margin-top:6px">
+        <div class="sys-about-card" style="margin-top:14px">
+          <div class="ic-label">OBS dock URL</div>
+          <div class="tab-sub" style="margin-top:4px">The OBS dock can't sign in, so paste this token URL as its Custom Browser Dock. It runs the stream (delay, cut, destination on/off) but never reveals your keys or changes settings.</div>
+          <div class="copy-block" style="margin-top:8px">
             <code class="mono blur-secret" id="sec-dock-url" style="overflow-x:auto;white-space:nowrap;min-width:0" title="Hidden to prevent leaks on stream. Use Show to reveal."></code>
             <button class="ic-btn ic-btn-ghost" id="sec-dock-toggle" onclick="toggleSecret('sec-dock-url',this)">Show</button>
             <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'sec-dock-url','Dock URL')">Copy</button>
           </div>
-          <button class="ic-btn ic-btn-ghost" style="margin-top:10px" onclick="regenDock(this)">Regenerate</button>
+          <div class="row" style="margin-top:10px">
+            <button class="ic-btn ic-btn-ghost" onclick="regenDock(this)">Regenerate</button>
+          </div>
         </div>
 
-        <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:16px">
+        <div class="row" style="gap:8px;align-items:center;margin-top:14px">
           <button class="ic-btn ic-btn-ghost" onclick="logoutNow()">Log out</button>
           <button class="ic-btn ic-btn-warn" onclick="disableAuth(this)">Turn off password</button>
         </div>
@@ -5180,9 +5178,11 @@ function applyAuthState(enabled, dockToken){
   if ($('sec-on')) $('sec-on').hidden = !_authEnabled;
   const st = $('pw-status');
   if (st){
-    st.textContent = _authEnabled ? 'on' : 'off';
-    st.className = 'ic-badge ' + (_authEnabled ? 'ic-badge-ok' : 'ic-badge-muted');
+    st.textContent = _authEnabled ? 'On' : 'Off';
+    st.className = 'sys-version-pill ' + (_authEnabled ? 'ok' : 'off');
   }
+  const stn = $('pw-status-note');
+  if (stn) stn.textContent = _authEnabled ? 'Sign-in required' : 'Local-only use needs none';
   const url = $('sec-dock-url');
   if (url){
     url.textContent = dockToken ? (location.origin + '/dock?token=' + dockToken) : '';
@@ -5273,9 +5273,11 @@ function applyIngestKey(key){
     : 'Any string works. The real platform key lives in <b>Destinations</b>.';
   const st = $('ingest-status');
   if (st){
-    st.textContent = key ? 'locked' : 'open';
-    st.className = 'ic-badge ' + (key ? 'ic-badge-ok' : 'ic-badge-muted');
+    st.textContent = key ? 'Locked' : 'Open';
+    st.className = 'sys-version-pill ' + (key ? 'ok' : 'off');
   }
+  const stn = $('ingest-status-note');
+  if (stn) stn.textContent = key ? 'Only OBS with your key can publish' : 'Any stream key is accepted';
   renderLanWarning();
 }
 
