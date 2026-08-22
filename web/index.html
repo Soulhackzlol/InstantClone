@@ -810,6 +810,10 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 @media (max-width:680px){.sys-about-grid{grid-template-columns:1fr}}
 .sys-about-card{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px}
 .sys-about-card .ic-label{margin-bottom:4px}
+/* One input that grows + its action buttons, on a single line (wrapping only
+   when the row gets genuinely narrow). Used by the Security controls. */
+.sec-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sec-row .ic-input{flex:1 1 180px;min-width:0}
 .sys-version-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}
 .sys-version-num{font-family:var(--mono);font-size:13px;color:var(--fg);font-weight:600}
 .sys-version-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:99px;
@@ -2663,10 +2667,10 @@ details.sys-collapse>summary .ic-label{margin:0}
         <span class="muted" id="ingest-status-note" style="font-size:12.5px">Any stream key is accepted</span>
       </div>
       <div class="tab-sub" style="margin-top:8px">Set a secret and only OBS publishing with it can connect - worth doing whenever the ingest port is reachable over a network. It becomes the Stream key you paste into OBS. Leave blank to accept any key.</div>
-      <div class="row" style="gap:8px;align-items:center;margin-top:12px">
-        <input id="s-ingest-key" class="ic-input mono" style="flex:1;min-width:160px" placeholder="blank = accept any key" autocomplete="off" spellcheck="false">
-        <button class="ic-btn ic-btn-ghost" style="flex:0 0 auto" onclick="genIngestKey()">Generate</button>
-        <button class="ic-btn ic-btn-primary" style="flex:0 0 auto" onclick="saveIngestKey(this)">Save key</button>
+      <div class="sec-row" style="margin-top:12px">
+        <input id="s-ingest-key" class="ic-input mono" placeholder="blank = accept any key" aria-label="Ingest key" autocomplete="off" spellcheck="false">
+        <button class="ic-btn ic-btn-ghost" onclick="genIngestKey()">Generate</button>
+        <button class="ic-btn ic-btn-primary" onclick="saveIngestKey(this)">Save key</button>
       </div>
       <div class="muted" id="ingest-key-msg" style="font-size:11.5px;margin-top:8px"></div>
     </section>
@@ -2680,18 +2684,18 @@ details.sys-collapse>summary .ic-label{margin:0}
 
       <div id="sec-off" style="margin-top:14px">
         <div class="ic-label">New password</div>
-        <div class="row" style="gap:8px;align-items:center;margin-top:6px">
-          <input id="sec-pw" type="password" class="ic-input" style="flex:1;min-width:160px" placeholder="at least 8 characters" autocomplete="new-password" spellcheck="false">
-          <button class="ic-btn ic-btn-primary" style="flex:0 0 auto" onclick="enableAuth(this,'sec-pw')">Enable</button>
+        <div class="sec-row" style="margin-top:6px">
+          <input id="sec-pw" type="password" class="ic-input" placeholder="at least 8 characters" aria-label="New dashboard password" autocomplete="new-password" spellcheck="false">
+          <button class="ic-btn ic-btn-primary" onclick="enableAuth(this,'sec-pw')">Enable</button>
         </div>
         <div class="muted" id="sec-off-msg" style="font-size:11.5px;margin-top:8px"></div>
       </div>
 
       <div id="sec-on" hidden style="margin-top:14px">
         <div class="ic-label">Change password</div>
-        <div class="row" style="gap:8px;align-items:center;margin-top:6px">
-          <input id="sec-pw2" type="password" class="ic-input" style="flex:1;min-width:160px" placeholder="new password" autocomplete="new-password" spellcheck="false">
-          <button class="ic-btn ic-btn-ghost" style="flex:0 0 auto" onclick="enableAuth(this,'sec-pw2')">Update</button>
+        <div class="sec-row" style="margin-top:6px">
+          <input id="sec-pw2" type="password" class="ic-input" placeholder="new password" aria-label="Change dashboard password" autocomplete="new-password" spellcheck="false">
+          <button class="ic-btn ic-btn-ghost" onclick="enableAuth(this,'sec-pw2')">Update</button>
         </div>
 
         <div class="sys-about-card" style="margin-top:14px">
@@ -2702,12 +2706,12 @@ details.sys-collapse>summary .ic-label{margin:0}
             <button class="ic-btn ic-btn-ghost" id="sec-dock-toggle" onclick="toggleSecret('sec-dock-url',this)">Show</button>
             <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'sec-dock-url','Dock URL')">Copy</button>
           </div>
-          <div class="row" style="margin-top:10px">
+          <div class="sec-row" style="margin-top:10px">
             <button class="ic-btn ic-btn-ghost" onclick="regenDock(this)">Regenerate</button>
           </div>
         </div>
 
-        <div class="row" style="gap:8px;align-items:center;margin-top:14px">
+        <div class="sec-row" style="margin-top:14px">
           <button class="ic-btn ic-btn-ghost" onclick="logoutNow()">Log out</button>
           <button class="ic-btn ic-btn-warn" onclick="disableAuth(this)">Turn off password</button>
         </div>
