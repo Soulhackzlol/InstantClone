@@ -68,11 +68,40 @@ impl RateLimiter {
         Ok(())
     }
 
+    /// Reject if `client` is locked out; otherwise count this attempt and arm
+    /// the lockout if it crosses the threshold - all under a single lock. Use
+    /// this when the check and the verification it guards are separated by an
+    /// `.await` (login runs PBKDF2 on a blocking thread): counting at check time
+    /// stops a burst of concurrent requests from all clearing the gate before
+    /// any failure is recorded. Clear on success with `record_success`; a plain
+    /// failure needs no further call.
+    pub fn check_and_count(&self, client: &str) -> Result<(), Duration> {
+        let now = Instant::now();
+        let mut a = self.attempts.lock();
+        if let Some(e) = a.get(client) {
+            if now.duration_since(e.last) > self.window {
+                a.remove(client);
+            } else if let Some(until) = e.locked_until {
+                if until > now {
+                    return Err(until - now);
+                }
+            }
+        }
+        self.bump_failure(&mut a, client, now);
+        Ok(())
+    }
+
     /// Record a failed attempt and (re)arm the lockout: exponential in the
     /// number of failures past the threshold, capped at `max_lockout`.
     pub fn record_failure(&self, client: &str) {
         let now = Instant::now();
         let mut a = self.attempts.lock();
+        self.bump_failure(&mut a, client, now);
+    }
+
+    /// Increment a client's failure count under an already-held lock, arming the
+    /// exponential lockout past the threshold and keeping the map bounded.
+    fn bump_failure(&self, a: &mut HashMap<String, Attempt>, client: &str, now: Instant) {
         // Bound the map so an attacker cycling source IPs (a whole IPv6 /64 is
         // routable to one host) can't grow it without limit. Drop entries past
         // the forgiveness window first; if a genuine flood keeps it full, evict
@@ -94,8 +123,14 @@ impl RateLimiter {
         e.fails = e.fails.saturating_add(1);
         e.last = now;
         if e.fails >= self.max_fails {
-            let over = (e.fails - self.max_fails).min(6); // cap the shift
-            let lock = (self.base_lockout * (1u32 << over)).min(self.max_lockout);
+            // Cap the shift so the doubling can't overflow.
+            let over = (e.fails - self.max_fails).min(6);
+            // Never lock past the forgiveness window: `check` frees an entry once
+            // it's older than `window`, so a lockout longer than that could be
+            // wiped early. Clamp to keep the two consistent regardless of config.
+            let lock = (self.base_lockout * (1u32 << over))
+                .min(self.max_lockout)
+                .min(self.window);
             e.locked_until = Some(now + lock);
         }
     }
@@ -168,12 +203,12 @@ impl AuthState {
         self.sessions.lock().clear();
     }
 
-    // Login limiter, delegated so web.rs keeps its small surface.
-    pub fn check_login_allowed(&self, client: &str) -> Result<(), Duration> {
-        self.login.check(client)
-    }
-    pub fn record_failure(&self, client: &str) {
-        self.login.record_failure(client)
+    // Login limiter, delegated so web.rs keeps its small surface. The gate
+    // counts the attempt as it checks (`check_and_count`) so a burst of
+    // concurrent logins can't slip past the lockout before the async password
+    // hash resolves; a success clears the record.
+    pub fn begin_login_attempt(&self, client: &str) -> Result<(), Duration> {
+        self.login.check_and_count(client)
     }
     pub fn record_success(&self, client: &str) {
         self.login.record_success(client)
@@ -209,13 +244,33 @@ mod tests {
     fn lockout_after_threshold_and_cleared_on_success() {
         let a = AuthState::new();
         let ip = "10.0.0.1";
-        assert!(a.check_login_allowed(ip).is_ok());
+        // Each attempt counts as it's checked. Five are allowed, the sixth is
+        // locked out; a success clears the record.
         for _ in 0..5 {
-            a.record_failure(ip);
+            assert!(a.begin_login_attempt(ip).is_ok());
         }
-        assert!(a.check_login_allowed(ip).is_err());
+        assert!(a.begin_login_attempt(ip).is_err());
         a.record_success(ip);
-        assert!(a.check_login_allowed(ip).is_ok());
+        assert!(a.begin_login_attempt(ip).is_ok());
+    }
+
+    #[test]
+    fn check_and_count_counts_at_check_time() {
+        // The gate must count the attempt itself, so concurrent callers can't
+        // all pass before any failure lands (the TOCTOU the login await opened).
+        let r = RateLimiter::new(
+            3,
+            Duration::from_secs(30),
+            Duration::from_secs(600),
+            Duration::from_secs(600),
+        );
+        let c = "peer";
+        assert!(r.check_and_count(c).is_ok()); // 1
+        assert!(r.check_and_count(c).is_ok()); // 2
+        assert!(r.check_and_count(c).is_ok()); // 3 -> arms the lock
+        assert!(r.check_and_count(c).is_err()); // 4 -> locked, no verify happens
+        r.record_success(c);
+        assert!(r.check_and_count(c).is_ok()); // cleared
     }
 
     #[test]

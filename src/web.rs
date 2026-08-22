@@ -430,7 +430,9 @@ async fn auth_gate(
             // Rate-limit BEFORE hashing so a locked-out or spamming client
             // burns no CPU. Vital on the single-threaded runtime, where a
             // 230ms hash on every attempt would otherwise stall the stream.
-            if let Err(wait) = auth.check_login_allowed(peer_ip) {
+            // begin_login_attempt counts this try as it checks, so N concurrent
+            // requests can't all clear the gate before the hash below resolves.
+            if let Err(wait) = auth.begin_login_attempt(peer_ip) {
                 let msg = format!(
                     r#"{{"ok":false,"error":"too many attempts, wait {}s"}}"#,
                     wait.as_secs() + 1
@@ -460,7 +462,7 @@ async fn auth_gate(
                 write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, &set).await?;
                 return Ok(AuthDecision::Handled);
             }
-            auth.record_failure(peer_ip);
+            // The attempt was already counted by begin_login_attempt above.
             write_simple(
                 sock,
                 "401 Unauthorized",
