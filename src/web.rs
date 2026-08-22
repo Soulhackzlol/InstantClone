@@ -216,13 +216,13 @@ async fn serve(
     // fail-closed once a password is set. The whole security-critical surface
     // lives in one auditable function; a `Handled` result means it already
     // wrote a response (login page, 401, redirect, an /auth/* mutation).
-    let dock_set_cookie = match auth_gate(
+    let (dock_set_cookie, is_admin) = match auth_gate(
         &mut sock, method, path, bare_path, head_str, body, &settings, &cfg_path, &auth, &peer_ip,
     )
     .await?
     {
         AuthDecision::Handled => return Ok(()),
-        AuthDecision::Allow(cookie) => cookie,
+        AuthDecision::Allow { cookie, is_admin } => (cookie, is_admin),
     };
 
     // Fast-path: static, pre-gzipped dashboard + dock. These two pages
@@ -345,7 +345,7 @@ async fn serve(
     }
 
     let (status, ctype, payload) =
-        route(method, path, body, &ctrl, &settings, &cfg_path, &sysstat).await;
+        route(method, path, body, &ctrl, &settings, &cfg_path, &sysstat, is_admin).await;
 
     // ACAO is intentionally restrictive now - only set on GET responses
     // so overlays / docks loaded as foreign origins can still read state.
@@ -370,7 +370,11 @@ async fn serve(
 /// request is allowed through with an optional `/dock` Set-Cookie header.
 enum AuthDecision {
     Handled,
-    Allow(String),
+    /// The request may proceed. `cookie` is an optional Set-Cookie line (the
+    /// dock-token handoff); `is_admin` is true for a full dashboard session or
+    /// when auth is off, false for a dock-token-only caller. Routes use it to
+    /// redact secrets and refuse settings writes for the dock.
+    Allow { cookie: String, is_admin: bool },
 }
 
 /// The optional dashboard-auth gate, kept in one auditable place so `serve()`
@@ -392,6 +396,10 @@ async fn auth_gate(
     peer_ip: &str,
 ) -> io::Result<AuthDecision> {
     let mut dock_set_cookie = String::new();
+    // True for a full dashboard session and (below) when auth is off entirely.
+    // Flipped to the session state once a password is set, so a dock-token
+    // caller is marked non-admin and routes can redact secrets from it.
+    let mut is_admin = true;
 
     // OFF BY DEFAULT: with no password set this is a single is_empty() on the
     // borrow (no allocation, no clone) and we fall straight through. Once a
@@ -404,6 +412,9 @@ async fn auth_gate(
         let cookies = parse_cookies(head_str);
         let session_cookie = cookies.get("ic_session").cloned().unwrap_or_default();
         let has_session = auth.validate_session(&session_cookie);
+        // Only a real session is admin; a dock token authorizes Control routes
+        // but never confers admin, so it never sees a redacted-away secret.
+        is_admin = has_session;
 
         // --- login page + login/logout (reachable without a session) ---
         if method == "GET" && bare_path == "/login" {
@@ -631,9 +642,16 @@ async fn auth_gate(
         return Ok(AuthDecision::Handled);
     }
 
-    Ok(AuthDecision::Allow(dock_set_cookie))
+    Ok(AuthDecision::Allow {
+        cookie: dock_set_cookie,
+        is_admin,
+    })
 }
 
+// The central request dispatcher genuinely needs all of these: the request
+// parts, the shared runtime handles, and the caller's admin flag. Bundling them
+// into a struct would only move the argument list, not remove it.
+#[allow(clippy::too_many_arguments)]
 async fn route(
     method: &str,
     path: &str,
@@ -642,6 +660,7 @@ async fn route(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
     sysstat: &Arc<SysStat>,
+    is_admin: bool,
 ) -> (&'static str, &'static str, String) {
     // Strip ?query - we only read it for /overlay.
     let (bare_path, query) = match path.split_once('?') {
@@ -698,7 +717,11 @@ async fn route(
         ("GET", "/config") => (
             "200 OK",
             "application/json",
-            settings.borrow().to_json(crate::autostart::is_enabled()),
+            // A dock-token caller (is_admin == false) gets the config with the
+            // raw ingest key and dock token blanked; a full session gets them.
+            settings
+                .borrow()
+                .to_json(crate::autostart::is_enabled(), is_admin),
         ),
         ("GET", "/docks") => dock_list_json(settings),
         ("GET", "/platforms") => ("200 OK", "application/json", platforms_json()),
@@ -3412,6 +3435,7 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
             }
         }
         "ingest_bind_all" => s.ingest_bind_all = value == "on" || value == "true" || value == "1",
+        "ingest_key" => s.ingest_key = value.into(),
         "web_port" => {
             if let Ok(v) = value.parse() {
                 s.web_port = v;
@@ -3616,6 +3640,16 @@ fn classify_access(method: &str, path: &str) -> Access {
         | ("GET", "/docks")
         | ("GET", "/profiles")
         | ("GET", "/platforms")
+        // Read + operational routes the OBS dock needs so it can render and run
+        // the stream. GET /config is redacted for a dock caller (no raw ingest
+        // key or dock token - see route + to_json); GET /destinations is already
+        // redacted (a "key set" boolean, never the raw key); toggling a
+        // destination on/off is operational, not a settings change. Editing
+        // settings, upserting destinations, and every secret write stay Admin.
+        | ("GET", "/config")
+        | ("GET", "/destinations")
+        | ("GET", "/overlays")
+        | ("POST", "/destinations/toggle")
         | ("POST", "/arm")
         | ("POST", "/activate")
         | ("POST", "/stop")
@@ -3625,6 +3659,8 @@ fn classify_access(method: &str, path: &str) -> Access {
         | ("POST", "/cut-after")
         | ("POST", "/cut-after/cancel") => Access::Control,
         ("POST", p) if p.starts_with("/docks/") => Access::Control,
+        // GET a saved dock layout (the dock loads its own persisted layout).
+        ("GET", p) if p.starts_with("/docks/") => Access::Control,
         _ => Access::Admin,
     }
 }
@@ -4254,6 +4290,19 @@ mod tests {
             normalize_stream_format("youtube", Some("garbage")),
             "horizontal"
         );
+    }
+
+    #[test]
+    fn apply_field_str_persists_ingest_key() {
+        // Regression: ingest_key is in post_config's form whitelist, so
+        // apply_field_str must have a matching arm or the "Save key" button
+        // silently no-ops and the ingest is never actually locked.
+        let mut s = crate::config::Settings::defaults();
+        assert!(s.ingest_key.is_empty());
+        apply_field_str(&mut s, "ingest_key", "hunter2ingest");
+        assert_eq!(s.ingest_key, "hunter2ingest");
+        apply_field_str(&mut s, "ingest_key", "");
+        assert!(s.ingest_key.is_empty());
     }
 
     #[test]

@@ -881,7 +881,11 @@ impl Settings {
     /// does not live in `Settings` at all - the Run-key entry is its own
     /// source of truth (see `crate::autostart`). Taking it as an argument
     /// keeps this function free of hidden I/O.
-    pub fn to_json(&self, start_with_windows: bool) -> String {
+    /// `include_secrets` gates the two raw credentials in the payload: the
+    /// ingest key and the dock token. A full dashboard session gets them (the
+    /// Network settings UI needs to show them); a dock-token caller does not,
+    /// so the dock can render without ever learning a secret it could leak.
+    pub fn to_json(&self, start_with_windows: bool, include_secrets: bool) -> String {
         // Build the destinations array. Stream keys are NEVER echoed back
         // (security); we expose a redacted form of the resolved URL plus
         // a `stream_key_set` boolean per destination.
@@ -910,9 +914,9 @@ impl Settings {
             r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"destinations":{dests}}}"#,
             c = self.configured,
             sww = start_with_windows,
-            ik = json_str(&self.ingest_key),
+            ik = json_str(if include_secrets { self.ingest_key.as_str() } else { "" }),
             ae = !self.dashboard_password_hash.is_empty(),
-            dt = json_str(&self.dock_token),
+            dt = json_str(if include_secrets { self.dock_token.as_str() } else { "" }),
             osname = json_str(os_name()),
             ver = json_str(crate::update_check::current_version()),
             ip = self.ingest_port,
@@ -1345,8 +1349,8 @@ mod tests {
     #[test]
     fn to_json_reflects_the_passed_autostart_state() {
         let s = Settings::defaults();
-        assert!(s.to_json(true).contains(r#""start_with_windows":true"#));
-        assert!(s.to_json(false).contains(r#""start_with_windows":false"#));
+        assert!(s.to_json(true, true).contains(r#""start_with_windows":true"#));
+        assert!(s.to_json(false, true).contains(r#""start_with_windows":false"#));
     }
 
     /// The auth + ingest secrets must survive a save/load round-trip, and the
@@ -1368,13 +1372,22 @@ mod tests {
         assert_eq!(loaded.dashboard_password_hash, "pbkdf2-sha256$210000$aa$bb");
         assert_eq!(loaded.dock_token, "a1b2c3d4e5f60718");
 
-        // Wire JSON: auth_enabled true, ingest_key + dock_token present, but
-        // the password hash must not leak.
-        let json = loaded.to_json(false);
+        // Admin wire JSON: auth_enabled true, ingest_key + dock_token present,
+        // but the password hash must not leak.
+        let json = loaded.to_json(false, true);
         assert!(json.contains(r#""auth_enabled":true"#));
         assert!(json.contains(r#""dock_token":"a1b2c3d4e5f60718""#));
         assert!(!json.contains("pbkdf2-sha256"));
         assert!(!json.contains("dashboard_password_hash"));
+
+        // Dock-token wire JSON: same shape, but the two raw secrets are blanked
+        // so a dock-only caller can never read them.
+        let redacted = loaded.to_json(false, false);
+        assert!(redacted.contains(r#""auth_enabled":true"#));
+        assert!(!redacted.contains("streamsecret"));
+        assert!(!redacted.contains("a1b2c3d4e5f60718"));
+        assert!(redacted.contains(r#""ingest_key":"""#));
+        assert!(redacted.contains(r#""dock_token":"""#));
 
         // A default install writes neither secret line and reads auth as off.
         let plain = Settings::defaults();
@@ -1395,7 +1408,7 @@ mod tests {
     /// always be present and non-empty.
     #[test]
     fn to_json_carries_the_os_tag() {
-        let json = Settings::defaults().to_json(false);
+        let json = Settings::defaults().to_json(false, true);
         assert!(
             json.contains(r#""os":"windows""#)
                 || json.contains(r#""os":"linux""#)
