@@ -1835,7 +1835,7 @@ details.sys-collapse>summary .ic-label{margin:0}
                 <p class="wizard-obs-body">Prefer pasting a URL? Set <b>Service: Custom</b> in OBS. It applies live, nothing to close.</p>
                 <div class="wizard-obs-copy-row">
                   <span class="muted">Server</span>
-                  <code class="mono" id="wiz-obs-srv">rtmp://127.0.0.1:1935/live</code>
+                  <code class="mono" id="wiz-obs-srv">rtmp://localhost:1935/live</code>
                   <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'wiz-obs-srv','Server URL')">Copy</button>
                 </div>
                 <div class="wizard-obs-copy-row">
@@ -2295,7 +2295,7 @@ details.sys-collapse>summary .ic-label{margin:0}
         <div class="obs-manual-field">
           <div class="ic-label">Server URL</div>
           <div class="copy-block">
-            <code class="mono" id="obs-srv">rtmp://127.0.0.1:1935/live</code>
+            <code class="mono" id="obs-srv">rtmp://localhost:1935/live</code>
             <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-srv','Server URL')">Copy</button>
           </div>
         </div>
@@ -3678,7 +3678,7 @@ function renderHeader(s){
   $('hdr-obs-v').textContent = s.ingest_alive ? 'Live' : 'Offline';
   obs.title = s.ingest_alive
     ? 'Your encoder is connected and publishing to InstantClone.'
-    : 'Waiting for your encoder. Point OBS (or any RTMP encoder) at rtmp://127.0.0.1:1935/live and start streaming.';
+    : 'Waiting for your encoder. Point OBS (or any RTMP encoder) at rtmp://localhost:1935/live and start streaming.';
   // Egress pill - how many destinations are actually connected.
   const eg = $('hdr-egress');
   const total = s.destinations_total || 0;
@@ -5157,8 +5157,8 @@ async function nudgeObsWiringIfNeeded(){
     const r = await (await fetch('/obs/register-status')).json();
     if (r.registered) return;
     const how = (r.path === null)
-      ? 'In OBS → Settings → Stream: Service = Custom, Server = rtmp://127.0.0.1:1935/live, then restart OBS.'
-      : 'In OBS → Settings → Stream, pick InstantClone (or Custom: rtmp://127.0.0.1:1935/live), then restart OBS.';
+      ? 'In OBS → Settings → Stream: Service = Custom, Server = rtmp://localhost:1935/live, then restart OBS.'
+      : 'In OBS → Settings → Stream, pick InstantClone (or Custom: rtmp://localhost:1935/live), then restart OBS.';
     toast('One more step to go live: point OBS at InstantClone. ' + how, 'info', 11000);
   } catch(_){ /* status endpoint unreachable; the first-run tour still covers OBS wiring */ }
 }
