@@ -878,9 +878,16 @@ impl Settings {
     }
 
     pub fn obs_url(&self) -> String {
-        // What OBS should be pointed at. Always 127.0.0.1 from the user's
+        // What OBS should be pointed at. Always loopback from the user's
         // perspective even if we bind on 0.0.0.0.
-        format!("rtmp://127.0.0.1:{}/live", self.ingest_port)
+        //
+        // `localhost` rather than a literal, for the same reason
+        // `obs_register::server_url` uses it: OBS's IP Family setting picks
+        // the address family passed to `getaddrinfo`, and an IPv4 literal
+        // cannot resolve under AF_INET6. Someone pasting this into a Custom
+        // service hits that wall exactly like someone picking our
+        // registered service would.
+        format!("rtmp://localhost:{}/live", self.ingest_port)
     }
 
     /// First destination's resolved URL - used by the legacy single-dest

@@ -78,14 +78,70 @@ pub fn services_json_path() -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
-/// True when the user's services.json already contains an entry whose
-/// `name` matches our `SERVICE_NAME`. Used by the System tab to render
+/// True when services.json holds an InstantClone entry that matches the
+/// ports and URLs we would write today. Used by the System tab to render
 /// the button as "Unregister" instead of "Register".
-pub fn is_registered() -> bool {
+///
+/// Deliberately stricter than "an entry with our name exists". An entry
+/// written by an older build, or before the user retuned a port, still
+/// carries our name while pointing OBS somewhere useless, and reporting
+/// that as registered leaves the user with no way to notice or fix it.
+/// Reporting it as unregistered puts the Register button back, and
+/// `register` is remove-and-replace, so one click repairs it.
+pub fn is_registered(web_port: u16, ingest_port: u16) -> bool {
     let Some(p) = services_json_path() else {
         return false;
     };
-    matches!(fs::read_to_string(&p), Ok(s) if entry_exists(&s))
+    let Ok(file) = fs::read_to_string(&p) else {
+        return false;
+    };
+    entry_exists(&file) && registration_is_current(&file, web_port, ingest_port)
+}
+
+/// Whether the entry in `file` still matches what `entry_json` produces.
+///
+/// Checks the two URLs that decide whether OBS can reach us, the RTMP
+/// server and the multi-track config endpoint. Both carry a port, so a
+/// retuned port shows up here too.
+///
+/// The literals must also be gone. A plain "contains our URL" test would
+/// pass a file that has our current entry *plus* leftover literal servers
+/// from an older build, leaving dead options in the dropdown that fail
+/// under one IP Family setting each. No other service in OBS's
+/// services.json points at loopback on our port, so finding one means it
+/// is ours and out of date.
+fn registration_is_current(file: &str, web_port: u16, ingest_port: u16) -> bool {
+    let stale_literals = [
+        format!("rtmp://127.0.0.1:{ingest_port}/live"),
+        format!("rtmp://[::1]:{ingest_port}/live"),
+    ];
+    file.contains(&server_url(ingest_port))
+        && file.contains(&multitrack_url(web_port))
+        && !stale_literals.iter().any(|u| file.contains(u.as_str()))
+}
+
+/// The RTMP URL we advertise to OBS.
+///
+/// `localhost`, not a literal, and that is the whole point. OBS's
+/// Settings -> Advanced -> Network -> IP Family is a resolver setting: it
+/// picks the address family passed to `getaddrinfo`. Under IP Family =
+/// IPv6 an IPv4 literal cannot resolve (`getaddrinfo("127.0.0.1",
+/// AF_INET6)` returns host-not-found), and under IPv4 an IPv6 literal
+/// cannot either. `localhost` is the one spelling that resolves under all
+/// three settings, so a single entry covers every configuration and the
+/// user never has to know the setting exists.
+///
+/// This is safe only because the ingest binds both families (see
+/// `Settings::ingest_addrs`). Under IPv4+IPv6 OBS resolves both `::1` and
+/// `127.0.0.1` and races them; happy-eyeballs reports failure only when
+/// every candidate fails, so even if our IPv6 leg could not bind, the
+/// IPv4 leg still wins the race.
+fn server_url(ingest_port: u16) -> String {
+    format!("rtmp://localhost:{ingest_port}/live")
+}
+
+fn multitrack_url(web_port: u16) -> String {
+    format!("http://127.0.0.1:{web_port}/obs/multitrack-config")
 }
 
 /// Build the services.json entry for InstantClone. The
@@ -96,15 +152,9 @@ pub fn is_registered() -> bool {
 /// the name marker to the nearest `{` without tracking strings, so it only
 /// finds our object's opening brace while nothing precedes the name.
 ///
-/// Three server entries, IPv4 first because it is what almost everyone
-/// dials and what existing profiles already have saved. The other two
-/// exist for OBS's Settings -> Advanced -> Network -> IP Family, which is
-/// a resolver setting: under IP Family = IPv6 OBS asks for `AF_INET6`, an
-/// IPv4 literal cannot resolve under it, and the stream fails with
-/// "Error reaching host" before a socket is ever opened. `localhost`
-/// resolves under every family setting, so it is the one to pick when in
-/// doubt; the explicit `[::1]` entry is there for anyone who wants to be
-/// unambiguous.
+/// One server entry, on `localhost`. See `server_url` for why that
+/// spelling is the only one that works under every OBS IP Family setting,
+/// and why a single entry beats offering the user a choice.
 fn entry_json(web_port: u16, ingest_port: u16) -> String {
     format!(
         r#"{{
@@ -112,21 +162,13 @@ fn entry_json(web_port: u16, ingest_port: u16) -> String {
             "common": true,
             "more_info_link": "https://github.com/Soulhackzlol/InstantClone",
             "stream_key_link": "http://127.0.0.1:{web}/",
-            "multitrack_video_configuration_url": "http://127.0.0.1:{web}/obs/multitrack-config",
+            "multitrack_video_configuration_url": "{mtv}",
             "multitrack_video_name": "Multi-track via InstantClone",
             "multitrack_video_learn_more_link": "https://github.com/Soulhackzlol/InstantClone",
             "servers": [
                 {{
                     "name": "InstantClone (local proxy)",
-                    "url": "rtmp://127.0.0.1:{rtmp}/live"
-                }},
-                {{
-                    "name": "InstantClone (localhost, any IP family)",
-                    "url": "rtmp://localhost:{rtmp}/live"
-                }},
-                {{
-                    "name": "InstantClone (IPv6 loopback)",
-                    "url": "rtmp://[::1]:{rtmp}/live"
+                    "url": "{server}"
                 }}
             ],
             "recommended": {{
@@ -138,7 +180,8 @@ fn entry_json(web_port: u16, ingest_port: u16) -> String {
             "supported video codecs": ["h264"]
         }}"#,
         web = web_port,
-        rtmp = ingest_port,
+        mtv = multitrack_url(web_port),
+        server = server_url(ingest_port),
     )
 }
 
@@ -1242,29 +1285,59 @@ mod tests {
         assert!(stripped.contains("YouTube"));
     }
 
-    /// The IPv6 entries only help if OBS can still find and remove our
-    /// object, and `remove_entry` walks braces by hand. Three nested server
-    /// objects instead of one is exactly the shape that would break a
-    /// depth-blind walk, so pin the round-trip on the real entry.
+    /// The single server entry must be the `localhost` spelling. An IP
+    /// literal of either family is unreachable under one of OBS's three IP
+    /// Family settings, because that setting picks the address family
+    /// handed to `getaddrinfo`. Measured on Windows 11:
+    /// `getaddrinfo("127.0.0.1", AF_INET6)` returns 11001 host-not-found,
+    /// while `localhost` resolves under AF_INET, AF_INET6 and AF_UNSPEC.
     #[test]
-    fn entry_with_ipv6_servers_still_round_trips_through_remove() {
+    fn entry_advertises_localhost_so_every_ip_family_setting_resolves() {
         let entry = entry_json(7799, 1935);
-        assert!(entry.contains("rtmp://127.0.0.1:1935/live"), "IPv4 entry");
-        assert!(entry.contains("rtmp://localhost:1935/live"), "any-family");
-        assert!(entry.contains("rtmp://[::1]:1935/live"), "IPv6 literal");
-        // IPv4 must stay the first server: OBS preselects it, and every
-        // existing profile already has that URL saved.
-        let v4 = entry.find("rtmp://127.0.0.1:1935/live").unwrap();
-        let localhost = entry.find("rtmp://localhost:1935/live").unwrap();
-        let v6 = entry.find("rtmp://[::1]:1935/live").unwrap();
-        assert!(v4 < localhost && localhost < v6, "IPv4 first");
+        assert!(entry.contains(r#""url": "rtmp://localhost:1935/live""#));
+        // A literal would strand one IP Family setting apiece.
+        assert!(!entry.contains("rtmp://127.0.0.1:1935/live"), "no v4 literal");
+        assert!(!entry.contains("rtmp://[::1]:1935/live"), "no v6 literal");
+        // One server, so the user never has to pick.
+        assert_eq!(entry.matches(r#""url": "rtmp://"#).count(), 1);
+    }
 
-        let patched = insert_entry(&fake_services_json(), &entry).expect("insert");
-        assert!(entry_exists(&patched));
-        let stripped = remove_entry(&patched).expect("remove");
-        assert!(!entry_exists(&stripped));
-        assert!(!stripped.contains("::1"), "no orphaned server object");
-        assert!(stripped.contains("Twitch") && stripped.contains("YouTube"));
+    /// An entry from an older build still carries our name while pointing
+    /// OBS at an address it may not be able to resolve. Reporting that as
+    /// registered would leave the user no way to notice, so staleness has
+    /// to read as unregistered and put the Register button back.
+    #[test]
+    fn a_stale_entry_does_not_count_as_registered() {
+        let current = entry_json(7799, 1935);
+        assert!(registration_is_current(&current, 7799, 1935));
+
+        // Pre-IPv6 builds wrote the v4 literal.
+        let legacy = current.replace(
+            "rtmp://localhost:1935/live",
+            "rtmp://127.0.0.1:1935/live",
+        );
+        assert!(entry_exists(&legacy), "still ours by name");
+        assert!(
+            !registration_is_current(&legacy, 7799, 1935),
+            "a v4-literal entry is stale and must prompt a re-register"
+        );
+
+        // A retuned port is stale for the same reason.
+        assert!(!registration_is_current(&current, 7799, 1936));
+        assert!(!registration_is_current(&current, 7800, 1935));
+
+        // Our current URL present but literal servers left over beside it:
+        // the dropdown would still offer options that fail under one IP
+        // Family setting each, so this has to read as stale too.
+        let with_leftovers = current.replace(
+            r#""url": "rtmp://localhost:1935/live""#,
+            r#""url": "rtmp://localhost:1935/live"}, {"name": "old", "url": "rtmp://[::1]:1935/live""#,
+        );
+        assert!(with_leftovers.contains("rtmp://localhost:1935/live"));
+        assert!(
+            !registration_is_current(&with_leftovers, 7799, 1935),
+            "a superset of our entry is still out of date"
+        );
     }
 
     #[test]
