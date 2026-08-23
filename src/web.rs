@@ -759,7 +759,7 @@ async fn route(
                 "application/json",
                 format!(
                     r#"{{"registered":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"active_profile":{},"path":{}}}"#,
-                    crate::obs_register::is_registered(),
+                    crate::obs_register::is_registered(s.web_port, s.ingest_port),
                     crate::obs_register::is_obs_running(),
                     crate::obs_register::vod_audio_flag_set(),
                     crate::obs_register::vod_eb_injection_present(s.web_port),
@@ -1566,7 +1566,7 @@ async fn obs_multitrack_config_proxy(
     // begin_publish accepts it (see Controller::remember_eb_key).
     let rewritten = rewrite_url_templates(
         &twitch_json,
-        &format!("rtmp://127.0.0.1:{}/live/{{stream_key}}", ingest_port),
+        &format!("rtmp://localhost:{}/live/{{stream_key}}", ingest_port),
     );
     // Extract the *original* IVS ingest URL from Twitch's response
     // BEFORE rewriting it to localhost, substitute the streamer's real
@@ -2020,7 +2020,7 @@ fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settin
     }
 
     format!(
-        r#"{{"meta":{{"service":"InstantClone","schema_version":"2024-06-04","config_id":"{cid}"}},"ingest_endpoints":[{{"protocol":"RTMP","url_template":"rtmp://127.0.0.1:{port}/live/{{stream_key}}"}}],"encoder_configurations":[{encs}],"audio_configurations":{{"live":[{{"codec":"aac","track_id":0,"channels":2,"settings":{{"bitrate":160}}}}]}}}}"#,
+        r#"{{"meta":{{"service":"InstantClone","schema_version":"2024-06-04","config_id":"{cid}"}},"ingest_endpoints":[{{"protocol":"RTMP","url_template":"rtmp://localhost:{port}/live/{{stream_key}}"}}],"encoder_configurations":[{encs}],"audio_configurations":{{"live":[{{"codec":"aac","track_id":0,"channels":2,"settings":{{"bitrate":160}}}}]}}}}"#,
         cid = config_id,
         port = ingest_port,
         encs = enc_configs,
