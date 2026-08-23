@@ -91,6 +91,20 @@ pub fn is_registered() -> bool {
 /// Build the services.json entry for InstantClone. The
 /// `multitrack_video_configuration_url` is what OBS hits when the user
 /// enables multi-track video - we serve it from our own web port.
+///
+/// `"name"` MUST stay the first key: `remove_entry` walks backwards from
+/// the name marker to the nearest `{` without tracking strings, so it only
+/// finds our object's opening brace while nothing precedes the name.
+///
+/// Three server entries, IPv4 first because it is what almost everyone
+/// dials and what existing profiles already have saved. The other two
+/// exist for OBS's Settings -> Advanced -> Network -> IP Family, which is
+/// a resolver setting: under IP Family = IPv6 OBS asks for `AF_INET6`, an
+/// IPv4 literal cannot resolve under it, and the stream fails with
+/// "Error reaching host" before a socket is ever opened. `localhost`
+/// resolves under every family setting, so it is the one to pick when in
+/// doubt; the explicit `[::1]` entry is there for anyone who wants to be
+/// unambiguous.
 fn entry_json(web_port: u16, ingest_port: u16) -> String {
     format!(
         r#"{{
@@ -105,6 +119,14 @@ fn entry_json(web_port: u16, ingest_port: u16) -> String {
                 {{
                     "name": "InstantClone (local proxy)",
                     "url": "rtmp://127.0.0.1:{rtmp}/live"
+                }},
+                {{
+                    "name": "InstantClone (localhost, any IP family)",
+                    "url": "rtmp://localhost:{rtmp}/live"
+                }},
+                {{
+                    "name": "InstantClone (IPv6 loopback)",
+                    "url": "rtmp://[::1]:{rtmp}/live"
                 }}
             ],
             "recommended": {{
@@ -1218,6 +1240,31 @@ mod tests {
         // services array should still contain both original entries.
         assert!(stripped.contains("Twitch"));
         assert!(stripped.contains("YouTube"));
+    }
+
+    /// The IPv6 entries only help if OBS can still find and remove our
+    /// object, and `remove_entry` walks braces by hand. Three nested server
+    /// objects instead of one is exactly the shape that would break a
+    /// depth-blind walk, so pin the round-trip on the real entry.
+    #[test]
+    fn entry_with_ipv6_servers_still_round_trips_through_remove() {
+        let entry = entry_json(7799, 1935);
+        assert!(entry.contains("rtmp://127.0.0.1:1935/live"), "IPv4 entry");
+        assert!(entry.contains("rtmp://localhost:1935/live"), "any-family");
+        assert!(entry.contains("rtmp://[::1]:1935/live"), "IPv6 literal");
+        // IPv4 must stay the first server: OBS preselects it, and every
+        // existing profile already has that URL saved.
+        let v4 = entry.find("rtmp://127.0.0.1:1935/live").unwrap();
+        let localhost = entry.find("rtmp://localhost:1935/live").unwrap();
+        let v6 = entry.find("rtmp://[::1]:1935/live").unwrap();
+        assert!(v4 < localhost && localhost < v6, "IPv4 first");
+
+        let patched = insert_entry(&fake_services_json(), &entry).expect("insert");
+        assert!(entry_exists(&patched));
+        let stripped = remove_entry(&patched).expect("remove");
+        assert!(!entry_exists(&stripped));
+        assert!(!stripped.contains("::1"), "no orphaned server object");
+        assert!(stripped.contains("Twitch") && stripped.contains("YouTube"));
     }
 
     #[test]
