@@ -568,6 +568,21 @@ pub fn set_vod_audio_flag(enable: bool) -> io::Result<bool> {
     Ok(true)
 }
 
+/// Section name if `line` is a `[Section]` header, else None.
+///
+/// The BOM strip is load-bearing. OBS writes every ini it owns with a
+/// UTF-8 BOM, and the first section header sits immediately after it, so
+/// line one reads as `\u{feff}[General]`. U+FEFF is not Unicode
+/// White_Space, which means `str::trim` leaves it attached and a plain
+/// `strip_prefix('[')` misses the header - silently hiding every key in
+/// the file's first section.
+fn ini_section(line: &str) -> Option<&str> {
+    line.trim()
+        .trim_start_matches('\u{feff}')
+        .strip_prefix('[')?
+        .strip_suffix(']')
+}
+
 /// Tiny INI reader / writer. OBS's global.ini is a strict
 /// "[Section]" + "key=value" file with no comments / continuations -
 /// no need to pull a full INI crate for two helpers.
@@ -575,7 +590,7 @@ fn ini_get<'a>(file: &'a str, section: &str, key: &str) -> Option<&'a str> {
     let mut cur: Option<&str> = None;
     for line in file.lines() {
         let line = line.trim();
-        if let Some(rest) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        if let Some(rest) = ini_section(line) {
             cur = Some(rest);
             continue;
         }
@@ -612,7 +627,7 @@ fn ini_set(file: &str, section: &str, key: &str, enable: bool) -> String {
     // where the target section ends (so we can insert if absent).
     for line in file.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        if let Some(rest) = ini_section(trimmed) {
             // Leaving a section without finding our key - remember the
             // line we're ABOUT to add (the new section header) as the
             // place to splice the key in if needed.
@@ -694,25 +709,84 @@ fn ini_set(file: &str, section: &str, key: &str, enable: bool) -> String {
 // Relative to an OBS config dir (the `.../obs-studio` paths from obs_config_dirs).
 const PROFILES_DIR_REL: &str = "basic/profiles";
 
-/// Active OBS profile name, read from `[Basic] Profile=<name>` in
-/// OBS's user config (user.ini on 32+, global.ini on older installs).
+/// Active OBS profile's DISPLAY name, read from `[Basic] Profile=<name>`
+/// in OBS's user config (user.ini on 32+, global.ini on older installs).
 /// None when OBS isn't installed or the key isn't present.
+///
+/// This is the label to show a user. It is NOT a directory name - see
+/// `active_profile_dir` for that.
 pub fn active_profile() -> Option<String> {
     let p = obs_user_config_path()?;
     let s = fs::read_to_string(&p).ok()?;
     ini_get(&s, "Basic", "Profile").map(|v| v.to_string())
 }
 
+/// Active OBS profile's DIRECTORY name under `basic/profiles/`.
+///
+/// OBS keeps the display name and the directory name as two separate
+/// values, and they diverge whenever the name is not filesystem-safe.
+/// Profile creation runs the name through `GetFileSafeName` (spaces and
+/// reserved characters are replaced) and then `GetClosestUnusedFileName`
+/// (a numeric suffix when the directory is taken), then stores both:
+///
+/// ```text
+/// config_set_string(userConfig, "Basic", "Profile",    profile.name);
+/// config_set_string(userConfig, "Basic", "ProfileDir", profile.directoryName);
+/// ```
+///
+/// A profile named "Sin Título" therefore lives in `Sin_Título`, so
+/// building a path from the display name misses it entirely.
+///
+/// Resolution order:
+///   1. `[Basic] ProfileDir` - authoritative when OBS wrote it.
+///   2. Reverse lookup: the profile whose own `basic.ini` declares
+///      `[General] Name=<display name>`. Covers installs predating
+///      `ProfileDir` and any case where it went stale.
+///   3. The display name as-is, which is correct for the plain-ASCII
+///      names that make up most profiles.
+pub fn active_profile_dir() -> Option<String> {
+    let p = obs_user_config_path()?;
+    let s = fs::read_to_string(&p).ok()?;
+    if let Some(dir) = ini_get(&s, "Basic", "ProfileDir").filter(|d| !d.is_empty()) {
+        return Some(dir.to_string());
+    }
+    let name = ini_get(&s, "Basic", "Profile")?;
+    Some(profile_dir_by_name(&obs_config_dirs(), name).unwrap_or_else(|| name.to_string()))
+}
+
+/// Directory of the profile whose `basic.ini` declares `[General]
+/// Name=<name>`. OBS writes that key into every profile it creates, so
+/// it is the authoritative reverse mapping from display name to folder.
+///
+/// Takes the roots rather than reading the environment so the scan is
+/// unit-testable, matching `obs_config_dirs_from`.
+fn profile_dir_by_name(roots: &[PathBuf], name: &str) -> Option<String> {
+    for root in roots {
+        let Ok(entries) = fs::read_dir(root.join(PROFILES_DIR_REL)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(text) = fs::read_to_string(entry.path().join("basic.ini")) else {
+                continue;
+            };
+            if ini_get(&text, "General", "Name") == Some(name) {
+                return entry.file_name().into_string().ok();
+            }
+        }
+    }
+    None
+}
+
 /// Path to the active profile's service.json, or None if OBS isn't
 /// installed / no profile is selected.
 pub fn active_profile_service_json_path() -> Option<PathBuf> {
-    let profile = active_profile()?;
+    let dir = active_profile_dir()?;
     obs_config_dirs()
         .into_iter()
         .map(|obs_dir| {
             obs_dir
                 .join(PROFILES_DIR_REL)
-                .join(&profile)
+                .join(&dir)
                 .join("service.json")
         })
         .find(|p| p.exists())
@@ -1524,6 +1598,86 @@ mod tests {
 
     // ── INI read/write ───────────────────────────────────────────────
 
+    /// Every ini OBS owns starts with a UTF-8 BOM immediately followed by
+    /// `[General]`, so the first section is exactly the one a BOM-blind
+    /// parser drops. Verified against a real install: `user.ini` opens
+    /// `ef bb bf 5b 47 65 6e ...`. U+FEFF is not Unicode White_Space, so
+    /// `trim` does not save us here.
+    #[test]
+    fn ini_get_reads_the_first_section_of_a_bom_prefixed_file() {
+        let ini = "\u{feff}[General]\nName=NewUi2\nEnableCustomServerVodTrack=true\n\
+                   [Basic]\nProfile=Sin Título\n";
+        assert_eq!(
+            ini_get(ini, "General", "EnableCustomServerVodTrack"),
+            Some("true"),
+            "the BOM must not hide the first section"
+        );
+        assert_eq!(ini_get(ini, "General", "Name"), Some("NewUi2"));
+        // Later sections were always reachable; keep them that way.
+        assert_eq!(ini_get(ini, "Basic", "Profile"), Some("Sin Título"));
+    }
+
+    /// The duplicate-`[General]` files seen in the wild were self-inflicted:
+    /// `ini_set` could not see the BOM'd header, so it appended a second
+    /// section instead of editing the first. Writing must now land in the
+    /// existing section and leave the BOM on the file.
+    #[test]
+    fn ini_set_edits_the_bom_prefixed_section_instead_of_appending_a_duplicate() {
+        let ini = "\u{feff}[General]\nPre19Defaults=false\n\n[Basic]\nProfile=A\n";
+        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
+
+        assert_eq!(
+            out.matches("[General]").count(),
+            1,
+            "must edit OBS's own section, not append a rival one"
+        );
+        assert!(
+            out.starts_with('\u{feff}'),
+            "the BOM belongs to OBS - we must not strip it on write"
+        );
+        assert_eq!(
+            ini_get(&out, "General", "EnableCustomServerVodTrack"),
+            Some("true")
+        );
+        assert_eq!(ini_get(&out, "General", "Pre19Defaults"), Some("false"));
+        assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
+    }
+
+    // ── Active profile directory resolution ──────────────────────────
+
+    /// `[Basic] Profile` is a display name and `[Basic] ProfileDir` is the
+    /// folder. Confirmed divergent on a real install: profile "Sin Título"
+    /// lives in `basic/profiles/Sin_Título/`. Building a path from the
+    /// display name misses it, which silently no-ops every per-profile
+    /// read and write we do.
+    #[test]
+    fn profile_dir_reverse_lookup_matches_on_the_profiles_own_name_key() {
+        let root = fresh_obs_dir("profile-dir");
+        let profiles = root.join(PROFILES_DIR_REL);
+        for (dir, name) in [("NewUi2", "NewUi2"), ("Sin_Título", "Sin Título")] {
+            std::fs::create_dir_all(profiles.join(dir)).unwrap();
+            std::fs::write(
+                profiles.join(dir).join("basic.ini"),
+                format!("\u{feff}[General]\nName={name}\n\n[Output]\nBindIP=default\n"),
+            )
+            .unwrap();
+        }
+        let roots = vec![root.clone()];
+
+        assert_eq!(
+            profile_dir_by_name(&roots, "Sin Título").as_deref(),
+            Some("Sin_Título"),
+            "a sanitized directory must still be found by display name"
+        );
+        assert_eq!(
+            profile_dir_by_name(&roots, "NewUi2").as_deref(),
+            Some("NewUi2")
+        );
+        assert_eq!(profile_dir_by_name(&roots, "Nope"), None);
+        // No profiles directory at all must not panic.
+        assert_eq!(profile_dir_by_name(&[fresh_obs_dir("empty")], "A"), None);
+    }
+
     #[test]
     fn ini_get_reads_value_from_correct_section() {
         let ini =
@@ -1605,8 +1759,11 @@ mod tests {
     }
 
     /// Reported on the v0.1.3 test build: user.ini ends up with two
-    /// `[General]` sections (OBS itself maintains a second one at the
-    /// end of the file). Our toggle-ON correctly lands the key in the
+    /// `[General]` sections. The second one was ours: the BOM on line
+    /// one hid OBS's real `[General]` from `ini_set`, which then
+    /// appended its own. `ini_section` fixes the cause, but files
+    /// written before that fix still carry the duplicate, so the walk
+    /// has to keep handling it. Our toggle-ON lands the key in the
     /// trailing block; this test confirms toggle-OFF flips its value
     /// in place to `false` without disturbing either section's other
     /// keys or trying to delete the line - which would be fragile
