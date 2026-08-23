@@ -698,7 +698,12 @@ pub fn active_profile_service_json_path() -> Option<PathBuf> {
     let dir = active_profile_dir()?;
     obs_config_dirs()
         .into_iter()
-        .map(|obs_dir| obs_dir.join(PROFILES_DIR_REL).join(&dir).join("service.json"))
+        .map(|obs_dir| {
+            obs_dir
+                .join(PROFILES_DIR_REL)
+                .join(&dir)
+                .join("service.json")
+        })
         .find(|p| p.exists())
 }
 
@@ -1761,4 +1766,3 @@ mod tests {
 
     static UNIQ_OBS: TestUniq = TestUniq::new(0);
 }
-
