@@ -33,6 +33,7 @@ mod controller;
 mod crypto;
 mod h264;
 mod https;
+mod midi;
 mod obs_register;
 mod portcheck;
 mod rtmp;
@@ -224,6 +225,9 @@ fn main() -> std::io::Result<()> {
         // startup can never slip in with any key while the mirror is still
         // pending. supervise_egress keeps it in sync on later edits.
         ctrl.update_ingest_key(settings.ingest_key.clone());
+        // Seed the MIDI listener's live view (bindings + default delay)
+        // before it starts, so a mapped controller works from the first tick.
+        ctrl.midi().update_from_settings(&settings);
 
         let (tx, rx) = watch::channel(settings.clone());
         let tx = Arc::new(tx);
@@ -285,6 +289,28 @@ fn main() -> std::io::Result<()> {
         // RTMP URL clipboard action.
         #[cfg(windows)]
         tray::spawn(rx.clone(), ctrl.clone());
+
+        // MIDI listener: a background thread that maps a controller's pads /
+        // knobs to the delay actions. No-op on platforms with no MIDI
+        // backend (the dashboard hides the section there).
+        midi::spawn(ctrl.clone(), ctrl.midi().clone(), rx.clone());
+
+        // Live-apply global hotkey + MIDI edits: every settings change nudges
+        // the tray to re-register its hotkeys and refreshes the MIDI
+        // listener's bindings view, so a combo or mapping set in the
+        // dashboard takes effect without a restart. Cheap and Windows-only,
+        // matching the tray. `changed()` ends only when the sender drops.
+        #[cfg(windows)]
+        {
+            let mut hk_rx = rx.clone();
+            let hk_ctrl = ctrl.clone();
+            tokio::spawn(async move {
+                while hk_rx.changed().await.is_ok() {
+                    hk_ctrl.midi().update_from_settings(&hk_rx.borrow());
+                    tray::request_hotkey_reload();
+                }
+            });
+        }
 
         // Shared dashboard-auth state (sessions + login rate limiter). Created
         // here, not inside the web supervisor, so a web restart (port change)
