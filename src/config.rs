@@ -841,13 +841,31 @@ impl Settings {
 
     // ---- Derived values ----
 
-    pub fn ingest_addr(&self) -> String {
-        let host = if self.ingest_bind_all {
-            "0.0.0.0"
+    /// Every address the ingest listener binds, IPv4 first.
+    ///
+    /// The IPv6 leg exists because OBS's Settings -> Advanced -> Network ->
+    /// IP Family is a resolver setting, not a transport preference. Set it
+    /// to IPv6 and OBS resolves with `AF_INET6`, under which an IPv4
+    /// literal cannot resolve at all: `getaddrinfo("127.0.0.1", AF_INET6)`
+    /// returns host-not-found and OBS reports "Error reaching host" before
+    /// it ever opens a socket. Pairing this with the `localhost` and
+    /// `[::1]` server entries in `obs_register` gives that configuration
+    /// something it can actually reach.
+    ///
+    /// IPv4 stays first because it is the default server entry and the one
+    /// almost everyone dials. The IPv6 leg is best-effort: a machine with
+    /// IPv6 disabled cannot bind it, and `supervise_ingest` drops it rather
+    /// than retrying forever.
+    pub fn ingest_addrs(&self) -> Vec<String> {
+        let (v4, v6) = if self.ingest_bind_all {
+            ("0.0.0.0", "[::]")
         } else {
-            "127.0.0.1"
+            ("127.0.0.1", "[::1]")
         };
-        format!("{}:{}", host, self.ingest_port)
+        vec![
+            format!("{}:{}", v4, self.ingest_port),
+            format!("{}:{}", v6, self.ingest_port),
+        ]
     }
 
     pub fn web_addr(&self) -> String {
@@ -860,9 +878,16 @@ impl Settings {
     }
 
     pub fn obs_url(&self) -> String {
-        // What OBS should be pointed at. Always 127.0.0.1 from the user's
+        // What OBS should be pointed at. Always loopback from the user's
         // perspective even if we bind on 0.0.0.0.
-        format!("rtmp://127.0.0.1:{}/live", self.ingest_port)
+        //
+        // `localhost` rather than a literal, for the same reason
+        // `obs_register::server_url` uses it: OBS's IP Family setting picks
+        // the address family passed to `getaddrinfo`, and an IPv4 literal
+        // cannot resolve under AF_INET6. Someone pasting this into a Custom
+        // service hits that wall exactly like someone picking our
+        // registered service would.
+        format!("rtmp://localhost:{}/live", self.ingest_port)
     }
 
     /// First destination's resolved URL - used by the legacy single-dest
@@ -1428,8 +1453,42 @@ fn hex_nibble(b: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    // Mirrors obs_register: what we tell the user to paste into OBS has to
+    // resolve under either IP Family, so it stays a hostname.
+    #[test]
+    fn obs_url_uses_a_hostname_not_an_ipv4_literal() {
+        let mut s = Settings::defaults();
+        s.ingest_port = 1935;
+        assert_eq!(s.obs_url(), "rtmp://localhost:1935/live");
+    }
     use super::*;
     use std::path::PathBuf;
+
+    /// Both legs, IPv4 first, in both bind modes. Order is contractual:
+    /// `spawn_ingest_legs` treats only the first address as required, so a
+    /// reordering here would silently make the IPv4 listener give up after
+    /// one failed bind and the IPv6 one retry forever.
+    #[test]
+    fn ingest_addrs_lists_ipv4_first_then_ipv6() {
+        let mut s = Settings::defaults();
+        s.ingest_port = 1935;
+
+        s.ingest_bind_all = false;
+        assert_eq!(s.ingest_addrs(), vec!["127.0.0.1:1935", "[::1]:1935"]);
+
+        s.ingest_bind_all = true;
+        assert_eq!(s.ingest_addrs(), vec!["0.0.0.0:1935", "[::]:1935"]);
+
+        // Every entry has to parse as a SocketAddr, since the IPv6 leg
+        // parses its address by hand before binding.
+        for addr in s.ingest_addrs() {
+            assert!(
+                addr.parse::<std::net::SocketAddr>().is_ok(),
+                "{addr} must parse"
+            );
+        }
+    }
 
     /// `start_with_windows` is not a `Settings` field - it comes from the
     /// registry via the caller. This guards the wire contract the dashboard

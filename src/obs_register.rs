@@ -78,19 +78,91 @@ pub fn services_json_path() -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
-/// True when the user's services.json already contains an entry whose
-/// `name` matches our `SERVICE_NAME`. Used by the System tab to render
+/// True when services.json holds an InstantClone entry that matches the
+/// ports and URLs we would write today. Used by the System tab to render
 /// the button as "Unregister" instead of "Register".
-pub fn is_registered() -> bool {
+///
+/// Deliberately stricter than "an entry with our name exists". An entry
+/// written by an older build, or before the user retuned a port, still
+/// carries our name while pointing OBS somewhere useless, and reporting
+/// that as registered leaves the user with no way to notice or fix it.
+/// Reporting it as unregistered puts the Register button back, and
+/// `register` is remove-and-replace, so one click repairs it.
+pub fn is_registered(web_port: u16, ingest_port: u16) -> bool {
     let Some(p) = services_json_path() else {
         return false;
     };
-    matches!(fs::read_to_string(&p), Ok(s) if entry_exists(&s))
+    let Ok(file) = fs::read_to_string(&p) else {
+        return false;
+    };
+    entry_exists(&file) && registration_is_current(&file, web_port, ingest_port)
+}
+
+/// Whether the entry in `file` still matches what `entry_json` produces.
+///
+/// Checks the two URLs that decide whether OBS can reach us, the RTMP
+/// server and the multi-track config endpoint. Both carry a port, so a
+/// retuned port shows up here too.
+///
+/// Leftover literal servers inside OUR entry also count as stale: they
+/// would sit in the dropdown as options that fail under one IP Family
+/// setting each.
+///
+/// Every check runs against `entry_span` and not the whole file. Scanning
+/// the file would let anything InstantClone-shaped elsewhere in
+/// services.json hold the answer at "stale" permanently, and since
+/// re-registering only rewrites our own entry, the user would be stuck
+/// with a Register button that never turns into Unregister no matter how
+/// many times they press it.
+fn registration_is_current(file: &str, web_port: u16, ingest_port: u16) -> bool {
+    let Some(span) = entry_span(file) else {
+        return false;
+    };
+    let entry = &file[span];
+    let stale_literals = [
+        format!("rtmp://127.0.0.1:{ingest_port}/live"),
+        format!("rtmp://[::1]:{ingest_port}/live"),
+    ];
+    entry.contains(&server_url(ingest_port))
+        && entry.contains(&multitrack_url(web_port))
+        && !stale_literals.iter().any(|u| entry.contains(u.as_str()))
+}
+
+/// The RTMP URL we advertise to OBS.
+///
+/// `localhost`, not a literal, and that is the whole point. OBS's
+/// Settings -> Advanced -> Network -> IP Family is a resolver setting: it
+/// picks the address family passed to `getaddrinfo`. Under IP Family =
+/// IPv6 an IPv4 literal cannot resolve (`getaddrinfo("127.0.0.1",
+/// AF_INET6)` returns host-not-found), and under IPv4 an IPv6 literal
+/// cannot either. `localhost` is the one spelling that resolves under all
+/// three settings, so a single entry covers every configuration and the
+/// user never has to know the setting exists.
+///
+/// This is safe only because the ingest binds both families (see
+/// `Settings::ingest_addrs`). Under IPv4+IPv6 OBS resolves both `::1` and
+/// `127.0.0.1` and races them; happy-eyeballs reports failure only when
+/// every candidate fails, so even if our IPv6 leg could not bind, the
+/// IPv4 leg still wins the race.
+fn server_url(ingest_port: u16) -> String {
+    format!("rtmp://localhost:{ingest_port}/live")
+}
+
+fn multitrack_url(web_port: u16) -> String {
+    format!("http://127.0.0.1:{web_port}/obs/multitrack-config")
 }
 
 /// Build the services.json entry for InstantClone. The
 /// `multitrack_video_configuration_url` is what OBS hits when the user
 /// enables multi-track video - we serve it from our own web port.
+///
+/// `"name"` MUST stay the first key: `remove_entry` walks backwards from
+/// the name marker to the nearest `{` without tracking strings, so it only
+/// finds our object's opening brace while nothing precedes the name.
+///
+/// One server entry, on `localhost`. See `server_url` for why that
+/// spelling is the only one that works under every OBS IP Family setting,
+/// and why a single entry beats offering the user a choice.
 fn entry_json(web_port: u16, ingest_port: u16) -> String {
     format!(
         r#"{{
@@ -98,13 +170,13 @@ fn entry_json(web_port: u16, ingest_port: u16) -> String {
             "common": true,
             "more_info_link": "https://github.com/Soulhackzlol/InstantClone",
             "stream_key_link": "http://127.0.0.1:{web}/",
-            "multitrack_video_configuration_url": "http://127.0.0.1:{web}/obs/multitrack-config",
+            "multitrack_video_configuration_url": "{mtv}",
             "multitrack_video_name": "Multi-track via InstantClone",
             "multitrack_video_learn_more_link": "https://github.com/Soulhackzlol/InstantClone",
             "servers": [
                 {{
                     "name": "InstantClone (local proxy)",
-                    "url": "rtmp://127.0.0.1:{rtmp}/live"
+                    "url": "{server}"
                 }}
             ],
             "recommended": {{
@@ -116,7 +188,8 @@ fn entry_json(web_port: u16, ingest_port: u16) -> String {
             "supported video codecs": ["h264"]
         }}"#,
         web = web_port,
-        rtmp = ingest_port,
+        mtv = multitrack_url(web_port),
+        server = server_url(ingest_port),
     )
 }
 
@@ -257,14 +330,17 @@ fn insert_entry(file: &str, entry: &str) -> Option<String> {
     Some(format!("{head}\n{entry},{tail}"))
 }
 
-/// Walk the file from the InstantClone name marker outward to find the
-/// `{ … }` span that encloses our entry, then delete that span plus
-/// any preceding/trailing comma so the surrounding array stays valid.
-fn remove_entry(file: &str) -> Option<String> {
+/// Byte range of our service object in `file`, braces included.
+///
+/// Scoping matters: the rest of the file belongs to OBS and to other
+/// services, and a stray `InstantClone`-flavoured string elsewhere (a
+/// leftover server object inside another service's `servers` array, say)
+/// must not be read as ours. Anything that inspects "our entry" has to go
+/// through here rather than searching the whole file.
+fn entry_span(file: &str) -> Option<std::ops::Range<usize>> {
     // Locate the marker (handles both indented and non-indented
-    // formats - the exact-substring check `entry_exists` already
-    // confirmed at least one is present, so the unwraps below are
-    // safe in practice but we still use `?` for paranoia).
+    // formats). The trailing quote is what keeps this from matching a
+    // nested `"name": "InstantClone (local proxy)"` server object.
     let marker = if file.contains(r#""name": "InstantClone""#) {
         r#""name": "InstantClone""#
     } else {
@@ -308,6 +384,15 @@ fn remove_entry(file: &str) -> Option<String> {
     if end == start {
         return None;
     }
+    Some(start..end)
+}
+
+/// Delete our entry plus any preceding/trailing comma so the surrounding
+/// array stays valid.
+fn remove_entry(file: &str) -> Option<String> {
+    let span = entry_span(file)?;
+    let (start, end) = (span.start, span.end);
+    let bytes = file.as_bytes();
     // Also strip the trailing comma + whitespace if our entry isn't
     // the last item, or the leading comma if it is.
     let mut left = start;
@@ -1151,6 +1236,17 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32 as TestUniq, Ordering as TestOrd};
 
+    // OBS resolves the server URL with the address family picked in
+    // Settings -> Advanced -> IP Family. An IPv4 literal is not resolvable
+    // under IPv6, so the single entry we register has to carry a hostname.
+    #[test]
+    fn the_registered_server_url_is_resolvable_under_either_ip_family() {
+        assert_eq!(server_url(1935), "rtmp://localhost:1935/live");
+        let entry = entry_json(7799, 1935);
+        assert!(entry.contains("rtmp://localhost:1935/live"), "{entry}");
+        assert!(!entry.contains("rtmp://127.0.0.1"), "{entry}");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_obs_config_dirs_cover_native_flatpak_snap() {
@@ -1218,6 +1314,118 @@ mod tests {
         // services array should still contain both original entries.
         assert!(stripped.contains("Twitch"));
         assert!(stripped.contains("YouTube"));
+    }
+
+    /// The single server entry must be the `localhost` spelling. An IP
+    /// literal of either family is unreachable under one of OBS's three IP
+    /// Family settings, because that setting picks the address family
+    /// handed to `getaddrinfo`. Measured on Windows 11:
+    /// `getaddrinfo("127.0.0.1", AF_INET6)` returns 11001 host-not-found,
+    /// while `localhost` resolves under AF_INET, AF_INET6 and AF_UNSPEC.
+    #[test]
+    fn entry_advertises_localhost_so_every_ip_family_setting_resolves() {
+        let entry = entry_json(7799, 1935);
+        assert!(entry.contains(r#""url": "rtmp://localhost:1935/live""#));
+        // A literal would strand one IP Family setting apiece.
+        assert!(
+            !entry.contains("rtmp://127.0.0.1:1935/live"),
+            "no v4 literal"
+        );
+        assert!(!entry.contains("rtmp://[::1]:1935/live"), "no v6 literal");
+        // One server, so the user never has to pick.
+        assert_eq!(entry.matches(r#""url": "rtmp://"#).count(), 1);
+    }
+
+    /// An entry from an older build still carries our name while pointing
+    /// OBS at an address it may not be able to resolve. Reporting that as
+    /// registered would leave the user no way to notice, so staleness has
+    /// to read as unregistered and put the Register button back.
+    #[test]
+    fn a_stale_entry_does_not_count_as_registered() {
+        let current = entry_json(7799, 1935);
+        assert!(registration_is_current(&current, 7799, 1935));
+
+        // Pre-IPv6 builds wrote the v4 literal.
+        let legacy = current.replace("rtmp://localhost:1935/live", "rtmp://127.0.0.1:1935/live");
+        assert!(entry_exists(&legacy), "still ours by name");
+        assert!(
+            !registration_is_current(&legacy, 7799, 1935),
+            "a v4-literal entry is stale and must prompt a re-register"
+        );
+
+        // A retuned port is stale for the same reason.
+        assert!(!registration_is_current(&current, 7799, 1936));
+        assert!(!registration_is_current(&current, 7800, 1935));
+
+        // Our current URL present but literal servers left over beside it:
+        // the dropdown would still offer options that fail under one IP
+        // Family setting each, so this has to read as stale too.
+        let with_leftovers = current.replace(
+            r#""url": "rtmp://localhost:1935/live""#,
+            r#""url": "rtmp://localhost:1935/live"}, {"name": "old", "url": "rtmp://[::1]:1935/live""#,
+        );
+        assert!(with_leftovers.contains("rtmp://localhost:1935/live"));
+        assert!(
+            !registration_is_current(&with_leftovers, 7799, 1935),
+            "a superset of our entry is still out of date"
+        );
+    }
+
+    /// Found on a real install: a leftover `InstantClone (local proxy)`
+    /// server object sitting inside Twitch's `servers` array, unrelated to
+    /// our own entry. A whole-file staleness scan sees that literal and
+    /// reports stale forever, and because re-registering only rewrites our
+    /// entry, the Register button can never turn into Unregister no matter
+    /// how many times it is pressed. The check has to look at our entry
+    /// only.
+    #[test]
+    fn a_stray_instantclone_server_in_another_service_does_not_block_registration() {
+        let polluted = format!(
+            r#"{{"format_version":4,"services":[
+{},
+{{"name":"Twitch","common":true,"servers":[
+                {{ "name": "InstantClone (local proxy)", "url": "rtmp://127.0.0.1:1935/live" }},
+                {{"name":"Asia: Hong Kong","url":"rtmp://hk.contribute.live-video.net/app"}}]}}
+]}}"#,
+            entry_json(7799, 1935)
+        );
+        assert!(
+            polluted.contains("rtmp://127.0.0.1:1935/live"),
+            "the stray must be present for this test to mean anything"
+        );
+        assert!(
+            registration_is_current(&polluted, 7799, 1935),
+            "a stray in someone else's entry must not make ours look stale"
+        );
+        assert!(is_entry_current_for_test(&polluted));
+    }
+
+    /// Removing our entry must leave the unrelated stray alone: it is not
+    /// ours to delete, and clobbering another service's servers array
+    /// would be far worse than the dead dropdown option it causes.
+    #[test]
+    fn remove_entry_leaves_a_stray_in_another_service_untouched() {
+        let polluted = format!(
+            r#"{{"format_version":4,"services":[
+{},
+{{"name":"Twitch","common":true,"servers":[
+                {{ "name": "InstantClone (local proxy)", "url": "rtmp://127.0.0.1:1935/live" }}]}}
+]}}"#,
+            entry_json(7799, 1935)
+        );
+        let stripped = remove_entry(&polluted).expect("remove");
+        assert!(!entry_exists(&stripped), "our entry is gone");
+        assert!(
+            stripped.contains(
+                r#"{ "name": "InstantClone (local proxy)", "url": "rtmp://127.0.0.1:1935/live" }"#
+            ),
+            "Twitch's array must be untouched"
+        );
+        assert!(stripped.contains("Twitch"));
+    }
+
+    fn is_entry_current_for_test(file: &str) -> bool {
+        entry_exists(file) && registration_is_current(file, 7799, 1935)
     }
 
     #[test]

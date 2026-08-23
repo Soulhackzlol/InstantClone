@@ -3,7 +3,10 @@
 //!
 //! Only one active publisher is meaningful at a time (one streamer). We
 //! still accept many TCP connections but the controller will reject a
-//! second `publish` until the first goes away.
+//! second `publish` until the first goes away. That guard is what makes
+//! the IPv4 and IPv6 listeners safe to run side by side: whichever one
+//! the encoder happens to arrive on takes the slot, and the other is
+//! refused exactly as a second OBS on the same listener would be.
 
 use crate::controller::Controller;
 use crate::h264;
@@ -17,12 +20,50 @@ use std::sync::Arc;
 use tokio::io::split;
 use tokio::net::TcpListener;
 
-pub async fn run(addr: String, ctrl: Arc<Controller>) -> io::Result<()> {
-    let listener = TcpListener::bind(&addr).await?;
+/// Bind one ingest address. Kept separate from `serve` so the supervisor
+/// can tell a bind failure (permanent for the IPv6 leg on a machine with
+/// IPv6 disabled) from a serve failure (worth retrying), instead of
+/// respawning a hopeless listener once a second forever.
+///
+/// IPv6 addresses go through `TcpSocket` rather than `TcpListener::bind`
+/// so `IPV6_V6ONLY` can be set before the bind - see `tcp::set_v6_only`
+/// for why the two sockets must not overlap.
+pub async fn bind(addr: &str) -> io::Result<TcpListener> {
+    let listener = if addr.starts_with('[') {
+        bind_v6_only(addr)?
+    } else {
+        TcpListener::bind(addr).await?
+    };
     // Keep this listener out of a restart/self-update child (else the ingest
     // port stays bound after we exit and the new instance can't reclaim it).
     crate::self_update::dont_inherit(&listener);
     eprintln!("[ingest] listening on {}", addr);
+    Ok(listener)
+}
+
+/// Bind a `[::1]` / `[::]` address with `IPV6_V6ONLY` forced on.
+///
+/// `SO_REUSEADDR` mirrors what `TcpListener::bind` does per platform (std
+/// sets it on unix, not on Windows), so a hot-rebind behaves the same on
+/// both legs. Anything else would let the IPv6 leg fail to reclaim the
+/// port on a restart where IPv4 succeeded.
+fn bind_v6_only(addr: &str) -> io::Result<TcpListener> {
+    let parsed: std::net::SocketAddr = addr.parse().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("not a socket address: {addr}"),
+        )
+    })?;
+    let sock = tokio::net::TcpSocket::new_v6()?;
+    crate::rtmp::tcp::set_v6_only(&sock)?;
+    #[cfg(unix)]
+    sock.set_reuseaddr(true)?;
+    sock.bind(parsed)?;
+    // Matches the backlog tokio uses inside `TcpListener::bind`.
+    sock.listen(1024)
+}
+
+pub async fn serve(listener: TcpListener, ctrl: Arc<Controller>) -> io::Result<()> {
     loop {
         let (sock, peer) = listener.accept().await?;
         sock.set_nodelay(true)?;
@@ -320,4 +361,69 @@ async fn send_set_peer_bandwidth<W: tokio::io::AsyncWrite + Unpin>(
     buf[..4].copy_from_slice(&size.to_be_bytes());
     buf[4] = limit_type;
     writer.write_message(2, 0, 6, 0, &buf).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A machine or container with IPv6 switched off cannot run these.
+    /// The product degrades to IPv4 there by design (`supervise_ingest_leg`
+    /// drops the optional leg), so skipping is the honest outcome rather
+    /// than a red suite on a Docker image without IPv6.
+    async fn bind_v6_or_skip(addr: &str) -> Option<TcpListener> {
+        match bind(addr).await {
+            Ok(l) => Some(l),
+            Err(e) => {
+                eprintln!("skipping IPv6 test, {addr} is unbindable here: {e}");
+                None
+            }
+        }
+    }
+
+    /// The wildcard legs have to hold one port simultaneously. Without
+    /// `IPV6_V6ONLY` this passes on Windows (the option defaults on) and
+    /// fails on Linux with EADDRINUSE, because `net.ipv6.bindv6only`
+    /// defaults off there and `[::]` swallows v4-mapped addresses. This is
+    /// the test that keeps the two-socket layout portable.
+    #[tokio::test]
+    async fn wildcard_v4_and_v6_listeners_share_one_port() {
+        let v4 = bind("0.0.0.0:0").await.expect("IPv4 wildcard bind");
+        let port = v4.local_addr().unwrap().port();
+        let Some(v6) = bind_v6_or_skip(&format!("[::]:{port}")).await else {
+            return;
+        };
+        assert!(v6.local_addr().unwrap().is_ipv6());
+    }
+
+    /// The default layout, plus the property `Controller::begin_publish`
+    /// depends on: a v6-only socket reports a local peer as `::1`, which
+    /// `is_loopback` accepts. A dual-stack socket would hand us
+    /// `::ffff:127.0.0.1` instead, where `is_loopback` is false and a
+    /// publisher sitting at the machine would be rate-limited as remote.
+    #[tokio::test]
+    async fn ipv6_loopback_listener_accepts_and_reports_a_loopback_peer() {
+        let Some(v6) = bind_v6_or_skip("[::1]:0").await else {
+            return;
+        };
+        let addr = v6.local_addr().unwrap();
+        assert!(addr.is_ipv6());
+
+        let client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect over IPv6");
+        let (accepted, peer) = v6.accept().await.expect("accept");
+        assert!(
+            peer.ip().is_loopback(),
+            "peer must classify as loopback, got {peer}"
+        );
+        drop((client, accepted));
+    }
+
+    /// A bad address must surface as an error the supervisor can act on,
+    /// not a panic inside the bind path.
+    #[tokio::test]
+    async fn malformed_ipv6_address_is_an_error_not_a_panic() {
+        assert!(bind("[not-an-address]:1935").await.is_err());
+    }
 }
