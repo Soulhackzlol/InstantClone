@@ -759,7 +759,7 @@ async fn route(
                 "application/json",
                 format!(
                     r#"{{"registered":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"active_profile":{},"path":{}}}"#,
-                    crate::obs_register::is_registered(),
+                    crate::obs_register::is_registered(s.web_port, s.ingest_port),
                     crate::obs_register::is_obs_running(),
                     crate::obs_register::vod_audio_flag_set(),
                     crate::obs_register::vod_eb_injection_present(s.web_port),
@@ -1036,6 +1036,11 @@ async fn route(
         ("POST", "/go-live") => post_stop(ctrl, settings, cfg_path, sysstat).await,
         ("POST", "/cut-after") => post_cut_after(ctrl, settings, sysstat).await,
         ("POST", "/cut-after/cancel") => post_cut_after_cancel(ctrl, settings, sysstat).await,
+        // MIDI mapping (Windows). Learn mode is server-side because the MIDI
+        // events arrive at the backend, not the browser; the dashboard polls.
+        ("POST", "/midi/learn") => post_midi_learn(body, ctrl).await,
+        ("POST", "/midi/learn/cancel") => post_midi_learn_cancel(ctrl).await,
+        ("POST", "/midi/poll") => post_midi_poll(ctrl, settings, cfg_path).await,
         ("POST", "/test-egress") => test_egress(settings).await,
         ("POST", "/test-webhook") => post_test_webhook(ctrl).await,
         ("POST", "/logs/clear") => {
@@ -1561,7 +1566,7 @@ async fn obs_multitrack_config_proxy(
     // begin_publish accepts it (see Controller::remember_eb_key).
     let rewritten = rewrite_url_templates(
         &twitch_json,
-        &format!("rtmp://127.0.0.1:{}/live/{{stream_key}}", ingest_port),
+        &format!("rtmp://localhost:{}/live/{{stream_key}}", ingest_port),
     );
     // Extract the *original* IVS ingest URL from Twitch's response
     // BEFORE rewriting it to localhost, substitute the streamer's real
@@ -2015,7 +2020,7 @@ fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settin
     }
 
     format!(
-        r#"{{"meta":{{"service":"InstantClone","schema_version":"2024-06-04","config_id":"{cid}"}},"ingest_endpoints":[{{"protocol":"RTMP","url_template":"rtmp://127.0.0.1:{port}/live/{{stream_key}}"}}],"encoder_configurations":[{encs}],"audio_configurations":{{"live":[{{"codec":"aac","track_id":0,"channels":2,"settings":{{"bitrate":160}}}}]}}}}"#,
+        r#"{{"meta":{{"service":"InstantClone","schema_version":"2024-06-04","config_id":"{cid}"}},"ingest_endpoints":[{{"protocol":"RTMP","url_template":"rtmp://localhost:{port}/live/{{stream_key}}"}}],"encoder_configurations":[{encs}],"audio_configurations":{{"live":[{{"codec":"aac","track_id":0,"channels":2,"settings":{{"bitrate":160}}}}]}}}}"#,
         cid = config_id,
         port = ingest_port,
         encs = enc_configs,
@@ -2114,7 +2119,8 @@ async fn post_config(
                 | "auto_arm_delay_ms"
                 | "update_check_enabled"
                 | "open_dashboard_on_launch"
-        ) {
+        ) || k.starts_with("hotkey.")
+        {
             apply_field_str(&mut new_settings, k, v);
         }
     }
@@ -2484,6 +2490,65 @@ async fn post_cut_after_cancel(
         "application/json",
         state_json(ctrl, settings, sysstat),
     )
+}
+
+// ---- MIDI mapping ----
+//
+// The listener thread (see crate::midi) receives controller messages and,
+// in learn mode, captures the next one for a chosen action. Because those
+// events land at the backend, the whole learn flow is server-side and the
+// dashboard drives it over these routes.
+
+/// Arm learn mode for one action: the next MIDI press is captured for it.
+async fn post_midi_learn(
+    body: &str,
+    ctrl: &Arc<Controller>,
+) -> (&'static str, &'static str, String) {
+    let form = config::parse_form(body);
+    let action = form.get("action").map(String::as_str).unwrap_or("");
+    if !matches!(action, "toggle" | "arm" | "activate" | "cut" | "cut_after") {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"unknown action"}"#.into(),
+        );
+    }
+    if !ctrl.midi().available() {
+        return (
+            "409 Conflict",
+            "application/json",
+            r#"{"ok":false,"error":"No MIDI device detected. Connect a controller and try again."}"#
+                .into(),
+        );
+    }
+    ctrl.midi().start_learn(action);
+    ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
+/// Drop a pending learn without binding anything.
+async fn post_midi_learn_cancel(ctrl: &Arc<Controller>) -> (&'static str, &'static str, String) {
+    ctrl.midi().cancel_learn();
+    ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
+/// Poll during learn: commit a freshly-captured binding (through the same
+/// guarded save path the settings form uses) and return the runtime state
+/// the dashboard renders (device availability, names, and what is learning).
+async fn post_midi_poll(
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> (&'static str, &'static str, String) {
+    if let Some((action, signature)) = ctrl.midi().take_captured() {
+        let _wl = settings_write_guard();
+        let mut new_settings = settings.borrow().clone();
+        new_settings.midi.set(&action, &signature);
+        if new_settings.save(cfg_path).is_ok() {
+            ctrl.midi().update_from_settings(&new_settings);
+            let _ = settings.send(new_settings);
+        }
+    }
+    ("200 OK", "application/json", ctrl.midi().to_json())
 }
 
 fn persist_delay_state(
@@ -3569,6 +3634,11 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         }
         "open_dashboard_on_launch" => {
             s.open_dashboard_on_launch = !matches!(value, "" | "false" | "0" | "off");
+        }
+        // hotkey.<action>=<combo>. `set` canonicalizes and drops anything
+        // malformed, so an empty or bad value simply clears the binding.
+        k if k.starts_with("hotkey.") => {
+            s.hotkeys.set(&k["hotkey.".len()..], value);
         }
         _ => {}
     }

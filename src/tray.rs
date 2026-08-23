@@ -20,11 +20,12 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
+use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::watch;
 
-use crate::config::Settings;
+use crate::config::{self, Settings};
 use crate::controller::Controller;
 
 use windows_sys::Win32::Foundation::{GlobalFree, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
@@ -34,6 +35,9 @@ use windows_sys::Win32::System::DataExchange::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    RegisterHotKey, UnregisterHotKey, MOD_NOREPEAT,
+};
 use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
@@ -45,10 +49,32 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, GWLP_USERDATA, HMENU, IDI_APPLICATION, IDYES, LR_DEFAULTCOLOR,
     MB_ICONWARNING, MB_YESNO, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON,
     SM_CYSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY,
-    WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
+    WM_HOTKEY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
 };
 
 const TRAY_MSG: u32 = WM_APP + 1;
+// Posted (from any thread) to ask the message loop to re-read hotkey
+// bindings from settings and re-register them - the live-apply path when
+// the user edits a binding in the dashboard.
+const HOTKEY_RELOAD_MSG: u32 = WM_APP + 2;
+
+// Global-hotkey action table: (RegisterHotKey id, config action name).
+// The id is echoed back in WM_HOTKEY's wParam; the action name is the one
+// `Hotkeys::entries` uses, so the two stay in lockstep. Ids start at 1
+// (RegisterHotKey rejects 0 for an application hotkey).
+const HOTKEY_ACTIONS: [(i32, &str); 5] = [
+    (1, "toggle"),
+    (2, "arm"),
+    (3, "activate"),
+    (4, "cut"),
+    (5, "cut_after"),
+];
+
+/// The tray window handle, published once the message-only window exists so
+/// the tokio side can post `HOTKEY_RELOAD_MSG` to it. 0 means "not up yet",
+/// in which case a reload request is a safe no-op.
+static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
+
 // Menu item IDs. Kept above 0x100 so they can't collide with system IDs.
 const ID_OPEN_DASH: usize = 0x101;
 const ID_OPEN_DOCK: usize = 0x102;
@@ -162,6 +188,11 @@ fn run(
             return Err("Shell_NotifyIconW(NIM_ADD) failed".into());
         }
 
+        // Publish the handle so `request_hotkey_reload` can post to us, then
+        // bind whatever hotkeys the user already has configured.
+        TRAY_HWND.store(hwnd as isize, Ordering::Release);
+        register_hotkeys(hwnd);
+
         // Message loop until WM_QUIT (PostQuitMessage from the Quit handler
         // or DefWindowProc on WM_DESTROY).
         let mut msg: MSG = std::mem::zeroed();
@@ -170,6 +201,10 @@ fn run(
             DispatchMessageW(&msg);
         }
 
+        // Tear down in reverse: stop the OS from routing hotkeys to a window
+        // we're about to destroy, then drop the tray icon and state.
+        TRAY_HWND.store(0, Ordering::Release);
+        unregister_hotkeys(hwnd);
         Shell_NotifyIconW(NIM_DELETE, &nid);
 
         // Reclaim and drop the TrayState.
@@ -220,6 +255,22 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             if ev == WM_LBUTTONUP || ev == WM_RBUTTONUP {
                 show_menu(hwnd);
             }
+            0
+        }
+        // Global hotkey fired. wParam is the RegisterHotKey id from the
+        // action table; run the matching delay action straight on the
+        // controller (atomic stores, no runtime needed).
+        WM_HOTKEY => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
+            if !state_ptr.is_null() {
+                dispatch_hotkey(&*state_ptr, wp as i32);
+            }
+            0
+        }
+        // Live re-apply: the user edited a binding in the dashboard.
+        HOTKEY_RELOAD_MSG => {
+            unregister_hotkeys(hwnd);
+            register_hotkeys(hwnd);
             0
         }
         // Menu selection.
@@ -288,6 +339,71 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
+}
+
+/// Ask the tray's message loop to re-read hotkey bindings and re-register
+/// them. Called from the tokio side after a settings change. Safe no-op
+/// until the tray window exists (TRAY_HWND still 0) - the initial bind
+/// happens in `run` regardless.
+pub fn request_hotkey_reload() {
+    let hwnd = TRAY_HWND.load(Ordering::Acquire);
+    if hwnd != 0 {
+        // SAFETY: PostMessageW is thread-safe; a stale handle (window torn
+        // down between the load and the post) is handled by the OS, which
+        // just fails the post. TRAY_HWND is set back to 0 before teardown.
+        unsafe {
+            PostMessageW(hwnd as HWND, HOTKEY_RELOAD_MSG, 0, 0);
+        }
+    }
+}
+
+/// (Re)register every configured hotkey against the tray window. Unbound
+/// or malformed entries are skipped; a combo another app already owns logs
+/// a friendly line rather than failing silently, so the user knows why a
+/// key does nothing.
+unsafe fn register_hotkeys(hwnd: HWND) {
+    let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
+    if state_ptr.is_null() {
+        return;
+    }
+    let state = &*state_ptr;
+    // Clone so we don't hold the watch borrow across the log calls below.
+    let hotkeys = state.settings.borrow().hotkeys.clone();
+    for (i, (action, combo)) in hotkeys.entries().into_iter().enumerate() {
+        if combo.is_empty() {
+            continue;
+        }
+        let Some((mods, vk)) = config::parse_hotkey(combo) else {
+            continue;
+        };
+        let id = (i + 1) as i32;
+        // MOD_NOREPEAT so holding the combo fires once, not on autorepeat.
+        if RegisterHotKey(hwnd, id, mods | MOD_NOREPEAT, vk) == 0 {
+            state.ctrl.log(format!(
+                "[hotkey] {combo} is already in use by another app - {action} not bound"
+            ));
+        }
+    }
+}
+
+/// Drop every hotkey registration. Unregistering an id that was never
+/// registered is harmless, so this can run unconditionally on reload and
+/// teardown.
+unsafe fn unregister_hotkeys(hwnd: HWND) {
+    for (id, _) in HOTKEY_ACTIONS {
+        UnregisterHotKey(hwnd, id);
+    }
+}
+
+/// Run the delay action bound to a fired hotkey. The RegisterHotKey id maps
+/// back to an action name via `HOTKEY_ACTIONS`; the shared controller method
+/// carries the semantics (identical to the MIDI path).
+fn dispatch_hotkey(state: &TrayState, id: i32) {
+    let Some((_, action)) = HOTKEY_ACTIONS.iter().find(|(hid, _)| *hid == id) else {
+        return;
+    };
+    let default_ms = state.settings.borrow().auto_arm_delay_ms;
+    state.ctrl.run_named_action(action, default_ms, "hotkey");
 }
 
 /// Modal Yes/No shown when the user hits Quit while OBS is publishing.

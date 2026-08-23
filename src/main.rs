@@ -33,6 +33,7 @@ mod controller;
 mod crypto;
 mod h264;
 mod https;
+mod midi;
 mod obs_register;
 mod portcheck;
 mod rtmp;
@@ -224,6 +225,9 @@ fn main() -> std::io::Result<()> {
         // startup can never slip in with any key while the mirror is still
         // pending. supervise_egress keeps it in sync on later edits.
         ctrl.update_ingest_key(settings.ingest_key.clone());
+        // Seed the MIDI listener's live view (bindings + default delay)
+        // before it starts, so a mapped controller works from the first tick.
+        ctrl.midi().update_from_settings(&settings);
 
         let (tx, rx) = watch::channel(settings.clone());
         let tx = Arc::new(tx);
@@ -285,6 +289,28 @@ fn main() -> std::io::Result<()> {
         // RTMP URL clipboard action.
         #[cfg(windows)]
         tray::spawn(rx.clone(), ctrl.clone());
+
+        // MIDI listener: a background thread that maps a controller's pads /
+        // knobs to the delay actions. No-op on platforms with no MIDI
+        // backend (the dashboard hides the section there).
+        midi::spawn(ctrl.clone(), ctrl.midi().clone(), rx.clone());
+
+        // Live-apply global hotkey + MIDI edits: every settings change nudges
+        // the tray to re-register its hotkeys and refreshes the MIDI
+        // listener's bindings view, so a combo or mapping set in the
+        // dashboard takes effect without a restart. Cheap and Windows-only,
+        // matching the tray. `changed()` ends only when the sender drops.
+        #[cfg(windows)]
+        {
+            let mut hk_rx = rx.clone();
+            let hk_ctrl = ctrl.clone();
+            tokio::spawn(async move {
+                while hk_rx.changed().await.is_ok() {
+                    hk_ctrl.midi().update_from_settings(&hk_rx.borrow());
+                    tray::request_hotkey_reload();
+                }
+            });
+        }
 
         // Shared dashboard-auth state (sessions + login rate limiter). Created
         // here, not inside the web supervisor, so a web restart (port change)
@@ -357,28 +383,84 @@ fn main() -> std::io::Result<()> {
 }
 
 async fn supervise_ingest(mut rx: watch::Receiver<Settings>, ctrl: Arc<controller::Controller>) {
-    let mut current_addr = rx.borrow().ingest_addr();
-    let mut handle = tokio::spawn(rtmp::server::run(current_addr.clone(), ctrl.clone()));
+    let mut current = rx.borrow().ingest_addrs();
+    let mut legs = spawn_ingest_legs(&current, &ctrl);
     loop {
-        tokio::select! {
-            r = &mut handle => {
-                eprintln!("[ingest] task ended: {:?}", r);
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                handle = tokio::spawn(rtmp::server::run(current_addr.clone(), ctrl.clone()));
-            }
-            ch = rx.changed() => {
-                if ch.is_err() { return; }
-                let new_addr = rx.borrow().ingest_addr();
-                if new_addr != current_addr {
-                    eprintln!("[ingest] hot-restart {} → {}", current_addr, new_addr);
-                    ctrl.log(format!("ingest: rebinding {} → {}", current_addr, new_addr));
-                    handle.abort();
-                    let _ = (&mut handle).await;
-                    current_addr = new_addr;
-                    handle = tokio::spawn(rtmp::server::run(current_addr.clone(), ctrl.clone()));
+        if rx.changed().await.is_err() {
+            return;
+        }
+        let next = rx.borrow().ingest_addrs();
+        if next == current {
+            continue;
+        }
+        eprintln!("[ingest] hot-restart {:?} -> {:?}", current, next);
+        ctrl.log(format!(
+            "ingest: rebinding {} -> {}",
+            current.join(", "),
+            next.join(", ")
+        ));
+        // Abort AND await every leg before rebinding. A listener that has
+        // been aborted but not yet dropped still holds the port, so binding
+        // the replacement first would fail and fall into the retry loop.
+        for mut leg in legs.drain(..) {
+            leg.abort();
+            let _ = (&mut leg).await;
+        }
+        current = next;
+        legs = spawn_ingest_legs(&current, &ctrl);
+    }
+}
+
+/// One supervisor task per address. `ingest_addrs` documents IPv4 first,
+/// and only that first leg is required: the IPv6 leg is a bonus that lets
+/// an OBS configured for IP Family = IPv6 reach us at all, and a machine
+/// with IPv6 disabled is expected to fail it.
+fn spawn_ingest_legs(
+    addrs: &[String],
+    ctrl: &Arc<controller::Controller>,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    addrs
+        .iter()
+        .enumerate()
+        .map(|(i, addr)| {
+            let required = i == 0;
+            tokio::spawn(supervise_ingest_leg(addr.clone(), ctrl.clone(), required))
+        })
+        .collect()
+}
+
+/// Bind and serve one ingest address, retrying on failure.
+///
+/// A required leg always retries. An optional leg retries only while the
+/// address is in use, which happens when a port is still closing behind a
+/// restart. Any other error means the family is unusable on this machine:
+/// with IPv6 disabled that bind can never succeed, and retrying it every
+/// second would spend the rest of the session writing the same log line, so
+/// the task logs once and exits.
+async fn supervise_ingest_leg(addr: String, ctrl: Arc<controller::Controller>, required: bool) {
+    loop {
+        match rtmp::server::bind(&addr).await {
+            Ok(listener) => {
+                if let Err(e) = rtmp::server::serve(listener, ctrl.clone()).await {
+                    eprintln!("[ingest] {} stopped serving: {}", addr, e);
                 }
             }
+            // AddrInUse is transient: on a restart or self-update the outgoing
+            // instance can still hold [::1] after it has released 127.0.0.1, and
+            // the port pre-flight only probes the IPv4 address. Keep retrying
+            // those. Any other error means the family is unusable on this
+            // machine, so an optional leg gives up instead of spinning.
+            Err(e) if !required && e.kind() != std::io::ErrorKind::AddrInUse => {
+                eprintln!("[ingest] optional listener {} unavailable: {}", addr, e);
+                ctrl.log(format!(
+                    "ingest: IPv6 listener {addr} unavailable ({e}). IPv4 ingest is \
+                     unaffected; only an OBS set to IP Family = IPv6 needs this one."
+                ));
+                return;
+            }
+            Err(e) => eprintln!("[ingest] bind {} failed: {}", addr, e),
         }
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 

@@ -1718,6 +1718,61 @@ details.sys-collapse>summary .ic-label{margin:0}
 @media (prefers-contrast: more){
   :root{--line:rgba(255,255,255,.24);--line-2:rgba(255,255,255,.40);--fg-4:oklch(0.63 0.018 230)}
 }
+/* ── Global hotkeys editor ─────────────────────────────────────────────
+   A capture field per action: click to record, press a modifier+key combo,
+   it commits and saves. Chips render the bound combo; the recording and
+   invalid states carry the whole affordance so no copy is needed. */
+.hk-list{margin-top:14px;display:flex;flex-direction:column;gap:10px}
+.hk-row{display:flex;align-items:center;gap:16px}
+.hk-row-main{flex:1;min-width:0}
+.hk-row-title{font-weight:600}
+.hk-row-sub{margin-top:2px}
+.hk-capture{
+  flex:0 0 auto;min-width:168px;min-height:38px;display:inline-flex;
+  align-items:center;justify-content:center;gap:7px;padding:7px 12px;
+  border:1px solid var(--line-2);border-radius:var(--radius-sm);
+  background:var(--surface-3,rgba(255,255,255,.04));color:var(--fg-2);
+  font:inherit;cursor:pointer;user-select:none;
+  transition:border-color .18s var(--ease-out),background .18s var(--ease-out),
+    box-shadow .18s var(--ease-out),transform .12s var(--ease-spring);
+}
+.hk-capture:hover{border-color:var(--accent);color:var(--fg)}
+.hk-capture:focus-visible{outline:none;border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-glow)}
+.hk-capture.recording{border-color:var(--accent);color:var(--fg);
+  background:color-mix(in oklch,var(--accent) 10%,transparent);
+  box-shadow:0 0 0 3px var(--accent-glow);animation:hk-pulse 1.4s var(--ease-out) infinite}
+.hk-capture.invalid{border-color:var(--danger);animation:hk-shake .32s var(--ease-out)}
+.hk-capture.empty{color:var(--fg-4);font-size:13px}
+.hk-chip{display:inline-flex;align-items:center;justify-content:center;
+  min-width:22px;height:24px;padding:0 7px;border-radius:6px;
+  border:1px solid var(--line-2);border-bottom-width:2px;
+  background:color-mix(in oklch,#fff 7%,var(--surface-3,transparent));
+  color:var(--fg);font-family:ui-monospace,'SF Mono',Menlo,monospace;
+  font-size:12px;font-weight:600;line-height:1}
+.hk-sep{color:var(--fg-4);font-size:11px;font-weight:600}
+.hk-cue{color:var(--fg-3);font-size:12.5px;letter-spacing:.2px}
+.hk-clear{flex:0 0 auto;width:30px;height:30px;display:inline-flex;
+  align-items:center;justify-content:center;border:none;border-radius:8px;
+  background:transparent;color:var(--fg-4);cursor:pointer;font-size:17px;line-height:1;
+  transition:background .15s var(--ease-out),color .15s var(--ease-out),opacity .15s}
+.hk-clear:hover{background:color-mix(in oklch,var(--danger) 16%,transparent);color:var(--danger)}
+.hk-clear[hidden]{display:none}
+.hk-warn{margin-top:10px;color:var(--warn);font-size:12.5px;min-height:1.1em}
+.hk-note{margin-top:10px;color:var(--fg-3);font-size:12.5px}
+@keyframes hk-pulse{0%,100%{box-shadow:0 0 0 3px var(--accent-glow)}
+  50%{box-shadow:0 0 0 5px var(--accent-glow)}}
+@keyframes hk-shake{0%,100%{transform:translateX(0)}
+  20%{transform:translateX(-5px)}40%{transform:translateX(5px)}
+  60%{transform:translateX(-3px)}80%{transform:translateX(3px)}}
+@media (prefers-reduced-motion: reduce){
+  .hk-capture.recording{animation:none}
+  .hk-capture.invalid{animation:none}
+}
+@media (max-width:560px){
+  .hk-row{flex-wrap:wrap;gap:8px}
+  .hk-capture{min-width:0;flex:1}
+}
 </style>
 </head>
 <body>
@@ -1835,7 +1890,7 @@ details.sys-collapse>summary .ic-label{margin:0}
                 <p class="wizard-obs-body">Prefer pasting a URL? Set <b>Service: Custom</b> in OBS. It applies live, nothing to close.</p>
                 <div class="wizard-obs-copy-row">
                   <span class="muted">Server</span>
-                  <code class="mono" id="wiz-obs-srv">rtmp://127.0.0.1:1935/live</code>
+                  <code class="mono" id="wiz-obs-srv">rtmp://localhost:1935/live</code>
                   <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'wiz-obs-srv','Server URL')">Copy</button>
                 </div>
                 <div class="wizard-obs-copy-row">
@@ -2295,7 +2350,7 @@ details.sys-collapse>summary .ic-label{margin:0}
         <div class="obs-manual-field">
           <div class="ic-label">Server URL</div>
           <div class="copy-block">
-            <code class="mono" id="obs-srv">rtmp://127.0.0.1:1935/live</code>
+            <code class="mono" id="obs-srv">rtmp://localhost:1935/live</code>
             <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-srv','Server URL')">Copy</button>
           </div>
         </div>
@@ -2590,6 +2645,25 @@ details.sys-collapse>summary .ic-label{margin:0}
           </div>
         </div>
       </div>
+    </section>
+
+    <!-- Global hotkeys. Windows-only (RegisterHotKey from the tray); the
+         whole section stays hidden until loadConfig confirms the platform. -->
+    <section class="sys-section" id="s-hotkeys-section" hidden>
+      <div class="ic-label">Global hotkeys</div>
+      <div class="tab-sub">Drive the delay from anywhere, even mid-game with OBS in the background. Click a field and press your combo. Each needs a modifier (Ctrl, Alt, Shift or Win) so it can never fire by accident.</div>
+      <div class="hk-list" id="hk-list"></div>
+      <div class="hk-warn" id="hk-warn" role="status" aria-live="polite"></div>
+    </section>
+
+    <!-- MIDI controller mapping. Windows-only; learn mode is server-side
+         (the MIDI events arrive at the backend) so the dashboard polls. -->
+    <section class="sys-section" id="s-midi-section" hidden>
+      <div class="ic-label">MIDI controller</div>
+      <div class="tab-sub">Map a pad or knob to each action. Click Learn, then press the control you want. Works while gaming, just like the hotkeys.</div>
+      <div class="hk-note" id="midi-note" hidden></div>
+      <div class="hk-list" id="midi-list"></div>
+      <div class="hk-warn" id="midi-warn" role="status" aria-live="polite"></div>
     </section>
 
     <!-- Twitch VOD audio via the optional unlocker script. Surfaced here so
@@ -2964,6 +3038,10 @@ details.sys-collapse>summary .ic-label{margin:0}
 'use strict';
 const $ = id => document.getElementById(id);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
+// Escape text bound for innerHTML. Used by the hotkeys editor; values there
+// are already constrained, so this is belt-and-braces against future callers.
+const escAttr = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // - State ------------------------------─
 let lastState = null;
@@ -3678,7 +3756,7 @@ function renderHeader(s){
   $('hdr-obs-v').textContent = s.ingest_alive ? 'Live' : 'Offline';
   obs.title = s.ingest_alive
     ? 'Your encoder is connected and publishing to InstantClone.'
-    : 'Waiting for your encoder. Point OBS (or any RTMP encoder) at rtmp://127.0.0.1:1935/live and start streaming.';
+    : 'Waiting for your encoder. Point OBS (or any RTMP encoder) at rtmp://localhost:1935/live and start streaming.';
   // Egress pill - how many destinations are actually connected.
   const eg = $('hdr-egress');
   const total = s.destinations_total || 0;
@@ -4450,6 +4528,31 @@ async function loadConfig(){
     $('s-auto-arm').checked = !!c.auto_arm_on_connect;
     $('s-auto-act').checked = !!c.auto_activate_when_ready;
     $('s-auto-arm-secs').value = Math.round((c.auto_arm_delay_ms || 15000) / 1000);
+    // Global hotkeys: Windows-only, so the whole section stays hidden
+    // elsewhere. A pending recording is cancelled before a re-render so
+    // stale listeners never outlive the DOM they were bound to.
+    if ($('s-hotkeys-section')){
+      if (c.os === 'windows'){
+        if (hkRec) hkCancelRecording();
+        hkBindings = Object.assign({toggle:'',arm:'',activate:'',cut:'',cut_after:''}, c.hotkeys || {});
+        $('s-hotkeys-section').hidden = false;
+        hkRenderList();
+      } else {
+        $('s-hotkeys-section').hidden = true;
+      }
+    }
+    // MIDI mapping: Windows-only, same gating as the hotkeys. A one-off
+    // poll fills in device availability; learn mode is driven separately.
+    if ($('s-midi-section')){
+      if (c.os === 'windows'){
+        if (midiLearnAction) midiCancelLearn();
+        midiBindings = Object.assign({toggle:'',arm:'',activate:'',cut:'',cut_after:''}, c.midi || {});
+        $('s-midi-section').hidden = false;
+        midiInit();
+      } else {
+        $('s-midi-section').hidden = true;
+      }
+    }
     // OBS panel
     $('obs-srv').textContent = c.obs_url;
     if ($('wiz-obs-srv')) $('wiz-obs-srv').textContent = c.obs_url;
@@ -5157,8 +5260,8 @@ async function nudgeObsWiringIfNeeded(){
     const r = await (await fetch('/obs/register-status')).json();
     if (r.registered) return;
     const how = (r.path === null)
-      ? 'In OBS → Settings → Stream: Service = Custom, Server = rtmp://127.0.0.1:1935/live, then restart OBS.'
-      : 'In OBS → Settings → Stream, pick InstantClone (or Custom: rtmp://127.0.0.1:1935/live), then restart OBS.';
+      ? 'In OBS → Settings → Stream: Service = Custom, Server = rtmp://localhost:1935/live, then restart OBS.'
+      : 'In OBS → Settings → Stream, pick InstantClone (or Custom: rtmp://localhost:1935/live), then restart OBS.';
     toast('One more step to go live: point OBS at InstantClone. ' + how, 'info', 11000);
   } catch(_){ /* status endpoint unreachable; the first-run tour still covers OBS wiring */ }
 }
@@ -5390,6 +5493,347 @@ async function testWebhook(){
   const r = await(await fetch('/test-webhook',{method:'POST'})).json();
   if (r.ok) toast('Webhook test fired - check Discord','ok');
   else toast(`Webhook test failed: ${r.error || 'no response from Discord'}`, 'err');
+}
+
+// ── Global hotkeys editor (Windows only) ───────────────────────────────
+// Click a capture field, press a modifier+key combo, and it commits and
+// saves instantly. Chips render the current binding; recording and invalid
+// states carry the whole affordance. Order here is display-only (most-used
+// first) and independent of the server-side action ids.
+const HOTKEY_ACTIONS = [
+  ['toggle',    'Toggle delay',        'Go delayed when live, cut to live when delayed. One key, on and off.'],
+  ['activate',  'Activate delay',      'Switch the armed delay on.'],
+  ['cut',       'Cut to live',         'Drop back to live, keeping the buffer armed for an instant re-activate.'],
+  ['arm',       'Arm buffer',          'Start filling the buffer at your default delay.'],
+  ['cut_after', 'Cut after this airs', 'Press once to schedule a cut the instant the live edge reaches every viewer; press again to cancel it.'],
+];
+let hkBindings = {toggle:'',arm:'',activate:'',cut:'',cut_after:''};
+let hkRec = null; // {action, el} while recording, else null
+let hkWarnTimer = null;
+
+const hkTitleOf = a => (HOTKEY_ACTIONS.find(x => x[0] === a) || [,''])[1];
+
+// Named keys beyond letters/digits/F-keys, keyed by KeyboardEvent.code and
+// mapped to the exact tokens the server's NAMED_KEYS table expects.
+const HK_CODE_MAP = {
+  Space:'Space', Tab:'Tab', Escape:'Esc', Enter:'Enter', NumpadEnter:'Enter', Backspace:'Backspace',
+  ArrowLeft:'Left', ArrowRight:'Right', ArrowUp:'Up', ArrowDown:'Down',
+  PageUp:'PageUp', PageDown:'PageDown', End:'End', Home:'Home', Insert:'Insert', Delete:'Delete',
+  NumpadMultiply:'NumMultiply', NumpadAdd:'NumAdd', NumpadSubtract:'NumSubtract',
+  NumpadDecimal:'NumDecimal', NumpadDivide:'NumDivide',
+};
+// Physical-key name from a KeyboardEvent.code, mirroring the server's
+// key_to_vk: letters, digits, F1-F24, numpad and the nav cluster.
+// Modifiers and everything else -> null.
+function hkMainKey(code){
+  let m;
+  if ((m = /^Key([A-Z])$/.exec(code))) return m[1];
+  if ((m = /^Digit([0-9])$/.exec(code))) return m[1];
+  if ((m = /^Numpad([0-9])$/.exec(code))) return 'Numpad' + m[1];
+  if ((m = /^F([1-9]|1[0-9]|2[0-4])$/.exec(code))) return 'F' + m[1];
+  return HK_CODE_MAP[code] || null;
+}
+// Fixed modifier order matches the server's canonical form.
+function hkMods(e){
+  const m = [];
+  if (e.ctrlKey) m.push('Ctrl');
+  if (e.altKey) m.push('Alt');
+  if (e.shiftKey) m.push('Shift');
+  if (e.metaKey) m.push('Win');
+  return m;
+}
+
+function hkSetWarn(msg){
+  const w = $('hk-warn'); if (!w) return;
+  w.textContent = msg || '';
+  clearTimeout(hkWarnTimer);
+  if (msg) hkWarnTimer = setTimeout(() => { if ($('hk-warn')) $('hk-warn').textContent = ''; }, 4000);
+}
+
+// Paint a capture field: chips for a bound combo, a cue when unbound.
+function hkRenderCapture(el, action){
+  const combo = hkBindings[action] || '';
+  el.classList.remove('recording','invalid');
+  if (!combo){
+    el.classList.add('empty');
+    el.innerHTML = '<span class="hk-cue">Click to set</span>';
+    el.setAttribute('aria-label', hkTitleOf(action) + ': no hotkey set, click to set one');
+    return;
+  }
+  el.classList.remove('empty');
+  const parts = combo.split('+');
+  el.innerHTML = parts.map(p =>
+    `<span class="hk-chip">${escAttr(p)}</span>`).join('<span class="hk-sep">+</span>');
+  el.setAttribute('aria-label', hkTitleOf(action) + ': ' + parts.join(' ') + ', click to change');
+}
+
+function hkRenderList(){
+  const list = $('hk-list'); if (!list) return;
+  list.innerHTML = '';
+  for (const [action, title, sub] of HOTKEY_ACTIONS){
+    const row = document.createElement('div');
+    row.className = 'hk-row';
+    const main = document.createElement('div');
+    main.className = 'hk-row-main';
+    main.innerHTML = `<div class="hk-row-title">${escAttr(title)}</div>`
+      + `<div class="tab-sub hk-row-sub">${escAttr(sub)}</div>`;
+    const cap = document.createElement('div');
+    cap.className = 'hk-capture';
+    cap.setAttribute('role','button');
+    cap.setAttribute('tabindex','0');
+    cap.addEventListener('click', () => hkStartRecording(action, cap));
+    cap.addEventListener('keydown', ev => {
+      // Enter/Space starts recording; once recording, the capture-phase
+      // handler owns every key, so this only fires when idle.
+      if (!hkRec && (ev.key === 'Enter' || ev.key === ' ')){ ev.preventDefault(); hkStartRecording(action, cap); }
+    });
+    const clear = document.createElement('button');
+    clear.className = 'hk-clear';
+    clear.type = 'button';
+    clear.innerHTML = '&times;';
+    clear.title = 'Clear ' + title + ' hotkey';
+    clear.setAttribute('aria-label', 'Clear ' + title + ' hotkey');
+    clear.hidden = !hkBindings[action];
+    clear.addEventListener('click', e => { e.stopPropagation(); hkSaveBinding(action, '', cap); });
+    row.append(main, cap, clear);
+    list.appendChild(row);
+    hkRenderCapture(cap, action);
+  }
+}
+
+function hkStartRecording(action, el){
+  if (hkRec) hkCancelRecording();
+  hkRec = {action, el};
+  el.classList.remove('empty');
+  el.classList.add('recording');
+  el.innerHTML = '<span class="hk-cue">Press keys&hellip;</span>';
+  el.focus();
+  hkSetWarn('');
+  document.addEventListener('keydown', hkOnKeydown, true);
+  el.addEventListener('blur', hkOnBlur);
+}
+
+function hkStopRecording(){
+  document.removeEventListener('keydown', hkOnKeydown, true);
+  if (hkRec) hkRec.el.removeEventListener('blur', hkOnBlur);
+  hkRec = null;
+}
+
+function hkCancelRecording(){
+  if (!hkRec) return;
+  const {action, el} = hkRec;
+  hkStopRecording();
+  hkRenderCapture(el, action);
+}
+
+function hkOnBlur(){ if (hkRec) hkCancelRecording(); }
+
+function hkFlashInvalid(msg){
+  if (!hkRec) return;
+  const el = hkRec.el;
+  el.classList.add('invalid');
+  setTimeout(() => el && el.classList.remove('invalid'), 340);
+  hkSetWarn(msg);
+}
+
+function hkOnKeydown(e){
+  if (!hkRec) return;
+  e.preventDefault(); e.stopPropagation();
+  if (e.key === 'Escape'){ hkCancelRecording(); return; }
+  if (e.key === 'Backspace' || e.key === 'Delete'){
+    const {action, el} = hkRec; hkStopRecording(); hkSaveBinding(action, '', el); return;
+  }
+  const mods = hkMods(e);
+  const key = hkMainKey(e.code);
+  if (!key){
+    // Modifiers only so far: live preview of what's held.
+    const cue = mods.length ? mods.join(' + ') + ' + &hellip;' : 'Press keys&hellip;';
+    hkRec.el.innerHTML = `<span class="hk-cue">${cue}</span>`;
+    return;
+  }
+  if (mods.length === 0){ hkFlashInvalid('Add Ctrl, Alt, Shift or Win - a bare key would fire by accident'); return; }
+  const combo = mods.concat(key).join('+');
+  const dup = Object.keys(hkBindings).find(a => a !== hkRec.action && hkBindings[a] === combo);
+  if (dup){ hkFlashInvalid(combo + ' is already bound to ' + hkTitleOf(dup)); return; }
+  const {action, el} = hkRec;
+  hkStopRecording();
+  hkSaveBinding(action, combo, el);
+}
+
+// Persist one binding. Optimistic: paint it, then POST. On failure, resync
+// from the server so the UI never lies about what is actually bound.
+async function hkSaveBinding(action, combo, el){
+  hkBindings[action] = combo;
+  hkRenderCapture(el, action);
+  const clearBtn = el.parentElement && el.parentElement.querySelector('.hk-clear');
+  if (clearBtn) clearBtn.hidden = !combo;
+  try {
+    const body = new URLSearchParams(); body.set('hotkey.' + action, combo);
+    const j = await (await fetch('/config', {method:'POST', body})).json();
+    if (j.ok){
+      toast(combo ? `${hkTitleOf(action)}: ${combo}` : `${hkTitleOf(action)} hotkey cleared`, 'ok');
+    } else {
+      toast(`Couldn't save hotkey: ${j.error}`, 'err');
+      await loadConfig();
+    }
+  } catch(e){
+    toast('Save failed - the app may have stopped responding', 'err');
+    await loadConfig();
+  }
+}
+
+// ── MIDI controller mapping (Windows only) ─────────────────────────────
+// Same five actions as the hotkeys, but "learn" is server-side: the MIDI
+// message arrives at the backend, so we POST /midi/learn then poll
+// /midi/poll until it is captured (or cancelled). Reuses the hk-* styles.
+let midiBindings = {toggle:'',arm:'',activate:'',cut:'',cut_after:''};
+let midiAvailable = false;
+let midiDevices = [];
+let midiLearnAction = null;
+let midiPollTimer = null;
+
+// "note:1:36" -> "Note 36 · ch 1"; "cc:1:20" -> "CC 20 · ch 1".
+function midiLabel(sig){
+  const p = (sig || '').split(':');
+  if (p.length !== 3) return sig || '';
+  const [kind, ch, n] = p;
+  if (kind === 'note') return 'Note ' + n + ' · ch ' + ch;
+  if (kind === 'cc') return 'CC ' + n + ' · ch ' + ch;
+  return sig;
+}
+
+function midiSetWarn(msg){ const w = $('midi-warn'); if (w) w.textContent = msg || ''; }
+
+function midiRenderCapture(el, action){
+  const sig = midiBindings[action] || '';
+  el.classList.remove('recording','invalid','empty');
+  if (midiLearnAction === action){
+    el.classList.add('recording');
+    el.innerHTML = '<span class="hk-cue">Press a pad or knob&hellip;</span>';
+    el.setAttribute('aria-label', hkTitleOf(action) + ': learning, press a control or click to cancel');
+    return;
+  }
+  if (!sig){
+    el.classList.add('empty');
+    el.innerHTML = '<span class="hk-cue">Click to learn</span>';
+    el.setAttribute('aria-label', hkTitleOf(action) + ': no MIDI control mapped, click to learn');
+    return;
+  }
+  el.innerHTML = '<span class="hk-chip">' + escAttr(midiLabel(sig)) + '</span>';
+  el.setAttribute('aria-label', hkTitleOf(action) + ': ' + midiLabel(sig) + ', click to remap');
+}
+
+function midiRenderList(){
+  const list = $('midi-list'); if (!list) return;
+  list.innerHTML = '';
+  for (const [action, title, sub] of HOTKEY_ACTIONS){
+    const row = document.createElement('div');
+    row.className = 'hk-row';
+    const main = document.createElement('div');
+    main.className = 'hk-row-main';
+    main.innerHTML = `<div class="hk-row-title">${escAttr(title)}</div>`
+      + `<div class="tab-sub hk-row-sub">${escAttr(sub)}</div>`;
+    const cap = document.createElement('div');
+    cap.className = 'hk-capture';
+    cap.setAttribute('role','button');
+    cap.setAttribute('tabindex','0');
+    cap.addEventListener('click', () => midiToggleLearn(action));
+    cap.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter' || ev.key === ' '){ ev.preventDefault(); midiToggleLearn(action); }
+      if (ev.key === 'Escape' && midiLearnAction === action) midiCancelLearn();
+    });
+    const clear = document.createElement('button');
+    clear.className = 'hk-clear';
+    clear.type = 'button';
+    clear.innerHTML = '&times;';
+    clear.title = 'Clear ' + title + ' mapping';
+    clear.setAttribute('aria-label', 'Clear ' + title + ' MIDI mapping');
+    clear.hidden = !midiBindings[action];
+    clear.addEventListener('click', e => { e.stopPropagation(); midiClear(action); });
+    row.append(main, cap, clear);
+    list.appendChild(row);
+    midiRenderCapture(cap, action);
+  }
+  const note = $('midi-note');
+  if (note){
+    if (!midiAvailable){
+      note.hidden = false;
+      note.textContent = 'No MIDI controller detected. Connect one and it shows up here.';
+    } else if (midiDevices.length){
+      note.hidden = false;
+      note.textContent = 'Listening to: ' + midiDevices.join(', ');
+    } else {
+      note.hidden = true;
+    }
+  }
+}
+
+async function midiToggleLearn(action){
+  if (midiLearnAction === action){ await midiCancelLearn(); return; }
+  if (midiLearnAction) await midiCancelLearn();
+  if (!midiAvailable){ midiSetWarn('Connect a MIDI controller first.'); return; }
+  try {
+    const j = await (await fetch('/midi/learn', {method:'POST', body:new URLSearchParams({action})})).json();
+    if (!j.ok){ midiSetWarn(j.error || 'Could not start learn'); return; }
+    midiLearnAction = action;
+    midiSetWarn('');
+    midiRenderList();
+    midiStartPoll();
+  } catch(e){ midiSetWarn('Learn failed - the app may have stopped responding'); }
+}
+
+async function midiCancelLearn(){
+  const was = midiLearnAction;
+  midiLearnAction = null;
+  midiStopPoll();
+  try { await fetch('/midi/learn/cancel', {method:'POST'}); } catch(e){}
+  if (was) midiRenderList();
+}
+
+function midiStartPoll(){ midiStopPoll(); midiPollTimer = setInterval(midiPollOnce, 300); }
+function midiStopPoll(){ if (midiPollTimer){ clearInterval(midiPollTimer); midiPollTimer = null; } }
+
+// One poll: refresh availability/devices/bindings and, while learning,
+// detect when the server has captured (learning back to null).
+async function midiPollOnce(){
+  let j;
+  try { j = await (await fetch('/midi/poll', {method:'POST'})).json(); }
+  catch(e){ return; }
+  midiAvailable = !!j.available;
+  midiDevices = j.devices || [];
+  if (j.bindings) midiBindings = Object.assign(midiBindings, j.bindings);
+  if (j.learning == null){
+    const was = midiLearnAction;
+    const got = was && midiBindings[was];
+    midiLearnAction = null;
+    midiStopPoll();
+    midiRenderList();
+    if (was && got) toast(`${hkTitleOf(was)}: ${midiLabel(midiBindings[was])}`, 'ok');
+  } else {
+    midiRenderList();
+  }
+}
+
+async function midiClear(action){
+  midiBindings[action] = '';
+  midiRenderList();
+  try {
+    const body = new URLSearchParams(); body.set('midi.' + action, '');
+    const j = await (await fetch('/config', {method:'POST', body})).json();
+    if (j.ok) toast(`${hkTitleOf(action)} mapping cleared`, 'ok');
+    else { toast(`Couldn't clear mapping: ${j.error}`, 'err'); await loadConfig(); }
+  } catch(e){ toast('Save failed - the app may have stopped responding', 'err'); await loadConfig(); }
+}
+
+// One-off poll on load to learn availability + device names.
+async function midiInit(){
+  try {
+    const j = await (await fetch('/midi/poll', {method:'POST'})).json();
+    midiAvailable = !!j.available;
+    midiDevices = j.devices || [];
+    if (j.bindings) midiBindings = Object.assign(midiBindings, j.bindings);
+  } catch(e){}
+  midiRenderList();
 }
 
 // - OBS service registration --------------------─

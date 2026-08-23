@@ -126,12 +126,302 @@ pub struct Settings {
     /// it - the dock owns its schema). Persisted here so a customized dock
     /// survives OBS wiping its browser cache or the machine restarting.
     pub docks: BTreeMap<String, String>,
+    /// Global hotkey bindings for the delay actions. Windows-only in
+    /// effect (bound via RegisterHotKey from the tray); other platforms
+    /// keep the values on disk but never register them. See `Hotkeys`.
+    pub hotkeys: Hotkeys,
+    /// MIDI controller bindings for the delay actions. Windows-only in
+    /// effect (winmm listener); other platforms keep the values on disk.
+    /// See `MidiBindings`.
+    pub midi: MidiBindings,
 }
 
 #[derive(Debug, Clone)]
 pub struct DelayProfile {
     pub name: String,
     pub delay_ms: u32,
+}
+
+// Win32 `RegisterHotKey` modifier bit values, mirrored here so the
+// cross-platform config layer can parse a combo string without pulling in
+// windows-sys. The tray passes these straight through to RegisterHotKey.
+pub const HK_MOD_ALT: u32 = 0x0001;
+pub const HK_MOD_CONTROL: u32 = 0x0002;
+pub const HK_MOD_SHIFT: u32 = 0x0004;
+pub const HK_MOD_WIN: u32 = 0x0008;
+
+/// Global hotkey bindings, one canonical combo string per delay action
+/// (e.g. "Ctrl+Alt+D"; empty means unbound). Windows binds them via
+/// RegisterHotKey from the tray's message loop; other platforms round-trip
+/// the values through save/load unchanged but never register them (a
+/// headless Linux box has no global-key surface). Every binding must carry
+/// at least one modifier, so a bare keypress mid-game can never fire a
+/// delay action by accident - that requirement is the misclick guard.
+#[derive(Debug, Clone, Default)]
+pub struct Hotkeys {
+    /// Delay on/off: activate the armed delay, or cut back to live.
+    pub toggle: String,
+    /// Arm the buffer at the default delay.
+    pub arm: String,
+    /// Activate the armed delay (go delayed).
+    pub activate: String,
+    /// Cut back to live, keeping the buffer armed.
+    pub cut: String,
+    /// Schedule a cut for the moment the current live edge airs.
+    pub cut_after: String,
+}
+
+impl Hotkeys {
+    /// Stable (action-name, binding) pairs. One source of truth for the
+    /// save writer, the JSON serializer, and the tray registrar, so a new
+    /// action is added in exactly one place.
+    pub fn entries(&self) -> [(&'static str, &str); 5] {
+        [
+            ("toggle", &self.toggle),
+            ("arm", &self.arm),
+            ("activate", &self.activate),
+            ("cut", &self.cut),
+            ("cut_after", &self.cut_after),
+        ]
+    }
+
+    fn slot_mut(&mut self, action: &str) -> Option<&mut String> {
+        Some(match action {
+            "toggle" => &mut self.toggle,
+            "arm" => &mut self.arm,
+            "activate" => &mut self.activate,
+            "cut" => &mut self.cut,
+            "cut_after" => &mut self.cut_after,
+            _ => return None,
+        })
+    }
+
+    /// Assign one action's binding from a raw combo string. An empty or
+    /// malformed value clears the binding; a valid one is stored in
+    /// canonical form. This is the single choke point that keeps only
+    /// well-formed combos on disk and in memory.
+    pub fn set(&mut self, action: &str, raw: &str) {
+        if let Some(slot) = self.slot_mut(action) {
+            *slot = canonicalize_hotkey(raw).unwrap_or_default();
+        }
+    }
+}
+
+/// MIDI controller bindings, one signature string per delay action (empty
+/// means unbound). A signature is `note:<channel>:<note>` for a note-on pad
+/// or `cc:<channel>:<controller>` for a control-change knob/button, channel
+/// 1-16 and data 0-127. Same five actions as `Hotkeys`; the MIDI listener
+/// thread matches an incoming message against these and fires the shared
+/// controller action. Windows-only in effect (winmm), round-tripped
+/// everywhere.
+#[derive(Debug, Clone, Default)]
+pub struct MidiBindings {
+    pub toggle: String,
+    pub arm: String,
+    pub activate: String,
+    pub cut: String,
+    pub cut_after: String,
+}
+
+impl MidiBindings {
+    /// Stable (action-name, signature) pairs, mirroring `Hotkeys::entries`.
+    pub fn entries(&self) -> [(&'static str, &str); 5] {
+        [
+            ("toggle", &self.toggle),
+            ("arm", &self.arm),
+            ("activate", &self.activate),
+            ("cut", &self.cut),
+            ("cut_after", &self.cut_after),
+        ]
+    }
+
+    fn slot_mut(&mut self, action: &str) -> Option<&mut String> {
+        Some(match action {
+            "toggle" => &mut self.toggle,
+            "arm" => &mut self.arm,
+            "activate" => &mut self.activate,
+            "cut" => &mut self.cut,
+            "cut_after" => &mut self.cut_after,
+            _ => return None,
+        })
+    }
+
+    /// Assign one action's MIDI signature. An empty or malformed value
+    /// clears it; a valid one is stored canonicalized. Single choke point,
+    /// same contract as `Hotkeys::set`.
+    pub fn set(&mut self, action: &str, raw: &str) {
+        if let Some(slot) = self.slot_mut(action) {
+            *slot = canonicalize_midi(raw).unwrap_or_default();
+        }
+    }
+
+    /// Action bound to `signature`, if any. Used by the MIDI listener to
+    /// route an incoming message. First match wins. Windows-only in use
+    /// (plus tests); other platforms have no listener to call it.
+    #[cfg(any(windows, test))]
+    pub fn action_for(&self, signature: &str) -> Option<&'static str> {
+        self.entries()
+            .into_iter()
+            .find(|(_, sig)| !sig.is_empty() && *sig == signature)
+            .map(|(action, _)| action)
+    }
+}
+
+/// Validate and normalise a MIDI signature to `note:ch:n` / `cc:ch:n`, or
+/// None if it is malformed or out of range. Channel 1-16, data 0-127.
+pub fn canonicalize_midi(sig: &str) -> Option<String> {
+    let mut parts = sig.trim().split(':');
+    let kind = parts.next()?.trim().to_ascii_lowercase();
+    let ch: u32 = parts.next()?.trim().parse().ok()?;
+    let data: u32 = parts.next()?.trim().parse().ok()?;
+    if parts.next().is_some() {
+        return None; // trailing junk
+    }
+    if !(1..=16).contains(&ch) || data > 127 {
+        return None;
+    }
+    match kind.as_str() {
+        "note" => Some(format!("note:{ch}:{data}")),
+        "cc" => Some(format!("cc:{ch}:{data}")),
+        _ => None,
+    }
+}
+
+/// Parse a combo string into `(modifier bitmask, virtual-key code)`.
+/// Tokens are '+'-separated, case-insensitive and order-independent:
+/// modifiers Ctrl/Control, Alt, Shift, Win/Super/Meta/Cmd, plus exactly
+/// one main key (A-Z, 0-9, or F1-F24). Returns None unless there is at
+/// least one modifier and exactly one valid main key - the modifier
+/// requirement is what stops a stray keypress from firing.
+pub fn parse_hotkey(combo: &str) -> Option<(u32, u32)> {
+    let mut mods = 0u32;
+    let mut vk: Option<u32> = None;
+    for tok in combo.split('+') {
+        let t = tok.trim();
+        if t.is_empty() {
+            continue;
+        }
+        match t.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods |= HK_MOD_CONTROL,
+            "alt" => mods |= HK_MOD_ALT,
+            "shift" => mods |= HK_MOD_SHIFT,
+            "win" | "super" | "meta" | "cmd" => mods |= HK_MOD_WIN,
+            _ => {
+                let code = key_to_vk(t)?;
+                if vk.is_some() {
+                    return None; // more than one main key: not RegisterHotKey-able
+                }
+                vk = Some(code);
+            }
+        }
+    }
+    let vk = vk?;
+    if mods == 0 {
+        return None; // bare key: rejected as a misclick risk
+    }
+    Some((mods, vk))
+}
+
+/// Normalise a combo to canonical display form ("Ctrl+Alt+D"), or None if
+/// it is not a valid modifier+key combo. Modifiers are emitted in a fixed
+/// order so the same combo always renders identically.
+pub fn canonicalize_hotkey(combo: &str) -> Option<String> {
+    let (mods, vk) = parse_hotkey(combo)?;
+    let mut out = String::with_capacity(16);
+    if mods & HK_MOD_CONTROL != 0 {
+        out.push_str("Ctrl+");
+    }
+    if mods & HK_MOD_ALT != 0 {
+        out.push_str("Alt+");
+    }
+    if mods & HK_MOD_SHIFT != 0 {
+        out.push_str("Shift+");
+    }
+    if mods & HK_MOD_WIN != 0 {
+        out.push_str("Win+");
+    }
+    out.push_str(&vk_to_key(vk)?);
+    Some(out)
+}
+
+/// Named main keys beyond the letter/digit/F ranges, as (canonical token,
+/// Win32 VK code). Token spellings deliberately avoid '+' (the combo
+/// separator) so they round-trip through the line-based parser. This table
+/// is the single source of truth for both directions; the dashboard's
+/// capture UI maps browser key codes onto these same tokens.
+const NAMED_KEYS: &[(&str, u32)] = &[
+    ("Space", 0x20),
+    ("Tab", 0x09),
+    ("Esc", 0x1B),
+    ("Enter", 0x0D),
+    ("Backspace", 0x08),
+    ("Left", 0x25),
+    ("Up", 0x26),
+    ("Right", 0x27),
+    ("Down", 0x28),
+    ("PageUp", 0x21),
+    ("PageDown", 0x22),
+    ("End", 0x23),
+    ("Home", 0x24),
+    ("Insert", 0x2D),
+    ("Delete", 0x2E),
+    ("Numpad0", 0x60),
+    ("Numpad1", 0x61),
+    ("Numpad2", 0x62),
+    ("Numpad3", 0x63),
+    ("Numpad4", 0x64),
+    ("Numpad5", 0x65),
+    ("Numpad6", 0x66),
+    ("Numpad7", 0x67),
+    ("Numpad8", 0x68),
+    ("Numpad9", 0x69),
+    ("NumMultiply", 0x6A),
+    ("NumAdd", 0x6B),
+    ("NumSubtract", 0x6D),
+    ("NumDecimal", 0x6E),
+    ("NumDivide", 0x6F),
+];
+
+/// Map a main-key token to its Win32 virtual-key code. Letters A-Z and
+/// digits 0-9 map to VK codes that equal their ASCII value; F1-F24 map to a
+/// fixed base; the nav / numpad cluster comes from `NAMED_KEYS`. Anything
+/// else is rejected so only sensibly-bindable keys reach RegisterHotKey.
+fn key_to_vk(key: &str) -> Option<u32> {
+    let bytes = key.as_bytes();
+    if bytes.len() == 1 {
+        let b = bytes[0];
+        if b.is_ascii_alphabetic() {
+            return Some(b.to_ascii_uppercase() as u32); // VK_A..VK_Z == 'A'..'Z'
+        }
+        if b.is_ascii_digit() {
+            return Some(b as u32); // VK_0..VK_9 == '0'..'9'
+        }
+        return None;
+    }
+    if bytes[0].eq_ignore_ascii_case(&b'F') {
+        if let Ok(n) = key[1..].parse::<u32>() {
+            if (1..=24).contains(&n) {
+                return Some(0x70 + (n - 1)); // VK_F1 == 0x70
+            }
+        }
+    }
+    NAMED_KEYS
+        .iter()
+        .find(|(name, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, vk)| *vk)
+}
+
+/// Inverse of `key_to_vk` for canonical display. Only the ranges
+/// `key_to_vk` can produce are handled; anything else is None.
+fn vk_to_key(vk: u32) -> Option<String> {
+    match vk {
+        0x30..=0x39 | 0x41..=0x5A => char::from_u32(vk).map(|c| c.to_string()),
+        0x70..=0x87 => Some(format!("F{}", vk - 0x70 + 1)),
+        _ => NAMED_KEYS
+            .iter()
+            .find(|(_, code)| *code == vk)
+            .map(|(name, _)| (*name).to_string()),
+    }
 }
 
 /// One streaming destination - Twitch, YouTube, a private server, etc.
@@ -376,6 +666,11 @@ impl Settings {
             // dashboard does it on first load, then flips this true.
             overlays_seeded: false,
             docks: BTreeMap::new(),
+            // No hotkeys bound out of the box: they are opt-in so a fresh
+            // install never steals a key combo a game or another app uses.
+            hotkeys: Hotkeys::default(),
+            // Likewise no MIDI bindings until the user maps a controller.
+            midi: MidiBindings::default(),
         }
     }
 
@@ -627,6 +922,20 @@ impl Settings {
         for (id, layout) in &self.docks {
             writeln!(f, "dock.{}={}", one_line(id), one_line(layout))?;
         }
+        // Hotkey bindings. Only bound actions are written, so a fresh
+        // install's config stays lean and a downgrade drops the unknown
+        // keys via apply_field's catch-all arm.
+        for (action, combo) in self.hotkeys.entries() {
+            if !combo.is_empty() {
+                writeln!(f, "hotkey.{}={}", action, combo)?;
+            }
+        }
+        // MIDI bindings, same only-when-bound rule.
+        for (action, sig) in self.midi.entries() {
+            if !sig.is_empty() {
+                writeln!(f, "midi.{}={}", action, sig)?;
+            }
+        }
         for (i, p) in self.profiles.iter().enumerate() {
             writeln!(f, "profile.{}.name={}", i, one_line(&p.name))?;
             writeln!(f, "profile.{}.delay_ms={}", i, p.delay_ms)?;
@@ -744,6 +1053,17 @@ impl Settings {
                     self.docks.insert(id.to_string(), value.to_string());
                 }
             }
+            // hotkey.<action>=<combo>. `set` canonicalizes and drops any
+            // malformed or unknown-action value, so a hand-edited config
+            // can never load a combo the tray would fail to register.
+            k if k.starts_with("hotkey.") => {
+                self.hotkeys.set(&k["hotkey.".len()..], value);
+            }
+            // midi.<action>=<signature>. `set` validates and drops anything
+            // malformed, so a hand-edited config can't load a bad signature.
+            k if k.starts_with("midi.") => {
+                self.midi.set(&k["midi.".len()..], value);
+            }
             k if k.starts_with("profile.") => {
                 let rest = &k[8..];
                 if let Some(dot) = rest.find('.') {
@@ -841,13 +1161,31 @@ impl Settings {
 
     // ---- Derived values ----
 
-    pub fn ingest_addr(&self) -> String {
-        let host = if self.ingest_bind_all {
-            "0.0.0.0"
+    /// Every address the ingest listener binds, IPv4 first.
+    ///
+    /// The IPv6 leg exists because OBS's Settings -> Advanced -> Network ->
+    /// IP Family is a resolver setting, not a transport preference. Set it
+    /// to IPv6 and OBS resolves with `AF_INET6`, under which an IPv4
+    /// literal cannot resolve at all: `getaddrinfo("127.0.0.1", AF_INET6)`
+    /// returns host-not-found and OBS reports "Error reaching host" before
+    /// it ever opens a socket. Pairing this with the `localhost` and
+    /// `[::1]` server entries in `obs_register` gives that configuration
+    /// something it can actually reach.
+    ///
+    /// IPv4 stays first because it is the default server entry and the one
+    /// almost everyone dials. The IPv6 leg is best-effort: a machine with
+    /// IPv6 disabled cannot bind it, and `supervise_ingest` drops it rather
+    /// than retrying forever.
+    pub fn ingest_addrs(&self) -> Vec<String> {
+        let (v4, v6) = if self.ingest_bind_all {
+            ("0.0.0.0", "[::]")
         } else {
-            "127.0.0.1"
+            ("127.0.0.1", "[::1]")
         };
-        format!("{}:{}", host, self.ingest_port)
+        vec![
+            format!("{}:{}", v4, self.ingest_port),
+            format!("{}:{}", v6, self.ingest_port),
+        ]
     }
 
     pub fn web_addr(&self) -> String {
@@ -860,9 +1198,16 @@ impl Settings {
     }
 
     pub fn obs_url(&self) -> String {
-        // What OBS should be pointed at. Always 127.0.0.1 from the user's
+        // What OBS should be pointed at. Always loopback from the user's
         // perspective even if we bind on 0.0.0.0.
-        format!("rtmp://127.0.0.1:{}/live", self.ingest_port)
+        //
+        // `localhost` rather than a literal, for the same reason
+        // `obs_register::server_url` uses it: OBS's IP Family setting picks
+        // the address family passed to `getaddrinfo`, and an IPv4 literal
+        // cannot resolve under AF_INET6. Someone pasting this into a Custom
+        // service hits that wall exactly like someone picking our
+        // registered service would.
+        format!("rtmp://localhost:{}/live", self.ingest_port)
     }
 
     /// First destination's resolved URL - used by the legacy single-dest
@@ -955,6 +1300,24 @@ impl Settings {
             ));
         }
         dests.push(']');
+        // Hotkey bindings. Not secrets, so always emitted; the dashboard
+        // only surfaces the editor on Windows (where they take effect).
+        let hotkeys = format!(
+            r#"{{"toggle":{t},"arm":{a},"activate":{ac},"cut":{c},"cut_after":{ca}}}"#,
+            t = json_str(&self.hotkeys.toggle),
+            a = json_str(&self.hotkeys.arm),
+            ac = json_str(&self.hotkeys.activate),
+            c = json_str(&self.hotkeys.cut),
+            ca = json_str(&self.hotkeys.cut_after),
+        );
+        let midi = format!(
+            r#"{{"toggle":{t},"arm":{a},"activate":{ac},"cut":{c},"cut_after":{ca}}}"#,
+            t = json_str(&self.midi.toggle),
+            a = json_str(&self.midi.arm),
+            ac = json_str(&self.midi.activate),
+            c = json_str(&self.midi.cut),
+            ca = json_str(&self.midi.cut_after),
+        );
         // The two raw credentials are emitted only for a full session; a
         // dock-token caller gets them blanked (see the doc comment above).
         let ik_shown = if include_secrets {
@@ -968,7 +1331,7 @@ impl Settings {
             ""
         };
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"destinations":{dests}}}"#,
             c = self.configured,
             sww = start_with_windows,
             ik = json_str(ik_shown),
@@ -994,6 +1357,8 @@ impl Settings {
             os = self.overlays_seeded,
             uce = self.update_check_enabled,
             odol = self.open_dashboard_on_launch,
+            hotkeys = hotkeys,
+            midi = midi,
             dests = dests,
         )
     }
@@ -1428,8 +1793,42 @@ fn hex_nibble(b: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    // Mirrors obs_register: what we tell the user to paste into OBS has to
+    // resolve under either IP Family, so it stays a hostname.
+    #[test]
+    fn obs_url_uses_a_hostname_not_an_ipv4_literal() {
+        let mut s = Settings::defaults();
+        s.ingest_port = 1935;
+        assert_eq!(s.obs_url(), "rtmp://localhost:1935/live");
+    }
     use super::*;
     use std::path::PathBuf;
+
+    /// Both legs, IPv4 first, in both bind modes. Order is contractual:
+    /// `spawn_ingest_legs` treats only the first address as required, so a
+    /// reordering here would silently make the IPv4 listener give up after
+    /// one failed bind and the IPv6 one retry forever.
+    #[test]
+    fn ingest_addrs_lists_ipv4_first_then_ipv6() {
+        let mut s = Settings::defaults();
+        s.ingest_port = 1935;
+
+        s.ingest_bind_all = false;
+        assert_eq!(s.ingest_addrs(), vec!["127.0.0.1:1935", "[::1]:1935"]);
+
+        s.ingest_bind_all = true;
+        assert_eq!(s.ingest_addrs(), vec!["0.0.0.0:1935", "[::]:1935"]);
+
+        // Every entry has to parse as a SocketAddr, since the IPv6 leg
+        // parses its address by hand before binding.
+        for addr in s.ingest_addrs() {
+            assert!(
+                addr.parse::<std::net::SocketAddr>().is_ok(),
+                "{addr} must parse"
+            );
+        }
+    }
 
     /// `start_with_windows` is not a `Settings` field - it comes from the
     /// registry via the caller. This guards the wire contract the dashboard
@@ -2294,6 +2693,149 @@ mod tests {
         assert_eq!(s.ingest_port, 1935);
         assert_eq!(s.web_port, 7799);
         assert!(!s.configured);
+    }
+
+    #[test]
+    fn parse_hotkey_accepts_modifier_plus_key_and_canonicalizes() {
+        // Order-independent, case-insensitive, alias-aware; canonical form
+        // is a fixed modifier order so the same combo always renders alike.
+        assert_eq!(
+            canonicalize_hotkey("alt+ctrl+d").as_deref(),
+            Some("Ctrl+Alt+D")
+        );
+        assert_eq!(
+            canonicalize_hotkey("CONTROL + SHIFT + f8").as_deref(),
+            Some("Ctrl+Shift+F8")
+        );
+        assert_eq!(canonicalize_hotkey("super+1").as_deref(), Some("Win+1"));
+        let (mods, vk) = parse_hotkey("Ctrl+Alt+D").expect("valid");
+        assert_eq!(mods, HK_MOD_CONTROL | HK_MOD_ALT);
+        assert_eq!(vk, b'D' as u32);
+        // Named keys (nav / numpad cluster) round-trip case-insensitively.
+        assert_eq!(
+            canonicalize_hotkey("ctrl+numpad5").as_deref(),
+            Some("Ctrl+Numpad5")
+        );
+        assert_eq!(canonicalize_hotkey("alt+LEFT").as_deref(), Some("Alt+Left"));
+        assert_eq!(
+            canonicalize_hotkey("ctrl+pageup").as_deref(),
+            Some("Ctrl+PageUp")
+        );
+        assert_eq!(
+            canonicalize_hotkey("shift+numadd").as_deref(),
+            Some("Shift+NumAdd")
+        );
+        assert_eq!(parse_hotkey("Ctrl+Home").expect("valid").1, 0x24);
+    }
+
+    #[test]
+    fn parse_hotkey_rejects_bare_keys_and_multi_key_chords() {
+        // A bare key (no modifier) is the misclick risk we refuse, and a
+        // two-letter chord is not expressible via RegisterHotKey.
+        assert!(parse_hotkey("D").is_none(), "bare key must be rejected");
+        assert!(
+            parse_hotkey("F8").is_none(),
+            "bare function key must be rejected"
+        );
+        assert!(
+            parse_hotkey("Ctrl+D+L").is_none(),
+            "multi-key chord must be rejected"
+        );
+        assert!(
+            parse_hotkey("Ctrl+Alt").is_none(),
+            "modifiers with no main key"
+        );
+        assert!(parse_hotkey("Ctrl+Q1").is_none(), "unknown key token");
+        assert!(parse_hotkey("Ctrl+F25").is_none(), "F-key out of range");
+        assert!(parse_hotkey("").is_none());
+    }
+
+    #[test]
+    fn hotkeys_round_trip_through_save_and_load() {
+        let path = std::env::temp_dir().join(format!(
+            "ic-test-hotkeys-roundtrip-{}-{}.ini",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let mut s = Settings::defaults();
+        // A lowercase, out-of-order input must be stored canonicalized.
+        s.hotkeys.set("toggle", "alt+ctrl+d");
+        s.hotkeys.set("cut", "ctrl+shift+f8");
+        // A malformed binding must be dropped, not persisted.
+        s.hotkeys.set("arm", "just-nonsense");
+        s.destinations.push(Destination {
+            id: "test".into(),
+            name: "Test".into(),
+            enabled: true,
+            platform: "twitch".into(),
+            stream_key: "test".into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
+        });
+        s.save(&path).expect("save");
+
+        let loaded = Settings::load(&path).expect("load");
+        assert_eq!(loaded.hotkeys.toggle, "Ctrl+Alt+D");
+        assert_eq!(loaded.hotkeys.cut, "Ctrl+Shift+F8");
+        assert!(
+            loaded.hotkeys.arm.is_empty(),
+            "malformed binding must not persist"
+        );
+        assert!(loaded.hotkeys.activate.is_empty(), "unbound stays unbound");
+
+        // A defaults() config must not write any hotkey line.
+        let bare =
+            std::env::temp_dir().join(format!("ic-test-hotkeys-bare-{}.ini", std::process::id()));
+        let _ = std::fs::remove_file(&bare);
+        let mut d = Settings::defaults();
+        d.destinations = loaded.destinations.clone();
+        d.save(&bare).expect("save bare");
+        let text = std::fs::read_to_string(&bare).expect("read bare");
+        assert!(
+            !text.contains("hotkey."),
+            "unbound hotkeys must stay out of the config file"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bare);
+    }
+
+    #[test]
+    fn midi_signatures_validate_and_route() {
+        assert_eq!(canonicalize_midi("NOTE:1:36").as_deref(), Some("note:1:36"));
+        assert_eq!(
+            canonicalize_midi(" cc : 10 : 20 ").as_deref(),
+            Some("cc:10:20")
+        );
+        assert!(canonicalize_midi("note:0:36").is_none(), "channel below 1");
+        assert!(
+            canonicalize_midi("note:17:36").is_none(),
+            "channel above 16"
+        );
+        assert!(canonicalize_midi("cc:1:128").is_none(), "data above 127");
+        assert!(canonicalize_midi("pitch:1:1").is_none(), "unknown kind");
+        assert!(canonicalize_midi("note:1").is_none(), "missing data");
+        assert!(canonicalize_midi("note:1:1:1").is_none(), "trailing junk");
+
+        let mut m = MidiBindings::default();
+        m.set("toggle", "note:1:36");
+        m.set("cut", "bad-signature");
+        assert_eq!(m.toggle, "note:1:36");
+        assert!(m.cut.is_empty(), "malformed signature must not persist");
+        assert_eq!(m.action_for("note:1:36"), Some("toggle"));
+        assert_eq!(m.action_for("note:1:99"), None);
+        // An empty signature must never match an unbound action.
+        assert_eq!(m.action_for(""), None);
     }
 }
 
