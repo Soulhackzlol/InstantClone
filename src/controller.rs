@@ -589,6 +589,12 @@ pub struct Controller {
 
     // In-process log ring (most recent N lines).
     pub logs: crate::sync::Mutex<std::collections::VecDeque<String>>,
+
+    // Shared MIDI state (bindings mirror + learn mode + device list),
+    // driven by the Windows winmm listener thread and read/written by the
+    // web layer. Present on every platform; inert where there is no MIDI
+    // backend (`available` stays false).
+    midi: Arc<crate::midi::MidiState>,
 }
 
 impl Controller {
@@ -645,7 +651,13 @@ impl Controller {
             shutdown_kind: AtomicU8::new(0),
             started: std::time::Instant::now(),
             logs: crate::sync::Mutex::new(std::collections::VecDeque::with_capacity(512)),
+            midi: Arc::new(crate::midi::MidiState::new()),
         }
+    }
+
+    /// Shared MIDI state, for the listener thread and the web endpoints.
+    pub fn midi(&self) -> &Arc<crate::midi::MidiState> {
+        &self.midi
     }
 
     /// Seconds since the process started, for the dashboard uptime readout.
@@ -1060,6 +1072,70 @@ impl Controller {
     /// Drop a pending scheduled cut. No-op if none is pending.
     pub fn cancel_safe_cut(&self) {
         self.safe_cut_input_ts.store(0, Ordering::Relaxed);
+    }
+
+    /// Run a named delay action. Shared by the keyboard hotkeys and MIDI
+    /// bindings so both trigger identical behaviour. `default_ms` is the
+    /// delay armed when starting from nothing; `source` tags the log line
+    /// ("hotkey" / "midi"). Unknown action names are ignored. Every call
+    /// here is atomic-only, so it is safe to invoke straight from an OS
+    /// callback thread with no runtime.
+    ///
+    /// Windows-only today: both callers (the tray hotkeys and the winmm MIDI
+    /// listener) are Windows-only. On other platforms the delay is driven
+    /// through the HTTP endpoints instead.
+    #[cfg(windows)]
+    pub fn run_named_action(&self, action: &str, default_ms: u32, source: &str) {
+        match action {
+            // Toggle: cut to live when a delay is live (or a safe-cut is
+            // pending), otherwise arm at the default delay and go delayed.
+            "toggle" => {
+                if self.target_delay_ms() > 0 || self.safe_cut_pending() {
+                    self.stop_delay();
+                    self.log(format!("[{source}] delay off - cut to live"));
+                } else {
+                    let ms = if self.armed_delay_ms() > 0 {
+                        self.armed_delay_ms()
+                    } else {
+                        default_ms
+                    };
+                    self.arm_delay(ms);
+                    match self.activate_delay() {
+                        Ok(d) => self.log(format!("[{source}] delay on - {} s", d / 1000)),
+                        Err(_) => self.log(format!(
+                            "[{source}] delay arming {} s - goes live once the buffer fills",
+                            ms / 1000
+                        )),
+                    }
+                }
+            }
+            "arm" => {
+                self.arm_delay(default_ms);
+                self.log(format!("[{source}] armed {} s", default_ms / 1000));
+            }
+            "activate" => match self.activate_delay() {
+                Ok(d) => self.log(format!("[{source}] activated - {} s delay", d / 1000)),
+                Err(e) => self.log(format!("[{source}] activate: {}", e.message())),
+            },
+            "cut" => {
+                self.stop_delay();
+                self.log(format!("[{source}] cut to live"));
+            }
+            // Toggle: first press schedules the safe cut, a second cancels
+            // the pending one, so a mistaken press stays reversible.
+            "cut_after" => {
+                if self.safe_cut_pending() {
+                    self.cancel_safe_cut();
+                    self.log(format!("[{source}] cut after this airs - cancelled"));
+                } else {
+                    match self.schedule_safe_cut() {
+                        Ok(_) => self.log(format!("[{source}] cut after this airs - scheduled")),
+                        Err(e) => self.log(format!("[{source}] cut after: {e}")),
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     pub fn safe_cut_pending(&self) -> bool {
