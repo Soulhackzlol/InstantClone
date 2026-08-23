@@ -1327,7 +1327,10 @@ mod tests {
         let entry = entry_json(7799, 1935);
         assert!(entry.contains(r#""url": "rtmp://localhost:1935/live""#));
         // A literal would strand one IP Family setting apiece.
-        assert!(!entry.contains("rtmp://127.0.0.1:1935/live"), "no v4 literal");
+        assert!(
+            !entry.contains("rtmp://127.0.0.1:1935/live"),
+            "no v4 literal"
+        );
         assert!(!entry.contains("rtmp://[::1]:1935/live"), "no v6 literal");
         // One server, so the user never has to pick.
         assert_eq!(entry.matches(r#""url": "rtmp://"#).count(), 1);
@@ -1343,10 +1346,7 @@ mod tests {
         assert!(registration_is_current(&current, 7799, 1935));
 
         // Pre-IPv6 builds wrote the v4 literal.
-        let legacy = current.replace(
-            "rtmp://localhost:1935/live",
-            "rtmp://127.0.0.1:1935/live",
-        );
+        let legacy = current.replace("rtmp://localhost:1935/live", "rtmp://127.0.0.1:1935/live");
         assert!(entry_exists(&legacy), "still ours by name");
         assert!(
             !registration_is_current(&legacy, 7799, 1935),
@@ -1416,7 +1416,9 @@ mod tests {
         let stripped = remove_entry(&polluted).expect("remove");
         assert!(!entry_exists(&stripped), "our entry is gone");
         assert!(
-            stripped.contains(r#"{ "name": "InstantClone (local proxy)", "url": "rtmp://127.0.0.1:1935/live" }"#),
+            stripped.contains(
+                r#"{ "name": "InstantClone (local proxy)", "url": "rtmp://127.0.0.1:1935/live" }"#
+            ),
             "Twitch's array must be untouched"
         );
         assert!(stripped.contains("Twitch"));

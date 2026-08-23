@@ -405,17 +405,13 @@ fn spawn_ingest_legs(
 
 /// Bind and serve one ingest address, retrying on failure.
 ///
-/// A bind failure on an optional leg is treated as permanent and the task
-/// exits. On a machine with IPv6 disabled that bind can never succeed, and
-/// retrying it every second would spend the rest of the session writing the
-/// same line to the log. A required leg keeps retrying, because there a
-/// bind failure means something transient like a port still closing behind
-/// a restart.
-async fn supervise_ingest_leg(
-    addr: String,
-    ctrl: Arc<controller::Controller>,
-    required: bool,
-) {
+/// A required leg always retries. An optional leg retries only while the
+/// address is in use, which happens when a port is still closing behind a
+/// restart. Any other error means the family is unusable on this machine:
+/// with IPv6 disabled that bind can never succeed, and retrying it every
+/// second would spend the rest of the session writing the same log line, so
+/// the task logs once and exits.
+async fn supervise_ingest_leg(addr: String, ctrl: Arc<controller::Controller>, required: bool) {
     loop {
         match rtmp::server::bind(&addr).await {
             Ok(listener) => {
