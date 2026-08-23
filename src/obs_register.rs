@@ -1236,6 +1236,17 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32 as TestUniq, Ordering as TestOrd};
 
+    // OBS resolves the server URL with the address family picked in
+    // Settings -> Advanced -> IP Family. An IPv4 literal is not resolvable
+    // under IPv6, so the single entry we register has to carry a hostname.
+    #[test]
+    fn the_registered_server_url_is_resolvable_under_either_ip_family() {
+        assert_eq!(server_url(1935), "rtmp://localhost:1935/live");
+        let entry = entry_json(7799, 1935);
+        assert!(entry.contains("rtmp://localhost:1935/live"), "{entry}");
+        assert!(!entry.contains("rtmp://127.0.0.1"), "{entry}");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_obs_config_dirs_cover_native_flatpak_snap() {
@@ -1804,6 +1815,3 @@ mod tests {
 
     static UNIQ_OBS: TestUniq = TestUniq::new(0);
 }
-
-
-

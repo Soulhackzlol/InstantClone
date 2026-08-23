@@ -423,7 +423,12 @@ async fn supervise_ingest_leg(
                     eprintln!("[ingest] {} stopped serving: {}", addr, e);
                 }
             }
-            Err(e) if !required => {
+            // AddrInUse is transient: on a restart or self-update the outgoing
+            // instance can still hold [::1] after it has released 127.0.0.1, and
+            // the port pre-flight only probes the IPv4 address. Keep retrying
+            // those. Any other error means the family is unusable on this
+            // machine, so an optional leg gives up instead of spinning.
+            Err(e) if !required && e.kind() != std::io::ErrorKind::AddrInUse => {
                 eprintln!("[ingest] optional listener {} unavailable: {}", addr, e);
                 ctrl.log(format!(
                     "ingest: IPv6 listener {addr} unavailable ({e}). IPv4 ingest is \

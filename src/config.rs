@@ -1453,6 +1453,15 @@ fn hex_nibble(b: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    // Mirrors obs_register: what we tell the user to paste into OBS has to
+    // resolve under either IP Family, so it stays a hostname.
+    #[test]
+    fn obs_url_uses_a_hostname_not_an_ipv4_literal() {
+        let mut s = Settings::defaults();
+        s.ingest_port = 1935;
+        assert_eq!(s.obs_url(), "rtmp://localhost:1935/live");
+    }
     use super::*;
     use std::path::PathBuf;
 
