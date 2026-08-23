@@ -104,20 +104,28 @@ pub fn is_registered(web_port: u16, ingest_port: u16) -> bool {
 /// server and the multi-track config endpoint. Both carry a port, so a
 /// retuned port shows up here too.
 ///
-/// The literals must also be gone. A plain "contains our URL" test would
-/// pass a file that has our current entry *plus* leftover literal servers
-/// from an older build, leaving dead options in the dropdown that fail
-/// under one IP Family setting each. No other service in OBS's
-/// services.json points at loopback on our port, so finding one means it
-/// is ours and out of date.
+/// Leftover literal servers inside OUR entry also count as stale: they
+/// would sit in the dropdown as options that fail under one IP Family
+/// setting each.
+///
+/// Every check runs against `entry_span` and not the whole file. Scanning
+/// the file would let anything InstantClone-shaped elsewhere in
+/// services.json hold the answer at "stale" permanently, and since
+/// re-registering only rewrites our own entry, the user would be stuck
+/// with a Register button that never turns into Unregister no matter how
+/// many times they press it.
 fn registration_is_current(file: &str, web_port: u16, ingest_port: u16) -> bool {
+    let Some(span) = entry_span(file) else {
+        return false;
+    };
+    let entry = &file[span];
     let stale_literals = [
         format!("rtmp://127.0.0.1:{ingest_port}/live"),
         format!("rtmp://[::1]:{ingest_port}/live"),
     ];
-    file.contains(&server_url(ingest_port))
-        && file.contains(&multitrack_url(web_port))
-        && !stale_literals.iter().any(|u| file.contains(u.as_str()))
+    entry.contains(&server_url(ingest_port))
+        && entry.contains(&multitrack_url(web_port))
+        && !stale_literals.iter().any(|u| entry.contains(u.as_str()))
 }
 
 /// The RTMP URL we advertise to OBS.
@@ -322,14 +330,17 @@ fn insert_entry(file: &str, entry: &str) -> Option<String> {
     Some(format!("{head}\n{entry},{tail}"))
 }
 
-/// Walk the file from the InstantClone name marker outward to find the
-/// `{ … }` span that encloses our entry, then delete that span plus
-/// any preceding/trailing comma so the surrounding array stays valid.
-fn remove_entry(file: &str) -> Option<String> {
+/// Byte range of our service object in `file`, braces included.
+///
+/// Scoping matters: the rest of the file belongs to OBS and to other
+/// services, and a stray `InstantClone`-flavoured string elsewhere (a
+/// leftover server object inside another service's `servers` array, say)
+/// must not be read as ours. Anything that inspects "our entry" has to go
+/// through here rather than searching the whole file.
+fn entry_span(file: &str) -> Option<std::ops::Range<usize>> {
     // Locate the marker (handles both indented and non-indented
-    // formats - the exact-substring check `entry_exists` already
-    // confirmed at least one is present, so the unwraps below are
-    // safe in practice but we still use `?` for paranoia).
+    // formats). The trailing quote is what keeps this from matching a
+    // nested `"name": "InstantClone (local proxy)"` server object.
     let marker = if file.contains(r#""name": "InstantClone""#) {
         r#""name": "InstantClone""#
     } else {
@@ -373,6 +384,15 @@ fn remove_entry(file: &str) -> Option<String> {
     if end == start {
         return None;
     }
+    Some(start..end)
+}
+
+/// Delete our entry plus any preceding/trailing comma so the surrounding
+/// array stays valid.
+fn remove_entry(file: &str) -> Option<String> {
+    let span = entry_span(file)?;
+    let (start, end) = (span.start, span.end);
+    let bytes = file.as_bytes();
     // Also strip the trailing comma + whitespace if our entry isn't
     // the last item, or the leading comma if it is.
     let mut left = start;
@@ -1340,6 +1360,61 @@ mod tests {
         );
     }
 
+    /// Found on a real install: a leftover `InstantClone (local proxy)`
+    /// server object sitting inside Twitch's `servers` array, unrelated to
+    /// our own entry. A whole-file staleness scan sees that literal and
+    /// reports stale forever, and because re-registering only rewrites our
+    /// entry, the Register button can never turn into Unregister no matter
+    /// how many times it is pressed. The check has to look at our entry
+    /// only.
+    #[test]
+    fn a_stray_instantclone_server_in_another_service_does_not_block_registration() {
+        let polluted = format!(
+            r#"{{"format_version":4,"services":[
+{},
+{{"name":"Twitch","common":true,"servers":[
+                {{ "name": "InstantClone (local proxy)", "url": "rtmp://127.0.0.1:1935/live" }},
+                {{"name":"Asia: Hong Kong","url":"rtmp://hk.contribute.live-video.net/app"}}]}}
+]}}"#,
+            entry_json(7799, 1935)
+        );
+        assert!(
+            polluted.contains("rtmp://127.0.0.1:1935/live"),
+            "the stray must be present for this test to mean anything"
+        );
+        assert!(
+            registration_is_current(&polluted, 7799, 1935),
+            "a stray in someone else's entry must not make ours look stale"
+        );
+        assert!(is_entry_current_for_test(&polluted));
+    }
+
+    /// Removing our entry must leave the unrelated stray alone: it is not
+    /// ours to delete, and clobbering another service's servers array
+    /// would be far worse than the dead dropdown option it causes.
+    #[test]
+    fn remove_entry_leaves_a_stray_in_another_service_untouched() {
+        let polluted = format!(
+            r#"{{"format_version":4,"services":[
+{},
+{{"name":"Twitch","common":true,"servers":[
+                {{ "name": "InstantClone (local proxy)", "url": "rtmp://127.0.0.1:1935/live" }}]}}
+]}}"#,
+            entry_json(7799, 1935)
+        );
+        let stripped = remove_entry(&polluted).expect("remove");
+        assert!(!entry_exists(&stripped), "our entry is gone");
+        assert!(
+            stripped.contains(r#"{ "name": "InstantClone (local proxy)", "url": "rtmp://127.0.0.1:1935/live" }"#),
+            "Twitch's array must be untouched"
+        );
+        assert!(stripped.contains("Twitch"));
+    }
+
+    fn is_entry_current_for_test(file: &str) -> bool {
+        entry_exists(file) && registration_is_current(file, 7799, 1935)
+    }
+
     #[test]
     fn insert_is_idempotent_for_caller() {
         // Caller (`register`) checks `entry_exists` before splicing,
@@ -1729,3 +1804,6 @@ mod tests {
 
     static UNIQ_OBS: TestUniq = TestUniq::new(0);
 }
+
+
+
