@@ -6,6 +6,179 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.1.14] - Hotkeys and MIDI for the delay, plus IPv6 ingest
+
+### Drive the delay without alt-tabbing
+
+Arming a delay meant leaving the game to find the dashboard, which is the
+one moment you cannot afford to be looking somewhere else. Five actions are
+now bindable to a global hotkey, a MIDI pad, or both (thanks **@4amMagic**
+on X for the idea!).
+
+- **Five bindable actions.** Delay on/off, arm or disarm the buffer,
+  activate the armed delay, cut back to live, and schedule a cut for the
+  moment the current live edge airs. The arm key toggles: press it again to
+  free a buffer you armed by mistake. It refuses to disarm while a delay is
+  on air, since that would drop every viewer to live - **Cut to live** is
+  the key for that. All configured in **Settings**, and re-registered
+  the instant you save through the tray's message loop, so nothing needs a
+  restart.
+- **Hotkeys fire under a fullscreen game.** Registered with Win32
+  `RegisterHotKey`, so a binding lands while OBS or the game holds focus.
+  Every binding must carry at least one modifier: a bare keypress mid-match
+  can never trip a delay action by accident, and that requirement is the
+  whole misclick guard.
+- **Modifier-plus-key only, deliberately.** Full chords would need a
+  low-level keyboard hook, which is the same API a keylogger uses and gets
+  an unsigned binary flagged by AV vendors. Not a trade worth making for
+  five actions.
+- **MIDI with a learn mode.** A background listener (winmm) watches every
+  MIDI input device, so a deck or pad is bound by pressing it rather than by
+  hunting for a note number. Note-on with velocity 0 is a note-off in
+  disguise and is ignored, and a control change only counts as a press at
+  value 64 or above, so releasing a button never double-fires. Both paths
+  route through the same action handler as the keyboard, so a pad and a
+  hotkey behave identically. Note: I'll call this "Experimental" since It's not
+  fully tested YET.
+- **One control, one action.** Binding a combo or a pad that another action
+  already holds moves it, rather than leaving a second entry that the
+  dashboard shows as bound and that could never fire: Windows refuses the
+  second registration of a combo, and a MIDI signature matches the first
+  action that claims it. The MIDI toast names the action it was moved off.
+- **A combo another app owns says so on the row.** Windows refuses to
+  register a hotkey somebody else holds (try Win+L), and the binding then
+  sits in Settings looking set while nothing ever fires. The row now flags
+  it and the field turns amber, updated live, so the fix is one keypress
+  away instead of a hunt through the log.
+- **Recording a combo no longer fires it.** A registered hotkey is handed to
+  us by Windows instead of to the focused window, so pressing an already
+  bound combo in the capture field ran its action and the field never saw
+  the key - rebinding one was impossible. Global hotkeys now stand down
+  while the dashboard is recording, and come back when it commits, cancels,
+  leaves the tab or closes the page. The backend holds a 30 second deadline
+  rather than a flag, so a dashboard that dies mid-capture costs one window,
+  never a session without hotkeys.
+- **A combo that other apps use warns you.** A global hotkey is taken from
+  every app on the machine, so binding Ctrl+V means paste quietly stops
+  working everywhere until InstantClone quits. Recording one of those now
+  says so, and still binds it - it is your machine.
+- **You can see which binding fired.** Press a hotkey or a pad and the
+  dashboard flashes that row and toasts what ran, so a press that landed
+  while you were looking at a game is still visible when you come back. A
+  refusal flashes amber and carries the reason instead.
+- **Two controllers, different bindings.** A mapping records which device
+  it came from, so pad 1 on one deck and pad 1 on another are two different
+  controls even though both send note 36 on channel 1 - which is what half
+  the controllers ever made send. The row shows the device, and a mapping
+  written by hand without one still matches any device.
+- **Pick which MIDI device listens.** The listener took every input it could
+  open, so a keyboard or a control surface sharing the desk could fire delay
+  actions of its own. **Settings → MIDI controller → Listen to** narrows it
+  to one device, and the line underneath says what is actually being heard -
+  including when the device you picked is unplugged, which used to read the
+  same as listening to it.
+- **A refused action tells you why, where you are.** Press activate before
+  the buffer is ready, or arm while a delay is on air, and a tray balloon
+  says so. Only refusals raise one - anything that worked stays silent, so
+  a balloon never lands on a display-captured scene during normal use.
+- **A delay armed by pad or key survives a restart.** Those paths run
+  outside the dashboard, which is what used to write the delay state to
+  disk, so they now ask the runtime to persist on their behalf.
+
+Windows only for now. The config fields parse and round-trip everywhere, so
+a config shared with a Linux build stays valid, and the dashboard hides the
+sections on a build with no backend rather than showing dead controls.
+
+### Fixes
+
+- **Nothing to delay now means nothing happens, and it says so.** With no
+  encoder connected the buffer cannot fill, so arming dropped you into
+  "preparing" forever and activating was a countdown that never moved. Every
+  surface - hotkey, MIDI pad, dashboard, dock - now refuses to build a delay
+  while nothing is publishing, with one message that names what it is
+  waiting for. Anything that *removes* delay still works, because OBS
+  crashing mid-delay is exactly when someone needs to cut back to live.
+  Auto-arm on connect is unaffected: it fires on the connect itself, when a
+  publisher is already there.
+- **"Start with Windows" died at launch with "Access is denied (os error
+  5)".** Turning the setting on and logging back in popped the buffer-file
+  error before InstantClone ever came up (thanks **@GM0NIE** on X for the
+  report). Windows launches startup entries from `C:\Windows\System32`, and
+  every default path we use is relative to wherever we were started from -
+  so the config sitting next to the exe was never read (every setting
+  silently back to its default) and the delay buffer was aimed at a folder
+  no unelevated program may write. InstantClone now anchors itself to the
+  folder holding the exe before it touches a single file, so autostart, a
+  shortcut and a plain double-click all keep the same files in the same
+  place. The buffer error dialog also reports the full resolved path now
+  instead of `./instantclone.buf`, so a genuinely unwritable folder names
+  itself. Set `CONFIG_PATH` to keep your own layout.
+- **The clear button on a MIDI mapping did nothing.** It reported success,
+  emptied the row, and left the mapping in place: the pad kept firing its
+  action and the row came back on the next dashboard load. The config route
+  simply did not accept `midi.<action>` keys, only `hotkey.<action>` ones,
+  so there was no way to unmap a control at all. Both now go through one
+  allow-list with a test that fails if the two ever drift again.
+- **A learn request nobody finished could bind a control days later.**
+  Learn mode swallows the next press instead of running it, and closing the
+  tab left it armed forever: a pad press mid-stream vanished, and the next
+  time the dashboard opened it was committed as a binding. Learning now
+  stops when you leave the System tab, hide the tab or close the page, and
+  the listener expires it after 30 seconds regardless, for the browser that
+  is killed outright and never gets to say so.
+- **Hotkeys were torn down and rebuilt on every arm, activate and cut.**
+  Each of those writes the delay state, and any settings write re-registered
+  the whole set: a press landing in that window was lost, and a combo owned
+  by another app repeated its warning in the log all session. It now
+  re-registers only when a binding actually changed.
+- **A MIDI controller swapped between polls went unnoticed**, because the
+  listener only reconciled when the device *count* changed. It compares the
+  device names now, and retries a controller that another app held open at
+  startup instead of waiting for the count to move.
+- **The IPv6 ingest listener could retry a port forever.** If something else
+  owned `[::1]:1935` for good, that leg retried once a second for the rest
+  of the session with nothing said in the dashboard. It now retries for 30
+  seconds (long enough for a restart to hand the port over), then logs one
+  line and stops. IPv4 is where all but a handful of setups connect and it
+  is unaffected either way: that leg still retries forever, because giving
+  up there would mean no ingest at all.
+- **The Register button could stick on a services.json OBS had rewritten.**
+  We found our own entry by walking backwards from its name to the nearest
+  `{`, which lands inside a string when any key ordered before `name` holds
+  one - a `url_template` carrying `{stream_key}` is exactly that shape. The
+  span then covered something that was not our entry, so registration always
+  read as stale. It is a single string-aware pass now, which returns the
+  object that actually encloses our name whatever the key order.
+- **"Failed to connect" when OBS is set to IP Family = IPv6.** OBS reported
+  `Error reaching host. Make sure that the interface you have bound can
+  access the internet...`, which points at a firewall and is the wrong place
+  to look (thanks **@GM0NIE** on X for the report and for testing the fix). 
+  **Settings -> Advanced -> Network -> IP Family** is handed straight
+  to `getaddrinfo` as the address family, and `127.0.0.1` does not resolve
+  under IPv6 - the lookup fails with `WSAHOST_NOT_FOUND`, and librtmp
+  relabels it as an unreachable host because a bind IP is set. Two things
+  were wrong on our side: the address we hand OBS was an IPv4 literal, and
+  we only ever listened on IPv4, so a resolvable name would have found
+  nothing waiting.
+
+  The ingest now listens on both families, and the server we register is
+  `rtmp://localhost:1935/live`. `localhost` resolves under either setting,
+  and OBS races every resolved address, so one entry covers both without
+  asking you to pick. IPv6 is best effort: a machine with it disabled logs
+  one line and carries on over IPv4 exactly as before. **Re-register the
+  server in Settings after updating**, or pick the refreshed entry in OBS,
+  since the old IPv4-literal entry stays until you do.
+- **The Register button could stick on "registered" with no way back.** The
+  check compared against the whole of `services.json`, so an entry named
+  like ours living inside another service's server list pinned the button
+  permanently. It now looks only at our own entry.
+- **Registering could target the wrong OBS profile.** We located the active
+  profile by its display name, but that is not the folder name: OBS
+  sanitises the folder and records it separately. A profile whose name
+  contains a character OBS strips resolved to a path that does not exist, so
+  registration silently landed nowhere. It now reads the recorded directory,
+  and falls back to matching profiles by name for older layouts
+
 ## [0.1.13] - Twitch VOD audio on the InstantClone service + per-destination audio routing
 
 ### Twitch VOD audio, unlocked with an optional script

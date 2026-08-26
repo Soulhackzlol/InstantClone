@@ -347,22 +347,19 @@ fn entry_span(file: &str) -> Option<std::ops::Range<usize>> {
         r#""name":"InstantClone""#
     };
     let marker_pos = file.find(marker)?;
-    // Walk backwards to find the `{` that opens our object.
-    let mut start = marker_pos;
+
+    // One string-aware pass, tracking the stack of open braces, so the
+    // object we return is the one that actually encloses the marker.
+    // Walking backwards to the nearest `{` instead would land inside a
+    // string the moment a key ordered before `name` carried one - a
+    // `url_template` holding `{stream_key}` is exactly that shape - and
+    // brace-match from there into a span that is not our entry at all.
     let bytes = file.as_bytes();
-    while start > 0 && bytes[start] != b'{' {
-        start -= 1;
-    }
-    if bytes[start] != b'{' {
-        return None;
-    }
-    // Walk forward from start to find the matching `}` - tracks
-    // brace depth and ignores braces inside strings.
-    let mut depth = 0i32;
+    let mut open_objects: Vec<usize> = Vec::new();
+    let mut entry_start: Option<usize> = None;
     let mut in_str = false;
     let mut escape = false;
-    let mut end = start;
-    for (i, b) in bytes[start..].iter().enumerate() {
+    for (i, &b) in bytes.iter().enumerate() {
         if escape {
             escape = false;
             continue;
@@ -370,21 +367,21 @@ fn entry_span(file: &str) -> Option<std::ops::Range<usize>> {
         match b {
             b'\\' if in_str => escape = true,
             b'"' => in_str = !in_str,
-            b'{' if !in_str => depth += 1,
+            b'{' if !in_str => open_objects.push(i),
             b'}' if !in_str => {
-                depth -= 1;
-                if depth == 0 {
-                    end = start + i + 1;
-                    break;
+                // Unbalanced: this is not JSON we should be editing.
+                let opened = open_objects.pop()?;
+                if entry_start == Some(opened) {
+                    return Some(opened..i + 1);
                 }
             }
             _ => {}
         }
+        if entry_start.is_none() && i == marker_pos {
+            entry_start = Some(*open_objects.last()?);
+        }
     }
-    if end == start {
-        return None;
-    }
-    Some(start..end)
+    None
 }
 
 /// Delete our entry plus any preceding/trailing comma so the surrounding
@@ -1548,6 +1545,37 @@ mod tests {
         assert!(entry_exists(indented));
         assert!(entry_exists(compact));
         assert!(!entry_exists(r#""name": "InstantCloneAndCompany""#));
+    }
+
+    /// The span has to be the object that encloses our name key, whatever
+    /// order the keys are in. A backward scan for the nearest `{` used to
+    /// land inside a preceding string - `{stream_key}` in a url template is
+    /// exactly that shape - and hand back a span that was not our entry,
+    /// which reads as "stale" forever and pins the Register button.
+    #[test]
+    fn entry_span_is_the_object_around_our_name_whatever_the_key_order() {
+        let file = r#"{"services":[
+  {"name": "Twitch", "servers": [{"name": "Auto", "url": "rtmp://live.twitch.tv/app"}]},
+  {"recommended": {"url_template": "rtmp://localhost:1935/live/{stream_key}"},
+   "name": "InstantClone",
+   "servers": [{"name": "InstantClone (local proxy)", "url": "rtmp://localhost:1935/live"}]},
+  {"name": "YouTube", "servers": [{"name": "Primary", "url": "rtmp://a.rtmp.youtube.com/live2"}]}
+]}"#;
+        let span = entry_span(file).expect("our entry");
+        let entry = &file[span];
+        assert!(entry.starts_with('{') && entry.ends_with('}'), "{entry}");
+        assert!(
+            entry.contains(r#""name": "InstantClone""#),
+            "the span must hold our name key: {entry}"
+        );
+        assert!(
+            entry.contains("{stream_key}"),
+            "and the whole object around it: {entry}"
+        );
+        assert!(
+            !entry.contains("Twitch") && !entry.contains("YouTube"),
+            "and nothing belonging to another service: {entry}"
+        );
     }
 
     #[test]

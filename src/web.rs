@@ -1038,6 +1038,8 @@ async fn route(
         ("POST", "/cut-after/cancel") => post_cut_after_cancel(ctrl, settings, sysstat).await,
         // MIDI mapping (Windows). Learn mode is server-side because the MIDI
         // events arrive at the backend, not the browser; the dashboard polls.
+        #[cfg(windows)]
+        ("POST", "/hotkeys/capture") => post_hotkey_capture(body, ctrl).await,
         ("POST", "/midi/learn") => post_midi_learn(body, ctrl).await,
         ("POST", "/midi/learn/cancel") => post_midi_learn_cancel(ctrl).await,
         ("POST", "/midi/poll") => post_midi_poll(ctrl, settings, cfg_path).await,
@@ -1264,11 +1266,33 @@ fn state_json(
         crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock()).is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
         cw = json_escape_quoted(&compat_warning),
+        la = ctrl
+            .last_action()
+            .map(|a| {
+                format!(
+                    r#"{{"seq":{s},"action":"{ac}","source":"{src}","problem":{p}}}"#,
+                    s = a.seq,
+                    ac = json_escape(&a.action),
+                    src = json_escape(&a.source),
+                    p = a
+                        .problem
+                        .as_deref()
+                        .map(json_escape_quoted)
+                        .unwrap_or_else(|| "null".to_string()),
+                )
+            })
+            .unwrap_or_else(|| "null".to_string()),
+        hkc = ctrl
+            .hotkey_conflicts()
+            .iter()
+            .map(|a| format!("\"{a}\""))
+            .collect::<Vec<_>>()
+            .join(","),
         ad = ctrl.armed_delay_ms(),
         td = ctrl.target_delay_ms(),
         cd = ctrl.current_delay_ms(),
@@ -2084,6 +2108,35 @@ fn twitch_ingests_json() -> String {
     out
 }
 
+/// Config keys this route will write. Every other field has its own route
+/// (destinations, auth, profiles) or is not user-settable at all, and the
+/// default is refusal.
+///
+/// This list and `apply_field_str` must cover the same keys: a key allowed
+/// here that the applier does not know is silently dropped, which is how the
+/// MIDI clear button spent 0.1.14 pretending to work.
+fn is_settable_key(k: &str) -> bool {
+    matches!(
+        k,
+        "ingest_port"
+            | "ingest_bind_all"
+            | "ingest_key"
+            | "web_port"
+            | "web_bind_all"
+            | "buffer_mb"
+            | "buffer_path"
+            | "overlays_dir"
+            | "tracing_enabled"
+            | "auto_arm_on_connect"
+            | "auto_activate_when_ready"
+            | "auto_arm_delay_ms"
+            | "update_check_enabled"
+            | "open_dashboard_on_launch"
+    ) || k.starts_with("hotkey.")
+        || k.starts_with("midi.")
+        || k == "midi_device"
+}
+
 async fn post_config(
     body: &str,
     ctrl: &Arc<Controller>,
@@ -2103,24 +2156,7 @@ async fn post_config(
     // POST without an explicit "delete webhook" intent must be a no-op
     // for that field - otherwise saving any other setting would wipe it.
     for (k, v) in form.iter() {
-        if matches!(
-            k.as_str(),
-            "ingest_port"
-                | "ingest_bind_all"
-                | "ingest_key"
-                | "web_port"
-                | "web_bind_all"
-                | "buffer_mb"
-                | "buffer_path"
-                | "overlays_dir"
-                | "tracing_enabled"
-                | "auto_arm_on_connect"
-                | "auto_activate_when_ready"
-                | "auto_arm_delay_ms"
-                | "update_check_enabled"
-                | "open_dashboard_on_launch"
-        ) || k.starts_with("hotkey.")
-        {
+        if is_settable_key(k) {
             apply_field_str(&mut new_settings, k, v);
         }
     }
@@ -2335,6 +2371,9 @@ async fn post_delay(
     let form = config::parse_form(body);
     let ms: u32 = form.get("ms").and_then(|v| v.parse().ok()).unwrap_or(0);
     let ms = ms.min(600_000);
+    if let Some(refusal) = arm_refusal(ctrl, settings, ms) {
+        return refusal;
+    }
     ctrl.arm_delay(ms);
     if ms > 0 {
         // Force activate even if buffer hasn't built - controller will
@@ -2351,6 +2390,57 @@ async fn post_delay(
 
 // ---- Two-phase delay endpoints ----
 
+/// Why this arm cannot be granted, as a ready-to-send response - or None
+/// when it can. Shared by `/arm` and `/delay`, which ask the same question
+/// and used to answer it twice.
+///
+/// `ms == 0` is disarm and is always allowed.
+fn arm_refusal(
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    ms: u32,
+) -> Option<(&'static str, &'static str, String)> {
+    if ms == 0 {
+        return None;
+    }
+    // Nothing publishing: the buffer cannot fill, so arming would sit in
+    // "preparing" forever. The hotkey and MIDI paths refuse this too, so every
+    // surface behaves the same. Auto-arm-on-connect is unaffected: it fires on
+    // the connect itself, when a publisher is already there.
+    if !ctrl.ingest_alive() {
+        return Some(conflict(crate::controller::NO_INGEST));
+    }
+    // Capacity guard. A delay bigger than the ring can hold at the current
+    // bitrate never fills - it stalls in "arming" forever, which looks like a
+    // hang. The dashboard and dock both gate this client-side, but a stale
+    // page, a second dock, or a scripted call could still ask for the
+    // impossible. Same estimate we publish as buffer_capacity_ms_est; bitrate
+    // is floored at 2 Mbps so a low-bitrate stream stays generous.
+    let cap_ms = {
+        let s = settings.borrow();
+        let kbps = ctrl.bitrate_kbps().max(2_000) as u64;
+        (s.buffer_mb * 1024 * 1024 * 8 / kbps) as u32
+    };
+    if cap_ms > 0 && ms > cap_ms {
+        return Some(conflict(&format!(
+            "Buffer too small for {}s - it holds about {}s at the current bitrate. \
+             Raise the buffer size in the dashboard.",
+            ms / 1000,
+            cap_ms / 1000
+        )));
+    }
+    None
+}
+
+/// A 409 carrying one human-readable reason.
+fn conflict(error: &str) -> (&'static str, &'static str, String) {
+    (
+        "409 Conflict",
+        "application/json",
+        format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(error)),
+    )
+}
+
 async fn post_arm(
     body: &str,
     ctrl: &Arc<Controller>,
@@ -2365,33 +2455,9 @@ async fn post_arm(
         .unwrap_or(0)
         .min(600_000);
 
-    // Server-side capacity guard. A delay bigger than the ring can hold at
-    // the current bitrate never fills - it stalls in "arming" forever, which
-    // looks like a hang. The dashboard and dock both gate this client-side,
-    // but a stale page, a second dock, or a scripted call could still ask for
-    // the impossible, so we refuse it here too. Same estimate we publish as
-    // buffer_capacity_ms_est; bitrate is floored at 2 Mbps so an idle or
-    // low-bitrate stream stays generous and never blocks a reasonable pre-arm.
-    // ms == 0 is disarm and always allowed.
-    if ms > 0 {
-        let cap_ms = {
-            let s = settings.borrow();
-            let kbps = ctrl.bitrate_kbps().max(2_000) as u64;
-            (s.buffer_mb * 1024 * 1024 * 8 / kbps) as u32
-        };
-        if cap_ms > 0 && ms > cap_ms {
-            return (
-                "409 Conflict",
-                "application/json",
-                format!(
-                    r#"{{"ok":false,"error":"Buffer too small for {}s - it holds about {}s at the current bitrate. Raise the buffer size in the dashboard."}}"#,
-                    ms / 1000,
-                    cap_ms / 1000
-                ),
-            );
-        }
+    if let Some(refusal) = arm_refusal(ctrl, settings, ms) {
+        return refusal;
     }
-
     ctrl.arm_delay(ms);
     persist_delay_state(ctrl, settings, cfg_path);
     (
@@ -2492,6 +2558,34 @@ async fn post_cut_after_cancel(
     )
 }
 
+/// Stand global hotkeys down while the dashboard records a combo, and put
+/// them back when it is done (`on=0`).
+///
+/// Without this, recording is impossible for any combo that is already
+/// bound: `RegisterHotKey` takes the keypress system-wide, so the browser
+/// never sees it and the action fires instead. The backend holds a deadline
+/// rather than a flag, so a dashboard that is closed mid-capture cannot
+/// leave the user with no hotkeys.
+#[cfg(windows)]
+async fn post_hotkey_capture(
+    body: &str,
+    ctrl: &Arc<Controller>,
+) -> (&'static str, &'static str, String) {
+    /// Long enough for someone to think about which combo they want, short
+    /// enough that a browser that vanishes costs one window and no more.
+    const CAPTURE_WINDOW_MS: u32 = 30_000;
+
+    let form = config::parse_form(body);
+    let on = !matches!(
+        form.get("on").map(String::as_str).unwrap_or("1"),
+        "" | "0" | "false" | "off"
+    );
+    ctrl.suspend_hotkeys(if on { CAPTURE_WINDOW_MS } else { 0 });
+    #[cfg(windows)]
+    crate::tray::request_hotkey_reload();
+    ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
 // ---- MIDI mapping ----
 //
 // The listener thread (see crate::midi) receives controller messages and,
@@ -2506,7 +2600,7 @@ async fn post_midi_learn(
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let action = form.get("action").map(String::as_str).unwrap_or("");
-    if !matches!(action, "toggle" | "arm" | "activate" | "cut" | "cut_after") {
+    if !config::ACTIONS.contains(&action) {
         return (
             "400 Bad Request",
             "application/json",
@@ -2514,11 +2608,21 @@ async fn post_midi_learn(
         );
     }
     if !ctrl.midi().available() {
+        // Two different problems wear the same "not available" flag, and
+        // telling someone to connect a controller they can see plugged in
+        // is the least useful thing we could say.
+        let selected = ctrl.midi().selected_device();
+        let error = if selected.is_empty() {
+            "No MIDI device detected. Connect a controller and try again.".to_string()
+        } else {
+            format!("\"{selected}\" isn't connected. Plug it in, or pick every device again.")
+        };
+        // Escaped once, over the whole message: the device name is quoted
+        // inside it, and those quotes would otherwise close the JSON string.
         return (
             "409 Conflict",
             "application/json",
-            r#"{"ok":false,"error":"No MIDI device detected. Connect a controller and try again."}"#
-                .into(),
+            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&error)),
         );
     }
     ctrl.midi().start_learn(action);
@@ -2551,7 +2655,11 @@ async fn post_midi_poll(
     ("200 OK", "application/json", ctrl.midi().to_json())
 }
 
-fn persist_delay_state(
+/// Write the current delay state (armed / target, and the "last manually
+/// armed" preference) back to the config file. Called by every route that
+/// moves it, and by the runtime on behalf of the hotkey / MIDI paths, which
+/// run outside the web layer entirely.
+pub(crate) fn persist_delay_state(
     ctrl: &Controller,
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
@@ -3635,11 +3743,20 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         "open_dashboard_on_launch" => {
             s.open_dashboard_on_launch = !matches!(value, "" | "false" | "0" | "off");
         }
-        // hotkey.<action>=<combo>. `set` canonicalizes and drops anything
-        // malformed, so an empty or bad value simply clears the binding.
+        // hotkey.<action>=<combo> and midi.<action>=<signature>. Both
+        // `set`s canonicalize and drop anything malformed, so an empty or
+        // bad value simply clears the binding - which is exactly how the
+        // dashboard's clear button asks for an unbind.
         k if k.starts_with("hotkey.") => {
             s.hotkeys.set(&k["hotkey.".len()..], value);
         }
+        k if k.starts_with("midi.") => {
+            s.midi.set(&k["midi.".len()..], value);
+        }
+        // Empty means "every device", which is also what an unknown name
+        // amounts to - the listener simply finds nothing to open and the
+        // dashboard says so.
+        "midi_device" => s.midi_device = value.to_string(),
         _ => {}
     }
 }
@@ -3792,7 +3909,7 @@ fn classify_access(method: &str, path: &str) -> Access {
     // OBS fetches the multitrack (Enhanced Broadcasting) config when it starts
     // streaming, with no session cookie and often no token - the config URL is
     // saved in OBS before any password is set. It returns only the encoder
-    // ladder plus a local ingest template ("rtmp://127.0.0.1:<port>/live/
+    // ladder plus a local ingest template ("rtmp://localhost:<port>/live/
     // {stream_key}"), never a secret, and cannot control anything, so it stays
     // public like the overlay display. Gating it would break Start Streaming the
     // moment a dashboard password is enabled.
@@ -4425,6 +4542,131 @@ mod tests {
     // with `tracing_enabled` between 3f9db09 (toggle added) and
     // 6a3990b (default flipped to off). Invisible until users
     // actually tried to enable the toggle on a fresh install.
+
+    /// A controller with a real ring, so `arm_refusal` can be asked the
+    /// question the HTTP handlers ask it.
+    fn refusal_harness(
+        buffer_mb: u64,
+    ) -> (
+        Arc<Controller>,
+        Arc<watch::Sender<Settings>>,
+        std::path::PathBuf,
+    ) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("ic-arm-refusal-{nanos}.buf"));
+        let _ = std::fs::remove_file(&path);
+        let ring =
+            Arc::new(crate::buffer::DiskRing::create(&path, 4 * 1024 * 1024).expect("ring create"));
+        let ctrl = Arc::new(Controller::new(ring, 0));
+        let mut s = Settings::defaults();
+        s.buffer_mb = buffer_mb;
+        (ctrl, Arc::new(watch::channel(s).0), path)
+    }
+
+    /// The dashboard's copy of the offline guard. The hotkey and MIDI paths
+    /// refuse to build a delay with nothing publishing; `/arm` and `/delay`
+    /// have to refuse it too, or the browser is a way around the rule.
+    #[test]
+    fn arm_refusal_matches_the_hotkey_rules() {
+        let (ctrl, settings, path) = refusal_harness(1024);
+
+        // Nothing publishing: arming is refused, and says why.
+        let refused = arm_refusal(&ctrl, &settings, 5_000).expect("offline arm is refused");
+        assert_eq!(refused.0, "409 Conflict");
+        assert!(
+            refused.2.contains(crate::controller::NO_INGEST),
+            "the reason has to reach the user: {}",
+            refused.2
+        );
+
+        // Disarming is never refused - it frees the buffer, and OBS dying
+        // mid-delay is exactly when someone reaches for it.
+        assert!(arm_refusal(&ctrl, &settings, 0).is_none(), "disarm offline");
+
+        // With a publisher, a sane delay goes through.
+        ctrl.mark_ingest_alive_for_test();
+        assert!(arm_refusal(&ctrl, &settings, 5_000).is_none());
+
+        // More delay than the buffer can hold never fills, so it is refused
+        // with the size it can actually manage.
+        let (small, small_settings, small_path) = refusal_harness(8);
+        small.mark_ingest_alive_for_test();
+        let too_big = arm_refusal(&small, &small_settings, 600_000).expect("over capacity");
+        assert_eq!(too_big.0, "409 Conflict");
+        assert!(
+            too_big.2.contains("Buffer too small") && too_big.2.contains("Raise the buffer size"),
+            "the message has to read as a sentence: {}",
+            too_big.2
+        );
+        assert!(
+            !too_big.2.contains("  "),
+            "no stray whitespace in a user-facing string: {}",
+            too_big.2
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&small_path);
+    }
+
+    /// The whitelist and the applier have to agree, in both directions, for
+    /// every binding key. This is the pair that broke: `midi.<action>` was
+    /// missing from both, so the dashboard's clear button reported success
+    /// and changed nothing.
+    #[test]
+    fn binding_keys_are_settable_and_actually_applied() {
+        for action in config::ACTIONS {
+            let hotkey = format!("hotkey.{action}");
+            let midi = format!("midi.{action}");
+            assert!(is_settable_key(&hotkey), "{hotkey} must be settable");
+            assert!(is_settable_key(&midi), "{midi} must be settable");
+
+            let mut s = Settings::defaults();
+            apply_field_str(&mut s, &hotkey, "ctrl+alt+d");
+            apply_field_str(&mut s, &midi, "note:1:36");
+            let hotkeys: Vec<(&str, String)> = s
+                .hotkeys
+                .entries()
+                .iter()
+                .map(|(a, combo)| (*a, combo.to_string()))
+                .collect();
+            let signatures: Vec<(&str, String)> = s
+                .midi
+                .entries()
+                .iter()
+                .map(|(a, sig)| (*a, sig.to_string()))
+                .collect();
+            for (bound_action, combo) in &hotkeys {
+                let expected = if *bound_action == action {
+                    "Ctrl+Alt+D"
+                } else {
+                    ""
+                };
+                assert_eq!(combo, expected, "{hotkey} landed on {bound_action}");
+            }
+            for (bound_action, sig) in &signatures {
+                let expected = if *bound_action == action {
+                    "note:1:36"
+                } else {
+                    ""
+                };
+                assert_eq!(sig, expected, "{midi} landed on {bound_action}");
+            }
+
+            // And the clear the × button sends must actually clear it.
+            apply_field_str(&mut s, &hotkey, "");
+            apply_field_str(&mut s, &midi, "");
+            assert!(s.hotkeys.entries().iter().all(|(_, c)| c.is_empty()));
+            assert!(s.midi.entries().iter().all(|(_, sig)| sig.is_empty()));
+        }
+
+        // Secrets and per-route fields stay out of this door.
+        assert!(!is_settable_key("dock_token"));
+        assert!(!is_settable_key("dashboard_password_hash"));
+        assert!(!is_settable_key("configured"));
+    }
 
     #[test]
     fn normalize_stream_format_rules() {

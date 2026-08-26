@@ -81,13 +81,20 @@ const MIN_BUFFER_MS: u32 = 2_000;
 #[derive(Debug, Clone, Copy)]
 pub enum ActivateError {
     NotArmed,
-    BufferShort { remaining_ms: u32 },
+    /// Nothing is publishing, so there is no video to delay and the buffer
+    /// cannot fill. Distinct from `BufferShort`, which is the same screen
+    /// with an eta the user can wait out - this one waits on OBS.
+    NoIngest,
+    BufferShort {
+        remaining_ms: u32,
+    },
 }
 
 impl ActivateError {
     pub fn message(&self) -> String {
         match self {
             ActivateError::NotArmed => "no delay armed".to_string(),
+            ActivateError::NoIngest => NO_INGEST.to_string(),
             ActivateError::BufferShort { remaining_ms } => {
                 let secs = ((*remaining_ms + 500) / 1000).max(1);
                 format!("buffer is still building - wait ~{}s", secs)
@@ -95,6 +102,23 @@ impl ActivateError {
         }
     }
 }
+/// What every surface says when a request would build delay state with
+/// nothing publishing. The buffer holds no video and cannot fill, so arming
+/// or going delayed has nothing to work with - and "preparing" on the
+/// dashboard would be a progress bar that never moves.
+pub const NO_INGEST: &str = "OBS isn't sending anything yet - start streaming first";
+
+/// One hotkey / MIDI press, as the dashboard renders it: which action ran,
+/// where it came from, whether it was refused, and a sequence number so a
+/// repeat of the same action still reads as a new event.
+#[derive(Debug, Clone)]
+pub struct FiredAction {
+    pub seq: u64,
+    pub action: String,
+    pub source: String,
+    pub problem: Option<String>,
+}
+
 /// Hidden slack beyond what the user sees as the target. Equal to the
 /// IDR-search tolerance, so a "5s armed" cut can always land on a real
 /// IDR even if the nearest one happens to be slightly past the boundary.
@@ -595,6 +619,35 @@ pub struct Controller {
     // web layer. Present on every platform; inert where there is no MIDI
     // backend (`available` stays false).
     midi: Arc<crate::midi::MidiState>,
+
+    // The most recent action driven from outside the dashboard (a hotkey or
+    // a MIDI pad), so the UI can point at the binding that just fired. The
+    // sequence number is what makes a repeat of the same action visible:
+    // pressing "cut" twice has to read as two events, not one.
+    last_action: crate::sync::Mutex<Option<FiredAction>>,
+    #[cfg(windows)]
+    last_action_seq: AtomicU64,
+
+    // While the dashboard is capturing a new binding, global hotkeys have to
+    // stand down: `RegisterHotKey` swallows the combo system-wide, so the
+    // browser never sees the keypress and the action fires instead of being
+    // recorded. Holds the deadline (process-relative ms) rather than a flag,
+    // so a dashboard that goes away mid-capture cannot leave them off.
+    #[cfg(windows)]
+    hotkey_capture_until_ms: AtomicU64,
+
+    // Actions whose hotkey the OS refused to register, because another app
+    // already owns the combo. Written by the tray on every (re)bind, read by
+    // the dashboard so the row itself can say a binding is dead - the log
+    // line alone is somewhere nobody setting a hotkey is looking.
+    hotkey_conflicts: crate::sync::Mutex<Vec<String>>,
+
+    // Raised when a hotkey or MIDI action moves the delay state. Those two
+    // paths run outside the web layer, which is where every other state
+    // change gets written to the config file, so the runtime watches this
+    // and persists on their behalf.
+    #[cfg(windows)]
+    state_dirty: Notify,
 }
 
 impl Controller {
@@ -652,12 +705,60 @@ impl Controller {
             started: std::time::Instant::now(),
             logs: crate::sync::Mutex::new(std::collections::VecDeque::with_capacity(512)),
             midi: Arc::new(crate::midi::MidiState::new()),
+            last_action: crate::sync::Mutex::new(None),
+            #[cfg(windows)]
+            last_action_seq: AtomicU64::new(0),
+            #[cfg(windows)]
+            hotkey_capture_until_ms: AtomicU64::new(0),
+            hotkey_conflicts: crate::sync::Mutex::new(Vec::new()),
+            #[cfg(windows)]
+            state_dirty: Notify::new(),
         }
     }
 
     /// Shared MIDI state, for the listener thread and the web endpoints.
     pub fn midi(&self) -> &Arc<crate::midi::MidiState> {
         &self.midi
+    }
+
+    /// Stand global hotkeys down for `window_ms` while the dashboard records
+    /// a new binding, or clear the suspension when `window_ms` is 0. The
+    /// deadline is the safety net: a browser that dies mid-capture costs the
+    /// user one window, not a session with no hotkeys.
+    #[cfg(windows)]
+    pub fn suspend_hotkeys(&self, window_ms: u32) {
+        let until = if window_ms == 0 {
+            0
+        } else {
+            process_now_ms() + window_ms as u64
+        };
+        self.hotkey_capture_until_ms.store(until, Ordering::Relaxed);
+    }
+
+    /// Whether global hotkeys are currently stood down.
+    #[cfg(windows)]
+    pub fn hotkeys_suspended(&self) -> bool {
+        self.hotkeys_suspend_remaining_ms() > 0
+    }
+
+    /// How much of the suspension window is left, for the tray's resume
+    /// timer. 0 when hotkeys are live.
+    #[cfg(windows)]
+    pub fn hotkeys_suspend_remaining_ms(&self) -> u32 {
+        let until = self.hotkey_capture_until_ms.load(Ordering::Relaxed);
+        until.saturating_sub(process_now_ms()) as u32
+    }
+
+    /// Replace the set of actions whose hotkey could not be registered.
+    /// Empty on every platform without a global-key surface.
+    #[cfg(windows)]
+    pub fn set_hotkey_conflicts(&self, actions: Vec<String>) {
+        *self.hotkey_conflicts.lock() = actions;
+    }
+
+    /// Actions whose hotkey another app owns, for the dashboard.
+    pub fn hotkey_conflicts(&self) -> Vec<String> {
+        self.hotkey_conflicts.lock().clone()
     }
 
     /// Seconds since the process started, for the dashboard uptime readout.
@@ -1007,6 +1108,13 @@ impl Controller {
         if armed == 0 {
             return Err(ActivateError::NotArmed);
         }
+        // No publisher means no video arriving: the buffer cannot grow, so
+        // "still building" would be a countdown that never ends. Arming
+        // stays allowed (that is pre-arm, and it is the point), but there is
+        // nothing to switch on until OBS starts.
+        if !self.ingest_alive() {
+            return Err(ActivateError::NoIngest);
+        }
         let fill = self.buffer_fill_ms();
         if fill + 500 < armed {
             let remaining_ms = armed.saturating_sub(fill);
@@ -1081,61 +1189,182 @@ impl Controller {
     /// here is atomic-only, so it is safe to invoke straight from an OS
     /// callback thread with no runtime.
     ///
+    /// Returns a short problem message when the action could not do what was
+    /// asked, and None when it did. The caller is expected to put that in
+    /// front of the user: they are mid-game, they pressed a key, and the
+    /// dashboard log they cannot see is the only other record of it.
+    ///
     /// Windows-only today: both callers (the tray hotkeys and the winmm MIDI
     /// listener) are Windows-only. On other platforms the delay is driven
     /// through the HTTP endpoints instead.
     #[cfg(windows)]
-    pub fn run_named_action(&self, action: &str, default_ms: u32, source: &str) {
+    pub fn run_named_action(&self, action: &str, default_ms: u32, source: &str) -> Option<String> {
+        let problem = self.dispatch_named_action(action, default_ms, source);
+        // Publish what just happened before anything else: the dashboard
+        // reads this on its next tick and lights up the row that fired,
+        // which is the only feedback a user gets when the press landed while
+        // they were looking at a game.
+        self.record_fired_action(action, source, problem.clone());
+        // Arm / activate / cut all move state the dashboard routes persist
+        // on their way through. Nothing persists on this path, so ask the
+        // runtime to save it - otherwise a delay armed by pad or key is
+        // forgotten across a restart.
+        self.state_dirty.notify_one();
+        problem
+    }
+
+    #[cfg(windows)]
+    fn dispatch_named_action(&self, action: &str, default_ms: u32, source: &str) -> Option<String> {
         match action {
-            // Toggle: cut to live when a delay is live (or a safe-cut is
-            // pending), otherwise arm at the default delay and go delayed.
-            "toggle" => {
-                if self.target_delay_ms() > 0 || self.safe_cut_pending() {
-                    self.stop_delay();
-                    self.log(format!("[{source}] delay off - cut to live"));
-                } else {
-                    let ms = if self.armed_delay_ms() > 0 {
-                        self.armed_delay_ms()
-                    } else {
-                        default_ms
-                    };
-                    self.arm_delay(ms);
-                    match self.activate_delay() {
-                        Ok(d) => self.log(format!("[{source}] delay on - {} s", d / 1000)),
-                        Err(_) => self.log(format!(
-                            "[{source}] delay arming {} s - goes live once the buffer fills",
-                            ms / 1000
-                        )),
-                    }
-                }
-            }
-            "arm" => {
-                self.arm_delay(default_ms);
-                self.log(format!("[{source}] armed {} s", default_ms / 1000));
-            }
-            "activate" => match self.activate_delay() {
-                Ok(d) => self.log(format!("[{source}] activated - {} s delay", d / 1000)),
-                Err(e) => self.log(format!("[{source}] activate: {}", e.message())),
-            },
+            "toggle" => self.action_toggle(default_ms, source),
+            "arm" => self.action_arm(default_ms, source),
+            "activate" => self.action_activate(source),
             "cut" => {
                 self.stop_delay();
                 self.log(format!("[{source}] cut to live"));
+                None
             }
-            // Toggle: first press schedules the safe cut, a second cancels
-            // the pending one, so a mistaken press stays reversible.
-            "cut_after" => {
-                if self.safe_cut_pending() {
-                    self.cancel_safe_cut();
-                    self.log(format!("[{source}] cut after this airs - cancelled"));
-                } else {
-                    match self.schedule_safe_cut() {
-                        Ok(_) => self.log(format!("[{source}] cut after this airs - scheduled")),
-                        Err(e) => self.log(format!("[{source}] cut after: {e}")),
-                    }
-                }
-            }
-            _ => {}
+            "cut_after" => self.action_cut_after(source),
+            _ => None,
         }
+    }
+
+    /// Delay on/off. Cut to live when a delay is live (or a safe cut is
+    /// pending), otherwise arm at the default and go delayed.
+    #[cfg(windows)]
+    fn action_toggle(&self, default_ms: u32, source: &str) -> Option<String> {
+        if self.target_delay_ms() > 0 || self.safe_cut_pending() {
+            self.stop_delay();
+            self.log(format!("[{source}] delay off - cut to live"));
+            return None;
+        }
+        if !self.ingest_alive() {
+            self.log(format!("[{source}] delay on ignored - {NO_INGEST}"));
+            return Some(NO_INGEST.to_string());
+        }
+        let ms = if self.armed_delay_ms() > 0 {
+            self.armed_delay_ms()
+        } else {
+            default_ms
+        };
+        self.arm_delay(ms);
+        match self.activate_delay() {
+            Ok(d) => {
+                self.log(format!("[{source}] delay on - {} s", d / 1000));
+                None
+            }
+            Err(e) => {
+                self.log(format!(
+                    "[{source}] delay arming {} s - goes live once the buffer fills",
+                    ms / 1000
+                ));
+                // Armed, but the stream is still going out live: the streamer
+                // pressed "delay on" and is not protected yet. Only the buffer
+                // case resolves on its own - with nothing publishing, "still
+                // filling" would be a wait that never ends.
+                Some(match e {
+                    ActivateError::BufferShort { .. } => format!(
+                        "Buffer still filling - the {} s delay starts as soon as it is ready.",
+                        ms / 1000
+                    ),
+                    other => other.message(),
+                })
+            }
+        }
+    }
+
+    /// Arm at the default delay, or free the buffer when it is already armed.
+    /// Refused while a delay is on air, because disarming wipes the target
+    /// too and one stray press would snap every viewer to live - that is what
+    /// "cut" is for.
+    #[cfg(windows)]
+    fn action_arm(&self, default_ms: u32, source: &str) -> Option<String> {
+        if self.target_delay_ms() > 0 {
+            self.log(format!(
+                "[{source}] arm ignored - delay is on air, cut to live first"
+            ));
+            return Some("The delay is on air. Cut to live first, then disarm the buffer.".into());
+        }
+        if self.armed_delay_ms() > 0 {
+            self.arm_delay(0);
+            self.log(format!("[{source}] disarmed - buffer freed"));
+            return None;
+        }
+        if !self.ingest_alive() {
+            self.log(format!("[{source}] arm ignored - {NO_INGEST}"));
+            return Some(NO_INGEST.to_string());
+        }
+        self.arm_delay(default_ms);
+        self.log(format!("[{source}] armed {} s", default_ms / 1000));
+        None
+    }
+
+    #[cfg(windows)]
+    fn action_activate(&self, source: &str) -> Option<String> {
+        match self.activate_delay() {
+            Ok(d) => {
+                self.log(format!("[{source}] activated - {} s delay", d / 1000));
+                None
+            }
+            Err(e) => {
+                self.log(format!("[{source}] activate: {}", e.message()));
+                Some(e.message())
+            }
+        }
+    }
+
+    /// First press schedules the safe cut, a second cancels the pending one,
+    /// so a mistaken press stays reversible.
+    #[cfg(windows)]
+    fn action_cut_after(&self, source: &str) -> Option<String> {
+        if self.safe_cut_pending() {
+            self.cancel_safe_cut();
+            self.log(format!("[{source}] cut after this airs - cancelled"));
+            return None;
+        }
+        match self.schedule_safe_cut() {
+            Ok(_) => {
+                self.log(format!("[{source}] cut after this airs - scheduled"));
+                None
+            }
+            Err(e) => {
+                self.log(format!("[{source}] cut after: {e}"));
+                Some(e.to_string())
+            }
+        }
+    }
+
+    /// Stamp the most recent externally-driven action for the dashboard.
+    #[cfg(windows)]
+    fn record_fired_action(&self, action: &str, source: &str, problem: Option<String>) {
+        let seq = self.last_action_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        *self.last_action.lock() = Some(FiredAction {
+            seq,
+            action: action.to_string(),
+            source: source.to_string(),
+            problem,
+        });
+    }
+
+    /// Stand in for a connected publisher, for tests in other modules that
+    /// push tags into the ring directly instead of going through
+    /// `begin_publish` (see `feed_seconds` for the same idea in this one).
+    /// Model a publisher for tests that need one without feeding a frame.
+    #[cfg(test)]
+    pub fn mark_ingest_alive_for_test(&self) {
+        self.ingest_alive.store(true, Ordering::Relaxed);
+    }
+
+    /// The most recent hotkey / MIDI action, if there has been one this run.
+    pub fn last_action(&self) -> Option<FiredAction> {
+        self.last_action.lock().clone()
+    }
+
+    /// Woken whenever a hotkey or MIDI action changes the delay state, so
+    /// the runtime can persist it the way the dashboard routes already do.
+    #[cfg(windows)]
+    pub fn state_dirty(&self) -> &tokio::sync::Notify {
+        &self.state_dirty
     }
 
     pub fn safe_cut_pending(&self) -> bool {
@@ -2824,6 +3053,13 @@ mod tests {
     /// monotonically from `start_ms`. Used to drive `buffer_fill_ms` past
     /// the armed threshold so we can exercise phase transitions.
     fn feed_seconds(ctrl: &Controller, start_ms: u32, secs: u32, fps: u32) {
+        // Tags only ever arrive from a connected publisher, but these tests
+        // push them straight into the ring rather than going through
+        // `begin_publish`. Say the publisher is live to match, or every
+        // activate refuses with `NoIngest` - true of the harness, not of
+        // what it is modelling. Tests that exercise the publish handshake
+        // itself never call this, so their state stays untouched.
+        ctrl.ingest_alive.store(true, Ordering::Relaxed);
         let frame_ms = 1000 / fps;
         // Leading byte 0x17 (legacy AVC keyframe) lets the IDR survive
         // v0.1.3's primary-track gate in `Ring::append`; 0x27 marks the
@@ -3037,6 +3273,10 @@ mod tests {
         feed_seconds(&h.ctrl, 0, 3, 30);
         h.ctrl.activate_delay().expect("buffer is past armed");
         h.ctrl.schedule_safe_cut().expect("delay is active");
+        // The old publisher goes away first, the way a real disconnect
+        // frees the slot - feeding tags above stands in for it having been
+        // live.
+        h.ctrl.mark_ingest_dead();
         // Fresh publisher: the mark's timestamp belongs to the OLD
         // session's timeline (the new one restarts near 0), so keeping
         // it would leave an unreachable mark pending forever.
@@ -3270,6 +3510,276 @@ mod tests {
         let h = harness(0);
         h.ctrl.arm_delay(9_999_999);
         assert_eq!(h.ctrl.armed_delay_ms(), 600_000);
+    }
+
+    // ── Named action (Hotkey & MIDI) test suite ──────────────────────
+
+    #[test]
+    #[cfg(windows)]
+    fn named_action_arm_toggles_arming_and_disarming() {
+        let h = harness(0);
+        // Arming needs a publisher, so model one.
+        h.ctrl.mark_ingest_alive_for_test();
+        assert_eq!(h.ctrl.armed_delay_ms(), 0);
+
+        // 1st press: arms the delay
+        h.ctrl.run_named_action("arm", 5_000, "hotkey");
+        assert_eq!(h.ctrl.armed_delay_ms(), 5_000);
+        assert_eq!(h.ctrl.phase(), "preparing");
+
+        // 2nd press: disarms and frees buffer target
+        h.ctrl.run_named_action("arm", 5_000, "hotkey");
+        assert_eq!(h.ctrl.armed_delay_ms(), 0);
+        assert_eq!(h.ctrl.phase(), "idle");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn named_action_arm_never_disarms_a_delay_on_air() {
+        // Disarming wipes the target as well, so an arm press while the
+        // delay is live would cut every viewer to live. Misclick guard.
+        let h = harness(0);
+        h.ctrl.arm_delay(3_000);
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.activate_delay().unwrap();
+
+        let problem = h.ctrl.run_named_action("arm", 5_000, "hotkey");
+
+        assert!(
+            problem.is_some(),
+            "a refused action must hand the caller something to show"
+        );
+        assert_eq!(h.ctrl.target_delay_ms(), 3_000, "must stay delayed");
+        assert_eq!(h.ctrl.armed_delay_ms(), 3_000);
+        assert_eq!(h.ctrl.phase(), "active");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn named_action_toggle_switches_between_live_and_delayed() {
+        let h = harness(0);
+
+        // From idle with buffer ready: 1st toggle arms and activates delay
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.run_named_action("toggle", 3_000, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 3_000);
+        assert_eq!(h.ctrl.phase(), "active");
+
+        // 2nd toggle cuts back to live (target = 0, but armed remains preserved)
+        h.ctrl.run_named_action("toggle", 3_000, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 0);
+        assert_eq!(h.ctrl.armed_delay_ms(), 3_000);
+        assert_eq!(h.ctrl.phase(), "ready");
+
+        // 3rd toggle re-activates using the preserved armed duration
+        h.ctrl.run_named_action("toggle", 0, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 3_000);
+        assert_eq!(h.ctrl.phase(), "active");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn named_action_reports_only_what_it_could_not_do() {
+        // The tray turns a returned message into a balloon, so anything that
+        // worked has to stay quiet: a toast per keypress would land on a
+        // display-captured scene mid-stream.
+        let h = harness(0);
+        // These presses model a streamer who is live.
+        h.ctrl.mark_ingest_alive_for_test();
+        assert_eq!(h.ctrl.run_named_action("arm", 5_000, "hotkey"), None);
+        assert_eq!(h.ctrl.run_named_action("arm", 5_000, "hotkey"), None);
+        assert_eq!(h.ctrl.run_named_action("cut", 0, "hotkey"), None);
+        assert_eq!(h.ctrl.run_named_action("nonsense", 0, "hotkey"), None);
+
+        // Activating with nothing armed cannot work, and says so.
+        assert!(h.ctrl.run_named_action("activate", 0, "hotkey").is_some());
+
+        // Neither can toggling on before the buffer holds the delay.
+        let cold = harness(0);
+        cold.ctrl.mark_ingest_alive_for_test();
+        assert!(cold
+            .ctrl
+            .run_named_action("toggle", 5_000, "hotkey")
+            .is_some());
+        assert_eq!(cold.ctrl.armed_delay_ms(), 5_000, "it armed even so");
+    }
+
+    /// A delay cannot start with nothing arriving: the buffer holds no
+    /// video and can never fill, so "still building" would be a countdown
+    /// that never ends. Arming stays allowed - that is pre-arm.
+    #[test]
+    fn activate_refuses_while_nothing_is_publishing() {
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        assert!(
+            matches!(h.ctrl.activate_delay(), Err(ActivateError::NoIngest)),
+            "no publisher means no delay to switch on"
+        );
+        assert_eq!(h.ctrl.armed_delay_ms(), 2_000, "but it stays armed");
+
+        // With a publisher and a filled buffer it works as before.
+        feed_seconds(&h.ctrl, 0, 4, 30);
+        assert_eq!(
+            h.ctrl.activate_delay().expect("buffer is past armed"),
+            2_000
+        );
+
+        // And the publisher going away does not retroactively cut it.
+        h.ctrl.mark_ingest_dead();
+        assert_eq!(h.ctrl.target_delay_ms(), 2_000);
+    }
+
+    /// Recording a combo that is already bound has to be possible: Windows
+    /// hands a registered combo to us rather than to the browser, so the
+    /// capture field would never see the key and the action would fire
+    /// instead. The tray reads this to skip registration while it holds.
+    #[test]
+    #[cfg(windows)]
+    fn hotkey_capture_suspends_and_expires_on_its_own() {
+        let h = harness(0);
+        assert!(!h.ctrl.hotkeys_suspended(), "live by default");
+
+        h.ctrl.suspend_hotkeys(30_000);
+        assert!(h.ctrl.hotkeys_suspended());
+        let left = h.ctrl.hotkeys_suspend_remaining_ms();
+        assert!(left > 25_000 && left <= 30_000, "got {left}");
+
+        // The dashboard says it is done.
+        h.ctrl.suspend_hotkeys(0);
+        assert!(!h.ctrl.hotkeys_suspended(), "resumed on request");
+        assert_eq!(h.ctrl.hotkeys_suspend_remaining_ms(), 0);
+
+        // And a window that has already passed never holds them down: a
+        // dashboard that dies mid-capture costs one window, not the session.
+        h.ctrl.suspend_hotkeys(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(!h.ctrl.hotkeys_suspended(), "expired on its own");
+    }
+
+    /// Nothing publishing means the buffer cannot fill, so every action
+    /// that would BUILD delay is refused - and every action that removes it
+    /// still works, because OBS crashing mid-delay is exactly when someone
+    /// needs to cut back to live.
+    #[test]
+    #[cfg(windows)]
+    fn named_actions_refuse_to_build_delay_with_no_publisher() {
+        let h = harness(0);
+        assert!(!h.ctrl.ingest_alive(), "offline to start with");
+
+        assert!(h.ctrl.run_named_action("arm", 5_000, "hotkey").is_some());
+        assert_eq!(h.ctrl.armed_delay_ms(), 0, "arm must not arm");
+        assert_eq!(h.ctrl.phase(), "idle", "and must not enter preparing");
+
+        assert!(h.ctrl.run_named_action("toggle", 5_000, "hotkey").is_some());
+        assert_eq!(h.ctrl.armed_delay_ms(), 0, "toggle must not arm either");
+        assert_eq!(h.ctrl.target_delay_ms(), 0);
+
+        assert!(h.ctrl.run_named_action("activate", 0, "hotkey").is_some());
+        assert_eq!(h.ctrl.target_delay_ms(), 0);
+
+        // Now the other direction: armed and on air when the publisher dies.
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.arm_delay(3_000);
+        h.ctrl.activate_delay().expect("buffer is past armed");
+        h.ctrl.mark_ingest_dead();
+
+        assert_eq!(
+            h.ctrl.run_named_action("cut", 0, "hotkey"),
+            None,
+            "cutting back to live must never be blocked"
+        );
+        assert_eq!(h.ctrl.target_delay_ms(), 0, "and must actually cut");
+        assert_eq!(
+            h.ctrl.run_named_action("arm", 5_000, "hotkey"),
+            None,
+            "disarming frees the buffer, which is never harmful"
+        );
+        assert_eq!(h.ctrl.armed_delay_ms(), 0);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn named_action_records_what_fired_for_the_dashboard() {
+        // The dashboard reads this to light up the row that fired, and the
+        // sequence number is what makes a repeat of the same action a new
+        // event rather than a no-op.
+        let h = harness(0);
+        h.ctrl.mark_ingest_alive_for_test();
+        assert!(h.ctrl.last_action().is_none(), "nothing has fired yet");
+
+        h.ctrl.run_named_action("arm", 5_000, "hotkey");
+        let first = h.ctrl.last_action().expect("an action was recorded");
+        assert_eq!(first.action, "arm");
+        assert_eq!(first.source, "hotkey");
+        assert!(first.problem.is_none());
+
+        h.ctrl.run_named_action("arm", 5_000, "midi");
+        let second = h.ctrl.last_action().expect("recorded");
+        assert_eq!(second.source, "midi");
+        assert!(second.seq > first.seq, "a repeat has to read as new");
+
+        // A refusal carries its message, so the dashboard can show it.
+        let cold = harness(0);
+        cold.ctrl.run_named_action("activate", 0, "hotkey");
+        let refused = cold.ctrl.last_action().expect("recorded");
+        assert!(refused.problem.is_some(), "a refusal is worth surfacing");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn named_action_activate_and_cut() {
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        feed_seconds(&h.ctrl, 0, 4, 30);
+
+        // Activate action
+        h.ctrl.run_named_action("activate", 0, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 2_000);
+        assert_eq!(h.ctrl.phase(), "active");
+
+        // Cut action (drops to live immediately)
+        h.ctrl.run_named_action("cut", 0, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 0);
+        assert_eq!(h.ctrl.phase(), "ready");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn named_action_cut_after_schedules_and_cancels() {
+        let h = harness(0);
+        h.ctrl.arm_delay(3_000);
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.activate_delay().unwrap();
+        assert!(!h.ctrl.safe_cut_pending());
+
+        // 1st press: schedules safe-cut (cut-after)
+        h.ctrl.run_named_action("cut_after", 0, "hotkey");
+        assert!(
+            h.ctrl.safe_cut_pending(),
+            "1st press must schedule safe cut"
+        );
+
+        // 2nd press: cancels the scheduled safe-cut (reversible misclick)
+        h.ctrl.run_named_action("cut_after", 0, "hotkey");
+        assert!(!h.ctrl.safe_cut_pending(), "2nd press must cancel safe cut");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn named_action_toggle_clears_pending_safe_cut() {
+        let h = harness(0);
+        h.ctrl.arm_delay(3_000);
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.activate_delay().unwrap();
+
+        // Schedule a safe cut
+        h.ctrl.run_named_action("cut_after", 0, "hotkey");
+        assert!(h.ctrl.safe_cut_pending());
+
+        // Toggle while safe cut is pending should immediately cut to live and cancel mark
+        h.ctrl.run_named_action("toggle", 3_000, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 0);
+        assert!(!h.ctrl.safe_cut_pending());
     }
 
     // ── Ring + index correctness ─────────────────────────────────────

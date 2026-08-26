@@ -110,6 +110,11 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    // Every default path below is relative, so where we're "standing"
+    // decides where InstantClone keeps its files. Pin that to the exe's
+    // own folder before the first one is touched.
+    anchor_working_dir_to_exe();
+
     let cfg_path: PathBuf = std::env::var("CONFIG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("./instantclone.config.json"));
@@ -193,6 +198,16 @@ fn main() -> std::io::Result<()> {
                 // to do nothing and the user has no path to diagnose.
                 // Mirrors how `resolve_port_conflict` surfaces port
                 // conflicts before the runtime starts.
+                // Report where the path actually resolved to: the default
+                // is relative, and "./instantclone.buf" names no folder the
+                // user could go and check.
+                let shown = if settings.buffer_path.is_absolute() {
+                    settings.buffer_path.clone()
+                } else {
+                    std::env::current_dir()
+                        .map(|d| d.join(&settings.buffer_path))
+                        .unwrap_or_else(|_| settings.buffer_path.clone())
+                };
                 let msg = format!(
                     "InstantClone couldn't open or create the delay buffer file.\n\n\
                      Path:  {}\n\
@@ -202,10 +217,11 @@ fn main() -> std::io::Result<()> {
                      - Another instance of InstantClone is still running\n\
                      - Antivirus or backup software is scanning the file\n\
                      - The drive is full or read-only\n\
+                     - InstantClone sits in a folder Windows protects (Program Files)\n\
                      - The path is on a removable drive that's disconnected\n\n\
                      Fix one of the above and relaunch, or change \
                      'buffer_path' in instantclone.config.json to a writable folder.",
-                    settings.buffer_path.display(),
+                    shown.display(),
                     settings.buffer_mb,
                     e,
                 );
@@ -304,10 +320,52 @@ fn main() -> std::io::Result<()> {
         {
             let mut hk_rx = rx.clone();
             let hk_ctrl = ctrl.clone();
+            // The MIDI half of this is (bindings, chosen device): both live
+            // in the listener's mirror, and a device change with the same
+            // bindings still has to reach it or the pick is inert.
+            let (mut bound_hotkeys, mut bound_midi) = {
+                let s = hk_rx.borrow();
+                (s.hotkeys.clone(), (s.midi.clone(), s.midi_device.clone()))
+            };
             tokio::spawn(async move {
                 while hk_rx.changed().await.is_ok() {
-                    hk_ctrl.midi().update_from_settings(&hk_rx.borrow());
-                    tray::request_hotkey_reload();
+                    let (hotkeys, midi) = {
+                        let s = hk_rx.borrow();
+                        (s.hotkeys.clone(), (s.midi.clone(), s.midi_device.clone()))
+                    };
+                    if midi != bound_midi {
+                        hk_ctrl.midi().update_from_settings(&hk_rx.borrow());
+                        bound_midi = midi;
+                    }
+                    // Only when a binding actually changed. Arming,
+                    // activating and cutting each persist the delay state, so
+                    // most settings changes carry no binding edit at all, and
+                    // re-registering on those would drop every hotkey for an
+                    // instant and repeat the "combo already in use" line on
+                    // every cut.
+                    if hotkeys != bound_hotkeys {
+                        tray::request_hotkey_reload();
+                        bound_hotkeys = hotkeys;
+                    }
+                }
+            });
+
+            // Hotkey / MIDI actions live outside the web layer, so nothing
+            // would otherwise write the delay state they change. Persist on
+            // their behalf, event-driven so an idle session costs nothing.
+            let persist_ctrl = ctrl.clone();
+            let persist_tx = tx.clone();
+            let persist_path = cfg_path.clone();
+            tokio::spawn(async move {
+                loop {
+                    persist_ctrl.state_dirty().notified().await;
+                    // Coalesce a burst before writing. Every save rewrites
+                    // the whole config file, and a mashed pad or a held key
+                    // would otherwise do that once per press; the delay
+                    // costs nothing, since this only has to survive a
+                    // restart.
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    web::persist_delay_state(&persist_ctrl, &persist_tx, &persist_path);
                 }
             });
         }
@@ -429,36 +487,49 @@ fn spawn_ingest_legs(
         .collect()
 }
 
+/// How long an optional leg keeps retrying an address that is still held.
+/// Long enough to cover a restart handoff, where the outgoing instance can
+/// still own `[::1]` for a moment after it has released `127.0.0.1` and the
+/// IPv4-only port pre-flight has already waved us through. Short enough that
+/// an address somebody else owns for good does not leave a task retrying for
+/// the rest of the session.
+const OPTIONAL_BIND_GRACE: Duration = Duration::from_secs(30);
+
 /// Bind and serve one ingest address, retrying on failure.
 ///
-/// A required leg always retries. An optional leg retries only while the
-/// address is in use, which happens when a port is still closing behind a
-/// restart. Any other error means the family is unusable on this machine:
-/// with IPv6 disabled that bind can never succeed, and retrying it every
-/// second would spend the rest of the session writing the same log line, so
-/// the task logs once and exits.
+/// The required leg is IPv4, where all but a handful of setups connect, and
+/// it retries forever: giving up there would mean no ingest at all. The IPv6
+/// leg exists only for an OBS set to IP Family = IPv6, so it is never allowed
+/// to cost the other users anything. It retries a held address for
+/// `OPTIONAL_BIND_GRACE` and then stops for good, and any other error stops
+/// it immediately (that is the shape a machine with IPv6 disabled gives,
+/// where the bind can never succeed). Either way it says so once, in the
+/// dashboard log, and the task ends instead of looping in the background.
 async fn supervise_ingest_leg(addr: String, ctrl: Arc<controller::Controller>, required: bool) {
+    let mut deadline = std::time::Instant::now() + OPTIONAL_BIND_GRACE;
     loop {
         match rtmp::server::bind(&addr).await {
             Ok(listener) => {
                 if let Err(e) = rtmp::server::serve(listener, ctrl.clone()).await {
                     eprintln!("[ingest] {} stopped serving: {}", addr, e);
                 }
+                // It bound once, so the family works here: a listener that
+                // stops serving gets a fresh window to reclaim the address.
+                deadline = std::time::Instant::now() + OPTIONAL_BIND_GRACE;
             }
-            // AddrInUse is transient: on a restart or self-update the outgoing
-            // instance can still hold [::1] after it has released 127.0.0.1, and
-            // the port pre-flight only probes the IPv4 address. Keep retrying
-            // those. Any other error means the family is unusable on this
-            // machine, so an optional leg gives up instead of spinning.
-            Err(e) if !required && e.kind() != std::io::ErrorKind::AddrInUse => {
-                eprintln!("[ingest] optional listener {} unavailable: {}", addr, e);
-                ctrl.log(format!(
-                    "ingest: IPv6 listener {addr} unavailable ({e}). IPv4 ingest is \
-                     unaffected; only an OBS set to IP Family = IPv6 needs this one."
-                ));
-                return;
+            Err(e) => {
+                let still_settling = e.kind() == std::io::ErrorKind::AddrInUse
+                    && std::time::Instant::now() < deadline;
+                if !required && !still_settling {
+                    eprintln!("[ingest] optional listener {} unavailable: {}", addr, e);
+                    ctrl.log(format!(
+                        "ingest: IPv6 listener {addr} unavailable ({e}). IPv4 ingest is \
+                         unaffected; only an OBS set to IP Family = IPv6 needs this one."
+                    ));
+                    return;
+                }
+                eprintln!("[ingest] bind {} failed: {}", addr, e);
             }
-            Err(e) => eprintln!("[ingest] bind {} failed: {}", addr, e),
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -1070,6 +1141,51 @@ fn port_free_with_grace(addr: &str, grace: bool) -> bool {
     }
 }
 
+/// Make the folder holding the exe our working directory, so every relative
+/// path in Settings (config, buffer, trace log, overlays) lands next to the
+/// binary no matter who launched us or from where.
+///
+/// "Start with Windows" is the case that forces this: entries under the Run
+/// key inherit `C:\Windows\System32` as their working directory, which no
+/// unelevated process may write. Without the anchor, autostart reads no
+/// config (so every setting silently reverts to defaults) and then dies on
+/// `Access is denied (os error 5)` while creating the delay buffer. A
+/// `.desktop` autostart entry on Linux has the same shape of bug, landing in
+/// `$HOME` instead - writable, so it fails quietly rather than loudly.
+///
+/// Skipped when `CONFIG_PATH` is set: that's an explicit "I've chosen the
+/// layout" signal (a second instance, a service install), and moving the
+/// ground under that would be the surprise. It is also the escape hatch for
+/// `cargo run`, which otherwise keeps its files beside the built exe under
+/// `target/`.
+fn anchor_working_dir_to_exe() {
+    let exe = std::env::current_exe().ok();
+    let config_path_set = std::env::var_os("CONFIG_PATH").is_some();
+    let Some(dir) = anchor_dir(exe.as_deref(), config_path_set) else {
+        return;
+    };
+    if let Err(e) = std::env::set_current_dir(&dir) {
+        // Nothing is broken yet - we're simply still where we started, which
+        // is the pre-fix behaviour. The buffer dialog reports the absolute
+        // path if this turns into a real failure.
+        eprintln!("could not switch to {}: {e}", dir.display());
+    }
+}
+
+/// The directory `anchor_working_dir_to_exe` should move to, or None to stay
+/// put. Split out from the env + chdir so the rule is testable without
+/// mutating the process's working directory under other tests.
+fn anchor_dir(exe: Option<&std::path::Path>, config_path_set: bool) -> Option<PathBuf> {
+    if config_path_set {
+        return None;
+    }
+    // A bare "instantclone.exe" yields an empty parent, and an exe at a
+    // filesystem root yields none: in both cases there is nowhere to move to.
+    exe?.parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(PathBuf::from)
+}
+
 fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
     let _ = Command::new("cmd").args(["/c", "start", "", url]).spawn();
@@ -1101,3 +1217,34 @@ fn ensure_overlays_dir(dir: &std::path::Path) {
 // keeps them in lockstep - no risk of drifting silently.
 const OVERLAY_README: &str = include_str!("../overlays/README.md");
 const OVERLAY_CUSTOM_TEMPLATE: &str = include_str!("../overlays/custom-template.html");
+
+#[cfg(test)]
+mod tests {
+    use super::anchor_dir;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn anchor_dir_picks_the_folder_holding_the_exe() {
+        let exe = PathBuf::from("C:/Users/me/Desktop/InstantClone/instantclone.exe");
+        assert_eq!(
+            anchor_dir(Some(&exe), false),
+            Some(PathBuf::from("C:/Users/me/Desktop/InstantClone"))
+        );
+    }
+
+    #[test]
+    fn anchor_dir_leaves_an_explicit_config_path_alone() {
+        let exe = PathBuf::from("C:/Users/me/Desktop/InstantClone/instantclone.exe");
+        assert_eq!(
+            anchor_dir(Some(&exe), true),
+            None,
+            "CONFIG_PATH means the user chose the layout - don't move"
+        );
+    }
+
+    #[test]
+    fn anchor_dir_stays_put_when_the_exe_is_unknown_or_parentless() {
+        assert_eq!(anchor_dir(None, false), None);
+        assert_eq!(anchor_dir(Some(Path::new("instantclone.exe")), false), None);
+    }
+}
