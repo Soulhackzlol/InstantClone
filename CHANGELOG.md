@@ -179,6 +179,18 @@ sections on a build with no backend rather than showing dead controls.
   registration silently landed nowhere. It now reads the recorded directory,
   and falls back to matching profiles by name for older layouts
 
+### Internal
+
+- **The delay actions now build on every platform.** Toggle, arm, activate,
+  cut and cut-after are plain state-machine code with no system call in
+  them, but they were compiled only on Windows because the only things
+  driving them (the tray's hotkey loop, the MIDI listener) are Windows-only.
+  That left the Linux CI job compiling a different controller and skipping
+  ten of the tests covering the newest logic. They are one clearly named
+  block now, built and tested everywhere, with the platforms that have no
+  driver yet declaring that rather than hiding it behind conditional
+  compilation.
+
 ## [0.1.13] - Twitch VOD audio on the InstantClone service + per-destination audio routing
 
 ### Twitch VOD audio, unlocked with an optional script
