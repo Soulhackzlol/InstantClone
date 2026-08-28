@@ -179,6 +179,20 @@ sections on a build with no backend rather than showing dead controls.
   registration silently landed nowhere. It now reads the recorded directory,
   and falls back to matching profiles by name for older layouts
 
+- **A delay running for 49.7 days straight would empty its own buffer.**
+  RTMP timestamps a stream in unsigned 32-bit milliseconds, which rolls over
+  every 49.7 days. Audio and video interleave and cross each other by a few
+  milliseconds constantly, so at the instant the counter rolls, one track is
+  over the line and the other is not - and the tag still carrying a pre-roll
+  timestamp was read as if it belonged to the new cycle, landing it 49.7
+  days in the future. The buffer trim measures everything it holds against
+  the newest timestamp it has seen, so that one late audio tag put the
+  cutoff past every frame in the ring and evicted the whole delay at once,
+  dropping every viewer to live with no way back short of a restart. Only
+  reachable by streaming without interruption for seven weeks, which is the
+  unattended-relay case rather than the streamer one. Found by a new
+  10,000-hour simulation, not in the wild.
+
 ### Internal
 
 - **The delay actions now build on every platform.** Toggle, arm, activate,

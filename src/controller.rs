@@ -106,6 +106,11 @@ impl ActivateError {
 /// nothing publishing. The buffer holds no video and cannot fill, so arming
 /// or going delayed has nothing to work with - and "preparing" on the
 /// dashboard would be a progress bar that never moves.
+/// How many log lines the in-memory ring keeps for the dashboard. Bounded
+/// because a 24/7 relay logs for months: the oldest line is dropped rather
+/// than letting the buffer track uptime.
+const LOG_LINES_MAX: usize = 1_500;
+
 pub const NO_INGEST: &str = "OBS isn't sending anything yet - start streaming first";
 
 /// One hotkey / MIDI press, as the dashboard renders it: which action ran,
@@ -703,7 +708,7 @@ impl Controller {
             shutdown_notify: Notify::new(),
             shutdown_kind: AtomicU8::new(0),
             started: std::time::Instant::now(),
-            logs: crate::sync::Mutex::new(std::collections::VecDeque::with_capacity(512)),
+            logs: crate::sync::Mutex::new(std::collections::VecDeque::with_capacity(LOG_LINES_MAX)),
             midi: Arc::new(crate::midi::MidiState::new()),
             last_action: crate::sync::Mutex::new(None),
             last_action_seq: AtomicU64::new(0),
@@ -933,18 +938,45 @@ impl Controller {
     /// `expand_ts` at any moment, so the relaxed atomic load + store
     /// is race-free in practice.
     ///
-    /// Wrap detection rule: if the new u32 ts is less than the previous
-    /// by more than 2^31 ms (~24.8 days), the counter wrapped around;
-    /// bump the high half. Smaller backward jumps are treated as the
-    /// (normal) inter-stream out-of-order audio interleaving and ignored
-    /// here - pace_and_send drops those separately.
+    /// Wrap detection rule: consecutive tags are never more than half the
+    /// u32 space apart, so of the two possible distances between this
+    /// timestamp and the last one, the shorter is the real one. That reading
+    /// has to work in both directions:
+    ///
+    /// - *ahead* of the last tag but numerically below it: the counter
+    ///   rolled over, so this tag belongs to the next epoch.
+    /// - *behind* the last tag but numerically above it: this tag belongs to
+    ///   the epoch we just left.
+    ///
+    /// The second case is what audio costs us. Audio and video interleave
+    /// and cross each other by a few milliseconds constantly, so at the
+    /// instant the counter rolls, one track is over the line and the other
+    /// is not. Reading that straggler in the new epoch puts one tag 49.7
+    /// days in the future, and `on_tag` hands exactly that value to
+    /// `trim_older_than`, whose cutoff then sits past every frame in the
+    /// ring: a single late audio tag evicts the entire delay and drops
+    /// every viewer to live. Found by the 10,000-hour soak.
+    ///
+    /// Reading a straggler back into the previous epoch is self-correcting.
+    /// The next in-epoch tag is once again below the stored `last` and rolls
+    /// the counter forward again, so an alternating audio/video pattern
+    /// across the boundary resolves each tag to its own correct epoch.
+    ///
+    /// Smaller backward jumps inside one epoch stay ordinary interleaving
+    /// and change nothing here; pace_and_send drops those separately.
     fn expand_ts(&self, wire_ts: u32) -> u64 {
         let last = self.last_input_ts_u32.load(Ordering::Relaxed);
         let mut wrap_high = self.input_ts_wrap_high.load(Ordering::Relaxed);
-        if last > 0 && wire_ts < last && last.wrapping_sub(wire_ts) > (1u32 << 31) {
-            wrap_high = wrap_high.wrapping_add(1);
-            self.input_ts_wrap_high.store(wrap_high, Ordering::Relaxed);
+        if wire_ts.wrapping_sub(last) <= (1u32 << 31) {
+            if wire_ts < last {
+                wrap_high = wrap_high.wrapping_add(1);
+            }
+        } else if wire_ts > last && wrap_high > 0 {
+            // Epoch 0 has nothing before it, so a low-epoch straggler is
+            // just a stream that started near the top of the counter.
+            wrap_high -= 1;
         }
+        self.input_ts_wrap_high.store(wrap_high, Ordering::Relaxed);
         self.last_input_ts_u32.store(wire_ts, Ordering::Relaxed);
         ((wrap_high as u64) << 32) | (wire_ts as u64)
     }
@@ -1372,7 +1404,7 @@ impl Controller {
     /// 30 seconds in".
     pub fn log(&self, line: impl Into<String>) {
         let mut q = self.logs.lock();
-        if q.len() >= 1500 {
+        if q.len() >= LOG_LINES_MAX {
             q.pop_front();
         }
         let ts_s = process_now_ms() as f64 / 1000.0;
@@ -3765,6 +3797,289 @@ mod tests {
         h.ctrl.run_named_action("toggle", 3_000, "hotkey");
         assert_eq!(h.ctrl.target_delay_ms(), 0);
         assert!(!h.ctrl.safe_cut_pending());
+    }
+
+    /// Audio and video cross each other by a few milliseconds all the time,
+    /// so at the moment the u32 wire clock rolls over, one track is past it
+    /// and the other is not. The straggler must be read in the epoch it was
+    /// actually stamped in: promoting it puts one tag 49.7 days ahead, and
+    /// `on_tag` feeds that to the trim, which then measures the whole ring
+    /// against a cutoff past every frame in it and evicts the lot.
+    #[test]
+    fn a_late_tag_at_the_wrap_stays_in_the_epoch_it_came_from() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+        let a = [0xafu8; 64];
+
+        // Video runs up to the edge of the wrap, audio interleaved behind it.
+        h.ctrl.on_tag(9, 0xFFFF_FFC0, &v, false, false);
+        h.ctrl.on_tag(8, 0xFFFF_FFD0, &a, false, false);
+        h.ctrl.on_tag(9, 0xFFFF_FFE0, &v, false, false);
+
+        // Video crosses first: one epoch up, 0x10 into the new counter.
+        h.ctrl.on_tag(9, 0x0000_0010, &v, false, false);
+        let crossed = h.ctrl.ring.latest_ts().expect("a populated ring");
+        assert_eq!(crossed, (1u64 << 32) | 0x10, "video took the new epoch");
+
+        // The audio tag that was still in flight is stamped 32 ms earlier,
+        // and has to read as 32 ms earlier - not 49.7 days later.
+        h.ctrl.on_tag(8, 0xFFFF_FFF0, &a, false, false);
+        let straggler = h.ctrl.ring.latest_ts().expect("a populated ring");
+        assert_eq!(
+            straggler, 0xFFFF_FFF0,
+            "the straggler belongs to the epoch it was stamped in"
+        );
+        assert_eq!(
+            crossed - straggler,
+            32,
+            "and sits 32 ms before the tag that crossed, not 49.7 days after"
+        );
+
+        // The next video tag is back in the new epoch, so one late tag does
+        // not leave the counter stuck an epoch behind.
+        h.ctrl.on_tag(9, 0x0000_0030, &v, false, false);
+        assert_eq!(
+            h.ctrl.ring.latest_ts().expect("a populated ring"),
+            (1u64 << 32) | 0x30,
+            "the counter recovers on the next in-epoch tag"
+        );
+    }
+
+    // -- Long-run soak ------------------------------------------------
+
+    /// What a soak run observed, so each scenario can assert on its own
+    /// terms instead of the driver guessing what matters.
+    struct SoakStats {
+        tags: u64,
+        wraps: u64,
+        reconnects: u64,
+        secs: f64,
+    }
+
+    const WRAP_MS: u64 = 1u64 << 32; // u32 ms rolls over every 49.7 days
+    const FRAME_MS: u64 = 33; // 30 fps, the dense rate
+    const COARSE_MS: u64 = 1_000; // where nothing interesting happens
+    const HOT_ZONE_MS: u64 = 90_000; // dense either side of a boundary
+    const SOAK_ARMED_MS: u32 = 5_000;
+    /// How far behind the video tag the interleaved audio tag is stamped.
+    /// Deeper than one video frame on purpose, which is both what a real
+    /// muxer's audio buffering looks like and what guarantees the case that
+    /// matters: with a lag shorter than the frame step, whether any tag
+    /// lands in the window between the two tracks crossing the wrap is down
+    /// to the phase of the step, and a run can walk straight over the bug
+    /// without ever touching it.
+    const AUDIO_LAG_MS: u64 = 60;
+
+    /// Send one tag and check it expanded to the timestamp it was stamped
+    /// with. Equality is what catches an epoch read the wrong way round: a
+    /// missed wrap loses 49.7 days, a straggler promoted into the new epoch
+    /// gains them, and both still look monotonic.
+    fn soak_emit(ctrl: &Controller, kind: u8, track_ms: u64, payload: &[u8], is_idr: bool) {
+        ctrl.on_tag(kind, track_ms as u32, payload, is_idr, false);
+        if let Some(ts) = ctrl.ring.latest_ts() {
+            assert_eq!(
+                ts,
+                track_ms,
+                "expanded timestamp is not where the tag was stamped, at {} h",
+                track_ms / 3_600_000
+            );
+        }
+    }
+
+    /// Ring invariants that are too costly to check per tag.
+    fn soak_check_ring(ctrl: &Controller, stream_ms: u64, prev_seq: &mut Option<u64>) {
+        let oldest = ctrl.ring.oldest_ts().expect("a populated ring");
+        let latest = ctrl.ring.latest_ts().expect("a populated ring");
+        assert!(oldest <= latest, "ring front overtook its back");
+        if let Some(seq) = ctrl.ring.latest_seq() {
+            if let Some(prev) = *prev_seq {
+                assert!(seq > prev, "sequence number went backwards");
+            }
+            *prev_seq = Some(seq);
+        }
+        assert!(
+            latest - oldest <= (SOAK_ARMED_MS as u64) * 3,
+            "trim stopped bounding the buffer at {} h: {} ms held for {SOAK_ARMED_MS} ms",
+            stream_ms / 3_600_000,
+            latest - oldest
+        );
+    }
+
+    /// What a real restart does: the publisher goes, the session caches go
+    /// with it, and OBS's wire clock starts again near 0.
+    fn soak_restart(ctrl: &Controller) {
+        ctrl.mark_ingest_dead();
+        ctrl.ring.clear();
+        ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        ctrl.arm_delay(SOAK_ARMED_MS);
+    }
+
+    /// Frames run dense either side of a wrap or a reconnect, where the
+    /// arithmetic is interesting, and coarse in between so a run measured in
+    /// years of stream time finishes in minutes.
+    fn soak_step_ms(session_ms: u64, until_reconnect: u64) -> u64 {
+        let into_epoch = session_ms % WRAP_MS;
+        let near_wrap = into_epoch < HOT_ZONE_MS || WRAP_MS - into_epoch < HOT_ZONE_MS;
+        if near_wrap || until_reconnect < HOT_ZONE_MS {
+            FRAME_MS
+        } else {
+            COARSE_MS
+        }
+    }
+
+    /// Drive `hours` of stream through the real ingest path, restarting the
+    /// publisher every `reconnect_every_ms` (0 for one unbroken session).
+    ///
+    /// The timeline is never skipped: every millisecond of the requested
+    /// duration passes through the same u32 truncation OBS puts on the wire.
+    fn soak(hours: u64, reconnect_every_ms: u64, interleave_audio: bool) -> SoakStats {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.arm_delay(SOAK_ARMED_MS);
+
+        // Small payloads: a run this long rewrites the ring's whole capacity
+        // thousands of times over, and the tag count is what we are after.
+        let mut idr = [0u8; 120];
+        idr[0] = 0x17;
+        let mut pframe = [0u8; 120];
+        pframe[0] = 0x27;
+
+        let total_ms = hours * 3_600_000;
+        let mut stream_ms: u64 = 0; // the whole run
+        let mut session_start: u64 = 0; // where the current session began
+        let mut prev_seq: Option<u64> = None;
+        let mut next_reconnect = if reconnect_every_ms == 0 {
+            u64::MAX
+        } else {
+            reconnect_every_ms
+        };
+        let (mut tags, mut wraps, mut reconnects) = (0u64, 0u64, 0u64);
+        let started = std::time::Instant::now();
+
+        while stream_ms < total_ms {
+            let session_ms = stream_ms - session_start;
+            let is_idr = session_ms % 2_000 < FRAME_MS;
+            let payload: &[u8] = if is_idr { &idr } else { &pframe };
+
+            // Video, then the audio tag that was already in flight when the
+            // video was sent.
+            soak_emit(&h.ctrl, 9, session_ms, payload, is_idr);
+            tags += 1;
+            if interleave_audio && session_ms >= AUDIO_LAG_MS {
+                soak_emit(&h.ctrl, 8, session_ms - AUDIO_LAG_MS, &pframe, false);
+                tags += 1;
+            }
+
+            // No separate monotonicity check: soak_emit already pins every
+            // tag to its own stamp, and the session clock only moves
+            // forward, so ordering follows from it.
+            if tags % 20_000 == 0 {
+                soak_check_ring(&h.ctrl, stream_ms, &mut prev_seq);
+            }
+
+            // Keep the delay state machine moving, so this is not just an
+            // append loop with a long clock.
+            if session_ms > 60_000 && session_ms % 1_800_000 < COARSE_MS {
+                let _ = h.ctrl.activate_delay();
+                h.ctrl.arm_delay(SOAK_ARMED_MS);
+            }
+
+            if stream_ms >= next_reconnect {
+                soak_restart(&h.ctrl);
+                session_start = stream_ms;
+                prev_seq = None;
+                next_reconnect += reconnect_every_ms;
+                reconnects += 1;
+            }
+
+            let step = soak_step_ms(session_ms, next_reconnect.saturating_sub(stream_ms));
+            if (session_ms + step) % WRAP_MS < session_ms % WRAP_MS {
+                wraps += 1;
+            }
+            stream_ms += step;
+        }
+
+        assert!(
+            h.ctrl.logs.lock().len() <= LOG_LINES_MAX,
+            "the log ring grew unbounded"
+        );
+        SoakStats {
+            tags,
+            wraps,
+            reconnects,
+            secs: started.elapsed().as_secs_f64(),
+        }
+    }
+
+    fn soak_hours(default: u64) -> u64 {
+        std::env::var("SOAK_HOURS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    /// One unbroken session, long enough to cross the RTMP timestamp wrap
+    /// eight times. This is the unattended-relay case: nothing restarts OBS,
+    /// so the wire clock runs until u32 milliseconds roll over at 49.7 days,
+    /// and every expanded timestamp after that no longer fits in 32 bits.
+    ///
+    /// Debug build on purpose: overflow checks are on, so every counter that
+    /// accumulates over the run is bounds-checked by the compiler rather
+    /// than by an assertion someone remembered to write.
+    ///
+    ///   cargo test soak_continuous -- --ignored --nocapture
+    ///   SOAK_HOURS=1500 cargo test soak_continuous -- --ignored --nocapture
+    #[test]
+    #[ignore = "long-running soak; run explicitly with --ignored"]
+    fn soak_continuous_session_crosses_every_timestamp_wrap() {
+        let hours = soak_hours(10_000);
+        let s = soak(hours, 0, false);
+        println!(
+            "soak/continuous: {hours} h, {} tags, {} wraps, {:.1} s",
+            s.tags, s.wraps, s.secs
+        );
+        if hours >= 1_200 {
+            assert!(s.wraps >= 1, "a run this long has to cross a wrap");
+        }
+    }
+
+    /// The same unbroken session, but with audio interleaved the way a real
+    /// muxer sends it: each audio tag stamped a few milliseconds behind the
+    /// video tag it followed. At every wrap that leaves one track over the
+    /// line while the other is not, which is the case that put a tag 49.7
+    /// days in the future and had the trim evict the entire delay buffer.
+    #[test]
+    #[ignore = "long-running soak; run explicitly with --ignored"]
+    fn soak_interleaved_audio_across_every_wrap() {
+        let hours = soak_hours(10_000);
+        let s = soak(hours, 0, true);
+        println!(
+            "soak/interleaved: {hours} h, {} tags, {} wraps, {:.1} s",
+            s.tags, s.wraps, s.secs
+        );
+        if hours >= 1_200 {
+            assert!(s.wraps >= 1, "a run this long has to cross a wrap");
+        }
+    }
+
+    /// The ordinary case: a streamer who goes live, stops, and goes live
+    /// again, a few hours at a time. Each restart hands the ingest path a
+    /// wire clock that jumps backwards to ~0 while the ring still holds the
+    /// previous session, which is the shape of a wrap seen from the wrong
+    /// side.
+    #[test]
+    #[ignore = "long-running soak; run explicitly with --ignored"]
+    fn soak_many_sessions_reset_cleanly() {
+        let hours = soak_hours(1_000);
+        let s = soak(hours, 6 * 3_600_000, false);
+        println!(
+            "soak/sessions: {hours} h, {} tags, {} reconnects, {:.1} s",
+            s.tags, s.reconnects, s.secs
+        );
+        if hours >= 100 {
+            assert!(s.reconnects > 10, "the run has to restart the publisher");
+        }
     }
 
     // ── Ring + index correctness ─────────────────────────────────────
