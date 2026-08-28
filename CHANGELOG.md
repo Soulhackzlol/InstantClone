@@ -193,6 +193,21 @@ sections on a build with no backend rather than showing dead controls.
   unattended-relay case rather than the streamer one. Found by a new
   10,000-hour simulation, not in the wild.
 
+- **A stray early timestamp could empty the buffer at any moment.** The
+  same 49.7-day arithmetic had a second way in that needed no waiting: a tag
+  stamped before the session's first one has no earlier cycle to belong to,
+  and was read as 49.7 days into the future instead, which the buffer trim
+  then measured everything against. Reachable by anything that can publish
+  to the ingest port, not only after seven weeks of uptime. The first tag of
+  a session now sets the timeline and anything stamped before it is pinned
+  to the present rather than launched past it.
+- **A MIDI device could be selectable and never match.** The device name was
+  cleaned one way when stored inside a binding and not at all when stored as
+  the selected device, so a controller whose name contained the character
+  that separates a signature from its device could be picked in the dropdown
+  and then silently never fire. Every path now cleans the name identically,
+  and the selected name is bounded like the one in a binding.
+
 ### Internal
 
 - **The delay actions now build on every platform.** Toggle, arm, activate,

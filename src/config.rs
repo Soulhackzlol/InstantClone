@@ -356,14 +356,8 @@ pub fn canonicalize_midi(sig: &str) -> Option<String> {
     if !(1..=16).contains(&ch) || data > 127 {
         return None;
     }
-    // Driver-supplied text lands in a one-line config file: keep it short
-    // and free of anything that would break the line or the JSON.
-    let device: String = device
-        .chars()
-        .filter(|c| !c.is_control() && *c != '@')
-        .take(MIDI_DEVICE_NAME_MAX)
-        .collect();
-    let device = device.trim();
+    let device = sanitize_device_name(device);
+    let device = device.as_str();
     let base = match kind.as_str() {
         "note" => format!("note:{ch}:{data}"),
         "cc" => format!("cc:{ch}:{data}"),
@@ -374,6 +368,24 @@ pub fn canonicalize_midi(sig: &str) -> Option<String> {
     } else {
         format!("{base}@{device}")
     })
+}
+
+/// Clean a driver-supplied device name for storage. It lands in a one-line
+/// config file, so no control characters; '@' is the separator inside a
+/// signature, so none of those either; and it is capped, so a driver with a
+/// novel-length name cannot bloat the file.
+///
+/// The selected device and the device named inside a signature are the same
+/// string from the same driver, so they go through the same door - otherwise
+/// the two disagree about what a legal name is and a device can be
+/// selectable but never matchable.
+pub fn sanitize_device_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_control() && *c != '@')
+        .take(MIDI_DEVICE_NAME_MAX)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 /// Cap on the device name carried in a signature. Long enough for every
@@ -1157,7 +1169,7 @@ impl Settings {
             k if k.starts_with("hotkey.") => {
                 self.hotkeys.set(&k["hotkey.".len()..], value);
             }
-            "midi_device" => self.midi_device = value.to_string(),
+            "midi_device" => self.midi_device = sanitize_device_name(value),
             // midi.<action>=<signature>. `set` validates and drops anything
             // malformed, so a hand-edited config can't load a bad signature.
             k if k.starts_with("midi.") => {
@@ -2898,6 +2910,167 @@ mod tests {
         keep.set("arm", "");
         assert_eq!(keep.toggle, "Ctrl+Alt+D");
         assert_eq!(keep.cut, "Ctrl+Alt+C");
+    }
+
+    /// The selected device name and the device name inside a signature are
+    /// the same string from the same driver, so they have to survive the
+    /// same abuse. The signature path caps and strips it; the selector must
+    /// not be the one place an unbounded driver string reaches the file.
+    #[test]
+    fn the_selected_device_name_is_bounded_like_a_signature() {
+        let mut s = Settings::defaults();
+        s.apply_field("midi_device", &"y".repeat(500));
+        assert!(
+            s.midi_device.len() <= MIDI_DEVICE_NAME_MAX,
+            "selector kept {} chars",
+            s.midi_device.len()
+        );
+
+        s.apply_field("midi_device", "Deck\nA\tB");
+        assert!(
+            !s.midi_device.chars().any(|c| c.is_control()),
+            "control characters reached the selector: {:?}",
+            s.midi_device
+        );
+    }
+
+    /// Every path that handles a device name has to produce the same string
+    /// for the same driver: the list the dashboard shows, the value the user
+    /// picks, the name an opened device is matched against, and the suffix a
+    /// signature carries. A name that survives one and not another makes a
+    /// device selectable but unmatchable, which looks like MIDI silently
+    /// not working.
+    #[test]
+    fn a_device_name_means_the_same_thing_everywhere() {
+        for raw in ["Launchpad MK2", "Deck@A", "Pad\u{7}One", "  spaced  "] {
+            let listed = sanitize_device_name(raw);
+            // Picking the listed name back out of the dashboard.
+            let mut s = Settings::defaults();
+            s.apply_field("midi_device", &listed);
+            assert_eq!(s.midi_device, listed, "selecting {raw:?} changed it");
+
+            // And binding a control on that device.
+            let sig = canonicalize_midi(&format!("note:1:36@{listed}")).expect("a valid signature");
+            let mut m = MidiBindings::default();
+            m.set("arm", &sig);
+            assert_eq!(
+                m.action_for(&format!("note:1:36@{listed}")),
+                Some("arm"),
+                "a press on {raw:?} did not match its own binding"
+            );
+        }
+    }
+
+    /// Config files get hand-edited and half-written. Loading one must not
+    /// panic, and must not let a broken line take a good setting with it.
+    #[test]
+    fn a_damaged_config_file_still_loads() {
+        let path = std::env::temp_dir().join(format!(
+            "ic-edge-cfg-{}-{}.conf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(
+            &path,
+            "\n\
+             = no key\n\
+             no equals sign at all\n\
+             unknown_setting=1\n\
+             ingest_port=not-a-number\n\
+             web_port=8080\n\
+             buffer_mb=\n\
+             hotkey.toggle=Ctrl+Alt+D\n\
+             hotkey.nonsense=Ctrl+Alt+E\n\
+             midi.toggle=note:1:200\n\
+             target_delay_ms=99999999999999999999\n\
+             a truncated final line",
+        )
+        .expect("write");
+
+        let s = Settings::load_or_default(&path);
+        assert_eq!(s.web_port, 8080, "a good line after bad ones still loads");
+        assert_eq!(s.hotkeys.toggle, "Ctrl+Alt+D", "and so does a good binding");
+        assert!(
+            s.midi.toggle.is_empty(),
+            "an out-of-range signature is dropped, not stored"
+        );
+        assert!(
+            s.target_delay_ms <= 600_000,
+            "an absurd delay is clamped, got {}",
+            s.target_delay_ms
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Signatures arrive from a driver string and from hand-edited config
+    /// files, so the parser is a trust boundary, not a formality.
+    #[test]
+    fn midi_signature_parsing_rejects_the_awkward_shapes() {
+        // Structurally short or empty.
+        assert!(canonicalize_midi("").is_none());
+        assert!(canonicalize_midi("note").is_none());
+        assert!(canonicalize_midi("note:1").is_none());
+        assert!(canonicalize_midi(":::").is_none());
+        // Out of range on either field.
+        assert!(canonicalize_midi("note:0:36").is_none(), "channel is 1-16");
+        assert!(canonicalize_midi("note:17:36").is_none());
+        assert!(canonicalize_midi("note:1:128").is_none(), "data is 0-127");
+        // Not numbers at all, including ones that would overflow a parse.
+        assert!(canonicalize_midi("note:one:36").is_none());
+        assert!(canonicalize_midi("note:-1:36").is_none());
+        assert!(canonicalize_midi("note:99999999999999999999:36").is_none());
+        // Unknown kind.
+        assert!(canonicalize_midi("pitch:1:36").is_none());
+        // The boundaries themselves are valid.
+        assert_eq!(canonicalize_midi("note:1:0").as_deref(), Some("note:1:0"));
+        assert_eq!(canonicalize_midi("cc:16:127").as_deref(), Some("cc:16:127"));
+        // A device marker with nothing after it is the no-device form.
+        assert_eq!(
+            canonicalize_midi("note:1:36@").as_deref(),
+            Some("note:1:36")
+        );
+        assert_eq!(
+            canonicalize_midi("note:1:36@   ").as_deref(),
+            Some("note:1:36")
+        );
+        // An overlong driver name is truncated, not rejected, so a working
+        // controller never becomes unbindable because of its name.
+        let long = format!("note:1:36@{}", "x".repeat(300));
+        let out = canonicalize_midi(&long).expect("still a valid signature");
+        assert!(out.len() < 120, "device name is capped: {}", out.len());
+        assert!(out.starts_with("note:1:36@x"));
+    }
+
+    /// Combos are typed by users and hand-edited in the config file.
+    #[test]
+    fn hotkey_parsing_rejects_the_awkward_shapes() {
+        // A modifier is mandatory: that requirement is the misclick guard.
+        assert!(canonicalize_hotkey("D").is_none(), "a bare key is refused");
+        assert!(canonicalize_hotkey("Ctrl").is_none(), "modifiers alone too");
+        assert!(canonicalize_hotkey("Ctrl+Alt").is_none());
+        assert!(canonicalize_hotkey("").is_none());
+        assert!(canonicalize_hotkey("+++").is_none());
+        assert!(canonicalize_hotkey("Ctrl+NotAKey").is_none());
+        // Two keys is not a combo we can register.
+        assert!(canonicalize_hotkey("Ctrl+A+B").is_none());
+        // Order and case do not matter, and the output is canonical.
+        assert_eq!(
+            canonicalize_hotkey("alt+CTRL+d").as_deref(),
+            canonicalize_hotkey("Ctrl+Alt+D").as_deref()
+        );
+        // A repeated modifier is the same combo, not a different one.
+        assert_eq!(
+            canonicalize_hotkey("Ctrl+Ctrl+Alt+D").as_deref(),
+            canonicalize_hotkey("Ctrl+Alt+D").as_deref()
+        );
+        // Whitespace around the tokens survives a hand edit.
+        assert_eq!(
+            canonicalize_hotkey(" Ctrl + Alt + D ").as_deref(),
+            canonicalize_hotkey("Ctrl+Alt+D").as_deref()
+        );
     }
 
     #[test]

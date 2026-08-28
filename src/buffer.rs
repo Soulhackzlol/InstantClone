@@ -893,3 +893,113 @@ mod tests {
         assert!(t.0.newest_idr_after(new_seq + 100).is_none());
     }
 }
+
+#[cfg(test)]
+mod edge_tests {
+    use super::*;
+
+    fn ring(capacity: u64) -> (DiskRing, std::path::PathBuf) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("ic-edge-ring-{nanos}-{capacity}.buf"));
+        let _ = std::fs::remove_file(&path);
+        let r = DiskRing::create(&path, capacity).expect("ring create");
+        (r, path)
+    }
+
+    /// A tag too big for the ring to hold half of can never be stored
+    /// without eating its own tail, so it is refused rather than corrupting
+    /// the index. The ring has to stay usable afterwards.
+    #[test]
+    fn an_oversized_tag_is_refused_and_leaves_the_ring_usable() {
+        let (r, path) = ring(64 * 1024);
+        let half = 32 * 1024;
+
+        assert_eq!(
+            r.append(9, 1_000, &vec![0x27; half + 1], false, false)
+                .expect("no io error"),
+            None,
+            "a tag over half the ring is refused"
+        );
+        assert_eq!(r.latest_ts(), None, "and nothing was indexed");
+
+        // Exactly half still fits.
+        assert!(r
+            .append(9, 2_000, &vec![0x27; half], false, false)
+            .expect("no io error")
+            .is_some());
+        assert_eq!(r.latest_ts(), Some(2_000));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// An empty payload is a degenerate tag, not a reason to panic or to
+    /// desynchronise the write cursor from the index.
+    #[test]
+    fn an_empty_payload_does_not_break_the_cursor() {
+        let (r, path) = ring(64 * 1024);
+        r.append(9, 1_000, &[], false, false).expect("no io error");
+        r.append(9, 2_000, &[0x27; 100], false, false)
+            .expect("no io error");
+        assert_eq!(r.latest_ts(), Some(2_000));
+        let mut buf = Vec::new();
+        let seq = r.latest_seq().expect("a populated ring");
+        assert!(r
+            .try_read_seq(seq, &mut buf)
+            .expect("no io error")
+            .is_some());
+        assert_eq!(
+            buf.len(),
+            100,
+            "the tag after an empty one reads back whole"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Trim takes a cutoff derived from the newest timestamp. When every tag
+    /// is newer than it, nothing may be evicted - the guard that stops a
+    /// clock jump from emptying the buffer.
+    #[test]
+    fn trim_keeps_everything_newer_than_its_cutoff() {
+        let (r, path) = ring(64 * 1024);
+        for i in 1..=10u64 {
+            r.append(9, i * 100, &[0x27; 64], false, false)
+                .expect("no io error");
+        }
+        r.trim_older_than(60_000, 1_000, u64::MAX);
+        assert_eq!(r.oldest_ts(), Some(100), "nothing is older than the cutoff");
+
+        // And a cutoff past everything empties it, which is what a bogus
+        // future timestamp used to trigger.
+        r.trim_older_than(0, 1_000_000, u64::MAX);
+        assert_eq!(r.oldest_ts(), None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Writes wrap the file. The index has to keep pointing at bytes that
+    /// still belong to the tag it names, across a full lap of the ring.
+    #[test]
+    fn tags_read_back_correctly_after_the_ring_laps() {
+        let (r, path) = ring(16 * 1024);
+        let mut last_seq = 0;
+        for i in 1..=200u64 {
+            let payload = vec![(i % 251) as u8; 300];
+            if let Some(seq) = r.append(9, i * 10, &payload, false, false).expect("no io") {
+                last_seq = seq;
+            }
+        }
+        let mut buf = Vec::new();
+        assert!(r
+            .try_read_seq(last_seq, &mut buf)
+            .expect("no io error")
+            .is_some());
+        assert_eq!(buf.len(), 300);
+        assert!(
+            buf.iter().all(|b| *b == buf[0]),
+            "the newest tag read back as a mix of two writes"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+}

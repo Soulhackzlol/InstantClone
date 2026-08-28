@@ -586,6 +586,11 @@ pub struct Controller {
     // from wrap_high=0 again.
     last_input_ts_u32: AtomicU32,
     input_ts_wrap_high: AtomicU32,
+    /// Whether `last_input_ts_u32` means anything yet. A session's first tag
+    /// has nothing to be early or late relative to, so it is taken at face
+    /// value; without this, a first tag in the upper half of the counter is
+    /// indistinguishable from one stamped before the session started.
+    input_ts_seen: AtomicBool,
 
     // Wall-clock (process_now_ms) of last multi-track video tag - the
     // Enhanced Broadcasting warning chip only shows if we've seen one
@@ -703,6 +708,7 @@ impl Controller {
             seq_header_gen: AtomicU32::new(0),
             last_input_ts_u32: AtomicU32::new(0),
             input_ts_wrap_high: AtomicU32::new(0),
+            input_ts_seen: AtomicBool::new(false),
             last_multitrack_video_ms: AtomicU64::new(0),
             backpressure_since_ms: AtomicU64::new(0),
             shutdown_notify: Notify::new(),
@@ -927,6 +933,7 @@ impl Controller {
         self.backpressure_since_ms.store(0, Ordering::Relaxed);
         self.last_input_ts_u32.store(0, Ordering::Relaxed);
         self.input_ts_wrap_high.store(0, Ordering::Relaxed);
+        self.input_ts_seen.store(false, Ordering::Relaxed);
     }
 
     /// Promote an RTMP wire timestamp (u32 ms, wraps at ~49.7 days) to
@@ -967,13 +974,30 @@ impl Controller {
     fn expand_ts(&self, wire_ts: u32) -> u64 {
         let last = self.last_input_ts_u32.load(Ordering::Relaxed);
         let mut wrap_high = self.input_ts_wrap_high.load(Ordering::Relaxed);
+        if !self.input_ts_seen.swap(true, Ordering::Relaxed) {
+            // The first tag of a session defines where its timeline starts,
+            // whatever it says. An encoder's clock does not have to begin
+            // near zero - OBS reconnecting into a still-running session
+            // carries on from wherever it had got to.
+            self.last_input_ts_u32.store(wire_ts, Ordering::Relaxed);
+            return wire_ts as u64;
+        }
         if wire_ts.wrapping_sub(last) <= (1u32 << 31) {
             if wire_ts < last {
                 wrap_high = wrap_high.wrapping_add(1);
             }
-        } else if wire_ts > last && wrap_high > 0 {
-            // Epoch 0 has nothing before it, so a low-epoch straggler is
-            // just a stream that started near the top of the counter.
+        } else if wire_ts > last {
+            if wrap_high == 0 {
+                // Behind the timeline with no cycle underneath to fall back
+                // to: this tag is stamped before the session began, so it is
+                // out of range rather than from a previous cycle. Reading it
+                // literally puts it 49.7 days ahead, `on_tag` hands that to
+                // the trim, and the cutoff lands past every frame in the
+                // ring. Pin it to the moment we are already at, and leave
+                // `last` alone - adopting a stamp from nowhere would make
+                // the next ordinary tag look like a wrap.
+                return last as u64;
+            }
             wrap_high -= 1;
         }
         self.input_ts_wrap_high.store(wrap_high, Ordering::Relaxed);
@@ -3797,6 +3821,107 @@ mod tests {
         h.ctrl.run_named_action("toggle", 3_000, "hotkey");
         assert_eq!(h.ctrl.target_delay_ms(), 0);
         assert!(!h.ctrl.safe_cut_pending());
+    }
+
+    /// A wrap does not arrive as one tidy crossing. Audio buffering means
+    /// several tags can still be in flight when video crosses, and every one
+    /// of them has to read back into the epoch it was stamped in.
+    #[test]
+    fn several_late_tags_in_a_row_all_land_in_the_old_epoch() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+
+        h.ctrl.on_tag(9, 0xFFFF_FF00, &v, false, false);
+        h.ctrl.on_tag(9, 0x0000_0020, &v, false, false); // video crosses
+        assert_eq!(h.ctrl.ring.latest_ts(), Some((1u64 << 32) | 0x20));
+
+        // Three stragglers, each later than the one before but all still on
+        // the old side of the counter.
+        for wire in [0xFFFF_FFA0u32, 0xFFFF_FFC0, 0xFFFF_FFE0] {
+            h.ctrl.on_tag(8, wire, &v, false, false);
+            assert_eq!(
+                h.ctrl.ring.latest_ts(),
+                Some(wire as u64),
+                "straggler {wire:#x} left its epoch"
+            );
+        }
+
+        // And the counter is still able to cross forward afterwards.
+        h.ctrl.on_tag(9, 0x0000_0040, &v, false, false);
+        assert_eq!(h.ctrl.ring.latest_ts(), Some((1u64 << 32) | 0x40));
+    }
+
+    /// Audio and video routinely carry the same timestamp. Equal is neither
+    /// ahead nor behind, and must not be read as either.
+    #[test]
+    fn tags_sharing_a_timestamp_do_not_move_the_epoch() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+
+        h.ctrl.on_tag(9, 5_000, &v, false, false);
+        h.ctrl.on_tag(8, 5_000, &v, false, false);
+        h.ctrl.on_tag(9, 5_000, &v, false, false);
+        assert_eq!(h.ctrl.ring.latest_ts(), Some(5_000));
+
+        // Same, but sitting exactly on the wrap boundary.
+        let h2 = harness(0);
+        h2.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h2.ctrl.on_tag(9, 0xFFFF_FFFF, &v, false, false);
+        h2.ctrl.on_tag(8, 0xFFFF_FFFF, &v, false, false);
+        assert_eq!(h2.ctrl.ring.latest_ts(), Some(0xFFFF_FFFF));
+        h2.ctrl.on_tag(9, 0, &v, false, false);
+        assert_eq!(
+            h2.ctrl.ring.latest_ts(),
+            Some(1u64 << 32),
+            "the very next millisecond is the next epoch"
+        );
+    }
+
+    /// Half the counter apart is the point where "ahead" and "behind" stop
+    /// being distinguishable. Whichever way it is read, one tag must not
+    /// move the timeline by 49.7 days.
+    #[test]
+    fn a_jump_of_exactly_half_the_counter_does_not_move_the_epoch() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+
+        h.ctrl.on_tag(9, 0, &v, false, false);
+        h.ctrl.on_tag(9, 1u32 << 31, &v, false, false);
+        assert_eq!(
+            h.ctrl.ring.latest_ts(),
+            Some(1u64 << 31),
+            "exactly half the counter ahead is still this epoch"
+        );
+    }
+
+    /// A publisher session starts at epoch 0, and there is no epoch below it.
+    /// A tag stamped before the first one we saw cannot be read as "the
+    /// previous cycle", and must not be read as 49.7 days into the future
+    /// either - that value reaches `trim_older_than` and empties the ring.
+    #[test]
+    fn a_tag_from_before_the_first_one_cannot_jump_the_timeline() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+
+        // A short, ordinary session.
+        h.ctrl.on_tag(9, 0, &v, true, false);
+        h.ctrl.on_tag(9, 1_000, &v, false, false);
+        h.ctrl.on_tag(9, 2_000, &v, false, false);
+        let before = h.ctrl.ring.latest_ts().expect("a populated ring");
+
+        // Now a tag stamped "60 ms before zero", which is what an audio
+        // track lagging the video would carry if the session began at 0.
+        h.ctrl.on_tag(8, 0u32.wrapping_sub(60), &v, false, false);
+        let after = h.ctrl.ring.latest_ts().expect("a populated ring");
+
+        assert!(
+            after <= before + 60_000,
+            "a stray early tag moved the timeline to {after} from {before}"
+        );
     }
 
     /// Audio and video cross each other by a few milliseconds all the time,

@@ -397,7 +397,11 @@ mod win {
         // borrowed directly; copy it out unaligned into an owned array first.
         let name: [u16; 32] = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(caps.szPname)) };
         let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
-        String::from_utf16_lossy(&name[..end])
+        // Through the same door as the device recorded inside a signature.
+        // The name the user picks in the dashboard, the name we match an
+        // open device against, and the name a signature carries all have to
+        // be the same string, or a device is selectable and never matches.
+        crate::config::sanitize_device_name(&String::from_utf16_lossy(&name[..end]))
     }
 
     /// winmm callback. Runs on a system thread; keeps work minimal (parse +
