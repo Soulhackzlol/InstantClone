@@ -319,7 +319,14 @@ async fn serve(
     // changed. Clients fall back to `GET /state` polling if EventSource
     // is unavailable or the connection drops.
     if method == "GET" && bare_path == "/events" {
-        return handle_sse(sock, ctrl, settings, sysstat).await;
+        return handle_sse(sock, ctrl, settings, sysstat, Feed::Dashboard).await;
+    }
+
+    // The overlay's own feed. Same machinery, a payload carrying nothing but
+    // what a widget paints - see `overlay_state_json` for why an overlay gets
+    // its own rather than a share of the dashboard's.
+    if method == "GET" && bare_path == "/overlay-events" {
+        return handle_sse(sock, ctrl, settings, sysstat, Feed::Overlay).await;
     }
 
     // Lifecycle controls (admin-gated by auth_gate above): acknowledge and
@@ -721,6 +728,11 @@ async fn route(
             "application/json",
             state_json(ctrl, settings, sysstat),
         ),
+        ("GET", "/overlay-state") => (
+            "200 OK",
+            "application/json",
+            overlay_state_json(ctrl, settings),
+        ),
         ("GET", "/config") => (
             "200 OK",
             "application/json",
@@ -1080,11 +1092,23 @@ async fn route(
 /// the compute but no per-request HTTP overhead. The win is upstream:
 /// the dashboard JS no longer fires a fresh `fetch('/state')` every 500
 /// ms, so connection-close churn and CSRF parsing disappear.
+/// Which payload an SSE connection carries.
+///
+/// The dashboard is a logged-in operator surface and gets everything. An
+/// overlay is a picture on a stream: it is served to anyone who can reach the
+/// port, so it gets a payload that is only the numbers it draws.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Feed {
+    Dashboard,
+    Overlay,
+}
+
 async fn handle_sse(
     mut sock: TcpStream,
     ctrl: Arc<Controller>,
     settings: Arc<watch::Sender<Settings>>,
     sysstat: Arc<SysStat>,
+    feed: Feed,
 ) -> io::Result<()> {
     // SSE preamble. `X-Accel-Buffering: no` tells nginx-style proxies not
     // to buffer; `Cache-Control: no-store` keeps browsers from caching;
@@ -1105,7 +1129,10 @@ async fn handle_sse(
     let tick = Duration::from_millis(250);
 
     loop {
-        let cur = state_json(&ctrl, &settings, &sysstat);
+        let cur = match feed {
+            Feed::Dashboard => state_json(&ctrl, &settings, &sysstat),
+            Feed::Overlay => overlay_state_json(&ctrl, &settings),
+        };
         let now = std::time::Instant::now();
         let changed = cur != last_payload;
         let beat_due = now.duration_since(last_send) >= heartbeat;
@@ -1325,6 +1352,67 @@ fn state_json(
         cl = consumer_lag,
         bp = backpressure,
         dl = dest_list,
+    )
+}
+
+/// The state an overlay is allowed to see: the numbers it paints, and
+/// nothing else.
+///
+/// An overlay is not an operator surface. It is a picture composited into a
+/// live stream, loaded by an OBS browser source that cannot log in, so its
+/// page and its data are reachable by anyone who can reach the port. That
+/// makes `/state` the wrong feed for it twice over.
+///
+/// It carries too much. `/state` exists for a logged-in dashboard and
+/// includes the ingest URL, the publisher token, host CPU and memory, the
+/// compat warning, the hotkey conflict list, and every destination's id and
+/// name - "Twitch main", "client backup". An overlay draws none of it, and
+/// an overlay is on screen: whatever it holds is one bug away from being on
+/// the stream.
+///
+/// And reaching it means being allowed to reach the routes beside it. The
+/// only way to let an unauthenticated browser source read `/state` is to
+/// open `Access::Control`, which is arm, activate, cut and go-live. A
+/// picture would become a control path, and anyone who could see the overlay
+/// could drive the delay.
+///
+/// So the fields below are the complete set the two overlay renderers
+/// actually read (`overlay_html` here and `web/overlay-runtime.js` for saved
+/// overlays), and the destination list is reduced to liveness flags with the
+/// names dropped. Nothing here identifies the streamer, authorises anything,
+/// or describes the machine. Adding a field is a decision to put it on
+/// screen; there is a test that fails if a secret-shaped one appears.
+fn overlay_state_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>) -> String {
+    let (alive_count, total_count) = ctrl.destination_alive_summary();
+    // Config order, so the dots keep their positions between ticks, joined
+    // with live state the same way `/state` does it - but the id and name
+    // that join them stay here.
+    let snap = ctrl.destination_snapshot();
+    let dots = settings
+        .borrow()
+        .destinations
+        .iter()
+        .map(|d| {
+            let alive = snap.iter().find(|t| t.0 == d.id).map(|t| t.1) == Some(true);
+            format!(r#"{{"alive":{alive}}}"#)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!(
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"ingest_alive":{ia},"destinations_alive":{dla},"destinations_total":{dlt},"stats":{{"cuts":{cu},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        ph = ctrl.phase(),
+        ad = ctrl.armed_delay_ms(),
+        td = ctrl.target_delay_ms(),
+        cd = ctrl.current_delay_ms(),
+        bf = ctrl.buffer_fill_ms(),
+        btm = ctrl.target_buffer_ms(),
+        ia = ctrl.ingest_alive(),
+        dla = alive_count,
+        dlt = total_count,
+        cu = ctrl.cuts_performed(),
+        br = ctrl.bitrate_kbps(),
+        dl = dots,
     )
 }
 
@@ -3891,6 +3979,7 @@ fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// Access level a route requires WHEN auth is enabled. The default is `Admin`,
 /// so any route not explicitly listed below is protected (fail closed): a new
 /// endpoint is locked down unless someone deliberately opens it here.
+#[derive(Debug, PartialEq, Eq)]
 enum Access {
     /// No auth: the login page and overlay DISPLAY (OBS browser sources).
     Public,
@@ -3919,6 +4008,19 @@ fn classify_access(method: &str, path: &str) -> Access {
     // public like the overlay display. Gating it would break Start Streaming the
     // moment a dashboard password is enabled.
     if path == "/obs/multitrack-config" {
+        return Access::Public;
+    }
+    // The overlay's read-only feed, and only by GET. An OBS browser source
+    // cannot log in, so without this an overlay stops updating the moment a
+    // dashboard password is set - it paints once and freezes, silently,
+    // because both its fetch and its EventSource swallow the 401.
+    //
+    // Public is safe here only because the payload is: `overlay_state_json`
+    // carries the numbers a widget draws and nothing else. The alternative -
+    // letting overlays reach `/state` - would mean opening `Access::Control`
+    // to unauthenticated callers, and Control is arm, activate, cut and
+    // go-live. A picture must not be a way to drive the delay.
+    if method == "GET" && (path == "/overlay-state" || path == "/overlay-events") {
         return Access::Public;
     }
     match (method, path) {
@@ -4526,9 +4628,11 @@ function paint(s){{
 }}
 
 function start(){{
+  // /overlay-events, not /events: an OBS browser source has no session, and
+  // the overlay feed is the read-only one it is allowed to have.
   if (window.EventSource){{
     try {{
-      const es = new EventSource('/events');
+      const es = new EventSource('/overlay-events');
       es.onmessage = e => {{ try {{ paint(JSON.parse(e.data)); }} catch(_){{}} }};
       es.onerror = () => {{ es.close(); setTimeout(startPolling, 1000); }};
       return;
@@ -4537,7 +4641,7 @@ function start(){{
   startPolling();
 }}
 function startPolling(){{
-  async function tick(){{ try {{ paint(await (await fetch('/state')).json()); }} catch(_){{}} }}
+  async function tick(){{ try {{ paint(await (await fetch('/overlay-state')).json()); }} catch(_){{}} }}
   tick(); setInterval(tick, 500);
 }}
 start();
@@ -4580,6 +4684,147 @@ mod tests {
         let mut s = Settings::defaults();
         s.buffer_mb = buffer_mb;
         (ctrl, Arc::new(watch::channel(s).0), path)
+    }
+
+    /// An overlay is a picture, not a control surface.
+    ///
+    /// The feed it reads has to be public, because an OBS browser source
+    /// cannot log in and an overlay that stops updating under a dashboard
+    /// password is a broken overlay. Public is only acceptable while the
+    /// payload stays a picture's worth of data, so this pins both halves:
+    /// the fields the renderers need are present, and nothing that names the
+    /// streamer, describes the machine, or authorises anything is.
+    #[test]
+    fn the_overlay_feed_carries_only_what_an_overlay_paints() {
+        let (ctrl, settings, path) = refusal_harness(1024);
+        {
+            let mut s = settings.borrow().clone();
+            s.destinations.push(crate::config::Destination {
+                id: "dest-secret-id".into(),
+                name: "Twitch main - client account".into(),
+                enabled: true,
+                platform: "custom".into(),
+                stream_key: "SECRETKEY".into(),
+                custom_egress_url: "rtmp://host/app".into(),
+                twitch_ingest: String::new(),
+                youtube_ingest: String::new(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
+            });
+            // `send_replace`, not `send`: the harness drops its receiver, and
+            // `send` is a no-op with no receivers - the destination would
+            // never land and the leak assertions below would all pass on an
+            // empty list, proving nothing.
+            settings.send_replace(s);
+        }
+        let json = overlay_state_json(&ctrl, &settings);
+        // The fixture has to reach the payload or every leak assertion below
+        // passes on an empty list and proves nothing. Anchored on the entry
+        // opening rather than the whole entry, so a field smuggled in beside
+        // `alive` still satisfies this and is caught where it should be.
+        //
+        // (`destinations_total` would be the wrong anchor: like `/state`, it
+        // counts the controller's live destinations, not the configured ones.)
+        assert!(
+            json.contains(r#""destinations":[{"alive""#),
+            "the fixture destination never landed: {json}"
+        );
+
+        // Everything the two renderers read, or a widget silently blanks.
+        for field in [
+            "phase",
+            "armed_delay_ms",
+            "target_delay_ms",
+            "current_delay_ms",
+            "buffer_fill_ms",
+            "buffer_target_ms",
+            "ingest_alive",
+            "destinations_alive",
+            "destinations_total",
+            "cuts",
+            "bitrate_kbps",
+            "alive",
+        ] {
+            assert!(json.contains(field), "overlays render {field}: {json}");
+        }
+
+        // And nothing else. A destination's name is the sharpest case: it is
+        // the streamer's own words ("client account"), and an overlay is on
+        // screen, so `/state`'s list would have put it one bug from air.
+        for leak in [
+            "Twitch main",
+            "dest-secret-id",
+            "obs_url",
+            "publisher_token",
+            "cpu_pct",
+            "rss_bytes",
+            "uptime_secs",
+            "webhook",
+            "compat_warning",
+            "hotkey_conflicts",
+            "last_action",
+            "ingest_key",
+            "dock_token",
+            "SECRETKEY",
+        ] {
+            assert!(
+                !json.contains(leak),
+                "an overlay has no use for {leak}: {json}"
+            );
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Reading the overlay feed must never imply being able to drive the
+    /// delay. `/state` is Control, and Control is arm / activate / cut /
+    /// go-live - so pointing overlays at it, or widening it to reach them,
+    /// would have turned a picture into a way to cut someone's stream.
+    #[test]
+    fn the_overlay_feed_is_readable_but_not_a_control_path() {
+        assert_eq!(classify_access("GET", "/overlay-state"), Access::Public);
+        assert_eq!(classify_access("GET", "/overlay-events"), Access::Public);
+
+        // GET only. Nothing writes through these paths today, and if
+        // something ever tries it lands on the admin default rather than
+        // inheriting the read exemption.
+        assert_eq!(classify_access("POST", "/overlay-state"), Access::Admin);
+        assert_eq!(classify_access("POST", "/overlay-events"), Access::Admin);
+
+        // The dashboard's own feed stays behind a login. If this ever
+        // relaxes to Public, the overlay split above has been undone and
+        // every control route went with it.
+        assert_eq!(classify_access("GET", "/state"), Access::Control);
+        assert_eq!(classify_access("GET", "/events"), Access::Control);
+        assert_eq!(classify_access("POST", "/arm"), Access::Control);
+    }
+
+    /// The shipped overlay JS must ask for the overlay feed, not the
+    /// dashboard's. This is the half a Rust test cannot otherwise see: the
+    /// renderers are JavaScript, and pointing one back at `/state` would
+    /// compile, pass every other test, and freeze every overlay the first
+    /// time a user set a dashboard password.
+    #[test]
+    fn neither_overlay_renderer_asks_for_the_dashboard_feed() {
+        let saved = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/web/overlay-runtime.js"
+        ));
+        let builtin = overlay_html("");
+        for (what, js) in [
+            ("saved overlays", saved),
+            ("the built-in overlay", builtin.as_str()),
+        ] {
+            assert!(
+                js.contains("/overlay-events") && js.contains("/overlay-state"),
+                "{what} must read the overlay feed"
+            );
+            assert!(
+                !js.contains("EventSource('/events')") && !js.contains("fetch('/state')"),
+                "{what} must not read the dashboard feed - it needs a session"
+            );
+        }
     }
 
     /// The dashboard's copy of the offline guard. The hotkey and MIDI paths

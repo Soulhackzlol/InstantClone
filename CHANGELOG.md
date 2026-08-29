@@ -119,6 +119,16 @@ the delay path.
   turned on "listen on all interfaces".
 - **OBS dock token.** The dock gets its own least-privilege credential rather
   than your password, so a docked panel inside OBS cannot change settings.
+- **Overlays keep working under a password, and read only what they draw.**
+  An OBS browser source cannot log in, so an overlay pointed at the
+  dashboard's data feed would have painted once and frozen the moment you set
+  a password, silently. Overlays now have their own read-only feed carrying
+  just the numbers they render: phase, the delay figures, buffer fill, cut
+  count, bitrate, and one liveness flag per destination. It is deliberately
+  narrower than the dashboard's, so your destination names, ingest URL and
+  machine stats never reach a page that is composited into your stream. It is
+  also read-only in the strict sense: reading it gives no way to arm,
+  activate, cut, or go live. An overlay is a picture, not a remote control.
 - **Linux (x86-64) builds are published.** `instantclone-v0.1.14-linux-x64`
   runs headless on a VPS or on an Ubuntu desktop. There is no system tray
   there, so the dashboard is the whole control surface and Quit and Restart
