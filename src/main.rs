@@ -1161,7 +1161,12 @@ fn port_free_with_grace(addr: &str, grace: bool) -> bool {
 fn anchor_working_dir_to_exe() {
     let exe = std::env::current_exe().ok();
     let config_path_set = std::env::var_os("CONFIG_PATH").is_some();
-    let Some(dir) = anchor_dir(exe.as_deref(), config_path_set) else {
+    let here = std::env::current_dir().ok();
+    let Some(dir) = anchor_dir(
+        exe.as_deref(),
+        config_path_set,
+        here.as_deref().map(has_config),
+    ) else {
         return;
     };
     if let Err(e) = std::env::set_current_dir(&dir) {
@@ -1175,8 +1180,35 @@ fn anchor_working_dir_to_exe() {
 /// The directory `anchor_working_dir_to_exe` should move to, or None to stay
 /// put. Split out from the env + chdir so the rule is testable without
 /// mutating the process's working directory under other tests.
-fn anchor_dir(exe: Option<&std::path::Path>, config_path_set: bool) -> Option<PathBuf> {
-    if config_path_set {
+/// The settings file name, as `cfg_path` below defaults to it.
+const CONFIG_FILE_NAME: &str = "instantclone.config.json";
+
+/// Does this directory already hold a settings file we would load?
+fn has_config(dir: &std::path::Path) -> bool {
+    dir.join(CONFIG_FILE_NAME).is_file()
+}
+
+/// Where to move to before anything reads a relative path, or None to stay put.
+///
+/// `config_here` says whether the directory we started in already holds a
+/// settings file. That is the whole difference between the two reasons we get
+/// called with an odd working directory:
+///
+/// - Windows hands a startup entry `C:\Windows\System32`, which has no
+///   settings file and is not writable. Moving is the fix for the "Access is
+///   denied" crash, and there is nothing there to lose.
+/// - Someone launched from their own data folder (a shortcut with a "Start
+///   in", or a terminal). That folder holds their destinations and stream
+///   keys. Moving would silently hand them a factory-fresh install while
+///   their real config sat untouched a few directories away.
+///
+/// So: an existing settings file wins, and we stay where it is.
+fn anchor_dir(
+    exe: Option<&std::path::Path>,
+    config_path_set: bool,
+    config_here: Option<bool>,
+) -> Option<PathBuf> {
+    if config_path_set || config_here == Some(true) {
         return None;
     }
     // A bare "instantclone.exe" yields an empty parent, and an exe at a
@@ -1227,7 +1259,7 @@ mod tests {
     fn anchor_dir_picks_the_folder_holding_the_exe() {
         let exe = PathBuf::from("C:/Users/me/Desktop/InstantClone/instantclone.exe");
         assert_eq!(
-            anchor_dir(Some(&exe), false),
+            anchor_dir(Some(&exe), false, Some(false)),
             Some(PathBuf::from("C:/Users/me/Desktop/InstantClone"))
         );
     }
@@ -1236,15 +1268,44 @@ mod tests {
     fn anchor_dir_leaves_an_explicit_config_path_alone() {
         let exe = PathBuf::from("C:/Users/me/Desktop/InstantClone/instantclone.exe");
         assert_eq!(
-            anchor_dir(Some(&exe), true),
+            anchor_dir(Some(&exe), true, Some(false)),
             None,
             "CONFIG_PATH means the user chose the layout - don't move"
         );
     }
 
+    /// The upgrade case. A 0.1.13 user who launched from their own data
+    /// folder has their destinations and stream keys there. Moving to the exe
+    /// folder would hand them a factory-fresh install with everything
+    /// apparently gone, while the real file sat untouched where they left it.
+    #[test]
+    fn anchor_dir_leaves_an_existing_install_where_it_already_lives() {
+        let exe = PathBuf::from("C:/Program Files/InstantClone/instantclone.exe");
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(true)),
+            None,
+            "a settings file in the launch folder is an install, not an accident"
+        );
+        // The autostart case is unchanged: System32 holds no settings file,
+        // so there is nothing to preserve and moving is still the fix.
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(false)),
+            Some(PathBuf::from("C:/Program Files/InstantClone"))
+        );
+        // Unknown (the current directory could not be read) behaves like the
+        // autostart case rather than blocking the fix.
+        assert_eq!(
+            anchor_dir(Some(&exe), false, None),
+            Some(PathBuf::from("C:/Program Files/InstantClone"))
+        );
+    }
+
     #[test]
     fn anchor_dir_stays_put_when_the_exe_is_unknown_or_parentless() {
-        assert_eq!(anchor_dir(None, false), None);
-        assert_eq!(anchor_dir(Some(Path::new("instantclone.exe")), false), None);
+        assert_eq!(anchor_dir(None, false, Some(false)), None);
+        assert_eq!(
+            anchor_dir(Some(Path::new("instantclone.exe")), false, Some(false)),
+            None
+        );
     }
 }

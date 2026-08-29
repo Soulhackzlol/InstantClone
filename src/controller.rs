@@ -2244,7 +2244,16 @@ async fn pump_dest(
     // position. Otherwise we'd briefly emit live frames before
     // compute_delay_cut catches up, producing a visible ~5 s backward
     // jump for viewers of the new destination.
-    let first_idr = seed_idr(ctrl).await;
+    // No seed means the publisher went away (or this destination was
+    // disabled) before a keyframe arrived. Leave rather than hold an open
+    // session to the platform with nothing to send down it.
+    let Some(first_idr) = seed_idr(ctrl, dest).await else {
+        ctrl.log(format!(
+            "[{}] nothing to send - the publisher went away before a keyframe",
+            dest.id
+        ));
+        return Ok(());
+    };
     state.consumer_seq = first_idr.seq;
     state.input_ts_anchor = first_idr.ts_ms;
     state.output_ts_base = 0;
@@ -2313,7 +2322,13 @@ async fn pump_dest(
         if current_token != state.last_publisher_token {
             ctrl.log(format!("[{}] publisher reconnect - re-anchoring", dest.id));
             let watermark = ctrl.ring.latest_seq().unwrap_or(0);
-            let new_idr = wait_first_idr_after(&ctrl.ring, watermark).await;
+            let Some(new_idr) = wait_for_idr(ctrl, dest, Some(watermark)).await else {
+                ctrl.log(format!(
+                    "[{}] publisher went away again before re-anchoring",
+                    dest.id
+                ));
+                return Ok(());
+            };
             reseed_after_publisher_change(&mut state, new_idr);
             state.last_publisher_token = current_token;
             send_sequence_headers(ctrl, dest, &mut sink, state.output_ts_base).await?;
@@ -2972,28 +2987,47 @@ async fn send_sequence_headers(
     sink.flush().await
 }
 
-async fn wait_first_idr(ring: &Arc<DiskRing>) -> TagMeta {
+/// Wait for a usable IDR, or `None` when there is no longer any point in
+/// waiting: the publisher has gone, or this destination was asked to stop.
+///
+/// Giving up matters more than it looks. By the time a pump calls this it has
+/// already opened and authenticated an RTMP session to the platform, so a wait
+/// that never ends is the "live but frozen" state the rest of this file exists
+/// to avoid: the platform keeps the publish slot, viewers see a stalled
+/// stream, and nothing notices, because the task is alive and simply parked.
+/// The supervisor will not respawn a task that has not finished.
+///
+/// `min_seq` selects the two shapes this is used in: `None` for a fresh pump
+/// seeding at the newest keyframe, `Some(watermark)` for a pump re-anchoring
+/// after the publisher reconnected, which must not accept a keyframe from the
+/// session that just ended.
+///
+/// The periodic wake is not a poll for tags - `on_append` covers those. It is
+/// there because losing the publisher raises no append, so without it the
+/// escape condition would never be looked at.
+async fn wait_for_idr(
+    ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
+    min_seq: Option<u64>,
+) -> Option<TagMeta> {
     loop {
         // Register notification *before* checking - guarantees we don't
         // miss an append that lands between the check and the await.
-        let notified = ring.on_append.notified();
-        if let Some(m) = ring.newest_idr() {
-            return m;
+        let notified = ctrl.ring.on_append.notified();
+        let found = match min_seq {
+            Some(seq) => ctrl.ring.newest_idr_after(seq),
+            None => ctrl.ring.newest_idr(),
+        };
+        if let Some(m) = found {
+            return Some(m);
         }
-        notified.await;
-    }
-}
-
-/// Same as `wait_first_idr` but only returns IDRs with seq strictly
-/// greater than `min_seq`. Used after publisher reconnect to ignore the
-/// previous session's IDRs that are still indexed in the ring.
-async fn wait_first_idr_after(ring: &Arc<DiskRing>, min_seq: u64) -> TagMeta {
-    loop {
-        let notified = ring.on_append.notified();
-        if let Some(m) = ring.newest_idr_after(min_seq) {
-            return m;
+        if !ctrl.ingest_alive() || dest.shutdown_requested.load(Ordering::Relaxed) {
+            return None;
         }
-        notified.await;
+        tokio::select! {
+            _ = notified => {}
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+        }
     }
 }
 
@@ -3001,7 +3035,7 @@ async fn wait_first_idr_after(ring: &Arc<DiskRing>, min_seq: u64) -> TagMeta {
 /// already active and the ring has enough history, seed at the delayed
 /// position so the new pump joins mid-stream cleanly; otherwise fall
 /// back to the newest IDR (live edge).
-async fn seed_idr(ctrl: &Arc<Controller>) -> TagMeta {
+async fn seed_idr(ctrl: &Arc<Controller>, dest: &Arc<DestinationState>) -> Option<TagMeta> {
     let target = ctrl.target_delay_ms() as u64;
     if target > 0 {
         if let (Some(latest), Some(oldest)) = (ctrl.ring.latest_ts(), ctrl.ring.oldest_ts()) {
@@ -3011,12 +3045,12 @@ async fn seed_idr(ctrl: &Arc<Controller>) -> TagMeta {
             if latest.saturating_sub(oldest) + 1_500 >= target {
                 let desired = latest.saturating_sub(target);
                 if let Some(idr) = ctrl.ring.find_idr_near(desired, 2_000) {
-                    return idr;
+                    return Some(idr);
                 }
             }
         }
     }
-    wait_first_idr(&ctrl.ring).await
+    wait_for_idr(ctrl, dest, None).await
 }
 
 /// Re-anchor egress state after the publisher changed identity. Mirrors
@@ -3925,6 +3959,45 @@ mod tests {
             after <= before + 60_000,
             "a stray early tag moved the timeline to {after} from {before}"
         );
+    }
+
+    /// A pump that reaches the IDR wait has already opened and authenticated
+    /// a session to the platform. If it waits forever there, the platform
+    /// keeps the publish slot and viewers see a frozen stream, while nothing
+    /// in the app notices because the task is alive and merely parked - and
+    /// the supervisor will not respawn a task that has not finished.
+    #[tokio::test]
+    async fn the_idr_wait_gives_up_when_there_is_nothing_left_to_wait_for() {
+        let h = harness(0);
+        let dest = h.ctrl.destination_state("d1");
+
+        // No publisher and no keyframe: the wait must not hang.
+        assert!(!h.ctrl.ingest_alive());
+        let gave_up =
+            tokio::time::timeout(std::time::Duration::from_secs(2), seed_idr(&h.ctrl, &dest))
+                .await
+                .expect("the wait has to return, not hang");
+        assert!(gave_up.is_none(), "no publisher means no seed");
+
+        // The other exit: a publisher is live, but this destination was
+        // asked to stop before any keyframe arrived.
+        h.ctrl.mark_ingest_alive_for_test();
+        dest.shutdown_requested.store(true, Ordering::Relaxed);
+        let stopped =
+            tokio::time::timeout(std::time::Duration::from_secs(2), seed_idr(&h.ctrl, &dest))
+                .await
+                .expect("the wait has to return, not hang");
+        assert!(stopped.is_none(), "a stopping destination stops waiting");
+
+        // And when a keyframe does arrive it is still returned.
+        dest.shutdown_requested.store(false, Ordering::Relaxed);
+        feed_seconds(&h.ctrl, 0, 2, 30);
+        let seeded =
+            tokio::time::timeout(std::time::Duration::from_secs(2), seed_idr(&h.ctrl, &dest))
+                .await
+                .expect("returns")
+                .expect("a keyframe is present");
+        assert!(seeded.is_idr, "the seed has to be a keyframe");
     }
 
     /// The egress error path redacts the stream key before logging it. That

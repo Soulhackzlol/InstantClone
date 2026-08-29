@@ -8,15 +8,13 @@ All notable changes will land here. Format loosely follows
 
 ## [0.1.14] - Hotkeys and MIDI for the delay, plus IPv6 ingest
 
-> **Upgrading from 0.1.13.** InstantClone now always keeps its config, buffer
-> and log next to `instantclone.exe`. That is the fix for the "Access is
-> denied" crash when starting with Windows, which happened because a startup
-> entry hands the app `C:\Windows\System32` as its working folder. If you
-> used to launch InstantClone from somewhere else (a shortcut with a "Start
-> in" folder, or a terminal in a data directory) it will look like a fresh
-> install: your destinations and stream keys are not lost, they are still in
-> the `instantclone.config.json` in that old folder. Copy that file next to
-> the exe and restart to get everything back.
+> **Upgrading from 0.1.13.** Nothing to do. InstantClone now keeps its config,
+> buffer and log next to `instantclone.exe`, which is the fix for the "Access
+> is denied" crash when starting with Windows (a startup entry hands the app
+> `C:\Windows\System32` as its working folder). If you already run it from
+> somewhere else, that is left exactly as it is: an existing
+> `instantclone.config.json` in the folder you launch from keeps being the one
+> it uses, so your destinations and stream keys stay where they are.
 
 ### Drive the delay without alt-tabbing
 

@@ -5986,7 +5986,14 @@ async function midiSetDevice(name){
 async function midiToggleLearn(action){
   if (midiLearnAction === action){ await midiCancelLearn(); return; }
   if (midiLearnAction) await midiCancelLearn();
-  if (!midiAvailable){ midiSetWarn('Connect a MIDI controller first.'); return; }
+  // Re-check before refusing. midiAvailable is whatever the last poll saw,
+  // and the poll only runs during a learn - so a controller plugged in after
+  // this page was opened would otherwise be invisible until a reload, which
+  // is exactly the order a first-time user does things in.
+  if (!midiAvailable){
+    await midiPollOnce();
+    if (!midiAvailable){ midiSetWarn('Connect a MIDI controller first.'); return; }
+  }
   try {
     const j = await (await fetch('/midi/learn', {method:'POST', body:new URLSearchParams({action})})).json();
     if (!j.ok){ midiSetWarn(j.error || 'Could not start learn'); return; }
@@ -6026,6 +6033,12 @@ async function midiPollOnce(){
     midiLearnAction = null;
     midiStopPoll();
     midiRenderList();
+    // One more refresh a beat later. The listener needs a sweep to reopen the
+    // device now that a binding exists, and the response that told us the
+    // learn finished was taken before that - so without this the panel can
+    // settle on "another app has it open" at the end of a mapping that
+    // actually worked.
+    if (got) setTimeout(midiPollOnce, 700);
     if (was && !got){
       // The listener drops a learn nobody finished, so the field going back
       // to normal on its own needs a reason attached to it.
