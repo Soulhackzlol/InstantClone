@@ -245,6 +245,21 @@ fn main() -> std::io::Result<()> {
         // before it starts, so a mapped controller works from the first tick.
         ctrl.midi().update_from_settings(&settings);
 
+        // An update can leave the OBS entry we wrote pointing at the old
+        // shape of things. Someone who already registered should not have to
+        // notice a button changed back and press it again - repair it for
+        // them, quietly, and only if they registered in the first place.
+        match obs_register::refresh_stale_registration(settings.web_port, settings.ingest_port) {
+            None => {}
+            Some(Ok(())) => ctrl.log(
+                "[obs] the registered InstantClone service was out of date and has been refreshed",
+            ),
+            Some(Err(e)) => ctrl.log(format!(
+                "[obs] could not refresh the registered service ({e}); the dashboard's \
+                 Register button will repair it"
+            )),
+        }
+
         let (tx, rx) = watch::channel(settings.clone());
         let tx = Arc::new(tx);
 

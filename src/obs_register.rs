@@ -88,6 +88,43 @@ pub fn services_json_path() -> Option<PathBuf> {
 /// that as registered leaves the user with no way to notice or fix it.
 /// Reporting it as unregistered puts the Register button back, and
 /// `register` is remove-and-replace, so one click repairs it.
+/// Repair a registration the user already made, when a new build or a
+/// retuned port has left it pointing somewhere OBS cannot use.
+///
+/// Returns None when there is nothing to do, or `Some(result)` when a repair
+/// was attempted.
+///
+/// Two rules keep this from being a surprise:
+///
+/// - Only an entry that is already there. Someone who never pressed Register
+///   has not asked us to write into OBS's `services.json`, and an unregister
+///   removes the entry, so it stays removed.
+/// - Only while OBS is closed. OBS holds `services.json` in memory and
+///   rewrites it on exit, so repairing underneath a running OBS is undone a
+///   moment later and leaves the user worse off than not trying: the button
+///   would read registered while the file on disk says otherwise.
+///
+/// Everything else is the existing `register`, which is remove-and-replace,
+/// so this is exactly the click the dashboard would have asked for.
+pub fn refresh_stale_registration(web_port: u16, ingest_port: u16) -> Option<io::Result<()>> {
+    let path = services_json_path()?;
+    let file = fs::read_to_string(&path).ok()?;
+    if !should_refresh_registration(&file, web_port, ingest_port, is_obs_running()) {
+        return None;
+    }
+    Some(register(web_port, ingest_port))
+}
+
+/// The decision on its own, so it can be tested without an OBS install.
+fn should_refresh_registration(
+    file: &str,
+    web_port: u16,
+    ingest_port: u16,
+    obs_running: bool,
+) -> bool {
+    entry_exists(file) && !registration_is_current(file, web_port, ingest_port) && !obs_running
+}
+
 pub fn is_registered(web_port: u16, ingest_port: u16) -> bool {
     let Some(p) = services_json_path() else {
         return false;
@@ -1405,6 +1442,43 @@ mod tests {
         assert!(!entry.contains("rtmp://[::1]:1935/live"), "no v6 literal");
         // One server, so the user never has to pick.
         assert_eq!(entry.matches(r#""url": "rtmp://"#).count(), 1);
+    }
+
+    /// Updating should not leave someone with a service entry OBS cannot
+    /// reach and a button they have to notice and press. Repair it for them,
+    /// but only the entry they already asked for, and only when OBS is not
+    /// holding services.json in memory ready to write it back out.
+    #[test]
+    fn a_stale_entry_is_repaired_only_when_it_is_safe_to() {
+        let current = entry_json(7799, 1935);
+        let stale = current.replace("rtmp://localhost:1935/live", "rtmp://127.0.0.1:1935/live");
+        let file_current = format!(r#"{{"services":[{current}]}}"#);
+        let file_stale = format!(r#"{{"services":[{stale}]}}"#);
+        let file_none = r#"{"services":[{"name":"Twitch","servers":[]}]}"#;
+
+        assert!(
+            should_refresh_registration(&file_stale, 7799, 1935, false),
+            "an out-of-date entry the user registered is repaired"
+        );
+        assert!(
+            !should_refresh_registration(&file_stale, 7799, 1935, true),
+            "not while OBS is running - it would rewrite the file on exit"
+        );
+        assert!(
+            !should_refresh_registration(&file_current, 7799, 1935, false),
+            "an entry that is already right is left alone"
+        );
+        assert!(
+            !should_refresh_registration(file_none, 7799, 1935, false),
+            "someone who never registered is not signed up for us editing OBS"
+        );
+        // A retuned port is the same kind of staleness.
+        assert!(should_refresh_registration(
+            &file_current,
+            7799,
+            1936,
+            false
+        ));
     }
 
     /// An entry from an older build still carries our name while pointing

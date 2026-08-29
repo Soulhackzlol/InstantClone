@@ -8,14 +8,6 @@ All notable changes will land here. Format loosely follows
 
 ## [0.1.14] - Hotkeys and MIDI for the delay, plus IPv6 ingest
 
-> **Upgrading from 0.1.13.** Nothing to do. InstantClone now keeps its config,
-> buffer and log next to `instantclone.exe`, which is the fix for the "Access
-> is denied" crash when starting with Windows (a startup entry hands the app
-> `C:\Windows\System32` as its working folder). If you already run it from
-> somewhere else, that is left exactly as it is: an existing
-> `instantclone.config.json` in the folder you launch from keeps being the one
-> it uses, so your destinations and stream keys stay where they are.
-
 ### Drive the delay without alt-tabbing
 
 Arming a delay meant leaving the game to find the dashboard, which is the
@@ -96,6 +88,14 @@ on X for the idea!).
 Windows only for now. The config fields parse and round-trip everywhere, so
 a config shared with a Linux build stays valid, and the dashboard hides the
 sections on a build with no backend rather than showing dead controls.
+
+- **Updating repairs your OBS service entry by itself.** The entry
+  InstantClone writes into OBS carries the addresses OBS uses to reach it, so
+  a new build or a changed port could leave it pointing at the old shape and
+  put the **Register** button back, waiting for you to notice. If you had
+  registered before, it is now refreshed on startup instead. It only ever
+  touches an entry you already made, and only while OBS is closed, since OBS
+  rewrites that file from memory when it exits.
 
 ### Lock the dashboard down, and run it on Linux
 
