@@ -548,12 +548,20 @@ impl Drop for FlvWriter {
     }
 }
 
+/// Shorten a string to `max` characters for the fixed-width banner.
+///
+/// Characters, not bytes, on both counts. The path comes from `--file`,
+/// and a byte-offset slice lands inside a multi-byte character whenever a
+/// path long enough to need shortening has an accent straddling the cut.
+/// With `panic = "abort"` that is not a wrong line in a box, it is the
+/// sink refusing to start. The width the caller pads to (`{:<42}`) counts
+/// characters too, so measuring the same way is also what keeps the
+/// banner's right-hand border aligned.
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         return s.to_string();
     }
-    let mut out = String::with_capacity(max);
-    out.push_str(&s[..max.saturating_sub(1)]);
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
     out.push('…');
     out
 }
@@ -1373,3 +1381,41 @@ start();
 </script>
 </body></html>
 "##;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The banner shortens `--file` to fit a fixed-width box. Measuring in
+    /// bytes cut inside a multi-byte character, and with `panic = "abort"`
+    /// that aborted the process rather than printing a wrong line: the sink
+    /// would refuse to start for any path whose accent happened to straddle
+    /// the cut. Same bug the config redactors and `scrub_secret` had; this
+    /// was the last copy of it.
+    #[test]
+    fn truncate_cuts_on_characters_not_bytes() {
+        // The accent straddles byte 41, which is where the old code cut.
+        let path = format!(r"D:\Streams\Directos\Noche\{}ñ-partida.flv", "a".repeat(14));
+        assert!(
+            !path.is_char_boundary(41),
+            "the repro only means something while the cut lands mid-character"
+        );
+        let out = truncate(&path, 42);
+        assert_eq!(
+            out.chars().count(),
+            42,
+            "the caller pads by characters, so we must cut by them too"
+        );
+        assert!(out.ends_with('…'));
+
+        // Short input comes back whole, accents and all.
+        let short = r"D:\vídeos\a.flv";
+        assert_eq!(truncate(short, 42), short);
+
+        // Long in bytes, short in characters: it already fits the column,
+        // and the byte test used to shorten it for no reason.
+        let wide = "ñ".repeat(30);
+        assert_eq!(wide.len(), 60, "60 bytes");
+        assert_eq!(truncate(&wide, 42), wide, "but 30 characters, so it fits");
+    }
+}

@@ -237,6 +237,14 @@ the delay path.
   process down. Because the value was already saved, it then crashed again on
   every dashboard load until the config was hand-edited. Present since the
   first release.
+- **A recording path with an accent could stop the local sink from starting.**
+  `instantclone sink --file <path>` prints the path in a fixed-width banner,
+  shortening it to fit by counting bytes rather than characters. A path long
+  enough to need shortening whose accent happened to straddle the cut took the
+  process down before it ever listened. Same byte-versus-character mistake as
+  the key redaction above; this was the last copy of it in the codebase. The
+  banner's right-hand border now lines up for accented paths too, which it
+  never had. Present since the sink shipped.
 - **The overlay URL accepted more than a language code.** `/overlay?lang=`
   was written straight into the page it returns, so a crafted link could run
   script inside the overlay's page on InstantClone's own origin, which is

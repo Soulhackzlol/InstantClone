@@ -3754,7 +3754,14 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         // Empty means "every device", which is also what an unknown name
         // amounts to - the listener simply finds nothing to open and the
         // dashboard says so.
-        "midi_device" => s.midi_device = value.to_string(),
+        //
+        // Sanitised the same way the loader and the device lister do it. The
+        // dashboard only ever sends a name it got from the enumerated list,
+        // so this is about the two appliers agreeing rather than about a
+        // reachable bug: a name that survives one path and not the other
+        // matches no device, and the user sees a pick that silently does
+        // nothing until the next restart tidies it up.
+        "midi_device" => s.midi_device = config::sanitize_device_name(value),
         _ => {}
     }
 }
