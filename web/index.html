@@ -2813,6 +2813,7 @@ details.sys-collapse>summary .ic-label{margin:0}
           <input id="sec-pw" type="password" class="ic-input" placeholder="at least 8 characters" aria-label="New dashboard password" autocomplete="new-password" spellcheck="false">
           <button class="ic-btn ic-btn-primary" onclick="enableAuth(this,'sec-pw')">Enable</button>
         </div>
+        <div class="muted" style="font-size:11.5px;margin-top:8px">There is no reset link - one reachable over the network would not be much of a lock. If you forget it, delete the <code class="mono">dashboard_password_hash=</code> line from <code class="mono">instantclone.config.json</code> next to the app and restart.</div>
         <div class="muted" id="sec-off-msg" style="font-size:11.5px;margin-top:8px"></div>
       </div>
 
@@ -5437,7 +5438,7 @@ function renderLanWarning(){
   const hasKey = !!($('s-ingest-key') && $('s-ingest-key').value.trim());
   const parts = [];
   if (web && !_authEnabled) parts.push('The web UI has no password, so anyone on your network can change the delay, cut, and edit destinations. Set one in Security below.');
-  if (ingest && !hasKey) parts.push('The ingest port accepts any stream key, so anyone on your network can publish into your buffer. Set a required key in the OBS tab to lock it.');
+  if (ingest && !hasKey) parts.push('The ingest port accepts any stream key, so anyone on your network can publish into your buffer. Set a required key below to lock it.');
   const on = parts.length > 0;
   $('lan-warn').hidden = !on;
   if (on) $('lan-warn-text').textContent = parts.join(' ') + ' Only enable on a network you trust.';

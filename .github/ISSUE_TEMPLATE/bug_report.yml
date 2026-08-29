@@ -67,7 +67,7 @@ body:
       label: How to reproduce
       placeholder: |
         1. Open InstantClone
-        2. Start OBS streaming to rtmp://127.0.0.1:1935/live
+        2. Start OBS streaming to rtmp://localhost:1935/live
         3. Click Arm with 15s
         4. ...
 

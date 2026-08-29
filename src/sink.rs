@@ -113,7 +113,7 @@ To use this with the proxy:
     2. Run `instantclone` in another terminal
     3. In the web UI, set platform → \"Custom\" and URL to
        rtmp://127.0.0.1:1936/live/test
-    4. Point OBS at rtmp://127.0.0.1:1935/live"
+    4. Point OBS at rtmp://localhost:1935/live"
     );
 }
 
