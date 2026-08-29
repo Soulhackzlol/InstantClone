@@ -5951,11 +5951,22 @@ function midiRenderDevices(){
     note.textContent = 'No MIDI controller detected. Connect one and it shows up here.';
   } else if (midiListening.length){
     note.textContent = 'Listening to: ' + midiListening.join(', ');
-  } else if (midiSelected){
+  } else if (midiSelected && !midiDevices.includes(midiSelected)){
     note.textContent = `"${midiSelected}" isn't connected, so nothing is listening.`;
+  } else if (!anyMidiBound()){
+    // Nothing is held open until something is bound - that is deliberate, so
+    // a controller stays usable by your DAW until you actually map a pad.
+    note.textContent = 'Detected ' + midiDevices.join(', ') + '. Press Learn on an action to map it.';
   } else {
     note.textContent = 'Detected ' + midiDevices.join(', ') + ', but another app has it open.';
   }
+}
+
+// Whether any action currently has a MIDI control mapped. Drives the idle
+// note: with nothing bound we hold no device open on purpose, which is not
+// the same thing as another app having taken it.
+function anyMidiBound(){
+  return Object.values(midiBindings || {}).some(v => v);
 }
 
 async function midiSetDevice(name){
@@ -6003,7 +6014,7 @@ async function midiPollOnce(){
   let j;
   try { j = await (await fetch('/midi/poll', {method:'POST'})).json(); }
   catch(e){ return; }
-  midiAvailable = !!j.available;
+  midiAvailable = !!j.connected;
   midiDevices = j.devices || [];
   midiListening = j.listening || [];
   midiSelected = j.device || '';
@@ -6073,7 +6084,7 @@ window.addEventListener('pagehide', () => {
 async function midiInit(){
   try {
     const j = await (await fetch('/midi/poll', {method:'POST'})).json();
-    midiAvailable = !!j.available;
+    midiAvailable = !!j.connected;
     midiDevices = j.devices || [];
     midiListening = j.listening || [];
     midiSelected = j.device || '';

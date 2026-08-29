@@ -86,7 +86,7 @@ Clave:     main          (vale cualquier texto)
 
 El modo multipista "Auto" funciona de fábrica. Tus claves reales van en la pestaña **Destinos**, no en OBS.
 
-<sub>¿Prefieres manual? Servicio <b>Personalizado</b>, Servidor <code>rtmp://127.0.0.1:1935/live</code>, Clave <code>main</code>.</sub>
+<sub>¿Prefieres manual? Servicio <b>Personalizado</b>, Servidor <code>rtmp://localhost:1935/live</code>, Clave <code>main</code>.</sub>
 
 </td>
 </tr>
@@ -108,7 +108,7 @@ El modo multipista "Auto" funciona de fábrica. Tus claves reales van en la pest
 > El Firewall de Windows preguntará al primer arranque porque el proxy escucha en <code>:1935</code> (RTMP) y <code>:7799</code> (web). Permítelo solo en **redes privadas**.
 
 > [!WARNING]
-> Solo Windows 10/11. macOS y Linux no están soportados, probados ni empaquetados.
+> Windows 10/11 y Linux (x86-64) están soportados. En Linux funciona headless en un VPS o en un escritorio Ubuntu; el panel web del navegador es la superficie de control (no hay bandeja nativa). macOS todavía no está soportado.
 
 <br/>
 
@@ -334,7 +334,7 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 **E/S de disco síncrona en la ruta caliente de escritura al anillo, por elección.** La escritura con buffer aterriza en la caché de páginas del SO en microsegundos y el kernel vacía en segundo plano, así que la caché de páginas ya es el buffer asíncrono; el índice y los bytes avanzan bajo un solo lock para que un lector nunca vea una etiqueta cuyos bytes aún no están en disco.
 
-**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **358 tests, todos en verde.**
+**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **378 tests, todos en verde.**
 
 </details>
 
@@ -344,11 +344,11 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 358 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
+**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 378 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
 
 **Lo áspero, con honestidad**
 
-- **Solo Windows por ahora.** Varios módulos (bandeja, pre-flight de puerto, muestreo de RSS) usan rutas específicas de Windows. Hay una versión para Linux (incluida una variante headless/terminal para servidor) en la hoja de ruta; macOS aún no está planeado.
+- **Sin bandeja nativa en Linux.** En Windows hay un icono en la bandeja del sistema; en Linux la superficie de control es el panel web (Salir y Reiniciar están en su pestaña Sistema). macOS aún no está soportado.
 - **La escalera de transcodificado no está garantizada sin EB.** Solo los Twitch Partner tienen slot de transcodificado siempre; el resto se queda en Source-Only, donde algunos decodificadores por hardware fallan por encima de ~8 Mbps (es el comportamiento de asignación de Twitch, no del proxy). Para una escalera garantizada usa Enhanced Broadcasting; si no, mantén el bitrate cerca de ~6000 Kbps.
 - **Servidor HTTP hecho a mano.** Binario más pequeño que con `hyper`, pero soy dueño de toda la superficie HTTP. A revisar si crece.
 
@@ -422,7 +422,7 @@ Sí, ambas cosas. Cinco acciones - delay on/off, armar, activar, cortar a direct
 
 <br/>
 
-Windows 10/11 por ahora. Hay una **versión para Linux en la hoja de ruta**, incluida una variante headless/terminal para servidores sin escritorio. macOS aún no está planeado. Algunas partes (bandeja, pre-flight de puerto, muestreo de memoria) usan código específico de Windows que primero hay que portar.
+Windows 10/11 y **Linux (x86-64)** lo ejecutan. En Linux funciona headless en un VPS o en un escritorio Ubuntu, gobernado desde el panel web (no hay bandeja nativa, así que Salir y Reiniciar viven en la pestaña Sistema del panel). Para una instalación expuesta a la red, activa la contraseña opcional del panel y acompáñala de TLS mediante un proxy inverso. macOS aún no está soportado.
 
 </details>
 

@@ -74,7 +74,28 @@ impl MidiState {
     pub fn available(&self) -> bool {
         !self.listening.lock().is_empty()
     }
-    #[cfg(windows)]
+
+    /// Whether there is a controller we *could* listen to.
+    ///
+    /// Distinct from `available`, which says whether a device is open right
+    /// now. Since devices are only held while a binding exists or a learn is
+    /// running, a fresh install with no bindings has nothing open - so
+    /// gating "record a binding" on `available` would mean the first binding
+    /// could never be made. Learn is gated on this instead: the sweep opens
+    /// the device once the learn is armed.
+    pub fn connected(&self) -> bool {
+        let selected = self.selected_device();
+        let devices = self.devices.lock();
+        if selected.is_empty() {
+            !devices.is_empty()
+        } else {
+            devices.contains(&selected)
+        }
+    }
+    /// Pure state, no Win32: built everywhere so the tests that drive the
+    /// device list run on every CI target, even though only the Windows
+    /// listener calls it.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn set_devices(&self, present: Vec<String>, listening: Vec<String>) {
         *self.devices.lock() = present;
         *self.listening.lock() = listening;
@@ -178,8 +199,9 @@ impl MidiState {
             )
         };
         format!(
-            r#"{{"available":{a},"learning":{l},"devices":[{d}],"listening":[{li}],"device":{sel},"bindings":{b}}}"#,
+            r#"{{"available":{a},"connected":{c},"learning":{l},"devices":[{d}],"listening":[{li}],"device":{sel},"bindings":{b}}}"#,
             a = self.available(),
+            c = self.connected(),
             l = learning,
             d = devices.join(","),
             li = listening.join(","),
@@ -635,6 +657,52 @@ mod tests {
         assert_eq!(ctrl.target_delay_ms(), 0, "toggle turned the delay off");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The first binding on a fresh install has to be recordable.
+    ///
+    /// Devices are only held open once something is bound, so "is a device
+    /// open" and "is a controller plugged in" are different questions, and
+    /// gating learn on the first one deadlocks: no binding means no open
+    /// device means learn is refused means no binding can ever be made.
+    /// This is the end-to-end shape of that, which testing the two halves
+    /// separately does not catch.
+    #[test]
+    fn a_fresh_install_can_still_record_its_first_binding() {
+        let state = MidiState::new();
+        let midi = crate::config::MidiBindings::default();
+
+        // Fresh install: a controller is plugged in, nothing is bound yet.
+        state.set_devices(vec!["Launchpad MK2".to_string()], Vec::new());
+        assert!(
+            !should_hold_devices(false, &midi),
+            "nothing bound: the controller stays free for other software"
+        );
+        assert!(!state.available(), "so nothing is open");
+        assert!(
+            state.connected(),
+            "but a controller IS there, which is what learn needs to know"
+        );
+
+        // Arming a learn is what asks for the device.
+        state.start_learn("arm");
+        assert!(
+            should_hold_devices(state.learning().is_some(), &midi),
+            "an armed learn opens the device so the press can be heard"
+        );
+
+        // A device the user selected but never plugged in is still refused.
+        let picky = MidiState::new();
+        let mut s = crate::config::Settings::defaults();
+        s.midi_device = "Deck B".to_string();
+        picky.update_from_settings(&s);
+        picky.set_devices(vec!["Deck A".to_string()], Vec::new());
+        assert!(
+            !picky.connected(),
+            "the chosen device is not plugged in, so there is nothing to learn from"
+        );
+        picky.set_devices(vec!["Deck A".into(), "Deck B".into()], Vec::new());
+        assert!(picky.connected(), "plugging it in makes learn available");
     }
 
     /// A MIDI input is an exclusive device: while InstantClone holds one,

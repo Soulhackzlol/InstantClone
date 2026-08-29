@@ -1707,24 +1707,45 @@ fn redact_webhook(url: &str) -> String {
     // Discord webhook URLs are: https://discord.com/api/webhooks/<id>/<token>
     // Keep first 8 + last 4 of the token so the user can recognize it
     // without exposing it to a screen-share.
-    if let Some(i) = url.rfind('/') {
-        let (base, token) = url.split_at(i + 1);
-        if token.len() > 16 {
-            return format!("{}{}…{}", base, &token[..8], &token[token.len() - 4..]);
-        }
+    elide_after_last_slash(url, 16, 8, 4)
+}
+
+/// Keep the first `head` and last `tail` CHARACTERS of the segment after the
+/// last '/', eliding the middle. Anything `min_chars` or shorter is returned
+/// unchanged - a short value is a placeholder, not a secret worth hiding.
+///
+/// Characters, never bytes. These are user-supplied strings that only have to
+/// satisfy a scheme check, so a multi-byte character can sit at any offset.
+/// Slicing one by byte offset panics, and under `panic = "abort"` that is the
+/// whole process - mid-stream, and then again on every dashboard load, because
+/// the offending value is already saved to disk. Three copies of this had the
+/// bug; there is one now.
+pub fn elide_after_last_slash(url: &str, min_chars: usize, head: usize, tail: usize) -> String {
+    let Some(i) = url.rfind('/') else {
+        return url.to_string();
+    };
+    let (base, secret) = url.split_at(i + 1);
+    let chars: Vec<char> = secret.chars().collect();
+    if chars.len() <= min_chars || chars.len() < head + tail {
+        return url.to_string();
     }
-    url.to_string()
+    let front: String = chars[..head].iter().collect();
+    let back: String = chars[chars.len() - tail..].iter().collect();
+    format!("{base}{front}…{back}")
 }
 
 fn redact_key(url: &str) -> String {
     // Find last '/' and keep first 4 + last 4 of whatever follows.
+    let elided = elide_after_last_slash(url, 12, 4, 4);
+    if elided != url {
+        return elided;
+    }
+    // Short but present: show the opening few characters only.
     if let Some(i) = url.rfind('/') {
         let (base, key) = url.split_at(i + 1);
-        if key.len() > 12 {
-            return format!("{}{}…{}", base, &key[..4], &key[key.len() - 4..]);
-        }
         if !key.is_empty() {
-            return format!("{}{}…", base, &key[..key.len().min(4)]);
+            let front: String = key.chars().take(4).collect();
+            return format!("{base}{front}…");
         }
     }
     url.to_string()
@@ -3003,6 +3024,54 @@ mod tests {
             s.target_delay_ms
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A stream key, webhook token or egress URL is user-supplied text that
+    /// only has to satisfy a scheme check, so a multi-byte character can sit
+    /// anywhere in it. Redaction used to slice at byte offsets: under
+    /// `panic = "abort"` that ends the process mid-stream, and then again on
+    /// every dashboard load, because the value is already on disk.
+    #[test]
+    fn redaction_survives_non_ascii_secrets() {
+        // The exact shape that aborted the process.
+        let jp = "rtmp://h/app/日本語テストテスト";
+        let out = redact_key(jp);
+        assert!(out.starts_with("rtmp://h/app/"), "{out}");
+        assert!(out.contains('…'), "{out}");
+        assert!(
+            !out.contains("語テストテス"),
+            "the middle must be hidden: {out}"
+        );
+
+        // Emoji are 4 bytes each, and combining marks push char != grapheme.
+        assert!(redact_key("rtmp://h/app/🎥🎥🎥🎥🎥🎥🎥🎥🎥🎥🎥🎥🎥").contains('…'));
+        // Both sides of the 16-CHARACTER threshold. The short one is the
+        // sharper case: byte-length said 45 and sliced; char-length says 15
+        // and leaves it alone.
+        let short_token = "https://discord.com/api/webhooks/1/日本語テストテストテストテスト";
+        assert_eq!(
+            redact_webhook(short_token),
+            short_token,
+            "15 chars, untouched"
+        );
+        let long_token =
+            "https://discord.com/api/webhooks/1/日本語テストテストテストテストテストテスト";
+        assert!(redact_webhook(long_token).contains('…'), "21 chars, elided");
+
+        // Short, non-empty, non-ASCII: the other branch that byte-sliced.
+        let short = redact_key("rtmp://h/app/日本");
+        assert!(short.ends_with('…'), "{short}");
+
+        // Nothing after the slash, and no slash at all, stay unchanged.
+        assert_eq!(redact_key("rtmp://h/app/"), "rtmp://h/app/");
+        assert_eq!(redact_key("no-slashes-here"), "no-slashes-here");
+
+        // ASCII behaviour is unchanged.
+        assert_eq!(
+            redact_key("rtmp://h/app/live_123456789_abcdefgh"),
+            "rtmp://h/app/live…efgh"
+        );
+        assert_eq!(redact_key("rtmp://h/app/short"), "rtmp://h/app/shor…");
     }
 
     /// Signatures arrive from a driver string and from hand-edited config

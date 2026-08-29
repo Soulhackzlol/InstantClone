@@ -89,6 +89,32 @@ Windows only for now. The config fields parse and round-trip everywhere, so
 a config shared with a Linux build stays valid, and the dashboard hides the
 sections on a build with no backend rather than showing dead controls.
 
+### Lock the dashboard down, and run it on Linux
+
+Two things this release ships that are easy to miss, because neither is on
+the delay path.
+
+- **Optional dashboard password.** Off by default and nothing changes if you
+  leave it that way. Turn it on in **System → Network** when the dashboard is
+  reachable from anywhere but your own machine. Hashed with PBKDF2-SHA256 and
+  a per-install salt, with rate limiting and a lockout after repeated failed
+  attempts; the first password can only be set from the local machine.
+  **If you forget it,** delete the `dashboard_password_hash=` line from
+  `instantclone.config.json` next to the exe and restart. There is no reset
+  button, by design: a reset button reachable from the network is not a lock.
+- **Optional ingest key.** Also in **System → Network**. Requires OBS to send
+  a matching stream key before a publish is accepted, which is what stops a
+  second machine on your LAN from pushing into your delay when you have
+  turned on "listen on all interfaces".
+- **OBS dock token.** The dock gets its own least-privilege credential rather
+  than your password, so a docked panel inside OBS cannot change settings.
+- **Linux (x86-64) builds are published.** `instantclone-v0.1.14-linux-x64`
+  runs headless on a VPS or on an Ubuntu desktop. There is no system tray
+  there, so the dashboard is the whole control surface and Quit and Restart
+  live in its System tab. Global hotkeys and MIDI stay Windows-only, since
+  both sit on Win32 APIs. For anything network-facing, pair the dashboard
+  password with TLS through a reverse proxy.
+
 ### Fixes
 
 - **Nothing to delay now means nothing happens, and it says so.** With no
@@ -193,6 +219,26 @@ sections on a build with no backend rather than showing dead controls.
   unattended-relay case rather than the streamer one. Found by a new
   10,000-hour simulation, not in the wild.
 
+- **A stream key or webhook URL with non-Latin characters crashed the app.**
+  The redaction that hides a key on the dashboard counted bytes where it
+  should have counted characters, so a value containing any multi-byte
+  character (Japanese, Cyrillic, an emoji) cut one in half and took the whole
+  process down. Because the value was already saved, it then crashed again on
+  every dashboard load until the config was hand-edited. Present since the
+  first release.
+- **The overlay URL accepted more than a language code.** `/overlay?lang=`
+  was written straight into the page it returns, so a crafted link could run
+  script inside the overlay's page on InstantClone's own origin, which is
+  enough to read your stream key or repoint a destination. The language is
+  now checked against the list we actually have translations for, the same
+  way the style parameter already was. Present since overlays shipped.
+- **Video could be pushed into the delay without publishing first.** The
+  stream key, and the optional ingest key with it, is checked when a client
+  sends RTMP `publish`. A client that skipped that command and sent video
+  frames anyway had them accepted, so the ingest key could be walked around
+  and a second sender could interleave frames into your buffer. Media is now
+  ignored until the connection has published. Only reachable with "listen on
+  all interfaces" turned on. Present since the first release.
 - **A stray early timestamp could empty the buffer at any moment.** The
   same 49.7-day arithmetic had a second way in that needed no waiting: a tag
   stamped before the session's first one has no earlier cycle to belong to,
@@ -201,6 +247,12 @@ sections on a build with no backend rather than showing dead controls.
   to the ingest port, not only after seven weeks of uptime. The first tag of
   a session now sets the timeline and anything stamped before it is pinned
   to the present rather than launched past it.
+- **Recording your first MIDI binding works on a fresh install.** Devices are
+  only held open once something is bound to them, but the Learn button was
+  checking whether a device was open rather than whether one was plugged in,
+  so on a config with no bindings yet the two waited on each other and the
+  first mapping could never be made. Caught by a pre-release review, not in
+  the wild.
 - **The tray drops its "Launch OBS (VOD + EB)" item.** It came from before
   the InstantClone service existed, when Enhanced Broadcasting on a custom
   RTMP server had to be switched on by launching OBS with a `--config-url`

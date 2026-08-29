@@ -2607,7 +2607,11 @@ async fn post_midi_learn(
             r#"{"ok":false,"error":"unknown action"}"#.into(),
         );
     }
-    if !ctrl.midi().available() {
+    // Deliberately `connected` and not `available`: nothing is held open
+    // until a binding exists, so gating on "a device is open" would make the
+    // very first binding impossible to record. Arming the learn is what
+    // causes the device to be opened.
+    if !ctrl.midi().connected() {
         // Two different problems wear the same "not available" flag, and
         // telling someone to connect a controller they can see plugged in
         // is the least useful thing we could say.
@@ -3241,13 +3245,7 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
 }
 
 fn redact_url(url: &str) -> String {
-    if let Some(i) = url.rfind('/') {
-        let (base, key) = url.split_at(i + 1);
-        if key.len() > 12 {
-            return format!("{}{}…{}", base, &key[..4], &key[key.len() - 4..]);
-        }
-    }
-    url.to_string()
+    crate::config::elide_after_last_slash(url, 12, 4, 4)
 }
 
 fn json_escape_quoted(s: &str) -> String {
@@ -4144,6 +4142,17 @@ fn overlay_html(query: &str) -> String {
         "minimal" | "corner" | "strip" | "focus" | "broadcast" | "ticker" => style,
         _ => "minimal",
     };
+    // Same treatment, and for a sharper reason: `lang` is written into the
+    // page's own `<html lang="...">` attribute below. This route is public
+    // and needs no auth, so an unvalidated value is a reflected-XSS hole -
+    // one clicked link and script runs on our origin, which is same-origin
+    // for the CSRF check and can read the stream key or repoint the egress.
+    // An allow-list, not escaping: these are the languages we have strings
+    // for, so anything else has no business reaching the page.
+    let lang = match lang {
+        "en" | "es" | "pt" | "fr" | "de" => lang,
+        _ => "en",
+    };
 
     let (l_delay, _l_live, l_preparing, l_ready, l_active, l_passthrough) = match lang {
         "es" => (
@@ -4894,6 +4903,51 @@ mod tests {
         assert!(accepts_gzip(
             "GET / HTTP/1.1\r\nAccept-Encoding: gzip;q=0.5, deflate\r\n"
         ));
+    }
+
+    /// `/overlay` needs no auth, and its `lang` is written into the page's
+    /// own `<html lang="...">`. An unvalidated value there is reflected XSS
+    /// on our own origin: script that runs there passes the same-origin CSRF
+    /// check, so it can read the stream key or repoint the egress. Both
+    /// query parameters are allow-listed; neither is escaped and reflected.
+    #[test]
+    fn overlay_query_parameters_cannot_reach_the_page() {
+        for probe in [
+            r#"en"><script>alert(1)</script>"#,
+            r#"en" onload="evil()"#,
+            "../../etc/passwd",
+            "<img src=x onerror=y>",
+            "en'",
+        ] {
+            let enc: String = probe
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_string()
+                    } else {
+                        format!("%{:02X}", c as u32)
+                    }
+                })
+                .collect();
+            for key in ["lang", "style"] {
+                let html = overlay_html(&format!("{key}={enc}"));
+                assert!(
+                    !html.contains(probe),
+                    "{key}={probe:?} was reflected into the page"
+                );
+                assert!(
+                    !html.contains("<script>alert"),
+                    "{key}={probe:?} injected a script tag"
+                );
+            }
+        }
+
+        // The languages we do have strings for still work.
+        assert!(overlay_html("lang=es").contains(r#"<html lang="es""#));
+        assert!(
+            overlay_html("lang=zz").contains(r#"<html lang="en""#),
+            "unknown falls back"
+        );
     }
 
     #[test]
