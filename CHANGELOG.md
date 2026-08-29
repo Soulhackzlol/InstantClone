@@ -6,7 +6,7 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
-## [0.1.14] - Hotkeys and MIDI for the delay, plus IPv6 ingest
+## [0.1.14] - Hotkeys and MIDI for the delay, a dashboard password, and Linux builds
 
 ### Drive the delay without alt-tabbing
 
