@@ -46,11 +46,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics,
     GetWindowLongPtrW, KillTimer, LoadIconW, LookupIconIdFromDirectoryEx, MessageBoxW,
-    PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer,
-    SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, GWLP_USERDATA, HMENU, IDI_APPLICATION,
-    IDYES, LR_DEFAULTCOLOR, MB_ICONWARNING, MB_YESNO, MF_DISABLED, MF_GRAYED, MF_SEPARATOR,
-    MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
-    WM_APP, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow,
+    SetTimer, SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, GWLP_USERDATA, HMENU,
+    IDI_APPLICATION, IDYES, LR_DEFAULTCOLOR, MB_ICONWARNING, MB_YESNO, MF_DISABLED, MF_GRAYED,
+    MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_RBUTTONUP,
+    WM_TIMER, WNDCLASSW,
 };
 
 const TRAY_MSG: u32 = WM_APP + 1;
@@ -96,6 +97,11 @@ fn hotkey_action(id: i32) -> Option<&'static str> {
 /// the tokio side can post `HOTKEY_RELOAD_MSG` to it. 0 means "not up yet",
 /// in which case a reload request is a safe no-op.
 static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// The shell broadcasts `TaskbarCreated` when the notification area appears -
+/// at logon once explorer is ready, and again every time explorer restarts.
+/// Registered at startup, read in the window procedure; 0 until then.
+static TASKBAR_CREATED_MSG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 // Menu item IDs. Kept above 0x100 so they can't collide with system IDs.
 const ID_OPEN_DASH: usize = 0x101;
@@ -189,7 +195,10 @@ fn run(
             return Err("CreateWindowExW failed".into());
         }
 
-        // Park state on the window so the WNDPROC can find it.
+        // Park state on the window so the WNDPROC can find it. Keep a handle
+        // to the controller first: the state is moved in, and the icon path
+        // below still needs somewhere to report to.
+        let log_ctrl = ctrl.clone();
         let state = Box::new(TrayState {
             web_url,
             dock_url,
@@ -213,14 +222,33 @@ fn run(
         nid.hIcon = h_icon;
         write_wide(&mut nid.szTip, "InstantClone - click for menu");
 
-        if Shell_NotifyIconW(NIM_ADD, &nid) == 0 {
-            return Err("Shell_NotifyIconW(NIM_ADD) failed".into());
-        }
-
-        // Publish the handle so `request_hotkey_reload` can post to us, then
-        // bind whatever hotkeys the user already has configured.
+        // Publish the handle and bind the hotkeys BEFORE touching the shell,
+        // and never let the icon decide whether the rest of this thread runs.
+        //
+        // `Shell_NotifyIconW(NIM_ADD)` legitimately fails at logon when the
+        // notification area does not exist yet - which is exactly the
+        // start-with-Windows path this release exists to fix. Aborting here
+        // used to mean no icon, no hotkeys (TRAY_HWND stayed 0, so nothing
+        // could ever register), no balloons, and with `windows_subsystem =
+        // "windows"` no console and no way to quit: an invisible process with
+        // the headline feature dead and nothing on screen to say why.
         TRAY_HWND.store(hwnd as isize, Ordering::Release);
         register_hotkeys(hwnd);
+
+        // Ask the shell to tell us when the notification area shows up, then
+        // try once now. Either the icon appears, or TaskbarCreated brings us
+        // back - which also covers explorer restarting mid-session, after
+        // which the icon used to be gone for good.
+        TASKBAR_CREATED_MSG.store(
+            RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
+            Ordering::Release,
+        );
+        if Shell_NotifyIconW(NIM_ADD, &nid) == 0 {
+            log_ctrl.log(
+                "[tray] the notification area is not ready; hotkeys are live and the icon \
+                 will appear when it is",
+            );
+        }
 
         // Message loop until WM_QUIT (PostQuitMessage from the Quit handler
         // or DefWindowProc on WM_DESTROY).
@@ -284,6 +312,14 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             if ev == WM_LBUTTONUP || ev == WM_RBUTTONUP {
                 show_menu(hwnd);
             }
+            0
+        }
+        // The notification area (re)appeared: at logon after explorer was
+        // ready, or because explorer restarted and took our icon with it.
+        // Re-adding is idempotent from our side - the shell has no record of
+        // the old one either way.
+        m if m != 0 && m == TASKBAR_CREATED_MSG.load(Ordering::Acquire) => {
+            readd_tray_icon(hwnd);
             0
         }
         // Global hotkey fired. wParam is the RegisterHotKey id from the
@@ -584,6 +620,26 @@ unsafe fn show_menu(hwnd: HWND) {
     // standard Win32 dance.
     PostMessageW(hwnd, 0, 0, 0);
     DestroyMenu(menu);
+}
+
+/// Put our icon back in the notification area. Called when the shell says
+/// the area exists, which is both the logon race and an explorer restart.
+///
+/// Builds the descriptor fresh rather than caching one: the only fields that
+/// matter are the window, the id and the callback message, and re-deriving
+/// them is cheaper than keeping a `NOTIFYICONDATAW` alive across threads.
+unsafe fn readd_tray_icon(hwnd: HWND) {
+    let h_icon =
+        load_embedded_icon().unwrap_or_else(|| LoadIconW(ptr::null_mut(), IDI_APPLICATION));
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = TRAY_MSG;
+    nid.hIcon = h_icon;
+    write_wide(&mut nid.szTip, "InstantClone - click for menu");
+    Shell_NotifyIconW(NIM_ADD, &nid);
 }
 
 /// One-line summary of the controller's current state. Read on every

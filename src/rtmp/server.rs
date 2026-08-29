@@ -119,6 +119,8 @@ async fn handle(
         active: false,
     };
 
+    // One warning per connection for media sent without publishing.
+    let mut warned_unpublished = false;
     loop {
         let msg = reader.read_message().await?;
         // librtmp's window-ack rule: fire BYTES_READ_REPORT once we've
@@ -143,10 +145,17 @@ async fn handle(
         // the cached one that is replayed on every cut and reconnect. A
         // conforming client always publishes first, so this costs nothing.
         if ignore_before_publish(guard.active, msg.type_id) {
-            ctrl.log(format!(
-                "[ingest] ignored a type-{} message from {peer_ip} that never published",
-                msg.type_id
-            ));
+            // Once per connection, not once per message. Reaching this needs
+            // only TCP plus the handshake, and a peer can manufacture a
+            // complete message per wire byte - which would evict the whole
+            // bounded log ring at line rate, destroying the very evidence
+            // someone would use to work out what was happening.
+            if !warned_unpublished {
+                warned_unpublished = true;
+                ctrl.log(format!(
+                    "[ingest] {peer_ip} is sending media without publishing; ignoring it"
+                ));
+            }
             continue;
         }
         match msg.type_id {

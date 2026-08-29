@@ -8,6 +8,16 @@ All notable changes will land here. Format loosely follows
 
 ## [0.1.14] - Hotkeys and MIDI for the delay, plus IPv6 ingest
 
+> **Upgrading from 0.1.13.** InstantClone now always keeps its config, buffer
+> and log next to `instantclone.exe`. That is the fix for the "Access is
+> denied" crash when starting with Windows, which happened because a startup
+> entry hands the app `C:\Windows\System32` as its working folder. If you
+> used to launch InstantClone from somewhere else (a shortcut with a "Start
+> in" folder, or a terminal in a data directory) it will look like a fresh
+> install: your destinations and stream keys are not lost, they are still in
+> the `instantclone.config.json` in that old folder. Copy that file next to
+> the exe and restart to get everything back.
+
 ### Drive the delay without alt-tabbing
 
 Arming a delay meant leaving the game to find the dashboard, which is the
@@ -38,8 +48,8 @@ on X for the idea!).
   disguise and is ignored, and a control change only counts as a press at
   value 64 or above, so releasing a button never double-fires. Both paths
   route through the same action handler as the keyboard, so a pad and a
-  hotkey behave identically. Note: I'll call this "Experimental" since It's not
-  fully tested YET.
+  hotkey behave identically. Marked experimental for this release: it works,
+  but it has had far less real-world use than the rest of the app.
 - **One control, one action.** Binding a combo or a pad that another action
   already holds moves it, rather than leaving a second entry that the
   dashboard shows as bound and that could never fire: Windows refuses the
@@ -1645,7 +1655,13 @@ See `0.1.0` below for the full feature list.
   port pre-flight, and process / RSS sampler have Windows-specific paths.
 - No automated release pipeline yet. Build from source per the README.
 
-[Unreleased]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.14...HEAD
+[0.1.14]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.13...v0.1.14
+[0.1.13]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.12...v0.1.13
+[0.1.12]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.11...v0.1.12
+[0.1.11]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.10...v0.1.11
+[0.1.10]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.9...v0.1.10
+[0.1.9]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.0...v0.1.6

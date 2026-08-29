@@ -1067,8 +1067,25 @@ impl Settings {
                 i,
                 one_line(&d.custom_egress_url)
             )?;
-            writeln!(f, "destination.{}.twitch_ingest={}", i, d.twitch_ingest)?;
-            writeln!(f, "destination.{}.youtube_ingest={}", i, d.youtube_ingest)?;
+            // one_line, like every other free-text field here: these two are
+            // written into a newline-delimited config file that is parsed back
+            // as privileged state, so a value carrying a newline would inject
+            // whole settings lines of its own - dashboard_password_hash and
+            // web_bind_all among them, which is a dashboard takeover that
+            // walks straight around the loopback-only rule on setting the
+            // first password.
+            writeln!(
+                f,
+                "destination.{}.twitch_ingest={}",
+                i,
+                one_line(&d.twitch_ingest)
+            )?;
+            writeln!(
+                f,
+                "destination.{}.youtube_ingest={}",
+                i,
+                one_line(&d.youtube_ingest)
+            )?;
             // VOD audio knobs. Defaults (false/false) are written only
             // when set so a downgrade to a pre-Phase-B build still
             // parses cleanly (apply_field's `_ => {}` arm drops keys
@@ -2980,6 +2997,62 @@ mod tests {
                 "a press on {raw:?} did not match its own binding"
             );
         }
+    }
+
+    /// The config file is newline-delimited and is parsed back as privileged
+    /// state, so every free-text field written into it has to be flattened.
+    /// A newline in one would inject whole settings lines of its own.
+    #[test]
+    fn no_destination_field_can_inject_a_config_line() {
+        let mut s = Settings::defaults();
+        let mut d = Destination {
+            id: "d1".into(),
+            name: "Main\nweb_bind_all=true".into(),
+            enabled: true,
+            platform: "twitch".into(),
+            stream_key: "k\nauth_enabled=true".into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: "fra\ndashboard_password_hash=pbkdf2-sha256$1$00$deadbeef".into(),
+            youtube_ingest: "backup\nweb_port=9999".into(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: String::new(),
+            audio_track: "auto".into(),
+        };
+        d.name = d.name.clone();
+        s.destinations = vec![d];
+
+        let path = std::env::temp_dir().join(format!(
+            "ic-inject-{}-{}.conf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        s.save(&path).expect("save");
+        let written = std::fs::read_to_string(&path).expect("read back");
+
+        for injected in [
+            "dashboard_password_hash=",
+            "web_bind_all=true",
+            "auth_enabled=true",
+            "web_port=9999",
+        ] {
+            assert!(
+                !written
+                    .lines()
+                    .any(|l| l.trim_start().starts_with(injected)),
+                "a destination field injected `{injected}` as its own line:\n{written}"
+            );
+        }
+
+        // And nothing it injected survives a reload as a real setting.
+        let back = Settings::load_or_default(&path);
+        assert!(back.dashboard_password_hash.is_empty());
+        assert!(!back.web_bind_all);
+        assert_eq!(back.web_port, s.web_port);
+        let _ = std::fs::remove_file(&path);
     }
 
     /// Config files get hand-edited and half-written. Loading one must not

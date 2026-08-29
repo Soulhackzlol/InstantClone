@@ -2200,16 +2200,19 @@ pub async fn run_egress(
 /// Also redacts the suffix after the last `/` if it's long enough to be
 /// a stream key - defensive against secrets we don't know about.
 fn scrub_secret(text: &str, secret: &str) -> String {
-    let mut out = text.to_string();
-    if secret.len() >= 6 {
-        let redacted = format!(
-            "{}…{}",
-            &secret[..secret.len().min(3)],
-            &secret[secret.len().saturating_sub(3)..]
-        );
-        out = out.replace(secret, &redacted);
+    // Characters, not bytes. A stream key is whatever the user pasted, and
+    // this runs on the egress error path - so a byte-offset slice here aborts
+    // the process (`panic = "abort"`) at the exact moment a destination is
+    // already failing, and again on every reconnect, because the key is on
+    // disk. The config redactors had the same bug in three places; this was
+    // the fourth and it was missed when they were fixed.
+    let chars: Vec<char> = secret.chars().collect();
+    if chars.len() < 6 {
+        return text.to_string();
     }
-    out
+    let head: String = chars[..3].iter().collect();
+    let tail: String = chars[chars.len() - 3..].iter().collect();
+    text.replace(secret, &format!("{head}…{tail}"))
 }
 
 /// One destination's session against a platform. Returns on disconnect.
@@ -3921,6 +3924,37 @@ mod tests {
         assert!(
             after <= before + 60_000,
             "a stray early tag moved the timeline to {after} from {before}"
+        );
+    }
+
+    /// The egress error path redacts the stream key before logging it. That
+    /// redaction sliced bytes, so a key with a multi-byte character in it
+    /// aborted the process at the exact moment a destination was already
+    /// failing - and again on every reconnect, since the key is on disk.
+    /// Three sibling copies of this were fixed a commit earlier; this one
+    /// was missed, which is why it has its own test.
+    #[test]
+    fn scrubbing_a_key_from_an_error_never_panics() {
+        for key in [
+            "🎥abcde",      // 4-byte char straddling offset 3
+            "abéde",        // 2-byte char at the tail boundary
+            "日本語テスト", // every char multi-byte
+            "live_señor_key",
+            "ascii_key_here",
+            "short", // under the length floor
+            "",
+        ] {
+            let msg = format!("connection refused while sending to {key}");
+            let out = scrub_secret(&msg, key);
+            if key.chars().count() >= 6 {
+                assert!(!out.contains(key), "the key survived redaction: {out}");
+                assert!(out.contains('…'), "nothing was elided: {out}");
+            }
+        }
+        // ASCII behaviour is unchanged.
+        assert_eq!(
+            scrub_secret("failed for live_1234567890", "live_1234567890"),
+            "failed for liv…890"
         );
     }
 
