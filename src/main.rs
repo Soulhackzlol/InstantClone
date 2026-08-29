@@ -245,23 +245,59 @@ fn main() -> std::io::Result<()> {
         // before it starts, so a mapped controller works from the first tick.
         ctrl.midi().update_from_settings(&settings);
 
-        // An update can leave the OBS entry we wrote pointing at the old
-        // shape of things. Someone who already registered should not have to
-        // notice a button changed back and press it again - repair it for
-        // them, quietly, and only if they registered in the first place.
-        match obs_register::refresh_stale_registration(settings.web_port, settings.ingest_port) {
-            None => {}
-            Some(Ok(())) => ctrl.log(
-                "[obs] the registered InstantClone service was out of date and has been refreshed",
-            ),
-            Some(Err(e)) => ctrl.log(format!(
-                "[obs] could not refresh the registered service ({e}); the dashboard's \
-                 Register button will repair it"
-            )),
-        }
-
         let (tx, rx) = watch::channel(settings.clone());
         let tx = Arc::new(tx);
+
+        // An update can leave the OBS entry we wrote pointing at the old shape
+        // of things, and on an in-app update the user never saw the dashboard
+        // button change back to ask them about it. Repair it for them.
+        //
+        // The wait matters as much as the repair: updating with OBS still open
+        // is the ordinary case, and OBS rewrites services.json from memory when
+        // it exits, so a repair now would simply be undone. We keep the
+        // question open until OBS closes and fix it then, which lands before
+        // the next time OBS reads the file - the only moment it could matter.
+        {
+            let ctrl = ctrl.clone();
+            let rx = rx.clone();
+            tokio::spawn(async move {
+                use obs_register::RegistrationRefresh as Refresh;
+                let mut said_waiting = false;
+                loop {
+                    let (web_port, ingest_port) = {
+                        let s = rx.borrow();
+                        (s.web_port, s.ingest_port)
+                    };
+                    match obs_register::refresh_stale_registration(web_port, ingest_port) {
+                        Refresh::NotNeeded => return,
+                        Refresh::Repaired => {
+                            ctrl.log(
+                                "[obs] the registered InstantClone service was out of date and \
+                                 has been refreshed - it takes effect next time OBS starts",
+                            );
+                            return;
+                        }
+                        Refresh::Failed(e) => {
+                            ctrl.log(format!(
+                                "[obs] could not refresh the registered service ({e}); the \
+                                 dashboard's Register button will repair it"
+                            ));
+                            return;
+                        }
+                        Refresh::Deferred => {
+                            if !said_waiting {
+                                said_waiting = true;
+                                ctrl.log(
+                                    "[obs] the registered InstantClone service is out of date; \
+                                     waiting for OBS to close to refresh it",
+                                );
+                            }
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                }
+            });
+        }
 
         // (Banner removed: with windows_subsystem=windows there is no
         // attached console for the user to read it, and debug builds

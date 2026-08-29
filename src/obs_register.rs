@@ -106,23 +106,54 @@ pub fn services_json_path() -> Option<PathBuf> {
 ///
 /// Everything else is the existing `register`, which is remove-and-replace,
 /// so this is exactly the click the dashboard would have asked for.
-pub fn refresh_stale_registration(web_port: u16, ingest_port: u16) -> Option<io::Result<()>> {
-    let path = services_json_path()?;
-    let file = fs::read_to_string(&path).ok()?;
-    if !should_refresh_registration(&file, web_port, ingest_port, is_obs_running()) {
-        return None;
+pub fn refresh_stale_registration(web_port: u16, ingest_port: u16) -> RegistrationRefresh {
+    let Some(path) = services_json_path() else {
+        return RegistrationRefresh::NotNeeded;
+    };
+    let Ok(file) = fs::read_to_string(&path) else {
+        return RegistrationRefresh::NotNeeded;
+    };
+    // The decision is `refresh_decision`, so what the tests pin is what runs.
+    match refresh_decision(&file, web_port, ingest_port, is_obs_running()) {
+        RegistrationRefresh::Repaired => match register(web_port, ingest_port) {
+            Ok(()) => RegistrationRefresh::Repaired,
+            Err(e) => RegistrationRefresh::Failed(e.to_string()),
+        },
+        verdict => verdict,
     }
-    Some(register(web_port, ingest_port))
 }
 
-/// The decision on its own, so it can be tested without an OBS install.
-fn should_refresh_registration(
+/// What `refresh_stale_registration` did, and whether coming back later would
+/// help. `Deferred` is the interesting one: the entry does need repairing,
+/// but OBS is open, and OBS rewrites `services.json` from memory when it
+/// exits - so the repair has to wait for it to close.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RegistrationRefresh {
+    /// No entry of ours, or the one there is already right. Nothing to do,
+    /// now or later.
+    NotNeeded,
+    /// Wanted, but OBS holds the file. Worth trying again when it closes.
+    Deferred,
+    Repaired,
+    Failed(String),
+}
+
+/// Should we repair, wait, or leave it alone? Split out so it can be tested
+/// without an OBS install; `Repaired` here means "a repair is warranted", and
+/// the caller downgrades it to `Failed` if writing the file does not work.
+fn refresh_decision(
     file: &str,
     web_port: u16,
     ingest_port: u16,
     obs_running: bool,
-) -> bool {
-    entry_exists(file) && !registration_is_current(file, web_port, ingest_port) && !obs_running
+) -> RegistrationRefresh {
+    if !entry_exists(file) || registration_is_current(file, web_port, ingest_port) {
+        return RegistrationRefresh::NotNeeded;
+    }
+    if obs_running {
+        return RegistrationRefresh::Deferred;
+    }
+    RegistrationRefresh::Repaired
 }
 
 pub fn is_registered(web_port: u16, ingest_port: u16) -> bool {
@@ -1456,29 +1487,34 @@ mod tests {
         let file_stale = format!(r#"{{"services":[{stale}]}}"#);
         let file_none = r#"{"services":[{"name":"Twitch","servers":[]}]}"#;
 
-        assert!(
-            should_refresh_registration(&file_stale, 7799, 1935, false),
+        use RegistrationRefresh::*;
+        assert_eq!(
+            refresh_decision(&file_stale, 7799, 1935, false),
+            Repaired,
             "an out-of-date entry the user registered is repaired"
         );
-        assert!(
-            !should_refresh_registration(&file_stale, 7799, 1935, true),
-            "not while OBS is running - it would rewrite the file on exit"
+        assert_eq!(
+            refresh_decision(&file_stale, 7799, 1935, true),
+            Deferred,
+            "OBS is open, so wait for it rather than have the repair undone"
         );
-        assert!(
-            !should_refresh_registration(&file_current, 7799, 1935, false),
+        assert_eq!(
+            refresh_decision(&file_current, 7799, 1935, false),
+            NotNeeded,
             "an entry that is already right is left alone"
         );
-        assert!(
-            !should_refresh_registration(file_none, 7799, 1935, false),
+        assert_eq!(
+            refresh_decision(file_none, 7799, 1935, false),
+            NotNeeded,
             "someone who never registered is not signed up for us editing OBS"
         );
+        assert_eq!(
+            refresh_decision(file_none, 7799, 1935, true),
+            NotNeeded,
+            "and with OBS open there is still nothing to come back for"
+        );
         // A retuned port is the same kind of staleness.
-        assert!(should_refresh_registration(
-            &file_current,
-            7799,
-            1936,
-            false
-        ));
+        assert_eq!(refresh_decision(&file_current, 7799, 1936, false), Repaired);
     }
 
     /// An entry from an older build still carries our name while pointing

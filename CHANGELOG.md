@@ -90,12 +90,15 @@ a config shared with a Linux build stays valid, and the dashboard hides the
 sections on a build with no backend rather than showing dead controls.
 
 - **Updating repairs your OBS service entry by itself.** The entry
-  InstantClone writes into OBS carries the addresses OBS uses to reach it, so
-  a new build or a changed port could leave it pointing at the old shape and
-  put the **Register** button back, waiting for you to notice. If you had
-  registered before, it is now refreshed on startup instead. It only ever
-  touches an entry you already made, and only while OBS is closed, since OBS
-  rewrites that file from memory when it exits.
+  InstantClone writes into OBS carries the addresses OBS uses to reach it, and
+  0.1.13 wrote an IPv4 literal there. That still works unless OBS's **IP
+  Family** is set to IPv6, where it cannot resolve at all - and until now
+  fixing it meant noticing the **Register** button had quietly changed back
+  and pressing it. If you had registered before, it is repaired for you.
+  Updating with OBS open is fine: OBS keeps that file in memory and writes it
+  back when it closes, so the repair waits for that and lands before the next
+  time OBS reads it. Your current session is unaffected either way, and an
+  entry you never made, or deliberately removed, is left alone.
 
 ### Lock the dashboard down, and run it on Linux
 
