@@ -135,6 +135,15 @@ the delay path.
   live in its System tab. Global hotkeys and MIDI stay Windows-only, since
   both sit on Win32 APIs. For anything network-facing, pair the dashboard
   password with TLS through a reverse proxy.
+- **Linux fixes found by auditing every platform split before release.**
+  Three places assumed Windows and quietly did nothing elsewhere. A binary
+  installed the normal Linux way, in `/usr/local/bin`, anchored its working
+  directory to that root-owned folder and then could not create its buffer -
+  it did not start at all; it now keeps its files where you launch it from.
+  TCP keepalive was a no-op on Linux, and since keepalive is off by default
+  there, a publisher whose machine lost power stayed "connected" forever
+  instead of dropping after ~60 s. And the buffer error listed Windows causes
+  ("a folder Windows protects") to Linux users reading `Permission denied`.
 - **One-click update works on Linux too.** The About tab's update button
   downloads the Linux binary, checks it against the release's
   `SHA256SUMS.txt`, marks it executable, swaps it in and relaunches - the

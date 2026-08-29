@@ -214,16 +214,13 @@ fn main() -> std::io::Result<()> {
                      Size:  {} MB\n\
                      Error: {}\n\n\
                      Common causes:\n\
-                     - Another instance of InstantClone is still running\n\
-                     - Antivirus or backup software is scanning the file\n\
-                     - The drive is full or read-only\n\
-                     - InstantClone sits in a folder Windows protects (Program Files)\n\
-                     - The path is on a removable drive that's disconnected\n\n\
+                     {}\n\n\
                      Fix one of the above and relaunch, or change \
                      'buffer_path' in instantclone.config.json to a writable folder.",
                     shown.display(),
                     settings.buffer_mb,
                     e,
+                    buffer_failure_causes(),
                 );
                 notify_fatal("InstantClone buffer error", &msg);
                 return Err(e);
@@ -1217,6 +1214,7 @@ fn anchor_working_dir_to_exe() {
         exe.as_deref(),
         config_path_set,
         here.as_deref().map(has_config),
+        exe_dir_writable(exe.as_deref()),
     ) else {
         return;
     };
@@ -1226,6 +1224,67 @@ fn anchor_working_dir_to_exe() {
         // path if this turns into a real failure.
         eprintln!("could not switch to {}: {e}", dir.display());
     }
+}
+
+/// The "common causes" list for a buffer that would not open, written for the
+/// platform the user is actually on.
+///
+/// One shared list used to name Program Files and antivirus everywhere, so a
+/// Linux user staring at `Permission denied` was told to go and check a folder
+/// that Windows protects. This is the one moment the copy has to be useful.
+fn buffer_failure_causes() -> &'static str {
+    #[cfg(windows)]
+    {
+        concat!(
+            "- Another instance of InstantClone is still running\n",
+            "                     - Antivirus or backup software is scanning the file\n",
+            "                     - The drive is full or read-only\n",
+            "                     - InstantClone sits in a folder Windows protects (Program Files)\n",
+            "                     - The path is on a removable drive that's disconnected",
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        concat!(
+            "- Another instance of InstantClone is still running\n",
+            "                     - The folder is not writable by this user. A binary kept in\n",
+            "                       /usr/local/bin keeps its files in the directory you launch\n",
+            "                       it from, so check that you can write there.\n",
+            "                     - The disk is full, mounted read-only, or over quota\n",
+            "                     - The path is on a removable or network mount that is not attached",
+        )
+    }
+}
+
+/// Whether we could actually keep our files next to the exe, or None when
+/// the question does not apply.
+///
+/// Only asked on unix, and the reason is install convention. A Windows
+/// InstantClone is a portable exe that lives in its own folder, so its
+/// directory is writable and anchoring there is what makes the files
+/// findable. The idiomatic Linux install is the opposite: the binary goes in
+/// `/usr/local/bin` and is root-owned, so anchoring points every default
+/// path at a directory the user cannot write. That is not a degraded
+/// experience, it is a cold start that fails outright - the ring buffer
+/// cannot be created, and the app exits before it ever listens.
+///
+/// `access(W_OK)` rather than a permissions bit: the mode says `/usr/local/bin`
+/// is writable by its owner, and its owner is root.
+#[cfg(unix)]
+fn exe_dir_writable(exe: Option<&std::path::Path>) -> Option<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = exe?.parent()?;
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c` is a valid NUL-terminated path for the duration of the call.
+    Some(unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
+}
+
+/// Windows keeps the unconditional behaviour: there the exe folder is the
+/// install, and the case anchoring exists for (a startup entry handed
+/// `C:\Windows\System32`) has no writable alternative to fall back to.
+#[cfg(not(unix))]
+fn exe_dir_writable(_exe: Option<&std::path::Path>) -> Option<bool> {
+    None
 }
 
 /// The directory `anchor_working_dir_to_exe` should move to, or None to stay
@@ -1258,8 +1317,17 @@ fn anchor_dir(
     exe: Option<&std::path::Path>,
     config_path_set: bool,
     config_here: Option<bool>,
+    exe_dir_writable: Option<bool>,
 ) -> Option<PathBuf> {
     if config_path_set || config_here == Some(true) {
+        return None;
+    }
+    // Known-unwritable exe folder: staying where we are is the only option
+    // that can work. See `exe_dir_writable` - this is the `/usr/local/bin`
+    // install, where anchoring turns a normal first run into a cold start
+    // that cannot create its buffer. `None` means the question was not asked
+    // (Windows), which keeps that path exactly as it was.
+    if exe_dir_writable == Some(false) {
         return None;
     }
     // A bare "instantclone.exe" yields an empty parent, and an exe at a
@@ -1310,7 +1378,7 @@ mod tests {
     fn anchor_dir_picks_the_folder_holding_the_exe() {
         let exe = PathBuf::from("C:/Users/me/Desktop/InstantClone/instantclone.exe");
         assert_eq!(
-            anchor_dir(Some(&exe), false, Some(false)),
+            anchor_dir(Some(&exe), false, Some(false), None),
             Some(PathBuf::from("C:/Users/me/Desktop/InstantClone"))
         );
     }
@@ -1319,7 +1387,7 @@ mod tests {
     fn anchor_dir_leaves_an_explicit_config_path_alone() {
         let exe = PathBuf::from("C:/Users/me/Desktop/InstantClone/instantclone.exe");
         assert_eq!(
-            anchor_dir(Some(&exe), true, Some(false)),
+            anchor_dir(Some(&exe), true, Some(false), None),
             None,
             "CONFIG_PATH means the user chose the layout - don't move"
         );
@@ -1333,29 +1401,64 @@ mod tests {
     fn anchor_dir_leaves_an_existing_install_where_it_already_lives() {
         let exe = PathBuf::from("C:/Program Files/InstantClone/instantclone.exe");
         assert_eq!(
-            anchor_dir(Some(&exe), false, Some(true)),
+            anchor_dir(Some(&exe), false, Some(true), None),
             None,
             "a settings file in the launch folder is an install, not an accident"
         );
         // The autostart case is unchanged: System32 holds no settings file,
         // so there is nothing to preserve and moving is still the fix.
         assert_eq!(
-            anchor_dir(Some(&exe), false, Some(false)),
+            anchor_dir(Some(&exe), false, Some(false), None),
             Some(PathBuf::from("C:/Program Files/InstantClone"))
         );
         // Unknown (the current directory could not be read) behaves like the
         // autostart case rather than blocking the fix.
         assert_eq!(
-            anchor_dir(Some(&exe), false, None),
+            anchor_dir(Some(&exe), false, None, None),
             Some(PathBuf::from("C:/Program Files/InstantClone"))
         );
     }
 
+    /// The idiomatic Linux install: the binary goes in /usr/local/bin, which
+    /// is root-owned. Anchoring there points every relative default at a
+    /// directory the user cannot write, and the first thing that needs one is
+    /// the ring buffer - so the app does not start in a degraded way, it does
+    /// not start at all. Staying where the user launched from is the only
+    /// answer that works.
+    #[test]
+    fn anchor_dir_stays_put_when_the_exe_folder_is_not_writable() {
+        let exe = PathBuf::from("/usr/local/bin/instantclone");
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(false), Some(false)),
+            None,
+            "a root-owned bin directory is not somewhere to keep a 300 MB buffer"
+        );
+        // Writable, so the portable-folder layout still anchors and the files
+        // stay findable next to the binary.
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(false), Some(true)),
+            Some(PathBuf::from("/usr/local/bin"))
+        );
+        // Not asked (Windows): unchanged from before this rule existed.
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(false), None),
+            Some(PathBuf::from("/usr/local/bin"))
+        );
+        // An existing config still wins over everything - that rule is about
+        // not moving someone's install, and it does not depend on this one.
+        assert_eq!(anchor_dir(Some(&exe), false, Some(true), Some(true)), None);
+    }
+
     #[test]
     fn anchor_dir_stays_put_when_the_exe_is_unknown_or_parentless() {
-        assert_eq!(anchor_dir(None, false, Some(false)), None);
+        assert_eq!(anchor_dir(None, false, Some(false), None), None);
         assert_eq!(
-            anchor_dir(Some(Path::new("instantclone.exe")), false, Some(false)),
+            anchor_dir(
+                Some(Path::new("instantclone.exe")),
+                false,
+                Some(false),
+                None
+            ),
             None
         );
     }
