@@ -138,6 +138,25 @@ async fn serve(
 
     let head_str = std::str::from_utf8(&buf[..head_end]).unwrap_or("");
     let (method, path, content_length) = parse_request_head(head_str);
+    // A body we cannot read honestly. Answering 400 keeps a malformed request
+    // from being run as a well-formed one with no arguments - which for
+    // `POST /arm` would mean dropping a live delay. See `parse_request_head`.
+    let Some(content_length) = content_length else {
+        let body =
+            r#"{"ok":false,"error":"malformed Content-Length or unsupported Transfer-Encoding"}"#;
+        let r = format!(
+            "HTTP/1.1 400 Bad Request
+Content-Type: application/json
+             Content-Length: {}
+Connection: close
+
+{}",
+            body.len(),
+            body
+        );
+        sock.write_all(r.as_bytes()).await?;
+        return Ok(());
+    };
     let (origin, host) = parse_origin_host(head_str);
     let accept_gzip = accepts_gzip(head_str);
 
@@ -3854,19 +3873,53 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
     }
 }
 
-fn parse_request_head(head: &str) -> (&str, &str, usize) {
+/// Split the request line into method + path, and resolve the body length.
+///
+/// The length is `None` when the request describes a body we cannot read
+/// honestly: a `Content-Length` that is not a number, two that disagree, or a
+/// `Transfer-Encoding` we do not implement. The caller answers 400 rather than
+/// guessing.
+///
+/// Guessing was the old behaviour - `parse().unwrap_or(0)` - and it read as an
+/// empty body, which is not a neutral choice here. Every POST route takes its
+/// arguments from that body, and several treat "no argument" as a real
+/// instruction: `POST /arm` with no `ms` is a disarm. So a request that was
+/// merely malformed did not fail, it dropped the streamer's delay. Absent is
+/// still `Some(0)` - a POST with no body is ordinary and must keep working.
+fn parse_request_head(head: &str) -> (&str, &str, Option<usize>) {
     let mut lines = head.split("\r\n");
     let first = lines.next().unwrap_or("");
     let mut parts = first.split_whitespace();
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("/");
-    let mut content_length = 0usize;
+    let mut content_length: Option<usize> = None;
+    let mut seen_length = false;
+    let mut bad = false;
     for line in lines {
         if let Some(v) = strip_prefix_icase(line, "content-length:") {
-            content_length = v.trim().parse().unwrap_or(0);
+            match v.trim().parse::<usize>() {
+                // A second, disagreeing Content-Length is the classic
+                // request-smuggling shape. We never proxy and always close,
+                // so it cannot be smuggled past us - but there is no honest
+                // reading of two lengths, so refuse rather than pick one.
+                Ok(n) if !seen_length || content_length == Some(n) => {
+                    content_length = Some(n);
+                    seen_length = true;
+                }
+                _ => bad = true,
+            }
+        } else if let Some(v) = strip_prefix_icase(line, "transfer-encoding:") {
+            // We do not implement chunked. Ignoring it would hand the route an
+            // empty body and run it with no arguments; saying so is honest.
+            if !v.trim().eq_ignore_ascii_case("identity") {
+                bad = true;
+            }
         }
     }
-    (method, path, content_length)
+    if bad {
+        return (method, path, None);
+    }
+    (method, path, Some(content_length.unwrap_or(0)))
 }
 
 /// Extract the Origin and Host headers verbatim (or empty strings).
@@ -5222,6 +5275,73 @@ mod tests {
 
     // ── HTTP request-head parsing ────────────────────────────────────
 
+    /// A malformed body length must not read as "no body".
+    ///
+    /// Every POST route takes its arguments from the body, and several treat
+    /// an absent argument as an instruction: `POST /arm` with no `ms` is a
+    /// disarm. So `parse().unwrap_or(0)` meant a merely corrupt request did
+    /// not fail - it dropped the streamer's delay. Found by fuzzing the live
+    /// HTTP surface, which got a 200 for `Content-Length: -5`.
+    #[test]
+    fn an_unreadable_body_length_is_refused_not_guessed() {
+        let bad = [
+            ("POST /arm HTTP/1.1\r\nContent-Length: -5\r\n", "negative"),
+            (
+                "POST /arm HTTP/1.1\r\nContent-Length: abc\r\n",
+                "not a number",
+            ),
+            ("POST /arm HTTP/1.1\r\nContent-Length: \r\n", "empty"),
+            (
+                "POST /arm HTTP/1.1\r\nContent-Length: 12x\r\n",
+                "trailing junk",
+            ),
+            (
+                "POST /arm HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 9\r\n",
+                "two that disagree - the request-smuggling shape",
+            ),
+            (
+                "POST /arm HTTP/1.1\r\nTransfer-Encoding: chunked\r\n",
+                "an encoding we do not implement",
+            ),
+        ];
+        for (head, why) in bad {
+            let (_, _, len) = parse_request_head(head);
+            assert_eq!(len, None, "{why} must be refused, not read as empty");
+        }
+    }
+
+    /// The ordinary shapes still work. A POST with no body is normal, and two
+    /// Content-Length headers that agree are merely redundant.
+    #[test]
+    fn ordinary_body_lengths_still_parse() {
+        for (head, want, why) in [
+            (
+                "POST /x HTTP/1.1\r\nContent-Length: 0\r\n",
+                Some(0),
+                "explicit zero",
+            ),
+            (
+                "POST /x HTTP/1.1\r\nHost: y\r\n",
+                Some(0),
+                "absent is a real zero",
+            ),
+            ("GET / HTTP/1.1\r\nHost: y\r\n", Some(0), "GET with no body"),
+            (
+                "POST /x HTTP/1.1\r\nContent-Length: 7\r\nContent-Length: 7\r\n",
+                Some(7),
+                "duplicates that agree",
+            ),
+            (
+                "POST /x HTTP/1.1\r\nTransfer-Encoding: identity\r\n",
+                Some(0),
+                "identity is the no-op encoding",
+            ),
+        ] {
+            let (_, _, len) = parse_request_head(head);
+            assert_eq!(len, want, "{why}");
+        }
+    }
+
     #[test]
     fn parse_request_head_extracts_method_path_and_length() {
         let head = "POST /arm?x=1 HTTP/1.1\r\n\
@@ -5231,21 +5351,21 @@ mod tests {
         let (method, path, len) = parse_request_head(head);
         assert_eq!(method, "POST");
         assert_eq!(path, "/arm?x=1");
-        assert_eq!(len, 42);
+        assert_eq!(len, Some(42));
     }
 
     #[test]
     fn parse_request_head_treats_missing_content_length_as_zero() {
         let head = "GET / HTTP/1.1\r\nHost: x\r\n";
         let (_, _, len) = parse_request_head(head);
-        assert_eq!(len, 0);
+        assert_eq!(len, Some(0));
     }
 
     #[test]
     fn parse_request_head_is_case_insensitive_on_header_name() {
         let head = "POST /x HTTP/1.1\r\ncontent-length: 7\r\n";
         let (_, _, len) = parse_request_head(head);
-        assert_eq!(len, 7);
+        assert_eq!(len, Some(7));
     }
 
     #[test]

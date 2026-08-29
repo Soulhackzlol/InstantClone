@@ -135,6 +135,14 @@ the delay path.
   live in its System tab. Global hotkeys and MIDI stay Windows-only, since
   both sit on Win32 APIs. For anything network-facing, pair the dashboard
   password with TLS through a reverse proxy.
+- **A malformed request could disarm a live delay.** A `Content-Length` the
+  server could not parse was read as "no body", and several POST routes treat
+  a missing argument as an instruction - `POST /arm` with no `ms` is a disarm.
+  So a corrupt request did not fail, it dropped the delay. The server now
+  answers 400 for a body it cannot read honestly, including two
+  `Content-Length` headers that disagree and a `Transfer-Encoding` it does not
+  implement. Found by fuzzing the running dashboard, which returned 200 to
+  `Content-Length: -5`.
 - **Linux fixes found by auditing every platform split before release.**
   Three places assumed Windows and quietly did nothing elsewhere. A binary
   installed the normal Linux way, in `/usr/local/bin`, anchored its working
