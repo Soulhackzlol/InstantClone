@@ -135,6 +135,12 @@ the delay path.
   live in its System tab. Global hotkeys and MIDI stay Windows-only, since
   both sit on Win32 APIs. For anything network-facing, pair the dashboard
   password with TLS through a reverse proxy.
+- **One-click update works on Linux too.** The About tab's update button
+  downloads the Linux binary, checks it against the release's
+  `SHA256SUMS.txt`, marks it executable, swaps it in and relaunches - the
+  same verified path Windows has had, and it will not run an image whose
+  checksum does not match. Both binaries ship under one `SHA256SUMS.txt`,
+  so a 0.1.13 install updating to 0.1.14 still finds its own line.
 
 ### Fixes
 
