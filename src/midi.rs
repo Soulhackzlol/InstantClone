@@ -248,6 +248,21 @@ pub fn spawn(
 ) {
 }
 
+/// Whether the listener should be holding MIDI inputs open.
+///
+/// Opening one claims it exclusively: for as long as we hold a device, no
+/// DAW, no VST host and no other MIDI tool on the machine can open it. A
+/// user who has bound nothing never asked us to take their controller away
+/// from the software they actually use it with, so we hold nothing until
+/// there is a binding to serve - or a learn waiting for the press that will
+/// become one.
+/// Built everywhere so its rule is tested on every CI target; only Windows
+/// has a listener to act on it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn should_hold_devices(learning: bool, midi: &crate::config::MidiBindings) -> bool {
+    learning || midi.entries().iter().any(|(_, sig)| !sig.is_empty())
+}
+
 #[cfg(windows)]
 mod win {
     use super::{signature_for, MidiState};
@@ -289,6 +304,7 @@ mod win {
         let mut handles: Vec<HMIDIIN> = Vec::new();
         let mut last_present: Vec<String> = Vec::new();
         let mut last_selected = String::new();
+        let mut last_listening = false;
         loop {
             // winmm gives no hot-plug event, so a periodic sweep is the only
             // way to notice a controller arriving or leaving. Comparing the
@@ -299,15 +315,22 @@ mod win {
             // that retries every tick until it is handed back.
             let present = device_names();
             let selected = ctx.state.selected_device();
-            let wanted = present
-                .iter()
-                .any(|d| selected.is_empty() || *d == selected);
+            let listening = wants_to_listen(ctx);
+            let wanted = listening
+                && present
+                    .iter()
+                    .any(|d| selected.is_empty() || *d == selected);
             if present != last_present
                 || selected != last_selected
+                || listening != last_listening
                 || (handles.is_empty() && wanted)
             {
                 close_all(&mut handles);
-                let opened = open_matching(&present, &selected, instance, &mut handles);
+                let opened = if listening {
+                    open_matching(&present, &selected, instance, &mut handles)
+                } else {
+                    Vec::new()
+                };
                 // `open_matching` fills both in step, so zipping is the map
                 // from the handle a callback carries to the name a binding
                 // was recorded against.
@@ -316,11 +339,45 @@ mod win {
                     .map(|h| *h as usize)
                     .zip(opened.iter().cloned())
                     .collect();
+                // `present` is published either way: enumerating opens
+                // nothing, so the dashboard can still offer a device to pick
+                // while we are holding none of them.
                 ctx.state.set_devices(present.clone(), opened);
                 last_present = present;
                 last_selected = selected;
+                last_listening = listening;
             }
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            sleep_until_worth_another_look(ctx, listening);
+        }
+    }
+
+    /// Whether we should be holding MIDI inputs open at all.
+    ///
+    /// Opening one claims it exclusively: for as long as we hold a device,
+    /// no DAW, no VST host and no other MIDI tool on the machine can open
+    /// it. A user who has bound nothing never asked us to take their
+    /// controller away from the software they actually use it with, so hold
+    /// nothing until there is a binding to serve, or a learn waiting for the
+    /// press that will become one.
+    fn wants_to_listen(ctx: &CallbackCtx) -> bool {
+        let learning = ctx.state.learning().is_some();
+        // Scoped: the borrow parks the settings watch, and opening devices
+        // below is slow enough to matter.
+        let settings = ctx.settings.borrow();
+        super::should_hold_devices(learning, &settings.midi)
+    }
+
+    /// Idle between sweeps, but notice a learn starting sooner than the
+    /// sweep would. A learn window is short and the press that ends it comes
+    /// from a human finger, so waiting a full tick to open the device would
+    /// swallow the first thing they hit.
+    fn sleep_until_worth_another_look(ctx: &CallbackCtx, listening: bool) {
+        const TICK: std::time::Duration = std::time::Duration::from_millis(250);
+        for _ in 0..8 {
+            std::thread::sleep(TICK);
+            if wants_to_listen(ctx) != listening {
+                return;
+            }
         }
     }
 
@@ -445,6 +502,7 @@ mod win {
 
 #[cfg(test)]
 mod tests {
+    use super::should_hold_devices;
     use super::signature_for;
     // `MidiState` itself is cross-platform - only the listener that feeds it
     // is Windows-only - so the device-choice test below runs everywhere.
@@ -577,6 +635,36 @@ mod tests {
         assert_eq!(ctrl.target_delay_ms(), 0, "toggle turned the delay off");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A MIDI input is an exclusive device: while InstantClone holds one,
+    /// the DAW or VST host the user actually bought it for cannot open it.
+    /// Someone who has never bound a pad has not asked for that, so we hold
+    /// nothing until there is a reason to.
+    #[test]
+    fn no_bindings_means_we_leave_every_midi_device_alone() {
+        let mut midi = crate::config::MidiBindings::default();
+        assert!(
+            !should_hold_devices(false, &midi),
+            "nothing bound and not learning: hold nothing"
+        );
+        assert!(
+            should_hold_devices(true, &midi),
+            "a learn needs a device open to hear the press"
+        );
+
+        midi.set("arm", "note:1:36");
+        assert!(
+            should_hold_devices(false, &midi),
+            "one binding is reason enough"
+        );
+
+        // Clearing the last binding hands the controller back.
+        midi.set("arm", "");
+        assert!(
+            !should_hold_devices(false, &midi),
+            "the last binding going away releases the device"
+        );
     }
 
     /// The whole point of naming the device: two decks that both send pad 1

@@ -201,6 +201,14 @@ sections on a build with no backend rather than showing dead controls.
   to the ingest port, not only after seven weeks of uptime. The first tag of
   a session now sets the timeline and anything stamped before it is pinned
   to the present rather than launched past it.
+- **InstantClone no longer takes your MIDI controller hostage.** A MIDI
+  input is exclusive on Windows: while one program holds it, nothing else
+  can open it. The listener was opening every input device on the machine at
+  startup whether or not anything was bound to one, so upgrading could have
+  taken a controller away from the DAW or plugin host already using it. It
+  now holds a device only while there is a binding to serve, or a learn
+  waiting for a press, and hands it back when the last binding is cleared.
+  Listing devices to choose from opens nothing, so the dropdown still fills.
 - **A MIDI device could be selectable and never match.** The device name was
   cleaned one way when stored inside a binding and not at all when stored as
   the selected device, so a controller whose name contained the character
