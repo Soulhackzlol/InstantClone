@@ -201,6 +201,15 @@ sections on a build with no backend rather than showing dead controls.
   to the ingest port, not only after seven weeks of uptime. The first tag of
   a session now sets the timeline and anything stamped before it is pinned
   to the present rather than launched past it.
+- **The tray drops its "Launch OBS (VOD + EB)" item.** It came from before
+  the InstantClone service existed, when Enhanced Broadcasting on a custom
+  RTMP server had to be switched on by launching OBS with a `--config-url`
+  flag. The registered service now carries that configuration itself, so
+  picking **InstantClone** as your service in OBS *is* Enhanced
+  Broadcasting, with nothing to launch specially. The other half of the item
+  wrote OBS's built-in VOD-track flag, which OBS 32.2 locked to Custom
+  services - a VOD track comes from the unlocker script now. The item did
+  neither job any more, so it is gone rather than misleading.
 - **InstantClone no longer takes your MIDI controller hostage.** A MIDI
   input is exclusive on Windows: while one program holds it, nothing else
   can open it. The listener was opening every input device on the machine at
