@@ -180,9 +180,15 @@ the delay path.
   no unelevated program may write. InstantClone now anchors itself to the
   folder holding the exe before it touches a single file, so autostart, a
   shortcut and a plain double-click all keep the same files in the same
-  place. The buffer error dialog also reports the full resolved path now
-  instead of `./instantclone.buf`, so a genuinely unwritable folder names
-  itself. Set `CONFIG_PATH` to keep your own layout.
+  place. Two exceptions keep that from being a surprise: if the folder you
+  launched from already holds a settings file, that is your install and it
+  is left where it is, so upgrading never hands you a factory-fresh copy
+  while your real config sits untouched a few folders away; and on Linux,
+  where the binary usually lives somewhere root-owned like /usr/local/bin,
+  it anchors only if it could actually write there. The buffer error dialog
+  also reports the full resolved path now instead of `./instantclone.buf`,
+  so a genuinely unwritable folder names itself, with causes listed for the
+  platform you are on. Set `CONFIG_PATH` to keep your own layout.
 - **The clear button on a MIDI mapping did nothing.** It reported success,
   emptied the row, and left the mapping in place: the pad kept firing its
   action and the row came back on the next dashboard load. The config route
