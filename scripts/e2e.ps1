@@ -302,12 +302,21 @@ Run-Scenario "D -HTTP API smoke (arm/state/disarm/reset)" {
             Assert ($null -ne $state.$k -or $state.PSObject.Properties.Name -contains $k) "GET /state missing key '$k'" $failed
         }
 
-        # POST /arm ms=2000 - phase must leave idle.
-        $arm = Invoke-RestMethod "http://127.0.0.1:7799/arm" -Method POST -Body "ms=2000" -ContentType "application/x-www-form-urlencoded" -TimeoutSec 5
+        # Arming with nothing publishing is refused, on purpose. The buffer
+        # cannot fill without a publisher, so it would sit in "preparing"
+        # forever and read as a hang. The hotkey and MIDI paths refuse it
+        # too, so /arm has to agree or the dashboard is a way around the
+        # rule. Invoke-WebRequest throws on a 4xx, so ask it not to.
+        $arm = Invoke-WebRequest "http://127.0.0.1:7799/arm" -Method POST -Body "ms=2000" `
+            -ContentType "application/x-www-form-urlencoded" -TimeoutSec 5 -SkipHttpErrorCheck
+        Assert ($arm.StatusCode -eq 409) "/arm with no publisher should be refused with 409 (got $($arm.StatusCode))" $failed
+        Assert ($arm.Content -match "isn't sending") "the refusal has to say why (got '$($arm.Content)')" $failed
         Start-Sleep -Milliseconds 300
         $state = (Invoke-RestMethod "http://127.0.0.1:7799/state" -TimeoutSec 5)
-        Assert ($state.phase -ne "idle") "phase still 'idle' after /arm ms=2000 (got '$($state.phase)')" $failed
+        Assert ($state.phase -eq "idle") "phase must stay 'idle' when the arm was refused (got '$($state.phase)')" $failed
 
+        # A disarm is never refused, even offline: it frees the buffer, and
+        # a publisher dying mid-delay is exactly when someone reaches for it.
         # POST /disarm - phase must return to idle.
         Invoke-RestMethod "http://127.0.0.1:7799/disarm" -Method POST -TimeoutSec 5 | Out-Null
         Start-Sleep -Milliseconds 300

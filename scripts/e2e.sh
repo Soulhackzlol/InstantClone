@@ -229,9 +229,20 @@ scenario_d() {
       [ "$(echo "$s" | jq "has(\"$k\")")" = "true" ]; assert $? "GET /state missing key '$k'"
     done
 
-    curl -s -X POST --data "ms=2000" -H "Content-Type: application/x-www-form-urlencoded" http://127.0.0.1:7799/arm >/dev/null
+    # Arming with nothing publishing is refused, on purpose. The buffer
+    # cannot fill without a publisher, so it would sit in "preparing"
+    # forever and read as a hang. The hotkey and MIDI paths refuse it too,
+    # so /arm has to agree or the dashboard is a way around the rule.
+    local code body
+    code=$(curl -s -o D.arm.json -w '%{http_code}' -X POST --data "ms=2000"       -H "Content-Type: application/x-www-form-urlencoded" http://127.0.0.1:7799/arm)
+    body=$(cat D.arm.json 2>/dev/null); rm -f D.arm.json
+    [ "$code" = "409" ]; assert $? "/arm with no publisher should be refused with 409, got $code"
+    echo "$body" | grep -qi "isn't sending"; assert $? "the refusal has to say why: $body"
     sleep 0.3
-    [ "$(get_state | jq -r .phase)" != "idle" ]; assert $? "phase still 'idle' after /arm ms=2000"
+    [ "$(get_state | jq -r .phase)" = "idle" ]; assert $? "phase must stay 'idle' when the arm was refused"
+
+    # A disarm is never refused, even offline: it frees the buffer, and a
+    # publisher dying mid-delay is exactly when someone reaches for it.
 
     curl -s -X POST http://127.0.0.1:7799/disarm >/dev/null
     sleep 0.3

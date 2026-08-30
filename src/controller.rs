@@ -4020,8 +4020,14 @@ mod tests {
             let msg = format!("connection refused while sending to {key}");
             let out = scrub_secret(&msg, key);
             if key.chars().count() >= 6 {
-                assert!(!out.contains(key), "the key survived redaction: {out}");
-                assert!(out.contains('…'), "nothing was elided: {out}");
+                // The failure text deliberately carries neither the key nor the
+                // scrubbed line. A test about redaction that prints the value it
+                // failed to redact would leak it into CI logs on the one run where
+                // that matters, and code scanning flags the pattern for exactly
+                // that reason. The fixture list above is short enough to find the
+                // offending input without it.
+                assert!(!out.contains(key), "a key survived redaction");
+                assert!(out.contains('…'), "a key was not elided at all");
             }
         }
         // ASCII behaviour is unchanged.
