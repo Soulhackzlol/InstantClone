@@ -10,6 +10,7 @@
 <br/>
 
 <a href="https://github.com/Soulhackzlol/InstantClone/releases/latest"><img alt="Descargar para Windows" src="https://img.shields.io/badge/Descargar%20para%20Windows-5ac8fa?style=for-the-badge&labelColor=11141a&logo=windows&logoColor=white"/></a>
+<a href="https://github.com/Soulhackzlol/InstantClone/releases/latest"><img alt="Descargar para Linux" src="https://img.shields.io/badge/Descargar%20para%20Linux-1c2129?style=for-the-badge&labelColor=11141a&logo=linux&logoColor=white"/></a>
 
 
 <a href="#inicio-rápido"><img src="https://img.shields.io/badge/-Inicio%20r%C3%A1pido-1c2129?style=for-the-badge&labelColor=11141a"/></a>
@@ -64,11 +65,12 @@ Una señal entra. Un delay con buffer que **armas**, **activas** y **cortas** al
 **1 · Ejecútalo**
 
 ```text
-Descarga instantclone.exe → doble clic.
+Windows:  descarga instantclone.exe → doble clic.
+Linux:    chmod +x instantclone-*-linux-x64 → ejecútalo.
 El panel abre en http://127.0.0.1:7799
 ```
 
-Esa es toda la instalación. Un icono queda en la bandeja mientras corre; clic derecho para el panel, el dock, un **Corte** de un clic, o **Salir**. Cerrar la pestaña no mata el proxy, solo Salir lo hace.
+Esa es toda la instalación. En Windows un icono queda en la bandeja mientras corre; clic derecho para el panel, el dock, un **Corte** de un clic, o **Salir**. Cerrar la pestaña no mata el proxy, solo Salir lo hace. En Linux no hay bandeja, así que el panel es toda la superficie de control y Salir y Reiniciar viven en su pestaña Sistema.
 
 <sub>Al primer arranque, Windows SmartScreen puede decir "editor desconocido" porque la build aún no está firmada. Pulsa **Más información → Ejecutar de todas formas**, o compárala con el `SHA256SUMS.txt` de la release.</sub>
 

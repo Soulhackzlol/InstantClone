@@ -10,6 +10,7 @@
 <br/>
 
 <a href="https://github.com/Soulhackzlol/InstantClone/releases/latest"><img alt="Download for Windows" src="https://img.shields.io/badge/Download%20for%20Windows-5ac8fa?style=for-the-badge&labelColor=11141a&logo=windows&logoColor=white"/></a>
+<a href="https://github.com/Soulhackzlol/InstantClone/releases/latest"><img alt="Download for Linux" src="https://img.shields.io/badge/Download%20for%20Linux-1c2129?style=for-the-badge&labelColor=11141a&logo=linux&logoColor=white"/></a>
 
 
 <a href="#quickstart"><img src="https://img.shields.io/badge/-Quickstart-1c2129?style=for-the-badge&labelColor=11141a"/></a>
@@ -64,11 +65,12 @@ One feed in. A buffered delay you **arm**, **activate**, and **cut** on the fly,
 **1 · Run it**
 
 ```text
-Download instantclone.exe → double-click.
+Windows:  download instantclone.exe → double-click.
+Linux:    chmod +x instantclone-*-linux-x64 → run it.
 Dashboard opens at http://127.0.0.1:7799
 ```
 
-That's the whole install. A tray icon sits in the systray while it runs; right-click for the dashboard, dock, one-click **Cut**, or **Quit**. Closing the tab doesn't kill the proxy, only Quit does.
+That's the whole install. On Windows a tray icon sits in the systray while it runs; right-click for the dashboard, dock, one-click **Cut**, or **Quit**. Closing the tab doesn't kill the proxy, only Quit does. Linux has no tray, so the dashboard is the whole control surface and Quit and Restart live in its System tab.
 
 <sub>First launch, Windows SmartScreen may say "unknown publisher" because the build isn't code-signed yet. Click **More info → Run anyway**, or check it against the `SHA256SUMS.txt` on the release.</sub>
 
