@@ -2197,8 +2197,6 @@ pub async fn run_egress(
 
 /// Replace any occurrence of `secret` (case-sensitive) in `text` with a
 /// short redaction so it doesn't end up in logs or webhook payloads.
-/// Also redacts the suffix after the last `/` if it's long enough to be
-/// a stream key - defensive against secrets we don't know about.
 fn scrub_secret(text: &str, secret: &str) -> String {
     // Characters, not bytes. A stream key is whatever the user pasted, and
     // this runs on the egress error path - so a byte-offset slice here aborts
@@ -2207,8 +2205,18 @@ fn scrub_secret(text: &str, secret: &str) -> String {
     // disk. The config redactors had the same bug in three places; this was
     // the fourth and it was missed when they were fixed.
     let chars: Vec<char> = secret.chars().collect();
-    if chars.len() < 6 {
+    // An empty secret matches at every character boundary, so `replace`
+    // would splice the marker through the whole message.
+    if chars.is_empty() {
         return text.to_string();
+    }
+    // Too short to show a head and a tail without handing over most of it,
+    // so it goes entirely. Platform-issued keys are never this short, but a
+    // custom RTMP destination takes whatever the user pasted - and passing
+    // that through unredacted put it straight into /logs and the Discord
+    // payload, which is the one thing this function exists to prevent.
+    if chars.len() < 6 {
+        return text.replace(secret, "…");
     }
     let head: String = chars[..3].iter().collect();
     let tail: String = chars[chars.len() - 3..].iter().collect();
@@ -4014,27 +4022,34 @@ mod tests {
             "日本語テスト", // every char multi-byte
             "live_señor_key",
             "ascii_key_here",
-            "short", // under the length floor
+            "short", // under the length floor: elided whole
             "",
         ] {
             let msg = format!("connection refused while sending to {key}");
             let out = scrub_secret(&msg, key);
-            if key.chars().count() >= 6 {
-                // The failure text deliberately carries neither the key nor the
-                // scrubbed line. A test about redaction that prints the value it
-                // failed to redact would leak it into CI logs on the one run where
-                // that matters, and code scanning flags the pattern for exactly
-                // that reason. The fixture list above is short enough to find the
-                // offending input without it.
-                assert!(!out.contains(key), "a key survived redaction");
-                assert!(out.contains('…'), "a key was not elided at all");
+            if key.is_empty() {
+                // Nothing to redact - and an empty needle must not splice the
+                // marker in between every character of the message.
+                assert_eq!(out, msg);
+                continue;
             }
+            // The failure text deliberately carries neither the key nor the
+            // scrubbed line. A test about redaction that prints the value it
+            // failed to redact would leak it into CI logs on the one run where
+            // that matters, and code scanning flags the pattern for exactly
+            // that reason. The fixture list above is short enough to find the
+            // offending input without it.
+            assert!(!out.contains(key), "a key survived redaction");
+            assert!(out.contains('…'), "a key was not elided at all");
         }
         // ASCII behaviour is unchanged.
         assert_eq!(
             scrub_secret("failed for live_1234567890", "live_1234567890"),
             "failed for liv…890"
         );
+        // Under the floor there is no safe head/tail, so the whole key goes
+        // rather than passing through into the log line untouched.
+        assert_eq!(scrub_secret("failed for abc12", "abc12"), "failed for …");
     }
 
     /// Audio and video cross each other by a few milliseconds all the time,
