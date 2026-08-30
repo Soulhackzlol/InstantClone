@@ -5,7 +5,7 @@
 <br/>
 <br/>
 
-<img src="docs/preview.svg" alt="InstantClone, proxy RTMP libre y de código abierto para retardo de stream en OBS y multistream (simulcast)" width="100%"/>
+<img src="docs/preview.svg" alt="InstantClone, proxy RTMP libre y de código abierto para delay de stream en OBS y multistream (simulcast)" width="100%"/>
 
 <br/>
 
@@ -28,7 +28,7 @@
 <a href="https://github.com/Soulhackzlol/InstantClone/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Soulhackzlol/InstantClone/ci.yml?branch=main&style=flat-square&label=ci&color=34c759&labelColor=11141a"/></a>
 <a href="https://github.com/Soulhackzlol/InstantClone/releases"><img alt="release" src="https://img.shields.io/github/v/release/Soulhackzlol/InstantClone?include_prereleases&style=flat-square&color=5ac8fa&labelColor=11141a&display_name=tag&sort=semver"/></a>
 <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-d4d8e1?style=flat-square&labelColor=11141a"/></a>
-<img alt="Solo Windows" src="https://img.shields.io/badge/solo-windows-7a7d8a?style=flat-square&labelColor=11141a"/>
+<img alt="Windows y Linux" src="https://img.shields.io/badge/plataforma-windows%20%7C%20linux-7a7d8a?style=flat-square&labelColor=11141a"/>
 <a href="https://alternativeto.net/software/instantclone/about/"><img alt="En AlternativeTo" src="https://img.shields.io/badge/AlternativeTo-listado-5ac8fa?style=flat-square&labelColor=11141a&logo=alternativeto&logoColor=white"/></a>
 
 </div>
@@ -37,7 +37,7 @@
 
 <div align="center">
 
-### Un retardo (delay) de stream sin cortes para OBS.
+### Un delay de stream sin cortes para OBS.
 
 Una señal entra. Un delay con buffer que **armas**, **activas** y **cortas** al vuelo, repartido a todas las plataformas a la vez. Libre y de código abierto.
 
@@ -86,7 +86,7 @@ Clave:     main          (vale cualquier texto)
 
 El modo multipista "Auto" funciona de fábrica. Tus claves reales van en la pestaña **Destinos**, no en OBS.
 
-<sub>¿Prefieres manual? Servicio <b>Personalizado</b>, Servidor <code>rtmp://127.0.0.1:1935/live</code>, Clave <code>main</code>.</sub>
+<sub>¿Prefieres manual? Servicio <b>Personalizado</b>, Servidor <code>rtmp://localhost:1935/live</code>, Clave <code>main</code>.</sub>
 
 </td>
 </tr>
@@ -95,20 +95,20 @@ El modo multipista "Auto" funciona de fábrica. Tus claves reales van en la pest
 **3 · Arma, activa, corta**
 
 <div align="center">
-<img src="docs/states.svg" alt="Tres pasos para un retardo (delay) de stream: Armar llena el buffer mientras sigues en directo, Activar pasa a diferido sin cortes, Cortar vuelve a directo al instante" width="100%"/>
+<img src="docs/states.svg" alt="Tres pasos para un delay de stream: Armar llena el buffer mientras sigues en directo, Activar pasa a diferido sin cortes, Cortar vuelve a directo al instante" width="100%"/>
 </div>
 
 <table>
-<tr><td align="center" width="40"><b>1</b></td><td>Escribe un retardo (p. ej. <kbd>15</kbd>s) y pulsa <b>Armar</b>. El buffer se prellena desde la señal en directo sin tocar lo que sale.</td></tr>
+<tr><td align="center" width="40"><b>1</b></td><td>Escribe un delay (p. ej. <kbd>15</kbd>s) y pulsa <b>Armar</b>. El buffer se prellena desde la señal en directo sin tocar lo que sale.</td></tr>
 <tr><td align="center"><b>2</b></td><td>Cuando ponga <code>ARMED</code>, pulsa <b>Activar</b>. El cambio a diferido es instantáneo en pantalla, sin reconexión ni corte.</td></tr>
-<tr><td align="center"><b>3</b></td><td><b>Corta</b> para volver a directo cuando quieras, o <b>&#9201; Cortar cuando esto salga</b> para autocortar justo cuando tu reacción llega a los espectadores. Sin contar el retardo de cabeza.</td></tr>
+<tr><td align="center"><b>3</b></td><td><b>Corta</b> para volver a directo cuando quieras, o <b>&#9201; Cortar cuando esto salga</b> para autocortar justo cuando tu reacción llega a los espectadores. Sin contar el delay de cabeza.</td></tr>
 </table>
 
 > [!IMPORTANT]
 > El Firewall de Windows preguntará al primer arranque porque el proxy escucha en <code>:1935</code> (RTMP) y <code>:7799</code> (web). Permítelo solo en **redes privadas**.
 
 > [!WARNING]
-> Solo Windows 10/11. macOS y Linux no están soportados, probados ni empaquetados.
+> Windows 10/11 y Linux (x86-64) están soportados. En Linux funciona headless en un VPS o en un escritorio Ubuntu; el panel web del navegador es la superficie de control (no hay bandeja nativa). macOS todavía no está soportado.
 
 <br/>
 
@@ -116,9 +116,9 @@ El modo multipista "Auto" funciona de fábrica. Tus claves reales van en la pest
 
 ## Por qué
 
-Quería un buffer de retardo para mi propio stream y me puse a buscar. La opción pulida que encontré fue [InstantDelay](https://instant-delay.com/), que es de pago. Prefería algo que pudiera reconstruir desde cero, entender de punta a punta y adaptar a mi setup, así que lo escribí yo.
+Quería un buffer de delay para mi propio stream y me puse a buscar. La opción pulida que encontré fue [InstantDelay](https://instant-delay.com/), que es de pago. Prefería algo que pudiera reconstruir desde cero, entender de punta a punta y adaptar a mi setup, así que lo escribí yo.
 
-Una vez existía, acabaron dentro las partes que de verdad quería: un armado/activado real de dos fases (para que el momento de salir con retardo sea **sin cortes** en el reproductor del destino), varios destinos de salida a la vez (así hace también de herramienta de multistream / simulcast gratuita, una alternativa autoalojada a Restream), un dock de OBS y un overlay de estadísticas que puedes soltar como fuente de navegador.
+Una vez existía, acabaron dentro las partes que de verdad quería: un armado/activado real de dos fases (para que el momento de salir con delay sea **sin cortes** en el reproductor del destino), varios destinos de salida a la vez (así hace también de herramienta de multistream / simulcast gratuita, una alternativa autoalojada a Restream), un dock de OBS y un overlay de estadísticas que puedes soltar como fuente de navegador.
 
 <sub>InstantClone es un proyecto independiente, no afiliado ni respaldado por InstantDelay ni sus desarrolladores.</sub>
 
@@ -139,7 +139,7 @@ Haz simulcast de una señal de OBS a Twitch, YouTube, Kick y RTMP personalizado 
 <td valign="top" width="50%">
 
 **⏱ Corte programado seguro**
-**Cortar cuando esto salga** marca el borde en directo y autocorta cuando ha llegado a los espectadores en todos los destinos. Ideal para reacciones de final de partida sin hacer cuentas de retardo.
+**Cortar cuando esto salga** marca el borde en directo y autocorta cuando ha llegado a los espectadores en todos los destinos. Ideal para reacciones de final de partida sin hacer cuentas de delay.
 
 </td>
 </tr>
@@ -180,8 +180,22 @@ Un dock de control 280×340 vive dentro de OBS para no hacer alt-tab a media par
 </td>
 <td valign="top">
 
-**⚡ Ajuste de retardo en vivo**
-Rearma o ajusta el retardo arriba/abajo sin desarmar primero, expuesto como un control **↻ Ajustar a Ns** de un solo valor. Consciente de la capacidad: rechaza un retardo que el buffer no aguanta y te dice exactamente cuántos MB necesita.
+**⚡ Ajuste de delay en vivo**
+Rearma o ajusta el delay arriba/abajo sin desarmar primero, expuesto como un control **↻ Ajustar a Ns** de un solo valor. Consciente de la capacidad: rechaza un delay que el buffer no aguanta y te dice exactamente cuántos MB necesita.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**⌨ Atajos de teclado globales**
+Asigna delay on/off, armar, activar, cortar y **cortar cuando esto salga** a una combinación que funciona con un juego en pantalla completa por delante. Toda combinación necesita un modificador para que nada se dispare a media partida, una que otra app ya ocupa se marca en su fila en vez de fallar en silencio, y una acción rechazada te llega como globo en la bandeja.
+
+</td>
+<td valign="top">
+
+**🎹 Pads y controladoras MIDI**
+Mapea las mismas cinco acciones a un pad o un knob, aprendidos pulsando el control en vez de escribir un número de nota. Cada mapeo recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas aunque manden la misma nota, y puedes acotar a qué dispositivo escucha InstantClone.
 
 </td>
 </tr>
@@ -212,7 +226,7 @@ Rearma o ajusta el retardo arriba/abajo sin desarmar primero, expuesto como un c
 </table>
 
 > [!NOTE]
-> El buffer del retardo vive en disco y se reinicia cada vez que cierras la app, así que nada se acumula entre sesiones. Pide más delay del que cabe y la app te dice exactamente cuánto necesita en vez de atascarse.
+> El buffer del delay vive en disco y se reinicia cada vez que cierras la app, así que nada se acumula entre sesiones. Pide más delay del que cabe y la app te dice exactamente cuánto necesita en vez de atascarse.
 
 <br/>
 
@@ -227,7 +241,7 @@ Rearma o ajusta el retardo arriba/abajo sin desarmar primero, expuesto como un c
 | | Endpoint | Cuerpo | Qué hace |
 |:---|---|---|---|
 | <kbd>POST</kbd> | `/arm` | `ms=15000` | Empieza a llenar un buffer de 15 s. Aún no sale. |
-| <kbd>POST</kbd> | `/activate` | | Activa el retardo armado. <code>409</code> si no está listo. |
+| <kbd>POST</kbd> | `/activate` | | Activa el delay armado. <code>409</code> si no está listo. |
 | <kbd>POST</kbd> | `/disarm` | | Cancela el armado, descarta el buffer sin salir. |
 | <kbd>POST</kbd> | `/stop` | | Vuelve a directo (igual que el botón **Cortar**). |
 | <kbd>POST</kbd> | `/cut-after` | | Marca el borde en directo; autocorta cuando sale en todos. |
@@ -302,10 +316,10 @@ Armado de un botón. Añade `/activate` y `/stop` a otros dos botones para contr
 <br/>
 
 <table>
-<tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td><td width="24"></td><td><b>Deps runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>282 / 282</code></td></tr>
+<tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td><td width="24"></td><td><b>Deps runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>392 / 392</code></td></tr>
 </table>
 
-**Buffer.** En disco por defecto (`./instantclone.buf`, 500 MB ≈ 11 min a 6 Mbps, ≈ 6 min 50 s a 10 Mbps), fuera de la RAM porque puede llegar a cientos de MB. Lo único en RAM es el índice de IDR, ~1 MB para 10 minutos a 60 fps. El archivo se reinicia en cada apagado limpio, así que nada se acumula entre sesiones, y la interfaz se niega a armar un retardo mayor del que cabe, con un motivo explícito "necesita ≥ N MB".
+**Buffer.** En disco por defecto (`./instantclone.buf`, 500 MB ≈ 11 min a 6 Mbps, ≈ 6 min 50 s a 10 Mbps), fuera de la RAM porque puede llegar a cientos de MB. Lo único en RAM es el índice de IDR, ~1 MB para 10 minutos a 60 fps. El archivo se reinicia en cada apagado limpio, así que nada se acumula entre sesiones, y la interfaz se niega a armar un delay mayor del que cabe, con un motivo explícito "necesita ≥ N MB".
 
 **Compilar.** Rust 1.74+ estable. Sin npm, sin submódulos, sin SDKs de plataforma.
 
@@ -320,7 +334,7 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 **E/S de disco síncrona en la ruta caliente de escritura al anillo, por elección.** La escritura con buffer aterriza en la caché de páginas del SO en microsegundos y el kernel vacía en segundo plano, así que la caché de páginas ya es el buffer asíncrono; el índice y los bytes avanzan bajo un solo lock para que un lector nunca vea una etiqueta cuyos bytes aún no están en disco.
 
-**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, y la descarga de autoactualización + verificación de checksum + intercambio del exe. **282 tests, todos en verde.**
+**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **392 tests, todos en verde.**
 
 </details>
 
@@ -330,11 +344,11 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 282 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
+**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 392 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
 
 **Lo áspero, con honestidad**
 
-- **Solo Windows por ahora.** Varios módulos (bandeja, pre-flight de puerto, muestreo de RSS) usan rutas específicas de Windows. Hay una versión para Linux (incluida una variante headless/terminal para servidor) en la hoja de ruta; macOS aún no está planeado.
+- **Sin bandeja nativa en Linux.** En Windows hay un icono en la bandeja del sistema; en Linux la superficie de control es el panel web (Salir y Reiniciar están en su pestaña Sistema). macOS aún no está soportado.
 - **La escalera de transcodificado no está garantizada sin EB.** Solo los Twitch Partner tienen slot de transcodificado siempre; el resto se queda en Source-Only, donde algunos decodificadores por hardware fallan por encima de ~8 Mbps (es el comportamiento de asignación de Twitch, no del proxy). Para una escalera garantizada usa Enhanced Broadcasting; si no, mantén el bitrate cerca de ~6000 Kbps.
 - **Servidor HTTP hecho a mano.** Binario más pequeño que con `hyper`, pero soy dueño de toda la superficie HTTP. A revisar si crece.
 
@@ -395,11 +409,20 @@ En la pestaña **Destinos** de InstantClone, nunca en OBS. OBS solo apunta a Ins
 </details>
 
 <details>
+<summary><b>¿Puedo controlar el delay con un atajo de teclado o una controladora MIDI?</b></summary>
+
+<br/>
+
+Sí, ambas cosas. Cinco acciones - delay on/off, armar, activar, cortar a directo y **cortar cuando esto salga** - se asignan a un atajo de teclado global, a un pad o knob MIDI, o a los dos a la vez, en **Ajustes**. Los atajos funcionan con un juego en pantalla completa por delante, así no haces alt-tab a media partida, y toda combinación necesita un modificador (Ctrl, Alt, Shift o Win) para que una tecla suelta no dispare una acción de delay. Los mapeos MIDI se aprenden pulsando el control en vez de escribir un número de nota, y cada uno recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas. Por ahora solo en Windows.
+
+</details>
+
+<details>
 <summary><b>¿Funciona en macOS o Linux?</b></summary>
 
 <br/>
 
-Windows 10/11 por ahora. Hay una **versión para Linux en la hoja de ruta**, incluida una variante headless/terminal para servidores sin escritorio. macOS aún no está planeado. Algunas partes (bandeja, pre-flight de puerto, muestreo de memoria) usan código específico de Windows que primero hay que portar.
+Windows 10/11 y **Linux (x86-64)** lo ejecutan. En Linux funciona headless en un VPS o en un escritorio Ubuntu, gobernado desde el panel web (no hay bandeja nativa, así que Salir y Reiniciar viven en la pestaña Sistema del panel). Para una instalación expuesta a la red, activa la contraseña opcional del panel y acompáñala de TLS mediante un proxy inverso. macOS aún no está soportado.
 
 </details>
 

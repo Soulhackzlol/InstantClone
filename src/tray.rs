@@ -39,17 +39,19 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, MOD_NOREPEAT,
 };
 use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_WARNING, NIM_ADD, NIM_DELETE,
+    NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics,
-    GetWindowLongPtrW, LoadIconW, LookupIconIdFromDirectoryEx, MessageBoxW, PostMessageW,
-    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW, TrackPopupMenu,
-    TranslateMessage, GWLP_USERDATA, HMENU, IDI_APPLICATION, IDYES, LR_DEFAULTCOLOR,
-    MB_ICONWARNING, MB_YESNO, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON,
-    SM_CYSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY,
-    WM_HOTKEY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
+    GetWindowLongPtrW, KillTimer, LoadIconW, LookupIconIdFromDirectoryEx, MessageBoxW,
+    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow,
+    SetTimer, SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, GWLP_USERDATA, HMENU,
+    IDI_APPLICATION, IDYES, LR_DEFAULTCOLOR, MB_ICONWARNING, MB_YESNO, MF_DISABLED, MF_GRAYED,
+    MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_RBUTTONUP,
+    WM_TIMER, WNDCLASSW,
 };
 
 const TRAY_MSG: u32 = WM_APP + 1;
@@ -58,29 +60,62 @@ const TRAY_MSG: u32 = WM_APP + 1;
 // the user edits a binding in the dashboard.
 const HOTKEY_RELOAD_MSG: u32 = WM_APP + 2;
 
-// Global-hotkey action table: (RegisterHotKey id, config action name).
-// The id is echoed back in WM_HOTKEY's wParam; the action name is the one
-// `Hotkeys::entries` uses, so the two stay in lockstep. Ids start at 1
-// (RegisterHotKey rejects 0 for an application hotkey).
-const HOTKEY_ACTIONS: [(i32, &str); 5] = [
-    (1, "toggle"),
-    (2, "arm"),
-    (3, "activate"),
-    (4, "cut"),
-    (5, "cut_after"),
-];
+// Posted (from any thread) with a problem message parked in
+// `PENDING_BALLOON`, so the balloon is raised on the thread that owns the
+// tray icon.
+const BALLOON_MSG: u32 = WM_APP + 3;
+
+// Fires when a capture suspension runs out, so hotkeys come back even if the
+// dashboard that asked for it never says it is done.
+const RESUME_TIMER_ID: usize = 1;
+
+/// Text for the next balloon. A single slot: if two problems land back to
+/// back, the newer one is the one worth showing.
+static PENDING_BALLOON: crate::sync::Mutex<String> = crate::sync::Mutex::new(String::new());
+
+/// RegisterHotKey id for an action: its 1-based position in
+/// `config::ACTIONS` (0 is not a valid application hotkey id). Deriving both
+/// directions from that one list is what keeps the id a binding is filed
+/// under and the action a WM_HOTKEY runs from ever drifting apart.
+fn hotkey_id(action: &str) -> Option<i32> {
+    config::ACTIONS
+        .iter()
+        .position(|a| *a == action)
+        .map(|i| i as i32 + 1)
+}
+
+/// Inverse of `hotkey_id`: the action a fired WM_HOTKEY id belongs to.
+fn hotkey_action(id: i32) -> Option<&'static str> {
+    // `checked_sub` rather than `id - 1`: wParam arrives from the OS, and a
+    // stray message with i32::MIN would overflow (a debug-build panic) on
+    // the way to a lookup that was never going to match anything.
+    let index = usize::try_from(id.checked_sub(1)?).ok()?;
+    config::ACTIONS.get(index).copied()
+}
 
 /// The tray window handle, published once the message-only window exists so
 /// the tokio side can post `HOTKEY_RELOAD_MSG` to it. 0 means "not up yet",
 /// in which case a reload request is a safe no-op.
 static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
 
+/// The shell broadcasts `TaskbarCreated` when the notification area appears -
+/// at logon once explorer is ready, and again every time explorer restarts.
+/// Registered at startup, read in the window procedure; 0 until then.
+static TASKBAR_CREATED_MSG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 // Menu item IDs. Kept above 0x100 so they can't collide with system IDs.
 const ID_OPEN_DASH: usize = 0x101;
 const ID_OPEN_DOCK: usize = 0x102;
 const ID_CUT_DELAY: usize = 0x103;
 const ID_COPY_URL: usize = 0x104;
-const ID_LAUNCH_EB: usize = 0x105;
+// 0x105 was "Launch OBS (VOD + EB)", a launcher from before the InstantClone
+// service existed. It passed OBS `--config-url` to switch Enhanced
+// Broadcasting on for a custom RTMP server, and wrote OBS's VOD-track flag on
+// the way. Neither job is its any more: the registered service carries
+// `multitrack_video_configuration_url` itself, so picking InstantClone in OBS
+// IS Enhanced Broadcasting, and OBS 32.2 locked the built-in VOD Track to
+// Custom services, so a VOD track now comes from the unlocker script. Left
+// unused rather than recycled, in case an old build's menu message arrives.
 const ID_QUIT: usize = 0x1FF;
 
 /// The icon bytes are generated by build.rs (cyan rounded square + white
@@ -160,7 +195,10 @@ fn run(
             return Err("CreateWindowExW failed".into());
         }
 
-        // Park state on the window so the WNDPROC can find it.
+        // Park state on the window so the WNDPROC can find it. Keep a handle
+        // to the controller first: the state is moved in, and the icon path
+        // below still needs somewhere to report to.
+        let log_ctrl = ctrl.clone();
         let state = Box::new(TrayState {
             web_url,
             dock_url,
@@ -182,16 +220,35 @@ fn run(
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = TRAY_MSG;
         nid.hIcon = h_icon;
-        write_tip(&mut nid.szTip, "InstantClone - click for menu");
+        write_wide(&mut nid.szTip, "InstantClone - click for menu");
 
-        if Shell_NotifyIconW(NIM_ADD, &nid) == 0 {
-            return Err("Shell_NotifyIconW(NIM_ADD) failed".into());
-        }
-
-        // Publish the handle so `request_hotkey_reload` can post to us, then
-        // bind whatever hotkeys the user already has configured.
+        // Publish the handle and bind the hotkeys BEFORE touching the shell,
+        // and never let the icon decide whether the rest of this thread runs.
+        //
+        // `Shell_NotifyIconW(NIM_ADD)` legitimately fails at logon when the
+        // notification area does not exist yet - which is exactly the
+        // start-with-Windows path this release exists to fix. Aborting here
+        // used to mean no icon, no hotkeys (TRAY_HWND stayed 0, so nothing
+        // could ever register), no balloons, and with `windows_subsystem =
+        // "windows"` no console and no way to quit: an invisible process with
+        // the headline feature dead and nothing on screen to say why.
         TRAY_HWND.store(hwnd as isize, Ordering::Release);
         register_hotkeys(hwnd);
+
+        // Ask the shell to tell us when the notification area shows up, then
+        // try once now. Either the icon appears, or TaskbarCreated brings us
+        // back - which also covers explorer restarting mid-session, after
+        // which the icon used to be gone for good.
+        TASKBAR_CREATED_MSG.store(
+            RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
+            Ordering::Release,
+        );
+        if Shell_NotifyIconW(NIM_ADD, &nid) == 0 {
+            log_ctrl.log(
+                "[tray] the notification area is not ready; hotkeys are live and the icon \
+                 will appear when it is",
+            );
+        }
 
         // Message loop until WM_QUIT (PostQuitMessage from the Quit handler
         // or DefWindowProc on WM_DESTROY).
@@ -257,6 +314,14 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             }
             0
         }
+        // The notification area (re)appeared: at logon after explorer was
+        // ready, or because explorer restarted and took our icon with it.
+        // Re-adding is idempotent from our side - the shell has no record of
+        // the old one either way.
+        m if m != 0 && m == TASKBAR_CREATED_MSG.load(Ordering::Acquire) => {
+            readd_tray_icon(hwnd);
+            0
+        }
         // Global hotkey fired. wParam is the RegisterHotKey id from the
         // action table; run the matching delay action straight on the
         // controller (atomic stores, no runtime needed).
@@ -267,10 +332,27 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             }
             0
         }
-        // Live re-apply: the user edited a binding in the dashboard.
+        // A hotkey or MIDI action was refused; say so where the user is.
+        BALLOON_MSG => {
+            show_balloon(hwnd);
+            0
+        }
+        // Live re-apply: the user edited a binding, or started / finished
+        // recording one.
         HOTKEY_RELOAD_MSG => {
             unregister_hotkeys(hwnd);
             register_hotkeys(hwnd);
+            sync_resume_timer(hwnd);
+            0
+        }
+        // A capture suspension ran out without anyone telling us it was
+        // over. Put the hotkeys back.
+        WM_TIMER => {
+            if wp == RESUME_TIMER_ID {
+                KillTimer(hwnd, RESUME_TIMER_ID);
+                unregister_hotkeys(hwnd);
+                register_hotkeys(hwnd);
+            }
             0
         }
         // Menu selection.
@@ -296,24 +378,6 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 ID_COPY_URL => {
                     let url = obs_rtmp_url(&state.settings.borrow());
                     let _ = set_clipboard_text(hwnd, &url);
-                }
-                ID_LAUNCH_EB => {
-                    // One-click VOD + EB from the tray: write OBS's
-                    // VOD-track flag, then launch OBS with --config-url.
-                    // Both are synchronous and degrade quietly (missing
-                    // OBS just logs) so a click never wedges the tray.
-                    let (web_port, dock_token) = {
-                        let s = state.settings.borrow();
-                        (s.web_port, s.dock_token.clone())
-                    };
-                    let _ = crate::obs_register::set_vod_audio_flag(true);
-                    match crate::obs_register::launch_obs_with_eb_config(web_port, &dock_token) {
-                        Ok(exe) => state.ctrl.log(format!(
-                            "[tray] launched OBS for VOD + EB ({})",
-                            exe.display()
-                        )),
-                        Err(e) => state.ctrl.log(format!("[tray] OBS launch failed: {e}")),
-                    }
                 }
                 ID_QUIT => {
                     // Quitting kills every egress, so if OBS is publishing
@@ -367,22 +431,56 @@ unsafe fn register_hotkeys(hwnd: HWND) {
         return;
     }
     let state = &*state_ptr;
+    // The dashboard is recording a combo. Leaving ours registered would eat
+    // the keypress before the browser ever saw it - the user would be unable
+    // to record any bound combo, and would trigger its action instead. The
+    // conflict list is left as it was: it describes bindings, not this
+    // moment, and clearing it would flash a warning off and back on.
+    if state.ctrl.hotkeys_suspended() {
+        return;
+    }
     // Clone so we don't hold the watch borrow across the log calls below.
     let hotkeys = state.settings.borrow().hotkeys.clone();
-    for (i, (action, combo)) in hotkeys.entries().into_iter().enumerate() {
+    let mut conflicts = Vec::new();
+    for (action, combo) in hotkeys.entries() {
         if combo.is_empty() {
             continue;
         }
         let Some((mods, vk)) = config::parse_hotkey(combo) else {
             continue;
         };
-        let id = (i + 1) as i32;
+        let Some(id) = hotkey_id(action) else {
+            continue;
+        };
         // MOD_NOREPEAT so holding the combo fires once, not on autorepeat.
         if RegisterHotKey(hwnd, id, mods | MOD_NOREPEAT, vk) == 0 {
+            // Duplicates inside our own set are impossible (`Hotkeys::set`
+            // moves a combo rather than sharing it), so a refusal here can
+            // only be another app holding the combo.
             state.ctrl.log(format!(
                 "[hotkey] {combo} is already in use by another app - {action} not bound"
             ));
+            conflicts.push(action.to_string());
         }
+    }
+    // Always published, including the empty case, so the dashboard clears a
+    // warning the moment the user picks a combo that is actually free.
+    state.ctrl.set_hotkey_conflicts(conflicts);
+}
+
+/// Keep the resume timer in step with the suspension: armed for whatever is
+/// left of the window, cancelled as soon as hotkeys are live again.
+unsafe fn sync_resume_timer(hwnd: HWND) {
+    let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
+    if state_ptr.is_null() {
+        return;
+    }
+    let remaining = (*state_ptr).ctrl.hotkeys_suspend_remaining_ms();
+    if remaining > 0 {
+        // +250 ms so the timer lands after the deadline, never a tick before.
+        SetTimer(hwnd, RESUME_TIMER_ID, remaining + 250, None);
+    } else {
+        KillTimer(hwnd, RESUME_TIMER_ID);
     }
 }
 
@@ -390,20 +488,58 @@ unsafe fn register_hotkeys(hwnd: HWND) {
 /// registered is harmless, so this can run unconditionally on reload and
 /// teardown.
 unsafe fn unregister_hotkeys(hwnd: HWND) {
-    for (id, _) in HOTKEY_ACTIONS {
-        UnregisterHotKey(hwnd, id);
+    for i in 0..config::ACTIONS.len() {
+        UnregisterHotKey(hwnd, i as i32 + 1);
     }
 }
 
 /// Run the delay action bound to a fired hotkey. The RegisterHotKey id maps
-/// back to an action name via `HOTKEY_ACTIONS`; the shared controller method
+/// back to an action name via `hotkey_action`; the shared controller method
 /// carries the semantics (identical to the MIDI path).
 fn dispatch_hotkey(state: &TrayState, id: i32) {
-    let Some((_, action)) = HOTKEY_ACTIONS.iter().find(|(hid, _)| *hid == id) else {
+    let Some(action) = hotkey_action(id) else {
         return;
     };
     let default_ms = state.settings.borrow().auto_arm_delay_ms;
-    state.ctrl.run_named_action(action, default_ms, "hotkey");
+    // A refusal is the one case worth interrupting for: the streamer is in a
+    // game, pressed a key, and nothing happened. Successes stay silent so a
+    // balloon never lands on a display-captured scene during normal use.
+    if let Some(problem) = state.ctrl.run_named_action(action, default_ms, "hotkey") {
+        notify_problem(&problem);
+    }
+}
+
+/// Raise a tray balloon about an action that could not run. Callable from
+/// any thread: the text is parked and the tray thread does the drawing.
+pub fn notify_problem(text: &str) {
+    let hwnd = TRAY_HWND.load(Ordering::Acquire);
+    if hwnd == 0 {
+        return;
+    }
+    *PENDING_BALLOON.lock() = text.to_string();
+    // SAFETY: same contract as `request_hotkey_reload` - PostMessageW is
+    // thread-safe and a stale handle just fails the post.
+    unsafe {
+        PostMessageW(hwnd as HWND, BALLOON_MSG, 0, 0);
+    }
+}
+
+/// Show the parked message as a tray balloon. Reuses the icon we already
+/// own (uID 1), so this is a modify rather than a second icon.
+unsafe fn show_balloon(hwnd: HWND) {
+    let text = std::mem::take(&mut *PENDING_BALLOON.lock());
+    if text.is_empty() {
+        return;
+    }
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_INFO;
+    nid.dwInfoFlags = NIIF_WARNING;
+    write_wide(&mut nid.szInfoTitle, "InstantClone");
+    write_wide(&mut nid.szInfo, &text);
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
 /// Modal Yes/No shown when the user hits Quit while OBS is publishing.
@@ -463,10 +599,6 @@ unsafe fn show_menu(hwnd: HWND) {
     AppendMenuW(menu, MF_STRING, ID_COPY_URL, copy.as_ptr());
 
     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
-    let launch_eb = wide("Launch OBS (VOD + EB)");
-    AppendMenuW(menu, MF_STRING, ID_LAUNCH_EB, launch_eb.as_ptr());
-
-    AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
     let quit = wide("Quit InstantClone");
     AppendMenuW(menu, MF_STRING, ID_QUIT, quit.as_ptr());
 
@@ -488,6 +620,26 @@ unsafe fn show_menu(hwnd: HWND) {
     // standard Win32 dance.
     PostMessageW(hwnd, 0, 0, 0);
     DestroyMenu(menu);
+}
+
+/// Put our icon back in the notification area. Called when the shell says
+/// the area exists, which is both the logon race and an explorer restart.
+///
+/// Builds the descriptor fresh rather than caching one: the only fields that
+/// matter are the window, the id and the callback message, and re-deriving
+/// them is cheaper than keeping a `NOTIFYICONDATAW` alive across threads.
+unsafe fn readd_tray_icon(hwnd: HWND) {
+    let h_icon =
+        load_embedded_icon().unwrap_or_else(|| LoadIconW(ptr::null_mut(), IDI_APPLICATION));
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = TRAY_MSG;
+    nid.hIcon = h_icon;
+    write_wide(&mut nid.szTip, "InstantClone - click for menu");
+    Shell_NotifyIconW(NIM_ADD, &nid);
 }
 
 /// One-line summary of the controller's current state. Read on every
@@ -628,16 +780,40 @@ fn wide(s: &str) -> Vec<u16> {
         .collect()
 }
 
-/// Copy a string into the fixed-cap `szTip` array, NUL-terminated, with
-/// the truncation-at-127-chars cap NOTIFYICONDATAW requires. Splitting
-/// a surrogate pair near the boundary is acceptable: it would render as
-/// a tofu glyph in the tooltip, not crash.
-fn write_tip(dst: &mut [u16; 128], s: &str) {
-    let mut v: Vec<u16> = OsStr::new(s).encode_wide().collect();
-    if v.len() > 127 {
-        v.truncate(127);
+/// Copy `s` into a fixed-size UTF-16 field, NUL-terminated, truncating to
+/// leave room for the terminator. Used for the tray tooltip and for the
+/// balloon's title and body, all of which are fixed-cap arrays in
+/// NOTIFYICONDATAW. Splitting a surrogate pair at the boundary is
+/// acceptable: it renders as a tofu glyph, it does not crash.
+fn write_wide(dst: &mut [u16], s: &str) {
+    if dst.is_empty() {
+        return;
     }
+    let mut v: Vec<u16> = OsStr::new(s).encode_wide().collect();
+    v.truncate(dst.len().saturating_sub(1));
     v.push(0);
-    let n = v.len().min(dst.len());
-    dst[..n].copy_from_slice(&v[..n]);
+    dst[..v.len()].copy_from_slice(&v);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hotkey_action, hotkey_id};
+    use crate::config;
+
+    /// The id a hotkey is registered under and the action a fired WM_HOTKEY
+    /// runs come from the same list, so this is really asking that the two
+    /// directions are inverses - the property that used to depend on two
+    /// hand-kept tables staying in the same order.
+    #[test]
+    fn hotkey_ids_round_trip_to_their_action() {
+        for action in config::ACTIONS {
+            let id = hotkey_id(action).expect("every action has an id");
+            assert!(id >= 1, "RegisterHotKey rejects id 0");
+            assert_eq!(hotkey_action(id), Some(action));
+        }
+        assert_eq!(hotkey_id("not-an-action"), None);
+        assert_eq!(hotkey_action(0), None, "no action is filed under 0");
+        assert_eq!(hotkey_action(-1), None);
+        assert_eq!(hotkey_action(config::ACTIONS.len() as i32 + 1), None);
+    }
 }

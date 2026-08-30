@@ -12,8 +12,14 @@
 //!     overlapping, and keeps v4 peers from arriving v4-mapped.
 //!
 //! Implementation: raw `WSAIoctl(SIO_KEEPALIVE_VALS)` / `setsockopt` on
-//! Windows and `libc::setsockopt` on unix (no `socket2` dependency),
-//! no-op stubs elsewhere.
+//! Windows and `libc::setsockopt` on Linux (no `socket2` dependency),
+//! no-op stubs on platforms we do not publish.
+//!
+//! Not every helper needs both halves, and the ones that do not say why at
+//! the stub. Treat a silent `Ok(())` here as a claim that the platform
+//! already does the right thing, not as a gap - `set_aggressive_keepalive`
+//! was such a stub on Linux by oversight, and the result was a build that
+//! set no keepalive at all.
 
 use std::io;
 use tokio::net::TcpStream;
@@ -72,7 +78,55 @@ pub fn set_aggressive_keepalive(sock: &TcpStream) -> io::Result<()> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Linux half of the same tuning. `SO_KEEPALIVE` is OFF by default on every
+/// unix, so without this a Linux build sets no keepalive at all - strictly
+/// worse than Windows, which at least has a two-hour default to fall back on.
+///
+/// That matters more here than the numbers suggest. `ingest_alive` is cleared
+/// by `PublishGuard::drop`, which runs when the connection handler returns,
+/// and nothing else clears it - there is no tag-timeout behind it. So a
+/// half-open socket (the publisher's machine loses power, someone pulls the
+/// cable, Wi-Fi drops) leaves `read_message().await` parked forever: the
+/// dashboard reports the publisher alive indefinitely, and every path gated on
+/// `ingest_alive` waits on a stream that is never coming back. On a headless
+/// relay, which is what the Linux build is for, there is nobody at the machine
+/// to notice.
+///
+/// 30 s idle then 3 probes 10 s apart, so a dead peer surfaces in ~60 s.
+/// Windows sets the same idle and interval but fixes its own probe count, so
+/// the two platforms land close rather than identical - near enough that the
+/// dashboard behaves the same way on both.
+#[cfg(target_os = "linux")]
+pub fn set_aggressive_keepalive(sock: &TcpStream) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    fn set(fd: i32, level: libc::c_int, name: libc::c_int, val: libc::c_int) -> io::Result<()> {
+        let rc = unsafe {
+            libc::setsockopt(
+                fd,
+                level,
+                name,
+                &val as *const libc::c_int as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    let fd = sock.as_raw_fd();
+    set(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1)?;
+    set(fd, libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, 30)?;
+    set(fd, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 10)?;
+    set(fd, libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 3)?;
+    Ok(())
+}
+
+// Windows and Linux are the platforms we publish; anywhere else keeps the
+// OS defaults.
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn set_aggressive_keepalive(_sock: &TcpStream) -> io::Result<()> {
     Ok(())
 }
@@ -111,6 +165,14 @@ pub fn set_send_buffer(sock: &TcpStream, bytes: u32) -> io::Result<()> {
     }
 }
 
+/// Deliberately nothing on unix, unlike the keepalive above.
+///
+/// Linux auto-tunes the send buffer between the bounds in
+/// `net.ipv4.tcp_wmem`, growing it under exactly the load this exists to
+/// smooth. Calling `setsockopt(SO_SNDBUF)` opts that socket OUT of the
+/// autotuning and pins it at the value given, so "fixing" the gap by
+/// mirroring the Windows call would cap a socket the kernel would otherwise
+/// have grown past 1 MB. The right amount of code here is none.
 #[cfg(not(target_os = "windows"))]
 pub fn set_send_buffer(_sock: &TcpStream, _bytes: u32) -> io::Result<()> {
     Ok(())
@@ -179,4 +241,64 @@ pub fn set_v6_only(sock: &tokio::net::TcpSocket) -> io::Result<()> {
 #[cfg(not(any(target_os = "windows", unix)))]
 pub fn set_v6_only(_sock: &tokio::net::TcpSocket) -> io::Result<()> {
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    fn opt(fd: i32, level: libc::c_int, name: libc::c_int) -> libc::c_int {
+        let mut v: libc::c_int = -1;
+        let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                level,
+                name,
+                &mut v as *mut libc::c_int as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        v
+    }
+
+    /// The keepalive has to reach the socket, not just compile.
+    ///
+    /// This was a `Ok(())` stub on every non-Windows target, and because
+    /// `SO_KEEPALIVE` is off by default on unix that left Linux with no
+    /// keepalive at all - not the OS default, none. `ingest_alive` is cleared
+    /// only when the connection handler returns, so a half-open socket would
+    /// have parked the read forever and reported the publisher alive for good.
+    #[test]
+    fn keepalive_reaches_the_socket_on_linux() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            use std::os::fd::AsRawFd;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("listen");
+            let sock = tokio::net::TcpStream::connect(listener.local_addr().expect("addr"))
+                .await
+                .expect("connect");
+            let fd = sock.as_raw_fd();
+
+            assert_eq!(
+                opt(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE),
+                0,
+                "unix leaves keepalive off, which is why the stub was worse than a default"
+            );
+
+            set_aggressive_keepalive(&sock).expect("set keepalive");
+
+            assert_eq!(opt(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE), 1);
+            // 30 s idle then 3 probes 10 s apart: a dead peer surfaces in ~60 s.
+            assert_eq!(opt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPIDLE), 30);
+            assert_eq!(opt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL), 10);
+            assert_eq!(opt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPCNT), 3);
+        });
+    }
 }

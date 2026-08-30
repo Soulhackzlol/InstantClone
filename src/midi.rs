@@ -12,24 +12,43 @@
 //! `available` stays false and the dashboard hides the section - exactly
 //! like the keyboard hotkeys on Linux.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::config::{MidiBindings, Settings};
 #[cfg(windows)]
 use crate::controller::Controller;
+use crate::sync::Mutex;
+
+/// How long a learn request stays armed, and how long a capture waits to be
+/// collected.
+///
+/// Learn mode swallows the next press instead of firing its action, so it
+/// must not outlive the person who asked for it. The dashboard cancels when
+/// the tab is hidden or closed, but a browser that is killed outright never
+/// gets to, and without a deadline the listener would eat a press mid-stream
+/// and then bind it to whatever was being learned days earlier, the moment
+/// someone next opened the dashboard.
+const LEARN_WINDOW: Duration = Duration::from_secs(30);
 
 /// Shared MIDI state between the listener thread and the web layer.
 #[derive(Default)]
 pub struct MidiState {
-    available: AtomicBool,
     bindings: Mutex<MidiBindings>,
+    /// Every input device the system reports, whether or not we opened it.
+    /// The dashboard needs the full list to offer a choice.
     devices: Mutex<Vec<String>>,
-    /// The action currently being learned, if any. While set, the next
-    /// incoming message is captured for it instead of being dispatched.
-    learn: Mutex<Option<String>>,
-    /// A just-captured (action, signature) awaiting commit by the web layer.
-    captured: Mutex<Option<(String, String)>>,
+    /// The devices we actually hold open and are hearing from.
+    listening: Mutex<Vec<String>>,
+    /// The device the user picked, by name. Empty means all of them.
+    selected: Mutex<String>,
+    /// The action currently being learned and when it stops being learned.
+    /// While set, the next incoming message is captured for it instead of
+    /// being dispatched.
+    learn: Mutex<Option<(String, Instant)>>,
+    /// A just-captured (action, signature) awaiting commit by the web layer,
+    /// carrying the deadline of the learn that produced it.
+    captured: Mutex<Option<(String, String, Instant)>>,
 }
 
 impl MidiState {
@@ -37,40 +56,96 @@ impl MidiState {
         Self::default()
     }
 
-    /// Mirror the current bindings into the listener's live match view.
+    /// Mirror the current bindings and device choice into the listener's
+    /// live view. The listener picks the device change up on its next sweep.
     pub fn update_from_settings(&self, s: &Settings) {
-        *self.bindings.lock().unwrap() = s.midi.clone();
+        *self.bindings.lock() = s.midi.clone();
+        *self.selected.lock() = s.midi_device.clone();
     }
 
+    /// The device the user picked, or empty for every device.
+    pub fn selected_device(&self) -> String {
+        self.selected.lock().clone()
+    }
+
+    /// Whether anything is actually being heard. Derived rather than
+    /// stored: a flag beside the list is a second copy of the same fact,
+    /// and the two drift the first time one of them is forgotten.
     pub fn available(&self) -> bool {
-        self.available.load(Ordering::Relaxed)
+        !self.listening.lock().is_empty()
     }
-    #[cfg(windows)]
-    pub fn set_available(&self, v: bool) {
-        self.available.store(v, Ordering::Relaxed);
+
+    /// Whether there is a controller we *could* listen to.
+    ///
+    /// Distinct from `available`, which says whether a device is open right
+    /// now. Since devices are only held while a binding exists or a learn is
+    /// running, a fresh install with no bindings has nothing open - so
+    /// gating "record a binding" on `available` would mean the first binding
+    /// could never be made. Learn is gated on this instead: the sweep opens
+    /// the device once the learn is armed.
+    pub fn connected(&self) -> bool {
+        let selected = self.selected_device();
+        let devices = self.devices.lock();
+        if selected.is_empty() {
+            !devices.is_empty()
+        } else {
+            devices.contains(&selected)
+        }
     }
-    #[cfg(windows)]
-    pub fn set_devices(&self, names: Vec<String>) {
-        *self.devices.lock().unwrap() = names;
+    /// Pure state, no Win32: built everywhere so the tests that drive the
+    /// device list run on every CI target, even though only the Windows
+    /// listener calls it.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn set_devices(&self, present: Vec<String>, listening: Vec<String>) {
+        *self.devices.lock() = present;
+        *self.listening.lock() = listening;
     }
     pub fn devices(&self) -> Vec<String> {
-        self.devices.lock().unwrap().clone()
+        self.devices.lock().clone()
+    }
+    pub fn listening(&self) -> Vec<String> {
+        self.listening.lock().clone()
     }
 
+    /// Arm learn mode for `action`. Any earlier learn or uncollected capture
+    /// is dropped: only the request the user just made is live.
     pub fn start_learn(&self, action: &str) {
-        *self.learn.lock().unwrap() = Some(action.to_string());
-        *self.captured.lock().unwrap() = None;
+        self.start_learn_within(action, LEARN_WINDOW);
+    }
+
+    /// `start_learn` with an explicit window, so the expiry rule is testable
+    /// without waiting out the real one.
+    fn start_learn_within(&self, action: &str, window: Duration) {
+        *self.learn.lock() = Some((action.to_string(), Instant::now() + window));
+        *self.captured.lock() = None;
     }
     pub fn cancel_learn(&self) {
-        *self.learn.lock().unwrap() = None;
+        *self.learn.lock() = None;
+        *self.captured.lock() = None;
     }
+    /// The action being learned, or None once it is captured or expired.
     pub fn learning(&self) -> Option<String> {
-        self.learn.lock().unwrap().clone()
+        let mut learn = self.learn.lock();
+        match learn.as_ref() {
+            Some((action, deadline)) if Instant::now() < *deadline => Some(action.clone()),
+            Some(_) => {
+                *learn = None;
+                None
+            }
+            None => None,
+        }
     }
-    /// Take a captured (action, signature) if one is waiting. The web layer
-    /// persists it to config, so it is consumed exactly once.
+    /// Take a captured (action, signature) if one is waiting and still
+    /// inside its learn window. The web layer persists it to config, so it
+    /// is consumed exactly once.
     pub fn take_captured(&self) -> Option<(String, String)> {
-        self.captured.lock().unwrap().take()
+        let mut captured = self.captured.lock();
+        match captured.take() {
+            Some((action, signature, deadline)) if Instant::now() < deadline => {
+                Some((action, signature))
+            }
+            _ => None,
+        }
     }
 
     /// Called by the listener on each press-edge message. In learn mode it
@@ -80,16 +155,24 @@ impl MidiState {
     #[cfg(windows)]
     pub fn on_signature(&self, ctrl: &Controller, default_ms: u32, signature: &str) {
         // Learn mode wins: capture and stop, do not also fire an action.
+        // An expired request is not learn mode any more - the press belongs
+        // to whatever the control is actually bound to.
         {
-            let mut learn = self.learn.lock().unwrap();
-            if let Some(action) = learn.take() {
-                *self.captured.lock().unwrap() = Some((action, signature.to_string()));
-                return;
+            let mut learn = self.learn.lock();
+            if let Some((action, deadline)) = learn.take() {
+                if Instant::now() < deadline {
+                    *self.captured.lock() = Some((action, signature.to_string(), deadline));
+                    return;
+                }
             }
         }
-        let action = self.bindings.lock().unwrap().action_for(signature);
+        let action = self.bindings.lock().action_for(signature);
         if let Some(action) = action {
-            ctrl.run_named_action(action, default_ms, "midi");
+            // Same as the keyboard path: a refusal reaches the user as a
+            // tray balloon, since a pad press gives no feedback of its own.
+            if let Some(problem) = ctrl.run_named_action(action, default_ms, "midi") {
+                crate::tray::notify_problem(&problem);
+            }
         }
     }
 
@@ -103,8 +186,9 @@ impl MidiState {
             None => "null".to_string(),
         };
         let devices: Vec<String> = self.devices().iter().map(|d| json_string(d)).collect();
+        let listening: Vec<String> = self.listening().iter().map(|d| json_string(d)).collect();
         let bindings = {
-            let b = self.bindings.lock().unwrap();
+            let b = self.bindings.lock();
             format!(
                 r#"{{"toggle":{t},"arm":{a},"activate":{ac},"cut":{c},"cut_after":{ca}}}"#,
                 t = json_string(&b.toggle),
@@ -115,10 +199,13 @@ impl MidiState {
             )
         };
         format!(
-            r#"{{"available":{a},"learning":{l},"devices":[{d}],"bindings":{b}}}"#,
+            r#"{{"available":{a},"connected":{c},"learning":{l},"devices":[{d}],"listening":[{li}],"device":{sel},"bindings":{b}}}"#,
             a = self.available(),
+            c = self.connected(),
             l = learning,
             d = devices.join(","),
+            li = listening.join(","),
+            sel = json_string(&self.selected_device()),
             b = bindings,
         )
     }
@@ -183,6 +270,21 @@ pub fn spawn(
 ) {
 }
 
+/// Whether the listener should be holding MIDI inputs open.
+///
+/// Opening one claims it exclusively: for as long as we hold a device, no
+/// DAW, no VST host and no other MIDI tool on the machine can open it. A
+/// user who has bound nothing never asked us to take their controller away
+/// from the software they actually use it with, so we hold nothing until
+/// there is a binding to serve - or a learn waiting for the press that will
+/// become one.
+/// Built everywhere so its rule is tested on every CI target; only Windows
+/// has a listener to act on it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn should_hold_devices(learning: bool, midi: &crate::config::MidiBindings) -> bool {
+    learning || midi.entries().iter().any(|(_, sig)| !sig.is_empty())
+}
+
 #[cfg(windows)]
 mod win {
     use super::{signature_for, MidiState};
@@ -206,6 +308,10 @@ mod win {
         ctrl: Arc<Controller>,
         state: Arc<MidiState>,
         settings: watch::Receiver<Settings>,
+        /// Open device handle -> its name, so a message can say which deck
+        /// it came from. winmm hands the handle to every callback; without
+        /// this map two controllers sending the same note are one control.
+        by_handle: crate::sync::Mutex<Vec<(usize, String)>>,
     }
 
     pub fn run(ctrl: Arc<Controller>, state: Arc<MidiState>, settings: watch::Receiver<Settings>) {
@@ -213,32 +319,113 @@ mod win {
             ctrl,
             state,
             settings,
+            by_handle: crate::sync::Mutex::new(Vec::new()),
         }));
         let instance = ctx as *const CallbackCtx as usize;
 
         let mut handles: Vec<HMIDIIN> = Vec::new();
-        let mut last_count = u32::MAX;
+        let mut last_present: Vec<String> = Vec::new();
+        let mut last_selected = String::new();
+        let mut last_listening = false;
         loop {
-            let count = unsafe { midiInGetNumDevs() };
-            // Reconcile only when the device count changes: winmm gives no
-            // hot-plug event, so a periodic count check is the cheap way to
-            // pick up a controller plugged in (or pulled out) mid-session.
-            if count != last_count {
+            // winmm gives no hot-plug event, so a periodic sweep is the only
+            // way to notice a controller arriving or leaving. Comparing the
+            // NAMES rather than the count catches the swap that keeps the
+            // count the same (one deck unplugged, another plugged in between
+            // two ticks). Holding nothing while a device we want is present
+            // means the open failed - another app had it exclusively - so
+            // that retries every tick until it is handed back.
+            let present = device_names();
+            let selected = ctx.state.selected_device();
+            let listening = wants_to_listen(ctx);
+            let wanted = listening
+                && present
+                    .iter()
+                    .any(|d| selected.is_empty() || *d == selected);
+            if present != last_present
+                || selected != last_selected
+                || listening != last_listening
+                || (handles.is_empty() && wanted)
+            {
                 close_all(&mut handles);
-                let names = open_all(count, instance, &mut handles);
-                ctx.state.set_devices(names);
-                ctx.state.set_available(!handles.is_empty());
-                last_count = count;
+                let opened = if listening {
+                    open_matching(&present, &selected, instance, &mut handles)
+                } else {
+                    Vec::new()
+                };
+                // `open_matching` fills both in step, so zipping is the map
+                // from the handle a callback carries to the name a binding
+                // was recorded against.
+                *ctx.by_handle.lock() = handles
+                    .iter()
+                    .map(|h| *h as usize)
+                    .zip(opened.iter().cloned())
+                    .collect();
+                // `present` is published either way: enumerating opens
+                // nothing, so the dashboard can still offer a device to pick
+                // while we are holding none of them.
+                ctx.state.set_devices(present.clone(), opened);
+                last_present = present;
+                last_selected = selected;
+                last_listening = listening;
             }
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            sleep_until_worth_another_look(ctx, listening);
         }
     }
 
-    /// Open and start every input device, returning their names. Devices
-    /// that fail to open are skipped (another app may hold them exclusively).
-    fn open_all(count: u32, instance: usize, handles: &mut Vec<HMIDIIN>) -> Vec<String> {
+    /// Whether we should be holding MIDI inputs open at all.
+    ///
+    /// Opening one claims it exclusively: for as long as we hold a device,
+    /// no DAW, no VST host and no other MIDI tool on the machine can open
+    /// it. A user who has bound nothing never asked us to take their
+    /// controller away from the software they actually use it with, so hold
+    /// nothing until there is a binding to serve, or a learn waiting for the
+    /// press that will become one.
+    fn wants_to_listen(ctx: &CallbackCtx) -> bool {
+        let learning = ctx.state.learning().is_some();
+        // Scoped: the borrow parks the settings watch, and opening devices
+        // below is slow enough to matter.
+        let settings = ctx.settings.borrow();
+        super::should_hold_devices(learning, &settings.midi)
+    }
+
+    /// Idle between sweeps, but notice a learn starting sooner than the
+    /// sweep would. A learn window is short and the press that ends it comes
+    /// from a human finger, so waiting a full tick to open the device would
+    /// swallow the first thing they hit.
+    fn sleep_until_worth_another_look(ctx: &CallbackCtx, listening: bool) {
+        const TICK: std::time::Duration = std::time::Duration::from_millis(250);
+        for _ in 0..8 {
+            std::thread::sleep(TICK);
+            if wants_to_listen(ctx) != listening {
+                return;
+            }
+        }
+    }
+
+    /// Every input device the system reports, in device order.
+    fn device_names() -> Vec<String> {
+        (0..unsafe { midiInGetNumDevs() })
+            .map(device_name)
+            .collect()
+    }
+
+    /// Open and start the input devices the user asked for, returning the
+    /// names actually opened. An empty `selected` means every device.
+    /// Devices that fail to open are skipped (another app may hold one
+    /// exclusively) and retried on a later sweep.
+    fn open_matching(
+        present: &[String],
+        selected: &str,
+        instance: usize,
+        handles: &mut Vec<HMIDIIN>,
+    ) -> Vec<String> {
         let mut names = Vec::new();
-        for dev in 0..count {
+        for (dev, name) in present.iter().enumerate() {
+            if !selected.is_empty() && name != selected {
+                continue;
+            }
+            let dev = dev as u32;
             let mut h: HMIDIIN = std::ptr::null_mut();
             let r = unsafe {
                 midiInOpen(
@@ -256,7 +443,7 @@ mod win {
                 unsafe { midiInClose(h) };
                 continue;
             }
-            names.push(device_name(dev));
+            names.push(name.clone());
             handles.push(h);
         }
         names
@@ -289,14 +476,18 @@ mod win {
         // borrowed directly; copy it out unaligned into an owned array first.
         let name: [u16; 32] = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(caps.szPname)) };
         let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
-        String::from_utf16_lossy(&name[..end])
+        // Through the same door as the device recorded inside a signature.
+        // The name the user picks in the dashboard, the name we match an
+        // open device against, and the name a signature carries all have to
+        // be the same string, or a device is selectable and never matches.
+        crate::config::sanitize_device_name(&String::from_utf16_lossy(&name[..end]))
     }
 
     /// winmm callback. Runs on a system thread; keeps work minimal (parse +
     /// a couple of short mutex holds). Only MIM_DATA carries a channel-voice
     /// message; dwParam1 packs status / data1 / data2 in its low three bytes.
     unsafe extern "system" fn midi_in_proc(
-        _hmi: HMIDIIN,
+        hmi: HMIDIIN,
         msg: u32,
         instance: usize,
         param1: usize,
@@ -312,6 +503,18 @@ mod win {
             return;
         };
         let ctx = &*(instance as *const CallbackCtx);
+        // Name the device the press came from. A deck we somehow have no
+        // name for still works as an any-device signature rather than
+        // going silent.
+        let sig = match ctx
+            .by_handle
+            .lock()
+            .iter()
+            .find(|(handle, _)| *handle == hmi as usize)
+        {
+            Some((_, name)) => format!("{sig}@{name}"),
+            None => sig,
+        };
         // Read the default delay live so a mid-session change in the
         // dashboard is reflected without restarting the listener.
         let default_ms = ctx.settings.borrow().auto_arm_delay_ms;
@@ -321,8 +524,10 @@ mod win {
 
 #[cfg(test)]
 mod tests {
+    use super::should_hold_devices;
     use super::signature_for;
-    #[cfg(windows)]
+    // `MidiState` itself is cross-platform - only the listener that feeds it
+    // is Windows-only - so the device-choice test below runs everywhere.
     use super::MidiState;
 
     #[test]
@@ -366,10 +571,8 @@ mod tests {
         let ring = std::sync::Arc::new(
             crate::buffer::DiskRing::create(&path, 4 * 1024 * 1024).expect("ring create"),
         );
-        (
-            std::sync::Arc::new(crate::controller::Controller::new(ring, 0)),
-            path,
-        )
+        let ctrl = std::sync::Arc::new(crate::controller::Controller::new(ring, 0));
+        (ctrl, path)
     }
 
     /// Full simulated MIDI note: the exact bytes winmm delivers for a pad
@@ -380,6 +583,7 @@ mod tests {
     #[test]
     fn simulated_note_fires_the_bound_action() {
         let (ctrl, path) = test_controller();
+        ctrl.mark_ingest_alive_for_test();
         let state = MidiState::new();
 
         // Map "arm" to note 36 on channel 1, the way the learn UI would.
@@ -423,7 +627,10 @@ mod tests {
         state.update_from_settings(&s);
 
         // Pre-fill the ring with ~3 s of fake video (IDR at each second) so a
-        // 1 s toggle can actually activate, mirroring a live OBS feed.
+        // 1 s toggle can actually activate, mirroring a live OBS feed. The
+        // publisher flag goes with it: tags without one is not a state that
+        // happens outside a test, and activate refuses it.
+        ctrl.mark_ingest_alive_for_test();
         for sec in 0..3u32 {
             for f in 0..30u32 {
                 let ts = sec * 1000 + f * 33;
@@ -448,6 +655,186 @@ mod tests {
         // Toggle -> delay off.
         state.on_signature(&ctrl, 1_000, &note);
         assert_eq!(ctrl.target_delay_ms(), 0, "toggle turned the delay off");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The first binding on a fresh install has to be recordable.
+    ///
+    /// Devices are only held open once something is bound, so "is a device
+    /// open" and "is a controller plugged in" are different questions, and
+    /// gating learn on the first one deadlocks: no binding means no open
+    /// device means learn is refused means no binding can ever be made.
+    /// This is the end-to-end shape of that, which testing the two halves
+    /// separately does not catch.
+    #[test]
+    fn a_fresh_install_can_still_record_its_first_binding() {
+        let state = MidiState::new();
+        let midi = crate::config::MidiBindings::default();
+
+        // Fresh install: a controller is plugged in, nothing is bound yet.
+        state.set_devices(vec!["Launchpad MK2".to_string()], Vec::new());
+        assert!(
+            !should_hold_devices(false, &midi),
+            "nothing bound: the controller stays free for other software"
+        );
+        assert!(!state.available(), "so nothing is open");
+        assert!(
+            state.connected(),
+            "but a controller IS there, which is what learn needs to know"
+        );
+
+        // Arming a learn is what asks for the device.
+        state.start_learn("arm");
+        assert!(
+            should_hold_devices(state.learning().is_some(), &midi),
+            "an armed learn opens the device so the press can be heard"
+        );
+
+        // A device the user selected but never plugged in is still refused.
+        let picky = MidiState::new();
+        let mut s = crate::config::Settings::defaults();
+        s.midi_device = "Deck B".to_string();
+        picky.update_from_settings(&s);
+        picky.set_devices(vec!["Deck A".to_string()], Vec::new());
+        assert!(
+            !picky.connected(),
+            "the chosen device is not plugged in, so there is nothing to learn from"
+        );
+        picky.set_devices(vec!["Deck A".into(), "Deck B".into()], Vec::new());
+        assert!(picky.connected(), "plugging it in makes learn available");
+    }
+
+    /// A MIDI input is an exclusive device: while InstantClone holds one,
+    /// the DAW or VST host the user actually bought it for cannot open it.
+    /// Someone who has never bound a pad has not asked for that, so we hold
+    /// nothing until there is a reason to.
+    #[test]
+    fn no_bindings_means_we_leave_every_midi_device_alone() {
+        let mut midi = crate::config::MidiBindings::default();
+        assert!(
+            !should_hold_devices(false, &midi),
+            "nothing bound and not learning: hold nothing"
+        );
+        assert!(
+            should_hold_devices(true, &midi),
+            "a learn needs a device open to hear the press"
+        );
+
+        midi.set("arm", "note:1:36");
+        assert!(
+            should_hold_devices(false, &midi),
+            "one binding is reason enough"
+        );
+
+        // Clearing the last binding hands the controller back.
+        midi.set("arm", "");
+        assert!(
+            !should_hold_devices(false, &midi),
+            "the last binding going away releases the device"
+        );
+    }
+
+    /// The whole point of naming the device: two decks that both send pad 1
+    /// as note 36 on channel 1 stay two decks, and can drive different
+    /// actions. This is the matching half - `canonicalize_midi` covers the
+    /// parsing, and the listener appends the name in the callback.
+    #[cfg(windows)]
+    #[test]
+    fn two_devices_sending_the_same_note_drive_different_actions() {
+        let (ctrl, path) = test_controller();
+        ctrl.mark_ingest_alive_for_test();
+        let state = MidiState::new();
+        let mut s = crate::config::Settings::defaults();
+        s.midi.set("arm", "note:1:36@Deck A");
+        s.midi.set("cut", "note:1:36@Deck B");
+        state.update_from_settings(&s);
+
+        // Pad 1 on deck A arms.
+        let base = signature_for(0x90, 36, 100).expect("a press edge");
+        state.on_signature(&ctrl, 7_000, &format!("{base}@Deck A"));
+        assert_eq!(ctrl.armed_delay_ms(), 7_000, "deck A armed");
+
+        // The identical pad on deck B cuts instead, and does not re-arm.
+        state.on_signature(&ctrl, 7_000, &format!("{base}@Deck B"));
+        assert_eq!(ctrl.target_delay_ms(), 0, "deck B cut to live");
+        assert_eq!(
+            ctrl.armed_delay_ms(),
+            7_000,
+            "and did not run deck A's arm, which would have disarmed"
+        );
+
+        // A deck nobody mapped does nothing at all.
+        ctrl.arm_delay(0);
+        state.on_signature(&ctrl, 7_000, &format!("{base}@Deck C"));
+        assert_eq!(ctrl.armed_delay_ms(), 0, "an unmapped deck is ignored");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Picking a device is only useful if the listener actually narrows to
+    /// it, and the dashboard has to keep seeing every device so the choice
+    /// can be changed back.
+    #[test]
+    fn device_choice_round_trips_through_settings() {
+        let state = MidiState::new();
+        assert_eq!(state.selected_device(), "", "every device by default");
+
+        let mut s = crate::config::Settings::defaults();
+        s.midi_device = "Launchpad MK2".to_string();
+        state.update_from_settings(&s);
+        assert_eq!(state.selected_device(), "Launchpad MK2");
+
+        let json = state.to_json();
+        assert!(json.contains(r#""device":"Launchpad MK2""#), "{json}");
+        assert!(json.contains(r#""devices":[]"#), "{json}");
+        assert!(json.contains(r#""listening":[]"#), "{json}");
+    }
+
+    /// A learn request nobody came back for must not sit armed: the press
+    /// belongs to whatever the control is bound to, and must never be
+    /// committed as a binding later.
+    #[cfg(windows)]
+    #[test]
+    fn an_expired_learn_dispatches_the_press_instead_of_capturing_it() {
+        let (ctrl, path) = test_controller();
+        ctrl.mark_ingest_alive_for_test();
+        let state = MidiState::new();
+        let mut s = crate::config::Settings::defaults();
+        s.midi.set("arm", "note:1:36");
+        state.update_from_settings(&s);
+
+        // Armed, then expired before anyone pressed anything.
+        state.start_learn_within("toggle", std::time::Duration::from_millis(0));
+        assert_eq!(state.learning(), None, "an expired learn is not learning");
+
+        let sig = signature_for(0x90, 36, 100).expect("a press edge");
+        state.on_signature(&ctrl, 15_000, &sig);
+
+        assert_eq!(
+            ctrl.armed_delay_ms(),
+            15_000,
+            "the press must run its bound action"
+        );
+        assert_eq!(state.take_captured(), None, "and must not be captured");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Cancelling drops an uncollected capture too, so reopening the
+    /// dashboard cannot commit a binding the user walked away from.
+    #[cfg(windows)]
+    #[test]
+    fn cancel_learn_discards_a_capture_nobody_collected() {
+        let (ctrl, path) = test_controller();
+        let state = MidiState::new();
+
+        state.start_learn("cut");
+        let sig = signature_for(0x90, 36, 100).expect("a press edge");
+        state.on_signature(&ctrl, 15_000, &sig);
+        state.cancel_learn();
+
+        assert_eq!(state.take_captured(), None);
 
         let _ = std::fs::remove_file(&path);
     }

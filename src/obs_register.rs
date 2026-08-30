@@ -88,6 +88,74 @@ pub fn services_json_path() -> Option<PathBuf> {
 /// that as registered leaves the user with no way to notice or fix it.
 /// Reporting it as unregistered puts the Register button back, and
 /// `register` is remove-and-replace, so one click repairs it.
+/// Repair a registration the user already made, when a new build or a
+/// retuned port has left it pointing somewhere OBS cannot use.
+///
+/// Returns None when there is nothing to do, or `Some(result)` when a repair
+/// was attempted.
+///
+/// Two rules keep this from being a surprise:
+///
+/// - Only an entry that is already there. Someone who never pressed Register
+///   has not asked us to write into OBS's `services.json`, and an unregister
+///   removes the entry, so it stays removed.
+/// - Only while OBS is closed. OBS holds `services.json` in memory and
+///   rewrites it on exit, so repairing underneath a running OBS is undone a
+///   moment later and leaves the user worse off than not trying: the button
+///   would read registered while the file on disk says otherwise.
+///
+/// Everything else is the existing `register`, which is remove-and-replace,
+/// so this is exactly the click the dashboard would have asked for.
+pub fn refresh_stale_registration(web_port: u16, ingest_port: u16) -> RegistrationRefresh {
+    let Some(path) = services_json_path() else {
+        return RegistrationRefresh::NotNeeded;
+    };
+    let Ok(file) = fs::read_to_string(&path) else {
+        return RegistrationRefresh::NotNeeded;
+    };
+    // The decision is `refresh_decision`, so what the tests pin is what runs.
+    match refresh_decision(&file, web_port, ingest_port, is_obs_running()) {
+        RegistrationRefresh::Repaired => match register(web_port, ingest_port) {
+            Ok(()) => RegistrationRefresh::Repaired,
+            Err(e) => RegistrationRefresh::Failed(e.to_string()),
+        },
+        verdict => verdict,
+    }
+}
+
+/// What `refresh_stale_registration` did, and whether coming back later would
+/// help. `Deferred` is the interesting one: the entry does need repairing,
+/// but OBS is open, and OBS rewrites `services.json` from memory when it
+/// exits - so the repair has to wait for it to close.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RegistrationRefresh {
+    /// No entry of ours, or the one there is already right. Nothing to do,
+    /// now or later.
+    NotNeeded,
+    /// Wanted, but OBS holds the file. Worth trying again when it closes.
+    Deferred,
+    Repaired,
+    Failed(String),
+}
+
+/// Should we repair, wait, or leave it alone? Split out so it can be tested
+/// without an OBS install; `Repaired` here means "a repair is warranted", and
+/// the caller downgrades it to `Failed` if writing the file does not work.
+fn refresh_decision(
+    file: &str,
+    web_port: u16,
+    ingest_port: u16,
+    obs_running: bool,
+) -> RegistrationRefresh {
+    if !entry_exists(file) || registration_is_current(file, web_port, ingest_port) {
+        return RegistrationRefresh::NotNeeded;
+    }
+    if obs_running {
+        return RegistrationRefresh::Deferred;
+    }
+    RegistrationRefresh::Repaired
+}
+
 pub fn is_registered(web_port: u16, ingest_port: u16) -> bool {
     let Some(p) = services_json_path() else {
         return false;
@@ -347,22 +415,19 @@ fn entry_span(file: &str) -> Option<std::ops::Range<usize>> {
         r#""name":"InstantClone""#
     };
     let marker_pos = file.find(marker)?;
-    // Walk backwards to find the `{` that opens our object.
-    let mut start = marker_pos;
+
+    // One string-aware pass, tracking the stack of open braces, so the
+    // object we return is the one that actually encloses the marker.
+    // Walking backwards to the nearest `{` instead would land inside a
+    // string the moment a key ordered before `name` carried one - a
+    // `url_template` holding `{stream_key}` is exactly that shape - and
+    // brace-match from there into a span that is not our entry at all.
     let bytes = file.as_bytes();
-    while start > 0 && bytes[start] != b'{' {
-        start -= 1;
-    }
-    if bytes[start] != b'{' {
-        return None;
-    }
-    // Walk forward from start to find the matching `}` - tracks
-    // brace depth and ignores braces inside strings.
-    let mut depth = 0i32;
+    let mut open_objects: Vec<usize> = Vec::new();
+    let mut entry_start: Option<usize> = None;
     let mut in_str = false;
     let mut escape = false;
-    let mut end = start;
-    for (i, b) in bytes[start..].iter().enumerate() {
+    for (i, &b) in bytes.iter().enumerate() {
         if escape {
             escape = false;
             continue;
@@ -370,21 +435,21 @@ fn entry_span(file: &str) -> Option<std::ops::Range<usize>> {
         match b {
             b'\\' if in_str => escape = true,
             b'"' => in_str = !in_str,
-            b'{' if !in_str => depth += 1,
+            b'{' if !in_str => open_objects.push(i),
             b'}' if !in_str => {
-                depth -= 1;
-                if depth == 0 {
-                    end = start + i + 1;
-                    break;
+                // Unbalanced: this is not JSON we should be editing.
+                let opened = open_objects.pop()?;
+                if entry_start == Some(opened) {
+                    return Some(opened..i + 1);
                 }
             }
             _ => {}
         }
+        if entry_start.is_none() && i == marker_pos {
+            entry_start = Some(*open_objects.last()?);
+        }
     }
-    if end == start {
-        return None;
-    }
-    Some(start..end)
+    None
 }
 
 /// Delete our entry plus any preceding/trailing comma so the surrounding
@@ -1410,6 +1475,48 @@ mod tests {
         assert_eq!(entry.matches(r#""url": "rtmp://"#).count(), 1);
     }
 
+    /// Updating should not leave someone with a service entry OBS cannot
+    /// reach and a button they have to notice and press. Repair it for them,
+    /// but only the entry they already asked for, and only when OBS is not
+    /// holding services.json in memory ready to write it back out.
+    #[test]
+    fn a_stale_entry_is_repaired_only_when_it_is_safe_to() {
+        let current = entry_json(7799, 1935);
+        let stale = current.replace("rtmp://localhost:1935/live", "rtmp://127.0.0.1:1935/live");
+        let file_current = format!(r#"{{"services":[{current}]}}"#);
+        let file_stale = format!(r#"{{"services":[{stale}]}}"#);
+        let file_none = r#"{"services":[{"name":"Twitch","servers":[]}]}"#;
+
+        use RegistrationRefresh::*;
+        assert_eq!(
+            refresh_decision(&file_stale, 7799, 1935, false),
+            Repaired,
+            "an out-of-date entry the user registered is repaired"
+        );
+        assert_eq!(
+            refresh_decision(&file_stale, 7799, 1935, true),
+            Deferred,
+            "OBS is open, so wait for it rather than have the repair undone"
+        );
+        assert_eq!(
+            refresh_decision(&file_current, 7799, 1935, false),
+            NotNeeded,
+            "an entry that is already right is left alone"
+        );
+        assert_eq!(
+            refresh_decision(file_none, 7799, 1935, false),
+            NotNeeded,
+            "someone who never registered is not signed up for us editing OBS"
+        );
+        assert_eq!(
+            refresh_decision(file_none, 7799, 1935, true),
+            NotNeeded,
+            "and with OBS open there is still nothing to come back for"
+        );
+        // A retuned port is the same kind of staleness.
+        assert_eq!(refresh_decision(&file_current, 7799, 1936, false), Repaired);
+    }
+
     /// An entry from an older build still carries our name while pointing
     /// OBS at an address it may not be able to resolve. Reporting that as
     /// registered would leave the user no way to notice, so staleness has
@@ -1548,6 +1655,37 @@ mod tests {
         assert!(entry_exists(indented));
         assert!(entry_exists(compact));
         assert!(!entry_exists(r#""name": "InstantCloneAndCompany""#));
+    }
+
+    /// The span has to be the object that encloses our name key, whatever
+    /// order the keys are in. A backward scan for the nearest `{` used to
+    /// land inside a preceding string - `{stream_key}` in a url template is
+    /// exactly that shape - and hand back a span that was not our entry,
+    /// which reads as "stale" forever and pins the Register button.
+    #[test]
+    fn entry_span_is_the_object_around_our_name_whatever_the_key_order() {
+        let file = r#"{"services":[
+  {"name": "Twitch", "servers": [{"name": "Auto", "url": "rtmp://live.twitch.tv/app"}]},
+  {"recommended": {"url_template": "rtmp://localhost:1935/live/{stream_key}"},
+   "name": "InstantClone",
+   "servers": [{"name": "InstantClone (local proxy)", "url": "rtmp://localhost:1935/live"}]},
+  {"name": "YouTube", "servers": [{"name": "Primary", "url": "rtmp://a.rtmp.youtube.com/live2"}]}
+]}"#;
+        let span = entry_span(file).expect("our entry");
+        let entry = &file[span];
+        assert!(entry.starts_with('{') && entry.ends_with('}'), "{entry}");
+        assert!(
+            entry.contains(r#""name": "InstantClone""#),
+            "the span must hold our name key: {entry}"
+        );
+        assert!(
+            entry.contains("{stream_key}"),
+            "and the whole object around it: {entry}"
+        );
+        assert!(
+            !entry.contains("Twitch") && !entry.contains("YouTube"),
+            "and nothing belonging to another service: {entry}"
+        );
     }
 
     #[test]

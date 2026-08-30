@@ -119,6 +119,8 @@ async fn handle(
         active: false,
     };
 
+    // One warning per connection for media sent without publishing.
+    let mut warned_unpublished = false;
     loop {
         let msg = reader.read_message().await?;
         // librtmp's window-ack rule: fire BYTES_READ_REPORT once we've
@@ -133,6 +135,28 @@ async fn handle(
         if let Some(seq) = reader.take_pending_ack() {
             writer.send_ack(seq).await?;
             writer.flush().await?;
+        }
+        // Media and metadata only count from a connection that actually
+        // completed `publish`. The stream key - and with it the ingest key -
+        // is checked in `begin_publish` and nowhere else, so dispatching a
+        // tag before that means a peer can skip the command entirely and
+        // still land frames in the ring: its timestamps interleave with the
+        // real publisher's on a different origin, and its onMetaData replaces
+        // the cached one that is replayed on every cut and reconnect. A
+        // conforming client always publishes first, so this costs nothing.
+        if ignore_before_publish(guard.active, msg.type_id) {
+            // Once per connection, not once per message. Reaching this needs
+            // only TCP plus the handshake, and a peer can manufacture a
+            // complete message per wire byte - which would evict the whole
+            // bounded log ring at line rate, destroying the very evidence
+            // someone would use to work out what was happening.
+            if !warned_unpublished {
+                warned_unpublished = true;
+                ctrl.log(format!(
+                    "[ingest] {peer_ip} is sending media without publishing; ignoring it"
+                ));
+            }
+            continue;
         }
         match msg.type_id {
             20 /* AMF0 command */ => {
@@ -363,8 +387,45 @@ async fn send_set_peer_bandwidth<W: tokio::io::AsyncWrite + Unpin>(
     writer.write_message(2, 0, 6, 0, &buf).await
 }
 
+/// Whether a message must be dropped because this connection never
+/// completed `publish`.
+///
+/// Audio, video and metadata are the three that carry a stream into the
+/// ring. Commands are exempt - `publish` itself is one, so gating those
+/// would make the state unreachable.
+fn ignore_before_publish(published: bool, type_id: u8) -> bool {
+    !published && matches!(type_id, 8 | 9 | 18)
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// The stream key - and the ingest key with it - is checked inside
+    /// `begin_publish` and nowhere else. A peer that connects and then sends
+    /// video without ever publishing would otherwise land tags in the ring
+    /// on its own timeline, and replace the cached onMetaData that is
+    /// replayed on every cut and reconnect, with nothing in the log to say
+    /// a second publisher existed.
+    #[test]
+    fn media_is_ignored_until_the_connection_has_published() {
+        for type_id in [8u8, 9, 18] {
+            assert!(
+                ignore_before_publish(false, type_id),
+                "type {type_id} must not reach the controller before publish"
+            );
+            assert!(
+                !ignore_before_publish(true, type_id),
+                "type {type_id} must flow once published"
+            );
+        }
+        // Commands are how a connection publishes in the first place.
+        for type_id in [20u8, 17, 4, 5, 6] {
+            assert!(
+                !ignore_before_publish(false, type_id),
+                "type {type_id} is not media and must still be handled"
+            );
+        }
+    }
     use super::*;
 
     /// A machine or container with IPv6 switched off cannot run these.

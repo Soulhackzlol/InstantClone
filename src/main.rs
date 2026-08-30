@@ -110,6 +110,11 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    // Every default path below is relative, so where we're "standing"
+    // decides where InstantClone keeps its files. Pin that to the exe's
+    // own folder before the first one is touched.
+    anchor_working_dir_to_exe();
+
     let cfg_path: PathBuf = std::env::var("CONFIG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("./instantclone.config.json"));
@@ -193,21 +198,29 @@ fn main() -> std::io::Result<()> {
                 // to do nothing and the user has no path to diagnose.
                 // Mirrors how `resolve_port_conflict` surfaces port
                 // conflicts before the runtime starts.
+                // Report where the path actually resolved to: the default
+                // is relative, and "./instantclone.buf" names no folder the
+                // user could go and check.
+                let shown = if settings.buffer_path.is_absolute() {
+                    settings.buffer_path.clone()
+                } else {
+                    std::env::current_dir()
+                        .map(|d| d.join(&settings.buffer_path))
+                        .unwrap_or_else(|_| settings.buffer_path.clone())
+                };
                 let msg = format!(
                     "InstantClone couldn't open or create the delay buffer file.\n\n\
                      Path:  {}\n\
                      Size:  {} MB\n\
                      Error: {}\n\n\
                      Common causes:\n\
-                     - Another instance of InstantClone is still running\n\
-                     - Antivirus or backup software is scanning the file\n\
-                     - The drive is full or read-only\n\
-                     - The path is on a removable drive that's disconnected\n\n\
+                     {}\n\n\
                      Fix one of the above and relaunch, or change \
                      'buffer_path' in instantclone.config.json to a writable folder.",
-                    settings.buffer_path.display(),
+                    shown.display(),
                     settings.buffer_mb,
                     e,
+                    buffer_failure_causes(),
                 );
                 notify_fatal("InstantClone buffer error", &msg);
                 return Err(e);
@@ -231,6 +244,57 @@ fn main() -> std::io::Result<()> {
 
         let (tx, rx) = watch::channel(settings.clone());
         let tx = Arc::new(tx);
+
+        // An update can leave the OBS entry we wrote pointing at the old shape
+        // of things, and on an in-app update the user never saw the dashboard
+        // button change back to ask them about it. Repair it for them.
+        //
+        // The wait matters as much as the repair: updating with OBS still open
+        // is the ordinary case, and OBS rewrites services.json from memory when
+        // it exits, so a repair now would simply be undone. We keep the
+        // question open until OBS closes and fix it then, which lands before
+        // the next time OBS reads the file - the only moment it could matter.
+        {
+            let ctrl = ctrl.clone();
+            let rx = rx.clone();
+            tokio::spawn(async move {
+                use obs_register::RegistrationRefresh as Refresh;
+                let mut said_waiting = false;
+                loop {
+                    let (web_port, ingest_port) = {
+                        let s = rx.borrow();
+                        (s.web_port, s.ingest_port)
+                    };
+                    match obs_register::refresh_stale_registration(web_port, ingest_port) {
+                        Refresh::NotNeeded => return,
+                        Refresh::Repaired => {
+                            ctrl.log(
+                                "[obs] the registered InstantClone service was out of date and \
+                                 has been refreshed - it takes effect next time OBS starts",
+                            );
+                            return;
+                        }
+                        Refresh::Failed(e) => {
+                            ctrl.log(format!(
+                                "[obs] could not refresh the registered service ({e}); the \
+                                 dashboard's Register button will repair it"
+                            ));
+                            return;
+                        }
+                        Refresh::Deferred => {
+                            if !said_waiting {
+                                said_waiting = true;
+                                ctrl.log(
+                                    "[obs] the registered InstantClone service is out of date; \
+                                     waiting for OBS to close to refresh it",
+                                );
+                            }
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                }
+            });
+        }
 
         // (Banner removed: with windows_subsystem=windows there is no
         // attached console for the user to read it, and debug builds
@@ -304,10 +368,52 @@ fn main() -> std::io::Result<()> {
         {
             let mut hk_rx = rx.clone();
             let hk_ctrl = ctrl.clone();
+            // The MIDI half of this is (bindings, chosen device): both live
+            // in the listener's mirror, and a device change with the same
+            // bindings still has to reach it or the pick is inert.
+            let (mut bound_hotkeys, mut bound_midi) = {
+                let s = hk_rx.borrow();
+                (s.hotkeys.clone(), (s.midi.clone(), s.midi_device.clone()))
+            };
             tokio::spawn(async move {
                 while hk_rx.changed().await.is_ok() {
-                    hk_ctrl.midi().update_from_settings(&hk_rx.borrow());
-                    tray::request_hotkey_reload();
+                    let (hotkeys, midi) = {
+                        let s = hk_rx.borrow();
+                        (s.hotkeys.clone(), (s.midi.clone(), s.midi_device.clone()))
+                    };
+                    if midi != bound_midi {
+                        hk_ctrl.midi().update_from_settings(&hk_rx.borrow());
+                        bound_midi = midi;
+                    }
+                    // Only when a binding actually changed. Arming,
+                    // activating and cutting each persist the delay state, so
+                    // most settings changes carry no binding edit at all, and
+                    // re-registering on those would drop every hotkey for an
+                    // instant and repeat the "combo already in use" line on
+                    // every cut.
+                    if hotkeys != bound_hotkeys {
+                        tray::request_hotkey_reload();
+                        bound_hotkeys = hotkeys;
+                    }
+                }
+            });
+
+            // Hotkey / MIDI actions live outside the web layer, so nothing
+            // would otherwise write the delay state they change. Persist on
+            // their behalf, event-driven so an idle session costs nothing.
+            let persist_ctrl = ctrl.clone();
+            let persist_tx = tx.clone();
+            let persist_path = cfg_path.clone();
+            tokio::spawn(async move {
+                loop {
+                    persist_ctrl.state_dirty().notified().await;
+                    // Coalesce a burst before writing. Every save rewrites
+                    // the whole config file, and a mashed pad or a held key
+                    // would otherwise do that once per press; the delay
+                    // costs nothing, since this only has to survive a
+                    // restart.
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    web::persist_delay_state(&persist_ctrl, &persist_tx, &persist_path);
                 }
             });
         }
@@ -429,36 +535,49 @@ fn spawn_ingest_legs(
         .collect()
 }
 
+/// How long an optional leg keeps retrying an address that is still held.
+/// Long enough to cover a restart handoff, where the outgoing instance can
+/// still own `[::1]` for a moment after it has released `127.0.0.1` and the
+/// IPv4-only port pre-flight has already waved us through. Short enough that
+/// an address somebody else owns for good does not leave a task retrying for
+/// the rest of the session.
+const OPTIONAL_BIND_GRACE: Duration = Duration::from_secs(30);
+
 /// Bind and serve one ingest address, retrying on failure.
 ///
-/// A required leg always retries. An optional leg retries only while the
-/// address is in use, which happens when a port is still closing behind a
-/// restart. Any other error means the family is unusable on this machine:
-/// with IPv6 disabled that bind can never succeed, and retrying it every
-/// second would spend the rest of the session writing the same log line, so
-/// the task logs once and exits.
+/// The required leg is IPv4, where all but a handful of setups connect, and
+/// it retries forever: giving up there would mean no ingest at all. The IPv6
+/// leg exists only for an OBS set to IP Family = IPv6, so it is never allowed
+/// to cost the other users anything. It retries a held address for
+/// `OPTIONAL_BIND_GRACE` and then stops for good, and any other error stops
+/// it immediately (that is the shape a machine with IPv6 disabled gives,
+/// where the bind can never succeed). Either way it says so once, in the
+/// dashboard log, and the task ends instead of looping in the background.
 async fn supervise_ingest_leg(addr: String, ctrl: Arc<controller::Controller>, required: bool) {
+    let mut deadline = std::time::Instant::now() + OPTIONAL_BIND_GRACE;
     loop {
         match rtmp::server::bind(&addr).await {
             Ok(listener) => {
                 if let Err(e) = rtmp::server::serve(listener, ctrl.clone()).await {
                     eprintln!("[ingest] {} stopped serving: {}", addr, e);
                 }
+                // It bound once, so the family works here: a listener that
+                // stops serving gets a fresh window to reclaim the address.
+                deadline = std::time::Instant::now() + OPTIONAL_BIND_GRACE;
             }
-            // AddrInUse is transient: on a restart or self-update the outgoing
-            // instance can still hold [::1] after it has released 127.0.0.1, and
-            // the port pre-flight only probes the IPv4 address. Keep retrying
-            // those. Any other error means the family is unusable on this
-            // machine, so an optional leg gives up instead of spinning.
-            Err(e) if !required && e.kind() != std::io::ErrorKind::AddrInUse => {
-                eprintln!("[ingest] optional listener {} unavailable: {}", addr, e);
-                ctrl.log(format!(
-                    "ingest: IPv6 listener {addr} unavailable ({e}). IPv4 ingest is \
-                     unaffected; only an OBS set to IP Family = IPv6 needs this one."
-                ));
-                return;
+            Err(e) => {
+                let still_settling = e.kind() == std::io::ErrorKind::AddrInUse
+                    && std::time::Instant::now() < deadline;
+                if !required && !still_settling {
+                    eprintln!("[ingest] optional listener {} unavailable: {}", addr, e);
+                    ctrl.log(format!(
+                        "ingest: IPv6 listener {addr} unavailable ({e}). IPv4 ingest is \
+                         unaffected; only an OBS set to IP Family = IPv6 needs this one."
+                    ));
+                    return;
+                }
+                eprintln!("[ingest] bind {} failed: {}", addr, e);
             }
-            Err(e) => eprintln!("[ingest] bind {} failed: {}", addr, e),
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -1070,6 +1189,154 @@ fn port_free_with_grace(addr: &str, grace: bool) -> bool {
     }
 }
 
+/// Make the folder holding the exe our working directory, so every relative
+/// path in Settings (config, buffer, trace log, overlays) lands next to the
+/// binary no matter who launched us or from where.
+///
+/// "Start with Windows" is the case that forces this: entries under the Run
+/// key inherit `C:\Windows\System32` as their working directory, which no
+/// unelevated process may write. Without the anchor, autostart reads no
+/// config (so every setting silently reverts to defaults) and then dies on
+/// `Access is denied (os error 5)` while creating the delay buffer. A
+/// `.desktop` autostart entry on Linux has the same shape of bug, landing in
+/// `$HOME` instead - writable, so it fails quietly rather than loudly.
+///
+/// Skipped when `CONFIG_PATH` is set: that's an explicit "I've chosen the
+/// layout" signal (a second instance, a service install), and moving the
+/// ground under that would be the surprise. It is also the escape hatch for
+/// `cargo run`, which otherwise keeps its files beside the built exe under
+/// `target/`.
+fn anchor_working_dir_to_exe() {
+    let exe = std::env::current_exe().ok();
+    let config_path_set = std::env::var_os("CONFIG_PATH").is_some();
+    let here = std::env::current_dir().ok();
+    let Some(dir) = anchor_dir(
+        exe.as_deref(),
+        config_path_set,
+        here.as_deref().map(has_config),
+        exe_dir_writable(exe.as_deref()),
+    ) else {
+        return;
+    };
+    if let Err(e) = std::env::set_current_dir(&dir) {
+        // Nothing is broken yet - we're simply still where we started, which
+        // is the pre-fix behaviour. The buffer dialog reports the absolute
+        // path if this turns into a real failure.
+        eprintln!("could not switch to {}: {e}", dir.display());
+    }
+}
+
+/// The "common causes" list for a buffer that would not open, written for the
+/// platform the user is actually on.
+///
+/// One shared list used to name Program Files and antivirus everywhere, so a
+/// Linux user staring at `Permission denied` was told to go and check a folder
+/// that Windows protects. This is the one moment the copy has to be useful.
+fn buffer_failure_causes() -> &'static str {
+    #[cfg(windows)]
+    {
+        concat!(
+            "- Another instance of InstantClone is still running\n",
+            "                     - Antivirus or backup software is scanning the file\n",
+            "                     - The drive is full or read-only\n",
+            "                     - InstantClone sits in a folder Windows protects (Program Files)\n",
+            "                     - The path is on a removable drive that's disconnected",
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        concat!(
+            "- Another instance of InstantClone is still running\n",
+            "                     - The folder is not writable by this user. A binary kept in\n",
+            "                       /usr/local/bin keeps its files in the directory you launch\n",
+            "                       it from, so check that you can write there.\n",
+            "                     - The disk is full, mounted read-only, or over quota\n",
+            "                     - The path is on a removable or network mount that is not attached",
+        )
+    }
+}
+
+/// Whether we could actually keep our files next to the exe, or None when
+/// the question does not apply.
+///
+/// Only asked on unix, and the reason is install convention. A Windows
+/// InstantClone is a portable exe that lives in its own folder, so its
+/// directory is writable and anchoring there is what makes the files
+/// findable. The idiomatic Linux install is the opposite: the binary goes in
+/// `/usr/local/bin` and is root-owned, so anchoring points every default
+/// path at a directory the user cannot write. That is not a degraded
+/// experience, it is a cold start that fails outright - the ring buffer
+/// cannot be created, and the app exits before it ever listens.
+///
+/// `access(W_OK)` rather than a permissions bit: the mode says `/usr/local/bin`
+/// is writable by its owner, and its owner is root.
+#[cfg(unix)]
+fn exe_dir_writable(exe: Option<&std::path::Path>) -> Option<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = exe?.parent()?;
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c` is a valid NUL-terminated path for the duration of the call.
+    Some(unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
+}
+
+/// Windows keeps the unconditional behaviour: there the exe folder is the
+/// install, and the case anchoring exists for (a startup entry handed
+/// `C:\Windows\System32`) has no writable alternative to fall back to.
+#[cfg(not(unix))]
+fn exe_dir_writable(_exe: Option<&std::path::Path>) -> Option<bool> {
+    None
+}
+
+/// The directory `anchor_working_dir_to_exe` should move to, or None to stay
+/// put. Split out from the env + chdir so the rule is testable without
+/// mutating the process's working directory under other tests.
+/// The settings file name, as `cfg_path` below defaults to it.
+const CONFIG_FILE_NAME: &str = "instantclone.config.json";
+
+/// Does this directory already hold a settings file we would load?
+fn has_config(dir: &std::path::Path) -> bool {
+    dir.join(CONFIG_FILE_NAME).is_file()
+}
+
+/// Where to move to before anything reads a relative path, or None to stay put.
+///
+/// `config_here` says whether the directory we started in already holds a
+/// settings file. That is the whole difference between the two reasons we get
+/// called with an odd working directory:
+///
+/// - Windows hands a startup entry `C:\Windows\System32`, which has no
+///   settings file and is not writable. Moving is the fix for the "Access is
+///   denied" crash, and there is nothing there to lose.
+/// - Someone launched from their own data folder (a shortcut with a "Start
+///   in", or a terminal). That folder holds their destinations and stream
+///   keys. Moving would silently hand them a factory-fresh install while
+///   their real config sat untouched a few directories away.
+///
+/// So: an existing settings file wins, and we stay where it is.
+fn anchor_dir(
+    exe: Option<&std::path::Path>,
+    config_path_set: bool,
+    config_here: Option<bool>,
+    exe_dir_writable: Option<bool>,
+) -> Option<PathBuf> {
+    if config_path_set || config_here == Some(true) {
+        return None;
+    }
+    // Known-unwritable exe folder: staying where we are is the only option
+    // that can work. See `exe_dir_writable` - this is the `/usr/local/bin`
+    // install, where anchoring turns a normal first run into a cold start
+    // that cannot create its buffer. `None` means the question was not asked
+    // (Windows), which keeps that path exactly as it was.
+    if exe_dir_writable == Some(false) {
+        return None;
+    }
+    // A bare "instantclone.exe" yields an empty parent, and an exe at a
+    // filesystem root yields none: in both cases there is nowhere to move to.
+    exe?.parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(PathBuf::from)
+}
+
 fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
     let _ = Command::new("cmd").args(["/c", "start", "", url]).spawn();
@@ -1101,3 +1368,98 @@ fn ensure_overlays_dir(dir: &std::path::Path) {
 // keeps them in lockstep - no risk of drifting silently.
 const OVERLAY_README: &str = include_str!("../overlays/README.md");
 const OVERLAY_CUSTOM_TEMPLATE: &str = include_str!("../overlays/custom-template.html");
+
+#[cfg(test)]
+mod tests {
+    use super::anchor_dir;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn anchor_dir_picks_the_folder_holding_the_exe() {
+        let exe = PathBuf::from("C:/Users/me/Desktop/InstantClone/instantclone.exe");
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(false), None),
+            Some(PathBuf::from("C:/Users/me/Desktop/InstantClone"))
+        );
+    }
+
+    #[test]
+    fn anchor_dir_leaves_an_explicit_config_path_alone() {
+        let exe = PathBuf::from("C:/Users/me/Desktop/InstantClone/instantclone.exe");
+        assert_eq!(
+            anchor_dir(Some(&exe), true, Some(false), None),
+            None,
+            "CONFIG_PATH means the user chose the layout - don't move"
+        );
+    }
+
+    /// The upgrade case. A 0.1.13 user who launched from their own data
+    /// folder has their destinations and stream keys there. Moving to the exe
+    /// folder would hand them a factory-fresh install with everything
+    /// apparently gone, while the real file sat untouched where they left it.
+    #[test]
+    fn anchor_dir_leaves_an_existing_install_where_it_already_lives() {
+        let exe = PathBuf::from("C:/Program Files/InstantClone/instantclone.exe");
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(true), None),
+            None,
+            "a settings file in the launch folder is an install, not an accident"
+        );
+        // The autostart case is unchanged: System32 holds no settings file,
+        // so there is nothing to preserve and moving is still the fix.
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(false), None),
+            Some(PathBuf::from("C:/Program Files/InstantClone"))
+        );
+        // Unknown (the current directory could not be read) behaves like the
+        // autostart case rather than blocking the fix.
+        assert_eq!(
+            anchor_dir(Some(&exe), false, None, None),
+            Some(PathBuf::from("C:/Program Files/InstantClone"))
+        );
+    }
+
+    /// The idiomatic Linux install: the binary goes in /usr/local/bin, which
+    /// is root-owned. Anchoring there points every relative default at a
+    /// directory the user cannot write, and the first thing that needs one is
+    /// the ring buffer - so the app does not start in a degraded way, it does
+    /// not start at all. Staying where the user launched from is the only
+    /// answer that works.
+    #[test]
+    fn anchor_dir_stays_put_when_the_exe_folder_is_not_writable() {
+        let exe = PathBuf::from("/usr/local/bin/instantclone");
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(false), Some(false)),
+            None,
+            "a root-owned bin directory is not somewhere to keep a 300 MB buffer"
+        );
+        // Writable, so the portable-folder layout still anchors and the files
+        // stay findable next to the binary.
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(false), Some(true)),
+            Some(PathBuf::from("/usr/local/bin"))
+        );
+        // Not asked (Windows): unchanged from before this rule existed.
+        assert_eq!(
+            anchor_dir(Some(&exe), false, Some(false), None),
+            Some(PathBuf::from("/usr/local/bin"))
+        );
+        // An existing config still wins over everything - that rule is about
+        // not moving someone's install, and it does not depend on this one.
+        assert_eq!(anchor_dir(Some(&exe), false, Some(true), Some(true)), None);
+    }
+
+    #[test]
+    fn anchor_dir_stays_put_when_the_exe_is_unknown_or_parentless() {
+        assert_eq!(anchor_dir(None, false, Some(false), None), None);
+        assert_eq!(
+            anchor_dir(
+                Some(Path::new("instantclone.exe")),
+                false,
+                Some(false),
+                None
+            ),
+            None
+        );
+    }
+}

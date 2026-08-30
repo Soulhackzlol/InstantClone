@@ -81,13 +81,20 @@ const MIN_BUFFER_MS: u32 = 2_000;
 #[derive(Debug, Clone, Copy)]
 pub enum ActivateError {
     NotArmed,
-    BufferShort { remaining_ms: u32 },
+    /// Nothing is publishing, so there is no video to delay and the buffer
+    /// cannot fill. Distinct from `BufferShort`, which is the same screen
+    /// with an eta the user can wait out - this one waits on OBS.
+    NoIngest,
+    BufferShort {
+        remaining_ms: u32,
+    },
 }
 
 impl ActivateError {
     pub fn message(&self) -> String {
         match self {
             ActivateError::NotArmed => "no delay armed".to_string(),
+            ActivateError::NoIngest => NO_INGEST.to_string(),
             ActivateError::BufferShort { remaining_ms } => {
                 let secs = ((*remaining_ms + 500) / 1000).max(1);
                 format!("buffer is still building - wait ~{}s", secs)
@@ -95,6 +102,28 @@ impl ActivateError {
         }
     }
 }
+/// What every surface says when a request would build delay state with
+/// nothing publishing. The buffer holds no video and cannot fill, so arming
+/// or going delayed has nothing to work with - and "preparing" on the
+/// dashboard would be a progress bar that never moves.
+/// How many log lines the in-memory ring keeps for the dashboard. Bounded
+/// because a 24/7 relay logs for months: the oldest line is dropped rather
+/// than letting the buffer track uptime.
+const LOG_LINES_MAX: usize = 1_500;
+
+pub const NO_INGEST: &str = "OBS isn't sending anything yet - start streaming first";
+
+/// One hotkey / MIDI press, as the dashboard renders it: which action ran,
+/// where it came from, whether it was refused, and a sequence number so a
+/// repeat of the same action still reads as a new event.
+#[derive(Debug, Clone)]
+pub struct FiredAction {
+    pub seq: u64,
+    pub action: String,
+    pub source: String,
+    pub problem: Option<String>,
+}
+
 /// Hidden slack beyond what the user sees as the target. Equal to the
 /// IDR-search tolerance, so a "5s armed" cut can always land on a real
 /// IDR even if the nearest one happens to be slightly past the boundary.
@@ -557,6 +586,11 @@ pub struct Controller {
     // from wrap_high=0 again.
     last_input_ts_u32: AtomicU32,
     input_ts_wrap_high: AtomicU32,
+    /// Whether `last_input_ts_u32` means anything yet. A session's first tag
+    /// has nothing to be early or late relative to, so it is taken at face
+    /// value; without this, a first tag in the upper half of the counter is
+    /// indistinguishable from one stamped before the session started.
+    input_ts_seen: AtomicBool,
 
     // Wall-clock (process_now_ms) of last multi-track video tag - the
     // Enhanced Broadcasting warning chip only shows if we've seen one
@@ -595,6 +629,35 @@ pub struct Controller {
     // web layer. Present on every platform; inert where there is no MIDI
     // backend (`available` stays false).
     midi: Arc<crate::midi::MidiState>,
+
+    // The most recent action driven from outside the dashboard (a hotkey or
+    // a MIDI pad), so the UI can point at the binding that just fired. The
+    // sequence number is what makes a repeat of the same action visible:
+    // pressing "cut" twice has to read as two events, not one.
+    last_action: crate::sync::Mutex<Option<FiredAction>>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    last_action_seq: AtomicU64,
+
+    // While the dashboard is capturing a new binding, global hotkeys have to
+    // stand down: `RegisterHotKey` swallows the combo system-wide, so the
+    // browser never sees the keypress and the action fires instead of being
+    // recorded. Holds the deadline (process-relative ms) rather than a flag,
+    // so a dashboard that goes away mid-capture cannot leave them off.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    hotkey_capture_until_ms: AtomicU64,
+
+    // Actions whose hotkey the OS refused to register, because another app
+    // already owns the combo. Written by the tray on every (re)bind, read by
+    // the dashboard so the row itself can say a binding is dead - the log
+    // line alone is somewhere nobody setting a hotkey is looking.
+    hotkey_conflicts: crate::sync::Mutex<Vec<String>>,
+
+    // Raised when a hotkey or MIDI action moves the delay state. Those two
+    // paths run outside the web layer, which is where every other state
+    // change gets written to the config file, so the runtime watches this
+    // and persists on their behalf.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    state_dirty: Notify,
 }
 
 impl Controller {
@@ -645,19 +708,30 @@ impl Controller {
             seq_header_gen: AtomicU32::new(0),
             last_input_ts_u32: AtomicU32::new(0),
             input_ts_wrap_high: AtomicU32::new(0),
+            input_ts_seen: AtomicBool::new(false),
             last_multitrack_video_ms: AtomicU64::new(0),
             backpressure_since_ms: AtomicU64::new(0),
             shutdown_notify: Notify::new(),
             shutdown_kind: AtomicU8::new(0),
             started: std::time::Instant::now(),
-            logs: crate::sync::Mutex::new(std::collections::VecDeque::with_capacity(512)),
+            logs: crate::sync::Mutex::new(std::collections::VecDeque::with_capacity(LOG_LINES_MAX)),
             midi: Arc::new(crate::midi::MidiState::new()),
+            last_action: crate::sync::Mutex::new(None),
+            last_action_seq: AtomicU64::new(0),
+            hotkey_capture_until_ms: AtomicU64::new(0),
+            hotkey_conflicts: crate::sync::Mutex::new(Vec::new()),
+            state_dirty: Notify::new(),
         }
     }
 
     /// Shared MIDI state, for the listener thread and the web endpoints.
     pub fn midi(&self) -> &Arc<crate::midi::MidiState> {
         &self.midi
+    }
+
+    /// Actions whose hotkey another app owns, for the dashboard.
+    pub fn hotkey_conflicts(&self) -> Vec<String> {
+        self.hotkey_conflicts.lock().clone()
     }
 
     /// Seconds since the process started, for the dashboard uptime readout.
@@ -859,6 +933,7 @@ impl Controller {
         self.backpressure_since_ms.store(0, Ordering::Relaxed);
         self.last_input_ts_u32.store(0, Ordering::Relaxed);
         self.input_ts_wrap_high.store(0, Ordering::Relaxed);
+        self.input_ts_seen.store(false, Ordering::Relaxed);
     }
 
     /// Promote an RTMP wire timestamp (u32 ms, wraps at ~49.7 days) to
@@ -870,18 +945,62 @@ impl Controller {
     /// `expand_ts` at any moment, so the relaxed atomic load + store
     /// is race-free in practice.
     ///
-    /// Wrap detection rule: if the new u32 ts is less than the previous
-    /// by more than 2^31 ms (~24.8 days), the counter wrapped around;
-    /// bump the high half. Smaller backward jumps are treated as the
-    /// (normal) inter-stream out-of-order audio interleaving and ignored
-    /// here - pace_and_send drops those separately.
+    /// Wrap detection rule: consecutive tags are never more than half the
+    /// u32 space apart, so of the two possible distances between this
+    /// timestamp and the last one, the shorter is the real one. That reading
+    /// has to work in both directions:
+    ///
+    /// - *ahead* of the last tag but numerically below it: the counter
+    ///   rolled over, so this tag belongs to the next epoch.
+    /// - *behind* the last tag but numerically above it: this tag belongs to
+    ///   the epoch we just left.
+    ///
+    /// The second case is what audio costs us. Audio and video interleave
+    /// and cross each other by a few milliseconds constantly, so at the
+    /// instant the counter rolls, one track is over the line and the other
+    /// is not. Reading that straggler in the new epoch puts one tag 49.7
+    /// days in the future, and `on_tag` hands exactly that value to
+    /// `trim_older_than`, whose cutoff then sits past every frame in the
+    /// ring: a single late audio tag evicts the entire delay and drops
+    /// every viewer to live. Found by the 10,000-hour soak.
+    ///
+    /// Reading a straggler back into the previous epoch is self-correcting.
+    /// The next in-epoch tag is once again below the stored `last` and rolls
+    /// the counter forward again, so an alternating audio/video pattern
+    /// across the boundary resolves each tag to its own correct epoch.
+    ///
+    /// Smaller backward jumps inside one epoch stay ordinary interleaving
+    /// and change nothing here; pace_and_send drops those separately.
     fn expand_ts(&self, wire_ts: u32) -> u64 {
         let last = self.last_input_ts_u32.load(Ordering::Relaxed);
         let mut wrap_high = self.input_ts_wrap_high.load(Ordering::Relaxed);
-        if last > 0 && wire_ts < last && last.wrapping_sub(wire_ts) > (1u32 << 31) {
-            wrap_high = wrap_high.wrapping_add(1);
-            self.input_ts_wrap_high.store(wrap_high, Ordering::Relaxed);
+        if !self.input_ts_seen.swap(true, Ordering::Relaxed) {
+            // The first tag of a session defines where its timeline starts,
+            // whatever it says. An encoder's clock does not have to begin
+            // near zero - OBS reconnecting into a still-running session
+            // carries on from wherever it had got to.
+            self.last_input_ts_u32.store(wire_ts, Ordering::Relaxed);
+            return wire_ts as u64;
         }
+        if wire_ts.wrapping_sub(last) <= (1u32 << 31) {
+            if wire_ts < last {
+                wrap_high = wrap_high.wrapping_add(1);
+            }
+        } else if wire_ts > last {
+            if wrap_high == 0 {
+                // Behind the timeline with no cycle underneath to fall back
+                // to: this tag is stamped before the session began, so it is
+                // out of range rather than from a previous cycle. Reading it
+                // literally puts it 49.7 days ahead, `on_tag` hands that to
+                // the trim, and the cutoff lands past every frame in the
+                // ring. Pin it to the moment we are already at, and leave
+                // `last` alone - adopting a stamp from nowhere would make
+                // the next ordinary tag look like a wrap.
+                return last as u64;
+            }
+            wrap_high -= 1;
+        }
+        self.input_ts_wrap_high.store(wrap_high, Ordering::Relaxed);
         self.last_input_ts_u32.store(wire_ts, Ordering::Relaxed);
         ((wrap_high as u64) << 32) | (wire_ts as u64)
     }
@@ -1007,6 +1126,13 @@ impl Controller {
         if armed == 0 {
             return Err(ActivateError::NotArmed);
         }
+        // No publisher means no video arriving: the buffer cannot grow, so
+        // "still building" would be a countdown that never ends. Arming
+        // stays allowed (that is pre-arm, and it is the point), but there is
+        // nothing to switch on until OBS starts.
+        if !self.ingest_alive() {
+            return Err(ActivateError::NoIngest);
+        }
         let fill = self.buffer_fill_ms();
         if fill + 500 < armed {
             let remaining_ms = armed.saturating_sub(fill);
@@ -1074,68 +1200,17 @@ impl Controller {
         self.safe_cut_input_ts.store(0, Ordering::Relaxed);
     }
 
-    /// Run a named delay action. Shared by the keyboard hotkeys and MIDI
-    /// bindings so both trigger identical behaviour. `default_ms` is the
-    /// delay armed when starting from nothing; `source` tags the log line
-    /// ("hotkey" / "midi"). Unknown action names are ignored. Every call
-    /// here is atomic-only, so it is safe to invoke straight from an OS
-    /// callback thread with no runtime.
-    ///
-    /// Windows-only today: both callers (the tray hotkeys and the winmm MIDI
-    /// listener) are Windows-only. On other platforms the delay is driven
-    /// through the HTTP endpoints instead.
-    #[cfg(windows)]
-    pub fn run_named_action(&self, action: &str, default_ms: u32, source: &str) {
-        match action {
-            // Toggle: cut to live when a delay is live (or a safe-cut is
-            // pending), otherwise arm at the default delay and go delayed.
-            "toggle" => {
-                if self.target_delay_ms() > 0 || self.safe_cut_pending() {
-                    self.stop_delay();
-                    self.log(format!("[{source}] delay off - cut to live"));
-                } else {
-                    let ms = if self.armed_delay_ms() > 0 {
-                        self.armed_delay_ms()
-                    } else {
-                        default_ms
-                    };
-                    self.arm_delay(ms);
-                    match self.activate_delay() {
-                        Ok(d) => self.log(format!("[{source}] delay on - {} s", d / 1000)),
-                        Err(_) => self.log(format!(
-                            "[{source}] delay arming {} s - goes live once the buffer fills",
-                            ms / 1000
-                        )),
-                    }
-                }
-            }
-            "arm" => {
-                self.arm_delay(default_ms);
-                self.log(format!("[{source}] armed {} s", default_ms / 1000));
-            }
-            "activate" => match self.activate_delay() {
-                Ok(d) => self.log(format!("[{source}] activated - {} s delay", d / 1000)),
-                Err(e) => self.log(format!("[{source}] activate: {}", e.message())),
-            },
-            "cut" => {
-                self.stop_delay();
-                self.log(format!("[{source}] cut to live"));
-            }
-            // Toggle: first press schedules the safe cut, a second cancels
-            // the pending one, so a mistaken press stays reversible.
-            "cut_after" => {
-                if self.safe_cut_pending() {
-                    self.cancel_safe_cut();
-                    self.log(format!("[{source}] cut after this airs - cancelled"));
-                } else {
-                    match self.schedule_safe_cut() {
-                        Ok(_) => self.log(format!("[{source}] cut after this airs - scheduled")),
-                        Err(e) => self.log(format!("[{source}] cut after: {e}")),
-                    }
-                }
-            }
-            _ => {}
-        }
+    /// Stand in for a connected publisher, for tests in other modules that
+    /// push tags into the ring directly instead of going through
+    /// `begin_publish` (see `feed_seconds` for the same idea in this one).
+    #[cfg(test)]
+    pub fn mark_ingest_alive_for_test(&self) {
+        self.ingest_alive.store(true, Ordering::Relaxed);
+    }
+
+    /// The most recent hotkey / MIDI action, if there has been one this run.
+    pub fn last_action(&self) -> Option<FiredAction> {
+        self.last_action.lock().clone()
     }
 
     pub fn safe_cut_pending(&self) -> bool {
@@ -1353,7 +1428,7 @@ impl Controller {
     /// 30 seconds in".
     pub fn log(&self, line: impl Into<String>) {
         let mut q = self.logs.lock();
-        if q.len() >= 1500 {
+        if q.len() >= LOG_LINES_MAX {
             q.pop_front();
         }
         let ts_s = process_now_ms() as f64 / 1000.0;
@@ -1763,6 +1838,211 @@ impl Controller {
     }
 }
 
+/// The named delay actions, and the hotkey-capture state that guards them.
+///
+/// Platform-neutral by construction: nothing in here makes a system call.
+/// What is Windows-only is who *drives* it - the tray's `RegisterHotKey`
+/// loop and the winmm MIDI listener - which is why other platforms compile
+/// this and never reach it. Compiling it everywhere is the point: one
+/// definition of what "toggle" means, and this suite's tests run on every
+/// CI target instead of only on Windows, where a threading or ordering
+/// mistake would go unseen until someone shipped a Linux driver.
+///
+/// The allow is scoped to the platforms that have no driver yet, so real
+/// dead code is still an error on Windows.
+#[cfg_attr(not(windows), allow(dead_code))]
+impl Controller {
+    /// Stand global hotkeys down for `window_ms` while the dashboard records
+    /// a new binding, or clear the suspension when `window_ms` is 0. The
+    /// deadline is the safety net: a browser that dies mid-capture costs the
+    /// user one window, not a session with no hotkeys.
+    pub fn suspend_hotkeys(&self, window_ms: u32) {
+        let until = if window_ms == 0 {
+            0
+        } else {
+            process_now_ms() + window_ms as u64
+        };
+        self.hotkey_capture_until_ms.store(until, Ordering::Relaxed);
+    }
+
+    /// Whether global hotkeys are currently stood down.
+    pub fn hotkeys_suspended(&self) -> bool {
+        self.hotkeys_suspend_remaining_ms() > 0
+    }
+
+    /// How much of the suspension window is left, for the tray's resume
+    /// timer. 0 when hotkeys are live.
+    pub fn hotkeys_suspend_remaining_ms(&self) -> u32 {
+        let until = self.hotkey_capture_until_ms.load(Ordering::Relaxed);
+        until.saturating_sub(process_now_ms()) as u32
+    }
+
+    /// Replace the set of actions whose hotkey could not be registered.
+    /// Empty on every platform without a global-key surface.
+    pub fn set_hotkey_conflicts(&self, actions: Vec<String>) {
+        *self.hotkey_conflicts.lock() = actions;
+    }
+
+    /// Run a named delay action. Shared by the keyboard hotkeys and MIDI
+    /// bindings so both trigger identical behaviour. `default_ms` is the
+    /// delay armed when starting from nothing; `source` tags the log line
+    /// ("hotkey" / "midi"). Unknown action names are ignored. Every call
+    /// here is atomic-only, so it is safe to invoke straight from an OS
+    /// callback thread with no runtime.
+    ///
+    /// Returns a short problem message when the action could not do what was
+    /// asked, and None when it did. The caller is expected to put that in
+    /// front of the user: they are mid-game, they pressed a key, and the
+    /// dashboard log they cannot see is the only other record of it.
+    pub fn run_named_action(&self, action: &str, default_ms: u32, source: &str) -> Option<String> {
+        let problem = self.dispatch_named_action(action, default_ms, source);
+        // Publish what just happened before anything else: the dashboard
+        // reads this on its next tick and lights up the row that fired,
+        // which is the only feedback a user gets when the press landed while
+        // they were looking at a game.
+        self.record_fired_action(action, source, problem.clone());
+        // Arm / activate / cut all move state the dashboard routes persist
+        // on their way through. Nothing persists on this path, so ask the
+        // runtime to save it - otherwise a delay armed by pad or key is
+        // forgotten across a restart.
+        self.state_dirty.notify_one();
+        problem
+    }
+
+    fn dispatch_named_action(&self, action: &str, default_ms: u32, source: &str) -> Option<String> {
+        match action {
+            "toggle" => self.action_toggle(default_ms, source),
+            "arm" => self.action_arm(default_ms, source),
+            "activate" => self.action_activate(source),
+            "cut" => {
+                self.stop_delay();
+                self.log(format!("[{source}] cut to live"));
+                None
+            }
+            "cut_after" => self.action_cut_after(source),
+            _ => None,
+        }
+    }
+
+    /// Delay on/off. Cut to live when a delay is live (or a safe cut is
+    /// pending), otherwise arm at the default and go delayed.
+    fn action_toggle(&self, default_ms: u32, source: &str) -> Option<String> {
+        if self.target_delay_ms() > 0 || self.safe_cut_pending() {
+            self.stop_delay();
+            self.log(format!("[{source}] delay off - cut to live"));
+            return None;
+        }
+        if !self.ingest_alive() {
+            self.log(format!("[{source}] delay on ignored - {NO_INGEST}"));
+            return Some(NO_INGEST.to_string());
+        }
+        let ms = if self.armed_delay_ms() > 0 {
+            self.armed_delay_ms()
+        } else {
+            default_ms
+        };
+        self.arm_delay(ms);
+        match self.activate_delay() {
+            Ok(d) => {
+                self.log(format!("[{source}] delay on - {} s", d / 1000));
+                None
+            }
+            Err(e) => {
+                self.log(format!(
+                    "[{source}] delay arming {} s - goes live once the buffer fills",
+                    ms / 1000
+                ));
+                // Armed, but the stream is still going out live: the streamer
+                // pressed "delay on" and is not protected yet. Only the buffer
+                // case resolves on its own - with nothing publishing, "still
+                // filling" would be a wait that never ends.
+                Some(match e {
+                    ActivateError::BufferShort { .. } => format!(
+                        "Buffer still filling - the {} s delay starts as soon as it is ready.",
+                        ms / 1000
+                    ),
+                    other => other.message(),
+                })
+            }
+        }
+    }
+
+    /// Arm at the default delay, or free the buffer when it is already armed.
+    /// Refused while a delay is on air, because disarming wipes the target
+    /// too and one stray press would snap every viewer to live - that is what
+    /// "cut" is for.
+    fn action_arm(&self, default_ms: u32, source: &str) -> Option<String> {
+        if self.target_delay_ms() > 0 {
+            self.log(format!(
+                "[{source}] arm ignored - delay is on air, cut to live first"
+            ));
+            return Some("The delay is on air. Cut to live first, then disarm the buffer.".into());
+        }
+        if self.armed_delay_ms() > 0 {
+            self.arm_delay(0);
+            self.log(format!("[{source}] disarmed - buffer freed"));
+            return None;
+        }
+        if !self.ingest_alive() {
+            self.log(format!("[{source}] arm ignored - {NO_INGEST}"));
+            return Some(NO_INGEST.to_string());
+        }
+        self.arm_delay(default_ms);
+        self.log(format!("[{source}] armed {} s", default_ms / 1000));
+        None
+    }
+
+    fn action_activate(&self, source: &str) -> Option<String> {
+        match self.activate_delay() {
+            Ok(d) => {
+                self.log(format!("[{source}] activated - {} s delay", d / 1000));
+                None
+            }
+            Err(e) => {
+                self.log(format!("[{source}] activate: {}", e.message()));
+                Some(e.message())
+            }
+        }
+    }
+
+    /// First press schedules the safe cut, a second cancels the pending one,
+    /// so a mistaken press stays reversible.
+    fn action_cut_after(&self, source: &str) -> Option<String> {
+        if self.safe_cut_pending() {
+            self.cancel_safe_cut();
+            self.log(format!("[{source}] cut after this airs - cancelled"));
+            return None;
+        }
+        match self.schedule_safe_cut() {
+            Ok(_) => {
+                self.log(format!("[{source}] cut after this airs - scheduled"));
+                None
+            }
+            Err(e) => {
+                self.log(format!("[{source}] cut after: {e}"));
+                Some(e.to_string())
+            }
+        }
+    }
+
+    /// Stamp the most recent externally-driven action for the dashboard.
+    fn record_fired_action(&self, action: &str, source: &str, problem: Option<String>) {
+        let seq = self.last_action_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        *self.last_action.lock() = Some(FiredAction {
+            seq,
+            action: action.to_string(),
+            source: source.to_string(),
+            problem,
+        });
+    }
+
+    /// Woken whenever a hotkey or MIDI action changes the delay state, so
+    /// the runtime can persist it the way the dashboard routes already do.
+    pub fn state_dirty(&self) -> &tokio::sync::Notify {
+        &self.state_dirty
+    }
+}
+
 /// JSON-string escape that handles every C0 control char that would
 /// otherwise produce an invalid Discord payload (the previous
 /// `replace('\\', ..).replace('"', ..).replace('\n', ..)` chain missed
@@ -1920,16 +2200,19 @@ pub async fn run_egress(
 /// Also redacts the suffix after the last `/` if it's long enough to be
 /// a stream key - defensive against secrets we don't know about.
 fn scrub_secret(text: &str, secret: &str) -> String {
-    let mut out = text.to_string();
-    if secret.len() >= 6 {
-        let redacted = format!(
-            "{}…{}",
-            &secret[..secret.len().min(3)],
-            &secret[secret.len().saturating_sub(3)..]
-        );
-        out = out.replace(secret, &redacted);
+    // Characters, not bytes. A stream key is whatever the user pasted, and
+    // this runs on the egress error path - so a byte-offset slice here aborts
+    // the process (`panic = "abort"`) at the exact moment a destination is
+    // already failing, and again on every reconnect, because the key is on
+    // disk. The config redactors had the same bug in three places; this was
+    // the fourth and it was missed when they were fixed.
+    let chars: Vec<char> = secret.chars().collect();
+    if chars.len() < 6 {
+        return text.to_string();
     }
-    out
+    let head: String = chars[..3].iter().collect();
+    let tail: String = chars[chars.len() - 3..].iter().collect();
+    text.replace(secret, &format!("{head}…{tail}"))
 }
 
 /// One destination's session against a platform. Returns on disconnect.
@@ -1961,7 +2244,16 @@ async fn pump_dest(
     // position. Otherwise we'd briefly emit live frames before
     // compute_delay_cut catches up, producing a visible ~5 s backward
     // jump for viewers of the new destination.
-    let first_idr = seed_idr(ctrl).await;
+    // No seed means the publisher went away (or this destination was
+    // disabled) before a keyframe arrived. Leave rather than hold an open
+    // session to the platform with nothing to send down it.
+    let Some(first_idr) = seed_idr(ctrl, dest).await else {
+        ctrl.log(format!(
+            "[{}] nothing to send - the publisher went away before a keyframe",
+            dest.id
+        ));
+        return Ok(());
+    };
     state.consumer_seq = first_idr.seq;
     state.input_ts_anchor = first_idr.ts_ms;
     state.output_ts_base = 0;
@@ -2030,7 +2322,13 @@ async fn pump_dest(
         if current_token != state.last_publisher_token {
             ctrl.log(format!("[{}] publisher reconnect - re-anchoring", dest.id));
             let watermark = ctrl.ring.latest_seq().unwrap_or(0);
-            let new_idr = wait_first_idr_after(&ctrl.ring, watermark).await;
+            let Some(new_idr) = wait_for_idr(ctrl, dest, Some(watermark)).await else {
+                ctrl.log(format!(
+                    "[{}] publisher went away again before re-anchoring",
+                    dest.id
+                ));
+                return Ok(());
+            };
             reseed_after_publisher_change(&mut state, new_idr);
             state.last_publisher_token = current_token;
             send_sequence_headers(ctrl, dest, &mut sink, state.output_ts_base).await?;
@@ -2689,28 +2987,47 @@ async fn send_sequence_headers(
     sink.flush().await
 }
 
-async fn wait_first_idr(ring: &Arc<DiskRing>) -> TagMeta {
+/// Wait for a usable IDR, or `None` when there is no longer any point in
+/// waiting: the publisher has gone, or this destination was asked to stop.
+///
+/// Giving up matters more than it looks. By the time a pump calls this it has
+/// already opened and authenticated an RTMP session to the platform, so a wait
+/// that never ends is the "live but frozen" state the rest of this file exists
+/// to avoid: the platform keeps the publish slot, viewers see a stalled
+/// stream, and nothing notices, because the task is alive and simply parked.
+/// The supervisor will not respawn a task that has not finished.
+///
+/// `min_seq` selects the two shapes this is used in: `None` for a fresh pump
+/// seeding at the newest keyframe, `Some(watermark)` for a pump re-anchoring
+/// after the publisher reconnected, which must not accept a keyframe from the
+/// session that just ended.
+///
+/// The periodic wake is not a poll for tags - `on_append` covers those. It is
+/// there because losing the publisher raises no append, so without it the
+/// escape condition would never be looked at.
+async fn wait_for_idr(
+    ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
+    min_seq: Option<u64>,
+) -> Option<TagMeta> {
     loop {
         // Register notification *before* checking - guarantees we don't
         // miss an append that lands between the check and the await.
-        let notified = ring.on_append.notified();
-        if let Some(m) = ring.newest_idr() {
-            return m;
+        let notified = ctrl.ring.on_append.notified();
+        let found = match min_seq {
+            Some(seq) => ctrl.ring.newest_idr_after(seq),
+            None => ctrl.ring.newest_idr(),
+        };
+        if let Some(m) = found {
+            return Some(m);
         }
-        notified.await;
-    }
-}
-
-/// Same as `wait_first_idr` but only returns IDRs with seq strictly
-/// greater than `min_seq`. Used after publisher reconnect to ignore the
-/// previous session's IDRs that are still indexed in the ring.
-async fn wait_first_idr_after(ring: &Arc<DiskRing>, min_seq: u64) -> TagMeta {
-    loop {
-        let notified = ring.on_append.notified();
-        if let Some(m) = ring.newest_idr_after(min_seq) {
-            return m;
+        if !ctrl.ingest_alive() || dest.shutdown_requested.load(Ordering::Relaxed) {
+            return None;
         }
-        notified.await;
+        tokio::select! {
+            _ = notified => {}
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+        }
     }
 }
 
@@ -2718,7 +3035,7 @@ async fn wait_first_idr_after(ring: &Arc<DiskRing>, min_seq: u64) -> TagMeta {
 /// already active and the ring has enough history, seed at the delayed
 /// position so the new pump joins mid-stream cleanly; otherwise fall
 /// back to the newest IDR (live edge).
-async fn seed_idr(ctrl: &Arc<Controller>) -> TagMeta {
+async fn seed_idr(ctrl: &Arc<Controller>, dest: &Arc<DestinationState>) -> Option<TagMeta> {
     let target = ctrl.target_delay_ms() as u64;
     if target > 0 {
         if let (Some(latest), Some(oldest)) = (ctrl.ring.latest_ts(), ctrl.ring.oldest_ts()) {
@@ -2728,12 +3045,12 @@ async fn seed_idr(ctrl: &Arc<Controller>) -> TagMeta {
             if latest.saturating_sub(oldest) + 1_500 >= target {
                 let desired = latest.saturating_sub(target);
                 if let Some(idr) = ctrl.ring.find_idr_near(desired, 2_000) {
-                    return idr;
+                    return Some(idr);
                 }
             }
         }
     }
-    wait_first_idr(&ctrl.ring).await
+    wait_for_idr(ctrl, dest, None).await
 }
 
 /// Re-anchor egress state after the publisher changed identity. Mirrors
@@ -2824,6 +3141,13 @@ mod tests {
     /// monotonically from `start_ms`. Used to drive `buffer_fill_ms` past
     /// the armed threshold so we can exercise phase transitions.
     fn feed_seconds(ctrl: &Controller, start_ms: u32, secs: u32, fps: u32) {
+        // Tags only ever arrive from a connected publisher, but these tests
+        // push them straight into the ring rather than going through
+        // `begin_publish`. Say the publisher is live to match, or every
+        // activate refuses with `NoIngest` - true of the harness, not of
+        // what it is modelling. Tests that exercise the publish handshake
+        // itself never call this, so their state stays untouched.
+        ctrl.ingest_alive.store(true, Ordering::Relaxed);
         let frame_ms = 1000 / fps;
         // Leading byte 0x17 (legacy AVC keyframe) lets the IDR survive
         // v0.1.3's primary-track gate in `Ring::append`; 0x27 marks the
@@ -3037,6 +3361,10 @@ mod tests {
         feed_seconds(&h.ctrl, 0, 3, 30);
         h.ctrl.activate_delay().expect("buffer is past armed");
         h.ctrl.schedule_safe_cut().expect("delay is active");
+        // The old publisher goes away first, the way a real disconnect
+        // frees the slot - feeding tags above stands in for it having been
+        // live.
+        h.ctrl.mark_ingest_dead();
         // Fresh publisher: the mark's timestamp belongs to the OLD
         // session's timeline (the new one restarts near 0), so keeping
         // it would leave an unreachable mark pending forever.
@@ -3270,6 +3598,726 @@ mod tests {
         let h = harness(0);
         h.ctrl.arm_delay(9_999_999);
         assert_eq!(h.ctrl.armed_delay_ms(), 600_000);
+    }
+
+    // ── Named action (Hotkey & MIDI) test suite ──────────────────────
+
+    #[test]
+    fn named_action_arm_toggles_arming_and_disarming() {
+        let h = harness(0);
+        // Arming needs a publisher, so model one.
+        h.ctrl.mark_ingest_alive_for_test();
+        assert_eq!(h.ctrl.armed_delay_ms(), 0);
+
+        // 1st press: arms the delay
+        h.ctrl.run_named_action("arm", 5_000, "hotkey");
+        assert_eq!(h.ctrl.armed_delay_ms(), 5_000);
+        assert_eq!(h.ctrl.phase(), "preparing");
+
+        // 2nd press: disarms and frees buffer target
+        h.ctrl.run_named_action("arm", 5_000, "hotkey");
+        assert_eq!(h.ctrl.armed_delay_ms(), 0);
+        assert_eq!(h.ctrl.phase(), "idle");
+    }
+
+    #[test]
+    fn named_action_arm_never_disarms_a_delay_on_air() {
+        // Disarming wipes the target as well, so an arm press while the
+        // delay is live would cut every viewer to live. Misclick guard.
+        let h = harness(0);
+        h.ctrl.arm_delay(3_000);
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.activate_delay().unwrap();
+
+        let problem = h.ctrl.run_named_action("arm", 5_000, "hotkey");
+
+        assert!(
+            problem.is_some(),
+            "a refused action must hand the caller something to show"
+        );
+        assert_eq!(h.ctrl.target_delay_ms(), 3_000, "must stay delayed");
+        assert_eq!(h.ctrl.armed_delay_ms(), 3_000);
+        assert_eq!(h.ctrl.phase(), "active");
+    }
+
+    #[test]
+    fn named_action_toggle_switches_between_live_and_delayed() {
+        let h = harness(0);
+
+        // From idle with buffer ready: 1st toggle arms and activates delay
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.run_named_action("toggle", 3_000, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 3_000);
+        assert_eq!(h.ctrl.phase(), "active");
+
+        // 2nd toggle cuts back to live (target = 0, but armed remains preserved)
+        h.ctrl.run_named_action("toggle", 3_000, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 0);
+        assert_eq!(h.ctrl.armed_delay_ms(), 3_000);
+        assert_eq!(h.ctrl.phase(), "ready");
+
+        // 3rd toggle re-activates using the preserved armed duration
+        h.ctrl.run_named_action("toggle", 0, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 3_000);
+        assert_eq!(h.ctrl.phase(), "active");
+    }
+
+    #[test]
+    fn named_action_reports_only_what_it_could_not_do() {
+        // The tray turns a returned message into a balloon, so anything that
+        // worked has to stay quiet: a toast per keypress would land on a
+        // display-captured scene mid-stream.
+        let h = harness(0);
+        // These presses model a streamer who is live.
+        h.ctrl.mark_ingest_alive_for_test();
+        assert_eq!(h.ctrl.run_named_action("arm", 5_000, "hotkey"), None);
+        assert_eq!(h.ctrl.run_named_action("arm", 5_000, "hotkey"), None);
+        assert_eq!(h.ctrl.run_named_action("cut", 0, "hotkey"), None);
+        assert_eq!(h.ctrl.run_named_action("nonsense", 0, "hotkey"), None);
+
+        // Activating with nothing armed cannot work, and says so.
+        assert!(h.ctrl.run_named_action("activate", 0, "hotkey").is_some());
+
+        // Neither can toggling on before the buffer holds the delay.
+        let cold = harness(0);
+        cold.ctrl.mark_ingest_alive_for_test();
+        assert!(cold
+            .ctrl
+            .run_named_action("toggle", 5_000, "hotkey")
+            .is_some());
+        assert_eq!(cold.ctrl.armed_delay_ms(), 5_000, "it armed even so");
+    }
+
+    /// A delay cannot start with nothing arriving: the buffer holds no
+    /// video and can never fill, so "still building" would be a countdown
+    /// that never ends. Arming stays allowed - that is pre-arm.
+    #[test]
+    fn activate_refuses_while_nothing_is_publishing() {
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        assert!(
+            matches!(h.ctrl.activate_delay(), Err(ActivateError::NoIngest)),
+            "no publisher means no delay to switch on"
+        );
+        assert_eq!(h.ctrl.armed_delay_ms(), 2_000, "but it stays armed");
+
+        // With a publisher and a filled buffer it works as before.
+        feed_seconds(&h.ctrl, 0, 4, 30);
+        assert_eq!(
+            h.ctrl.activate_delay().expect("buffer is past armed"),
+            2_000
+        );
+
+        // And the publisher going away does not retroactively cut it.
+        h.ctrl.mark_ingest_dead();
+        assert_eq!(h.ctrl.target_delay_ms(), 2_000);
+    }
+
+    /// Recording a combo that is already bound has to be possible: Windows
+    /// hands a registered combo to us rather than to the browser, so the
+    /// capture field would never see the key and the action would fire
+    /// instead. The tray reads this to skip registration while it holds.
+    #[test]
+    fn hotkey_capture_suspends_and_expires_on_its_own() {
+        let h = harness(0);
+        assert!(!h.ctrl.hotkeys_suspended(), "live by default");
+
+        h.ctrl.suspend_hotkeys(30_000);
+        assert!(h.ctrl.hotkeys_suspended());
+        let left = h.ctrl.hotkeys_suspend_remaining_ms();
+        assert!(left > 25_000 && left <= 30_000, "got {left}");
+
+        // The dashboard says it is done.
+        h.ctrl.suspend_hotkeys(0);
+        assert!(!h.ctrl.hotkeys_suspended(), "resumed on request");
+        assert_eq!(h.ctrl.hotkeys_suspend_remaining_ms(), 0);
+
+        // And a window that has already passed never holds them down: a
+        // dashboard that dies mid-capture costs one window, not the session.
+        h.ctrl.suspend_hotkeys(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(!h.ctrl.hotkeys_suspended(), "expired on its own");
+    }
+
+    /// Nothing publishing means the buffer cannot fill, so every action
+    /// that would BUILD delay is refused - and every action that removes it
+    /// still works, because OBS crashing mid-delay is exactly when someone
+    /// needs to cut back to live.
+    #[test]
+    fn named_actions_refuse_to_build_delay_with_no_publisher() {
+        let h = harness(0);
+        assert!(!h.ctrl.ingest_alive(), "offline to start with");
+
+        assert!(h.ctrl.run_named_action("arm", 5_000, "hotkey").is_some());
+        assert_eq!(h.ctrl.armed_delay_ms(), 0, "arm must not arm");
+        assert_eq!(h.ctrl.phase(), "idle", "and must not enter preparing");
+
+        assert!(h.ctrl.run_named_action("toggle", 5_000, "hotkey").is_some());
+        assert_eq!(h.ctrl.armed_delay_ms(), 0, "toggle must not arm either");
+        assert_eq!(h.ctrl.target_delay_ms(), 0);
+
+        assert!(h.ctrl.run_named_action("activate", 0, "hotkey").is_some());
+        assert_eq!(h.ctrl.target_delay_ms(), 0);
+
+        // Now the other direction: armed and on air when the publisher dies.
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.arm_delay(3_000);
+        h.ctrl.activate_delay().expect("buffer is past armed");
+        h.ctrl.mark_ingest_dead();
+
+        assert_eq!(
+            h.ctrl.run_named_action("cut", 0, "hotkey"),
+            None,
+            "cutting back to live must never be blocked"
+        );
+        assert_eq!(h.ctrl.target_delay_ms(), 0, "and must actually cut");
+        assert_eq!(
+            h.ctrl.run_named_action("arm", 5_000, "hotkey"),
+            None,
+            "disarming frees the buffer, which is never harmful"
+        );
+        assert_eq!(h.ctrl.armed_delay_ms(), 0);
+    }
+
+    #[test]
+    fn named_action_records_what_fired_for_the_dashboard() {
+        // The dashboard reads this to light up the row that fired, and the
+        // sequence number is what makes a repeat of the same action a new
+        // event rather than a no-op.
+        let h = harness(0);
+        h.ctrl.mark_ingest_alive_for_test();
+        assert!(h.ctrl.last_action().is_none(), "nothing has fired yet");
+
+        h.ctrl.run_named_action("arm", 5_000, "hotkey");
+        let first = h.ctrl.last_action().expect("an action was recorded");
+        assert_eq!(first.action, "arm");
+        assert_eq!(first.source, "hotkey");
+        assert!(first.problem.is_none());
+
+        h.ctrl.run_named_action("arm", 5_000, "midi");
+        let second = h.ctrl.last_action().expect("recorded");
+        assert_eq!(second.source, "midi");
+        assert!(second.seq > first.seq, "a repeat has to read as new");
+
+        // A refusal carries its message, so the dashboard can show it.
+        let cold = harness(0);
+        cold.ctrl.run_named_action("activate", 0, "hotkey");
+        let refused = cold.ctrl.last_action().expect("recorded");
+        assert!(refused.problem.is_some(), "a refusal is worth surfacing");
+    }
+
+    #[test]
+    fn named_action_activate_and_cut() {
+        let h = harness(0);
+        h.ctrl.arm_delay(2_000);
+        feed_seconds(&h.ctrl, 0, 4, 30);
+
+        // Activate action
+        h.ctrl.run_named_action("activate", 0, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 2_000);
+        assert_eq!(h.ctrl.phase(), "active");
+
+        // Cut action (drops to live immediately)
+        h.ctrl.run_named_action("cut", 0, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 0);
+        assert_eq!(h.ctrl.phase(), "ready");
+    }
+
+    #[test]
+    fn named_action_cut_after_schedules_and_cancels() {
+        let h = harness(0);
+        h.ctrl.arm_delay(3_000);
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.activate_delay().unwrap();
+        assert!(!h.ctrl.safe_cut_pending());
+
+        // 1st press: schedules safe-cut (cut-after)
+        h.ctrl.run_named_action("cut_after", 0, "hotkey");
+        assert!(
+            h.ctrl.safe_cut_pending(),
+            "1st press must schedule safe cut"
+        );
+
+        // 2nd press: cancels the scheduled safe-cut (reversible misclick)
+        h.ctrl.run_named_action("cut_after", 0, "hotkey");
+        assert!(!h.ctrl.safe_cut_pending(), "2nd press must cancel safe cut");
+    }
+
+    #[test]
+    fn named_action_toggle_clears_pending_safe_cut() {
+        let h = harness(0);
+        h.ctrl.arm_delay(3_000);
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.activate_delay().unwrap();
+
+        // Schedule a safe cut
+        h.ctrl.run_named_action("cut_after", 0, "hotkey");
+        assert!(h.ctrl.safe_cut_pending());
+
+        // Toggle while safe cut is pending should immediately cut to live and cancel mark
+        h.ctrl.run_named_action("toggle", 3_000, "hotkey");
+        assert_eq!(h.ctrl.target_delay_ms(), 0);
+        assert!(!h.ctrl.safe_cut_pending());
+    }
+
+    /// A wrap does not arrive as one tidy crossing. Audio buffering means
+    /// several tags can still be in flight when video crosses, and every one
+    /// of them has to read back into the epoch it was stamped in.
+    #[test]
+    fn several_late_tags_in_a_row_all_land_in_the_old_epoch() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+
+        h.ctrl.on_tag(9, 0xFFFF_FF00, &v, false, false);
+        h.ctrl.on_tag(9, 0x0000_0020, &v, false, false); // video crosses
+        assert_eq!(h.ctrl.ring.latest_ts(), Some((1u64 << 32) | 0x20));
+
+        // Three stragglers, each later than the one before but all still on
+        // the old side of the counter.
+        for wire in [0xFFFF_FFA0u32, 0xFFFF_FFC0, 0xFFFF_FFE0] {
+            h.ctrl.on_tag(8, wire, &v, false, false);
+            assert_eq!(
+                h.ctrl.ring.latest_ts(),
+                Some(wire as u64),
+                "straggler {wire:#x} left its epoch"
+            );
+        }
+
+        // And the counter is still able to cross forward afterwards.
+        h.ctrl.on_tag(9, 0x0000_0040, &v, false, false);
+        assert_eq!(h.ctrl.ring.latest_ts(), Some((1u64 << 32) | 0x40));
+    }
+
+    /// Audio and video routinely carry the same timestamp. Equal is neither
+    /// ahead nor behind, and must not be read as either.
+    #[test]
+    fn tags_sharing_a_timestamp_do_not_move_the_epoch() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+
+        h.ctrl.on_tag(9, 5_000, &v, false, false);
+        h.ctrl.on_tag(8, 5_000, &v, false, false);
+        h.ctrl.on_tag(9, 5_000, &v, false, false);
+        assert_eq!(h.ctrl.ring.latest_ts(), Some(5_000));
+
+        // Same, but sitting exactly on the wrap boundary.
+        let h2 = harness(0);
+        h2.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h2.ctrl.on_tag(9, 0xFFFF_FFFF, &v, false, false);
+        h2.ctrl.on_tag(8, 0xFFFF_FFFF, &v, false, false);
+        assert_eq!(h2.ctrl.ring.latest_ts(), Some(0xFFFF_FFFF));
+        h2.ctrl.on_tag(9, 0, &v, false, false);
+        assert_eq!(
+            h2.ctrl.ring.latest_ts(),
+            Some(1u64 << 32),
+            "the very next millisecond is the next epoch"
+        );
+    }
+
+    /// Half the counter apart is the point where "ahead" and "behind" stop
+    /// being distinguishable. Whichever way it is read, one tag must not
+    /// move the timeline by 49.7 days.
+    #[test]
+    fn a_jump_of_exactly_half_the_counter_does_not_move_the_epoch() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+
+        h.ctrl.on_tag(9, 0, &v, false, false);
+        h.ctrl.on_tag(9, 1u32 << 31, &v, false, false);
+        assert_eq!(
+            h.ctrl.ring.latest_ts(),
+            Some(1u64 << 31),
+            "exactly half the counter ahead is still this epoch"
+        );
+    }
+
+    /// A publisher session starts at epoch 0, and there is no epoch below it.
+    /// A tag stamped before the first one we saw cannot be read as "the
+    /// previous cycle", and must not be read as 49.7 days into the future
+    /// either - that value reaches `trim_older_than` and empties the ring.
+    #[test]
+    fn a_tag_from_before_the_first_one_cannot_jump_the_timeline() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+
+        // A short, ordinary session.
+        h.ctrl.on_tag(9, 0, &v, true, false);
+        h.ctrl.on_tag(9, 1_000, &v, false, false);
+        h.ctrl.on_tag(9, 2_000, &v, false, false);
+        let before = h.ctrl.ring.latest_ts().expect("a populated ring");
+
+        // Now a tag stamped "60 ms before zero", which is what an audio
+        // track lagging the video would carry if the session began at 0.
+        h.ctrl.on_tag(8, 0u32.wrapping_sub(60), &v, false, false);
+        let after = h.ctrl.ring.latest_ts().expect("a populated ring");
+
+        assert!(
+            after <= before + 60_000,
+            "a stray early tag moved the timeline to {after} from {before}"
+        );
+    }
+
+    /// A pump that reaches the IDR wait has already opened and authenticated
+    /// a session to the platform. If it waits forever there, the platform
+    /// keeps the publish slot and viewers see a frozen stream, while nothing
+    /// in the app notices because the task is alive and merely parked - and
+    /// the supervisor will not respawn a task that has not finished.
+    #[tokio::test]
+    async fn the_idr_wait_gives_up_when_there_is_nothing_left_to_wait_for() {
+        let h = harness(0);
+        let dest = h.ctrl.destination_state("d1");
+
+        // No publisher and no keyframe: the wait must not hang.
+        assert!(!h.ctrl.ingest_alive());
+        let gave_up =
+            tokio::time::timeout(std::time::Duration::from_secs(2), seed_idr(&h.ctrl, &dest))
+                .await
+                .expect("the wait has to return, not hang");
+        assert!(gave_up.is_none(), "no publisher means no seed");
+
+        // The other exit: a publisher is live, but this destination was
+        // asked to stop before any keyframe arrived.
+        h.ctrl.mark_ingest_alive_for_test();
+        dest.shutdown_requested.store(true, Ordering::Relaxed);
+        let stopped =
+            tokio::time::timeout(std::time::Duration::from_secs(2), seed_idr(&h.ctrl, &dest))
+                .await
+                .expect("the wait has to return, not hang");
+        assert!(stopped.is_none(), "a stopping destination stops waiting");
+
+        // And when a keyframe does arrive it is still returned.
+        dest.shutdown_requested.store(false, Ordering::Relaxed);
+        feed_seconds(&h.ctrl, 0, 2, 30);
+        let seeded =
+            tokio::time::timeout(std::time::Duration::from_secs(2), seed_idr(&h.ctrl, &dest))
+                .await
+                .expect("returns")
+                .expect("a keyframe is present");
+        assert!(seeded.is_idr, "the seed has to be a keyframe");
+    }
+
+    /// The egress error path redacts the stream key before logging it. That
+    /// redaction sliced bytes, so a key with a multi-byte character in it
+    /// aborted the process at the exact moment a destination was already
+    /// failing - and again on every reconnect, since the key is on disk.
+    /// Three sibling copies of this were fixed a commit earlier; this one
+    /// was missed, which is why it has its own test.
+    #[test]
+    fn scrubbing_a_key_from_an_error_never_panics() {
+        for key in [
+            "🎥abcde",      // 4-byte char straddling offset 3
+            "abéde",        // 2-byte char at the tail boundary
+            "日本語テスト", // every char multi-byte
+            "live_señor_key",
+            "ascii_key_here",
+            "short", // under the length floor
+            "",
+        ] {
+            let msg = format!("connection refused while sending to {key}");
+            let out = scrub_secret(&msg, key);
+            if key.chars().count() >= 6 {
+                // The failure text deliberately carries neither the key nor the
+                // scrubbed line. A test about redaction that prints the value it
+                // failed to redact would leak it into CI logs on the one run where
+                // that matters, and code scanning flags the pattern for exactly
+                // that reason. The fixture list above is short enough to find the
+                // offending input without it.
+                assert!(!out.contains(key), "a key survived redaction");
+                assert!(out.contains('…'), "a key was not elided at all");
+            }
+        }
+        // ASCII behaviour is unchanged.
+        assert_eq!(
+            scrub_secret("failed for live_1234567890", "live_1234567890"),
+            "failed for liv…890"
+        );
+    }
+
+    /// Audio and video cross each other by a few milliseconds all the time,
+    /// so at the moment the u32 wire clock rolls over, one track is past it
+    /// and the other is not. The straggler must be read in the epoch it was
+    /// actually stamped in: promoting it puts one tag 49.7 days ahead, and
+    /// `on_tag` feeds that to the trim, which then measures the whole ring
+    /// against a cutoff past every frame in it and evicts the lot.
+    #[test]
+    fn a_late_tag_at_the_wrap_stays_in_the_epoch_it_came_from() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+        let a = [0xafu8; 64];
+
+        // Video runs up to the edge of the wrap, audio interleaved behind it.
+        h.ctrl.on_tag(9, 0xFFFF_FFC0, &v, false, false);
+        h.ctrl.on_tag(8, 0xFFFF_FFD0, &a, false, false);
+        h.ctrl.on_tag(9, 0xFFFF_FFE0, &v, false, false);
+
+        // Video crosses first: one epoch up, 0x10 into the new counter.
+        h.ctrl.on_tag(9, 0x0000_0010, &v, false, false);
+        let crossed = h.ctrl.ring.latest_ts().expect("a populated ring");
+        assert_eq!(crossed, (1u64 << 32) | 0x10, "video took the new epoch");
+
+        // The audio tag that was still in flight is stamped 32 ms earlier,
+        // and has to read as 32 ms earlier - not 49.7 days later.
+        h.ctrl.on_tag(8, 0xFFFF_FFF0, &a, false, false);
+        let straggler = h.ctrl.ring.latest_ts().expect("a populated ring");
+        assert_eq!(
+            straggler, 0xFFFF_FFF0,
+            "the straggler belongs to the epoch it was stamped in"
+        );
+        assert_eq!(
+            crossed - straggler,
+            32,
+            "and sits 32 ms before the tag that crossed, not 49.7 days after"
+        );
+
+        // The next video tag is back in the new epoch, so one late tag does
+        // not leave the counter stuck an epoch behind.
+        h.ctrl.on_tag(9, 0x0000_0030, &v, false, false);
+        assert_eq!(
+            h.ctrl.ring.latest_ts().expect("a populated ring"),
+            (1u64 << 32) | 0x30,
+            "the counter recovers on the next in-epoch tag"
+        );
+    }
+
+    // -- Long-run soak ------------------------------------------------
+
+    /// What a soak run observed, so each scenario can assert on its own
+    /// terms instead of the driver guessing what matters.
+    struct SoakStats {
+        tags: u64,
+        wraps: u64,
+        reconnects: u64,
+        secs: f64,
+    }
+
+    const WRAP_MS: u64 = 1u64 << 32; // u32 ms rolls over every 49.7 days
+    const FRAME_MS: u64 = 33; // 30 fps, the dense rate
+    const COARSE_MS: u64 = 1_000; // where nothing interesting happens
+    const HOT_ZONE_MS: u64 = 90_000; // dense either side of a boundary
+    const SOAK_ARMED_MS: u32 = 5_000;
+    /// How far behind the video tag the interleaved audio tag is stamped.
+    /// Deeper than one video frame on purpose, which is both what a real
+    /// muxer's audio buffering looks like and what guarantees the case that
+    /// matters: with a lag shorter than the frame step, whether any tag
+    /// lands in the window between the two tracks crossing the wrap is down
+    /// to the phase of the step, and a run can walk straight over the bug
+    /// without ever touching it.
+    const AUDIO_LAG_MS: u64 = 60;
+
+    /// Send one tag and check it expanded to the timestamp it was stamped
+    /// with. Equality is what catches an epoch read the wrong way round: a
+    /// missed wrap loses 49.7 days, a straggler promoted into the new epoch
+    /// gains them, and both still look monotonic.
+    fn soak_emit(ctrl: &Controller, kind: u8, track_ms: u64, payload: &[u8], is_idr: bool) {
+        ctrl.on_tag(kind, track_ms as u32, payload, is_idr, false);
+        if let Some(ts) = ctrl.ring.latest_ts() {
+            assert_eq!(
+                ts,
+                track_ms,
+                "expanded timestamp is not where the tag was stamped, at {} h",
+                track_ms / 3_600_000
+            );
+        }
+    }
+
+    /// Ring invariants that are too costly to check per tag.
+    fn soak_check_ring(ctrl: &Controller, stream_ms: u64, prev_seq: &mut Option<u64>) {
+        let oldest = ctrl.ring.oldest_ts().expect("a populated ring");
+        let latest = ctrl.ring.latest_ts().expect("a populated ring");
+        assert!(oldest <= latest, "ring front overtook its back");
+        if let Some(seq) = ctrl.ring.latest_seq() {
+            if let Some(prev) = *prev_seq {
+                assert!(seq > prev, "sequence number went backwards");
+            }
+            *prev_seq = Some(seq);
+        }
+        assert!(
+            latest - oldest <= (SOAK_ARMED_MS as u64) * 3,
+            "trim stopped bounding the buffer at {} h: {} ms held for {SOAK_ARMED_MS} ms",
+            stream_ms / 3_600_000,
+            latest - oldest
+        );
+    }
+
+    /// What a real restart does: the publisher goes, the session caches go
+    /// with it, and OBS's wire clock starts again near 0.
+    fn soak_restart(ctrl: &Controller) {
+        ctrl.mark_ingest_dead();
+        ctrl.ring.clear();
+        ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        ctrl.arm_delay(SOAK_ARMED_MS);
+    }
+
+    /// Frames run dense either side of a wrap or a reconnect, where the
+    /// arithmetic is interesting, and coarse in between so a run measured in
+    /// years of stream time finishes in minutes.
+    fn soak_step_ms(session_ms: u64, until_reconnect: u64) -> u64 {
+        let into_epoch = session_ms % WRAP_MS;
+        let near_wrap = into_epoch < HOT_ZONE_MS || WRAP_MS - into_epoch < HOT_ZONE_MS;
+        if near_wrap || until_reconnect < HOT_ZONE_MS {
+            FRAME_MS
+        } else {
+            COARSE_MS
+        }
+    }
+
+    /// Drive `hours` of stream through the real ingest path, restarting the
+    /// publisher every `reconnect_every_ms` (0 for one unbroken session).
+    ///
+    /// The timeline is never skipped: every millisecond of the requested
+    /// duration passes through the same u32 truncation OBS puts on the wire.
+    fn soak(hours: u64, reconnect_every_ms: u64, interleave_audio: bool) -> SoakStats {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.arm_delay(SOAK_ARMED_MS);
+
+        // Small payloads: a run this long rewrites the ring's whole capacity
+        // thousands of times over, and the tag count is what we are after.
+        let mut idr = [0u8; 120];
+        idr[0] = 0x17;
+        let mut pframe = [0u8; 120];
+        pframe[0] = 0x27;
+
+        let total_ms = hours * 3_600_000;
+        let mut stream_ms: u64 = 0; // the whole run
+        let mut session_start: u64 = 0; // where the current session began
+        let mut prev_seq: Option<u64> = None;
+        let mut next_reconnect = if reconnect_every_ms == 0 {
+            u64::MAX
+        } else {
+            reconnect_every_ms
+        };
+        let (mut tags, mut wraps, mut reconnects) = (0u64, 0u64, 0u64);
+        let started = std::time::Instant::now();
+
+        while stream_ms < total_ms {
+            let session_ms = stream_ms - session_start;
+            let is_idr = session_ms % 2_000 < FRAME_MS;
+            let payload: &[u8] = if is_idr { &idr } else { &pframe };
+
+            // Video, then the audio tag that was already in flight when the
+            // video was sent.
+            soak_emit(&h.ctrl, 9, session_ms, payload, is_idr);
+            tags += 1;
+            if interleave_audio && session_ms >= AUDIO_LAG_MS {
+                soak_emit(&h.ctrl, 8, session_ms - AUDIO_LAG_MS, &pframe, false);
+                tags += 1;
+            }
+
+            // No separate monotonicity check: soak_emit already pins every
+            // tag to its own stamp, and the session clock only moves
+            // forward, so ordering follows from it.
+            if tags % 20_000 == 0 {
+                soak_check_ring(&h.ctrl, stream_ms, &mut prev_seq);
+            }
+
+            // Keep the delay state machine moving, so this is not just an
+            // append loop with a long clock.
+            if session_ms > 60_000 && session_ms % 1_800_000 < COARSE_MS {
+                let _ = h.ctrl.activate_delay();
+                h.ctrl.arm_delay(SOAK_ARMED_MS);
+            }
+
+            if stream_ms >= next_reconnect {
+                soak_restart(&h.ctrl);
+                session_start = stream_ms;
+                prev_seq = None;
+                next_reconnect += reconnect_every_ms;
+                reconnects += 1;
+            }
+
+            let step = soak_step_ms(session_ms, next_reconnect.saturating_sub(stream_ms));
+            if (session_ms + step) % WRAP_MS < session_ms % WRAP_MS {
+                wraps += 1;
+            }
+            stream_ms += step;
+        }
+
+        assert!(
+            h.ctrl.logs.lock().len() <= LOG_LINES_MAX,
+            "the log ring grew unbounded"
+        );
+        SoakStats {
+            tags,
+            wraps,
+            reconnects,
+            secs: started.elapsed().as_secs_f64(),
+        }
+    }
+
+    fn soak_hours(default: u64) -> u64 {
+        std::env::var("SOAK_HOURS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    /// One unbroken session, long enough to cross the RTMP timestamp wrap
+    /// eight times. This is the unattended-relay case: nothing restarts OBS,
+    /// so the wire clock runs until u32 milliseconds roll over at 49.7 days,
+    /// and every expanded timestamp after that no longer fits in 32 bits.
+    ///
+    /// Debug build on purpose: overflow checks are on, so every counter that
+    /// accumulates over the run is bounds-checked by the compiler rather
+    /// than by an assertion someone remembered to write.
+    ///
+    ///   cargo test soak_continuous -- --ignored --nocapture
+    ///   SOAK_HOURS=1500 cargo test soak_continuous -- --ignored --nocapture
+    #[test]
+    #[ignore = "long-running soak; run explicitly with --ignored"]
+    fn soak_continuous_session_crosses_every_timestamp_wrap() {
+        let hours = soak_hours(10_000);
+        let s = soak(hours, 0, false);
+        println!(
+            "soak/continuous: {hours} h, {} tags, {} wraps, {:.1} s",
+            s.tags, s.wraps, s.secs
+        );
+        if hours >= 1_200 {
+            assert!(s.wraps >= 1, "a run this long has to cross a wrap");
+        }
+    }
+
+    /// The same unbroken session, but with audio interleaved the way a real
+    /// muxer sends it: each audio tag stamped a few milliseconds behind the
+    /// video tag it followed. At every wrap that leaves one track over the
+    /// line while the other is not, which is the case that put a tag 49.7
+    /// days in the future and had the trim evict the entire delay buffer.
+    #[test]
+    #[ignore = "long-running soak; run explicitly with --ignored"]
+    fn soak_interleaved_audio_across_every_wrap() {
+        let hours = soak_hours(10_000);
+        let s = soak(hours, 0, true);
+        println!(
+            "soak/interleaved: {hours} h, {} tags, {} wraps, {:.1} s",
+            s.tags, s.wraps, s.secs
+        );
+        if hours >= 1_200 {
+            assert!(s.wraps >= 1, "a run this long has to cross a wrap");
+        }
+    }
+
+    /// The ordinary case: a streamer who goes live, stops, and goes live
+    /// again, a few hours at a time. Each restart hands the ingest path a
+    /// wire clock that jumps backwards to ~0 while the ring still holds the
+    /// previous session, which is the shape of a wrap seen from the wrong
+    /// side.
+    #[test]
+    #[ignore = "long-running soak; run explicitly with --ignored"]
+    fn soak_many_sessions_reset_cleanly() {
+        let hours = soak_hours(1_000);
+        let s = soak(hours, 6 * 3_600_000, false);
+        println!(
+            "soak/sessions: {hours} h, {} tags, {} reconnects, {:.1} s",
+            s.tags, s.reconnects, s.secs
+        );
+        if hours >= 100 {
+            assert!(s.reconnects > 10, "the run has to restart the publisher");
+        }
     }
 
     // ── Ring + index correctness ─────────────────────────────────────

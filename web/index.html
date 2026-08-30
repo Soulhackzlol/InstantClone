@@ -698,6 +698,10 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,.15) 50%,transparent 100%);
   animation:arm-shimmer 1.6s linear infinite;pointer-events:none}
 @keyframes arm-shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+/* No publisher: the buffer cannot grow, so the travelling shimmer would be
+   promising progress that is not happening. */
+.arm-bar.stalled::after{animation:none}
+.arm-bar.stalled .arm-bar-fill{opacity:.45;box-shadow:none}
 
 .cp-head{display:flex;align-items:baseline;justify-content:space-between}
 .cp-cap{color:var(--fg-4);font-size:11px}
@@ -1737,19 +1741,34 @@ details.sys-collapse>summary .ic-label{margin:0}
     box-shadow .18s var(--ease-out),transform .12s var(--ease-spring);
 }
 .hk-capture:hover{border-color:var(--accent);color:var(--fg)}
+/* Feedback on the press itself, not on release - waiting for the click to
+   land is the difference between a control that answers and one that lags. */
+.hk-capture:active{transform:scale(.985)}
 .hk-capture:focus-visible{outline:none;border-color:var(--accent);
   box-shadow:0 0 0 3px var(--accent-glow)}
+/* A binding the OS refused: the field looks bound but nothing will ever
+   fire, so the row has to say so where the eye already is. */
+.hk-capture.conflict{border-color:var(--warn);
+  background:color-mix(in oklch,var(--warn) 8%,transparent)}
+.hk-flag{display:none;align-items:center;gap:5px;margin-top:3px;
+  color:var(--warn);font-size:12px;letter-spacing:.1px}
+.hk-flag.on{display:inline-flex}
 .hk-capture.recording{border-color:var(--accent);color:var(--fg);
   background:color-mix(in oklch,var(--accent) 10%,transparent);
   box-shadow:0 0 0 3px var(--accent-glow);animation:hk-pulse 1.4s var(--ease-out) infinite}
 .hk-capture.invalid{border-color:var(--danger);animation:hk-shake .32s var(--ease-out)}
+/* The binding that just fired, so a press that landed while you were in a
+   game is still visible when you alt-tab back. */
+.hk-capture.fired{animation:hk-fired .9s var(--ease-out)}
+.hk-capture.fired-bad{animation:hk-fired-bad .9s var(--ease-out)}
 .hk-capture.empty{color:var(--fg-4);font-size:13px}
 .hk-chip{display:inline-flex;align-items:center;justify-content:center;
   min-width:22px;height:24px;padding:0 7px;border-radius:6px;
   border:1px solid var(--line-2);border-bottom-width:2px;
   background:color-mix(in oklch,#fff 7%,var(--surface-3,transparent));
   color:var(--fg);font-family:ui-monospace,'SF Mono',Menlo,monospace;
-  font-size:12px;font-weight:600;line-height:1}
+  font-size:12px;font-weight:600;line-height:1;
+  animation:hk-chip-in .22s var(--ease-spring) both}
 .hk-sep{color:var(--fg-4);font-size:11px;font-weight:600}
 .hk-cue{color:var(--fg-3);font-size:12.5px;letter-spacing:.2px}
 .hk-clear{flex:0 0 auto;width:30px;height:30px;display:inline-flex;
@@ -1757,17 +1776,39 @@ details.sys-collapse>summary .ic-label{margin:0}
   background:transparent;color:var(--fg-4);cursor:pointer;font-size:17px;line-height:1;
   transition:background .15s var(--ease-out),color .15s var(--ease-out),opacity .15s}
 .hk-clear:hover{background:color-mix(in oklch,var(--danger) 16%,transparent);color:var(--danger)}
-.hk-clear[hidden]{display:none}
+.hk-clear:active{transform:scale(.92)}
+/* Kept in the layout when there is nothing to clear: collapsing it shifted
+   every row sideways the moment a binding was set or cleared. */
+.hk-clear.idle{opacity:0;pointer-events:none}
 .hk-warn{margin-top:10px;color:var(--warn);font-size:12.5px;min-height:1.1em}
 .hk-note{margin-top:10px;color:var(--fg-3);font-size:12.5px}
+.hk-device{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}
+.hk-device label{font-weight:600;font-size:13.5px}
+.hk-device select{flex:1;min-width:180px;max-width:340px}
 @keyframes hk-pulse{0%,100%{box-shadow:0 0 0 3px var(--accent-glow)}
   50%{box-shadow:0 0 0 5px var(--accent-glow)}}
+/* Chips arrive rather than blink in: the confirmation that a binding
+   committed is the motion, so no extra copy is needed to say "saved". */
+@keyframes hk-chip-in{from{opacity:0;transform:scale(.86)}
+  to{opacity:1;transform:scale(1)}}
+@keyframes hk-fired{
+  0%{box-shadow:0 0 0 0 var(--accent-glow);border-color:var(--accent)}
+  18%{box-shadow:0 0 0 6px var(--accent-glow);border-color:var(--accent)}
+  100%{box-shadow:0 0 0 0 transparent}}
+@keyframes hk-fired-bad{
+  0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--warn) 45%,transparent);border-color:var(--warn)}
+  18%{box-shadow:0 0 0 6px color-mix(in oklch,var(--warn) 45%,transparent);border-color:var(--warn)}
+  100%{box-shadow:0 0 0 0 transparent}}
 @keyframes hk-shake{0%,100%{transform:translateX(0)}
   20%{transform:translateX(-5px)}40%{transform:translateX(5px)}
   60%{transform:translateX(-3px)}80%{transform:translateX(3px)}}
 @media (prefers-reduced-motion: reduce){
   .hk-capture.recording{animation:none}
   .hk-capture.invalid{animation:none}
+  .hk-capture.fired,.hk-capture.fired-bad{animation:none;border-color:var(--accent)}
+  .hk-capture:active{transform:none}
+  .hk-clear:active{transform:none}
+  .hk-chip{animation:none}
 }
 @media (max-width:560px){
   .hk-row{flex-wrap:wrap;gap:8px}
@@ -2637,7 +2678,7 @@ details.sys-collapse>summary .ic-label{margin:0}
         <div style="display:flex;align-items:center;gap:14px">
           <div style="flex:1">
             <div style="font-weight:600">Default delay</div>
-            <div class="tab-sub" style="margin-top:2px">Used by pre-arm. Also tracks the last value you manually armed at.</div>
+            <div class="tab-sub" style="margin-top:2px">Used by pre-arm and by the hotkey / MIDI arm and toggle actions. Also tracks the last value you manually armed at.</div>
           </div>
           <div style="display:flex;align-items:center;gap:6px">
             <input id="s-auto-arm-secs" class="ic-input mono" type="number" min="1" max="600" style="width:80px;text-align:right">
@@ -2651,7 +2692,7 @@ details.sys-collapse>summary .ic-label{margin:0}
          whole section stays hidden until loadConfig confirms the platform. -->
     <section class="sys-section" id="s-hotkeys-section" hidden>
       <div class="ic-label">Global hotkeys</div>
-      <div class="tab-sub">Drive the delay from anywhere, even mid-game with OBS in the background. Click a field and press your combo. Each needs a modifier (Ctrl, Alt, Shift or Win) so it can never fire by accident.</div>
+      <div class="tab-sub">Drive the delay from anywhere, even mid-game with OBS in the background. Click a field and press your combo. Each needs a modifier (Ctrl, Alt, Shift or Win) so it can never fire by accident. Arm and toggle use the <b>Default delay</b> from Behavior above, and a binding flashes here when it fires.</div>
       <div class="hk-list" id="hk-list"></div>
       <div class="hk-warn" id="hk-warn" role="status" aria-live="polite"></div>
     </section>
@@ -2660,7 +2701,11 @@ details.sys-collapse>summary .ic-label{margin:0}
          (the MIDI events arrive at the backend) so the dashboard polls. -->
     <section class="sys-section" id="s-midi-section" hidden>
       <div class="ic-label">MIDI controller</div>
-      <div class="tab-sub">Map a pad or knob to each action. Click Learn, then press the control you want. Works while gaming, just like the hotkeys.</div>
+      <div class="tab-sub">Map a pad or knob to each action. Click Learn, then press the control you want. Works while gaming, just like the hotkeys. Each mapping remembers which device it came from, so two controllers can drive different actions even when they send the same note. Windows hands a MIDI input to one app at a time, so while InstantClone is listening your DAW or deck software can't open the same device - narrow <b>Listen to</b> to the controller you want if you use both.</div>
+      <div class="hk-device">
+        <label for="midi-device">Listen to</label>
+        <select id="midi-device" class="ic-input"><option value="">Every connected device</option></select>
+      </div>
       <div class="hk-note" id="midi-note" hidden></div>
       <div class="hk-list" id="midi-list"></div>
       <div class="hk-warn" id="midi-warn" role="status" aria-live="polite"></div>
@@ -2768,6 +2813,7 @@ details.sys-collapse>summary .ic-label{margin:0}
           <input id="sec-pw" type="password" class="ic-input" placeholder="at least 8 characters" aria-label="New dashboard password" autocomplete="new-password" spellcheck="false">
           <button class="ic-btn ic-btn-primary" onclick="enableAuth(this,'sec-pw')">Enable</button>
         </div>
+        <div class="muted" style="font-size:11.5px;margin-top:8px">There is no reset link - one reachable over the network would not be much of a lock. If you forget it, delete the <code class="mono">dashboard_password_hash=</code> line from <code class="mono">instantclone.config.json</code> next to the app and restart.</div>
         <div class="muted" id="sec-off-msg" style="font-size:11.5px;margin-top:8px"></div>
       </div>
 
@@ -3067,6 +3113,13 @@ const PHASE_TO_STATE = { idle:'off', preparing:'arming', ready:'armed', active:'
 // OFFLINE when ingest is actually down.
 function computeStatePill(s){
   if (!s || !s.ingest_alive){
+    // Armed with nothing publishing is pre-arm, which is a real workflow -
+    // but the buffer cannot fill until OBS starts, so saying "filling"
+    // would be a progress bar that never moves.
+    // Armed with nothing publishing can only mean OBS dropped after arming:
+    // it cannot be entered from offline any more.
+    const pre = s && (PHASE_TO_STATE[s.phase] === 'arming' || PHASE_TO_STATE[s.phase] === 'armed');
+    if (pre) return { label:'OFFLINE', desc:'· still armed, waiting for OBS', c:'var(--warn)', pulse:false };
     return { label:'OFFLINE', desc:'· no encoder connected', c:'var(--idle)', pulse:false };
   }
   const ds = PHASE_TO_STATE[s.phase] || 'off';
@@ -3488,6 +3541,8 @@ function renderHero(s){
     $('arm-bar').hidden = false;
     const pct = targetSec > 0 ? Math.min(100, (fillSec / targetSec) * 100) : 0;
     $('arm-bar-fill').style.width = pct + '%';
+    // A bar that cannot move looks broken; dim it while there is no feed.
+    $('arm-bar').classList.toggle('stalled', !s.ingest_alive);
   } else {
     $('delay-of').hidden = true;
     $('arm-bar').hidden = true;
@@ -3621,6 +3676,15 @@ function renderCta(){
       btn.className = 'ic-btn ic-btn-primary cp-cta';
       btn.textContent = `↻ Re-arm at ${fmtDelay(inputMs)}`;
       clearWarn();
+    } else if (!lastState.ingest_alive){
+      // Nothing is arriving, so there is no buffer to switch on and the
+      // backend refuses this anyway. Say what it is waiting for instead of
+      // offering a button that can only fail.
+      btn.className = 'ic-btn ic-btn-disabled cp-cta';
+      btn.textContent = 'Waiting for OBS - the delay starts when it connects';
+      btn.disabled = true;
+      if (cancel){ cancel.hidden = false; cancel.textContent = 'Disarm'; }
+      clearWarn();
     } else {
       btn.className = 'ic-btn ic-btn-primary cp-cta cp-cta-pulse';
       btn.textContent = `▶ Activate ${fmtDelay(armedMs)} delay`;
@@ -3647,7 +3711,14 @@ function renderCta(){
     }
   } else {
     // off / idle (== passthrough or genuinely no source)
-    if (inputMs > 0 && tooBig){
+    if (!lastState.ingest_alive){
+      // Nothing to delay yet, and the backend refuses it - so offer the
+      // wait rather than a button whose only outcome is an error toast.
+      btn.className = 'ic-btn ic-btn-disabled cp-cta';
+      btn.textContent = 'Waiting for OBS to connect';
+      btn.disabled = true;
+      clearWarn();
+    } else if (inputMs > 0 && tooBig){
       btn.className = 'ic-btn ic-btn-disabled cp-cta';
       btn.textContent = `Buffer holds only ${fmtDelay(cap)} - raise it first`;
       btn.disabled = true;
@@ -4534,7 +4605,7 @@ async function loadConfig(){
     if ($('s-hotkeys-section')){
       if (c.os === 'windows'){
         if (hkRec) hkCancelRecording();
-        hkBindings = Object.assign({toggle:'',arm:'',activate:'',cut:'',cut_after:''}, c.hotkeys || {});
+        hkBindings = Object.assign(emptyBindings(), c.hotkeys || {});
         $('s-hotkeys-section').hidden = false;
         hkRenderList();
       } else {
@@ -4546,7 +4617,8 @@ async function loadConfig(){
     if ($('s-midi-section')){
       if (c.os === 'windows'){
         if (midiLearnAction) midiCancelLearn();
-        midiBindings = Object.assign({toggle:'',arm:'',activate:'',cut:'',cut_after:''}, c.midi || {});
+        midiBindings = Object.assign(emptyBindings(), c.midi || {});
+        midiSelected = c.midi_device || '';
         $('s-midi-section').hidden = false;
         midiInit();
       } else {
@@ -5366,7 +5438,7 @@ function renderLanWarning(){
   const hasKey = !!($('s-ingest-key') && $('s-ingest-key').value.trim());
   const parts = [];
   if (web && !_authEnabled) parts.push('The web UI has no password, so anyone on your network can change the delay, cut, and edit destinations. Set one in Security below.');
-  if (ingest && !hasKey) parts.push('The ingest port accepts any stream key, so anyone on your network can publish into your buffer. Set a required key in the OBS tab to lock it.');
+  if (ingest && !hasKey) parts.push('The ingest port accepts any stream key, so anyone on your network can publish into your buffer. Set a required key below to lock it.');
   const on = parts.length > 0;
   $('lan-warn').hidden = !on;
   if (on) $('lan-warn-text').textContent = parts.join(' ') + ' Only enable on a network you trust.';
@@ -5504,10 +5576,11 @@ const HOTKEY_ACTIONS = [
   ['toggle',    'Toggle delay',        'Go delayed when live, cut to live when delayed. One key, on and off.'],
   ['activate',  'Activate delay',      'Switch the armed delay on.'],
   ['cut',       'Cut to live',         'Drop back to live, keeping the buffer armed for an instant re-activate.'],
-  ['arm',       'Arm buffer',          'Start filling the buffer at your default delay.'],
+  ['arm',       'Arm / disarm buffer', 'Press once to start filling the buffer at your default delay; press again to disarm and free it.'],
   ['cut_after', 'Cut after this airs', 'Press once to schedule a cut the instant the live edge reaches every viewer; press again to cancel it.'],
 ];
-let hkBindings = {toggle:'',arm:'',activate:'',cut:'',cut_after:''};
+const emptyBindings = () => ({toggle:'',arm:'',activate:'',cut:'',cut_after:''});
+let hkBindings = emptyBindings();
 let hkRec = null; // {action, el} while recording, else null
 let hkWarnTimer = null;
 
@@ -5576,9 +5649,13 @@ function hkRenderList(){
     const main = document.createElement('div');
     main.className = 'hk-row-main';
     main.innerHTML = `<div class="hk-row-title">${escAttr(title)}</div>`
-      + `<div class="tab-sub hk-row-sub">${escAttr(sub)}</div>`;
+      + `<div class="tab-sub hk-row-sub">${escAttr(sub)}</div>`
+      + `<div class="hk-flag" data-flag="${escAttr(action)}">`
+      + `<span aria-hidden="true">&#9888;</span> Another app owns this combo - pick a different one`
+      + `</div>`;
     const cap = document.createElement('div');
     cap.className = 'hk-capture';
+    cap.dataset.action = action;
     cap.setAttribute('role','button');
     cap.setAttribute('tabindex','0');
     cap.addEventListener('click', () => hkStartRecording(action, cap));
@@ -5593,16 +5670,67 @@ function hkRenderList(){
     clear.innerHTML = '&times;';
     clear.title = 'Clear ' + title + ' hotkey';
     clear.setAttribute('aria-label', 'Clear ' + title + ' hotkey');
-    clear.hidden = !hkBindings[action];
+    clear.classList.toggle('idle', !hkBindings[action]);
     clear.addEventListener('click', e => { e.stopPropagation(); hkSaveBinding(action, '', cap); });
     row.append(main, cap, clear);
     list.appendChild(row);
     hkRenderCapture(cap, action);
   }
+  hkApplyConflicts(hkConflicts);
+}
+
+// The last hotkey / MIDI press the backend saw, by sequence number so a
+// repeat of the same action still reads as a new event. The first sighting
+// after a page load is only recorded, never announced - it may be minutes
+// old, and a toast for it would be a lie about what just happened.
+let lastFiredSeq = null;
+function showFiredAction(fired){
+  if (!fired || typeof fired.seq !== 'number') return;
+  if (lastFiredSeq === null){ lastFiredSeq = fired.seq; return; }
+  if (fired.seq === lastFiredSeq) return;
+  // The counter restarts with the process, so a lower number means the app
+  // was restarted under us - adopt it silently rather than announcing an
+  // action from before the restart.
+  if (fired.seq < lastFiredSeq){ lastFiredSeq = fired.seq; return; }
+  lastFiredSeq = fired.seq;
+  const where = fired.source === 'midi' ? '#midi-list' : '#hk-list';
+  const label = (fired.source === 'midi' ? 'MIDI' : 'Hotkey') + ' · ' + hkTitleOf(fired.action);
+  toast(fired.problem ? `${label}: ${fired.problem}` : label, fired.problem ? 'err' : 'ok');
+  const cap = document.querySelector(`${where} .hk-capture[data-action="${fired.action}"]`);
+  if (!cap) return;
+  const cls = fired.problem ? 'fired-bad' : 'fired';
+  cap.classList.remove('fired','fired-bad');
+  void cap.offsetWidth;  // restart the animation on a repeat press
+  cap.classList.add(cls);
+  setTimeout(() => cap.classList.remove(cls), 950);
+}
+
+// Bindings Windows refused to register, from the /state tick. Touches only
+// the flag + the field's border, never the field's contents, so a conflict
+// arriving mid-recording cannot interrupt what the user is typing.
+let hkConflicts = [];
+function hkApplyConflicts(list){
+  const next = Array.isArray(list) ? list : [];
+  // /state ticks once a second whether or not anyone is looking at this
+  // section; nothing to do unless the set actually moved.
+  if (next.join(',') === hkConflicts.join(',') && $$('#hk-list .hk-flag.on').length === next.length) return;
+  hkConflicts = next;
+  $$('#hk-list .hk-flag').forEach(f => f.classList.toggle('on', hkConflicts.includes(f.dataset.flag)));
+  $$('#hk-list .hk-capture').forEach(c =>
+    c.classList.toggle('conflict', hkConflicts.includes(c.dataset.action)));
+}
+
+// Global hotkeys have to stand down while we record: Windows hands a
+// registered combo to us instead of to the browser, so the field would never
+// see the keypress and the action would fire instead of being rebound.
+function hkCaptureMode(on){
+  try { fetch('/hotkeys/capture', {method:'POST', body:new URLSearchParams({on: on ? '1' : '0'})}); }
+  catch(e){}
 }
 
 function hkStartRecording(action, el){
   if (hkRec) hkCancelRecording();
+  hkCaptureMode(true);
   hkRec = {action, el};
   el.classList.remove('empty');
   el.classList.add('recording');
@@ -5617,6 +5745,7 @@ function hkStopRecording(){
   document.removeEventListener('keydown', hkOnKeydown, true);
   if (hkRec) hkRec.el.removeEventListener('blur', hkOnBlur);
   hkRec = null;
+  hkCaptureMode(false);
 }
 
 function hkCancelRecording(){
@@ -5636,6 +5765,15 @@ function hkFlashInvalid(msg){
   hkSetWarn(msg);
 }
 
+// Combos that almost certainly mean something else somewhere. A global
+// hotkey is taken from every other app on the machine, so binding Ctrl+V
+// means paste stops working everywhere until InstantClone quits - the same
+// surprise as recording a bound combo, one step further out. We still bind
+// it (it is their machine) but we say so.
+function hkCommonShortcut(mods, key){
+  return mods.length === 1 && mods[0] === 'Ctrl' && /^[A-Z0-9]$/.test(key);
+}
+
 function hkOnKeydown(e){
   if (!hkRec) return;
   e.preventDefault(); e.stopPropagation();
@@ -5653,25 +5791,42 @@ function hkOnKeydown(e){
   }
   if (mods.length === 0){ hkFlashInvalid('Add Ctrl, Alt, Shift or Win - a bare key would fire by accident'); return; }
   const combo = mods.concat(key).join('+');
+  // One combo, one action - the same rule the server enforces and the MIDI
+  // side follows. Taking it from the other action is what the user just
+  // asked for; refusing would leave them to go and clear it by hand first.
   const dup = Object.keys(hkBindings).find(a => a !== hkRec.action && hkBindings[a] === combo);
-  if (dup){ hkFlashInvalid(combo + ' is already bound to ' + hkTitleOf(dup)); return; }
+  if (hkCommonShortcut(mods, key)){
+    hkSetWarn(combo + ' is a common shortcut - while InstantClone runs, other apps stop receiving it.');
+  }
   const {action, el} = hkRec;
   hkStopRecording();
+  if (dup){
+    hkBindings[dup] = '';
+    hkRenderList();
+    const moved = document.querySelector(`#hk-list .hk-capture[data-action="${action}"]`);
+    hkSaveBinding(action, combo, moved || el, hkTitleOf(dup));
+    return;
+  }
   hkSaveBinding(action, combo, el);
 }
 
 // Persist one binding. Optimistic: paint it, then POST. On failure, resync
 // from the server so the UI never lies about what is actually bound.
-async function hkSaveBinding(action, combo, el){
+async function hkSaveBinding(action, combo, el, movedOff){
   hkBindings[action] = combo;
   hkRenderCapture(el, action);
   const clearBtn = el.parentElement && el.parentElement.querySelector('.hk-clear');
-  if (clearBtn) clearBtn.hidden = !combo;
+  if (clearBtn) clearBtn.classList.toggle('idle', !combo);
+  // The new combo has not been through RegisterHotKey yet; the next /state
+  // tick says whether it took. Until then, do not keep flagging the old one.
+  hkApplyConflicts(hkConflicts.filter(a => a !== action));
   try {
     const body = new URLSearchParams(); body.set('hotkey.' + action, combo);
     const j = await (await fetch('/config', {method:'POST', body})).json();
     if (j.ok){
-      toast(combo ? `${hkTitleOf(action)}: ${combo}` : `${hkTitleOf(action)} hotkey cleared`, 'ok');
+      toast(combo
+        ? `${hkTitleOf(action)}: ${combo}` + (movedOff ? ` (moved off ${movedOff})` : '')
+        : `${hkTitleOf(action)} hotkey cleared`, 'ok');
     } else {
       toast(`Couldn't save hotkey: ${j.error}`, 'err');
       await loadConfig();
@@ -5686,20 +5841,28 @@ async function hkSaveBinding(action, combo, el){
 // Same five actions as the hotkeys, but "learn" is server-side: the MIDI
 // message arrives at the backend, so we POST /midi/learn then poll
 // /midi/poll until it is captured (or cancelled). Reuses the hk-* styles.
-let midiBindings = {toggle:'',arm:'',activate:'',cut:'',cut_after:''};
+let midiBindings = emptyBindings();
 let midiAvailable = false;
-let midiDevices = [];
+let midiDevices = [];      // every input the system reports
+let midiListening = [];    // the ones we actually hold open
+let midiSelected = '';     // '' = every device
 let midiLearnAction = null;
 let midiPollTimer = null;
 
-// "note:1:36" -> "Note 36 · ch 1"; "cc:1:20" -> "CC 20 · ch 1".
-function midiLabel(sig){
-  const p = (sig || '').split(':');
+// "note:1:36@Launchpad" -> "Note 36 · Launchpad"; "cc:1:20" -> "CC 20 · ch 1".
+// The device is what tells two decks apart, so it earns the space: channel
+// only shows when there is no device to show instead.
+function midiLabel(sig, full){
+  const at = (sig || '').indexOf('@');
+  const head = at < 0 ? (sig || '') : sig.slice(0, at);
+  const device = at < 0 ? '' : sig.slice(at + 1);
+  const p = head.split(':');
   if (p.length !== 3) return sig || '';
   const [kind, ch, n] = p;
-  if (kind === 'note') return 'Note ' + n + ' · ch ' + ch;
-  if (kind === 'cc') return 'CC ' + n + ' · ch ' + ch;
-  return sig;
+  const control = kind === 'note' ? 'Note ' + n : kind === 'cc' ? 'CC ' + n : head;
+  if (!device) return control + ' · ch ' + ch;
+  const shown = (!full && device.length > 18) ? device.slice(0, 17) + '…' : device;
+  return control + ' · ' + shown;
 }
 
 function midiSetWarn(msg){ const w = $('midi-warn'); if (w) w.textContent = msg || ''; }
@@ -5720,7 +5883,8 @@ function midiRenderCapture(el, action){
     return;
   }
   el.innerHTML = '<span class="hk-chip">' + escAttr(midiLabel(sig)) + '</span>';
-  el.setAttribute('aria-label', hkTitleOf(action) + ': ' + midiLabel(sig) + ', click to remap');
+  el.title = midiLabel(sig, true);
+  el.setAttribute('aria-label', hkTitleOf(action) + ': ' + midiLabel(sig, true) + ', click to remap');
 }
 
 function midiRenderList(){
@@ -5735,6 +5899,7 @@ function midiRenderList(){
       + `<div class="tab-sub hk-row-sub">${escAttr(sub)}</div>`;
     const cap = document.createElement('div');
     cap.className = 'hk-capture';
+    cap.dataset.action = action;
     cap.setAttribute('role','button');
     cap.setAttribute('tabindex','0');
     cap.addEventListener('click', () => midiToggleLearn(action));
@@ -5748,30 +5913,88 @@ function midiRenderList(){
     clear.innerHTML = '&times;';
     clear.title = 'Clear ' + title + ' mapping';
     clear.setAttribute('aria-label', 'Clear ' + title + ' MIDI mapping');
-    clear.hidden = !midiBindings[action];
+    clear.classList.toggle('idle', !midiBindings[action]);
     clear.addEventListener('click', e => { e.stopPropagation(); midiClear(action); });
     row.append(main, cap, clear);
     list.appendChild(row);
     midiRenderCapture(cap, action);
   }
-  const note = $('midi-note');
-  if (note){
-    if (!midiAvailable){
-      note.hidden = false;
-      note.textContent = 'No MIDI controller detected. Connect one and it shows up here.';
-    } else if (midiDevices.length){
-      note.hidden = false;
-      note.textContent = 'Listening to: ' + midiDevices.join(', ');
-    } else {
-      note.hidden = true;
-    }
+  midiRenderDevices();
+}
+
+// The device picker plus the one line that says what is actually being
+// heard. Those are different things: a device can be present but held by
+// another app, or picked and then unplugged, and both used to read the same
+// as "listening".
+let midiDeviceSig = null;
+function midiRenderDevices(){
+  const sel = $('midi-device');
+  const sig = JSON.stringify([midiDevices, midiSelected]);
+  // Rebuilt only when the choices change: the learn poll runs three times a
+  // second, and replacing the options under an open dropdown would close it.
+  if (sel && sig !== midiDeviceSig && document.activeElement !== sel){
+    midiDeviceSig = sig;
+    const opts = ['<option value="">Every connected device</option>'];
+    const known = midiDevices.slice();
+    if (midiSelected && !known.includes(midiSelected)) known.push(midiSelected);
+    known.forEach(d => {
+      const gone = !midiDevices.includes(d);
+      opts.push(`<option value="${escAttr(d)}"${d === midiSelected ? ' selected' : ''}>`
+        + escAttr(d) + (gone ? ' (not connected)' : '') + '</option>');
+    });
+    sel.innerHTML = opts.join('');
+    sel.value = midiSelected || '';
   }
+  const note = $('midi-note');
+  if (!note) return;
+  note.hidden = false;
+  if (!midiDevices.length){
+    note.textContent = 'No MIDI controller detected. Connect one and it shows up here.';
+  } else if (midiListening.length){
+    note.textContent = 'Listening to: ' + midiListening.join(', ');
+  } else if (midiSelected && !midiDevices.includes(midiSelected)){
+    note.textContent = `"${midiSelected}" isn't connected, so nothing is listening.`;
+  } else if (!anyMidiBound()){
+    // Nothing is held open until something is bound - that is deliberate, so
+    // a controller stays usable by your DAW until you actually map a pad.
+    note.textContent = 'Detected ' + midiDevices.join(', ') + '. Press Learn on an action to map it.';
+  } else {
+    note.textContent = 'Detected ' + midiDevices.join(', ') + ', but another app has it open.';
+  }
+}
+
+// Whether any action currently has a MIDI control mapped. Drives the idle
+// note: with nothing bound we hold no device open on purpose, which is not
+// the same thing as another app having taken it.
+function anyMidiBound(){
+  return Object.values(midiBindings || {}).some(v => v);
+}
+
+async function midiSetDevice(name){
+  midiSelected = name;
+  midiRenderDevices();
+  try {
+    const body = new URLSearchParams(); body.set('midi_device', name);
+    const j = await (await fetch('/config', {method:'POST', body})).json();
+    if (j.ok) toast(name ? `Listening to ${name}` : 'Listening to every MIDI device', 'ok');
+    else { toast(`Couldn't save the device: ${j.error}`, 'err'); await loadConfig(); }
+  } catch(e){ toast('Save failed - the app may have stopped responding', 'err'); await loadConfig(); }
+  // The listener picks the change up on its next sweep (~2 s); refresh so
+  // the note stops claiming the old device.
+  setTimeout(midiPollOnce, 2400);
 }
 
 async function midiToggleLearn(action){
   if (midiLearnAction === action){ await midiCancelLearn(); return; }
   if (midiLearnAction) await midiCancelLearn();
-  if (!midiAvailable){ midiSetWarn('Connect a MIDI controller first.'); return; }
+  // Re-check before refusing. midiAvailable is whatever the last poll saw,
+  // and the poll only runs during a learn - so a controller plugged in after
+  // this page was opened would otherwise be invisible until a reload, which
+  // is exactly the order a first-time user does things in.
+  if (!midiAvailable){
+    await midiPollOnce();
+    if (!midiAvailable){ midiSetWarn('Connect a MIDI controller first.'); return; }
+  }
   try {
     const j = await (await fetch('/midi/learn', {method:'POST', body:new URLSearchParams({action})})).json();
     if (!j.ok){ midiSetWarn(j.error || 'Could not start learn'); return; }
@@ -5799,8 +6022,11 @@ async function midiPollOnce(){
   let j;
   try { j = await (await fetch('/midi/poll', {method:'POST'})).json(); }
   catch(e){ return; }
-  midiAvailable = !!j.available;
+  midiAvailable = !!j.connected;
   midiDevices = j.devices || [];
+  midiListening = j.listening || [];
+  midiSelected = j.device || '';
+  const before = Object.assign({}, midiBindings);
   if (j.bindings) midiBindings = Object.assign(midiBindings, j.bindings);
   if (j.learning == null){
     const was = midiLearnAction;
@@ -5808,7 +6034,25 @@ async function midiPollOnce(){
     midiLearnAction = null;
     midiStopPoll();
     midiRenderList();
-    if (was && got) toast(`${hkTitleOf(was)}: ${midiLabel(midiBindings[was])}`, 'ok');
+    // One more refresh a beat later. The listener needs a sweep to reopen the
+    // device now that a binding exists, and the response that told us the
+    // learn finished was taken before that - so without this the panel can
+    // settle on "another app has it open" at the end of a mapping that
+    // actually worked.
+    if (got) setTimeout(midiPollOnce, 700);
+    if (was && !got){
+      // The listener drops a learn nobody finished, so the field going back
+      // to normal on its own needs a reason attached to it.
+      midiSetWarn('Learn timed out. Click the field and press a control within 30 seconds.');
+    }
+    if (was && got){
+      // One control drives one action, so learning a pad that was already
+      // mapped takes it off the other action. Say which, rather than
+      // leaving the user to spot the row that went empty.
+      const stolen = Object.keys(before).find(a => a !== was && before[a] && !midiBindings[a]);
+      toast(`${hkTitleOf(was)}: ${midiLabel(midiBindings[was])}`
+        + (stolen ? ` (moved off ${hkTitleOf(stolen)})` : ''), 'ok');
+    }
   } else {
     midiRenderList();
   }
@@ -5825,12 +6069,39 @@ async function midiClear(action){
   } catch(e){ toast('Save failed - the app may have stopped responding', 'err'); await loadConfig(); }
 }
 
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'midi-device') midiSetDevice(e.target.value);
+});
+
+// Same reasoning as the tab switch, one level up: a learn request must not
+// outlive the person who made it. Hiding the tab cancels normally; an unload
+// gets one sendBeacon, which still lands when a fetch would be cancelled.
+// The listener also expires a learn on its own after 30 s, for the browser
+// that is killed outright and never runs either handler.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden') return;
+  if (hkRec) hkCancelRecording();
+  if (midiLearnAction) midiCancelLearn();
+});
+window.addEventListener('pagehide', () => {
+  if (hkRec){
+    hkRec = null;
+    try { navigator.sendBeacon('/hotkeys/capture', new URLSearchParams({on:'0'})); } catch(e){}
+  }
+  if (!midiLearnAction) return;
+  midiLearnAction = null;
+  midiStopPoll();
+  try { navigator.sendBeacon('/midi/learn/cancel'); } catch(e){}
+});
+
 // One-off poll on load to learn availability + device names.
 async function midiInit(){
   try {
     const j = await (await fetch('/midi/poll', {method:'POST'})).json();
-    midiAvailable = !!j.available;
+    midiAvailable = !!j.connected;
     midiDevices = j.devices || [];
+    midiListening = j.listening || [];
+    midiSelected = j.device || '';
     if (j.bindings) midiBindings = Object.assign(midiBindings, j.bindings);
   } catch(e){}
   midiRenderList();
@@ -7484,6 +7755,13 @@ function showTab(name){
   $$('.tab-pane').forEach(p => p.hidden = p.dataset.pane !== name);
   if (card && cardH0 != null) morphCardHeight(card, cardH0);
   moveTabInd();
+  // A pending MIDI learn belongs to the System tab. Leaving it means the
+  // user is not about to press a pad for us, and an armed learn swallows
+  // the next press instead of running its action.
+  if (name !== 'system'){
+    if (hkRec) hkCancelRecording();
+    if (midiLearnAction) midiCancelLearn();
+  }
   if (name === 'obs') refreshObsRegisterStatus();
   if (name === 'overlay' && window.ICOverlay) Studio.show();
   // The Studio modal lives on <body>, so close it when leaving the tab.
@@ -7878,6 +8156,14 @@ function applyState(s){
     const t = s.destinations_total || 0, a = s.destinations_alive || 0;
     $('si-dests').textContent = t ? (a + ' of ' + t + ' live') : 'none';
   }
+  // A hotkey or pad that just fired. This is the only feedback for a press
+  // that landed while the user was in a game, so it runs before the
+  // not-configured early return and regardless of which tab is open.
+  showFiredAction(s.last_action);
+  // Whether Windows actually took each hotkey. Applied before the
+  // not-configured early return below, since Settings is reachable either
+  // way and a dead binding is exactly what a first-time user would set.
+  if (s.hotkey_conflicts) hkApplyConflicts(s.hotkey_conflicts);
   // Update the capacity planning bitrate BEFORE any render that reads it
   // (the profile chips + CTA capacity gate), so a transient dip can't
   // flash a too-big delay unlocked mid-tick.

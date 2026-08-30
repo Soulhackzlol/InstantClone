@@ -138,6 +138,25 @@ async fn serve(
 
     let head_str = std::str::from_utf8(&buf[..head_end]).unwrap_or("");
     let (method, path, content_length) = parse_request_head(head_str);
+    // A body we cannot read honestly. Answering 400 keeps a malformed request
+    // from being run as a well-formed one with no arguments - which for
+    // `POST /arm` would mean dropping a live delay. See `parse_request_head`.
+    let Some(content_length) = content_length else {
+        let body =
+            r#"{"ok":false,"error":"malformed Content-Length or unsupported Transfer-Encoding"}"#;
+        let r = format!(
+            "HTTP/1.1 400 Bad Request
+Content-Type: application/json
+             Content-Length: {}
+Connection: close
+
+{}",
+            body.len(),
+            body
+        );
+        sock.write_all(r.as_bytes()).await?;
+        return Ok(());
+    };
     let (origin, host) = parse_origin_host(head_str);
     let accept_gzip = accepts_gzip(head_str);
 
@@ -319,7 +338,14 @@ async fn serve(
     // changed. Clients fall back to `GET /state` polling if EventSource
     // is unavailable or the connection drops.
     if method == "GET" && bare_path == "/events" {
-        return handle_sse(sock, ctrl, settings, sysstat).await;
+        return handle_sse(sock, ctrl, settings, sysstat, Feed::Dashboard).await;
+    }
+
+    // The overlay's own feed. Same machinery, a payload carrying nothing but
+    // what a widget paints - see `overlay_state_json` for why an overlay gets
+    // its own rather than a share of the dashboard's.
+    if method == "GET" && bare_path == "/overlay-events" {
+        return handle_sse(sock, ctrl, settings, sysstat, Feed::Overlay).await;
     }
 
     // Lifecycle controls (admin-gated by auth_gate above): acknowledge and
@@ -721,6 +747,11 @@ async fn route(
             "application/json",
             state_json(ctrl, settings, sysstat),
         ),
+        ("GET", "/overlay-state") => (
+            "200 OK",
+            "application/json",
+            overlay_state_json(ctrl, settings),
+        ),
         ("GET", "/config") => (
             "200 OK",
             "application/json",
@@ -1038,6 +1069,8 @@ async fn route(
         ("POST", "/cut-after/cancel") => post_cut_after_cancel(ctrl, settings, sysstat).await,
         // MIDI mapping (Windows). Learn mode is server-side because the MIDI
         // events arrive at the backend, not the browser; the dashboard polls.
+        #[cfg(windows)]
+        ("POST", "/hotkeys/capture") => post_hotkey_capture(body, ctrl).await,
         ("POST", "/midi/learn") => post_midi_learn(body, ctrl).await,
         ("POST", "/midi/learn/cancel") => post_midi_learn_cancel(ctrl).await,
         ("POST", "/midi/poll") => post_midi_poll(ctrl, settings, cfg_path).await,
@@ -1078,11 +1111,23 @@ async fn route(
 /// the compute but no per-request HTTP overhead. The win is upstream:
 /// the dashboard JS no longer fires a fresh `fetch('/state')` every 500
 /// ms, so connection-close churn and CSRF parsing disappear.
+/// Which payload an SSE connection carries.
+///
+/// The dashboard is a logged-in operator surface and gets everything. An
+/// overlay is a picture on a stream: it is served to anyone who can reach the
+/// port, so it gets a payload that is only the numbers it draws.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Feed {
+    Dashboard,
+    Overlay,
+}
+
 async fn handle_sse(
     mut sock: TcpStream,
     ctrl: Arc<Controller>,
     settings: Arc<watch::Sender<Settings>>,
     sysstat: Arc<SysStat>,
+    feed: Feed,
 ) -> io::Result<()> {
     // SSE preamble. `X-Accel-Buffering: no` tells nginx-style proxies not
     // to buffer; `Cache-Control: no-store` keeps browsers from caching;
@@ -1103,7 +1148,10 @@ async fn handle_sse(
     let tick = Duration::from_millis(250);
 
     loop {
-        let cur = state_json(&ctrl, &settings, &sysstat);
+        let cur = match feed {
+            Feed::Dashboard => state_json(&ctrl, &settings, &sysstat),
+            Feed::Overlay => overlay_state_json(&ctrl, &settings),
+        };
         let now = std::time::Instant::now();
         let changed = cur != last_payload;
         let beat_due = now.duration_since(last_send) >= heartbeat;
@@ -1264,11 +1312,33 @@ fn state_json(
         crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock()).is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
         cw = json_escape_quoted(&compat_warning),
+        la = ctrl
+            .last_action()
+            .map(|a| {
+                format!(
+                    r#"{{"seq":{s},"action":"{ac}","source":"{src}","problem":{p}}}"#,
+                    s = a.seq,
+                    ac = json_escape(&a.action),
+                    src = json_escape(&a.source),
+                    p = a
+                        .problem
+                        .as_deref()
+                        .map(json_escape_quoted)
+                        .unwrap_or_else(|| "null".to_string()),
+                )
+            })
+            .unwrap_or_else(|| "null".to_string()),
+        hkc = ctrl
+            .hotkey_conflicts()
+            .iter()
+            .map(|a| format!("\"{a}\""))
+            .collect::<Vec<_>>()
+            .join(","),
         ad = ctrl.armed_delay_ms(),
         td = ctrl.target_delay_ms(),
         cd = ctrl.current_delay_ms(),
@@ -1301,6 +1371,67 @@ fn state_json(
         cl = consumer_lag,
         bp = backpressure,
         dl = dest_list,
+    )
+}
+
+/// The state an overlay is allowed to see: the numbers it paints, and
+/// nothing else.
+///
+/// An overlay is not an operator surface. It is a picture composited into a
+/// live stream, loaded by an OBS browser source that cannot log in, so its
+/// page and its data are reachable by anyone who can reach the port. That
+/// makes `/state` the wrong feed for it twice over.
+///
+/// It carries too much. `/state` exists for a logged-in dashboard and
+/// includes the ingest URL, the publisher token, host CPU and memory, the
+/// compat warning, the hotkey conflict list, and every destination's id and
+/// name - "Twitch main", "client backup". An overlay draws none of it, and
+/// an overlay is on screen: whatever it holds is one bug away from being on
+/// the stream.
+///
+/// And reaching it means being allowed to reach the routes beside it. The
+/// only way to let an unauthenticated browser source read `/state` is to
+/// open `Access::Control`, which is arm, activate, cut and go-live. A
+/// picture would become a control path, and anyone who could see the overlay
+/// could drive the delay.
+///
+/// So the fields below are the complete set the two overlay renderers
+/// actually read (`overlay_html` here and `web/overlay-runtime.js` for saved
+/// overlays), and the destination list is reduced to liveness flags with the
+/// names dropped. Nothing here identifies the streamer, authorises anything,
+/// or describes the machine. Adding a field is a decision to put it on
+/// screen; there is a test that fails if a secret-shaped one appears.
+fn overlay_state_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>) -> String {
+    let (alive_count, total_count) = ctrl.destination_alive_summary();
+    // Config order, so the dots keep their positions between ticks, joined
+    // with live state the same way `/state` does it - but the id and name
+    // that join them stay here.
+    let snap = ctrl.destination_snapshot();
+    let dots = settings
+        .borrow()
+        .destinations
+        .iter()
+        .map(|d| {
+            let alive = snap.iter().find(|t| t.0 == d.id).map(|t| t.1) == Some(true);
+            format!(r#"{{"alive":{alive}}}"#)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!(
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"ingest_alive":{ia},"destinations_alive":{dla},"destinations_total":{dlt},"stats":{{"cuts":{cu},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        ph = ctrl.phase(),
+        ad = ctrl.armed_delay_ms(),
+        td = ctrl.target_delay_ms(),
+        cd = ctrl.current_delay_ms(),
+        bf = ctrl.buffer_fill_ms(),
+        btm = ctrl.target_buffer_ms(),
+        ia = ctrl.ingest_alive(),
+        dla = alive_count,
+        dlt = total_count,
+        cu = ctrl.cuts_performed(),
+        br = ctrl.bitrate_kbps(),
+        dl = dots,
     )
 }
 
@@ -2084,6 +2215,35 @@ fn twitch_ingests_json() -> String {
     out
 }
 
+/// Config keys this route will write. Every other field has its own route
+/// (destinations, auth, profiles) or is not user-settable at all, and the
+/// default is refusal.
+///
+/// This list and `apply_field_str` must cover the same keys: a key allowed
+/// here that the applier does not know is silently dropped, which is how the
+/// MIDI clear button spent 0.1.14 pretending to work.
+fn is_settable_key(k: &str) -> bool {
+    matches!(
+        k,
+        "ingest_port"
+            | "ingest_bind_all"
+            | "ingest_key"
+            | "web_port"
+            | "web_bind_all"
+            | "buffer_mb"
+            | "buffer_path"
+            | "overlays_dir"
+            | "tracing_enabled"
+            | "auto_arm_on_connect"
+            | "auto_activate_when_ready"
+            | "auto_arm_delay_ms"
+            | "update_check_enabled"
+            | "open_dashboard_on_launch"
+    ) || k.starts_with("hotkey.")
+        || k.starts_with("midi.")
+        || k == "midi_device"
+}
+
 async fn post_config(
     body: &str,
     ctrl: &Arc<Controller>,
@@ -2103,24 +2263,7 @@ async fn post_config(
     // POST without an explicit "delete webhook" intent must be a no-op
     // for that field - otherwise saving any other setting would wipe it.
     for (k, v) in form.iter() {
-        if matches!(
-            k.as_str(),
-            "ingest_port"
-                | "ingest_bind_all"
-                | "ingest_key"
-                | "web_port"
-                | "web_bind_all"
-                | "buffer_mb"
-                | "buffer_path"
-                | "overlays_dir"
-                | "tracing_enabled"
-                | "auto_arm_on_connect"
-                | "auto_activate_when_ready"
-                | "auto_arm_delay_ms"
-                | "update_check_enabled"
-                | "open_dashboard_on_launch"
-        ) || k.starts_with("hotkey.")
-        {
+        if is_settable_key(k) {
             apply_field_str(&mut new_settings, k, v);
         }
     }
@@ -2335,6 +2478,9 @@ async fn post_delay(
     let form = config::parse_form(body);
     let ms: u32 = form.get("ms").and_then(|v| v.parse().ok()).unwrap_or(0);
     let ms = ms.min(600_000);
+    if let Some(refusal) = arm_refusal(ctrl, settings, ms) {
+        return refusal;
+    }
     ctrl.arm_delay(ms);
     if ms > 0 {
         // Force activate even if buffer hasn't built - controller will
@@ -2351,6 +2497,57 @@ async fn post_delay(
 
 // ---- Two-phase delay endpoints ----
 
+/// Why this arm cannot be granted, as a ready-to-send response - or None
+/// when it can. Shared by `/arm` and `/delay`, which ask the same question
+/// and used to answer it twice.
+///
+/// `ms == 0` is disarm and is always allowed.
+fn arm_refusal(
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    ms: u32,
+) -> Option<(&'static str, &'static str, String)> {
+    if ms == 0 {
+        return None;
+    }
+    // Nothing publishing: the buffer cannot fill, so arming would sit in
+    // "preparing" forever. The hotkey and MIDI paths refuse this too, so every
+    // surface behaves the same. Auto-arm-on-connect is unaffected: it fires on
+    // the connect itself, when a publisher is already there.
+    if !ctrl.ingest_alive() {
+        return Some(conflict(crate::controller::NO_INGEST));
+    }
+    // Capacity guard. A delay bigger than the ring can hold at the current
+    // bitrate never fills - it stalls in "arming" forever, which looks like a
+    // hang. The dashboard and dock both gate this client-side, but a stale
+    // page, a second dock, or a scripted call could still ask for the
+    // impossible. Same estimate we publish as buffer_capacity_ms_est; bitrate
+    // is floored at 2 Mbps so a low-bitrate stream stays generous.
+    let cap_ms = {
+        let s = settings.borrow();
+        let kbps = ctrl.bitrate_kbps().max(2_000) as u64;
+        (s.buffer_mb * 1024 * 1024 * 8 / kbps) as u32
+    };
+    if cap_ms > 0 && ms > cap_ms {
+        return Some(conflict(&format!(
+            "Buffer too small for {}s - it holds about {}s at the current bitrate. \
+             Raise the buffer size in the dashboard.",
+            ms / 1000,
+            cap_ms / 1000
+        )));
+    }
+    None
+}
+
+/// A 409 carrying one human-readable reason.
+fn conflict(error: &str) -> (&'static str, &'static str, String) {
+    (
+        "409 Conflict",
+        "application/json",
+        format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(error)),
+    )
+}
+
 async fn post_arm(
     body: &str,
     ctrl: &Arc<Controller>,
@@ -2365,33 +2562,9 @@ async fn post_arm(
         .unwrap_or(0)
         .min(600_000);
 
-    // Server-side capacity guard. A delay bigger than the ring can hold at
-    // the current bitrate never fills - it stalls in "arming" forever, which
-    // looks like a hang. The dashboard and dock both gate this client-side,
-    // but a stale page, a second dock, or a scripted call could still ask for
-    // the impossible, so we refuse it here too. Same estimate we publish as
-    // buffer_capacity_ms_est; bitrate is floored at 2 Mbps so an idle or
-    // low-bitrate stream stays generous and never blocks a reasonable pre-arm.
-    // ms == 0 is disarm and always allowed.
-    if ms > 0 {
-        let cap_ms = {
-            let s = settings.borrow();
-            let kbps = ctrl.bitrate_kbps().max(2_000) as u64;
-            (s.buffer_mb * 1024 * 1024 * 8 / kbps) as u32
-        };
-        if cap_ms > 0 && ms > cap_ms {
-            return (
-                "409 Conflict",
-                "application/json",
-                format!(
-                    r#"{{"ok":false,"error":"Buffer too small for {}s - it holds about {}s at the current bitrate. Raise the buffer size in the dashboard."}}"#,
-                    ms / 1000,
-                    cap_ms / 1000
-                ),
-            );
-        }
+    if let Some(refusal) = arm_refusal(ctrl, settings, ms) {
+        return refusal;
     }
-
     ctrl.arm_delay(ms);
     persist_delay_state(ctrl, settings, cfg_path);
     (
@@ -2492,6 +2665,34 @@ async fn post_cut_after_cancel(
     )
 }
 
+/// Stand global hotkeys down while the dashboard records a combo, and put
+/// them back when it is done (`on=0`).
+///
+/// Without this, recording is impossible for any combo that is already
+/// bound: `RegisterHotKey` takes the keypress system-wide, so the browser
+/// never sees it and the action fires instead. The backend holds a deadline
+/// rather than a flag, so a dashboard that is closed mid-capture cannot
+/// leave the user with no hotkeys.
+#[cfg(windows)]
+async fn post_hotkey_capture(
+    body: &str,
+    ctrl: &Arc<Controller>,
+) -> (&'static str, &'static str, String) {
+    /// Long enough for someone to think about which combo they want, short
+    /// enough that a browser that vanishes costs one window and no more.
+    const CAPTURE_WINDOW_MS: u32 = 30_000;
+
+    let form = config::parse_form(body);
+    let on = !matches!(
+        form.get("on").map(String::as_str).unwrap_or("1"),
+        "" | "0" | "false" | "off"
+    );
+    ctrl.suspend_hotkeys(if on { CAPTURE_WINDOW_MS } else { 0 });
+    #[cfg(windows)]
+    crate::tray::request_hotkey_reload();
+    ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
 // ---- MIDI mapping ----
 //
 // The listener thread (see crate::midi) receives controller messages and,
@@ -2506,19 +2707,33 @@ async fn post_midi_learn(
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let action = form.get("action").map(String::as_str).unwrap_or("");
-    if !matches!(action, "toggle" | "arm" | "activate" | "cut" | "cut_after") {
+    if !config::ACTIONS.contains(&action) {
         return (
             "400 Bad Request",
             "application/json",
             r#"{"ok":false,"error":"unknown action"}"#.into(),
         );
     }
-    if !ctrl.midi().available() {
+    // Deliberately `connected` and not `available`: nothing is held open
+    // until a binding exists, so gating on "a device is open" would make the
+    // very first binding impossible to record. Arming the learn is what
+    // causes the device to be opened.
+    if !ctrl.midi().connected() {
+        // Two different problems wear the same "not available" flag, and
+        // telling someone to connect a controller they can see plugged in
+        // is the least useful thing we could say.
+        let selected = ctrl.midi().selected_device();
+        let error = if selected.is_empty() {
+            "No MIDI device detected. Connect a controller and try again.".to_string()
+        } else {
+            format!("\"{selected}\" isn't connected. Plug it in, or pick every device again.")
+        };
+        // Escaped once, over the whole message: the device name is quoted
+        // inside it, and those quotes would otherwise close the JSON string.
         return (
             "409 Conflict",
             "application/json",
-            r#"{"ok":false,"error":"No MIDI device detected. Connect a controller and try again."}"#
-                .into(),
+            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&error)),
         );
     }
     ctrl.midi().start_learn(action);
@@ -2551,7 +2766,11 @@ async fn post_midi_poll(
     ("200 OK", "application/json", ctrl.midi().to_json())
 }
 
-fn persist_delay_state(
+/// Write the current delay state (armed / target, and the "last manually
+/// armed" preference) back to the config file. Called by every route that
+/// moves it, and by the runtime on behalf of the hotkey / MIDI paths, which
+/// run outside the web layer entirely.
+pub(crate) fn persist_delay_state(
     ctrl: &Controller,
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
@@ -3133,13 +3352,7 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
 }
 
 fn redact_url(url: &str) -> String {
-    if let Some(i) = url.rfind('/') {
-        let (base, key) = url.split_at(i + 1);
-        if key.len() > 12 {
-            return format!("{}{}…{}", base, &key[..4], &key[key.len() - 4..]);
-        }
-    }
-    url.to_string()
+    crate::config::elide_after_last_slash(url, 12, 4, 4)
 }
 
 fn json_escape_quoted(s: &str) -> String {
@@ -3635,28 +3848,78 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         "open_dashboard_on_launch" => {
             s.open_dashboard_on_launch = !matches!(value, "" | "false" | "0" | "off");
         }
-        // hotkey.<action>=<combo>. `set` canonicalizes and drops anything
-        // malformed, so an empty or bad value simply clears the binding.
+        // hotkey.<action>=<combo> and midi.<action>=<signature>. Both
+        // `set`s canonicalize and drop anything malformed, so an empty or
+        // bad value simply clears the binding - which is exactly how the
+        // dashboard's clear button asks for an unbind.
         k if k.starts_with("hotkey.") => {
             s.hotkeys.set(&k["hotkey.".len()..], value);
         }
+        k if k.starts_with("midi.") => {
+            s.midi.set(&k["midi.".len()..], value);
+        }
+        // Empty means "every device", which is also what an unknown name
+        // amounts to - the listener simply finds nothing to open and the
+        // dashboard says so.
+        //
+        // Sanitised the same way the loader and the device lister do it. The
+        // dashboard only ever sends a name it got from the enumerated list,
+        // so this is about the two appliers agreeing rather than about a
+        // reachable bug: a name that survives one path and not the other
+        // matches no device, and the user sees a pick that silently does
+        // nothing until the next restart tidies it up.
+        "midi_device" => s.midi_device = config::sanitize_device_name(value),
         _ => {}
     }
 }
 
-fn parse_request_head(head: &str) -> (&str, &str, usize) {
+/// Split the request line into method + path, and resolve the body length.
+///
+/// The length is `None` when the request describes a body we cannot read
+/// honestly: a `Content-Length` that is not a number, two that disagree, or a
+/// `Transfer-Encoding` we do not implement. The caller answers 400 rather than
+/// guessing.
+///
+/// Guessing was the old behaviour - `parse().unwrap_or(0)` - and it read as an
+/// empty body, which is not a neutral choice here. Every POST route takes its
+/// arguments from that body, and several treat "no argument" as a real
+/// instruction: `POST /arm` with no `ms` is a disarm. So a request that was
+/// merely malformed did not fail, it dropped the streamer's delay. Absent is
+/// still `Some(0)` - a POST with no body is ordinary and must keep working.
+fn parse_request_head(head: &str) -> (&str, &str, Option<usize>) {
     let mut lines = head.split("\r\n");
     let first = lines.next().unwrap_or("");
     let mut parts = first.split_whitespace();
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("/");
-    let mut content_length = 0usize;
+    let mut content_length: Option<usize> = None;
+    let mut seen_length = false;
+    let mut bad = false;
     for line in lines {
         if let Some(v) = strip_prefix_icase(line, "content-length:") {
-            content_length = v.trim().parse().unwrap_or(0);
+            match v.trim().parse::<usize>() {
+                // A second, disagreeing Content-Length is the classic
+                // request-smuggling shape. We never proxy and always close,
+                // so it cannot be smuggled past us - but there is no honest
+                // reading of two lengths, so refuse rather than pick one.
+                Ok(n) if !seen_length || content_length == Some(n) => {
+                    content_length = Some(n);
+                    seen_length = true;
+                }
+                _ => bad = true,
+            }
+        } else if let Some(v) = strip_prefix_icase(line, "transfer-encoding:") {
+            // We do not implement chunked. Ignoring it would hand the route an
+            // empty body and run it with no arguments; saying so is honest.
+            if !v.trim().eq_ignore_ascii_case("identity") {
+                bad = true;
+            }
         }
     }
-    (method, path, content_length)
+    if bad {
+        return (method, path, None);
+    }
+    (method, path, Some(content_length.unwrap_or(0)))
 }
 
 /// Extract the Origin and Host headers verbatim (or empty strings).
@@ -3769,6 +4032,7 @@ fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// Access level a route requires WHEN auth is enabled. The default is `Admin`,
 /// so any route not explicitly listed below is protected (fail closed): a new
 /// endpoint is locked down unless someone deliberately opens it here.
+#[derive(Debug, PartialEq, Eq)]
 enum Access {
     /// No auth: the login page and overlay DISPLAY (OBS browser sources).
     Public,
@@ -3792,11 +4056,24 @@ fn classify_access(method: &str, path: &str) -> Access {
     // OBS fetches the multitrack (Enhanced Broadcasting) config when it starts
     // streaming, with no session cookie and often no token - the config URL is
     // saved in OBS before any password is set. It returns only the encoder
-    // ladder plus a local ingest template ("rtmp://127.0.0.1:<port>/live/
+    // ladder plus a local ingest template ("rtmp://localhost:<port>/live/
     // {stream_key}"), never a secret, and cannot control anything, so it stays
     // public like the overlay display. Gating it would break Start Streaming the
     // moment a dashboard password is enabled.
     if path == "/obs/multitrack-config" {
+        return Access::Public;
+    }
+    // The overlay's read-only feed, and only by GET. An OBS browser source
+    // cannot log in, so without this an overlay stops updating the moment a
+    // dashboard password is set - it paints once and freezes, silently,
+    // because both its fetch and its EventSource swallow the 401.
+    //
+    // Public is safe here only because the payload is: `overlay_state_json`
+    // carries the numbers a widget draws and nothing else. The alternative -
+    // letting overlays reach `/state` - would mean opening `Access::Control`
+    // to unauthenticated callers, and Control is arm, activate, cut and
+    // go-live. A picture must not be a way to drive the delay.
+    if method == "GET" && (path == "/overlay-state" || path == "/overlay-events") {
         return Access::Public;
     }
     match (method, path) {
@@ -4026,6 +4303,17 @@ fn overlay_html(query: &str) -> String {
     let style = match style {
         "minimal" | "corner" | "strip" | "focus" | "broadcast" | "ticker" => style,
         _ => "minimal",
+    };
+    // Same treatment, and for a sharper reason: `lang` is written into the
+    // page's own `<html lang="...">` attribute below. This route is public
+    // and needs no auth, so an unvalidated value is a reflected-XSS hole -
+    // one clicked link and script runs on our origin, which is same-origin
+    // for the CSRF check and can read the stream key or repoint the egress.
+    // An allow-list, not escaping: these are the languages we have strings
+    // for, so anything else has no business reaching the page.
+    let lang = match lang {
+        "en" | "es" | "pt" | "fr" | "de" => lang,
+        _ => "en",
     };
 
     let (l_delay, _l_live, l_preparing, l_ready, l_active, l_passthrough) = match lang {
@@ -4393,9 +4681,11 @@ function paint(s){{
 }}
 
 function start(){{
+  // /overlay-events, not /events: an OBS browser source has no session, and
+  // the overlay feed is the read-only one it is allowed to have.
   if (window.EventSource){{
     try {{
-      const es = new EventSource('/events');
+      const es = new EventSource('/overlay-events');
       es.onmessage = e => {{ try {{ paint(JSON.parse(e.data)); }} catch(_){{}} }};
       es.onerror = () => {{ es.close(); setTimeout(startPolling, 1000); }};
       return;
@@ -4404,7 +4694,7 @@ function start(){{
   startPolling();
 }}
 function startPolling(){{
-  async function tick(){{ try {{ paint(await (await fetch('/state')).json()); }} catch(_){{}} }}
+  async function tick(){{ try {{ paint(await (await fetch('/overlay-state')).json()); }} catch(_){{}} }}
   tick(); setInterval(tick, 500);
 }}
 start();
@@ -4425,6 +4715,272 @@ mod tests {
     // with `tracing_enabled` between 3f9db09 (toggle added) and
     // 6a3990b (default flipped to off). Invisible until users
     // actually tried to enable the toggle on a fresh install.
+
+    /// A controller with a real ring, so `arm_refusal` can be asked the
+    /// question the HTTP handlers ask it.
+    fn refusal_harness(
+        buffer_mb: u64,
+    ) -> (
+        Arc<Controller>,
+        Arc<watch::Sender<Settings>>,
+        std::path::PathBuf,
+    ) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("ic-arm-refusal-{nanos}.buf"));
+        let _ = std::fs::remove_file(&path);
+        let ring =
+            Arc::new(crate::buffer::DiskRing::create(&path, 4 * 1024 * 1024).expect("ring create"));
+        let ctrl = Arc::new(Controller::new(ring, 0));
+        let mut s = Settings::defaults();
+        s.buffer_mb = buffer_mb;
+        (ctrl, Arc::new(watch::channel(s).0), path)
+    }
+
+    /// An overlay is a picture, not a control surface.
+    ///
+    /// The feed it reads has to be public, because an OBS browser source
+    /// cannot log in and an overlay that stops updating under a dashboard
+    /// password is a broken overlay. Public is only acceptable while the
+    /// payload stays a picture's worth of data, so this pins both halves:
+    /// the fields the renderers need are present, and nothing that names the
+    /// streamer, describes the machine, or authorises anything is.
+    #[test]
+    fn the_overlay_feed_carries_only_what_an_overlay_paints() {
+        let (ctrl, settings, path) = refusal_harness(1024);
+        {
+            let mut s = settings.borrow().clone();
+            s.destinations.push(crate::config::Destination {
+                id: "dest-secret-id".into(),
+                name: "Twitch main - client account".into(),
+                enabled: true,
+                platform: "custom".into(),
+                stream_key: "SECRETKEY".into(),
+                custom_egress_url: "rtmp://host/app".into(),
+                twitch_ingest: String::new(),
+                youtube_ingest: String::new(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
+            });
+            // `send_replace`, not `send`: the harness drops its receiver, and
+            // `send` is a no-op with no receivers - the destination would
+            // never land and the leak assertions below would all pass on an
+            // empty list, proving nothing.
+            settings.send_replace(s);
+        }
+        let json = overlay_state_json(&ctrl, &settings);
+        // The fixture has to reach the payload or every leak assertion below
+        // passes on an empty list and proves nothing. Anchored on the entry
+        // opening rather than the whole entry, so a field smuggled in beside
+        // `alive` still satisfies this and is caught where it should be.
+        //
+        // (`destinations_total` would be the wrong anchor: like `/state`, it
+        // counts the controller's live destinations, not the configured ones.)
+        assert!(
+            json.contains(r#""destinations":[{"alive""#),
+            "the fixture destination never landed: {json}"
+        );
+
+        // Everything the two renderers read, or a widget silently blanks.
+        for field in [
+            "phase",
+            "armed_delay_ms",
+            "target_delay_ms",
+            "current_delay_ms",
+            "buffer_fill_ms",
+            "buffer_target_ms",
+            "ingest_alive",
+            "destinations_alive",
+            "destinations_total",
+            "cuts",
+            "bitrate_kbps",
+            "alive",
+        ] {
+            assert!(json.contains(field), "overlays render {field}: {json}");
+        }
+
+        // And nothing else. A destination's name is the sharpest case: it is
+        // the streamer's own words ("client account"), and an overlay is on
+        // screen, so `/state`'s list would have put it one bug from air.
+        for leak in [
+            "Twitch main",
+            "dest-secret-id",
+            "obs_url",
+            "publisher_token",
+            "cpu_pct",
+            "rss_bytes",
+            "uptime_secs",
+            "webhook",
+            "compat_warning",
+            "hotkey_conflicts",
+            "last_action",
+            "ingest_key",
+            "dock_token",
+            "SECRETKEY",
+        ] {
+            assert!(
+                !json.contains(leak),
+                "an overlay has no use for {leak}: {json}"
+            );
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Reading the overlay feed must never imply being able to drive the
+    /// delay. `/state` is Control, and Control is arm / activate / cut /
+    /// go-live - so pointing overlays at it, or widening it to reach them,
+    /// would have turned a picture into a way to cut someone's stream.
+    #[test]
+    fn the_overlay_feed_is_readable_but_not_a_control_path() {
+        assert_eq!(classify_access("GET", "/overlay-state"), Access::Public);
+        assert_eq!(classify_access("GET", "/overlay-events"), Access::Public);
+
+        // GET only. Nothing writes through these paths today, and if
+        // something ever tries it lands on the admin default rather than
+        // inheriting the read exemption.
+        assert_eq!(classify_access("POST", "/overlay-state"), Access::Admin);
+        assert_eq!(classify_access("POST", "/overlay-events"), Access::Admin);
+
+        // The dashboard's own feed stays behind a login. If this ever
+        // relaxes to Public, the overlay split above has been undone and
+        // every control route went with it.
+        assert_eq!(classify_access("GET", "/state"), Access::Control);
+        assert_eq!(classify_access("GET", "/events"), Access::Control);
+        assert_eq!(classify_access("POST", "/arm"), Access::Control);
+    }
+
+    /// The shipped overlay JS must ask for the overlay feed, not the
+    /// dashboard's. This is the half a Rust test cannot otherwise see: the
+    /// renderers are JavaScript, and pointing one back at `/state` would
+    /// compile, pass every other test, and freeze every overlay the first
+    /// time a user set a dashboard password.
+    #[test]
+    fn neither_overlay_renderer_asks_for_the_dashboard_feed() {
+        let saved = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/web/overlay-runtime.js"
+        ));
+        let builtin = overlay_html("");
+        for (what, js) in [
+            ("saved overlays", saved),
+            ("the built-in overlay", builtin.as_str()),
+        ] {
+            assert!(
+                js.contains("/overlay-events") && js.contains("/overlay-state"),
+                "{what} must read the overlay feed"
+            );
+            assert!(
+                !js.contains("EventSource('/events')") && !js.contains("fetch('/state')"),
+                "{what} must not read the dashboard feed - it needs a session"
+            );
+        }
+    }
+
+    /// The dashboard's copy of the offline guard. The hotkey and MIDI paths
+    /// refuse to build a delay with nothing publishing; `/arm` and `/delay`
+    /// have to refuse it too, or the browser is a way around the rule.
+    #[test]
+    fn arm_refusal_matches_the_hotkey_rules() {
+        let (ctrl, settings, path) = refusal_harness(1024);
+
+        // Nothing publishing: arming is refused, and says why.
+        let refused = arm_refusal(&ctrl, &settings, 5_000).expect("offline arm is refused");
+        assert_eq!(refused.0, "409 Conflict");
+        assert!(
+            refused.2.contains(crate::controller::NO_INGEST),
+            "the reason has to reach the user: {}",
+            refused.2
+        );
+
+        // Disarming is never refused - it frees the buffer, and OBS dying
+        // mid-delay is exactly when someone reaches for it.
+        assert!(arm_refusal(&ctrl, &settings, 0).is_none(), "disarm offline");
+
+        // With a publisher, a sane delay goes through.
+        ctrl.mark_ingest_alive_for_test();
+        assert!(arm_refusal(&ctrl, &settings, 5_000).is_none());
+
+        // More delay than the buffer can hold never fills, so it is refused
+        // with the size it can actually manage.
+        let (small, small_settings, small_path) = refusal_harness(8);
+        small.mark_ingest_alive_for_test();
+        let too_big = arm_refusal(&small, &small_settings, 600_000).expect("over capacity");
+        assert_eq!(too_big.0, "409 Conflict");
+        assert!(
+            too_big.2.contains("Buffer too small") && too_big.2.contains("Raise the buffer size"),
+            "the message has to read as a sentence: {}",
+            too_big.2
+        );
+        assert!(
+            !too_big.2.contains("  "),
+            "no stray whitespace in a user-facing string: {}",
+            too_big.2
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&small_path);
+    }
+
+    /// The whitelist and the applier have to agree, in both directions, for
+    /// every binding key. This is the pair that broke: `midi.<action>` was
+    /// missing from both, so the dashboard's clear button reported success
+    /// and changed nothing.
+    #[test]
+    fn binding_keys_are_settable_and_actually_applied() {
+        for action in config::ACTIONS {
+            let hotkey = format!("hotkey.{action}");
+            let midi = format!("midi.{action}");
+            assert!(is_settable_key(&hotkey), "{hotkey} must be settable");
+            assert!(is_settable_key(&midi), "{midi} must be settable");
+
+            let mut s = Settings::defaults();
+            apply_field_str(&mut s, &hotkey, "ctrl+alt+d");
+            apply_field_str(&mut s, &midi, "note:1:36");
+            let hotkeys: Vec<(&str, String)> = s
+                .hotkeys
+                .entries()
+                .iter()
+                .map(|(a, combo)| (*a, combo.to_string()))
+                .collect();
+            let signatures: Vec<(&str, String)> = s
+                .midi
+                .entries()
+                .iter()
+                .map(|(a, sig)| (*a, sig.to_string()))
+                .collect();
+            for (bound_action, combo) in &hotkeys {
+                let expected = if *bound_action == action {
+                    "Ctrl+Alt+D"
+                } else {
+                    ""
+                };
+                assert_eq!(combo, expected, "{hotkey} landed on {bound_action}");
+            }
+            for (bound_action, sig) in &signatures {
+                let expected = if *bound_action == action {
+                    "note:1:36"
+                } else {
+                    ""
+                };
+                assert_eq!(sig, expected, "{midi} landed on {bound_action}");
+            }
+
+            // And the clear the × button sends must actually clear it.
+            apply_field_str(&mut s, &hotkey, "");
+            apply_field_str(&mut s, &midi, "");
+            assert!(s.hotkeys.entries().iter().all(|(_, c)| c.is_empty()));
+            assert!(s.midi.entries().iter().all(|(_, sig)| sig.is_empty()));
+        }
+
+        // Secrets and per-route fields stay out of this door.
+        assert!(!is_settable_key("dock_token"));
+        assert!(!is_settable_key("dashboard_password_hash"));
+        assert!(!is_settable_key("configured"));
+    }
 
     #[test]
     fn normalize_stream_format_rules() {
@@ -4654,6 +5210,51 @@ mod tests {
         ));
     }
 
+    /// `/overlay` needs no auth, and its `lang` is written into the page's
+    /// own `<html lang="...">`. An unvalidated value there is reflected XSS
+    /// on our own origin: script that runs there passes the same-origin CSRF
+    /// check, so it can read the stream key or repoint the egress. Both
+    /// query parameters are allow-listed; neither is escaped and reflected.
+    #[test]
+    fn overlay_query_parameters_cannot_reach_the_page() {
+        for probe in [
+            r#"en"><script>alert(1)</script>"#,
+            r#"en" onload="evil()"#,
+            "../../etc/passwd",
+            "<img src=x onerror=y>",
+            "en'",
+        ] {
+            let enc: String = probe
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_string()
+                    } else {
+                        format!("%{:02X}", c as u32)
+                    }
+                })
+                .collect();
+            for key in ["lang", "style"] {
+                let html = overlay_html(&format!("{key}={enc}"));
+                assert!(
+                    !html.contains(probe),
+                    "{key}={probe:?} was reflected into the page"
+                );
+                assert!(
+                    !html.contains("<script>alert"),
+                    "{key}={probe:?} injected a script tag"
+                );
+            }
+        }
+
+        // The languages we do have strings for still work.
+        assert!(overlay_html("lang=es").contains(r#"<html lang="es""#));
+        assert!(
+            overlay_html("lang=zz").contains(r#"<html lang="en""#),
+            "unknown falls back"
+        );
+    }
+
     #[test]
     fn redact_url_hides_long_keys() {
         let redacted = redact_url("rtmp://live.twitch.tv/app/live_123456789_abcdefgh");
@@ -4674,6 +5275,73 @@ mod tests {
 
     // ── HTTP request-head parsing ────────────────────────────────────
 
+    /// A malformed body length must not read as "no body".
+    ///
+    /// Every POST route takes its arguments from the body, and several treat
+    /// an absent argument as an instruction: `POST /arm` with no `ms` is a
+    /// disarm. So `parse().unwrap_or(0)` meant a merely corrupt request did
+    /// not fail - it dropped the streamer's delay. Found by fuzzing the live
+    /// HTTP surface, which got a 200 for `Content-Length: -5`.
+    #[test]
+    fn an_unreadable_body_length_is_refused_not_guessed() {
+        let bad = [
+            ("POST /arm HTTP/1.1\r\nContent-Length: -5\r\n", "negative"),
+            (
+                "POST /arm HTTP/1.1\r\nContent-Length: abc\r\n",
+                "not a number",
+            ),
+            ("POST /arm HTTP/1.1\r\nContent-Length: \r\n", "empty"),
+            (
+                "POST /arm HTTP/1.1\r\nContent-Length: 12x\r\n",
+                "trailing junk",
+            ),
+            (
+                "POST /arm HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 9\r\n",
+                "two that disagree - the request-smuggling shape",
+            ),
+            (
+                "POST /arm HTTP/1.1\r\nTransfer-Encoding: chunked\r\n",
+                "an encoding we do not implement",
+            ),
+        ];
+        for (head, why) in bad {
+            let (_, _, len) = parse_request_head(head);
+            assert_eq!(len, None, "{why} must be refused, not read as empty");
+        }
+    }
+
+    /// The ordinary shapes still work. A POST with no body is normal, and two
+    /// Content-Length headers that agree are merely redundant.
+    #[test]
+    fn ordinary_body_lengths_still_parse() {
+        for (head, want, why) in [
+            (
+                "POST /x HTTP/1.1\r\nContent-Length: 0\r\n",
+                Some(0),
+                "explicit zero",
+            ),
+            (
+                "POST /x HTTP/1.1\r\nHost: y\r\n",
+                Some(0),
+                "absent is a real zero",
+            ),
+            ("GET / HTTP/1.1\r\nHost: y\r\n", Some(0), "GET with no body"),
+            (
+                "POST /x HTTP/1.1\r\nContent-Length: 7\r\nContent-Length: 7\r\n",
+                Some(7),
+                "duplicates that agree",
+            ),
+            (
+                "POST /x HTTP/1.1\r\nTransfer-Encoding: identity\r\n",
+                Some(0),
+                "identity is the no-op encoding",
+            ),
+        ] {
+            let (_, _, len) = parse_request_head(head);
+            assert_eq!(len, want, "{why}");
+        }
+    }
+
     #[test]
     fn parse_request_head_extracts_method_path_and_length() {
         let head = "POST /arm?x=1 HTTP/1.1\r\n\
@@ -4683,21 +5351,21 @@ mod tests {
         let (method, path, len) = parse_request_head(head);
         assert_eq!(method, "POST");
         assert_eq!(path, "/arm?x=1");
-        assert_eq!(len, 42);
+        assert_eq!(len, Some(42));
     }
 
     #[test]
     fn parse_request_head_treats_missing_content_length_as_zero() {
         let head = "GET / HTTP/1.1\r\nHost: x\r\n";
         let (_, _, len) = parse_request_head(head);
-        assert_eq!(len, 0);
+        assert_eq!(len, Some(0));
     }
 
     #[test]
     fn parse_request_head_is_case_insensitive_on_header_name() {
         let head = "POST /x HTTP/1.1\r\ncontent-length: 7\r\n";
         let (_, _, len) = parse_request_head(head);
-        assert_eq!(len, 7);
+        assert_eq!(len, Some(7));
     }
 
     #[test]

@@ -837,10 +837,15 @@
     }
   });
 
+  // /overlay-events and /overlay-state, not /events and /state. A saved
+  // overlay runs in an OBS browser source that cannot log in, and the
+  // overlay feed is the read-only payload it is allowed to have; the
+  // dashboard's needs a session, which is why an overlay pointed at it
+  // froze the moment a dashboard password was set.
   function connect(){
     if(window.EventSource){
       try{
-        var es=new EventSource('/events');
+        var es=new EventSource('/overlay-events');
         es.onmessage=function(e){ try{ render(JSON.parse(e.data)); }catch(_){} };
         es.onerror=function(){ es.close(); setTimeout(poll,1000); };
         return;
@@ -848,7 +853,7 @@
     }
     poll();
   }
-  function poll(){ function t(){ fetch('/state').then(function(r){return r.json();}).then(render).catch(function(){}); } t(); setInterval(t,500); }
+  function poll(){ function t(){ fetch('/overlay-state').then(function(r){return r.json();}).then(render).catch(function(){}); } t(); setInterval(t,500); }
   // Seed a believable idle frame so a forced-state preview renders instantly.
   render(window.__ic_seed||{ingest_alive:false,phase:'idle',destinations_total:0,destinations_alive:0,stats:{cuts:0,bitrate_kbps:0}});
   connect();

@@ -238,7 +238,63 @@ pub fn wait_for_pid_exit(pid: u32, timeout_ms: u32) {
         CloseHandle(h);
     }
 }
-#[cfg(not(windows))]
+/// Whether a `/proc/<pid>/stat` body describes a process that has already let
+/// go of its sockets.
+///
+/// A zombie counts as gone, and that is the point of parsing the state at all
+/// rather than just checking the file exists (or calling `kill(pid, 0)`, which
+/// succeeds for zombies too). The kernel closes every descriptor as a process
+/// exits, before the entry becomes a zombie, so the ingest and web ports are
+/// already free while the entry lingers waiting to be reaped. Whether that
+/// reap is prompt depends on whoever launched us - a shell, a terminal that
+/// has since closed, systemd - and none of that is our business. Waiting for
+/// it would stall every update by the full timeout for no gain.
+///
+/// An unparseable body reads as gone: the timeout exists so a stuck process
+/// cannot wedge the relaunch, and the port pre-flight downstream is the real
+/// backstop either way.
+///
+/// Pure parsing, built on every platform so its test runs on every CI target
+/// even though only Linux has a `/proc` to read.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn proc_stat_has_exited(stat: &str) -> bool {
+    // `<pid> (<comm>) <state> ...`. `comm` is the executable name, arbitrary
+    // and free to contain both spaces and parentheses, so the state is the
+    // first field after the LAST ')' - not the second whitespace-separated
+    // field, which is where a naive split lands for anything odd.
+    match stat.rsplit_once(')') {
+        Some((_, rest)) => matches!(rest.split_whitespace().next(), Some("Z") | None),
+        None => true,
+    }
+}
+
+/// Block until process `pid` exits (or `timeout_ms` elapses) so a relaunched
+/// instance never races the outgoing one for the ingest/web ports. Returns
+/// at once if the process is already gone.
+///
+/// This is the Linux half of what `WaitForSingleObject` does on Windows.
+/// Without it the stub returned instantly, the fresh process reached its port
+/// pre-flight while the old one still held 1935 and 7799, and a self-update
+/// ended with the app failing to come back.
+#[cfg(target_os = "linux")]
+pub fn wait_for_pid_exit(pid: u32, timeout_ms: u32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64);
+    loop {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Err(_) => return, // reaped, or never existed
+            Ok(stat) if proc_stat_has_exited(&stat) => return,
+            Ok(_) => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+// Windows and Linux are the platforms we publish. Anywhere else the relaunch
+// goes ahead without waiting, exactly as it did before Linux had an answer.
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn wait_for_pid_exit(_pid: u32, _timeout_ms: u32) {}
 
 /// Find the hash for `name` in a `SHA256SUMS.txt` body. Each line is
@@ -313,6 +369,67 @@ mod tests {
         assert_eq!(n, "instantclone-v1.2.3-windows-x64.exe");
         #[cfg(target_os = "linux")]
         assert_eq!(n, "instantclone-v1.2.3-linux-x64");
+    }
+
+    /// The relaunch handshake reads a process's state, not just whether its
+    /// `/proc` entry is there. A zombie has already closed its sockets, so it
+    /// must read as gone - otherwise every self-update on Linux stalls for the
+    /// full ten seconds whenever the launching shell is slow to reap.
+    #[test]
+    fn a_zombie_has_already_released_its_ports() {
+        assert!(
+            super::proc_stat_has_exited("4242 (instantclone) Z 1 4242 4242 0 -1 4194304"),
+            "a zombie holds no sockets"
+        );
+        assert!(
+            !super::proc_stat_has_exited("4242 (instantclone) S 1 4242 4242 0 -1 4194304"),
+            "sleeping is still running"
+        );
+        assert!(
+            !super::proc_stat_has_exited("4242 (instantclone) R 1 4242 4242 0 -1 4194304"),
+            "running is still running"
+        );
+    }
+
+    /// `comm` is the executable's name and can hold spaces and parentheses,
+    /// which is why the state is read after the LAST ')'. Splitting on
+    /// whitespace and taking field three - the obvious reading - lands inside
+    /// the name for anything odd and misreports the state.
+    #[test]
+    fn a_process_name_with_spaces_or_parens_does_not_confuse_the_state() {
+        assert!(
+            super::proc_stat_has_exited("77 (my app (old) v2) Z 1 77 77 0 -1 0"),
+            "state is after the last paren, not the second field"
+        );
+        assert!(!super::proc_stat_has_exited(
+            "77 (my app (old) v2) S 1 77 77 0 -1 0"
+        ),);
+        // Unparseable reads as gone: the timeout exists so a stuck process
+        // cannot wedge the relaunch, and the port pre-flight is the backstop.
+        assert!(super::proc_stat_has_exited(""));
+        assert!(super::proc_stat_has_exited("nonsense with no paren"));
+    }
+
+    /// The real thing, on the platform that has a `/proc`: our own process is
+    /// alive, and a pid that cannot exist is not.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn waiting_on_a_dead_pid_returns_immediately() {
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", std::process::id()))
+            .expect("our own /proc entry");
+        assert!(
+            !super::proc_stat_has_exited(&stat),
+            "this test process is running: {stat}"
+        );
+
+        // A pid past the kernel's maximum can never exist, so the wait must
+        // fall straight through rather than burn its timeout.
+        let start = std::time::Instant::now();
+        super::wait_for_pid_exit(u32::MAX, 10_000);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(1),
+            "a pid that cannot exist must not cost the timeout"
+        );
     }
 
     #[test]

@@ -86,7 +86,7 @@ Key:      main          (any string works)
 
 Multi-track "Auto" works out of the box. Your real platform keys go into the **Destinations** tab, not OBS.
 
-<sub>Prefer manual? Service <b>Custom</b>, Server <code>rtmp://127.0.0.1:1935/live</code>, Key <code>main</code>.</sub>
+<sub>Prefer manual? Service <b>Custom</b>, Server <code>rtmp://localhost:1935/live</code>, Key <code>main</code>.</sub>
 
 </td>
 </tr>
@@ -182,6 +182,20 @@ A 280×340 control dock lives inside OBS so you're not alt-tabbing mid-match. Th
 
 **⚡ Live delay adjustment**
 Re-arm or nudge the delay up/down without disarming first, exposed as a single typed-value **↻ Adjust to Ns** control. Capacity-aware: it refuses a delay the buffer can't hold and tells you exactly how many MB it needs.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**⌨ Global hotkeys**
+Bind delay on/off, arm, activate, cut, and **cut after this airs** to a key combo that fires while a fullscreen game holds focus. Every binding needs a modifier so nothing trips mid-match, a combo another app already owns is flagged on the row instead of failing silently, and a refused action reaches you as a tray balloon.
+
+</td>
+<td valign="top">
+
+**🎹 MIDI pads and decks**
+Map the same five actions to a pad or knob, learned by pressing the control rather than typing a note number. Each mapping remembers which device it came from, so two controllers can drive different actions even when they send the same note, and you can narrow which device InstantClone listens to.
 
 </td>
 </tr>
@@ -302,7 +316,7 @@ One-button arming. Add `/activate` and `/stop` to two more buttons for full dela
 <br/>
 
 <table>
-<tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>282 / 282</code></td></tr>
+<tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>392 / 392</code></td></tr>
 </table>
 
 **Buffer.** Disk-backed by default (`./instantclone.buf`, 500 MB ≈ 11 min at 6 Mbps, ≈ 6 min 50 s at 10 Mbps), kept off RAM because it can run to hundreds of MB. The only thing in RAM is the IDR index, ~1 MB for 10 minutes at 60 fps. The file resets on every clean shutdown, so nothing accumulates between sessions, and the UI refuses to arm a delay larger than the buffer can hold, with an explicit "needs ≥ N MB" reason.
@@ -320,7 +334,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 **Sync disk I/O on the ring-append hot path, by choice.** The buffered write lands in the OS page cache in microseconds and the kernel flushes in the background, so the page cache is already the async buffer; the index and the bytes advance under one lock so a reader never sees a tag whose bytes aren't on disk yet.
 
-**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, and the self-update download + checksum-verify + exe swap. **282 tests, all green.**
+**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), and the self-update download + checksum-verify + exe swap. **392 tests, all green.**
 
 </details>
 
@@ -330,7 +344,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 282 tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
+**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 392 tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's rough, honestly**
 
@@ -391,6 +405,15 @@ No. Video is passed through bit-for-bit. The only rewriting happens on the audio
 In InstantClone's **Destinations** tab, never in OBS. OBS only ever points at InstantClone with one service and a throwaway key; InstantClone holds each platform's real key and fans your feed out to them. So your keys live in one place, and you toggle destinations on and off without touching OBS.
 
 **Your keys never leave your PC.** InstantClone has no servers of its own and no telemetry: keys are stored locally on your machine and only ever sent to the platform ingest servers you choose to stream to. Running the app sends us nothing, we never see your keys, your stream, or anything else. It's open source, so you can verify that yourself.
+
+</details>
+
+<details>
+<summary><b>Can I control the delay with a hotkey or a MIDI controller?</b></summary>
+
+<br/>
+
+Yes, both. Five actions - delay on/off, arm, activate, cut to live, and **cut after this airs** - bind to a global keyboard shortcut, a MIDI pad or knob, or both at once, in **Settings**. Hotkeys fire while a fullscreen game holds focus, so you never alt-tab mid-match, and every binding needs a modifier (Ctrl, Alt, Shift or Win) so a stray keypress can't trip a delay action. MIDI mappings are learned by pressing the control rather than typing a note number, and each one remembers which device it came from, so two controllers can drive different actions. Windows only for now.
 
 </details>
 

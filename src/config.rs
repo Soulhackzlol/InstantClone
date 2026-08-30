@@ -134,6 +134,11 @@ pub struct Settings {
     /// effect (winmm listener); other platforms keep the values on disk.
     /// See `MidiBindings`.
     pub midi: MidiBindings,
+    /// Which MIDI input to listen to, by device name. Empty means every
+    /// device, which is the right default for one controller on the desk;
+    /// naming one matters when a second device (a keyboard, a DAW control
+    /// surface) would otherwise fire delay actions of its own.
+    pub midi_device: String,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +155,12 @@ pub const HK_MOD_CONTROL: u32 = 0x0002;
 pub const HK_MOD_SHIFT: u32 = 0x0004;
 pub const HK_MOD_WIN: u32 = 0x0008;
 
+/// The five delay actions a hotkey or MIDI control can drive, in the order
+/// everything else keys off: `Hotkeys::entries`, `MidiBindings::entries`, and
+/// the tray's `RegisterHotKey` ids. Adding an action means adding it here and
+/// to the two structs below, and nothing else has to agree by hand.
+pub const ACTIONS: [&str; 5] = ["toggle", "arm", "activate", "cut", "cut_after"];
+
 /// Global hotkey bindings, one canonical combo string per delay action
 /// (e.g. "Ctrl+Alt+D"; empty means unbound). Windows binds them via
 /// RegisterHotKey from the tray's message loop; other platforms round-trip
@@ -157,11 +168,11 @@ pub const HK_MOD_WIN: u32 = 0x0008;
 /// headless Linux box has no global-key surface). Every binding must carry
 /// at least one modifier, so a bare keypress mid-game can never fire a
 /// delay action by accident - that requirement is the misclick guard.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Hotkeys {
     /// Delay on/off: activate the armed delay, or cut back to live.
     pub toggle: String,
-    /// Arm the buffer at the default delay.
+    /// Arm the buffer at the default delay, or disarm when already armed.
     pub arm: String,
     /// Activate the armed delay (go delayed).
     pub activate: String,
@@ -200,9 +211,33 @@ impl Hotkeys {
     /// malformed value clears the binding; a valid one is stored in
     /// canonical form. This is the single choke point that keeps only
     /// well-formed combos on disk and in memory.
+    ///
+    /// One combo, one action: binding a combo that another action already
+    /// holds takes it away from that action. Both could never work anyway -
+    /// `RegisterHotKey` refuses the second registration of the same combo -
+    /// and keeping the loser would leave the dashboard showing a binding
+    /// that silently never fires.
     pub fn set(&mut self, action: &str, raw: &str) {
+        let value = canonicalize_hotkey(raw).unwrap_or_default();
+        if !value.is_empty() {
+            self.unbind_elsewhere(action, &value);
+        }
         if let Some(slot) = self.slot_mut(action) {
-            *slot = canonicalize_hotkey(raw).unwrap_or_default();
+            *slot = value;
+        }
+    }
+
+    /// Clear `value` from every action except `keep`.
+    fn unbind_elsewhere(&mut self, keep: &str, value: &str) {
+        for action in ACTIONS {
+            if action == keep {
+                continue;
+            }
+            if let Some(slot) = self.slot_mut(action) {
+                if slot == value {
+                    slot.clear();
+                }
+            }
         }
     }
 }
@@ -214,7 +249,7 @@ impl Hotkeys {
 /// thread matches an incoming message against these and fires the shared
 /// controller action. Windows-only in effect (winmm), round-tripped
 /// everywhere.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MidiBindings {
     pub toggle: String,
     pub arm: String,
@@ -249,9 +284,34 @@ impl MidiBindings {
     /// Assign one action's MIDI signature. An empty or malformed value
     /// clears it; a valid one is stored canonicalized. Single choke point,
     /// same contract as `Hotkeys::set`.
+    /// Assign one action's signature, validated and canonical. Empty or
+    /// malformed clears it.
+    ///
+    /// One pad, one action, for the same reason as `Hotkeys::set`: matching
+    /// is first-hit over a fixed order, so a second action holding the same
+    /// signature would never fire while the dashboard showed it mapped.
+    /// Learning a control that is already mapped moves it.
     pub fn set(&mut self, action: &str, raw: &str) {
+        let value = canonicalize_midi(raw).unwrap_or_default();
+        if !value.is_empty() {
+            self.unbind_elsewhere(action, &value);
+        }
         if let Some(slot) = self.slot_mut(action) {
-            *slot = canonicalize_midi(raw).unwrap_or_default();
+            *slot = value;
+        }
+    }
+
+    /// Clear `value` from every action except `keep`.
+    fn unbind_elsewhere(&mut self, keep: &str, value: &str) {
+        for action in ACTIONS {
+            if action == keep {
+                continue;
+            }
+            if let Some(slot) = self.slot_mut(action) {
+                if slot == value {
+                    slot.clear();
+                }
+            }
         }
     }
 
@@ -260,9 +320,14 @@ impl MidiBindings {
     /// (plus tests); other platforms have no listener to call it.
     #[cfg(any(windows, test))]
     pub fn action_for(&self, signature: &str) -> Option<&'static str> {
+        // The incoming signature always names its device. A binding that
+        // names one has to match it exactly, so two decks sending the same
+        // note drive different actions; a binding that names none is the
+        // "any device" form and matches on the control alone.
+        let control_only = signature.split('@').next().unwrap_or(signature);
         self.entries()
             .into_iter()
-            .find(|(_, sig)| !sig.is_empty() && *sig == signature)
+            .find(|(_, sig)| !sig.is_empty() && (*sig == signature || *sig == control_only))
             .map(|(action, _)| action)
     }
 }
@@ -270,7 +335,18 @@ impl MidiBindings {
 /// Validate and normalise a MIDI signature to `note:ch:n` / `cc:ch:n`, or
 /// None if it is malformed or out of range. Channel 1-16, data 0-127.
 pub fn canonicalize_midi(sig: &str) -> Option<String> {
-    let mut parts = sig.trim().split(':');
+    let sig = sig.trim();
+    // `note:1:36@Launchpad MK2` - the device is part of the identity,
+    // because note 36 on channel 1 is pad 1 on half the controllers ever
+    // made. Two decks would otherwise be indistinguishable, and binding
+    // them to different actions impossible. The learn flow always records
+    // one; a signature without it matches any device, which is what a
+    // config written by hand gets.
+    let (head, device) = match sig.split_once('@') {
+        Some((head, dev)) => (head, dev.trim()),
+        None => (sig, ""),
+    };
+    let mut parts = head.split(':');
     let kind = parts.next()?.trim().to_ascii_lowercase();
     let ch: u32 = parts.next()?.trim().parse().ok()?;
     let data: u32 = parts.next()?.trim().parse().ok()?;
@@ -280,12 +356,42 @@ pub fn canonicalize_midi(sig: &str) -> Option<String> {
     if !(1..=16).contains(&ch) || data > 127 {
         return None;
     }
-    match kind.as_str() {
-        "note" => Some(format!("note:{ch}:{data}")),
-        "cc" => Some(format!("cc:{ch}:{data}")),
-        _ => None,
-    }
+    let device = sanitize_device_name(device);
+    let device = device.as_str();
+    let base = match kind.as_str() {
+        "note" => format!("note:{ch}:{data}"),
+        "cc" => format!("cc:{ch}:{data}"),
+        _ => return None,
+    };
+    Some(if device.is_empty() {
+        base
+    } else {
+        format!("{base}@{device}")
+    })
 }
+
+/// Clean a driver-supplied device name for storage. It lands in a one-line
+/// config file, so no control characters; '@' is the separator inside a
+/// signature, so none of those either; and it is capped, so a driver with a
+/// novel-length name cannot bloat the file.
+///
+/// The selected device and the device named inside a signature are the same
+/// string from the same driver, so they go through the same door - otherwise
+/// the two disagree about what a legal name is and a device can be
+/// selectable but never matchable.
+pub fn sanitize_device_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_control() && *c != '@')
+        .take(MIDI_DEVICE_NAME_MAX)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// Cap on the device name carried in a signature. Long enough for every
+/// controller name seen in the wild, short enough that a driver with a
+/// novel-length name cannot bloat the config file.
+const MIDI_DEVICE_NAME_MAX: usize = 64;
 
 /// Parse a combo string into `(modifier bitmask, virtual-key code)`.
 /// Tokens are '+'-separated, case-insensitive and order-independent:
@@ -671,6 +777,7 @@ impl Settings {
             hotkeys: Hotkeys::default(),
             // Likewise no MIDI bindings until the user maps a controller.
             midi: MidiBindings::default(),
+            midi_device: String::new(),
         }
     }
 
@@ -931,6 +1038,9 @@ impl Settings {
             }
         }
         // MIDI bindings, same only-when-bound rule.
+        if !self.midi_device.is_empty() {
+            writeln!(f, "midi_device={}", one_line(&self.midi_device))?;
+        }
         for (action, sig) in self.midi.entries() {
             if !sig.is_empty() {
                 writeln!(f, "midi.{}={}", action, sig)?;
@@ -957,8 +1067,25 @@ impl Settings {
                 i,
                 one_line(&d.custom_egress_url)
             )?;
-            writeln!(f, "destination.{}.twitch_ingest={}", i, d.twitch_ingest)?;
-            writeln!(f, "destination.{}.youtube_ingest={}", i, d.youtube_ingest)?;
+            // one_line, like every other free-text field here: these two are
+            // written into a newline-delimited config file that is parsed back
+            // as privileged state, so a value carrying a newline would inject
+            // whole settings lines of its own - dashboard_password_hash and
+            // web_bind_all among them, which is a dashboard takeover that
+            // walks straight around the loopback-only rule on setting the
+            // first password.
+            writeln!(
+                f,
+                "destination.{}.twitch_ingest={}",
+                i,
+                one_line(&d.twitch_ingest)
+            )?;
+            writeln!(
+                f,
+                "destination.{}.youtube_ingest={}",
+                i,
+                one_line(&d.youtube_ingest)
+            )?;
             // VOD audio knobs. Defaults (false/false) are written only
             // when set so a downgrade to a pre-Phase-B build still
             // parses cleanly (apply_field's `_ => {}` arm drops keys
@@ -1059,6 +1186,7 @@ impl Settings {
             k if k.starts_with("hotkey.") => {
                 self.hotkeys.set(&k["hotkey.".len()..], value);
             }
+            "midi_device" => self.midi_device = sanitize_device_name(value),
             // midi.<action>=<signature>. `set` validates and drops anything
             // malformed, so a hand-edited config can't load a bad signature.
             k if k.starts_with("midi.") => {
@@ -1331,7 +1459,7 @@ impl Settings {
             ""
         };
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"destinations":{dests}}}"#,
             c = self.configured,
             sww = start_with_windows,
             ik = json_str(ik_shown),
@@ -1359,6 +1487,7 @@ impl Settings {
             odol = self.open_dashboard_on_launch,
             hotkeys = hotkeys,
             midi = midi,
+            midid = json_str(&self.midi_device),
             dests = dests,
         )
     }
@@ -1595,24 +1724,45 @@ fn redact_webhook(url: &str) -> String {
     // Discord webhook URLs are: https://discord.com/api/webhooks/<id>/<token>
     // Keep first 8 + last 4 of the token so the user can recognize it
     // without exposing it to a screen-share.
-    if let Some(i) = url.rfind('/') {
-        let (base, token) = url.split_at(i + 1);
-        if token.len() > 16 {
-            return format!("{}{}…{}", base, &token[..8], &token[token.len() - 4..]);
-        }
+    elide_after_last_slash(url, 16, 8, 4)
+}
+
+/// Keep the first `head` and last `tail` CHARACTERS of the segment after the
+/// last '/', eliding the middle. Anything `min_chars` or shorter is returned
+/// unchanged - a short value is a placeholder, not a secret worth hiding.
+///
+/// Characters, never bytes. These are user-supplied strings that only have to
+/// satisfy a scheme check, so a multi-byte character can sit at any offset.
+/// Slicing one by byte offset panics, and under `panic = "abort"` that is the
+/// whole process - mid-stream, and then again on every dashboard load, because
+/// the offending value is already saved to disk. Three copies of this had the
+/// bug; there is one now.
+pub fn elide_after_last_slash(url: &str, min_chars: usize, head: usize, tail: usize) -> String {
+    let Some(i) = url.rfind('/') else {
+        return url.to_string();
+    };
+    let (base, secret) = url.split_at(i + 1);
+    let chars: Vec<char> = secret.chars().collect();
+    if chars.len() <= min_chars || chars.len() < head + tail {
+        return url.to_string();
     }
-    url.to_string()
+    let front: String = chars[..head].iter().collect();
+    let back: String = chars[chars.len() - tail..].iter().collect();
+    format!("{base}{front}…{back}")
 }
 
 fn redact_key(url: &str) -> String {
     // Find last '/' and keep first 4 + last 4 of whatever follows.
+    let elided = elide_after_last_slash(url, 12, 4, 4);
+    if elided != url {
+        return elided;
+    }
+    // Short but present: show the opening few characters only.
     if let Some(i) = url.rfind('/') {
         let (base, key) = url.split_at(i + 1);
-        if key.len() > 12 {
-            return format!("{}{}…{}", base, &key[..4], &key[key.len() - 4..]);
-        }
         if !key.is_empty() {
-            return format!("{}{}…", base, &key[..key.len().min(4)]);
+            let front: String = key.chars().take(4).collect();
+            return format!("{base}{front}…");
         }
     }
     url.to_string()
@@ -2750,6 +2900,321 @@ mod tests {
         assert!(parse_hotkey("").is_none());
     }
 
+    /// `ACTIONS` is what the tray derives its RegisterHotKey ids from and
+    /// what both `unbind_elsewhere` walks, so it has to stay in step with
+    /// the two structs. A reorder here without one there would file a
+    /// binding under one action and run another.
+    #[test]
+    fn action_list_matches_both_binding_tables() {
+        let names: Vec<&str> = Hotkeys::default()
+            .entries()
+            .iter()
+            .map(|(a, _)| *a)
+            .collect();
+        assert_eq!(names, ACTIONS.to_vec());
+        let midi: Vec<&str> = MidiBindings::default()
+            .entries()
+            .iter()
+            .map(|(a, _)| *a)
+            .collect();
+        assert_eq!(midi, ACTIONS.to_vec());
+    }
+
+    /// One control drives one action. Two actions on the same combo cannot
+    /// both work (RegisterHotKey refuses the second), and two on the same
+    /// MIDI signature cannot either (matching is first-hit), so binding one
+    /// that is already taken moves it rather than leaving a dead entry the
+    /// dashboard still shows as bound.
+    #[test]
+    fn binding_a_taken_control_moves_it_off_the_other_action() {
+        let mut h = Hotkeys::default();
+        h.set("toggle", "ctrl+alt+d");
+        h.set("cut", "Ctrl+Alt+D");
+        assert_eq!(h.cut, "Ctrl+Alt+D");
+        assert!(h.toggle.is_empty(), "the combo moved to cut");
+
+        let mut m = MidiBindings::default();
+        m.set("toggle", "note:1:36");
+        m.set("cut", "note:1:36");
+        assert_eq!(m.cut, "note:1:36");
+        assert!(m.toggle.is_empty(), "the pad moved to cut");
+        assert_eq!(m.action_for("note:1:36"), Some("cut"));
+
+        // Clearing one action must not touch the others, which are also
+        // "empty" and would otherwise all match.
+        let mut keep = Hotkeys::default();
+        keep.set("toggle", "ctrl+alt+d");
+        keep.set("cut", "ctrl+alt+c");
+        keep.set("arm", "");
+        assert_eq!(keep.toggle, "Ctrl+Alt+D");
+        assert_eq!(keep.cut, "Ctrl+Alt+C");
+    }
+
+    /// The selected device name and the device name inside a signature are
+    /// the same string from the same driver, so they have to survive the
+    /// same abuse. The signature path caps and strips it; the selector must
+    /// not be the one place an unbounded driver string reaches the file.
+    #[test]
+    fn the_selected_device_name_is_bounded_like_a_signature() {
+        let mut s = Settings::defaults();
+        s.apply_field("midi_device", &"y".repeat(500));
+        assert!(
+            s.midi_device.len() <= MIDI_DEVICE_NAME_MAX,
+            "selector kept {} chars",
+            s.midi_device.len()
+        );
+
+        s.apply_field("midi_device", "Deck\nA\tB");
+        assert!(
+            !s.midi_device.chars().any(|c| c.is_control()),
+            "control characters reached the selector: {:?}",
+            s.midi_device
+        );
+    }
+
+    /// Every path that handles a device name has to produce the same string
+    /// for the same driver: the list the dashboard shows, the value the user
+    /// picks, the name an opened device is matched against, and the suffix a
+    /// signature carries. A name that survives one and not another makes a
+    /// device selectable but unmatchable, which looks like MIDI silently
+    /// not working.
+    #[test]
+    fn a_device_name_means_the_same_thing_everywhere() {
+        for raw in ["Launchpad MK2", "Deck@A", "Pad\u{7}One", "  spaced  "] {
+            let listed = sanitize_device_name(raw);
+            // Picking the listed name back out of the dashboard.
+            let mut s = Settings::defaults();
+            s.apply_field("midi_device", &listed);
+            assert_eq!(s.midi_device, listed, "selecting {raw:?} changed it");
+
+            // And binding a control on that device.
+            let sig = canonicalize_midi(&format!("note:1:36@{listed}")).expect("a valid signature");
+            let mut m = MidiBindings::default();
+            m.set("arm", &sig);
+            assert_eq!(
+                m.action_for(&format!("note:1:36@{listed}")),
+                Some("arm"),
+                "a press on {raw:?} did not match its own binding"
+            );
+        }
+    }
+
+    /// The config file is newline-delimited and is parsed back as privileged
+    /// state, so every free-text field written into it has to be flattened.
+    /// A newline in one would inject whole settings lines of its own.
+    #[test]
+    fn no_destination_field_can_inject_a_config_line() {
+        let mut s = Settings::defaults();
+        let mut d = Destination {
+            id: "d1".into(),
+            name: "Main\nweb_bind_all=true".into(),
+            enabled: true,
+            platform: "twitch".into(),
+            stream_key: "k\nauth_enabled=true".into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: "fra\ndashboard_password_hash=pbkdf2-sha256$1$00$deadbeef".into(),
+            youtube_ingest: "backup\nweb_port=9999".into(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: String::new(),
+            audio_track: "auto".into(),
+        };
+        d.name = d.name.clone();
+        s.destinations = vec![d];
+
+        let path = std::env::temp_dir().join(format!(
+            "ic-inject-{}-{}.conf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        s.save(&path).expect("save");
+        let written = std::fs::read_to_string(&path).expect("read back");
+
+        for injected in [
+            "dashboard_password_hash=",
+            "web_bind_all=true",
+            "auth_enabled=true",
+            "web_port=9999",
+        ] {
+            assert!(
+                !written
+                    .lines()
+                    .any(|l| l.trim_start().starts_with(injected)),
+                "a destination field injected `{injected}` as its own line:\n{written}"
+            );
+        }
+
+        // And nothing it injected survives a reload as a real setting.
+        let back = Settings::load_or_default(&path);
+        assert!(back.dashboard_password_hash.is_empty());
+        assert!(!back.web_bind_all);
+        assert_eq!(back.web_port, s.web_port);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Config files get hand-edited and half-written. Loading one must not
+    /// panic, and must not let a broken line take a good setting with it.
+    #[test]
+    fn a_damaged_config_file_still_loads() {
+        let path = std::env::temp_dir().join(format!(
+            "ic-edge-cfg-{}-{}.conf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(
+            &path,
+            "\n\
+             = no key\n\
+             no equals sign at all\n\
+             unknown_setting=1\n\
+             ingest_port=not-a-number\n\
+             web_port=8080\n\
+             buffer_mb=\n\
+             hotkey.toggle=Ctrl+Alt+D\n\
+             hotkey.nonsense=Ctrl+Alt+E\n\
+             midi.toggle=note:1:200\n\
+             target_delay_ms=99999999999999999999\n\
+             a truncated final line",
+        )
+        .expect("write");
+
+        let s = Settings::load_or_default(&path);
+        assert_eq!(s.web_port, 8080, "a good line after bad ones still loads");
+        assert_eq!(s.hotkeys.toggle, "Ctrl+Alt+D", "and so does a good binding");
+        assert!(
+            s.midi.toggle.is_empty(),
+            "an out-of-range signature is dropped, not stored"
+        );
+        assert!(
+            s.target_delay_ms <= 600_000,
+            "an absurd delay is clamped, got {}",
+            s.target_delay_ms
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A stream key, webhook token or egress URL is user-supplied text that
+    /// only has to satisfy a scheme check, so a multi-byte character can sit
+    /// anywhere in it. Redaction used to slice at byte offsets: under
+    /// `panic = "abort"` that ends the process mid-stream, and then again on
+    /// every dashboard load, because the value is already on disk.
+    #[test]
+    fn redaction_survives_non_ascii_secrets() {
+        // The exact shape that aborted the process.
+        let jp = "rtmp://h/app/日本語テストテスト";
+        let out = redact_key(jp);
+        assert!(out.starts_with("rtmp://h/app/"), "{out}");
+        assert!(out.contains('…'), "{out}");
+        assert!(
+            !out.contains("語テストテス"),
+            "the middle must be hidden: {out}"
+        );
+
+        // Emoji are 4 bytes each, and combining marks push char != grapheme.
+        assert!(redact_key("rtmp://h/app/🎥🎥🎥🎥🎥🎥🎥🎥🎥🎥🎥🎥🎥").contains('…'));
+        // Both sides of the 16-CHARACTER threshold. The short one is the
+        // sharper case: byte-length said 45 and sliced; char-length says 15
+        // and leaves it alone.
+        let short_token = "https://discord.com/api/webhooks/1/日本語テストテストテストテスト";
+        assert_eq!(
+            redact_webhook(short_token),
+            short_token,
+            "15 chars, untouched"
+        );
+        let long_token =
+            "https://discord.com/api/webhooks/1/日本語テストテストテストテストテストテスト";
+        assert!(redact_webhook(long_token).contains('…'), "21 chars, elided");
+
+        // Short, non-empty, non-ASCII: the other branch that byte-sliced.
+        let short = redact_key("rtmp://h/app/日本");
+        assert!(short.ends_with('…'), "{short}");
+
+        // Nothing after the slash, and no slash at all, stay unchanged.
+        assert_eq!(redact_key("rtmp://h/app/"), "rtmp://h/app/");
+        assert_eq!(redact_key("no-slashes-here"), "no-slashes-here");
+
+        // ASCII behaviour is unchanged.
+        assert_eq!(
+            redact_key("rtmp://h/app/live_123456789_abcdefgh"),
+            "rtmp://h/app/live…efgh"
+        );
+        assert_eq!(redact_key("rtmp://h/app/short"), "rtmp://h/app/shor…");
+    }
+
+    /// Signatures arrive from a driver string and from hand-edited config
+    /// files, so the parser is a trust boundary, not a formality.
+    #[test]
+    fn midi_signature_parsing_rejects_the_awkward_shapes() {
+        // Structurally short or empty.
+        assert!(canonicalize_midi("").is_none());
+        assert!(canonicalize_midi("note").is_none());
+        assert!(canonicalize_midi("note:1").is_none());
+        assert!(canonicalize_midi(":::").is_none());
+        // Out of range on either field.
+        assert!(canonicalize_midi("note:0:36").is_none(), "channel is 1-16");
+        assert!(canonicalize_midi("note:17:36").is_none());
+        assert!(canonicalize_midi("note:1:128").is_none(), "data is 0-127");
+        // Not numbers at all, including ones that would overflow a parse.
+        assert!(canonicalize_midi("note:one:36").is_none());
+        assert!(canonicalize_midi("note:-1:36").is_none());
+        assert!(canonicalize_midi("note:99999999999999999999:36").is_none());
+        // Unknown kind.
+        assert!(canonicalize_midi("pitch:1:36").is_none());
+        // The boundaries themselves are valid.
+        assert_eq!(canonicalize_midi("note:1:0").as_deref(), Some("note:1:0"));
+        assert_eq!(canonicalize_midi("cc:16:127").as_deref(), Some("cc:16:127"));
+        // A device marker with nothing after it is the no-device form.
+        assert_eq!(
+            canonicalize_midi("note:1:36@").as_deref(),
+            Some("note:1:36")
+        );
+        assert_eq!(
+            canonicalize_midi("note:1:36@   ").as_deref(),
+            Some("note:1:36")
+        );
+        // An overlong driver name is truncated, not rejected, so a working
+        // controller never becomes unbindable because of its name.
+        let long = format!("note:1:36@{}", "x".repeat(300));
+        let out = canonicalize_midi(&long).expect("still a valid signature");
+        assert!(out.len() < 120, "device name is capped: {}", out.len());
+        assert!(out.starts_with("note:1:36@x"));
+    }
+
+    /// Combos are typed by users and hand-edited in the config file.
+    #[test]
+    fn hotkey_parsing_rejects_the_awkward_shapes() {
+        // A modifier is mandatory: that requirement is the misclick guard.
+        assert!(canonicalize_hotkey("D").is_none(), "a bare key is refused");
+        assert!(canonicalize_hotkey("Ctrl").is_none(), "modifiers alone too");
+        assert!(canonicalize_hotkey("Ctrl+Alt").is_none());
+        assert!(canonicalize_hotkey("").is_none());
+        assert!(canonicalize_hotkey("+++").is_none());
+        assert!(canonicalize_hotkey("Ctrl+NotAKey").is_none());
+        // Two keys is not a combo we can register.
+        assert!(canonicalize_hotkey("Ctrl+A+B").is_none());
+        // Order and case do not matter, and the output is canonical.
+        assert_eq!(
+            canonicalize_hotkey("alt+CTRL+d").as_deref(),
+            canonicalize_hotkey("Ctrl+Alt+D").as_deref()
+        );
+        // A repeated modifier is the same combo, not a different one.
+        assert_eq!(
+            canonicalize_hotkey("Ctrl+Ctrl+Alt+D").as_deref(),
+            canonicalize_hotkey("Ctrl+Alt+D").as_deref()
+        );
+        // Whitespace around the tokens survives a hand edit.
+        assert_eq!(
+            canonicalize_hotkey(" Ctrl + Alt + D ").as_deref(),
+            canonicalize_hotkey("Ctrl+Alt+D").as_deref()
+        );
+    }
+
     #[test]
     fn hotkeys_round_trip_through_save_and_load() {
         let path = std::env::temp_dir().join(format!(
@@ -2808,6 +3273,54 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&bare);
+    }
+
+    /// Note 36 on channel 1 is pad 1 on half the controllers ever made, so
+    /// the device is what makes two decks two decks. A signature without one
+    /// still matches anything, which is the hand-written / any-device form.
+    #[test]
+    fn midi_signatures_carry_their_device() {
+        assert_eq!(
+            canonicalize_midi("NOTE:1:36@Launchpad MK2").as_deref(),
+            Some("note:1:36@Launchpad MK2")
+        );
+        assert_eq!(
+            canonicalize_midi(" cc : 2 : 20 @ Deck B ").as_deref(),
+            Some("cc:2:20@Deck B")
+        );
+        // Control characters and a second @ cannot ride in from a driver
+        // string into a one-line config file.
+        assert_eq!(
+            canonicalize_midi(
+                "note:1:36@Bad
+Name@x"
+            )
+            .as_deref(),
+            Some("note:1:36@BadNamex")
+        );
+        assert!(
+            canonicalize_midi("note:1:200@Deck").is_none(),
+            "range still checked"
+        );
+
+        // Two decks, same pad, different actions.
+        let mut m = MidiBindings::default();
+        m.set("arm", "note:1:36@Deck A");
+        m.set("cut", "note:1:36@Deck B");
+        assert_eq!(m.action_for("note:1:36@Deck A"), Some("arm"));
+        assert_eq!(m.action_for("note:1:36@Deck B"), Some("cut"));
+        assert_eq!(
+            m.action_for("note:1:36@Deck C"),
+            None,
+            "a third deck is not either"
+        );
+
+        // A binding with no device is the any-device form.
+        let mut any = MidiBindings::default();
+        any.set("toggle", "note:1:36");
+        assert_eq!(any.action_for("note:1:36@Anything"), Some("toggle"));
+        assert_eq!(any.action_for("note:1:36"), Some("toggle"));
+        assert_eq!(any.action_for("note:1:37@Anything"), None);
     }
 
     #[test]
