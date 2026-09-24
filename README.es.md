@@ -149,7 +149,7 @@ Haz simulcast de una señal de OBS a Twitch, YouTube, Kick y RTMP personalizado 
 <td valign="top">
 
 **📱 Vertical (9:16) gratis**
-Activa **Formato Dual** de Twitch (Enhanced Broadcasting) y pon el formato de cualquier destino no-Twitch en **Vertical**. InstantClone reutiliza el lienzo 9:16 que OBS ya crea para Twitch y lo envía a YouTube Shorts, Kick móvil o TikTok, sin codificación extra.
+En OBS, activa **Enhanced Broadcasting** y elige tu lienzo vertical (por ejemplo Aitum Vertical) en **Lienzo adicional**, y pon el formato de cualquier destino no-Twitch en **Vertical**. InstantClone envía ese lienzo 9:16 a TikTok, YouTube Shorts o Kick móvil, con o sin un destino de Twitch. ¿También en Twitch? El **Formato Dual** de Twitch aporta el mismo lienzo.
 
 </td>
 <td valign="top">
@@ -306,7 +306,7 @@ Armado de un botón. Añade `/activate` y `/stop` a otros dos botones para contr
 
 - **Handshake RTMP con paridad total con OBS.** `connect` lleva la misma bolsa de capacidades de códec que envía librtmp (`audioCodecs=3191`, `videoCodecs=252`, `videoFunction=1`), el `fourCcList` de Enhanced-RTMP (AVC / HEVC / AV1 / VP9 / Opus / AC-3 / FLAC), `Set Chunk Size` antes de connect, `FCUnpublish → deleteStream` al cerrar, y RTMP Acknowledgement (BYTES_READ_REPORT) al umbral ventana/10 declarado por el par, en entrada y salida.
 - **Passthrough de Enhanced Broadcasting a Twitch.** Cuando OBS pasa a multipista "Auto" hacemos de proxy de `GetClientConfiguration` de Twitch, ruteamos la salida al endpoint IVS asignado a la sesión y reenviamos cada SPS/PPS por pista fielmente para que se encienda la escalera de transcodificado sin importar el nivel de cuenta. Los destinos no-Twitch reciben la pista primaria horizontal por defecto; las etiquetas de escalera con `TrackId != 0` se descartan para evitar la tormenta de varios frames por PTS que hace caer el decodificador de YouTube. Los cortes de EB caen en el IDR de la pista primaria (no en el keyframe del peldaño que gane el `partition_point`) para que el decodificador del destino siempre tenga su ancla.
-- **Selección del lienzo vertical (9:16).** El lienzo vertical se identifica decodificando el SPS de cada pista por orientación (retrato, mayor área) en vez de confiar en el JSON privado de sesión de Twitch, y se autocorrige según se activa/desactiva Formato Dual.
+- **Selección del lienzo vertical (9:16).** El lienzo vertical se identifica decodificando el SPS de cada pista por orientación (retrato, mayor área) en vez de confiar en el JSON privado de sesión de Twitch, y se autocorrige según aparece o desaparece el lienzo vertical.
 - **Audio de VOD de Twitch, desbloqueado en el servicio InstantClone.** OBS ata su pista de VOD al servicio llamado literalmente "Twitch" (`ServiceSupportsVodTrack == {"Twitch"}`), así que está bloqueada en el servicio InstantClone. Un pequeño script de OBS incluido (`optional-vod-unlocker.lua`, descargado desde el panel) engancha el mismo segundo codificador de audio que usaría la propia pista de VOD de OBS, sin la restricción. Su lector de formato coincide byte a byte con el `flv_packet_audio_ex` de OBS (`AudioPacketType` en el byte 0, `TrackId` en el byte 6). OBS 32.2+ necesita el script; OBS anterior puede usar la casilla de VOD Track integrada (escribimos `EnableCustomServerVodTrack` en el `user.ini` de OBS 32, con `global.ini` como respaldo).
 - **Ruteo de audio por destino.** Las pistas no seleccionadas se descartan y la elegida se aplana a una etiqueta de una sola pista estándar (AAC reescrito al `0xAF` legado), espejando el `flatten_multitrack_video` del lado de vídeo. Si la pista elegida no se está enviando, cae a la pista en directo en vez de quedarse en silencio.
 
@@ -336,7 +336,7 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 **E/S de disco síncrona en la ruta caliente de escritura al anillo, por elección.** La escritura con buffer aterriza en la caché de páginas del SO en microsegundos y el kernel vacía en segundo plano, así que la caché de páginas ya es el buffer asíncrono; el índice y los bytes avanzan bajo un solo lock para que un lector nunca vea una etiqueta cuyos bytes aún no están en disco.
 
-**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **392 tests, todos en verde.**
+**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, la configuración de Enhanced Broadcasting construida a partir de los lienzos y codificadores GPU de OBS, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **406 tests, todos en verde.**
 
 </details>
 
@@ -346,7 +346,7 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 392 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
+**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 406 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
 
 **Lo áspero, con honestidad**
 
