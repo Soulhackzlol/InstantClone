@@ -781,7 +781,7 @@ async fn route(
         ("GET", "/obs/multitrack-config") => (
             "200 OK",
             "application/json",
-            obs_multitrack_config_static(query, settings),
+            obs_multitrack_config_static(query, body, settings),
         ),
         ("GET", "/obs/register-status") => {
             let s = settings.borrow();
@@ -1198,7 +1198,7 @@ fn video_readouts(ctrl: &Controller) -> std::collections::BTreeMap<u8, (String, 
         .collect()
 }
 
-/// Live video state for one destination: whether the Dual Format canvas
+/// Live video state for one destination: whether a vertical 9:16 canvas
 /// is on the wire, whether this destination can forward yet, and the
 /// resolution + codec of the track it actually sends.
 ///
@@ -1228,7 +1228,9 @@ fn dest_video(
         .destination_state(&dest.id)
         .vertical_primary_track
         .load(Ordering::Relaxed);
-    let vertical_canvas_present = track != 0xFF;
+    // The sequence-header cache outlives the OBS session (it is cleared on
+    // the next publish), so a canvas only counts while OBS is live.
+    let vertical_canvas_present = track != 0xFF && ctrl.ingest_alive();
     let vertical = dest.wants_vertical();
     // The track this destination actually forwards: the detected portrait
     // primary for vertical dests, track 0 (horizontal primary) otherwise.
@@ -1306,10 +1308,11 @@ fn state_json(
         String::new()
     };
 
-    // A portrait canvas is present on the wire (Twitch Dual Format is live).
-    // Drives the header "Dual Format" pill.
-    let vertical_present =
-        crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock()).is_some();
+    // A portrait canvas is on the wire right now (OBS's Additional canvas,
+    // or Twitch Dual Format). Drives the header "Vertical" pill.
+    let vertical_present = ctrl.ingest_alive()
+        && crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock())
+            .is_some();
 
     format!(
         r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
@@ -1527,7 +1530,7 @@ async fn obs_multitrack_config_proxy(
             "OBS_MULTITRACK",
             "wrong ingest key in request - refusing to broker an EB session",
         );
-        return obs_multitrack_config_static(query, settings);
+        return obs_multitrack_config_static(query, body, settings);
     }
 
     // The streamer's real Twitch key lives in our destinations list.
@@ -1546,14 +1549,7 @@ async fn obs_multitrack_config_proxy(
             .map(|d| d.stream_key.clone())
     };
     let Some(twitch_key) = twitch_key else {
-        ctrl.log(
-            "[OBS multitrack] no enabled Twitch destination with a stream key - \
-             returning static config. Twitch will accept the multi-track stream \
-             but won't go live to viewers without an API-allocated session. \
-             Fix: Destinations → enable a Twitch destination with the real key.",
-        );
-        crate::trace::log("OBS_MULTITRACK", "no twitch destination - static fallback");
-        return obs_multitrack_config_static(query, settings);
+        return obs_multitrack_config_local(body, query, ctrl, settings);
     };
 
     // Swap the `authentication` field in OBS's payload with the real
@@ -1571,7 +1567,7 @@ async fn obs_multitrack_config_proxy(
                 "OBS_MULTITRACK",
                 "could not patch authentication field - static fallback",
             );
-            return obs_multitrack_config_static(query, settings);
+            return obs_multitrack_config_static(query, body, settings);
         }
     };
 
@@ -1646,12 +1642,12 @@ async fn obs_multitrack_config_proxy(
                  from this machine.",
             );
             crate::trace::log("OBS_MULTITRACK", "Twitch API timed out - static fallback");
-            return obs_multitrack_config_static(query, settings);
+            return obs_multitrack_config_static(query, body, settings);
         }
-        ProxyOutcome::HttpError(code, body) => {
+        ProxyOutcome::HttpError(code, response) => {
             // Truncate the body so a verbose Twitch error page doesn't
             // flood the dashboard log line.
-            let snippet: String = body.chars().take(300).collect();
+            let snippet: String = response.chars().take(300).collect();
             ctrl.log(format!(
                 "[OBS multitrack] Twitch API returned HTTP {code} - returning static \
                  config. Response body (first 300 chars): {snippet}"
@@ -1660,7 +1656,7 @@ async fn obs_multitrack_config_proxy(
                 "OBS_MULTITRACK",
                 &format!("Twitch API HTTP {code} - static fallback. body={snippet}"),
             );
-            return obs_multitrack_config_static(query, settings);
+            return obs_multitrack_config_static(query, body, settings);
         }
         ProxyOutcome::TransportError(e) => {
             ctrl.log(format!(
@@ -1671,7 +1667,7 @@ async fn obs_multitrack_config_proxy(
                 "OBS_MULTITRACK",
                 &format!("Twitch API transport error: {e} - static fallback"),
             );
-            return obs_multitrack_config_static(query, settings);
+            return obs_multitrack_config_static(query, body, settings);
         }
         ProxyOutcome::ReadError(e) => {
             ctrl.log(format!(
@@ -1682,7 +1678,7 @@ async fn obs_multitrack_config_proxy(
                 "OBS_MULTITRACK",
                 &format!("Twitch API read error: {e} - static fallback"),
             );
-            return obs_multitrack_config_static(query, settings);
+            return obs_multitrack_config_static(query, body, settings);
         }
     };
 
@@ -1832,6 +1828,13 @@ async fn obs_multitrack_config_proxy(
         "OBS_MULTITRACK",
         "Twitch config received + rewritten to localhost ingest",
     );
+    if !crate::local_eb_config::names_additional_canvas(&rewritten) {
+        log_vertical_destinations_waiting(
+            ctrl,
+            settings,
+            "Twitch's config for this channel has no vertical track (Dual Format isn't on for it)",
+        );
+    }
     rewritten
 }
 
@@ -2057,60 +2060,33 @@ fn rewrite_url_templates(json: &str, new_value: &str) -> String {
     out
 }
 
-fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settings>>) -> String {
+/// `body` is OBS's config request when there is one (empty for GET): it
+/// names the GPU, so the ladder uses its hardware encoder.
+fn obs_multitrack_config_static(
+    query: &str,
+    body: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+) -> String {
     let params = config::parse_form(query);
-    let encoder = params.get("encoder").map(|s| s.as_str()).unwrap_or("x264");
+    let available = crate::obs_register::available_video_encoders();
+    let encoder = choose_encoder(query, body, available.as_deref());
+    let bandwidth = config_url_bandwidth(query).unwrap_or(10000);
     let tracks: u32 = params
         .get("tracks")
         .and_then(|s| s.parse().ok())
         .unwrap_or(3)
         .clamp(1, 3);
-    let bandwidth: u32 = params
-        .get("bandwidth")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10000)
-        .clamp(1500, 50000);
 
     let ingest_port = settings.borrow().ingest_port;
 
-    let (enc_type, settings_json_1080, settings_json_720, settings_json_480): (
-        &str,
-        String,
-        String,
-        String,
+    let track = |index: u32| encoder_for(&encoder, bitrate_for_track(bandwidth, tracks, index));
+    let (top, middle, bottom) = (track(0), track(1), track(2));
+    let enc_type = top.encoder_type;
+    let (settings_json_1080, settings_json_720, settings_json_480) = (
+        top.settings_json,
+        middle.settings_json,
+        bottom.settings_json,
     );
-    // Per-encoder presets: libobs encoder IDs + the settings keys each
-    // implementation understands. x264 uses `preset` strings like
-    // "veryfast"; nvenc uses "p1"-"p7"; AMD uses similar tier names.
-    // `profile=main` is what every Twitch / YouTube / Kick decoder
-    // accepts; baseline would drop B-frames entirely and main+high
-    // are functionally equivalent on the wire for ~1080p60.
-    match encoder {
-        "nvenc" => {
-            enc_type = "jim_nvenc";
-            settings_json_1080 = encoder_settings_nvenc(bitrate_for_track(bandwidth, tracks, 0));
-            settings_json_720 = encoder_settings_nvenc(bitrate_for_track(bandwidth, tracks, 1));
-            settings_json_480 = encoder_settings_nvenc(bitrate_for_track(bandwidth, tracks, 2));
-        }
-        "amd" => {
-            enc_type = "h264_texture_amf";
-            settings_json_1080 = encoder_settings_amd(bitrate_for_track(bandwidth, tracks, 0));
-            settings_json_720 = encoder_settings_amd(bitrate_for_track(bandwidth, tracks, 1));
-            settings_json_480 = encoder_settings_amd(bitrate_for_track(bandwidth, tracks, 2));
-        }
-        "qsv" => {
-            enc_type = "obs_qsv11";
-            settings_json_1080 = encoder_settings_qsv(bitrate_for_track(bandwidth, tracks, 0));
-            settings_json_720 = encoder_settings_qsv(bitrate_for_track(bandwidth, tracks, 1));
-            settings_json_480 = encoder_settings_qsv(bitrate_for_track(bandwidth, tracks, 2));
-        }
-        _ => {
-            enc_type = "obs_x264";
-            settings_json_1080 = encoder_settings_x264(bitrate_for_track(bandwidth, tracks, 0));
-            settings_json_720 = encoder_settings_x264(bitrate_for_track(bandwidth, tracks, 1));
-            settings_json_480 = encoder_settings_x264(bitrate_for_track(bandwidth, tracks, 2));
-        }
-    }
 
     // Per-call config_id: a monotonic-ish value derived from the
     // process clock means OBS treats each config-fetch as fresh
@@ -2184,7 +2160,7 @@ fn encoder_settings_x264(bitrate: u32) -> String {
 
 fn encoder_settings_nvenc(bitrate: u32) -> String {
     format!(
-        r#"{{"bitrate":{b},"rate_control":"CBR","keyint_sec":2,"profile":"main","preset":"p5","tune":"hq","multipass":"qres"}}"#,
+        r#"{{"bitrate":{b},"rate_control":"CBR","keyint_sec":2,"profile":"main","preset":"p5","preset2":"p5","tune":"hq","multipass":"qres"}}"#,
         b = bitrate
     )
 }
@@ -2201,6 +2177,185 @@ fn encoder_settings_qsv(bitrate: u32) -> String {
         r#"{{"bitrate":{b},"rate_control":"CBR","keyint_sec":2,"profile":"main","target_usage":"balanced"}}"#,
         b = bitrate
     )
+}
+
+/// Encoder for InstantClone's own configs: the family (which settings
+/// keys apply), the exact libobs id, and why, for the log.
+struct EncoderChoice {
+    family: &'static str,
+    id: &'static str,
+    reason: String,
+}
+
+/// libobs H.264 encoder ids per family, newest first. OBS 31 moved NVENC to
+/// `obs_nvenc_h264_tex` and QSV to `obs_qsv11_v2`; OBS 30.2, the first with
+/// Enhanced Broadcasting, only has `jim_nvenc` and `obs_qsv11`.
+fn encoder_ids(family: &str) -> &'static [&'static str] {
+    match family {
+        "nvenc" => &["obs_nvenc_h264_tex", "jim_nvenc"],
+        "amd" => &["h264_texture_amf"],
+        "qsv" => &["obs_qsv11_v2", "obs_qsv11"],
+        _ => &["obs_x264"],
+    }
+}
+
+/// Canonical family name for a config URL's `encoder=` value.
+fn encoder_family(name: &str) -> &'static str {
+    match name {
+        "nvenc" => "nvenc",
+        "amd" => "amd",
+        "qsv" => "qsv",
+        _ => "x264",
+    }
+}
+
+/// An explicit `encoder=` in the config URL wins, otherwise the GPU OBS
+/// composites on. Either way the id must be one OBS's log lists as
+/// available: naming an encoder OBS doesn't have stops the stream from
+/// starting at all, which is worse than x264 being heavy. `available` is
+/// None when no OBS log could be read; then an explicit choice is trusted
+/// and a guessed one falls back to x264.
+fn choose_encoder(query: &str, body: &str, available: Option<&[String]>) -> EncoderChoice {
+    let x264 = |reason: String| EncoderChoice {
+        family: "x264",
+        id: "obs_x264",
+        reason,
+    };
+    let explicit = config::parse_form(query)
+        .get("encoder")
+        .map(|name| encoder_family(name));
+    let (family, source) = match explicit {
+        Some(family) => (family, "set in the config URL"),
+        None => match crate::local_eb_config::gpu_encoder_family(body) {
+            Some(family) => (family, "the GPU OBS runs on"),
+            None => return x264("OBS reported no NVIDIA, AMD or Intel GPU".into()),
+        },
+    };
+    if family == "x264" {
+        return x264(source.into());
+    }
+    let listed = |id: &str| available.is_some_and(|list| list.iter().any(|e| e == id));
+    match (
+        available,
+        encoder_ids(family).iter().copied().find(|id| listed(id)),
+    ) {
+        (_, Some(id)) => EncoderChoice {
+            family,
+            id,
+            reason: format!("{source}; {id} is available in OBS"),
+        },
+        // Can't check: the oldest id, which every OBS with Enhanced
+        // Broadcasting still registers (newer ones as a compatibility alias).
+        (None, None) if explicit.is_some() => EncoderChoice {
+            family,
+            id: encoder_ids(family).last().copied().unwrap_or("obs_x264"),
+            reason: source.into(),
+        },
+        (Some(_), None) => x264(format!("OBS lists no {family} encoder")),
+        (None, None) => x264("OBS's log couldn't be read to check GPU encoders".into()),
+    }
+}
+
+/// `bandwidth` from the config URL's query, in kbps, when it has one.
+fn config_url_bandwidth(query: &str) -> Option<u32> {
+    config::parse_form(query)
+        .get("bandwidth")
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|kbps| kbps.clamp(1500, 50000))
+}
+
+/// Log, once per config request, which enabled vertical destinations will
+/// get nothing this stream and why, so a streamer isn't left guessing.
+fn log_vertical_destinations_waiting(
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    why: &str,
+) {
+    let names: Vec<String> = settings
+        .borrow()
+        .destinations
+        .iter()
+        .filter(|d| d.enabled && d.wants_vertical())
+        .map(|d| d.name.clone())
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    ctrl.log(format!(
+        "[OBS multitrack] {} set to Vertical, but {why}, so it gets nothing this stream.",
+        names.join(", ")
+    ));
+}
+
+/// Encoder id and settings for one track. x264 uses `preset` strings like
+/// "veryfast"; nvenc uses "p1"-"p7"; AMD uses similar tier names.
+/// `profile=main` is what every Twitch / YouTube / Kick decoder accepts;
+/// baseline would drop B-frames entirely and main+high are functionally
+/// equivalent on the wire for ~1080p60.
+fn encoder_for(choice: &EncoderChoice, kbps: u32) -> crate::local_eb_config::TrackEncoder {
+    let settings_json = match choice.family {
+        "nvenc" => encoder_settings_nvenc(kbps),
+        "amd" => encoder_settings_amd(kbps),
+        "qsv" => encoder_settings_qsv(kbps),
+        _ => encoder_settings_x264(kbps),
+    };
+    crate::local_eb_config::TrackEncoder {
+        encoder_type: choice.id,
+        settings_json,
+    }
+}
+
+/// No Twitch destination, so there is no Twitch config to proxy: build one
+/// from the canvases OBS described (see `local_eb_config`). The main canvas
+/// gets one track, and OBS's Additional canvas gets one when it sends one,
+/// which is what feeds destinations set to Vertical. Falls back to the
+/// static ladder when OBS didn't describe its canvases.
+fn obs_multitrack_config_local(
+    body: &str,
+    query: &str,
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+) -> String {
+    let canvases = crate::local_eb_config::parse_canvases(body);
+    let available = crate::obs_register::available_video_encoders();
+    let choice = choose_encoder(query, body, available.as_deref());
+    // Explicit URL value, then OBS's own bandwidth cap, then a default
+    // that keeps the main track at a normal 1080p60 bitrate.
+    let bandwidth = config_url_bandwidth(query)
+        .or_else(|| crate::local_eb_config::requested_budget_kbps(body))
+        .unwrap_or_else(|| crate::local_eb_config::default_budget_kbps(&canvases));
+    let ingest_port = settings.borrow().ingest_port;
+    let built = crate::local_eb_config::build(&canvases, bandwidth, ingest_port, |kbps| {
+        encoder_for(&choice, kbps)
+    });
+    let Some((config, plan)) = built else {
+        ctrl.log(
+            "[OBS multitrack] no Twitch destination, and OBS didn't describe its canvases - \
+             using the default 1080p ladder.",
+        );
+        crate::trace::log(
+            "OBS_MULTITRACK",
+            "no twitch destination, no canvases - static fallback",
+        );
+        return obs_multitrack_config_static(query, body, settings);
+    };
+    ctrl.log(format!(
+        "[OBS multitrack] no Twitch destination - building the config here: {}, \
+         {bandwidth} kbps total, encoded with {} ({})",
+        plan.describe(),
+        choice.family,
+        choice.reason
+    ));
+    crate::trace::log("OBS_MULTITRACK", "local config built from OBS's canvases");
+    if !plan.feeds_vertical() {
+        log_vertical_destinations_waiting(
+            ctrl,
+            settings,
+            "OBS sent no 9:16 canvas (in OBS: Settings → Stream → Enhanced Broadcasting → \
+             Additional canvas, pick your vertical canvas, for example Aitum Vertical)",
+        );
+    }
+    config
 }
 
 fn twitch_ingests_json() -> String {
@@ -5525,8 +5680,62 @@ mod tests {
         s.ingest_port = 1935;
         s.ingest_key = "abc123def".into();
         let (tx, _rx) = watch::channel(s);
-        let cfg = obs_multitrack_config_static("encoder=x264&tracks=1", &Arc::new(tx));
+        let cfg = obs_multitrack_config_static("encoder=x264&tracks=1", "", &Arc::new(tx));
         assert!(cfg.contains("/live/{stream_key}"));
+    }
+
+    #[test]
+    fn own_configs_use_the_gpu_encoder_only_when_obs_has_it() {
+        let amd_request = r#"{"capabilities":{"gpu":[{"vendor_id":4098}]}}"#;
+        let with_amf = vec!["h264_texture_amf".to_string(), "obs_x264".to_string()];
+        let without_amf = vec!["obs_x264".to_string()];
+        assert_eq!(
+            choose_encoder("", amd_request, Some(&with_amf)).family,
+            "amd"
+        );
+        let nvidia_request = r#"{"capabilities":{"gpu":[{"vendor_id":4318}]}}"#;
+        let obs_30_2 = vec!["jim_nvenc".to_string(), "obs_x264".to_string()];
+        assert_eq!(
+            choose_encoder("", nvidia_request, Some(&obs_30_2)).id,
+            "jim_nvenc",
+            "OBS 30.2 has only the old NVENC id"
+        );
+        assert_eq!(
+            choose_encoder("encoder=nvenc", "", Some(&with_amf)).family,
+            "x264",
+            "an explicit encoder OBS doesn't list must not stop the stream"
+        );
+        assert_eq!(
+            choose_encoder("", amd_request, Some(&without_amf)).family,
+            "x264",
+            "an AMD card without AMF in OBS must not get an encoder OBS can't create"
+        );
+        assert_eq!(choose_encoder("", amd_request, None).family, "x264");
+        assert_eq!(choose_encoder("", "", Some(&with_amf)).family, "x264");
+        assert_eq!(
+            choose_encoder("encoder=qsv", amd_request, None).id,
+            "obs_qsv11",
+            "with no log to check, an explicit encoder is trusted"
+        );
+    }
+
+    #[test]
+    fn static_ladder_keeps_encoder_ids_and_bitrate_split() {
+        let (tx, _rx) = watch::channel(crate::config::Settings::defaults());
+        let cfg = obs_multitrack_config_static(
+            "encoder=x264&tracks=3&bandwidth=10000",
+            "",
+            &Arc::new(tx),
+        );
+        assert_eq!(cfg.matches(r#""type":"obs_x264""#).count(), 3);
+        assert!(
+            cfg.contains(r#""bitrate":6000"#),
+            "top rung keeps its 60% share"
+        );
+        assert!(
+            !cfg.contains(r#""canvas_index":1"#),
+            "the ladder never names a second canvas"
+        );
     }
 
     #[test]

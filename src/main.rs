@@ -33,6 +33,7 @@ mod controller;
 mod crypto;
 mod h264;
 mod https;
+mod local_eb_config;
 mod midi;
 mod obs_register;
 mod portcheck;
@@ -52,7 +53,7 @@ use crate::config::Settings;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 fn main() -> std::io::Result<()> {
@@ -329,11 +330,28 @@ fn main() -> std::io::Result<()> {
                 tokio::time::sleep(Duration::from_millis(600)).await;
                 let _ =
                     tokio::task::spawn_blocking(move || {
-                        match obs_register::set_vod_audio_flag(true) {
-                            Ok(true) => ctrl_eb.log("[--launch-eb] VOD-track flag written"),
-                            Ok(false) => ctrl_eb
-                                .log("[--launch-eb] OBS config not found - is OBS installed?"),
-                            Err(e) => ctrl_eb.log(format!("[--launch-eb] flag write failed: {e}")),
+                        // On OBS 32.2+ this shortcut's Custom RTMP path is dead:
+                        // --config-url is no longer read for Custom RTMP, so the
+                        // VOD flag would only switch on a track that never gets
+                        // Enhanced Broadcasting. Leave OBS's config alone.
+                        let modern_obs =
+                            obs_register::obs_version().is_some_and(|v| v >= (32, 2, 0));
+                        if modern_obs {
+                            ctrl_eb.log(
+                                "[--launch-eb] this shortcut is the old VOD + Enhanced Broadcasting \
+                                 path for OBS before 32.2, so on your OBS it only opens OBS. For \
+                                 Enhanced Broadcasting pick the InstantClone service in OBS's Stream \
+                                 settings; for VOD audio use the VOD unlocker script in System.",
+                            );
+                        } else {
+                            match obs_register::set_vod_audio_flag(true) {
+                                Ok(true) => ctrl_eb.log("[--launch-eb] VOD-track flag written"),
+                                Ok(false) => ctrl_eb
+                                    .log("[--launch-eb] OBS config not found - is OBS installed?"),
+                                Err(e) => {
+                                    ctrl_eb.log(format!("[--launch-eb] flag write failed: {e}"));
+                                }
+                            }
                         }
                         match obs_register::launch_obs_with_eb_config(web_port, &dock_token) {
                             Ok(exe) => ctrl_eb
@@ -583,6 +601,45 @@ async fn supervise_ingest_leg(addr: String, ctrl: Arc<controller::Controller>, r
     }
 }
 
+/// How long a vertical destination's 9:16 canvas must be missing, within
+/// one OBS session, before the log says so.
+const VERTICAL_WAIT_GRACE: Duration = Duration::from_secs(3);
+
+/// Decides when to log that a vertical destination has no 9:16 canvas: once
+/// per OBS session, and only after `VERTICAL_WAIT_GRACE`, so a vertical
+/// sequence header landing a moment after the main one (or a settings
+/// change waking the supervisor early) never raises a false alarm.
+#[derive(Default)]
+struct VerticalWaitLog {
+    /// Destination id -> (publisher session, first seen missing, logged).
+    seen: std::collections::HashMap<String, (u64, Instant, bool)>,
+}
+
+impl VerticalWaitLog {
+    /// Note that `dest_id` has no canvas at `now` during `session`. True
+    /// exactly once per session: when the grace period has run out.
+    fn missing(&mut self, dest_id: &str, session: u64, now: Instant) -> bool {
+        match self.seen.get_mut(dest_id) {
+            Some((seen_session, since, logged)) if *seen_session == session => {
+                if *logged || now.duration_since(*since) < VERTICAL_WAIT_GRACE {
+                    return false;
+                }
+                *logged = true;
+                true
+            }
+            _ => {
+                self.seen.insert(dest_id.to_string(), (session, now, false));
+                false
+            }
+        }
+    }
+
+    /// Forget destinations that no longer exist.
+    fn retain(&mut self, keep: impl Fn(&str) -> bool) {
+        self.seen.retain(|id, _| keep(id));
+    }
+}
+
 /// One egress pump per destination. Owns a map { dest_id → (url, JoinHandle) }
 /// and diffs it against the active-destinations list whenever settings
 /// change. Adds/removes/restarts as needed.
@@ -592,6 +649,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         String,
         (String, tokio::task::JoinHandle<std::io::Result<()>>),
     > = std::collections::HashMap::new();
+    let mut vertical_wait = VerticalWaitLog::default();
 
     // Mirror webhook URL + ingest key into the controller on every settings
     // change (the ingest task enforces the key but has no settings handle).
@@ -675,6 +733,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             let headers = ctrl.ring.video_seq_headers.lock();
             crate::h264::detect_vertical_primary_track(&headers)
         };
+        vertical_wait.retain(|id| desired.iter().any(|(d, _)| d.id == id));
         for (dest, url) in &desired {
             // Keep each destination's vertical policy in sync with its
             // current settings and the detected canvas every tick - this
@@ -695,8 +754,8 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             // nothing to send. Don't open the upstream connection - it would
             // just sit idle, get dropped on the platform's inactivity
             // timeout, and churn reconnects. Tear down any pump and wait for
-            // the canvas; the card shows "Waiting for Dual Format". It spawns
-            // the moment detection resolves (self-heals within a tick).
+            // the canvas; the card says what's missing. It spawns the
+            // moment detection resolves (self-heals within a tick).
             if dest.wants_vertical() && vertical_track.is_none() {
                 if let Some((_u, handle)) = running.remove(&dest.id) {
                     let st = ctrl.destination_state(&dest.id);
@@ -706,7 +765,24 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                     let _ = tokio::time::timeout(Duration::from_millis(1500), handle).await;
                     abort.abort();
                     ctrl.log(format!(
-                        "[{}] vertical: no Dual Format canvas yet - holding off connecting",
+                        "[{}] vertical: the 9:16 canvas stopped - holding off connecting",
+                        dest.name
+                    ));
+                }
+                // Say so once per OBS session, and only once video is
+                // flowing: before the first sequence header there is no way
+                // to know whether a vertical canvas is coming. Without this
+                // the destination sits silent for the whole stream.
+                let video_known = !ctrl.ring.video_seq_headers.lock().is_empty();
+                if ingest_alive
+                    && video_known
+                    && vertical_wait.missing(&dest.id, ctrl.publisher_token(), Instant::now())
+                {
+                    ctrl.log(format!(
+                        "[{}] vertical: OBS isn't sending a 9:16 canvas, so nothing goes out. \
+                         In OBS: Settings → Stream → Enhanced Broadcasting on, then pick your \
+                         vertical canvas under Additional canvas. Or set this destination's \
+                         Stream format to Horizontal.",
                         dest.name
                     ));
                 }
@@ -1371,6 +1447,32 @@ const OVERLAY_CUSTOM_TEMPLATE: &str = include_str!("../overlays/custom-template.
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vertical_wait_logs_once_per_session_after_the_grace() {
+        let mut log = super::VerticalWaitLog::default();
+        let start = std::time::Instant::now();
+        let later = start + super::VERTICAL_WAIT_GRACE;
+        assert!(
+            !log.missing("tiktok", 1, start),
+            "first look only starts the clock"
+        );
+        assert!(!log.missing("tiktok", 1, start + std::time::Duration::from_millis(10)));
+        assert!(
+            log.missing("tiktok", 1, later),
+            "logs once the grace has passed"
+        );
+        assert!(
+            !log.missing("tiktok", 1, later),
+            "and only once per session"
+        );
+        assert!(
+            !log.missing("tiktok", 2, later),
+            "a new OBS session starts over"
+        );
+        log.retain(|id| id != "tiktok");
+        assert!(log.seen.is_empty(), "deleted destinations are forgotten");
+    }
+
     use super::anchor_dir;
     use std::path::{Path, PathBuf};
 

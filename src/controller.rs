@@ -204,9 +204,9 @@ pub struct DestinationState {
     /// The OneTrack TrackId of the vertical-canvas primary, discovered by
     /// `h264::detect_vertical_primary_track` from the per-track seq-header
     /// cache and refreshed whenever that cache changes. `0xFF` means
-    /// "not resolved yet" (Twitch Dual Format isn't active, or no portrait
-    /// track has been seen): a vertical destination then sends no video
-    /// and surfaces a "waiting for Dual Format" status, while every other
+    /// "not resolved yet" (OBS sends no 9:16 canvas, from its Additional
+    /// canvas or Twitch Dual Format): a vertical destination then sends no
+    /// video and the dashboard says what's missing, while every other
     /// destination is unaffected.
     pub vertical_primary_track: AtomicU8,
     /// Twitch only: when our /obs/multitrack-config proxy successfully
@@ -308,9 +308,9 @@ impl DestinationState {
     /// The video egress policy for this destination right now. Read by
     /// both the live send path and the seq-header replay so they always
     /// agree on which canvas to forward. Returns `None` when a vertical
-    /// destination has no resolved canvas yet (Twitch Dual Format isn't
-    /// active): the caller drops all video and the dest waits, leaving
-    /// every other destination untouched.
+    /// destination has no resolved canvas yet (no 9:16 canvas on the wire):
+    /// the caller drops all video and the dest waits, leaving every other
+    /// destination untouched.
     pub fn video_egress(&self) -> Option<crate::h264::VideoEgress> {
         use crate::h264::VideoEgress;
         if self.pass_through_multitrack_video.load(Ordering::Relaxed) {
@@ -2511,7 +2511,7 @@ async fn pace_and_send(
     match meta.kind {
         8 => {
             // A vertical destination whose 9:16 canvas isn't on the wire yet
-            // (Dual Format off) has `video_egress() == None`. Drop its AUDIO
+            // has `video_egress() == None`. Drop its AUDIO
             // too - otherwise we'd feed the platform an audio-only stream
             // with no video, which reads as a broken/black broadcast. It
             // should send nothing until the canvas appears.

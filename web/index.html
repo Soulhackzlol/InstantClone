@@ -934,9 +934,10 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .dcard-switch.on>span{transform:translateX(15px);background:#fff}
 .dcard-status{display:inline-flex;align-items:center;justify-content:center;gap:5px;font-size:11px;font-weight:500;
   padding:3px 8px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line);
-  color:var(--fg-3);flex:0 0 auto;min-width:84px;
+  color:var(--fg-3);flex:0 0 auto;min-width:84px;max-width:44%;
   transition:color .2s ease,background .2s ease,border-color .2s ease}
 .dcard-status .d-dot{width:5px;height:5px;border-radius:999px;background:var(--fg-4)}
+.dcard-status-l{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dcard-status.s-ready{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 30%,var(--line));
   background:color-mix(in oklch,var(--accent) 8%,var(--surface-3))}
 .dcard-status.s-ready .d-dot{background:var(--accent)}
@@ -944,15 +945,15 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   background:color-mix(in oklch,var(--live) 8%,var(--surface-3))}
 .dcard-status.s-live .d-dot{background:var(--live);box-shadow:0 0 6px var(--live);
   animation:hpulse 1.6s infinite;--sc:var(--live)}
-/* "Waiting for Dual Format": a vertical destination that holds a
-   connection but deliberately sends no video until OBS produces the 9:16
-   canvas. Amber + a slow pulse so it reads as "attention" not "error". */
+/* Vertical destination waiting on OBS's 9:16 canvas: it deliberately
+   sends no video until the canvas arrives. Amber + a slow pulse so it
+   reads as "attention" not "error". */
 .dcard-status.s-wait{color:var(--warn,#d6a23a);border-color:color-mix(in oklch,var(--warn,#d6a23a) 32%,var(--line));
   background:color-mix(in oklch,var(--warn,#d6a23a) 9%,var(--surface-3))}
 .dcard-status.s-wait .d-dot{background:var(--warn,#d6a23a);box-shadow:0 0 6px var(--warn,#d6a23a);
   animation:hpulse 2.4s infinite;--sc:var(--warn,#d6a23a)}
 /* Orientation indicator: small glyph in the head; hover/focus shows the
-   full format + Dual Format requirement via the native tooltip. */
+   full format and, for vertical, what it needs, via the native tooltip. */
 .dcard-format{display:inline-flex;align-items:center;justify-content:center;
   width:24px;height:24px;border-radius:7px;flex:0 0 auto;color:var(--fg-3);
   background:var(--surface-3);border:1px solid var(--line);cursor:help;
@@ -975,7 +976,10 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .dcard-rate-u{font-size:11px;color:var(--fg-3);font-family:'JetBrains Mono',monospace}
 .dcard-foot-meta{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;white-space:nowrap}
 /* Detected resolution + codec of the forwarded track (e.g. 1080x1920 · H.264). */
-.dcard-res{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;margin-top:3px;letter-spacing:.02em}
+.dcard-res{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;margin-top:3px;letter-spacing:.02em;min-height:1.5em}
+/* A waiting vertical destination spells out its fix here, visible on touch
+   and to keyboard users (the pill's tooltip alone isn't). */
+.dcard-res.is-hint{color:var(--warn,#d6a23a);font-family:inherit;font-size:11px;letter-spacing:0}
 .dcard-spark{display:block;width:calc(100% + 28px);height:40px;margin:6px -14px 0}
 /* Edit / remove: subtle glass buttons over the trace, revealed on hover. */
 /* Reveal via slide + visibility, NOT opacity. Animating opacity on a
@@ -1547,7 +1551,7 @@ details.sys-collapse>summary .ic-label{margin:0}
 .logs{background:#050608;border:1px solid var(--line);border-radius:10px;padding:10px 14px;
   font-family:'JetBrains Mono',monospace;font-size:12px;
   min-height:420px;max-height:420px;overflow-y:auto;color:var(--fg-2);
-  line-height:1.6;margin:0}
+  line-height:1.6;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .logs-empty{background:var(--bg-2);border:1px dashed var(--line);border-radius:10px;
   min-height:420px;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:8px;text-align:center;padding:24px;color:var(--fg-3)}
@@ -1850,7 +1854,7 @@ details.sys-collapse>summary .ic-label{margin:0}
     </span>
     <span class="ic-pill" id="hdr-codec" hidden><span class="mono" id="hdr-codec-v">-</span></span>
     <span class="ic-pill ok" id="hdr-ebroadcast" hidden title="Enhanced Broadcasting active - multi-track simulcast is being forwarded bit-faithfully to Twitch and flattened to the primary track for any non-Twitch destinations. Twitch's transcoder serves the full quality ladder to viewers.">⚡ Enhanced Broadcasting</span>
-    <span class="ic-pill ok" id="hdr-dualformat" hidden title="Twitch Dual Format is live - a vertical 9:16 canvas is on the wire. Any destination set to Vertical is forwarding it (YouTube Shorts, Kick mobile, etc.)."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" class="ic-pill-ic"><rect x="0.8" y="4.5" width="8.2" height="6.6" rx="1.2"/><rect x="10" y="2.4" width="4.4" height="11.2" rx="1.2"/></svg>Dual Format</span>
+    <span class="ic-pill ok" id="hdr-dualformat" hidden title="A vertical 9:16 canvas is on the wire. Any destination set to Vertical is forwarding it (TikTok, YouTube Shorts, Kick mobile, etc.)."><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" class="ic-pill-ic"><rect x="0.8" y="4.5" width="8.2" height="6.6" rx="1.2"/><rect x="10" y="2.4" width="4.4" height="11.2" rx="1.2"/></svg>Vertical</span>
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
     <span class="ic-pill warn" id="hdr-twitch-cap" hidden>⚠ <span id="hdr-twitch-cap-v">Twitch · Source-Only at 10 Mbps</span></span>
     <a id="hdr-update" class="ic-pill" href="#" hidden title="Open the updater" onclick="openUpdateInAbout();return false;" style="cursor:pointer">⬆ <span id="hdr-update-v">update available</span></a>
@@ -2198,17 +2202,20 @@ details.sys-collapse>summary .ic-label{margin:0}
       <label>Stream format</label>
       <select id="dest-form-format" class="ic-input">
         <option value="horizontal">Horizontal 16:9 - normal landscape</option>
-        <option value="vertical">Vertical 9:16 - YouTube Shorts, Kick mobile, TikTok</option>
+        <option value="vertical">Vertical 9:16 - TikTok, YouTube Shorts, Kick mobile</option>
       </select>
-      <div id="dest-form-format-gate" hidden class="muted" style="font-size:11.5px;margin-top:6px;line-height:1.45;color:var(--warn,#d6a23a)">
-        <b>Vertical needs a Twitch source.</b> It reuses the 9:16 canvas from Twitch <b>Dual Format</b> (Enhanced Broadcasting + Aitum Vertical - not a single OBS toggle), so add and enable a <b>Twitch</b> destination set up for it first - then this option unlocks. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">Set up Dual Format &rarr;</a>
-      </div>
-      <div class="muted" id="dest-form-format-help" style="font-size:11.5px;margin-top:5px;line-height:1.45">
-        <b style="color:var(--warn,#d6a23a)">Vertical reuses the 9:16 canvas that Twitch Dual Format produces.</b> InstantClone standardizes on that one canvas as its vertical source: set Twitch <b>Dual Format</b> up <b>once</b> (Enhanced Broadcasting + the Aitum Vertical canvas, per Twitch's guide - it is not a single OBS toggle) and every vertical destination here reuses it - no second scene, no extra encoder. With Dual Format off there is no vertical canvas, so this destination just waits and sends nothing. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to set up Twitch Dual Format &amp; Enhanced Broadcasting →</a><br>For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream → Select key → Encoder</b>.
+      <div class="muted" id="dest-form-format-help" hidden style="font-size:11.5px;margin-top:6px;line-height:1.5">
+        <b style="color:var(--fg-2)">Vertical needs a 9:16 canvas from OBS.</b> Set it up once:
+        <ol style="margin:5px 0 5px;padding-left:18px">
+          <li>OBS <b>Settings → Stream</b>: turn on <b>Enhanced Broadcasting</b>.</li>
+          <li>Under <b>Additional canvas</b>, pick your vertical canvas (for example <b>Aitum Vertical</b>).</li>
+        </ol>
+        Every vertical destination reuses it. With a Twitch destination enabled, Twitch decides instead, so the channel needs Dual Format on. Until a 9:16 canvas arrives, this destination waits and sends nothing.
+        <span id="dest-form-format-youtube" hidden><br>For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream → Select key → Encoder</b>.</span>
       </div>
     </div>
     <div id="dest-form-twitch-native-note" hidden class="muted" style="font-size:11.5px;margin:2px 0 6px;line-height:1.45">
-      Nothing to set here - a <b>normal Twitch stream just works</b>, and so does regular <b>Enhanced Broadcasting</b> (that's horizontal too); InstantClone simply forwards whatever OBS sends. Only Twitch's new <b>Dual Format</b> (a beta add-on to Enhanced Broadcasting) also sends a vertical 9:16 canvas - when it's on, InstantClone forwards both automatically, no toggle needed. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
+      Twitch needs no format setting: InstantClone forwards whatever OBS sends, Enhanced Broadcasting included. With Twitch <b>Dual Format</b> on, it forwards both canvases. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
     </div>
     <!-- Per-destination audio track routing (issue #44). Only bites when OBS
          sends a 2nd audio track (VOD unlocker script or Enhanced Broadcasting);
@@ -2222,7 +2229,10 @@ details.sys-collapse>summary .ic-label{margin:0}
         <option value="2">Track 2 only - clean / no-copyright audio</option>
       </select>
       <div class="muted" id="dest-form-audio-help" style="font-size:11.5px;margin-top:5px;line-height:1.45">
-        If OBS sends a second audio track (via the <b>VOD unlocker script</b> or Enhanced Broadcasting), choose what <i>this</i> destination gets. Classic use: send <b>Track 2</b> (music stripped) to YouTube to dodge copyright while Twitch keeps <b>Both</b>. Only Twitch consumes a second audio track, so other platforms always send a single one. If the track you pick isn't being sent, the live track is used instead, so a destination never goes silent. Most setups can leave this on <b>Auto</b>.
+        Most setups can leave this on <b>Auto</b>.
+        <details style="margin-top:3px"><summary style="cursor:pointer">When to change it</summary>
+          If OBS sends a second audio track (via the <b>VOD unlocker script</b> or Enhanced Broadcasting), choose what <i>this</i> destination gets. Classic use: send <b>Track 2</b> (music stripped) to YouTube to dodge copyright while Twitch keeps <b>Both</b>. Only Twitch consumes a second audio track, so other platforms always send a single one. If the track you pick isn't being sent, the live track is used instead, so a destination never goes silent.
+        </details>
       </div>
     </div>
     <div class="dfg-sep">Stream key &amp; status</div>
@@ -2365,7 +2375,7 @@ details.sys-collapse>summary .ic-label{margin:0}
   <div class="tab-head">
     <div>
       <div class="tab-title">OBS connection</div>
-      <div class="tab-sub">Point OBS at InstantClone, then use the destination's stream key from the Destinations tab.</div>
+      <div class="tab-sub">Point OBS at InstantClone. Your real platform stream keys stay in Destinations.</div>
     </div>
   </div>
   <div class="obs-grid">
@@ -2386,7 +2396,7 @@ details.sys-collapse>summary .ic-label{margin:0}
     </section>
     <section class="obs-section span-2 obs-manual-card">
       <div class="ic-label">Or set up a Custom RTMP server manually</div>
-      <div class="tab-sub">Paste these in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service: Custom</b>.</div>
+      <div class="tab-sub">Paste these in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service: Custom</b>. On OBS 32.2 and newer, Custom can't use Enhanced Broadcasting; use the registered service above for that.</div>
       <div class="obs-manual-row">
         <div class="obs-manual-field">
           <div class="ic-label">Server URL</div>
@@ -2410,7 +2420,7 @@ details.sys-collapse>summary .ic-label{margin:0}
       <div class="ic-label">Recommended OBS settings</div>
       <div class="obs-recs">
         <div class="rec"><div class="rec-k">Output &rarr; Video &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
-        <div class="rec"><div class="rec-k">Output &rarr; Encoder</div><div class="rec-v">x264 / NVENC</div><div class="rec-why">Anything modern - InstantClone passes through untouched.</div></div>
+        <div class="rec"><div class="rec-k">Output &rarr; Encoder</div><div class="rec-v">GPU (NVENC / AMF / QSV)</div><div class="rec-why">InstantClone passes it through untouched. With Enhanced Broadcasting it picks your GPU's encoder on its own.</div></div>
         <div class="rec"><div class="rec-k">Bitrate</div><div class="rec-v">&le; 80% of upload</div><div class="rec-why">Leave headroom or the "Upload bottleneck" pill lights up.</div></div>
         <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">CBR + 2 s keyframe</div><div class="rec-why">The rules that actually matter for Kick. <a href="#" onclick="event.preventDefault();toggleDisclosure('rec-kick-detail')">details</a></div></div>
       </div>
@@ -3934,8 +3944,6 @@ function renderStats(s){
 // - Destinations ---------------------------─
 function rebuildDests(){
   const c = $('dest-grid');
-  // remove old "+Add" if present so we can re-append at end
-  const oldAdd = c.querySelector('.dest-add'); if (oldAdd) oldAdd.remove();
   const seen = new Set();
   lastDests.forEach(d => {
     seen.add(d.id);
@@ -3946,13 +3954,19 @@ function rebuildDests(){
   Object.keys(destCardCache).forEach(id => {
     if (!seen.has(id)){ destCardCache[id].el.remove(); delete destCardCache[id]; }
   });
-  // (re)append add tile
-  const add = document.createElement('button');
-  add.className = 'dest-add';
-  add.innerHTML = `<span class="dest-add-icon">+</span><span>Add destination</span>`;
-  add.onclick = () => openDestForm(null);
-  c.appendChild(add);
-  $('dest-sub').textContent = `${lastDests.length} configured · ${lastDests.filter(d => d.alive).length} forwarding live`;
+  // The "+ Add" tile is built once and kept last. Moving it only when a
+  // new card landed after it keeps keyboard focus and hover intact.
+  let add = c.querySelector('.dest-add');
+  if (!add){
+    add = document.createElement('button');
+    add.className = 'dest-add';
+    add.innerHTML = `<span class="dest-add-icon">+</span><span>Add destination</span>`;
+    add.onclick = () => openDestForm(null);
+  }
+  if (c.lastElementChild !== add) c.appendChild(add);
+  const waiting = lastDests.filter(d => isVerticalDest(d) && !verticalDiag(d).ready).length;
+  $('dest-sub').textContent = `${lastDests.length} configured · ${lastDests.filter(d => d.alive).length} forwarding live`
+    + (waiting ? ` · ${waiting} waiting for a 9:16 canvas` : '');
 }
 
 // Outline glyph for the card's format indicator. 'horizontal' = a wide
@@ -3965,38 +3979,43 @@ function formatIconSvg(kind){
   return open + '<rect x="1.5" y="4" width="13" height="8" rx="1.6"/></svg>'; // horizontal
 }
 
+// Diagnose why a non-Twitch vertical destination is (not) ready from the
+// live /state signals. `label` is the pill (a state, like the other
+// pills), `hint` is the visible one-line fix on the card, `title` the
+// full explanation. The 9:16 canvas is OBS's Enhanced Broadcasting
+// Additional canvas; with an enabled Twitch destination, Twitch's config
+// decides, so it only comes when Dual Format is on for that channel.
+//   - OBS not streaming, or a canvas is live  -> nothing to diagnose
+//   - EB live but no 9:16 canvas              -> "No 9:16 canvas"
+//   - OBS streaming without EB                -> "EB off"
+// An enabled non-Twitch destination set to Vertical (Twitch always takes
+// both canvases natively).
+function isVerticalDest(d){
+  return d.enabled && d.platform !== 'twitch' && d.stream_format === 'vertical';
+}
+function verticalDiag(d){
+  const s = lastState || {};
+  // d.vertical_ready updates once per supervisor tick; vertical_present is
+  // live, so trust it too and never flash a warning while one is on the wire.
+  if (d.vertical_ready !== false || s.vertical_present) return {ready:true};
+  if (!s.ingest_alive) return {ready:true};
+  // Matches the backend: only an enabled Twitch destination with a key
+  // makes InstantClone proxy Twitch's config.
+  const viaTwitch = Array.isArray(lastDests) && lastDests.some(x => x.platform === 'twitch' && x.enabled && x.stream_key_set);
+  if (s.multitrack_video && viaTwitch)
+    return {ready:false, label:'No 9:16 canvas', hint:'Twitch sends no vertical track (Dual Format is off)',
+      title:'With a Twitch destination, Twitch\'s config decides the tracks, and it has no vertical one for this channel. Turn on Twitch Dual Format for the channel, or disable the Twitch destination so InstantClone builds the config and uses OBS\'s Additional canvas.'};
+  if (s.multitrack_video)
+    return {ready:false, label:'No 9:16 canvas', hint:'In OBS, pick an Additional canvas',
+      title:'OBS is streaming with Enhanced Broadcasting but sends no 9:16 canvas. In OBS: Settings \u2192 Stream \u2192 Enhanced Broadcasting \u2192 Additional canvas, pick your vertical canvas (for example Aitum Vertical).'};
+  return {ready:false, label:'EB off', hint:'Turn on Enhanced Broadcasting in OBS',
+    title:'OBS is streaming without Enhanced Broadcasting, so there is no 9:16 canvas. In OBS: Settings \u2192 Stream, turn on Enhanced Broadcasting and pick your vertical canvas under Additional canvas.'};
+}
 // Set the card's format icon + hover tooltip from the destination's
 // *actual* live state, not an assumed config. Twitch reads horizontal by
-// default (the normal case) and only flips to "both" when a vertical canvas
-// is really on the wire (Dual Format live). Non-Twitch shows horizontal, or
-// vertical with a distinct amber state while it waits on Dual Format.
-// Is there an enabled Twitch destination that can produce the Dual Format
-// canvas? Vertical is impossible without one - this is the config-time gate.
-function hasEnabledTwitchSource(){
-  return Array.isArray(lastDests) && lastDests.some(x => x.platform === 'twitch' && x.enabled);
-}
-// Diagnose why a non-Twitch vertical destination is (not) ready. Combines the
-// config precondition with the two live /state signals so the message is
-// precise instead of a vague "waiting". Dual Format is NOT a single OBS
-// toggle - it's Twitch Enhanced Broadcasting + the Aitum Vertical canvas,
-// set up per Twitch's guide - so the copy points there, never "turn it on".
-//   - no Twitch source            -> "Needs Twitch EB"
-//   - EB live but no 9:16 canvas  -> "No vertical canvas"
-//   - EB not live yet             -> "Waiting for Dual Format"
-function verticalDiag(d){
-  // d.vertical_ready is the backend truth: the canvas is resolved for this
-  // destination and video is really flowing.
-  if (d.vertical_ready !== false) return {ready:true};
-  const s = lastState || {};
-  if (!hasEnabledTwitchSource())
-    return {ready:false, label:'Needs Twitch EB',
-      title:'Vertical reuses the 9:16 canvas from Twitch Dual Format (Enhanced Broadcasting + Aitum Vertical). Add and enable a Twitch destination set up for it - see Twitch\'s Dual Format guide.'};
-  if (s.multitrack_video)
-    return {ready:false, label:'No vertical canvas',
-      title:'Enhanced Broadcasting is live, but no 9:16 canvas is on the wire. Dual Format needs the vertical canvas too (Enhanced Broadcasting + Aitum Vertical) - follow Twitch\'s Dual Format guide.'};
-  return {ready:false, label:'Waiting for Dual Format',
-    title:'No Dual Format canvas yet. Start streaming with Twitch Dual Format set up (Enhanced Broadcasting + Aitum Vertical, per Twitch\'s guide) to feed this destination.'};
-}
+// default and only flips to "both" when a vertical canvas is really on the
+// wire (Dual Format live). Non-Twitch shows horizontal, or vertical with an
+// amber state while it waits for OBS's 9:16 canvas.
 function updateFormatIcon(r, d){
   if (!r.format) return;
   let kind, title, cls = '';
@@ -4016,7 +4035,7 @@ function updateFormatIcon(r, d){
       title = vd.title;
     } else {
       cls = 'fmt-vertical';
-      title = 'Vertical (9:16): reusing Twitch Dual Format\'s vertical canvas (YouTube Shorts / Kick mobile / TikTok).';
+      title = 'Vertical (9:16): forwarding the vertical canvas OBS sends with Enhanced Broadcasting (TikTok / YouTube Shorts / Kick mobile).';
     }
   } else {
     kind = 'horizontal';
@@ -4035,17 +4054,17 @@ function buildDestCard(d){
     <div class="dcard-head">
       <span class="dcard-icon"></span>
       <div class="dcard-id"><div class="dcard-name"></div><div class="dcard-host mono"></div></div>
-      <span class="dcard-format" tabindex="0"></span>
+      <span class="dcard-format" tabindex="0" role="img"></span>
       <button class="dcard-switch dcard-toggle" role="switch" title="Enable / disable"><span></span></button>
       <div class="dcard-status"><span class="d-dot"></span><span class="dcard-status-l"></span></div>
     </div>
     <div class="dcard-screen">
       <div class="dcard-body">
         <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">kbps</span></div>
-        <span class="dcard-foot-meta"><span class="dcard-frames">0</span>f · <span class="dcard-cuts">0</span>c · <span class="dcard-rec">0</span>r</span>
+        <span class="dcard-foot-meta" title="Frames sent · delay cuts · reconnects"><span class="dcard-frames">0</span>f · <span class="dcard-cuts">0</span>c · <span class="dcard-rec">0</span>r</span>
         <a class="dcard-player" target="_blank" rel="noopener" hidden title="Open the sink's built-in live player - watch exactly what a platform would receive, delay included">▶ Watch output</a>
       </div>
-      <div class="dcard-res mono" hidden></div>
+      <div class="dcard-res mono"></div>
       <svg class="dcard-spark" viewBox="0 0 400 40" preserveAspectRatio="none">
         <path class="dcard-spark-fill" style="fill:color-mix(in oklch,var(--dc,var(--accent)) 16%,transparent)" d=""/>
         <path class="dcard-spark-line" style="fill:none;stroke:var(--dc,var(--accent));stroke-width:2;stroke-linecap:round;stroke-linejoin:round" d=""/>
@@ -4104,14 +4123,10 @@ function updateDestCard(r, d){
   // sent the first IDR yet) - UI used to call that "Streaming" which is
   // misleading. Split into three states: Streaming (green pulse), Connected
   // (accent, just sitting on a healthy TCP connection), Idle (gray).
-  // A vertical destination whose canvas isn't resolved yet (Twitch Dual
-  // Format off) is a fourth state: it holds a connection but deliberately
-  // sends no video, so call it out as "Waiting for Dual Format" rather
-  // than the misleading "Connected".
-  // A vertical dest that can't produce its canvas yet gets a precise,
-  // actionable pill (why it's waiting) instead of a generic "Connected".
-  const vdiag = (d.enabled && d.platform !== 'twitch' && d.stream_format === 'vertical')
-    ? verticalDiag(d) : null;
+  // A vertical destination with no 9:16 canvas on the wire while OBS is
+  // live is a fourth state: it deliberately sends no video, so the pill
+  // names what's missing and the card shows the fix.
+  const vdiag = isVerticalDest(d) ? verticalDiag(d) : null;
   const verticalWaiting = !!vdiag && !vdiag.ready;
   const isStreaming = d.alive && (d.bitrate_kbps || 0) > 0 && !verticalWaiting;
   const stat = !d.enabled ? 'off' : verticalWaiting ? 'wait' : isStreaming ? 'live' : d.alive ? 'ready' : 'off';
@@ -4135,8 +4150,8 @@ function updateDestCard(r, d){
     const parts = [];
     if (d.video_res) parts.push(d.video_res.replace('x','×'));
     if (d.video_codec) parts.push(d.video_codec);
-    const txt = parts.join(' · ');
-    r.res.hidden = !txt;
+    const txt = verticalWaiting ? vdiag.hint : parts.join(' · ');
+    r.res.classList.toggle('is-hint', verticalWaiting);
     if (r.res.textContent !== txt) r.res.textContent = txt;
   }
   // Smooth, 0-anchored, per-card stable sparkline (same renderer as stats).
@@ -4172,14 +4187,13 @@ function openDestForm(d){
   $('dest-form-id').value = d ? d.id : '';
   $('dest-form-name').value = d ? d.name : '';
   fillDestPlatforms();
-  fillTwitchIngests();
+  fillTwitchIngests((d && d.twitch_ingest) || '');
   $('dest-form-platform').value = d ? d.platform : 'twitch';
   $('dest-form-platform').dispatchEvent(new Event('change'));
   $('dest-form-custom').value = d ? d.custom_egress_url : '';
-  $('dest-form-twitch-ingest').value = (d && d.twitch_ingest) || '';
   $('dest-form-youtube-ingest').value = (d && d.youtube_ingest) || '';
   $('dest-form-format').value = (d && d.stream_format === 'vertical') ? 'vertical' : 'horizontal';
-  refreshFormatOptionAvailability();
+  syncFormatHelp();
   $('dest-form-key').value = '';
   $('dest-form-key').placeholder = d && d.stream_key_set ? 'leave blank to keep current' : 'paste stream key';
   document.getElementById('dest-form-key-hint').textContent = d && d.stream_key_set ? '(currently set)' : '';
@@ -4330,21 +4344,15 @@ async function installVodScript(btnId, msgId){
   toast('VOD unlocker downloaded','ok');
 }
 
-// Vertical can only exist when a Twitch Enhanced Broadcasting source is on to
-// produce the 9:16 canvas. Gate the choice: disable it when there's no enabled
-// Twitch destination (but never force-flip a dest that's already vertical - its
-// source may reappear), and show the reason inline.
-function refreshFormatOptionAvailability(){
-  const wrap = $('dest-form-format-wrap');
-  if (!wrap) return;
-  const sel = $('dest-form-format');
-  const vopt = sel ? sel.querySelector('option[value="vertical"]') : null;
-  const ok = hasEnabledTwitchSource();
-  const alreadyVertical = sel && sel.value === 'vertical';
-  if (vopt) vopt.disabled = !ok && !alreadyVertical;
-  const gate = $('dest-form-format-gate');
-  if (gate) gate.hidden = ok || wrap.hidden;
+// The OBS setup steps only matter once Vertical is picked; the YouTube
+// key note only for YouTube.
+function syncFormatHelp(){
+  const help = $('dest-form-format-help');
+  if (!help) return;
+  help.hidden = $('dest-form-format').value !== 'vertical';
+  $('dest-form-format-youtube').hidden = $('dest-form-platform').value !== 'youtube';
 }
+$('dest-form-format').addEventListener('change', syncFormatHelp);
 
 function fillDestPlatforms(){
   const sel = $('dest-form-platform'); sel.innerHTML = '';
@@ -4385,19 +4393,23 @@ function fillDestPlatforms(){
       $('dest-form-key').hidden = isSink;
       renderKeyHelp(sel.value, 'dest-form-key-help');
       updateVodVisibility();
-      refreshFormatOptionAvailability();
+      syncFormatHelp();
     });
     const vodToggle = $('dest-form-vod-audio');
     if (vodToggle) vodToggle.addEventListener('change', updateVodVisibility);
   }
 }
-async function fillTwitchIngests(){
+// Fill the Twitch ingest picker, then select `value`. The first call per
+// page load awaits a fetch, so the value must be applied here, after the
+// options exist; set earlier it would silently fall back to Auto.
+async function fillTwitchIngests(value){
   const sel = $('dest-form-twitch-ingest');
   if (!twitchIngests){
     try { twitchIngests = await (await fetch('/twitch_ingests')).json(); } catch(_){ twitchIngests = []; }
   }
   sel.innerHTML = '';
   twitchIngests.forEach(p => { const o = document.createElement('option'); o.value = p.slug; o.textContent = p.label; sel.appendChild(o); });
+  sel.value = value || '';
 }
 
 async function saveDestForm(){
@@ -4425,10 +4437,14 @@ async function saveDestForm(){
   });
   if (id) body.set('id', id);
   if (key) body.set('stream_key', key);
-  const r = await fetch('/destinations', {method:'POST', body});
-  const j = await r.json();
+  let j;
+  try { j = await (await fetch('/destinations', {method:'POST', body})).json(); }
+  catch(_){ j = {ok:false, error:'The app did not answer - is InstantClone still running?'}; }
   if (j.ok){ toast('Saved','ok'); cancelDestForm(); loadDestinations(); loadConfig(); return true; }
-  $('dest-form-msg').innerHTML = '<span class="err">'+j.error+'</span>';
+  const msg = document.createElement('span');
+  msg.className = 'err';
+  msg.textContent = j.error || 'Could not save this destination.';
+  $('dest-form-msg').replaceChildren(msg);
   return false;
 }
 async function toggleDest(d){
@@ -4634,7 +4650,7 @@ async function loadConfig(){
       const osLabel = {windows:'Windows', linux:'Linux', macos:'macOS'}[c.os] || (c.os || '');
       if (osLabel){ $('sys-os-chip').textContent = osLabel; $('sys-os-chip').hidden = false; }
     }
-    // The version row shows v0.1.13 from /update-check; seed it from /config so
+    // The version row shows the running version from /update-check; seed it from /config so
     // it's correct immediately even before the (async) update check returns.
     if ($('sys-about-version') && c.version && $('sys-about-version').textContent === 'v?.?.?'){
       $('sys-about-version').textContent = 'v' + c.version;
@@ -4704,8 +4720,10 @@ function renderTwitchCapPill(s){
   const pill = document.getElementById('hdr-twitch-cap');
   const v = document.getElementById('hdr-twitch-cap-v');
   if (!pill || !v) return;
+  // /state's destination entries carry no platform, so join on id.
+  const platformOf = id => ((lastDests || []).find(x => x.id === id) || {}).platform;
   const hasTwitchDest = (s.destinations || []).some(
-    d => d.platform === 'twitch' && d.alive && d.enabled
+    d => platformOf(d.id) === 'twitch' && d.alive && d.enabled
   );
   const kbps = (s.stats && s.stats.bitrate_kbps) || 0;
   // When Enhanced Broadcasting is active the multi-track stream
@@ -6331,7 +6349,7 @@ async function sysLaunchVodEb(){
         youtube_ingest:d.youtube_ingest||'',
         vod_audio:'on',
         vod_audio_inject_eb: d.vod_audio_inject_eb ? 'on' : 'off',
-        stream_format:d.stream_format||'horizontal', enabled:'on',
+        stream_format:d.stream_format||'horizontal', audio_track:d.audio_track||'auto', enabled:'on',
       });
       const rr = await (await fetch('/destinations', {method:'POST', body})).json();
       steps.push({name:'VOD audio mode', ok:!!rr.ok,
@@ -7436,10 +7454,18 @@ async function pollLogs(){
     }
     if (empty) empty.hidden = true;
     el.hidden = false;
-    el.textContent = lines.join('\n');
-    el.scrollTop = el.scrollHeight;
+    const text = lines.join('\n');
+    if (el.textContent !== text) el.textContent = text;
+    // Follow the tail unless you've scrolled up to read (the scroll listener
+    // below tracks that). A hidden pane can't scroll, so it catches up on
+    // the first poll after the Logs tab opens.
+    if (el._follow !== false) el.scrollTop = el.scrollHeight;
   } catch(_){}
 }
+$('logs').addEventListener('scroll', e => {
+  const el = e.currentTarget;
+  if (el.clientHeight) el._follow = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+});
 async function clearLogs(){
   await fetch('/logs/clear',{method:'POST'});
   $('logs').textContent = '';
@@ -7521,7 +7547,7 @@ const TOUR = [
       <details class="ic-disclose">
         <summary>Vertical (9:16) for Shorts / mobile</summary>
         <div class="ic-disclose-body">
-          <p>Set any non-Twitch destination to <b>Vertical</b> and it reuses Twitch's Dual Format 9:16 canvas - one setup in OBS feeds every vertical destination. The card reads <b>Waiting for Dual Format</b> until Enhanced Broadcasting is on. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">Set up Dual Format →</a></p>
+          <p>Set any non-Twitch destination to <b>Vertical</b> and it forwards the 9:16 canvas OBS sends with Enhanced Broadcasting. Set it up once in OBS: <b>Settings → Stream</b>, turn on <b>Enhanced Broadcasting</b>, and pick your vertical canvas (for example Aitum Vertical) under <b>Additional canvas</b>. It works with or without Twitch. While OBS streams without it, the card says what's missing.</p>
         </div>
       </details>
       <div class="tour-tip"><strong>Streaming vs Connected:</strong> Streaming = bytes flowing. Connected = TCP up, but OBS hasn't sent a frame yet.</div>
