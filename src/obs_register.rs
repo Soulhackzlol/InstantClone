@@ -24,7 +24,7 @@
 //!   * macOS: not handled yet (no candidates).
 
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 /// Candidate OBS config directories for this platform, in priority order.
@@ -990,6 +990,61 @@ fn first_version_triple(s: &str) -> Option<(u32, u32, u32)> {
 /// a note", not a hard block: this only gates the experimental
 /// VOD-unlocker script.
 pub fn obs_version() -> Option<(u32, u32, u32)> {
+    newest_obs_log_head()?
+        .lines()
+        .take(30)
+        .filter(|l| l.contains("OBS"))
+        .find_map(first_version_triple)
+}
+
+/// Video encoder ids OBS registered in its most recent session, from the
+/// "Available Encoders" block it logs at startup. None when there is no
+/// readable log. Enhanced Broadcasting configs must only name encoders in
+/// this list: OBS refuses to start the stream on one it doesn't have.
+pub fn available_video_encoders() -> Option<Vec<String>> {
+    let encoders = parse_available_video_encoders(&newest_obs_log_head()?);
+    (!encoders.is_empty()).then_some(encoders)
+}
+
+/// Parse the block OBS logs at startup:
+///
+/// ```text
+/// 15:28:19.316: Available Encoders:
+/// 15:28:19.316:   Video Encoders:
+/// 15:28:19.316: \t- obs_x264 (x264)
+/// 15:28:19.316:   Audio Encoders:
+/// ```
+fn parse_available_video_encoders(log: &str) -> Vec<String> {
+    let mut lines = log
+        .lines()
+        .skip_while(|l| !l.contains("Available Encoders:"))
+        .skip_while(|l| !l.contains("Video Encoders:"))
+        .skip(1);
+    let mut encoders = Vec::new();
+    for line in lines.by_ref() {
+        // Drop the "HH:MM:SS.mmm: " timestamp, then expect "- <id> (<name>)".
+        let entry = line.split_once(": ").map_or(line, |(_, rest)| rest).trim();
+        let Some(item) = entry.strip_prefix("- ") else {
+            break;
+        };
+        if let Some(id) = item.split_whitespace().next() {
+            encoders.push(id.to_string());
+        }
+    }
+    encoders
+}
+
+/// Enough of an OBS log to hold its startup section: the version line and
+/// the "Available Encoders" block come right after plugin loading. A log
+/// grows for the whole OBS session (tens of MB on a long one), and this is
+/// read on every stream start, so the rest is never loaded.
+const OBS_LOG_HEAD_BYTES: u64 = 512 * 1024;
+
+/// The start of the most recently written OBS log, which is the running
+/// session's while OBS is open. Read lossily: a plugin that writes one
+/// non-UTF-8 byte must not hide the whole log (and with it the encoder
+/// list and the OBS version).
+fn newest_obs_log_head() -> Option<String> {
     let logs_dir = obs_config_dirs()
         .into_iter()
         .map(|d| d.join("logs"))
@@ -1006,12 +1061,13 @@ pub fn obs_version() -> Option<(u32, u32, u32)> {
             }
         }
     }
-    let contents = fs::read_to_string(newest?.1).ok()?;
-    contents
-        .lines()
-        .take(30)
-        .filter(|l| l.contains("OBS"))
-        .find_map(first_version_triple)
+    let mut head = Vec::new();
+    fs::File::open(newest?.1)
+        .ok()?
+        .take(OBS_LOG_HEAD_BYTES)
+        .read_to_end(&mut head)
+        .ok()?;
+    Some(String::from_utf8_lossy(&head).into_owned())
 }
 
 /// Whether an `obs64.exe` process is currently running. Used by the setup
@@ -1374,6 +1430,22 @@ fn strip_service_json_key(file: &str, web_port: u16) -> String {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32 as TestUniq, Ordering as TestOrd};
+
+    #[test]
+    fn available_video_encoders_are_read_from_the_startup_block() {
+        let log = "15:28:19.316: Available Encoders:\n\
+                   15:28:19.316:   Video Encoders:\n\
+                   15:28:19.316: \t- ffmpeg_svt_av1 (SVT-AV1)\n\
+                   15:28:19.316: \t- h264_texture_amf (AMD HW H.264 (AVC))\n\
+                   15:28:19.316: \t- obs_x264 (x264)\n\
+                   15:28:19.316:   Audio Encoders:\n\
+                   15:28:19.316: \t- ffmpeg_aac (FFmpeg AAC)\n";
+        assert_eq!(
+            parse_available_video_encoders(log),
+            vec!["ffmpeg_svt_av1", "h264_texture_amf", "obs_x264"]
+        );
+        assert!(parse_available_video_encoders("no block here").is_empty());
+    }
 
     // OBS resolves the server URL with the address family picked in
     // Settings -> Advanced -> IP Family. An IPv4 literal is not resolvable

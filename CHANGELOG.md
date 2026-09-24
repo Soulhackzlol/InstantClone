@@ -6,6 +6,74 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.1.15] - Vertical without Twitch, and Enhanced Broadcasting on your GPU
+
+### Vertical (9:16) no longer needs a Twitch destination
+
+Sending a vertical feed to TikTok, YouTube Shorts or Kick mobile used to
+require a Twitch destination, because the only 9:16 canvas InstantClone knew
+about was Twitch's Dual Format one. Streamers who only go to TikTok (through
+Restream, for example) could not use it at all, and the Vertical option was
+greyed out for them (thanks **fashion** on Discord for the report and the
+logs that tracked it down).
+
+- **OBS's Additional canvas feeds vertical destinations.** With no Twitch
+  destination, InstantClone now builds OBS's Enhanced Broadcasting config
+  itself from what OBS reports, and asks for your Additional canvas (for
+  example Aitum Vertical) when you picked one. Set it once in OBS:
+  Settings -> Stream -> Enhanced Broadcasting, then Additional canvas.
+- **Vertical is always selectable.** The lock that disabled it without a
+  Twitch destination is gone.
+- **A waiting destination says why.** Its card shows **EB off** or
+  **No 9:16 canvas** with the fix written out underneath, the Destinations
+  header counts how many are waiting, and the log says it once per stream
+  instead of the destination sitting silent. With a Twitch destination
+  whose channel has no Dual Format, the log names the vertical
+  destinations that will get nothing.
+
+### Enhanced Broadcasting without Twitch uses your GPU
+
+Without a Twitch destination, OBS used to receive a fixed config that asked
+for three x264 encodes at once (1080p60, 720p60 and 480p30). On a gaming PC
+that overloads the CPU, and only the 1080p one was ever forwarded.
+
+- **Your GPU's encoder, only if OBS has it.** InstantClone reads which GPU
+  OBS runs on and uses its H.264 encoder (NVENC, AMF or QSV), but only when
+  OBS's own log lists that encoder as available, since OBS refuses to start
+  a stream on one it doesn't have. Otherwise it uses x264 and the log says
+  why. OBS 30.2's older NVENC and QSV encoders are recognised too.
+- **One track per canvas, at your size.** The main canvas at the Output
+  resolution you set in OBS, plus the Additional canvas when there is one.
+- **Sensible bitrate.** OBS's Maximum Streaming Bandwidth is respected when
+  set. Otherwise the main track gets 6000 kbps, and a vertical track 4000.
+
+### Fixes
+
+- **The old "VOD + EB" desktop shortcut no longer edits OBS 32.2+.** On
+  those versions it can't turn on Enhanced Broadcasting for Custom RTMP, so
+  it now only opens OBS and the log points to the InstantClone service and
+  the VOD unlocker script.
+- **Editing a Twitch destination could reset its pinned ingest to Auto.**
+  The first time the editor opened after loading the dashboard, the region
+  list arrived after the saved value was applied, so saving wrote Auto.
+- **The Twitch mobile-risk pill never appeared.** It looked for a platform
+  field the live state doesn't carry.
+- **The VOD + EB setup button reset a destination's audio track** to Auto.
+- **The header's Vertical pill stayed on after OBS stopped.**
+- **Destination save errors are shown as plain text,** and a save that
+  gets no answer from the app says so instead of doing nothing.
+
+### Polish
+
+- The log wraps long lines instead of cutting them off, and stops jumping
+  to the bottom while you are reading older lines.
+- Destination cards in a row line up, the frame, cut and reconnect counters
+  have a tooltip, and the "+ Add" tile keeps keyboard focus.
+- The destination editor shows the vertical setup as two steps, only when
+  Vertical is picked, and folds the audio track details away.
+- The OBS tab recommends a GPU encoder and notes that Custom RTMP can't use
+  Enhanced Broadcasting on OBS 32.2 and newer.
+
 ## [0.1.14] - Hotkeys and MIDI for the delay, a dashboard password, and Linux builds
 
 ### Drive the delay without alt-tabbing
@@ -1703,7 +1771,8 @@ See `0.1.0` below for the full feature list.
   port pre-flight, and process / RSS sampler have Windows-specific paths.
 - No automated release pipeline yet. Build from source per the README.
 
-[Unreleased]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.14...HEAD
+[Unreleased]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.15...HEAD
+[0.1.15]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/Soulhackzlol/InstantClone/compare/v0.1.11...v0.1.12

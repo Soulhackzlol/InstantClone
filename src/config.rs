@@ -589,15 +589,15 @@ pub struct Destination {
     /// non-Twitch platforms (Twitch gets the native dual-canvas
     /// passthrough). One of:
     ///   "horizontal" (default) - the primary 16:9 canvas (TrackId 0)
-    ///   "vertical"             - the 9:16 canvas Twitch Dual Format /
-    ///                            Enhanced Broadcasting produces, reused
-    ///                            for YouTube Shorts / Kick mobile / etc.
+    ///   "vertical"             - the 9:16 canvas OBS sends with Enhanced
+    ///                            Broadcasting (its Additional canvas, or
+    ///                            Twitch Dual Format), for TikTok /
+    ///                            YouTube Shorts / Kick mobile.
     ///
-    /// Vertical only has data on the wire while Twitch Dual Format (EB)
-    /// is active in OBS. With EB off there is no vertical canvas, so a
-    /// vertical destination waits (sends no video) until one appears -
-    /// see `h264::detect_vertical_primary_track`. Unknown / empty values
-    /// fall back to "horizontal".
+    /// Vertical only has data on the wire while OBS sends that canvas.
+    /// Without it a vertical destination waits (sends no video) until one
+    /// appears - see `h264::detect_vertical_primary_track`. Unknown / empty
+    /// values fall back to "horizontal".
     pub stream_format: String,
     /// Which OBS audio track(s) this destination receives. Only meaningful
     /// once OBS sends a second audio track (the VOD-unlocker script, or

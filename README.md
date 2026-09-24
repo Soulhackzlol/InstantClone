@@ -149,7 +149,7 @@ Simulcast one OBS feed to Twitch, YouTube, Kick, and custom RTMP at once, a free
 <td valign="top">
 
 **📱 Vertical (9:16) for free**
-Turn on Twitch **Dual Format** (Enhanced Broadcasting) and set any non-Twitch destination's format to **Vertical**. InstantClone reuses the 9:16 canvas OBS already makes for Twitch and sends it to YouTube Shorts, Kick mobile, or TikTok, with no extra encoding.
+In OBS, turn on **Enhanced Broadcasting** and pick your vertical canvas (for example Aitum Vertical) under **Additional canvas**, then set any non-Twitch destination's format to **Vertical**. InstantClone sends that 9:16 canvas to TikTok, YouTube Shorts, or Kick mobile, with or without a Twitch destination. Streaming to Twitch too? Twitch **Dual Format** provides the same canvas.
 
 </td>
 <td valign="top">
@@ -306,7 +306,7 @@ One-button arming. Add `/activate` and `/stop` to two more buttons for full dela
 
 - **Full OBS-parity RTMP handshake.** `connect` carries the same codec-capability bag librtmp ships (`audioCodecs=3191`, `videoCodecs=252`, `videoFunction=1`), the Enhanced-RTMP `fourCcList` (AVC / HEVC / AV1 / VP9 / Opus / AC-3 / FLAC), `Set Chunk Size` before connect, `FCUnpublish → deleteStream` on shutdown, and RTMP Acknowledgement (BYTES_READ_REPORT) at the peer-declared window/10 threshold on both ingest and egress.
 - **Enhanced Broadcasting passthrough to Twitch.** When OBS hits multi-track "Auto" we proxy Twitch's `GetClientConfiguration`, route egress to the session-allocated IVS endpoint, and forward every per-track SPS/PPS bit-faithfully so the transcoded ladder lights up regardless of account tier. Non-Twitch destinations get the horizontal primary track by default; ladder tags with `TrackId != 0` are dropped to avoid the multi-frame-per-PTS storm that crashes YouTube's decoder. EB cuts land on the primary track's IDR (not whichever ladder rung's keyframe wins the `partition_point`) so the destination decoder always has its anchor.
-- **Vertical (9:16) canvas selection.** The vertical canvas is identified by decoding each track's SPS for orientation (portrait, largest area) rather than trusting Twitch's private session JSON, and it self-heals as Dual Format toggles on/off.
+- **Vertical (9:16) canvas selection.** The vertical canvas is identified by decoding each track's SPS for orientation (portrait, largest area) rather than trusting Twitch's private session JSON, and it self-heals as the vertical canvas comes and goes.
 - **Twitch VOD audio, unlocked on the InstantClone service.** OBS hardcodes its VOD Track to the service literally named "Twitch" (`ServiceSupportsVodTrack == {"Twitch"}`), so it's locked on the InstantClone service. A tiny bundled OBS script (`optional-vod-unlocker.lua`, downloaded from the dashboard) attaches the same second audio encoder OBS's own VOD Track would, without the gate. Its wire-format reader matches OBS's `flv_packet_audio_ex` byte-for-byte (`AudioPacketType` in byte 0, `TrackId` at byte 6). OBS 32.2+ needs the script; older OBS can still use the built-in VOD Track checkbox (we write `EnableCustomServerVodTrack` to OBS 32's `user.ini`, falling back to `global.ini`).
 - **Per-destination audio routing.** Non-selected tracks are dropped and the chosen one is flattened to a standard single-track tag (AAC rewritten to legacy `0xAF`), mirroring the video-side `flatten_multitrack_video`. If the chosen track isn't being sent, it falls back to the live track rather than going silent.
 
@@ -336,7 +336,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 **Sync disk I/O on the ring-append hot path, by choice.** The buffered write lands in the OS page cache in microseconds and the kernel flushes in the background, so the page cache is already the async buffer; the index and the bytes advance under one lock so a reader never sees a tag whose bytes aren't on disk yet.
 
-**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), and the self-update download + checksum-verify + exe swap. **392 tests, all green.**
+**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the Enhanced Broadcasting config built from OBS's canvases and GPU encoders, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), and the self-update download + checksum-verify + exe swap. **408 tests, all green.**
 
 </details>
 
@@ -346,7 +346,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 392 tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
+**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 408 tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's rough, honestly**
 
