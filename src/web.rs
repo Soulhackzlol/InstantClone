@@ -370,6 +370,22 @@ Connection: close
         return Ok(());
     }
 
+    // Crash-protection preview: a still of the reconnect screen from the
+    // same renderer the stream uses. Binary, so it can't go through
+    // `route`. Admin-gated by auth_gate (classify_access's default).
+    if method == "GET" && bare_path == "/crash-protection/preview" {
+        let query = path.split_once('?').map_or("", |(_, q)| q);
+        let image = crash_protection_preview(query, &settings.borrow().crash_protection);
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/bmp\r\nContent-Length: {}\r\n\
+             Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+            image.len()
+        );
+        sock.write_all(head.as_bytes()).await?;
+        sock.write_all(&image).await?;
+        return Ok(());
+    }
+
     let (status, ctype, payload) = route(
         method, path, body, &ctrl, &settings, &cfg_path, &sysstat, is_admin,
     )
@@ -391,6 +407,37 @@ Connection: close
     sock.write_all(resp.as_bytes()).await?;
     sock.write_all(payload.as_bytes()).await?;
     Ok(())
+}
+
+/// Render the preview for the saved crash-protection settings with any
+/// unsaved `crash_protection.*` edits from the query applied on top, so
+/// the dashboard can preview before Save. `orientation=vertical` flips it
+/// to 9:16; `phase` (0..1) picks the moment in the 2 s loop.
+fn crash_protection_preview(
+    query: &str,
+    saved: &crate::crash_protection::CrashProtection,
+) -> Vec<u8> {
+    const LONG_SIDE: usize = 480;
+    const SHORT_SIDE: usize = 270;
+    const DEFAULT_PHASE: f32 = 0.25;
+    let form = config::parse_form(query);
+    let mut settings = saved.clone();
+    for (key, value) in &form {
+        if let Some(field) = key.strip_prefix(crate::crash_protection::KEY_PREFIX) {
+            settings.set(field, value);
+        }
+    }
+    let (width, height) = if form.get("orientation").map(String::as_str) == Some("vertical") {
+        (SHORT_SIDE, LONG_SIDE)
+    } else {
+        (LONG_SIDE, SHORT_SIDE)
+    };
+    let phase = form
+        .get("phase")
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| (0.0..1.0).contains(value))
+        .unwrap_or(DEFAULT_PHASE);
+    crate::slate::preview_bmp(&settings, width, height, phase)
 }
 
 /// Result of the auth gate: either it already wrote a response (login page,
@@ -2241,6 +2288,7 @@ fn is_settable_key(k: &str) -> bool {
             | "open_dashboard_on_launch"
     ) || k.starts_with("hotkey.")
         || k.starts_with("midi.")
+        || k.starts_with(crate::crash_protection::KEY_PREFIX)
         || k == "midi_device"
 }
 
@@ -3858,6 +3906,12 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         k if k.starts_with("midi.") => {
             s.midi.set(&k["midi.".len()..], value);
         }
+        // crash_protection.<field>=<value>. `set` clamps and drops anything
+        // malformed, same contract as the config loader.
+        k if k.starts_with(crate::crash_protection::KEY_PREFIX) => {
+            s.crash_protection
+                .set(&k[crate::crash_protection::KEY_PREFIX.len()..], value);
+        }
         // Empty means "every device", which is also what an unknown name
         // amounts to - the listener simply finds nothing to open and the
         // dashboard says so.
@@ -5070,6 +5124,39 @@ mod tests {
         assert!(s.auto_activate_when_ready);
         apply_field_str(&mut s, "auto_activate_when_ready", "off");
         assert!(!s.auto_activate_when_ready);
+    }
+
+    #[test]
+    fn crash_protection_preview_applies_unsaved_edits() {
+        let saved = crate::crash_protection::CrashProtection::default();
+        let landscape = crash_protection_preview("", &saved);
+        let arcade = crash_protection_preview("crash_protection.theme=arcade", &saved);
+        let vertical = crash_protection_preview("orientation=vertical", &saved);
+        assert_eq!(&landscape[..2], b"BM");
+        assert_ne!(landscape, arcade, "query edits reach the render");
+        assert_eq!(
+            i32::from_le_bytes(vertical[18..22].try_into().unwrap()),
+            270
+        );
+        assert!(
+            !is_settable_key("orientation"),
+            "preview-only params never persist"
+        );
+    }
+
+    #[test]
+    fn apply_field_str_persists_crash_protection_fields() {
+        let mut s = crate::config::Settings::defaults();
+        assert!(is_settable_key("crash_protection.enabled"));
+        apply_field_str(&mut s, "crash_protection.enabled", "on");
+        apply_field_str(&mut s, "crash_protection.theme", "arcade");
+        apply_field_str(&mut s, "crash_protection.hold_secs", "45");
+        assert!(s.crash_protection.enabled);
+        assert_eq!(
+            s.crash_protection.theme,
+            crate::crash_protection::SlateTheme::Arcade
+        );
+        assert_eq!(s.crash_protection.hold_secs, 45);
     }
 
     #[test]

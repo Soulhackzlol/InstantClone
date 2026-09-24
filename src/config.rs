@@ -5,6 +5,7 @@
 //! editable by hand and trivially parseable without a serde dependency.
 //! For wire transport (web UI), `to_json` emits a small JSON object.
 
+use crate::crash_protection::{self, CrashProtection};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
@@ -139,6 +140,9 @@ pub struct Settings {
     /// naming one matters when a second device (a keyboard, a DAW control
     /// surface) would otherwise fire delay actions of its own.
     pub midi_device: String,
+    /// Keep destinations live on a reconnect screen when OBS crashes.
+    /// Off by default. See `crate::crash_protection`.
+    pub crash_protection: CrashProtection,
 }
 
 #[derive(Debug, Clone)]
@@ -778,6 +782,7 @@ impl Settings {
             // Likewise no MIDI bindings until the user maps a controller.
             midi: MidiBindings::default(),
             midi_device: String::new(),
+            crash_protection: CrashProtection::default(),
         }
     }
 
@@ -1046,6 +1051,8 @@ impl Settings {
                 writeln!(f, "midi.{}={}", action, sig)?;
             }
         }
+        // Crash protection: only fields that differ from the default.
+        self.crash_protection.write_lines(&mut f)?;
         for (i, p) in self.profiles.iter().enumerate() {
             writeln!(f, "profile.{}.name={}", i, one_line(&p.name))?;
             writeln!(f, "profile.{}.delay_ms={}", i, p.delay_ms)?;
@@ -1191,6 +1198,10 @@ impl Settings {
             // malformed, so a hand-edited config can't load a bad signature.
             k if k.starts_with("midi.") => {
                 self.midi.set(&k["midi.".len()..], value);
+            }
+            k if k.starts_with(crash_protection::KEY_PREFIX) => {
+                self.crash_protection
+                    .set(&k[crash_protection::KEY_PREFIX.len()..], value);
             }
             k if k.starts_with("profile.") => {
                 let rest = &k[8..];
@@ -1459,7 +1470,7 @@ impl Settings {
             ""
         };
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"crash_protection":{cp},"destinations":{dests}}}"#,
             c = self.configured,
             sww = start_with_windows,
             ik = json_str(ik_shown),
@@ -1488,6 +1499,7 @@ impl Settings {
             hotkeys = hotkeys,
             midi = midi,
             midid = json_str(&self.midi_device),
+            cp = self.crash_protection.to_json(),
             dests = dests,
         )
     }
@@ -1808,7 +1820,7 @@ fn one_line(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn json_str(s: &str) -> String {
+pub(crate) fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {

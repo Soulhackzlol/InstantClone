@@ -1477,6 +1477,19 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 
 /* - System ------------------ */
 .sys-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px}
+/* Crash protection card. The preview <img> is drawn server-side by the
+   same renderer that encodes the stream, so it is what viewers will see. */
+.cp-grid{display:grid;grid-template-columns:120px minmax(0,1fr);gap:12px 16px;align-items:center;margin-top:16px}
+.cp-label{font-weight:600;font-size:13px}
+.cp-preview{display:block;width:100%;max-width:480px;aspect-ratio:16/9;border-radius:8px;border:1px solid var(--line);background:var(--surface)}
+.cp-themes{display:inline-flex;align-self:flex-start;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.cp-themes button{appearance:none;border:0;background:var(--bg-2);color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:600;padding:7px 14px;cursor:pointer}
+.cp-themes button[aria-pressed="true"]{background:var(--surface-3);color:var(--accent)}
+.cp-swatches{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.cp-swatch{appearance:none;width:24px;height:24px;border-radius:50%;padding:0;cursor:pointer;border:2px solid var(--bg-2);box-shadow:0 0 0 1px var(--line-2)}
+.cp-swatch[aria-pressed="true"]{box-shadow:0 0 0 2px var(--fg)}
+.cp-inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+@media (max-width:560px){.cp-grid{grid-template-columns:1fr}}
 /* Collapsible System section (e.g. legacy OBS quick launch). Native
    <details>; the summary carries the section label + a rotating caret. */
 details.sys-collapse>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;-webkit-user-select:none;user-select:none}
@@ -2685,6 +2698,61 @@ details.sys-collapse>summary .ic-label{margin:0}
             <span class="muted" style="font-size:12px">s</span>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- Crash protection: keep destinations live on a reconnect screen when
+         OBS crashes. Off by default; the rest of the card appears once it is
+         turned on. Saved with the tab's Save settings button. -->
+    <section class="sys-section" id="s-cp-section">
+      <div class="ic-label">Crash protection</div>
+      <div style="margin-top:14px;display:flex;align-items:flex-start;gap:14px">
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
+          <input type="checkbox" id="s-cp-enabled" style="width:16px;height:16px;cursor:pointer;margin-top:2px" onchange="cpSyncVisibility()">
+          <div>
+            <div style="font-weight:600">Keep the stream up if OBS crashes</div>
+            <div class="tab-sub" style="margin-top:2px">Your destinations stay live and show a reconnect screen until OBS is back. Stopping the stream in OBS still ends it right away.</div>
+          </div>
+        </label>
+      </div>
+      <div class="cp-grid" id="s-cp-details" hidden>
+        <span class="cp-label">Hold for</span>
+        <span class="cp-inline">
+          <input id="s-cp-hold" class="ic-input mono" type="number" min="30" max="300" style="width:80px;text-align:right" aria-label="Hold time in seconds">
+          <span class="muted" style="font-size:12px">s, then the stream ends cleanly (30 to 300)</span>
+        </span>
+        <span class="cp-label" style="align-self:start;padding-top:7px">Screen</span>
+        <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+          <div class="cp-themes" role="group" aria-label="Reconnect screen theme">
+            <button type="button" data-cp-theme="whisper" aria-pressed="true">Whisper</button>
+            <button type="button" data-cp-theme="arcade" aria-pressed="false">Arcade</button>
+          </div>
+          <img class="cp-preview" id="s-cp-preview" alt="Preview of the reconnect screen">
+        </div>
+        <span class="cp-label">Accent</span>
+        <div class="cp-swatches" id="s-cp-swatches" role="group" aria-label="Accent colour">
+          <span class="st-color"><input type="color" id="s-cp-accent" aria-label="Custom accent colour"></span>
+        </div>
+        <span class="cp-label">Background</span>
+        <span class="cp-inline">
+          <span class="st-color"><input type="color" id="s-cp-bg" aria-label="Background colour"></span>
+          <button type="button" class="ic-btn" id="s-cp-bg-reset" style="padding:6px 10px;font-size:12px">Theme default</button>
+        </span>
+        <label class="cp-label" for="s-cp-headline">Headline</label>
+        <input id="s-cp-headline" class="ic-input" type="text" maxlength="28" style="max-width:480px">
+        <label class="cp-label" for="s-cp-subline">Subline</label>
+        <input id="s-cp-subline" class="ic-input" type="text" maxlength="48" style="max-width:480px">
+        <span></span>
+        <details>
+          <summary class="tab-sub" style="cursor:pointer">Advanced</summary>
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;margin-top:10px">
+            <input type="checkbox" id="s-cp-every" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
+            <div>
+              <div style="font-weight:600">Protect every disconnect</div>
+              <div class="tab-sub" style="margin-top:2px">For encoders that fail cleanly, like an NVENC error. Stopping in OBS then shows the screen too, until OBS reconnects or the hold ends.</div>
+            </div>
+          </label>
+        </details>
       </div>
     </section>
 
@@ -4599,6 +4667,7 @@ async function loadConfig(){
     $('s-auto-arm').checked = !!c.auto_arm_on_connect;
     $('s-auto-act').checked = !!c.auto_activate_when_ready;
     $('s-auto-arm-secs').value = Math.round((c.auto_arm_delay_ms || 15000) / 1000);
+    cpApplyConfig(c.crash_protection);
     // Global hotkeys: Windows-only, so the whole section stays hidden
     // elsewhere. A pending recording is cancelled before a re-render so
     // stale listeners never outlive the DOM they were bound to.
@@ -5541,6 +5610,7 @@ async function saveSettings(){
     auto_activate_when_ready:$('s-auto-act').checked?'true':'false',
     auto_arm_delay_ms:String(Math.max(1, Math.min(600, parseInt($('s-auto-arm-secs').value,10)||15)) * 1000),
   });
+  Object.entries(cpFields()).forEach(([k, v]) => body.append(k, v));
   _savingSettings = true;
   if (btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
   try {
@@ -5561,6 +5631,84 @@ async function saveSettings(){
     if (btn){ btn.disabled = false; btn.textContent = 'Save settings'; }
   }
 }
+// ── Crash protection card ────────────────────────────────────────────────
+// The preview comes from /crash-protection/preview, drawn by the Rust
+// renderer that also encodes the stream. Unsaved edits ride along in the
+// query, so the preview follows every change before Save.
+const CP_ACCENTS = [['Cyan','#5ac8fa'],['Violet','#9d7bff'],['Lime','#7ee06b'],['Coral','#ff6b6b'],['Amber','#ffb73a']];
+const CP_THEME_BACKGROUNDS = {whisper:'#0e0f12', arcade:'#130f22'};
+let cpState = {theme:'whisper', accent:'#5ac8fa', background:''};
+let cpPreviewTimer = null;
+
+function cpInit(){
+  const custom = $('s-cp-accent').parentElement;
+  CP_ACCENTS.forEach(([name, hex]) => {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'cp-swatch';
+    swatch.style.background = hex;
+    swatch.dataset.hex = hex;
+    swatch.setAttribute('aria-label', name);
+    swatch.onclick = () => cpSetAccent(hex);
+    $('s-cp-swatches').insertBefore(swatch, custom);
+  });
+  $('s-cp-accent').oninput = e => cpSetAccent(e.target.value);
+  document.querySelectorAll('[data-cp-theme]').forEach(button => {
+    button.onclick = () => { cpState.theme = button.dataset.cpTheme; cpRender(); };
+  });
+  $('s-cp-bg').oninput = e => { cpState.background = e.target.value; cpRender(); };
+  $('s-cp-bg-reset').onclick = () => { cpState.background = ''; cpRender(); };
+  $('s-cp-headline').oninput = cpSchedulePreview;
+  $('s-cp-subline').oninput = cpSchedulePreview;
+}
+function cpSetAccent(hex){ cpState.accent = hex.toLowerCase(); cpRender(); }
+function cpSyncVisibility(){
+  $('s-cp-details').hidden = !$('s-cp-enabled').checked;
+  cpSchedulePreview();
+}
+// Reflect cpState in the controls, then refresh the preview.
+function cpRender(){
+  document.querySelectorAll('[data-cp-theme]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cpTheme === cpState.theme)));
+  document.querySelectorAll('#s-cp-swatches .cp-swatch').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.hex === cpState.accent)));
+  $('s-cp-accent').value = cpState.accent;
+  $('s-cp-bg').value = cpState.background || CP_THEME_BACKGROUNDS[cpState.theme];
+  $('s-cp-bg-reset').hidden = !cpState.background;
+  cpSchedulePreview();
+}
+// Form fields for POST /config and the preview query. The server clamps
+// and validates every one, so these are passed through as typed.
+function cpFields(){
+  return {
+    'crash_protection.enabled': $('s-cp-enabled').checked ? 'true' : 'false',
+    'crash_protection.hold_secs': String(Math.max(30, Math.min(300, parseInt($('s-cp-hold').value, 10) || 120))),
+    'crash_protection.theme': cpState.theme,
+    'crash_protection.accent': cpState.accent,
+    'crash_protection.background': cpState.background,
+    'crash_protection.headline': $('s-cp-headline').value,
+    'crash_protection.subline': $('s-cp-subline').value,
+    'crash_protection.every_disconnect': $('s-cp-every').checked ? 'true' : 'false',
+  };
+}
+function cpSchedulePreview(){
+  clearTimeout(cpPreviewTimer);
+  cpPreviewTimer = setTimeout(() => {
+    if ($('s-cp-details').hidden) return;
+    $('s-cp-preview').src = '/crash-protection/preview?' + new URLSearchParams(cpFields());
+  }, 200);
+}
+function cpApplyConfig(cp){
+  if (!cp) return;
+  $('s-cp-enabled').checked = !!cp.enabled;
+  $('s-cp-hold').value = cp.hold_secs || 120;
+  $('s-cp-headline').value = cp.headline || '';
+  $('s-cp-subline').value = cp.subline || '';
+  $('s-cp-every').checked = !!cp.every_disconnect;
+  cpState = {theme: cp.theme || 'whisper', accent: cp.accent || '#5ac8fa', background: cp.background || ''};
+  cpSyncVisibility();
+  cpRender();
+}
+cpInit();
+
 async function testWebhook(){
   const r = await(await fetch('/test-webhook',{method:'POST'})).json();
   if (r.ok) toast('Webhook test fired - check Discord','ok');

@@ -268,8 +268,17 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
             info.insert("objectEncoding".to_string(), Amf0::Number(0.0));
             send_command_result(writer, txn_id, Amf0::Object(props), Amf0::Object(info)).await?;
         }
-        "releaseStream" | "FCPublish" | "FCUnpublish" | "deleteStream" => {
+        "releaseStream" | "FCPublish" => {
             // No-op acks. Most clients don't care about the response body.
+            send_simple_result(writer, txn_id).await?;
+        }
+        "FCUnpublish" | "deleteStream" => {
+            // OBS sends both from RTMP_Close on every deliberate stop, and
+            // never on a crash. Remember it so the disconnect that follows
+            // counts as a stop (crash protection stays out of the way).
+            if guard.active {
+                ctrl.note_unpublish();
+            }
             send_simple_result(writer, txn_id).await?;
         }
         "createStream" => {

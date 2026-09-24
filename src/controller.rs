@@ -444,6 +444,18 @@ impl DestinationState {
     }
 }
 
+/// How the last publisher session ended, as far as RTMP can tell. Crash
+/// protection keeps destinations up only for `Dropped`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IngestEnd {
+    /// The publisher said goodbye (FCUnpublish / deleteStream) before
+    /// closing: Stop Streaming, closing OBS, or an OBS encoder error.
+    Stopped,
+    /// The connection went away without that goodbye: OBS crashed, was
+    /// killed, or the network between it and us dropped.
+    Dropped,
+}
+
 /// What the main loop should do after a graceful shutdown: exit for good, or
 /// relaunch a fresh process in place.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -494,6 +506,11 @@ pub struct Controller {
     ingest_alive: AtomicBool,
     buffer_building: AtomicBool,
     publisher_token: AtomicU64,
+    /// Set when the live publisher sends FCUnpublish or deleteStream, read
+    /// (and cleared) when its connection closes. See `IngestEnd`.
+    unpublish_received: AtomicBool,
+    /// Whether the most recent session ended with that goodbye.
+    last_end_was_stop: AtomicBool,
 
     // --- Per-destination state, keyed by Destination.id -----------------
     // RwLock not Mutex: every `on_tag` (~150-300/s per active stream)
@@ -676,6 +693,8 @@ impl Controller {
             ingest_alive: AtomicBool::new(false),
             buffer_building: AtomicBool::new(false),
             publisher_token: AtomicU64::new(0),
+            unpublish_received: AtomicBool::new(false),
+            last_end_was_stop: AtomicBool::new(false),
             destinations: crate::sync::RwLock::new(HashMap::new()),
             ingest_disconnects: AtomicU32::new(0),
             bitrate_kbps: AtomicU32::new(0),
@@ -1545,6 +1564,9 @@ impl Controller {
         // fire hours later (or never) - clear it with the session.
         self.safe_cut_input_ts.store(0, Ordering::Relaxed);
 
+        // A goodbye from an earlier connection must not mark this session's
+        // end as a clean stop.
+        self.unpublish_received.store(false, Ordering::Relaxed);
         // Bump token so any prior egress reader knows it's stale.
         let token = self.publisher_token.fetch_add(1, Ordering::SeqCst) + 1;
         self.ingest_alive.store(true, Ordering::Relaxed);
@@ -1731,13 +1753,36 @@ impl Controller {
                 // being spawned for the same destination - clearing it here
                 // would reintroduce the multi-session bug on a fast restart.
             }
-            self.log("ingest: publisher disconnected");
+            let stopped = self.unpublish_received.swap(false, Ordering::Relaxed);
+            self.last_end_was_stop.store(stopped, Ordering::Relaxed);
+            if stopped {
+                self.log("ingest: publisher stopped the stream");
+            } else {
+                self.log(
+                    "ingest: publisher dropped without stopping (crash, kill or network loss)",
+                );
+            }
             self.fire_webhook("⚠️", "OBS publisher disconnected.");
         }
     }
 
     /// Update the Discord webhook URL - call when settings change. Empty
     /// string disables webhook delivery entirely.
+    /// The live publisher sent FCUnpublish or deleteStream: it is ending
+    /// the stream on purpose, so its disconnect is a stop, not a crash.
+    pub fn note_unpublish(&self) {
+        self.unpublish_received.store(true, Ordering::Relaxed);
+    }
+
+    /// How the most recent publisher session ended.
+    pub fn last_ingest_end(&self) -> IngestEnd {
+        if self.last_end_was_stop.load(Ordering::Relaxed) {
+            IngestEnd::Stopped
+        } else {
+            IngestEnd::Dropped
+        }
+    }
+
     pub fn update_webhook(&self, url: String) {
         *self.webhook_url.lock() = url;
     }
@@ -4447,6 +4492,28 @@ mod tests {
     /// (possibly non-EB) stream onto an IVS endpoint with no
     /// allocated session - exactly the silent 60-s-drop failure mode
     /// we were chasing before the override field landed.
+    /// OBS sends FCUnpublish + deleteStream from `RTMP_Close` on every
+    /// deliberate stop; a crash closes the socket without them. The two
+    /// endings must be told apart, and a goodbye must not leak into the
+    /// next session.
+    #[tokio::test]
+    async fn ingest_end_tells_a_stop_from_a_drop() {
+        let h = harness(0);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.note_unpublish();
+        h.ctrl.mark_ingest_dead();
+        assert_eq!(h.ctrl.last_ingest_end(), IngestEnd::Stopped);
+
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.mark_ingest_dead();
+        assert_eq!(h.ctrl.last_ingest_end(), IngestEnd::Dropped);
+
+        h.ctrl.note_unpublish(); // stray goodbye between sessions
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.mark_ingest_dead();
+        assert_eq!(h.ctrl.last_ingest_end(), IngestEnd::Dropped);
+    }
+
     #[test]
     fn mark_ingest_dead_clears_all_eb_overrides() {
         let h = harness(0);
