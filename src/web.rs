@@ -412,13 +412,12 @@ Connection: close
 /// Render the preview for the saved crash-protection settings with any
 /// unsaved `crash_protection.*` edits from the query applied on top, so
 /// the dashboard can preview before Save. `orientation=vertical` flips it
-/// to 9:16; `phase` (0..1) picks the moment in the 2 s loop.
+/// to 9:16; `phase` (0..1) picks the moment in the 2 s loop; `size=thumb`
+/// draws the small version the theme picker shows.
 fn crash_protection_preview(
     query: &str,
     saved: &crate::crash_protection::CrashProtection,
 ) -> Vec<u8> {
-    const LONG_SIDE: usize = 480;
-    const SHORT_SIDE: usize = 270;
     const DEFAULT_PHASE: f32 = 0.25;
     let form = config::parse_form(query);
     let mut settings = saved.clone();
@@ -427,10 +426,14 @@ fn crash_protection_preview(
             settings.set(field, value);
         }
     }
+    let (long_side, short_side) = match form.get("size").map(String::as_str) {
+        Some("thumb") => (192, 108),
+        _ => (480, 270),
+    };
     let (width, height) = if form.get("orientation").map(String::as_str) == Some("vertical") {
-        (SHORT_SIDE, LONG_SIDE)
+        (short_side, long_side)
     } else {
-        (LONG_SIDE, SHORT_SIDE)
+        (long_side, short_side)
     };
     let phase = form
         .get("phase")
@@ -5415,10 +5418,14 @@ mod tests {
             i32::from_le_bytes(vertical[18..22].try_into().unwrap()),
             270
         );
-        assert!(
-            !is_settable_key("orientation"),
-            "preview-only params never persist"
-        );
+        let thumb = crash_protection_preview("size=thumb", &saved);
+        assert_eq!(i32::from_le_bytes(thumb[18..22].try_into().unwrap()), 192);
+        for preview_only in ["orientation", "size", "phase"] {
+            assert!(
+                !is_settable_key(preview_only),
+                "preview-only params never persist"
+            );
+        }
     }
 
     #[test]

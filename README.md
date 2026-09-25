@@ -205,7 +205,7 @@ Map the same actions to a pad or knob, learned by pressing the control rather th
 <td valign="top" colspan="2">
 
 **🛡 Crash protection**
-If OBS crashes or freezes, every destination stays live on a reconnect screen (Whisper or Arcade, your colours and text) with silent audio, for up to 5 minutes. OBS coming back resumes on the same connection at its first keyframe, Enhanced Broadcasting included: each track gets its own screen and OBS is handed the same Twitch session. HEVC and AV1 tracks hold their last frame. End it early from the dashboard, the OBS dock, the tray, a hotkey or a MIDI pad.
+If OBS crashes or freezes, every destination stays live on a reconnect screen (five styles, your colours and text) with silent audio, for up to 5 minutes. OBS coming back resumes on the same connection at its first keyframe, Enhanced Broadcasting included: each track gets its own screen and OBS is handed the same Twitch session. HEVC and AV1 tracks hold their last frame. End it early from the dashboard, the OBS dock, the tray, a hotkey or a MIDI pad.
 
 </td>
 </tr>

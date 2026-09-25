@@ -205,7 +205,7 @@ Mapea las mismas acciones a un pad o un knob, aprendidos pulsando el control en 
 <td valign="top" colspan="2">
 
 **🛡 Protección contra crasheos**
-Si OBS se cuelga o se congela, todos los destinos siguen en directo con una pantalla de reconexión (Whisper o Arcade, con tus colores y tu texto) y audio en silencio, hasta 5 minutos. Cuando OBS vuelve, retoma en la misma conexión desde su primer keyframe, Enhanced Broadcasting incluido: cada pista recibe su propia pantalla y OBS recibe la misma sesión de Twitch. Las pistas HEVC y AV1 mantienen su último fotograma. Termínala antes desde el panel, el dock de OBS, la bandeja, un atajo o un pad MIDI.
+Si OBS se cuelga o se congela, todos los destinos siguen en directo con una pantalla de reconexión (cinco estilos, con tus colores y tu texto) y audio en silencio, hasta 5 minutos. Cuando OBS vuelve, retoma en la misma conexión desde su primer keyframe, Enhanced Broadcasting incluido: cada pista recibe su propia pantalla y OBS recibe la misma sesión de Twitch. Las pistas HEVC y AV1 mantienen su último fotograma. Termínala antes desde el panel, el dock de OBS, la bandeja, un atajo o un pad MIDI.
 
 </td>
 </tr>

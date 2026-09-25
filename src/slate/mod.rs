@@ -208,7 +208,7 @@ mod tests {
             height: 1080,
             fps: 30,
         };
-        for theme in [SlateTheme::Whisper, SlateTheme::Arcade] {
+        for theme in SlateTheme::ALL {
             let slate = build_loop(&settings(theme), shape).unwrap();
             let loop_bytes: usize =
                 slate.keyframes[0].len() + slate.deltas.iter().map(Vec::len).sum::<usize>();
@@ -225,7 +225,7 @@ mod tests {
             eprintln!("ffmpeg not found - skipping the decode round trip");
             return;
         }
-        for theme in [SlateTheme::Whisper, SlateTheme::Arcade] {
+        for theme in SlateTheme::ALL {
             let shape = StreamShape {
                 width: 320,
                 height: 180,

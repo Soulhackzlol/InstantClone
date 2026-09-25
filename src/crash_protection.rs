@@ -27,22 +27,48 @@ pub enum SlateTheme {
     Whisper,
     /// 5x7 pixel font snapped to the 16 px macroblock grid.
     Arcade,
+    /// Centred text under a dot sending out radar rings.
+    Beacon,
+    /// Centred text under a ring of eight dots, one lit and chasing round.
+    Orbit,
+    /// Broadcast lower third: text on the left with an accent bar and a
+    /// sliding progress stripe.
+    Studio,
 }
 
 impl SlateTheme {
+    /// Every theme, in the order the dashboard offers them.
+    pub const ALL: [SlateTheme; 5] = [
+        SlateTheme::Whisper,
+        SlateTheme::Beacon,
+        SlateTheme::Orbit,
+        SlateTheme::Studio,
+        SlateTheme::Arcade,
+    ];
+
     pub fn id(self) -> &'static str {
         match self {
             SlateTheme::Whisper => "whisper",
             SlateTheme::Arcade => "arcade",
+            SlateTheme::Beacon => "beacon",
+            SlateTheme::Orbit => "orbit",
+            SlateTheme::Studio => "studio",
+        }
+    }
+
+    /// Name shown in the dashboard.
+    pub fn name(self) -> &'static str {
+        match self {
+            SlateTheme::Whisper => "Whisper",
+            SlateTheme::Arcade => "Arcade",
+            SlateTheme::Beacon => "Beacon",
+            SlateTheme::Orbit => "Orbit",
+            SlateTheme::Studio => "Studio",
         }
     }
 
     fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "whisper" => Some(SlateTheme::Whisper),
-            "arcade" => Some(SlateTheme::Arcade),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|theme| theme.id() == id)
     }
 
     /// Background used when the streamer hasn't picked one.
@@ -50,6 +76,9 @@ impl SlateTheme {
         match self {
             SlateTheme::Whisper => Rgb::new(0x0e, 0x0f, 0x12),
             SlateTheme::Arcade => Rgb::new(0x13, 0x0f, 0x22),
+            SlateTheme::Beacon => Rgb::new(0x0b, 0x12, 0x16),
+            SlateTheme::Orbit => Rgb::new(0x10, 0x10, 0x16),
+            SlateTheme::Studio => Rgb::new(0x0d, 0x10, 0x18),
         }
     }
 }
@@ -70,19 +99,6 @@ pub struct CrashProtection {
     /// OBS closes cleanly on encoder errors, so this is the only way to
     /// protect against them; the streamer ends the hold with "End now".
     pub every_disconnect: bool,
-}
-
-impl CrashProtection {
-    /// Whether `other` draws the same reconnect screen. The hold time and
-    /// what triggers a hold don't change the picture, so editing them
-    /// never re-encodes a loop.
-    pub fn same_screen(&self, other: &CrashProtection) -> bool {
-        self.theme == other.theme
-            && self.accent == other.accent
-            && self.resolved_background() == other.resolved_background()
-            && self.headline == other.headline
-            && self.subline == other.subline
-    }
 }
 
 impl Default for CrashProtection {
@@ -135,6 +151,17 @@ impl CrashProtection {
         }
     }
 
+    /// Whether `other` draws the same reconnect screen. The hold time and
+    /// what triggers a hold don't change the picture, so editing them
+    /// never re-encodes a loop.
+    pub fn same_screen(&self, other: &CrashProtection) -> bool {
+        self.theme == other.theme
+            && self.accent == other.accent
+            && self.resolved_background() == other.resolved_background()
+            && self.headline == other.headline
+            && self.subline == other.subline
+    }
+
     /// Background the screen actually draws with.
     pub fn resolved_background(&self) -> Rgb {
         self.background
@@ -154,10 +181,23 @@ impl CrashProtection {
         Ok(())
     }
 
-    /// JSON object for `GET /config`. Nothing here is secret.
+    /// JSON object for `GET /config`. Nothing here is secret. `themes`
+    /// lists what the dashboard can offer, with each theme's default
+    /// background, so the page never keeps its own copy.
     pub fn to_json(&self) -> String {
+        let themes: Vec<String> = SlateTheme::ALL
+            .iter()
+            .map(|theme| {
+                format!(
+                    r#"{{"id":{},"name":{},"background":{}}}"#,
+                    crate::config::json_str(theme.id()),
+                    crate::config::json_str(theme.name()),
+                    crate::config::json_str(&theme.default_background().to_hex()),
+                )
+            })
+            .collect();
         format!(
-            r#"{{"enabled":{},"hold_secs":{},"theme":{},"accent":{},"background":{},"headline":{},"subline":{},"every_disconnect":{}}}"#,
+            r#"{{"enabled":{},"hold_secs":{},"theme":{},"accent":{},"background":{},"headline":{},"subline":{},"every_disconnect":{},"defaults":{{"headline":{},"subline":{}}},"themes":[{}]}}"#,
             self.enabled,
             self.hold_secs,
             crate::config::json_str(self.theme.id()),
@@ -166,6 +206,9 @@ impl CrashProtection {
             crate::config::json_str(&self.headline),
             crate::config::json_str(&self.subline),
             self.every_disconnect,
+            crate::config::json_str(HEADLINE_DEFAULT),
+            crate::config::json_str(SUBLINE_DEFAULT),
+            themes.join(","),
         )
     }
 
@@ -292,6 +335,7 @@ mod tests {
             "headline",
             "subline",
             "every_disconnect",
+            "themes",
         ] {
             assert!(
                 json.contains(&format!("\"{field}\":")),
@@ -299,5 +343,19 @@ mod tests {
             );
         }
         assert!(json.contains(r##""accent":"#5ac8fa""##));
+    }
+
+    #[test]
+    fn every_theme_round_trips_by_id() {
+        for theme in SlateTheme::ALL {
+            let mut settings = CrashProtection::default();
+            settings.set("theme", theme.id());
+            assert_eq!(settings.theme, theme);
+            let json = settings.to_json();
+            assert!(
+                json.contains(&format!(r#""id":"{}""#, theme.id())),
+                "{json}"
+            );
+        }
     }
 }

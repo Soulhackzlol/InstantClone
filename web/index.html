@@ -1491,19 +1491,60 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 
 /* - System ------------------ */
 .sys-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px}
-/* Crash protection card. The preview <img> is drawn server-side by the
-   same renderer that encodes the stream, so it is what viewers will see. */
-.crash-grid{display:grid;grid-template-columns:120px minmax(0,1fr);gap:12px 16px;align-items:center;margin-top:16px}
-.crash-label{font-weight:600;font-size:13px}
-.crash-preview{display:block;width:100%;max-width:480px;aspect-ratio:16/9;border-radius:8px;border:1px solid var(--line);background:var(--surface)}
-.crash-themes{display:inline-flex;align-self:flex-start;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.crash-themes button{appearance:none;border:0;background:var(--bg-2);color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:600;padding:7px 14px;cursor:pointer}
-.crash-themes button[aria-pressed="true"]{background:var(--surface-3);color:var(--accent)}
+/* Crash protection card. The preview is drawn server-side by the same
+   renderer that encodes the stream, so it is what viewers will see. Wide
+   screens put the preview beside the controls and keep it in view while
+   they scroll; narrow ones stack them. */
+.crash-check{display:flex;align-items:flex-start;gap:10px;cursor:pointer}
+.crash-check input{width:16px;height:16px;margin-top:2px;flex:none;cursor:pointer;accent-color:var(--accent)}
+.crash-check>span{display:flex;flex-direction:column;gap:2px;min-width:0}
+.crash-check-title{font-weight:600}
+.crash-master{margin-top:14px}
+.crash-body{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:20px 28px;margin-top:18px;
+  padding-top:18px;border-top:1px solid var(--line);animation:softDrop .2s var(--ease-out)}
+.crash-stage{display:flex;flex-direction:column;gap:8px;align-self:start;position:sticky;top:12px}
+.crash-stage-head,.crash-field-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.crash-label{font-weight:600;font-size:12.5px;color:var(--fg-2)}
+.crash-note{color:var(--fg-3);font-size:11.5px;line-height:1.45}
+.crash-preview-frame{display:grid;place-items:center;background:var(--bg);border:1px solid var(--line);
+  border-radius:10px;padding:10px;aspect-ratio:16/10}
+.crash-preview{display:block;width:100%;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.45);aspect-ratio:16/9}
+.crash-preview-frame.vertical .crash-preview{width:auto;height:100%;aspect-ratio:9/16}
+.crash-controls{display:flex;flex-direction:column;gap:18px;min-width:0}
+.crash-field{display:flex;flex-direction:column;gap:8px;min-width:0}
+.crash-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.crash-seg button{appearance:none;border:0;background:var(--bg-2);color:var(--fg-3);font:inherit;font-size:11.5px;
+  font-weight:600;padding:5px 11px;cursor:pointer}
+.crash-seg button[aria-pressed="true"]{background:var(--surface-3);color:var(--accent)}
+.crash-themes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.crash-theme{appearance:none;display:flex;flex-direction:column;gap:6px;padding:5px 5px 7px;border-radius:9px;cursor:pointer;
+  background:var(--bg-2);border:1px solid var(--line);color:var(--fg-3);font:inherit;font-size:12px;font-weight:600;
+  transition:border-color .15s,color .15s,transform .15s var(--ease-out)}
+.crash-theme:hover{border-color:var(--line-2);color:var(--fg);transform:translateY(-1px)}
+.crash-theme[aria-checked="true"]{border-color:var(--accent);color:var(--fg);
+  box-shadow:0 0 0 1px var(--accent) inset}
+.crash-theme img{display:block;width:100%;aspect-ratio:16/9;border-radius:5px;background:var(--surface)}
 .crash-swatches{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.crash-swatch{appearance:none;width:24px;height:24px;border-radius:50%;padding:0;cursor:pointer;border:2px solid var(--bg-2);box-shadow:0 0 0 1px var(--line-2)}
+.crash-swatch{appearance:none;width:26px;height:26px;border-radius:50%;padding:0;cursor:pointer;border:2px solid var(--bg-2);
+  box-shadow:0 0 0 1px var(--line-2);transition:transform .12s var(--ease-out)}
+.crash-swatch:hover{transform:scale(1.08)}
 .crash-swatch[aria-pressed="true"]{box-shadow:0 0 0 2px var(--fg)}
-.crash-inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-@media (max-width:560px){.crash-grid{grid-template-columns:1fr}}
+.crash-inline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.crash-small-btn{padding:6px 10px;font-size:12px}
+.crash-link{appearance:none;background:none;border:0;padding:0;color:var(--accent);font:inherit;font-size:11.5px;cursor:pointer}
+.crash-link:hover{text-decoration:underline}
+.crash-text-row{position:relative;display:block}
+.crash-text-row .ic-input{padding-right:58px}
+.crash-count{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:10.5px;color:var(--fg-4);pointer-events:none}
+.crash-count.full{color:var(--warn)}
+.crash-hold-value{font-size:12.5px;color:var(--accent);font-weight:600}
+.crash-range{width:100%;accent-color:var(--accent);cursor:pointer}
+.crash-advanced>summary{cursor:pointer;color:var(--fg-3);font-size:12.5px}
+.crash-advanced>summary:hover{color:var(--fg)}
+.crash-advanced .crash-check{margin-top:10px}
+@media (max-width:820px){.crash-body{grid-template-columns:1fr}.crash-stage{position:static}}
+@media (max-width:420px){.crash-themes{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (prefers-reduced-motion: reduce){.crash-body{animation:none}.crash-theme:hover,.crash-swatch:hover{transform:none}}
 /* Collapsible System section (e.g. legacy OBS quick launch). Native
    <details>; the summary carries the section label + a rotating caret. */
 details.sys-collapse>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;-webkit-user-select:none;user-select:none}
@@ -2731,54 +2772,79 @@ details.sys-collapse>summary .ic-label{margin:0}
          turned on. Saved with the tab's Save settings button. -->
     <section class="sys-section" id="s-cp-section">
       <div class="ic-label">Crash protection</div>
-      <div style="margin-top:14px;display:flex;align-items:flex-start;gap:14px">
-        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;flex:1">
-          <input type="checkbox" id="s-cp-enabled" style="width:16px;height:16px;cursor:pointer;margin-top:2px" onchange="cpSyncVisibility()">
-          <div>
-            <div style="font-weight:600">Keep the stream up if OBS crashes</div>
-            <div class="tab-sub" style="margin-top:2px">Your destinations stay live and show a reconnect screen until OBS is back. Stopping the stream in OBS still ends it right away.</div>
-          </div>
-        </label>
-      </div>
-      <div class="crash-grid" id="s-cp-details" hidden>
-        <span class="crash-label">Hold for</span>
-        <span class="crash-inline">
-          <input id="s-cp-hold" class="ic-input mono" type="number" min="30" max="300" style="width:80px;text-align:right" aria-label="Hold time in seconds">
-          <span class="muted" style="font-size:12px">s from the crash, then the stream ends cleanly (30 to 300). A delay still airing counts toward it.</span>
+      <label class="crash-check crash-master">
+        <input type="checkbox" id="s-cp-enabled" onchange="cpSyncVisibility()">
+        <span>
+          <span class="crash-check-title">Keep the stream up if OBS crashes</span>
+          <span class="tab-sub">Your destinations stay live and show a reconnect screen until OBS is back. Stopping the stream in OBS still ends it right away.</span>
         </span>
-        <span class="crash-label" style="align-self:start;padding-top:7px">Screen</span>
-        <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
-          <div class="crash-themes" role="group" aria-label="Reconnect screen theme">
-            <button type="button" data-cp-theme="whisper" aria-pressed="true">Whisper</button>
-            <button type="button" data-cp-theme="arcade" aria-pressed="false">Arcade</button>
-          </div>
-          <img class="crash-preview" id="s-cp-preview" alt="Preview of the reconnect screen">
-          <span class="muted" style="font-size:12px">H.264 tracks show this screen. HEVC and AV1 tracks hold your last frame instead.</span>
-        </div>
-        <span class="crash-label">Accent</span>
-        <div class="crash-swatches" id="s-cp-swatches" role="group" aria-label="Accent colour">
-          <span class="st-color"><input type="color" id="s-cp-accent" aria-label="Custom accent colour"></span>
-        </div>
-        <span class="crash-label">Background</span>
-        <span class="crash-inline">
-          <span class="st-color"><input type="color" id="s-cp-bg" aria-label="Background colour"></span>
-          <button type="button" class="ic-btn" id="s-cp-bg-reset" style="padding:6px 10px;font-size:12px">Theme default</button>
-        </span>
-        <label class="crash-label" for="s-cp-headline">Headline</label>
-        <input id="s-cp-headline" class="ic-input" type="text" maxlength="28" style="max-width:480px">
-        <label class="crash-label" for="s-cp-subline">Subline</label>
-        <input id="s-cp-subline" class="ic-input" type="text" maxlength="48" style="max-width:480px">
-        <span></span>
-        <details>
-          <summary class="tab-sub" style="cursor:pointer">Advanced</summary>
-          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;margin-top:10px">
-            <input type="checkbox" id="s-cp-every" style="width:16px;height:16px;cursor:pointer;margin-top:2px">
-            <div>
-              <div style="font-weight:600">Protect every disconnect</div>
-              <div class="tab-sub" style="margin-top:2px">For encoders that fail cleanly, like an NVENC error. Stopping in OBS then shows the screen too, until OBS reconnects or the hold ends.</div>
+      </label>
+      <div class="crash-body" id="s-cp-details" hidden>
+        <div class="crash-stage">
+          <div class="crash-stage-head">
+            <span class="crash-label">What viewers see</span>
+            <div class="crash-seg" role="group" aria-label="Preview shape">
+              <button type="button" data-cp-shape="horizontal" aria-pressed="true">16:9</button>
+              <button type="button" data-cp-shape="vertical" aria-pressed="false">9:16</button>
             </div>
-          </label>
-        </details>
+          </div>
+          <div class="crash-preview-frame" id="s-cp-preview-frame">
+            <img class="crash-preview" id="s-cp-preview" alt="Preview of the reconnect screen">
+          </div>
+          <span class="crash-note">Drawn by the same code that streams it. H.264 tracks show this screen; HEVC and AV1 tracks hold your last frame instead.</span>
+        </div>
+        <div class="crash-controls">
+          <div class="crash-field">
+            <span class="crash-label">Style</span>
+            <div class="crash-themes" id="s-cp-themes" role="radiogroup" aria-label="Reconnect screen style"></div>
+          </div>
+          <div class="crash-field">
+            <span class="crash-label">Accent</span>
+            <div class="crash-swatches" id="s-cp-swatches" role="group" aria-label="Accent colour">
+              <span class="st-color" title="Custom colour"><input type="color" id="s-cp-accent" aria-label="Custom accent colour"></span>
+            </div>
+          </div>
+          <div class="crash-field">
+            <span class="crash-label">Background</span>
+            <span class="crash-inline">
+              <span class="st-color"><input type="color" id="s-cp-bg" aria-label="Background colour"></span>
+              <span class="crash-note" id="s-cp-bg-note">Style default</span>
+              <button type="button" class="ic-btn crash-small-btn" id="s-cp-bg-reset">Use style default</button>
+            </span>
+          </div>
+          <div class="crash-field">
+            <span class="crash-field-head">
+              <label class="crash-label" for="s-cp-headline">Text</label>
+              <button type="button" class="crash-link" id="s-cp-text-reset" hidden>Reset text</button>
+            </span>
+            <span class="crash-text-row">
+              <input id="s-cp-headline" class="ic-input" type="text" maxlength="28" aria-label="Headline">
+              <span class="crash-count mono" id="s-cp-headline-count" aria-hidden="true"></span>
+            </span>
+            <span class="crash-text-row">
+              <input id="s-cp-subline" class="ic-input" type="text" maxlength="48" aria-label="Subline">
+              <span class="crash-count mono" id="s-cp-subline-count" aria-hidden="true"></span>
+            </span>
+          </div>
+          <div class="crash-field">
+            <span class="crash-field-head">
+              <label class="crash-label" for="s-cp-hold">Hold for</label>
+              <output class="crash-hold-value mono" id="s-cp-hold-value" for="s-cp-hold"></output>
+            </span>
+            <input id="s-cp-hold" class="crash-range" type="range" min="30" max="300" step="15">
+            <span class="crash-note">Then the stream ends cleanly. A delay still airing counts toward it.</span>
+          </div>
+          <details class="crash-advanced">
+            <summary>Advanced</summary>
+            <label class="crash-check">
+              <input type="checkbox" id="s-cp-every">
+              <span>
+                <span class="crash-check-title">Protect every disconnect</span>
+                <span class="tab-sub">For encoders that fail cleanly, like an NVENC error. Stopping in OBS then shows the screen too, until OBS reconnects or the hold ends.</span>
+              </span>
+            </label>
+          </details>
+        </div>
       </div>
     </section>
 
@@ -5677,13 +5743,21 @@ async function saveSettings(){
   }
 }
 // ── Crash protection card ────────────────────────────────────────────────
-// The preview comes from /crash-protection/preview, drawn by the Rust
+// Every picture comes from /crash-protection/preview, drawn by the Rust
 // renderer that also encodes the stream. Unsaved edits ride along in the
-// query, so the preview follows every change before Save.
+// query, so the preview and the style thumbnails follow every change
+// before Save. The style list and default text come from GET /config.
 const CP_ACCENTS = [['Cyan','#5ac8fa'],['Violet','#9d7bff'],['Lime','#7ee06b'],['Coral','#ff6b6b'],['Amber','#ffb73a']];
-const CP_THEME_BACKGROUNDS = {whisper:'#0e0f12', arcade:'#130f22'};
-let cpState = {theme:'whisper', accent:'#5ac8fa', background:''};
-let cpPreviewTimer = null;
+// Moments of the 2 s loop the preview cycles through, one every 200 ms.
+const CP_PREVIEW_FRAMES = 10;
+let cpState = {theme:'whisper', accent:'#5ac8fa', background:'', shape:'horizontal'};
+let cpThemes = [];
+let cpDefaults = {headline:'', subline:''};
+let cpRefreshTimer = null;
+let cpFrames = [];
+let cpFrameIndex = 0;
+// Bumped per refresh, so frames of a superseded one are thrown away.
+let cpGeneration = 0;
 
 function cpInit(){
   const custom = $('s-cp-accent').parentElement;
@@ -5693,39 +5767,99 @@ function cpInit(){
     swatch.className = 'crash-swatch';
     swatch.style.background = hex;
     swatch.dataset.hex = hex;
+    swatch.title = name;
     swatch.setAttribute('aria-label', name);
     swatch.onclick = () => cpSetAccent(hex);
     $('s-cp-swatches').insertBefore(swatch, custom);
   });
   $('s-cp-accent').oninput = e => cpSetAccent(e.target.value);
-  document.querySelectorAll('[data-cp-theme]').forEach(button => {
-    button.onclick = () => { cpState.theme = button.dataset.cpTheme; cpRender(); };
-  });
-  $('s-cp-bg').oninput = e => { cpState.background = e.target.value; cpRender(); };
+  $('s-cp-bg').oninput = e => { cpState.background = e.target.value.toLowerCase(); cpRender(); };
   $('s-cp-bg-reset').onclick = () => { cpState.background = ''; cpRender(); };
-  $('s-cp-headline').oninput = cpSchedulePreview;
-  $('s-cp-subline').oninput = cpSchedulePreview;
+  $('s-cp-text-reset').onclick = () => {
+    $('s-cp-headline').value = cpDefaults.headline;
+    $('s-cp-subline').value = cpDefaults.subline;
+    cpRenderText();
+  };
+  $('s-cp-headline').oninput = cpRenderText;
+  $('s-cp-subline').oninput = cpRenderText;
+  $('s-cp-hold').oninput = cpRenderHold;
+  document.querySelectorAll('[data-cp-shape]').forEach(button => {
+    button.onclick = () => { cpState.shape = button.dataset.cpShape; cpRender(); };
+  });
+  setInterval(cpTickPreview, 2000 / CP_PREVIEW_FRAMES);
+}
+// One card per style, a radio group: arrow keys move the choice.
+function cpBuildThemes(){
+  const box = $('s-cp-themes');
+  box.replaceChildren(...cpThemes.map(theme => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'crash-theme';
+    card.setAttribute('role', 'radio');
+    card.dataset.cpTheme = theme.id;
+    const thumb = document.createElement('img');
+    thumb.alt = '';
+    const name = document.createElement('span');
+    name.textContent = theme.name;
+    card.append(thumb, name);
+    card.onclick = () => { cpState.theme = theme.id; cpRender(); };
+    return card;
+  }));
+  box.onkeydown = e => {
+    const step = {ArrowRight:1, ArrowDown:1, ArrowLeft:-1, ArrowUp:-1}[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const index = cpThemes.findIndex(t => t.id === cpState.theme);
+    cpState.theme = cpThemes[(index + step + cpThemes.length) % cpThemes.length].id;
+    cpRender();
+    box.querySelector('[data-cp-theme="' + cpState.theme + '"]').focus();
+  };
 }
 function cpSetAccent(hex){ cpState.accent = hex.toLowerCase(); cpRender(); }
 function cpSyncVisibility(){
   $('s-cp-details').hidden = !$('s-cp-enabled').checked;
-  cpSchedulePreview();
+  cpScheduleRefresh();
 }
-// Reflect cpState in the controls, then refresh the preview.
+// Reflect cpState in the controls, then refresh the pictures.
 function cpRender(){
-  document.querySelectorAll('[data-cp-theme]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cpTheme === cpState.theme)));
+  document.querySelectorAll('#s-cp-themes .crash-theme').forEach(card => {
+    const on = card.dataset.cpTheme === cpState.theme;
+    card.setAttribute('aria-checked', String(on));
+    card.tabIndex = on ? 0 : -1;
+  });
   document.querySelectorAll('#s-cp-swatches .crash-swatch').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.hex === cpState.accent)));
+  document.querySelectorAll('[data-cp-shape]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cpShape === cpState.shape)));
+  $('s-cp-preview-frame').classList.toggle('vertical', cpState.shape === 'vertical');
   $('s-cp-accent').value = cpState.accent;
-  $('s-cp-bg').value = cpState.background || CP_THEME_BACKGROUNDS[cpState.theme];
+  const theme = cpThemes.find(t => t.id === cpState.theme);
+  $('s-cp-bg').value = cpState.background || (theme ? theme.background : '#000000');
+  $('s-cp-bg-note').hidden = !!cpState.background;
   $('s-cp-bg-reset').hidden = !cpState.background;
-  cpSchedulePreview();
+  cpScheduleRefresh();
+}
+// Character counters, and "Reset text" once either line is edited.
+function cpRenderText(){
+  ['s-cp-headline', 's-cp-subline'].forEach(id => {
+    const input = $(id);
+    const counter = $(id + '-count');
+    counter.textContent = input.value.length + '/' + input.maxLength;
+    counter.classList.toggle('full', input.value.length >= input.maxLength);
+  });
+  $('s-cp-text-reset').hidden = $('s-cp-headline').value === cpDefaults.headline
+    && $('s-cp-subline').value === cpDefaults.subline;
+  cpScheduleRefresh();
+}
+function cpRenderHold(){
+  const secs = parseInt($('s-cp-hold').value, 10);
+  const minutes = Math.floor(secs / 60), rest = secs % 60;
+  $('s-cp-hold-value').textContent = !minutes ? rest + ' s' : rest ? minutes + ' min ' + rest + ' s' : minutes + ' min';
 }
 // Form fields for POST /config and the preview query. The server clamps
 // and validates every one, so these are passed through as typed.
 function cpFields(){
   return {
     'crash_protection.enabled': $('s-cp-enabled').checked ? 'true' : 'false',
-    'crash_protection.hold_secs': String(Math.max(30, Math.min(300, parseInt($('s-cp-hold').value, 10) || 120))),
+    'crash_protection.hold_secs': $('s-cp-hold').value,
     'crash_protection.theme': cpState.theme,
     'crash_protection.accent': cpState.accent,
     'crash_protection.background': cpState.background,
@@ -5734,21 +5868,59 @@ function cpFields(){
     'crash_protection.every_disconnect': $('s-cp-every').checked ? 'true' : 'false',
   };
 }
-function cpSchedulePreview(){
-  clearTimeout(cpPreviewTimer);
-  cpPreviewTimer = setTimeout(() => {
-    if ($('s-cp-details').hidden) return;
-    $('s-cp-preview').src = '/crash-protection/preview?' + new URLSearchParams(cpFields());
-  }, 200);
+function cpScheduleRefresh(){
+  clearTimeout(cpRefreshTimer);
+  cpRefreshTimer = setTimeout(cpRefresh, 250);
+}
+async function cpRefresh(){
+  if ($('s-cp-details').hidden) return;
+  const generation = ++cpGeneration;
+  const fields = cpFields();
+  const previewUrl = extra => '/crash-protection/preview?' + new URLSearchParams({...fields, ...extra});
+  document.querySelectorAll('#s-cp-themes .crash-theme').forEach(card => {
+    card.querySelector('img').src = previewUrl({'crash_protection.theme': card.dataset.cpTheme, size: 'thumb', phase: '0.3'});
+  });
+  const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const phases = still ? [0.25] : Array.from({length: CP_PREVIEW_FRAMES}, (_, i) => i / CP_PREVIEW_FRAMES);
+  let frames;
+  try {
+    frames = await Promise.all(phases.map(async phase => {
+      const response = await fetch(previewUrl({orientation: cpState.shape, phase: String(phase)}));
+      if (!response.ok) throw new Error('preview ' + response.status);
+      return URL.createObjectURL(await response.blob());
+    }));
+  } catch (_) {
+    return;
+  }
+  if (generation !== cpGeneration) {
+    frames.forEach(url => URL.revokeObjectURL(url));
+    return;
+  }
+  cpFrames.forEach(url => URL.revokeObjectURL(url));
+  cpFrames = frames;
+  cpFrameIndex = 0;
+  $('s-cp-preview').src = cpFrames[0];
+}
+function cpTickPreview(){
+  if (cpFrames.length < 2 || document.hidden || $('s-cp-details').hidden) return;
+  cpFrameIndex = (cpFrameIndex + 1) % cpFrames.length;
+  $('s-cp-preview').src = cpFrames[cpFrameIndex];
 }
 function cpApplyConfig(cp){
   if (!cp) return;
+  if (Array.isArray(cp.themes) && cp.themes.length) {
+    cpThemes = cp.themes;
+    cpBuildThemes();
+  }
+  cpDefaults = cp.defaults || cpDefaults;
   $('s-cp-enabled').checked = !!cp.enabled;
   $('s-cp-hold').value = cp.hold_secs || 120;
   $('s-cp-headline').value = cp.headline || '';
   $('s-cp-subline').value = cp.subline || '';
   $('s-cp-every').checked = !!cp.every_disconnect;
-  cpState = {theme: cp.theme || 'whisper', accent: cp.accent || '#5ac8fa', background: cp.background || ''};
+  cpState = {...cpState, theme: cp.theme || 'whisper', accent: cp.accent || '#5ac8fa', background: cp.background || ''};
+  cpRenderHold();
+  cpRenderText();
   cpSyncVisibility();
   cpRender();
 }

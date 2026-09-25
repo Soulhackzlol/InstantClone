@@ -15,12 +15,17 @@ offline with it, and viewers were gone by the time OBS was back. Turn on
 **Settings -> System -> Crash protection** and they stay live on a
 reconnect screen instead, for up to the time you pick (30 s to 5 min).
 
-- **A reconnect screen, not a black frame.** Two themes, **Whisper** and
-  **Arcade**, with your own accent, background, headline and subline, and
-  a live preview in Settings. It plays at the resolution each
-  destination receives, with silent audio, after any buffered delay has
-  aired, and timestamps carry on from the last real frame, so platforms
-  see one unbroken stream.
+- **A reconnect screen, not a black frame.** Five styles: **Whisper**
+  (pulsing dots), **Beacon** (radar rings), **Orbit** (a spinner),
+  **Studio** (a lower third, lifted clear of TikTok's buttons on vertical
+  canvases) and **Arcade** (pixel art). Pick your own accent, background,
+  headline and subline. Settings shows every style as a card with your
+  colours and text on it, plus an animated preview in 16:9 and 9:16,
+  drawn by the same code that streams it. Every style animates in small
+  steps over a small area, so the loop stays light (under 1 Mbps at
+  1080p). It plays at the resolution each destination receives, with
+  silent audio, after any buffered delay has aired, and timestamps carry
+  on from the last real frame, so platforms see one unbroken stream.
 - **OBS coming back resumes on the same connection.** No reconnect on the
   platform side: the stream picks up at OBS's first keyframe. With a delay
   armed, the screen stays up until the delay has rebuilt, so viewers never

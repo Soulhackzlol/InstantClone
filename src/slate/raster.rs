@@ -87,11 +87,16 @@ impl Canvas {
 
     /// Circle with 4x4 supersampled edges.
     pub fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, color: Rgb) {
+        self.fill_ring(cx, cy, radius, 0.0, color);
+    }
+
+    /// The band between `inner` and `outer` radius, 4x4 supersampled.
+    pub fn fill_ring(&mut self, cx: f32, cy: f32, outer: f32, inner: f32, color: Rgb) {
         const SAMPLES: usize = 4;
-        let x0 = (cx - radius).floor().max(0.0) as usize;
-        let y0 = (cy - radius).floor().max(0.0) as usize;
-        let x1 = ((cx + radius).ceil() as usize).min(self.width);
-        let y1 = ((cy + radius).ceil() as usize).min(self.height);
+        let x0 = (cx - outer).floor().max(0.0) as usize;
+        let y0 = (cy - outer).floor().max(0.0) as usize;
+        let x1 = ((cx + outer).ceil().max(0.0) as usize).min(self.width);
+        let y1 = ((cy + outer).ceil().max(0.0) as usize).min(self.height);
         for y in y0..y1 {
             for x in x0..x1 {
                 let mut inside = 0;
@@ -99,7 +104,8 @@ impl Canvas {
                     for sx in 0..SAMPLES {
                         let px = x as f32 + (sx as f32 + 0.5) / SAMPLES as f32 - cx;
                         let py = y as f32 + (sy as f32 + 0.5) / SAMPLES as f32 - cy;
-                        if px * px + py * py <= radius * radius {
+                        let distance_squared = px * px + py * py;
+                        if distance_squared <= outer * outer && distance_squared >= inner * inner {
                             inside += 1;
                         }
                     }

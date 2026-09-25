@@ -27,22 +27,24 @@ pub enum Weight {
     SemiBold,
 }
 
+/// Which point of the line `x` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Center,
+    Left,
+}
+
 /// How one line of text is set.
 #[derive(Debug, Clone, Copy)]
 pub struct Line {
     pub size_px: f32,
     pub weight: Weight,
+    pub align: Align,
 }
 
-/// Draw `text` centred on `center_x` with its baseline at `baseline_y`.
-pub fn draw_centered(
-    canvas: &mut Canvas,
-    text: &str,
-    center_x: f32,
-    baseline_y: f32,
-    line: Line,
-    color: Rgb,
-) {
+/// Draw `text` with its baseline at `baseline_y`, centred on `x` or
+/// starting at it, as `line.align` says.
+pub fn draw(canvas: &mut Canvas, text: &str, x: f32, baseline_y: f32, line: Line, color: Rgb) {
     let Some(font) = font_for(line.weight) else {
         return;
     };
@@ -61,7 +63,10 @@ pub fn draw_centered(
         return;
     }
     let mut coverage = Coverage::new(canvas.width(), band_top, band_bottom - band_top);
-    let mut pen_x = center_x - width / 2.0;
+    let mut pen_x = match line.align {
+        Align::Center => x - width / 2.0,
+        Align::Left => x,
+    };
     for gid in glyphs {
         for contour in font.contours(gid) {
             let to_pixels =
@@ -519,8 +524,9 @@ mod tests {
         let line = Line {
             size_px: 40.0,
             weight: Weight::SemiBold,
+            align: Align::Center,
         };
-        draw_centered(
+        draw(
             &mut canvas,
             "HOH",
             100.0,
@@ -528,14 +534,40 @@ mod tests {
             line,
             Rgb::new(255, 255, 255),
         );
-        let frame = canvas.to_yuv420();
-        let lit: Vec<usize> = (0..200)
-            .filter(|x| frame.y[30 * frame.width + x] > 128)
-            .collect();
-        let (first, last) = (*lit.first().unwrap(), *lit.last().unwrap());
+        let (first, last) = lit_span(&canvas, 30);
         assert!(
             (first as i32 + last as i32 - 199).abs() <= 2,
             "not centred: {first}..{last}"
         );
+    }
+
+    #[test]
+    fn left_aligned_text_starts_at_x() {
+        let mut canvas = Canvas::new(200, 60, Rgb::new(0, 0, 0));
+        let line = Line {
+            size_px: 40.0,
+            weight: Weight::SemiBold,
+            align: Align::Left,
+        };
+        draw(
+            &mut canvas,
+            "HOH",
+            20.0,
+            45.0,
+            line,
+            Rgb::new(255, 255, 255),
+        );
+        let (first, _) = lit_span(&canvas, 30);
+        // The H's left side bearing keeps ink a few pixels right of the pen.
+        assert!((20..=26).contains(&first), "starts at {first}");
+    }
+
+    /// First and last bright pixel on `row`.
+    fn lit_span(canvas: &Canvas, row: usize) -> (usize, usize) {
+        let frame = canvas.to_yuv420();
+        let lit: Vec<usize> = (0..canvas.width())
+            .filter(|x| frame.y[row * frame.width + x] > 128)
+            .collect();
+        (*lit.first().unwrap(), *lit.last().unwrap())
     }
 }
