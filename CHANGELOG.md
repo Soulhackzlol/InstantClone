@@ -150,7 +150,7 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
   logo and an Enabled switch, and Save stays in view while the rest scrolls.
 - **Livelier fields and buttons.** Inputs glow softly when focused and their
   label lights up with them; buttons lift a touch on hover. Both pick up the
-  stream state's colour, so they read cyan offline and green once you're live.
+  stream state's colour: cyan when idle, shifting toward amber or green.
   Dropdowns open as a styled list that fades in, with a turning arrow and a
   check on the current choice (older browsers keep the native list).
 - **The aurora, reworked.** Three soft lights drift behind the whole delay
