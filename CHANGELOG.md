@@ -71,13 +71,16 @@ logs that tracked it down).
   instead of the destination sitting silent. With a Twitch destination
   whose channel has no Dual Format, the log names the vertical
   destinations that will get nothing.
-- **Enhanced Broadcasting to Twitch asks for H.264 when you multistream.**
-  Twitch picks each track's codec, and on a GPU that can encode HEVC it
-  picks HEVC, even with H.264 set in OBS. TikTok, Kick and vertical feeds
-  can't play HEVC, so a vertical destination showed "No 9:16 canvas" and
-  got nothing. While any other destination is on, InstantClone now asks
-  Twitch for H.264 tracks. Twitch-only streams keep HEVC. If a stream still
-  arrives as HEVC, the card says so and tells you to restart the stream.
+- **Twitch Dual Format now feeds TikTok and other vertical destinations on
+  GPUs that can encode HEVC.** Twitch picks each track's codec, and on those
+  GPUs it picks HEVC, even with H.264 set in OBS. TikTok, Kick and vertical
+  feeds can't play HEVC, so a vertical destination showed "No 9:16 canvas"
+  and got nothing. With a vertical destination on, OBS now encodes the
+  vertical track as H.264 with the same GPU and settings, and with a
+  horizontal one on, InstantClone asks Twitch for an H.264 main track.
+  Twitch keeps HEVC wherever nothing else needs that track. If a stream
+  still arrives as HEVC, the card and the log say so and tell you to
+  restart the stream.
 
 ### Enhanced Broadcasting without Twitch uses your GPU
 

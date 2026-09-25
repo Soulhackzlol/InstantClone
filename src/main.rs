@@ -785,13 +785,24 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                     && video_known
                     && vertical_wait.missing(&dest.id, ctrl.publisher_token(), Instant::now())
                 {
-                    ctrl.log(format!(
-                        "[{}] vertical: OBS isn't sending a 9:16 canvas, so nothing goes out. \
-                         In OBS: Settings → Stream → Enhanced Broadcasting on, then pick your \
-                         vertical canvas under Additional canvas. Or set this destination's \
-                         Stream format to Horizontal.",
-                        dest.name
-                    ));
+                    let codec = ctrl.video_codec();
+                    let why = if matches!(
+                        codec,
+                        crate::h264::VideoCodec::Avc | crate::h264::VideoCodec::Unknown
+                    ) {
+                        "OBS isn't sending a 9:16 canvas, so nothing goes out. In OBS: \
+                         Settings → Stream → Enhanced Broadcasting on, then pick your vertical \
+                         canvas under Additional canvas. Or set this destination's Stream format \
+                         to Horizontal."
+                            .to_string()
+                    } else {
+                        format!(
+                            "the video is {}, which only Twitch can play, so nothing goes out. \
+                             Stop and start the stream in OBS so Twitch sends H.264.",
+                            codec.label()
+                        )
+                    };
+                    ctrl.log(format!("[{}] vertical: {why}", dest.name));
                 }
                 continue;
             }
