@@ -3106,7 +3106,7 @@ async fn pace_and_send(
             };
             let bytes_out: &[u8] = &selected;
             let tags_so_far = dest.tags_sent.load(Ordering::Relaxed);
-            if tags_so_far < 20 || tags_so_far.is_multiple_of(200) {
+            if crate::trace::is_enabled() && (tags_so_far < 20 || tags_so_far.is_multiple_of(200)) {
                 crate::trace::log(
                     "TAG_AUDIO",
                     &format!(

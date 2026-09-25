@@ -712,7 +712,6 @@ function overlayUrl(slug) {
   const q = cfg.w.overlays.autohide ? '?autohide=off' : '';
   return `${location.origin}/overlay/${encodeURIComponent(slug)}.html${q}`;
 }
-function openOverlay(slug) { window.open(overlayUrl(slug), '_blank'); }
 async function copyOverlay(slug) {
   const url = overlayUrl(slug);
   try { await navigator.clipboard.writeText(url); toast('Overlay URL copied', 'ok'); }

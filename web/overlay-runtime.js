@@ -108,10 +108,6 @@
 
   // ---- Defaults ----
 
-  function defaultStateProps() {
-    return {}; // sparse - falls back to base
-  }
-
   function defaultWidget(kind, id) {
     const k = KINDS.find(function (x) { return x.key === kind; }) || KINDS[0];
     const SIZES = {
