@@ -117,7 +117,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .ic-header-right{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
 .ic-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border-radius:999px;
   background:var(--surface-3);border:1px solid var(--line);font-size:12px;color:var(--fg-2);
-  transition:.2s var(--ease-out)}
+  transition:border-color .2s var(--ease-out),background-color .2s var(--ease-out),color .2s var(--ease-out)}
 .ic-pill:hover{border-color:var(--line-2)}
 .ic-pill .dot{width:7px;height:7px;border-radius:999px;background:var(--idle)}
 .ic-pill.ok .dot{background:var(--live);box-shadow:0 0 0 4px color-mix(in oklch,var(--live) 15%,transparent)}
@@ -190,7 +190,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   color:var(--fg);font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;
   transition:transform .15s var(--ease-out),background .15s var(--ease-out),border-color .15s var(--ease-out),
              box-shadow .15s var(--ease-out)}
-.ic-btn:hover{background:color-mix(in oklch,var(--tint) 7%,var(--surface-3));
+.ic-btn:hover:not(:disabled,.ic-btn-disabled){background:color-mix(in oklch,var(--tint) 7%,var(--surface-3));
   border-color:color-mix(in oklch,var(--tint) 38%,rgba(255,255,255,.16));
   box-shadow:0 8px 20px -12px color-mix(in oklch,var(--tint) 70%,transparent);transform:translateY(-1px)}
 .ic-btn:active{transform:scale(.96);transition-duration:.08s}
@@ -224,9 +224,9 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .ic-btn-primary:disabled,.ic-btn-disabled{opacity:1;cursor:not-allowed;box-shadow:none;
   background:var(--surface-3) !important;color:var(--fg-3) !important;
   border-color:var(--line-2) !important}
-.ic-btn-danger{background:color-mix(in oklch,var(--danger) 18%,var(--surface-3));color:var(--danger);
-  border-color:color-mix(in oklch,var(--danger) 35%,transparent);font-weight:600}
-.ic-btn-danger:hover{background:color-mix(in oklch,var(--danger) 25%,var(--surface-3));
+.ic-btn-danger{background:color-mix(in oklch,var(--danger) 18%,var(--bg-2));color:var(--danger);
+  border-color:color-mix(in oklch,var(--danger) 50%,var(--line));font-weight:600}
+.ic-btn-danger:hover:not(:disabled){background:color-mix(in oklch,var(--danger) 25%,var(--surface-3));
   border-color:color-mix(in oklch,var(--danger) 55%,transparent);
   box-shadow:0 8px 22px -12px color-mix(in oklch,var(--danger) 80%,transparent)}
 .ic-btn-ghost{background:transparent;border-color:var(--line);color:var(--fg-2)}
@@ -310,7 +310,7 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 .ic-toast.err .ic-toast-icon{background:color-mix(in oklch,var(--danger) 22%,transparent);color:var(--danger)}
 .ic-toast.ok .ic-toast-icon{background:color-mix(in oklch,var(--live) 22%,transparent);color:var(--live)}
 @keyframes toast-in{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
-.ic-toast.leaving{opacity:0;transform:translateX(12px);transition:.25s var(--ease-out)}
+.ic-toast.leaving{opacity:0;transform:translateX(12px);transition:opacity .25s var(--ease-out),transform .25s var(--ease-out)}
 
 /* - Wizard (when !configured) --------─ */
 .wizard-card{width:min(880px,92vw);max-width:880px;margin:40px auto;padding:38px 44px;display:flex;flex-direction:column;gap:18px}
@@ -323,7 +323,8 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
   letter-spacing:.16em;text-transform:uppercase;color:var(--fg-4)}
 .obs-or::before,.obs-or::after{content:"";flex:1;height:1px;background:var(--line)}
 .wizard-obs-after{margin:0;font-size:12px;color:var(--fg-3);line-height:1.5}
-.wizard-obs-card{padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--bg-2);display:flex;flex-direction:column;gap:12px}
+.wizard-obs-card{padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--bg-2);display:flex;flex-direction:column;gap:12px;
+  transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
 .wizard-obs-title{font-size:13.5px;font-weight:600;color:var(--fg);display:flex;justify-content:space-between;align-items:center;gap:8px;line-height:1.3}
 .wizard-obs-badge{flex:0 0 auto;font-size:9.5px;text-transform:uppercase;letter-spacing:1.2px;color:var(--accent);background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));padding:3px 8px;border-radius:999px}
 .wizard-obs-body{margin:0;font-size:12.5px;color:var(--fg-3);line-height:1.55}
@@ -363,7 +364,6 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 @keyframes obsNudge{0%,100%{transform:none}20%{transform:translateX(-4px)}
   40%{transform:translateX(4px)}60%{transform:translateX(-3px)}80%{transform:translateX(2px)}}
 /* Method cards: recommended one wears a soft accent frame; both lift on hover. */
-.wizard-obs-card{transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
 .wizard-obs-card:hover{border-color:var(--line-2)}
 .wizard-obs-card.obs-recommended{border-color:color-mix(in oklch,var(--accent) 30%,var(--line));
   background:linear-gradient(180deg,color-mix(in oklch,var(--accent) 7%,var(--bg-2)),var(--bg-2));
@@ -631,8 +631,8 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 #w-msg .ok{color:var(--live)}
 
 /* - Hero ------------------- */
-.hero-card{padding:0;overflow:hidden}
-.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:stretch;position:relative}
+.hero-card{padding:0;overflow:hidden;position:relative}
+.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:stretch;position:relative;isolation:isolate}
 @media (max-width:880px){.hero{grid-template-columns:1fr}}
 
 .hero-readout{display:flex;flex-direction:column;gap:14px;padding:28px 32px;min-width:0;
@@ -666,7 +666,6 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
    transform animates, so the loop costs the compositor, not layout. The
    drifts are identical in every state (retiming one mid-flight teleports
    it); state changes color and brightness only. */
-.hero{isolation:isolate}
 .hero-aurora{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden}
 .aurora-blob{position:absolute;border-radius:50%;filter:blur(64px);mix-blend-mode:screen;
   opacity:var(--aurora-glow);will-change:transform}
@@ -692,7 +691,6 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
 .aurora-bloom.bloom{animation:aurora-bloom 1.3s var(--ease-out)}
 @keyframes aurora-bloom{0%{opacity:.55;transform:scale(.55)}100%{opacity:0;transform:scale(1.25)}}
 /* Lit top edge in the state's color. */
-.hero-card{position:relative}
 .hero-card::after{content:'';position:absolute;top:0;left:8%;right:8%;height:1px;pointer-events:none;z-index:2;
   background:linear-gradient(90deg,transparent,color-mix(in oklch,var(--aurora-a) 85%,transparent),transparent);
   opacity:calc(.35 + var(--aurora-glow))}
@@ -1264,13 +1262,12 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
 /* - Stats ------------------─ */
 .stats-big{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}
 @media (max-width:880px){.stats-big{grid-template-columns:1fr}}
-.stat-card{position:relative}
 .stat-idle{position:absolute;left:14px;right:14px;bottom:24px;text-align:center;font-size:12.5px;color:var(--fg-3)}
 .stat-idle[hidden]{display:none}
 .profile-empty{display:flex;flex-direction:column;gap:4px;padding:18px;border:1px dashed var(--line-2);border-radius:10px;
   color:var(--fg-3);font-size:12.5px;line-height:1.5}
 .profile-empty b{color:var(--fg-2);font-size:13.5px}
-.stat-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px;cursor:help;
+.stat-card{position:relative;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px;cursor:help;
   transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
 /* Elevation via shadow + border only - no position change, so the element
    never moves out from under the cursor (no hover flicker). */
@@ -1373,7 +1370,7 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
 
 /* - Overlay Studio ---------------─ */
 .st-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.st-toolbar .ic-input{max-width:200px;height:34px}
+.st-toolbar .ic-input{max-width:160px;height:34px}
 .st-left,.st-right{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;
   display:flex;flex-direction:column;overflow:hidden}
 .st-right{padding:0}
@@ -1420,7 +1417,6 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
 .st-head-title{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 @media (max-width:760px){.st-head-title{display:none}}
 .st-modal-head .st-toolbar{margin-left:auto;flex-wrap:nowrap}
-.st-toolbar .ic-input{max-width:160px}
 .st-icobtn{padding:8px 11px;font-size:15px;line-height:1;min-width:38px}
 .st-icobtn:disabled{opacity:.35;cursor:default}
 .st-menu{position:relative}
@@ -1457,7 +1453,7 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
 /* Left panel: layers + add */
 .st-sec{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-4);margin:10px 2px 4px}
 .st-sec:first-child{margin-top:2px}
-.st-layer{display:flex;align-items:center;gap:6px;padding:8px 9px;border:1px solid var(--line);
+.st-layer{position:relative;overflow:hidden;display:flex;align-items:center;gap:6px;padding:8px 9px;border:1px solid var(--line);
   border-radius:8px;background:var(--surface);cursor:pointer;transition:border-color .12s}
 .st-layer:hover{border-color:var(--line-2)}
 .st-layer.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
@@ -1534,14 +1530,12 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
 .st-st.on .dot{animation:ph-pulse 1.8s ease-in-out infinite}
 
 /* selected layer accent stripe */
-.st-layer{position:relative;overflow:hidden}
 .st-layer::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent);
   transform:scaleY(0);transition:transform .16s var(--ease-out)}
 .st-layer.sel::before{transform:scaleY(1)}
 
 /* gentle fade when panels re-render */
 @keyframes st-fade-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-.st-props-body{animation:st-fade-in .2s var(--ease-out)}
 .st-canvas-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block;pointer-events:none;color-scheme:normal}
 .st-hit{position:absolute;inset:0}
 .st-hit .st-box{position:absolute;border:2px solid transparent;cursor:move;border-radius:4px}
@@ -1565,7 +1559,8 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
 .st-props-head{padding:12px 14px;border-bottom:1px solid var(--line)}
 .st-props-title{font-size:13px;font-weight:600;color:var(--fg)}
 .st-props-sub{font-size:11px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
-.st-props-body{overflow-y:auto;padding:12px 14px;flex:1;display:flex;flex-direction:column;gap:11px}
+.st-props-body{overflow-y:auto;padding:12px 14px;flex:1;display:flex;flex-direction:column;gap:11px;
+  animation:st-fade-in .2s var(--ease-out)}
 .st-field{display:flex;flex-direction:column;gap:5px}
 .st-field-row{display:flex;gap:8px}
 .st-field-row .st-field{flex:1}
@@ -1713,9 +1708,6 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ic-btn-warn{background:color-mix(in oklch,var(--warn) 18%,var(--bg-2));
   border:1px solid color-mix(in oklch,var(--warn) 45%,var(--line));color:var(--warn)}
 .ic-btn-warn:hover{background:color-mix(in oklch,var(--warn) 28%,var(--bg-2))}
-.ic-btn-danger{background:color-mix(in oklch,var(--err) 18%,var(--bg-2));
-  border:1px solid color-mix(in oklch,var(--err) 50%,var(--line));color:var(--err);font-weight:600}
-.ic-btn-danger:hover:not(:disabled){background:color-mix(in oklch,var(--err) 32%,var(--bg-2))}
 .ic-btn-danger:disabled{opacity:.45;cursor:not-allowed}
 /* Reset modal */
 .ic-modal{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
@@ -3554,7 +3546,6 @@ const SETTINGS_FIELDS = {
 };
 
 // - Formatting ----------------------------─
-const fmtSecs = ms => { const s = ms/1000; return s < 10 ? s.toFixed(1) : Math.round(s).toString(); };
 const fmtDelay = ms => { const s = Math.round(ms/1000); if (s < 60) return s+'s'; const m = Math.floor(s/60), r = s%60; return r ? `${m}m${r}s` : `${m}m`; };
 const fmtKbps = k => k >= 1000 ? (k/1000).toFixed(2)+' Mbps' : k+' kbps';
 function fmtBytesPair(b){ const u=['B','KB','MB','GB','TB']; let i=0; while(b>=1024 && i<u.length-1){b/=1024;i++} return [b.toFixed(b<10&&i?1:0), u[i]]; }
@@ -8106,7 +8097,7 @@ function copyText(btn, text, label){ navigator.clipboard.writeText(text); flashC
 const LOG_ERROR = /\b(disconnected|failed|failure|error|errors|refused|rejected|invalid|denied|aborted)\b|could not|couldn't/i;
 const LOG_WARN = /\b(retry|retrying|retries|waiting|timed out|stale|warning|fallback|too small)\b|holding off|nothing goes out|can't|cannot/i;
 const LOG_OK = /\b(succeeded|connected|published|saved|started|ready|resumed)\b|is now live|now live/i;
-const logView = {lines: [], sources: new Set(), level: 'all', source: '', text: ''};
+const logView = {lines: [], level: 'all', source: '', text: ''};
 
 function parseLogLine(line){
   const match = line.match(/^\[\+\s*([\d.]+)s\]\s*(.*)$/);
@@ -8145,7 +8136,6 @@ function logRow(line){
   message.className = 'log-msg';
   message.textContent = entry.message;
   row.append(time, source, message);
-  logView.sources.add(entry.source);
   return row;
 }
 function logRowVisible(row){
@@ -8155,23 +8145,39 @@ function logRowVisible(row){
   return !logView.text || row.dataset.text.includes(logView.text);
 }
 function applyLogFilters(){
-  const el = $('logs');
   let shown = 0;
-  el.querySelectorAll('.log-row').forEach(row => { row.hidden = !logRowVisible(row); if (!row.hidden) shown++; });
-  $('logs-nomatch').hidden = shown > 0 || !logView.lines.length;
   const counts = {err: 0, warn: 0};
-  el.querySelectorAll('.log-row').forEach(row => { if (row.dataset.level in counts) counts[row.dataset.level]++; });
+  const seen = new Set();
+  for (const row of $('logs').children){
+    row.hidden = !logRowVisible(row);
+    if (!row.hidden) shown++;
+    if (row.dataset.level in counts) counts[row.dataset.level]++;
+    seen.add(row.dataset.source);
+  }
+  $('logs-nomatch').hidden = shown > 0 || !logView.lines.length;
   $('logs-n-problems').textContent = counts.err + counts.warn || '';
   $('logs-n-err').textContent = counts.err || '';
   const select = $('logs-source');
   const known = [...select.options].map(o => o.value).filter(Boolean);
-  const sources = [...logView.sources].sort();
+  const sources = [...seen].sort();
   if (sources.join('|') !== known.join('|')){
     select.replaceChildren(new Option('All sources', ''), ...sources.map(name => new Option(name, name)));
     select.value = sources.includes(logView.source) ? logView.source : '';
   }
 }
+// How many of the shown lines are still in `lines`, at its front. The
+// server's log is a ring: once full, each new line pushes the oldest out, so
+// the view drops rows from the top and appends at the bottom instead of
+// rebuilding all 1500. -1 when they don't line up (cleared or restarted).
+function logOverlap(old, lines){
+  if (!old.length) return -1;
+  const last = lines.lastIndexOf(old[old.length - 1]);
+  const dropped = old.length - (last + 1);
+  return last >= 0 && dropped >= 0 && lines[0] === old[dropped] ? last + 1 : -1;
+}
 async function pollLogs(){
+  // A background tab has nobody reading; it catches up when shown.
+  if (document.hidden) return;
   try {
     const j = await (await fetch('/logs')).json();
     const lines = j.lines || [];
@@ -8181,17 +8187,11 @@ async function pollLogs(){
     $('logs-empty').hidden = hasLines;
     $('logs-tools').hidden = !hasLines;
     const old = logView.lines;
-    const appendOnly = old.length > 0 && lines.length >= old.length
-      && lines[0] === old[0] && lines[old.length - 1] === old[old.length - 1];
-    if (appendOnly && lines.length === old.length) return;
-    if (!appendOnly){
-      logView.sources.clear();
-      el.replaceChildren();
-    }
-    const fresh = appendOnly ? lines.slice(old.length) : lines;
-    const rows = fresh.map(logRow);
-    rows.forEach(row => { row.hidden = !logRowVisible(row); });
-    el.append(...rows);
+    const kept = logOverlap(old, lines);
+    if (kept === old.length && kept === lines.length) return;
+    if (kept < 0) el.replaceChildren();
+    else for (let i = old.length - kept; i > 0; i--) el.firstElementChild.remove();
+    el.append(...lines.slice(Math.max(kept, 0)).map(logRow));
     logView.lines = lines;
     applyLogFilters();
     // Follow the tail unless you've scrolled up to read (see the scroll
@@ -8224,7 +8224,6 @@ async function pollLogs(){
 async function clearLogs(){
   await fetch('/logs/clear',{method:'POST'});
   logView.lines = [];
-  logView.sources.clear();
   $('logs').replaceChildren();
   $('logs').hidden = true;
   $('logs-tools').hidden = true;
@@ -9343,6 +9342,7 @@ function openUpdateInAbout(){
   checkForUpdate();
   startStateSSE();
   setInterval(pollLogs, 1500);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pollLogs(); });
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     if (e.key === ' '){ e.preventDefault(); ctaClick({currentTarget: $('cp-cta')}); }
