@@ -182,7 +182,8 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 /* - Card / labels / buttons / inputs (atoms) ------─ */
 .ic-card{background:linear-gradient(180deg,var(--surface-2),var(--surface));
   border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-1)}
-.ic-label{font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3)}
+.ic-label{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+  color:color-mix(in oklch,var(--fg-2) 45%,var(--fg-3))}
 
 .ic-btn{appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;
   padding:10px 16px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface-3);
@@ -764,14 +765,14 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   border-radius:10px;gap:2px;position:relative;overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
 .tab{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:7px;
-  padding:7px 14px;border-radius:7px;color:var(--fg-3);font-size:12.5px;font-weight:500;cursor:pointer;
+  padding:9px 14px;border-radius:7px;color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
   position:relative;z-index:2;transition:color .2s var(--ease-out);white-space:nowrap;
   flex:1;justify-content:center}
 @media (max-width:720px){.tab{flex:0 0 auto}}
 .tab:hover{color:var(--fg)}
 .tab.on{color:var(--fg)}
-.tab svg{opacity:.7;width:13px;height:13px}
-.tab.on svg{opacity:1}
+.tab svg{opacity:.85;width:15px;height:15px;transition:color .2s var(--ease-out)}
+.tab.on svg{opacity:1;color:var(--accent)}
 .tab-ind{position:absolute;top:4px;bottom:4px;background:var(--surface-3);border-radius:7px;
   transition:left .28s var(--ease-spring),width .28s var(--ease-spring);z-index:1;border:1px solid var(--line-2)}
 
@@ -903,8 +904,8 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   to{opacity:1;transform:translate3d(0,0,0)}
 }
 .tab-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
-.tab-title{font-size:15px;font-weight:600;color:var(--fg);letter-spacing:-.01em}
-.tab-sub{color:var(--fg-3);font-size:12.5px;margin-top:3px;max-width:60ch}
+.tab-title{font-size:17px;font-weight:650;color:var(--fg);letter-spacing:-.015em}
+.tab-sub{color:var(--fg-3);font-size:13px;margin-top:4px;max-width:60ch}
 
 /* - Destinations --------------- */
 .dest-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
@@ -935,6 +936,8 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   text-decoration:none;margin-left:auto}
 .dcard-player:hover{text-decoration:underline;text-underline-offset:2px}
 .dcard-head{display:flex;align-items:center;gap:9px}
+.dcard-icon svg,.dest-starter-icon svg{width:18px;height:18px}
+.w-ptile-badge svg{width:24px;height:24px}
 .dcard-icon{width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
   background:color-mix(in oklch,var(--dc,var(--fg-3)) 16%,var(--surface-3));
   border:1px solid color-mix(in oklch,var(--dc,var(--fg-3)) 38%,transparent);
@@ -1034,6 +1037,53 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   transition:color .15s,background .15s,border-color .15s}
 .dcard-act:hover{color:var(--fg);border-color:var(--line-2);background:color-mix(in oklch,var(--bg-1) 78%,transparent)}
 .dcard-act.dcard-del:hover{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,var(--line))}
+/* Signal path strip (renderFlow). */
+.flow{display:flex;align-items:center;flex-wrap:wrap;row-gap:10px;padding:12px 14px;margin-bottom:14px;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:12px}
+.flow[hidden]{display:none}
+.flow-node{display:flex;align-items:center;gap:10px;flex:none}
+.flow-ic{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;flex:none;
+  background:var(--surface-3);border:1px solid var(--line);color:var(--fg-4);
+  transition:color .3s var(--ease-out),border-color .3s var(--ease-out),background .3s var(--ease-out)}
+.flow-ic svg{width:17px;height:17px}
+.flow-txt{display:flex;flex-direction:column;line-height:1.25}
+.flow-txt b{font-size:12.5px;font-weight:600;color:var(--fg-2)}
+.flow-txt small{font-size:11.5px;color:var(--fg-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+.flow-node.on .flow-ic{color:var(--live);border-color:color-mix(in oklch,var(--live) 35%,var(--line));
+  background:color-mix(in oklch,var(--live) 10%,var(--surface-3))}
+.flow-node.on .flow-txt b{color:var(--fg)}
+#flow-ic.on .flow-ic{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 35%,var(--line));
+  background:color-mix(in oklch,var(--accent) 10%,var(--surface-3))}
+#flow-ic[data-phase="arming"].on .flow-ic,#flow-ic[data-phase="hold"] .flow-ic{color:var(--warn);
+  border-color:color-mix(in oklch,var(--warn) 35%,var(--line));background:color-mix(in oklch,var(--warn) 10%,var(--surface-3))}
+#flow-ic[data-phase="active"] .flow-ic{color:var(--live);border-color:color-mix(in oklch,var(--live) 35%,var(--line));
+  background:color-mix(in oklch,var(--live) 10%,var(--surface-3))}
+/* A link is a hairline at rest; while data flows, dashes travel along it. */
+.flow-link{flex:1 1 28px;min-width:28px;max-width:110px;height:2px;margin:0 12px;border-radius:2px;background:var(--line-2)}
+.flow-link.on{background:repeating-linear-gradient(90deg,var(--accent) 0 8px,transparent 8px 14px);
+  background-size:14px 2px;animation:flowMove .7s linear infinite}
+@keyframes flowMove{to{background-position:14px 0}}
+.flow-dests{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.flow-dest{--dc:var(--fg-3);display:inline-flex;align-items:center;gap:7px;padding:5px 10px 5px 7px;border-radius:999px;
+  background:var(--surface-3);border:1px solid var(--line);font-size:12px;color:var(--fg-2);
+  transition:opacity .3s var(--ease-out),border-color .3s var(--ease-out)}
+.flow-dest.platform-twitch{--dc:#a78bfa}
+.flow-dest.platform-youtube{--dc:#fda4af}
+.flow-dest.platform-kick{--dc:#86efac}
+.flow-dest.platform-trovo{--dc:#67e8f9}
+.flow-dest.platform-restream{--dc:#5eead4}
+.flow-dest.platform-custom{--dc:#fcd34d}
+.flow-dest.platform-sink{--dc:#93c5fd}
+.flow-mark{display:grid;place-items:center;width:18px;height:18px;color:var(--dc)}
+.flow-mark svg{width:15px;height:15px}
+.flow-dot{width:6px;height:6px;border-radius:50%;background:var(--fg-4)}
+.flow-dest[data-state="live"]{border-color:color-mix(in oklch,var(--dc) 40%,var(--line))}
+.flow-dest[data-state="live"] .flow-dot{background:var(--live);box-shadow:0 0 0 3px color-mix(in oklch,var(--live) 18%,transparent)}
+.flow-dest[data-state="ready"] .flow-dot{background:var(--accent)}
+.flow-dest[data-state="wait"] .flow-dot{background:var(--warn)}
+.flow-dest[data-state="off"]{opacity:.5}
+@media (max-width:720px){.flow-link{max-width:40px;margin:0 8px}}
+@media (prefers-reduced-motion: reduce){.flow-link.on{animation:none;background:var(--accent)}}
 /* Empty Destinations: a platform picker instead of a lone "+" tile. */
 .dest-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:26px 8px 10px}
 .dest-empty[hidden],.dest-grid[hidden]{display:none}
@@ -1124,6 +1174,12 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 /* - Stats ------------------─ */
 .stats-big{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}
 @media (max-width:880px){.stats-big{grid-template-columns:1fr}}
+.stat-card{position:relative}
+.stat-idle{position:absolute;left:14px;right:14px;bottom:24px;text-align:center;font-size:12.5px;color:var(--fg-3)}
+.stat-idle[hidden]{display:none}
+.profile-empty{display:flex;flex-direction:column;gap:4px;padding:18px;border:1px dashed var(--line-2);border-radius:10px;
+  color:var(--fg-3);font-size:12.5px;line-height:1.5}
+.profile-empty b{color:var(--fg-2);font-size:13.5px}
 .stat-card{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px;cursor:help;
   transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
 /* Elevation via shadow + border only - no position change, so the element
@@ -1134,23 +1190,23 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .stat-label{display:inline-flex;align-items:center;gap:7px}
 .stat-ic{width:14px;height:14px;color:var(--fg-3);opacity:.85;flex:0 0 auto;transition:color .18s,opacity .18s}
 .stat-card:hover .stat-ic{color:var(--accent);opacity:1}
-.stat-now{font-size:22px;font-weight:500;color:var(--fg);letter-spacing:-.02em;
+.stat-now{font-size:26px;font-weight:500;color:var(--fg);letter-spacing:-.02em;
   font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
 .stat-unit{color:var(--fg-3);font-size:12px;margin-left:4px;font-family:'JetBrains Mono',monospace}
 .stat-spark{width:100%;height:70px;display:block}
 .stats-small{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
 @media (max-width:980px){.stats-small{grid-template-columns:repeat(3,1fr)}}
 @media (max-width:540px){.stats-small{grid-template-columns:repeat(2,1fr)}}
-.metric-mini{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:help;
+.metric-mini{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;cursor:help;
   transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
 .metric-mini:hover{border-color:color-mix(in oklch,var(--accent) 35%,var(--line-2));
   background:color-mix(in oklch,var(--accent) 4%,var(--bg-2));
   box-shadow:0 8px 20px -14px color-mix(in oklch,var(--accent) 55%,transparent)}
 .metric-mini-top{display:flex;align-items:center;gap:6px}
-.metric-ic{width:13px;height:13px;color:var(--fg-3);opacity:.8;flex:0 0 auto;transition:color .18s,opacity .18s}
+.metric-ic{width:14px;height:14px;color:var(--fg-3);opacity:.85;flex:0 0 auto;transition:color .18s,opacity .18s}
 .metric-mini:hover .metric-ic{color:var(--accent);opacity:1}
-.metric-mini-v{display:flex;align-items:baseline;gap:4px;margin-top:5px}
-.metric-mini-v .mono{font-size:18px;font-weight:500;color:var(--fg);letter-spacing:-.01em;
+.metric-mini-v{display:flex;align-items:baseline;gap:4px;margin-top:8px}
+.metric-mini-v .mono{font-size:22px;font-weight:500;color:var(--fg);letter-spacing:-.01em;
   font-variant-numeric:tabular-nums}
 .metric-unit{color:var(--fg-3);font-size:11px;font-family:'JetBrains Mono',monospace}
 /* Sparkline strokes draw in on first paint for a touch of life. */
@@ -2272,6 +2328,8 @@ details.sys-collapse>summary .ic-label{margin:0}
     <div class="dest-empty-sub">Pick a platform to add it. Add as many as you like: each gets its own connection, and one delay covers them all.</div>
     <div class="dest-empty-grid" id="dest-empty-grid"></div>
   </div>
+  <!-- Signal path: OBS -> InstantClone -> each destination (renderFlow). -->
+  <div class="flow" id="dest-flow" role="img" aria-label="Signal path" hidden></div>
   <div class="dest-grid" id="dest-grid"></div>
   <div class="ic-modal" id="dest-modal" hidden role="dialog" aria-modal="true" aria-labelledby="dest-form-title">
     <div class="ic-modal-backdrop" onclick="cancelDestForm()"></div>
@@ -2433,6 +2491,7 @@ details.sys-collapse>summary .ic-label{margin:0}
   </div>
   <div class="stats-big">
     <div class="stat-card" id="stat-card-rate" title="Incoming video+audio bitrate from OBS, averaged over the last 60 seconds. This is what InstantClone is buffering and forwarding.">
+      <div class="stat-idle" id="stat-idle" hidden>No video yet. The graph fills in when OBS starts streaming.</div>
       <div class="stat-head">
         <span class="stat-label"><svg class="stat-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8h3l1.8-5 3 11 1.8-6h3.4"/></svg><span class="ic-label">Bitrate in</span></span>
         <span class="mono stat-now"><span id="stat-rate">-</span> <span class="stat-unit" id="stat-rate-u">kbps</span></span>
@@ -3359,6 +3418,24 @@ function computeStatePill(s){
   return { label:'IDLE', desc:'', c:'var(--idle)', pulse:false };
 }
 const PLATFORM_INITIAL = { twitch:'T', youtube:'Y', kick:'K', trovo:'V', restream:'R', custom:'·', sink:'⌂' };
+// Platform marks, drawn in currentColor so each surface tints them with the
+// platform's colour. Twitch, YouTube and Kick are their own glyphs; the
+// relays and local targets get a plain symbol rather than an imitation logo.
+const PLATFORM_MARK = {
+  twitch: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.3 3 3 6.4V19h4.4v2.4h2.4L12.2 19h3.6l4.9-4.9V3zm14.8 10.4-2.8 2.8h-4.4l-2.4 2.4v-2.4H5.8V4.6h13.3zM15.2 7.3h1.6v4.8h-1.6zm-4.4 0h1.6v4.8h-1.6z"/></svg>',
+  youtube: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M21.6 7.2a2.5 2.5 0 0 0-1.8-1.8C18.2 5 12 5 12 5s-6.2 0-7.8.4A2.5 2.5 0 0 0 2.4 7.2 26 26 0 0 0 2 12c0 1.7.1 3.3.4 4.8a2.5 2.5 0 0 0 1.8 1.8c1.6.4 7.8.4 7.8.4s6.2 0 7.8-.4a2.5 2.5 0 0 0 1.8-1.8c.3-1.5.4-3.1.4-4.8s-.1-3.3-.4-4.8zM10 15.1V8.9l5.3 3.1z"/></svg>',
+  kick: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 3h5v5h2V6h2V4h2V3h5v6h-2v2h-2v2h2v2h2v6h-5v-1h-2v-2h-2v-2H9v5H4z"/></svg>',
+  restream: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="2"/><path d="M7 12h12M11 12l5-5h3M11 12l5 5h3"/></svg>',
+  custom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><path d="M8 7h.01M8 17h.01"/></svg>',
+  sink: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+};
+// The mark for `slug`, or its letter when there's no mark (Trovo, unknown).
+function platformMark(slug){
+  if (PLATFORM_MARK[slug]) return PLATFORM_MARK[slug];
+  const letter = document.createElement('span');
+  letter.textContent = PLATFORM_INITIAL[slug] || (slug || '?').charAt(0).toUpperCase();
+  return letter.outerHTML;
+}
 const PLATFORM_LABEL = { twitch:'Twitch', youtube:'YouTube', kick:'Kick', trovo:'Trovo', restream:'Restream', custom:'Custom', sink:'Local test sink' };
 // Fixed ports of the managed test-sink child - mirror config.rs
 // SINK_RTMP_PORT / SINK_WEB_PORT (documented as non-configurable).
@@ -4185,7 +4262,7 @@ function renderDestStarters(){
     tile.className = 'dest-starter platform-' + platform;
     const icon = document.createElement('span');
     icon.className = 'dest-starter-icon';
-    icon.textContent = PLATFORM_INITIAL[platform];
+    icon.innerHTML = platformMark(platform);
     const name = document.createElement('span');
     name.className = 'dest-starter-name';
     name.textContent = PLATFORM_LABEL[platform];
@@ -4196,6 +4273,74 @@ function renderDestStarters(){
     tile.onclick = () => openNewDest(platform);
     return tile;
   }));
+}
+// Signal path strip: OBS -> InstantClone (the delay) -> every destination.
+// A link animates only while data really crosses it, so a glance says
+// where the stream stops. The structure is rebuilt only when the set of
+// destinations changes; every tick just updates classes and text.
+const FLOW_OBS_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg>';
+const FLOW_IC_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>';
+const FLOW_DEST_WORDS = {off: 'switched off', wait: 'on the reconnect screen', live: 'streaming', ready: 'connected', idle: 'waiting for OBS'};
+function flowNode(id, icon, title){
+  const node = document.createElement('div');
+  node.className = 'flow-node';
+  node.id = id;
+  node.innerHTML = '<span class="flow-ic">' + icon + '</span><span class="flow-txt"><b></b><small></small></span>';
+  node.querySelector('b').textContent = title;
+  return node;
+}
+function flowDestState(d){
+  if (!d.enabled) return 'off';
+  if (d.on_hold) return 'wait';
+  if (d.alive && (d.bitrate_kbps || 0) > 0) return 'live';
+  return d.alive ? 'ready' : 'idle';
+}
+function renderFlow(){
+  const flow = $('dest-flow');
+  flow.hidden = lastDests.length === 0;
+  if (flow.hidden) return;
+  const s = lastState || {};
+  const sig = lastDests.map(d => [d.id, d.platform, d.name].join(':')).join('|');
+  if (flow._sig !== sig){
+    flow._sig = sig;
+    const dests = document.createElement('div');
+    dests.className = 'flow-dests';
+    lastDests.forEach(d => {
+      const chip = document.createElement('div');
+      chip.className = 'flow-dest platform-' + d.platform;
+      chip.dataset.id = d.id;
+      chip.innerHTML = '<span class="flow-mark">' + platformMark(d.platform) + '</span><span class="flow-dname"></span><span class="flow-dot"></span>';
+      chip.querySelector('.flow-dname').textContent = d.name;
+      dests.append(chip);
+    });
+    const link = id => Object.assign(document.createElement('span'), {className: 'flow-link', id});
+    flow.replaceChildren(flowNode('flow-obs', FLOW_OBS_ICON, 'OBS'), link('flow-in'),
+      flowNode('flow-ic', FLOW_IC_ICON, 'InstantClone'), link('flow-out'), dests);
+  }
+  const obsOn = !!s.ingest_alive;
+  const codec = s.video_codec && s.video_codec !== '?' ? ' · ' + s.video_codec : '';
+  $('flow-obs').classList.toggle('on', obsOn);
+  $('flow-obs').querySelector('small').textContent = obsOn ? 'Streaming' + codec + (s.multitrack_video ? ' · EB' : '') : 'Not connected';
+  $('flow-in').classList.toggle('on', obsOn);
+  const phase = PHASE_TO_STATE[s.phase] || 'off';
+  const secs = ms => (ms / 1000).toFixed(1) + ' s';
+  $('flow-ic').querySelector('small').textContent = s.hold ? 'Reconnect screen'
+    : phase === 'arming' ? 'Buffering ' + secs(s.buffer_fill_ms || 0) + ' / ' + fmtDelay(s.armed_delay_ms || 0)
+    : phase === 'armed' ? 'Armed · ' + fmtDelay(s.armed_delay_ms || 0) + ' ready'
+    : phase === 'active' ? 'Delayed ' + secs(s.current_delay_ms || 0)
+    : obsOn ? 'Live, no delay' : 'Waiting for OBS';
+  $('flow-ic').classList.toggle('on', obsOn || !!s.hold);
+  $('flow-ic').dataset.phase = s.hold ? 'hold' : phase;
+  let anyFlowing = false;
+  lastDests.forEach(d => {
+    const chip = flow.querySelector('.flow-dest[data-id="' + CSS.escape(d.id) + '"]');
+    if (!chip) return;
+    const state = flowDestState(d);
+    anyFlowing = anyFlowing || state === 'live' || state === 'wait';
+    chip.dataset.state = state;
+    chip.title = d.name + ': ' + FLOW_DEST_WORDS[state];
+  });
+  $('flow-out').classList.toggle('on', anyFlowing);
 }
 function rebuildDests(){
   const c = $('dest-grid');
@@ -4224,6 +4369,7 @@ function rebuildDests(){
   }
   if (c.lastElementChild !== add) c.appendChild(add);
   const waiting = lastDests.filter(d => isVerticalDest(d) && !verticalDiag(d).ready).length;
+  renderFlow();
   $('dest-sub').textContent = `${lastDests.length} configured · ${lastDests.filter(d => d.alive).length} forwarding live`
     + (waiting ? ` · ${waiting} waiting for a 9:16 canvas` : '');
 }
@@ -4320,7 +4466,7 @@ function buildDestCard(d){
     <div class="dcard-screen">
       <div class="dcard-body">
         <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">kbps</span></div>
-        <span class="dcard-foot-meta" title="Frames sent · delay cuts · reconnects" hidden><span class="dcard-frames">0</span> frames · <span class="dcard-cuts">0</span> cuts · <span class="dcard-rec">0</span> reconnects</span>
+        <span class="dcard-foot-meta" title="Frames sent · delay cuts · reconnects" hidden></span>
         <a class="dcard-player" target="_blank" rel="noopener" hidden title="Open the sink's built-in live player - watch exactly what a platform would receive, delay included">▶ Watch output</a>
       </div>
       <div class="dcard-res mono"></div>
@@ -4346,9 +4492,6 @@ function buildDestCard(d){
     res: el.querySelector('.dcard-res'),
     sparkLine: el.querySelector('.dcard-spark-line'),
     sparkFill: el.querySelector('.dcard-spark-fill'),
-    frames: el.querySelector('.dcard-frames'),
-    cuts: el.querySelector('.dcard-cuts'),
-    rec: el.querySelector('.dcard-rec'),
     meta: el.querySelector('.dcard-foot-meta'),
     toggle: el.querySelector('.dcard-toggle'),
     edit: el.querySelector('.dcard-edit'),
@@ -4371,7 +4514,7 @@ function updateDestCard(r, d){
     if (r.lastPlatform) r.el.classList.remove('platform-'+r.lastPlatform);
     r.el.classList.add('platform-'+d.platform);
     r.lastPlatform = d.platform;
-    r.icon.textContent = PLATFORM_INITIAL[d.platform] || (d.platform || '?').charAt(0).toUpperCase();
+    r.icon.innerHTML = platformMark(d.platform);
   }
   if (r.name.textContent !== d.name) r.name.textContent = d.name;
   // Host stays clean (just the platform). The format is conveyed by the
@@ -4433,11 +4576,13 @@ function updateDestCard(r, d){
   // Counters only once there is something to count.
   const frames = d.tags_sent || 0;
   r.meta.hidden = !frames && !d.cuts && !d.reconnects;
-  r.frames.textContent = frames >= 1e6 ? (frames / 1e6).toFixed(1) + 'M'
-                       : frames >= 1e4 ? (frames / 1e3).toFixed(1) + 'k'
-                       : frames.toLocaleString();
-  r.cuts.textContent = d.cuts || 0;
-  r.rec.textContent = d.reconnects || 0;
+  const count = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+  const framesText = frames >= 1e6 ? (frames / 1e6).toFixed(1) + 'M'
+                   : frames >= 1e4 ? (frames / 1e3).toFixed(1) + 'k'
+                   : frames.toLocaleString();
+  const metaText = framesText + (frames === 1 ? ' frame' : ' frames') + ' · '
+    + count(d.cuts || 0, 'cut', 'cuts') + ' · ' + count(d.reconnects || 0, 'reconnect', 'reconnects');
+  if (r.meta.textContent !== metaText) r.meta.textContent = metaText;
   r.toggle.title = d.enabled ? 'Disable this destination' : 'Enable this destination';
   r.toggle.classList.toggle('on', d.enabled);
   r.toggle.setAttribute('aria-checked', d.enabled ? 'true' : 'false');
@@ -4774,6 +4919,11 @@ function renderProfilesPane(){
   if (c._sig === sig) return;
   c._sig = sig;
   c.innerHTML = '';
+  if (!(profiles || []).length){
+    c.innerHTML = '<div class="profile-empty"><b>No saved delays yet</b>'
+      + '<span>Name a delay below, like "Tournament" at 300 seconds. It shows up as a one-click chip under the delay input, ready to arm.</span></div>';
+    return;
+  }
   profiles.forEach(p => {
     const isCur = ds !== 'off' && lastState && lastState.armed_delay_ms === p.delay_ms;
     const tooBig = cap > 0 && p.delay_ms > cap;
@@ -5390,7 +5540,7 @@ function fillWizardPlatforms(){
     // Staggered entrance when the platform step appears.
     b.style.animationDelay = (idx * 40) + 'ms';
     b.innerHTML = `<span class="w-ptile-check" aria-hidden="true">✓</span>`
-      + `<span class="w-ptile-badge">${PLATFORM_INITIAL[p.slug] || '·'}</span>`
+      + `<span class="w-ptile-badge">${platformMark(p.slug)}</span>`
       + `<span class="w-ptile-label"></span>`;
     b.querySelector('.w-ptile-label').textContent = p.label;
     b.addEventListener('click', () => {
@@ -8995,6 +9145,7 @@ async function endHold(btn){
 
 function applyState(s){
   const prev = lastState;
+  if ($('stat-idle')) $('stat-idle').hidden = !!s.ingest_alive;
   if (prev){
     if (!prev.ingest_alive && s.ingest_alive) toast('OBS connected','ok');
     else if (prev.ingest_alive && !s.ingest_alive) toast('OBS disconnected','err');

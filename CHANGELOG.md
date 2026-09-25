@@ -141,6 +141,16 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
   "Connecting…" or "Off. Switch it on to stream here." instead of a dash,
   frames, cuts and reconnects in words once there is something to count,
   and one pulse in the platform's colour when a destination goes live.
+- **Platform logos.** Twitch, YouTube and Kick show their own marks in their
+  colours on destination cards, the platform picker and the setup wizard;
+  Restream, Custom and the test sink get a clear symbol each.
+- **See the whole signal path.** Destinations shows OBS, InstantClone and
+  every platform in one strip, with the current delay in the middle; a link
+  animates only while data really flows across it.
+- **Clearer at a glance.** Larger section titles, labels and stats numbers,
+  bigger tab icons with the open tab in the accent colour, and screens that
+  explain themselves when there's nothing yet (Stats before OBS streams, an
+  empty Profiles list).
 - **A log you can read.** Every event is a row with its time and source;
   errors are red, warnings amber, good news green. Filter to Problems or
   Errors (with counts), one source, or any text, and jump back to the latest
