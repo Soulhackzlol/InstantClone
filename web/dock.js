@@ -256,6 +256,20 @@ async function cutAfter() {
   else toast('Mark set - cuts once this airs', 'ok');
   tick();
 }
+// Ending the hold ends the stream everywhere: the first click arms, a second
+// within 3 s ends it (OBS docks can't show confirm dialogs).
+async function endHold() {
+  const b = $('hold-end');
+  if (!b._armed) {
+    b._armed = true; b.textContent = 'Confirm';
+    b._reset = setTimeout(() => { b._armed = false; b.textContent = 'End now'; }, 3000);
+    return;
+  }
+  clearTimeout(b._reset); b._armed = false; b.textContent = 'End now';
+  await fetchJ('/crash-protection/end', { method: 'POST' });
+  toast('Stream ended', 'ok');
+  tick();
+}
 async function cutAfterCancel() {
   await fetchJ('/cut-after/cancel', { method: 'POST' });
   toast('Auto-cut cancelled', 'ok');
@@ -366,8 +380,17 @@ function applyState(j) {
     if (cfg.w.egress.codec && s.video_codec) parts.push(`<b>${esc(s.video_codec)}</b>${s.multitrack_video ? ' &middot; MT' : ''}`);
     if (parts.length) { eg.innerHTML = parts.join('<span class="sep">&middot;</span>'); eg.hidden = false; } else eg.hidden = true;
   } else eg.hidden = true;
+  // Crash protection: the reconnect screen is holding the destinations.
+  const hold = s.hold;
+  $('w-hold').hidden = !hold;
+  if (hold) {
+    const secs = Math.max(0, Math.ceil(hold.remaining_ms / 1000));
+    const left = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+    $('hold-l').textContent = `${hold.reason === 'freeze' ? 'OBS froze' : 'OBS dropped'} · ${left} left`;
+  }
   // Hint text: full sentences, or errors-only (encoder offline) if opted.
-  const tip = !s.ingest_alive ? 'Point your encoder at rtmp://…/live'
+  const tip = hold ? 'Viewers see the reconnect screen. Start streaming in OBS to resume.'
+    : !s.ingest_alive ? 'Point your encoder at rtmp://…/live'
     : ds === 'active' && s.safe_cut_pending ? `Auto-cut in ~${Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000))}s - marked footage still airs.`
     : ds === 'active' ? `Live ${(s.current_delay_ms / 1000).toFixed(1)}s behind real time.`
     : ds === 'armed' ? 'Buffer full. Hit Activate to go live with delay.'

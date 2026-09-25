@@ -1,6 +1,5 @@
 //! H.264 bit-level writing: fixed-width and Exp-Golomb fields, RBSP
-//! trailing bits, NAL unit framing with emulation prevention, and the
-//! AVCDecoderConfigurationRecord RTMP sends as the video sequence header.
+//! trailing bits, and NAL unit framing with emulation prevention.
 
 /// MSB-first bit writer for one RBSP.
 #[derive(Default)]
@@ -108,18 +107,6 @@ pub fn length_prefixed(nals: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-/// AVCDecoderConfigurationRecord (ISO 14496-15) for one SPS and one PPS,
-/// with 4-byte NAL lengths.
-pub fn avc_config_record(sps: &[u8], pps: &[u8]) -> Vec<u8> {
-    let mut out = vec![1, sps[1], sps[2], sps[3], 0xFF, 0xE1];
-    out.extend_from_slice(&(sps.len() as u16).to_be_bytes());
-    out.extend_from_slice(sps);
-    out.push(1);
-    out.extend_from_slice(&(pps.len() as u16).to_be_bytes());
-    out.extend_from_slice(pps);
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,14 +145,5 @@ mod tests {
             vec![0x67, 0, 0, 3, 1, 0, 0, 3, 0, 0]
         );
         assert_eq!(nal_unit(0, NAL_SLICE, &[0, 0, 4]), vec![0x01, 0, 0, 4]);
-    }
-
-    #[test]
-    fn config_record_copies_profile_and_level_from_the_sps() {
-        let sps = [0x67, 66, 0xC0, 42, 0xFF];
-        let record = avc_config_record(&sps, &[0x68, 0xCE]);
-        assert_eq!(&record[..6], &[1, 66, 0xC0, 42, 0xFF, 0xE1]);
-        assert_eq!(&record[6..8], &[0, 5]);
-        assert_eq!(&record[record.len() - 5..], &[1, 0, 2, 0x68, 0xCE]);
     }
 }

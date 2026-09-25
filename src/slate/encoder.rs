@@ -20,6 +20,13 @@ use super::raster::YuvFrame;
 const MB: usize = 16;
 const CHROMA_MB: usize = 8;
 const LOG2_MAX_FRAME_NUM: u8 = 8;
+/// Parameter-set ids for the reconnect screen. Streams from OBS use id 0,
+/// so the screen's own SPS/PPS sit beside the stream's in a decoder instead
+/// of replacing them: switching to the screen and back needs only a
+/// keyframe, never a new sequence header (which decoders don't reliably
+/// apply mid-stream).
+const SPS_ID: u32 = 1;
+const PPS_ID: u32 = 1;
 const PROFILE_BASELINE: u32 = 66;
 /// constraint_set0 + constraint_set1: Constrained Baseline.
 const CONSTRAINT_FLAGS: u32 = 0b1100_0000;
@@ -59,7 +66,7 @@ fn sps_rbsp(shape: StreamShape) -> Vec<u8> {
     w.bits(PROFILE_BASELINE, 8);
     w.bits(CONSTRAINT_FLAGS, 8);
     w.bits(level_idc(width_mbs * height_mbs, shape.fps), 8);
-    w.ue(0); // seq_parameter_set_id
+    w.ue(SPS_ID);
     w.ue(LOG2_MAX_FRAME_NUM as u32 - 4);
     w.ue(2); // pic_order_cnt_type: POC follows frame_num
     w.ue(1); // max_num_ref_frames
@@ -136,8 +143,8 @@ fn level_idc(frame_mbs: usize, fps: u32) -> u32 {
 
 fn pps_rbsp() -> Vec<u8> {
     let mut w = BitWriter::new();
-    w.ue(0); // pic_parameter_set_id
-    w.ue(0); // seq_parameter_set_id
+    w.ue(PPS_ID);
+    w.ue(SPS_ID);
     w.bit(false); // entropy_coding_mode_flag: CAVLC
     w.bit(false); // bottom_field_pic_order_in_frame_present_flag
     w.ue(0); // num_slice_groups_minus1
@@ -160,7 +167,7 @@ pub fn encode_idr(frame: &YuvFrame, idr_pic_id: u32) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.ue(0); // first_mb_in_slice
     w.ue(SLICE_TYPE_I);
-    w.ue(0); // pic_parameter_set_id
+    w.ue(PPS_ID);
     w.bits(0, LOG2_MAX_FRAME_NUM); // frame_num
     w.ue(idr_pic_id);
     w.bit(false); // no_output_of_prior_pics_flag
@@ -181,7 +188,7 @@ pub fn encode_p(frame: &YuvFrame, previous: &YuvFrame, frame_num: u32) -> Vec<u8
     let mut w = BitWriter::new();
     w.ue(0); // first_mb_in_slice
     w.ue(SLICE_TYPE_P);
-    w.ue(0); // pic_parameter_set_id
+    w.ue(PPS_ID);
     w.bits(frame_num % (1 << LOG2_MAX_FRAME_NUM), LOG2_MAX_FRAME_NUM);
     w.bit(false); // num_ref_idx_active_override_flag
     w.bit(false); // ref_pic_list_modification_flag_l0

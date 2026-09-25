@@ -390,7 +390,7 @@ impl EgressClient {
             stream_id: self.stream_id,
             ping_rx,
             ack_rx,
-            _drain_abort: drain.abort_handle(),
+            drain,
         }
     }
 }
@@ -408,14 +408,17 @@ pub struct EgressSink {
     /// see `spawn_reader_drain`. Drained by `drain_pings` on every
     /// pump tick.
     ack_rx: tokio::sync::mpsc::UnboundedReceiver<u32>,
-    // Aborts the paired drain task when the sink is dropped. Held only
-    // for its Drop side-effect; never read.
-    _drain_abort: tokio::task::AbortHandle,
+    /// The paired drain task: aborted when the sink is dropped, and
+    /// awaited by `send_delete_stream` to close the connection cleanly.
+    drain: tokio::task::JoinHandle<()>,
 }
+
+/// How long a goodbye waits for the platform to read it and close.
+const GOODBYE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl Drop for EgressSink {
     fn drop(&mut self) {
-        self._drain_abort.abort();
+        self.drain.abort();
     }
 }
 
@@ -518,7 +521,20 @@ impl EgressSink {
         amf0::enc_null(&mut buf);
         amf0::enc_number(&mut buf, self.stream_id as f64);
         self.writer.write_message(3, 0, 20, 0, &buf).await?;
-        self.writer.flush().await
+        self.writer.flush().await?;
+        // Close cleanly rather than just dropping the socket. The platform
+        // answers FCUnpublish, and closing with that answer unread makes
+        // the OS reset the connection, which can discard the deleteStream
+        // the platform hasn't read yet: it then sees a dropped stream, not
+        // a finished one. So send FIN, keep draining its replies, and let
+        // it close first (bounded, in case it never does).
+        let _ = self.writer.shutdown().await;
+        // A finished task can't be awaited again (it would panic, and
+        // panics abort the process), so only wait while it's running.
+        if !self.drain.is_finished() {
+            let _ = tokio::time::timeout(GOODBYE_WAIT, &mut self.drain).await;
+        }
+        Ok(())
     }
 }
 

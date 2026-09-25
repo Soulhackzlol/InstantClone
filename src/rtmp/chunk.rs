@@ -480,6 +480,12 @@ impl<W: AsyncWrite + Unpin> ChunkWriter<W> {
     pub async fn flush(&mut self) -> io::Result<()> {
         self.inner.flush().await
     }
+
+    /// Close the sending side (TCP FIN). The peer still gets everything
+    /// already written, and this side can keep reading until it closes.
+    pub async fn shutdown(&mut self) -> io::Result<()> {
+        self.inner.shutdown().await
+    }
 }
 
 fn write_basic_header(out: &mut Vec<u8>, fmt: u8, csid: u32) {

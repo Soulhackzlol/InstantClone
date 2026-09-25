@@ -6,7 +6,48 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
-## [0.1.15] - Vertical without Twitch, and Enhanced Broadcasting on your GPU
+## [0.1.15] - Crash protection, vertical without Twitch, and Enhanced Broadcasting on your GPU
+
+### Crash protection: OBS crashes, the stream stays up
+
+When OBS crashed, froze or lost its connection, every destination went
+offline with it, and viewers were gone by the time OBS was back. Turn on
+**Settings -> System -> Crash protection** and they stay live on a
+reconnect screen instead, for up to the time you pick (30 s to 5 min).
+
+- **A reconnect screen, not a black frame.** Two themes, **Whisper** and
+  **Arcade**, with your own accent, background, headline and subline, and
+  a live preview in Settings. It plays at the resolution each
+  destination receives, with silent audio, after any buffered delay has
+  aired, and timestamps carry on from the last real frame, so platforms
+  see one unbroken stream.
+- **OBS coming back resumes on the same connection.** No reconnect on the
+  platform side: the stream picks up at OBS's first keyframe. With a delay
+  armed, the screen stays up until the delay has rebuilt, so viewers never
+  see live.
+- **Frozen OBS counts too.** OBS still connected but sending no video for
+  3 seconds opens the same screen, and its next frame closes it.
+- **Enhanced Broadcasting is covered.** Every track of a Twitch multitrack
+  stream gets its own screen at its own resolution, the VOD audio track
+  gets its own silence, and OBS reconnecting is handed the same Twitch
+  session, so the destination carries on instead of restarting. Twitch
+  VOD-audio sessions are kept the same way.
+- **HEVC and AV1 hold the last frame.** The screen is H.264, so those
+  tracks re-send their last keyframe once a second instead.
+- **Stopping in OBS still ends the stream right away,** even while the
+  screen is up for a frozen OBS. Only a drop without a goodbye opens it. **Protect every disconnect** (under
+  Advanced) covers encoders that fail cleanly, like an NVENC error.
+- **End it early from anywhere.** A banner on the dashboard and a strip in
+  the OBS dock show the countdown with **End now** (click twice), the tray
+  menu has **End crash protection** while it is on air, and it can be
+  bound to a global hotkey or a MIDI pad. `POST /crash-protection/end`
+  does the same for a Stream Deck.
+- **You hear about it.** The destination card reads **Reconnect screen**,
+  the tray status shows the time left, and the Discord webhook posts when
+  the screen goes on air, when OBS is back, and when it ends.
+- **Good to know.** The hold time counts from the crash, so a delay still
+  airing uses part of it. A delay as long as the hold time or longer airs
+  in full and then the stream ends, as it did before crash protection.
 
 ### Vertical (9:16) no longer needs a Twitch destination
 
@@ -30,6 +71,13 @@ logs that tracked it down).
   instead of the destination sitting silent. With a Twitch destination
   whose channel has no Dual Format, the log names the vertical
   destinations that will get nothing.
+- **Enhanced Broadcasting to Twitch asks for H.264 when you multistream.**
+  Twitch picks each track's codec, and on a GPU that can encode HEVC it
+  picks HEVC, even with H.264 set in OBS. TikTok, Kick and vertical feeds
+  can't play HEVC, so a vertical destination showed "No 9:16 canvas" and
+  got nothing. While any other destination is on, InstantClone now asks
+  Twitch for H.264 tracks. Twitch-only streams keep HEVC. If a stream still
+  arrives as HEVC, the card says so and tells you to restart the stream.
 
 ### Enhanced Broadcasting without Twitch uses your GPU
 
@@ -49,6 +97,11 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
 
 ### Fixes
 
+- **Ending a stream now reaches the platform as a clean stop.** InstantClone
+  sent the platform its goodbye and closed the connection straight away,
+  and the closing could throw that goodbye away before the platform read
+  it, so the platform saw a dropped stream instead. It now closes only
+  after the platform has read it (or after 1 second).
 - **The old "VOD + EB" desktop shortcut no longer edits OBS 32.2+.** On
   those versions it can't turn on Enhanced Broadcasting for Custom RTMP, so
   it now only opens OBS and the log points to the InstantClone service and

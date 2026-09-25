@@ -191,13 +191,21 @@ Rearma o ajusta el delay arriba/abajo sin desarmar primero, expuesto como un con
 <td valign="top">
 
 **⌨ Atajos de teclado globales**
-Asigna delay on/off, armar, activar, cortar y **cortar cuando esto salga** a una combinación que funciona con un juego en pantalla completa por delante. Toda combinación necesita un modificador para que nada se dispare a media partida, una que otra app ya ocupa se marca en su fila en vez de fallar en silencio, y una acción rechazada te llega como globo en la bandeja.
+Asigna delay on/off, armar, activar, cortar, **cortar cuando esto salga** y terminar la protección contra crasheos a una combinación que funciona con un juego en pantalla completa por delante. Toda combinación necesita un modificador para que nada se dispare a media partida, una que otra app ya ocupa se marca en su fila en vez de fallar en silencio, y una acción rechazada te llega como globo en la bandeja.
 
 </td>
 <td valign="top">
 
 **🎹 Pads y controladoras MIDI**
-Mapea las mismas cinco acciones a un pad o un knob, aprendidos pulsando el control en vez de escribir un número de nota. Cada mapeo recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas aunque manden la misma nota, y puedes acotar a qué dispositivo escucha InstantClone.
+Mapea las mismas acciones a un pad o un knob, aprendidos pulsando el control en vez de escribir un número de nota. Cada mapeo recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas aunque manden la misma nota, y puedes acotar a qué dispositivo escucha InstantClone.
+
+</td>
+</tr>
+<tr>
+<td valign="top" colspan="2">
+
+**🛡 Protección contra crasheos**
+Si OBS se cuelga o se congela, todos los destinos siguen en directo con una pantalla de reconexión (Whisper o Arcade, con tus colores y tu texto) y audio en silencio, hasta 5 minutos. Cuando OBS vuelve, retoma en la misma conexión desde su primer keyframe, Enhanced Broadcasting incluido: cada pista recibe su propia pantalla y OBS recibe la misma sesión de Twitch. Las pistas HEVC y AV1 mantienen su último fotograma. Termínala antes desde el panel, el dock de OBS, la bandeja, un atajo o un pad MIDI.
 
 </td>
 </tr>
@@ -249,6 +257,7 @@ Mapea las mismas cinco acciones a un pad o un knob, aprendidos pulsando el contr
 | <kbd>POST</kbd> | `/cut-after` | | Marca el borde en directo; autocorta cuando sale en todos. |
 | <kbd>POST</kbd> | `/cut-after/cancel` | | Descarta un corte programado pendiente. |
 | <kbd>POST</kbd> | `/delay` | `ms=NNN` | De un tiro: arma y autoactiva en cuanto esté listo. |
+| <kbd>POST</kbd> | `/crash-protection/end` | | Termina ya la pantalla de reconexión: todos los destinos terminan. |
 | <kbd>GET</kbd> | `/state` | | Instantánea JSON puntual. |
 | <kbd>GET</kbd> | `/events` | | Flujo de estado JSON por server-sent events. Solo push. |
 
@@ -336,7 +345,7 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 **E/S de disco síncrona en la ruta caliente de escritura al anillo, por elección.** La escritura con buffer aterriza en la caché de páginas del SO en microsegundos y el kernel vacía en segundo plano, así que la caché de páginas ya es el buffer asíncrono; el índice y los bytes avanzan bajo un solo lock para que un lector nunca vea una etiqueta cuyos bytes aún no están en disco.
 
-**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, la configuración de Enhanced Broadcasting construida a partir de los lienzos y codificadores GPU de OBS, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **408 tests, todos en verde.**
+**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, la configuración de Enhanced Broadcasting construida a partir de los lienzos y codificadores GPU de OBS, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), la protección contra crasheos (distinguir crasheo, parada y congelado, el codificador sin pérdidas de la pantalla de reconexión comprobado con ffmpeg, el empaquetado por pista de Enhanced Broadcasting, el AAC en silencio), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **474 tests, todos en verde.**
 
 </details>
 
@@ -346,7 +355,7 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 408 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
+**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 474 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
 
 **Lo áspero, con honestidad**
 
@@ -415,7 +424,7 @@ En la pestaña **Destinos** de InstantClone, nunca en OBS. OBS solo apunta a Ins
 
 <br/>
 
-Sí, ambas cosas. Cinco acciones - delay on/off, armar, activar, cortar a directo y **cortar cuando esto salga** - se asignan a un atajo de teclado global, a un pad o knob MIDI, o a los dos a la vez, en **Ajustes**. Los atajos funcionan con un juego en pantalla completa por delante, así no haces alt-tab a media partida, y toda combinación necesita un modificador (Ctrl, Alt, Shift o Win) para que una tecla suelta no dispare una acción de delay. Los mapeos MIDI se aprenden pulsando el control en vez de escribir un número de nota, y cada uno recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas. Por ahora solo en Windows.
+Sí, ambas cosas. Seis acciones - delay on/off, armar, activar, cortar a directo, **cortar cuando esto salga** y terminar la protección contra crasheos - se asignan a un atajo de teclado global, a un pad o knob MIDI, o a los dos a la vez, en **Ajustes**. Los atajos funcionan con un juego en pantalla completa por delante, así no haces alt-tab a media partida, y toda combinación necesita un modificador (Ctrl, Alt, Shift o Win) para que una tecla suelta no dispare una acción de delay. Los mapeos MIDI se aprenden pulsando el control en vez de escribir un número de nota, y cada uno recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas. Por ahora solo en Windows.
 
 </details>
 

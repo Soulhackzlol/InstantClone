@@ -190,12 +190,13 @@ impl MidiState {
         let bindings = {
             let b = self.bindings.lock();
             format!(
-                r#"{{"toggle":{t},"arm":{a},"activate":{ac},"cut":{c},"cut_after":{ca}}}"#,
+                r#"{{"toggle":{t},"arm":{a},"activate":{ac},"cut":{c},"cut_after":{ca},"end_hold":{eh}}}"#,
                 t = json_string(&b.toggle),
                 a = json_string(&b.arm),
                 ac = json_string(&b.activate),
                 c = json_string(&b.cut),
                 ca = json_string(&b.cut_after),
+                eh = json_string(&b.end_hold),
             )
         };
         format!(

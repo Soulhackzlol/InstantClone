@@ -191,13 +191,21 @@ Re-arm or nudge the delay up/down without disarming first, exposed as a single t
 <td valign="top">
 
 **⌨ Global hotkeys**
-Bind delay on/off, arm, activate, cut, and **cut after this airs** to a key combo that fires while a fullscreen game holds focus. Every binding needs a modifier so nothing trips mid-match, a combo another app already owns is flagged on the row instead of failing silently, and a refused action reaches you as a tray balloon.
+Bind delay on/off, arm, activate, cut, **cut after this airs**, and ending crash protection to a key combo that fires while a fullscreen game holds focus. Every binding needs a modifier so nothing trips mid-match, a combo another app already owns is flagged on the row instead of failing silently, and a refused action reaches you as a tray balloon.
 
 </td>
 <td valign="top">
 
 **🎹 MIDI pads and decks**
-Map the same five actions to a pad or knob, learned by pressing the control rather than typing a note number. Each mapping remembers which device it came from, so two controllers can drive different actions even when they send the same note, and you can narrow which device InstantClone listens to.
+Map the same actions to a pad or knob, learned by pressing the control rather than typing a note number. Each mapping remembers which device it came from, so two controllers can drive different actions even when they send the same note, and you can narrow which device InstantClone listens to.
+
+</td>
+</tr>
+<tr>
+<td valign="top" colspan="2">
+
+**🛡 Crash protection**
+If OBS crashes or freezes, every destination stays live on a reconnect screen (Whisper or Arcade, your colours and text) with silent audio, for up to 5 minutes. OBS coming back resumes on the same connection at its first keyframe, Enhanced Broadcasting included: each track gets its own screen and OBS is handed the same Twitch session. HEVC and AV1 tracks hold their last frame. End it early from the dashboard, the OBS dock, the tray, a hotkey or a MIDI pad.
 
 </td>
 </tr>
@@ -249,6 +257,7 @@ Map the same five actions to a pad or knob, learned by pressing the control rath
 | <kbd>POST</kbd> | `/cut-after` | | Mark the live edge; auto-cut once it airs everywhere. |
 | <kbd>POST</kbd> | `/cut-after/cancel` | | Drop a pending scheduled cut. |
 | <kbd>POST</kbd> | `/delay` | `ms=NNN` | One-shot: arm, auto-activate as soon as ready. |
+| <kbd>POST</kbd> | `/crash-protection/end` | | End the reconnect screen now: every destination ends. |
 | <kbd>GET</kbd> | `/state` | | One-shot JSON snapshot. |
 | <kbd>GET</kbd> | `/events` | | Server-sent stream of state JSON. Push-only. |
 
@@ -336,7 +345,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 **Sync disk I/O on the ring-append hot path, by choice.** The buffered write lands in the OS page cache in microseconds and the kernel flushes in the background, so the page cache is already the async buffer; the index and the bytes advance under one lock so a reader never sees a tag whose bytes aren't on disk yet.
 
-**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the Enhanced Broadcasting config built from OBS's canvases and GPU encoders, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), and the self-update download + checksum-verify + exe swap. **408 tests, all green.**
+**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the Enhanced Broadcasting config built from OBS's canvases and GPU encoders, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), crash protection (crash vs. stop vs. freeze detection, the lossless reconnect-screen encoder checked against ffmpeg, per-track framing for Enhanced Broadcasting, silent AAC), and the self-update download + checksum-verify + exe swap. **474 tests, all green.**
 
 </details>
 
@@ -346,7 +355,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 408 tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
+**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 474 tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's rough, honestly**
 
@@ -415,7 +424,7 @@ In InstantClone's **Destinations** tab, never in OBS. OBS only ever points at In
 
 <br/>
 
-Yes, both. Five actions - delay on/off, arm, activate, cut to live, and **cut after this airs** - bind to a global keyboard shortcut, a MIDI pad or knob, or both at once, in **Settings**. Hotkeys fire while a fullscreen game holds focus, so you never alt-tab mid-match, and every binding needs a modifier (Ctrl, Alt, Shift or Win) so a stray keypress can't trip a delay action. MIDI mappings are learned by pressing the control rather than typing a note number, and each one remembers which device it came from, so two controllers can drive different actions. Windows only for now.
+Yes, both. Six actions - delay on/off, arm, activate, cut to live, **cut after this airs**, and ending crash protection - bind to a global keyboard shortcut, a MIDI pad or knob, or both at once, in **Settings**. Hotkeys fire while a fullscreen game holds focus, so you never alt-tab mid-match, and every binding needs a modifier (Ctrl, Alt, Shift or Win) so a stray keypress can't trip a delay action. MIDI mappings are learned by pressing the control rather than typing a note number, and each one remembers which device it came from, so two controllers can drive different actions. Windows only for now.
 
 </details>
 

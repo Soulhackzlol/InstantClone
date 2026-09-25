@@ -159,11 +159,12 @@ pub const HK_MOD_CONTROL: u32 = 0x0002;
 pub const HK_MOD_SHIFT: u32 = 0x0004;
 pub const HK_MOD_WIN: u32 = 0x0008;
 
-/// The five delay actions a hotkey or MIDI control can drive, in the order
-/// everything else keys off: `Hotkeys::entries`, `MidiBindings::entries`, and
-/// the tray's `RegisterHotKey` ids. Adding an action means adding it here and
-/// to the two structs below, and nothing else has to agree by hand.
-pub const ACTIONS: [&str; 5] = ["toggle", "arm", "activate", "cut", "cut_after"];
+/// The actions a hotkey or MIDI control can drive, in the order everything
+/// else keys off: `Hotkeys::entries`, `MidiBindings::entries`, and the
+/// tray's `RegisterHotKey` ids. Adding an action means adding it here and to
+/// the two structs below, and nothing else has to agree by hand. New actions
+/// go at the end so existing tray ids stay put.
+pub const ACTIONS: [&str; 6] = ["toggle", "arm", "activate", "cut", "cut_after", "end_hold"];
 
 /// Global hotkey bindings, one canonical combo string per delay action
 /// (e.g. "Ctrl+Alt+D"; empty means unbound). Windows binds them via
@@ -184,19 +185,22 @@ pub struct Hotkeys {
     pub cut: String,
     /// Schedule a cut for the moment the current live edge airs.
     pub cut_after: String,
+    /// End a crash-protection hold now (every destination ends).
+    pub end_hold: String,
 }
 
 impl Hotkeys {
     /// Stable (action-name, binding) pairs. One source of truth for the
     /// save writer, the JSON serializer, and the tray registrar, so a new
     /// action is added in exactly one place.
-    pub fn entries(&self) -> [(&'static str, &str); 5] {
+    pub fn entries(&self) -> [(&'static str, &str); 6] {
         [
             ("toggle", &self.toggle),
             ("arm", &self.arm),
             ("activate", &self.activate),
             ("cut", &self.cut),
             ("cut_after", &self.cut_after),
+            ("end_hold", &self.end_hold),
         ]
     }
 
@@ -207,6 +211,7 @@ impl Hotkeys {
             "activate" => &mut self.activate,
             "cut" => &mut self.cut,
             "cut_after" => &mut self.cut_after,
+            "end_hold" => &mut self.end_hold,
             _ => return None,
         })
     }
@@ -246,10 +251,10 @@ impl Hotkeys {
     }
 }
 
-/// MIDI controller bindings, one signature string per delay action (empty
+/// MIDI controller bindings, one signature string per action (empty
 /// means unbound). A signature is `note:<channel>:<note>` for a note-on pad
 /// or `cc:<channel>:<controller>` for a control-change knob/button, channel
-/// 1-16 and data 0-127. Same five actions as `Hotkeys`; the MIDI listener
+/// 1-16 and data 0-127. Same actions as `Hotkeys`; the MIDI listener
 /// thread matches an incoming message against these and fires the shared
 /// controller action. Windows-only in effect (winmm), round-tripped
 /// everywhere.
@@ -260,17 +265,19 @@ pub struct MidiBindings {
     pub activate: String,
     pub cut: String,
     pub cut_after: String,
+    pub end_hold: String,
 }
 
 impl MidiBindings {
     /// Stable (action-name, signature) pairs, mirroring `Hotkeys::entries`.
-    pub fn entries(&self) -> [(&'static str, &str); 5] {
+    pub fn entries(&self) -> [(&'static str, &str); 6] {
         [
             ("toggle", &self.toggle),
             ("arm", &self.arm),
             ("activate", &self.activate),
             ("cut", &self.cut),
             ("cut_after", &self.cut_after),
+            ("end_hold", &self.end_hold),
         ]
     }
 
@@ -281,6 +288,7 @@ impl MidiBindings {
             "activate" => &mut self.activate,
             "cut" => &mut self.cut,
             "cut_after" => &mut self.cut_after,
+            "end_hold" => &mut self.end_hold,
             _ => return None,
         })
     }
@@ -1442,20 +1450,22 @@ impl Settings {
         // Hotkey bindings. Not secrets, so always emitted; the dashboard
         // only surfaces the editor on Windows (where they take effect).
         let hotkeys = format!(
-            r#"{{"toggle":{t},"arm":{a},"activate":{ac},"cut":{c},"cut_after":{ca}}}"#,
+            r#"{{"toggle":{t},"arm":{a},"activate":{ac},"cut":{c},"cut_after":{ca},"end_hold":{eh}}}"#,
             t = json_str(&self.hotkeys.toggle),
             a = json_str(&self.hotkeys.arm),
             ac = json_str(&self.hotkeys.activate),
             c = json_str(&self.hotkeys.cut),
             ca = json_str(&self.hotkeys.cut_after),
+            eh = json_str(&self.hotkeys.end_hold),
         );
         let midi = format!(
-            r#"{{"toggle":{t},"arm":{a},"activate":{ac},"cut":{c},"cut_after":{ca}}}"#,
+            r#"{{"toggle":{t},"arm":{a},"activate":{ac},"cut":{c},"cut_after":{ca},"end_hold":{eh}}}"#,
             t = json_str(&self.midi.toggle),
             a = json_str(&self.midi.arm),
             ac = json_str(&self.midi.activate),
             c = json_str(&self.midi.cut),
             ca = json_str(&self.midi.cut_after),
+            eh = json_str(&self.midi.end_hold),
         );
         // The two raw credentials are emitted only for a full session; a
         // dock-token caller gets them blanked (see the doc comment above).
@@ -1542,6 +1552,12 @@ impl Settings {
         for d in &self.destinations {
             if d.name.trim().is_empty() {
                 errs.push("destination is missing a name".into());
+                continue;
+            }
+            // A switched-off destination is never streamed, so a half-filled
+            // one (no server URL or key yet) must not block saving anything
+            // else. Switching it on runs the checks below.
+            if !d.enabled {
                 continue;
             }
             if d.platform == "custom" || d.platform == "kick" {
@@ -2415,6 +2431,31 @@ mod tests {
             "kick with no server URL must report a clear error: {:?}",
             s.validate()
         );
+    }
+
+    /// A switched-off, half-filled destination must not block saving other
+    /// settings (turning on crash protection failed on one); switching it
+    /// on still needs its fields.
+    #[test]
+    fn a_disabled_incomplete_destination_does_not_block_saving() {
+        let mut s = Settings::defaults();
+        s.destinations.push(Destination {
+            id: "k".into(),
+            name: "test3".into(),
+            enabled: false,
+            platform: "kick".into(),
+            stream_key: String::new(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
+        });
+        assert!(s.validate().is_empty(), "{:?}", s.validate());
+        s.destinations[0].enabled = true;
+        assert!(s.validate().iter().any(|e| e.contains("Kick Server URL")));
     }
 
     #[test]

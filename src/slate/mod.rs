@@ -26,23 +26,17 @@ const MIN_SIDE: usize = 16;
 const MAX_SIDE: usize = 8192;
 const MAX_FPS: u32 = 240;
 
-/// One encoded loop, ready to be wrapped in RTMP video tags.
+/// One encoded loop, ready to be wrapped in RTMP video tags. It needs no
+/// sequence header of its own: every keyframe carries the loop's SPS and
+/// PPS in-band, under ids the stream it interrupts doesn't use.
 pub struct SlateLoop {
-    /// AVCDecoderConfigurationRecord for the video sequence header.
-    pub avc_config: Vec<u8>,
-    /// The loop's first picture as an AVCC sample, encoded twice with
-    /// idr_pic_id 0 and 1. Replays alternate them, because back-to-back
-    /// IDRs must not share an id.
+    /// The loop's first picture as an AVCC sample (SPS, PPS, IDR), encoded
+    /// twice with idr_pic_id 0 and 1. Replays alternate them, because
+    /// back-to-back IDRs must not share an id.
     pub keyframes: [Vec<u8>; 2],
     /// The rest of the loop (P pictures) as AVCC samples, in order.
     pub deltas: Vec<Vec<u8>>,
     pub shape: StreamShape,
-}
-
-impl SlateLoop {
-    pub fn frame_count(&self) -> usize {
-        1 + self.deltas.len()
-    }
 }
 
 /// The encoder only handles 4:2:0 frames with even sides.
@@ -96,28 +90,52 @@ pub fn build_loop(
     let render = |index: usize| {
         let mut canvas = Canvas::new(shape.width, shape.height, style.background);
         themes::draw(&mut canvas, &style, index as f32 / frame_count as f32);
-        canvas.to_yuv420()
+        canvas
     };
 
-    let first = render(0);
-    let keyframes = [0, 1]
-        .map(|idr_pic_id| bitstream::length_prefixed(&[&encoder::encode_idr(&first, idr_pic_id)]));
+    let parameter_sets = encoder::parameter_sets(shape);
+    let mut previous_canvas = render(0);
+    let mut previous = previous_canvas.to_yuv420();
+    let keyframes = [0, 1].map(|idr_pic_id| {
+        let idr = encoder::encode_idr(&previous, idr_pic_id);
+        bitstream::length_prefixed(&[&parameter_sets.sps, &parameter_sets.pps, &idr])
+    });
     let mut deltas = Vec::with_capacity(frame_count - 1);
-    let mut previous = first;
     for index in 1..frame_count {
-        let frame = render(index);
+        let canvas = render(index);
+        // Only the animated rows change between frames.
+        let frame = canvas.to_yuv420_after(&previous_canvas, &previous);
         let picture = encoder::encode_p(&frame, &previous, index as u32);
         deltas.push(bitstream::length_prefixed(&[&picture]));
-        previous = frame;
+        (previous_canvas, previous) = (canvas, frame);
     }
 
-    let parameter_sets = encoder::parameter_sets(shape);
     Ok(SlateLoop {
-        avc_config: bitstream::avc_config_record(&parameter_sets.sps, &parameter_sets.pps),
         keyframes,
         deltas,
         shape,
     })
+}
+
+/// A legacy FLV H.264 sequence-header tag describing a `width` x `height`
+/// stream, for tests that need video the reconnect screen can cover.
+#[cfg(test)]
+pub fn test_sequence_header(width: usize, height: usize) -> Vec<u8> {
+    let sets = encoder::parameter_sets(StreamShape {
+        width,
+        height,
+        fps: 30,
+    });
+    let (sps, pps) = (&sets.sps, &sets.pps);
+    // AVCDecoderConfigurationRecord: version 1, profile/compat/level from
+    // the SPS, 4-byte NAL lengths, one SPS, one PPS.
+    let mut tag = vec![0x17, 0, 0, 0, 0, 1, sps[1], sps[2], sps[3], 0xFF, 0xE1];
+    tag.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+    tag.extend_from_slice(sps);
+    tag.push(1);
+    tag.extend_from_slice(&(pps.len() as u16).to_be_bytes());
+    tag.extend_from_slice(pps);
+    tag
 }
 
 fn frames_per_loop(fps: u32) -> usize {
@@ -145,8 +163,30 @@ mod tests {
             fps: 30,
         };
         let slate = build_loop(&settings(SlateTheme::Arcade), shape).unwrap();
-        assert_eq!(slate.frame_count(), 60);
+        assert_eq!(1 + slate.deltas.len(), 60);
         assert_ne!(slate.keyframes[0], slate.keyframes[1], "idr_pic_id differs");
+    }
+
+    #[test]
+    fn keyframes_carry_their_own_parameter_sets_in_band() {
+        let shape = StreamShape {
+            width: 320,
+            height: 180,
+            fps: 10,
+        };
+        let slate = build_loop(&settings(SlateTheme::Whisper), shape).unwrap();
+        let types = |sample: &[u8]| {
+            nal_units(sample)
+                .iter()
+                .map(|nal| nal[0] & 0x1F)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(types(&slate.keyframes[0]), vec![7, 8, 5], "SPS, PPS, IDR");
+        assert_eq!(
+            types(&slate.deltas[0]),
+            vec![1],
+            "P frames are just the slice"
+        );
     }
 
     #[test]
@@ -202,21 +242,27 @@ mod tests {
         }
     }
 
+    /// The NAL units of one AVCC sample (4-byte big-endian lengths).
+    fn nal_units(sample: &[u8]) -> Vec<&[u8]> {
+        let mut units = Vec::new();
+        let mut at = 0;
+        while at + 4 <= sample.len() {
+            let len = u32::from_be_bytes(sample[at..at + 4].try_into().unwrap()) as usize;
+            units.push(&sample[at + 4..at + 4 + len]);
+            at += 4 + len;
+        }
+        units
+    }
+
     /// Two loop replays as an Annex B elementary stream.
     fn annex_b(slate: &SlateLoop) -> Vec<u8> {
-        let record = &slate.avc_config;
-        let sps_len = u16::from_be_bytes([record[6], record[7]]) as usize;
-        let sps = &record[8..8 + sps_len];
-        let pps = &record[8 + sps_len + 3..];
         let mut out = Vec::new();
-        for nal in [sps, pps] {
-            out.extend_from_slice(&[0, 0, 0, 1]);
-            out.extend_from_slice(nal);
-        }
         for keyframe in &slate.keyframes {
             for sample in std::iter::once(keyframe).chain(&slate.deltas) {
-                out.extend_from_slice(&[0, 0, 0, 1]);
-                out.extend_from_slice(&sample[4..]);
+                for nal in nal_units(sample) {
+                    out.extend_from_slice(&[0, 0, 0, 1]);
+                    out.extend_from_slice(nal);
+                }
             }
         }
         out

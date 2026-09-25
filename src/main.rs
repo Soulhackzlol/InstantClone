@@ -30,6 +30,7 @@ mod buffer;
 mod compat;
 mod config;
 mod controller;
+mod crash_hold;
 mod crash_protection;
 mod crypto;
 mod h264;
@@ -683,6 +684,10 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
     loop {
         // Snapshot the current desired destinations.
         let desired: Vec<(config::Destination, String)> = { rx.borrow().active_destinations() };
+        // Crash protection reads its settings from the controller, which
+        // decides whether to open a hold the instant OBS drops.
+        let crash_settings = rx.borrow().crash_protection.clone();
+        ctrl.update_crash_protection(crash_settings.clone());
 
         // Keep the managed test-sink child in sync with the desired set
         // BEFORE the pump diff below, so a freshly enabled sink
@@ -864,8 +869,13 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             }
             let effective_url = override_url.as_deref().unwrap_or(url.as_str()).to_string();
             let url = &effective_url;
+            // A URL change during a crash-protection hold waits: dropping OBS
+            // clears Twitch's session URL, and restarting now would take the
+            // destination off the reconnect screen.
             let needs_restart = match running.get(&dest.id) {
-                Some((existing_url, handle)) => existing_url != url || handle.is_finished(),
+                Some((existing_url, handle)) => {
+                    (existing_url != url && !ctrl.hold_active()) || handle.is_finished()
+                }
                 None => true,
             };
             if needs_restart {
@@ -944,6 +954,17 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 ));
                 running.insert(dest.id.clone(), (url_clone, handle));
                 ctrl.log(format!("[{}] starting egress", dest.name));
+            }
+        }
+
+        // Close a hold whose time ran out, and keep a reconnect loop encoded
+        // for each live destination's resolution, so a hold starts without
+        // waiting a second or two on the encoder.
+        ctrl.expire_hold();
+        ctrl.check_ingest_freeze();
+        if ingest_alive && crash_settings.enabled {
+            for id in running.keys() {
+                crash_hold::prebuild_for(&ctrl, &ctrl.destination_state(id), &crash_settings);
             }
         }
 
@@ -1449,6 +1470,9 @@ const OVERLAY_CUSTOM_TEMPLATE: &str = include_str!("../overlays/custom-template.
 
 #[cfg(test)]
 mod tests {
+    use super::anchor_dir;
+    use std::path::{Path, PathBuf};
+
     #[test]
     fn vertical_wait_logs_once_per_session_after_the_grace() {
         let mut log = super::VerticalWaitLog::default();
@@ -1474,9 +1498,6 @@ mod tests {
         log.retain(|id| id != "tiktok");
         assert!(log.seen.is_empty(), "deleted destinations are forgotten");
     }
-
-    use super::anchor_dir;
-    use std::path::{Path, PathBuf};
 
     #[test]
     fn anchor_dir_picks_the_folder_holding_the_exe() {

@@ -72,6 +72,19 @@ pub struct CrashProtection {
     pub every_disconnect: bool,
 }
 
+impl CrashProtection {
+    /// Whether `other` draws the same reconnect screen. The hold time and
+    /// what triggers a hold don't change the picture, so editing them
+    /// never re-encodes a loop.
+    pub fn same_screen(&self, other: &CrashProtection) -> bool {
+        self.theme == other.theme
+            && self.accent == other.accent
+            && self.resolved_background() == other.resolved_background()
+            && self.headline == other.headline
+            && self.subline == other.subline
+    }
+}
+
 impl Default for CrashProtection {
     fn default() -> Self {
         Self {

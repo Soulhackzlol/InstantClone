@@ -128,25 +128,73 @@ impl Canvas {
         let coded_width = self.width.div_ceil(16) * 16;
         let coded_height = self.height.div_ceil(16) * 16;
         let mut frame = YuvFrame::blank(coded_width, coded_height);
-        for y in 0..coded_height {
-            for x in 0..coded_width {
-                frame.y[y * coded_width + x] = luma(self.edge_pixel(x, y));
-            }
+        for pair in 0..coded_height / 2 {
+            self.convert_row_pair(&mut frame, pair);
         }
-        let chroma_width = coded_width / 2;
-        for cy in 0..coded_height / 2 {
-            for cx in 0..chroma_width {
-                let (mut u_sum, mut v_sum) = (0.0, 0.0);
-                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                    let (u, v) = chroma(self.edge_pixel(cx * 2 + dx, cy * 2 + dy));
-                    u_sum += u;
-                    v_sum += v;
-                }
-                frame.u[cy * chroma_width + cx] = to_sample(128.0 + u_sum / 4.0);
-                frame.v[cy * chroma_width + cx] = to_sample(128.0 + v_sum / 4.0);
+        frame
+    }
+
+    /// `to_yuv420`, reusing `before_frame` (the conversion of `before`)
+    /// for every pair of rows the two canvases share. A loop's frames
+    /// differ in a few rows, and converting the rest again was 90% of the
+    /// time it takes to build one.
+    pub fn to_yuv420_after(&self, before: &Canvas, before_frame: &YuvFrame) -> YuvFrame {
+        let mut frame = before_frame.clone();
+        for pair in 0..frame.height / 2 {
+            let changed = [2 * pair, 2 * pair + 1]
+                .iter()
+                .any(|&y| self.row(y) != before.row(y));
+            if changed {
+                self.convert_row_pair(&mut frame, pair);
             }
         }
         frame
+    }
+
+    /// Coded luma rows `2 * pair` and `2 * pair + 1`, and chroma row
+    /// `pair`. Neighbouring pixels are usually the same colour, so each
+    /// conversion is reused until the colour changes.
+    fn convert_row_pair(&self, frame: &mut YuvFrame, pair: usize) {
+        let coded_width = frame.width;
+        let rows = [self.row(2 * pair), self.row(2 * pair + 1)];
+        let at = |row: &[Rgb], x: usize| row[x.min(self.width - 1)];
+        for (offset, row) in rows.iter().enumerate() {
+            let start = (2 * pair + offset) * coded_width;
+            let mut last = (row[0], luma(row[0]));
+            for (x, sample) in frame.y[start..start + coded_width].iter_mut().enumerate() {
+                let pixel = at(row, x);
+                if pixel != last.0 {
+                    last = (pixel, luma(pixel));
+                }
+                *sample = last.1;
+            }
+        }
+        let chroma_width = coded_width / 2;
+        let mut last: Option<([Rgb; 4], (u8, u8))> = None;
+        for cx in 0..chroma_width {
+            let quad = [
+                at(rows[0], 2 * cx),
+                at(rows[0], 2 * cx + 1),
+                at(rows[1], 2 * cx),
+                at(rows[1], 2 * cx + 1),
+            ];
+            let (u, v) = match last {
+                Some((seen, samples)) if seen == quad => samples,
+                _ => {
+                    let samples = chroma_samples(quad);
+                    last = Some((quad, samples));
+                    samples
+                }
+            };
+            frame.u[pair * chroma_width + cx] = u;
+            frame.v[pair * chroma_width + cx] = v;
+        }
+    }
+
+    /// Row `y`, repeating the bottom edge below the canvas.
+    fn row(&self, y: usize) -> &[Rgb] {
+        let start = y.min(self.height - 1) * self.width;
+        &self.pixels[start..start + self.width]
     }
 
     /// 24-bit top-down BMP, for the dashboard preview. Uncompressed on
@@ -180,12 +228,6 @@ impl Canvas {
             out.resize(start + row_bytes, 0);
         }
         out
-    }
-
-    fn edge_pixel(&self, x: usize, y: usize) -> Rgb {
-        let x = x.min(self.width - 1);
-        let y = y.min(self.height - 1);
-        self.pixels[y * self.width + x]
     }
 }
 
@@ -225,6 +267,20 @@ fn luma(color: Rgb) -> u8 {
     to_sample(16.0 + luma_linear(color) * 219.0 / 255.0)
 }
 
+/// U and V samples for a 2x2 block of pixels: their chroma, averaged.
+fn chroma_samples(quad: [Rgb; 4]) -> (u8, u8) {
+    let (mut u_sum, mut v_sum) = (0.0, 0.0);
+    for pixel in quad {
+        let (u, v) = chroma(pixel);
+        u_sum += u;
+        v_sum += v;
+    }
+    (
+        to_sample(128.0 + u_sum / 4.0),
+        to_sample(128.0 + v_sum / 4.0),
+    )
+}
+
 /// Chroma offsets from 128, before averaging.
 fn chroma(color: Rgb) -> (f32, f32) {
     let y = luma_linear(color);
@@ -256,8 +312,8 @@ mod tests {
     fn fill_rect_clips_to_canvas() {
         let mut canvas = Canvas::new(8, 8, Rgb::new(0, 0, 0));
         canvas.fill_rect(-4, 6, 100, 100, Rgb::new(255, 0, 0));
-        assert_eq!(canvas.edge_pixel(0, 5), Rgb::new(0, 0, 0));
-        assert_eq!(canvas.edge_pixel(7, 7), Rgb::new(255, 0, 0));
+        assert_eq!(canvas.row(5)[0], Rgb::new(0, 0, 0));
+        assert_eq!(canvas.row(7)[7], Rgb::new(255, 0, 0));
     }
 
     #[test]
@@ -280,5 +336,19 @@ mod tests {
         assert_eq!(frame.y[19], 16, "black is limited-range 16");
         assert_eq!(frame.y[31], 16, "padding repeats the right edge");
         assert_eq!(frame.u[0], 128);
+    }
+
+    #[test]
+    fn converting_only_changed_rows_matches_a_full_conversion() {
+        let mut before = Canvas::new(20, 18, Rgb::new(10, 20, 30));
+        before.fill_rect(2, 2, 6, 3, Rgb::new(200, 40, 90));
+        let mut after = Canvas::new(20, 18, Rgb::new(10, 20, 30));
+        after.fill_rect(2, 2, 6, 3, Rgb::new(200, 40, 90));
+        // A middle row and the bottom edge, which the padding repeats.
+        after.fill_rect(5, 9, 3, 1, Rgb::new(90, 250, 12));
+        after.fill_rect(0, 17, 20, 1, Rgb::new(255, 255, 255));
+        let reused = after.to_yuv420_after(&before, &before.to_yuv420());
+        let full = after.to_yuv420();
+        assert!(reused.y == full.y && reused.u == full.u && reused.v == full.v);
     }
 }

@@ -181,6 +181,7 @@ fn snap(value: f32, step: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::raster::YuvFrame;
     use super::*;
 
     fn arcade_style() -> ScreenStyle<'static> {
@@ -193,8 +194,7 @@ mod tests {
         }
     }
 
-    fn is_flat_block(canvas: &Canvas, block_x: usize, block_y: usize) -> bool {
-        let frame = canvas.to_yuv420();
+    fn is_flat_block(frame: &YuvFrame, block_x: usize, block_y: usize) -> bool {
         let first = frame.y[block_y * 16 * frame.width + block_x * 16];
         (0..16).all(|dy| {
             (0..16)
@@ -207,11 +207,12 @@ mod tests {
         let style = arcade_style();
         let mut canvas = Canvas::new(1920, 1080, style.background);
         draw(&mut canvas, &style, 0.75);
+        let frame = canvas.to_yuv420();
         // Headline cells are 16 px and snapped to multiples of 16, so the
         // block rows the headline occupies are all single-colour.
         let blocks_wide = 1920 / 16;
         let flat = (0..blocks_wide)
-            .filter(|bx| is_flat_block(&canvas, *bx, 24))
+            .filter(|bx| is_flat_block(&frame, *bx, 24))
             .count();
         assert_eq!(flat, blocks_wide, "every headline-row block should be flat");
     }

@@ -111,9 +111,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # native-tls links system OpenSSL on Linux (schannel on Windows), so the
-      # headers must be present for the build to link.
+      # headers must be present for the build to link. ffmpeg lets the
+      # reconnect screen's lossless round-trip test run instead of skipping.
       - name: install build deps
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev ffmpeg
 
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings

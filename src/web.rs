@@ -1114,6 +1114,14 @@ async fn route(
         ("POST", "/go-live") => post_stop(ctrl, settings, cfg_path, sysstat).await,
         ("POST", "/cut-after") => post_cut_after(ctrl, settings, sysstat).await,
         ("POST", "/cut-after/cancel") => post_cut_after_cancel(ctrl, settings, sysstat).await,
+        ("POST", "/crash-protection/end") => {
+            ctrl.end_hold_now();
+            (
+                "200 OK",
+                "application/json",
+                state_json(ctrl, settings, sysstat),
+            )
+        }
         // MIDI mapping (Windows). Learn mode is server-side because the MIDI
         // events arrive at the backend, not the browser; the dashboard polls.
         #[cfg(windows)]
@@ -1300,6 +1308,23 @@ fn dest_video(
     }
 }
 
+/// The crash-protection hold for `/state`: `null`, or why it is on air and
+/// how long it has left.
+fn hold_json(ctrl: &Controller) -> String {
+    match ctrl.hold_status() {
+        Some(status) => format!(
+            r#"{{"reason":"{}","remaining_ms":{},"total_ms":{}}}"#,
+            match status.reason {
+                crate::crash_hold::HoldReason::Crash => "crash",
+                crate::crash_hold::HoldReason::Freeze => "freeze",
+            },
+            status.remaining.as_millis(),
+            status.total.as_millis()
+        ),
+        None => "null".into(),
+    }
+}
+
 fn state_json(
     ctrl: &Controller,
     settings: &Arc<watch::Sender<Settings>>,
@@ -1326,6 +1351,7 @@ fn state_json(
     // only refetched on config edits; anything live that lives solely
     // there freezes on the cards until the user reloads.
     let readouts = video_readouts(ctrl);
+    let holding = ctrl.hold_active();
     let dest_list = s.destinations.iter().map(|d| {
         let st = snap.iter().find(|t| t.0 == d.id);
         let (alive, kbps, tags, bytes, cuts, recon) = st
@@ -1333,7 +1359,7 @@ fn state_json(
             .unwrap_or((false, 0u32, 0u64, 0u64, 0u32, 0u32));
         let v = dest_video(ctrl, d, &readouts);
         format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"reconnects":{rc},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"reconnects":{rc},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"on_hold":{oh}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled, al = alive, br = kbps, ts = tags, bs = bytes, cu = cuts, rc = recon,
@@ -1341,6 +1367,7 @@ fn state_json(
             vcp = v.vertical_canvas_present,
             vres = json_escape_quoted(&v.res),
             vcod = json_escape_quoted(&v.codec),
+            oh = holding && alive && crate::crash_hold::covers(ctrl, &ctrl.destination_state(&d.id)),
         )
     }).collect::<Vec<_>>().join(",");
 
@@ -1362,10 +1389,11 @@ fn state_json(
             .is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
+        hold = hold_json(ctrl),
         cw = json_escape_quoted(&compat_warning),
         la = ctrl
             .last_action()
@@ -1580,6 +1608,22 @@ async fn obs_multitrack_config_proxy(
         return obs_multitrack_config_static(query, body, settings);
     }
 
+    // OBS is back while crash protection keeps its Twitch session live on
+    // the reconnect screen: hand it the same config, so it publishes the
+    // same tracks with the same session token and the destination carries
+    // on without a restart.
+    if let Some(config) = ctrl.held_eb_config() {
+        ctrl.log(
+            "[OBS multitrack] crash protection: OBS is back - continuing the live \
+             Twitch session",
+        );
+        crate::trace::log(
+            "OBS_MULTITRACK",
+            "hold active - reusing the live EB session",
+        );
+        return config;
+    }
+
     // The streamer's real Twitch key lives in our destinations list.
     // Pick the first enabled Twitch destination with a non-empty key.
     // Also report what we found in the dashboard event log - the
@@ -1616,6 +1660,22 @@ async fn obs_multitrack_config_proxy(
             );
             return obs_multitrack_config_static(query, body, settings);
         }
+    };
+
+    // Twitch picks each track's codec from the ones OBS offers, and hands
+    // HEVC to any GPU that has it. The other destinations get these same
+    // tracks, so while one is enabled only H.264 is offered.
+    let needs_h264 = forwards_eb_beyond_twitch(&settings.borrow().destinations);
+    let modified_body = match offer_only_h264(&modified_body) {
+        Some(h264_only) if needs_h264 && h264_only != modified_body => {
+            ctrl.log(
+                "[OBS multitrack] asking Twitch for H.264 tracks - your other \
+                 destinations can't play HEVC or AV1",
+            );
+            crate::trace::log("OBS_MULTITRACK", "supported_codecs narrowed to h264");
+            h264_only
+        }
+        _ => modified_body,
     };
 
     let ingest_port = settings.borrow().ingest_port;
@@ -1829,6 +1889,17 @@ async fn obs_multitrack_config_proxy(
         if let Some(id) = chosen_id {
             let state = ctrl.destination_state(&id);
             *state.eb_override_url.lock() = Some(ivs.clone());
+            let auths = if endpoint_auths.is_empty() {
+                vec![twitch_key.clone()]
+            } else {
+                endpoint_auths.clone()
+            };
+            ctrl.remember_eb_session(crate::controller::EbSession {
+                config: rewritten.clone(),
+                auths,
+                dest_id: id,
+                ivs_url: ivs.clone(),
+            });
         }
         // Clean up any stale override on OTHER Twitch destinations -
         // the proxy might have run before and left stale state from a
@@ -2004,6 +2075,37 @@ fn replace_auth_field(json: &str, new_value: &str) -> Option<String> {
         &json[..value_start_abs],
         new_value.replace('\\', "\\\\").replace('"', "\\\""),
         &json[value_end_abs + 1..]
+    ))
+}
+
+/// Whether an enabled destination besides Twitch gets the EB tracks.
+/// Kick, TikTok and vertical feeds only decode H.264; the local test sink
+/// takes anything.
+fn forwards_eb_beyond_twitch(destinations: &[config::Destination]) -> bool {
+    destinations
+        .iter()
+        .any(|d| d.enabled && d.platform != "twitch" && d.platform != "sink")
+}
+
+/// OBS's config request with `client.supported_codecs` narrowed to
+/// `["h264"]`, so Twitch builds every track as H.264. `None` when the list
+/// is missing or has no H.264 to keep; the request then goes unchanged.
+fn offer_only_h264(json: &str) -> Option<String> {
+    const KEY: &str = r#""supported_codecs""#;
+    let after_key = &json[json.find(KEY)? + KEY.len()..];
+    let list = after_key.trim_start().strip_prefix(':')?.trim_start();
+    if !list.starts_with('[') {
+        return None;
+    }
+    let list_len = list.find(']')? + 1;
+    if !list[..list_len].contains(r#""h264""#) {
+        return None;
+    }
+    let list_start = json.len() - list.len();
+    Some(format!(
+        r#"{}["h264"]{}"#,
+        &json[..list_start],
+        &json[list_start + list_len..]
     ))
 }
 
@@ -3330,6 +3432,21 @@ async fn post_destination_toggle(
         );
     };
     dest.enabled = enabled;
+    // Switching on a half-filled destination would stream nothing and, once
+    // on, fail every later save. Say what's missing instead.
+    if enabled {
+        let errors = ns.validate();
+        if !errors.is_empty() {
+            return (
+                "400 Bad Request",
+                "application/json",
+                format!(
+                    r#"{{"ok":false,"error":"{}"}}"#,
+                    json_escape(&errors.join("; "))
+                ),
+            );
+        }
+    }
 
     // `configured` is a first-run setup latch, not a live "has an active
     // destination" flag. Toggling your last destination off must not bounce
@@ -4310,7 +4427,9 @@ fn classify_access(method: &str, path: &str) -> Access {
         | ("POST", "/delay")
         | ("POST", "/go-live")
         | ("POST", "/cut-after")
-        | ("POST", "/cut-after/cancel") => Access::Control,
+        | ("POST", "/cut-after/cancel")
+        // Ending a crash-protection hold is operational, like a cut.
+        | ("POST", "/crash-protection/end") => Access::Control,
         ("POST", p) if p.starts_with("/docks/") => Access::Control,
         // GET a saved dock layout (the dock loads its own persisted layout).
         ("GET", p) if p.starts_with("/docks/") => Access::Control,
@@ -5367,6 +5486,55 @@ mod tests {
         // fallback at the caller.
         let body = r#"{"client":"obs-studio"}"#;
         assert!(replace_auth_field(body, "x").is_none());
+    }
+
+    #[test]
+    fn offer_only_h264_narrows_the_codecs_obs_offers() {
+        // OBS 32 serialises the request with nlohmann (compact, keys sorted).
+        let body = r#"{"client":{"name":"obs-studio","supported_codecs":["av1","h265","h264"],"version":"32.2.2"},"preferences":{"canvases":[{"width":1080}]}}"#;
+        assert_eq!(
+            offer_only_h264(body).unwrap(),
+            r#"{"client":{"name":"obs-studio","supported_codecs":["h264"],"version":"32.2.2"},"preferences":{"canvases":[{"width":1080}]}}"#
+        );
+        let spaced = r#"{"client": {"supported_codecs" : [ "h265", "h264" ] }}"#;
+        assert_eq!(
+            offer_only_h264(spaced).unwrap(),
+            r#"{"client": {"supported_codecs" : ["h264"] }}"#
+        );
+    }
+
+    #[test]
+    fn offer_only_h264_leaves_requests_it_cannot_narrow() {
+        // No list, no H.264 in it, or a list that isn't an array: Twitch
+        // must still get a request, so the caller keeps the original.
+        assert!(offer_only_h264(r#"{"client":{"name":"obs-studio"}}"#).is_none());
+        assert!(offer_only_h264(r#"{"client":{"supported_codecs":["h265"]}}"#).is_none());
+        assert!(offer_only_h264(r#"{"supported_codecs":"h264","x":["h264"]}"#).is_none());
+    }
+
+    #[test]
+    fn only_destinations_besides_twitch_need_h264_tracks() {
+        let dest = |platform: &str, enabled: bool| config::Destination {
+            id: platform.into(),
+            name: platform.into(),
+            enabled,
+            platform: platform.into(),
+            stream_key: "k".into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "vertical".into(),
+            audio_track: "auto".into(),
+        };
+        let twitch = dest("twitch", true);
+        let test_sink = dest("sink", true);
+        let kick_off = dest("kick", false);
+        let restream = dest("restream", true);
+        assert!(!forwards_eb_beyond_twitch(&[twitch.clone(), test_sink]));
+        assert!(!forwards_eb_beyond_twitch(&[twitch.clone(), kick_off]));
+        assert!(forwards_eb_beyond_twitch(&[twitch, restream]));
     }
 
     #[test]

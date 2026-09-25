@@ -948,6 +948,16 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 /* Vertical destination waiting on OBS's 9:16 canvas: it deliberately
    sends no video until the canvas arrives. Amber + a slow pulse so it
    reads as "attention" not "error". */
+/* Crash protection hold: the hero banner while the reconnect screen is on
+   air, with the countdown and End now. Amber, like a waiting destination. */
+.hold-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px;padding:12px 14px;
+  border-radius:10px;border:1px solid color-mix(in oklch,var(--warn,#d6a23a) 55%,var(--line));
+  background:color-mix(in oklch,var(--warn,#d6a23a) 8%,var(--bg-2))}
+.hold-banner .hold-dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--warn,#d6a23a);
+  box-shadow:0 0 8px var(--warn,#d6a23a);animation:hpulse 2.4s infinite;--sc:var(--warn,#d6a23a)}
+.hold-copy{flex:1;min-width:220px;display:grid;gap:2px}
+.hold-copy span{color:var(--fg-3);font-size:12px;font-variant-numeric:tabular-nums}
+.hold-banner .ic-btn{flex:0 0 auto;padding:8px 14px}
 .dcard-status.s-wait{color:var(--warn,#d6a23a);border-color:color-mix(in oklch,var(--warn,#d6a23a) 32%,var(--line));
   background:color-mix(in oklch,var(--warn,#d6a23a) 9%,var(--surface-3))}
 .dcard-status.s-wait .d-dot{background:var(--warn,#d6a23a);box-shadow:0 0 6px var(--warn,#d6a23a);
@@ -1483,17 +1493,17 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .sys-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px}
 /* Crash protection card. The preview <img> is drawn server-side by the
    same renderer that encodes the stream, so it is what viewers will see. */
-.cp-grid{display:grid;grid-template-columns:120px minmax(0,1fr);gap:12px 16px;align-items:center;margin-top:16px}
-.cp-label{font-weight:600;font-size:13px}
-.cp-preview{display:block;width:100%;max-width:480px;aspect-ratio:16/9;border-radius:8px;border:1px solid var(--line);background:var(--surface)}
-.cp-themes{display:inline-flex;align-self:flex-start;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.cp-themes button{appearance:none;border:0;background:var(--bg-2);color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:600;padding:7px 14px;cursor:pointer}
-.cp-themes button[aria-pressed="true"]{background:var(--surface-3);color:var(--accent)}
-.cp-swatches{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.cp-swatch{appearance:none;width:24px;height:24px;border-radius:50%;padding:0;cursor:pointer;border:2px solid var(--bg-2);box-shadow:0 0 0 1px var(--line-2)}
-.cp-swatch[aria-pressed="true"]{box-shadow:0 0 0 2px var(--fg)}
-.cp-inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-@media (max-width:560px){.cp-grid{grid-template-columns:1fr}}
+.crash-grid{display:grid;grid-template-columns:120px minmax(0,1fr);gap:12px 16px;align-items:center;margin-top:16px}
+.crash-label{font-weight:600;font-size:13px}
+.crash-preview{display:block;width:100%;max-width:480px;aspect-ratio:16/9;border-radius:8px;border:1px solid var(--line);background:var(--surface)}
+.crash-themes{display:inline-flex;align-self:flex-start;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.crash-themes button{appearance:none;border:0;background:var(--bg-2);color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:600;padding:7px 14px;cursor:pointer}
+.crash-themes button[aria-pressed="true"]{background:var(--surface-3);color:var(--accent)}
+.crash-swatches{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.crash-swatch{appearance:none;width:24px;height:24px;border-radius:50%;padding:0;cursor:pointer;border:2px solid var(--bg-2);box-shadow:0 0 0 1px var(--line-2)}
+.crash-swatch[aria-pressed="true"]{box-shadow:0 0 0 2px var(--fg)}
+.crash-inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+@media (max-width:560px){.crash-grid{grid-template-columns:1fr}}
 /* Collapsible System section (e.g. legacy OBS quick launch). Native
    <details>; the summary carries the section label + a rotating caret. */
 details.sys-collapse>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;-webkit-user-select:none;user-select:none}
@@ -2082,6 +2092,11 @@ details.sys-collapse>summary .ic-label{margin:0}
 
 <!-- - Hero -------------------─ -->
 <section class="ic-card hero-card" id="hero" hidden>
+  <div class="hold-banner" id="hold-banner" role="status" hidden>
+    <span class="hold-dot" aria-hidden="true"></span>
+    <div class="hold-copy"><b id="hold-title">OBS dropped. Keeping your destinations live.</b><span id="hold-sub"></span></div>
+    <button class="ic-btn ic-btn-ghost" id="hold-end" onclick="endHold(this)">End now</button>
+  </div>
   <div class="hero">
     <div class="hero-readout" id="hero-readout" data-state="off">
       <!-- Breathing glow layer for the "arming" state - see the aurora
@@ -2725,32 +2740,33 @@ details.sys-collapse>summary .ic-label{margin:0}
           </div>
         </label>
       </div>
-      <div class="cp-grid" id="s-cp-details" hidden>
-        <span class="cp-label">Hold for</span>
-        <span class="cp-inline">
+      <div class="crash-grid" id="s-cp-details" hidden>
+        <span class="crash-label">Hold for</span>
+        <span class="crash-inline">
           <input id="s-cp-hold" class="ic-input mono" type="number" min="30" max="300" style="width:80px;text-align:right" aria-label="Hold time in seconds">
-          <span class="muted" style="font-size:12px">s, then the stream ends cleanly (30 to 300)</span>
+          <span class="muted" style="font-size:12px">s from the crash, then the stream ends cleanly (30 to 300). A delay still airing counts toward it.</span>
         </span>
-        <span class="cp-label" style="align-self:start;padding-top:7px">Screen</span>
+        <span class="crash-label" style="align-self:start;padding-top:7px">Screen</span>
         <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
-          <div class="cp-themes" role="group" aria-label="Reconnect screen theme">
+          <div class="crash-themes" role="group" aria-label="Reconnect screen theme">
             <button type="button" data-cp-theme="whisper" aria-pressed="true">Whisper</button>
             <button type="button" data-cp-theme="arcade" aria-pressed="false">Arcade</button>
           </div>
-          <img class="cp-preview" id="s-cp-preview" alt="Preview of the reconnect screen">
+          <img class="crash-preview" id="s-cp-preview" alt="Preview of the reconnect screen">
+          <span class="muted" style="font-size:12px">H.264 tracks show this screen. HEVC and AV1 tracks hold your last frame instead.</span>
         </div>
-        <span class="cp-label">Accent</span>
-        <div class="cp-swatches" id="s-cp-swatches" role="group" aria-label="Accent colour">
+        <span class="crash-label">Accent</span>
+        <div class="crash-swatches" id="s-cp-swatches" role="group" aria-label="Accent colour">
           <span class="st-color"><input type="color" id="s-cp-accent" aria-label="Custom accent colour"></span>
         </div>
-        <span class="cp-label">Background</span>
-        <span class="cp-inline">
+        <span class="crash-label">Background</span>
+        <span class="crash-inline">
           <span class="st-color"><input type="color" id="s-cp-bg" aria-label="Background colour"></span>
           <button type="button" class="ic-btn" id="s-cp-bg-reset" style="padding:6px 10px;font-size:12px">Theme default</button>
         </span>
-        <label class="cp-label" for="s-cp-headline">Headline</label>
+        <label class="crash-label" for="s-cp-headline">Headline</label>
         <input id="s-cp-headline" class="ic-input" type="text" maxlength="28" style="max-width:480px">
-        <label class="cp-label" for="s-cp-subline">Subline</label>
+        <label class="crash-label" for="s-cp-subline">Subline</label>
         <input id="s-cp-subline" class="ic-input" type="text" maxlength="48" style="max-width:480px">
         <span></span>
         <details>
@@ -4070,6 +4086,11 @@ function verticalDiag(d){
   // Matches the backend: only an enabled Twitch destination with a key
   // makes InstantClone proxy Twitch's config.
   const viaTwitch = Array.isArray(lastDests) && lastDests.some(x => x.platform === 'twitch' && x.enabled && x.stream_key_set);
+  // Twitch built the tracks as HEVC or AV1: its config came before this
+  // destination was on, since InstantClone asks for H.264 while it is.
+  if (s.multitrack_video && viaTwitch && s.video_codec && s.video_codec !== 'H.264' && s.video_codec !== '?')
+    return {ready:false, label:s.video_codec + ' tracks', hint:'Restart the stream in OBS to get H.264',
+      title:'Twitch sent this stream\'s tracks as ' + s.video_codec + ', which only Twitch can play. InstantClone asks Twitch for H.264 while another destination is on, so stop and start the stream in OBS to get H.264 tracks.'};
   if (s.multitrack_video && viaTwitch)
     return {ready:false, label:'No 9:16 canvas', hint:'Twitch sends no vertical track (Dual Format is off)',
       title:'With a Twitch destination, Twitch\'s config decides the tracks, and it has no vertical one for this channel. Turn on Twitch Dual Format for the channel, or disable the Twitch destination so InstantClone builds the config and uses OBS\'s Additional canvas.'};
@@ -4197,14 +4218,17 @@ function updateDestCard(r, d){
   const vdiag = isVerticalDest(d) ? verticalDiag(d) : null;
   const verticalWaiting = !!vdiag && !vdiag.ready;
   const isStreaming = d.alive && (d.bitrate_kbps || 0) > 0 && !verticalWaiting;
-  const stat = !d.enabled ? 'off' : verticalWaiting ? 'wait' : isStreaming ? 'live' : d.alive ? 'ready' : 'off';
+  const onHold = !!d.on_hold;
+  const stat = !d.enabled ? 'off' : onHold || verticalWaiting ? 'wait' : isStreaming ? 'live' : d.alive ? 'ready' : 'off';
   r.statE.className = 'dcard-status s-' + stat;
   r.statL.textContent = !d.enabled ? 'Disabled'
+                       : onHold ? 'Reconnect screen'
                        : verticalWaiting ? vdiag.label
                        : isStreaming ? 'Streaming'
                        : d.alive ? 'Connected'
                        : 'Idle';
-  r.statE.title = verticalWaiting ? vdiag.title : '';
+  r.statE.title = onHold ? 'Crash protection: live on the reconnect screen until OBS is back.'
+                : verticalWaiting ? vdiag.title : '';
   // rate + history (auto kbps -> Mbps, matching the header + stats).
   const kbps = d.alive ? (d.bitrate_kbps || 0) : 0;
   r.history.push(kbps); if (r.history.length > HISTORY_LEN) r.history.shift();
@@ -4526,7 +4550,15 @@ async function toggleDest(d){
     stream_format: d.stream_format || 'horizontal',
     audio_track: d.audio_track || 'auto',
     enabled:d.enabled?'off':'on'});
-  await fetch('/destinations',{method:'POST', body});
+  try {
+    const r = await fetch('/destinations',{method:'POST', body});
+    // A refused toggle (say, switching on a Kick destination with no
+    // Server URL yet) says why instead of the switch snapping back.
+    if (!r.ok){
+      const j = await r.json().catch(() => ({}));
+      toast(j.error || 'Could not change this destination', 'err');
+    }
+  } catch(_){ toast('Could not reach InstantClone', 'err'); }
   loadDestinations();
 }
 async function deleteDest(id){
@@ -5663,7 +5695,7 @@ function cpInit(){
   CP_ACCENTS.forEach(([name, hex]) => {
     const swatch = document.createElement('button');
     swatch.type = 'button';
-    swatch.className = 'cp-swatch';
+    swatch.className = 'crash-swatch';
     swatch.style.background = hex;
     swatch.dataset.hex = hex;
     swatch.setAttribute('aria-label', name);
@@ -5687,7 +5719,7 @@ function cpSyncVisibility(){
 // Reflect cpState in the controls, then refresh the preview.
 function cpRender(){
   document.querySelectorAll('[data-cp-theme]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cpTheme === cpState.theme)));
-  document.querySelectorAll('#s-cp-swatches .cp-swatch').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.hex === cpState.accent)));
+  document.querySelectorAll('#s-cp-swatches .crash-swatch').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.hex === cpState.accent)));
   $('s-cp-accent').value = cpState.accent;
   $('s-cp-bg').value = cpState.background || CP_THEME_BACKGROUNDS[cpState.theme];
   $('s-cp-bg-reset').hidden = !cpState.background;
@@ -5744,8 +5776,9 @@ const HOTKEY_ACTIONS = [
   ['cut',       'Cut to live',         'Drop back to live, keeping the buffer armed for an instant re-activate.'],
   ['arm',       'Arm / disarm buffer', 'Press once to start filling the buffer at your default delay; press again to disarm and free it.'],
   ['cut_after', 'Cut after this airs', 'Press once to schedule a cut the instant the live edge reaches every viewer; press again to cancel it.'],
+  ['end_hold',  'End crash protection', 'While the reconnect screen is on air after an OBS crash, end the stream on every destination now.'],
 ];
-const emptyBindings = () => ({toggle:'',arm:'',activate:'',cut:'',cut_after:''});
+const emptyBindings = () => ({toggle:'',arm:'',activate:'',cut:'',cut_after:'',end_hold:''});
 let hkBindings = emptyBindings();
 let hkRec = null; // {action, el} while recording, else null
 let hkWarnTimer = null;
@@ -6004,7 +6037,7 @@ async function hkSaveBinding(action, combo, el, movedOff){
 }
 
 // ── MIDI controller mapping (Windows only) ─────────────────────────────
-// Same five actions as the hotkeys, but "learn" is server-side: the MIDI
+// Same actions as the hotkeys, but "learn" is server-side: the MIDI
 // message arrives at the backend, so we POST /midi/learn then poll
 // /midi/poll until it is captured (or cancelled). Reuses the hk-* styles.
 let midiBindings = emptyBindings();
@@ -8313,6 +8346,43 @@ function fmtUptime(sec){
   if (m) return m+'m '+r+'s';
   return r+'s';
 }
+// Crash protection: while a hold is on air, say why, how many destinations
+// it keeps live and how long is left, and offer End now.
+function renderHoldBanner(s){
+  const banner = $('hold-banner');
+  if (!banner) return;
+  const hold = s.hold;
+  banner.hidden = !hold;
+  if (!hold) return;
+  $('hold-title').textContent = hold.reason === 'freeze'
+    ? 'OBS stopped sending video. Keeping your destinations live.'
+    : 'OBS dropped. Keeping your destinations live.';
+  const held = (s.destinations || []).filter(d => d.on_hold).length;
+  $('hold-sub').textContent = `${held} destination${held === 1 ? '' : 's'} live · waiting for OBS · ${fmtClock(hold.remaining_ms)} left`;
+}
+// "1:05" for a millisecond countdown.
+function fmtClock(ms){
+  const secs = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+}
+// Ending the hold ends the stream everywhere, so it takes a second click
+// within 3 s (no dialog: it has to work the same in the OBS dock).
+async function endHold(btn){
+  if (!btn._armed){
+    btn._armed = true;
+    btn.textContent = 'Click again to end';
+    btn._reset = setTimeout(() => { btn._armed = false; btn.textContent = 'End now'; }, 3000);
+    return;
+  }
+  clearTimeout(btn._reset);
+  btn._armed = false;
+  btn.textContent = 'End now';
+  try {
+    applyState(await (await fetch('/crash-protection/end', {method:'POST'})).json());
+    toast('Stream ended on every destination', 'ok');
+  } catch(_){ toast('Could not reach InstantClone', 'err'); }
+}
+
 function applyState(s){
   const prev = lastState;
   if (prev){
@@ -8345,6 +8415,7 @@ function applyState(s){
   if ($('hero').hidden) return; // not configured
   if (pendingPhase && pendingPhase === PHASE_TO_STATE[s.phase]) clearPending();
   renderHero(s);
+  renderHoldBanner(s);
   renderHeader(s);
   renderStats(s);
   renderCpProfiles();

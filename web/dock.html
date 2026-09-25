@@ -97,6 +97,12 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .eg .sep{color:var(--fg-4)}
 
 /* Sub-tip with crossfade */
+/* Crash protection hold: what's on air and End now (two-step). */
+.hold{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:9px;font-size:11px;
+  color:var(--fg-2);border:1px solid color-mix(in srgb,var(--warn) 55%,var(--line));
+  background:color-mix(in srgb,var(--warn) 9%,var(--panel-2));font-variant-numeric:tabular-nums}
+.hold .hold-l{flex:1;min-width:0}
+.hold .btn{padding:5px 9px;font-size:11px}
 .tip{font-size:10.5px;color:var(--fg-3);text-align:center;min-height:0;line-height:1.3;
   transition:opacity .15s,transform .15s}
 .tip.fade{opacity:0;transform:translateY(2px)}
@@ -435,6 +441,7 @@ body.boot .wrap>*:nth-child(n+8){animation-delay:.28s}
     </div>
     <div class="bar" id="w-bar"><span class="pct" id="pct" hidden></span><div class="fill" id="bar"></div></div>
   </div>
+  <div class="hold" id="w-hold" role="status" hidden><span class="hold-l" id="hold-l"></span><button class="btn" id="hold-end" onclick="endHold()">End now</button></div>
   <div class="eg" id="w-eg" hidden></div>
   <div class="tip" id="w-tip">Waiting for your encoder&hellip;</div>
   <div class="dests" id="w-dests" hidden></div>

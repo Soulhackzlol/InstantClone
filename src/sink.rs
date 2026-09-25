@@ -1382,6 +1382,67 @@ start();
 </body></html>
 "##;
 
+/// One RTMP message a test platform received.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub(crate) struct Received {
+    /// Which connection it came on, counting from 0 in accept order.
+    pub conn: usize,
+    /// RTMP message type: 8 audio, 9 video, 20 command.
+    pub kind: u8,
+    pub ts: u32,
+    pub payload: Vec<u8>,
+    /// The command name, for type 20 (e.g. "deleteStream").
+    pub command: Option<String>,
+    pub at: Instant,
+}
+
+/// A platform for in-process egress tests: accept publishers on
+/// `listener`, answer them like the sink does, and forward every message
+/// they send, in order, to `tx`.
+#[cfg(test)]
+pub(crate) async fn record(
+    listener: TcpListener,
+    tx: tokio::sync::mpsc::UnboundedSender<Received>,
+) -> io::Result<()> {
+    for conn in 0.. {
+        let (mut sock, _) = listener.accept().await?;
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            handshake::perform_server(&mut sock).await?;
+            let (rd, wr) = split(sock);
+            let mut reader = ChunkReader::new(rd);
+            let mut writer = ChunkWriter::new(wr);
+            writer.send_set_chunk_size(4096).await?;
+            loop {
+                let msg = reader.read_message().await?;
+                let command = (msg.type_id == 20)
+                    .then(|| amf0::decode_all(&msg.payload).ok())
+                    .flatten()
+                    .and_then(|values| values.first().and_then(|v| v.as_str().map(String::from)));
+                let received = Received {
+                    conn,
+                    kind: msg.type_id,
+                    ts: msg.timestamp,
+                    payload: msg.payload.to_vec(),
+                    command,
+                    at: Instant::now(),
+                };
+                if tx.send(received).is_err() {
+                    return Ok::<(), io::Error>(());
+                }
+                // Recorded first: a publisher that is leaving (FCUnpublish,
+                // then deleteStream, then close) may be gone before the
+                // reply to its goodbye can be written.
+                if msg.type_id == 20 {
+                    let _ = handle_command(&mut writer, &msg).await;
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

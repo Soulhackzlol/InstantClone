@@ -108,6 +108,7 @@ const ID_OPEN_DASH: usize = 0x101;
 const ID_OPEN_DOCK: usize = 0x102;
 const ID_CUT_DELAY: usize = 0x103;
 const ID_COPY_URL: usize = 0x104;
+const ID_END_HOLD: usize = 0x106;
 // 0x105 was "Launch OBS (VOD + EB)", a launcher from before the InstantClone
 // service existed. It passed OBS `--config-url` to switch Enhanced
 // Broadcasting on for a custom RTMP server, and wrote OBS's VOD-track flag on
@@ -375,6 +376,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     // no runtime needed.
                     state.ctrl.stop_delay();
                 }
+                ID_END_HOLD => {
+                    state.ctrl.end_hold_now();
+                }
                 ID_COPY_URL => {
                     let url = obs_rtmp_url(&state.settings.borrow());
                     let _ = set_clipboard_text(hwnd, &url);
@@ -589,6 +593,12 @@ unsafe fn show_menu(hwnd: HWND) {
         MF_STRING | MF_DISABLED | MF_GRAYED
     };
     AppendMenuW(menu, cut_flags, ID_CUT_DELAY, cut_label.as_ptr());
+    // Crash protection: ending the hold ends the stream everywhere, so the
+    // item only exists while a hold is on air.
+    let end_hold_label = wide("End crash protection (ends the stream)");
+    if state.ctrl.hold_active() {
+        AppendMenuW(menu, MF_STRING, ID_END_HOLD, end_hold_label.as_ptr());
+    }
     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
 
     let open = wide("Open dashboard");
@@ -645,6 +655,12 @@ unsafe fn readd_tray_icon(hwnd: HWND) {
 /// One-line summary of the controller's current state. Read on every
 /// menu open so it's always fresh.
 fn status_label(ctrl: &Controller) -> String {
+    if let Some(status) = ctrl.hold_status() {
+        return format!(
+            "Status: RECONNECT SCREEN - {} left",
+            crate::crash_hold::minutes_seconds(status.remaining)
+        );
+    }
     let phase = ctrl.phase();
     match phase {
         "active" => {
