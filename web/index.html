@@ -190,7 +190,11 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   transition:transform .15s var(--ease-out),background .15s var(--ease-out),border-color .15s var(--ease-out),
              box-shadow .15s var(--ease-out)}
 .ic-btn:hover{background:color-mix(in oklch,#fff 4%,var(--surface-3));border-color:rgba(255,255,255,.16)}
-.ic-btn:active{transform:translateY(1px)}
+.ic-btn:active{transform:scale(.96)}
+/* Cards ease in, staggered, when their tab opens (see staggerIn). */
+.stagger-in{animation:staggerIn .34s var(--ease-out) both;animation-delay:var(--stagger,0ms)}
+@keyframes staggerIn{from{opacity:0;transform:translateY(8px);filter:blur(3px)}to{opacity:1;transform:none;filter:none}}
+@media (prefers-reduced-motion: reduce){.stagger-in,.dcard.went-live{animation:none}}
 /* Copy confirmation: the button turns success-green with a check that pops
    in (scale + blur per motion guidelines). Applied by flashCopied(). */
 .ic-btn.is-copied{color:var(--live) !important;
@@ -1000,6 +1004,12 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
 .dcard-rate-u{font-size:11px;color:var(--fg-3);font-family:'JetBrains Mono',monospace}
 .dcard-foot-meta{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;white-space:nowrap}
+.dcard-foot-meta[hidden]{display:none}
+/* A sentence in place of the bitrate while nothing is flowing. */
+.dcard-rate.is-msg{font-size:13px;font-weight:500;color:var(--fg-3);font-family:inherit;letter-spacing:0;line-height:24px}
+.dcard.went-live{animation:wentLive 1.1s var(--ease-out)}
+@keyframes wentLive{from{box-shadow:0 0 0 0 color-mix(in oklch,var(--dc,var(--accent)) 60%,transparent)}
+  to{box-shadow:0 0 0 16px transparent}}
 /* Detected resolution + codec of the forwarded track (e.g. 1080x1920 · H.264). */
 .dcard-res{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;margin-top:3px;letter-spacing:.02em;min-height:1.5em}
 /* A waiting vertical destination spells out its fix here, visible on touch
@@ -4192,7 +4202,7 @@ function buildDestCard(d){
     <div class="dcard-screen">
       <div class="dcard-body">
         <div class="dcard-rate-row"><span class="dcard-rate mono">-</span><span class="dcard-rate-u">kbps</span></div>
-        <span class="dcard-foot-meta" title="Frames sent · delay cuts · reconnects"><span class="dcard-frames">0</span>f · <span class="dcard-cuts">0</span>c · <span class="dcard-rec">0</span>r</span>
+        <span class="dcard-foot-meta" title="Frames sent · delay cuts · reconnects" hidden><span class="dcard-frames">0</span> frames · <span class="dcard-cuts">0</span> cuts · <span class="dcard-rec">0</span> reconnects</span>
         <a class="dcard-player" target="_blank" rel="noopener" hidden title="Open the sink's built-in live player - watch exactly what a platform would receive, delay included">▶ Watch output</a>
       </div>
       <div class="dcard-res mono"></div>
@@ -4221,11 +4231,13 @@ function buildDestCard(d){
     frames: el.querySelector('.dcard-frames'),
     cuts: el.querySelector('.dcard-cuts'),
     rec: el.querySelector('.dcard-rec'),
+    meta: el.querySelector('.dcard-foot-meta'),
     toggle: el.querySelector('.dcard-toggle'),
     edit: el.querySelector('.dcard-edit'),
     del: el.querySelector('.dcard-del'),
     player: el.querySelector('.dcard-player'),
     lastPlatform: '',
+    lastStat: '',
   };
   refs.edit.onclick = () => openDestForm(refs.last);
   refs.toggle.onclick = () => toggleDest(refs.last);
@@ -4263,6 +4275,10 @@ function updateDestCard(r, d){
   const onHold = !!d.on_hold;
   const stat = !d.enabled ? 'off' : onHold || verticalWaiting ? 'wait' : isStreaming ? 'live' : d.alive ? 'ready' : 'off';
   r.statE.className = 'dcard-status s-' + stat;
+  // Going live gets one pulse in the platform's colour, so the change is
+  // seen from across the room. Not on first render: the card was already live.
+  if (stat === 'live' && r.lastStat && r.lastStat !== 'live') restartAnimation(r.el, 'went-live');
+  r.lastStat = stat;
   r.statL.textContent = !d.enabled ? 'Disabled'
                        : onHold ? 'Reconnect screen'
                        : verticalWaiting ? vdiag.label
@@ -4275,7 +4291,13 @@ function updateDestCard(r, d){
   const kbps = d.alive ? (d.bitrate_kbps || 0) : 0;
   r.history.push(kbps); if (r.history.length > HISTORY_LEN) r.history.shift();
   const rateU = r.rateU || (r.rateU = r.el.querySelector('.dcard-rate-u'));
-  if (!d.alive){ r.rate.textContent = '-'; if (rateU) rateU.textContent = ''; }
+  // Until video flows, the card says what it's doing instead of a bare dash.
+  const idleMsg = !d.enabled ? 'Off. Switch it on to stream here.'
+                : !d.alive ? ((lastState || {}).ingest_alive ? 'Connecting…' : 'Goes live when OBS does')
+                : !isStreaming ? 'Connected, waiting for video'
+                : '';
+  r.rate.classList.toggle('is-msg', !!idleMsg);
+  if (idleMsg){ r.rate.textContent = idleMsg; if (rateU) rateU.textContent = ''; }
   else if (kbps >= 1000){ r.rate.textContent = (kbps/1000).toFixed(2); if (rateU) rateU.textContent = 'Mbps'; }
   else { r.rate.textContent = Math.round(kbps); if (rateU) rateU.textContent = 'kbps'; }
   // Detected resolution + codec of the forwarded track (confirms the 9:16
@@ -4290,7 +4312,12 @@ function updateDestCard(r, d){
   }
   // Smooth, 0-anchored, per-card stable sparkline (same renderer as stats).
   drawSpark(r.sparkLine, r.sparkFill, r.history, 400, 40, 'dc:' + d.id);
-  r.frames.textContent = (d.tags_sent || 0).toLocaleString();
+  // Counters only once there is something to count.
+  const frames = d.tags_sent || 0;
+  r.meta.hidden = !frames && !d.cuts && !d.reconnects;
+  r.frames.textContent = frames >= 1e6 ? (frames / 1e6).toFixed(1) + 'M'
+                       : frames >= 1e4 ? (frames / 1e3).toFixed(1) + 'k'
+                       : frames.toLocaleString();
   r.cuts.textContent = d.cuts || 0;
   r.rec.textContent = d.reconnects || 0;
   r.toggle.title = d.enabled ? 'Disable this destination' : 'Enable this destination';
@@ -8067,6 +8094,39 @@ async function downloadLogs(){
 
 // - Tabs -------------------------------
 let _tabIdx = -1;   // index of the current tab, for slide direction (see showTab)
+// - Motion helpers ----------------------------------------
+// Content eases in card by card when a tab or sub-tab opens, so the eye
+// lands on the first thing and follows down. The first STAGGER_MAX cards
+// stagger; the rest come in with the last so long lists never make you wait.
+const STAGGER_SELECTOR = '.dcard, .stat-card, .metric-mini, .obs-section, .overlay-section, .profile-row, '
+  + '.sub-pane > .sys-section, .sub-pane > .sys-reset, .sub-pane > .sys-about-grid';
+const STAGGER_STEP_MS = 40;
+const STAGGER_MAX = 8;
+const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function staggerIn(root){
+  if (!root || prefersReducedMotion()) return;
+  const items = [...root.querySelectorAll(STAGGER_SELECTOR)].filter(el => el.offsetParent !== null);
+  items.forEach(el => el.classList.remove('stagger-in'));
+  void root.offsetWidth; // one reflow restarts every item's animation
+  items.forEach((el, i) => {
+    el.style.setProperty('--stagger', Math.min(i, STAGGER_MAX) * STAGGER_STEP_MS + 'ms');
+    el.classList.add('stagger-in');
+  });
+}
+// Play a one-shot animation class again even if it's still on.
+function restartAnimation(el, cls){
+  if (prefersReducedMotion()) return;
+  el.classList.remove(cls);
+  void el.offsetWidth;
+  el.classList.add(cls);
+}
+// One-shot classes come off when they finish: their end state must not pin
+// transforms that hover effects use.
+document.addEventListener('animationend', e => {
+  if (e.animationName === 'staggerIn') e.target.classList.remove('stagger-in');
+  else if (e.animationName === 'wentLive') e.target.classList.remove('went-live');
+});
+
 function showTab(name){
   // Guard unsaved Studio edits: switching away from the Overlay tab hides the
   // editor and abandons the in-progress doc, so confirm first.
@@ -8111,6 +8171,7 @@ function showTab(name){
   const pane = document.querySelector(`.tab-pane[data-pane="${name}"]`);
   if (pane){ moveSubTabInd(pane); reserveCopyButtons(pane); }
   fitPaneCard();
+  if (name !== 'system') staggerIn(pane);
   // Run the open sub-tab's hooks (VOD callout, update check), which a
   // sub-tab restored at load hasn't had yet.
   if (name === 'system'){
@@ -8366,6 +8427,7 @@ function showSubTab(paneName, subName){
   pane.querySelectorAll('.sub-tab').forEach(t => t.classList.toggle('on', t.dataset.subtab === subName));
   pane.querySelectorAll('.sub-pane').forEach(p => p.hidden = p.dataset.subpane !== subName);
   moveSubTabInd(pane);
+  staggerIn(pane.querySelector(`.sub-pane[data-subpane="${subName}"]`));
   try { localStorage.setItem('ic-subtab-' + paneName, subName); } catch(e){}
   if (paneName !== 'system') return;
   updateSaveBar();

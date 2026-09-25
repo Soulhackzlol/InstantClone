@@ -137,6 +137,13 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
   unsaved changes, with **Discard** to undo them, and the page asks before
   you close it with changes unsaved.
 - Each tab's scroll area now ends inside the window instead of under it.
+- **Destination cards say what they're doing.** "Goes live when OBS does",
+  "Connecting…" or "Off. Switch it on to stream here." instead of a dash,
+  frames, cuts and reconnects in words once there is something to count,
+  and one pulse in the platform's colour when a destination goes live.
+- **Motion that guides the eye.** Cards and sections ease in one after
+  another when a tab opens, and buttons give a small press. All of it
+  switches off with the system's reduced-motion setting.
 - The log wraps long lines instead of cutting them off, and stops jumping
   to the bottom while you are reading older lines.
 - Destination cards in a row line up, the frame, cut and reconnect counters
