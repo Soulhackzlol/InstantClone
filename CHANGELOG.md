@@ -141,6 +141,17 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
   "Connecting…" or "Off. Switch it on to stream here." instead of a dash,
   frames, cuts and reconnects in words once there is something to count,
   and one pulse in the platform's colour when a destination goes live.
+- **Search and run anything (Ctrl+K).** One box to jump to a tab, find a
+  setting, turn a destination on or off, arm a profile, or type a delay like
+  "45s" or "2m" to arm it. It offers what makes sense right now, like
+  Activate once the buffer is ready. Also behind the Search button in the
+  header.
+- **A log you can read.** Every event is a row with its time and source;
+  errors are red, warnings amber, good news green. Filter to Problems or
+  Errors (with counts), one source, or any text, and jump back to the latest
+  line after scrolling up.
+- **A friendly start.** With no destinations yet, the Destinations tab asks
+  where you stream and opens the form with that platform picked.
 - **Motion that guides the eye.** Cards and sections ease in one after
   another when a tab opens, and buttons give a small press. All of it
   switches off with the system's reduced-motion setting.

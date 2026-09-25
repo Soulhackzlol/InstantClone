@@ -195,6 +195,41 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .stagger-in{animation:staggerIn .34s var(--ease-out) both;animation-delay:var(--stagger,0ms)}
 @keyframes staggerIn{from{opacity:0;transform:translateY(8px);filter:blur(3px)}to{opacity:1;transform:none;filter:none}}
 @media (prefers-reduced-motion: reduce){.stagger-in,.dcard.went-live{animation:none}}
+/* Header search button: opens the command palette. */
+.hdr-cmdk{appearance:none;display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 8px 0 10px;border-radius:999px;
+  border:1px solid var(--line);background:var(--surface-3);color:var(--fg-3);font:inherit;font-size:12px;cursor:pointer;
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.hdr-cmdk:hover{color:var(--fg);border-color:var(--line-2)}
+.hdr-cmdk:active{transform:scale(.96)}
+.hdr-cmdk svg{width:13px;height:13px}
+.hdr-cmdk kbd,.cmdk kbd{font:600 10px/1 'JetBrains Mono',monospace;color:var(--fg-4);border:1px solid var(--line-2);
+  border-radius:5px;padding:3px 5px;background:var(--bg-2)}
+@media (max-width:760px){.hdr-cmdk span,.hdr-cmdk kbd{display:none}.hdr-cmdk{padding:0 8px}}
+/* Command palette. */
+.cmdk{position:fixed;inset:0;z-index:1200;display:flex;justify-content:center;align-items:flex-start;padding:12vh 16px 16px}
+.cmdk[hidden]{display:none}
+.cmdk-backdrop{position:absolute;inset:0;background:rgba(3,5,8,.62);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  animation:fadeIn .16s var(--ease-out)}
+.cmdk-panel{position:relative;width:min(620px,100%);max-height:min(560px,76vh);display:flex;flex-direction:column;
+  background:var(--surface-2);border:1px solid var(--line-2);border-radius:16px;overflow:hidden;
+  box-shadow:0 30px 80px -20px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.03) inset;
+  animation:cmdkIn .2s var(--ease-out)}
+@keyframes cmdkIn{from{opacity:0;transform:translateY(-8px) scale(.97)}to{opacity:1;transform:none}}
+.cmdk-search{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.cmdk-search svg{width:17px;height:17px;color:var(--fg-3);flex:none}
+.cmdk-search input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--fg);font:inherit;font-size:15px}
+.cmdk-search input::placeholder{color:var(--fg-4)}
+.cmdk-list{overflow-y:auto;padding:6px;scroll-padding:6px}
+.cmdk-group{padding:10px 10px 4px;font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-4)}
+.cmdk-item{appearance:none;display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;
+  padding:10px 12px;border:0;border-radius:10px;background:transparent;color:var(--fg-2);font:inherit;font-size:13.5px;
+  text-align:left;cursor:pointer}
+.cmdk-item[aria-selected="true"]{background:var(--surface-3);color:var(--fg);box-shadow:inset 2px 0 0 var(--accent)}
+.cmdk-hint{font-size:11.5px;color:var(--fg-4);white-space:nowrap}
+.cmdk-empty{padding:28px 16px;text-align:center;color:var(--fg-3);font-size:13px}
+.cmdk-foot{display:flex;gap:16px;padding:9px 14px;border-top:1px solid var(--line);color:var(--fg-4);font-size:11px}
+.cmdk-foot span{display:inline-flex;align-items:center;gap:4px}
+@media (prefers-reduced-motion: reduce){.cmdk-panel,.cmdk-backdrop{animation:none}}
 /* Copy confirmation: the button turns success-green with a check that pops
    in (scale + blur per motion guidelines). Applied by flashCopied(). */
 .ic-btn.is-copied{color:var(--live) !important;
@@ -1034,6 +1069,30 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   transition:color .15s,background .15s,border-color .15s}
 .dcard-act:hover{color:var(--fg);border-color:var(--line-2);background:color-mix(in oklch,var(--bg-1) 78%,transparent)}
 .dcard-act.dcard-del:hover{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,var(--line))}
+/* Empty Destinations: a platform picker instead of a lone "+" tile. */
+.dest-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:26px 8px 10px}
+.dest-empty[hidden],.dest-grid[hidden]{display:none}
+.dest-empty-title{font-size:20px;font-weight:650;letter-spacing:-.01em;color:var(--fg)}
+.dest-empty-sub{max-width:52ch;font-size:13px;color:var(--fg-3);line-height:1.5;text-wrap:pretty}
+.dest-empty-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;width:min(720px,100%);margin-top:18px}
+@media (max-width:640px){.dest-empty-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.dest-starter{appearance:none;display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:16px;border-radius:14px;
+  background:var(--bg-2);border:1px solid var(--line);color:var(--fg);font:inherit;text-align:left;cursor:pointer;
+  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),transform .2s var(--ease-out)}
+.dest-starter:hover{border-color:color-mix(in oklch,var(--dc,var(--accent)) 45%,var(--line-2));transform:translateY(-2px);
+  box-shadow:0 18px 40px -24px color-mix(in oklch,var(--dc,var(--accent)) 80%,transparent)}
+.dest-starter:active{transform:scale(.96)}
+.dest-starter-icon{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;margin-bottom:6px;
+  background:color-mix(in oklch,var(--dc,var(--fg-3)) 16%,var(--surface-3));
+  border:1px solid color-mix(in oklch,var(--dc,var(--fg-3)) 38%,transparent);color:var(--dc,var(--fg-3));font-weight:700}
+.dest-starter-name{font-size:14px;font-weight:600}
+.dest-starter-note{font-size:12px;color:var(--fg-3)}
+.dest-starter.platform-twitch{--dc:#a78bfa}
+.dest-starter.platform-youtube{--dc:#fda4af}
+.dest-starter.platform-kick{--dc:#86efac}
+.dest-starter.platform-restream{--dc:#5eead4}
+.dest-starter.platform-custom{--dc:#fcd34d}
+.dest-starter.platform-sink{--dc:#93c5fd}
 .dest-add{appearance:none;background:transparent;border:1px dashed var(--line-2);border-radius:12px;
   color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
@@ -1587,15 +1646,52 @@ details.sys-collapse>summary .ic-label{margin:0}
 
 /* - Logs ------------------- */
 .logs-wrap{position:relative;min-height:420px}
-.logs{background:#050608;border:1px solid var(--line);border-radius:10px;padding:10px 14px;
+.logs{background:#050608;border:1px solid var(--line);border-radius:10px;padding:6px;
   font-family:'JetBrains Mono',monospace;font-size:12px;
-  min-height:420px;max-height:420px;overflow-y:auto;color:var(--fg-2);
-  line-height:1.6;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+  min-height:420px;max-height:420px;overflow-y:auto;color:var(--fg-2);line-height:1.55;margin:0}
+.logs[hidden]{display:none}
+/* One event per row: time, source, message; severity tints the row. */
+.log-row{display:grid;grid-template-columns:62px 118px minmax(0,1fr);gap:10px;align-items:baseline;
+  padding:3px 8px;border-radius:6px;border-left:2px solid transparent}
+.log-row[hidden]{display:none}
+.log-row:hover{background:rgba(255,255,255,.03)}
+.log-t{color:var(--fg-4);text-align:right;font-variant-numeric:tabular-nums}
+.log-src{justify-self:start;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:10.5px;padding:1px 7px;border-radius:999px;background:var(--surface-3);color:var(--fg-3)}
+.log-msg{white-space:pre-wrap;overflow-wrap:anywhere}
+.log-row.lvl-err{border-left-color:var(--err);background:color-mix(in oklch,var(--err) 7%,transparent)}
+.log-row.lvl-err .log-msg{color:color-mix(in oklch,var(--err) 70%,var(--fg))}
+.log-row.lvl-warn{border-left-color:var(--warn)}
+.log-row.lvl-warn .log-msg{color:var(--warn)}
+.log-row.lvl-ok .log-msg{color:color-mix(in oklch,var(--ok) 45%,var(--fg))}
+.logs-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.logs-tools[hidden]{display:none}
+.logs-chips{display:inline-flex;gap:4px;padding:3px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line)}
+.logs-chip{appearance:none;display:inline-flex;align-items:center;gap:6px;border:0;border-radius:7px;padding:6px 11px;
+  background:transparent;color:var(--fg-3);font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+  transition:background .15s var(--ease-out),color .15s var(--ease-out)}
+.logs-chip:hover{color:var(--fg)}
+.logs-chip[aria-pressed="true"]{background:var(--surface-3);color:var(--fg)}
+.logs-n{font:600 10.5px/1 'JetBrains Mono',monospace;padding:2px 5px;border-radius:999px}
+.logs-n:empty{display:none}
+.logs-chip.lvl-warn .logs-n{background:color-mix(in oklch,var(--warn) 20%,transparent);color:var(--warn)}
+.logs-chip.lvl-err .logs-n{background:color-mix(in oklch,var(--err) 20%,transparent);color:var(--err)}
+.logs-source{width:auto;max-width:190px;height:36px;padding:0 10px}
+.logs-search{flex:1;min-width:160px;height:36px}
+.logs-nomatch{position:absolute;inset:0;display:grid;place-items:center;color:var(--fg-3);font-size:13px;pointer-events:none}
+.logs-nomatch[hidden]{display:none}
+.logs-latest{position:absolute;right:14px;bottom:14px;appearance:none;border:1px solid var(--line-2);border-radius:999px;
+  padding:7px 13px;background:var(--surface-3);color:var(--fg);font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+  box-shadow:0 8px 24px rgba(0,0,0,.45);animation:softRise .18s var(--ease-out);transition:transform .15s var(--ease-out)}
+.logs-latest:active{transform:scale(.96)}
+.logs-latest[hidden]{display:none}
 .logs-empty{background:var(--bg-2);border:1px dashed var(--line);border-radius:10px;
   min-height:420px;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:8px;text-align:center;padding:24px;color:var(--fg-3)}
 .logs-empty[hidden]{display:none}
-.logs-empty-icon{font-size:28px;opacity:.7;margin-bottom:6px}
+.logs-empty-icon{width:44px;height:44px;display:grid;place-items:center;border-radius:12px;margin-bottom:6px;
+  background:var(--surface-3);color:var(--fg-3)}
+.logs-empty-icon svg{width:22px;height:22px}
 .logs-empty-title{font-size:14px;font-weight:600;color:var(--fg-2)}
 .logs-empty-body{font-size:12.5px;max-width:42ch;line-height:1.5}
 
@@ -1896,6 +1992,10 @@ details.sys-collapse>summary .ic-label{margin:0}
     <span class="ic-pill bad" id="hdr-backpressure" hidden title="A destination's upload can't keep up with OBS's bitrate. Lower OBS bitrate or check upload speed.">⚠ Upload bottleneck</span>
     <span class="ic-pill warn" id="hdr-twitch-cap" hidden>⚠ <span id="hdr-twitch-cap-v">Twitch · Source-Only at 10 Mbps</span></span>
     <a id="hdr-update" class="ic-pill" href="#" hidden title="Open the updater" onclick="openUpdateInAbout();return false;" style="cursor:pointer">⬆ <span id="hdr-update-v">update available</span></a>
+    <button id="hdr-cmdk" class="hdr-cmdk" type="button" onclick="openCmdk()" title="Search and run anything (Ctrl+K)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <span>Search</span><kbd>Ctrl K</kbd>
+    </button>
     <button id="hdr-help" class="ic-btn-tiny" title="How does this work? (?)" onclick="openTour(0)" style="width:30px;height:30px;color:var(--fg-3);font-weight:700;font-size:14px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);position:relative">?
       <span id="hdr-help-hint" class="help-hint" hidden>New here? Quick tour →</span>
     </button>
@@ -2204,6 +2304,12 @@ details.sys-collapse>summary .ic-label{margin:0}
       <div class="tab-sub" id="dest-sub">0 configured</div>
     </div>
     <button class="ic-btn ic-btn-primary" id="dest-add-btn" onclick="openDestForm(null)">+ Add destination</button>
+  </div>
+  <!-- First run: pick a platform to start from (filled by rebuildDests). -->
+  <div class="dest-empty" id="dest-empty" hidden>
+    <div class="dest-empty-title">Where do you stream?</div>
+    <div class="dest-empty-sub">Pick a platform to add it. Add as many as you like: each gets its own connection, and one delay covers them all.</div>
+    <div class="dest-empty-grid" id="dest-empty-grid"></div>
   </div>
   <div class="dest-grid" id="dest-grid"></div>
   <div class="ic-modal" id="dest-modal" hidden role="dialog" aria-modal="true" aria-labelledby="dest-form-title">
@@ -3139,10 +3245,21 @@ details.sys-collapse>summary .ic-label{margin:0}
       <button class="ic-btn ic-btn-ghost" onclick="clearLogs()">Clear</button>
     </div>
   </div>
+  <div class="logs-tools" id="logs-tools" hidden>
+    <div class="logs-chips" role="group" aria-label="Show">
+      <button type="button" class="logs-chip" data-log-level="all" aria-pressed="true">All</button>
+      <button type="button" class="logs-chip lvl-warn" data-log-level="problems" aria-pressed="false">Problems <span class="logs-n" id="logs-n-problems"></span></button>
+      <button type="button" class="logs-chip lvl-err" data-log-level="err" aria-pressed="false">Errors <span class="logs-n" id="logs-n-err"></span></button>
+    </div>
+    <select id="logs-source" class="ic-input logs-source" aria-label="Source"><option value="">All sources</option></select>
+    <input id="logs-search" type="search" class="ic-input logs-search" placeholder="Filter lines" aria-label="Filter lines" autocomplete="off" spellcheck="false">
+  </div>
   <div class="logs-wrap">
-    <pre class="logs" id="logs" hidden></pre>
+    <div class="logs" id="logs" role="log" hidden></div>
+    <div class="logs-nomatch" id="logs-nomatch" hidden>No lines match these filters.</div>
+    <button type="button" class="logs-latest" id="logs-latest" hidden>↓ Jump to latest</button>
     <div class="logs-empty" id="logs-empty">
-      <div class="logs-empty-icon">X</div>
+      <div class="logs-empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/></svg></div>
       <div class="logs-empty-title">No events yet</div>
       <div class="logs-empty-body">As soon as OBS connects, you'll see ingest, egress, and destination events tail here in real time.</div>
     </div>
@@ -3231,6 +3348,20 @@ details.sys-collapse>summary .ic-label{margin:0}
 
 <!-- Overlay Studio runtime + baker (author-time only; defines window.ICOverlay). -->
 <script src="/overlay-runtime.js"></script>
+<!-- Command palette (Ctrl+K): see the "Command palette" script section. -->
+<div class="cmdk" id="cmdk" hidden>
+  <div class="cmdk-backdrop" onclick="closeCmdk()"></div>
+  <div class="cmdk-panel" role="dialog" aria-modal="true" aria-label="Search and run">
+    <div class="cmdk-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="cmdk-input" type="text" placeholder="Go to, find a setting, or type a delay like 45s" autocomplete="off" spellcheck="false"
+        role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list">
+      <kbd>Esc</kbd>
+    </div>
+    <div class="cmdk-list" id="cmdk-list" role="listbox"></div>
+    <div class="cmdk-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> run</span><span><kbd>Ctrl</kbd><kbd>K</kbd> open anywhere</span></div>
+  </div>
+</div>
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
@@ -4083,8 +4214,48 @@ function renderStats(s){
 }
 
 // - Destinations ---------------------------─
+// Platforms offered on the empty Destinations screen: [platform, note].
+const DEST_STARTERS = [
+  ['twitch', 'Enhanced Broadcasting and Dual Format'],
+  ['youtube', 'Live and Shorts'],
+  ['kick', 'Kick ingest'],
+  ['restream', 'TikTok, Instagram and more'],
+  ['custom', 'Any RTMP server'],
+  ['sink', 'Try it without going live'],
+];
+// Open the new-destination form with `platform` already picked.
+function openNewDest(platform){
+  openDestForm(null);
+  $('dest-form-platform').value = platform;
+  $('dest-form-platform').dispatchEvent(new Event('change'));
+}
+function renderDestStarters(){
+  const grid = $('dest-empty-grid');
+  if (grid.childElementCount) return;
+  grid.replaceChildren(...DEST_STARTERS.map(([platform, note]) => {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'dest-starter platform-' + platform;
+    const icon = document.createElement('span');
+    icon.className = 'dest-starter-icon';
+    icon.textContent = PLATFORM_INITIAL[platform];
+    const name = document.createElement('span');
+    name.className = 'dest-starter-name';
+    name.textContent = PLATFORM_LABEL[platform];
+    const sub = document.createElement('span');
+    sub.className = 'dest-starter-note';
+    sub.textContent = note;
+    tile.append(icon, name, sub);
+    tile.onclick = () => openNewDest(platform);
+    return tile;
+  }));
+}
 function rebuildDests(){
   const c = $('dest-grid');
+  const empty = lastDests.length === 0;
+  $('dest-empty').hidden = !empty;
+  c.hidden = empty;
+  if (empty) renderDestStarters();
   const seen = new Set();
   lastDests.forEach(d => {
     seen.add(d.id);
@@ -7781,38 +7952,136 @@ function copyEl(btn, id, label){ navigator.clipboard.writeText($(id).textContent
 function copyText(btn, text, label){ navigator.clipboard.writeText(text); flashCopied(btn); }
 
 // - Logs -------------------------------
+// Each line is split into time, source and severity, shown as a row the eye
+// can scan: errors red, warnings amber, good news green. Filters narrow it
+// by severity, source or text. The log only grows at the end, so new lines
+// are appended rather than the whole list rebuilt every poll.
+const LOG_ERROR = /\b(disconnected|failed|failure|error|errors|refused|rejected|invalid|denied|aborted)\b|could not|couldn't/i;
+const LOG_WARN = /\b(retry|retrying|retries|waiting|timed out|stale|warning|fallback|too small)\b|holding off|nothing goes out|can't|cannot/i;
+const LOG_OK = /\b(succeeded|connected|published|saved|started|ready|resumed)\b|is now live|now live/i;
+const logView = {lines: [], sources: new Set(), level: 'all', source: '', text: ''};
+
+function parseLogLine(line){
+  const match = line.match(/^\[\+\s*([\d.]+)s\]\s*(.*)$/);
+  const secs = match ? parseFloat(match[1]) : NaN;
+  const message = match ? match[2] : line;
+  const bracket = message.match(/^\[([^\]]+)\]\s*/);
+  const source = bracket ? bracket[1]
+    : /^ingest:|^Enhanced Broadcasting/.test(message) ? 'OBS'
+    : /^pre-arm|delay/i.test(message) ? 'Delay'
+    : 'App';
+  const level = LOG_ERROR.test(message) ? 'err' : LOG_WARN.test(message) ? 'warn' : LOG_OK.test(message) ? 'ok' : 'info';
+  return {secs, source, level, message: bracket ? message.slice(bracket[0].length) : message};
+}
+// Seconds since the app started as h:mm:ss or m:ss.
+function fmtLogTime(secs){
+  if (!isFinite(secs)) return '';
+  const total = Math.floor(secs);
+  const h = Math.floor(total / 3600), m = Math.floor(total / 60) % 60, s = total % 60;
+  const pad = n => String(n).padStart(2, '0');
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+function logRow(line){
+  const entry = parseLogLine(line);
+  const row = document.createElement('div');
+  row.className = 'log-row lvl-' + entry.level;
+  row.dataset.level = entry.level;
+  row.dataset.source = entry.source;
+  row.dataset.text = line.toLowerCase();
+  const time = document.createElement('span');
+  time.className = 'log-t';
+  time.textContent = fmtLogTime(entry.secs);
+  const source = document.createElement('span');
+  source.className = 'log-src';
+  source.textContent = entry.source;
+  const message = document.createElement('span');
+  message.className = 'log-msg';
+  message.textContent = entry.message;
+  row.append(time, source, message);
+  logView.sources.add(entry.source);
+  return row;
+}
+function logRowVisible(row){
+  if (logView.level === 'err' && row.dataset.level !== 'err') return false;
+  if (logView.level === 'problems' && row.dataset.level !== 'err' && row.dataset.level !== 'warn') return false;
+  if (logView.source && row.dataset.source !== logView.source) return false;
+  return !logView.text || row.dataset.text.includes(logView.text);
+}
+function applyLogFilters(){
+  const el = $('logs');
+  let shown = 0;
+  el.querySelectorAll('.log-row').forEach(row => { row.hidden = !logRowVisible(row); if (!row.hidden) shown++; });
+  $('logs-nomatch').hidden = shown > 0 || !logView.lines.length;
+  const counts = {err: 0, warn: 0};
+  el.querySelectorAll('.log-row').forEach(row => { if (row.dataset.level in counts) counts[row.dataset.level]++; });
+  $('logs-n-problems').textContent = counts.err + counts.warn || '';
+  $('logs-n-err').textContent = counts.err || '';
+  const select = $('logs-source');
+  const known = [...select.options].map(o => o.value).filter(Boolean);
+  const sources = [...logView.sources].sort();
+  if (sources.join('|') !== known.join('|')){
+    select.replaceChildren(new Option('All sources', ''), ...sources.map(name => new Option(name, name)));
+    select.value = sources.includes(logView.source) ? logView.source : '';
+  }
+}
 async function pollLogs(){
   try {
     const j = await (await fetch('/logs')).json();
-    const el = $('logs');
-    const empty = $('logs-empty');
     const lines = j.lines || [];
-    if (!lines.length){
-      el.textContent = '';
-      el.hidden = true;
-      if (empty) empty.hidden = false;
-      return;
+    const el = $('logs');
+    const hasLines = lines.length > 0;
+    el.hidden = !hasLines;
+    $('logs-empty').hidden = hasLines;
+    $('logs-tools').hidden = !hasLines;
+    const old = logView.lines;
+    const appendOnly = old.length > 0 && lines.length >= old.length
+      && lines[0] === old[0] && lines[old.length - 1] === old[old.length - 1];
+    if (appendOnly && lines.length === old.length) return;
+    if (!appendOnly){
+      logView.sources.clear();
+      el.replaceChildren();
     }
-    if (empty) empty.hidden = true;
-    el.hidden = false;
-    const text = lines.join('\n');
-    if (el.textContent !== text) el.textContent = text;
-    // Follow the tail unless you've scrolled up to read (the scroll listener
-    // below tracks that). A hidden pane can't scroll, so it catches up on
-    // the first poll after the Logs tab opens.
+    const fresh = appendOnly ? lines.slice(old.length) : lines;
+    const rows = fresh.map(logRow);
+    rows.forEach(row => { row.hidden = !logRowVisible(row); });
+    el.append(...rows);
+    logView.lines = lines;
+    applyLogFilters();
+    // Follow the tail unless you've scrolled up to read (see the scroll
+    // listener). A hidden pane can't scroll, so it catches up when shown.
     if (el._follow !== false) el.scrollTop = el.scrollHeight;
   } catch(_){}
 }
-$('logs').addEventListener('scroll', e => {
-  const el = e.currentTarget;
-  if (el.clientHeight) el._follow = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-});
+(() => {
+  const el = $('logs');
+  el.addEventListener('scroll', () => {
+    if (!el.clientHeight) return;
+    el._follow = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    $('logs-latest').hidden = el._follow;
+  });
+  $('logs-latest').onclick = () => {
+    el._follow = true;
+    el.scrollTo({top: el.scrollHeight, behavior: prefersReducedMotion() ? 'auto' : 'smooth'});
+    $('logs-latest').hidden = true;
+  };
+  document.querySelectorAll('[data-log-level]').forEach(chip => {
+    chip.onclick = () => {
+      logView.level = chip.dataset.logLevel;
+      document.querySelectorAll('[data-log-level]').forEach(c => c.setAttribute('aria-pressed', String(c === chip)));
+      applyLogFilters();
+    };
+  });
+  $('logs-source').onchange = e => { logView.source = e.target.value; applyLogFilters(); };
+  $('logs-search').oninput = e => { logView.text = e.target.value.trim().toLowerCase(); applyLogFilters(); };
+})();
 async function clearLogs(){
   await fetch('/logs/clear',{method:'POST'});
-  $('logs').textContent = '';
+  logView.lines = [];
+  logView.sources.clear();
+  $('logs').replaceChildren();
   $('logs').hidden = true;
-  const empty = $('logs-empty');
-  if (empty) empty.hidden = false;
+  $('logs-tools').hidden = true;
+  $('logs-empty').hidden = false;
   toast('Logs cleared','info');
 }
 // - Spotlight onboarding tour --------------------─
@@ -8098,7 +8367,7 @@ let _tabIdx = -1;   // index of the current tab, for slide direction (see showTa
 // Content eases in card by card when a tab or sub-tab opens, so the eye
 // lands on the first thing and follows down. The first STAGGER_MAX cards
 // stagger; the rest come in with the last so long lists never make you wait.
-const STAGGER_SELECTOR = '.dcard, .stat-card, .metric-mini, .obs-section, .overlay-section, .profile-row, '
+const STAGGER_SELECTOR = '.dcard, .dest-starter, .stat-card, .metric-mini, .obs-section, .overlay-section, .profile-row, '
   + '.sub-pane > .sys-section, .sub-pane > .sys-reset, .sub-pane > .sys-about-grid';
 const STAGGER_STEP_MS = 40;
 const STAGGER_MAX = 8;
@@ -8409,6 +8678,215 @@ function sysFindGo(match){
     if (target.closest('input, textarea, select, [contenteditable="true"]')) return;
     e.preventDefault();
     input.focus();
+  });
+})();
+
+// - Command palette (Ctrl+K) ------------------------------
+// One box to go anywhere and do anything: switch tabs, jump to a setting,
+// arm a delay (type "45" or "2m"), turn destinations on and off. Commands
+// are built when it opens, from the live state, so it only offers what
+// makes sense right now.
+const CMDK_LIMIT = 40;
+let cmdkItems = [];
+let cmdkActive = 0;
+let cmdkReturnFocus = null;
+
+const CMDK_TABS = [
+  ['destinations', 'Destinations', 'platforms stream keys twitch youtube kick'],
+  ['stats', 'Stats', 'bitrate cpu memory frames graphs metrics'],
+  ['obs', 'OBS setup', 'obs connect server url stream key register service'],
+  ['overlay', 'Overlay', 'overlay badge browser source studio widget'],
+  ['profiles', 'Profiles', 'saved delays presets'],
+  ['system', 'System', 'settings preferences'],
+  ['logs', 'Logs', 'event log errors history'],
+];
+
+// "45", "45s", "2m", "1m30s", "90 sec" -> milliseconds (1 s..600 s), else null.
+function cmdkParseDelay(query){
+  const text = query.trim().toLowerCase().replace(/\s+/g, '');
+  const match = text.match(/^(?:(\d+)m(?:in(?:utes?)?)?)?(?:(\d+)(?:s(?:ec(?:onds?)?)?)?)?$/);
+  if (!match || (!match[1] && !match[2])) return null;
+  const secs = (parseInt(match[1] || '0', 10) * 60) + parseInt(match[2] || '0', 10);
+  return secs >= 1 && secs <= 600 ? secs * 1000 : null;
+}
+
+function cmdkCommands(query){
+  const state = lastState || {};
+  const phase = PHASE_TO_STATE[state.phase] || 'off';
+  const commands = [];
+  const add = (group, label, run, extra = {}) => commands.push({group, label, run, ...extra});
+
+  // Delay: what the big button would do now, plus the other moves.
+  const typed = cmdkParseDelay(query);
+  if (typed) add('Delay', `Arm a ${fmtDelay(typed)} delay`, () => arm(typed), {keywords: query, always: true});
+  if (phase === 'armed') add('Delay', 'Activate the delay', activate, {keywords: 'go delayed start'});
+  if (phase === 'active'){
+    add('Delay', 'Back to live now', stop, {keywords: 'cut live stop remove delay'});
+    add('Delay', 'Cut to live once this moment airs', cutAfter, {keywords: 'cut after safe'});
+  }
+  if (phase === 'arming' || phase === 'armed') add('Delay', 'Disarm', disarm, {keywords: 'cancel stop arming'});
+  (profiles || []).forEach(p => add('Profiles', `Arm ${p.name} (${fmtDelay(p.delay_ms)})`, () => arm(p.delay_ms), {keywords: 'profile delay'}));
+  if (state.hold){
+    add('Crash protection', 'End the reconnect screen now', async () => {
+      applyState(await (await fetch('/crash-protection/end', {method: 'POST'})).json());
+      toast('Stream ended on every destination', 'ok');
+    }, {keywords: 'hold crash end stop'});
+  }
+
+  // Destinations.
+  (lastDests || []).forEach(d => {
+    const where = PLATFORM_LABEL[d.platform] || d.platform;
+    add('Destinations', `${d.enabled ? 'Turn off' : 'Turn on'} ${d.name}`, () => toggleDest(d),
+      {hint: where, keywords: `${where} enable disable toggle destination`});
+    add('Destinations', `Edit ${d.name}`, () => { showTab('destinations'); openDestForm(d); },
+      {hint: where, keywords: `${where} settings key destination`});
+  });
+  add('Destinations', 'Add a destination', () => { showTab('destinations'); openDestForm(null); },
+    {keywords: 'new platform twitch youtube kick restream tiktok custom'});
+
+  // Places.
+  CMDK_TABS.forEach(([tab, label, words]) => add('Go to', label, () => showTab(tab), {keywords: words}));
+  if (query.trim()){
+    sysFindSearch(query).forEach(match => add('Settings', match.title, () => { showTab('system'); sysFindGo(match); },
+      {hint: 'System · ' + match.tabName}));
+  }
+
+  // App.
+  add('App', 'Check for updates', () => { showTab('system'); showSubTab('system', 'about'); aboutCheckUpdate(false); },
+    {keywords: 'version update upgrade new'});
+  add('App', 'Download the event log', downloadLogs, {keywords: 'logs export save support'});
+  add('App', 'Take the tour', () => openTour(0), {keywords: 'help guide how does this work'});
+  return commands;
+}
+
+// Every typed word must appear; label hits beat keyword hits.
+function cmdkScore(command, words){
+  const label = command.label.toLowerCase();
+  const haystack = [label, command.keywords || '', command.hint || '', command.group].join(' ').toLowerCase();
+  let score = 0;
+  for (const word of words){
+    if (!haystack.includes(word)) return -1;
+    score += label.startsWith(word) ? 3 : label.split(/[^a-z0-9]+/).some(part => part.startsWith(word)) ? 2 : 1;
+  }
+  return score;
+}
+
+function cmdkFilter(){
+  const query = $('cmdk-input').value;
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const all = cmdkCommands(query);
+  if (!query.trim()){
+    // Nothing typed: what you can do right now, then places.
+    cmdkItems = all.filter(c => c.group === 'Delay' || c.group === 'Crash protection' || c.group === 'Profiles' || c.group === 'Go to');
+  } else {
+    cmdkItems = all
+      .map(command => ({command, score: command.always ? 100 : cmdkScore(command, words)}))
+      .filter(entry => entry.score >= 0)
+      .sort((a, b) => b.score - a.score)
+      .map(entry => entry.command);
+  }
+  cmdkItems = cmdkItems.slice(0, CMDK_LIMIT);
+  cmdkActive = 0;
+  cmdkRender();
+}
+
+function cmdkRender(){
+  const list = $('cmdk-list');
+  if (!cmdkItems.length){
+    const empty = document.createElement('div');
+    empty.className = 'cmdk-empty';
+    empty.textContent = 'Nothing matches. Try a tab, a setting, a destination or a delay like "45s".';
+    list.replaceChildren(empty);
+    return;
+  }
+  let lastGroup = '';
+  const rows = [];
+  cmdkItems.forEach((command, index) => {
+    if (command.group !== lastGroup){
+      lastGroup = command.group;
+      const heading = document.createElement('div');
+      heading.className = 'cmdk-group';
+      heading.textContent = command.group;
+      rows.push(heading);
+    }
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'cmdk-item';
+    row.id = 'cmdk-item-' + index;
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(index === cmdkActive));
+    const label = document.createElement('span');
+    label.className = 'cmdk-label';
+    label.textContent = command.label;
+    row.append(label);
+    if (command.hint){
+      const hint = document.createElement('span');
+      hint.className = 'cmdk-hint';
+      hint.textContent = command.hint;
+      row.append(hint);
+    }
+    row.onmousemove = () => { if (cmdkActive !== index){ cmdkActive = index; cmdkSyncActive(); } };
+    row.onclick = () => cmdkRun(index);
+    rows.push(row);
+  });
+  list.replaceChildren(...rows);
+  cmdkSyncActive();
+}
+function cmdkSyncActive(){
+  $('cmdk-list').querySelectorAll('.cmdk-item').forEach(row => {
+    const on = row.id === 'cmdk-item-' + cmdkActive;
+    row.setAttribute('aria-selected', String(on));
+    if (on) row.scrollIntoView({block: 'nearest'});
+  });
+  $('cmdk-input').setAttribute('aria-activedescendant', 'cmdk-item-' + cmdkActive);
+}
+function cmdkRun(index){
+  const command = cmdkItems[index];
+  if (!command) return;
+  closeCmdk(false);
+  command.run();
+}
+
+function openCmdk(){
+  const box = $('cmdk');
+  if (!box.hidden) return;
+  cmdkReturnFocus = document.activeElement;
+  box.hidden = false;
+  const input = $('cmdk-input');
+  input.value = '';
+  cmdkFilter();
+  input.focus();
+}
+function closeCmdk(restoreFocus = true){
+  const box = $('cmdk');
+  if (box.hidden) return;
+  box.hidden = true;
+  if (restoreFocus && cmdkReturnFocus && cmdkReturnFocus.focus) cmdkReturnFocus.focus();
+}
+
+(() => {
+  const input = $('cmdk-input');
+  input.addEventListener('input', cmdkFilter);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+      e.preventDefault();
+      if (!cmdkItems.length) return;
+      cmdkActive = (cmdkActive + (e.key === 'ArrowDown' ? 1 : -1) + cmdkItems.length) % cmdkItems.length;
+      cmdkSyncActive();
+    } else if (e.key === 'Enter'){
+      e.preventDefault();
+      cmdkRun(cmdkActive);
+    } else if (e.key === 'Escape'){
+      e.preventDefault();
+      closeCmdk();
+    }
+  });
+  // Ctrl+K (Cmd+K on a Mac) opens it from anywhere, even mid-typing.
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k'){
+      e.preventDefault();
+      if ($('cmdk').hidden) openCmdk(); else closeCmdk();
+    }
   });
 })();
 
