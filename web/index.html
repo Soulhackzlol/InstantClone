@@ -8629,7 +8629,12 @@ function morphCardHeight(card, h0){
   };
   card.addEventListener('transitionend', card._morphDone);
 }
-$$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
+// Clicking the tab that's already open does nothing: replaying its enter
+// animation reads as a glitch, not feedback. (Code that re-shows the current
+// tab on purpose calls showTab directly.)
+$$('.tab').forEach(t => t.addEventListener('click', () => {
+  if (!t.classList.contains('on')) showTab(t.dataset.tab);
+}));
 window.addEventListener('resize', moveTabInd);
 // The pane card scrolls on its own. Cap it at the room left below its top
 // edge, so its bottom (and the System save bar pinned to it) always sits
@@ -8908,7 +8913,7 @@ function moveSubTabInd(pane){
 $$('.sub-tab').forEach(t => {
   t.addEventListener('click', e => {
     const pane = e.currentTarget.closest('.tab-pane');
-    if (pane) showSubTab(pane.dataset.pane, e.currentTarget.dataset.subtab);
+    if (pane && !e.currentTarget.classList.contains('on')) showSubTab(pane.dataset.pane, e.currentTarget.dataset.subtab);
   });
 });
 window.addEventListener('resize', () => {
