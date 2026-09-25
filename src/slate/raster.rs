@@ -203,6 +203,26 @@ impl Canvas {
         &self.pixels[start..start + self.width]
     }
 
+    /// Same-size canvases one above the other, first on top: the preview
+    /// strip the dashboard animates by sliding it. `None` when empty or
+    /// the sizes differ.
+    pub fn stacked(frames: Vec<Canvas>) -> Option<Canvas> {
+        let first = frames.first()?;
+        let (width, height) = (first.width, first.height);
+        if frames
+            .iter()
+            .any(|f| f.width != width || f.height != height)
+        {
+            return None;
+        }
+        let count = frames.len();
+        Some(Canvas {
+            width,
+            height: height * count,
+            pixels: frames.into_iter().flat_map(|f| f.pixels).collect(),
+        })
+    }
+
     /// 24-bit top-down BMP, for the dashboard preview. Uncompressed on
     /// purpose: it is a few hundred KB over localhost, and needs no
     /// deflate at runtime.
@@ -356,5 +376,18 @@ mod tests {
         let reused = after.to_yuv420_after(&before, &before.to_yuv420());
         let full = after.to_yuv420();
         assert!(reused.y == full.y && reused.u == full.u && reused.v == full.v);
+    }
+
+    #[test]
+    fn stacked_frames_keep_their_order_and_refuse_mixed_sizes() {
+        let red = Canvas::new(4, 2, Rgb::new(255, 0, 0));
+        let blue = Canvas::new(4, 2, Rgb::new(0, 0, 255));
+        let strip = Canvas::stacked(vec![red, blue]).unwrap();
+        assert_eq!((strip.width(), strip.height()), (4, 4));
+        assert_eq!(strip.row(0)[0], Rgb::new(255, 0, 0));
+        assert_eq!(strip.row(3)[0], Rgb::new(0, 0, 255));
+        let small = Canvas::new(2, 2, Rgb::new(0, 0, 0));
+        assert!(Canvas::stacked(vec![Canvas::new(4, 2, Rgb::new(0, 0, 0)), small]).is_none());
+        assert!(Canvas::stacked(Vec::new()).is_none());
     }
 }

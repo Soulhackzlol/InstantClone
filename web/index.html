@@ -1508,8 +1508,12 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .crash-note{color:var(--fg-3);font-size:11.5px;line-height:1.45}
 .crash-preview-frame{display:grid;place-items:center;background:var(--bg);border:1px solid var(--line);
   border-radius:10px;padding:10px;aspect-ratio:16/10}
-.crash-preview{display:block;width:100%;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.45);aspect-ratio:16/9}
+.crash-preview{display:block;width:100%;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.45);aspect-ratio:16/9;
+  background:var(--surface) no-repeat 0 0/100% 1000%;animation:crash-loop 2s steps(10,jump-none) infinite}
 .crash-preview-frame.vertical .crash-preview{width:auto;height:100%;aspect-ratio:9/16}
+/* The preview is one strip of 10 frames (CP_PREVIEW_FRAMES) stacked top to
+   bottom; sliding it a frame at a time plays the 2 s loop with no script. */
+@keyframes crash-loop{to{background-position:0 100%}}
 .crash-controls{display:flex;flex-direction:column;gap:18px;min-width:0}
 .crash-field{display:flex;flex-direction:column;gap:8px;min-width:0}
 .crash-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
@@ -1544,7 +1548,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .crash-advanced .crash-check{margin-top:10px}
 @media (max-width:820px){.crash-body{grid-template-columns:1fr}.crash-stage{position:static}}
 @media (max-width:420px){.crash-themes{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (prefers-reduced-motion: reduce){.crash-body{animation:none}.crash-theme:hover,.crash-swatch:hover{transform:none}}
+@media (prefers-reduced-motion: reduce){.crash-body,.crash-preview{animation:none}.crash-theme:hover,.crash-swatch:hover{transform:none}}
 /* Collapsible System section (e.g. legacy OBS quick launch). Native
    <details>; the summary carries the section label + a rotating caret. */
 details.sys-collapse>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;-webkit-user-select:none;user-select:none}
@@ -2789,7 +2793,7 @@ details.sys-collapse>summary .ic-label{margin:0}
             </div>
           </div>
           <div class="crash-preview-frame" id="s-cp-preview-frame">
-            <img class="crash-preview" id="s-cp-preview" alt="Preview of the reconnect screen">
+            <div class="crash-preview" id="s-cp-preview" role="img" aria-label="Preview of the reconnect screen"></div>
           </div>
           <span class="crash-note">Drawn by the same code that streams it. H.264 tracks show this screen; HEVC and AV1 tracks hold your last frame instead.</span>
         </div>
@@ -5748,16 +5752,18 @@ async function saveSettings(){
 // query, so the preview and the style thumbnails follow every change
 // before Save. The style list and default text come from GET /config.
 const CP_ACCENTS = [['Cyan','#5ac8fa'],['Violet','#9d7bff'],['Lime','#7ee06b'],['Coral','#ff6b6b'],['Amber','#ffb73a']];
-// Moments of the 2 s loop the preview cycles through, one every 200 ms.
+// Frames in the preview strip; the CSS animation steps through the same 10.
 const CP_PREVIEW_FRAMES = 10;
 let cpState = {theme:'whisper', accent:'#5ac8fa', background:'', shape:'horizontal'};
 let cpThemes = [];
 let cpDefaults = {headline:'', subline:''};
 let cpRefreshTimer = null;
-let cpFrames = [];
-let cpFrameIndex = 0;
-// Bumped per refresh, so frames of a superseded one are thrown away.
+// What the thumbnails were last drawn with. Picking a style or a shape
+// doesn't change them, so only colour and text edits reload them.
+let cpThumbKey = '';
+// Bumped per refresh, so a strip that loads after a newer one is dropped.
 let cpGeneration = 0;
+let cpStripUrl = '';
 
 function cpInit(){
   const custom = $('s-cp-accent').parentElement;
@@ -5786,7 +5792,6 @@ function cpInit(){
   document.querySelectorAll('[data-cp-shape]').forEach(button => {
     button.onclick = () => { cpState.shape = button.dataset.cpShape; cpRender(); };
   });
-  setInterval(cpTickPreview, 2000 / CP_PREVIEW_FRAMES);
 }
 // One card per style, a radio group: arrow keys move the choice.
 function cpBuildThemes(){
@@ -5872,39 +5877,29 @@ function cpScheduleRefresh(){
   clearTimeout(cpRefreshTimer);
   cpRefreshTimer = setTimeout(cpRefresh, 250);
 }
-async function cpRefresh(){
+function cpRefresh(){
   if ($('s-cp-details').hidden) return;
   const generation = ++cpGeneration;
   const fields = cpFields();
   const previewUrl = extra => '/crash-protection/preview?' + new URLSearchParams({...fields, ...extra});
-  document.querySelectorAll('#s-cp-themes .crash-theme').forEach(card => {
-    card.querySelector('img').src = previewUrl({'crash_protection.theme': card.dataset.cpTheme, size: 'thumb', phase: '0.3'});
-  });
-  const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const phases = still ? [0.25] : Array.from({length: CP_PREVIEW_FRAMES}, (_, i) => i / CP_PREVIEW_FRAMES);
-  let frames;
-  try {
-    frames = await Promise.all(phases.map(async phase => {
-      const response = await fetch(previewUrl({orientation: cpState.shape, phase: String(phase)}));
-      if (!response.ok) throw new Error('preview ' + response.status);
-      return URL.createObjectURL(await response.blob());
-    }));
-  } catch (_) {
-    return;
+  const thumbKey = [cpState.accent, cpState.background, fields['crash_protection.headline'], fields['crash_protection.subline']].join('|');
+  if (thumbKey !== cpThumbKey) {
+    cpThumbKey = thumbKey;
+    document.querySelectorAll('#s-cp-themes .crash-theme').forEach(card => {
+      card.querySelector('img').src = previewUrl({'crash_protection.theme': card.dataset.cpTheme, size: 'thumb', phase: '0.3'});
+    });
   }
-  if (generation !== cpGeneration) {
-    frames.forEach(url => URL.revokeObjectURL(url));
-    return;
-  }
-  cpFrames.forEach(url => URL.revokeObjectURL(url));
-  cpFrames = frames;
-  cpFrameIndex = 0;
-  $('s-cp-preview').src = cpFrames[0];
-}
-function cpTickPreview(){
-  if (cpFrames.length < 2 || document.hidden || $('s-cp-details').hidden) return;
-  cpFrameIndex = (cpFrameIndex + 1) % cpFrames.length;
-  $('s-cp-preview').src = cpFrames[cpFrameIndex];
+  // Fetch the strip whole and swap it in once it has arrived, so the
+  // preview never flashes empty or half-drawn while it loads.
+  fetch(previewUrl({orientation: cpState.shape, frames: String(CP_PREVIEW_FRAMES)}))
+    .then(response => response.ok ? response.blob() : Promise.reject(response.status))
+    .then(blob => {
+      if (generation !== cpGeneration) return;
+      URL.revokeObjectURL(cpStripUrl);
+      cpStripUrl = URL.createObjectURL(blob);
+      $('s-cp-preview').style.backgroundImage = 'url("' + cpStripUrl + '")';
+    })
+    .catch(() => {});
 }
 function cpApplyConfig(cp){
   if (!cp) return;

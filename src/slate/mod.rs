@@ -57,13 +57,28 @@ impl fmt::Display for UnsupportedShape {
 
 impl std::error::Error for UnsupportedShape {}
 
-/// Still frame of the screen as a BMP, drawn by the same code as the
-/// stream, so the dashboard preview is exactly what viewers get.
-pub fn preview_bmp(settings: &CrashProtection, width: usize, height: usize, phase: f32) -> Vec<u8> {
+/// The screen at each of `phases` (moments of the loop, 0..1), stacked
+/// top to bottom in one BMP. Drawn by the same code as the stream, so the
+/// dashboard preview is exactly what viewers get; one image for the whole
+/// animation keeps the dashboard to a single request per change.
+pub fn preview_bmp(
+    settings: &CrashProtection,
+    width: usize,
+    height: usize,
+    phases: &[f32],
+) -> Vec<u8> {
     let style = screen_style(settings);
-    let mut canvas = Canvas::new(width, height, style.background);
-    themes::draw(&mut canvas, &style, phase);
-    canvas.to_bmp()
+    let frames = phases
+        .iter()
+        .map(|phase| {
+            let mut canvas = Canvas::new(width, height, style.background);
+            themes::draw(&mut canvas, &style, *phase);
+            canvas
+        })
+        .collect();
+    Canvas::stacked(frames)
+        .unwrap_or_else(|| Canvas::new(width, height, style.background))
+        .to_bmp()
 }
 
 fn screen_style(settings: &CrashProtection) -> ScreenStyle<'_> {

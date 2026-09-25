@@ -412,13 +412,15 @@ Connection: close
 /// Render the preview for the saved crash-protection settings with any
 /// unsaved `crash_protection.*` edits from the query applied on top, so
 /// the dashboard can preview before Save. `orientation=vertical` flips it
-/// to 9:16; `phase` (0..1) picks the moment in the 2 s loop; `size=thumb`
-/// draws the small version the theme picker shows.
+/// to 9:16; `phase` (0..1) picks the moment in the 2 s loop, or
+/// `frames=N` stacks N evenly spaced moments into one strip the dashboard
+/// animates; `size=thumb` draws the small version the theme picker shows.
 fn crash_protection_preview(
     query: &str,
     saved: &crate::crash_protection::CrashProtection,
 ) -> Vec<u8> {
     const DEFAULT_PHASE: f32 = 0.25;
+    const MAX_FRAMES: usize = 12;
     let form = config::parse_form(query);
     let mut settings = saved.clone();
     for (key, value) in &form {
@@ -435,12 +437,19 @@ fn crash_protection_preview(
     } else {
         (long_side, short_side)
     };
-    let phase = form
-        .get("phase")
-        .and_then(|value| value.parse::<f32>().ok())
-        .filter(|value| (0.0..1.0).contains(value))
-        .unwrap_or(DEFAULT_PHASE);
-    crate::slate::preview_bmp(&settings, width, height, phase)
+    let frames = form
+        .get("frames")
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|count| count.clamp(1, MAX_FRAMES));
+    let phases: Vec<f32> = match frames {
+        Some(count) => (0..count).map(|i| i as f32 / count as f32).collect(),
+        None => vec![form
+            .get("phase")
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| (0.0..1.0).contains(value))
+            .unwrap_or(DEFAULT_PHASE)],
+    };
+    crate::slate::preview_bmp(&settings, width, height, &phases)
 }
 
 /// Result of the auth gate: either it already wrote a response (login page,
@@ -5420,7 +5429,18 @@ mod tests {
         );
         let thumb = crash_protection_preview("size=thumb", &saved);
         assert_eq!(i32::from_le_bytes(thumb[18..22].try_into().unwrap()), 192);
-        for preview_only in ["orientation", "size", "phase"] {
+        let strip = crash_protection_preview("frames=10", &saved);
+        assert_eq!(
+            i32::from_le_bytes(strip[22..26].try_into().unwrap()),
+            -2700,
+            "ten 270 px frames, top-down"
+        );
+        let capped = crash_protection_preview("frames=500&size=thumb", &saved);
+        assert_eq!(
+            i32::from_le_bytes(capped[22..26].try_into().unwrap()),
+            -108 * 12
+        );
+        for preview_only in ["orientation", "size", "phase", "frames"] {
             assert!(
                 !is_settable_key(preview_only),
                 "preview-only params never persist"
