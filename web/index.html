@@ -982,6 +982,12 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
 /* - Pane ------------------- */
 .pane-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
   padding:22px;min-height:360px;max-height:var(--pane-max,70vh);overflow-y:auto;overflow-x:hidden}
+/* Scrolling panels keep their scrollbar's room even when nothing scrolls,
+   so a tab growing past the fold (or its enter animation) never narrows the
+   content and nudges it sideways. The right padding gives that room back
+   (22px = 12px + the 10px scrollbar). */
+.pane-card,.dest-form-body{scrollbar-gutter:stable}
+@supports (scrollbar-gutter:stable){.pane-card{padding-right:12px}}
 /* Directional enter: the body slides in from the side the tab moved toward
    (showTab sets --pane-dx: + for a rightward move, - for leftward, 0 on first
    paint / sub-panes), echoing the sliding tab indicator. Transform + opacity
@@ -1168,7 +1174,7 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
   position:relative;width:min(820px,100%);max-height:min(92vh,900px);overflow:hidden}
 /* Header and footer stay put; only the body scrolls, so Save is always in
    reach however long the Twitch VOD section gets. */
-.dest-form-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:18px 22px 20px;
+.dest-form-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:18px 12px 20px 22px;
   display:flex;flex-direction:column;gap:10px}
 .dest-form-foot{display:flex;align-items:center;gap:8px;padding:14px 22px;border-top:1px solid var(--line);
   background:color-mix(in oklch,var(--bg-2) 85%,transparent)}
@@ -1204,7 +1210,7 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
   #dest-modal{padding:0}
   .dest-form{width:100%;height:100dvh;max-height:100dvh;border-radius:0;border-width:0}
   .dest-form-head{padding:14px 16px}
-  .dest-form-body{padding:14px 16px 18px}
+  .dest-form-body{padding:14px 6px 18px 16px}
   .dest-form-foot{padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
   .dest-form-hint{display:none}
 }
@@ -8600,8 +8606,9 @@ function moveTabInd(){
 // Tween the pane card from its previous height (h0) to the new pane's natural
 // height, so switching between panes of different length morphs instead of
 // snapping. Height is a layout property, but this is one short click-driven
-// transition (not per-frame), and .pane-card clips overflow during it so no
-// scrollbar flashes. Interruptible: a rapid re-switch re-targets from the
+// transition (not per-frame). .pane-card clips overflow during it so no
+// scrollbar flashes, and its reserved gutter (scrollbar-gutter:stable) keeps
+// the content from shifting when the bar comes back. Interruptible: a rapid re-switch re-targets from the
 // live height. Releases back to `auto` on finish so dynamic content (logs,
 // stats) can still grow the card afterwards.
 function morphCardHeight(card, h0){
