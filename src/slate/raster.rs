@@ -223,37 +223,10 @@ impl Canvas {
         })
     }
 
-    /// 24-bit top-down BMP, for the dashboard preview. Uncompressed on
-    /// purpose: it is a few hundred KB over localhost, and needs no
-    /// deflate at runtime.
-    pub fn to_bmp(&self) -> Vec<u8> {
-        const HEADERS: u32 = 14 + 40;
-        const PIXELS_PER_METRE: i32 = 2835; // 72 dpi
-        let row_bytes = (self.width * 3).div_ceil(4) * 4;
-        let image_bytes = (row_bytes * self.height) as u32;
-        let mut out = Vec::with_capacity((HEADERS + image_bytes) as usize);
-        out.extend_from_slice(b"BM");
-        out.extend_from_slice(&(HEADERS + image_bytes).to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
-        out.extend_from_slice(&HEADERS.to_le_bytes());
-        out.extend_from_slice(&40u32.to_le_bytes());
-        out.extend_from_slice(&(self.width as i32).to_le_bytes());
-        out.extend_from_slice(&(-(self.height as i32)).to_le_bytes()); // negative: top-down
-        out.extend_from_slice(&1u16.to_le_bytes());
-        out.extend_from_slice(&24u16.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes()); // BI_RGB
-        out.extend_from_slice(&image_bytes.to_le_bytes());
-        out.extend_from_slice(&PIXELS_PER_METRE.to_le_bytes());
-        out.extend_from_slice(&PIXELS_PER_METRE.to_le_bytes());
-        out.extend_from_slice(&[0; 8]); // palette counts
-        for row in self.pixels.chunks(self.width) {
-            let start = out.len();
-            for pixel in row {
-                out.extend_from_slice(&[pixel.b, pixel.g, pixel.r]);
-            }
-            out.resize(start + row_bytes, 0);
-        }
-        out
+    /// PNG of the canvas, for the dashboard preview.
+    pub fn to_png(&self) -> Vec<u8> {
+        let rgb: Vec<u8> = self.pixels.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+        super::png::encode(self.width, self.height, &rgb)
     }
 }
 
@@ -340,16 +313,6 @@ mod tests {
         canvas.fill_rect(-4, 6, 100, 100, Rgb::new(255, 0, 0));
         assert_eq!(canvas.row(5)[0], Rgb::new(0, 0, 0));
         assert_eq!(canvas.row(7)[7], Rgb::new(255, 0, 0));
-    }
-
-    #[test]
-    fn bmp_has_headers_padding_and_bgr_order() {
-        let mut canvas = Canvas::new(3, 2, Rgb::new(0, 0, 0));
-        canvas.fill_rect(0, 0, 1, 1, Rgb::new(10, 20, 30));
-        let bmp = canvas.to_bmp();
-        assert_eq!(&bmp[..2], b"BM");
-        assert_eq!(bmp.len(), 54 + 12 * 2, "3 px rows pad from 9 to 12 bytes");
-        assert_eq!(&bmp[54..57], &[30, 20, 10], "first pixel, blue first");
     }
 
     #[test]

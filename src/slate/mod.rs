@@ -10,6 +10,7 @@ mod bitstream;
 mod encoder;
 mod font;
 mod pixel_font;
+mod png;
 mod raster;
 mod themes;
 
@@ -58,10 +59,10 @@ impl fmt::Display for UnsupportedShape {
 impl std::error::Error for UnsupportedShape {}
 
 /// The screen at each of `phases` (moments of the loop, 0..1), stacked
-/// top to bottom in one BMP. Drawn by the same code as the stream, so the
+/// top to bottom in one PNG. Drawn by the same code as the stream, so the
 /// dashboard preview is exactly what viewers get; one image for the whole
 /// animation keeps the dashboard to a single request per change.
-pub fn preview_bmp(
+pub fn preview_png(
     settings: &CrashProtection,
     width: usize,
     height: usize,
@@ -78,7 +79,7 @@ pub fn preview_bmp(
         .collect();
     Canvas::stacked(frames)
         .unwrap_or_else(|| Canvas::new(width, height, style.background))
-        .to_bmp()
+        .to_png()
 }
 
 fn screen_style(settings: &CrashProtection) -> ScreenStyle<'_> {

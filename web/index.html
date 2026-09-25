@@ -787,18 +787,17 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   transition:left .28s var(--ease-spring),width .28s var(--ease-spring);z-index:1;border:1px solid var(--line-2)}
 .sub-pane{display:flex;flex-direction:column;gap:14px;animation:paneIn .2s var(--ease-out) both}
 .sub-tab[hidden]{display:none}
-/* Save bar: sticks to the bottom of the window, so Save is never a long
-   scroll away, and turns amber while there are unsaved changes. */
+/* Save bar: appears only while there are unsaved changes, pinned to the
+   bottom of the window so Save is never a long scroll away. */
 .sys-foot{position:sticky;bottom:12px;z-index:5;display:flex;align-items:center;gap:10px;margin-top:4px;
   padding:9px 10px 9px 16px;border:1px solid var(--line);border-radius:12px;
   background:var(--surface-2);
-  box-shadow:0 10px 30px rgba(0,0,0,.35);transition:border-color .2s var(--ease-out)}
+  box-shadow:0 10px 30px rgba(0,0,0,.35);border-color:color-mix(in oklch,var(--warn) 55%,var(--line));
+  animation:softRise .18s var(--ease-out)}
 .sys-foot[hidden]{display:none}
-.sys-foot-state{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-3);white-space:nowrap}
-.sys-foot-state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok)}
-.sys-foot[data-dirty="true"]{border-color:color-mix(in oklch,var(--warn) 55%,var(--line))}
-.sys-foot[data-dirty="true"] .sys-foot-state{color:var(--fg);font-weight:600}
-.sys-foot[data-dirty="true"] .sys-foot-state::before{background:var(--warn)}
+.sys-foot-state{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg);font-weight:600;white-space:nowrap}
+.sys-foot-state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--warn)}
+@keyframes softRise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 #s-msg{flex:1;min-width:0;font-size:12px}
 /* Find a setting, in the System header. */
 .sys-find{position:relative;display:flex;align-items:center;width:min(320px,100%);margin-left:auto}
@@ -825,7 +824,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .sys-found{animation:sysFound 1.6s var(--ease-out)}
 @keyframes sysFound{0%,35%{box-shadow:0 0 0 2px var(--accent)}100%{box-shadow:0 0 0 2px transparent}}
 @media (max-width:640px){.sys-find{width:100%}}
-@media (prefers-reduced-motion: reduce){.sys-found,.sys-find-results{animation:none}}
+@media (prefers-reduced-motion: reduce){.sys-found,.sys-find-results,.sys-foot{animation:none}}
 .sys-about-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media (max-width:680px){.sys-about-grid{grid-template-columns:1fr}}
 .sys-about-card{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px}
@@ -1472,9 +1471,9 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .crash-preview-frame{display:grid;place-items:center;background:var(--bg);border:1px solid var(--line);
   border-radius:10px;padding:10px;aspect-ratio:16/10}
 .crash-preview{display:block;width:100%;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.45);aspect-ratio:16/9;
-  background:var(--surface) no-repeat 0 0/100% 1000%;animation:crash-loop 2s steps(10,jump-none) infinite}
+  background:var(--surface) no-repeat 0 0/100% 2400%;animation:crash-loop 2s steps(24,jump-none) infinite}
 .crash-preview-frame.vertical .crash-preview{width:auto;height:100%;aspect-ratio:9/16}
-/* The preview is one strip of 10 frames (CP_PREVIEW_FRAMES) stacked top to
+/* The preview is one strip of 24 frames (CP_PREVIEW_FRAMES) stacked top to
    bottom; sliding it a frame at a time plays the 2 s loop with no script. */
 @keyframes crash-loop{to{background-position:0 100%}}
 .crash-controls{display:flex;flex-direction:column;gap:18px;min-width:0}
@@ -3111,10 +3110,10 @@ details.sys-collapse>summary .ic-label{margin:0}
 
   <!-- Save bar: sticks to the bottom of the window while there are unsaved
        changes, so Save is never a long scroll away. -->
-  <div class="sys-foot" id="sys-foot" data-dirty="false">
-    <span class="sys-foot-state" id="sys-foot-state" aria-live="polite">All changes saved</span>
+  <div class="sys-foot" id="sys-foot" role="status" hidden>
+    <span class="sys-foot-state">Unsaved changes</span>
     <span class="muted" id="s-msg"></span>
-    <button class="ic-btn" id="sys-discard" onclick="discardSettings()" hidden>Discard</button>
+    <button class="ic-btn" onclick="discardSettings()">Discard</button>
     <button class="ic-btn ic-btn-primary" onclick="saveSettings()">Save settings</button>
   </div>
 </section>
@@ -5711,6 +5710,7 @@ async function saveSettings(){
   } finally {
     _savingSettings = false;
     if (btn){ btn.disabled = false; btn.textContent = 'Save settings'; }
+    updateSaveBar();
   }
 }
 // ── Crash protection card ────────────────────────────────────────────────
@@ -5719,8 +5719,10 @@ async function saveSettings(){
 // query, so the preview and the style thumbnails follow every change
 // before Save. The style list and default text come from GET /config.
 const CP_ACCENTS = [['Cyan','#5ac8fa'],['Violet','#9d7bff'],['Lime','#7ee06b'],['Coral','#ff6b6b'],['Amber','#ffb73a']];
-// Frames in the preview strip; the CSS animation steps through the same 10.
-const CP_PREVIEW_FRAMES = 10;
+// Frames in the preview strip; the CSS animation steps through the same 24.
+// Every style moves in 6, 8 or 12 steps per loop, and 24 is a multiple of
+// each, so the preview shows every step at the moment the stream does.
+const CP_PREVIEW_FRAMES = 24;
 let cpState = {theme:'whisper', accent:'#5ac8fa', background:'', shape:'horizontal'};
 let cpThemes = [];
 let cpDefaults = {headline:'', subline:''};
@@ -5763,6 +5765,8 @@ function cpInit(){
 // One card per style, a radio group: arrow keys move the choice.
 function cpBuildThemes(){
   const box = $('s-cp-themes');
+  // Fresh cards have empty thumbnails, whatever the last refresh drew.
+  cpThumbKey = '';
   box.replaceChildren(...cpThemes.map(theme => {
     const card = document.createElement('button');
     card.type = 'button';
@@ -8165,9 +8169,6 @@ window.addEventListener('resize', fitPaneCard);
 // last loaded or saved. Comparing the whole form body keeps that exact
 // without tracking fields one by one.
 let settingsSnapshot = null;
-// Sub-tabs whose fields go through Save; the rest act the moment they're
-// used (hotkeys, MIDI, buttons), so the bar only shows there when dirty.
-const SAVED_SUBTABS = new Set(['general', 'crash', 'access', 'alerts']);
 function settingsBody(){
   const body = new URLSearchParams({
     ingest_port:$('s-iport').value, web_port:$('s-wport').value,
@@ -8193,15 +8194,12 @@ function settingsMarkClean(){
 function settingsDirty(){
   return settingsSnapshot !== null && settingsBody().toString() !== settingsSnapshot;
 }
+// Only there while something is unsaved (or a save just failed and says
+// why), so it never covers settings for nothing.
 function updateSaveBar(){
   const foot = $('sys-foot');
   if (!foot) return;
-  const dirty = settingsDirty();
-  const current = document.querySelector('#sys-sub-tabs .sub-tab.on');
-  foot.hidden = !dirty && !SAVED_SUBTABS.has(current ? current.dataset.subtab : 'general');
-  foot.dataset.dirty = String(dirty);
-  $('sys-foot-state').textContent = dirty ? 'Unsaved changes' : 'All changes saved';
-  $('sys-discard').hidden = !dirty;
+  foot.hidden = !settingsDirty() && !$('s-msg').textContent;
 }
 // Throw the edits away: reload what the app has saved.
 function discardSettings(){ $('s-msg').textContent = ''; flashFieldErrors(null); loadConfig(); }

@@ -370,14 +370,19 @@ Connection: close
         return Ok(());
     }
 
-    // Crash-protection preview: a still of the reconnect screen from the
-    // same renderer the stream uses. Binary, so it can't go through
-    // `route`. Admin-gated by auth_gate (classify_access's default).
+    // Crash-protection preview: the reconnect screen from the same renderer
+    // the stream uses. Binary, so it can't go through `route`. Admin-gated
+    // by auth_gate (classify_access's default). A 24-frame strip takes tens
+    // of milliseconds to draw, so it renders on a blocking thread: on this
+    // runtime's one thread it would stall every destination's egress.
     if method == "GET" && bare_path == "/crash-protection/preview" {
-        let query = path.split_once('?').map_or("", |(_, q)| q);
-        let image = crash_protection_preview(query, &settings.borrow().crash_protection);
+        let query = path.split_once('?').map_or("", |(_, q)| q).to_string();
+        let saved = settings.borrow().crash_protection.clone();
+        let image = tokio::task::spawn_blocking(move || crash_protection_preview(&query, &saved))
+            .await
+            .map_err(io::Error::other)?;
         let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: image/bmp\r\nContent-Length: {}\r\n\
+            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\
              Cache-Control: no-store\r\nConnection: close\r\n\r\n",
             image.len()
         );
@@ -420,7 +425,7 @@ fn crash_protection_preview(
     saved: &crate::crash_protection::CrashProtection,
 ) -> Vec<u8> {
     const DEFAULT_PHASE: f32 = 0.25;
-    const MAX_FRAMES: usize = 12;
+    const MAX_FRAMES: usize = 24;
     let form = config::parse_form(query);
     let mut settings = saved.clone();
     for (key, value) in &form {
@@ -449,7 +454,7 @@ fn crash_protection_preview(
             .filter(|value| (0.0..1.0).contains(value))
             .unwrap_or(DEFAULT_PHASE)],
     };
-    crate::slate::preview_bmp(&settings, width, height, &phases)
+    crate::slate::preview_png(&settings, width, height, &phases)
 }
 
 /// Result of the auth gate: either it already wrote a response (login page,
@@ -5421,25 +5426,20 @@ mod tests {
         let landscape = crash_protection_preview("", &saved);
         let arcade = crash_protection_preview("crash_protection.theme=arcade", &saved);
         let vertical = crash_protection_preview("orientation=vertical", &saved);
-        assert_eq!(&landscape[..2], b"BM");
+        // PNG: width and height sit big-endian at bytes 16 and 20.
+        let size = |png: &[u8]| {
+            let read = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+            (read(16), read(20))
+        };
+        assert_eq!(&landscape[1..4], b"PNG");
         assert_ne!(landscape, arcade, "query edits reach the render");
-        assert_eq!(
-            i32::from_le_bytes(vertical[18..22].try_into().unwrap()),
-            270
-        );
+        assert_eq!(size(&vertical), (270, 480));
         let thumb = crash_protection_preview("size=thumb", &saved);
-        assert_eq!(i32::from_le_bytes(thumb[18..22].try_into().unwrap()), 192);
-        let strip = crash_protection_preview("frames=10", &saved);
-        assert_eq!(
-            i32::from_le_bytes(strip[22..26].try_into().unwrap()),
-            -2700,
-            "ten 270 px frames, top-down"
-        );
+        assert_eq!(size(&thumb), (192, 108));
+        let strip = crash_protection_preview("frames=24", &saved);
+        assert_eq!(size(&strip), (480, 270 * 24), "24 frames stacked");
         let capped = crash_protection_preview("frames=500&size=thumb", &saved);
-        assert_eq!(
-            i32::from_le_bytes(capped[22..26].try_into().unwrap()),
-            -108 * 12
-        );
+        assert_eq!(size(&capped), (192, 108 * 24));
         for preview_only in ["orientation", "size", "phase", "frames"] {
             assert!(
                 !is_settable_key(preview_only),
