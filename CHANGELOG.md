@@ -144,6 +144,10 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
 - **Platform logos.** Twitch, YouTube and Kick show their own marks in their
   colours on destination cards, the platform picker and the setup wizard;
   Restream, Custom and the test sink get a clear symbol each.
+- **A roomier destination editor.** Two columns on wide screens (name beside
+  platform, server beside stream key, format beside audio), one on narrow
+  ones, and a full-screen sheet on phones. The header shows the platform's
+  logo and an Enabled switch, and Save stays in view while the rest scrolls.
 - **The aurora, reworked.** Three soft lights drift behind the whole delay
   panel in the stream state's colour (grey offline, amber buffering, cyan
   armed, green delayed), the page top glows faintly with it, the panel's top

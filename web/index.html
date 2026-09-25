@@ -1099,15 +1099,56 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
 
 /* Destination editor - a centred floating modal (see .ic-modal shell).
    Scrolls internally when the VOD/EB section makes it tall. */
-.dest-form{padding:20px 22px;background:linear-gradient(180deg,var(--bg-2),var(--surface));
+.dest-form{padding:0;background:linear-gradient(180deg,var(--bg-2),var(--surface));
   border:1px solid color-mix(in oklch,var(--accent) 40%,var(--line));border-radius:var(--radius);
   box-shadow:0 24px 60px -20px rgba(0,0,0,.6);
-  animation:modalPop .2s var(--ease-out) both;display:flex;flex-direction:column;gap:9px;
-  position:relative;width:min(600px,100%);max-height:min(90vh,860px);overflow-y:auto}
+  animation:modalPop .2s var(--ease-out) both;display:flex;flex-direction:column;
+  position:relative;width:min(820px,100%);max-height:min(92vh,900px);overflow:hidden}
+/* Header and footer stay put; only the body scrolls, so Save is always in
+   reach however long the Twitch VOD section gets. */
+.dest-form-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:18px 22px 20px;
+  display:flex;flex-direction:column;gap:10px}
+.dest-form-foot{display:flex;align-items:center;gap:8px;padding:14px 22px;border-top:1px solid var(--line);
+  background:color-mix(in oklch,var(--bg-2) 85%,transparent)}
+.dest-form-foot .dest-form-msg{flex:1;min-width:0;margin:0}
+.dest-form-mark{--dc:var(--fg-3);width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex:none;
+  background:color-mix(in oklch,var(--dc) 16%,var(--surface-3));border:1px solid color-mix(in oklch,var(--dc) 38%,transparent);
+  color:var(--dc);font-weight:700;transition:color .25s var(--ease-out),background .25s var(--ease-out),border-color .25s var(--ease-out)}
+.dest-form-mark svg{width:21px;height:21px}
+.dest-form-titles{flex:1;min-width:0}
+/* Two columns of fields on wide screens, one on narrow ones. Hidden fields
+   drop out of the grid, so each platform packs its own set. */
+.dfg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 18px;align-items:start}
+.dff{display:flex;flex-direction:column;gap:6px;min-width:0}
+.dest-form-note{display:block;min-width:0;font-size:12px;line-height:1.55;align-self:center}
+.dest-form .dff>label,.dest-form .dff>label.muted{margin:0;font-size:12.5px;font-weight:600;color:var(--fg-2);
+  text-transform:none;letter-spacing:0}
+.dest-form .dff>label .muted{font-weight:400;font-size:11.5px}
+/* Enabled: a switch in the header instead of a checkbox at the bottom. */
+.dest-form .dest-form-enable{display:inline-flex;align-items:center;gap:8px;margin:0;cursor:pointer;flex:none;
+  font-size:12.5px;font-weight:500;color:var(--fg-2);text-transform:none;letter-spacing:0}
+.dest-form-enable input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.dfe-track{position:relative;width:36px;height:20px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line-2);
+  transition:background .2s var(--ease-out),border-color .2s var(--ease-out)}
+.dfe-track>span{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--fg-3);
+  transition:transform .25s var(--ease-spring),background .2s var(--ease-out)}
+.dest-form-enable input:checked+.dfe-track{background:var(--accent);border-color:transparent}
+.dest-form-enable input:checked+.dfe-track>span{transform:translateX(16px);background:#fff}
+.dest-form-enable input:focus-visible+.dfe-track{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:760px){.dfg{grid-template-columns:1fr}}
+/* Phones: a full-screen sheet rather than a box floating in a margin. */
+@media (max-width:560px){
+  #dest-modal{padding:0}
+  .dest-form{width:100%;height:100dvh;max-height:100dvh;border-radius:0;border-width:0}
+  .dest-form-head{padding:14px 16px}
+  .dest-form-body{padding:14px 16px 18px}
+  .dest-form-foot{padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+  .dest-form-hint{display:none}
+}
 @keyframes modalPop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
 /* Header row: title + one-click close so editing feels like a focused
    panel you can dismiss without scrolling to the Cancel button. */
-.dest-form-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:2px}
+.dest-form-head{display:flex;align-items:center;gap:14px;padding:18px 22px 16px;border-bottom:1px solid var(--line)}
 .dest-form h4{margin:0;font-size:15px;font-weight:600}
 .dest-form-hint{font-size:11.5px;color:var(--fg-3);margin-top:3px;line-height:1.4}
 .dest-form-x{flex:0 0 auto;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
@@ -2321,38 +2362,54 @@ details.sys-collapse>summary .ic-label{margin:0}
     <div class="ic-modal-backdrop" onclick="cancelDestForm()"></div>
     <div class="dest-form" id="dest-form">
     <div class="dest-form-head">
-      <div>
+      <span class="dest-form-mark" id="dest-form-mark" aria-hidden="true"></span>
+      <div class="dest-form-titles">
         <h4 id="dest-form-title">New destination</h4>
         <div class="dest-form-hint">Fan your OBS feed out to this platform. Real stream keys live here, not in OBS.</div>
       </div>
+      <label class="dest-form-enable" title="A switched-off destination keeps its settings but doesn't stream">
+        <input type="checkbox" id="dest-form-enabled" checked><span class="dfe-track"><span></span></span><span>Enabled</span>
+      </label>
       <button type="button" class="dest-form-x" onclick="cancelDestForm()" title="Close" aria-label="Close editor">✕</button>
     </div>
+    <div class="dest-form-body">
     <input id="dest-form-id" type="hidden">
-    <label>Name</label>
-    <input id="dest-form-name" class="ic-input" placeholder="Twitch / YouTube / Backup …">
-    <label>Platform</label>
-    <select id="dest-form-platform" class="ic-input"></select>
-    <div class="dfg-sep">Routing &amp; format</div>
-    <div id="dest-form-custom-wrap" hidden>
+    <div class="dfg">
+      <div class="dff"><label for="dest-form-name">Name</label>
+        <input id="dest-form-name" class="ic-input" placeholder="Twitch / YouTube / Backup …"></div>
+      <div class="dff"><label for="dest-form-platform">Platform</label>
+        <select id="dest-form-platform" class="ic-input"></select></div>
+    </div>
+    <div class="dfg-sep">Connection</div>
+    <div class="dfg">
+    <div class="dff" id="dest-form-custom-wrap" hidden>
       <label id="dest-form-custom-label">Custom RTMP URL</label>
       <input id="dest-form-custom" class="ic-input mono" placeholder="rtmp://host/app">
       <div id="dest-form-custom-help" class="muted" hidden style="font-size:11.5px;margin-top:5px;line-height:1.45"></div>
     </div>
-    <div id="dest-form-twitch-wrap" hidden>
+    <div class="dff" id="dest-form-twitch-wrap" hidden>
       <label>Twitch ingest server <span class="muted">- pin a region if auto-routing is flaky</span></label>
       <select id="dest-form-twitch-ingest" class="ic-input"></select>
     </div>
-    <div id="dest-form-youtube-wrap" hidden>
+    <div class="dff" id="dest-form-youtube-wrap" hidden>
       <label>YouTube ingest <span class="muted">- switch to backup if the primary is flaky</span></label>
       <select id="dest-form-youtube-ingest" class="ic-input">
         <option value="">Primary (a.rtmp.youtube.com)</option>
         <option value="backup">Backup (b.rtmp.youtube.com)</option>
       </select>
     </div>
+    <div class="dff" id="dest-form-key-wrap">
+    <label id="dest-form-key-label">Stream key <span class="muted" id="dest-form-key-hint"></span></label>
+    <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
+    <div id="dest-form-key-help" class="w-key-help" hidden></div>
+    </div>
+    </div>
+    <div class="dfg-sep">Format &amp; audio</div>
+    <div class="dfg">
     <!-- Stream format. Non-Twitch only: Twitch sends BOTH canvases
          natively via Dual Format, so offering the choice there would
          only confuse. -->
-    <div id="dest-form-format-wrap" hidden>
+    <div class="dff" id="dest-form-format-wrap" hidden>
       <label>Stream format</label>
       <select id="dest-form-format" class="ic-input">
         <option value="horizontal">Horizontal 16:9 - normal landscape</option>
@@ -2368,34 +2425,28 @@ details.sys-collapse>summary .ic-label{margin:0}
         <span id="dest-form-format-youtube" hidden><br>For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream → Select key → Encoder</b>.</span>
       </div>
     </div>
-    <div id="dest-form-twitch-native-note" hidden class="muted" style="font-size:11.5px;margin:2px 0 6px;line-height:1.45">
+    <div id="dest-form-twitch-native-note" hidden class="muted dest-form-note">
       Twitch needs no format setting: InstantClone forwards whatever OBS sends, Enhanced Broadcasting included. With Twitch <b>Dual Format</b> on, it forwards both canvases. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
     </div>
     <!-- Per-destination audio track routing (issue #44). Only bites when OBS
          sends a 2nd audio track (VOD unlocker script or Enhanced Broadcasting);
          with one track everything stays on the live audio regardless. -->
-    <div id="dest-form-audio-wrap" style="margin-top:12px">
+    <div class="dff" id="dest-form-audio-wrap">
       <label>Audio track <span class="muted" style="text-transform:none;letter-spacing:0">- only if OBS sends a second track</span></label>
       <select id="dest-form-audio" class="ic-input">
-        <option value="auto">Auto - Twitch keeps both, other platforms use the live track</option>
-        <option value="both">Both tracks - Twitch VOD audio (other platforms fall back to the live track)</option>
-        <option value="1">Track 1 only - live audio</option>
-        <option value="2">Track 2 only - clean / no-copyright audio</option>
+        <option value="auto">Auto (recommended)</option>
+        <option value="both">Both tracks (Twitch VOD audio)</option>
+        <option value="1">Track 1 only (live audio)</option>
+        <option value="2">Track 2 only (clean, no copyright)</option>
       </select>
       <div class="muted" id="dest-form-audio-help" style="font-size:11.5px;margin-top:5px;line-height:1.45">
-        Most setups can leave this on <b>Auto</b>.
+        <b>Auto</b>: Twitch keeps both tracks, other platforms get the live one. Most setups can leave it.
         <details style="margin-top:3px"><summary style="cursor:pointer">When to change it</summary>
           If OBS sends a second audio track (via the <b>VOD unlocker script</b> or Enhanced Broadcasting), choose what <i>this</i> destination gets. Classic use: send <b>Track 2</b> (music stripped) to YouTube to dodge copyright while Twitch keeps <b>Both</b>. Only Twitch consumes a second audio track, so other platforms always send a single one. If the track you pick isn't being sent, the live track is used instead, so a destination never goes silent.
         </details>
       </div>
     </div>
-    <div class="dfg-sep">Stream key &amp; status</div>
-    <label id="dest-form-key-label">Stream key <span class="muted" id="dest-form-key-hint"></span></label>
-    <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
-    <div id="dest-form-key-help" class="w-key-help" hidden></div>
-    <div class="row"><label style="display:inline-flex;align-items:center;gap:8px;margin:0;text-transform:none;letter-spacing:0;font-size:13px">
-      <input type="checkbox" id="dest-form-enabled" checked> Enabled
-    </label></div>
+    </div>
     <!-- Twitch VOD audio (Twitch only). Visible only when platform == twitch.
          Leads with the VOD-unlocker script (the path on OBS 32.2+); the old
          VOD-Track-checkbox method + EB launcher live in the version-gated
@@ -2459,11 +2510,12 @@ details.sys-collapse>summary .ic-label{margin:0}
       </div>
       </details>
     </div>
-    <div class="row" style="margin-top:14px;justify-content:flex-end">
+    </div>
+    <div class="dest-form-foot">
+      <div class="dest-form-msg" id="dest-form-msg"></div>
       <button class="ic-btn ic-btn-ghost" onclick="cancelDestForm()">Cancel</button>
       <button class="ic-btn ic-btn-primary" onclick="saveDestForm()">Save destination</button>
     </div>
-    <div class="dest-form-msg" id="dest-form-msg"></div>
     </div>
   </div>
 </section>
@@ -4743,6 +4795,14 @@ function fillDestPlatforms(){
     if (vodToggle) vodToggle.addEventListener('change', updateVodVisibility);
   }
 }
+// The editor's header shows the chosen platform's mark in its colour.
+function syncDestFormMark(){
+  const slug = $('dest-form-platform').value;
+  const mark = $('dest-form-mark');
+  mark.style.setProperty('--dc', PLATFORM_COLOR[slug] || 'var(--fg-3)');
+  mark.innerHTML = platformMark(slug);
+}
+$('dest-form-platform').addEventListener('change', syncDestFormMark);
 // Fill the Twitch ingest picker, then select `value`. The first call per
 // page load awaits a fetch, so the value must be applied here, after the
 // options exist; set earlier it would silently fall back to Auto.
