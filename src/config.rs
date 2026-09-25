@@ -767,7 +767,7 @@ impl Settings {
             tracing_enabled: false,
             // Behaviour toggles default off so the two-phase
             // arm/activate ceremony stays the canonical flow. Streamers
-            // who always want delay opt in once via System -> Behavior.
+            // who always want delay opt in once via System -> General.
             auto_arm_on_connect: false,
             auto_activate_when_ready: false,
             // 15 s is the same default the wizard suggests and matches

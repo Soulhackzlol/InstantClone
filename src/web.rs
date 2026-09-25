@@ -3100,7 +3100,7 @@ pub(crate) fn persist_delay_state(
     let armed = ctrl.armed_delay_ms();
     let target = ctrl.target_delay_ms();
     // Track "last manually armed delay" in auto_arm_delay_ms so the
-    // System -> Behavior auto-arm picks up wherever the streamer last
+    // System -> General auto-arm picks up wherever the streamer last
     // explicitly armed. Only updates on non-zero arm so a Disarm
     // (arm_delay(0)) doesn't wipe the preference.
     let new_auto_arm = if armed > 0 { Some(armed) } else { None };

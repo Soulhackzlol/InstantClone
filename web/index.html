@@ -786,8 +786,46 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .sub-tab-ind{position:absolute;top:4px;bottom:4px;background:var(--surface-3);border-radius:6px;
   transition:left .28s var(--ease-spring),width .28s var(--ease-spring);z-index:1;border:1px solid var(--line-2)}
 .sub-pane{display:flex;flex-direction:column;gap:14px;animation:paneIn .2s var(--ease-out) both}
-.sys-foot{display:flex;justify-content:flex-end;align-items:center;gap:10px;
-  border-top:1px solid var(--line);padding-top:14px;margin-top:4px}
+.sub-tab[hidden]{display:none}
+/* Save bar: sticks to the bottom of the window, so Save is never a long
+   scroll away, and turns amber while there are unsaved changes. */
+.sys-foot{position:sticky;bottom:12px;z-index:5;display:flex;align-items:center;gap:10px;margin-top:4px;
+  padding:9px 10px 9px 16px;border:1px solid var(--line);border-radius:12px;
+  background:var(--surface-2);
+  box-shadow:0 10px 30px rgba(0,0,0,.35);transition:border-color .2s var(--ease-out)}
+.sys-foot[hidden]{display:none}
+.sys-foot-state{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-3);white-space:nowrap}
+.sys-foot-state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.sys-foot[data-dirty="true"]{border-color:color-mix(in oklch,var(--warn) 55%,var(--line))}
+.sys-foot[data-dirty="true"] .sys-foot-state{color:var(--fg);font-weight:600}
+.sys-foot[data-dirty="true"] .sys-foot-state::before{background:var(--warn)}
+#s-msg{flex:1;min-width:0;font-size:12px}
+/* Find a setting, in the System header. */
+.sys-find{position:relative;display:flex;align-items:center;width:min(320px,100%);margin-left:auto}
+.sys-find>svg{position:absolute;left:11px;width:15px;height:15px;color:var(--fg-4);pointer-events:none}
+.sys-find input{width:100%;height:36px;padding:0 34px 0 34px;border-radius:10px;background:var(--bg-2);color:var(--fg);
+  border:1px solid var(--line);font:inherit;font-size:13px;outline:0;transition:border-color .15s var(--ease-out)}
+.sys-find input:focus{border-color:color-mix(in oklch,var(--accent) 60%,transparent);background:var(--bg)}
+.sys-find input::-webkit-search-cancel-button{display:none}
+.sys-find-key{position:absolute;right:9px;font:600 10.5px/1 'JetBrains Mono',monospace;color:var(--fg-4);
+  border:1px solid var(--line-2);border-radius:5px;padding:3px 6px;pointer-events:none}
+.sys-find input:focus~.sys-find-key,.sys-find input:not(:placeholder-shown)~.sys-find-key{display:none}
+.sys-find-results{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:30;display:flex;flex-direction:column;
+  padding:5px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line-2);
+  box-shadow:0 16px 40px rgba(0,0,0,.5);animation:softDrop .15s var(--ease-out)}
+.sys-find-results[hidden]{display:none}
+.sys-find-option{appearance:none;display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+  padding:9px 10px;border:0;border-radius:8px;background:transparent;color:var(--fg-2);font:inherit;font-size:13px;
+  text-align:left;cursor:pointer}
+.sys-find-option b{font-weight:600;color:var(--fg)}
+.sys-find-option span{font-size:11.5px;color:var(--fg-4);white-space:nowrap}
+.sys-find-option:hover,.sys-find-option[aria-selected="true"]{background:var(--surface-3)}
+.sys-find-empty{padding:10px;font-size:12.5px;color:var(--fg-3)}
+/* The section a search landed on glows briefly. */
+.sys-found{animation:sysFound 1.6s var(--ease-out)}
+@keyframes sysFound{0%,35%{box-shadow:0 0 0 2px var(--accent)}100%{box-shadow:0 0 0 2px transparent}}
+@media (max-width:640px){.sys-find{width:100%}}
+@media (prefers-reduced-motion: reduce){.sys-found,.sys-find-results{animation:none}}
 .sys-about-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media (max-width:680px){.sys-about-grid{grid-template-columns:1fr}}
 .sys-about-card{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px}
@@ -850,7 +888,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 
 /* - Pane ------------------- */
 .pane-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
-  padding:22px;min-height:360px;max-height:70vh;overflow-y:auto;overflow-x:hidden}
+  padding:22px;min-height:360px;max-height:var(--pane-max,70vh);overflow-y:auto;overflow-x:hidden}
 /* Directional enter: the body slides in from the side the tab moved toward
    (showTab sets --pane-dx: + for a rightward move, - for leftward, 0 on first
    paint / sub-panes), echoing the sliding tab indicator. Transform + opacity
@@ -2025,7 +2063,7 @@ details.sys-collapse>summary .ic-label{margin:0}
         <summary>How to turn it on in OBS</summary>
         <div class="ic-disclose-body">
           <p><b>In OBS:</b> if you registered InstantClone as a service (previous step), set <b>Settings &rarr; Output &rarr; Video Encoder</b> to <b>Multi-track Video</b> with <b>Auto</b> - EB engages on its own.</p>
-          <p>On Custom RTMP, open the <b>InstantClone dashboard</b> after setup and use <b>System &rarr; Behavior &rarr; OBS quick launch</b> - it starts OBS with the one flag EB needs.</p>
+          <p>On Custom RTMP, open the <b>InstantClone dashboard</b> after setup and use <b>System &rarr; Twitch &amp; OBS &rarr; OBS quick launch</b> - it starts OBS with the one flag EB needs.</p>
         </div>
       </details>
     </div>
@@ -2040,7 +2078,7 @@ details.sys-collapse>summary .ic-label{margin:0}
     <div id="w-vod-how" hidden class="wiz-vod-how">
       <div class="wiz-vod-how-t">Why a script? OBS hardcodes its VOD Track to the service named "Twitch", so it's locked on the InstantClone service. The <b>optional VOD unlocker script</b> adds the same second audio track OBS won't - nothing else. <b>OBS 32.2+ needs it</b> (older OBS can still use the built-in VOD Track checkbox).</div>
       <ol>
-        <li>Finish this wizard, then open <b>System &rarr; Behavior &rarr; Twitch VOD audio unlocker</b> and click <b>Download</b>.</li>
+        <li>Finish this wizard, then open <b>System &rarr; Twitch &amp; OBS &rarr; Twitch VOD audio</b> and click <b>Download</b>.</li>
         <li>In OBS: <b>Tools &rarr; Scripts &rarr; +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
         <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>).</li>
       </ol>
@@ -2408,7 +2446,7 @@ details.sys-collapse>summary .ic-label{margin:0}
             <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-key','Stream key')">Copy</button>
           </div>
           <div class="tab-sub" id="obs-key-note" style="margin-top:6px">Any string works. The real platform key lives in <b>Destinations</b>.</div>
-          <div class="tab-sub" style="margin-top:8px">Want only OBS with a secret to publish? Set an <b>ingest key</b> in <a href="#" onclick="goNetworkSettings();return false">System &rarr; Network</a>; it becomes the Stream key here.</div>
+          <div class="tab-sub" style="margin-top:8px">Want only OBS with a secret to publish? Set an <b>ingest key</b> in <a href="#" onclick="goNetworkSettings();return false">System &rarr; Access</a>; it becomes the Stream key here.</div>
         </div>
       </div>
     </section>
@@ -2611,37 +2649,49 @@ details.sys-collapse>summary .ic-label{margin:0}
     <div>
       <div class="tab-title">System</div>
     </div>
+    <!-- Find a setting: matches section titles, their text and the
+         data-find keywords, then opens the right sub-tab. -->
+    <div class="sys-find" role="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="sys-find" type="search" placeholder="Find a setting" aria-label="Find a setting" autocomplete="off" spellcheck="false"
+        role="combobox" aria-expanded="false" aria-controls="sys-find-results" aria-autocomplete="list">
+      <kbd class="sys-find-key" aria-hidden="true">/</kbd>
+      <div class="sys-find-results" id="sys-find-results" role="listbox" hidden></div>
+    </div>
   </div>
   <div class="restart-banner hidden" id="restart-banner">
     <span>⚠ Buffer size or path changed. Restart the app for it to take effect.</span>
     <button class="ic-btn ic-btn-warn" style="flex:0 0 auto;white-space:nowrap" onclick="restartApp(this)">Restart now</button>
   </div>
 
-  <nav class="sub-tabs" id="sys-sub-tabs" role="tablist" aria-label="System sub-sections">
+  <nav class="sub-tabs" id="sys-sub-tabs" role="tablist" aria-label="System sections">
     <span class="sub-tab-ind" id="sys-sub-ind"></span>
-    <button class="sub-tab on" data-subtab="behavior" role="tab">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3 4 14h7l-1 7 9-11h-7z"/></svg>
-      <span>Behavior</span></button>
-    <button class="sub-tab" data-subtab="network" role="tab">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>
-      <span>Network</span></button>
-    <button class="sub-tab" data-subtab="buffer" role="tab">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v6"/><path d="M4 14h4v6H4z"/><path d="M11 9v11h4V9z"/><path d="M18 4v16h4V4z"/></svg>
-      <span>Buffer</span></button>
-    <button class="sub-tab" data-subtab="notifications" role="tab">
+    <button class="sub-tab on" data-subtab="general" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10"/><path d="M18 6h2"/><circle cx="16" cy="6" r="2"/><path d="M4 12h4"/><path d="M12 12h8"/><circle cx="10" cy="12" r="2"/><path d="M4 18h12"/><path d="M20 18h0"/><circle cx="18" cy="18" r="2"/></svg>
+      <span>General</span></button>
+    <button class="sub-tab" data-subtab="crash" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.5 3 8.5 7 10 4-1.5 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+      <span>Crash protection</span></button>
+    <button class="sub-tab" data-subtab="controls" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01"/><path d="M11 10h.01"/><path d="M15 10h.01"/><path d="M8 14h8"/></svg>
+      <span>Controls</span></button>
+    <button class="sub-tab" data-subtab="twitch" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m10 9 5 2-5 2z"/></svg>
+      <span>Twitch &amp; OBS</span></button>
+    <button class="sub-tab" data-subtab="access" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      <span>Access</span></button>
+    <button class="sub-tab" data-subtab="alerts" role="tab">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 1 1 12 0c0 4 1 5 2 6H4c1-1 2-2 2-6z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
-      <span>Notifications</span></button>
-    <button class="sub-tab" data-subtab="diagnostics" role="tab">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2.5 11.5 5l3.5 3.5L17.5 6 14 2.5z"/><path d="m11.5 5-7 7v4h4l7-7"/><path d="m2 22 4-1 1-4"/></svg>
-      <span>Diagnostics</span></button>
+      <span>Alerts &amp; logs</span></button>
     <button class="sub-tab" data-subtab="about" role="tab">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg>
       <span>About</span></button>
   </nav>
 
-  <!-- Behavior sub-pane -->
-  <div class="sub-pane" data-subpane="behavior">
-    <section class="sys-section">
+  <!-- General: how the app starts and behaves, and the delay buffer -->
+  <div class="sub-pane" data-subpane="general">
+    <section class="sys-section" data-find="startup start with windows launch tray open dashboard auto arm activate default delay pre-arm">
       <div class="ic-label">Behavior</div>
       <div class="tab-sub">How InstantClone reacts when OBS starts streaming and when the buffer fills.</div>
       <div style="margin-top:14px;display:flex;flex-direction:column;gap:14px">
@@ -2693,11 +2743,26 @@ details.sys-collapse>summary .ic-label{margin:0}
         </div>
       </div>
     </section>
+    <section class="sys-section" data-find="buffer disk size mb path memory delay length restart">
+      <div class="ic-label">Buffer file</div>
+      <div class="tab-sub">Disk-backed ring. Bigger buffer = longer max delay at a given bitrate.</div>
+      <div class="form-row tight" style="margin-top:12px;align-items:flex-start">
+        <div><span class="ic-label">Buffer size (MB)</span><input id="s-bmb" class="ic-input mono" type="number" min="50" max="10000"></div>
+        <div><span class="ic-label">Buffer file</span><input id="s-bpath" class="ic-input mono"></div>
+      </div>
+      <div class="muted" id="s-bmb-hint" style="margin-top:8px;font-size:11.5px;line-height:1.4"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="ic-btn ic-btn-ghost reveal-btn" onclick="reveal('buffer',this)">Show buffer file in Explorer</button>
+      </div>
+    </section>
+  </div>
 
+  <!-- Crash protection -->
+  <div class="sub-pane" data-subpane="crash" hidden>
     <!-- Crash protection: keep destinations live on a reconnect screen when
          OBS crashes. Off by default; the rest of the card appears once it is
          turned on. Saved with the tab's Save settings button. -->
-    <section class="sys-section" id="s-cp-section">
+    <section class="sys-section" id="s-cp-section" data-find="crash protection reconnect screen brb be right back slate obs crash freeze hold style theme">
       <div class="ic-label">Crash protection</div>
       <label class="crash-check crash-master">
         <input type="checkbox" id="s-cp-enabled" onchange="cpSyncVisibility()">
@@ -2774,19 +2839,22 @@ details.sys-collapse>summary .ic-label{margin:0}
         </div>
       </div>
     </section>
+  </div>
 
+  <!-- Controls: global hotkeys and MIDI (both Windows-only; the tab hides when neither is available) -->
+  <div class="sub-pane" data-subpane="controls" hidden>
     <!-- Global hotkeys. Windows-only (RegisterHotKey from the tray); the
          whole section stays hidden until loadConfig confirms the platform. -->
-    <section class="sys-section" id="s-hotkeys-section" hidden>
+    <section class="sys-section" id="s-hotkeys-section" hidden data-find="hotkeys hotkey keyboard shortcut keybind key binding">
       <div class="ic-label">Global hotkeys</div>
-      <div class="tab-sub">Drive the delay from anywhere, even mid-game with OBS in the background. Click a field and press your combo. Each needs a modifier (Ctrl, Alt, Shift or Win) so it can never fire by accident. Arm and toggle use the <b>Default delay</b> from Behavior above, and a binding flashes here when it fires.</div>
+      <div class="tab-sub">Drive the delay from anywhere, even mid-game with OBS in the background. Click a field and press your combo. Each needs a modifier (Ctrl, Alt, Shift or Win) so it can never fire by accident. Arm and toggle use the <b>Default delay</b> from System &rarr; General, and a binding flashes here when it fires.</div>
       <div class="hk-list" id="hk-list"></div>
       <div class="hk-warn" id="hk-warn" role="status" aria-live="polite"></div>
     </section>
 
     <!-- MIDI controller mapping. Windows-only; learn mode is server-side
          (the MIDI events arrive at the backend) so the dashboard polls. -->
-    <section class="sys-section" id="s-midi-section" hidden>
+    <section class="sys-section" id="s-midi-section" hidden data-find="midi controller stream deck pad knob launchpad">
       <div class="ic-label">MIDI controller</div>
       <div class="tab-sub">Map a pad or knob to each action. Click Learn, then press the control you want. Works while gaming, just like the hotkeys. Each mapping remembers which device it came from, so two controllers can drive different actions even when they send the same note. Windows hands a MIDI input to one app at a time, so while InstantClone is listening your DAW or deck software can't open the same device - narrow <b>Listen to</b> to the controller you want if you use both.</div>
       <div class="hk-device">
@@ -2797,10 +2865,13 @@ details.sys-collapse>summary .ic-label{margin:0}
       <div class="hk-list" id="midi-list"></div>
       <div class="hk-warn" id="midi-warn" role="status" aria-live="polite"></div>
     </section>
+  </div>
 
+  <!-- Twitch & OBS: VOD audio and the legacy OBS launcher -->
+  <div class="sub-pane" data-subpane="twitch" hidden>
     <!-- Twitch VOD audio via the optional unlocker script. Surfaced here so
          a streamer can grab it without opening a destination's settings. -->
-    <section class="sys-section">
+    <section class="sys-section" data-find="twitch vod audio track music copyright soundtrack script lua">
       <div class="ic-label">Twitch VOD audio <span class="tag">experimental</span></div>
       <div class="tab-sub">Keep copyrighted music in your live stream but out of the <b>VOD</b>. OBS locks its built-in <b>VOD Track</b> to the service literally named "Twitch", so on the InstantClone service you add the second audio track with a tiny optional script.</div>
 
@@ -2822,7 +2893,7 @@ details.sys-collapse>summary .ic-label{margin:0}
     <!-- OBS quick launch: Enhanced Broadcasting (video) launcher. The legacy
          "EB + VOD" launcher is version-gated off on OBS 32.2+, where the VOD
          track comes from the unlocker script above instead. -->
-    <details class="sys-section sys-collapse" id="sys-eb-launch">
+    <details class="sys-section sys-collapse" id="sys-eb-launch" data-find="obs quick launch enhanced broadcasting eb shortcut">
       <summary><span class="ic-label">OBS quick launch</span><span class="muted" id="sys-eb-launch-note" style="font-weight:400;font-size:12px;margin-left:6px"></span></summary>
       <div class="tab-sub" style="margin-top:10px">Start OBS pre-wired for Twitch <b>Enhanced Broadcasting</b> (the multi-resolution video ladder) - no destination editing needed. Session-only: reopen OBS normally and it streams plain again. You can run InstantClone and OBS side by side.</div>
       <div id="sys-eb-twitch-warn" class="tab-sub" hidden style="margin-top:8px;color:var(--warn,#d6a23a)">
@@ -2842,36 +2913,9 @@ details.sys-collapse>summary .ic-label{margin:0}
     </details>
   </div>
 
-  <!-- Network sub-pane -->
-  <div class="sub-pane" data-subpane="network" hidden>
-    <section class="sys-section">
-      <div class="ic-label">Ports</div>
-      <div class="tab-sub">Restart required if you change these.</div>
-      <div class="form-row tight" style="margin-top:12px">
-        <div><span class="ic-label">Ingest port</span><input id="s-iport" class="ic-input mono" type="number" min="1" max="65535"></div>
-        <div><span class="ic-label">Web UI port</span><input id="s-wport" class="ic-input mono" type="number" min="1" max="65535"></div>
-      </div>
-    </section>
-    <section class="sys-section">
-      <div class="ic-label">LAN access</div>
-      <div class="tab-sub">By default both ports are bound to 127.0.0.1. Open them to your LAN if OBS or your browser run on a different machine.</div>
-      <div class="checkbox-row" style="margin-top:10px">
-        <label><input type="checkbox" id="s-ibind" onchange="renderLanWarning()"> Allow LAN to publish</label>
-        <label><input type="checkbox" id="s-wbind" onchange="renderLanWarning()"> Allow LAN to access Web UI</label>
-      </div>
-      <!-- Shown only while the web UI is actually exposed. The control API
-           has no authentication - the CSRF guard stops cross-origin browser
-           POSTs, but a direct request (curl, script) carries no Origin
-           header and is allowed through by design so CLI and Stream Deck
-           keep working. On loopback that is exactly right; on a LAN it
-           means every machine on the network can drive the delay. Say so
-           rather than letting someone discover it. -->
-      <div id="lan-warn" class="lan-warn" hidden>
-        <span class="lw-ic" aria-hidden="true">⚠</span>
-        <span id="lan-warn-text"></span>
-      </div>
-    </section>
-    <section class="sys-section">
+  <!-- Access: who can publish and open the dashboard, and on which ports -->
+  <div class="sub-pane" data-subpane="access" hidden>
+    <section class="sys-section" data-find="ingest key stream key secret publish security">
       <div class="ic-label">Ingest key</div>
       <div class="sys-version-row">
         <span class="sys-version-pill off" id="ingest-status">Open</span>
@@ -2886,7 +2930,7 @@ details.sys-collapse>summary .ic-label{margin:0}
       </div>
       <div class="muted" id="ingest-key-msg" style="font-size:11.5px;margin-top:8px"></div>
     </section>
-    <section class="sys-section">
+    <section class="sys-section" data-find="password login lock security dock url dock token">
       <div class="ic-label">Dashboard password</div>
       <div class="sys-version-row">
         <span class="sys-version-pill off" id="pw-status">Off</span>
@@ -2931,27 +2975,38 @@ details.sys-collapse>summary .ic-label{margin:0}
         <div class="muted" id="sec-on-msg" style="font-size:11.5px;margin-top:8px"></div>
       </div>
     </section>
-  </div>
-
-  <!-- Buffer sub-pane -->
-  <div class="sub-pane" data-subpane="buffer" hidden>
-    <section class="sys-section">
-      <div class="ic-label">Buffer file</div>
-      <div class="tab-sub">Disk-backed ring. Bigger buffer = longer max delay at a given bitrate.</div>
-      <div class="form-row tight" style="margin-top:12px;align-items:flex-start">
-        <div><span class="ic-label">Buffer size (MB)</span><input id="s-bmb" class="ic-input mono" type="number" min="50" max="10000"></div>
-        <div><span class="ic-label">Buffer file</span><input id="s-bpath" class="ic-input mono"></div>
+    <section class="sys-section" data-find="ports port 7799 1935 ingest web ui">
+      <div class="ic-label">Ports</div>
+      <div class="tab-sub">Restart required if you change these.</div>
+      <div class="form-row tight" style="margin-top:12px">
+        <div><span class="ic-label">Ingest port</span><input id="s-iport" class="ic-input mono" type="number" min="1" max="65535"></div>
+        <div><span class="ic-label">Web UI port</span><input id="s-wport" class="ic-input mono" type="number" min="1" max="65535"></div>
       </div>
-      <div class="muted" id="s-bmb-hint" style="margin-top:8px;font-size:11.5px;line-height:1.4"></div>
-      <div class="row" style="margin-top:10px">
-        <button class="ic-btn ic-btn-ghost reveal-btn" onclick="reveal('buffer',this)">Show buffer file in Explorer</button>
+    </section>
+    <section class="sys-section" data-find="lan network remote access phone tablet another pc bind">
+      <div class="ic-label">LAN access</div>
+      <div class="tab-sub">By default both ports are bound to 127.0.0.1. Open them to your LAN if OBS or your browser run on a different machine.</div>
+      <div class="checkbox-row" style="margin-top:10px">
+        <label><input type="checkbox" id="s-ibind" onchange="renderLanWarning()"> Allow LAN to publish</label>
+        <label><input type="checkbox" id="s-wbind" onchange="renderLanWarning()"> Allow LAN to access Web UI</label>
+      </div>
+      <!-- Shown only while the web UI is actually exposed. The control API
+           has no authentication - the CSRF guard stops cross-origin browser
+           POSTs, but a direct request (curl, script) carries no Origin
+           header and is allowed through by design so CLI and Stream Deck
+           keep working. On loopback that is exactly right; on a LAN it
+           means every machine on the network can drive the delay. Say so
+           rather than letting someone discover it. -->
+      <div id="lan-warn" class="lan-warn" hidden>
+        <span class="lw-ic" aria-hidden="true">⚠</span>
+        <span id="lan-warn-text"></span>
       </div>
     </section>
   </div>
 
-  <!-- Notifications sub-pane -->
-  <div class="sub-pane" data-subpane="notifications" hidden>
-    <section class="sys-section">
+  <!-- Alerts & logs: Discord webhook and the wire trace -->
+  <div class="sub-pane" data-subpane="alerts" hidden>
+    <section class="sys-section" data-find="discord webhook notifications alerts ping">
       <div class="ic-label">Discord webhook <span class="muted" style="text-transform:none;letter-spacing:0">(optional)</span></div>
       <div class="tab-sub">Pings on OBS connect/disconnect and destination drops.</div>
       <div style="margin-top:10px">
@@ -2962,11 +3017,7 @@ details.sys-collapse>summary .ic-label{margin:0}
         <button class="ic-btn ic-btn-ghost" onclick="testWebhook()">Test webhook</button>
       </div>
     </section>
-  </div>
-
-  <!-- Diagnostics sub-pane -->
-  <div class="sub-pane" data-subpane="diagnostics" hidden>
-    <section class="sys-section">
+    <section class="sys-section" data-find="trace log debug diagnostics wire support">
       <div class="ic-label">Trace log</div>
       <div class="tab-sub">Wire-level egress trace at <code class="mono">./instantclone-trace.log</code>. Useful when investigating an issue, safe to disable otherwise.</div>
       <label style="display:flex;align-items:center;gap:10px;margin-top:10px;cursor:pointer">
@@ -2981,7 +3032,7 @@ details.sys-collapse>summary .ic-label{margin:0}
 
   <!-- About sub-pane -->
   <div class="sub-pane" data-subpane="about" hidden>
-    <section class="sys-section">
+    <section class="sys-section" data-title="Version and updates" data-find="version update updates check new release">
       <div class="ic-label">InstantClone</div>
       <div class="sys-version-row">
         <span class="sys-version-num" id="sys-about-version">v?.?.?</span>
@@ -3030,7 +3081,7 @@ details.sys-collapse>summary .ic-label{margin:0}
         </div>
       </div>
     </div>
-    <section class="sys-reset" id="sys-reset">
+    <section class="sys-reset" id="sys-reset" data-find="reset danger zone factory defaults wipe">
       <div class="sys-reset-head">
         <div>
           <div class="ic-label" style="color:var(--err)">Danger zone</div>
@@ -3058,8 +3109,12 @@ details.sys-collapse>summary .ic-label{margin:0}
     </section>
   </div>
 
-  <div class="sys-foot" id="sys-foot">
-    <span class="muted" id="s-msg" style="flex:1;font-size:12px;min-height:1.2em"></span>
+  <!-- Save bar: sticks to the bottom of the window while there are unsaved
+       changes, so Save is never a long scroll away. -->
+  <div class="sys-foot" id="sys-foot" data-dirty="false">
+    <span class="sys-foot-state" id="sys-foot-state" aria-live="polite">All changes saved</span>
+    <span class="muted" id="s-msg"></span>
+    <button class="ic-btn" id="sys-discard" onclick="discardSettings()" hidden>Discard</button>
     <button class="ic-btn ic-btn-primary" onclick="saveSettings()">Save settings</button>
   </div>
 </section>
@@ -4645,13 +4700,13 @@ async function delProfile(name){
   await fetch('/profiles/delete',{method:'POST',body:new URLSearchParams({name})});
   loadProfiles();
 }
-// Jump to System -> Buffer with a target size prefilled, so a profile that
+// Jump to System -> General (buffer size) with a target size prefilled, so a profile that
 // "needs more MB" is one click from being fixable. Buffer changes need a
 // restart (the DiskRing is immutable once mapped) - the restart banner
 // already communicates that after Save.
 function jumpToBufferSetting(mb){
   showTab('system');
-  showSubTab('system', 'buffer');
+  showSubTab('system', 'general');
   const el = $('s-bmb');
   if (el){
     // Navigate + highlight only - never overwrite the user's value. We
@@ -4704,6 +4759,7 @@ async function loadConfig(){
     $('s-auto-act').checked = !!c.auto_activate_when_ready;
     $('s-auto-arm-secs').value = Math.round((c.auto_arm_delay_ms || 15000) / 1000);
     cpApplyConfig(c.crash_protection);
+    settingsMarkClean();
     // Global hotkeys: Windows-only, so the whole section stays hidden
     // elsewhere. A pending recording is cancelled before a re-render so
     // stale listeners never outlive the DOM they were bound to.
@@ -4730,6 +4786,7 @@ async function loadConfig(){
         $('s-midi-section').hidden = true;
       }
     }
+    syncControlsTab();
     // OBS panel
     $('obs-srv').textContent = c.obs_url;
     if ($('wiz-obs-srv')) $('wiz-obs-srv').textContent = c.obs_url;
@@ -4762,7 +4819,7 @@ async function loadConfig(){
     $('hdr-bar').hidden = !configured;
     $('hero').hidden = !configured;
     $('tabs').hidden = !configured;
-    $('pane-card').hidden = !configured;
+    $('pane-card').hidden = !configured; fitPaneCard();
     $('ic-foot').hidden = !configured;
     if (configured){
       // initial render of dest-add empty state at least
@@ -5390,7 +5447,7 @@ function skipWizard(){
   $('hdr-bar').hidden = false;
   $('hero').hidden = false;
   $('tabs').hidden = false;
-  $('pane-card').hidden = false;
+  $('pane-card').hidden = false; fitPaneCard();
   $('ic-foot').hidden = false;
   loadDestinations(); loadProfiles(); loadOverlays();
   const cur = document.querySelector('.tab.on') || document.querySelector('.tab[data-tab="destinations"]');
@@ -5634,27 +5691,14 @@ async function saveOverlaysDir(btn){
 async function saveSettings(){
   if (_savingSettings) return; // guard against a double-click double-POST
   const btn = document.querySelector('#sys-foot .ic-btn-primary');
-  const body = new URLSearchParams({
-    ingest_port:$('s-iport').value, web_port:$('s-wport').value,
-    buffer_mb:$('s-bmb').value, buffer_path:$('s-bpath').value,
-    ingest_bind_all:$('s-ibind').checked?'on':'off',
-    web_bind_all:$('s-wbind').checked?'on':'off',
-    discord_webhook_url:$('s-webhook').value.trim(),
-    tracing_enabled:$('s-trace').checked?'true':'false',
-    start_with_windows:$('s-startup').checked?'on':'off',
-    open_dashboard_on_launch:$('s-open-dash').checked?'true':'false',
-    update_check_enabled:$('s-update-check').checked?'true':'false',
-    auto_arm_on_connect:$('s-auto-arm').checked?'true':'false',
-    auto_activate_when_ready:$('s-auto-act').checked?'true':'false',
-    auto_arm_delay_ms:String(Math.max(1, Math.min(600, parseInt($('s-auto-arm-secs').value,10)||15)) * 1000),
-  });
-  Object.entries(cpFields()).forEach(([k, v]) => body.append(k, v));
+  const body = settingsBody();
   _savingSettings = true;
   if (btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
   try {
     const j = await(await fetch('/config',{method:'POST',body})).json();
     if (j.ok){
       flashFieldErrors(null);
+      $('s-msg').textContent = '';
       toast('Settings saved','ok');
       if (j.restart_required || +$('s-bmb').value !== initialBufferMb || $('s-bpath').value !== initialBufferPath){
         $('restart-banner').classList.remove('hidden');
@@ -8062,6 +8106,13 @@ function showTab(name){
   // so reposition any sub-tab indicator inside the freshly shown pane.
   const pane = document.querySelector(`.tab-pane[data-pane="${name}"]`);
   if (pane){ moveSubTabInd(pane); reserveCopyButtons(pane); }
+  fitPaneCard();
+  // Run the open sub-tab's hooks (VOD callout, update check), which a
+  // sub-tab restored at load hasn't had yet.
+  if (name === 'system'){
+    const current = pane && pane.querySelector('.sub-tab.on');
+    showSubTab('system', current ? current.dataset.subtab : 'general');
+  }
 }
 function moveTabInd(){
   const cur = document.querySelector('.tab.on'); if (!cur) return;
@@ -8097,28 +8148,231 @@ function morphCardHeight(card, h0){
 }
 $$('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
 window.addEventListener('resize', moveTabInd);
+// The pane card scrolls on its own. Cap it at the room left below its top
+// edge, so its bottom (and the System save bar pinned to it) always sits
+// inside the window instead of under it. 360 px is the card's own floor.
+const PANE_CARD_MARGIN_PX = 16;
+function fitPaneCard(){
+  const card = $('pane-card');
+  if (!card || card.hidden) return;
+  const top = card.getBoundingClientRect().top + window.scrollY;
+  card.style.setProperty('--pane-max', Math.max(360, innerHeight - top - PANE_CARD_MARGIN_PX) + 'px');
+}
+window.addEventListener('resize', fitPaneCard);
+
+// - Save bar -----------------------------------------
+// The System form is dirty when what Save would send differs from what was
+// last loaded or saved. Comparing the whole form body keeps that exact
+// without tracking fields one by one.
+let settingsSnapshot = null;
+// Sub-tabs whose fields go through Save; the rest act the moment they're
+// used (hotkeys, MIDI, buttons), so the bar only shows there when dirty.
+const SAVED_SUBTABS = new Set(['general', 'crash', 'access', 'alerts']);
+function settingsBody(){
+  const body = new URLSearchParams({
+    ingest_port:$('s-iport').value, web_port:$('s-wport').value,
+    buffer_mb:$('s-bmb').value, buffer_path:$('s-bpath').value,
+    ingest_bind_all:$('s-ibind').checked?'on':'off',
+    web_bind_all:$('s-wbind').checked?'on':'off',
+    discord_webhook_url:$('s-webhook').value.trim(),
+    tracing_enabled:$('s-trace').checked?'true':'false',
+    start_with_windows:$('s-startup').checked?'on':'off',
+    open_dashboard_on_launch:$('s-open-dash').checked?'true':'false',
+    update_check_enabled:$('s-update-check').checked?'true':'false',
+    auto_arm_on_connect:$('s-auto-arm').checked?'true':'false',
+    auto_activate_when_ready:$('s-auto-act').checked?'true':'false',
+    auto_arm_delay_ms:String(Math.max(1, Math.min(600, parseInt($('s-auto-arm-secs').value,10)||15)) * 1000),
+  });
+  Object.entries(cpFields()).forEach(([k, v]) => body.append(k, v));
+  return body;
+}
+function settingsMarkClean(){
+  settingsSnapshot = settingsBody().toString();
+  updateSaveBar();
+}
+function settingsDirty(){
+  return settingsSnapshot !== null && settingsBody().toString() !== settingsSnapshot;
+}
+function updateSaveBar(){
+  const foot = $('sys-foot');
+  if (!foot) return;
+  const dirty = settingsDirty();
+  const current = document.querySelector('#sys-sub-tabs .sub-tab.on');
+  foot.hidden = !dirty && !SAVED_SUBTABS.has(current ? current.dataset.subtab : 'general');
+  foot.dataset.dirty = String(dirty);
+  $('sys-foot-state').textContent = dirty ? 'Unsaved changes' : 'All changes saved';
+  $('sys-discard').hidden = !dirty;
+}
+// Throw the edits away: reload what the app has saved.
+function discardSettings(){ $('s-msg').textContent = ''; flashFieldErrors(null); loadConfig(); }
+(() => {
+  const pane = document.querySelector('.tab-pane[data-pane="system"]');
+  let queued = false;
+  // Clicks count too: style cards and colour swatches change the form
+  // without an input event.
+  const queue = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; updateSaveBar(); });
+  };
+  ['input', 'change', 'click'].forEach(type => pane.addEventListener(type, queue));
+  window.addEventListener('beforeunload', e => {
+    if (!settingsDirty()) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+})();
+
+// Hotkeys and MIDI are Windows-only; with neither, Controls has nothing in it.
+function syncControlsTab(){
+  const tab = document.querySelector('#sys-sub-tabs [data-subtab="controls"]');
+  if (!tab) return;
+  tab.hidden = $('s-hotkeys-section').hidden && $('s-midi-section').hidden;
+  if (tab.hidden && tab.classList.contains('on')) showSubTab('system', 'general');
+  moveSubTabInd(tab.closest('.tab-pane'));
+}
+
+// - Find a setting ------------------------------------
+// Every System section carries data-find keywords for words people search
+// with that its own text may not contain ("keybind", "brb", "port 7799").
+// A section matches when every typed word appears in its title, keywords or
+// text. Title hits rank first, then keyword hits, then body text; a title
+// or keyword counts when one of its words starts with what was typed, so
+// "port" ranks Ports above a section that merely mentions "support".
+const SYS_FIND_LIMIT = 6;
+let sysFindMatches = [];
+let sysFindActive = 0;
+function sysFindTitle(section){
+  if (section.dataset.title) return section.dataset.title;
+  const label = section.querySelector('.ic-label');
+  if (!label) return '';
+  const copy = label.cloneNode(true);
+  copy.querySelectorAll('.tag, .muted').forEach(extra => extra.remove());
+  return copy.textContent.trim().replace(/\s+/g, ' ');
+}
+function sysFindSearch(query){
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  return [...document.querySelectorAll('[data-pane="system"] .sub-pane > [data-find]')]
+    .filter(section => !section.hidden)
+    .map(section => {
+      const title = sysFindTitle(section);
+      const haystack = (title + ' ' + section.dataset.find + ' ' + section.textContent).toLowerCase();
+      if (!words.every(word => haystack.includes(word))) return null;
+      const startsAWord = (text, word) => text.toLowerCase().split(/[^a-z0-9]+/).some(part => part.startsWith(word));
+      const score = words.reduce((sum, word) =>
+        sum + (startsAWord(title, word) ? 2 : startsAWord(section.dataset.find, word) ? 1 : 0), 0);
+      const subtab = section.closest('.sub-pane').dataset.subpane;
+      const tab = document.querySelector(`#sys-sub-tabs [data-subtab="${subtab}"]`);
+      return {section, title, subtab, tabName: tab ? tab.textContent.trim() : '', score};
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, SYS_FIND_LIMIT);
+}
+function sysFindRender(){
+  const box = $('sys-find-results');
+  const input = $('sys-find');
+  const open = input.value.trim() !== '';
+  box.hidden = !open;
+  input.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  if (!sysFindMatches.length){
+    const empty = document.createElement('div');
+    empty.className = 'sys-find-empty';
+    empty.textContent = 'No setting matches "' + input.value.trim() + '"';
+    box.replaceChildren(empty);
+    return;
+  }
+  box.replaceChildren(...sysFindMatches.map((match, index) => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'sys-find-option';
+    option.id = 'sys-find-option-' + index;
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-selected', String(index === sysFindActive));
+    const title = document.createElement('b');
+    title.textContent = match.title;
+    const where = document.createElement('span');
+    where.textContent = match.tabName;
+    option.append(title, where);
+    // mousedown, not click: it lands before the input's blur closes the list.
+    option.onmousedown = e => { e.preventDefault(); sysFindGo(match); };
+    return option;
+  }));
+  input.setAttribute('aria-activedescendant', 'sys-find-option-' + sysFindActive);
+}
+function sysFindGo(match){
+  const input = $('sys-find');
+  input.value = '';
+  sysFindMatches = [];
+  sysFindRender();
+  input.blur();
+  showSubTab('system', match.subtab);
+  if (match.section.tagName === 'DETAILS') match.section.open = true;
+  match.section.scrollIntoView({behavior: 'smooth', block: 'start'});
+  match.section.classList.remove('sys-found');
+  void match.section.offsetWidth;
+  match.section.classList.add('sys-found');
+}
+(() => {
+  const input = $('sys-find');
+  input.addEventListener('input', () => {
+    sysFindMatches = sysFindSearch(input.value);
+    sysFindActive = 0;
+    sysFindRender();
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+      e.preventDefault();
+      if (!sysFindMatches.length) return;
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      sysFindActive = (sysFindActive + step + sysFindMatches.length) % sysFindMatches.length;
+      sysFindRender();
+    } else if (e.key === 'Enter'){
+      e.preventDefault();
+      if (sysFindMatches[sysFindActive]) sysFindGo(sysFindMatches[sysFindActive]);
+    } else if (e.key === 'Escape'){
+      input.value = '';
+      sysFindMatches = [];
+      sysFindRender();
+      input.blur();
+    }
+  });
+  input.addEventListener('blur', () => { $('sys-find-results').hidden = true; input.setAttribute('aria-expanded', 'false'); });
+  input.addEventListener('focus', () => { if (input.value.trim()) sysFindRender(); });
+  // "/" jumps to the search while the System tab is open, unless the user
+  // is already typing somewhere.
+  document.addEventListener('keydown', e => {
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (document.querySelector('.tab-pane[data-pane="system"]').hidden) return;
+    const target = e.target;
+    if (target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    e.preventDefault();
+    input.focus();
+  });
+})();
 
 // - Sub-tabs (currently only the System pane uses these) -------
-// Jump straight to System -> Network (used by the "set an ingest key" pointer
-// on the OBS tab, now that the key control lives under Network settings).
-function goNetworkSettings(){ showTab('system'); showSubTab('system', 'network'); }
+// Jump straight to System -> Access (used by the "set an ingest key" pointer
+// on the OBS tab; the key control lives under Access).
+function goNetworkSettings(){ showTab('system'); showSubTab('system', 'access'); }
+// Sub-tabs that were renamed or merged, so a remembered tab or an old link
+// still lands in the right place.
+const SUBTAB_MOVED = {behavior:'general', buffer:'general', network:'access', notifications:'alerts', diagnostics:'alerts'};
 
 function showSubTab(paneName, subName){
   const pane = document.querySelector(`.tab-pane[data-pane="${paneName}"]`);
   if (!pane) return;
+  subName = SUBTAB_MOVED[subName] || subName;
   pane.querySelectorAll('.sub-tab').forEach(t => t.classList.toggle('on', t.dataset.subtab === subName));
   pane.querySelectorAll('.sub-pane').forEach(p => p.hidden = p.dataset.subpane !== subName);
   moveSubTabInd(pane);
   try { localStorage.setItem('ic-subtab-' + paneName, subName); } catch(e){}
-  // The "Save settings" footer only applies to the editable sub-panes.
-  // About is version info + immediate danger-zone actions, so a Save
-  // button there is meaningless - hide the footer on About.
-  if (paneName === 'system'){
-    const foot = $('sys-foot');
-    if (foot) foot.hidden = (subName === 'about');
-  }
-  if (paneName === 'system' && subName === 'about') aboutMaybeAutoCheck();
-  if (paneName === 'system' && subName === 'behavior') refreshSysVodScript();
+  if (paneName !== 'system') return;
+  updateSaveBar();
+  if (subName === 'about') aboutMaybeAutoCheck();
+  if (subName === 'twitch') refreshSysVodScript();
 }
 // Fill the System-tab VOD sections: the script button label, the
 // version-aware requirement callout, and - crucially - gate the legacy
@@ -8188,17 +8442,12 @@ window.addEventListener('resize', () => {
     if (!pane.querySelector('.sub-tabs')) return;
     let saved = null;
     try { saved = localStorage.getItem('ic-subtab-' + pane.dataset.pane); } catch(e){}
-    if (!saved) return;
-    const target = pane.querySelector(`.sub-tab[data-subtab="${saved}"]`);
-    if (target) {
-      pane.querySelectorAll('.sub-tab').forEach(t => t.classList.toggle('on', t.dataset.subtab === saved));
-      pane.querySelectorAll('.sub-pane').forEach(p => p.hidden = p.dataset.subpane !== saved);
-      // Keep the Save footer in sync with the restored sub-tab (see showSubTab).
-      if (pane.dataset.pane === 'system'){
-        const foot = $('sys-foot');
-        if (foot) foot.hidden = (saved === 'about');
-      }
-    }
+    saved = SUBTAB_MOVED[saved] || saved;
+    if (!saved || !pane.querySelector(`.sub-tab[data-subtab="${saved}"]`)) return;
+    // Classes only: this runs while the page script is still loading, so
+    // the per-tab hooks in showSubTab wait for the first real switch.
+    pane.querySelectorAll('.sub-tab').forEach(t => t.classList.toggle('on', t.dataset.subtab === saved));
+    pane.querySelectorAll('.sub-pane').forEach(p => p.hidden = p.dataset.subpane !== saved);
   });
 })();
 

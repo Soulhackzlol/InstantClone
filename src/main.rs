@@ -309,7 +309,7 @@ fn main() -> std::io::Result<()> {
         // tray icon stays running in the background - closing the tab
         // doesn't kill the proxy. `--no-browser` skips this for autostart
         // / headless setups; the persisted `open_dashboard_on_launch`
-        // toggle (System -> Behavior) does the same from the UI, so a
+        // toggle (System -> General) does the same from the UI, so a
         // tray-resident user isn't forced into a tab every launch.
         if !suppress_browser && settings.open_dashboard_on_launch {
             let url = format!("http://127.0.0.1:{}/", settings.web_port);

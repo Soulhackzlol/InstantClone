@@ -126,6 +126,17 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
 
 ### Polish
 
+- **System is organized by topic.** General, Crash protection, Controls
+  (hotkeys and MIDI), Twitch & OBS, Access (ingest key, password, ports,
+  LAN), Alerts & logs, and About. Behavior used to hold six unrelated
+  things while three tabs held one each.
+- **Find a setting.** Type in System's search (or press **/**) and it
+  opens the right tab and highlights the section. It knows the words
+  people use, like "keybind", "brb" or "port".
+- **A save bar that follows you.** It stays on screen while there are
+  unsaved changes, with **Discard** to undo them, and the page asks before
+  you close it with changes unsaved.
+- Each tab's scroll area now ends inside the window instead of under it.
 - The log wraps long lines instead of cutting them off, and stops jumping
   to the bottom while you are reading older lines.
 - Destination cards in a row line up, the frame, cut and reconnect counters
