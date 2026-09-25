@@ -4086,11 +4086,6 @@ function verticalDiag(d){
   // Matches the backend: only an enabled Twitch destination with a key
   // makes InstantClone proxy Twitch's config.
   const viaTwitch = Array.isArray(lastDests) && lastDests.some(x => x.platform === 'twitch' && x.enabled && x.stream_key_set);
-  // Twitch built the tracks as HEVC or AV1: its config came before this
-  // destination was on, since InstantClone asks for H.264 while it is.
-  if (s.multitrack_video && viaTwitch && s.video_codec && s.video_codec !== 'H.264' && s.video_codec !== '?')
-    return {ready:false, label:s.video_codec + ' tracks', hint:'Restart the stream in OBS to get H.264',
-      title:'Twitch sent this stream\'s tracks as ' + s.video_codec + ', which only Twitch can play. InstantClone asks Twitch for H.264 while another destination is on, so stop and start the stream in OBS to get H.264 tracks.'};
   if (s.multitrack_video && viaTwitch)
     return {ready:false, label:'No 9:16 canvas', hint:'Twitch sends no vertical track (Dual Format is off)',
       title:'With a Twitch destination, Twitch\'s config decides the tracks, and it has no vertical one for this channel. Turn on Twitch Dual Format for the channel, or disable the Twitch destination so InstantClone builds the config and uses OBS\'s Additional canvas.'};

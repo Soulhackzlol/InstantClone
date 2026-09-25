@@ -15,9 +15,6 @@
 //!
 //! A track must never name a canvas OBS didn't send: OBS refuses to start
 //! the stream on an out-of-range `canvas_index`.
-//!
-//! With a Twitch destination, `vertical_tracks_as_h264` adjusts Twitch's
-//! answer so the vertical track is one the other platforms can play.
 
 /// One entry of OBS's `preferences.canvases`: the size OBS outputs that
 /// canvas at, and its frame rate.
@@ -74,6 +71,24 @@ pub fn names_additional_canvas(config: &str) -> bool {
     config
         .match_indices("\"canvas_index\"")
         .any(|(at, _)| number_field(&config[at..], "canvas_index").is_some_and(|i| i > 0))
+}
+
+/// The track a config puts the vertical canvas on: the largest portrait
+/// entry of `encoder_configurations`. OBS numbers tracks in that list's
+/// order (`obs_output_set_video_encoder2(output, encoder, i)`), so this
+/// finds the vertical track in any codec, where reading its SPS only works
+/// for H.264. Twitch sends 2K channels an HEVC vertical track.
+pub fn vertical_track(config: &str) -> Option<u8> {
+    array_objects(config, "encoder_configurations")
+        .into_iter()
+        .enumerate()
+        .filter_map(|(track, entry)| {
+            let width = number_field(entry, "width")?;
+            let height = number_field(entry, "height")?;
+            (height > width).then_some((track, width.saturating_mul(height)))
+        })
+        .max_by_key(|&(_, area)| area)
+        .and_then(|(track, _)| u8::try_from(track).ok())
 }
 
 /// Canvases OBS listed in its config request, in `canvas_index` order.
@@ -173,88 +188,6 @@ fn number_field(object: &str, key: &str) -> Option<u32> {
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(value.len());
     value[..digits_end].parse().ok()
-}
-
-/// The H.264 encoder OBS ships beside each HEVC or AV1 hardware encoder,
-/// from the same vendor plugin, so OBS has one whenever it has the other.
-const H264_TWINS: &[(&str, &str)] = &[
-    ("h265_texture_amf", "h264_texture_amf"),
-    ("av1_texture_amf", "h264_texture_amf"),
-    ("h265_fallback_amf", "h264_fallback_amf"),
-    ("av1_fallback_amf", "h264_fallback_amf"),
-    ("obs_nvenc_hevc_tex", "obs_nvenc_h264_tex"),
-    ("obs_nvenc_av1_tex", "obs_nvenc_h264_tex"),
-    ("obs_nvenc_hevc_cuda", "obs_nvenc_h264_cuda"),
-    ("obs_nvenc_av1_cuda", "obs_nvenc_h264_cuda"),
-    ("obs_nvenc_hevc_soft", "obs_nvenc_h264_soft"),
-    ("obs_nvenc_av1_soft", "obs_nvenc_h264_soft"),
-    ("jim_hevc_nvenc", "jim_nvenc"),
-    ("jim_av1_nvenc", "jim_nvenc"),
-    ("obs_qsv11_hevc", "obs_qsv11_v2"),
-    ("obs_qsv11_av1", "obs_qsv11_v2"),
-    ("obs_qsv11_hevc_soft", "obs_qsv11_soft_v2"),
-    ("obs_qsv11_av1_soft", "obs_qsv11_soft_v2"),
-];
-
-/// Twitch's config with every vertical track switched to H.264, or `None`
-/// when no vertical track needed it.
-///
-/// Twitch builds Dual Format's vertical track as HEVC on any GPU that has
-/// it, whatever codecs OBS offers (only the main track follows
-/// `supported_codecs`). TikTok, Kick and the vertical detection itself need
-/// H.264, so OBS is told to encode that track with its vendor's H.264
-/// encoder at the same size, frame rate and bitrate.
-pub fn vertical_tracks_as_h264(config: &str) -> Option<String> {
-    let mut rewritten = config.to_string();
-    // Back to front, so each splice leaves the earlier offsets valid.
-    for track in array_objects(config, "encoder_configurations")
-        .into_iter()
-        .rev()
-    {
-        let Some(h264_track) = vertical_track_as_h264(track) else {
-            continue;
-        };
-        let start = track.as_ptr() as usize - config.as_ptr() as usize;
-        rewritten.replace_range(start..start + track.len(), &h264_track);
-    }
-    (rewritten != config).then_some(rewritten)
-}
-
-fn vertical_track_as_h264(track: &str) -> Option<String> {
-    if number_field(track, "height")? <= number_field(track, "width")? {
-        return None;
-    }
-    let encoder = string_field(track, "type")?;
-    let (_, twin) = H264_TWINS.iter().find(|(from, _)| *from == encoder)?;
-    let mut h264_track = track.replacen(&format!("\"{encoder}\""), &format!("\"{twin}\""), 1);
-    // AMD's options are named per codec (`HevcVBVBufferSize`); the H.264
-    // encoder only knows the plain names (`VBVBufferSize`).
-    if let Some(opts) = string_field(track, "ffmpeg_opts") {
-        let h264_opts: Vec<&str> = opts
-            .split(' ')
-            .map(|opt| {
-                opt.strip_prefix("Hevc")
-                    .or_else(|| opt.strip_prefix("Av1"))
-                    .unwrap_or(opt)
-            })
-            .collect();
-        h264_track = h264_track.replacen(
-            &format!("\"{opts}\""),
-            &format!("\"{}\"", h264_opts.join(" ")),
-            1,
-        );
-    }
-    Some(h264_track)
-}
-
-/// The string after `"key":`, without its quotes. Enough for encoder ids
-/// and option lists, which never hold an escaped quote.
-fn string_field<'a>(object: &'a str, key: &str) -> Option<&'a str> {
-    let needle = format!("\"{key}\"");
-    let after = &object[object.find(&needle)? + needle.len()..];
-    let value = after.trim_start().strip_prefix(':')?.trim_start();
-    let value = value.strip_prefix('"')?;
-    Some(&value[..value.find('"')?])
 }
 
 /// Encoder id plus its settings JSON for one track.
@@ -517,84 +450,33 @@ mod tests {
         assert!(build(&[], 8_000, 1935, x264).is_none());
     }
 
-    /// Twitch's reply for an AMD GPU with Dual Format, as a streamer's trace
-    /// logged it: the main track follows `supported_codecs`, the vertical one
-    /// stays HEVC.
-    const TWITCH_DUAL_FORMAT: &str = r#"{
-    "encoder_configurations": [
-        {
-            "type": "h264_texture_amf",
-            "gpu_scale_type": "OBS_SCALE_BICUBIC",
-            "width": 1920,
-            "height": 1080,
-            "canvas_index": 0,
-            "settings": {
-                "bitrate": 7500,
-                "ffmpeg_opts": "EncoderInstance=0 VBVBufferSize=750000"
-            }
-        },
-        {
-            "type": "h265_texture_amf",
-            "gpu_scale_type": "OBS_SCALE_BICUBIC",
-            "width": 1080,
-            "height": 1920,
-            "canvas_index": 1,
-            "settings": {
-                "bitrate": 5000,
-                "ffmpeg_opts": "HevcEncoderInstance=1 HevcVBVBufferSize=500000"
-            }
-        }
-    ],
-    "audio_configurations": {"live": [{"codec": "aac", "track_id": 0}]}
-}"#;
-
     #[test]
-    fn the_vertical_track_is_encoded_as_h264() {
-        let rewritten = vertical_tracks_as_h264(TWITCH_DUAL_FORMAT).unwrap();
-        let expected = TWITCH_DUAL_FORMAT
-            .replace(r#""h265_texture_amf""#, r#""h264_texture_amf""#)
-            .replace(
-                "HevcEncoderInstance=1 HevcVBVBufferSize=500000",
-                "EncoderInstance=1 VBVBufferSize=500000",
-            );
-        assert_eq!(rewritten, expected);
+    fn the_vertical_track_is_found_in_any_codec() {
+        // Twitch's reply to a 2K channel on an AMD GPU, as a streamer's
+        // trace logged it: both tracks HEVC, the vertical one second.
+        let twitch = r#"{"encoder_configurations": [
+            {"type": "h265_texture_amf", "width": 2560, "height": 1440, "canvas_index": 0,
+             "framerate": {"numerator": 60, "denominator": 1}, "settings": {"bitrate": 9000}},
+            {"type": "h265_texture_amf", "width": 1080, "height": 1920, "canvas_index": 1,
+             "framerate": {"numerator": 60, "denominator": 1}, "settings": {"bitrate": 5000}}
+        ]}"#;
+        assert_eq!(vertical_track(twitch), Some(1));
     }
 
     #[test]
-    fn an_hevc_main_track_is_left_to_twitch() {
-        // Only the vertical track is ours to change: the landscape one feeds
-        // Twitch, where HEVC is the better picture.
-        let hevc_main = TWITCH_DUAL_FORMAT.replacen("h264_texture_amf", "h265_texture_amf", 1);
-        let rewritten = vertical_tracks_as_h264(&hevc_main).unwrap();
-        assert!(rewritten.contains(
-            r#""type": "h265_texture_amf",
-            "gpu_scale_type": "OBS_SCALE_BICUBIC",
-            "width": 1920"#
-        ));
-        assert_eq!(rewritten.matches("h264_texture_amf").count(), 1);
+    fn a_config_without_a_portrait_track_has_no_vertical_track() {
+        let landscape_ladder = r#"{"encoder_configurations": [
+            {"width": 1920, "height": 1080}, {"width": 1280, "height": 720}]}"#;
+        assert_eq!(vertical_track(landscape_ladder), None);
+        assert_eq!(vertical_track(r#"{"ingest_endpoints": []}"#), None);
     }
 
     #[test]
-    fn nvenc_and_qsv_vertical_tracks_get_their_h264_twin() {
-        for (hevc, h264) in [
-            ("jim_hevc_nvenc", "jim_nvenc"),
-            ("obs_qsv11_hevc", "obs_qsv11_v2"),
-        ] {
-            let config = TWITCH_DUAL_FORMAT.replace("h265_texture_amf", hevc);
-            let rewritten = vertical_tracks_as_h264(&config).unwrap();
-            assert!(
-                rewritten.contains(&format!(r#""type": "{h264}""#)),
-                "{hevc}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_config_with_nothing_to_change_is_left_alone() {
-        let h264_vertical = TWITCH_DUAL_FORMAT.replace("h265_texture_amf", "h264_texture_amf");
-        assert!(vertical_tracks_as_h264(&h264_vertical).is_none());
-        let unknown_encoder = TWITCH_DUAL_FORMAT.replace("h265_texture_amf", "some_future_hevc");
-        assert!(vertical_tracks_as_h264(&unknown_encoder).is_none());
-        assert!(vertical_tracks_as_h264(r#"{"ingest_endpoints": []}"#).is_none());
+    fn the_largest_portrait_track_is_the_vertical_one() {
+        let two_portrait_rungs = r#"{"encoder_configurations": [
+            {"width": 1920, "height": 1080},
+            {"width": 540, "height": 960},
+            {"width": 1080, "height": 1920}]}"#;
+        assert_eq!(vertical_track(two_portrait_rungs), Some(2));
     }
 }

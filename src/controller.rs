@@ -459,6 +459,8 @@ impl DestinationState {
 
 /// `Controller::resumed_after_seq` when the ring held nothing.
 const NO_SEQ: u64 = u64::MAX;
+/// `Controller::eb_vertical_track` when the config has no vertical track.
+const NO_TRACK: u8 = 0xFF;
 
 /// `Controller::last_hold_end` values.
 const HOLD_END_RESUMED: u8 = 1;
@@ -600,6 +602,10 @@ pub struct Controller {
     // whether Enhanced Broadcasting was caught + flattened.
     video_codec: AtomicU8,
     audio_codec: AtomicU8,
+    /// The track the last Enhanced Broadcasting config OBS got puts the
+    /// vertical canvas on, `NO_TRACK` when it has none. Finds the vertical
+    /// track when its SPS can't be read (Twitch's HEVC for 2K channels).
+    eb_vertical_track: AtomicU8,
     multitrack_video: AtomicBool,
     multitrack_audio: AtomicBool,
 
@@ -771,6 +777,7 @@ impl Controller {
             publish_lock: Mutex::new(()),
             video_codec: AtomicU8::new(0),
             audio_codec: AtomicU8::new(0),
+            eb_vertical_track: AtomicU8::new(NO_TRACK),
             video_dims: AtomicU64::new(0),
             idr_window_open: AtomicBool::new(false),
             first_idr_ts_ms: AtomicU64::new(0),
@@ -840,6 +847,16 @@ impl Controller {
 
     pub fn video_codec(&self) -> VideoCodec {
         dec_vcodec(self.video_codec.load(Ordering::Relaxed))
+    }
+    /// Remember which track the config just handed to OBS puts the
+    /// vertical canvas on.
+    pub fn note_eb_config(&self, config: &str) {
+        let track = crate::local_eb_config::vertical_track(config).unwrap_or(NO_TRACK);
+        self.eb_vertical_track.store(track, Ordering::Relaxed);
+    }
+    /// The vertical track of the last config handed to OBS.
+    pub fn eb_vertical_track(&self) -> Option<u8> {
+        Some(self.eb_vertical_track.load(Ordering::Relaxed)).filter(|&t| t != NO_TRACK)
     }
     pub fn audio_codec(&self) -> AudioCodec {
         dec_acodec(self.audio_codec.load(Ordering::Relaxed))

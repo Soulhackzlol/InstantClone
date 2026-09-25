@@ -71,16 +71,16 @@ logs that tracked it down).
   instead of the destination sitting silent. With a Twitch destination
   whose channel has no Dual Format, the log names the vertical
   destinations that will get nothing.
-- **Twitch Dual Format now feeds TikTok and other vertical destinations on
-  GPUs that can encode HEVC.** Twitch picks each track's codec, and on those
-  GPUs it picks HEVC, even with H.264 set in OBS. TikTok, Kick and vertical
-  feeds can't play HEVC, so a vertical destination showed "No 9:16 canvas"
-  and got nothing. With a vertical destination on, OBS now encodes the
-  vertical track as H.264 with the same GPU and settings, and with a
-  horizontal one on, InstantClone asks Twitch for an H.264 main track.
-  Twitch keeps HEVC wherever nothing else needs that track. If a stream
-  still arrives as HEVC, the card and the log say so and tell you to
-  restart the stream.
+- **Twitch 2K channels feed vertical destinations too.** Twitch streams
+  Partners and Affiliates at 1440p in HEVC, vertical track included, even
+  with H.264 set in OBS. InstantClone could only find a vertical track in
+  H.264, so a vertical destination showed "No 9:16 canvas" and got nothing.
+  It now reads the vertical track from Twitch's config, in any codec, and
+  forwards it as Twitch sent it. Restream takes HEVC and converts it to
+  H.264 for TikTok and the rest.
+- **A horizontal destination besides Twitch gets an H.264 main track.**
+  While one is on, InstantClone asks Twitch for H.264, since Kick and most
+  ingests can't play HEVC. Twitch then streams at 1080p instead of 2K.
 
 ### Enhanced Broadcasting without Twitch uses your GPU
 

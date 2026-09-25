@@ -735,10 +735,15 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // Format turns on/off mid-stream. `None` until a portrait track is
         // seen; we map that to the 0xFF "unresolved" sentinel each tick so
         // a vanished vertical canvas reverts vertical destinations to
-        // "waiting" without a restart.
+        // "waiting" without a restart. Only H.264 headers can be measured;
+        // for any other codec, the vertical track the Enhanced Broadcasting
+        // config named counts once OBS is actually sending it.
         let vertical_track = {
             let headers = ctrl.ring.video_seq_headers.lock();
-            crate::h264::detect_vertical_primary_track(&headers)
+            crate::h264::detect_vertical_primary_track(&headers).or_else(|| {
+                ctrl.eb_vertical_track()
+                    .filter(|track| headers.contains_key(track))
+            })
         };
         vertical_wait.retain(|id| desired.iter().any(|(d, _)| d.id == id));
         for (dest, url) in &desired {
@@ -785,24 +790,13 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                     && video_known
                     && vertical_wait.missing(&dest.id, ctrl.publisher_token(), Instant::now())
                 {
-                    let codec = ctrl.video_codec();
-                    let why = if matches!(
-                        codec,
-                        crate::h264::VideoCodec::Avc | crate::h264::VideoCodec::Unknown
-                    ) {
-                        "OBS isn't sending a 9:16 canvas, so nothing goes out. In OBS: \
-                         Settings → Stream → Enhanced Broadcasting on, then pick your vertical \
-                         canvas under Additional canvas. Or set this destination's Stream format \
-                         to Horizontal."
-                            .to_string()
-                    } else {
-                        format!(
-                            "the video is {}, which only Twitch can play, so nothing goes out. \
-                             Stop and start the stream in OBS so Twitch sends H.264.",
-                            codec.label()
-                        )
-                    };
-                    ctrl.log(format!("[{}] vertical: {why}", dest.name));
+                    ctrl.log(format!(
+                        "[{}] vertical: OBS isn't sending a 9:16 canvas, so nothing goes out. \
+                         In OBS: Settings → Stream → Enhanced Broadcasting on, then pick your \
+                         vertical canvas under Additional canvas. Or set this destination's \
+                         Stream format to Horizontal.",
+                        dest.name
+                    ));
                 }
                 continue;
             }

@@ -820,11 +820,11 @@ async fn route(
         // no Twitch destination is configured or the upstream call
         // fails. GET is supported as an escape hatch for poking the
         // static fallback from a browser address bar.
-        ("POST", "/obs/multitrack-config") => (
-            "200 OK",
-            "application/json",
-            obs_multitrack_config_proxy(body, query, ctrl, settings).await,
-        ),
+        ("POST", "/obs/multitrack-config") => {
+            let config = obs_multitrack_config_proxy(body, query, ctrl, settings).await;
+            ctrl.note_eb_config(&config);
+            ("200 OK", "application/json", config)
+        }
         ("GET", "/obs/multitrack-config") => (
             "200 OK",
             "application/json",
@@ -1662,10 +1662,12 @@ async fn obs_multitrack_config_proxy(
         }
     };
 
-    // Twitch picks the main track's codec from the ones OBS offers, and
-    // hands HEVC to any GPU that has it. A horizontal destination besides
-    // Twitch gets that same track, so while one is enabled only H.264 is
-    // offered. (The vertical track ignores this list; see below.)
+    // Twitch picks the main track's codec from the ones OBS offers: HEVC
+    // for a 2K (1440p) channel on a GPU that has it. A horizontal
+    // destination besides Twitch gets that same track, so while one is
+    // enabled only H.264 is offered. Twitch keeps the vertical track's codec
+    // whatever this list says, and refuses a session whose tracks don't
+    // match its config, so the vertical track is forwarded as it comes.
     let needs_h264 = feeds_main_track_beyond_twitch(&settings.borrow().destinations);
     let modified_body = match offer_only_h264(&modified_body) {
         Some(h264_only) if needs_h264 && h264_only != modified_body => {
@@ -1803,20 +1805,6 @@ async fn obs_multitrack_config_proxy(
         &twitch_json,
         &format!("rtmp://localhost:{}/live/{{stream_key}}", ingest_port),
     );
-    let vertical_h264 = feeds_vertical_track(&settings.borrow().destinations)
-        .then(|| crate::local_eb_config::vertical_tracks_as_h264(&rewritten))
-        .flatten();
-    let rewritten = match vertical_h264 {
-        Some(config) => {
-            ctrl.log(
-                "[OBS multitrack] Twitch asked for an HEVC vertical track - OBS will \
-                 encode it as H.264 so your vertical destinations can play it",
-            );
-            crate::trace::log("OBS_MULTITRACK", "vertical track switched to h264");
-            config
-        }
-        None => rewritten,
-    };
     // Extract the *original* IVS ingest URL from Twitch's response
     // BEFORE rewriting it to localhost, substitute the streamer's real
     // stream key into the `{stream_key}` placeholder, and stash it on
@@ -2100,13 +2088,6 @@ fn feeds_main_track_beyond_twitch(destinations: &[config::Destination]) -> bool 
     destinations
         .iter()
         .any(|d| d.enabled && d.platform != "twitch" && d.platform != "sink" && !d.wants_vertical())
-}
-
-/// Whether an enabled destination is set to Vertical. The vertical track
-/// has to be H.264 for any of them: it is how InstantClone finds the 9:16
-/// canvas, and TikTok and Kick can't play anything else.
-fn feeds_vertical_track(destinations: &[config::Destination]) -> bool {
-    destinations.iter().any(|d| d.enabled && d.wants_vertical())
 }
 
 /// OBS's config request with `client.supported_codecs` narrowed to
@@ -5535,7 +5516,7 @@ mod tests {
     }
 
     #[test]
-    fn h264_is_asked_for_only_the_tracks_other_destinations_play() {
+    fn only_a_horizontal_destination_besides_twitch_narrows_the_codecs() {
         let dest = |platform: &str, enabled: bool, format: &str| config::Destination {
             id: platform.into(),
             name: platform.into(),
@@ -5560,16 +5541,8 @@ mod tests {
             test_sink
         ]));
         assert!(!feeds_main_track_beyond_twitch(&[twitch.clone(), kick_off]));
-        assert!(!feeds_main_track_beyond_twitch(&[
-            twitch.clone(),
-            tiktok.clone()
-        ]));
-        assert!(feeds_main_track_beyond_twitch(&[
-            twitch.clone(),
-            kick.clone()
-        ]));
-        assert!(!feeds_vertical_track(&[twitch.clone(), kick]));
-        assert!(feeds_vertical_track(&[twitch, tiktok]));
+        assert!(!feeds_main_track_beyond_twitch(&[twitch.clone(), tiktok]));
+        assert!(feeds_main_track_beyond_twitch(&[twitch, kick]));
     }
 
     #[test]
