@@ -144,9 +144,11 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
 - **Platform logos.** Twitch, YouTube and Kick show their own marks in their
   colours on destination cards, the platform picker and the setup wizard;
   Restream, Custom and the test sink get a clear symbol each.
-- **See the whole signal path.** Destinations shows OBS, InstantClone and
-  every platform in one strip, with the current delay in the middle; a link
-  animates only while data really flows across it.
+- **The aurora, reworked.** Three soft lights drift behind the whole delay
+  panel in the stream state's colour (grey offline, amber buffering, cyan
+  armed, green delayed), the page top glows faintly with it, the panel's top
+  edge catches the light, and each state change blooms from the number.
+  Buttons and cards pick up a subtle lit edge too.
 - **Clearer at a glance.** Larger section titles, labels and stats numbers,
   bigger tab icons with the open tab in the accent colour, and screens that
   explain themselves when there's nothing yet (Stats before OBS streams, an
