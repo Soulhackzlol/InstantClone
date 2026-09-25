@@ -556,7 +556,7 @@ pub struct Controller {
     eb_session: crate::sync::Mutex<Option<EbSession>>,
     /// OBS asked for that config again during the open hold (it is coming
     /// back with Enhanced Broadcasting). Cleared when a hold opens.
-    eb_session_reclaimed: AtomicBool,
+    eb_session_claimed: AtomicBool,
 
     // --- Per-destination state, keyed by Destination.id -----------------
     // RwLock not Mutex: every `on_tag` (~150-300/s per active stream)
@@ -772,7 +772,7 @@ impl Controller {
             eb_keys: crate::sync::Mutex::new(Vec::new()),
             held_keyframes: crate::sync::Mutex::new(std::collections::BTreeMap::new()),
             eb_session: crate::sync::Mutex::new(None),
-            eb_session_reclaimed: AtomicBool::new(false),
+            eb_session_claimed: AtomicBool::new(false),
             webhook_last_fire_ms: AtomicU64::new(0),
             publish_lock: Mutex::new(()),
             video_codec: AtomicU8::new(0),
@@ -1892,6 +1892,10 @@ impl Controller {
     /// the Twitch session it opened.
     pub fn remember_eb_session(&self, session: EbSession) {
         *self.eb_session.lock() = Some(session);
+        // OBS asked for this session, so it is Enhanced Broadcasting's own
+        // even when a hold is open (one that had no session to hand back):
+        // OBS publishing next must continue it, not drop it as stale.
+        self.eb_session_claimed.store(true, Ordering::Relaxed);
     }
 
     /// The config to hand OBS again when it asks during a hold that is
@@ -1912,16 +1916,16 @@ impl Controller {
         for auth in &session.auths {
             self.remember_eb_key(auth.clone());
         }
-        self.eb_session_reclaimed.store(true, Ordering::Relaxed);
+        self.eb_session_claimed.store(true, Ordering::Relaxed);
         Some(session.config)
     }
 
-    /// OBS is publishing again during a hold without having asked for the
-    /// Enhanced Broadcasting config the hold kept its Twitch session for:
+    /// OBS is publishing again during a hold without having asked for an
+    /// Enhanced Broadcasting config (held or fresh) since the hold opened:
     /// Enhanced Broadcasting is off now, and that multitrack session can't
     /// take a single-track stream, so the destination starts a fresh one.
     fn forget_unclaimed_eb_session(&self) {
-        if self.eb_session_reclaimed.load(Ordering::Relaxed) {
+        if self.eb_session_claimed.load(Ordering::Relaxed) {
             return;
         }
         let Some(session) = self.eb_session.lock().take() else {
@@ -2043,7 +2047,7 @@ impl Controller {
             });
         }
         self.hold_open.store(true, Ordering::Relaxed);
-        self.eb_session_reclaimed.store(false, Ordering::Relaxed);
+        self.eb_session_claimed.store(false, Ordering::Relaxed);
         if reason == crate::crash_hold::HoldReason::Freeze {
             self.ingest_frozen.store(true, Ordering::Relaxed);
         }
@@ -5263,6 +5267,32 @@ mod tests {
             h.ctrl.begin_publish("token", "127.0.0.1").await.unwrap();
             assert_eq!(live.eb_override_url.lock().is_some(), reclaims);
         }
+    }
+
+    /// OBS drops with no Twitch session to keep, then asks for a fresh
+    /// Enhanced Broadcasting session before publishing again: that new
+    /// session is the one it streams to, so it must survive the resume
+    /// (dropping it sent HEVC multitrack to live.twitch.tv, which refused).
+    #[tokio::test]
+    async fn a_fresh_eb_session_asked_for_during_a_hold_survives_the_resume() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.on_tag(9, 0, &[0x17, 0, 0, 0, 0, 1], false, true);
+        h.ctrl.mark_ingest_dead();
+        assert!(h.ctrl.hold_active());
+        assert_eq!(h.ctrl.held_eb_config(), None, "nothing kept to hand back");
+
+        let live = h.ctrl.destination_state("live");
+        let ivs = "rtmps://ivs/app/fresh";
+        *live.eb_override_url.lock() = Some(ivs.into());
+        h.ctrl.remember_eb_session(EbSession {
+            config: "{config}".into(),
+            auths: vec!["token".into()],
+            dest_id: "live".into(),
+            ivs_url: ivs.into(),
+        });
+        h.ctrl.begin_publish("token", "127.0.0.1").await.unwrap();
+        assert_eq!(live.eb_override_url.lock().as_deref(), Some(ivs));
     }
 
     #[tokio::test]

@@ -105,6 +105,11 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
 
 ### Fixes
 
+- **Twitch no longer loops on "connection aborted" after OBS reconnects
+  during crash protection.** When OBS dropped with no Enhanced Broadcasting
+  session to keep and then started a fresh one, the reconnect threw that new
+  session away as stale. Twitch then got the multi-track stream on its plain
+  ingest and refused it on every retry.
 - **Ending a stream now reaches the platform as a clean stop.** InstantClone
   sent the platform its goodbye and closed the connection straight away,
   and the closing could throw that goodbye away before the platform read
