@@ -105,6 +105,30 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
 
 ### Fixes
 
+- **Crash protection keeps a new Twitch session when the hold ends first.**
+  If OBS came back and asked for a fresh Enhanced Broadcasting session just
+  as the hold ran out (or you pressed End now), the session was thrown away
+  and Twitch restarted without it.
+- **An OBS that reconnects but never sends a picture** no longer keeps the
+  reconnect screen up forever: after 10 seconds it counts as a freeze and
+  gets the normal time limit.
+- **No backwards timestamps when the reconnect screen starts.** Its first
+  frames are stamped after the newest audio or video already sent, not the
+  last one, which can be a few milliseconds older.
+- **A second Twitch account on a 2K channel** gets an H.264 main track like
+  Kick does, since it streams outside the Enhanced Broadcasting session.
+- **The vertical track survives a stray config request** made with the wrong
+  InstantClone key, and the header's Vertical pill now also recognises an
+  HEVC vertical canvas.
+- **Arcade style draws accents and curly quotes.** "¡Volvé!" and "We’ll" show
+  as VOLVE and WE'LL instead of dropping the letters.
+- **Dashboard:** unsaved System edits survive saving a destination or the
+  password; saving a destination no longer replays the tab's animation;
+  arrow-key style changes show the save bar; Space on a focused button or
+  inside a dialog no longer arms or stops the delay; a log source filter
+  that empties resets to all sources; End now reports failures in the
+  dashboard and the dock; the panel refits when the crash-protection banner
+  appears.
 - **Twitch no longer loops on "connection aborted" after OBS reconnects
   during crash protection.** When OBS dropped with no Enhanced Broadcasting
   session to keep and then started a fresh one, the reconnect threw that new

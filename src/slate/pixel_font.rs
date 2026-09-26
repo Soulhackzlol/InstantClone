@@ -1,7 +1,8 @@
 //! 5x7 pixel font for the Arcade theme. Each glyph is seven rows, top to
 //! bottom, with the five pixels of a row in the low bits (bit 4 is the
 //! leftmost column). Letters are uppercase only; `to_pixel_text` folds
-//! lowercase and turns anything unsupported into a space.
+//! lowercase, accents and curly punctuation, and turns anything else it
+//! can't draw into a space.
 
 pub const GLYPH_COLUMNS: usize = 5;
 pub const GLYPH_ROWS: usize = 7;
@@ -66,13 +67,36 @@ pub fn glyph(c: char) -> Option<&'static [u8; GLYPH_ROWS]> {
         .map(|(_, rows)| rows)
 }
 
-/// Uppercase `text` and replace characters the font lacks with spaces,
-/// so layout can count columns without looking glyphs up twice.
+/// Uppercase `text`, fold what the font can stand in for, and replace
+/// the rest with spaces, so layout can count columns without looking
+/// glyphs up twice.
 pub fn to_pixel_text(text: &str) -> Vec<char> {
     text.chars()
         .flat_map(char::to_uppercase)
+        .map(fold)
         .map(|c| if glyph(c).is_some() { c } else { ' ' })
         .collect()
+}
+
+/// The glyph drawn for a typographic or accented character: a phone
+/// keyboard's curly apostrophe, dashes, Spanish and French accents.
+fn fold(c: char) -> char {
+    match c {
+        '\u{2018}' | '\u{2019}' | '\u{201C}' | '\u{201D}' | '"' => '\'',
+        '\u{2013}' | '\u{2014}' => '-',
+        '\u{2026}' => '.',
+        '\u{A1}' => '!',
+        '\u{BF}' => '?',
+        '\u{C0}'..='\u{C5}' => 'A',
+        '\u{C7}' => 'C',
+        '\u{C8}'..='\u{CB}' => 'E',
+        '\u{CC}'..='\u{CF}' => 'I',
+        '\u{D1}' => 'N',
+        '\u{D2}'..='\u{D6}' => 'O',
+        '\u{D9}'..='\u{DC}' => 'U',
+        '\u{DD}' => 'Y',
+        other => other,
+    }
 }
 
 /// Whether column `column` (0 = left) of `row` is lit.
@@ -86,7 +110,14 @@ mod tests {
 
     #[test]
     fn lowercase_folds_and_unknown_becomes_space() {
-        assert_eq!(to_pixel_text("Hi é!"), vec!['H', 'I', ' ', ' ', '!']);
+        assert_eq!(to_pixel_text("Hi #!"), vec!['H', 'I', ' ', ' ', '!']);
+    }
+
+    #[test]
+    fn accents_and_curly_punctuation_fold_to_drawable_glyphs() {
+        let folded = |text: &str| to_pixel_text(text).into_iter().collect::<String>();
+        assert_eq!(folded("\u{A1}Volv\u{E9}!"), "!VOLVE!");
+        assert_eq!(folded("We\u{2019}ll \u{2014} ok"), "WE'LL - OK");
     }
 
     #[test]

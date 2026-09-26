@@ -838,8 +838,13 @@ async fn route(
         // fails. GET is supported as an escape hatch for poking the
         // static fallback from a browser address bar.
         ("POST", "/obs/multitrack-config") => {
+            let authorized = eb_request_authorized(body, &settings.borrow().ingest_key);
             let config = obs_multitrack_config_proxy(body, query, ctrl, settings).await;
-            ctrl.note_eb_config(&config);
+            // A refused request gets the static config and its publish is
+            // turned away: it must not replace the live session's tracks.
+            if authorized {
+                ctrl.note_eb_config(&config);
+            }
             ("200 OK", "application/json", config)
         }
         ("GET", "/obs/multitrack-config") => (
@@ -1401,9 +1406,7 @@ fn state_json(
 
     // A portrait canvas is on the wire right now (OBS's Additional canvas,
     // or Twitch Dual Format). Drives the header "Vertical" pill.
-    let vertical_present = ctrl.ingest_alive()
-        && crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock())
-            .is_some();
+    let vertical_present = ctrl.ingest_alive() && ctrl.vertical_track_on_wire().is_some();
 
     format!(
         r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
@@ -1685,7 +1688,7 @@ async fn obs_multitrack_config_proxy(
     // enabled only H.264 is offered. Twitch keeps the vertical track's codec
     // whatever this list says, and refuses a session whose tracks don't
     // match its config, so the vertical track is forwarded as it comes.
-    let needs_h264 = feeds_main_track_beyond_twitch(&settings.borrow().destinations);
+    let needs_h264 = feeds_main_track_beyond_twitch(&settings.borrow().destinations, &twitch_key);
     let modified_body = match offer_only_h264(&modified_body) {
         Some(h264_only) if needs_h264 && h264_only != modified_body => {
             ctrl.log(
@@ -2098,13 +2101,15 @@ fn replace_auth_field(json: &str, new_value: &str) -> Option<String> {
     ))
 }
 
-/// Whether an enabled horizontal destination besides Twitch gets the main
-/// EB track. Kick and most ingests only decode H.264; the local test sink
-/// takes anything.
-fn feeds_main_track_beyond_twitch(destinations: &[config::Destination]) -> bool {
-    destinations
-        .iter()
-        .any(|d| d.enabled && d.platform != "twitch" && d.platform != "sink" && !d.wants_vertical())
+/// Whether an enabled horizontal destination other than the Twitch one
+/// holding the EB session (`session_key`) gets the main EB track. Kick and
+/// most ingests only decode H.264, and so does a second Twitch account,
+/// which streams outside any EB session. The local test sink takes anything.
+fn feeds_main_track_beyond_twitch(destinations: &[config::Destination], session_key: &str) -> bool {
+    destinations.iter().any(|d| {
+        let holds_session = d.platform == "twitch" && d.stream_key == session_key;
+        d.enabled && !holds_session && d.platform != "sink" && !d.wants_vertical()
+    })
 }
 
 /// OBS's config request with `client.supported_codecs` narrowed to
@@ -5563,13 +5568,27 @@ mod tests {
         let kick = dest("kick", true, "horizontal");
         let kick_off = dest("kick", false, "horizontal");
         let tiktok = dest("restream", true, "vertical");
-        assert!(!feeds_main_track_beyond_twitch(&[
-            twitch.clone(),
-            test_sink
-        ]));
-        assert!(!feeds_main_track_beyond_twitch(&[twitch.clone(), kick_off]));
-        assert!(!feeds_main_track_beyond_twitch(&[twitch.clone(), tiktok]));
-        assert!(feeds_main_track_beyond_twitch(&[twitch, kick]));
+        let second_twitch = config::Destination {
+            stream_key: "other-account".into(),
+            ..twitch.clone()
+        };
+        assert!(!feeds_main_track_beyond_twitch(
+            &[twitch.clone(), test_sink],
+            "k"
+        ));
+        assert!(!feeds_main_track_beyond_twitch(
+            &[twitch.clone(), kick_off],
+            "k"
+        ));
+        assert!(!feeds_main_track_beyond_twitch(
+            &[twitch.clone(), tiktok],
+            "k"
+        ));
+        assert!(feeds_main_track_beyond_twitch(
+            &[twitch.clone(), second_twitch],
+            "k"
+        ));
+        assert!(feeds_main_track_beyond_twitch(&[twitch, kick], "k"));
     }
 
     #[test]

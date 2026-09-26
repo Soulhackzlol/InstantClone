@@ -5055,7 +5055,10 @@ function jumpToBufferSetting(mb){
 }
 
 // - Config / Settings ------------------------─
-async function loadConfig(){
+let dashboardShown = false;
+// `resetSystem`: overwrite the System form even with unsaved edits (after a
+// System save, or Discard). Any other reload leaves those edits alone.
+async function loadConfig({resetSystem = false} = {}){
   try {
     const c = await (await fetch('/config')).json();
     lastConfig = c;
@@ -5071,30 +5074,32 @@ async function loadConfig(){
     $('w-platform').value = first.platform; $('w-platform').dispatchEvent(new Event('change'));
     $('w-custom').value = first.custom_egress_url || '';
     // system fields
-    $('s-iport').value = c.ingest_port; $('s-wport').value = c.web_port;
-    $('s-bmb').value = c.buffer_mb; $('s-bpath').value = c.buffer_path;
-    renderBufferHint();
-    $('s-ibind').checked = c.ingest_bind_all; $('s-wbind').checked = c.web_bind_all;
-    renderLanWarning();
-    $('s-webhook').value = '';
     $('s-webhook').placeholder = c.webhook_set ? '(set - paste a new one to replace)' : 'https://discord.com/api/webhooks/…';
     $('s-webhook-hint').textContent = c.webhook_set ? '(currently set)' : '';
-    $('s-ovdir').value = c.overlays_dir || '';
     $('ov-dir-display').textContent = c.overlays_dir || 'overlays/';
-    $('s-trace').checked = c.tracing_enabled !== false;
-    // Reflects the actual Run-key entry, not a stored preference - so if
-    // the user removed it via Task Manager's Startup tab, this shows off.
-    $('s-startup').checked = !!c.start_with_windows;
     applyPlatformCopy(c.os);
-    // Both default true server-side; treat a missing field as on.
-    $('s-open-dash').checked = c.open_dashboard_on_launch !== false;
-    $('s-update-check').checked = c.update_check_enabled !== false;
-    // Behavior section
-    $('s-auto-arm').checked = !!c.auto_arm_on_connect;
-    $('s-auto-act').checked = !!c.auto_activate_when_ready;
-    $('s-auto-arm-secs').value = Math.round((c.auto_arm_delay_ms || 15000) / 1000);
-    cpApplyConfig(c.crash_protection);
-    settingsMarkClean();
+    if (resetSystem || !settingsDirty()){
+      $('s-iport').value = c.ingest_port; $('s-wport').value = c.web_port;
+      $('s-bmb').value = c.buffer_mb; $('s-bpath').value = c.buffer_path;
+      renderBufferHint();
+      $('s-ibind').checked = c.ingest_bind_all; $('s-wbind').checked = c.web_bind_all;
+      renderLanWarning();
+      $('s-webhook').value = '';
+      $('s-ovdir').value = c.overlays_dir || '';
+      $('s-trace').checked = c.tracing_enabled !== false;
+      // Reflects the actual Run-key entry, not a stored preference - so if
+      // the user removed it via Task Manager's Startup tab, this shows off.
+      $('s-startup').checked = !!c.start_with_windows;
+      // Both default true server-side; treat a missing field as on.
+      $('s-open-dash').checked = c.open_dashboard_on_launch !== false;
+      $('s-update-check').checked = c.update_check_enabled !== false;
+      // Behavior section
+      $('s-auto-arm').checked = !!c.auto_arm_on_connect;
+      $('s-auto-act').checked = !!c.auto_activate_when_ready;
+      $('s-auto-arm-secs').value = Math.round((c.auto_arm_delay_ms || 15000) / 1000);
+      cpApplyConfig(c.crash_protection);
+      settingsMarkClean();
+    }
     // Global hotkeys: Windows-only, so the whole section stays hidden
     // elsewhere. A pending recording is cancelled before a re-render so
     // stale listeners never outlive the DOM they were bound to.
@@ -5159,9 +5164,13 @@ async function loadConfig(){
     if (configured){
       // initial render of dest-add empty state at least
       loadDestinations(); loadProfiles(); loadOverlays();
-      // ensure a tab is shown
-      const cur = document.querySelector('.tab.on') || document.querySelector('.tab[data-tab="destinations"]');
-      if (cur) showTab(cur.dataset.tab);
+      // Show a tab the first time the dashboard appears. Later reloads keep
+      // the view as it is rather than replaying its entrance.
+      if (!dashboardShown){
+        dashboardShown = true;
+        const cur = document.querySelector('.tab.on') || document.querySelector('.tab[data-tab="destinations"]');
+        if (cur) showTab(cur.dataset.tab);
+      }
       setTimeout(moveTabInd, 50);
       // First-run tour: fires on the first loadConfig() that sees
       // configured=true, which is the right moment for both fresh users
@@ -6037,12 +6046,13 @@ async function saveSettings(){
       toast('Settings saved','ok');
       if (j.restart_required || +$('s-bmb').value !== initialBufferMb || $('s-bpath').value !== initialBufferPath){
         $('restart-banner').classList.remove('hidden');
+        fitPaneCard();
       }
-      loadConfig();
-    } else { flashFieldErrors(j.error); toast(`Couldn't save settings: ${j.error}`, 'err'); $('s-msg').innerHTML = '<span class="err">'+j.error+'</span>'; }
+      loadConfig({resetSystem: true});
+    } else { flashFieldErrors(j.error); toast(`Couldn't save settings: ${j.error}`, 'err'); showSettingsError(j.error); }
   } catch(e){
     toast('Couldn\'t save settings - the app may have stopped responding','err');
-    $('s-msg').innerHTML = '<span class="err">Request failed: '+e+'</span>';
+    showSettingsError('Request failed: ' + e);
   } finally {
     _savingSettings = false;
     if (btn){ btn.disabled = false; btn.textContent = 'Save settings'; }
@@ -6124,6 +6134,7 @@ function cpBuildThemes(){
     const index = cpThemes.findIndex(t => t.id === cpState.theme);
     cpState.theme = cpThemes[(index + step + cpThemes.length) % cpThemes.length].id;
     cpRender();
+    updateSaveBar();
     box.querySelector('[data-cp-theme="' + cpState.theme + '"]').focus();
   };
 }
@@ -8154,6 +8165,10 @@ function applyLogFilters(){
     if (row.dataset.level in counts) counts[row.dataset.level]++;
     seen.add(row.dataset.source);
   }
+  if (logView.source && !seen.has(logView.source)){
+    logView.source = '';
+    return applyLogFilters();
+  }
   $('logs-nomatch').hidden = shown > 0 || !logView.lines.length;
   $('logs-n-problems').textContent = counts.err + counts.warn || '';
   $('logs-n-err').textContent = counts.err || '';
@@ -8685,7 +8700,14 @@ function updateSaveBar(){
   foot.hidden = !settingsDirty() && !$('s-msg').textContent;
 }
 // Throw the edits away: reload what the app has saved.
-function discardSettings(){ $('s-msg').textContent = ''; flashFieldErrors(null); loadConfig(); }
+function discardSettings(){ $('s-msg').textContent = ''; flashFieldErrors(null); loadConfig({resetSystem: true}); }
+// 6. The server's error can echo user text (a destination name): text only.
+function showSettingsError(text){
+  const span = document.createElement('span');
+  span.className = 'err';
+  span.textContent = text;
+  $('s-msg').replaceChildren(span);
+}
 (() => {
   const pane = document.querySelector('.tab-pane[data-pane="system"]');
   let queued = false;
@@ -9168,7 +9190,10 @@ function renderHoldBanner(s){
   const banner = $('hold-banner');
   if (!banner) return;
   const hold = s.hold;
-  banner.hidden = !hold;
+  if (banner.hidden !== !hold){
+    banner.hidden = !hold;
+    fitPaneCard();
+  }
   if (!hold) return;
   $('hold-title').textContent = hold.reason === 'freeze'
     ? 'OBS stopped sending video. Keeping your destinations live.'
@@ -9194,7 +9219,9 @@ async function endHold(btn){
   btn._armed = false;
   btn.textContent = 'End now';
   try {
-    applyState(await (await fetch('/crash-protection/end', {method:'POST'})).json());
+    const r = await fetch('/crash-protection/end', {method:'POST'});
+    if (!r.ok){ toast('Could not end the stream', 'err'); return; }
+    applyState(await r.json());
     toast('Stream ended on every destination', 'ok');
   } catch(_){ toast('Could not reach InstantClone', 'err'); }
 }
@@ -9343,9 +9370,15 @@ function openUpdateInAbout(){
   startStateSSE();
   setInterval(pollLogs, 1500);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pollLogs(); });
+  // Space drives the delay only from the bare page: a focused control
+  // (button, switch, select, style card) or an open dialog keeps it, and
+  // holding the key down doesn't repeat the action.
   document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-    if (e.key === ' '){ e.preventDefault(); ctaClick({currentTarget: $('cp-cta')}); }
+    if (e.key !== ' ' || e.repeat) return;
+    if (e.target.closest('input,textarea,select,button,a,[role],[tabindex],[contenteditable]')) return;
+    if (document.querySelector('.ic-modal:not([hidden]),#ov-studio:not([hidden]),#tour:not([hidden])')) return;
+    e.preventDefault();
+    ctaClick({currentTarget: $('cp-cta')});
   });
   // First-run tour autostart lives inside loadConfig() (see the
   // `if (configured)` branch). That hook fires both on the

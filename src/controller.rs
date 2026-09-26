@@ -110,6 +110,9 @@ impl ActivateError {
 /// because a 24/7 relay logs for months: the oldest line is dropped rather
 /// than letting the buffer track uptime.
 const LOG_LINES_MAX: usize = 1_500;
+/// How long OBS gets to send its first video frame after coming back from
+/// a crash-protection hold before a missing picture counts as a freeze.
+const FIRST_VIDEO_GRACE: Duration = Duration::from_secs(10);
 
 pub const NO_INGEST: &str = "OBS isn't sending anything yet - start streaming first";
 
@@ -557,6 +560,9 @@ pub struct Controller {
     /// OBS asked for that config again during the open hold (it is coming
     /// back with Enhanced Broadcasting). Cleared when a hold opens.
     eb_session_claimed: AtomicBool,
+    /// That config opened a new Twitch session during the open hold, one no
+    /// destination has streamed on yet. Cleared when a hold opens.
+    eb_session_fresh: AtomicBool,
 
     // --- Per-destination state, keyed by Destination.id -----------------
     // RwLock not Mutex: every `on_tag` (~150-300/s per active stream)
@@ -773,6 +779,7 @@ impl Controller {
             held_keyframes: crate::sync::Mutex::new(std::collections::BTreeMap::new()),
             eb_session: crate::sync::Mutex::new(None),
             eb_session_claimed: AtomicBool::new(false),
+            eb_session_fresh: AtomicBool::new(false),
             webhook_last_fire_ms: AtomicU64::new(0),
             publish_lock: Mutex::new(()),
             video_codec: AtomicU8::new(0),
@@ -857,6 +864,16 @@ impl Controller {
     /// The vertical track of the last config handed to OBS.
     pub fn eb_vertical_track(&self) -> Option<u8> {
         Some(self.eb_vertical_track.load(Ordering::Relaxed)).filter(|&t| t != NO_TRACK)
+    }
+    /// The portrait (9:16) track OBS is sending now. Only H.264 headers can
+    /// be measured; for any other codec, the vertical track the Enhanced
+    /// Broadcasting config named counts once OBS is actually sending it.
+    pub fn vertical_track_on_wire(&self) -> Option<u8> {
+        let headers = self.ring.video_seq_headers.lock();
+        crate::h264::detect_vertical_primary_track(&headers).or_else(|| {
+            self.eb_vertical_track()
+                .filter(|track| headers.contains_key(track))
+        })
     }
     pub fn audio_codec(&self) -> AudioCodec {
         dec_acodec(self.audio_codec.load(Ordering::Relaxed))
@@ -1646,13 +1663,25 @@ impl Controller {
         // ended while ingest still reads as dead, so the sessions it kept
         // are forgotten rather than carried into this stream.
         self.expire_hold();
-        if self.hold_active() {
+        let resuming = self.hold_active();
+        if resuming {
             self.forget_unclaimed_eb_session();
         }
         // Bump token so any prior egress reader knows it's stale.
         let token = self.publisher_token.fetch_add(1, Ordering::SeqCst) + 1;
         self.ingest_alive.store(true, Ordering::Relaxed);
         self.resume_from_hold();
+        if resuming {
+            // Freeze detection only starts at a session's first video
+            // frame, so an OBS that reconnects and never sends any would
+            // keep the screen up with no deadline. Start its clock now,
+            // with room for a slow encoder start before it counts.
+            let grace = FIRST_VIDEO_GRACE.saturating_sub(crate::crash_hold::FREEZE_AFTER);
+            self.last_video_tag_ms.store(
+                process_now_ms() + grace.as_millis() as u64,
+                Ordering::Relaxed,
+            );
+        }
         self.log("ingest: publisher connected");
         self.fire_webhook("✅", "OBS publisher connected - going live.");
         Ok(token)
@@ -1896,6 +1925,7 @@ impl Controller {
         // even when a hold is open (one that had no session to hand back):
         // OBS publishing next must continue it, not drop it as stale.
         self.eb_session_claimed.store(true, Ordering::Relaxed);
+        self.eb_session_fresh.store(true, Ordering::Relaxed);
     }
 
     /// The config to hand OBS again when it asks during a hold that is
@@ -2048,6 +2078,7 @@ impl Controller {
         }
         self.hold_open.store(true, Ordering::Relaxed);
         self.eb_session_claimed.store(false, Ordering::Relaxed);
+        self.eb_session_fresh.store(false, Ordering::Relaxed);
         if reason == crate::crash_hold::HoldReason::Freeze {
             self.ingest_frozen.store(true, Ordering::Relaxed);
         }
@@ -2071,9 +2102,12 @@ impl Controller {
         self.hold_open.store(false, Ordering::Relaxed);
         self.last_hold_end.store(end, Ordering::Relaxed);
         // OBS never came back: forget the sessions the hold kept for it
-        // (see `mark_ingest_dead`). A frozen OBS is still connected, so its
-        // session is still the current one.
-        if end == HOLD_END_ENDED && !self.ingest_alive() {
+        // (see `mark_ingest_dead`); ending the hold ended them on Twitch. A
+        // frozen OBS is still connected, so its session is still the
+        // current one, and a new session OBS asked for during the hold is
+        // the one it is about to publish on.
+        let obs_opened_new_session = self.eb_session_fresh.load(Ordering::Relaxed);
+        if end == HOLD_END_ENDED && !self.ingest_alive() && !obs_opened_new_session {
             for (_id, state) in self.all_destination_states() {
                 state.invalidate_session_override();
             }
@@ -2974,7 +3008,8 @@ struct EgressState {
     output_ts_base: u32, // output ts assigned to the most recent cut target (RTMP wire is u32)
     wall_anchor: Instant, // wall clock at the most recent cut
     wall_anchor_input_ts: u64, // input ts that pairs with wall_anchor
-    last_sent_input_ts: u64, // input ts of the last tag we actually emitted -
+    last_sent_input_ts: u64, // highest input ts we actually emitted (audio and
+    // video interleave a few ms out of order) -
     // required so apply_cut can re-anchor the
     // output timeline *after* the last sent frame
     // (instead of after the last cut, which would
@@ -3218,7 +3253,7 @@ async fn pace_and_send(
                 .fetch_add(bytes_out.len() as u64, Ordering::Relaxed);
             dest.note_outbound_bytes(bytes_out.len());
             state.consumer_seq = meta.seq + 1;
-            state.last_sent_input_ts = meta.ts_ms;
+            state.last_sent_input_ts = state.last_sent_input_ts.max(meta.ts_ms);
             dest.consumer_seq
                 .store(state.consumer_seq, Ordering::Relaxed);
             return Ok(());
@@ -3230,7 +3265,7 @@ async fn pace_and_send(
         .fetch_add(io_buf.len() as u64, Ordering::Relaxed);
     dest.note_outbound_bytes(io_buf.len());
     state.consumer_seq = meta.seq + 1;
-    state.last_sent_input_ts = meta.ts_ms;
+    state.last_sent_input_ts = state.last_sent_input_ts.max(meta.ts_ms);
     // Tell the ingest-side trimmer how far we've read. The trimmer takes
     // the MIN across all destinations, so a slow consumer protects all
     // others from over-aggressive eviction.
@@ -5293,6 +5328,45 @@ mod tests {
         });
         h.ctrl.begin_publish("token", "127.0.0.1").await.unwrap();
         assert_eq!(live.eb_override_url.lock().as_deref(), Some(ivs));
+    }
+
+    /// The hold runs out (or "End now") after OBS asked for its config but
+    /// before it publishes: the session it got is the one it streams on.
+    #[tokio::test]
+    async fn a_hold_ending_before_obs_publishes_keeps_the_session_it_asked_for() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.on_tag(9, 0, &[0x17, 0, 0, 0, 0, 1], false, true);
+        h.ctrl.mark_ingest_dead();
+        let live = h.ctrl.destination_state("live");
+        let ivs = "rtmps://ivs/app/fresh";
+        *live.eb_override_url.lock() = Some(ivs.into());
+        h.ctrl.remember_eb_session(EbSession {
+            config: "{config}".into(),
+            auths: vec!["token".into()],
+            dest_id: "live".into(),
+            ivs_url: ivs.into(),
+        });
+        assert!(h.ctrl.end_hold_now());
+        assert_eq!(live.eb_override_url.lock().as_deref(), Some(ivs));
+    }
+
+    /// OBS reconnects after a crash but never sends video: once the grace
+    /// runs out that counts as a freeze, so the screen gets a deadline.
+    #[tokio::test]
+    async fn a_returning_obs_that_sends_no_video_is_a_freeze() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.on_tag(9, 0, &[0x17, 0, 0, 0, 0, 1], false, true);
+        h.ctrl.mark_ingest_dead();
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        assert!(!h.ctrl.hold_active(), "resumed");
+        let now = process_now_ms();
+        let grace = FIRST_VIDEO_GRACE.as_millis() as u64;
+        h.ctrl.check_ingest_freeze_at(now + grace - 1_000);
+        assert!(!h.ctrl.hold_active(), "still within the grace");
+        h.ctrl.check_ingest_freeze_at(now + grace + 1_000);
+        assert!(h.ctrl.hold_active(), "no video after the grace is a freeze");
     }
 
     #[tokio::test]

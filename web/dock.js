@@ -266,8 +266,8 @@ async function endHold() {
     return;
   }
   clearTimeout(b._reset); b._armed = false; b.textContent = 'End now';
-  await fetchJ('/crash-protection/end', { method: 'POST' });
-  toast('Stream ended', 'ok');
+  const r = await fetchJ('/crash-protection/end', { method: 'POST' });
+  toast(r.ok ? 'Stream ended' : 'Could not end the stream', r.ok ? 'ok' : 'err');
   tick();
 }
 async function cutAfterCancel() {

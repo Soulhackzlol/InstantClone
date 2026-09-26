@@ -738,13 +738,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // "waiting" without a restart. Only H.264 headers can be measured;
         // for any other codec, the vertical track the Enhanced Broadcasting
         // config named counts once OBS is actually sending it.
-        let vertical_track = {
-            let headers = ctrl.ring.video_seq_headers.lock();
-            crate::h264::detect_vertical_primary_track(&headers).or_else(|| {
-                ctrl.eb_vertical_track()
-                    .filter(|track| headers.contains_key(track))
-            })
-        };
+        let vertical_track = ctrl.vertical_track_on_wire();
         vertical_wait.retain(|id| desired.iter().any(|(d, _)| d.id == id));
         for (dest, url) in &desired {
             // Keep each destination's vertical policy in sync with its

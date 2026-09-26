@@ -75,8 +75,8 @@ impl Canvas {
 
     /// Opaque rectangle, clipped to the canvas.
     pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: Rgb) {
-        let x0 = x.max(0) as usize;
-        let y0 = y.max(0) as usize;
+        let x0 = (x.max(0) as usize).min(self.width);
+        let y0 = (y.max(0) as usize).min(self.height);
         let x1 = (x.saturating_add(w)).clamp(0, self.width as i32) as usize;
         let y1 = (y.saturating_add(h)).clamp(0, self.height as i32) as usize;
         for row in y0..y1 {
