@@ -605,11 +605,18 @@ mod tests {
             "a mapped MIDI note must arm the delay at the default"
         );
 
-        // A note that is NOT mapped must do nothing.
+        // A note that is NOT mapped must do nothing. Every dispatched
+        // action stamps `last_action` with a fresh seq, even one that
+        // changes no state, so an unchanged seq proves nothing fired.
+        let seq_before = ctrl.last_action().map(|a| a.seq);
+        assert!(seq_before.is_some(), "the mapped note must have stamped");
         let other = signature_for(0x90, 40, 100).expect("a press edge");
-        ctrl.stop_delay();
         state.on_signature(&ctrl, 15_000, &other);
-        // (arm stays as-is; the unmapped note fired no action.)
+        assert_eq!(
+            ctrl.last_action().map(|a| a.seq),
+            seq_before,
+            "an unmapped note must not fire any action"
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -846,23 +853,31 @@ mod tests {
     #[test]
     fn learn_captures_the_note_without_firing() {
         let (ctrl, path) = test_controller();
+        // A live publisher and a control already bound to "arm", so the
+        // press WOULD visibly arm the delay if learn mode let it through.
+        // Without both, "nothing fired" would hold even with learn broken.
+        ctrl.mark_ingest_alive_for_test();
         let state = MidiState::new();
+        let mut s = crate::config::Settings::defaults();
+        s.midi.set("arm", "cc:1:20");
+        state.update_from_settings(&s);
 
-        state.start_learn("toggle");
+        state.start_learn("arm");
         let sig = signature_for(0xB0, 20, 127).expect("cc press");
         state.on_signature(&ctrl, 15_000, &sig);
 
         assert_eq!(
             state.take_captured(),
-            Some(("toggle".to_string(), "cc:1:20".to_string())),
+            Some(("arm".to_string(), "cc:1:20".to_string())),
             "learn must capture the pressed control"
         );
         assert_eq!(state.learning(), None, "learn clears after one capture");
         assert_eq!(
-            ctrl.target_delay_ms(),
+            ctrl.armed_delay_ms(),
             0,
             "capturing must not also fire the action"
         );
+        assert!(ctrl.last_action().is_none(), "no action may be stamped");
 
         let _ = std::fs::remove_file(&path);
     }

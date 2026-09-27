@@ -385,39 +385,46 @@ impl DiskRing {
         }
     }
 
-    /// Return the most recent IDR (used to seed the egress state cleanly
-    /// without walking the entire index entry-by-entry).
-    pub fn newest_idr(&self) -> Option<TagMeta> {
+    /// The newest primary-track IDR stamped at or before `ts`, or None when
+    /// every IDR in the ring is newer. A delay lands here so viewers are
+    /// never closer to live than asked: the nearest IDR can be the newer one.
+    pub fn newest_idr_at_or_before(&self, ts: u64) -> Option<TagMeta> {
         let inner = self.inner.lock();
-        inner.index.iter().rev().find(|m| m.is_idr).copied()
+        let pos = inner.idr_index.partition_point(|m| m.ts_ms <= ts);
+        pos.checked_sub(1)
+            .and_then(|below| inner.idr_index.get(below).copied())
     }
 
-    /// Most recent IDR whose seq is strictly greater than `min_seq`.
-    /// Used after a publisher reconnect to skip stale IDRs from the
-    /// previous session that still happen to live in the ring.
+    /// Return the most recent primary-track IDR (used to seed the egress
+    /// state cleanly without walking the entire index entry-by-entry).
+    ///
+    /// This and the two lookups below read `idr_index`, not `index`: a
+    /// tag's `is_idr` is also true for an Enhanced Broadcasting rung's
+    /// keyframe, which OBS sends right after the primary's for the same
+    /// frame. Seeding on that one starts a horizontal destination one tag
+    /// past its own keyframe, on P-frames with no reference.
+    pub fn newest_idr(&self) -> Option<TagMeta> {
+        self.inner.lock().idr_index.back().copied()
+    }
+
+    /// Most recent primary IDR whose seq is strictly greater than
+    /// `min_seq`. Used after a publisher reconnect to skip stale IDRs from
+    /// the previous session that still happen to live in the ring.
     pub fn newest_idr_after(&self, min_seq: u64) -> Option<TagMeta> {
         let inner = self.inner.lock();
-        inner
-            .index
-            .iter()
-            .rev()
-            .find(|m| m.is_idr && m.seq > min_seq)
-            .copied()
+        inner.idr_index.back().filter(|m| m.seq > min_seq).copied()
     }
 
-    /// OLDEST IDR whose seq is >= `min_seq`. Used by the egress pump
-    /// after eviction skip-ahead - landing on a random P-frame would
+    /// OLDEST primary IDR whose seq is >= `min_seq`. Used by the egress
+    /// pump after eviction skip-ahead - landing on a random P-frame would
     /// stream P-frames that reference absent reference frames and the
     /// player would show macroblocking until the next IDR. Returning
     /// the *earliest* IDR at or after the skip target loses the least
     /// content while keeping the decode chain valid.
     pub fn oldest_idr_at_or_after(&self, min_seq: u64) -> Option<TagMeta> {
         let inner = self.inner.lock();
-        inner
-            .index
-            .iter()
-            .find(|m| m.is_idr && m.seq >= min_seq)
-            .copied()
+        let pos = inner.idr_index.partition_point(|m| m.seq < min_seq);
+        inner.idr_index.get(pos).copied()
     }
 
     /// Seq of the most recently appended tag, or None if the ring is empty.
@@ -684,41 +691,6 @@ mod tests {
     }
 
     #[test]
-    fn oversized_tag_is_rejected_silently() {
-        // Capacity 4096, tag of 3000 bytes (> cap/2) - must be dropped.
-        let t = tmp(4096);
-        let big = vec![0u8; 3000];
-        let r = t.0.append(9, 0, &big, false, false).unwrap();
-        assert!(r.is_none());
-        assert_eq!(t.0.front_seq(), None, "ring must remain empty");
-    }
-
-    #[test]
-    fn wrapping_write_evicts_oldest_and_reads_correctly() {
-        // Capacity 256. Write 6 × 80 = 480 bytes total - wraps the cursor
-        // twice. Oldest tags get evicted; we read the latest one back.
-        let t = tmp(256);
-        let mut last_seq = 0;
-        for i in 0..6 {
-            let payload = vec![(i + 1) as u8; 80];
-            last_seq =
-                t.0.append(9, i as u64, &payload, false, false)
-                    .unwrap()
-                    .unwrap();
-        }
-        // Front is no longer seq=0
-        let front = t.0.front_seq().unwrap();
-        assert!(front > 0, "oldest tags must have been evicted");
-
-        let mut buf = Vec::new();
-        assert!(t.0.try_read_seq(last_seq, &mut buf).unwrap().is_some());
-        assert_eq!(buf, vec![6u8; 80]);
-
-        // The evicted oldest seq must read as None (it's gone).
-        assert!(t.0.try_read_seq(0, &mut buf).unwrap().is_none());
-    }
-
-    #[test]
     fn find_idr_near_picks_closest() {
         let t = tmp(8192);
         // Three IDRs at ts 1000, 2000, 3000. v0.1.3 added a primary-
@@ -819,45 +791,6 @@ mod tests {
     }
 
     #[test]
-    fn tag_exactly_at_half_capacity_is_accepted() {
-        // The rejection threshold is `> cap/2`. A tag exactly at cap/2
-        // bytes must be accepted (boundary check, not off-by-one).
-        let t = tmp(2048);
-        let payload = vec![0u8; 1024]; // exactly cap/2
-        let r = t.0.append(9, 100, &payload, false, false).unwrap();
-        assert!(
-            r.is_some(),
-            "tag at cap/2 must be accepted, not the rejection branch"
-        );
-    }
-
-    #[test]
-    fn ring_survives_multiple_full_wraps() {
-        // Cap 512. Write 30 tags of 80 bytes = 2400 bytes total, ~4.7×
-        // the capacity. The ring must keep the most recent tag readable
-        // and the index must not corrupt itself across multiple wraps.
-        let t = tmp(512);
-        let mut last_seq = 0;
-        for i in 0..30u32 {
-            let payload = vec![i as u8; 80];
-            last_seq =
-                t.0.append(9, (i * 100) as u64, &payload, false, false)
-                    .unwrap()
-                    .unwrap();
-        }
-        let mut buf = Vec::new();
-        let r = t.0.try_read_seq(last_seq, &mut buf).unwrap();
-        assert!(r.is_some());
-        assert_eq!(
-            buf.first(),
-            Some(&29u8),
-            "latest tag's bytes must be intact"
-        );
-        // Front seq is well past 0 (many evictions happened)
-        assert!(t.0.front_seq().unwrap() > 20);
-    }
-
-    #[test]
     fn all_idr_queries_return_none_on_empty_ring() {
         // Every IDR-lookup variant must early-return None instead of
         // touching its (empty) underlying VecDeque. Collapsing into one
@@ -880,6 +813,62 @@ mod tests {
         assert_eq!(t.0.find_idr_near(1000, 0).unwrap().ts_ms, 1000);
     }
 
+    /// A Twitch Enhanced Broadcasting keyframe for a NON-primary ladder
+    /// rung: OneTrack multitrack, FrameType 1, TrackId `track`. Ingest
+    /// stores it with `is_idr = true` (classify_video_tag reads the outer
+    /// FrameType), but it is not a keyframe of the horizontal primary.
+    fn rung_idr_payload(track: u8) -> Vec<u8> {
+        let mut v = vec![0x96, 0x01, b'a', b'v', b'c', b'1', track];
+        v.resize(40, 0);
+        v
+    }
+
+    #[test]
+    fn idr_seeds_are_primary_track_keyframes_only() {
+        // With EB, OBS sends the primary's IDR and then each rung's IDR for
+        // the same frame. Seeding a Track(0) destination on a rung's IDR
+        // starts it one tag PAST its own keyframe, so it opens on primary
+        // P-frames with no reference: exactly the glitch the primary-only
+        // `idr_index` exists to prevent, reintroduced by the seed lookups
+        // that walked `index` for any `is_idr`.
+        let t = tmp(8192);
+        let p_frame = [0x27u8; 40];
+        let first =
+            t.0.append(9, 1000, &primary_idr_payload(40), true, false)
+                .unwrap()
+                .unwrap();
+        let rung =
+            t.0.append(9, 1000, &rung_idr_payload(1), true, false)
+                .unwrap()
+                .unwrap();
+        t.0.append(9, 1033, &p_frame, false, false).unwrap();
+        let second =
+            t.0.append(9, 2000, &primary_idr_payload(40), true, false)
+                .unwrap()
+                .unwrap();
+        t.0.append(9, 2000, &rung_idr_payload(2), true, false)
+            .unwrap();
+        t.0.append(9, 2033, &p_frame, false, false).unwrap();
+
+        assert_eq!(t.0.newest_idr().map(|m| m.seq), Some(second));
+        assert_eq!(t.0.newest_idr_after(first).map(|m| m.seq), Some(second));
+        assert!(
+            t.0.newest_idr_after(second).is_none(),
+            "only rung IDRs follow"
+        );
+        assert_eq!(
+            t.0.oldest_idr_at_or_after(rung).map(|m| m.seq),
+            Some(second)
+        );
+        assert_eq!(
+            t.0.oldest_idr_at_or_after(first).map(|m| m.seq),
+            Some(first)
+        );
+        // The rung's own flag is kept: the vertical-canvas pump reads
+        // `meta.is_idr` to find its own canvas's first keyframe.
+        assert!(t.0.find_by_seq(rung).unwrap().1.is_idr);
+    }
+
     #[test]
     fn newest_idr_after_skips_stale_publisher_idrs() {
         // Models the publisher-reconnect case: there are old IDRs in the
@@ -897,16 +886,58 @@ mod tests {
 #[cfg(test)]
 mod edge_tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
-    fn ring(capacity: u64) -> (DiskRing, std::path::PathBuf) {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("ic-edge-ring-{nanos}-{capacity}.buf"));
+    static UNIQ: AtomicU32 = AtomicU32::new(0);
+
+    /// A ring in its own temp file, deleted on drop - including when an
+    /// assertion fails mid-test. The name is process id plus a counter, so
+    /// tests running in parallel (or two `cargo test` runs) never share a
+    /// file the way a wall-clock name could.
+    struct Ring(DiskRing, std::path::PathBuf);
+
+    impl Drop for Ring {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.1);
+        }
+    }
+
+    impl std::ops::Deref for Ring {
+        type Target = DiskRing;
+        fn deref(&self) -> &DiskRing {
+            &self.0
+        }
+    }
+
+    fn ring(capacity: u64) -> Ring {
+        let n = UNIQ.fetch_add(1, Ordering::SeqCst);
+        let path =
+            std::env::temp_dir().join(format!("ic-edge-ring-{}-{}.buf", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
-        let r = DiskRing::create(&path, capacity).expect("ring create");
-        (r, path)
+        Ring(
+            DiskRing::create(&path, capacity).expect("ring create"),
+            path,
+        )
+    }
+
+    /// Legacy AVC keyframe shape, so it passes the primary-IDR gate.
+    fn idr(len: usize) -> Vec<u8> {
+        let mut v = vec![0x17];
+        v.resize(len, 0);
+        v
+    }
+
+    /// Payload whose every byte depends on both the tag and the position,
+    /// so a read that mixes two tags or rotates the split cannot pass.
+    fn distinct(tag: u64, len: usize) -> Vec<u8> {
+        (0..len).map(|j| (tag * 7 + j as u64 * 13) as u8).collect()
+    }
+
+    fn read(r: &DiskRing, seq: u64) -> Option<Vec<u8>> {
+        let mut buf = Vec::new();
+        r.try_read_seq(seq, &mut buf)
+            .expect("no io error")
+            .map(|()| buf)
     }
 
     /// A tag too big for the ring to hold half of can never be stored
@@ -914,7 +945,7 @@ mod edge_tests {
     /// the index. The ring has to stay usable afterwards.
     #[test]
     fn an_oversized_tag_is_refused_and_leaves_the_ring_usable() {
-        let (r, path) = ring(64 * 1024);
+        let r = ring(64 * 1024);
         let half = 32 * 1024;
 
         assert_eq!(
@@ -931,31 +962,23 @@ mod edge_tests {
             .expect("no io error")
             .is_some());
         assert_eq!(r.latest_ts(), Some(2_000));
-
-        let _ = std::fs::remove_file(&path);
     }
 
     /// An empty payload is a degenerate tag, not a reason to panic or to
     /// desynchronise the write cursor from the index.
     #[test]
     fn an_empty_payload_does_not_break_the_cursor() {
-        let (r, path) = ring(64 * 1024);
+        let r = ring(64 * 1024);
         r.append(9, 1_000, &[], false, false).expect("no io error");
         r.append(9, 2_000, &[0x27; 100], false, false)
             .expect("no io error");
         assert_eq!(r.latest_ts(), Some(2_000));
-        let mut buf = Vec::new();
         let seq = r.latest_seq().expect("a populated ring");
-        assert!(r
-            .try_read_seq(seq, &mut buf)
-            .expect("no io error")
-            .is_some());
         assert_eq!(
-            buf.len(),
-            100,
+            read(&r, seq).map(|b| b.len()),
+            Some(100),
             "the tag after an empty one reads back whole"
         );
-        let _ = std::fs::remove_file(&path);
     }
 
     /// Trim takes a cutoff derived from the newest timestamp. When every tag
@@ -963,7 +986,7 @@ mod edge_tests {
     /// clock jump from emptying the buffer.
     #[test]
     fn trim_keeps_everything_newer_than_its_cutoff() {
-        let (r, path) = ring(64 * 1024);
+        let r = ring(64 * 1024);
         for i in 1..=10u64 {
             r.append(9, i * 100, &[0x27; 64], false, false)
                 .expect("no io error");
@@ -975,31 +998,126 @@ mod edge_tests {
         // future timestamp used to trigger.
         r.trim_older_than(0, 1_000_000, u64::MAX);
         assert_eq!(r.oldest_ts(), None);
-        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The one tag whose bytes are split across the end of the file: the
+    /// write and the read each take two syscalls, and both halves have to
+    /// land in the right order at the right offsets.
+    #[test]
+    fn a_tag_straddling_the_end_of_the_file_reads_back_exactly() {
+        let r = ring(256);
+        for tag in 0..4u64 {
+            r.append(9, tag * 10, &distinct(tag, 80), false, false)
+                .expect("no io error");
+        }
+        // Offsets 0, 80, 160, then 240..256 + 0..64, which overwrote tag 0.
+        assert_eq!(read(&r, 0), None, "tag 0's bytes were overwritten");
+        for tag in 1..4u64 {
+            assert_eq!(read(&r, tag), Some(distinct(tag, 80)), "tag {tag}");
+        }
     }
 
     /// Writes wrap the file. The index has to keep pointing at bytes that
-    /// still belong to the tag it names, across a full lap of the ring.
+    /// still belong to the tag it names, across several laps of the ring.
+    /// 300-byte tags do not divide the capacity, so the split point moves
+    /// on every lap, and every live tag is checked after every append.
     #[test]
-    fn tags_read_back_correctly_after_the_ring_laps() {
-        let (r, path) = ring(16 * 1024);
-        let mut last_seq = 0;
-        for i in 1..=200u64 {
-            let payload = vec![(i % 251) as u8; 300];
-            if let Some(seq) = r.append(9, i * 10, &payload, false, false).expect("no io") {
-                last_seq = seq;
+    fn every_live_tag_reads_back_exactly_across_several_laps() {
+        let r = ring(16 * 1024);
+        for tag in 0..120u64 {
+            let seq = r
+                .append(9, tag * 10, &distinct(tag, 300), false, false)
+                .expect("no io error")
+                .expect("fits");
+            assert_eq!(seq, tag);
+            let front = r.front_seq().expect("a populated ring");
+            assert!(
+                (seq + 1 - front) * 300 <= 16 * 1024,
+                "live tags fit the file"
+            );
+            for live in front..=seq {
+                assert_eq!(read(&r, live), Some(distinct(live, 300)), "tag {live}");
             }
         }
-        let mut buf = Vec::new();
-        assert!(r
-            .try_read_seq(last_seq, &mut buf)
-            .expect("no io error")
-            .is_some());
-        assert_eq!(buf.len(), 300);
+        let front = r.front_seq().expect("a populated ring");
+        assert!(front > 60, "two laps evicted the early tags");
+        assert_eq!(read(&r, front - 1), None, "an evicted tag reads as gone");
+    }
+
+    /// Both ways a keyframe leaves the index - overwritten by a wrap, or
+    /// aged out by trim - must also take it out of the cut-point index, or
+    /// a cut would seek to bytes that now belong to another tag.
+    #[test]
+    fn evicted_keyframes_are_never_returned_as_cut_points() {
+        let r = ring(256);
+        r.append(9, 1_000, &idr(80), true, false)
+            .expect("no io error");
+        for i in 1..4u64 {
+            r.append(9, 1_000 + i * 33, &[0x27; 80], false, false)
+                .expect("no io error");
+        }
+        assert!(r.find_idr_near(1_000, 10_000).is_none(), "wrapped away");
+        assert!(r.newest_idr().is_none());
+        assert!(r.oldest_idr_at_or_after(0).is_none());
+
+        let r = ring(64 * 1024);
+        r.append(9, 100, &idr(40), true, false)
+            .expect("no io error");
+        r.append(9, 200, &[0x27; 40], false, false)
+            .expect("no io error");
+        r.append(9, 5_000, &idr(40), true, false)
+            .expect("no io error");
+        r.append(9, 5_100, &[0x27; 40], false, false)
+            .expect("no io error");
+        r.trim_older_than(1_000, 5_100, u64::MAX);
+        assert_eq!(r.oldest_ts(), Some(5_000));
+        assert!(r.find_idr_near(100, 1_000).is_none(), "trimmed away");
+        assert_eq!(r.find_idr_near(100, 10_000).map(|m| m.ts_ms), Some(5_000));
+        assert_eq!(r.oldest_idr_at_or_after(0).map(|m| m.ts_ms), Some(5_000));
+    }
+
+    /// `clear` runs when a new publisher takes over. Seqs keep counting
+    /// from the old high-water mark so a destination's saved position can
+    /// never alias a new tag, and nothing from the old session - bytes or
+    /// cut points - may surface again.
+    #[test]
+    fn clear_forgets_the_old_session_but_keeps_counting_seqs() {
+        let r = ring(64 * 1024);
+        r.append(9, 90_000, &idr(40), true, false)
+            .expect("no io error");
+        r.append(9, 90_033, &[0x27; 40], false, false)
+            .expect("no io error");
+        r.clear();
+
+        assert_eq!(r.latest_seq(), None);
+        assert!(r.newest_idr().is_none());
+        assert!(r.find_idr_near(90_000, 1_000).is_none());
+        assert_eq!(read(&r, 0), None);
+
+        let seq = r.append(9, 10, &[0x27; 40], false, false).unwrap().unwrap();
+        assert_eq!(seq, 2, "continues above the old high-water mark");
+        assert_eq!(read(&r, 1), None, "old seqs stay gone");
         assert!(
-            buf.iter().all(|b| *b == buf[0]),
-            "the newest tag read back as a mix of two writes"
+            r.newest_idr_after(1).is_none(),
+            "no keyframe in this session yet"
         );
-        let _ = std::fs::remove_file(&path);
+        let key = r.append(9, 20, &idr(40), true, false).unwrap().unwrap();
+        assert_eq!(r.newest_idr_after(1).map(|m| m.seq), Some(key));
+    }
+
+    #[test]
+    fn find_idr_near_before_the_first_keyframe_and_on_a_tie() {
+        let r = ring(64 * 1024);
+        r.append(9, 1_000, &idr(40), true, false)
+            .expect("no io error");
+        r.append(9, 2_000, &idr(40), true, false)
+            .expect("no io error");
+        // Before every keyframe: only the one above can match.
+        assert_eq!(r.find_idr_near(800, 300).map(|m| m.ts_ms), Some(1_000));
+        assert!(r.find_idr_near(800, 100).is_none());
+        // Equidistant: the earlier one wins, so the delay is never less
+        // than asked for when the two are otherwise equal.
+        assert_eq!(r.find_idr_near(1_500, 500).map(|m| m.ts_ms), Some(1_000));
+        assert!(r.find_idr_near(1_500, 499).is_none());
     }
 }

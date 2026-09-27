@@ -123,7 +123,7 @@ fn write_vui(w: &mut BitWriter, fps: u32) {
 
 /// Smallest level (Table A-1) whose frame size and macroblock rate fit.
 fn level_idc(frame_mbs: usize, fps: u32) -> u32 {
-    const LEVELS: [(u32, usize, usize); 9] = [
+    const LEVELS: [(u32, usize, usize); 10] = [
         (30, 1_620, 40_500),
         (31, 3_600, 108_000),
         (32, 5_120, 216_000),
@@ -133,6 +133,7 @@ fn level_idc(frame_mbs: usize, fps: u32) -> u32 {
         (51, 36_864, 983_040),
         (52, 36_864, 2_073_600),
         (60, 139_264, 4_177_920),
+        (61, 139_264, 8_355_840),
     ];
     let mb_rate = frame_mbs * fps as usize;
     LEVELS
@@ -490,5 +491,189 @@ fn chroma_dc(block: &PlaneBlock, x_offset: usize, y_offset: usize) -> u32 {
         (_, true, _) => (top_sum() + 2) >> 2,
         (_, _, true) => (left_sum() + 2) >> 2,
         _ => 128,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::raster::{Canvas, Rgb};
+    use super::*;
+
+    const BACKGROUND: Rgb = Rgb::new(0x0e, 0x0f, 0x12);
+    const SHAPE_1080P: StreamShape = StreamShape {
+        width: 1920,
+        height: 1080,
+        fps: 30,
+    };
+
+    /// Reads fields back out of one NAL unit: past its header byte, with
+    /// the emulation-prevention bytes dropped.
+    struct FieldReader {
+        bits: Vec<bool>,
+        at: usize,
+    }
+
+    impl FieldReader {
+        fn new(nal: &[u8]) -> Self {
+            let mut rbsp = Vec::new();
+            let mut zeros = 0;
+            for &byte in &nal[1..] {
+                if zeros >= 2 && byte == 3 {
+                    zeros = 0;
+                    continue;
+                }
+                rbsp.push(byte);
+                zeros = if byte == 0 { zeros + 1 } else { 0 };
+            }
+            let bits = rbsp
+                .iter()
+                .flat_map(|byte| (0..8).rev().map(move |shift| (byte >> shift) & 1 == 1))
+                .collect();
+            Self { bits, at: 0 }
+        }
+
+        /// u(n)
+        fn bits(&mut self, count: usize) -> u32 {
+            let field = &self.bits[self.at..self.at + count];
+            self.at += count;
+            field
+                .iter()
+                .fold(0, |value, bit| (value << 1) | u32::from(*bit))
+        }
+
+        /// ue(v)
+        fn ue(&mut self) -> u32 {
+            let zeros = self.bits[self.at..].iter().take_while(|bit| !**bit).count();
+            self.at += zeros;
+            self.bits(zeros + 1) - 1
+        }
+    }
+
+    /// The SPS's id and how many bits its frame_num takes in a slice.
+    fn sps_id_and_frame_num_bits(sps: &[u8]) -> (u32, usize) {
+        let mut reader = FieldReader::new(sps);
+        reader.bits(24); // profile_idc, constraint flags, level_idc
+        let id = reader.ue();
+        (id, reader.ue() as usize + 4)
+    }
+
+    /// A slice header read up to frame_num: (reader, slice_type % 5,
+    /// pic_parameter_set_id, frame_num).
+    fn read_slice_header(slice: &[u8], frame_num_bits: usize) -> (FieldReader, u32, u32, u32) {
+        let mut header = FieldReader::new(slice);
+        assert_eq!(header.ue(), 0, "one slice per picture");
+        let slice_type = header.ue() % 5;
+        let pps_id = header.ue();
+        let frame_num = header.bits(frame_num_bits);
+        (header, slice_type, pps_id, frame_num)
+    }
+
+    fn flat_frame(width: usize, height: usize) -> YuvFrame {
+        Canvas::new(width, height, BACKGROUND).to_yuv420()
+    }
+
+    /// OBS's streams use parameter-set id 0. The screen's SPS and PPS must
+    /// sit under another id, and its slices must name that id: otherwise
+    /// switching to the screen overwrites the stream's own SPS in every
+    /// decoder, and switching back needs a sequence header they may ignore.
+    #[test]
+    fn the_screen_never_reuses_the_parameter_set_ids_of_the_stream() {
+        let sets = parameter_sets(SHAPE_1080P);
+        let (sps_id, frame_num_bits) = sps_id_and_frame_num_bits(&sets.sps);
+        let mut pps = FieldReader::new(&sets.pps);
+        let pps_id = pps.ue();
+        assert_ne!(sps_id, 0, "SPS id 0 belongs to the stream");
+        assert_ne!(pps_id, 0, "PPS id 0 belongs to the stream");
+        assert_eq!(pps.ue(), sps_id, "the PPS points at the screen's SPS");
+
+        let frame = flat_frame(64, 64);
+        for slice in [encode_idr(&frame, 0), encode_p(&frame, &frame, 1)] {
+            let (_, _, slice_pps_id, _) = read_slice_header(&slice, frame_num_bits);
+            assert_eq!(slice_pps_id, pps_id, "slices point at the screen's PPS");
+        }
+    }
+
+    /// What replaying the loop relies on: each IDR carries the idr_pic_id
+    /// it was asked for (back-to-back IDRs must differ), and P pictures are
+    /// kept as references, since the next one skips against them, with
+    /// frame_num counting up and wrapping at the size the SPS declares.
+    /// A 240 fps loop has 480 pictures, so the wrap is a real path.
+    #[test]
+    fn slice_headers_number_the_loop_the_way_the_sps_says() {
+        let (_, frame_num_bits) = sps_id_and_frame_num_bits(&parameter_sets(SHAPE_1080P).sps);
+        let frame = flat_frame(64, 64);
+        for idr_pic_id in [0, 1] {
+            let idr = encode_idr(&frame, idr_pic_id);
+            assert_eq!(idr[0] & 0x1F, bitstream::NAL_IDR_SLICE);
+            assert_ne!(idr[0] >> 5, 0, "an IDR must be a reference");
+            let (mut header, slice_type, _, frame_num) = read_slice_header(&idr, frame_num_bits);
+            assert_eq!((slice_type, frame_num), (2, 0), "I slice, frame_num 0");
+            assert_eq!(header.ue(), idr_pic_id);
+        }
+        let max_frame_num = 1 << frame_num_bits;
+        for index in [1, max_frame_num - 1, max_frame_num, max_frame_num + 223] {
+            let p = encode_p(&frame, &frame, index);
+            assert_eq!(p[0] & 0x1F, bitstream::NAL_SLICE);
+            assert_ne!(p[0] >> 5, 0, "picture {index} must be a reference");
+            let (_, slice_type, _, frame_num) = read_slice_header(&p, frame_num_bits);
+            assert_eq!(slice_type, 0, "picture {index} is a P slice");
+            assert_eq!(frame_num, index % max_frame_num, "picture {index}");
+        }
+    }
+
+    /// level_idc must be the smallest level of Table A-1 whose frame size
+    /// and macroblock rate both fit: too low and strict decoders refuse
+    /// the screen. The table starts at 3.0, so anything smaller reports
+    /// 3.0, which every decoder of a real stream handles.
+    #[test]
+    fn level_is_the_smallest_in_table_a1_that_fits() {
+        for (width, height, fps, level) in [
+            (320, 180, 30, 30),
+            (854, 480, 30, 31),
+            (1280, 720, 30, 31),
+            (1280, 720, 60, 32),
+            (1920, 1080, 30, 40),
+            (1080, 1920, 30, 40),
+            (1920, 1080, 60, 42),
+            (2560, 1440, 30, 50),
+            (2560, 1440, 60, 51),
+            (3840, 2160, 30, 51),
+            (3840, 2160, 60, 52),
+            (7680, 4320, 30, 60),
+            (7680, 4320, 60, 61),
+            (7680, 4320, 120, 62),
+        ] {
+            let sps = parameter_sets(StreamShape { width, height, fps }).sps;
+            assert_eq!(sps[3], level, "{width}x{height} at {fps} fps");
+        }
+    }
+
+    /// A picture identical to the previous one is a single skip run, a few
+    /// bytes at any resolution: that is what keeps the held screen cheap.
+    /// A block that did change must still be coded, and only that block,
+    /// or viewers keep a stale picture.
+    #[test]
+    fn a_p_picture_codes_only_the_blocks_that_changed() {
+        let still = flat_frame(1920, 1080);
+        let unchanged = encode_p(&still, &still, 1);
+        assert!(
+            unchanged.len() < 16,
+            "{} bytes for an unchanged 1080p picture",
+            unchanged.len()
+        );
+
+        // Noise in one macroblock: no prediction reproduces it, so it goes
+        // out as I_PCM, 384 raw samples.
+        let mut noisy = Canvas::new(1920, 1080, BACKGROUND);
+        for i in 0..256 {
+            let color = Rgb::new((i * 37) as u8, (i * 91) as u8, (i * 53) as u8);
+            noisy.fill_rect(800 + i % 16, 400 + i / 16, 1, 1, color);
+        }
+        let changed = encode_p(&noisy.to_yuv420(), &still, 1);
+        assert!(
+            (384..384 + 32).contains(&changed.len()),
+            "{} bytes for one changed block",
+            changed.len()
+        );
     }
 }

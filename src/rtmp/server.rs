@@ -408,6 +408,11 @@ fn ignore_before_publish(published: bool, type_id: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::buffer::DiskRing;
+    use crate::rtmp::client::{EgressClient, EgressUrl};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
 
     /// The stream key - and the ingest key with it - is checked inside
     /// `begin_publish` and nowhere else. A peer that connects and then sends
@@ -435,17 +440,156 @@ mod tests {
             );
         }
     }
-    use super::*;
 
-    /// A machine or container with IPv6 switched off cannot run these.
-    /// The product degrades to IPv4 there by design (`supervise_ingest_leg`
-    /// drops the optional leg), so skipping is the honest outcome rather
-    /// than a red suite on a Docker image without IPv6.
-    async fn bind_v6_or_skip(addr: &str) -> Option<TcpListener> {
-        match bind(addr).await {
+    static UNIQ: AtomicU32 = AtomicU32::new(0);
+
+    /// A real ingest listener on a loopback port, serving a Controller over
+    /// its own temp ring. Stops the listener and deletes the ring on drop.
+    struct Ingest {
+        ctrl: Option<Arc<Controller>>,
+        port: u16,
+        path: std::path::PathBuf,
+        server: tokio::task::JoinHandle<io::Result<()>>,
+    }
+
+    impl Ingest {
+        fn ctrl(&self) -> &Arc<Controller> {
+            self.ctrl.as_ref().expect("alive until drop")
+        }
+    }
+
+    impl Drop for Ingest {
+        fn drop(&mut self) {
+            self.server.abort();
+            // Best-effort: a connection task still winding down may hold
+            // the ring open a moment longer, which Windows won't delete.
+            drop(self.ctrl.take());
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    async fn ingest() -> Ingest {
+        let n = UNIQ.fetch_add(1, Ordering::SeqCst);
+        let path =
+            std::env::temp_dir().join(format!("ic-test-ingest-{}-{}.buf", std::process::id(), n));
+        let _ = std::fs::remove_file(&path);
+        let ring = Arc::new(DiskRing::create(&path, 1 << 20).expect("ring create"));
+        let ctrl = Arc::new(Controller::new(ring, 0));
+        let listener = bind("127.0.0.1:0").await.expect("loopback bind");
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(serve(listener, ctrl.clone()));
+        Ingest {
+            ctrl: Some(ctrl),
+            port,
+            path,
+            server,
+        }
+    }
+
+    /// Poll `done` until it holds, failing the test after 5 s. The ingest
+    /// runs on its own task, so its effects land shortly after the bytes.
+    async fn eventually(what: &str, done: impl Fn() -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !done() {
+            assert!(tokio::time::Instant::now() < deadline, "timed out: {what}");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    fn read_tag(ctrl: &Controller, seq: u64) -> Vec<u8> {
+        let mut buf = Vec::new();
+        ctrl.ring
+            .try_read_seq(seq, &mut buf)
+            .expect("no io error")
+            .expect("tag present");
+        buf
+    }
+
+    /// End to end through `serve` and `handle`, driven by the crate's own
+    /// egress client: handshake, connect, createStream, publish, then media.
+    /// Every unit test of the pieces can pass while this wiring is broken
+    /// (a reply the client rejects, a tag routed to the wrong kind), and
+    /// this is the one that would notice.
+    #[tokio::test]
+    async fn a_publisher_reaches_the_ring_through_the_real_ingest_path() {
+        let ingest = ingest().await;
+        let ctrl = ingest.ctrl().clone();
+        let url = EgressUrl::parse(&format!("rtmp://127.0.0.1:{}/live/key", ingest.port)).unwrap();
+        let client = tokio::time::timeout(Duration::from_secs(5), EgressClient::connect(&url))
+            .await
+            .expect("handshake and publish finish")
+            .expect("the ingest accepts the publish");
+        assert!(ctrl.ingest_alive(), "publish claimed the slot");
+
+        let mut sink = client.spawn_reader_drain();
+        // Legacy AVC keyframe whose NAL walk finds an IDR, then AAC.
+        let video = [0x17, 0x01, 0, 0, 0, 0, 0, 0, 5, 0x65, 1, 2, 3, 4];
+        let audio = [0xAF, 0x01, 0x21, 0x10];
+        sink.send_video(40, &video).await.unwrap();
+        sink.send_audio(41, &audio).await.unwrap();
+        sink.flush().await.unwrap();
+
+        eventually("both tags indexed", || ctrl.ring.latest_seq() == Some(1)).await;
+        assert_eq!(read_tag(&ctrl, 0), video);
+        assert_eq!(read_tag(&ctrl, 1), audio);
+        let idr = ctrl.ring.newest_idr().expect("the keyframe is a cut point");
+        assert_eq!((idr.seq, idr.ts_ms, idr.kind), (0, 40, 9));
+
+        // Closing the connection releases the publisher slot.
+        drop(sink);
+        eventually("slot released", || !ctrl.ingest_alive()).await;
+    }
+
+    /// The pre-publish gate, through the real connection handler: a peer
+    /// that sends a frame without publishing gets nothing into the ring.
+    /// The `connect` sent afterwards is answered only once the frame before
+    /// it was handled, so its `_result` proves the frame was seen and
+    /// dropped rather than still in flight.
+    #[tokio::test]
+    async fn media_before_publish_never_reaches_the_ring() {
+        let ingest = ingest().await;
+        let ctrl = ingest.ctrl().clone();
+        let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", ingest.port))
+            .await
+            .unwrap();
+        handshake::perform_client(&mut sock).await.unwrap();
+        let (rd, wr) = split(sock);
+        let mut reader = ChunkReader::new(rd);
+        let mut writer = ChunkWriter::new(wr);
+
+        let frame = [0x17, 0x01, 0, 0, 0, 0, 0, 0, 5, 0x65, 1, 2, 3, 4];
+        writer.write_message(6, 0, 9, 1, &frame).await.unwrap();
+        let mut connect = BytesMut::new();
+        amf0::enc_string(&mut connect, "connect");
+        amf0::enc_number(&mut connect, 1.0);
+        amf0::enc_object(&mut connect, &[("app", &Amf0::String("live".into()))]);
+        writer.write_message(3, 0, 20, 0, &connect).await.unwrap();
+        writer.flush().await.unwrap();
+
+        let reply = tokio::time::timeout(Duration::from_secs(5), reader.read_message())
+            .await
+            .expect("the ingest answers connect")
+            .unwrap();
+        let values = amf0::decode_all(&reply.payload).unwrap();
+        assert_eq!(values[0].as_str(), Some("_result"));
+        assert_eq!(
+            ctrl.ring.latest_seq(),
+            None,
+            "the unpublished frame was dropped"
+        );
+        assert!(!ctrl.ingest_alive());
+    }
+
+    /// Whether this machine can bind IPv6 at all. A machine or container
+    /// with IPv6 switched off cannot run the IPv6 tests; the product
+    /// degrades to IPv4 there by design (`supervise_ingest_leg` drops the
+    /// optional leg), so skipping is the honest outcome rather than a red
+    /// suite on a Docker image without IPv6.
+    async fn ipv6_loopback_or_skip() -> Option<TcpListener> {
+        match bind("[::1]:0").await {
             Ok(l) => Some(l),
             Err(e) => {
-                eprintln!("skipping IPv6 test, {addr} is unbindable here: {e}");
+                eprintln!("skipping IPv6 test, [::1] is unbindable here: {e}");
                 None
             }
         }
@@ -455,14 +599,19 @@ mod tests {
     /// `IPV6_V6ONLY` this passes on Windows (the option defaults on) and
     /// fails on Linux with EADDRINUSE, because `net.ipv6.bindv6only`
     /// defaults off there and `[::]` swallows v4-mapped addresses. This is
-    /// the test that keeps the two-socket layout portable.
+    /// the test that keeps the two-socket layout portable. IPv6 support is
+    /// probed on a different address first, so that exact EADDRINUSE is a
+    /// failure here and not mistaken for "no IPv6" and skipped.
     #[tokio::test]
     async fn wildcard_v4_and_v6_listeners_share_one_port() {
+        if ipv6_loopback_or_skip().await.is_none() {
+            return;
+        }
         let v4 = bind("0.0.0.0:0").await.expect("IPv4 wildcard bind");
         let port = v4.local_addr().unwrap().port();
-        let Some(v6) = bind_v6_or_skip(&format!("[::]:{port}")).await else {
-            return;
-        };
+        let v6 = bind(&format!("[::]:{port}"))
+            .await
+            .expect("[::] must share the port IPv4 holds (is IPV6_V6ONLY set?)");
         assert!(v6.local_addr().unwrap().is_ipv6());
     }
 
@@ -473,7 +622,7 @@ mod tests {
     /// publisher sitting at the machine would be rate-limited as remote.
     #[tokio::test]
     async fn ipv6_loopback_listener_accepts_and_reports_a_loopback_peer() {
-        let Some(v6) = bind_v6_or_skip("[::1]:0").await else {
+        let Some(v6) = ipv6_loopback_or_skip().await else {
             return;
         };
         let addr = v6.local_addr().unwrap();

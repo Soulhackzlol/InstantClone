@@ -154,6 +154,27 @@ pub fn test_sequence_header(width: usize, height: usize) -> Vec<u8> {
     tag
 }
 
+/// Whether ffmpeg runs here, for the tests that decode with it. Missing
+/// on a dev machine skips them with a note; missing on CI (`CI` set)
+/// fails, so a runner without ffmpeg can't turn them into silent passes.
+#[cfg(test)]
+fn ffmpeg_is_available(check: &str) -> bool {
+    let found = std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_ok();
+    if !found {
+        // The Linux CI job installs ffmpeg, so there a missing one is a
+        // broken job, not a machine without it; the Windows job skips.
+        assert!(
+            !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
+            "ffmpeg is required on Linux CI for {check}"
+        );
+        eprintln!("NOTE: ffmpeg not found, so {check} did not run");
+    }
+    found
+}
+
 fn frames_per_loop(fps: u32) -> usize {
     (fps as usize * LOOP_MS / 1000).max(1)
 }
@@ -197,12 +218,35 @@ mod tests {
                 .map(|nal| nal[0] & 0x1F)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(types(&slate.keyframes[0]), vec![7, 8, 5], "SPS, PPS, IDR");
-        assert_eq!(
-            types(&slate.deltas[0]),
-            vec![1],
-            "P frames are just the slice"
-        );
+        for keyframe in &slate.keyframes {
+            assert_eq!(types(keyframe), vec![7, 8, 5], "SPS, PPS, IDR");
+        }
+        for delta in &slate.deltas {
+            assert_eq!(types(delta), vec![1], "P frames are just the slice");
+        }
+    }
+
+    /// The SPS must describe the visible size, cropping included, or the
+    /// screen comes out padded or rescaled against the stream it covers.
+    /// Read back with the parser that sizes real streams.
+    #[test]
+    fn sequence_header_describes_the_visible_size() {
+        for (width, height) in [
+            (1920, 1080),
+            (1080, 1920),
+            (1280, 720),
+            (854, 480),
+            (2560, 1440),
+            (200, 360),
+            (16, 16),
+        ] {
+            let header = test_sequence_header(width, height);
+            assert_eq!(
+                crate::h264::sps_dimensions(&header),
+                Some((width as u32, height as u32)),
+                "{width}x{height}"
+            );
+        }
     }
 
     #[test]
@@ -217,55 +261,105 @@ mod tests {
         }
     }
 
-    #[test]
-    fn loop_stays_small_at_1080p() {
+    /// Every theme's loop at `width` x `height`, built at the rate a hold
+    /// really uses, stays under `max_kbps`.
+    fn assert_every_theme_fits(width: usize, height: usize, max_kbps: usize) {
         let shape = StreamShape {
-            width: 1920,
-            height: 1080,
-            fps: 30,
+            width,
+            height,
+            fps: crate::crash_hold::SLATE_FPS,
         };
         for theme in SlateTheme::ALL {
             let slate = build_loop(&settings(theme), shape).unwrap();
             let loop_bytes: usize =
                 slate.keyframes[0].len() + slate.deltas.iter().map(Vec::len).sum::<usize>();
-            let kbps = loop_bytes * 8 / 2 / 1000;
-            assert!(kbps < 1_000, "{theme:?} loop runs at {kbps} kbps");
+            // Bits per millisecond are kbps.
+            let kbps = loop_bytes * 8 / LOOP_MS;
+            assert!(
+                kbps < max_kbps,
+                "{theme:?} loop at {width}x{height} runs at {kbps} kbps"
+            );
         }
     }
 
+    /// The screen goes to every destination for as long as a hold lasts,
+    /// on the streamer's upload: under 1 Mbps at 1080p.
+    #[test]
+    fn loop_stays_small_at_1080p() {
+        assert_every_theme_fits(1920, 1080, 1_000);
+    }
+
+    /// Destinations set to Vertical get the screen at 1080x1920: the same
+    /// pixel count and, as themes scale by the short side, the same layout
+    /// scale as 1080p, so the same 1 Mbps.
+    #[test]
+    fn loop_stays_small_on_a_vertical_canvas() {
+        assert_every_theme_fits(1080, 1920, 1_000);
+    }
+
+    /// 2K channels stream 1440p. Themes scale their layout by the short
+    /// side, 1440 / 1080, and the costly blocks are the edges of what they
+    /// draw, so the budget scales the same way: 1333 kbps.
+    #[test]
+    fn loop_stays_small_at_1440p() {
+        assert_every_theme_fits(2560, 1440, 1_333);
+    }
+
     /// Decode two replays of the loop with ffmpeg and require every pixel
-    /// to match what we rendered. Skips when ffmpeg isn't installed.
+    /// to match what we rendered. Every theme at 320x180 (180 isn't whole
+    /// macroblocks), then one portrait 200x360 so a real decoder checks the
+    /// cropping of the width too; each ffmpeg run costs about half a second.
     #[test]
     fn ffmpeg_decodes_the_loop_losslessly() {
-        if Command::new("ffmpeg").arg("-version").output().is_err() {
-            eprintln!("ffmpeg not found - skipping the decode round trip");
+        if !ffmpeg_is_available("the reconnect screen decode round trip") {
             return;
         }
-        for theme in SlateTheme::ALL {
+        let landscape = SlateTheme::ALL.map(|theme| (theme, 320, 180));
+        let portrait = (SlateTheme::Studio, 200, 360);
+        for (theme, width, height) in landscape.into_iter().chain([portrait]) {
             let shape = StreamShape {
-                width: 320,
-                height: 180,
+                width,
+                height,
                 fps: 10,
             };
             let slate = build_loop(&settings(theme), shape).unwrap();
             let decoded = decode_with_ffmpeg(&annex_b(&slate), shape.fps, theme);
             let expected = expected_frames(&settings(theme), shape);
-            assert_eq!(decoded.len(), expected.len(), "{theme:?}: frame count");
+            assert_eq!(
+                decoded.len(),
+                expected.len(),
+                "{theme:?} at {width}x{height}: frame count"
+            );
             assert!(
                 decoded == expected,
-                "{theme:?}: decoded pixels differ from the render"
+                "{theme:?} at {width}x{height}: decoded pixels differ from the render"
             );
         }
     }
 
-    /// The NAL units of one AVCC sample (4-byte big-endian lengths).
+    /// The NAL units of one AVCC sample (4-byte big-endian lengths). Fails
+    /// unless the lengths tile the sample exactly and every unit is well
+    /// formed: a stray byte, or a start code inside a unit, breaks every
+    /// decoder downstream.
     fn nal_units(sample: &[u8]) -> Vec<&[u8]> {
         let mut units = Vec::new();
-        let mut at = 0;
-        while at + 4 <= sample.len() {
-            let len = u32::from_be_bytes(sample[at..at + 4].try_into().unwrap()) as usize;
-            units.push(&sample[at + 4..at + 4 + len]);
-            at += 4 + len;
+        let mut rest = sample;
+        while !rest.is_empty() {
+            assert!(rest.len() >= 4, "truncated length prefix");
+            let (prefix, tail) = rest.split_at(4);
+            let len = u32::from_be_bytes(prefix.try_into().unwrap()) as usize;
+            assert!(
+                (1..=tail.len()).contains(&len),
+                "NAL length {len} doesn't fit the sample"
+            );
+            let (unit, tail) = tail.split_at(len);
+            assert_eq!(unit[0] & 0x80, 0, "forbidden_zero_bit is set");
+            assert!(
+                !unit.windows(3).any(|w| w[0] == 0 && w[1] == 0 && w[2] <= 2),
+                "start code pattern inside a NAL unit"
+            );
+            units.push(unit);
+            rest = tail;
         }
         units
     }

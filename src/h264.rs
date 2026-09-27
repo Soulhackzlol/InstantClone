@@ -166,11 +166,13 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
 fn contains_idr_nalu(mut data: &[u8]) -> bool {
     while data.len() >= 4 {
         let len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        if 4 + len > data.len() {
+        let Some(nal) = data[4..].get(..len) else {
             return false;
-        }
-        let nal_unit_type = data[4] & 0x1F;
-        if nal_unit_type == 5 {
+        };
+        // A zero-length NAL has no header byte to classify. Step over it:
+        // reading data[4] here indexed past the slice when the empty NAL
+        // was the last thing in the tag, which aborts a release build.
+        if nal.first().is_some_and(|header| header & 0x1F == 5) {
             return true;
         }
         data = &data[4 + len..];
@@ -774,6 +776,12 @@ impl<'a> BitReader<'a> {
         for _ in 0..size {
             if next_scale != 0 {
                 let delta = self.read_se()?;
+                // delta_scale is -128..=127 (H.264 7.4.2.1.1.1). Anything
+                // else is a corrupt or hostile SPS, and a near-i32::MAX
+                // delta would overflow the sum below.
+                if !(-128..=127).contains(&delta) {
+                    return None;
+                }
                 next_scale = (last_scale + delta + 256) % 256;
             }
             last_scale = if next_scale == 0 {
@@ -1288,6 +1296,55 @@ mod tests {
     }
 
     #[test]
+    fn enhanced_rtmp_fourccs_map_to_their_codec() {
+        // hev1 is HEVC with parameter sets in-band (some encoders send it
+        // instead of hvc1); avc1 is H.264 in Enhanced framing, which is what
+        // OBS uses for the EB ladder. Each drives the dashboard codec chip
+        // and the per-destination readout.
+        for (fourcc, codec) in [
+            (b"hev1", VideoCodec::Hevc),
+            (b"vp09", VideoCodec::Vp9),
+            (b"avc1", VideoCodec::Avc),
+            (b"xxxx", VideoCodec::Unknown),
+        ] {
+            let mut frame = vec![0x80 | (2u8 << 4) | 1]; // inter, CodedFrames
+            frame.extend_from_slice(fourcc);
+            frame.extend_from_slice(&[0; 8]);
+            let info = classify_video_tag(&frame);
+            assert_eq!(info.codec, codec, "{}", String::from_utf8_lossy(fourcc));
+            assert!(!info.is_idr, "an inter frame is never a cut point");
+
+            let mut seq = vec![0x90u8]; // keyframe, SequenceStart
+            seq.extend_from_slice(fourcc);
+            assert_eq!(seq_header_codec(&seq), codec);
+        }
+    }
+
+    #[test]
+    fn seq_header_track_id_reads_only_the_onetrack_layout() {
+        // OneTrack: TrackId at byte 6.
+        assert_eq!(seq_header_track_id(&onetrack_avc_seq_header(3, 30, 40)), 3);
+        // ManyTracks / ManyTracksManyCodecs hold every track's config in
+        // one tag, so they share slot 0 even though byte 6 is a track id
+        // (ManyTracks) or a FourCC byte (ManyTracksManyCodecs).
+        let many_tracks = [0x96, 0x10, b'a', b'v', b'c', b'1', 2, 0, 0, 1, 0xAA];
+        assert_eq!(seq_header_track_id(&many_tracks), 0);
+        let many_codecs = [0x96, 0x20, 2, b'a', b'v', b'c', b'1', 0, 0, 1, 0xAA];
+        assert_eq!(seq_header_track_id(&many_codecs), 0);
+        // Legacy, Enhanced single-track and a OneTrack tag cut before its
+        // TrackId all fall back to slot 0 rather than reading past the end.
+        assert_eq!(seq_header_track_id(&legacy_avc_seq_header(40, 30)), 0);
+        assert_eq!(
+            seq_header_track_id(&[0x90, b'h', b'v', b'c', b'1', 7, 7]),
+            0
+        );
+        assert_eq!(
+            seq_header_track_id(&[0x96, 0x00, b'a', b'v', b'c', b'1']),
+            0
+        );
+    }
+
+    #[test]
     fn aac_seq_header_detected() {
         // sound_format 10 (AAC), packet_type 0 (AudioSpecificConfig)
         let payload = [0xA0, 0x00, 0x12, 0x10];
@@ -1368,22 +1425,6 @@ mod tests {
         assert!(!info.is_idr);
     }
 
-    #[test]
-    fn enhanced_aac_seq_header_via_packet_type_0() {
-        // Enhanced-RTMP single-track AAC seq header: byte 0 = 0x90
-        // (SoundFormat=9, AudioPacketType=0=SequenceStart), followed
-        // by FourCC. This is the exact tag OBS emits for the live
-        // track when VOD audio is enabled (live = idx=0, single-track
-        // because not multitrack).
-        let mut payload = vec![0x90];
-        payload.extend_from_slice(b"mp4a");
-        let info = classify_audio_tag(&payload);
-        assert!(info.is_seq_header);
-        assert_eq!(info.codec, AudioCodec::Aac);
-        // The convenience shim agrees.
-        assert!(is_aac_seq_header(&payload));
-    }
-
     // ── select_video_bytes: per-destination flatten policy ───────────
     //
     // The pump uses this helper to decide what bytes to put on the wire
@@ -1436,7 +1477,9 @@ mod tests {
     fn select_video_bytes_passes_multitrack_through_for_twitch() {
         // Invariant 2: Twitch destinations get the raw multi-track
         // bytes verbatim - that's what unlocks the transcoded ladder.
-        // True for every TrackId, not just the primary.
+        // True for every TrackId, not just the primary. Twitch Dual Format
+        // rides on this too: the vertical canvas is just more TrackIds on
+        // the wire (`canvas_index` only exists in the config JSON).
         for track in 0u8..=4 {
             let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
             let twitch = select_video_bytes(&tag, VideoEgress::Passthrough)
@@ -1457,9 +1500,67 @@ mod tests {
         let tag = enhanced_rtmp_onetrack_video_bytes_track(0);
         let youtube =
             select_video_bytes(&tag, VideoEgress::Track(0)).expect("track 0 must be forwarded");
-        let direct_flat = flatten_multitrack_video(&tag).expect("OneTrack layout must flatten");
-        assert_eq!(youtube.as_ref(), direct_flat.as_slice());
+        assert_eq!(youtube.as_ref(), flat_hvc1_keyframe().as_slice());
         assert!(matches!(youtube, std::borrow::Cow::Owned(_)));
+    }
+
+    /// What `enhanced_rtmp_onetrack_video_bytes_track(_)` must flatten to,
+    /// written out byte by byte: a single-track Enhanced-RTMP keyframe
+    /// (0x80 | FrameType 1 << 4 | CodedFrames 1 = 0x91), the FourCC, then
+    /// the track body with the multitrack header and TrackId gone.
+    fn flat_hvc1_keyframe() -> Vec<u8> {
+        let mut out = vec![0x91, b'h', b'v', b'c', b'1'];
+        out.extend_from_slice(&[0xAA; 32]);
+        out
+    }
+
+    #[test]
+    fn flatten_multitrack_video_emits_known_bytes_for_every_layout() {
+        // OneTrack HEVC is the Twitch Dual Format vertical path (2K channels
+        // get HEVC, which has no legacy framing, so it is flattened rather
+        // than rewritten to 0x17/0x27). Inter frame + CodedFramesX here, so
+        // the rebuilt header byte is 0x80 | 2 << 4 | 3 = 0xA3.
+        let onetrack = [0xA6, 0x03, b'h', b'v', b'c', b'1', 1, 0x10, 0x20, 0x30];
+        assert_eq!(
+            flatten_multitrack_video(&onetrack).unwrap(),
+            [0xA3, b'h', b'v', b'c', b'1', 0x10, 0x20, 0x30]
+        );
+
+        // ManyTracks (mt_type 1): one FourCC, then [TrackId][Size(3)][body]
+        // per track. The first listed track is the primary and the rest go.
+        let many_tracks = [
+            0x96, 0x11, b'h', b'v', b'c', b'1', 0, 0, 0, 3, 0xA1, 0xA2, 0xA3, 1, 0, 0, 2, 0xB1,
+            0xB2,
+        ];
+        assert_eq!(
+            flatten_multitrack_video(&many_tracks).unwrap(),
+            [0x91, b'h', b'v', b'c', b'1', 0xA1, 0xA2, 0xA3]
+        );
+
+        // ManyTracksManyCodecs (mt_type 2): [TrackId][FourCC][Size(3)][body]
+        // per track, so the FourCC comes from the first track's own entry.
+        let many_codecs = [
+            0x96, 0x21, 0, b'a', b'v', b'0', b'1', 0, 0, 2, 0xC1, 0xC2, 1, b'h', b'v', b'c', b'1',
+            0, 0, 1, 0xD1,
+        ];
+        assert_eq!(
+            flatten_multitrack_video(&many_codecs).unwrap(),
+            [0x91, b'a', b'v', b'0', b'1', 0xC1, 0xC2]
+        );
+
+        // A first track that claims more bytes than the tag holds, and a
+        // layout type the spec reserves, both refuse rather than guess.
+        let mut overlong = many_tracks;
+        overlong[9] = 0xFF;
+        assert_eq!(flatten_multitrack_video(&overlong), None);
+        let mut reserved = onetrack;
+        reserved[1] = 0x31;
+        assert_eq!(flatten_multitrack_video(&reserved), None);
+        // Not multitrack at all.
+        assert_eq!(
+            flatten_multitrack_video(&avc_single_track_keyframe_bytes()),
+            None
+        );
     }
 
     #[test]
@@ -1469,7 +1570,8 @@ mod tests {
         // Forwarding every one to YouTube delivered N frames per PTS
         // → decoder storm → reconnect cascade. These tags must be
         // dropped; the primary arrives separately as a legacy /
-        // Enhanced single-track tag.
+        // Enhanced single-track tag. With Dual Format, TrackId 1+ also
+        // carries the vertical canvas, which a horizontal dest never wants.
         for track in 1u8..=4 {
             let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
             assert!(
@@ -1477,48 +1579,6 @@ mod tests {
                 "TrackId {track} must be dropped for non-Twitch",
             );
         }
-    }
-
-    // ── Twitch Dual Format (dual canvas) forwarding ──────────────────
-    //
-    // Dual Format = a horizontal (canvas 0) and a vertical (canvas 1)
-    // layout sent together over the one Enhanced Broadcasting RTMP
-    // connection. `canvas_index` lives only in the GetClientConfiguration
-    // JSON; on the wire the canvases are just more TrackIds. So the
-    // existing per-track passthrough already carries the vertical canvas:
-    // these tests pin that down explicitly with dual-format framing.
-
-    #[test]
-    fn select_video_bytes_forwards_dual_canvas_to_twitch() {
-        // Horizontal primary (TrackId 0) and a vertical-canvas rung
-        // (TrackId 1) both reach Twitch byte-for-byte. Nothing about a
-        // second canvas changes the Twitch passthrough contract.
-        let horizontal = enhanced_rtmp_onetrack_video_bytes_track(0);
-        let vertical = enhanced_rtmp_onetrack_video_bytes_track(1);
-        for tag in [&horizontal, &vertical] {
-            let twitch = select_video_bytes(tag, VideoEgress::Passthrough)
-                .expect("twitch must forward both canvases");
-            assert_eq!(twitch.as_ref(), tag.as_slice());
-            assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
-        }
-    }
-
-    #[test]
-    fn select_video_bytes_keeps_horizontal_drops_vertical_for_non_twitch() {
-        // A non-Twitch destination (YouTube/Kick) running alongside a
-        // Dual Format Twitch session keeps the horizontal primary and
-        // drops the vertical canvas - it has no concept of a second
-        // canvas, and TrackId != 0 is exactly the vertical rungs.
-        let horizontal = enhanced_rtmp_onetrack_video_bytes_track(0);
-        let vertical = enhanced_rtmp_onetrack_video_bytes_track(1);
-        assert!(
-            select_video_bytes(&horizontal, VideoEgress::Track(0)).is_some(),
-            "horizontal canvas (TrackId 0) must reach non-Twitch"
-        );
-        assert!(
-            select_video_bytes(&vertical, VideoEgress::Track(0)).is_none(),
-            "vertical canvas (TrackId 1) must be dropped for non-Twitch"
-        );
     }
 
     // ── Vertical-canvas selection: SPS orientation + Track(n) routing ──
@@ -1563,6 +1623,15 @@ mod tests {
                 self.put_bit(0);
             }
             self.put_bits(code, bits);
+        }
+        /// Signed Exp-Golomb: 0, +1, -1, +2, ... map to codes 0, 1, 2, 3, ...
+        fn put_se(&mut self, v: i32) {
+            let code = if v > 0 {
+                2 * v.unsigned_abs() - 1
+            } else {
+                2 * v.unsigned_abs()
+            };
+            self.put_ue(code);
         }
         fn finish(mut self) -> Vec<u8> {
             self.put_bit(1); // rbsp_stop_one_bit
@@ -1655,6 +1724,220 @@ mod tests {
         assert_eq!(sps_dimensions(&hevc), None);
     }
 
+    /// The SPS fields that change how many bits sit in front of the picture
+    /// size. Everything else is fixed by `build_rich_sps_rbsp`.
+    struct SpsFields {
+        profile_idc: u32,
+        chroma_format_idc: u32,
+        /// `(list index, delta_scale values)` for each scaling list sent.
+        /// Empty means `seq_scaling_matrix_present_flag = 0`.
+        scaling_lists: Vec<(usize, Vec<i32>)>,
+        pic_order_cnt_type: u32,
+        frame_mbs_only: bool,
+        width_in_mbs: u32,
+        height_in_map_units: u32,
+        /// (left, right, top, bottom) in crop units.
+        crop: Option<(u32, u32, u32, u32)>,
+    }
+
+    impl SpsFields {
+        fn progressive(width_in_mbs: u32, height_in_map_units: u32) -> Self {
+            Self {
+                profile_idc: 100,
+                chroma_format_idc: 1,
+                scaling_lists: Vec::new(),
+                pic_order_cnt_type: 0,
+                frame_mbs_only: true,
+                width_in_mbs,
+                height_in_map_units,
+                crop: None,
+            }
+        }
+    }
+
+    /// SPS RBSP per H.264 7.3.2.1.1, written field by field. The caller
+    /// supplies scaling-list deltas that end each list the way the spec
+    /// does (the reader stops reading once nextScale hits 0).
+    fn build_rich_sps_rbsp(f: &SpsFields) -> Vec<u8> {
+        let mut w = BitWriter::new();
+        w.put_bits(f.profile_idc, 8);
+        w.put_bits(0, 8); // constraint flags + reserved
+        w.put_bits(40, 8); // level_idc
+        w.put_ue(0); // seq_parameter_set_id
+        if matches!(f.profile_idc, 100 | 110 | 122 | 244) {
+            w.put_ue(f.chroma_format_idc);
+            if f.chroma_format_idc == 3 {
+                w.put_bit(0); // separate_colour_plane_flag
+            }
+            w.put_ue(0); // bit_depth_luma_minus8
+            w.put_ue(0); // bit_depth_chroma_minus8
+            w.put_bit(0); // qpprime_y_zero_transform_bypass_flag
+            w.put_bit(u32::from(!f.scaling_lists.is_empty()));
+            if !f.scaling_lists.is_empty() {
+                let count = if f.chroma_format_idc == 3 { 12 } else { 8 };
+                for i in 0..count {
+                    match f.scaling_lists.iter().find(|(idx, _)| *idx == i) {
+                        Some((_, deltas)) => {
+                            w.put_bit(1);
+                            deltas.iter().for_each(|d| w.put_se(*d));
+                        }
+                        None => w.put_bit(0),
+                    }
+                }
+            }
+        }
+        w.put_ue(0); // log2_max_frame_num_minus4
+        w.put_ue(f.pic_order_cnt_type);
+        match f.pic_order_cnt_type {
+            0 => w.put_ue(2), // log2_max_pic_order_cnt_lsb_minus4
+            1 => {
+                w.put_bit(0); // delta_pic_order_always_zero_flag
+                w.put_se(-2); // offset_for_non_ref_pic
+                w.put_se(5); // offset_for_top_to_bottom_field
+                w.put_ue(3); // num_ref_frames_in_pic_order_cnt_cycle
+                [1, -1, 7].iter().for_each(|o| w.put_se(*o));
+            }
+            _ => {}
+        }
+        w.put_ue(4); // max_num_ref_frames
+        w.put_bit(0); // gaps_in_frame_num_value_allowed_flag
+        w.put_ue(f.width_in_mbs - 1);
+        w.put_ue(f.height_in_map_units - 1);
+        w.put_bit(u32::from(f.frame_mbs_only));
+        if !f.frame_mbs_only {
+            w.put_bit(1); // mb_adaptive_frame_field_flag
+        }
+        w.put_bit(1); // direct_8x8_inference_flag
+        match f.crop {
+            Some((left, right, top, bottom)) => {
+                w.put_bit(1);
+                [left, right, top, bottom].iter().for_each(|c| w.put_ue(*c));
+            }
+            None => w.put_bit(0),
+        }
+        w.put_bit(0); // vui_parameters_present_flag
+        w.finish()
+    }
+
+    fn rich_sps_dimensions(f: &SpsFields) -> Option<(u32, u32)> {
+        sps_dimensions(&seq_header_around(&build_rich_sps_rbsp(f), false))
+    }
+
+    #[test]
+    fn sps_dimensions_decodes_real_x264_sequence_headers() {
+        // Real High-profile SPS NALs from x264, not produced by the test
+        // BitWriter, so a bug shared by the writer and the reader can't
+        // cancel out. 1280x720 has no cropping; 1920x1080 is coded as
+        // 1920x1088 with frame_crop_bottom_offset = 4 (x2 for 4:2:0).
+        let sps_720p = [
+            0x64, 0x00, 0x1F, 0xAC, 0xD9, 0x40, 0x50, 0x05, 0xBB, 0x01, 0x10, 0x00, 0x00, 0x03,
+            0x00, 0x10, 0x00, 0x00, 0x03, 0x03, 0xC0, 0xF1, 0x83, 0x19, 0x60,
+        ];
+        let sps_1080p = [
+            0x64, 0x00, 0x28, 0xAC, 0xD9, 0x40, 0x78, 0x02, 0x27, 0xE5, 0xC0, 0x44, 0x00, 0x00,
+            0x03, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0xF0, 0x3C, 0x60, 0xC6, 0x58,
+        ];
+        assert_eq!(
+            sps_dimensions(&seq_header_around(&sps_720p, false)),
+            Some((1280, 720))
+        );
+        assert_eq!(
+            sps_dimensions(&seq_header_around(&sps_1080p, true)),
+            Some((1920, 1080))
+        );
+    }
+
+    #[test]
+    fn sps_dimensions_walks_high_profile_scaling_lists() {
+        // Each list must be skipped by exactly the bits it occupies or the
+        // size fields after it decode as garbage. The deltas cover a list
+        // that ends on its first read, one that takes two, both ends of the
+        // legal delta_scale range (-128 and 127), and an 8x8 list that never
+        // hits nextScale = 0 and so reads all 64 entries.
+        let mut f = SpsFields::progressive(120, 68);
+        f.scaling_lists = vec![
+            (0, vec![-8]),
+            (1, vec![3, -11]),
+            (2, vec![127, 121]),
+            (3, vec![-128, 120]),
+            (6, vec![0; 64]),
+        ];
+        f.crop = Some((0, 0, 0, 4));
+        assert_eq!(rich_sps_dimensions(&f), Some((1920, 1080)));
+    }
+
+    #[test]
+    fn sps_dimensions_rejects_out_of_range_scaling_deltas_without_panicking() {
+        // delta_scale is -128..=127 by spec. A hostile SPS can carry up to
+        // +/-(2^31 - 1), and `last_scale + delta + 256` overflowed i32: a
+        // panic in debug, a silently wrong parse in release. Nonsense like
+        // that means the SPS is not one we can size, so the parse gives up.
+        for bad_delta in [128, -129, i32::MAX, -i32::MAX] {
+            let mut f = SpsFields::progressive(120, 68);
+            f.scaling_lists = vec![(0, vec![bad_delta, 0])];
+            assert_eq!(rich_sps_dimensions(&f), None, "delta {bad_delta}");
+        }
+    }
+
+    #[test]
+    fn sps_dimensions_applies_cropping_per_chroma_format() {
+        // Portrait 1080x1920 is coded 1088 wide; crop_right 4 x 2 (4:2:0).
+        let mut portrait = SpsFields::progressive(68, 120);
+        portrait.crop = Some((0, 4, 0, 0));
+        assert_eq!(rich_sps_dimensions(&portrait), Some((1080, 1920)));
+
+        // 4:2:2 crops vertically in single lines: bottom 8 x 1.
+        let mut yuv422 = SpsFields::progressive(120, 68);
+        yuv422.profile_idc = 122;
+        yuv422.chroma_format_idc = 2;
+        yuv422.crop = Some((0, 0, 0, 8));
+        assert_eq!(rich_sps_dimensions(&yuv422), Some((1920, 1080)));
+
+        // 4:4:4 has 12 scaling lists (the last six 8x8) and a crop unit of
+        // one pixel in both directions.
+        let mut yuv444 = SpsFields::progressive(120, 68);
+        yuv444.profile_idc = 244;
+        yuv444.chroma_format_idc = 3;
+        yuv444.scaling_lists = vec![(8, vec![-8]), (11, vec![0; 64])];
+        yuv444.crop = Some((0, 16, 0, 8));
+        assert_eq!(rich_sps_dimensions(&yuv444), Some((1904, 1080)));
+    }
+
+    #[test]
+    fn sps_dimensions_handles_interlaced_and_every_poc_type() {
+        // frame_mbs_only = 0: height counts field pairs (2 x 34 x 16 =
+        // 1088), there is an extra mb_adaptive bit, and the vertical crop
+        // unit doubles: bottom 2 x 2 x 2 = 8 lines. Main profile, so no
+        // High-profile block, with poc type 2 (no extra fields).
+        let mut interlaced = SpsFields::progressive(120, 34);
+        interlaced.profile_idc = 77;
+        interlaced.frame_mbs_only = false;
+        interlaced.pic_order_cnt_type = 2;
+        interlaced.crop = Some((0, 0, 0, 2));
+        assert_eq!(rich_sps_dimensions(&interlaced), Some((1920, 1080)));
+
+        // poc type 1 carries signed offsets and a cycle before the size.
+        let mut poc1 = SpsFields::progressive(40, 30);
+        poc1.profile_idc = 66;
+        poc1.pic_order_cnt_type = 1;
+        assert_eq!(rich_sps_dimensions(&poc1), Some((640, 480)));
+    }
+
+    #[test]
+    fn strip_emulation_prevention_drops_only_the_escape_byte() {
+        // 00 00 03 xx is how an encoder escapes 00 00 0x inside a NAL; the
+        // 03 goes, and the zero count restarts after it.
+        assert_eq!(strip_emulation_prevention(&[0, 0, 3, 1]), [0, 0, 1]);
+        assert_eq!(strip_emulation_prevention(&[0, 0, 3, 3]), [0, 0, 3]);
+        assert_eq!(
+            strip_emulation_prevention(&[0, 0, 3, 0, 0, 3, 0]),
+            [0, 0, 0, 0, 0]
+        );
+        // One zero is not enough to start an escape.
+        assert_eq!(strip_emulation_prevention(&[0, 3, 1]), [0, 3, 1]);
+        assert_eq!(strip_emulation_prevention(&[0x42, 3]), [0x42, 3]);
+    }
+
     #[test]
     fn sps_dimensions_huge_crop_returns_none_not_panic() {
         // A malformed SPS can carry near-u32::MAX frame-crop Exp-Golomb
@@ -1692,28 +1975,303 @@ mod tests {
     }
 
     #[test]
-    fn sps_and_selection_never_panic_on_fuzz() {
-        // Deterministic pseudo-random byte blobs, wrapped as AVC seq
-        // headers, pushed through the parser + selector. These run on
-        // hostile wire input, so the invariant is simply: never panic.
-        let mut seed: u32 = 0x9e3779b9;
-        for _ in 0..3000 {
-            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-            let n = (seed as usize % 48) + 1;
-            let mut blob = Vec::with_capacity(n);
-            let mut x = seed;
-            for _ in 0..n {
-                x = x.wrapping_mul(1103515245).wrapping_add(12345);
-                blob.push((x >> 16) as u8);
+    fn a_zero_length_nal_at_the_end_of_a_tag_is_not_an_idr_and_does_not_panic() {
+        // A length prefix of 0 as the last 4 bytes passes the "does the NAL
+        // fit" check (4 + 0 <= 4) and the walk then read the NAL header one
+        // byte past the slice. That runs on every published video tag, and
+        // with `panic = "abort"` one malformed frame killed the process.
+        let bare = [0x17, 0x01, 0, 0, 0, 0, 0, 0, 0];
+        assert!(!classify_video_tag(&bare).is_idr);
+
+        let mut after_a_slice = avc_tag(1, &[nal(1, 10)]);
+        after_a_slice.extend_from_slice(&[0, 0, 0, 0]);
+        assert!(!classify_video_tag(&after_a_slice).is_idr);
+
+        // An empty NAL in the middle is skipped, so an IDR after it still counts.
+        let mut idr_after_empty = avc_tag(1, &[]);
+        idr_after_empty.extend_from_slice(&[0, 0, 0, 0]);
+        idr_after_empty.extend_from_slice(&nal(5, 8));
+        assert!(classify_video_tag(&idr_after_empty).is_idr);
+    }
+
+    /// Deterministic LCG for the fuzz tests: fixed seed, no dependency, and a
+    /// failure reproduces from the iteration number alone.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next_u32(&mut self) -> u32 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) as u32
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.next_u32() % n
+        }
+
+        fn pick<T: Copy>(&mut self, items: &[T]) -> T {
+            items[self.below(items.len() as u32) as usize]
+        }
+
+        /// Zero- and 0xFF-heavy bytes. Uniform bytes almost never form a
+        /// zero length prefix or a long Exp-Golomb run, which are exactly the
+        /// shapes that break parsers.
+        fn byte(&mut self) -> u8 {
+            match self.below(8) {
+                0..=2 => 0x00,
+                3 => 0xFF,
+                _ => self.next_u32() as u8,
             }
-            // Legacy AVC framing so the bytes reach the SPS Exp-Golomb path.
-            let mut tag = vec![0x17u8, 0x00, 0, 0, 0];
-            tag.extend_from_slice(&blob);
+        }
+
+        fn bytes(&mut self, max_len: u32) -> Vec<u8> {
+            let n = self.below(max_len + 1);
+            (0..n).map(|_| self.byte()).collect()
+        }
+    }
+
+    /// Length-prefixed NALs whose declared lengths are sometimes honest,
+    /// sometimes zero and sometimes past the end of the tag.
+    fn fuzz_nal_units(rng: &mut Lcg) -> Vec<u8> {
+        let mut out = Vec::new();
+        for _ in 0..rng.below(4) {
+            let body = rng.bytes(12);
+            let declared = match rng.below(4) {
+                0 => 0,
+                1 => rng.next_u32(),
+                _ => body.len() as u32,
+            };
+            out.extend_from_slice(&declared.to_be_bytes());
+            out.extend_from_slice(&body);
+        }
+        out
+    }
+
+    /// One tag shaped like the ones OBS sends (legacy AVC/AAC, Enhanced
+    /// single-track and multi-track video/audio) with a random body.
+    fn fuzz_tag(rng: &mut Lcg) -> Vec<u8> {
+        let b0 = match rng.below(8) {
+            0 => 0x17,
+            1 => 0x27,
+            2 => 0x90 | rng.below(16) as u8,
+            3 => 0x96,
+            4 => 0xA6,
+            5 => 0x95,
+            6 => 0xAF,
+            _ => rng.next_u32() as u8,
+        };
+        let mut tag = vec![b0];
+        if rng.below(4) == 0 {
+            tag.extend(rng.bytes(24));
+            return tag;
+        }
+        let fourccs = [
+            *b"avc1", *b"hvc1", *b"hev1", *b"av01", *b"vp09", *b"mp4a", *b"zzzz",
+        ];
+        let multitrack = b0 & 0x80 != 0 && (b0 & 0x0F == 6 || b0 == 0x95);
+        if b0 & 0x80 == 0 {
+            // Legacy: [AVCPacketType][CompositionTime(3)][NALs].
+            tag.push(rng.pick(&[0u8, 1, 2]));
+            tag.extend_from_slice(&[0, 0, rng.byte()]);
+            tag.extend(fuzz_nal_units(rng));
+        } else if !multitrack {
+            tag.extend_from_slice(&rng.pick(&fourccs));
+            tag.extend(rng.bytes(16));
+        } else {
+            let mt_type = rng.below(4) as u8;
+            tag.push((mt_type << 4) | rng.pick(&[0u8, 1, 3, 4]));
+            match mt_type {
+                0 => {
+                    // OneTrack: [FourCC][TrackId][body].
+                    tag.extend_from_slice(&rng.pick(&fourccs));
+                    tag.push(rng.below(3) as u8);
+                    tag.extend(rng.bytes(16));
+                }
+                1 | 2 => {
+                    // ManyTracks: [FourCC] then [TrackId][Size(3)][body]...
+                    // ManyTracksManyCodecs: [TrackId][FourCC][Size(3)][body]...
+                    if mt_type == 1 {
+                        tag.extend_from_slice(&rng.pick(&fourccs));
+                    }
+                    for _ in 0..=rng.below(3) {
+                        tag.push(rng.below(3) as u8);
+                        if mt_type == 2 {
+                            tag.extend_from_slice(&rng.pick(&fourccs));
+                        }
+                        let body = rng.bytes(8);
+                        let honest = rng.below(4) != 0;
+                        let size = if honest {
+                            body.len() as u32
+                        } else {
+                            rng.below(0x100)
+                        };
+                        tag.extend_from_slice(&size.to_be_bytes()[1..]);
+                        tag.extend(body);
+                    }
+                }
+                _ => tag.extend(rng.bytes(16)),
+            }
+        }
+        if rng.below(2) == 0 {
+            let keep = rng.below(tag.len() as u32 + 1) as usize;
+            tag.truncate(keep);
+        }
+        tag
+    }
+
+    /// Exp-Golomb values a hostile SPS would use: tiny, around the limits
+    /// the parser enforces, and as large as the 32-bit code allows.
+    fn fuzz_ue(rng: &mut Lcg) -> u32 {
+        rng.pick(&[
+            0,
+            1,
+            2,
+            3,
+            7,
+            8,
+            67,
+            119,
+            255,
+            1 << 16,
+            0x7FFF_FFFF,
+            0xFFFF_FFFD,
+        ])
+    }
+
+    fn fuzz_se(rng: &mut Lcg) -> i32 {
+        rng.pick(&[
+            0,
+            1,
+            -1,
+            -8,
+            127,
+            -128,
+            128,
+            -129,
+            1 << 20,
+            i32::MAX,
+            -i32::MAX,
+        ])
+    }
+
+    /// An SPS RBSP built by the grammar, so the fuzz reaches the scaling
+    /// lists and the crop fields instead of dying on the first bad field.
+    fn fuzz_sps_rbsp(rng: &mut Lcg) -> Vec<u8> {
+        let mut w = BitWriter::new();
+        w.put_bits(rng.pick(&[66, 77, 100, 110, 122, 244]), 8);
+        w.put_bits(0, 8);
+        w.put_bits(40, 8);
+        w.put_ue(fuzz_ue(rng) % 32);
+        w.put_ue(rng.pick(&[0, 1, 2, 3, 0x7FFF_FFFF]));
+        w.put_bit(rng.below(2));
+        w.put_ue(rng.below(3));
+        w.put_ue(rng.below(3));
+        w.put_bit(0);
+        w.put_bit(1); // seq_scaling_matrix_present_flag
+        for _ in 0..rng.below(13) {
+            w.put_bit(rng.below(2));
+            for _ in 0..rng.below(6) {
+                w.put_se(fuzz_se(rng));
+            }
+        }
+        for _ in 0..rng.below(12) {
+            w.put_ue(fuzz_ue(rng));
+        }
+        let mut rbsp = w.finish();
+        rbsp.truncate(rng.below(rbsp.len() as u32 + 1) as usize);
+        rbsp
+    }
+
+    /// An AVC sequence header with a correct spsLength around `rbsp`, in
+    /// either legacy or OneTrack framing, so the bytes reach the SPS parser.
+    fn seq_header_around(rbsp: &[u8], onetrack: bool) -> Vec<u8> {
+        let mut sps = vec![0x67u8];
+        sps.extend_from_slice(rbsp);
+        let mut tag = if onetrack {
+            let mut t = vec![0x96u8, 0x00];
+            t.extend_from_slice(b"avc1");
+            t.push(1);
+            t
+        } else {
+            vec![0x17u8, 0x00, 0, 0, 0]
+        };
+        tag.extend_from_slice(&[1, 100, 0, 40, 0xFF, 0xE1]);
+        tag.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+        tag.extend_from_slice(&sps);
+        tag.push(0);
+        tag
+    }
+
+    #[test]
+    fn every_tag_parser_survives_shape_aware_fuzz() {
+        // Every function here runs on raw publisher bytes, and a release
+        // build aborts on panic, so the floor is "never panic". On top of
+        // that, the invariants the egress pumps rely on must hold for any
+        // input: passthrough is always the exact bytes, and a single-track
+        // tag always reaches a Track(0) destination untouched.
+        let mut rng = Lcg(0x1C_2026);
+        for _ in 0..20_000 {
+            let tag = fuzz_tag(&mut rng);
+            let info = classify_video_tag(&tag);
+            let _ = classify_audio_tag(&tag);
+            let _ = is_primary_video_idr(&tag);
+            let _ = seq_header_track_id(&tag);
+            let _ = audio_seq_header_track_id(&tag);
+            let _ = flatten_multitrack_video(&tag);
+            let _ = seq_header_codec(&tag);
             let _ = sps_dimensions(&tag);
-            let _ = select_video_bytes(&tag, VideoEgress::Track((seed & 0xFF) as u8));
-            let mut m = std::collections::BTreeMap::new();
-            m.insert((seed & 0x7) as u8, tag);
-            let _ = detect_vertical_primary_track(&m);
+            let target = rng.below(4) as u8;
+            let _ = flatten_multitrack_audio(&tag, target);
+            for egress in [
+                VideoEgress::Track(0),
+                VideoEgress::Track(1),
+                VideoEgress::Track(target),
+            ] {
+                let _ = select_video_bytes(&tag, egress);
+            }
+            for egress in [AudioEgress::Track(0), AudioEgress::Track(1)] {
+                let _ = select_audio_bytes(&tag, egress);
+            }
+            let passthrough = select_video_bytes(&tag, VideoEgress::Passthrough).unwrap();
+            assert_eq!(passthrough.as_ref(), tag.as_slice());
+            let passthrough = select_audio_bytes(&tag, AudioEgress::Passthrough).unwrap();
+            assert_eq!(passthrough.as_ref(), tag.as_slice());
+            if !info.is_multitrack {
+                let primary = select_video_bytes(&tag, VideoEgress::Track(0)).unwrap();
+                assert_eq!(primary.as_ref(), tag.as_slice());
+            }
+        }
+    }
+
+    #[test]
+    fn sps_parsing_survives_random_and_grammar_built_fuzz() {
+        // Half the SPSs are raw bytes after a profile byte (High profile
+        // half the time, the one with the extra fields); half are built by
+        // the grammar with extreme field values, which is what reaches the
+        // scaling-list arithmetic. Both are wrapped with a correct spsLength
+        // so the parser, not the framing check, is what gets exercised.
+        let mut rng = Lcg(0x5B5_2026);
+        for i in 0..20_000 {
+            let rbsp = if i % 2 == 0 {
+                let mut raw = vec![if rng.below(2) == 0 {
+                    100
+                } else {
+                    rng.next_u32() as u8
+                }];
+                raw.extend(rng.bytes(40));
+                raw
+            } else {
+                fuzz_sps_rbsp(&mut rng)
+            };
+            let tag = seq_header_around(&rbsp, rng.below(2) == 0);
+            if let Some((w, h)) = sps_dimensions(&tag) {
+                assert!(w > 0 && h > 0, "a decoded size is never empty");
+            }
+            let mut headers = std::collections::BTreeMap::new();
+            headers.insert(rng.below(4) as u8, tag);
+            let _ = detect_vertical_primary_track(&headers);
         }
     }
 
@@ -1761,8 +2319,7 @@ mod tests {
 
         let kept = select_video_bytes(&track1, VideoEgress::Track(1))
             .expect("vertical target track must forward");
-        let flat = flatten_multitrack_video(&track1).expect("OneTrack flattens");
-        assert_eq!(kept.as_ref(), flat.as_slice());
+        assert_eq!(kept.as_ref(), flat_hvc1_keyframe().as_slice());
 
         assert!(
             select_video_bytes(&track2, VideoEgress::Track(1)).is_none(),
@@ -1868,6 +2425,10 @@ mod tests {
         // EB ladder rungs 1..=4 each carry their own IDR cadence but
         // must NOT be picked as a cut anchor - if the cut lands here
         // the legacy decoder on the destination has no reference.
+        // Twitch Dual Format's vertical canvas is one of these TrackIds,
+        // so cuts are anchored to the horizontal canvas only; a vertical
+        // cut is clean because OBS aligns both canvases' keyframes. If
+        // cuts ever become canvas-aware, this is the guard that must flip.
         for track in 1u8..=4 {
             let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
             assert!(
@@ -1875,30 +2436,6 @@ mod tests {
                 "TrackId {track} must not be a cut candidate"
             );
         }
-    }
-
-    #[test]
-    fn is_primary_video_idr_anchors_dual_format_cuts_to_horizontal_canvas() {
-        // Dual Format: the cut-point index is built only from the
-        // horizontal primary (TrackId 0); the vertical canvas's primary
-        // (a nonzero TrackId) is NOT a cut anchor. That means a Cut lands
-        // cleanly on the vertical canvas ONLY IF OBS aligned both
-        // canvases' keyframes to the same input timestamp - which it does
-        // when both encoders share keyint, but that is an OBS behaviour we
-        // can't prove from inside this crate (it needs one real capture).
-        // This test pins our half of the contract: cuts are anchored to
-        // the horizontal canvas. If a future change must make cuts
-        // canvas-aware, this is the regression guard that has to flip.
-        let horizontal_idr = enhanced_rtmp_onetrack_video_bytes_track(0);
-        let vertical_idr = enhanced_rtmp_onetrack_video_bytes_track(1);
-        assert!(
-            is_primary_video_idr(&horizontal_idr),
-            "horizontal canvas IDR must be a cut anchor"
-        );
-        assert!(
-            !is_primary_video_idr(&vertical_idr),
-            "vertical canvas IDR must not (yet) be an independent cut anchor"
-        );
     }
 
     #[test]
@@ -2017,6 +2554,8 @@ mod tests {
         );
         assert!(!info.is_multitrack);
         assert_eq!(info.codec, AudioCodec::Aac);
+        // sink.rs asks through the shim, which must agree.
+        assert!(is_aac_seq_header(&tag));
     }
 
     #[test]

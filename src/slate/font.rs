@@ -474,7 +474,6 @@ mod tests {
     #[test]
     fn letters_have_outlines_and_space_does_not() {
         let font = font_for(Weight::Regular).unwrap();
-        assert!(!font.contours(font.glyph_id('o')).is_empty());
         assert_eq!(
             font.contours(font.glyph_id('o')).len(),
             2,

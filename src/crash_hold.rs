@@ -889,6 +889,38 @@ mod tests {
         assert!(later.await.expect("not wedged").is_some());
     }
 
+    /// OBS is back, but its new video comes in too slowly to span the
+    /// delay (a struggling encoder, or a delay raised meanwhile). The screen
+    /// can't wait forever: after the grace it rejoins where OBS's new video
+    /// starts, never on the video from before the hold.
+    #[test]
+    fn the_screen_stops_waiting_for_the_delay_after_the_grace() {
+        const DELAY_MS: u64 = 10_000;
+        let path =
+            std::env::temp_dir().join(format!("ic-rebuild-grace-{}.buf", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let ring = Arc::new(crate::buffer::DiskRing::create(&path, 1 << 20).unwrap());
+        let ctrl = Controller::new(ring, 0);
+        let keyframe = [0x17, 1, 0, 0, 0];
+        ctrl.ring.append(9, 0, &keyframe, true, false).unwrap();
+        let first_new = ctrl.ring.append(9, 5_000, &keyframe, true, false).unwrap();
+        ctrl.ring.append(9, 6_000, &keyframe, true, false).unwrap();
+        let mut rebuild = Some(Rebuild {
+            after_seq: Some(0),
+            since: Instant::now(),
+        });
+        assert_eq!(
+            delay_rebuilt(&ctrl, &mut rebuild, DELAY_MS),
+            None,
+            "1 s of 10"
+        );
+
+        let waited = Duration::from_millis(DELAY_MS) + REBUILD_GRACE;
+        rebuild.as_mut().unwrap().since = Instant::now() - waited;
+        assert_eq!(delay_rebuilt(&ctrl, &mut rebuild, DELAY_MS), first_new);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn durations_print_as_minutes_and_seconds() {
         assert_eq!(minutes_seconds(Duration::from_secs(65)), "1:05");

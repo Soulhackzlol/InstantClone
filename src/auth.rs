@@ -254,23 +254,105 @@ mod tests {
         assert!(a.begin_login_attempt(ip).is_ok());
     }
 
+    /// The lockout `client` is currently serving, read back through `check`.
+    /// Measured just after the failure that armed it, so it sits a hair under
+    /// the armed value; `assert_lockout` allows for that.
+    fn remaining_lockout(r: &RateLimiter, client: &str) -> Duration {
+        r.check(client).expect_err("client should be locked out")
+    }
+
+    fn assert_lockout(r: &RateLimiter, client: &str, want_secs: u64) {
+        let left = remaining_lockout(r, client);
+        let want = Duration::from_secs(want_secs);
+        assert!(
+            left <= want && left > want - Duration::from_secs(1),
+            "expected a ~{want_secs}s lockout, got {left:?}"
+        );
+    }
+
+    /// Each failure past the threshold doubles the lockout until it reaches
+    /// `max_lockout`, where it stays. Read back without sleeping: `check`
+    /// reports how long is left, which right after arming is the armed value.
     #[test]
-    fn check_and_count_counts_at_check_time() {
-        // The gate must count the attempt itself, so concurrent callers can't
-        // all pass before any failure lands (the TOCTOU the login await opened).
+    fn lockout_doubles_past_the_threshold_up_to_the_cap() {
         let r = RateLimiter::new(
-            3,
-            Duration::from_secs(30),
-            Duration::from_secs(600),
-            Duration::from_secs(600),
+            2,
+            Duration::from_secs(10),
+            Duration::from_secs(45),
+            Duration::from_secs(3600),
         );
         let c = "peer";
-        assert!(r.check_and_count(c).is_ok()); // 1
-        assert!(r.check_and_count(c).is_ok()); // 2
-        assert!(r.check_and_count(c).is_ok()); // 3 -> arms the lock
-        assert!(r.check_and_count(c).is_err()); // 4 -> locked, no verify happens
-        r.record_success(c);
-        assert!(r.check_and_count(c).is_ok()); // cleared
+        r.record_failure(c);
+        assert!(r.check(c).is_ok(), "one failure is under the threshold");
+        for want in [10, 20, 40, 45, 45] {
+            r.record_failure(c);
+            assert_lockout(&r, c, want);
+        }
+    }
+
+    /// A lockout never outlasts the forgiveness window. `check` forgets an
+    /// entry once it is older than the window, so a longer lock would be
+    /// wiped early and the two settings would disagree about when a client
+    /// may try again.
+    #[test]
+    fn lockout_is_clamped_to_the_forgiveness_window() {
+        let r = RateLimiter::new(
+            1,
+            Duration::from_secs(10),
+            Duration::from_secs(3600),
+            Duration::from_secs(25),
+        );
+        let c = "peer";
+        for want in [10, 20, 25, 25] {
+            r.record_failure(c);
+            assert_lockout(&r, c, want);
+        }
+    }
+
+    /// A client that keeps failing must not overflow the doubling. Without the
+    /// cap on the shift, the 33rd failure past the threshold is `1u32 << 32`:
+    /// a panic in a debug build, and in release a shift that wraps back to a
+    /// short lockout, handing the most persistent guesser the fastest retries.
+    #[test]
+    fn endless_failures_do_not_overflow_the_doubling() {
+        let day = Duration::from_secs(24 * 3600);
+        let r = RateLimiter::new(1, Duration::from_secs(1), day, day);
+        let c = "peer";
+        for _ in 0..100 {
+            r.record_failure(c);
+        }
+        // The shift is capped at 6: base * 64.
+        assert_lockout(&r, c, 64);
+    }
+
+    /// The tracked-client map is bounded, and when a flood fills it the
+    /// oldest entry is the one dropped. `MAX_TRACKED` is private to
+    /// `bump_failure`; the 8192 here mirrors it.
+    #[test]
+    fn a_full_table_evicts_the_oldest_client() {
+        const MAX_TRACKED: usize = 8192;
+        let r = RateLimiter::new(
+            1,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(3600),
+        );
+        r.record_failure("oldest");
+        // Make every later entry strictly newer than "oldest" so it is the
+        // unique minimum. A busy-wait on the clock, well under a microsecond,
+        // rather than a sleep.
+        let armed = Instant::now();
+        while Instant::now() <= armed {}
+        for i in 1..MAX_TRACKED {
+            r.record_failure(&format!("client-{i}"));
+        }
+        assert_eq!(r.attempts.lock().len(), MAX_TRACKED, "table is full");
+
+        r.record_failure("newcomer");
+        assert_eq!(r.attempts.lock().len(), MAX_TRACKED, "table stays bounded");
+        assert!(r.check("oldest").is_ok(), "the oldest entry was evicted");
+        assert!(r.check("client-1").is_err(), "newer entries are kept");
+        assert!(r.check("newcomer").is_err(), "the newcomer is tracked");
     }
 
     #[test]

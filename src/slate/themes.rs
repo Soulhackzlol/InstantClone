@@ -362,6 +362,13 @@ mod tests {
             .filter(|bx| is_flat_block(&frame, *bx, 24))
             .count();
         assert_eq!(flat, blocks_wide, "every headline-row block should be flat");
+        // An empty row is flat too: the headline must really be on it.
+        let background = frame.y[0];
+        let row = &frame.y[24 * 16 * frame.width..][..frame.width];
+        assert!(
+            row.iter().any(|luma| *luma != background),
+            "the headline moved off block row 24"
+        );
     }
 
     #[test]
@@ -392,38 +399,39 @@ mod tests {
         }
     }
 
+    /// Full-size vertical canvases are built in full by the budget tests in
+    /// `slate`; this covers the tiny ones, either way up.
     #[test]
-    fn themes_fit_vertical_and_tiny_canvases() {
+    fn themes_fit_tiny_canvases() {
         for theme in SlateTheme::ALL {
-            for (width, height) in [(1080, 1920), (284, 160), (32, 32)] {
+            for (width, height) in [(284, 160), (160, 284), (32, 32)] {
                 render(&style(theme), width, height, 0.3);
             }
         }
     }
 
+    /// Across the whole loop the track row is painted on exactly the
+    /// track's columns, including while the stripe enters and leaves, and
+    /// the stripe (a second colour on the track) shows up at some point.
     #[test]
     fn studio_stripe_stays_on_its_track() {
-        // Across the whole loop the stripe never paints outside the track's
-        // columns, including while it enters and leaves.
         let style = style(SlateTheme::Studio);
-        let scale = 1.0;
-        let track_left = (96.0 + 8.0 + 28.0) * scale;
-        let track_right = track_left + 360.0 * scale;
-        let track_row = (1080.0 - 200.0 + SUBLINE_DROP_PX + 36.0) * scale;
+        let track_left = 96 + 8 + 28;
+        let track_columns: Vec<usize> = (track_left..track_left + 360).collect();
+        let track_row = (1080.0 - 200.0 + SUBLINE_DROP_PX + 36.0) as usize;
+        let mut stripe_seen = false;
         for step in 0..STUDIO_STEPS as usize {
             let phase = step as f32 / STUDIO_STEPS;
-            let mut canvas = Canvas::new(1920, 1080, style.background);
-            draw(&mut canvas, &style, phase);
-            let frame = canvas.to_yuv420();
-            let row = &frame.y[track_row as usize * frame.width..][..1920];
+            let frame = render(&style, 1920, 1080, phase);
+            let row = &frame.y[track_row * frame.width..][..1920];
             let background_luma = row[0];
             let painted: Vec<usize> = (0..1920).filter(|x| row[*x] != background_luma).collect();
-            assert!(
-                painted
-                    .iter()
-                    .all(|x| (track_left as usize..track_right as usize).contains(x)),
-                "phase {phase}: stripe or track left its columns"
+            assert_eq!(
+                painted, track_columns,
+                "phase {phase}: the track row is painted off the track's columns"
             );
+            stripe_seen |= painted.iter().any(|x| row[*x] != row[painted[0]]);
         }
+        assert!(stripe_seen, "the stripe never showed on the track");
     }
 }

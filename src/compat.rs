@@ -95,10 +95,19 @@ fn keyframe_issue(params: &StreamParams, live: &[&Destination]) -> Option<String
     ))
 }
 
-/// Canvas taller than a destination's ceiling. Only Kick states a hard cap
-/// we can rely on, so it is the only platform checked here.
+/// Canvas past a destination's ceiling. Only Kick states a hard cap we can
+/// rely on, so it is the only platform checked here.
+///
+/// Measured on the short side, the way "1080p" is meant: a 1080x1920
+/// portrait canvas is 1080p, not "1920p". The height alone stands in when
+/// the width is not decoded.
 fn resolution_issue(params: &StreamParams, live: &[&Destination]) -> Option<String> {
-    if params.height == 0 || params.height <= KICK_MAX_HEIGHT {
+    let short_side = if params.width == 0 {
+        params.height
+    } else {
+        params.width.min(params.height)
+    };
+    if short_side == 0 || short_side <= KICK_MAX_HEIGHT {
         return None;
     }
     if !live.iter().any(|d| d.platform == "kick") {
@@ -106,7 +115,7 @@ fn resolution_issue(params: &StreamParams, live: &[&Destination]) -> Option<Stri
     }
     Some(format!(
         "Video is {}p. Kick caps at {}p.",
-        params.height, KICK_MAX_HEIGHT
+        short_side, KICK_MAX_HEIGHT
     ))
 }
 
@@ -297,6 +306,39 @@ mod tests {
         let mut p = params();
         p.height = 1440;
         assert_eq!(compat_warning(&p, &[dest("twitch", true)]), None);
+        assert_eq!(
+            compat_warning(&p, &[dest("kick", true)]),
+            Some("Video is 1440p. Kick caps at 1080p.".into())
+        );
+    }
+
+    /// Pins the threshold itself: 2600 ms is the last silent value. Moving
+    /// it either way changes who gets nagged, so it must be a deliberate
+    /// edit to `KEYFRAME_WARN_MS`, not a `<` vs `<=` slip.
+    #[test]
+    fn keyframe_warning_starts_just_past_the_threshold() {
+        let mut p = params();
+        p.keyframe_interval_ms = 2_600;
+        assert_eq!(compat_warning(&p, &[dest("kick", true)]), None);
+        p.keyframe_interval_ms = 2_601;
+        assert_eq!(
+            compat_warning(&p, &[dest("kick", true)]),
+            Some("Keyframe interval measures 2.6s. Kick expects 2s.".into())
+        );
+    }
+
+    /// A 9:16 canvas is 1080p on its short side, the same pixel budget as
+    /// 1920x1080, which Kick's ingest accepts in either orientation.
+    /// Reading the height alone called it "1920p" and warned falsely.
+    #[test]
+    fn portrait_1080p_canvas_does_not_trip_the_kick_cap() {
+        let mut p = params();
+        p.width = 1080;
+        p.height = 1920;
+        assert_eq!(compat_warning(&p, &[dest("kick", true)]), None);
+        // A portrait canvas past the cap still warns, named by its short side.
+        p.width = 1440;
+        p.height = 2560;
         assert_eq!(
             compat_warning(&p, &[dest("kick", true)]),
             Some("Video is 1440p. Kick caps at 1080p.".into())

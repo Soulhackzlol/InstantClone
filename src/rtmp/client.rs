@@ -6,7 +6,8 @@
 //! URL form: rtmp://host[:port]/app/stream_key (default port 1935), or
 //! rtmps://host[:port]/app/stream_key for TLS (default port 443). Kick's
 //! ingest is RTMPS-only, so the egress socket transparently upgrades to
-//! TLS when the URL scheme is `rtmps://` - see `EgressStream`.
+//! TLS when the URL scheme is `rtmps://` - see `EgressStream`. An IPv6
+//! host is written in brackets: rtmp://[::1]:1935/app/stream_key.
 
 use crate::rtmp::amf0::{self, Amf0};
 use crate::rtmp::chunk::{ChunkReader, ChunkWriter, Message};
@@ -47,24 +48,25 @@ impl EgressUrl {
         let slash = rest
             .find('/')
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing app path"))?;
-        let host_part = &rest[..slash];
+        let (host, port) = split_host_port(&rest[..slash], default_port)?;
         let path = &rest[slash + 1..];
-        let (host, port) = match host_part.find(':') {
-            Some(c) => (
-                host_part[..c].to_string(),
-                host_part[c + 1..]
-                    .parse()
-                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad port"))?,
-            ),
-            None => (host_part.to_string(), default_port),
-        };
-        let last_slash = path
-            .rfind('/')
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing stream key"))?;
+        let missing_key = || io::Error::new(io::ErrorKind::InvalidInput, "missing stream key");
+        let last_slash = path.rfind('/').ok_or_else(missing_key)?;
         let app = path[..last_slash].to_string();
         let stream_key = path[last_slash + 1..].to_string();
+        // A trailing slash leaves nothing after it. Publishing with "" only
+        // earns a platform auth error that never says the key was missing.
+        if stream_key.is_empty() {
+            return Err(missing_key());
+        }
         let scheme = if tls { "rtmps" } else { "rtmp" };
-        let tc_url = format!("{}://{}:{}/{}", scheme, host, port, app);
+        // tcUrl is a URL, so an IPv6 host goes back inside its brackets.
+        let url_host = if host.contains(':') {
+            format!("[{host}]")
+        } else {
+            host.clone()
+        };
+        let tc_url = format!("{}://{}:{}/{}", scheme, url_host, port, app);
         Ok(Self {
             host,
             port,
@@ -74,6 +76,35 @@ impl EgressUrl {
             tls,
         })
     }
+}
+
+/// Split `host[:port]` or `[ipv6]:port` into the host to dial and the port.
+/// An IPv6 literal has colons of its own, so it must be bracketed and its
+/// port can only follow the `]`; splitting on the first ':' tore it apart.
+fn split_host_port(host_part: &str, default_port: u16) -> io::Result<(String, u16)> {
+    let invalid = |msg: &str| io::Error::new(io::ErrorKind::InvalidInput, msg.to_string());
+    let (host, port) = match host_part.strip_prefix('[') {
+        Some(bracketed) => {
+            let (host, after) = bracketed
+                .split_once(']')
+                .ok_or_else(|| invalid("unclosed [ in host"))?;
+            if after.is_empty() {
+                (host, None)
+            } else {
+                let port = after.strip_prefix(':').ok_or_else(|| invalid("bad port"))?;
+                (host, Some(port))
+            }
+        }
+        None => match host_part.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (host_part, None),
+        },
+    };
+    let port = match port {
+        Some(p) => p.parse().map_err(|_| invalid("bad port"))?,
+        None => default_port,
+    };
+    Ok((host.to_string(), port))
 }
 
 /// Egress socket that is either a plain TCP stream or a TLS stream over
@@ -683,5 +714,164 @@ mod tests {
     fn parse_rejects_unknown_scheme() {
         assert!(EgressUrl::parse("http://host/app/k").is_err());
         assert!(EgressUrl::parse("host/app/k").is_err());
+    }
+
+    #[test]
+    fn parse_accepts_bracketed_ipv6_hosts() {
+        // An IPv6 literal has to be bracketed in a URL; splitting host and
+        // port on the first ':' cut it apart and failed on "bad port".
+        let u = EgressUrl::parse("rtmp://[::1]:1936/app/k").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("::1", 1936));
+        // The host is dialled bare, but tcUrl is a URL, so it keeps brackets.
+        assert_eq!(u.tc_url, "rtmp://[::1]:1936/app");
+
+        let u = EgressUrl::parse("rtmps://[2001:db8::7]/app/k").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("2001:db8::7", 443));
+        assert_eq!(u.tc_url, "rtmps://[2001:db8::7]:443/app");
+
+        for bad in [
+            "rtmp://[::1/app/k",     // no closing bracket
+            "rtmp://[::1]x/app/k",   // junk after it
+            "rtmp://[::1]:/app/k",   // empty port
+            "rtmp://::1:1935/app/k", // unbracketed
+        ] {
+            assert!(EgressUrl::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn parse_refuses_an_empty_stream_key() {
+        // A trailing slash left the key empty, and we published with "" -
+        // the platform then refuses with an auth error that doesn't say the
+        // key was missing. Saying so up front is the useful error.
+        let err = EgressUrl::parse("rtmp://live.twitch.tv/app/")
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("stream key"), "{err}");
+        assert!(EgressUrl::parse("rtmp://live.twitch.tv/app").is_err());
+    }
+
+    #[test]
+    fn parse_keeps_nested_app_paths_and_rejects_bad_ports() {
+        // Everything between the host and the last '/' is the app, which is
+        // how Wowza-style `app/instance` ingests are addressed.
+        let u = EgressUrl::parse("rtmp://host:1935/app/inst/key?x=1").unwrap();
+        assert_eq!(u.app, "app/inst");
+        assert_eq!(
+            u.stream_key, "key?x=1",
+            "query rides on the key, as OBS sends it"
+        );
+        assert_eq!(u.tc_url, "rtmp://host:1935/app/inst");
+
+        for bad in [
+            "rtmp://host:abc/app/k",
+            "rtmp://host:70000/app/k",
+            "rtmp://host:/app/k",
+        ] {
+            assert!(EgressUrl::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// Wire bytes of AMF0 command messages as a server would send them.
+    async fn server_replies(commands: &[(u8, BytesMut)]) -> Vec<u8> {
+        let mut wire: Vec<u8> = Vec::new();
+        let mut w = ChunkWriter::new(&mut wire);
+        for (type_id, body) in commands {
+            w.write_message(3, 0, *type_id, 0, body).await.unwrap();
+        }
+        wire
+    }
+
+    fn command(name: &str, info: Option<Vec<(&str, &str)>>) -> BytesMut {
+        let mut buf = BytesMut::new();
+        amf0::enc_string(&mut buf, name);
+        amf0::enc_number(&mut buf, 1.0);
+        amf0::enc_null(&mut buf);
+        if let Some(pairs) = info {
+            let values: Vec<Amf0> = pairs
+                .iter()
+                .map(|(_, v)| Amf0::String(v.to_string()))
+                .collect();
+            let fields: Vec<(&str, &Amf0)> = pairs
+                .iter()
+                .zip(&values)
+                .map(|((k, _), v)| (*k, v))
+                .collect();
+            amf0::enc_object(&mut buf, &fields);
+        }
+        buf
+    }
+
+    async fn await_on(wire: Vec<u8>, expect: &str) -> io::Result<Vec<Amf0>> {
+        let mut reader = ChunkReader::new(std::io::Cursor::new(wire));
+        await_command_status(&mut reader, expect).await
+    }
+
+    #[tokio::test]
+    async fn await_command_status_skips_unrelated_traffic_until_the_answer() {
+        // Servers interleave onBWDone, onFCPublish and control messages
+        // with the reply we wait for; none of those is the answer.
+        let mut info_with_date = command("_result", None);
+        info_with_date.extend_from_slice(&[0x0B, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let wire = server_replies(&[
+            (18, command("onMetaData", None)),
+            (20, command("onBWDone", None)),
+            (
+                20,
+                command(
+                    "onFCPublish",
+                    Some(vec![("code", "NetStream.Publish.Start")]),
+                ),
+            ),
+            (20, info_with_date),
+        ])
+        .await;
+        let vals = await_on(wire, "_result").await.expect("the _result");
+        assert_eq!(vals[0].as_str(), Some("_result"));
+        assert!(
+            matches!(vals[3], Amf0::Date(_)),
+            "a Date in a reply is fine"
+        );
+    }
+
+    #[tokio::test]
+    async fn await_command_status_turns_server_errors_into_errors() {
+        let wire = server_replies(&[(
+            20,
+            command(
+                "_error",
+                Some(vec![("level", "error"), ("description", "bad app")]),
+            ),
+        )])
+        .await;
+        let err = await_on(wire, "_result").await.unwrap_err();
+        assert!(err.to_string().contains("bad app"), "{err}");
+
+        let wire = server_replies(&[(
+            20,
+            command(
+                "onStatus",
+                Some(vec![
+                    ("level", "error"),
+                    ("code", "NetStream.Publish.BadName"),
+                    ("description", "in use"),
+                ]),
+            ),
+        )])
+        .await;
+        let err = await_on(wire, "onStatus").await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("NetStream.Publish.BadName: in use"),
+            "{err}"
+        );
+
+        // A status-level onStatus is the answer, not a failure.
+        let wire =
+            server_replies(&[(20, command("onStatus", Some(vec![("level", "status")])))]).await;
+        assert!(await_on(wire, "onStatus").await.is_ok());
+
+        // The connection closing before any answer is an error too.
+        assert!(await_on(Vec::new(), "_result").await.is_err());
     }
 }

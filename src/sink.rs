@@ -1453,6 +1453,33 @@ mod tests {
     /// would refuse to start for any path whose accent happened to straddle
     /// the cut. Same bug the config redactors and `scrub_secret` had; this
     /// was the last copy of it.
+    /// FLV splits the timestamp: the low 24 bits big-endian, then the top
+    /// 8 bits in a separate "extended" byte. Past 2^24 ms (~4.6 hours) a
+    /// writer that drops or misplaces that byte jumps the player's clock
+    /// backwards. The file recorder and the live web player each build
+    /// tags with their own copy of this code, so both are pinned.
+    #[test]
+    fn flv_tags_carry_the_extended_timestamp_byte() {
+        let expected = [
+            0x09, 0x00, 0x00, 0x02, // video, DataSize 2
+            0x34, 0x56, 0x78, 0x12, // ts low 24 bits, then bits 24..32
+            0x00, 0x00, 0x00, // StreamID
+            0xAA, 0xBB, // payload
+            0x00, 0x00, 0x00, 0x0D, // PreviousTagSize = 11 + 2
+        ];
+        assert_eq!(flv_tag_bytes(9, 0x1234_5678, &[0xAA, 0xBB]), expected);
+
+        let path = std::env::temp_dir().join(format!("ic-test-sink-{}.flv", std::process::id()));
+        {
+            let mut w = FlvWriter::create(path.to_str().unwrap(), None).unwrap();
+            w.write_tag(9, 0x1234_5678, &[0xAA, 0xBB]).unwrap();
+        }
+        let file = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(&file[..13], b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00");
+        assert_eq!(&file[13..], expected);
+    }
+
     #[test]
     fn truncate_cuts_on_characters_not_bytes() {
         // The accent straddles byte 41, which is where the old code cut.

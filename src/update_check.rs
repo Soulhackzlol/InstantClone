@@ -27,21 +27,15 @@ pub struct UpdateInfo {
 
 impl UpdateInfo {
     pub fn to_json(&self) -> String {
-        let latest_field = match &self.latest {
-            Some(v) => format!("\"{}\"", v.replace('"', "'")),
-            None => "null".to_string(),
-        };
-        let error_field = match &self.error {
-            Some(e) => format!("\"{}\"", e.replace('"', "'").replace('\\', "\\\\")),
-            None => "null".to_string(),
-        };
+        use crate::config::json_str;
+        let optional = |v: &Option<String>| v.as_deref().map_or("null".to_string(), json_str);
         format!(
-            r#"{{"current":"{}","latest":{},"update_available":{},"release_url":"{}","error":{}}}"#,
-            self.current.replace('"', "'"),
-            latest_field,
+            r#"{{"current":{},"latest":{},"update_available":{},"release_url":{},"error":{}}}"#,
+            json_str(&self.current),
+            optional(&self.latest),
             self.update_available,
-            RELEASES_PAGE,
-            error_field,
+            json_str(RELEASES_PAGE),
+            optional(&self.error),
         )
     }
 }
@@ -116,7 +110,7 @@ fn fetch_latest() -> UpdateInfo {
             };
         }
     };
-    let latest_stripped = latest_tag.trim_start_matches('v').to_string();
+    let latest_stripped = strip_tag_prefix(&latest_tag).to_string();
     let update_available = is_newer(&latest_stripped, &current);
     UpdateInfo {
         current,
@@ -142,14 +136,14 @@ fn extract_tag_name(body: &str) -> Option<String> {
     Some(value_slice[..quote_end].to_string())
 }
 
-/// SemVer-ish comparison: split on `.` and `-`, compare component by
-/// component (numbers numerically, suffixes lexically). Handles
-/// `0.1.3` vs `0.1.3-beta.7` correctly (prerelease loses to release of
-/// the same base version). Returns true iff `latest` is strictly newer
-/// than `current`.
+/// SemVer comparison: base components numerically, then the prerelease
+/// per SemVer 11.4 (see `compare_prerelease`). Handles `0.1.3` vs
+/// `0.1.3-beta.7` correctly (prerelease loses to release of the same base
+/// version). A `v`/`V` tag prefix and `+build` metadata are ignored.
+/// Returns true iff `latest` is strictly newer than `current`.
 fn is_newer(latest: &str, current: &str) -> bool {
-    let (lat_base, lat_pre) = split_prerelease(latest);
-    let (cur_base, cur_pre) = split_prerelease(current);
+    let (lat_base, lat_pre) = split_prerelease(strip_build_metadata(strip_tag_prefix(latest)));
+    let (cur_base, cur_pre) = split_prerelease(strip_build_metadata(strip_tag_prefix(current)));
     let lat_parts = parse_dotted(lat_base);
     let cur_parts = parse_dotted(cur_base);
     match lat_parts.cmp(&cur_parts) {
@@ -160,8 +154,45 @@ fn is_newer(latest: &str, current: &str) -> bool {
             (None, None) => false,
             (None, Some(_)) => true,
             (Some(_), None) => false,
-            (Some(a), Some(b)) => a > b,
+            (Some(a), Some(b)) => compare_prerelease(a, b).is_gt(),
         },
+    }
+}
+
+/// `v0.1.15` / `V0.1.15` -> `0.1.15`. Release tags are written by hand, so
+/// the prefix case is not guaranteed.
+fn strip_tag_prefix(tag: &str) -> &str {
+    tag.trim().trim_start_matches(['v', 'V'])
+}
+
+/// SemVer build metadata (`+...`) carries no precedence, so it is dropped.
+fn strip_build_metadata(v: &str) -> &str {
+    v.split_once('+').map_or(v, |(version, _)| version)
+}
+
+/// SemVer 11.4 prerelease precedence: dot-separated identifiers compared
+/// left to right, numeric ones as numbers (so `beta.10` > `beta.9`),
+/// numeric below alphanumeric, and a longer list wins a shared prefix.
+fn compare_prerelease(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let mut left = a.split('.');
+    let mut right = b.split('.');
+    loop {
+        let (l, r) = match (left.next(), right.next()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(l), Some(r)) => (l, r),
+        };
+        let order = match (l.parse::<u64>(), r.parse::<u64>()) {
+            (Ok(l), Ok(r)) => l.cmp(&r),
+            (Ok(_), Err(_)) => Ordering::Less,
+            (Err(_), Ok(_)) => Ordering::Greater,
+            (Err(_), Err(_)) => l.cmp(r),
+        };
+        if order.is_ne() {
+            return order;
+        }
     }
 }
 
@@ -222,5 +253,52 @@ mod tests {
     fn is_newer_prerelease_progression() {
         assert!(is_newer("0.1.3-beta.8", "0.1.3-beta.7"));
         assert!(!is_newer("0.1.3-beta.6", "0.1.3-beta.7"));
+    }
+
+    /// Prerelease numbers compare as numbers (SemVer 11.4.1). As text,
+    /// "10" sorts before "9", so beta.10 would never be offered to beta.9.
+    #[test]
+    fn is_newer_prerelease_numbers_compare_numerically() {
+        assert!(is_newer("0.1.3-beta.10", "0.1.3-beta.9"));
+        assert!(!is_newer("0.1.3-beta.9", "0.1.3-beta.10"));
+        // A longer identifier list wins when the shared prefix is equal,
+        // and a numeric identifier sorts below an alphanumeric one.
+        assert!(is_newer("0.1.3-beta.1.1", "0.1.3-beta.1"));
+        assert!(is_newer("0.1.3-rc", "0.1.3-2"));
+    }
+
+    /// Two-digit components must not sort as text either.
+    #[test]
+    fn is_newer_two_digit_patch_beats_one_digit() {
+        assert!(is_newer("0.1.10", "0.1.9"));
+        assert!(!is_newer("0.1.9", "0.1.10"));
+    }
+
+    /// Tag prefixes and build metadata are not part of the version: an
+    /// uppercase `V` or a `+build` suffix used to parse a component as 0,
+    /// so the release looked older than what is installed.
+    #[test]
+    fn is_newer_ignores_tag_prefix_case_and_build_metadata() {
+        assert!(is_newer("V1.0.0", "0.1.14"));
+        assert!(is_newer("0.1.15+build.7", "0.1.14"));
+        assert!(!is_newer("0.1.14+build.7", "0.1.14"));
+        assert_eq!(strip_tag_prefix("V1.0.0"), "1.0.0");
+        assert_eq!(strip_tag_prefix("v0.1.15"), "0.1.15");
+    }
+
+    /// The error text comes from ureq or the OS and can carry newlines or
+    /// control characters, which a raw JSON string cannot contain. The
+    /// dashboard would then fail to parse the whole response.
+    #[test]
+    fn to_json_escapes_control_characters_in_the_error() {
+        let info = UpdateInfo {
+            current: "0.1.14".into(),
+            latest: None,
+            update_available: false,
+            error: Some("network: line one\nline \"two\"\t\\ end".into()),
+        };
+        let json = info.to_json();
+        assert!(crate::config::is_valid_json(&json), "invalid JSON: {json}");
+        assert!(json.contains(r#""error":"network: line one\nline \"two\"\t\\ end""#));
     }
 }

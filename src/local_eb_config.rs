@@ -180,7 +180,7 @@ fn parse_canvas(object: &str) -> Option<ObsCanvas> {
 
 /// The unsigned number after `"key":`. The quotes keep `"width"` from
 /// matching `"canvas_width"`.
-fn number_field(object: &str, key: &str) -> Option<u32> {
+pub(crate) fn number_field(object: &str, key: &str) -> Option<u32> {
     let needle = format!("\"{key}\"");
     let after = &object[object.find(&needle)? + needle.len()..];
     let value = after.trim_start().strip_prefix(':')?.trim_start();
@@ -192,8 +192,86 @@ fn number_field(object: &str, key: &str) -> Option<u32> {
 
 /// Encoder id plus its settings JSON for one track.
 pub struct TrackEncoder {
-    pub encoder_type: &'static str,
+    pub encoder_type: String,
     pub settings_json: String,
+}
+
+impl TrackEncoder {
+    /// The codec this libobs encoder id produces. Unknown for an id that
+    /// names none, which no destination is assumed to play.
+    pub fn codec(&self) -> crate::h264::VideoCodec {
+        use crate::h264::VideoCodec;
+        let id = self.encoder_type.to_ascii_lowercase();
+        if id.contains("av1") {
+            VideoCodec::Av1
+        } else if id.contains("hevc") || id.contains("265") {
+            VideoCodec::Hevc
+        } else if id.contains("264")
+            || id.contains("avc")
+            || matches!(
+                id.as_str(),
+                "jim_nvenc" | "ffmpeg_nvenc" | "obs_qsv11" | "obs_qsv11_v2"
+            )
+        {
+            VideoCodec::Avc
+        } else {
+            VideoCodec::Unknown
+        }
+    }
+
+    /// The same encoder and settings at `kbps`.
+    pub fn at_bitrate(&self, kbps: u32) -> TrackEncoder {
+        const KEY: &str = "\"bitrate\"";
+        let json = &self.settings_json;
+        let settings_json = match json.find(KEY) {
+            Some(at) => {
+                let after_key = at + KEY.len();
+                let rest = &json[after_key..];
+                let value = rest
+                    .trim_start()
+                    .strip_prefix(':')
+                    .unwrap_or(rest)
+                    .trim_start();
+                let value_start = json.len() - value.len();
+                let digits = value
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(value.len());
+                format!(
+                    "{}:{kbps}{}",
+                    &json[..after_key],
+                    &json[value_start + digits..]
+                )
+            }
+            None => {
+                let fields = json
+                    .trim()
+                    .trim_start_matches('{')
+                    .trim_end_matches('}')
+                    .trim();
+                match fields {
+                    "" => format!("{{{KEY}:{kbps}}}"),
+                    _ => format!("{{{KEY}:{kbps},{fields}}}"),
+                }
+            }
+        };
+        TrackEncoder {
+            encoder_type: self.encoder_type.clone(),
+            settings_json,
+        }
+    }
+}
+
+/// The streamer's own stream settings from OBS (Settings > Output), what
+/// OBS streams with when Enhanced Broadcasting is off. The main track
+/// copies them, so the local config looks like EB off, and a streamer who
+/// wants it different changes it where they always do: in OBS.
+pub struct StreamerSettings {
+    /// Encoder id and its settings JSON (Advanced output). None in Simple
+    /// output, which keeps no settings file: only the bitrate is theirs.
+    pub encoder: Option<TrackEncoder>,
+    pub bitrate_kbps: u32,
+    /// "Rescale Output" (Advanced output), when it is on.
+    pub rescale: Option<(u32, u32)>,
 }
 
 /// What the local config asks OBS to encode.
@@ -227,23 +305,43 @@ impl LocalPlan {
 }
 
 /// The config JSON, or None when OBS sent no canvases (the caller then
-/// keeps the static ladder). `encoder_for(kbps)` supplies the chosen
-/// encoder's id and settings at a given bitrate.
+/// keeps the static ladder). The main track copies `streamer`'s settings
+/// when OBS's were readable; otherwise the budget is split and
+/// `encoder_for(kbps)` supplies the chosen encoder at a given bitrate. A
+/// second canvas always gets `encoder_for`'s encoder, so the caller passes
+/// one only when a destination streams it.
 pub fn build(
     canvases: &[ObsCanvas],
     bandwidth_kbps: u32,
+    streamer: Option<&StreamerSettings>,
     ingest_port: u16,
     encoder_for: impl Fn(u32) -> TrackEncoder,
 ) -> Option<(String, LocalPlan)> {
-    let main = *canvases.first()?;
+    let canvas = *canvases.first()?;
     let additional = canvases.get(1).copied();
-    let main_kbps = match additional {
-        Some(_) => share(bandwidth_kbps, MAIN_TRACK_SHARE_PCT),
-        None => bandwidth_kbps.max(MIN_TRACK_KBPS),
+    let (main, main_kbps) = match streamer {
+        Some(own) => {
+            let (width, height) = own.rescale.unwrap_or((canvas.width, canvas.height));
+            let sized = ObsCanvas {
+                width,
+                height,
+                ..canvas
+            };
+            (sized, own.bitrate_kbps)
+        }
+        None if additional.is_some() => (canvas, share(bandwidth_kbps, MAIN_TRACK_SHARE_PCT)),
+        None => (canvas, bandwidth_kbps.max(MIN_TRACK_KBPS)),
     };
-    let mut tracks = vec![track_json(&main, 0, &encoder_for(main_kbps))];
+    let main_track = match streamer.and_then(|own| own.encoder.as_ref()) {
+        Some(encoder) => track_json(&main, 0, encoder),
+        None => track_json(&main, 0, &encoder_for(main_kbps)),
+    };
+    let mut tracks = vec![main_track];
     if let Some(canvas) = additional {
-        let kbps = share(bandwidth_kbps, 100 - MAIN_TRACK_SHARE_PCT);
+        let kbps = match streamer {
+            Some(_) => same_quality_kbps(main_kbps, &main, &canvas),
+            None => share(bandwidth_kbps, 100 - MAIN_TRACK_SHARE_PCT),
+        };
         tracks.push(track_json(&canvas, 1, &encoder_for(kbps)));
     }
     let config = format!(
@@ -266,6 +364,21 @@ fn track_json(canvas: &ObsCanvas, canvas_index: u32, encoder: &TrackEncoder) -> 
         idx = canvas_index,
         s = encoder.settings_json,
     )
+}
+
+/// The bitrate that gives `other` the same bits per pixel per frame as
+/// `main` gets at `main_kbps`: the vertical track looks as good as the
+/// streamer's own. Never above `main_kbps`, never under `MIN_TRACK_KBPS`.
+fn same_quality_kbps(main_kbps: u32, main: &ObsCanvas, other: &ObsCanvas) -> u32 {
+    let pixel_rate = |c: &ObsCanvas, den: u32| {
+        u128::from(c.width) * u128::from(c.height) * u128::from(c.fps_num) * u128::from(den)
+    };
+    let kbps = u128::from(main_kbps) * pixel_rate(other, main.fps_den)
+        / pixel_rate(main, other.fps_den).max(1);
+    let ceiling = main_kbps.max(MIN_TRACK_KBPS);
+    u32::try_from(kbps)
+        .unwrap_or(ceiling)
+        .clamp(MIN_TRACK_KBPS, ceiling)
 }
 
 fn share(total_kbps: u32, percent: u64) -> u32 {
@@ -297,7 +410,7 @@ mod tests {
 
     fn x264(kbps: u32) -> TrackEncoder {
         TrackEncoder {
-            encoder_type: "obs_x264",
+            encoder_type: "obs_x264".into(),
             settings_json: format!(r#"{{"bitrate":{kbps}}}"#),
         }
     }
@@ -368,7 +481,7 @@ mod tests {
 
     #[test]
     fn two_canvases_give_one_track_each() {
-        let (config, plan) = build(&parse_canvases(REQUEST), 10_000, 1935, x264).unwrap();
+        let (config, plan) = build(&parse_canvases(REQUEST), 10_000, None, 1935, x264).unwrap();
         assert_eq!(config.matches("\"canvas_index\"").count(), 2);
         assert!(config.contains(r#""width":1920,"height":1080,"framerate":{"numerator":60,"denominator":1},"canvas_index":0,"settings":{"bitrate":6000}"#));
         assert!(config.contains(r#""width":1080,"height":1920,"framerate":{"numerator":30,"denominator":1},"canvas_index":1,"settings":{"bitrate":4000}"#));
@@ -379,7 +492,7 @@ mod tests {
     #[test]
     fn one_canvas_never_names_a_second() {
         let only_main = &parse_canvases(REQUEST)[..1];
-        let (config, plan) = build(only_main, 8_000, 1935, x264).unwrap();
+        let (config, plan) = build(only_main, 8_000, None, 1935, x264).unwrap();
         assert!(
             !config.contains(r#""canvas_index":1"#),
             "OBS would refuse to stream"
@@ -395,7 +508,8 @@ mod tests {
     fn default_budget_keeps_the_main_track_at_6000() {
         let canvases = parse_canvases(REQUEST);
         assert_eq!(default_budget_kbps(&canvases[..1]), 6000);
-        let (config, _) = build(&canvases, default_budget_kbps(&canvases), 1935, x264).unwrap();
+        let (config, _) =
+            build(&canvases, default_budget_kbps(&canvases), None, 1935, x264).unwrap();
         assert!(config.contains(r#""canvas_index":0,"settings":{"bitrate":6000}"#));
     }
 
@@ -413,6 +527,93 @@ mod tests {
             requested_budget_kbps(r#"{"preferences":{"maximum_aggregate_bitrate":100}}"#),
             Some(1250)
         );
+        assert_eq!(
+            requested_budget_kbps(r#"{"preferences":{"maximum_aggregate_bitrate":999999}}"#),
+            Some(50000),
+            "clamped to the 50000 ceiling"
+        );
+        assert_eq!(
+            requested_budget_kbps(r#"{"preferences":{"maximum_aggregate_bitrate":0}}"#),
+            None,
+            "0 is not a cap"
+        );
+    }
+
+    fn canvas(width: u32, height: u32) -> ObsCanvas {
+        ObsCanvas {
+            width,
+            height,
+            fps_num: 60,
+            fps_den: 1,
+        }
+    }
+
+    /// OBS refuses to start the stream on malformed JSON, and the tracks
+    /// together must never ask for more than the streamer's budget. Checked
+    /// at both clamps (at 1250 the 60 / 40 split meets the 500 kbps track
+    /// minimum exactly) and on odd canvases: portrait main, tiny, 4K, and
+    /// a third canvas that must not get a track.
+    #[test]
+    fn every_local_config_is_valid_json_within_its_budget() {
+        let landscape = canvas(1920, 1080);
+        let portrait = canvas(1080, 1920);
+        let canvas_sets: [&[ObsCanvas]; 6] = [
+            &[landscape],
+            &[landscape, portrait],
+            &[portrait],
+            &[canvas(16, 16), canvas(2, 2)],
+            &[canvas(3840, 2160), canvas(2160, 3840)],
+            &[landscape, portrait, canvas(1280, 720)],
+        ];
+        for canvases in canvas_sets {
+            for budget in [MIN_BUDGET_KBPS, MIN_BUDGET_KBPS + 1, 6001, MAX_BUDGET_KBPS] {
+                let (config, plan) = build(canvases, budget, None, 1935, x264).unwrap();
+                let context = format!("{} at {budget} kbps", plan.describe());
+                assert!(crate::config::is_valid_json(&config), "{context}: {config}");
+                let bitrates: Vec<u32> = array_objects(&config, "encoder_configurations")
+                    .iter()
+                    .map(|track| number_field(track, "bitrate").unwrap())
+                    .collect();
+                assert_eq!(
+                    bitrates.len(),
+                    canvases.len().min(2),
+                    "{context}: one track per canvas, two at most"
+                );
+                assert!(
+                    bitrates.iter().sum::<u32>() <= budget,
+                    "{context}: {bitrates:?} is over budget"
+                );
+                assert!(
+                    bitrates.iter().all(|kbps| *kbps >= MIN_TRACK_KBPS),
+                    "{context}: {bitrates:?} starves a track"
+                );
+                // What the ingest side and the controller read back from it.
+                assert_eq!(
+                    names_additional_canvas(&config),
+                    plan.additional.is_some(),
+                    "{context}"
+                );
+                assert_eq!(
+                    vertical_track(&config).is_some(),
+                    plan.feeds_vertical(),
+                    "{context}"
+                );
+            }
+        }
+    }
+
+    /// The split rounds down, so for every budget OBS can ask for, the two
+    /// tracks never add up to more than it.
+    #[test]
+    fn the_track_split_never_exceeds_any_budget() {
+        for budget in MIN_BUDGET_KBPS..=MAX_BUDGET_KBPS {
+            let main = share(budget, MAIN_TRACK_SHARE_PCT);
+            let additional = share(budget, 100 - MAIN_TRACK_SHARE_PCT);
+            assert!(
+                main + additional <= budget,
+                "{main} + {additional} > {budget}"
+            );
+        }
     }
 
     #[test]
@@ -429,16 +630,16 @@ mod tests {
     #[test]
     fn plan_says_what_it_encodes_and_whether_it_feeds_vertical() {
         let canvases = parse_canvases(REQUEST);
-        let (_, both) = build(&canvases, 10_000, 1935, x264).unwrap();
+        let (_, both) = build(&canvases, 10_000, None, 1935, x264).unwrap();
         assert!(both.feeds_vertical());
         assert_eq!(
             both.describe(),
             "1920x1080 from the main canvas + 1080x1920 from OBS's Additional canvas"
         );
-        let (_, main_only) = build(&canvases[..1], 6_000, 1935, x264).unwrap();
+        let (_, main_only) = build(&canvases[..1], 6_000, None, 1935, x264).unwrap();
         assert!(!main_only.feeds_vertical());
         assert_eq!(main_only.describe(), "1920x1080 from the main canvas");
-        let (_, portrait_main) = build(&canvases[1..], 6_000, 1935, x264).unwrap();
+        let (_, portrait_main) = build(&canvases[1..], 6_000, None, 1935, x264).unwrap();
         assert!(
             portrait_main.feeds_vertical(),
             "a portrait main canvas counts"
@@ -447,7 +648,7 @@ mod tests {
 
     #[test]
     fn no_canvases_means_no_local_config() {
-        assert!(build(&[], 8_000, 1935, x264).is_none());
+        assert!(build(&[], 8_000, None, 1935, x264).is_none());
     }
 
     #[test]
@@ -478,5 +679,164 @@ mod tests {
             {"width": 540, "height": 960},
             {"width": 1080, "height": 1920}]}"#;
         assert_eq!(vertical_track(two_portrait_rungs), Some(2));
+    }
+
+    const OWN_AMD: &str =
+        r#"{"bitrate":6000,"rate_control":"CBR","preset":"quality","profile":"high","bf":2}"#;
+
+    fn own_amd(rescale: Option<(u32, u32)>) -> StreamerSettings {
+        StreamerSettings {
+            encoder: Some(TrackEncoder {
+                encoder_type: "h264_texture_amf".into(),
+                settings_json: OWN_AMD.into(),
+            }),
+            bitrate_kbps: 6000,
+            rescale,
+        }
+    }
+
+    fn canvas_at(width: u32, height: u32, fps: u32) -> ObsCanvas {
+        ObsCanvas {
+            width,
+            height,
+            fps_num: fps,
+            fps_den: 1,
+        }
+    }
+
+    /// With the streamer's settings readable, the main track is exactly
+    /// their EB-off stream: their encoder, their settings untouched, their
+    /// Rescale Output size, whatever the budget says.
+    #[test]
+    fn the_main_track_streams_with_the_streamers_own_settings() {
+        let main_only = [canvas_at(2560, 1440, 60)];
+        let own = own_amd(Some((1920, 1080)));
+        let (config, plan) = build(&main_only, 10_000, Some(&own), 1935, x264).unwrap();
+        assert!(crate::config::is_valid_json(&config), "{config}");
+        let tracks = array_objects(&config, "encoder_configurations");
+        assert_eq!(tracks.len(), 1);
+        assert!(
+            tracks[0].contains(r#""type":"h264_texture_amf""#),
+            "{config}"
+        );
+        assert!(
+            tracks[0].contains(&format!(r#""settings":{OWN_AMD}"#)),
+            "{config}"
+        );
+        assert_eq!(number_field(tracks[0], "width"), Some(1920));
+        assert_eq!(number_field(tracks[0], "height"), Some(1080));
+        assert_eq!(number_field(tracks[0], "numerator"), Some(60));
+        assert_eq!((plan.main.width, plan.main.height), (1920, 1080));
+    }
+
+    /// Simple output leaves only the bitrate to copy: the main track takes
+    /// it on InstantClone's own encoder, not the default budget.
+    #[test]
+    fn simple_output_gives_the_main_track_its_bitrate() {
+        let own = StreamerSettings {
+            encoder: None,
+            bitrate_kbps: 4500,
+            rescale: None,
+        };
+        let (config, _) =
+            build(&[canvas_at(1920, 1080, 60)], 10_000, Some(&own), 1935, x264).unwrap();
+        let tracks = array_objects(&config, "encoder_configurations");
+        assert_eq!(number_field(tracks[0], "bitrate"), Some(4500), "{config}");
+    }
+
+    /// A vertical track gets the main track's quality: the same bits per
+    /// pixel per frame, on InstantClone's H.264 encoder.
+    #[test]
+    fn the_vertical_track_matches_the_main_tracks_quality() {
+        let own = own_amd(None);
+        let canvases = [canvas_at(2560, 1440, 60), canvas_at(1080, 1920, 60)];
+        let (config, plan) = build(&canvases, 10_000, Some(&own), 1935, x264).unwrap();
+        assert!(crate::config::is_valid_json(&config), "{config}");
+        assert!(plan.feeds_vertical());
+        let tracks = array_objects(&config, "encoder_configurations");
+        assert_eq!(tracks.len(), 2);
+        assert!(tracks[1].contains(r#""type":"obs_x264""#), "{config}");
+        // 6000 kbps * (1080 * 1920) / (2560 * 1440)
+        assert_eq!(number_field(tracks[1], "bitrate"), Some(3375));
+    }
+
+    fn encoder(id: &str, settings: &str) -> TrackEncoder {
+        TrackEncoder {
+            encoder_type: id.into(),
+            settings_json: settings.into(),
+        }
+    }
+
+    /// libobs encoder ids across OBS 30-32 and the three GPU vendors.
+    #[test]
+    fn the_codec_is_read_from_the_encoder_id() {
+        use crate::h264::VideoCodec::{Av1, Avc, Hevc, Unknown};
+        for (id, codec) in [
+            ("obs_x264", Avc),
+            ("jim_nvenc", Avc),
+            ("obs_nvenc_h264_tex", Avc),
+            ("h264_texture_amf", Avc),
+            ("obs_qsv11_v2", Avc),
+            ("com.apple.videotoolbox.videoencoder.ave.avc", Avc),
+            ("jim_hevc_nvenc", Hevc),
+            ("obs_nvenc_hevc_tex", Hevc),
+            ("h265_texture_amf", Hevc),
+            ("obs_qsv11_hevc", Hevc),
+            ("av1_texture_amf", Av1),
+            ("obs_nvenc_av1_tex", Av1),
+            ("ffmpeg_svt_av1", Av1),
+            ("some_future_encoder", Unknown),
+        ] {
+            assert_eq!(encoder(id, "{}").codec(), codec, "{id}");
+        }
+    }
+
+    /// Only the bitrate changes: every other setting the streamer chose
+    /// stays, including a `max_bitrate` that merely ends in "bitrate".
+    #[test]
+    fn at_bitrate_changes_only_the_bitrate() {
+        let own = encoder("h265_texture_amf", OWN_AMD);
+        let vertical = own.at_bitrate(3375);
+        assert_eq!(vertical.encoder_type, "h265_texture_amf");
+        assert_eq!(
+            vertical.settings_json,
+            r#"{"bitrate":3375,"rate_control":"CBR","preset":"quality","profile":"high","bf":2}"#
+        );
+        let spaced = encoder("x", r#"{"max_bitrate": 9000, "bitrate" : 6000 }"#);
+        assert_eq!(
+            spaced.at_bitrate(1000).settings_json,
+            r#"{"max_bitrate": 9000, "bitrate":1000 }"#
+        );
+        assert_eq!(
+            encoder("x", "{}").at_bitrate(800).settings_json,
+            r#"{"bitrate":800}"#
+        );
+        let no_bitrate = encoder("x", r#"{"preset":"p5"}"#).at_bitrate(800);
+        assert_eq!(no_bitrate.settings_json, r#"{"bitrate":800,"preset":"p5"}"#);
+        assert!(crate::config::is_valid_json(&no_bitrate.settings_json));
+    }
+
+    #[test]
+    fn same_quality_bitrate_follows_pixels_and_frame_rate_within_bounds() {
+        let main = canvas_at(2560, 1440, 60);
+        let half_rate = ObsCanvas {
+            fps_den: 2,
+            ..canvas_at(1080, 1920, 60)
+        };
+        assert_eq!(
+            same_quality_kbps(6000, &main, &canvas_at(1080, 1920, 30)),
+            1687
+        );
+        assert_eq!(same_quality_kbps(6000, &main, &half_rate), 1687);
+        assert_eq!(
+            same_quality_kbps(6000, &main, &canvas_at(90, 160, 30)),
+            MIN_TRACK_KBPS
+        );
+        assert_eq!(
+            same_quality_kbps(6000, &main, &canvas_at(3840, 2160, 60)),
+            6000,
+            "never above the main track"
+        );
+        assert_eq!(same_quality_kbps(300, &main, &main), MIN_TRACK_KBPS);
     }
 }

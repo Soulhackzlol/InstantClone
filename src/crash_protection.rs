@@ -272,6 +272,8 @@ mod tests {
         settings.set("accent", "#FF6B6B");
         settings.set("background", "#101010");
         settings.set("headline", "Be right back");
+        settings.set("subline", "Grab a drink");
+        settings.set("every_disconnect", "on");
 
         let mut loaded = CrashProtection::default();
         for line in written(&settings).lines() {
@@ -351,9 +353,10 @@ mod tests {
             let mut settings = CrashProtection::default();
             settings.set("theme", theme.id());
             assert_eq!(settings.theme, theme);
+            // The picked theme, not the `themes` list that names every id.
             let json = settings.to_json();
             assert!(
-                json.contains(&format!(r#""id":"{}""#, theme.id())),
+                json.contains(&format!(r#""theme":"{}""#, theme.id())),
                 "{json}"
             );
         }

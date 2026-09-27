@@ -265,6 +265,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
             // dispatch into the per-CSID state. The two phases exist so
             // the async byte-counting reads can hold &mut self exclusively.
             let header = self.read_chunk_header(fmt, csid).await?;
+            let chunk_size = self.chunk_size;
             let st = self.streams.entry(csid).or_default();
             match header {
                 ChunkHeader::Fmt0 {
@@ -280,7 +281,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     st.type_id = type_id;
                     st.stream_id = msid;
                     st.last_had_ext_ts = ext_ts_present;
-                    st.buf = BytesMut::with_capacity(length as usize);
+                    st.buf = message_buf(length, chunk_size);
                     st.receiving = true;
                 }
                 ChunkHeader::Fmt1 {
@@ -294,7 +295,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     st.length = length;
                     st.type_id = type_id;
                     st.last_had_ext_ts = ext_ts_present;
-                    st.buf = BytesMut::with_capacity(length as usize);
+                    st.buf = message_buf(length, chunk_size);
                     st.receiving = true;
                 }
                 ChunkHeader::Fmt2 {
@@ -304,7 +305,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     st.timestamp = st.timestamp.wrapping_add(delta);
                     st.timestamp_delta = delta;
                     st.last_had_ext_ts = ext_ts_present;
-                    st.buf = BytesMut::with_capacity(st.length as usize);
+                    st.buf = message_buf(st.length, chunk_size);
                     st.receiving = true;
                 }
                 ChunkHeader::Fmt3 => {
@@ -313,7 +314,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                         // so the absolute timestamp advances by the
                         // last delta and the buffer restarts.
                         st.timestamp = st.timestamp.wrapping_add(st.timestamp_delta);
-                        st.buf = BytesMut::with_capacity(st.length as usize);
+                        st.buf = message_buf(st.length, chunk_size);
                         st.receiving = true;
                     }
                 }
@@ -355,7 +356,24 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                         }
                         continue;
                     }
-                    2 => continue, // Abort Message
+                    2 => {
+                        // Abort Message: drop the partial message on the
+                        // named csid, so the next fmt-3 there starts a new
+                        // message instead of being appended to stale bytes.
+                        if msg.payload.len() >= 4 {
+                            let aborted = u32::from_be_bytes([
+                                msg.payload[0],
+                                msg.payload[1],
+                                msg.payload[2],
+                                msg.payload[3],
+                            ]);
+                            if let Some(st) = self.streams.get_mut(&aborted) {
+                                st.buf = BytesMut::new();
+                                st.receiving = false;
+                            }
+                        }
+                        continue;
+                    }
                     3 => continue, // Acknowledgement
                     5 => {
                         // Window Acknowledgement Size from the peer -
@@ -503,6 +521,17 @@ fn write_basic_header(out: &mut Vec<u8>, fmt: u8, csid: u32) {
     }
 }
 
+/// Empty buffer for a message the peer declares to be `length` bytes.
+///
+/// Reserves at most one chunk. The length is only the peer's claim, read
+/// before `publish` is gated, and every csid (up to 65599 of them) holds its
+/// own partial message: reserving the full 24-bit length up front let each
+/// ~140-byte header pin 16 MB. Capped here, the buffer grows only as chunks
+/// actually arrive, so memory tracks bytes received.
+fn message_buf(length: u32, chunk_size: usize) -> BytesMut {
+    BytesMut::with_capacity((length as usize).min(chunk_size))
+}
+
 fn push_u24_be(out: &mut Vec<u8>, v: u32) {
     out.push(((v >> 16) & 0xFF) as u8);
     out.push(((v >> 8) & 0xFF) as u8);
@@ -560,6 +589,14 @@ mod tests {
         b
     }
 
+    /// fmt-0 header declaring `declared` bytes (msid 1), followed by only
+    /// the first chunk's bytes: the rest must come as fmt-3 continuations.
+    fn fmt0_first_chunk(csid: u8, ts: u32, type_id: u8, declared: u32, first: &[u8]) -> Vec<u8> {
+        let mut b = fmt0(csid, ts, type_id, 1, first);
+        b[4..7].copy_from_slice(&u24(declared));
+        b
+    }
+
     fn fmt1(csid: u8, delta: u32, type_id: u8, payload: &[u8]) -> Vec<u8> {
         let mut b = vec![(1 << 6) | (csid & 0x3F)];
         b.extend_from_slice(&u24(delta));
@@ -604,11 +641,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extended_timestamp_roundtrips() {
-        // >= 0xFF_FFFF triggers the 32-bit extended-timestamp field - the
-        // "single most-broken-in-practice corner of RTMP" per the module doc.
-        let msg = roundtrip(6, 0x0100_0000, 9, 1, b"x").await;
-        assert_eq!(msg.timestamp, 0x0100_0000);
+    async fn writer_emits_spec_bytes_for_an_extended_timestamp_at_the_boundary() {
+        // Round trips can't catch a mistake the writer and reader share, so
+        // pin the wire bytes. Exactly 0xFF_FFFF is the first value that
+        // needs the extended field (the 24-bit slot then holds the 0xFFFFFF
+        // marker), message stream id is the one little-endian field, and the
+        // fmt-3 continuation repeats the 4-byte extended timestamp.
+        let payload: Vec<u8> = (0..200u32).map(|i| i as u8).collect();
+        let mut wire: Vec<u8> = Vec::new();
+        ChunkWriter::new(&mut wire)
+            .write_message(6, 0x00FF_FFFF, 9, 1, &payload)
+            .await
+            .unwrap();
+
+        let mut expected = vec![0x06, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xC8, 0x09];
+        expected.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]); // msid 1, LE
+        expected.extend_from_slice(&[0x00, 0xFF, 0xFF, 0xFF]); // ext ts, BE
+        expected.extend_from_slice(&payload[..128]);
+        expected.extend_from_slice(&[0xC6, 0x00, 0xFF, 0xFF, 0xFF]); // fmt 3 + ext ts
+        expected.extend_from_slice(&payload[128..]);
+        assert_eq!(wire, expected);
+
+        // One below the boundary still fits in 24 bits: no extended field.
+        let mut wire: Vec<u8> = Vec::new();
+        ChunkWriter::new(&mut wire)
+            .write_message(6, 0x00FF_FFFE, 9, 1, b"x")
+            .await
+            .unwrap();
+        assert_eq!(wire, [0x06, 0xFF, 0xFF, 0xFE, 0, 0, 1, 9, 1, 0, 0, 0, b'x']);
     }
 
     #[tokio::test]
@@ -735,8 +795,310 @@ mod tests {
         let mut r = reader(wire);
         let msg = r.read_message().await.unwrap();
         assert_eq!(msg.type_id, 9); // control consumed in-band, media surfaced
-        assert!(r.take_pending_ack().is_some());
+                                    // The ack reports every wire byte: (1 + 11 + 4) + (1 + 11 + 10).
+        assert_eq!(r.take_pending_ack(), Some(38));
         assert!(r.take_pending_ack().is_none());
+    }
+
+    #[tokio::test]
+    async fn ack_count_includes_extended_timestamps_and_continuation_headers() {
+        // The peer counts what it put on the wire, so a reader that skips
+        // the 4-byte extended timestamps or the fmt-3 basic headers
+        // under-reports, and a strict peer stalls waiting for the window.
+        let mut wire = fmt0(2, 0, 5, 0, &200u32.to_be_bytes()); // 16 bytes
+        ChunkWriter::new(&mut wire)
+            .write_message(6, 0x0100_0000, 9, 1, &[0u8; 200])
+            .await
+            .unwrap();
+        let mut r = reader(wire);
+        r.read_message().await.unwrap();
+        // 16 + (1 + 11 + 4 + 128) + (1 + 4 + 72)
+        assert_eq!(r.take_pending_ack(), Some(237));
+    }
+
+    #[tokio::test]
+    async fn reader_decodes_two_and_three_byte_basic_headers() {
+        // csid 64..=319 uses [fmt|0][csid - 64]; 320..=65599 uses
+        // [fmt|1][lo][hi] of csid - 64. Each must land in its own csid state
+        // or two streams would share one message buffer.
+        for csid in [64u32, 200, 319, 320, 1000, 65_599] {
+            let mut wire: Vec<u8> = Vec::new();
+            ChunkWriter::new(&mut wire)
+                .write_message(csid, 7, 9, 1, &[0xAB; 300])
+                .await
+                .unwrap();
+            let mut r = reader(wire);
+            let msg = r.read_message().await.unwrap();
+            assert_eq!(&msg.payload[..], &[0xAB; 300][..], "csid {csid}");
+            assert!(r.streams.contains_key(&csid), "csid {csid} decoded");
+            assert_eq!(r.streams.len(), 1, "csid {csid}: one state only");
+        }
+    }
+
+    #[tokio::test]
+    async fn interleaved_messages_on_different_csids_stay_intact() {
+        // Publishers interleave audio between the chunks of a large video
+        // frame. The audio completes first; the video resumes on its own
+        // csid with a fmt-3 and still reassembles byte for byte.
+        let video: Vec<u8> = (0..200u32).map(|i| (i * 3) as u8).collect();
+        let mut wire = fmt0_first_chunk(6, 40, 9, 200, &video[..128]);
+        wire.extend(fmt0(4, 41, 8, 1, b"audio"));
+        wire.extend(fmt3(6, &video[128..]));
+        let mut r = reader(wire);
+        let audio = r.read_message().await.unwrap();
+        assert_eq!((audio.type_id, audio.timestamp), (8, 41));
+        assert_eq!(&audio.payload[..], b"audio");
+        let frame = r.read_message().await.unwrap();
+        assert_eq!((frame.type_id, frame.timestamp), (9, 40));
+        assert_eq!(&frame.payload[..], &video[..]);
+    }
+
+    #[tokio::test]
+    async fn set_chunk_size_mid_message_applies_to_the_next_chunk() {
+        // A Set Chunk Size that arrives between two chunks of another csid's
+        // message governs the rest of that message: here the remaining 172
+        // bytes come as one chunk instead of 128 + 44.
+        let video: Vec<u8> = (0..300u32).map(|i| i as u8).collect();
+        let mut wire = fmt0_first_chunk(6, 0, 9, 300, &video[..128]);
+        wire.extend(fmt0(2, 0, 1, 0, &4096u32.to_be_bytes()));
+        wire.extend(fmt3(6, &video[128..]));
+        wire.extend(fmt0(4, 0, 8, 1, b"after"));
+        let mut r = reader(wire);
+        assert_eq!(&r.read_message().await.unwrap().payload[..], &video[..]);
+        assert_eq!(&r.read_message().await.unwrap().payload[..], b"after");
+    }
+
+    #[tokio::test]
+    async fn extended_deltas_on_fmt1_and_fmt2_carry_into_their_continuations() {
+        // A delta of 0xFFFFFF or more also moves to the extended field, and
+        // then every fmt-3 continuation of that message repeats it. The
+        // writer never produces this (it only emits fmt 0), so hand-build it.
+        let body: Vec<u8> = (0..200u32).map(|i| (i * 5) as u8).collect();
+        let big_delta = 0x0123_4567u32;
+        let mut wire = fmt0(6, 1000, 9, 1, b"seed");
+
+        let mut fmt1_hdr = vec![0x46]; // fmt 1, csid 6
+        fmt1_hdr.extend_from_slice(&u24(0xFF_FFFF));
+        fmt1_hdr.extend_from_slice(&u24(200));
+        fmt1_hdr.push(9);
+        fmt1_hdr.extend_from_slice(&big_delta.to_be_bytes());
+        wire.extend(fmt1_hdr);
+        wire.extend_from_slice(&body[..128]);
+        wire.extend_from_slice(&[0xC6]);
+        wire.extend_from_slice(&big_delta.to_be_bytes());
+        wire.extend_from_slice(&body[128..]);
+
+        let mut fmt2_hdr = vec![0x86]; // fmt 2, csid 6: reuses length 200
+        fmt2_hdr.extend_from_slice(&u24(0xFF_FFFF));
+        fmt2_hdr.extend_from_slice(&big_delta.to_be_bytes());
+        wire.extend(fmt2_hdr);
+        wire.extend_from_slice(&body[..128]);
+        wire.extend_from_slice(&[0xC6]);
+        wire.extend_from_slice(&big_delta.to_be_bytes());
+        wire.extend_from_slice(&body[128..]);
+
+        let mut r = reader(wire);
+        r.read_message().await.unwrap();
+        let first = r.read_message().await.unwrap();
+        assert_eq!(first.timestamp, 1000 + big_delta);
+        assert_eq!(&first.payload[..], &body[..]);
+        let second = r.read_message().await.unwrap();
+        assert_eq!(second.timestamp, 1000 + 2 * big_delta);
+        assert_eq!(&second.payload[..], &body[..]);
+    }
+
+    #[tokio::test]
+    async fn timestamp_deltas_wrap_at_32_bits() {
+        // RTMP time is u32 milliseconds and wraps every ~49.7 days. The
+        // controller widens it; the reader just has to wrap, not panic.
+        let mut wire = vec![0x06];
+        wire.extend_from_slice(&u24(0xFF_FFFF));
+        wire.extend_from_slice(&u24(1));
+        wire.push(9);
+        wire.extend_from_slice(&1u32.to_le_bytes());
+        wire.extend_from_slice(&0xFFFF_FFF0u32.to_be_bytes());
+        wire.push(b'a');
+        wire.extend(fmt1(6, 0x20, 9, b"b"));
+        let mut r = reader(wire);
+        assert_eq!(r.read_message().await.unwrap().timestamp, 0xFFFF_FFF0);
+        assert_eq!(r.read_message().await.unwrap().timestamp, 0x10);
+    }
+
+    #[tokio::test]
+    async fn out_of_range_set_chunk_size_is_clamped_not_trusted() {
+        // 0 would make no progress, so it clamps to 1: every later byte of
+        // payload then rides in its own chunk and still reassembles.
+        let mut wire = fmt0(2, 0, 1, 0, &0u32.to_be_bytes());
+        wire.extend(fmt0_first_chunk(6, 0, 9, 3, b"x"));
+        wire.extend(fmt3(6, b"y"));
+        wire.extend(fmt3(6, b"z"));
+        let mut r = reader(wire);
+        assert_eq!(&r.read_message().await.unwrap().payload[..], b"xyz");
+        assert_eq!(r.chunk_size, 1);
+
+        // The spec reserves the top bit. The value is clamped to the 24-bit
+        // maximum rather than read as a ~2 GB chunk.
+        let mut r = reader(fmt0(2, 0, 1, 0, &0x8000_0400u32.to_be_bytes()));
+        assert!(r.read_message().await.is_err(), "only the control message");
+        assert_eq!(r.chunk_size, 0xFF_FFFF);
+    }
+
+    #[tokio::test]
+    async fn short_control_payloads_are_ignored_without_panicking() {
+        // Set Chunk Size, Abort, Ack and Window Ack Size all carry a u32.
+        // A peer that sends fewer bytes must not make us index past the
+        // payload; the message is dropped and the stream carries on.
+        let mut wire = Vec::new();
+        for type_id in [1u8, 2, 3, 5, 6] {
+            wire.extend(fmt0(2, 0, type_id, 0, &[0x01, 0x02, 0x03]));
+            wire.extend(fmt0(2, 0, type_id, 0, &[]));
+        }
+        wire.extend(fmt0(4, 9, 8, 1, b"media"));
+        let mut r = reader(wire);
+        assert_eq!(&r.read_message().await.unwrap().payload[..], b"media");
+        assert_eq!(r.chunk_size, DEFAULT_CHUNK_SIZE);
+        assert_eq!(r.window_ack_size, 2_500_000);
+    }
+
+    /// Deterministic LCG for the fuzz test: fixed seed, no dependency.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next_u32(&mut self) -> u32 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) as u32
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.next_u32() % n
+        }
+    }
+
+    /// Feed `wire` to a fresh reader until it errors. Returns the messages
+    /// it surfaced. A capture always ends, so an Err must always come: a
+    /// reader that loops without consuming bytes would hang the test.
+    async fn drain(wire: Vec<u8>) -> Vec<Message> {
+        let mut r = reader(wire);
+        let mut out = Vec::new();
+        while let Ok(msg) = r.read_message().await {
+            out.push(msg);
+        }
+        out
+    }
+
+    /// A publisher-shaped capture: control messages, fmt 0-3, interleaving,
+    /// an extended timestamp with continuations, and an Abort.
+    async fn realistic_capture() -> Vec<u8> {
+        let mut wire: Vec<u8> = Vec::new();
+        {
+            let mut w = ChunkWriter::new(&mut wire);
+            w.write_message(2, 0, 5, 0, &2_500_000u32.to_be_bytes())
+                .await
+                .unwrap();
+            w.write_message(3, 0, 20, 0, b"\x02\x00\x07connect")
+                .await
+                .unwrap();
+            w.write_message(6, 0x0100_0000, 9, 1, &[0x17; 300])
+                .await
+                .unwrap();
+        }
+        wire.extend(fmt1(6, 33, 9, &[0x27; 40]));
+        wire.extend(fmt2(6, 33, &[0x27; 40]));
+        wire.extend(fmt3(6, &[0x27; 40]));
+        wire.extend(fmt0(4, 5, 8, 1, &[0xAF; 9]));
+        wire.extend(fmt0(2, 0, 2, 0, &6u32.to_be_bytes()));
+        {
+            let mut w = ChunkWriter::new(&mut wire);
+            w.send_set_chunk_size(64).await.unwrap();
+            w.write_message(4, 30, 8, 1, &[0xAF; 150]).await.unwrap();
+        }
+        wire
+    }
+
+    #[tokio::test]
+    async fn every_prefix_and_random_stream_terminates_without_panicking() {
+        // The reader runs on bytes from anyone who completes a handshake.
+        // Whatever arrives, it must return an error or a message, never
+        // panic and never spin: every prefix of a real capture (each cut
+        // lands mid-header or mid-payload somewhere), then random streams.
+        let capture = realistic_capture().await;
+        assert_eq!(drain(capture.clone()).await.len(), 7, "the full capture");
+        for end in 0..capture.len() {
+            drain(capture[..end].to_vec()).await;
+        }
+
+        let mut rng = Lcg(0xC4_2026);
+        for _ in 0..3_000 {
+            let mut wire = Vec::new();
+            for _ in 0..rng.below(6) {
+                // Mostly small csids and lengths so chunks actually complete
+                // and state carries across chunks, with the odd huge value.
+                wire.push(rng.next_u32() as u8 & 0xC7);
+                let n = rng.below(16) as usize;
+                wire.extend((0..n).map(|_| rng.next_u32() as u8 & 0x0F));
+                if rng.below(4) == 0 {
+                    wire.extend_from_slice(&[0xFF, 0xFF, 0xFF]);
+                }
+            }
+            drain(wire).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn declared_lengths_do_not_reserve_memory_before_the_bytes_arrive() {
+        // The 24-bit length is the peer's claim, readable before publish is
+        // gated. Reserving it up front let every fmt-0 header on a fresh
+        // csid pin ~16 MB, and there are 65599 csids: memory exhaustion for
+        // the price of 140 wire bytes per header. What is held has to track
+        // what was actually received.
+        let mut wire = Vec::new();
+        for csid in 3u8..11 {
+            wire.push(csid);
+            wire.extend_from_slice(&u24(0));
+            wire.extend_from_slice(&u24(0xFF_FFFF));
+            wire.push(9);
+            wire.extend_from_slice(&1u32.to_le_bytes());
+            wire.extend(std::iter::repeat_n(0u8, DEFAULT_CHUNK_SIZE));
+        }
+        let mut r = reader(wire);
+        assert!(
+            r.read_message().await.is_err(),
+            "the capture ends mid-message"
+        );
+        assert_eq!(r.streams.len(), 8, "every csid started a message");
+        for (csid, st) in &r.streams {
+            assert!(
+                st.buf.capacity() <= 4 * DEFAULT_CHUNK_SIZE,
+                "csid {csid} reserved {} bytes after receiving {}",
+                st.buf.capacity(),
+                st.buf.len()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn abort_message_discards_the_partial_message_on_its_csid() {
+        // Abort (type 2) tells us to drop whatever is half-received on the
+        // named csid. Ignoring it meant the next fmt-3 on that csid was
+        // appended to the stale half, surfacing a message stitched from two
+        // frames and desyncing the rest of the stream.
+        let stale = [0x11u8; 200];
+        let fresh: Vec<u8> = (0..200u32).map(|i| i as u8).collect();
+        let mut wire = fmt0_first_chunk(6, 1000, 9, 200, &stale[..128]);
+        wire.extend(fmt0(2, 0, 2, 0, &6u32.to_be_bytes())); // Abort csid 6
+        wire.extend(fmt3(6, &fresh[..128])); // a new message, header replayed
+        wire.extend(fmt3(6, &fresh[128..]));
+        wire.extend(fmt0(4, 0, 8, 1, b"next")); // the stream stays in sync
+        let mut r = reader(wire);
+        let msg = r.read_message().await.unwrap();
+        assert_eq!(&msg.payload[..], &fresh[..]);
+        // fmt-3 opening a message advances by the last delta (fmt-0 seeds
+        // it with the absolute timestamp), same as any other replay.
+        assert_eq!((msg.timestamp, msg.type_id, msg.stream_id), (2000, 9, 1));
+        assert_eq!(&r.read_message().await.unwrap().payload[..], b"next");
     }
 
     #[test]

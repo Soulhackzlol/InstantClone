@@ -130,16 +130,33 @@ fn main() -> std::io::Result<()> {
     // good capture. Opt-out via INSTANTCLONE_NO_TRACE=1.
     trace::init("./instantclone-trace.log");
 
-    let mut settings = Settings::load_or_default(&cfg_path);
+    // A missing file is a fresh install (defaults, written out at once). A
+    // file that exists but can't be read is never replaced at startup: see
+    // `Settings::load_for_startup` for the copy-aside rule.
+    let startup = match Settings::load_for_startup(&cfg_path) {
+        Ok(startup) => startup,
+        Err(e) => {
+            let msg = format!(
+                "InstantClone couldn't read its settings file, and couldn't make a \
+                 safety copy of it either, so it did not start (starting on defaults \
+                 could overwrite your settings).\n\nFile:  {}\nError: {e}\n\n\
+                 Close whatever is holding the file (antivirus, OneDrive, an editor) \
+                 and start InstantClone again.",
+                cfg_path.display()
+            );
+            notify_fatal("InstantClone settings error", &msg);
+            return Err(e);
+        }
+    };
+    if let Some(notice) = &startup.notice {
+        notify_fatal("InstantClone settings reset", notice);
+    }
+    let may_save_at_startup = startup.may_save;
+    let mut settings = startup.settings;
     // Honour the persisted tracing toggle from disk. init() defaults to
     // enabled; if the user disabled it last session, flip it off before
     // any code path starts writing.
     trace::set_enabled(settings.tracing_enabled);
-    // If the file didn't exist, persist the smart defaults so the file
-    // appears on disk immediately (useful for the user to find and edit).
-    if !cfg_path.exists() {
-        let _ = settings.save(&cfg_path);
-    }
 
     // Port pre-flight. Without this, a busy port leaves us in a silent
     // retry loop - the worst possible first-run UX (no console on Windows,
@@ -180,8 +197,10 @@ fn main() -> std::io::Result<()> {
             }
         }
         // Persist any chosen replacement port so the user doesn't get
-        // re-prompted on every launch.
-        let _ = settings.save(&cfg_path);
+        // re-prompted on every launch. Not over a file we couldn't read.
+        if may_save_at_startup {
+            let _ = settings.save(&cfg_path);
+        }
     }
 
     // Create overlays/ directory and write the three built-in templates if
@@ -1253,7 +1272,8 @@ fn resolve_port_conflict(label: &str, port: u16, host: &str) -> Option<u16> {
     }
 }
 
-/// Surface a fatal, pre-runtime error on every platform. The Windows release
+/// Surface a pre-runtime problem the user must see (fatal errors, and the
+/// settings-reset notice) on every platform. The Windows release
 /// build has no console, and a Linux desktop launched from a `.desktop` entry
 /// has none either, so a bare stderr line would vanish. Always print, then add
 /// the platform's native surface on top.

@@ -232,13 +232,12 @@ mod tests {
         );
     }
 
-    /// Decode with ffmpeg and require every pixel back. Skips when ffmpeg
-    /// isn't installed, like the reconnect screen's own decode test.
+    /// Decode with ffmpeg and require every pixel back. Needs ffmpeg the
+    /// same way the reconnect screen's own decode test does.
     #[test]
     fn ffmpeg_decodes_the_png_losslessly() {
         use std::process::{Command, Stdio};
-        if Command::new("ffmpeg").arg("-version").output().is_err() {
-            eprintln!("ffmpeg not found - skipping the PNG decode check");
+        if !super::super::ffmpeg_is_available("the PNG decode check") {
             return;
         }
         let (width, height) = (37, 11);

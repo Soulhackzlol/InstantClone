@@ -583,4 +583,30 @@ mod e2e {
         assert!(!staged.exists(), "staged .new should have been consumed");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// The half-swap case: the running exe is already parked at `.old`
+    /// when the second rename fails (here: the staged file vanished, as
+    /// when antivirus quarantines it). The rollback must put the old exe
+    /// back, or the install is left with nothing to launch.
+    #[test]
+    fn swap_in_place_rolls_back_when_the_staged_file_is_missing() {
+        let dir = std::env::temp_dir().join(format!("ic-swap-rollback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("instantclone.exe");
+        let staged = sidecar(&exe, "new");
+        std::fs::write(&exe, b"OLD-VERSION").unwrap();
+        let _ = std::fs::remove_file(&staged);
+
+        let result = swap_in_place(&exe, &staged);
+
+        let exe_bytes = std::fs::read(&exe);
+        let old_left_behind = sidecar(&exe, "old").exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(result.is_err(), "a missing staged file must fail the swap");
+        assert_eq!(exe_bytes.unwrap(), b"OLD-VERSION");
+        assert!(
+            !old_left_behind,
+            "rollback must move .old back, not copy it"
+        );
+    }
 }
