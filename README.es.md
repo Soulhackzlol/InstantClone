@@ -149,7 +149,7 @@ Haz simulcast de una señal de OBS a Twitch, YouTube, Kick y RTMP personalizado 
 <td valign="top">
 
 **📱 Vertical (9:16) gratis**
-En OBS, activa **Enhanced Broadcasting** y elige tu lienzo vertical (por ejemplo Aitum Vertical) en **Lienzo adicional**, y pon el formato de cualquier destino no-Twitch en **Vertical**. InstantClone envía ese lienzo 9:16 a TikTok, YouTube Shorts o Kick móvil, con o sin un destino de Twitch. ¿También en Twitch? El **Formato Dual** de Twitch aporta el mismo lienzo.
+En OBS, activa **Enhanced Broadcasting** y elige tu lienzo vertical (por ejemplo Aitum Vertical) en **Lienzo adicional**, y pon el formato de cualquier destino no-Twitch en **Vertical**. InstantClone envía ese lienzo 9:16 a TikTok, YouTube Shorts o Kick móvil, con o sin un destino de Twitch. Activa el destino Vertical antes de empezar a emitir: sin Twitch, la pista vertical solo se codifica mientras haya uno activo. ¿También en Twitch? El **Formato Dual** de Twitch aporta el mismo lienzo.
 
 </td>
 <td valign="top">
@@ -224,7 +224,7 @@ Si OBS se cuelga o se congela, todos los destinos siguen en directo con una pant
 <tr>
 <td valign="top" width="50%">
 
-**Dos fases por diseño.** **Armas** un buffer (un tamaño objetivo en segundos). InstantClone lo prellena desde la señal de OBS sin tocar lo que sale. Cuando se llena pulsas **Activar**, y el cambio a diferido es instantáneo en pantalla: el reproductor solo salta del borde en directo a un punto N segundos atrás.
+**Dos fases por diseño.** **Armas** un buffer (un tamaño objetivo en segundos). InstantClone lo prellena desde la señal de OBS sin tocar lo que sale. Cuando se llena pulsas **Activar**, y el cambio a diferido es instantáneo en pantalla: el reproductor solo salta del borde en directo al fotograma clave de al menos N segundos atrás, así que el público nunca queda más cerca del directo de lo que pusiste.
 
 </td>
 <td valign="top" width="50%">

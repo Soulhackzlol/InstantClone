@@ -149,7 +149,7 @@ Simulcast one OBS feed to Twitch, YouTube, Kick, and custom RTMP at once, a free
 <td valign="top">
 
 **📱 Vertical (9:16) for free**
-In OBS, turn on **Enhanced Broadcasting** and pick your vertical canvas (for example Aitum Vertical) under **Additional canvas**, then set any non-Twitch destination's format to **Vertical**. InstantClone sends that 9:16 canvas to TikTok, YouTube Shorts, or Kick mobile, with or without a Twitch destination. Streaming to Twitch too? Twitch **Dual Format** provides the same canvas.
+In OBS, turn on **Enhanced Broadcasting** and pick your vertical canvas (for example Aitum Vertical) under **Additional canvas**, then set any non-Twitch destination's format to **Vertical**. InstantClone sends that 9:16 canvas to TikTok, YouTube Shorts, or Kick mobile, with or without a Twitch destination. Switch the Vertical destination on before you start streaming: without Twitch, the vertical track is only encoded while one is on. Streaming to Twitch too? Twitch **Dual Format** provides the same canvas.
 
 </td>
 <td valign="top">
@@ -224,7 +224,7 @@ If OBS crashes or freezes, every destination stays live on a reconnect screen (f
 <tr>
 <td valign="top" width="50%">
 
-**Two-phase by design.** You **arm** a buffer (a target size in seconds). InstantClone pre-fills it from the live OBS feed without touching what's going out. Once it's full you hit **Activate**, and the switch to delayed is instant on screen: the player just jumps from the live edge to a point N seconds back.
+**Two-phase by design.** You **arm** a buffer (a target size in seconds). InstantClone pre-fills it from the live OBS feed without touching what's going out. Once it's full you hit **Activate**, and the switch to delayed is instant on screen: the player just jumps from the live edge to the keyframe at least N seconds back, so viewers are never closer to live than you set.
 
 </td>
 <td valign="top" width="50%">

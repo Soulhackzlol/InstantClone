@@ -87,21 +87,48 @@ logs that tracked it down).
   While one is on, InstantClone asks Twitch for H.264, since Kick and most
   ingests can't play HEVC. Twitch then streams at 1080p instead of 2K.
 
-### Enhanced Broadcasting without Twitch uses your GPU
+### Enhanced Broadcasting without Twitch now uses your OBS settings
 
-Without a Twitch destination, OBS used to receive a fixed config that asked
-for three x264 encodes at once (1080p60, 720p60 and 480p30). On a gaming PC
-that overloads the CPU, and only the 1080p one was ever forwarded.
+With Enhanced Broadcasting on, OBS asks InstantClone which video tracks to
+encode. Where that answer comes from depends on your destinations:
 
-- **Your GPU's encoder, only if OBS has it.** InstantClone reads which GPU
-  OBS runs on and uses its H.264 encoder (NVENC, AMF or QSV), but only when
-  OBS's own log lists that encoder as available, since OBS refuses to start
-  a stream on one it doesn't have. Otherwise it uses x264 and the log says
-  why. OBS 30.2's older NVENC and QSV encoders are recognised too.
-- **One track per canvas, at your size.** The main canvas at the Output
-  resolution you set in OBS, plus the Additional canvas when there is one.
-- **Sensible bitrate.** OBS's Maximum Streaming Bandwidth is respected when
-  set. Otherwise the main track gets 6000 kbps, and a vertical track 4000.
+- **A Twitch destination is on when you start streaming:** nothing changes.
+  InstantClone asks Twitch, and Twitch's own Enhanced Broadcasting config is
+  used, exactly as when OBS streams straight to Twitch. Twitch picks the
+  codec, resolution and bitrate, and that's the best quality you can get
+  there.
+- **No Twitch destination is on:** there is no Twitch to ask, so
+  InstantClone answers itself. This is the fallback, and it is what changed
+  in this version.
+
+Twitch is only asked at the moment you press Start Streaming. Switching a
+Twitch destination on mid-stream keeps the fallback until you stop and start
+streaming in OBS again.
+
+**What the fallback does now.** It used to make up its own settings: first
+three x264 encodes at once (enough to overload a gaming PC's CPU), then a
+fixed 6000 kbps at your full canvas size plus a vertical track nobody asked
+for. That could look worse than streaming with Enhanced Broadcasting off.
+Now it copies you instead:
+
+- **Your stream settings, as with Enhanced Broadcasting off.** The main
+  track uses what you set in OBS under Settings > Output. In Advanced mode
+  that is your encoder with all its settings, your bitrate and your Rescale
+  Output. In Simple mode it is your bitrate. To change how the fallback
+  looks, change it in OBS as you always would.
+- **A vertical track only when you stream one.** OBS's Additional canvas is
+  encoded only while a destination is set to Vertical, so it costs no GPU
+  otherwise. It gets the same quality per pixel as your main track. It uses
+  your encoder too when every vertical destination plays its codec (HEVC to
+  YouTube or Restream, for example), and H.264 otherwise, which plays
+  everywhere.
+- **If your OBS settings can't be read**, the old defaults are used: 6000
+  kbps for the main track (or the Maximum Streaming Bandwidth you set for
+  Enhanced Broadcasting), on your GPU's H.264 encoder (NVENC, AMF or QSV)
+  when OBS lists it as available, and x264 otherwise.
+
+The event log says which one you got, for example `main track uses your OBS
+stream settings: h264_texture_amf, 6000 kbps`.
 
 ### Fixes
 
@@ -133,7 +160,59 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
   during crash protection.** When OBS dropped with no Enhanced Broadcasting
   session to keep and then started a fresh one, the reconnect threw that new
   session away as stale. Twitch then got the multi-track stream on its plain
-  ingest and refused it on every retry.
+  ingest and refused it on every retry. The same happened when OBS took
+  back the kept session and the hold ran out, or was ended, before OBS
+  started publishing on it.
+- **A frozen OBS that recovers just after crash protection's deadline is
+  reported as ended, not as back in time.** Its first frame could beat the
+  deadline check and post "OBS is back, live again" for destinations that
+  had already ended.
+- **A delay always goes on air, and never shorter than you set.** A 1 s
+  delay, or a 2 s delay with a 4 s keyframe interval, counted as "close
+  enough" to live, so viewers kept watching live while the dashboard said
+  delayed. A delay now lands on the newest keyframe at least that old, so it
+  can run up to one keyframe interval longer than set, never shorter.
+- **Raising the delay on air jumps back once.** It could jump back twice
+  and show viewers the same stretch again.
+- **An OBS restart mid-delay never puts viewers on live.** With crash
+  protection off, destinations came back live and then jumped back once the
+  buffer refilled. They now wait for the buffer to reach the delay.
+- **A destination added mid-delay starts delayed** with long keyframe
+  intervals too, instead of airing live.
+- **No backward timestamp when OBS reconnects within half a second**, and a
+  new stream header mid-stream now goes out before the frame that needs it.
+- **Your settings survive a settings file that can't be read.** A file
+  saved from Notepad as ANSI with an accent in it, or one briefly locked by
+  antivirus or OneDrive, used to start InstantClone on defaults and save
+  them over every destination and stream key. Now a stray byte only costs
+  that character, a locked file is retried, and a file that still can't be
+  read is copied to `.unreadable` and never overwritten at startup.
+- **A deleted destination stays deleted.** Removing your last destination
+  brought back an enabled "Main" one on the next launch.
+- **A malformed video frame can no longer close InstantClone.** A frame
+  ending in an empty NAL unit crashed the app mid-stream. The RTMP ingest
+  also no longer reserves memory for data a client only announces.
+- **Enhanced Broadcasting destinations start on a clean picture.** A
+  destination joining a multitrack stream could start on another track's
+  keyframe and show blocky video until the next one.
+- **A broken control request no longer disarms the delay.** A `POST /arm`
+  with an unreadable body, or one cut off before its end, used to run as if
+  it had no arguments. It now gets an error and changes nothing.
+- **The OBS dock and Stream Deck token no longer see custom RTMP URLs**,
+  which often hold a stream key. The dashboard still shows them for editing.
+- **OBS's service list stays valid.** Registering InstantClone into an OBS
+  with no services wrote invalid JSON, a failed refresh could list
+  InstantClone twice, and every refresh added a blank line.
+- **The OBS VOD track setting sticks** when OBS's settings file has the same
+  section twice.
+- **Update checks see every newer version**, including `beta.10` after
+  `beta.9` and versions tagged with build info.
+- **Custom RTMP destinations accept IPv6 addresses** like
+  `rtmp://[::1]:1935/app/key`, and a URL with no stream key is reported
+  instead of publishing with an empty one.
+- **Servers that send AMF0 dates or long strings** in their replies no
+  longer drop the connection.
+- **No false "1920p" warning for Kick** when the main canvas is portrait.
 - **Ending a stream now reaches the platform as a clean stop.** InstantClone
   sent the platform its goodbye and closed the connection straight away,
   and the closing could throw that goodbye away before the platform read
@@ -152,6 +231,11 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
 - **The header's Vertical pill stayed on after OBS stopped.**
 - **Destination save errors are shown as plain text,** and a save that
   gets no answer from the app says so instead of doing nothing.
+- **Hovering a blue button turned it grey** with near-invisible text, on
+  every primary button in the dashboard (Save, Arm, Add destination...).
+  Amber warning buttons lost their colour on hover the same way.
+- **Idle destination cards squeezed their message** into a narrow column
+  beside the counters. The counters now drop to their own line.
 
 ### Polish
 
@@ -182,11 +266,14 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
   stream state's colour: cyan when idle, shifting toward amber or green.
   Dropdowns open as a styled list that fades in, with a turning arrow and a
   check on the current choice (older browsers keep the native list).
-- **The aurora, reworked.** Three soft lights drift behind the whole delay
-  panel in the stream state's colour (grey offline, amber buffering, cyan
-  armed, green delayed), the page top glows faintly with it, the panel's top
-  edge catches the light, and each state change blooms from the number.
-  Buttons and cards pick up a subtle lit edge too.
+- **The aurora, reworked.** Five soft pools of light circle slowly behind the
+  whole delay panel, each at its own size, speed and direction, so the
+  colours keep folding into each other. They take the stream state's colour
+  (grey offline, amber buffering, cyan armed, green delayed), and while
+  buffering the light grows as the buffer fills. The page top glows faintly
+  with it, the panel's top edge catches the light, and each state change
+  blooms from the number. Buttons and cards pick up a subtle lit edge too.
+  It holds still with the system's reduced-motion setting.
 - **Clearer at a glance.** Larger section titles, labels and stats numbers,
   bigger tab icons with the open tab in the accent colour, and screens that
   explain themselves when there's nothing yet (Stats before OBS streams, an
@@ -200,6 +287,26 @@ that overloads the CPU, and only the 1080p one was ever forwarded.
 - **Motion that guides the eye.** Cards and sections ease in one after
   another when a tab opens, and buttons give a small press. All of it
   switches off with the system's reduced-motion setting.
+- **A delay panel that answers back.**
+  - The main button eases between Arm, Activate, Adjust and Cut instead of
+    snapping, and when only the number changes, only the number flips.
+  - The delay field rolls its digits up or down as you step through values.
+  - − at 0, + at 600 or a typed 700 light up the range, and a typed value
+    past 600 settles on 600.
+  - A profile too big for the buffer says why when clicked, instead of
+    hiding it in a tooltip.
+  - "Waiting for OBS" visibly listens, and the button blooms once when OBS
+    connects.
+  - Clicking a profile sends a spark into the button it arms, and the armed
+    profile fills in.
+
+  All of it plays only on a real change, never on the dashboard's 4× a
+  second refresh, which now writes nothing when nothing changed. Reduced
+  motion keeps the colour cues and drops the movement.
+- **The status pill glides.** Its words change in step with its colour, and
+  it eases to its new width instead of jumping. The delay readout also stops
+  rewriting itself on every refresh when nothing changed.
+- **Add destination** is a tinted button with a real plus icon.
 - The log wraps long lines instead of cutting them off, and stops jumping
   to the bottom while you are reading older lines.
 - Destination cards in a row line up, the frame, cut and reconnect counters
