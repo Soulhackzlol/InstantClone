@@ -32,6 +32,62 @@ fn process_now_ms() -> u64 {
     Instant::now().saturating_duration_since(*start).as_millis() as u64
 }
 
+/// Rolling bitrate, lock-free: bytes are summed over windows of at least
+/// `RATE_WINDOW_MS` and the rate is the last full window. A window that
+/// hasn't rolled for `RATE_STALE_MS` means nothing has arrived since (the
+/// stream stopped or froze), so the rate reads 0 rather than holding the
+/// last second's value forever.
+#[derive(Default)]
+pub struct RateMeter {
+    window_bytes: AtomicU64,
+    /// 0 = no window yet.
+    window_start_ms: AtomicU64,
+    kbps: AtomicU32,
+}
+
+const RATE_WINDOW_MS: u64 = 1_000;
+const RATE_STALE_MS: u64 = 2_500;
+
+impl RateMeter {
+    pub fn note(&self, bytes: usize) {
+        self.note_at(bytes, process_now_ms());
+    }
+
+    fn note_at(&self, bytes: usize, now_ms: u64) {
+        let now_ms = now_ms.max(1);
+        let start = self.window_start_ms.load(Ordering::Relaxed);
+        // First bytes, or the first after a gap: they mark the start of a
+        // fresh window (so they count toward the time before it), instead
+        // of the silence being averaged into the rate.
+        if start == 0 || now_ms.saturating_sub(start) > RATE_STALE_MS {
+            self.window_bytes.store(0, Ordering::Relaxed);
+            self.window_start_ms.store(now_ms, Ordering::Relaxed);
+            return;
+        }
+        let total = self.window_bytes.fetch_add(bytes as u64, Ordering::Relaxed) + bytes as u64;
+        let elapsed = now_ms.saturating_sub(start);
+        if elapsed >= RATE_WINDOW_MS {
+            // bytes * 8 / ms = kbps
+            self.kbps
+                .store(((total * 8) / elapsed) as u32, Ordering::Relaxed);
+            self.window_bytes.store(0, Ordering::Relaxed);
+            self.window_start_ms.store(now_ms, Ordering::Relaxed);
+        }
+    }
+
+    pub fn kbps(&self) -> u32 {
+        self.kbps_at(process_now_ms())
+    }
+
+    fn kbps_at(&self, now_ms: u64) -> u32 {
+        let start = self.window_start_ms.load(Ordering::Relaxed);
+        if start == 0 || now_ms.saturating_sub(start) > RATE_STALE_MS {
+            return 0;
+        }
+        self.kbps.load(Ordering::Relaxed)
+    }
+}
+
 /// Encode VideoCodec as a u8 for atomic storage.
 fn enc_vcodec(c: VideoCodec) -> u8 {
     match c {
@@ -155,7 +211,7 @@ pub struct DestinationState {
     pub bytes_sent: AtomicU64,
     pub cuts_performed: AtomicU32,
     pub reconnects: AtomicU32,
-    pub bitrate_kbps_out: AtomicU32,
+    pub rate_out: RateMeter,
     /// Set by the supervisor when this destination is being removed or
     /// the app is shutting down. The egress pump checks it once per loop
     /// and tears down the upstream session politely (deleteStream) before
@@ -169,8 +225,6 @@ pub struct DestinationState {
     /// bytes don't match and the upstream decoder silently rejects every
     /// subsequent frame.
     last_seq_header_gen: AtomicU32,
-    rate_window_bytes: AtomicU64,
-    rate_window_start_ms: AtomicU64,
     /// True if this destination accepts Enhanced Broadcasting multi-track
     /// video on the wire. Set by the supervisor to `true` when the
     /// destination's platform is `twitch` and to `false` for everything
@@ -297,12 +351,10 @@ impl DestinationState {
             bytes_sent: AtomicU64::new(0),
             cuts_performed: AtomicU32::new(0),
             reconnects: AtomicU32::new(0),
-            bitrate_kbps_out: AtomicU32::new(0),
+            rate_out: RateMeter::default(),
             shutdown_requested: AtomicBool::new(false),
             last_seq_header_gen: AtomicU32::new(0),
             eb_override_url: crate::sync::Mutex::new(None),
-            rate_window_bytes: AtomicU64::new(0),
-            rate_window_start_ms: AtomicU64::new(0),
             // Default false: every newly-spawned destination flattens
             // multi-track until the supervisor decides otherwise. This
             // preserves beta.6 behaviour for any code path that creates
@@ -440,23 +492,7 @@ impl DestinationState {
     }
 
     pub(crate) fn note_outbound_bytes(&self, n: usize) {
-        let now = process_now_ms();
-        let total = self
-            .rate_window_bytes
-            .fetch_add(n as u64, Ordering::Relaxed)
-            + n as u64;
-        let start = self.rate_window_start_ms.load(Ordering::Relaxed);
-        if start == 0 {
-            self.rate_window_start_ms.store(now, Ordering::Relaxed);
-            return;
-        }
-        let elapsed = now.saturating_sub(start);
-        if elapsed >= 1_000 {
-            let kbps = ((total * 8) / elapsed.max(1)) as u32;
-            self.bitrate_kbps_out.store(kbps, Ordering::Relaxed);
-            self.rate_window_bytes.store(0, Ordering::Relaxed);
-            self.rate_window_start_ms.store(now, Ordering::Relaxed);
-        }
+        self.rate_out.note(n);
     }
 }
 
@@ -587,9 +623,7 @@ pub struct Controller {
 
     // Ingest-side stats
     ingest_disconnects: AtomicU32,
-    bitrate_kbps: AtomicU32, // inbound (from OBS)
-    rate_window_bytes: AtomicU64,
-    rate_window_start_ms: AtomicU64,
+    rate_in: RateMeter, // inbound (from OBS)
 
     // Discord webhook URL. Empty = disabled. Updated live via update_webhook.
     webhook_url: crate::sync::Mutex<String>,
@@ -781,9 +815,7 @@ impl Controller {
             slate_cache: Arc::default(),
             destinations: crate::sync::RwLock::new(HashMap::new()),
             ingest_disconnects: AtomicU32::new(0),
-            bitrate_kbps: AtomicU32::new(0),
-            rate_window_bytes: AtomicU64::new(0),
-            rate_window_start_ms: AtomicU64::new(0),
+            rate_in: RateMeter::default(),
             webhook_url: crate::sync::Mutex::new(String::new()),
             ingest_key: crate::sync::Mutex::new(String::new()),
             // 5 wrong keys then a short exponential lockout. A legit OBS uses
@@ -1188,7 +1220,7 @@ impl Controller {
                     d.id.clone(),
                     d.egress_alive.load(Ordering::Relaxed),
                     d.consumer_seq.load(Ordering::Relaxed),
-                    d.bitrate_kbps_out.load(Ordering::Relaxed),
+                    d.rate_out.kbps(),
                     d.tags_sent.load(Ordering::Relaxed),
                     d.bytes_sent.load(Ordering::Relaxed),
                     d.cuts_performed.load(Ordering::Relaxed),
@@ -1540,32 +1572,14 @@ impl Controller {
         self.ingest_disconnects.load(Ordering::Relaxed)
     }
     pub fn bitrate_kbps(&self) -> u32 {
-        self.bitrate_kbps.load(Ordering::Relaxed)
+        self.rate_in.kbps()
     }
 
     // ---- Internal: ingest counters ----
 
-    /// Called from the ingest path on every audio/video tag. Maintains a
-    /// 1-second rolling bitrate average (kbps) - cheap, lock-free.
+    /// Called from the ingest path on every audio/video tag.
     pub fn note_inbound_bytes(&self, n: usize) {
-        let now = process_now_ms();
-        let total = self
-            .rate_window_bytes
-            .fetch_add(n as u64, Ordering::Relaxed)
-            + n as u64;
-        let start = self.rate_window_start_ms.load(Ordering::Relaxed);
-        if start == 0 {
-            self.rate_window_start_ms.store(now, Ordering::Relaxed);
-            return;
-        }
-        let elapsed = now.saturating_sub(start);
-        if elapsed >= 1_000 {
-            // Convert bytes/ms → kbps:  bytes * 8 / ms
-            let kbps = ((total * 8) / elapsed.max(1)) as u32;
-            self.bitrate_kbps.store(kbps, Ordering::Relaxed);
-            self.rate_window_bytes.store(0, Ordering::Relaxed);
-            self.rate_window_start_ms.store(now, Ordering::Relaxed);
-        }
+        self.rate_in.note(n);
     }
 
     pub fn note_ingest_disconnect(&self) {
@@ -4054,6 +4068,25 @@ mod delay_sim;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1 MB/s for three seconds reads 8000 kbps; two and a half seconds
+    /// after the last byte it reads 0 (the stuck "17.40 Mbps" after OBS
+    /// stopped); and the first bytes after the gap start a fresh window
+    /// instead of averaging the silence in.
+    #[test]
+    fn a_bitrate_drops_to_zero_when_bytes_stop() {
+        let meter = RateMeter::default();
+        for ms in (0..=3_000).step_by(100) {
+            meter.note_at(100_000, 10_000 + ms);
+        }
+        assert_eq!(meter.kbps_at(13_000), 8_000);
+        assert_eq!(meter.kbps_at(15_400), 8_000, "a short pause keeps the rate");
+        assert_eq!(meter.kbps_at(15_600), 0, "stale after 2.5 s");
+        for ms in (0..=1_000).step_by(100) {
+            meter.note_at(50_000, 30_000 + ms);
+        }
+        assert_eq!(meter.kbps_at(31_000), 4_000, "no silence averaged in");
+    }
     use std::env;
     use std::sync::atomic::{AtomicU32 as TestUniq, Ordering as TestOrd};
 

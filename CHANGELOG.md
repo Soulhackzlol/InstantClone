@@ -278,6 +278,19 @@ stream settings: h264_texture_amf, 6000 kbps`.
 - **Hovering a blue button turned it grey** with near-invisible text, on
   every primary button in the dashboard (Save, Arm, Add destination...).
   Amber warning buttons lost their colour on hover the same way.
+- **Buttons hovered green while a delay was arming.** The hover colour
+  blended the accent with the stream state's colour, and cyan plus amber
+  came out green. Each state now hovers in one clean colour: amber while
+  arming, green while active, the accent otherwise.
+- **The bitrate stuck at its last value after OBS stopped** (the header and
+  graph kept showing, say, 17.40 Mbps with OBS offline). It now drops to 0
+  a couple of seconds after data stops, and a destination's rate does the
+  same.
+- **"… Applying" lingered for 2.5 s after Cut or Disarm** even when the app
+  answered at once. It now clears as soon as the new state arrives, and
+  reads "Applying" with the dots used elsewhere. The OBS dock no longer
+  flashes Arm for a moment after Cut delay (the delay stays armed, so it
+  goes straight to Activate).
 - **Idle destination cards squeezed their message** into a narrow column
   beside the counters. The counters now drop to their own line.
 
@@ -350,6 +363,24 @@ stream settings: h264_texture_amf, 6000 kbps`.
 - **The status pill glides.** Its words change in step with its colour, and
   it eases to its new width instead of jumping. The delay readout also stops
   rewriting itself on every refresh when nothing changed.
+- **The OBS dock, reworked for mid-stream use.**
+  - While the buffer fills, the main button counts down ("Ready in 0:23")
+    and fills toward Activate, instead of a spinner that restarted four
+    times a second.
+  - During a crash hold the dock says **Holding** (not Active and Offline
+    at once), and the hold card shows the countdown, how many destinations
+    are on the reconnect screen, and **End now**. It takes the place of the
+    delay controls, which step aside until OBS is back. A dock without
+    them, like a destinations-only dock, shows the card on top.
+  - Destinations show when they are on but not streaming yet ("Connecting…"
+    in amber) and when they are on the reconnect screen, instead of the
+    same grey dot as off. They follow the live state instead of a 4 s
+    refresh, so a "Turn off?" no longer vanishes before you can confirm.
+  - The status chip glides between states, the number pops only on a change
+    you made (not while the buffer counts up), and the idle "0 s" sits
+    together as "0s" without moving the +/− buttons.
+  - Like the dashboard, the dock now writes nothing when a refresh changes
+    nothing.
 - **Add destination** is a tinted button with a real plus icon.
 - The log wraps long lines instead of cutting them off, and stops jumping
   to the bottom while you are reading older lines.

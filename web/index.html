@@ -651,13 +651,15 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 @property --aurora-glow{syntax:'<number>';inherits:true;initial-value:.16}
 /* The stream state lives on <html> (renderHero sets data-stream-state), so
    the hero's aurora and the page's ambient light share one color and one
-   1.1 s sweep on every state change. */
+   1.1 s sweep on every state change. --tint (hovers) takes one clean hue
+   per state: blending the accent with the state colour made a third hue,
+   so cyan and the arming amber hovered green. */
 html{transition:--aurora-a 1.1s var(--ease-out),--aurora-b 1.1s var(--ease-out),--aurora-glow 1.1s var(--ease-out);
-  --tint:color-mix(in oklch,var(--accent) 65%,var(--aurora-a))}
+  --tint:var(--accent)}
 html[data-stream-state="off"]{--aurora-a:oklch(0.55 0.04 230);--aurora-b:oklch(0.5 0.05 260);--aurora-glow:.16}
-html[data-stream-state="arming"]{--aurora-a:var(--warn);--aurora-b:oklch(0.65 0.18 35);--aurora-glow:.34}
+html[data-stream-state="arming"]{--aurora-a:var(--warn);--aurora-b:oklch(0.65 0.18 35);--aurora-glow:.34;--tint:var(--warn)}
 html[data-stream-state="armed"]{--aurora-a:var(--accent);--aurora-b:oklch(0.62 0.16 250);--aurora-glow:.32}
-html[data-stream-state="active"]{--aurora-a:var(--live);--aurora-b:oklch(0.7 0.15 185);--aurora-glow:.36}
+html[data-stream-state="active"]{--aurora-a:var(--live);--aurora-b:oklch(0.7 0.15 185);--aurora-glow:.36;--tint:var(--live)}
 /* Ambient light at the top of the page in the state's color, so the whole
    dashboard (not just one box) says where the stream is. Fixed and
    pointer-less, so scrolling never repaints it. */
@@ -4296,7 +4298,7 @@ function renderCta(){
     setHidden(warn, true);
   };
   if (pendingPhase){
-    setCta(btn, { key: 'applying', cls: 'ic-btn-primary', pre: '… Applying', disabled: true });
+    setCta(btn, { key: 'applying', cls: 'ic-btn-disabled', pre: 'Applying', disabled: true, busy: true });
     setHidden(cancel, true);
     renderCutAfter('off');
     clearWarn();
@@ -4474,7 +4476,7 @@ function ctaLabel(d){
   num.className = 'cta-num';
   num.textContent = d.num || '';
   label.append(d.pre || '', num, d.post || '');
-  if (d.waiting){
+  if (d.waiting || d.busy){
     const dots = document.createElement('span');
     dots.className = 'cta-dots';
     dots.setAttribute('aria-hidden', 'true');
@@ -9697,7 +9699,10 @@ function applyState(s){
   // flash a too-big delay unlocked mid-tick.
   updateBitrateHold(s);
   if ($('hero').hidden) return; // not configured
-  if (pendingPhase && pendingPhase === PHASE_TO_STATE[s.phase]) clearPending();
+  // pendingPhase holds a raw phase ('ready', 'idle'), so compare it raw:
+  // mapped through PHASE_TO_STATE it never matched after Cut or Disarm and
+  // "Applying" sat out its full 2.5 s fallback.
+  if (pendingPhase && pendingPhase === s.phase) clearPending();
   renderHero(s);
   renderHoldBanner(s);
   renderHeader(s);
