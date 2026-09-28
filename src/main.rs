@@ -666,7 +666,8 @@ impl VerticalWaitLog {
 /// and diffs it against the active-destinations list whenever settings
 /// change. Adds/removes/restarts as needed.
 async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controller::Controller>) {
-    // Currently-running egress pumps, indexed by Destination.id.
+    // Currently-running egress pumps, indexed by Destination.id, with the
+    // signature each started with (see `pump_signature`).
     let mut running: std::collections::HashMap<
         String,
         (String, tokio::task::JoinHandle<std::io::Result<()>>),
@@ -724,21 +725,8 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             .cloned()
             .collect();
         for id in to_remove {
-            if let Some((_url, handle)) = running.remove(&id) {
-                // Cooperative shutdown: ask the pump to send deleteStream
-                // and close cleanly. Give it a short window - then
-                // HARD-ABORT no matter what. Without the explicit abort,
-                // dropping the JoinHandle leaves the task running
-                // detached: a Twitch destination stuck in a connect-fail
-                // loop would keep retrying forever even after the user
-                // toggled it off.
-                let state = ctrl.destination_state(&id);
-                state
-                    .shutdown_requested
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-                let abort = handle.abort_handle();
-                let _ = tokio::time::timeout(Duration::from_millis(1500), handle).await;
-                abort.abort();
+            if let Some((_signature, handle)) = running.remove(&id) {
+                stop_pump(&ctrl, &id, handle).await;
                 ctrl.remove_destination_state(&id);
                 ctrl.log(format!("[{}] removed", id));
             }
@@ -782,13 +770,8 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             // the canvas; the card says what's missing. It spawns the
             // moment detection resolves (self-heals within a tick).
             if dest.wants_vertical() && vertical_track.is_none() {
-                if let Some((_u, handle)) = running.remove(&dest.id) {
-                    let st = ctrl.destination_state(&dest.id);
-                    st.shutdown_requested
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
-                    let abort = handle.abort_handle();
-                    let _ = tokio::time::timeout(Duration::from_millis(1500), handle).await;
-                    abort.abort();
+                if let Some((_signature, handle)) = running.remove(&dest.id) {
+                    stop_pump(&ctrl, &dest.id, handle).await;
                     ctrl.log(format!(
                         "[{}] vertical: the 9:16 canvas stopped - holding off connecting",
                         dest.name
@@ -887,19 +870,19 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             }
             let effective_url = override_url.as_deref().unwrap_or(url.as_str()).to_string();
             let url = &effective_url;
-            // A URL change during a crash-protection hold waits: dropping OBS
+            let signature = pump_signature(url, &dest.stream_format, &dest.audio_track);
+            // A change during a crash-protection hold waits: dropping OBS
             // clears Twitch's session URL, and restarting now would take the
             // destination off the reconnect screen.
             let needs_restart = match running.get(&dest.id) {
-                Some((existing_url, handle)) => {
-                    (existing_url != url && !ctrl.hold_active()) || handle.is_finished()
+                Some((running_signature, handle)) => {
+                    (running_signature != &signature && !ctrl.hold_active()) || handle.is_finished()
                 }
                 None => true,
             };
             if needs_restart {
-                if let Some((_old_url, handle)) = running.remove(&dest.id) {
-                    handle.abort();
-                    let _ = handle.await;
+                if let Some((_old_signature, handle)) = running.remove(&dest.id) {
+                    stop_pump(&ctrl, &dest.id, handle).await;
                 }
                 // Don't open a fresh egress while OBS isn't sending -
                 // we'd either burn TCP to Twitch / YouTube for an empty
@@ -907,7 +890,10 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 // pump itself bails out cleanly on ingest loss; here we
                 // just refuse to spawn its replacement until ingest is
                 // back. The next supervisor tick (~2 s) re-checks.
-                if !ingest_alive {
+                // During a crash-protection hold it starts anyway: a
+                // destination switched on mid-hold goes onto the
+                // reconnect screen with the others (`pump_dest`).
+                if !ingest_alive && !ctrl.hold_active() {
                     continue;
                 }
                 let state = ctrl.destination_state(&dest.id);
@@ -963,14 +949,13 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                     .audio_track
                     .store(audio_track, std::sync::atomic::Ordering::Relaxed);
                 let label = dest.name.clone();
-                let url_clone = url.clone();
                 let handle = tokio::spawn(controller::run_egress(
                     ctrl.clone(),
                     label,
-                    url_clone.clone(),
+                    url.clone(),
                     state,
                 ));
-                running.insert(dest.id.clone(), (url_clone, handle));
+                running.insert(dest.id.clone(), (signature, handle));
                 ctrl.log(format!("[{}] starting egress", dest.name));
             }
         }
@@ -1099,6 +1084,41 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
 /// The child's `[sink]`-prefixed lines are forwarded into the dashboard
 /// log ring, so "publish accepted" and the 1 Hz stat lines show up in
 /// the Logs tab - that's the whole point of a testing destination.
+/// What a running pump was started with: its URL, and the settings a pump
+/// reads only when it starts (stream format, audio track). A change to any
+/// of them restarts it: switching a live destination between horizontal and
+/// vertical mid-stream would otherwise send the new canvas's frames against
+/// the old canvas's sequence header until the next cut.
+fn pump_signature(url: &str, stream_format: &str, audio_track: &str) -> String {
+    format!("{url}\n{stream_format}\n{audio_track}")
+}
+
+/// Stop a destination's pump: ask it to close its session cleanly (the
+/// platform gets its goodbye instead of a dropped connection), give it 1.5 s,
+/// then abort whatever is left - a pump stuck in a connect loop would
+/// otherwise run on detached. A pump cut off mid-send never clears its own
+/// state, so it is cleared here: it no longer reads as live, and its read
+/// position no longer holds back the buffer's trim.
+async fn stop_pump(
+    ctrl: &controller::Controller,
+    id: &str,
+    handle: tokio::task::JoinHandle<std::io::Result<()>>,
+) {
+    let state = ctrl.destination_state(id);
+    state
+        .shutdown_requested
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let abort = handle.abort_handle();
+    let _ = tokio::time::timeout(Duration::from_millis(1500), handle).await;
+    abort.abort();
+    state
+        .egress_alive
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    state
+        .consumer_seq
+        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+}
+
 async fn manage_test_sink(
     child: &mut Option<tokio::process::Child>,
     last_spawn: &mut Option<std::time::Instant>,
@@ -1605,5 +1625,23 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// A running pump restarts when anything it only reads at start
+    /// changes: the URL, the stream format, or the audio track.
+    #[test]
+    fn a_pump_restarts_for_its_url_format_or_audio_track() {
+        let base = super::pump_signature("rtmp://a/app/key", "horizontal", "auto");
+        assert_eq!(
+            base,
+            super::pump_signature("rtmp://a/app/key", "horizontal", "auto")
+        );
+        for changed in [
+            super::pump_signature("rtmp://b/app/key", "horizontal", "auto"),
+            super::pump_signature("rtmp://a/app/key", "vertical", "auto"),
+            super::pump_signature("rtmp://a/app/key", "horizontal", "2"),
+        ] {
+            assert_ne!(base, changed);
+        }
     }
 }

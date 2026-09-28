@@ -23,6 +23,14 @@ use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const DEFAULT_CHUNK_SIZE: usize = 128;
 
+/// Most bytes of unfinished messages a connection may hold across all its
+/// chunk streams. A publisher has one or two messages in flight (a large
+/// keyframe on one stream, audio on another); each can be up to 16 MB, so
+/// this leaves room for several. Without a total, a peer could open
+/// thousands of chunk streams and park a nearly finished 16 MB message on
+/// each, holding memory without ever publishing.
+pub const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct Message {
     pub timestamp: u32,
@@ -86,6 +94,9 @@ pub struct ChunkReader<R> {
     inner: R,
     chunk_size: usize,
     streams: HashMap<u32, CsState>,
+    /// Bytes of unfinished messages across all of `streams`, capped at
+    /// `MAX_PENDING_BYTES`.
+    pending: usize,
     /// Total wire bytes consumed from the peer since the connection
     /// opened - chunk headers + payload + extended timestamps + control
     /// messages. Used to emit RTMP Acknowledgement (BYTES_READ_REPORT,
@@ -111,6 +122,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
             inner,
             chunk_size: DEFAULT_CHUNK_SIZE,
             streams: HashMap::with_capacity(8),
+            pending: 0,
             bytes_in: 0,
             window_ack_size: 2_500_000,
             bytes_in_at_last_ack: 0,
@@ -281,6 +293,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     st.type_id = type_id;
                     st.stream_id = msid;
                     st.last_had_ext_ts = ext_ts_present;
+                    self.pending = self.pending.saturating_sub(st.buf.len());
                     st.buf = message_buf(length, chunk_size);
                     st.receiving = true;
                 }
@@ -295,6 +308,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     st.length = length;
                     st.type_id = type_id;
                     st.last_had_ext_ts = ext_ts_present;
+                    self.pending = self.pending.saturating_sub(st.buf.len());
                     st.buf = message_buf(length, chunk_size);
                     st.receiving = true;
                 }
@@ -305,6 +319,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     st.timestamp = st.timestamp.wrapping_add(delta);
                     st.timestamp_delta = delta;
                     st.last_had_ext_ts = ext_ts_present;
+                    self.pending = self.pending.saturating_sub(st.buf.len());
                     st.buf = message_buf(st.length, chunk_size);
                     st.receiving = true;
                 }
@@ -330,6 +345,13 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
             // self.streams. We bump the byte counter manually afterwards.
             self.inner.read_exact(&mut st.buf[start..]).await?;
             self.bytes_in += to_read as u64;
+            self.pending += to_read;
+            if self.pending > MAX_PENDING_BYTES {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidData,
+                    "too much unfinished message data on this connection",
+                ));
+            }
 
             if st.buf.len() as u32 == st.length {
                 let msg = Message {
@@ -339,6 +361,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                     payload: st.buf.split().freeze(),
                 };
                 st.receiving = false;
+                self.pending = self.pending.saturating_sub(msg.payload.len());
 
                 // Handle protocol-control messages in-band so callers
                 // only ever see semantic messages.
@@ -368,6 +391,7 @@ impl<R: AsyncReadExt + Unpin> ChunkReader<R> {
                                 msg.payload[3],
                             ]);
                             if let Some(st) = self.streams.get_mut(&aborted) {
+                                self.pending = self.pending.saturating_sub(st.buf.len());
                                 st.buf = BytesMut::new();
                                 st.receiving = false;
                             }
@@ -1124,5 +1148,29 @@ mod tests {
         push_u24_be(&mut out, 0x12_3456);
         assert_eq!(out, [0x12, 0x34, 0x56]);
         assert_eq!(u24_be(&out), 0x12_3456);
+    }
+
+    /// A peer that parks a nearly finished message on stream after stream
+    /// is cut off once the unfinished bytes pass `MAX_PENDING_BYTES`,
+    /// instead of holding that memory for as long as it likes.
+    #[tokio::test]
+    async fn unfinished_messages_are_capped_per_connection() {
+        const CHUNK: usize = 8 * 1024 * 1024;
+        let mut wire = fmt0(2, 0, 1, 0, &(CHUNK as u32).to_be_bytes());
+        let first = vec![0u8; CHUNK];
+        let streams = MAX_PENDING_BYTES / CHUNK + 1;
+        for csid in 0..streams {
+            // Declares 12 MB, sends only the first 8 MB chunk.
+            wire.extend(fmt0_first_chunk(
+                3 + csid as u8,
+                0,
+                9,
+                12 * 1024 * 1024,
+                &first,
+            ));
+        }
+        let mut reader = ChunkReader::new(std::io::Cursor::new(wire));
+        let err = reader.read_message().await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData, "{err}");
     }
 }

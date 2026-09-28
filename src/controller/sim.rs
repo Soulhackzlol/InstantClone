@@ -46,12 +46,19 @@ pub(super) struct Sim {
 
 impl Sim {
     pub(super) async fn new(protected: bool) -> Sim {
+        Sim::with_ring_bytes(protected, 16 * 1024 * 1024).await
+    }
+
+    /// A simulation whose buffer holds only `ring_bytes`. A frame and its
+    /// audio take 24 bytes, so at 10 fps a buffer of 240 bytes a second
+    /// of stream fills up.
+    pub(super) async fn with_ring_bytes(protected: bool, ring_bytes: u64) -> Sim {
         static UNIQ: AtomicU32 = AtomicU32::new(0);
         let n = UNIQ.fetch_add(1, Ordering::Relaxed);
         let ring_path =
             std::env::temp_dir().join(format!("ic-pump-sim-{}-{n}.buf", std::process::id()));
         let _ = std::fs::remove_file(&ring_path);
-        let ring = Arc::new(DiskRing::create(&ring_path, 16 * 1024 * 1024).unwrap());
+        let ring = Arc::new(DiskRing::create(&ring_path, ring_bytes).unwrap());
         let ctrl = Arc::new(Controller::new(ring, 0));
         ctrl.update_crash_protection(crate::crash_protection::CrashProtection {
             enabled: protected,

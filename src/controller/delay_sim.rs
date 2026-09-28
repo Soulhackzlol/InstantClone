@@ -755,3 +755,89 @@ async fn every_track_config_leads_each_twitch_connection() {
         assert_eq!(configs.len(), 4, "connection {conn} led with every track");
     }
 }
+
+/// A delay longer than the buffer can hold at this bitrate (a hotkey,
+/// MIDI or auto-arm skip the dashboard's capacity check, and the bitrate
+/// can rise after arming) must not wait forever. Once the buffer is full
+/// it counts as ready, the destination joins as far back as the buffer
+/// safely reaches, and the stream runs there without stalling or
+/// replaying. The log says the delay is capped.
+#[tokio::test]
+async fn a_delay_longer_than_the_buffer_runs_at_what_it_holds() {
+    // About 7.5 s of stream (24 bytes a frame at 10 fps).
+    let mut sim = Sim::with_ring_bytes(false, 1_800).await;
+    sim.ctrl.arm_delay(30_000);
+    sim.obs_connects().await;
+    sim.obs_sends(9_000).await;
+    assert_eq!(
+        sim.ctrl.phase(),
+        "ready",
+        "a full buffer holds all it ever will"
+    );
+    sim.ctrl
+        .activate_delay()
+        .expect("activates at what the buffer holds");
+    sim.destination_runs("platform");
+    sim.obs_sends(6_000).await;
+
+    let frames = sim.frames(0);
+    assert!(
+        frames.len() >= 30,
+        "the destination joined and kept streaming: {} frames",
+        frames.len()
+    );
+    assert_strictly_increasing(&frames, "a delay capped by the buffer");
+    let behind = delay_ms(&sim, frames.last().unwrap());
+    assert!(
+        (2_500..=7_500).contains(&behind),
+        "delayed by about what the buffer holds, not {behind} ms"
+    );
+    let gaps: Vec<u32> = frames
+        .windows(2)
+        .map(|w| w[1].at.duration_since(w[0].at).as_millis() as u32)
+        .collect();
+    assert!(
+        gaps.iter().all(|gap| *gap < 1_000),
+        "no stall while capped: {gaps:?}"
+    );
+    assert!(
+        sim.ctrl
+            .logs
+            .lock()
+            .iter()
+            .any(|line| line.contains("the buffer is full")),
+        "the log says the delay is capped"
+    );
+    sim.assert_timestamps_monotonic(0);
+}
+
+/// The keyframe interval is measured from the first few gaps only. When
+/// the encoder's real interval turns out much longer (OBS's "auto" after a
+/// restart, or early scene-cut keyframes), a landed delay can sit more than
+/// the expected band above its target. Cutting to fix that must move
+/// forward: the keyframe at the delay is the one the pump already passed,
+/// and cutting back to it replayed the same stretch on every check.
+#[tokio::test]
+async fn a_longer_keyframe_interval_than_measured_never_replays() {
+    let mut sim = delay_sim().await;
+    sim.ctrl.arm_delay(DELAY_MS);
+    sim.obs_connects().await;
+    // The measurement: keyframes every 500 ms (frames 0..29).
+    sim.obs_sends(3_000).await;
+    sim.ctrl
+        .activate_delay()
+        .expect("the buffer holds the delay");
+    // Then the real interval: a keyframe every 4 s, at frames 40 and 80.
+    sim.gop_frames = 40;
+    // Join 1 s after keyframe 80: it isn't the delay old yet, so the join
+    // lands on keyframe 40, about 5 s back - past the expected band.
+    sim.obs_sends(6_000).await;
+    sim.destination_connects("platform").await;
+    sim.obs_sends(10_000).await;
+
+    let frames = sim.frames(0);
+    let back = backward_jumps(&frames);
+    assert!(back.is_empty(), "the picture jumped back at {back:?}");
+    assert_airs_at_most_twice(&frames);
+    sim.assert_timestamps_monotonic(0);
+}

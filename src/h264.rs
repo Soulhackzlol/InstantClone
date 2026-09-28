@@ -57,6 +57,18 @@ const FOURCC_AV01: [u8; 4] = *b"av01";
 const FOURCC_VP09: [u8; 4] = *b"vp09";
 const FOURCC_AVC1: [u8; 4] = *b"avc1";
 
+/// Enhanced RTMP packet types that carry decoder config: SequenceStart (0)
+/// and MPEG2TSSequenceStart (5, AV1's alternative config form).
+fn is_config_packet(packet_type: u8) -> bool {
+    matches!(packet_type, 0 | 5)
+}
+
+/// Enhanced RTMP packet types that carry coded pictures: CodedFrames (1)
+/// and CodedFramesX (3, no composition time).
+fn is_coded_frames_packet(packet_type: u8) -> bool {
+    matches!(packet_type, 1 | 3)
+}
+
 pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     let unknown = VideoTagInfo {
         is_seq_header: false,
@@ -101,14 +113,16 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     //              5=MPEG2TSSequenceStart, 6=Multitrack.
     let frame_type = (b0 >> 4) & 0x07;
     let packet_type = b0 & 0x0F;
-    let is_seq_header = packet_type == 0;
+    let is_seq_header = is_config_packet(packet_type);
     let is_metadata = packet_type == 4;
     // Enhanced encoders always set FrameType=1 on keyframes. For AVC we
     // walked NALUs because some encoders flag P-frames as key incorrectly;
     // enhanced-rtmp tightens this and FrameType is the spec-blessed signal.
-    // SeqStart / Metadata packets carry no slice data, so refuse to flag
-    // them as IDR even if the encoder set FrameType=1.
-    let is_keyframe = frame_type == 1 && !is_seq_header && !is_metadata;
+    // Only coded frames (CodedFrames / CodedFramesX) carry a picture:
+    // config, SequenceEnd and Metadata packets never count as keyframes,
+    // even with FrameType=1 - a SequenceEnd taken for one became a cut
+    // point, and crash protection's held "last keyframe".
+    let is_keyframe = frame_type == 1 && is_coded_frames_packet(packet_type);
     let is_multitrack = packet_type == 6;
 
     // For multi-track, the FourCC sits behind the multitrack header; we
@@ -126,11 +140,11 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     // FrameType=1 (some do).
     if is_multitrack {
         let nested_pt = payload.get(1).map(|b| b & 0x0F).unwrap_or(0xFF);
-        let is_mt_seq_header = nested_pt == 0;
+        let is_mt_seq_header = is_config_packet(nested_pt);
         let is_mt_metadata = nested_pt == 4;
         return VideoTagInfo {
             is_seq_header: is_mt_seq_header,
-            is_idr: is_keyframe && !is_mt_seq_header && !is_mt_metadata,
+            is_idr: frame_type == 1 && is_coded_frames_packet(nested_pt),
             is_multitrack: true,
             is_metadata: is_mt_metadata,
             codec: VideoCodec::Unknown,
@@ -163,21 +177,44 @@ pub fn classify_video_tag(payload: &[u8]) -> VideoTagInfo {
     }
 }
 
-fn contains_idr_nalu(mut data: &[u8]) -> bool {
-    while data.len() >= 4 {
-        let len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        let Some(nal) = data[4..].get(..len) else {
-            return false;
+fn contains_idr_nalu(data: &[u8]) -> bool {
+    // NAL lengths are 4 bytes in practice (OBS, FFmpeg, x264), and an IDR
+    // found that way counts even if later bytes don't parse. The AVC config
+    // allows 1- or 2-byte lengths too (lengthSizeMinusOne); for those, a
+    // 4-byte walk finds nothing and fails, and a size is trusted only when
+    // its lengths tile the frame exactly, which a wrong size almost never does.
+    let (idr, tiled) = scan_nal_units(data, 4);
+    if idr || tiled {
+        return idr;
+    }
+    [2, 1]
+        .into_iter()
+        .any(|size| scan_nal_units(data, size) == (true, true))
+}
+
+/// Walk NAL units prefixed by `size`-byte big-endian lengths: whether an
+/// IDR slice turned up, and whether the lengths tiled `data` exactly.
+fn scan_nal_units(mut data: &[u8], size: usize) -> (bool, bool) {
+    let mut idr = false;
+    while !data.is_empty() {
+        let Some(prefix) = data.get(..size) else {
+            return (idr, false);
+        };
+        let len = prefix
+            .iter()
+            .fold(0usize, |len, byte| (len << 8) | usize::from(*byte));
+        let Some(nal) = data[size..].get(..len) else {
+            return (idr, false);
         };
         // A zero-length NAL has no header byte to classify. Step over it:
-        // reading data[4] here indexed past the slice when the empty NAL
-        // was the last thing in the tag, which aborts a release build.
+        // reading its header indexed past the slice when the empty NAL was
+        // the last thing in the tag, which aborts a release build.
         if nal.first().is_some_and(|header| header & 0x1F == 5) {
-            return true;
+            idr = true;
         }
-        data = &data[4 + len..];
+        data = &data[size + len..];
     }
-    false
+    (idr, true)
 }
 
 /// Flatten an Enhanced RTMP multi-track video tag down to a standard
@@ -884,8 +921,9 @@ fn is_multitrack_audio(payload: &[u8]) -> bool {
 
 /// Flatten an Enhanced-RTMP multi-track AUDIO tag down to a standard
 /// single-track tag carrying only `target_track`. The audio twin of
-/// [`flatten_multitrack_video`], shifted by one byte: the multitrack header
-/// is byte 1, the FourCC is bytes 2..6, and (OneTrack) the TrackId is byte 6.
+/// [`flatten_multitrack_video`], with the same offsets: the multitrack
+/// header is byte 1, the FourCC is bytes 2..6, and (OneTrack) the TrackId is
+/// byte 6.
 ///
 /// AAC (`mp4a`) is rewritten to a *legacy* AAC tag (`0xAF` ...), the form
 /// every RTMP ingest accepts - the same reason the vertical AVC path drops to
@@ -897,15 +935,35 @@ fn is_multitrack_audio(payload: &[u8]) -> bool {
 /// layout or `target_track` isn't present, so the caller drops the tag for
 /// this destination.
 pub fn flatten_multitrack_audio(payload: &[u8], target_track: u8) -> Option<Vec<u8>> {
+    let (fourcc, track_payload) = locate_audio_track(payload, target_track)?;
+    let nested_pt = payload[1] & 0x0F;
+    let mut out = Vec::with_capacity(track_payload.len() + 5);
+    if fourcc == FOURCC_MP4A && nested_pt <= 1 {
+        // Legacy AAC: [0xAF][AACPacketType 0=seq/1=raw][data]. The nested
+        // audio packet type maps 1:1 (SequenceStart=0, CodedFrames=1).
+        out.push(0xAF);
+        out.push(nested_pt);
+        out.extend_from_slice(track_payload);
+    } else {
+        // Enhanced-RTMP single-track audio tag (non-AAC, or an AAC packet
+        // type legacy FLV can't express such as MultichannelConfig).
+        out.push(0x90 | (nested_pt & 0x0F));
+        out.extend_from_slice(fourcc);
+        out.extend_from_slice(track_payload);
+    }
+    Some(out)
+}
+
+/// The FourCC and payload of `target_track` in an Enhanced-RTMP multi-track
+/// audio tag, across its three layouts (offsets mirror
+/// `flatten_multitrack_video`). None when the tag isn't one, or doesn't
+/// carry that track.
+fn locate_audio_track(payload: &[u8], target_track: u8) -> Option<(&[u8], &[u8])> {
     if payload.len() < 7 || !is_multitrack_audio(payload) {
         return None;
     }
     let mt_type = (payload[1] >> 4) & 0x0F;
-    let nested_pt = payload[1] & 0x0F;
-
-    // Locate the requested track's FourCC + payload across the three
-    // multi-track layouts (offsets mirror flatten_multitrack_video).
-    let (fourcc, track_payload): (&[u8], &[u8]) = match mt_type {
+    let located = match mt_type {
         0 => {
             // OneTrack: [FourCC(4)][TrackId(1)][payload..]
             if payload[6] != target_track {
@@ -952,22 +1010,12 @@ pub fn flatten_multitrack_audio(payload: &[u8], target_track: u8) -> Option<Vec<
         }
         _ => return None,
     };
+    Some(located)
+}
 
-    let mut out = Vec::with_capacity(track_payload.len() + 5);
-    if fourcc == FOURCC_MP4A && nested_pt <= 1 {
-        // Legacy AAC: [0xAF][AACPacketType 0=seq/1=raw][data]. The nested
-        // audio packet type maps 1:1 (SequenceStart=0, CodedFrames=1).
-        out.push(0xAF);
-        out.push(nested_pt);
-        out.extend_from_slice(track_payload);
-    } else {
-        // Enhanced-RTMP single-track audio tag (non-AAC, or an AAC packet
-        // type legacy FLV can't express such as MultichannelConfig).
-        out.push(0x90 | (nested_pt & 0x0F));
-        out.extend_from_slice(fourcc);
-        out.extend_from_slice(track_payload);
-    }
-    Some(out)
+/// Whether a multi-track audio tag carries `track`.
+pub fn multitrack_audio_has_track(payload: &[u8], track: u8) -> bool {
+    locate_audio_track(payload, track).is_some()
 }
 
 /// Decide what audio bytes to put on the wire given the destination's
@@ -977,35 +1025,39 @@ pub fn flatten_multitrack_audio(payload: &[u8], target_track: u8) -> Option<Vec<
 ///   bit-faithfully, so the VOD-audio track (`TrackId 1`) keeps being fed
 ///   alongside the live track.
 /// - [`AudioEgress::Track(n)`]: this destination gets exactly one audio
-///   track, `TrackId n`, flattened - and never goes silent, falling back to
-///   the primary live track when the requested one isn't there:
-///   * a single-track / legacy tag is the only audio there is, so it always
-///     passes through unchanged (even for `Track(1)`: a live track beats a
-///     silent destination if the 2nd track never arrived);
-///   * a multi-track tag is flattened to `TrackId n`, falling back to
-///     `TrackId 0` (live) when track `n` isn't present.
+///   track, `TrackId n`, flattened. `target_on_wire` says whether OBS is
+///   sending track `n` in this stream (`Controller::audio_track_on_wire`):
+///   * when it is, only track `n` goes out. OBS sends its live track as a
+///     plain (legacy) tag and the extra track as a multi-track one, so the
+///     live tags must be dropped here, or a "Track 2" destination gets both
+///     tracks interleaved, the copyrighted live mix included;
+///   * when it isn't, the live track goes out instead (a single-track or
+///     legacy tag unchanged, a multi-track one flattened to `TrackId 0`),
+///     so picking "Track 2" without a 2nd track still sends audio.
 ///
-/// Returns `None` only when the tag can't be represented at all.
+/// Returns `None` when the tag isn't this destination's to send, or can't
+/// be represented at all.
 pub fn select_audio_bytes(
     payload: &[u8],
     egress: AudioEgress,
+    target_on_wire: bool,
 ) -> Option<std::borrow::Cow<'_, [u8]>> {
     use std::borrow::Cow;
     let target = match egress {
         AudioEgress::Passthrough => return Some(Cow::Borrowed(payload)),
         AudioEgress::Track(t) => t,
     };
+    let live_fallback = target == 0 || !target_on_wire;
     if !is_multitrack_audio(payload) {
-        // Single track = the only audio there is. Always forward it, whatever
-        // track was requested - a live track beats a silent destination when
-        // the 2nd track isn't being sent.
-        return Some(Cow::Borrowed(payload));
+        // A single-track tag is the live track.
+        return live_fallback.then_some(Cow::Borrowed(payload));
     }
-    // Flatten the requested track; fall back to the primary live track 0 when
-    // it isn't present, so picking "Track 2" on a single-track stream still
-    // sends audio instead of silence.
     flatten_multitrack_audio(payload, target)
-        .or_else(|| flatten_multitrack_audio(payload, 0))
+        .or_else(|| {
+            live_fallback
+                .then(|| flatten_multitrack_audio(payload, 0))
+                .flatten()
+        })
         .map(Cow::Owned)
 }
 
@@ -1147,8 +1199,8 @@ fn fourcc_to_codec(fourcc: [u8; 4]) -> AudioCodec {
 
 /// Best-effort extraction of the Enhanced-RTMP audio TrackId for the
 /// OneTrack multi-track layout. Mirrors `seq_header_track_id` (the
-/// video equivalent), shifted by one byte because audio's multitrack
-/// header lives at byte 2 vs video's byte 1.
+/// video equivalent): both put the multitrack header at byte 1 and the
+/// TrackId at byte 6.
 ///
 /// Returns 0 for:
 ///   * legacy AAC / MP3 (sound_format != 9)
@@ -2232,11 +2284,13 @@ mod tests {
                 let _ = select_video_bytes(&tag, egress);
             }
             for egress in [AudioEgress::Track(0), AudioEgress::Track(1)] {
-                let _ = select_audio_bytes(&tag, egress);
+                for on_wire in [false, true] {
+                    let _ = select_audio_bytes(&tag, egress, on_wire);
+                }
             }
             let passthrough = select_video_bytes(&tag, VideoEgress::Passthrough).unwrap();
             assert_eq!(passthrough.as_ref(), tag.as_slice());
-            let passthrough = select_audio_bytes(&tag, AudioEgress::Passthrough).unwrap();
+            let passthrough = select_audio_bytes(&tag, AudioEgress::Passthrough, true).unwrap();
             assert_eq!(passthrough.as_ref(), tag.as_slice());
             if !info.is_multitrack {
                 let primary = select_video_bytes(&tag, VideoEgress::Track(0)).unwrap();
@@ -2623,8 +2677,8 @@ mod tests {
             AudioEgress::Track(0),
             AudioEgress::Track(1),
         ] {
-            let out =
-                select_audio_bytes(&legacy_aac, egress).expect("single-track audio must forward");
+            let out = select_audio_bytes(&legacy_aac, egress, false)
+                .expect("single-track audio must forward");
             assert_eq!(out.as_ref(), legacy_aac.as_slice());
             assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
         }
@@ -2636,9 +2690,28 @@ mod tests {
         // track (OneTrack TrackId 0) still gets audio: the requested track is
         // missing, so it falls back to the live track 0, flattened to legacy.
         let live_only = enhanced_audio_onetrack(0, 1);
-        let out = select_audio_bytes(&live_only, AudioEgress::Track(1))
+        let out = select_audio_bytes(&live_only, AudioEgress::Track(1), false)
             .expect("must fall back to the live track, not go silent");
         assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
+    }
+
+    /// OBS sends its live track as plain AAC and the VOD / clean track as a
+    /// OneTrack multi-track tag. Once the clean track is on the wire, a
+    /// "Track 2" destination must get only it: forwarding the live tags too
+    /// interleaved both tracks, copyrighted live mix included.
+    #[test]
+    fn a_track_two_destination_never_gets_the_live_track_once_the_second_is_sent() {
+        let live_legacy = vec![0xaf, 0x01, 0x12, 0x10, 0x56];
+        let live_multitrack = enhanced_audio_onetrack(0, 1);
+        let clean = enhanced_audio_onetrack(1, 1);
+        let egress = AudioEgress::Track(1);
+        assert!(select_audio_bytes(&live_legacy, egress, true).is_none());
+        assert!(select_audio_bytes(&live_multitrack, egress, true).is_none());
+        let out = select_audio_bytes(&clean, egress, true).expect("the clean track goes out");
+        assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
+        // The live track's own destinations are unaffected.
+        assert!(select_audio_bytes(&live_legacy, AudioEgress::Track(0), true).is_some());
+        assert!(select_audio_bytes(&clean, AudioEgress::Track(0), true).is_none());
     }
 
     #[test]
@@ -2647,7 +2720,7 @@ mod tests {
         // through bit-faithfully so Twitch's VOD-audio slot keeps its feed.
         for track in 0u8..=3 {
             let tag = enhanced_audio_onetrack(track, 1);
-            let out = select_audio_bytes(&tag, AudioEgress::Passthrough)
+            let out = select_audio_bytes(&tag, AudioEgress::Passthrough, true)
                 .unwrap_or_else(|| panic!("twitch must forward track {track}"));
             assert_eq!(out.as_ref(), tag.as_slice());
         }
@@ -2661,7 +2734,7 @@ mod tests {
         for track in 1u8..=3 {
             let tag = enhanced_audio_onetrack(track, 1);
             assert!(
-                select_audio_bytes(&tag, AudioEgress::Track(0)).is_none(),
+                select_audio_bytes(&tag, AudioEgress::Track(0), true).is_none(),
                 "TrackId {track} must be dropped when the dest wants Track(0)",
             );
         }
@@ -2672,12 +2745,12 @@ mod tests {
         // The clean/second audio track routed to a single-track dest is
         // flattened to legacy AAC (0xAF ...), the universally-accepted form.
         let live = enhanced_audio_onetrack(0, 1);
-        let out = select_audio_bytes(&live, AudioEgress::Track(0))
+        let out = select_audio_bytes(&live, AudioEgress::Track(0), true)
             .expect("track 0 must reach a Track(0) destination");
         assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
 
         let clean = enhanced_audio_onetrack(1, 1);
-        let out = select_audio_bytes(&clean, AudioEgress::Track(1))
+        let out = select_audio_bytes(&clean, AudioEgress::Track(1), true)
             .expect("track 1 must reach a Track(1) destination");
         assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
     }
@@ -2731,5 +2804,56 @@ mod tests {
             flatten_multitrack_audio(&mtmc, 1).unwrap(),
             vec![0x91, b'O', b'p', b'u', b's', 0x33, 0x44],
         );
+    }
+
+    /// Enhanced RTMP: only coded frames carry a picture. A SequenceEnd
+    /// (the encoder stopping) flagged as a keyframe was taken for one - a
+    /// cut point, and crash protection's held "last keyframe" - and AV1's
+    /// MPEG2TSSequenceStart config was never cached as a header.
+    #[test]
+    fn only_coded_frames_count_as_keyframes() {
+        let tag = |first: u8| vec![first, b'h', b'v', b'c', b'1', 0, 0, 0, 1];
+        // IsEx | FrameType 1 (key) | PacketType.
+        assert!(classify_video_tag(&tag(0x91)).is_idr, "CodedFrames");
+        assert!(classify_video_tag(&tag(0x93)).is_idr, "CodedFramesX");
+        let end = classify_video_tag(&tag(0x92));
+        assert!(!end.is_idr && !end.is_seq_header, "SequenceEnd");
+        let ts_config = classify_video_tag(&tag(0x95));
+        assert!(
+            !ts_config.is_idr && ts_config.is_seq_header,
+            "MPEG2TSSequenceStart"
+        );
+
+        // Multitrack: the nested packet type decides.
+        let multitrack = |nested: u8| vec![0x96, nested, b'a', b'v', b'c', b'1', 0, 0, 0, 1];
+        assert!(classify_video_tag(&multitrack(0x01)).is_idr);
+        assert!(
+            !classify_video_tag(&multitrack(0x02)).is_idr,
+            "nested SequenceEnd"
+        );
+        assert!(classify_video_tag(&multitrack(0x05)).is_seq_header);
+    }
+
+    /// AVC allows 1- or 2-byte NAL lengths (lengthSizeMinusOne). A stream
+    /// using them had no cut points; OBS's 4-byte lengths read as before.
+    #[test]
+    fn keyframes_are_found_with_short_nal_lengths() {
+        let legacy = |nals: &[u8]| {
+            let mut tag = vec![0x17, 1, 0, 0, 0];
+            tag.extend_from_slice(nals);
+            tag
+        };
+        // 2-byte lengths: an SEI (type 6), then an IDR slice (type 5).
+        let two = legacy(&[0, 2, 0x06, 0xAA, 0, 3, 0x65, 0xBB, 0xCC]);
+        assert!(classify_video_tag(&two).is_idr);
+        // 1-byte lengths.
+        let one = legacy(&[2, 0x06, 0xAA, 2, 0x65, 0xBB]);
+        assert!(classify_video_tag(&one).is_idr);
+        // A P-slice with short lengths is not a keyframe.
+        let p_slice = legacy(&[0, 2, 0x41, 0xAA]);
+        assert!(!classify_video_tag(&p_slice).is_idr);
+        // 4-byte lengths, as OBS sends them, unchanged.
+        let four = legacy(&[0, 0, 0, 2, 0x65, 0xBB]);
+        assert!(classify_video_tag(&four).is_idr);
     }
 }

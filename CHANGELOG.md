@@ -52,7 +52,7 @@ reconnect screen instead, for up to the time you pick (30 s to 5 min).
   the screen goes on air, when OBS is back, and when it ends.
 - **Good to know.** The hold time counts from the crash, so a delay still
   airing uses part of it. A delay as long as the hold time or longer airs
-  in full and then the stream ends, as it did before crash protection.
+  in full, and then the stream ends.
 
 ### Vertical (9:16) no longer needs a Twitch destination
 
@@ -179,6 +179,50 @@ stream settings: h264_texture_amf, 6000 kbps`.
   buffer refilled. They now wait for the buffer to reach the delay.
 - **A destination added mid-delay starts delayed** with long keyframe
   intervals too, instead of airing live.
+- **A delay longer than the buffer holds no longer gets stuck.** Only the
+  dashboard checked a delay against the buffer size; a hotkey, a MIDI pad,
+  auto-arm or a bitrate that rose after arming could ask for more than it
+  holds, and then the delay never filled: destinations waited forever and
+  ones already on air stalled. A full buffer now counts as ready, the delay
+  runs at what it holds, and the log says so.
+- **A delay no longer replays the same moment over and over** when the
+  encoder's keyframes turn out further apart than first measured (OBS's
+  "auto" keyframe interval, right after a restart).
+- **Crash protection plays out what's airing.** When its time runs out while
+  the delay is still airing, the rest airs in full before the stream ends,
+  as promised. **End now** ends at once. A frozen OBS that outlasts the
+  hold ends the stream too; it used to replay the delay's last seconds in a
+  loop.
+- **Coming back from a freeze keeps the full delay.** The delay rebuilds from
+  OBS's first keyframe, not its first frame, so it no longer rejoins short
+  of the delay.
+- **A destination switched on during crash protection joins the reconnect
+  screen** instead of waiting for OBS.
+- **"Track 2" destinations get only the clean track.** With OBS sending both
+  tracks, a YouTube or Kick destination set to the VOD / clean track also
+  got the live one mixed in, copyrighted music included (since 0.1.13).
+- **Editing a live destination restarts it cleanly.** A new URL, stream
+  format or audio track takes effect right away with a proper goodbye to
+  the platform. Switching to Vertical mid-stream used to corrupt the picture
+  until the next cut, and audio track changes waited for the next restart.
+- **A platform that accepts and then drops the stream** is retried with a
+  growing backoff instead of every second, and a platform that never answers
+  a connect is retried after 20 s instead of showing "connecting" forever.
+  The reconnect counter now counts only real drops.
+- **Restarting a hung OBS works.** A publisher that stopped sending video
+  hands over to a new one instead of locking it out until its connection
+  dies.
+- **A stopped destination no longer holds the buffer back**, which let the
+  buffer grow to its full size.
+- **Hardened ingest.** Oversized commands, half-sent messages and idle
+  connections that never publish are cut off before they can use lots of
+  memory, and refused publishes are logged at most every 10 s. The local
+  test sink now listens on this computer only.
+- **Keyframes are read more carefully:** an encoder's end-of-stream marker is
+  no longer taken for a keyframe, and streams with short NAL lengths get cut
+  points. Custom RTMP servers that reject part of the publish setup
+  InstantClone sends (some answer it with an error) no longer fail the
+  connection.
 - **No backward timestamp when OBS reconnects within half a second**, and a
   new stream header mid-stream now goes out before the frame that needs it.
 - **Your settings survive a settings file that can't be read.** A file

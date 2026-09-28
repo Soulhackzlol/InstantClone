@@ -70,10 +70,17 @@ impl Amf0 {
 /// Maximum nesting depth we'll honour when decoding AMF0. Real RTMP
 /// command/data payloads from OBS, ffmpeg, Twitch etc. never go more
 /// than 3-4 levels deep. A malicious peer sending `0x03 0x03 0x03 …` ad
-/// infinitum would otherwise blow the stack and crash the ingest task
-/// (or, worse with `ingest_bind_all=true`, the whole process from a
-/// LAN attacker).
+/// infinitum would otherwise overflow the stack, and a stack overflow
+/// aborts the whole process, not just the ingest task - reachable from
+/// the LAN with `ingest_bind_all=true`.
 const AMF0_MAX_DEPTH: u32 = 16;
+
+/// Most items a strict array reserves room for up front. Real arrays are
+/// a handful of items; a longer one still decodes, the Vec just grows as
+/// items arrive. Reserving the declared count (even capped at the bytes
+/// left) let one 16 MB command reserve ~56 bytes per input byte - about
+/// 1 GB - before any stream key is checked.
+const AMF0_MAX_PREALLOC: usize = 64;
 
 pub fn decode_all(mut data: &[u8]) -> io::Result<Vec<Amf0>> {
     let mut out = Vec::new();
@@ -126,13 +133,12 @@ fn decode_one(data: &[u8], depth: u32) -> io::Result<(Amf0, &[u8])> {
         0x0A => {
             need(rest, 4)?;
             let count = u32::from_be_bytes(rest[..4].try_into().unwrap()) as usize;
-            // Cap the declared count at the number of bytes remaining; a
-            // malicious peer could otherwise advertise a huge count and
-            // walk us into an OOM by pushing into a Vec we pre-grew.
-            // Each AMF0 value is at least 1 byte (the marker), so the
-            // remaining buffer length is a strict upper bound.
+            // Never trust the declared count for the reservation: a peer
+            // could advertise a huge one and walk us into an OOM. Each
+            // AMF0 value is at least 1 byte, so the bytes left bound the
+            // items, and `AMF0_MAX_PREALLOC` bounds the up-front memory.
             let mut data = &rest[4..];
-            let cap = count.min(data.len());
+            let cap = count.min(data.len()).min(AMF0_MAX_PREALLOC);
             let mut items = Vec::with_capacity(cap);
             for _ in 0..count {
                 let (v, next) = decode_one(data, depth + 1)?;

@@ -294,7 +294,7 @@ impl EgressClient {
                 FOURCC_LIST.join(",")
             ),
         );
-        let connect_resp = await_command_status(&mut reader, "_result").await?;
+        let connect_resp = await_command_status(&mut reader, "_result", Some(1.0)).await?;
         crate::trace::log(
             "AMF_IN",
             &format!(
@@ -325,7 +325,7 @@ impl EgressClient {
         // --- createStream ---
         send_cmd(&mut writer, "createStream", 4.0, &[]).await?;
         crate::trace::log("AMF_OUT", "cmd=createStream");
-        let create_resp = await_command_status(&mut reader, "_result").await?;
+        let create_resp = await_command_status(&mut reader, "_result", Some(4.0)).await?;
         let stream_id = create_resp.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as u32;
         crate::trace::log(
             "AMF_IN",
@@ -342,7 +342,7 @@ impl EgressClient {
         writer.write_message(4, 0, 20, stream_id, &buf).await?;
         writer.flush().await?;
         crate::trace::log("AMF_OUT", "cmd=publish key_redacted=true type=live");
-        let publish_resp = await_command_status(&mut reader, "onStatus").await?;
+        let publish_resp = await_command_status(&mut reader, "onStatus", None).await?;
         crate::trace::log(
             "AMF_IN",
             &format!(
@@ -602,9 +602,15 @@ async fn send_cmd<W: tokio::io::AsyncWrite + Unpin>(
     writer.flush().await
 }
 
+/// Wait for `expect`. With `txn`, only the `_result` / `_error` answering
+/// that transaction counts: servers also answer releaseStream / FCPublish,
+/// sometimes with `_error` (no such stream yet), and taking that reply for
+/// createStream's - or failing on it - broke the connect on those servers.
+/// onStatus carries no transaction (0), so it is matched by name alone.
 async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
     reader: &mut ChunkReader<R>,
     expect: &str,
+    txn: Option<f64>,
 ) -> io::Result<Vec<Amf0>> {
     // Hard cap so a wedged Twitch / YouTube edge that goes silent
     // mid-handshake can't hang the egress task forever. 15 s is well
@@ -622,11 +628,13 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
             }
             let vals = amf0::decode_all(&msg.payload)?;
             let cmd = vals.first().and_then(|v| v.as_str());
+            let answers_us =
+                txn.is_none_or(|txn| vals.get(1).and_then(|v| v.as_f64()) == Some(txn));
 
             // Both `_error` and `onStatus { level: "error" }` indicate failure.
             // Surface them as io::Errors so the supervisor can log a useful
             // reason instead of silently looping forever waiting for `_result`.
-            if cmd == Some("_error") {
+            if cmd == Some("_error") && answers_us {
                 let desc = vals
                     .iter()
                     .find_map(|v| v.as_object())
@@ -649,7 +657,7 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
                     }
                 }
             }
-            if cmd == Some(expect) {
+            if cmd == Some(expect) && answers_us {
                 return Ok(vals);
             }
             // Anything else (Window Ack, onBWDone, onFCPublish, ping …) is
@@ -804,7 +812,7 @@ mod tests {
 
     async fn await_on(wire: Vec<u8>, expect: &str) -> io::Result<Vec<Amf0>> {
         let mut reader = ChunkReader::new(std::io::Cursor::new(wire));
-        await_command_status(&mut reader, expect).await
+        await_command_status(&mut reader, expect, None).await
     }
 
     #[tokio::test]
@@ -873,5 +881,32 @@ mod tests {
 
         // The connection closing before any answer is an error too.
         assert!(await_on(Vec::new(), "_result").await.is_err());
+    }
+
+    /// Some servers answer releaseStream / FCPublish, even with `_error`
+    /// (no such stream yet). Only the reply to the awaited transaction
+    /// counts: createStream's `_result` carries the stream id, and an
+    /// `_error` for an earlier command doesn't fail the connect.
+    #[tokio::test]
+    async fn replies_are_matched_by_transaction() {
+        let reply = |name: &str, txn: f64, id: f64| {
+            let mut buf = BytesMut::new();
+            amf0::enc_string(&mut buf, name);
+            amf0::enc_number(&mut buf, txn);
+            amf0::enc_null(&mut buf);
+            amf0::enc_number(&mut buf, id);
+            buf
+        };
+        let wire = server_replies(&[
+            (20, reply("_error", 2.0, 0.0)),
+            (20, reply("_result", 3.0, 0.0)),
+            (20, reply("_result", 4.0, 7.0)),
+        ])
+        .await;
+        let mut reader = ChunkReader::new(std::io::Cursor::new(wire));
+        let vals = await_command_status(&mut reader, "_result", Some(4.0))
+            .await
+            .expect("createStream's own reply");
+        assert_eq!(vals.get(3).and_then(|v| v.as_f64()), Some(7.0));
     }
 }

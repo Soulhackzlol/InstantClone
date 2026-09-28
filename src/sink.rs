@@ -125,7 +125,9 @@ async fn run_sink(
     max_mb: Option<u64>,
     temp: bool,
 ) -> io::Result<()> {
-    let addr = format!("0.0.0.0:{}", port);
+    // Loopback only: InstantClone publishes to it on this machine, and the
+    // RTMP port takes a publish from anyone who can reach it.
+    let addr = format!("127.0.0.1:{}", port);
     let listener = TcpListener::bind(&addr).await?;
     let live = LiveStream::new();
 
@@ -624,7 +626,9 @@ fn flv_tag_bytes(tag_type: u8, ts: u32, payload: &[u8]) -> Vec<u8> {
 }
 
 async fn run_web(port: u16, live: Arc<LiveStream>) -> io::Result<()> {
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+    // Loopback only, like the RTMP side: the preview is the live stream,
+    // served with CORS open, so it must not reach the LAN.
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
     println!(
         "[sink-web] 🎬 open http://127.0.0.1:{}/ in your browser to watch live",
         port

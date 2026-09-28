@@ -17,8 +17,24 @@ use bytes::BytesMut;
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::split;
 use tokio::net::TcpListener;
+
+/// How long a new connection has to finish the RTMP handshake.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a connection that hasn't published may go without a complete
+/// message. OBS publishes within a second of connecting; this only frees
+/// sockets that connect and then sit. A publishing connection has no such
+/// limit: a frozen OBS is crash protection's to handle.
+const UNPUBLISHED_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Largest AMF0 command accepted. OBS's connect / publish commands are a
+/// few hundred bytes. A 16 MB command of 1-byte values would decode into
+/// millions of values (~56 bytes each in memory) before any stream key is
+/// checked.
+const MAX_COMMAND_BYTES: usize = 64 * 1024;
 
 /// Bind one ingest address. Kept separate from `serve` so the supervisor
 /// can tell a bind failure (permanent for the IPv6 leg on a machine with
@@ -87,11 +103,20 @@ pub async fn serve(listener: TcpListener, ctrl: Arc<Controller>) -> io::Result<(
 struct PublishGuard {
     ctrl: Arc<Controller>,
     active: bool,
+    /// The publisher token `begin_publish` gave this connection.
+    token: u64,
+}
+impl PublishGuard {
+    /// This connection published and is still the current publisher (a
+    /// newer one takes over from a hung OBS, see `Controller::begin_publish`).
+    fn is_current(&self) -> bool {
+        self.active && self.ctrl.publisher_token() == self.token
+    }
 }
 impl Drop for PublishGuard {
     fn drop(&mut self) {
         if self.active {
-            self.ctrl.mark_ingest_dead();
+            self.ctrl.end_publish(self.token);
         }
     }
 }
@@ -101,7 +126,9 @@ async fn handle(
     ctrl: Arc<Controller>,
     peer: std::net::SocketAddr,
 ) -> io::Result<()> {
-    handshake::perform_server(&mut sock).await?;
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake::perform_server(&mut sock))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "handshake timed out"))??;
 
     // Keys the ingest-key rate limiter; the port pre-flight already resolved a
     // stable bind, so the connecting peer's IP is the right client identity.
@@ -117,12 +144,19 @@ async fn handle(
     let mut guard = PublishGuard {
         ctrl: ctrl.clone(),
         active: false,
+        token: 0,
     };
 
     // One warning per connection for media sent without publishing.
     let mut warned_unpublished = false;
     loop {
-        let msg = reader.read_message().await?;
+        let msg = if guard.active {
+            reader.read_message().await?
+        } else {
+            tokio::time::timeout(UNPUBLISHED_IDLE_TIMEOUT, reader.read_message())
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "idle without publishing"))??
+        };
         // librtmp's window-ack rule: fire BYTES_READ_REPORT once we've
         // received more than `window_ack_size/10` bytes since our last
         // ack. Strict RTMP relays (nginx-rtmp under tight config, SRS,
@@ -144,6 +178,11 @@ async fn handle(
         // real publisher's on a different origin, and its onMetaData replaces
         // the cached one that is replayed on every cut and reconnect. A
         // conforming client always publishes first, so this costs nothing.
+        // A newer publisher took over from this one (it had stopped sending
+        // video): nothing more it sends may reach the buffer.
+        if guard.active && !guard.is_current() {
+            return Err(io::Error::other("replaced by a newer publisher"));
+        }
         if ignore_before_publish(guard.active, msg.type_id) {
             // Once per connection, not once per message. Reaching this needs
             // only TCP plus the handshake, and a peer can manufacture a
@@ -160,6 +199,12 @@ async fn handle(
         }
         match msg.type_id {
             20 /* AMF0 command */ => {
+                if msg.payload.len() > MAX_COMMAND_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "oversized AMF0 command",
+                    ));
+                }
                 handle_command(&mut writer, &ctrl, &msg, &mut guard, &peer_ip).await?;
             }
             18 /* AMF0 data - onMetaData et al */ => {
@@ -168,7 +213,7 @@ async fn handle(
             8 /* audio */ => {
                 let info = h264::classify_audio_tag(&msg.payload);
                 ctrl.note_audio_codec(info.codec);
-                if info.is_multitrack { ctrl.note_multitrack_audio(); }
+                if info.is_multitrack { ctrl.note_multitrack_audio(&msg.payload); }
                 // Audio multi-track (VOD audio) is forwarded bit-faithfully
                 // - Twitch consumes the second track for VOD audio.
                 ctrl.on_tag(8, msg.timestamp, &msg.payload, false, info.is_seq_header);
@@ -276,7 +321,7 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
             // OBS sends both from RTMP_Close on every deliberate stop, and
             // never on a crash. Remember it so the disconnect that follows
             // counts as a stop (crash protection stays out of the way).
-            if guard.active {
+            if guard.is_current() {
                 ctrl.note_unpublish();
             }
             send_simple_result(writer, txn_id).await?;
@@ -298,8 +343,9 @@ async fn handle_command<W: tokio::io::AsyncWrite + Unpin>(
                 .unwrap_or("")
                 .to_string();
             match ctrl.begin_publish(&stream_key, peer_ip).await {
-                Ok(_token) => {
+                Ok(token) => {
                     guard.active = true;
+                    guard.token = token;
                     // onStatus NetStream.Publish.Start
                     let mut info = HashMap::new();
                     info.insert("level".to_string(), Amf0::String("status".into()));

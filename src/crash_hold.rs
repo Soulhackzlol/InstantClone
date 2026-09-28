@@ -372,7 +372,7 @@ fn silent_audio_for(ctrl: &Controller, egress: AudioEgress) -> Vec<SilentAudio> 
     else {
         return Vec::new();
     };
-    crate::h264::select_audio_bytes(header, egress)
+    crate::h264::select_audio_bytes(header, egress, ctrl.audio_target_on_wire(egress))
         .and_then(|tag| silent_audio_from_header(&tag))
         .into_iter()
         .collect()
@@ -561,8 +561,11 @@ pub(crate) struct Rebuild {
 }
 
 /// The ring seq OBS's new video starts at, once that video spans
-/// `delay_ms` (at its first tag for no delay; or once the wait has run
-/// `REBUILD_GRACE` past the delay).
+/// `delay_ms` from its first keyframe (so at that keyframe for no delay;
+/// or once the wait has run `REBUILD_GRACE` past the delay). Measured from
+/// the keyframe, not the first tag: a frozen encoder often resumes on a
+/// P-frame, and counting from it let the rejoin land short of the delay, or
+/// wait on air with nothing to send until the keyframe came.
 pub(crate) fn delay_rebuilt(
     ctrl: &Controller,
     rebuild: &mut Option<Rebuild>,
@@ -579,8 +582,8 @@ pub(crate) fn delay_rebuilt(
     if rebuild.since.elapsed() >= Duration::from_millis(delay_ms) + REBUILD_GRACE {
         return Some(first_seq);
     }
-    let (_, first) = ctrl.ring.find_by_seq(first_seq)?;
-    let spanned = ctrl.ring.latest_ts()?.saturating_sub(first.ts_ms);
+    let first_keyframe = ctrl.ring.oldest_idr_at_or_after(first_seq)?;
+    let spanned = ctrl.ring.latest_ts()?.saturating_sub(first_keyframe.ts_ms);
     (spanned >= delay_ms).then_some(first_seq)
 }
 

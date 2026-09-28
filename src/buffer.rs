@@ -83,6 +83,11 @@ struct RingInner {
     /// `index`: every IDR push_back also push_backs here; every eviction
     /// also pops the IDR-front if it matches by seq.
     idr_index: VecDeque<TagMeta>,
+    /// Payload bytes of every tag in `index`, kept in step with it. Near
+    /// `capacity` means the ring is full: new tags are overwriting the
+    /// oldest ones, so the buffer reaches back no further (see
+    /// `is_saturated`).
+    indexed_bytes: u64,
 }
 
 impl DiskRing {
@@ -122,6 +127,7 @@ impl DiskRing {
                 next_seq: 0,
                 index: VecDeque::with_capacity(65_536),
                 idr_index: VecDeque::with_capacity(2_048),
+                indexed_bytes: 0,
             }),
             video_seq_headers: Mutex::new(std::collections::BTreeMap::new()),
             audio_seq_headers: Mutex::new(std::collections::BTreeMap::new()),
@@ -194,6 +200,7 @@ impl DiskRing {
         while let Some(front) = inner.index.front().copied() {
             if write_overlaps(offset, len, self.capacity, front.offset, front.len as u64) {
                 inner.index.pop_front();
+                inner.indexed_bytes -= u64::from(front.len);
                 if front.is_idr {
                     // Front of idr_index MUST be this same IDR - both
                     // queues are time-ordered and we only ever push at
@@ -237,6 +244,7 @@ impl DiskRing {
             is_idr,
         };
         inner.index.push_back(meta);
+        inner.indexed_bytes += len;
         if is_idr && crate::h264::is_primary_video_idr(payload) {
             // Only the PRIMARY track's IDRs become cut candidates. Each
             // EB ladder rung has its own IDR cadence; OBS aligns them
@@ -453,6 +461,7 @@ impl DiskRing {
             }
             if front.ts_ms < cutoff {
                 inner.index.pop_front();
+                inner.indexed_bytes -= u64::from(front.len);
                 // Keep the IDR-only index in sync - same defensive front
                 // check as the byte-overlap eviction path in `append`.
                 if front.is_idr && inner.idr_index.front().map(|m| m.seq) == Some(front.seq) {
@@ -484,6 +493,15 @@ impl DiskRing {
         let mut inner = self.inner.lock();
         inner.index.clear();
         inner.idr_index.clear();
+        inner.indexed_bytes = 0;
+    }
+
+    /// Whether the ring is full: the tags it holds fill all but the last
+    /// 1/16 of it, so every new tag overwrites an old one and the buffer
+    /// reaches back no further at this bitrate. A delay longer than that
+    /// can never fill; the controller then delays by what the ring holds.
+    pub fn is_saturated(&self) -> bool {
+        self.inner.lock().indexed_bytes >= self.capacity - self.capacity / 16
     }
 }
 
@@ -1119,5 +1137,31 @@ mod edge_tests {
         // than asked for when the two are otherwise equal.
         assert_eq!(r.find_idr_near(1_500, 500).map(|m| m.ts_ms), Some(1_000));
         assert!(r.find_idr_near(1_500, 499).is_none());
+    }
+
+    /// `is_saturated` follows what the ring holds: filling it past a lap
+    /// trips it (every new tag now overwrites the oldest), and trimming or
+    /// clearing releases it.
+    #[test]
+    fn saturation_follows_what_the_ring_holds() {
+        let r = ring(1_600);
+        let append = |from: u64, to: u64| {
+            for i in from..to {
+                r.append(8, i * 20, &[0u8; 100], false, false).unwrap();
+            }
+        };
+        append(0, 10);
+        assert!(!r.is_saturated(), "1000 of 1600 bytes held");
+        append(10, 40);
+        assert!(
+            r.is_saturated(),
+            "a full lap: each tag overwrites the oldest"
+        );
+        r.trim_older_than(100, 39 * 20, u64::MAX);
+        assert!(!r.is_saturated(), "trimmed to the last 100 ms");
+        append(40, 80);
+        assert!(r.is_saturated(), "full again");
+        r.clear();
+        assert!(!r.is_saturated(), "cleared");
     }
 }
