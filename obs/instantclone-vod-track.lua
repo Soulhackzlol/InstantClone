@@ -25,17 +25,37 @@
 -- next start, on unload) is exactly what raced OBS and crashed
 -- (c0000005 in receive_audio / obs_encoder_release). So: no encoder state
 -- kept, no deferred releases, nothing to clean up.
+--
+-- ONE EXCEPTION (OBS bug, every version 28-32): on OBS's own plain stream
+-- outputs, StartStreaming -> SetupVodTrack -> clear_archive_encoder calls
+-- obs_encoder_release() on the index-1 encoder it only BORROWED from
+-- obs_output_get_audio_encoder. That stray release destroys our encoder
+-- (and obs_encoder_destroy detaches it) before the stream starts, so OBS
+-- sends one audio track. On those outputs we hand our create-reference to
+-- OBS instead of releasing it: the stray release consumes it and the
+-- output is again the sole owner. Enhanced Broadcasting streams through a
+-- separate multitrack output that clear_archive_encoder never touches, so
+-- there we release normally. (With OBS's native Twitch VOD enabled, OBS
+-- replaces our encoder instead; the one idle encoder left over is inert.)
 
 local obs = obslua
 
 local ENCODER_ID = "ffmpeg_aac" -- always-present AAC encoder
 local ENCODER_NAME = "InstantClone VOD audio" -- how we recognise our own track
 
+-- OBS's plain stream outputs (Advanced / Simple output mode), the ones
+-- clear_archive_encoder stray-releases on. See the OWNERSHIP exception.
+local PLAIN_STREAM_OUTPUTS = { adv_stream = true, simple_stream = true }
+
 -- ── settings (mirrored from the script properties UI) ────────────────
 local enabled = true
 local vod_track = 2 -- OBS mixer track (2..6) that carries the VOD audio
 local vod_bitrate = 160 -- kbps
 local verbose = false -- extra diagnostic logging (off for clean logs)
+
+-- Whether this stream start attached our track, so the post-start check
+-- can warn when it went missing. A flag only - never an encoder handle.
+local attached = false
 
 local function log(msg)
     obs.script_log(obs.LOG_INFO, "[InstantClone VOD] " .. msg)
@@ -60,6 +80,7 @@ end
 -- Called on STREAMING_STARTING - the pre-start window OBS uses for its own
 -- native VOD setup, so the encoder is picked up when the output starts.
 local function on_streaming_starting()
+    attached = false
     local output = obs.obs_frontend_get_streaming_output()
     if output == nil then
         log("no streaming output at start - cannot attach VOD track")
@@ -85,10 +106,11 @@ local function on_streaming_starting()
         return
     end
 
-    -- Create a fresh encoder, attach it, and immediately release our
-    -- create-reference. The output now owns it (and releases the previous
-    -- index-1 encoder as part of the set). We keep no reference and never
-    -- release it again - see the OWNERSHIP note.
+    -- Create a fresh encoder, attach it, and give up our create-reference:
+    -- released here, or on a plain output left for OBS's stray release.
+    -- The output now owns it (and releases the previous index-1 encoder as
+    -- part of the set). We keep no reference and never release it again -
+    -- see the OWNERSHIP note.
     local settings = obs.obs_data_create()
     obs.obs_data_set_int(settings, "bitrate", vod_bitrate)
     local enc = obs.obs_audio_encoder_create(ENCODER_ID, ENCODER_NAME, settings, vod_track - 1, nil)
@@ -100,14 +122,19 @@ local function on_streaming_starting()
     end
     obs.obs_encoder_set_audio(enc, obs.obs_get_audio())
     obs.obs_output_set_audio_encoder(output, enc, 1)
-    obs.obs_encoder_release(enc) -- balance our create-ref; the output owns it now
+    if not PLAIN_STREAM_OUTPUTS[obs.obs_output_get_name(output)] then
+        obs.obs_encoder_release(enc) -- balance our create-ref; the output owns it now
+    end
+    attached = true
     log(string.format("VOD track attached: OBS track %d -> stream audio 2 @ %d kbps", vod_track, vod_bitrate))
     obs.obs_output_release(output)
 end
 
--- Diagnostic only (verbose): confirm our track is at index 1 after start.
+-- Diagnostic: confirm our track is still at index 1 after start. Always
+-- warns when an attached track went missing (the stream then carries one
+-- audio track and Twitch has no VOD audio); the full line is verbose-only.
 local function verify_after_start()
-    if not verbose then
+    if not (attached or verbose) then
         return
     end
     local output = obs.obs_frontend_get_streaming_output()
@@ -116,6 +143,11 @@ local function verify_after_start()
     end
     local present, ours = inspect_index_1(output)
     vlog(string.format("post-start check: idx1 present=%s ours=%s", tostring(present), tostring(ours)))
+    if attached and not present then
+        log("WARNING: VOD track missing after stream start - this stream has no VOD audio")
+    elseif attached and not ours then
+        log("OBS's native VOD track replaced ours - using OBS's VOD track")
+    end
     obs.obs_output_release(output)
 end
 

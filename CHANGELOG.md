@@ -201,6 +201,12 @@ stream settings: h264_texture_amf, 6000 kbps`.
 - **"Track 2" destinations get only the clean track.** With OBS sending both
   tracks, a YouTube or Kick destination set to the VOD / clean track also
   got the live one mixed in, copyrighted music included (since 0.1.13).
+- **The VOD unlocker script works without Enhanced Broadcasting.** With EB
+  off, OBS's own stream setup freed the script's VOD audio encoder right
+  before going live, so OBS sent one audio track and the Twitch VOD had no
+  separate audio. Re-download the script from **System -> Behavior** and
+  replace the old one in OBS. It now also logs a warning when the VOD track
+  goes missing, without needing verbose logging.
 - **Editing a live destination restarts it cleanly.** A new URL, stream
   format or audio track takes effect right away with a proper goodbye to
   the platform. Switching to Vertical mid-stream used to corrupt the picture
