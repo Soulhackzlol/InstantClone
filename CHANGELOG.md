@@ -204,8 +204,8 @@ stream settings: h264_texture_amf, 6000 kbps`.
 - **The VOD unlocker script works without Enhanced Broadcasting.** With EB
   off, OBS's own stream setup freed the script's VOD audio encoder right
   before going live, so OBS sent one audio track and the Twitch VOD had no
-  separate audio. Re-download the script from **System -> Behavior** and
-  replace the old one in OBS. It now also logs a warning when the VOD track
+  separate audio. Re-download the script from **System -> Twitch & OBS ->
+  Twitch VOD audio** and replace the old one in OBS. It now also logs a warning when the VOD track
   goes missing, without needing verbose logging.
 - **Editing a live destination restarts it cleanly.** A new URL, stream
   format or audio track takes effect right away with a proper goodbye to
