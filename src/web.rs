@@ -287,7 +287,11 @@ async fn serve(
     // Overlay Studio runtime - static pre-gzipped JS, same fast-path as
     // the dashboard. Served to the dashboard tab only; baked overlays
     // inline what they need and never request this.
-    if method == "GET" && (bare_path == "/overlay-runtime.js" || bare_path == "/dock.js") {
+    if method == "GET"
+        && (bare_path == "/overlay-runtime.js"
+            || bare_path == "/dock.js"
+            || bare_path == "/integrations.js")
+    {
         if !accept_gzip {
             let body = b"this build serves gzip-encoded JS; \
                          retry with Accept-Encoding: gzip" as &[u8];
@@ -300,10 +304,10 @@ async fn serve(
             sock.write_all(body).await?;
             return Ok(());
         }
-        let blob: &'static [u8] = if bare_path == "/dock.js" {
-            DOCK_JS_GZ
-        } else {
-            OVERLAY_RUNTIME_JS_GZ
+        let blob: &'static [u8] = match bare_path {
+            "/dock.js" => DOCK_JS_GZ,
+            "/integrations.js" => INTEGRATIONS_JS_GZ,
+            _ => OVERLAY_RUNTIME_JS_GZ,
         };
         let r = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\n\
@@ -2873,6 +2877,11 @@ async fn post_config_reset(
         next.destinations = prev.destinations;
         next.profiles = prev.profiles;
         next.configured = prev.configured;
+        // Integrations and their connections are the user's own work too.
+        next.integrations = prev.integrations;
+        next.discord_channels = prev.discord_channels;
+        next.phone = prev.phone;
+        next.integrations_migrated = prev.integrations_migrated;
     } else if scope != "all" {
         return (
             "400 Bad Request",
@@ -2903,6 +2912,11 @@ async fn post_config_reset(
         // send below swaps in defaults). The seeded flag is back to false in
         // `next`, so the dashboard re-bakes the presets on its next load.
         wipe_studio_overlays(&settings.borrow().overlays_dir);
+        // A factory reset forgets the Twitch logins as well.
+        if let Some(integrations) = ctrl.integrations() {
+            integrations.twitch_logout(crate::integrations::twitch::Which::Main);
+            integrations.twitch_logout(crate::integrations::twitch::Which::Bot);
+        }
     }
     ctrl.log(format!("config reset (scope={})", scope));
     reconcile_obs_vod_files(&next, ctrl);
@@ -4688,6 +4702,9 @@ static DOCK_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js.gz"
 /// Main dashboard / first-run wizard. Source lives in `web/index.html`;
 /// build-time minified + gzipped (see `build.rs`).
 static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
+/// The dashboard's Integrations tab; source in `web/integrations.js`,
+/// build-time gzipped like the dock script.
+static INTEGRATIONS_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js.gz"));
 
 /// Overlay Studio author-time runtime + baker. Loaded only by the
 /// dashboard (never by a live overlay in OBS). Source lives in
@@ -6980,6 +6997,7 @@ mod tests {
         ("GET", "/dock", Access::Control),
         ("GET", "/dock.js", Access::Control),
         ("GET", "/overlay-runtime.js", Access::Admin),
+        ("GET", "/integrations.js", Access::Admin),
         ("GET", "/obs/vod-script/download", Access::Admin),
         ("GET", "/events", Access::Control),
         ("GET", "/overlay-events", Access::Public),

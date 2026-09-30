@@ -52,6 +52,9 @@ impl Host for RealHost {
             .map_err(|e| format!("couldn't reach Discord: {e}"))?;
         match resp.status().as_u16() {
             200..=299 => Ok(()),
+            401 | 403 => {
+                Err("Discord refused this webhook link; copy it again from Discord".to_string())
+            }
             404 => Err("Discord says this webhook no longer exists".to_string()),
             429 => Err("Discord is rate limiting this webhook; slow down".to_string()),
             s => Err(format!("Discord answered {s}")),

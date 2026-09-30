@@ -2148,6 +2148,179 @@ details.sys-collapse>summary .ic-label{margin:0}
   .hk-row{flex-wrap:wrap;gap:8px}
   .hk-capture{min-width:0;flex:1}
 }
+/* - Integrations -------------------
+   Built from the Destinations pieces: a module is a .dcard whose screen
+   shows exactly what it sends, and every editor is the destination modal
+   (.ic-modal + .dest-form). Only the new shapes live here. */
+.ig-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ig-toolbar .ig-search{margin-left:auto;width:220px;padding:7px 11px}
+.ig-conns{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ig-conns .ic-pill{cursor:pointer;font:inherit;font-size:12px}
+.ig-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.ig-card{padding:10px;gap:10px;cursor:default}
+.ig-card .dcard-screen{position:relative;display:flex;align-items:center;height:92px;padding:10px;cursor:pointer;
+  transition:border-color .15s var(--ease-out)}
+.ig-card .dcard-screen:hover{border-color:color-mix(in oklch,var(--dc,var(--accent)) 45%,var(--line))}
+.ig-card-foot{display:flex;align-items:center;gap:9px}
+.ig-card-foot .dcard-icon{width:28px;height:28px;border-radius:8px}
+.ig-card-foot .dcard-icon svg{width:14px;height:14px}
+.ig-card .ig-flag{position:absolute;right:6px;top:6px;min-width:0}
+.ig-add-tile{min-height:160px}
+.ig-list{display:flex;flex-direction:column;gap:8px}
+.ig-row{padding:0;gap:0}
+.ig-row-main{display:flex;align-items:center;gap:12px;padding:9px 12px 9px 16px}
+.ig-row-main .dcard-icon{width:30px;height:30px}
+.ig-row-name{flex:0 0 240px;min-width:0;cursor:pointer}
+.ig-row-sum{flex:1;min-width:0;font-size:12px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-row-last{flex:0 0 96px;text-align:right;font-size:11.5px;color:var(--fg-4)}
+.ig-row-peek{display:flex;gap:12px;padding:0 12px 12px 58px}
+.ig-row-peek .dcard-screen{flex:1;padding:12px}
+/* Message previews, styled like where they land. */
+.ig-pv{flex:1;min-width:0;font-size:11.5px;line-height:1.4}
+.ig-pv-discord{display:flex;gap:8px;padding:8px 9px;border-radius:8px;background:#313338}
+.ig-pv-discord .ig-av{width:22px;height:22px;flex:none;border-radius:50%;background:var(--accent);
+  display:grid;place-items:center;color:#051018}
+.ig-pv-discord .ig-av svg{width:11px;height:11px}
+.ig-pv-discord b{color:#f2f3f5;font-weight:600}
+.ig-pv-discord .ig-app{padding:0 3px;margin-left:4px;border-radius:3px;background:#5865f2;color:#fff;font-size:8.5px;font-weight:700;vertical-align:1px}
+.ig-pv-discord .ig-txt{color:#dbdee1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.ig-pv-chat{display:flex;flex-direction:column;gap:3px;padding:8px 9px;border-radius:8px;background:#18181b;color:#efeff1}
+.ig-pv-chat div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-pv-chat .u1{font-weight:700;color:#ff7eb6}
+.ig-pv-chat .u2{font-weight:700;color:#5ac8fa}
+.ig-pv-phone{display:flex;gap:8px;padding:8px 9px;border-radius:12px;background:rgba(255,255,255,.08)}
+.ig-pv-phone .ig-av{width:22px;height:22px;flex:none;border-radius:6px;background:var(--accent)}
+.ig-pv-phone small{display:block;font-size:9.5px;letter-spacing:.04em;color:var(--fg-3)}
+.ig-pv-json{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--fg-2);white-space:pre;overflow:hidden}
+.ig-pv-json .k{color:var(--accent)}.ig-pv-json .v{color:var(--live)}
+.ig-pv-marker{display:flex;flex-direction:column;gap:7px}
+.ig-pv-marker .tag{align-self:center;padding:2px 7px;border-radius:5px;background:#9146ff;color:#fff;font-size:10px;font-weight:600;
+  max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-pv-marker .bar{position:relative;height:5px;border-radius:3px;background:var(--surface-3)}
+.ig-pv-marker .bar i{position:absolute;left:0;top:0;width:70%;height:5px;border-radius:3px;background:var(--fg-3)}
+.ig-pv-marker .bar b{position:absolute;top:-4px;width:3px;height:13px;border-radius:2px;background:#a78bfa}
+.ig-pv-file{display:flex;align-items:center;gap:10px}
+.ig-pv-file code{padding:5px 8px;border-radius:6px;background:var(--surface-3);font-size:10.5px;color:var(--fg-3)}
+.ig-pv-file span{padding:5px 9px;border-radius:6px;background:#000;color:#fff;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-pv-action{display:flex;align-items:center;gap:10px;color:var(--fg-2);font-size:12px}
+.ig-pv-action span{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex:none;
+  background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));color:var(--accent)}
+.ig-pv-action svg{width:15px;height:15px}
+.ig-pv-steps{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--fg-2)}
+.ig-pv-steps div{display:flex;gap:7px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-pv-steps i{width:6px;height:6px;border-radius:2px;flex:none;background:var(--accent)}
+/* Big previews inside editors. */
+.ig-pv.big{font-size:14px}
+.ig-pv.big.ig-pv-discord,.ig-pv.big.ig-pv-chat,.ig-pv.big.ig-pv-phone{padding:14px;gap:12px}
+.ig-pv.big .ig-av{width:40px;height:40px}
+.ig-pv.big .ig-av svg{width:18px;height:18px}
+.ig-pv.big .ig-txt{display:block;-webkit-line-clamp:unset}
+.ig-pv.big.ig-pv-chat div{white-space:normal}
+/* Tokens and the in-place message editor. */
+.ig-token{display:inline-flex;align-items:baseline;gap:4px;padding:1px 8px;border-radius:999px;cursor:pointer;
+  border:1px solid color-mix(in oklch,var(--accent) 40%,transparent);background:transparent;
+  color:color-mix(in oklch,var(--accent) 70%,#fff);font:500 11px/1.6 'JetBrains Mono',monospace;
+  transition:background .15s var(--ease-out)}
+.ig-token:hover{background:color-mix(in oklch,var(--accent) 14%,transparent)}
+.ig-tokens{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11.5px;color:var(--fg-3)}
+.ig-msg{width:100%;box-sizing:border-box;resize:none;overflow:hidden;min-height:48px;padding:8px 10px;margin:0;
+  border-radius:8px;border:1px dashed color-mix(in oklch,var(--accent) 55%,transparent);
+  background:color-mix(in oklch,var(--accent) 5%,transparent);color:inherit;font:inherit;line-height:1.5;outline:none}
+.ig-msg:focus{border-style:solid;box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 18%,transparent)}
+.ig-sample{margin-top:6px;font-size:12px;color:#949ba4}
+.ig-sample b{color:#b5bac1;font-weight:500}
+/* Moments timeline. */
+.ig-moments{position:relative;display:grid;grid-template-columns:repeat(var(--n,4),minmax(0,1fr));gap:4px}
+.ig-moments::before{content:'';position:absolute;left:calc(50% / var(--n,4));right:calc(50% / var(--n,4));top:11px;height:2px;background:var(--line-2)}
+.ig-moment{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0}
+.ig-dot{width:24px;height:24px;padding:0;border-radius:50%;border:2px solid var(--line-2);background:var(--surface-3);
+  box-shadow:0 0 0 4px var(--bg-2);cursor:pointer;display:grid;place-items:center;color:transparent;
+  transition:background .2s var(--ease-out),border-color .2s var(--ease-out)}
+.ig-dot svg{width:12px;height:12px}
+.ig-dot.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.ig-moment-name{max-width:100%;padding:5px 12px;border-radius:999px;border:1px solid transparent;background:transparent;
+  color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-moment-name.on{background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--fg)}
+/* Option chips and their panel. */
+.ig-chips{display:flex;flex-wrap:wrap;gap:8px}
+.ig-chip{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;border:1px solid var(--line);
+  background:var(--surface-3);color:var(--fg);font:inherit;font-size:12.5px;cursor:pointer;
+  transition:border-color .15s var(--ease-out),background .15s var(--ease-out)}
+.ig-chip:hover{border-color:var(--line-2)}
+.ig-chip span{color:var(--fg-3)}.ig-chip b{font-weight:600;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-chip svg{width:11px;height:11px;color:var(--fg-3)}
+.ig-chip.on{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 12%,var(--surface-3))}
+.ig-pop{min-height:96px;padding:14px 16px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line);
+  display:flex;flex-direction:column;gap:10px}
+.ig-seg{display:inline-flex;flex-wrap:wrap}
+.ig-seg .sub-tab{flex:0 0 auto;padding:6px 13px}
+.ig-seg .sub-tab.on{background:var(--surface-3)}
+.ig-pick{display:flex;flex-wrap:wrap;gap:8px}
+.ig-pick .dest-starter{padding:10px 14px;gap:2px}
+.ig-pick .dest-starter.on{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 20%,transparent)}
+/* Catalog. */
+.ig-cat{flex:1;min-height:0;display:flex}
+.ig-cat-nav{width:200px;flex:none;padding:16px 12px;display:flex;flex-direction:column;gap:2px;border-right:1px solid var(--line)}
+.ig-cat-nav button{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:8px;
+  border:1px solid transparent;background:transparent;color:var(--fg-3);font:inherit;font-size:13px;font-weight:500;cursor:pointer;text-align:left}
+.ig-cat-nav button.on{background:var(--surface-3);border-color:var(--line-2);color:var(--fg)}
+.ig-cat-nav button small{color:var(--fg-4)}
+.ig-cat-grid{flex:1;min-width:0;overflow-y:auto;padding:16px 18px 20px;display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;align-content:start}
+/* Builder. */
+.ig-bld{flex:1;min-height:0;display:flex}
+.ig-palette{width:224px;flex:none;padding:12px;display:flex;flex-direction:column;gap:2px;border-right:1px solid var(--line);overflow-y:auto}
+.ig-palette .ic-label{margin:10px 4px 3px}
+.ig-palette button{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:7px;border:1px solid transparent;
+  background:transparent;color:var(--fg-2);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
+.ig-palette button:hover{background:var(--surface-3);color:var(--fg)}
+.ig-palette button i{width:8px;height:8px;border-radius:3px;flex:none;background:var(--c)}
+.ig-canvas{flex:1;min-width:0;padding:16px 20px;overflow-y:auto;background:var(--bg)}
+.ig-triggers{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.ig-steps{display:flex;flex-direction:column;gap:8px}
+.ig-step{display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);
+  background:var(--bg-2);color:inherit;font:inherit;text-align:left;cursor:pointer;transition:border-color .15s var(--ease-out)}
+.ig-step:hover{border-color:var(--line-2)}
+.ig-step.on{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
+  background:color-mix(in oklch,var(--accent) 7%,var(--bg-2));box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 16%,transparent)}
+.ig-step-kind{flex:0 0 62px;font-size:9.5px;font-weight:700;letter-spacing:.1em;color:var(--c)}
+.ig-step-text{flex:1;min-width:0;font-size:13px;line-height:1.5;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-step-text .v{font-family:'JetBrains Mono',monospace;font-size:12px;color:color-mix(in oklch,var(--accent) 70%,#fff)}
+.ig-step-tools{display:flex;gap:2px;opacity:0;transition:opacity .15s}
+.ig-step:hover .ig-step-tools,.ig-step.on .ig-step-tools{opacity:1}
+.ig-branch{margin-left:30px;padding-left:12px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.ig-branch-label{font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--fg-3);text-transform:uppercase}
+.ig-drop{min-height:34px;border-radius:10px;border:1px dashed var(--line-2);background:transparent;color:var(--fg-4);
+  font:inherit;font-size:12px;cursor:pointer}
+.ig-drop.on{border-color:var(--accent);color:var(--accent);background:color-mix(in oklch,var(--accent) 6%,transparent)}
+.ig-inspector{width:320px;flex:none;padding:16px 18px;display:flex;flex-direction:column;gap:12px;border-left:1px solid var(--line);overflow-y:auto}
+.ig-inspector .dff>label{font-size:12px;font-weight:600;color:var(--fg-2)}
+.ig-inspector textarea.ic-input{resize:vertical;min-height:70px;font-family:'JetBrains Mono',monospace;font-size:12.5px}
+.ig-run{display:flex;flex-direction:column;gap:2px;font-size:12.5px}
+.ig-run div{display:grid;grid-template-columns:62px 190px minmax(0,1fr);gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}
+.ig-run .t{color:var(--fg-4);font-family:'JetBrains Mono',monospace;font-size:11.5px}
+.ig-run .ok{color:var(--live)}.ig-run .failed{color:var(--danger)}.ig-run .skipped{color:var(--fg-3)}
+.ig-run .d{color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Twitch device code. */
+.ig-code{font:600 30px/1 'JetBrains Mono',monospace;letter-spacing:.18em;color:var(--fg);text-align:center;padding:14px;
+  border-radius:12px;background:var(--bg-2);border:1px dashed color-mix(in oklch,var(--accent) 45%,var(--line))}
+.ig-acct{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line)}
+.ig-acct .dcard-icon{--dc:#a78bfa}
+.ig-activity{display:flex;flex-direction:column;gap:2px;font-size:12.5px}
+.ig-activity > div{display:grid;grid-template-columns:54px minmax(0,220px) minmax(0,1fr) 76px;gap:10px;align-items:center;
+  padding:6px 4px;border-bottom:1px solid var(--line)}
+.ig-activity .t{color:var(--fg-4);font-family:'JetBrains Mono',monospace;font-size:11.5px}
+.ig-activity .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-activity .d{color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-activity .s{text-align:right;font-size:11.5px}
+.ig-activity .ok{color:var(--live)}.ig-activity .failed{color:var(--danger)}.ig-activity .stopped,.ig-activity .busy{color:var(--fg-3)}
+.ig-textarea-code{width:100%;min-height:90px;resize:vertical;font-family:'JetBrains Mono',monospace;font-size:12px}
+@media (max-width:760px){
+  .ig-bld,.ig-cat{flex-direction:column}
+  .ig-palette,.ig-inspector,.ig-cat-nav{width:auto;border:0;border-bottom:1px solid var(--line)}
+  .ig-row-name{flex-basis:140px}.ig-row-last{display:none}
+}
 </style>
 </head>
 <body>
@@ -2490,6 +2663,9 @@ details.sys-collapse>summary .ic-label{margin:0}
   <button class="tab" data-tab="system">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6M4.22 4.22l4.24 4.24m7.08 7.08l4.24 4.24M1 12h6m10 0h6M4.22 19.78l4.24-4.24m7.08-7.08l4.24-4.24"/></svg>
     <span>System</span></button>
+  <button class="tab" data-tab="integrations">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v5M15 2v5"/><path d="M6 7h12v4a6 6 0 0 1-12 0z"/><path d="M12 17v5"/></svg>
+    <span>Integrations</span></button>
   <button class="tab" data-tab="logs">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6 6 6-6 6"/><path d="M12 18h8"/></svg>
     <span>Logs</span></button>
@@ -3333,17 +3509,13 @@ details.sys-collapse>summary .ic-label{margin:0}
     </section>
   </div>
 
-  <!-- Alerts & logs: Discord webhook and the wire trace -->
+  <!-- Alerts & logs: where alerts went, and the wire trace -->
   <div class="sub-pane" data-subpane="alerts" hidden>
-    <section class="sys-section" data-find="discord webhook notifications alerts ping">
-      <div class="ic-label">Discord webhook <span class="muted" style="text-transform:none;letter-spacing:0">(optional)</span></div>
-      <div class="tab-sub">Pings on OBS connect/disconnect and destination drops.</div>
-      <div style="margin-top:10px">
-        <input id="s-webhook" class="ic-input mono" placeholder="https://discord.com/api/webhooks/…" autocomplete="off">
-        <div class="muted" id="s-webhook-hint" style="margin-top:6px"></div>
-      </div>
+    <section class="sys-section" data-find="discord webhook notifications alerts ping phone push chat integrations">
+      <div class="ic-label">Alerts</div>
+      <div class="tab-sub">Discord, Twitch chat and phone alerts live in <b>Integrations</b> now, with a preview of every message.</div>
       <div class="row" style="justify-content:flex-end;margin-top:10px">
-        <button class="ic-btn ic-btn-ghost" onclick="testWebhook()">Test webhook</button>
+        <button class="ic-btn ic-btn-ghost" onclick="showTab('integrations')">Open Integrations</button>
       </div>
     </section>
     <section class="sys-section" data-find="trace log debug diagnostics wire support">
@@ -3420,7 +3592,7 @@ details.sys-collapse>summary .ic-label{margin:0}
       <div class="sys-reset-grid">
         <div class="sys-reset-card">
           <div class="ic-label">Reset settings</div>
-          <div class="tab-sub">Ports, buffer, webhook, overlays, diagnostics &rarr; defaults. Destinations and profiles kept.</div>
+          <div class="tab-sub">Ports, buffer, overlays, diagnostics &rarr; defaults. Destinations, profiles and integrations kept.</div>
           <button class="ic-btn ic-btn-warn" onclick="openResetModal('settings')">Reset settings…</button>
         </div>
         <div class="sys-reset-card sys-reset-card-danger">
@@ -3446,6 +3618,10 @@ details.sys-collapse>summary .ic-label{margin:0}
     <button class="ic-btn" onclick="discardSettings()">Discard</button>
     <button class="ic-btn ic-btn-primary" onclick="saveSettings()">Save settings</button>
   </div>
+</section>
+
+<section class="tab-pane" data-pane="integrations" hidden>
+  <div id="ig-root"><div class="muted">Loading integrations…</div></div>
 </section>
 
 <section class="tab-pane" data-pane="logs" hidden>
@@ -3641,7 +3817,7 @@ const PLATFORM_LABEL = { twitch:'Twitch', youtube:'YouTube', kick:'Kick', trovo:
 const SINK_PLAYER_URL = 'http://127.0.0.1:19351/';
 const SETTINGS_FIELDS = {
   'ingest_port':'s-iport','web_port':'s-wport','buffer_mb':'s-bmb','buffer_path':'s-bpath',
-  'discord webhook':'s-webhook','webhook':'s-webhook','overlays_dir':'s-ovdir',
+  'overlays_dir':'s-ovdir',
 };
 
 // - Formatting ----------------------------─
@@ -5513,8 +5689,6 @@ async function loadConfig({resetSystem = false} = {}){
     $('w-platform').value = first.platform; $('w-platform').dispatchEvent(new Event('change'));
     $('w-custom').value = first.custom_egress_url || '';
     // system fields
-    $('s-webhook').placeholder = c.webhook_set ? '(set - paste a new one to replace)' : 'https://discord.com/api/webhooks/…';
-    $('s-webhook-hint').textContent = c.webhook_set ? '(currently set)' : '';
     $('ov-dir-display').textContent = c.overlays_dir || 'overlays/';
     applyPlatformCopy(c.os);
     if (resetSystem || !settingsDirty()){
@@ -5523,7 +5697,6 @@ async function loadConfig({resetSystem = false} = {}){
       renderBufferHint();
       $('s-ibind').checked = c.ingest_bind_all; $('s-wbind').checked = c.web_bind_all;
       renderLanWarning();
-      $('s-webhook').value = '';
       $('s-ovdir').value = c.overlays_dir || '';
       $('s-trace').checked = c.tracing_enabled !== false;
       // Reflects the actual Run-key entry, not a stored preference - so if
@@ -6678,11 +6851,6 @@ function cpApplyConfig(cp){
 }
 cpInit();
 
-async function testWebhook(){
-  const r = await(await fetch('/test-webhook',{method:'POST'})).json();
-  if (r.ok) toast('Webhook test fired - check Discord','ok');
-  else toast(`Webhook test failed: ${r.error || 'no response from Discord'}`, 'err');
-}
 
 // ── Global hotkeys editor (Windows only) ───────────────────────────────
 // Click a capture field, press a modifier+key combo, and it commits and
@@ -7497,7 +7665,8 @@ function openResetModal(scope){
       '<li><b>All destinations</b> (Twitch / YouTube / custom keys) - gone</li>',
       '<li><b>All saved delay profiles</b> - gone</li>',
       '<li><b>All your overlays</b> (presets + custom) - deleted, the built-in set restored</li>',
-      '<li>Network ports, buffer settings, webhook, overlays folder - reset to defaults</li>',
+      '<li><b>All integrations</b>, their Discord and phone connections, and the Twitch login - gone</li>',
+      '<li>Network ports, buffer settings, overlays folder - reset to defaults</li>',
       '<li>Diagnostic trace toggle - turned off</li>',
     ].join('');
     keeps.innerHTML = '<b>Kept:</b> the buffer file on disk (it\'s reset on every clean shutdown anyway) and the OBS service registration (use the OBS tab to unregister if you want).';
@@ -7512,11 +7681,10 @@ function openResetModal(scope){
     list.innerHTML = [
       '<li>Network ports back to <code class="mono">:1935</code> / <code class="mono">:7799</code></li>',
       '<li>Buffer size and path back to defaults</li>',
-      '<li>Discord webhook URL cleared</li>',
       '<li>Overlays folder reset to <code class="mono">overlays/</code></li>',
       '<li>Diagnostic trace toggle turned off</li>',
     ].join('');
-    keeps.innerHTML = '<b>Kept:</b> destinations, delay profiles, OBS service registration, your buffer file on disk.';
+    keeps.innerHTML = '<b>Kept:</b> destinations, delay profiles, integrations, OBS service registration, your buffer file on disk.';
     typebox.hidden = true;
     confirm.disabled = false;
     confirm.textContent = 'Reset settings';
@@ -9036,6 +9204,7 @@ function showTab(name){
     if (midiLearnAction) midiCancelLearn();
   }
   if (name === 'obs') refreshObsRegisterStatus();
+  if (window.Integrations){ if (name === 'integrations') Integrations.show(); else Integrations.hide(); }
   if (name === 'overlay' && window.ICOverlay) Studio.show();
   // The Studio modal lives on <body>, so close it when leaving the tab.
   else { const m = $('ov-studio'); if (m) m.hidden = true; }
@@ -9115,7 +9284,6 @@ function settingsBody(){
     buffer_mb:$('s-bmb').value, buffer_path:$('s-bpath').value,
     ingest_bind_all:$('s-ibind').checked?'on':'off',
     web_bind_all:$('s-wbind').checked?'on':'off',
-    discord_webhook_url:$('s-webhook').value.trim(),
     tracing_enabled:$('s-trace').checked?'true':'false',
     start_with_windows:$('s-startup').checked?'on':'off',
     open_dashboard_on_launch:$('s-open-dash').checked?'true':'false',
@@ -9833,5 +10001,6 @@ function openUpdateInAbout(){
   // and leave first-run users without a tour after they save settings.
 })();
 </script>
+<script src="/integrations.js"></script>
 </body>
 </html>

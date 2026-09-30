@@ -511,7 +511,13 @@ impl Engine {
         } else {
             fmt(before)
         };
-        self.event(Event::new(kind).with("previous", previous));
+        let mut event = Event::new(kind).with("previous", previous);
+        // The delay just set: the applied one only catches up a moment later
+        // (after the buffer jump), so `{delay}` would still read the old one.
+        if now > 0 {
+            event = event.with("delay", fmt(now));
+        }
+        self.event(event);
     }
 
     fn enabled_handlers(

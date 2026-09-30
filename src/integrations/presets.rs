@@ -398,14 +398,8 @@ pub fn legacy_alerts(id: String, channel: &str) -> Integration {
         enabled: true,
         preset: "stream_alerts".to_string(),
         cooldown_ms: 0,
+        // Ordered by the life of a stream; the card previews the first.
         handlers: vec![
-            on(
-                EventKind::EbDetected,
-                vec![discord(
-                    c,
-                    "🎚️ Enhanced Broadcasting detected - multi-track forwarding active.",
-                )],
-            ),
             on(
                 EventKind::ObsConnected,
                 vec![discord(c, "✅ OBS publisher connected - going live.")],
@@ -447,6 +441,13 @@ pub fn legacy_alerts(id: String, channel: &str) -> Integration {
             on(
                 EventKind::DestinationDropped,
                 vec![discord(c, "🔴 **{destination}** disconnected: {reason}")],
+            ),
+            on(
+                EventKind::EbDetected,
+                vec![discord(
+                    c,
+                    "🎚️ Enhanced Broadcasting detected - multi-track forwarding active.",
+                )],
             ),
         ],
     }

@@ -6,6 +6,57 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
+### Integrations: InstantClone talks to Discord, Twitch chat, your phone and your tools
+
+A new **Integrations** tab. Every card shows exactly what it sends (the
+Discord message, the chat reply, the phone push, the VOD marker), so you
+know what each one does before you switch it on.
+
+- **A catalog of ready-made integrations**, one click to add: a crash
+  alert on Discord, a `!delay` command that always answers with your
+  current delay, "tell chat" when OBS drops (only after 20 s, so short
+  blips never reach chat), VOD markers at every crash and cut, a phone
+  push, a destination-down alert, mod controls (`!cut`, `!setdelay 30`),
+  a webhook for n8n or Home Assistant, a crash counter an OBS text source
+  can show, and more. Starter packs add a few at once.
+- **An editor that is the preview.** Pick a moment (OBS crashes, OBS is
+  back, the hold runs out), write on the message itself, and click a
+  variable to insert it. Every option (where it posts, when it sends,
+  who can use a command, cooldowns) is a chip that opens its own panel.
+- **Build your own, with no limits.** A step editor: any trigger (an
+  InstantClone event, a chat command or message, a timer, or a secret web
+  address a Stream Deck or script can call), checks with then/otherwise,
+  waits, web requests whose answer later steps can use, delay actions,
+  clips, programs, files and counters. Plus the one only InstantClone can
+  do: **wait until the moment has aired for your viewers**, so a `!clip`
+  captures what they actually saw.
+- **Test runs** send the real messages marked `[TEST]`, skip the waits
+  and never touch the stream, then show every step and what it answered.
+- **Twitch: log in once and forget it.** You approve InstantClone on
+  twitch.tv with a code; no password goes through the app. The login
+  refreshes itself, so as long as you open InstantClone at least once a
+  month you never log in again. An optional bot account can post instead
+  of you.
+- **Share integrations as recipes**: a line of text you can paste in
+  Discord. Recipes never include your connections, keys or secret links,
+  arrive switched off, and anything that runs a program or writes a file
+  needs your explicit yes.
+- **Nothing an integration does can touch the stream.** They run on their
+  own thread; a slow webhook or a busy chat never delays a frame, and a
+  failing integration shows up in the tab with the reason instead of
+  failing quietly.
+
+Your existing Discord webhook moves over by itself: it becomes a Discord
+connection plus a "Stream alerts" integration that sends the same
+messages as before.
+
+### Fixes
+
+- **Discord webhooks work.** The HTTPS client checked certificates
+  against a bundled list instead of Windows' own store, and refused
+  Discord's certificate chain, so every Discord alert failed silently. It
+  now uses the system store.
+
 ## [0.1.15] - Crash protection, vertical without Twitch, and Enhanced Broadcasting on your GPU
 
 ### Crash protection: OBS crashes, the stream stays up

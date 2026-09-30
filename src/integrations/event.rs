@@ -116,9 +116,9 @@ impl EventKind {
                 ("platform", "youtube"),
                 ("reason", "connection timed out"),
             ],
-            EventKind::DelayOn => &[("previous", "0s")],
+            EventKind::DelayOn => &[("delay", "30s"), ("previous", "0s")],
             EventKind::DelayOff => &[("previous", "30s")],
-            EventKind::DelayChanged => &[("previous", "20s")],
+            EventKind::DelayChanged => &[("delay", "30s"), ("previous", "20s")],
             EventKind::ObsConnected | EventKind::EbDetected | EventKind::AllDestinationsDown => &[],
         }
     }

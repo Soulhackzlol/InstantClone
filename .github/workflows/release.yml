@@ -11,6 +11,12 @@ on:
 permissions:
   contents: write  # needed to create releases
 
+# The Twitch app id the Integrations tab logs in with (Device Code flow, a
+# public client: the id is not a secret). Baked in at compile time through
+# option_env!; set it as a repository variable named TWITCH_CLIENT_ID.
+env:
+  INSTANTCLONE_TWITCH_CLIENT_ID: ${{ vars.TWITCH_CLIENT_ID }}
+
 jobs:
   # Gate 1: tests must pass on the exact tagged commit before we ship.
   # This guards against the "tag a commit that was never on main" case

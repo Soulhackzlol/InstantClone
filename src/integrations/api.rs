@@ -656,6 +656,7 @@ async fn test_discord(req: &Value, channels: Vec<DiscordChannel>) -> Reply {
     .await;
     match sent {
         Ok(Ok(status)) if (200..300).contains(&status) => done(),
+        Ok(Ok(401 | 403)) => fail("Discord refused this webhook link; copy it again from Discord"),
         Ok(Ok(404)) => fail("Discord says this webhook no longer exists"),
         Ok(Ok(status)) => fail(format!("Discord answered {status}")),
         Ok(Err(e)) => fail(format!("couldn't reach Discord: {e}")),
