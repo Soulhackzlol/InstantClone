@@ -140,20 +140,16 @@ async fn obs_back_mid_tail_never_puts_viewers_on_live() {
     sim.assert_timestamps_monotonic(0);
 }
 
-/// End now from the tray, a hotkey or MIDI (threads with no runtime) with
-/// a webhook set: the destination ends with deleteStream, and nothing
-/// panics.
+/// End now from the tray, a hotkey or MIDI (threads with no runtime): the
+/// destination ends with deleteStream, and nothing panics.
 #[tokio::test]
 async fn end_now_from_a_plain_thread_ends_the_destination_cleanly() {
     let mut sim = Sim::new(true).await;
-    sim.ctrl.update_webhook("http://127.0.0.1:9/webhook".into());
     sim.obs_connects().await;
     sim.destination_connects("platform").await;
     sim.obs_sends(1_000).await;
     sim.obs_crashes();
     wait(800).await;
-    // Clear the throttle the hold's own post set, so End now posts too.
-    sim.ctrl.webhook_last_fire_ms.store(0, Ordering::Relaxed);
     let ctrl = sim.ctrl.clone();
     let hotkey = std::thread::spawn(move || ctrl.run_named_action("end_hold", 0, "hotkey"));
     assert_eq!(hotkey.join().expect("no panic off the runtime"), None);

@@ -11,6 +11,8 @@
 use crate::buffer::{DiskRing, TagMeta};
 use crate::compat::StreamParams;
 use crate::h264::{AudioCodec, VideoCodec};
+use crate::integrations::host::fmt_duration;
+use crate::integrations::{Event, EventKind};
 use crate::rtmp::client::{EgressClient, EgressSink, EgressUrl};
 use std::collections::HashMap;
 use std::io;
@@ -625,8 +627,9 @@ pub struct Controller {
     ingest_disconnects: AtomicU32,
     rate_in: RateMeter, // inbound (from OBS)
 
-    // Discord webhook URL. Empty = disabled. Updated live via update_webhook.
-    webhook_url: crate::sync::Mutex<String>,
+    // The integrations engine, attached once at startup. Events reach it
+    // through `emit`, which never blocks and works from any thread.
+    integrations: std::sync::OnceLock<Arc<crate::integrations::Handle>>,
     // Required RTMP stream key. Empty = accept any publisher (local default).
     // Mirrored from Settings via update_ingest_key so `begin_publish` can
     // enforce it without the ingest task needing a settings handle.
@@ -640,10 +643,6 @@ pub struct Controller {
     // token out, so `begin_publish` trusts it alongside the ingest key. Bounded
     // and TTL'd (see remember_eb_key) so tokens never accumulate.
     eb_keys: crate::sync::Mutex<Vec<(String, Instant)>>,
-    // Wall-clock ms (since UNIX epoch) of last webhook fire. Throttles
-    // rapid event sequences (e.g. reconnect flapping) so we never spawn
-    // more than one curl every ~2 s.
-    webhook_last_fire_ms: AtomicU64,
 
     // Coordination
     publish_lock: Mutex<()>,
@@ -816,7 +815,7 @@ impl Controller {
             destinations: crate::sync::RwLock::new(HashMap::new()),
             ingest_disconnects: AtomicU32::new(0),
             rate_in: RateMeter::default(),
-            webhook_url: crate::sync::Mutex::new(String::new()),
+            integrations: std::sync::OnceLock::new(),
             ingest_key: crate::sync::Mutex::new(String::new()),
             // 5 wrong keys then a short exponential lockout. A legit OBS uses
             // the right key and clears its record on the first accept, so this
@@ -831,7 +830,6 @@ impl Controller {
             held_keyframes: crate::sync::Mutex::new(std::collections::BTreeMap::new()),
             eb_session: crate::sync::Mutex::new(None),
             eb_session_claimed: AtomicBool::new(false),
-            webhook_last_fire_ms: AtomicU64::new(0),
             publish_lock: Mutex::new(()),
             video_codec: AtomicU8::new(0),
             audio_codec: AtomicU8::new(0),
@@ -1059,10 +1057,7 @@ impl Controller {
                  forwarding raw to Twitch destinations, flattening to the \
                  primary resolution for any other platform.",
             );
-            self.fire_webhook(
-                "🎚️",
-                "Enhanced Broadcasting detected - multi-track forwarding active.",
-            );
+            self.emit(Event::new(EventKind::EbDetected));
         }
     }
     pub fn note_multitrack_audio(&self, payload: &[u8]) {
@@ -1752,7 +1747,7 @@ impl Controller {
             );
         }
         self.log("ingest: publisher connected");
-        self.fire_webhook("✅", "OBS publisher connected - going live.");
+        self.emit(Event::new(EventKind::ObsConnected));
         Ok(token)
     }
 
@@ -2010,11 +2005,12 @@ impl Controller {
                     "ingest: publisher dropped without stopping (crash, kill or network loss)",
                 );
             }
-            // An open hold posts its own, more useful message (and the
-            // webhook throttle would drop whichever came second).
-            if !self.hold_active() {
-                self.fire_webhook("⚠️", "OBS publisher disconnected.");
-            }
+            // `protected`: a hold opened and has its own, more useful event.
+            self.emit(
+                Event::new(EventKind::ObsDisconnected)
+                    .with("stopped", if stopped { "yes" } else { "no" })
+                    .with("protected", if self.hold_active() { "yes" } else { "no" }),
+            );
             // Clear any Enhanced Broadcasting URL overrides on the
             // way out - the next stream may or may not be EB, and a
             // stale override would force a non-EB stream onto an IVS
@@ -2226,9 +2222,16 @@ impl Controller {
         self.log(format!(
             "crash protection: {what} - destinations stay live on the reconnect screen for up to {window}"
         ));
-        self.fire_webhook(
-            "🛡️",
-            &format!("{what}. The reconnect screen is on air for up to {window}."),
+        self.emit(
+            Event::new(EventKind::HoldOpened)
+                .with(
+                    "reason",
+                    match reason {
+                        crate::crash_hold::HoldReason::Crash => "crash",
+                        crate::crash_hold::HoldReason::Freeze => "freeze",
+                    },
+                )
+                .with("hold", fmt_duration(hold_for.as_millis() as u64)),
         );
     }
 
@@ -2271,7 +2274,10 @@ impl Controller {
         self.log(format!(
             "crash protection: OBS is back after {lasted} - resuming live"
         ));
-        self.fire_webhook("✅", &format!("OBS is back after {lasted}. Live again."));
+        self.emit(Event::new(EventKind::ObsBack).with(
+            "down_for",
+            fmt_duration(hold.started.elapsed().as_millis() as u64),
+        ));
     }
 
     /// Whether the publisher has sent no video for `FREEZE_AFTER` as of
@@ -2342,10 +2348,10 @@ impl Controller {
         self.log(format!(
             "crash protection: OBS didn't come back within {window} - destinations ended"
         ));
-        self.fire_webhook(
-            "🔴",
-            &format!("OBS didn't come back within {window}. The stream has ended."),
-        );
+        self.emit(Event::new(EventKind::HoldExpired).with(
+            "hold",
+            fmt_duration((hold.deadline - hold.started).as_millis() as u64),
+        ));
     }
 
     /// End the hold now (dashboard, dock, tray or hotkey). True when a hold
@@ -2359,17 +2365,29 @@ impl Controller {
         self.log(format!(
             "crash protection: ended after {lasted} - destinations ended"
         ));
-        self.fire_webhook(
-            "⏹️",
-            "Crash protection ended by the streamer. The stream has ended.",
-        );
+        self.emit(Event::new(EventKind::HoldEnded).with(
+            "down_for",
+            fmt_duration(hold.started.elapsed().as_millis() as u64),
+        ));
         true
     }
 
-    /// Update the Discord webhook URL - call when settings change. Empty
-    /// string disables webhook delivery entirely.
-    pub fn update_webhook(&self, url: String) {
-        *self.webhook_url.lock() = url;
+    /// Attach the integrations engine. Called once at startup; events
+    /// emitted before it is attached are dropped.
+    pub fn attach_integrations(&self, handle: Arc<crate::integrations::Handle>) {
+        let _ = self.integrations.set(handle);
+    }
+
+    pub fn integrations(&self) -> Option<&Arc<crate::integrations::Handle>> {
+        self.integrations.get()
+    }
+
+    /// Tell the integrations something happened. Never blocks and needs no
+    /// runtime, so it is safe from the tray, hotkey and MIDI threads.
+    pub fn emit(&self, event: Event) {
+        if let Some(handle) = self.integrations.get() {
+            handle.emit(event);
+        }
     }
 
     /// Mirror the required ingest stream key from Settings. Empty disables the
@@ -2411,57 +2429,26 @@ impl Controller {
                 && crate::crypto::constant_time_eq(k.as_bytes(), key.as_bytes())
         })
     }
+}
 
-    /// Snapshot the current webhook URL. Used by the test endpoint so it
-    /// can route the request with verbose error reporting instead of
-    /// going through `fire_webhook` (which is fire-and-forget and
-    /// silently swallows everything from empty-URL to TLS failures).
-    pub fn webhook_url_snapshot(&self) -> String {
-        self.webhook_url.lock().clone()
-    }
-
-    /// Fire-and-forget Discord post. Skips silently when no webhook is
-    /// configured, OR when the last fire was less than 2 s ago (rate
-    /// limit - prevents subprocess spam if a destination flaps).
-    ///
-    /// Uses `ureq` (tiny blocking HTTPS client, ~150 KB) on its own thread
-    /// so the actual TCP+TLS work never parks the current-thread runtime. Previously shelled out to `curl`, which
-    /// (a) silently failed when `curl.exe` wasn't on PATH and (b) made
-    /// "runtime deps" technically include the system curl binary.
-    pub fn fire_webhook(&self, emoji: &str, message: &str) {
-        let url = self.webhook_url.lock().clone();
-        if url.is_empty() {
-            return;
-        }
-
-        // Throttle: skip if we fired less than 2 s ago (0 = never fired, so
-        // the first post in the process's first 2 s still goes out).
-        let now = process_now_ms();
-        let last = self.webhook_last_fire_ms.load(Ordering::Relaxed);
-        if last != 0 && now.saturating_sub(last) < 2_000 {
-            return;
-        }
-        self.webhook_last_fire_ms.store(now, Ordering::Relaxed);
-
-        let content = format!("{emoji} **InstantClone**: {message}");
-        let body = format!(r#"{{"content":"{}"}}"#, json_escape_inline(&content));
-
-        // A plain thread, not a runtime task: the tray, global hotkeys and
-        // MIDI run on their own threads with no Tokio runtime, and ending a
-        // hold from them posts here. At most one every 2 s (the throttle),
-        // and ureq's timeouts bound it. Fire-and-forget by design.
-        let _ = std::thread::Builder::new()
-            .name("instantclone-webhook".into())
-            .spawn(move || {
-                let _ = crate::https::https_agent()
-                    .post(&url)
-                    .config()
-                    .timeout_connect(Some(Duration::from_secs(5)))
-                    .timeout_global(Some(Duration::from_secs(8)))
-                    .build()
-                    .header("Content-Type", "application/json")
-                    .send(&body);
-            });
+/// The platform a destination's ingest host belongs to, for the `{platform}`
+/// variable of destination events.
+fn platform_of_host(host: &str) -> &'static str {
+    let host = host.to_ascii_lowercase();
+    if host.contains("twitch") {
+        "twitch"
+    } else if host.contains("youtube") || host.contains("google") {
+        "youtube"
+    } else if host.contains("kick") || host.contains("live-video.net") {
+        "kick"
+    } else if host.contains("trovo") {
+        "trovo"
+    } else if host.contains("restream") {
+        "restream"
+    } else if host == "127.0.0.1" || host == "localhost" {
+        "sink"
+    } else {
+        "custom"
     }
 }
 
@@ -2679,31 +2666,6 @@ impl Controller {
     }
 }
 
-/// JSON-string escape that handles every C0 control char that would
-/// otherwise produce an invalid Discord payload (the previous
-/// `replace('\\', ..).replace('"', ..).replace('\n', ..)` chain missed
-/// `\r`, `\t`, `\u{0008}` and friends - any destination name with a
-/// stray control character could nuke the webhook body).
-fn json_escape_inline(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 8);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str(r#"\""#),
-            '\\' => out.push_str(r"\\"),
-            '\n' => out.push_str(r"\n"),
-            '\r' => out.push_str(r"\r"),
-            '\t' => out.push_str(r"\t"),
-            '\u{0008}' => out.push_str(r"\b"),
-            '\u{000C}' => out.push_str(r"\f"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 // ---------------------------------------------------------------------------
 // Egress driver - the timing & cut-alignment core.
 // ---------------------------------------------------------------------------
@@ -2802,7 +2764,11 @@ pub async fn run_egress(
                 let connected_at = Instant::now();
                 let was_alive = dest.egress_alive.swap(true, Ordering::Relaxed);
                 if !was_alive {
-                    ctrl.fire_webhook("🟢", &format!("**{}** is now live.", label));
+                    ctrl.emit(
+                        Event::new(EventKind::DestinationLive)
+                            .with("destination", label.clone())
+                            .with("platform", platform_of_host(&parsed.host)),
+                    );
                 }
                 let sink = client.spawn_reader_drain();
                 let pump_result = pump_dest(&ctrl, &dest, sink).await;
@@ -2830,7 +2796,15 @@ pub async fn run_egress(
                     let safe = scrub_secret(&e.to_string(), &parsed.stream_key);
                     eprintln!("[egress {}] pump error: {}", label, safe);
                     ctrl.log(format!("[{}] disconnected ({})", label, safe));
-                    ctrl.fire_webhook("🔴", &format!("**{}** disconnected: {}", label, safe));
+                    ctrl.emit(
+                        Event::new(EventKind::DestinationDropped)
+                            .with("destination", label.clone())
+                            .with("platform", platform_of_host(&parsed.host))
+                            .with("reason", safe.clone()),
+                    );
+                    if ctrl.destination_alive_summary().0 == 0 {
+                        ctrl.emit(Event::new(EventKind::AllDestinationsDown));
+                    }
                 }
                 // Counted here (instead of at the loop tail) so a fresh
                 // connect or a connect failure never bumps it: "Egress
@@ -5418,17 +5392,14 @@ mod tests {
     }
 
     /// The tray, global hotkeys and MIDI run on plain threads with no Tokio
-    /// runtime. Ending a hold from them posts to the webhook, which must
-    /// not need one: a panic there aborts the whole process.
+    /// runtime. Ending a hold from them emits an integrations event, which
+    /// must not need one: a panic there aborts the whole process.
     #[tokio::test]
-    async fn ending_a_hold_off_the_runtime_with_a_webhook_set_does_not_panic() {
+    async fn ending_a_hold_off_the_runtime_does_not_panic() {
         let h = protected_harness(false);
-        h.ctrl.update_webhook("http://127.0.0.1:9/webhook".into());
         h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
         h.ctrl.mark_ingest_dead();
         assert!(h.ctrl.hold_active());
-        // Clear the throttle the hold's own post set, so this one goes out.
-        h.ctrl.webhook_last_fire_ms.store(0, Ordering::Relaxed);
         let ctrl = h.ctrl.clone();
         let hotkey = std::thread::spawn(move || ctrl.run_named_action("end_hold", 0, "hotkey"));
         assert_eq!(hotkey.join().expect("no panic off the runtime"), None);

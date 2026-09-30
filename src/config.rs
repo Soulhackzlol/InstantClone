@@ -6,6 +6,8 @@
 //! For wire transport (web UI), `to_json` emits a small JSON object.
 
 use crate::crash_protection::{self, CrashProtection};
+use crate::integrations::model::{DiscordChannel, Integration, PhoneConnection, MAX_INTEGRATIONS};
+use crate::json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
@@ -143,6 +145,17 @@ pub struct Settings {
     /// Keep destinations live on a reconnect screen when OBS crashes.
     /// Off by default. See `crate::crash_protection`.
     pub crash_protection: CrashProtection,
+    /// Integrations (alerts, chat commands, automations). Each is saved as
+    /// one `integration.<id>=<json>` line. See `crate::integrations`.
+    pub integrations: Vec<Integration>,
+    /// Discord webhooks the integrations can post to.
+    pub discord_channels: Vec<DiscordChannel>,
+    /// Phone pushes (ntfy).
+    pub phone: PhoneConnection,
+    /// Whether the old single `discord_webhook_url` has been turned into a
+    /// Discord connection plus a "Stream alerts" integration. False only in
+    /// configs written before integrations existed.
+    pub integrations_migrated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -730,6 +743,103 @@ impl Destination {
 }
 
 impl Settings {
+    /// `integration.<id>=<json>`, `connection.discord.<id>=<json>` and
+    /// `connection.phone=<json>` lines. Compact JSON has no newline, so each
+    /// stays one line of the key=value format.
+    fn write_integration_lines(&self, f: &mut impl Write) -> io::Result<()> {
+        if self.integrations_migrated {
+            writeln!(f, "integrations_migrated=true")?;
+        }
+        for c in &self.discord_channels {
+            let v = json::obj([("name", json::str(&c.name)), ("url", json::str(&c.url))]);
+            writeln!(
+                f,
+                "connection.discord.{}={}",
+                one_line(&c.id),
+                one_line(&v.to_json())
+            )?;
+        }
+        if self.phone != PhoneConnection::default() {
+            let v = json::obj([
+                ("server", json::str(&self.phone.server)),
+                ("topic", json::str(&self.phone.topic)),
+            ]);
+            writeln!(f, "connection.phone={}", one_line(&v.to_json()))?;
+        }
+        for i in &self.integrations {
+            writeln!(
+                f,
+                "integration.{}={}",
+                one_line(&i.id),
+                one_line(&i.to_json().to_json())
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Load one integration line. A line that no longer parses (a hand edit,
+    /// a newer version's step type) is skipped rather than failing the
+    /// whole config: the other integrations and settings still load.
+    fn load_integration(&mut self, value: &str) {
+        if self.integrations.len() >= MAX_INTEGRATIONS {
+            return;
+        }
+        let Ok(parsed) = json::parse(value) else {
+            return;
+        };
+        let Ok(integration) = Integration::from_json(&parsed) else {
+            return;
+        };
+        if crate::integrations::model::valid_id(&integration.id)
+            && !self.integrations.iter().any(|i| i.id == integration.id)
+        {
+            self.integrations.push(integration);
+        }
+    }
+
+    fn load_discord_channel(&mut self, id: &str, value: &str) {
+        if !crate::integrations::model::valid_id(id)
+            || self.discord_channels.len() >= 32
+            || self.discord_channels.iter().any(|c| c.id == id)
+        {
+            return;
+        }
+        if let Ok(v) = json::parse(value) {
+            self.discord_channels.push(DiscordChannel {
+                id: id.to_string(),
+                name: v.str_or("name", "Discord").to_string(),
+                url: v.str_or("url", "").to_string(),
+            });
+        }
+    }
+
+    /// One-time move of the old single Discord webhook into integrations:
+    /// a Discord connection plus a "Stream alerts" integration that posts
+    /// the same messages as before. Runs once per config.
+    fn migrate_discord_webhook(&mut self) {
+        if self.integrations_migrated {
+            return;
+        }
+        self.integrations_migrated = true;
+        let url = std::mem::take(&mut self.discord_webhook_url);
+        if url.trim().is_empty() {
+            return;
+        }
+        let channel_id = "discord".to_string();
+        if !self.discord_channels.iter().any(|c| c.id == channel_id) {
+            self.discord_channels.push(DiscordChannel {
+                id: channel_id.clone(),
+                name: "Discord".to_string(),
+                url,
+            });
+        }
+        self.integrations
+            .push(crate::integrations::presets::legacy_alerts(
+                "stream-alerts".to_string(),
+                &channel_id,
+            ));
+    }
+
     pub fn defaults() -> Self {
         Self {
             ingest_port: 1935,
@@ -806,6 +916,12 @@ impl Settings {
             midi: MidiBindings::default(),
             midi_device: String::new(),
             crash_protection: CrashProtection::default(),
+            integrations: Vec::new(),
+            discord_channels: Vec::new(),
+            phone: PhoneConnection::default(),
+            // A fresh install has no old webhook to migrate; `load` sets
+            // this after its one-time pass either way.
+            integrations_migrated: false,
         }
     }
 
@@ -856,6 +972,7 @@ impl Settings {
                 audio_track: "auto".into(),
             });
         }
+        s.migrate_discord_webhook();
         // Clamp / sanitize on load - hand-edited values can otherwise
         // hit divide-by-zero (buffer_mb=0 → `% capacity` in DiskRing) or
         // bind two services to the same port (one will silently fail).
@@ -1123,6 +1240,7 @@ impl Settings {
         }
         // Crash protection: only fields that differ from the default.
         self.crash_protection.write_lines(&mut f)?;
+        self.write_integration_lines(&mut f)?;
         for (i, p) in self.profiles.iter().enumerate() {
             writeln!(f, "profile.{}.name={}", i, one_line(&p.name))?;
             writeln!(f, "profile.{}.delay_ms={}", i, p.delay_ms)?;
@@ -1272,6 +1390,19 @@ impl Settings {
             k if k.starts_with(crash_protection::KEY_PREFIX) => {
                 self.crash_protection
                     .set(&k[crash_protection::KEY_PREFIX.len()..], value);
+            }
+            "integrations_migrated" => self.integrations_migrated = value == "true",
+            k if k.starts_with("integration.") => self.load_integration(value),
+            k if k.starts_with("connection.discord.") => {
+                self.load_discord_channel(&k["connection.discord.".len()..], value)
+            }
+            "connection.phone" => {
+                if let Ok(v) = json::parse(value) {
+                    self.phone = PhoneConnection {
+                        server: v.str_or("server", "").to_string(),
+                        topic: v.str_or("topic", "").to_string(),
+                    };
+                }
             }
             k if k.starts_with("profile.") => {
                 let rest = &k[8..];
@@ -3650,7 +3781,9 @@ Name@x"
                 },
             ],
             destinations: vec![first, second],
-            discord_webhook_url: "https://discord.com/api/webhooks/1/abc".into(),
+            // Migrated away on load (see `migrate_discord_webhook`), so a
+            // round-trip only holds for the empty value.
+            discord_webhook_url: String::new(),
             overlays_dir: PathBuf::from("D:/overlays"),
             tracing_enabled: true,
             auto_arm_on_connect: true,
@@ -3703,7 +3836,78 @@ Name@x"
                 subline: "OBS is restarting".into(),
                 every_disconnect: true,
             },
+            integrations: vec![
+                crate::integrations::presets::build("crash_alert", "alerts1".into(), "mods")
+                    .unwrap(),
+                crate::integrations::presets::build("mod_controls", "mods2".into(), "").unwrap(),
+            ],
+            discord_channels: vec![DiscordChannel {
+                id: "mods".into(),
+                name: "Mods = team".into(),
+                url: "https://discord.com/api/webhooks/1/abc".into(),
+            }],
+            phone: PhoneConnection {
+                server: "https://ntfy.example".into(),
+                topic: "texaz-alerts".into(),
+            },
+            integrations_migrated: true,
         }
+    }
+
+    /// The old single webhook becomes a Discord connection plus a "Stream
+    /// alerts" integration, once, and a config saved afterwards keeps them.
+    #[test]
+    fn old_discord_webhook_is_migrated_once() {
+        let path = scratch_config_path("webhook-migration");
+        std::fs::write(
+            &path,
+            "discord_webhook_url=https://discord.com/api/webhooks/9/tok
+",
+        )
+        .unwrap();
+        let loaded = Settings::load(&path).unwrap();
+        assert!(loaded.discord_webhook_url.is_empty());
+        assert!(loaded.integrations_migrated);
+        assert_eq!(loaded.discord_channels.len(), 1);
+        assert_eq!(
+            loaded.discord_channels[0].url,
+            "https://discord.com/api/webhooks/9/tok"
+        );
+        assert_eq!(loaded.integrations.len(), 1);
+        assert_eq!(loaded.integrations[0].preset, "stream_alerts");
+        assert!(loaded.integrations[0].enabled);
+
+        loaded.save(&path).unwrap();
+        let again = Settings::load(&path).unwrap();
+        assert_eq!(again.integrations.len(), 1, "migrated exactly once");
+        assert_eq!(again.discord_channels, loaded.discord_channels);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A damaged integration line is skipped; everything else still loads.
+    #[test]
+    fn a_broken_integration_line_does_not_cost_the_rest() {
+        let path = scratch_config_path("broken-integration");
+        let good = crate::integrations::presets::build("delay_command", "good".into(), "")
+            .unwrap()
+            .to_json()
+            .to_json();
+        std::fs::write(
+            &path,
+            format!(
+                "web_port=7811
+integration.bad={{not json
+integration.good={good}
+integrations_migrated=true
+"
+            ),
+        )
+        .unwrap();
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded.web_port, 7811);
+        assert_eq!(loaded.integrations.len(), 1);
+        assert_eq!(loaded.integrations[0].id, "good");
+        let _ = std::fs::remove_file(&path);
     }
 
     /// Every setting survives save then load unchanged. The one test that
@@ -3799,6 +4003,8 @@ Name@x"
         main.name = "Main".into();
         main.vod_audio = true;
         expected.destinations = vec![main];
+        // Loading always completes the one-time webhook migration.
+        expected.integrations_migrated = true;
         assert_eq!(loaded.unwrap(), expected);
     }
 

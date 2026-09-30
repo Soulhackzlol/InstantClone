@@ -35,6 +35,8 @@ mod crash_protection;
 mod crypto;
 mod h264;
 mod https;
+mod integrations;
+mod json;
 mod local_eb_config;
 mod midi;
 mod obs_register;
@@ -267,6 +269,18 @@ fn main() -> std::io::Result<()> {
 
         let (tx, rx) = watch::channel(settings.clone());
         let tx = Arc::new(tx);
+
+        // Integrations run on their own thread, so nothing they do can
+        // delay the stream. Their data file sits next to the config.
+        let data_dir = cfg_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        match integrations::engine::start(ctrl.clone(), rx.clone(), data_dir) {
+            Ok(handle) => ctrl.attach_integrations(handle),
+            Err(e) => ctrl.log(format!("[integrations] could not start: {e}")),
+        }
 
         // An update can leave the OBS entry we wrote pointing at the old shape
         // of things, and on an in-app update the user never saw the dashboard
@@ -674,10 +688,8 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
     > = std::collections::HashMap::new();
     let mut vertical_wait = VerticalWaitLog::default();
 
-    // Mirror webhook URL + ingest key into the controller on every settings
-    // change (the ingest task enforces the key but has no settings handle).
-    let initial_webhook = { rx.borrow().discord_webhook_url.clone() };
-    ctrl.update_webhook(initial_webhook);
+    // Mirror the ingest key into the controller on every settings change
+    // (the ingest task enforces the key but has no settings handle).
     ctrl.update_ingest_key(rx.borrow().ingest_key.clone());
 
     // Managed "Local test sink" child process. Spawned while any
@@ -1057,9 +1069,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         tokio::select! {
             ch = rx.changed() => {
                 if ch.is_err() { return; }
-                // Mirror webhook URL + ingest key on every settings change.
-                let new_webhook = { rx.borrow().discord_webhook_url.clone() };
-                ctrl.update_webhook(new_webhook);
+                // Mirror the ingest key on every settings change.
                 ctrl.update_ingest_key(rx.borrow().ingest_key.clone());
             }
             _ = periodic_wake => {

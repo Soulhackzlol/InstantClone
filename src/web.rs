@@ -44,7 +44,7 @@ static SETTINGS_WRITE_LOCK: crate::sync::Mutex<()> = crate::sync::Mutex::new(())
 /// Take the settings write lock for a full read-modify-write-send cycle. Hold
 /// the guard from just before `settings.borrow().clone()` until after
 /// `settings.send(..)`.
-fn settings_write_guard() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn settings_write_guard() -> std::sync::MutexGuard<'static, ()> {
     SETTINGS_WRITE_LOCK.lock()
 }
 
@@ -806,6 +806,22 @@ async fn route(
         }
     }
 
+    // Integrations: `/hooks/<token>` is how outside apps trigger a web call
+    // integration; the rest is the dashboard's integrations API.
+    if let Some(token) = bare_path.strip_prefix("/hooks/") {
+        return crate::integrations::api::hook(ctrl, token, body, query);
+    }
+    if bare_path.starts_with("/integrations")
+        || bare_path.starts_with("/connections/")
+        || bare_path.starts_with("/twitch/")
+    {
+        if let Some(reply) =
+            crate::integrations::api::route(method, bare_path, body, ctrl, settings, cfg_path).await
+        {
+            return reply;
+        }
+    }
+
     match (method, bare_path) {
         // GET / and GET /dock are handled in serve() as a fast-path
         // (static gz blob, no allocation, no String round-trip).
@@ -1157,7 +1173,6 @@ async fn route(
         ("POST", "/midi/learn/cancel") => post_midi_learn_cancel(ctrl).await,
         ("POST", "/midi/poll") => post_midi_poll(ctrl, settings, cfg_path).await,
         ("POST", "/test-egress") => test_egress(settings).await,
-        ("POST", "/test-webhook") => post_test_webhook(ctrl).await,
         ("POST", "/logs/clear") => {
             ctrl.clear_logs();
             ("200 OK", "application/json", r#"{"ok":true}"#.into())
@@ -2714,15 +2729,6 @@ async fn post_config(
             apply_field_str(&mut new_settings, k, v);
         }
     }
-    if let Some(v) = form.get("discord_webhook_url") {
-        if !v.is_empty() {
-            apply_field_str(&mut new_settings, "discord_webhook_url", v);
-        }
-        // explicit clear: caller must POST `webhook_clear=1`
-    }
-    if form.get("webhook_clear").map(|s| s.as_str()) == Some("1") {
-        new_settings.discord_webhook_url.clear();
-    }
 
     // Autostart lives in the registry, not in Settings, so it is applied
     // here rather than through `apply_field_str`. A failure is logged and
@@ -2811,9 +2817,6 @@ async fn post_config(
             ),
         );
     }
-    // Mirror webhook into the controller so events fire correctly even
-    // before the next supervisor settings-change tick.
-    ctrl.update_webhook(new_settings.discord_webhook_url.clone());
     // Same for the ingest key: mirror it inline so locking down the ingest port
     // takes effect this instant. Waiting for the supervisor tick would leave a
     // brief window where begin_publish still enforces the previous (usually
@@ -2887,7 +2890,6 @@ async fn post_config_reset(
             ),
         );
     }
-    ctrl.update_webhook(next.discord_webhook_url.clone());
     crate::trace::set_enabled(next.tracing_enabled);
     if scope == "all" {
         // Nuke the controller's live delay state too. Settings on
@@ -4198,78 +4200,6 @@ fn serve_overlay_file(
     }
 }
 
-// ----------------------------------------------------------------------
-// Discord webhook test ping
-// ----------------------------------------------------------------------
-
-async fn post_test_webhook(ctrl: &Arc<Controller>) -> (&'static str, &'static str, String) {
-    // Verbose test path. The fire-and-forget `fire_webhook` is the wrong
-    // tool here because it (a) silently returns when the URL is empty,
-    // (b) silently returns when its 2-second throttle is active (a fresh
-    // destination-connect notification suppresses the user's test for 2s),
-    // and (c) drops any HTTP/TLS error from Discord on the floor. This
-    // path bypasses the throttle, validates the URL, and surfaces the
-    // real result so the user knows whether the webhook is actually
-    // reachable from this machine.
-    let url = ctrl.webhook_url_snapshot();
-    if url.is_empty() {
-        return (
-            "200 OK",
-            "application/json",
-            r#"{"ok":false,"error":"webhook URL is empty - set it in the System tab and save first"}"#.into(),
-        );
-    }
-    let body =
-        r#"{"content":"🧪 **InstantClone**: Test message - webhook is wired up and working."}"#;
-    // Map ureq::Error (a fat enum that would trip clippy::result_large_err
-    // if propagated) down to just the status code on success or a short
-    // string on failure inside the worker thread.
-    let send = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        tokio::task::spawn_blocking(move || -> Result<u16, String> {
-            crate::https::https_agent()
-                .post(&url)
-                .config()
-                .timeout_connect(Some(std::time::Duration::from_secs(5)))
-                .timeout_global(Some(std::time::Duration::from_secs(8)))
-                .build()
-                .header("Content-Type", "application/json")
-                .send(body)
-                .map(|r| r.status().as_u16())
-                .map_err(|e| e.to_string())
-        }),
-    )
-    .await;
-    let (ok, msg) = match send {
-        Ok(Ok(Ok(status))) if (200..300).contains(&status) => {
-            (true, format!("Discord accepted (HTTP {})", status))
-        }
-        Ok(Ok(Ok(status))) => (
-            false,
-            format!(
-                "Discord rejected with HTTP {} - check the webhook URL",
-                status
-            ),
-        ),
-        Ok(Ok(Err(e))) => (false, format!("connection error: {}", e)),
-        Ok(Err(e)) => (false, format!("internal: {}", e)),
-        Err(_) => (
-            false,
-            "timed out after 10 s waiting for Discord".to_string(),
-        ),
-    };
-    // Match the dashboard contract: `ok=true` carries a friendly status
-    // in `message`, `ok=false` carries the same string in `error` so the
-    // existing toast handler ("Webhook test failed: ${r.error}") just
-    // works without a client-side change.
-    let json = if ok {
-        format!(r#"{{"ok":true,"message":{}}}"#, json_escape_quoted(&msg))
-    } else {
-        format!(r#"{{"ok":false,"error":{}}}"#, json_escape_quoted(&msg))
-    };
-    ("200 OK", "application/json", json)
-}
-
 fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
     // Wraps Settings::apply_field but is callable from outside the module.
     // Implementing here avoids exposing it on Settings.
@@ -4525,6 +4455,12 @@ enum Access {
 
 fn classify_access(method: &str, path: &str) -> Access {
     if path == "/login" {
+        return Access::Public;
+    }
+    // Web call integrations: outside apps (a Stream Deck, a script) can't log
+    // in. The secret token in the path is the credential, and all a caller
+    // can do is run the integrations that hold that exact token.
+    if path.starts_with("/hooks/") && (method == "GET" || method == "POST") {
         return Access::Public;
     }
     // Overlay DISPLAY only (browser sources can't log in); saving overlays is
@@ -7098,7 +7034,6 @@ mod tests {
         ("POST", "/midi/learn/cancel", Access::Admin),
         ("POST", "/midi/poll", Access::Admin),
         ("POST", "/test-egress", Access::Admin),
-        ("POST", "/test-webhook", Access::Admin),
         ("POST", "/logs/clear", Access::Admin),
         ("POST", "/profiles", Access::Admin),
         ("POST", "/profiles/delete", Access::Admin),
@@ -7113,6 +7048,15 @@ mod tests {
         ("POST", "/overlays/", Access::Admin),
         ("GET", "/docks/", Access::Control),
         ("POST", "/docks/", Access::Control),
+        // Web call integrations: the token in the path is the credential.
+        ("GET", "/hooks/", Access::Public),
+        ("POST", "/hooks/", Access::Public),
+        // The integrations API (see `integrations::api`): settings and
+        // secrets, so a session only.
+        ("GET", "/integrations", Access::Admin),
+        ("POST", "/integrations", Access::Admin),
+        ("POST", "/connections/", Access::Admin),
+        ("POST", "/twitch/", Access::Admin),
     ];
 
     /// The production half of this file, so the tables above are never
