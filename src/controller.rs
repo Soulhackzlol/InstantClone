@@ -2523,6 +2523,18 @@ impl Controller {
         problem
     }
 
+    /// Set the delay to `ms` (an integration's "set the delay"): arms it
+    /// when nothing is armed, and changes it in place when a delay is armed
+    /// or on air. Unlike the `arm` hotkey action, which toggles, this never
+    /// disarms, so `!setdelay 30` twice leaves a 30 s delay.
+    pub fn set_delay_to(&self, ms: u32, source: &str) {
+        let ms = ms.clamp(1000, 600_000);
+        self.arm_delay(ms);
+        self.log(format!("[{source}] delay set to {} s", ms / 1000));
+        self.record_fired_action("arm", source, None);
+        self.state_dirty.notify_one();
+    }
+
     fn dispatch_named_action(&self, action: &str, default_ms: u32, source: &str) -> Option<String> {
         match action {
             "toggle" => self.action_toggle(default_ms, source),
@@ -4565,6 +4577,27 @@ mod tests {
         h.ctrl.run_named_action("arm", 5_000, "hotkey");
         assert_eq!(h.ctrl.armed_delay_ms(), 0);
         assert_eq!(h.ctrl.phase(), "idle");
+    }
+
+    #[test]
+    fn setting_the_delay_twice_never_disarms_and_updates_a_live_delay() {
+        let h = harness(0);
+        h.ctrl.mark_ingest_alive_for_test();
+        h.ctrl.set_delay_to(30_000, "integration");
+        h.ctrl.set_delay_to(30_000, "integration");
+        assert_eq!(h.ctrl.armed_delay_ms(), 30_000, "a repeat keeps it armed");
+
+        let h = harness(0);
+        h.ctrl.arm_delay(3_000);
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.activate_delay().unwrap();
+        h.ctrl.set_delay_to(2_000, "integration");
+        assert_eq!(
+            h.ctrl.target_delay_ms(),
+            2_000,
+            "changed on air, not refused"
+        );
+        assert_eq!(h.ctrl.phase(), "active");
     }
 
     #[test]

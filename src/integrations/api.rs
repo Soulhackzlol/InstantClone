@@ -25,15 +25,20 @@ fn ok(v: Value) -> Reply {
 }
 
 fn fail(message: impl Into<String>) -> Reply {
+    let message = capitalize(&message.into());
     (
         "400 Bad Request",
         "application/json",
-        json::obj([
-            ("ok", Value::Bool(false)),
-            ("error", json::str(message.into())),
-        ])
-        .to_json(),
+        json::obj([("ok", Value::Bool(false)), ("error", json::str(message))]).to_json(),
     )
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 fn done() -> Reply {
@@ -215,16 +220,24 @@ fn save(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -
     if integration.id.is_empty() {
         integration.id = new_id();
     }
-    let errors = integration.validate();
-    if !errors.is_empty() {
-        return fail(errors.join("; "));
+    let mut problems = integration.problems();
+    if !problems.invalid.is_empty() {
+        return fail(problems.invalid.join("; "));
     }
-    let known = check_connections(&integration, &settings.borrow());
-    if let Err(e) = known {
-        return fail(e);
+    if let Err(e) = check_connections(&integration, &settings.borrow()) {
+        problems.incomplete.push(e);
+    }
+    // Switched on, it must be ready to run; switched off, it saves as a
+    // draft and the dashboard lists what is still missing.
+    if integration.enabled && !problems.incomplete.is_empty() {
+        return fail(format!(
+            "{}. Finish it, or switch it off to save it as a draft.",
+            problems.incomplete.join("; ")
+        ));
     }
     let id = integration.id.clone();
     let warnings = unknown_vars(&integration);
+    let missing = problems.incomplete;
     let reply = update(settings, cfg_path, move |s| {
         match s.integrations.iter().position(|i| i.id == integration.id) {
             Some(at) => s.integrations[at] = integration,
@@ -244,6 +257,10 @@ fn save(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -
         (
             "warnings",
             Value::Arr(warnings.into_iter().map(json::str).collect()),
+        ),
+        (
+            "missing",
+            Value::Arr(missing.into_iter().map(json::str).collect()),
         ),
     ]))
 }
@@ -317,21 +334,22 @@ fn with_id(reply: Reply, id: &str) -> Reply {
 
 /// Every Discord step must point at a connection that exists.
 fn check_connections(integration: &Integration, s: &Settings) -> Result<(), String> {
-    let mut missing = false;
+    let mut gone = false;
     for h in &integration.handlers {
         super::model::visit_steps(&h.steps, &mut |step| {
+            // A blank channel is reported by validation; this catches one
+            // that was set and has since been removed.
+            let id = step.param("connection");
             if step.kind == super::model::StepKind::Discord
-                && !s
-                    .discord_channels
-                    .iter()
-                    .any(|c| c.id == step.param("connection"))
+                && !id.is_empty()
+                && !s.discord_channels.iter().any(|c| c.id == id)
             {
-                missing = true;
+                gone = true;
             }
         });
     }
-    if missing {
-        Err("pick a Discord channel for every Discord step".to_string())
+    if gone {
+        Err("a Discord channel it posts to was removed; pick another".to_string())
     } else {
         Ok(())
     }

@@ -94,7 +94,7 @@ pub struct Twitch {
     incoming: mpsc::Sender<ChatMessage>,
     /// Shown on the dashboard when Twitch logged us out.
     notice: Mutex<Option<String>>,
-    upkeep_now: Notify,
+    upkeep_now: Arc<Notify>,
     /// Writes a line to the dashboard log.
     log: Box<dyn Fn(String) + Send + Sync>,
 }
@@ -119,7 +119,7 @@ impl Twitch {
             bot: Conn::default(),
             incoming,
             notice: Mutex::new(None),
-            upkeep_now: Notify::new(),
+            upkeep_now: Arc::new(Notify::new()),
             log,
         }
     }
@@ -186,8 +186,14 @@ impl Twitch {
         };
         let incoming = (which == Which::Main).then(|| self.incoming.clone());
         let state = conn.state.clone();
+        let upkeep_now = self.upkeep_now.clone();
         tokio::spawn(async move {
-            irc::run(login, incoming, out_rx, state, stop_rx).await;
+            irc::run(login, incoming, out_rx, state.clone(), stop_rx).await;
+            // Twitch refused the token: refresh now rather than leaving chat
+            // down until the next upkeep round.
+            if *state.lock() == ChatState::AuthFailed {
+                upkeep_now.notify_one();
+            }
         });
     }
 

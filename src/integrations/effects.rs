@@ -178,7 +178,12 @@ impl Host for RealHost {
             self.default_delay_ms.load(Ordering::Relaxed)
         };
         match action {
-            "toggle" | "arm" | "activate" | "cut" | "cut_after" | "end_hold" => {
+            // "Set the delay", not the hotkey's arm/disarm toggle.
+            "arm" => {
+                self.ctrl.set_delay_to(default_ms, "integration");
+                Ok(())
+            }
+            "toggle" | "activate" | "cut" | "cut_after" | "end_hold" => {
                 match self
                     .ctrl
                     .run_named_action(action, default_ms, "integration")

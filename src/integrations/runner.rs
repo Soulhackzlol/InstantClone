@@ -298,7 +298,12 @@ impl Runner {
             return;
         };
         let text = self.marked(self.fill(step, "text"));
-        let ping = step.param("ping").to_string();
+        // A test must never ping a whole server.
+        let ping = if self.ctx.test {
+            String::new()
+        } else {
+            step.param("ping").to_string()
+        };
         let label = format!("Discord · {}", channel.name);
         let shown = text.clone();
         match self
@@ -455,7 +460,8 @@ impl Runner {
     }
 
     async fn program(&mut self, step: &Step) {
-        let path = self.fill(step, "path").trim().to_string();
+        // Never templated: see `model::validate_steps`.
+        let path = step.param("path").trim().to_string();
         let args = split_args(&self.fill(step, "args"));
         let label = format!("Run {}", file_name(&path));
         if self.ctx.test {
@@ -469,7 +475,8 @@ impl Runner {
     }
 
     async fn file(&mut self, step: &Step) {
-        let path = self.fill(step, "path").trim().to_string();
+        // Never templated: see `model::validate_steps`.
+        let path = step.param("path").trim().to_string();
         let text = self.fill(step, "text");
         let append = step.param("mode") == "append";
         let label = format!("Write {}", file_name(&path));

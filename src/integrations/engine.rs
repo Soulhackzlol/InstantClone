@@ -38,6 +38,10 @@ const PER_INTEGRATION: usize = 4;
 const GLOBAL_RUNS: usize = 32;
 const ACTIVITY_KEEP: usize = 150;
 const TICK: Duration = Duration::from_millis(250);
+/// A destination stuck in a connect-then-drop loop (a key the platform
+/// accepts, then refuses) would otherwise alert on every round. Each
+/// destination gets at most one "live" and one "dropped" per window.
+const FLAP_WINDOW: Duration = Duration::from_secs(300);
 
 enum Input {
     Event(Event),
@@ -280,6 +284,7 @@ struct Engine {
     limits: HashMap<String, Arc<Semaphore>>,
     global: Arc<Semaphore>,
     delay_seen: Option<u32>,
+    flap: FlapGuard,
 }
 
 impl Engine {
@@ -303,6 +308,7 @@ impl Engine {
             limits: HashMap::new(),
             global: Arc::new(Semaphore::new(GLOBAL_RUNS)),
             delay_seen: None,
+            flap: FlapGuard::default(),
         }
     }
 
@@ -372,6 +378,9 @@ impl Engine {
     }
 
     fn event(&mut self, event: Event) {
+        if self.flap.suppress(&event, Instant::now()) {
+            return;
+        }
         let matches: Vec<(Arc<Integration>, usize)> = self
             .enabled_handlers()
             .filter(|(_, _, h)| match &h.trigger {
@@ -393,15 +402,20 @@ impl Engine {
     }
 
     fn chat(&mut self, msg: ChatMessage) {
-        // Our own bot talking must never trigger us.
-        let bot = self
-            .store
-            .accounts
-            .lock()
-            .bot
-            .as_ref()
-            .map(|b| b.login.clone());
-        if bot.is_some_and(|b| b.eq_ignore_ascii_case(&msg.user_login)) {
+        // Our own bot talking must never trigger us. (Unless the "bot" is
+        // the streamer's own account: then these are their own commands.)
+        let is_own_bot = {
+            let accounts = self.store.accounts.lock();
+            let main = accounts
+                .main
+                .as_ref()
+                .map(|a| a.login.as_str())
+                .unwrap_or("");
+            accounts.bot.as_ref().is_some_and(|b| {
+                !b.login.eq_ignore_ascii_case(main) && b.login.eq_ignore_ascii_case(&msg.user_login)
+            })
+        };
+        if is_own_bot {
             return;
         }
         let text = msg.text.trim();
@@ -643,6 +657,35 @@ impl Engine {
     }
 }
 
+/// See `FLAP_WINDOW`.
+#[derive(Default)]
+struct FlapGuard {
+    last: HashMap<String, Instant>,
+}
+
+impl FlapGuard {
+    fn suppress(&mut self, event: &Event, now: Instant) -> bool {
+        let key = match event.kind {
+            EventKind::DestinationLive | EventKind::DestinationDropped => format!(
+                "{}:{}",
+                event.kind.id(),
+                event.var("destination").unwrap_or("")
+            ),
+            EventKind::AllDestinationsDown => event.kind.id().to_string(),
+            _ => return false,
+        };
+        if self
+            .last
+            .get(&key)
+            .is_some_and(|t| now.duration_since(*t) < FLAP_WINDOW)
+        {
+            return true;
+        }
+        self.last.insert(key, now);
+        false
+    }
+}
+
 fn status_id(status: &RunStatus) -> &'static str {
     match status {
         RunStatus::Ok => "ok",
@@ -807,6 +850,25 @@ mod tests {
             display_name: "Ana".into(),
             ..ChatMessage::default()
         }
+    }
+
+    #[test]
+    fn a_flapping_destination_alerts_once_per_window() {
+        let mut guard = FlapGuard::default();
+        let t0 = Instant::now();
+        let drop = |d: &str| Event::new(EventKind::DestinationDropped).with("destination", d);
+        assert!(!guard.suppress(&drop("YouTube"), t0));
+        assert!(guard.suppress(&drop("YouTube"), t0 + Duration::from_secs(30)));
+        assert!(
+            !guard.suppress(&drop("Kick"), t0 + Duration::from_secs(30)),
+            "another destination still alerts"
+        );
+        assert!(!guard.suppress(&drop("YouTube"), t0 + FLAP_WINDOW + Duration::from_secs(1)));
+        assert!(
+            !guard.suppress(&Event::new(EventKind::HoldOpened), t0),
+            "other events pass"
+        );
+        assert!(!guard.suppress(&Event::new(EventKind::HoldOpened), t0));
     }
 
     #[test]

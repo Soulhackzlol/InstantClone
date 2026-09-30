@@ -312,10 +312,14 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
             cooldown_ms = 5_000;
             vec![command("!delay", Roles::EVERYONE, 30_000, vec![reply("Delay: {delay|off}")])]
         }
-        "delay_notice" => vec![
-            on(EventKind::DelayOn, vec![chat("Stream delay is now on.")]),
-            on(EventKind::DelayOff, vec![chat("Stream delay is now off.")]),
-        ],
+        "delay_notice" => {
+            // A burst of cuts must not become a burst of chat lines.
+            cooldown_ms = 30_000;
+            vec![
+                on(EventKind::DelayOn, vec![chat("Stream delay is now on.")]),
+                on(EventKind::DelayOff, vec![chat("Stream delay is now off.")]),
+            ]
+        }
         "mod_controls" => vec![
             command(
                 "!cut",

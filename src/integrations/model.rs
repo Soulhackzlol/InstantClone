@@ -182,18 +182,26 @@ impl StepKind {
         StepKind::ALL.into_iter().find(|k| k.id() == id)
     }
 
-    /// Parameters the step cannot run without.
-    fn required(self) -> &'static [&'static str] {
+    /// Parameters the step cannot run without, each with what to tell
+    /// the user when it is blank.
+    fn required(self) -> &'static [(&'static str, &'static str)] {
         match self {
-            StepKind::Discord => &["connection", "text"],
-            StepKind::Chat | StepKind::Phone => &["text"],
-            StepKind::Http => &["url"],
-            StepKind::Wait => &["ms"],
-            StepKind::If => &["left", "op"],
-            StepKind::DelayAction => &["action"],
-            StepKind::Program => &["path"],
-            StepKind::File => &["path"],
-            StepKind::SetVar | StepKind::Counter => &["name"],
+            StepKind::Discord => &[
+                ("connection", "pick a Discord channel"),
+                ("text", "write the Discord message"),
+            ],
+            StepKind::Chat => &[("text", "write the chat message")],
+            StepKind::Phone => &[("text", "write the phone message")],
+            StepKind::Http => &[("url", "add the web address")],
+            StepKind::Wait => &[("ms", "set how long to wait")],
+            StepKind::If => &[
+                ("left", "say what the check looks at"),
+                ("op", "pick how the check compares"),
+            ],
+            StepKind::DelayAction => &[("action", "pick a delay action")],
+            StepKind::Program => &[("path", "pick the program to run")],
+            StepKind::File => &[("path", "pick the file to write")],
+            StepKind::SetVar | StepKind::Counter => &[("name", "name the value")],
             StepKind::WaitDelay | StepKind::Stop | StepKind::Marker | StepKind::Clip => &[],
         }
     }
@@ -251,8 +259,20 @@ pub fn visit_steps<'a>(steps: &'a [Step], f: &mut dyn FnMut(&'a Step)) {
 
 impl Integration {
     /// Problems that stop it being saved, worded for the dashboard.
+    /// Every problem, for switching it on: it must be complete and valid.
     pub fn validate(&self) -> Vec<String> {
+        let problems = self.problems();
+        let mut all = problems.invalid;
+        all.extend(problems.incomplete);
+        all
+    }
+
+    /// Problems split by what they block. `invalid` ones stop any save;
+    /// `incomplete` ones only stop it running, so a switched-off
+    /// integration can be saved half-finished as a draft.
+    pub fn problems(&self) -> Problems {
         let mut errors = Vec::new();
+        let mut incomplete = Vec::new();
         if !valid_id(&self.id) {
             errors.push("invalid id".to_string());
         }
@@ -263,7 +283,7 @@ impl Integration {
             errors.push(format!("the name is longer than {MAX_NAME_LEN} characters"));
         }
         if self.handlers.is_empty() {
-            errors.push("add at least one trigger".to_string());
+            incomplete.push("add at least one trigger".to_string());
         }
         if self.handlers.len() > MAX_HANDLERS {
             errors.push(format!("more than {MAX_HANDLERS} triggers"));
@@ -273,11 +293,15 @@ impl Integration {
             errors.push(format!("more than {MAX_STEPS} steps"));
         }
         for handler in &self.handlers {
-            validate_trigger(&handler.trigger, &mut errors);
-            validate_steps(&handler.steps, 1, &mut errors);
+            validate_trigger(&handler.trigger, &mut incomplete);
+            validate_steps(&handler.steps, 1, &mut errors, &mut incomplete);
         }
         errors.dedup();
-        errors
+        incomplete.dedup();
+        Problems {
+            invalid: errors,
+            incomplete,
+        }
     }
 
     /// Whether any step runs a program or writes a file.
@@ -365,16 +389,35 @@ pub fn valid_command(c: &str) -> bool {
         && !c[1..].contains(|ch: char| ch.is_whitespace() || ch == '!')
 }
 
-fn validate_steps(steps: &[Step], depth: usize, errors: &mut Vec<String>) {
+fn validate_steps(
+    steps: &[Step],
+    depth: usize,
+    errors: &mut Vec<String>,
+    incomplete: &mut Vec<String>,
+) {
     if depth > MAX_DEPTH {
         errors.push(format!("checks nest more than {MAX_DEPTH} deep"));
         return;
     }
     for step in steps {
-        for name in step.kind.required() {
+        for (name, ask) in step.kind.required() {
             if step.param(name).trim().is_empty() {
-                errors.push(format!("a {} step is missing its {}", step.kind.id(), name));
+                incomplete.push(ask.to_string());
             }
+        }
+        // Where a program runs, a file is written or a request goes must be
+        // fixed by the streamer, never filled in from chat or a web call:
+        // otherwise a viewer's message could pick the program or the host.
+        if matches!(step.kind, StepKind::Program | StepKind::File)
+            && step.param("path").contains('{')
+        {
+            errors.push(format!(
+                "a {} step's path can't use variables",
+                step.kind.id()
+            ));
+        }
+        if step.kind == StepKind::Http && !host_is_fixed(step.param("url")) {
+            errors.push("a web request's address can't put variables in its host".to_string());
         }
         if step.params.values().any(|v| v.len() > MAX_PARAM_LEN) {
             errors.push(format!(
@@ -385,9 +428,24 @@ fn validate_steps(steps: &[Step], depth: usize, errors: &mut Vec<String>) {
         if step.kind != StepKind::If && !(step.then.is_empty() && step.otherwise.is_empty()) {
             errors.push(format!("a {} step cannot hold other steps", step.kind.id()));
         }
-        validate_steps(&step.then, depth + 1, errors);
-        validate_steps(&step.otherwise, depth + 1, errors);
+        validate_steps(&step.then, depth + 1, errors, incomplete);
+        validate_steps(&step.otherwise, depth + 1, errors, incomplete);
     }
+}
+
+/// True when the scheme and host of a URL template contain no variable
+/// (the path and query may).
+fn host_is_fixed(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let scheme = url.split_once("://").map_or("", |(s, _)| s);
+    !host.contains('{') && !scheme.contains('{')
+}
+
+/// See `Integration::problems`.
+pub struct Problems {
+    pub invalid: Vec<String>,
+    pub incomplete: Vec<String>,
 }
 
 fn roles_json(r: Roles) -> Value {
@@ -685,7 +743,7 @@ mod tests {
         };
         let errors = bad.validate();
         assert!(errors.iter().any(|e| e.contains("name")));
-        assert!(errors.iter().any(|e| e.contains("missing its connection")));
+        assert!(errors.iter().any(|e| e == "pick a Discord channel"));
         assert!(errors.iter().any(|e| e.contains("\"clip\"")));
     }
 
@@ -718,6 +776,38 @@ mod tests {
             .otherwise
             .push(Step::new(StepKind::Program, &[("path", "calc.exe")]));
         assert!(i.has_local_effects());
+    }
+
+    #[test]
+    fn viewers_can_never_choose_a_program_file_or_host() {
+        let mut i = sample();
+        i.handlers[0].steps = vec![Step::new(StepKind::Program, &[("path", "{message}")])];
+        assert!(!i.problems().invalid.is_empty());
+        i.handlers[0].steps = vec![Step::new(
+            StepKind::File,
+            &[("path", "C:/{arg1}.txt"), ("text", "x")],
+        )];
+        assert!(!i.problems().invalid.is_empty());
+        i.handlers[0].steps = vec![Step::new(StepKind::Http, &[("url", "https://{arg1}/x")])];
+        assert!(!i.problems().invalid.is_empty());
+        i.handlers[0].steps = vec![Step::new(
+            StepKind::Http,
+            &[("url", "https://api.example/{arg1}?q={user}")],
+        )];
+        assert!(
+            i.problems().invalid.is_empty(),
+            "{:?}",
+            i.problems().invalid
+        );
+    }
+
+    #[test]
+    fn drafts_are_incomplete_not_invalid() {
+        let mut i = sample();
+        i.handlers[0].steps = vec![Step::new(StepKind::Http, &[("url", "")])];
+        let p = i.problems();
+        assert!(p.invalid.is_empty());
+        assert!(!p.incomplete.is_empty());
     }
 
     #[test]

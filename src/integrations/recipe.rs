@@ -95,6 +95,11 @@ pub fn parse(text: &str, mut new_id: impl FnMut() -> String) -> Result<Recipe, S
     let mut integrations = Vec::new();
     for v in list {
         let mut i = Integration::from_json(v)?;
+        if let Some(problem) = i.problems().invalid.first() {
+            return Err(format!(
+                "the recipe has something unsafe or broken: {problem}"
+            ));
+        }
         i.id = new_id();
         i.enabled = false;
         for h in &mut i.handlers {

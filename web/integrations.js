@@ -80,7 +80,7 @@ const KINDS = {
 const PREVIEW_ORDER = ['discord','chat','phone','marker','http','file','clip','delay_action','program'];
 const CATEGORY = {alerts:'Alerts', chat:'Chat', auto:'Automation', own:'Your own'};
 const DELAY_ACTIONS = {
-  cut:'Cut the delay', arm:'Set the delay', activate:'Turn the delay on', toggle:'Toggle the delay',
+  cut:'Cut the delay', arm:'Set the delay to…', activate:'Turn the delay on', toggle:'Toggle the delay',
   cut_after:'Cut after this airs', end_hold:'End the reconnect screen',
 };
 const OPS = {
@@ -271,9 +271,13 @@ async function poll(){
   S.data.twitch = a.twitch;
   if (flowWas !== !!a.twitch.login) schedulePoll();
   if (S.visible && !modalOpen()){
-    if (changed) render(); else renderActivity();
+    // A full redraw would steal the caret from someone typing a search.
+    const typing = document.activeElement && document.activeElement.id === 'ig-search';
+    if (changed && !typing) render(); else renderActivity();
   }
-  if (Modal.kind === 'connections' && (changed || loginWas !== JSON.stringify(a.twitch.login))) Conn.render();
+  // Only the Twitch page shows live state; redrawing the others would wipe
+  // what the user is typing into them.
+  if (Modal.kind === 'connections' && Conn.tab === 'twitch' && (changed || loginWas !== JSON.stringify(a.twitch.login))) Conn.render();
 }
 
 function schedulePoll(){
@@ -414,7 +418,7 @@ function gridHtml(items){
   return `<div class="ig-grid">${items.map(i => {
     const c = cardInfo(i);
     return `<div class="dcard ig-card ${i.enabled ? 'alive' : 'off'}" style="--dc:${c.dc}">
-      <div class="dcard-screen" data-act="edit" data-id="${esc(i.id)}" title="Edit">
+      <div class="dcard-screen" data-act="edit" data-id="${esc(i.id)}" role="button" tabindex="0" aria-label="Edit ${esc(i.name)}">
         ${previewHtml(c.step, c.h, false)}
         ${c.failing ? '<span class="dcard-status s-wait ig-flag"><span class="d-dot"></span><span class="dcard-status-l">Failing</span></span>' : ''}
       </div>
@@ -437,7 +441,7 @@ function listHtml(items){
     return `<div class="dcard ig-row ${i.enabled ? 'alive' : 'off'}" style="--dc:${c.dc}">
       <div class="ig-row-main">
         <span class="dcard-icon">${svg(c.icon)}</span>
-        <div class="ig-row-name" data-act="peek" data-id="${esc(i.id)}"><div class="dcard-name">${esc(i.name)}</div>
+        <div class="ig-row-name" data-act="peek" data-id="${esc(i.id)}" role="button" tabindex="0" aria-expanded="${open}"><div class="dcard-name">${esc(i.name)}</div>
           <div class="dcard-host mono">${esc(c.where)}</div></div>
         <span class="ig-row-sum mono">${esc(c.summary || '')}</span>
         <span class="ig-row-last">${esc(c.last)}</span>
@@ -463,7 +467,7 @@ function emptyHtml(){
     <div class="dest-empty-sub">Pick a pack to switch on a few integrations at once. Each shows what it sends, and you can change or remove anything later.</div>
     <div class="dest-empty-grid" style="width:min(900px,100%)">
       ${packs.map((p, n) => `<button class="dest-starter" data-act="pack" data-pack="${esc(p.id)}" style="gap:8px;padding:18px;${n === 0 ? 'border-color:color-mix(in oklch,var(--accent) 45%,var(--line))' : ''}">
-        <span class="dest-starter-name" style="font-size:15px">${esc(p.name)}${n === 0 ? ' <span class="dcard-status s-ready" style="min-width:0;margin-left:6px;vertical-align:1px"><span class="dcard-status-l">Recommended</span></span>' : ''}</span>
+        <span class="dest-starter-name" style="font-size:15px">${esc(p.name)}${n === 0 ? ' <span class="dcard-status s-ready" style="min-width:0;max-width:none;margin-left:6px;vertical-align:1px"><span class="dcard-status-l">Recommended</span></span>' : ''}</span>
         <span class="dest-starter-note" style="line-height:1.5">${esc(p.description)}</span>
         <span style="display:flex;flex-direction:column;gap:4px;margin-top:4px;font-size:12.5px;color:var(--fg-2)">
           ${p.presets.map(id => `<span>· ${esc((preset(id) || {}).name || id)}</span>`).join('')}</span>
@@ -508,7 +512,11 @@ async function addFrom(body, openAfter){
   const added = (r.ids || []).map(find).filter(Boolean);
   toast(added.length > 1 ? `Added ${added.length} integrations` : `Added ${added[0] ? added[0].name : ''}`, 'ok');
   const unfinished = added.find(i => !i.enabled);
-  if (openAfter && unfinished){ Modal.close(true); openEditor(unfinished); return; }
+  if (openAfter && unfinished){
+    Modal.close(true);
+    if (unfinished.preset) Editor.open(unfinished, true); else Builder.open(unfinished);
+    return;
+  }
   if (unfinished) toast(`${unfinished.name} needs one more detail before it can switch on`, 'info', 4500);
   if (Modal.kind === 'catalog') Catalog.render();
 }
@@ -539,7 +547,7 @@ function openEditor(i){
 // One modal at a time, built on the destination editor's shell. Escape and
 // the backdrop close it; `onClose` lets an editor ask before losing edits.
 const Modal = {
-  el:null, kind:null, onClose:null,
+  el:null, kind:null, onClose:null, after:null,
   open(kind, html, width){
     this.close(true);
     const wrap = document.createElement('div');
@@ -552,9 +560,11 @@ const Modal = {
     wrap.addEventListener('click', onClick);
     wrap.addEventListener('input', onInput);
     wrap.addEventListener('change', onInput);
+    wrap.addEventListener('keydown', onActivateKey);
     this.el = wrap;
     this.kind = kind;
     this.onClose = null;
+    this.after = null;
     document.addEventListener('keydown', onModalKey);
     return wrap;
   },
@@ -564,10 +574,13 @@ const Modal = {
   close(force){
     if (!this.el) return;
     if (!force && this.onClose && this.onClose() === false) return;
+    const after = this.after;
     this.el.remove();
     this.el = null;
     this.kind = null;
+    this.after = null;
     document.removeEventListener('keydown', onModalKey);
+    if (after) after();
   },
 };
 function modalOpen(){ return !!Modal.el; }
@@ -650,6 +663,7 @@ function fakeStep(p){
 function needsNote(needs){
   const c = S.data.connections, t = S.data.twitch;
   if (needs === 'discord' && !c.discord.length) return 'Needs a Discord channel (you can add it next)';
+  if (needs === 'twitch' && !t.available) return 'Needs Twitch, which this build can\'t log in to';
   if (needs === 'twitch' && !t.main.login) return 'Needs Twitch connected';
   if (needs === 'phone' && !c.phone.topic) return 'Needs your phone connected';
   if (needs === 'web') return 'You paste the address it sends to';
@@ -663,10 +677,15 @@ function needsNote(needs){
 // preview itself, and every option is a chip that opens its own panel.
 const Editor = {
   d:null, sel:0, chip:null, run:null, dirty:false, moreVars:false,
-  open(i){
-    this.d = clone(i);
+  // `switchOn`: freshly added and waiting for one detail; shown switched on
+  // so saving once it is complete also turns it on.
+  open(i, switchOn){
+    this.d = withHandler(clone(i));
+    if (switchOn) this.d.enabled = true;
     this.sel = Math.max(0, this.d.handlers.findIndex(h => h.enabled));
-    this.chip = null;
+    // Missing a channel: open straight on the chip that fixes it.
+    const known = id => S.data.connections.discord.some(c => c.id === id);
+    this.chip = allSteps(this.d).some(s => s.type === 'discord' && !known(s.params.connection)) ? 'where' : null;
     this.run = null;
     this.dirty = false;
     this.moreVars = false;
@@ -675,6 +694,12 @@ const Editor = {
     this.render();
   },
   handler(){ return this.d.handlers[this.sel]; },
+  resume(){
+    if (pickNewChannel(this.d)) this.dirty = true;
+    Modal.open('editor', '', 920);
+    Modal.onClose = () => !this.dirty || confirm('Close without saving your changes?');
+    this.render();
+  },
   render(){
     const d = this.d, h = this.handler();
     const step = primaryStep(h);
@@ -689,7 +714,7 @@ const Editor = {
         ${this.momentsHtml()}
         ${this.previewBoxHtml(step, h)}
         <div style="display:flex;flex-direction:column;gap:10px">
-          <div class="ig-chips">${this.chips(step, h).map(c => `<button class="ig-chip${this.chip === c.id ? ' on' : ''}" data-act="chip" data-chip="${c.id}">
+          <div class="ig-chips">${this.chips(step, h).map(c => `<button class="ig-chip${this.chip === c.id ? ' on' : ''}${c.warn ? ' warn' : ''}" data-act="chip" data-chip="${c.id}">
             <span>${esc(c.k)}</span><b>${esc(c.v)}</b>${svg('chev')}</button>`).join('')}</div>
           <div class="ig-pop" id="ig-pop">${this.popHtml(step, h)}</div>
         </div>
@@ -770,7 +795,9 @@ const Editor = {
     const discordSteps = allSteps(d).filter(s => s.type === 'discord');
     const t = h.trigger;
     if (discordSteps.length){
-      out.push({id:'where', k:'Post in', v:channelName(discordSteps[0].params.connection)});
+      const id = discordSteps[0].params.connection;
+      const set = S.data.connections.discord.some(c => c.id === id);
+      out.push({id:'where', k:'Post in', v:set ? channelName(id) : 'pick a channel', warn:!set});
       if (step && step.type === 'discord'){
         const ping = step.params.ping || '';
         out.push({id:'ping', k:'Ping', v:ping === 'here' ? '@here' : ping === 'everyone' ? '@everyone' : 'nobody'});
@@ -864,7 +891,7 @@ const Editor = {
     if (!this.run) return '<div class="muted">Running the test…</div>';
     if (this.run.error) return `<div class="lan-warn" style="margin-top:0"><span class="lw-ic">⚠</span><span>${esc(this.run.error)}</span></div>`;
     return `<div class="ic-label">Test run: ${esc(this.run.status)}</div>${runLogHtml(this.run.steps)}
-      <div class="muted">Messages went out for real, marked [TEST]. Waits were skipped and the stream was never touched.</div>`;
+      <div class="muted">Messages and web requests went out for real, messages marked [TEST] and never pinging anyone. Waits were skipped; the stream, VOD, programs and files were left alone.</div>`;
   },
   lastRunHtml(){
     const st = stat(this.d);
@@ -893,7 +920,11 @@ const Editor = {
     else if (b === 'aliases') t.aliases = el.value.split(/[\s,]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
     else if (b === 'role'){ t.roles = t.roles || {}; t.roles[el.dataset.name] = el.checked; }
     else if (b === 'reply' && step) step.params.reply = el.checked ? 'yes' : '';
-    else if (['url', 'method', 'path', 'mode'].includes(b) && step) step.params[b] = el.value;
+    else if ((b === 'url' || b === 'method') && step){
+      // A catalog webhook sends every event to one address: set them all.
+      allSteps(this.d).filter(s => s.type === 'http').forEach(s => { s.params[b] = el.value; });
+    }
+    else if ((b === 'path' || b === 'mode') && step) step.params[b] = el.value;
     else return;
     this.dirty = true;
     if (el.tagName === 'SELECT' || el.type === 'checkbox') this.refreshChips();
@@ -901,7 +932,7 @@ const Editor = {
   refreshChips(){
     const h = this.handler(), step = primaryStep(h);
     const chips = Modal.el && Modal.el.querySelector('.ig-chips');
-    if (chips) chips.innerHTML = this.chips(step, h).map(c => `<button class="ig-chip${this.chip === c.id ? ' on' : ''}" data-act="chip" data-chip="${c.id}">
+    if (chips) chips.innerHTML = this.chips(step, h).map(c => `<button class="ig-chip${this.chip === c.id ? ' on' : ''}${c.warn ? ' warn' : ''}" data-act="chip" data-chip="${c.id}">
       <span>${esc(c.k)}</span><b>${esc(c.v)}</b>${svg('chev')}</button>`).join('');
   },
   act(a, el){
@@ -942,6 +973,26 @@ function sampleLine(text, h){
   return 'Reads like: <b>' + esc(renderSample(text, sampleMap(h))) + '</b>';
 }
 
+// A draft saved with no trigger still opens: it gets a starting one.
+function withHandler(d){
+  if (!d.handlers || !d.handlers.length) d.handlers = [{enabled:true, trigger:newTrigger('event'), steps:[]}];
+  return d;
+}
+
+// Discord steps with no channel yet get the first one, e.g. right after
+// the user added their first channel from inside an editor. True if any
+// step changed.
+function pickNewChannel(d){
+  const first = S.data.connections.discord[0];
+  if (!first) return false;
+  let changed = false;
+  allSteps(d).forEach(s => {
+    const known = S.data.connections.discord.some(c => c.id === s.params.connection);
+    if (s.type === 'discord' && !known){ s.params.connection = first.id; changed = true; }
+  });
+  return changed;
+}
+
 function setSend(h, v){
   const first = (h.steps || [])[0];
   if (first && (first.type === 'wait' || first.type === 'wait_delay')) h.steps.shift();
@@ -980,7 +1031,9 @@ async function saveIntegration(d, onSaved){
   const r = await api('/integrations/save', d);
   if (!r.ok){ toast(r.error || 'Could not save', 'err', 6000); return false; }
   if (onSaved) onSaved();
-  if (r.warnings && r.warnings.length){
+  if (r.missing && r.missing.length){
+    toast(`Saved as a draft. Still to do: ${r.missing.join('; ')}`, 'info', 7000);
+  } else if (r.warnings && r.warnings.length){
     toast(`Saved. Check these names, nothing fills them: ${r.warnings.map(w => '{' + w + '}').join(', ')}`, 'info', 7000);
   } else toast('Saved', 'ok');
   Modal.close(true);
@@ -1003,7 +1056,7 @@ const TRIGGERS = [['event', 'An InstantClone event'], ['chat_command', 'A chat c
 const Builder = {
   d:null, h:0, sel:'trigger', target:[], run:null, dirty:false,
   open(i, fromEditor){
-    this.d = i ? clone(i) : {id:'', name:'My integration', enabled:true, preset:'', cooldown_ms:0,
+    this.d = i ? withHandler(clone(i)) : {id:'', name:'My integration', enabled:true, preset:'', cooldown_ms:0,
       handlers:[{enabled:true, trigger:{type:'event', event:'hold_opened', filters:{}}, steps:[]}]};
     this.h = 0;
     this.sel = 'trigger';
@@ -1015,6 +1068,12 @@ const Builder = {
     this.render();
   },
   handler(){ return this.d.handlers[this.h]; },
+  resume(){
+    if (pickNewChannel(this.d)) this.dirty = true;
+    Modal.open('builder', '', 1240);
+    Modal.onClose = () => !this.dirty || confirm('Close without saving your changes?');
+    this.renderKeepScroll();
+  },
   render(){
     const d = this.d;
     Modal.body(`${modalHead('steps', 'var(--accent)',
@@ -1134,13 +1193,14 @@ const Builder = {
         + '<div class="muted">Text compares ignoring case; "is more than" compares numbers.</div>'; break;
       case 'stop': body = '<div class="muted">Ends this run here.</div>'; break;
       case 'delay_action': body = field('action', 'Action', {select:Object.entries(DELAY_ACTIONS)})
-        + (s.params.action === 'arm' ? field('seconds', 'Delay (seconds)', {mono:true, ph:'{arg1}'}) : '')
+        + (s.params.action === 'arm' ? field('seconds', 'Delay (seconds)', {mono:true, ph:'{arg1}'})
+          + '<div class="muted">Arms this delay, or changes it live when a delay is already on air. Never disarms.</div>' : '')
         + '<div class="lan-warn" style="margin-top:0"><span class="lw-ic">⚠</span><span>This changes your stream. Tests never run it.</span></div>'; break;
       case 'marker': body = field('description', 'Label', {ph:'Crash'}) + '<div class="muted">Only works while you are live on Twitch.</div>'; break;
       case 'clip': body = '<div class="muted">Clips the last moments of your stream. Later steps can use <span class="mono">{clip.url}</span> and <span class="mono">{clip.ok}</span>.</div>'; break;
-      case 'program': body = field('path', 'Program', {mono:true, ph:'C:\\Tools\\thing.exe'}) + field('args', 'Arguments', {mono:true, ph:'--scene "Replay"'})
+      case 'program': body = field('path', 'Program (a fixed path, no variables)', {mono:true, ph:'C:\\Tools\\thing.exe'}) + field('args', 'Arguments', {mono:true, ph:'--scene "Replay"'})
         + '<div class="lan-warn" style="margin-top:0"><span class="lw-ic">⚠</span><span>Runs on your PC. Recipes you import can never add this without asking you first.</span></div>'; break;
-      case 'file': body = field('path', 'File', {mono:true, ph:'C:\\Stream\\status.txt'}) + field('text', 'Text', {area:true}) + field('mode', 'Each time', {select:[['', 'Replace the text'], ['append', 'Add a line']]}); break;
+      case 'file': body = field('path', 'File (a fixed path, no variables)', {mono:true, ph:'C:\\Stream\\status.txt'}) + field('text', 'Text', {area:true}) + field('mode', 'Each time', {select:[['', 'Replace the text'], ['append', 'Add a line']]}); break;
       case 'set_var': body = field('name', 'Name', {mono:true, ph:'winner'}) + field('value', 'Value', {ph:'{user}'}) + '<div class="muted">Later steps use it as <span class="mono">{name}</span>. Lasts for this run.</div>'; break;
       case 'counter': body = field('name', 'Name', {mono:true, ph:'crashes'}) + field('op', 'Do', {select:[['', 'Add'], ['subtract', 'Subtract'], ['set', 'Set to'], ['reset', 'Reset to 0']]})
         + field('by', 'By', {mono:true, ph:'1'}) + `<div class="muted">Kept between runs. Use it anywhere as <span class="mono">{counter.${esc(s.params.name || 'name')}}</span>.</div>`; break;
@@ -1349,10 +1409,13 @@ function stepSentence(s){
 const Conn = {
   tab:'discord', editing:null,
   open(tab){
+    // Opened from an editor or an import: go back to it, work intact.
+    const from = {editor:Editor, builder:Builder, import:Recipes}[Modal.kind] || null;
     this.tab = tab || 'discord';
     this.editing = null;
     Modal.open('connections', '', 760);
     Modal.onClose = () => { if (S.data.twitch.login) api('/twitch/cancel', {}); return true; };
+    if (from) Modal.after = () => from.resume();
     this.render();
   },
   render(){
@@ -1403,7 +1466,7 @@ const Conn = {
       const code = active && !flow.error ? `<div style="display:flex;flex-direction:column;gap:10px;margin-top:4px">
           ${flow.user_code ? `<div class="ig-code">${esc(flow.user_code)}</div>
             <div style="display:flex;gap:8px;justify-content:center">
-              <a class="ic-btn ic-btn-primary" href="${esc(flow.uri || 'https://www.twitch.tv/activate')}" target="_blank" rel="noopener" style="text-decoration:none">Open twitch.tv/activate</a>
+              <a class="ic-btn ic-btn-primary" href="${esc(/^https:\/\//.test(flow.uri || '') ? flow.uri : 'https://www.twitch.tv/activate')}" target="_blank" rel="noopener" style="text-decoration:none">Open twitch.tv/activate</a>
               <button class="ic-btn ic-btn-ghost" data-act="b-copy" data-text="${esc(flow.user_code)}">Copy code</button>
               <button class="ic-btn ic-btn-ghost" data-act="t-cancel">Cancel</button></div>
             <div class="muted" style="text-align:center">Enter the code there and approve. This page updates on its own. The code works for ${Math.max(1, Math.round(flow.expires_in_s / 60))} more minutes.</div>`
@@ -1470,6 +1533,10 @@ async function refreshData(){
 
 const Recipes = {
   preview:null, text:'',
+  resume(){
+    Modal.open('import', '', 700);
+    this.render();
+  },
   openImport(){
     this.preview = null;
     this.text = '';
@@ -1583,6 +1650,14 @@ function onInput(e){
   }
 }
 
+// Enter or Space on a clickable card acts like a click.
+function onActivateKey(e){
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"][data-act]')){
+    e.preventDefault();
+    e.target.click();
+  }
+}
+
 // Remember the last text field the builder used, for variable inserts.
 document.addEventListener('focusin', e => {
   if (Modal.kind === 'builder' && e.target.matches('.ig-inspector input:not([readonly]), .ig-inspector textarea')) Builder.lastField = e.target;
@@ -1594,6 +1669,7 @@ function wireRoot(){
   root.dataset.wired = '1';
   root.addEventListener('click', onClick);
   root.addEventListener('input', onInput);
+  root.addEventListener('keydown', onActivateKey);
   root.addEventListener('toggle', e => { if (e.target.id === 'ig-activity-box') S.activityOpen = e.target.open; }, true);
 }
 
