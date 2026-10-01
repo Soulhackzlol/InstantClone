@@ -29,6 +29,27 @@ use tokio::sync::{mpsc, watch, Notify};
 const BUILT_IN_CLIENT_ID: Option<&str> = option_env!("INSTANTCLONE_TWITCH_CLIENT_ID");
 const CLIENT_ID_ENV: &str = "INSTANTCLONE_TWITCH_CLIENT_ID";
 
+/// The Twitch app used when the user hasn't set their own: the environment
+/// variable, else the one built into releases. Empty when there is none.
+pub fn default_client_id() -> String {
+    std::env::var(CLIENT_ID_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| BUILT_IN_CLIENT_ID.map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// The user's own app (System settings) wins over the default.
+fn effective_client_id(custom: &str) -> String {
+    let custom = custom.trim();
+    if custom.is_empty() {
+        default_client_id()
+    } else {
+        custom.to_string()
+    }
+}
+
 /// Refresh an access token when it has less than this left.
 const REFRESH_MARGIN: Duration = Duration::from_secs(20 * 60);
 const UPKEEP_EVERY: Duration = Duration::from_secs(5 * 60);
@@ -85,7 +106,8 @@ impl Conn {
 }
 
 pub struct Twitch {
-    client_id: String,
+    /// Changes when the user sets or clears their own app in System.
+    client_id: Mutex<String>,
     store: Arc<Store>,
     login: Mutex<Option<LoginFlow>>,
     login_attempts: std::sync::atomic::AtomicU64,
@@ -104,14 +126,10 @@ impl Twitch {
         store: Arc<Store>,
         incoming: mpsc::Sender<ChatMessage>,
         log: Box<dyn Fn(String) + Send + Sync>,
+        custom_client_id: &str,
     ) -> Twitch {
-        let client_id = std::env::var(CLIENT_ID_ENV)
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .or_else(|| BUILT_IN_CLIENT_ID.map(str::to_string))
-            .unwrap_or_default();
         Twitch {
-            client_id,
+            client_id: Mutex::new(effective_client_id(custom_client_id)),
             store,
             login: Mutex::new(None),
             login_attempts: Default::default(),
@@ -125,7 +143,36 @@ impl Twitch {
     }
 
     pub fn available(&self) -> bool {
-        !self.client_id.is_empty()
+        !self.client_id.lock().is_empty()
+    }
+
+    fn client_id(&self) -> String {
+        self.client_id.lock().clone()
+    }
+
+    /// Switch to the user's own Twitch app, or back to the default one.
+    /// Logins belong to the app that made them, so a real change logs both
+    /// accounts out (revoking them with the old app) and says so.
+    pub fn use_client_id(&self, custom: &str) {
+        let next = effective_client_id(custom);
+        if next == self.client_id() {
+            return;
+        }
+        self.cancel_login();
+        let had_accounts =
+            self.account(Which::Main).is_some() || self.account(Which::Bot).is_some();
+        self.logout(Which::Main);
+        self.logout(Which::Bot);
+        *self.client_id.lock() = next;
+        let which_app = if custom.trim().is_empty() {
+            "InstantClone's Twitch app"
+        } else {
+            "your own Twitch app"
+        };
+        (self.log)(format!("[twitch] now using {which_app}"));
+        *self.notice.lock() = had_accounts.then(|| {
+            format!("InstantClone now uses {which_app}. Connect your Twitch accounts again.")
+        });
     }
 
     fn conn(&self, which: Which) -> &Conn {
@@ -209,7 +256,10 @@ impl Twitch {
             user_code: String::new(),
             uri: String::new(),
             expires_at: Instant::now() + Duration::from_secs(600),
-            error: (!self.available()).then(|| "This build has no Twitch app id.".to_string()),
+            error: (!self.available()).then(|| {
+                "This copy of InstantClone has no Twitch app. Add your own in System > Twitch & OBS."
+                    .to_string()
+            }),
             attempt,
         });
         if !self.available() {
@@ -239,7 +289,7 @@ impl Twitch {
     }
 
     async fn run_login(self: Arc<Self>, which: Which, attempt: u64) {
-        let client_id = self.client_id.clone();
+        let client_id = self.client_id();
         let started = tokio::task::spawn_blocking({
             let client_id = client_id.clone();
             move || auth::start_device(&client_id, which.scopes())
@@ -318,7 +368,7 @@ impl Twitch {
     pub fn logout(&self, which: Which) {
         self.conn(which).stop();
         if let Some(account) = self.account(which) {
-            let client_id = self.client_id.clone();
+            let client_id = self.client_id();
             std::thread::spawn(move || {
                 let form = [
                     ("client_id", client_id.as_str()),
@@ -369,10 +419,18 @@ impl Twitch {
         } else if !expiring && !auth_failed {
             return;
         }
-        let (id, refresh) = (self.client_id.clone(), account.refresh.clone());
-        let result = tokio::task::spawn_blocking(move || auth::refresh(&id, &refresh))
-            .await
-            .unwrap_or_else(|_| Err(auth::TokenError::Temporary("refresh crashed".into())));
+        let (id, refresh) = (self.client_id(), account.refresh.clone());
+        let result = tokio::task::spawn_blocking({
+            let id = id.clone();
+            move || auth::refresh(&id, &refresh)
+        })
+        .await
+        .unwrap_or_else(|_| Err(auth::TokenError::Temporary("refresh crashed".into())));
+        // The user switched apps meanwhile: that logged this account out,
+        // and saving the old app's tokens would bring it back.
+        if self.client_id() != id {
+            return;
+        }
         match result {
             Ok(tokens) => {
                 self.set_account(
@@ -448,8 +506,9 @@ impl Twitch {
         call: impl FnOnce(&helix::Auth) -> Result<T, String>,
     ) -> Result<T, String> {
         let account = self.account(Which::Main).ok_or("connect Twitch first")?;
+        let client_id = self.client_id();
         let auth = helix::Auth {
-            client_id: &self.client_id,
+            client_id: &client_id,
             token: &account.access,
             user_id: &account.user_id,
         };
@@ -507,8 +566,17 @@ impl Twitch {
             ]),
             None => Value::Null,
         };
+        let id = self.client_id();
+        let app = if id.is_empty() {
+            "none"
+        } else if id == default_client_id() {
+            "built_in"
+        } else {
+            "custom"
+        };
         json::obj([
             ("available", Value::Bool(self.available())),
+            ("app", json::str(app)),
             ("main", conn_json(Which::Main)),
             ("bot", conn_json(Which::Bot)),
             ("login", flow),

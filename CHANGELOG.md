@@ -36,7 +36,8 @@ know what each one does before you switch it on.
   twitch.tv with a code; no password goes through the app. The login
   refreshes itself, so as long as you open InstantClone at least once a
   month you never log in again. An optional bot account can post instead
-  of you.
+  of you. Prefer your own Twitch app? Paste its Client ID in **System >
+  Twitch & OBS > Twitch login app**; the steps to make one are right there.
 - **Share integrations as recipes**: a line of text you can paste in
   Discord. Recipes never include your connections, keys or secret links,
   arrive switched off, and anything that runs a program or writes a file

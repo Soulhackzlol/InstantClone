@@ -1877,11 +1877,15 @@ const Conn = {
   },
   twitchHtml(){
     const t = S.data.twitch;
-    if (!t.available) return warnHtml('This build has no Twitch app id, so it can\'t log in to Twitch. Official releases include one.');
+    if (!t.available){
+      return warnHtml('This copy of InstantClone has no Twitch app, so it can\'t log in to Twitch yet. '
+        + 'You can add your own in a couple of minutes: <a href="#" data-act="twitch-app">System › Twitch login app</a>.');
+    }
     return (t.notice ? warnHtml(esc(t.notice)) : '')
       + this.accountHtml('main', t.main, 'Your Twitch account', 'Chat, VOD markers and clips. Log in once: InstantClone keeps it fresh.')
       + this.accountHtml('bot', t.bot, 'Bot account (optional)', 'A second account that posts in chat instead of you.')
-      + '<div class="muted">No password ever goes through InstantClone: you approve it on twitch.tv, and can revoke it there any time.</div>';
+      + '<div class="muted">No password ever goes through InstantClone: you approve it on twitch.tv, and can revoke it there any time.'
+      + (t.app === 'custom' ? ' Logging in through your own Twitch app (<a href="#" data-act="twitch-app">change</a>).' : '') + '</div>';
   },
   accountHtml(which, a, title, blurb){
     const flow = S.data.twitch.login;
@@ -2001,6 +2005,22 @@ const Conn = {
     return false;
   },
 };
+
+// System > Twitch & OBS, with the Twitch login app section open.
+function openTwitchAppSettings(){
+  Modal.close(true);
+  if (typeof showTab === 'function') showTab('system');
+  if (typeof showSubTab === 'function') showSubTab('system', 'twitch');
+  const box = document.getElementById('sys-twitch-app');
+  if (!box) return;
+  box.open = true;
+  // After the sub-tab has laid out and started its entrance.
+  setTimeout(() => {
+    box.scrollIntoView({block:'start', behavior:reduced() ? 'auto' : 'smooth'});
+    const field = document.getElementById('s-twitch-client');
+    if (field) setTimeout(() => field.focus({preventScroll:true}), 300);
+  }, 80);
+}
 
 function focusField(bind){
   const f = q(`[data-bind="${bind}"]`);
@@ -2130,6 +2150,7 @@ async function onClick(e){
     case 'filter': S.filter = el.dataset.f; render(); break;
     case 'view': S.view = el.dataset.v; store.set('ig-view', S.view); render(); break;
     case 'copy': copyText(el); break;
+    case 'twitch-app': openTwitchAppSettings(); break;
     case 'pack':
       busy(el, async () => {
         if (Modal.kind === 'catalog') Modal.close(true);

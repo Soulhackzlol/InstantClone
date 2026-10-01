@@ -2148,6 +2148,16 @@ details.sys-collapse>summary .ic-label{margin:0}
   .hk-row{flex-wrap:wrap;gap:8px}
   .hk-capture{min-width:0;flex:1}
 }
+/* System > Twitch login app. */
+.tw-app-status{margin-top:10px;padding:8px 11px;border-radius:9px;font-size:12.5px;color:var(--fg-2);
+  background:var(--surface-3);border:1px solid var(--line)}
+.tw-app-status:empty{display:none}
+.tw-app-status.warn{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 35%,var(--line));
+  background:color-mix(in oklch,var(--warn) 8%,var(--surface-3))}
+.tw-app-steps{margin:12px 0 0;padding-left:20px;font-size:12.5px;line-height:1.75;color:var(--fg-2)}
+.tw-app-steps a,.tw-app-warn a{color:var(--accent)}
+.tw-app-copy{padding:2px 9px;font-size:11.5px;border-radius:7px;vertical-align:1px}
+.tw-app-warn{margin-top:10px}
 /* - Integrations -------------------
    Built from the Destinations pieces: a module is a .dcard whose screen
    shows exactly what it sends, and every editor is the destination modal
@@ -2199,6 +2209,7 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-notice-text{flex:1;min-width:0;text-wrap:pretty}
 .ig-notice-text b{color:var(--fg)}
 .ig-inline-warn{margin-top:0}
+.ig-modal .lan-warn a{color:var(--accent);font-weight:600}
 .ig-conns{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .ig-conns .ic-label{margin-right:4px}
 .ig-conns .ic-pill{cursor:pointer;font:inherit;font-size:12px;
@@ -3721,6 +3732,28 @@ details.sys-collapse>summary .ic-label{margin:0}
       <div class="tab-sub" id="sys-vodeb-hint" style="margin-top:8px">The <b>EB + VOD</b> button is the <b>legacy VOD path</b> (OBS before 32.2): it turns on VOD audio mode on your Twitch destination and writes OBS's VOD-track unlock flag - close OBS before pressing it or the flag write is blocked.</div>
       <ul id="sys-vodeb-checklist" hidden style="list-style:none;margin:10px 0 0;padding:0;font-size:12.5px"></ul>
       <div class="tab-sub" id="sys-eb-msg" style="margin-top:8px"></div>
+    </details>
+
+    <!-- Which Twitch app Integrations log in with. Releases bring their own;
+         a copy without one (a fork, a dev build) or a streamer who prefers
+         their own app pastes a Client ID here. Opens by itself when there
+         is no app at all. Saved with the System save bar. -->
+    <details class="sys-section sys-collapse" id="sys-twitch-app" data-find="twitch app client id login chat integrations developer console own">
+      <summary><span class="ic-label">Twitch login app</span><span class="muted" id="sys-twitch-app-note" style="font-weight:400;font-size:12px;margin-left:6px"></span></summary>
+      <div class="tab-sub" style="margin-top:10px">Integrations log in to Twitch through an app registered at Twitch. InstantClone brings its own, so most people never touch this. Use your own if you prefer to, or if Twitch shows as unavailable.</div>
+      <div id="sys-twitch-app-status" class="tw-app-status"></div>
+      <div style="margin-top:12px">
+        <span class="ic-label">Your app's Client ID</span>
+        <input id="s-twitch-client" class="ic-input mono" style="margin-top:6px" maxlength="64" spellcheck="false" autocomplete="off" placeholder="Leave empty to use InstantClone's app">
+      </div>
+      <ol class="tw-app-steps">
+        <li>Open <a href="https://dev.twitch.tv/console/apps/create" target="_blank" rel="noopener">dev.twitch.tv/console</a> and log in. Twitch asks you to turn on two-factor authentication first.</li>
+        <li><b>Name</b>: anything, for example <i>My InstantClone</i>. It can't contain the word "Twitch".</li>
+        <li><b>OAuth Redirect URL</b>: <code class="mono">http://localhost</code> <button type="button" class="ic-btn ic-btn-ghost tw-app-copy" onclick="copyText(this,'http://localhost')">Copy</button> It isn't used, but Twitch requires one.</li>
+        <li><b>Category</b>: Broadcaster Suite. <b>Client Type</b>: <b>Public</b>. This one matters: a Confidential app can't stay logged in.</li>
+        <li>Click <b>Create</b>, then <b>Manage</b>, copy the <b>Client ID</b> and paste it above. You don't need a secret.</li>
+      </ol>
+      <div class="tab-sub tw-app-warn">Changing the app logs your Twitch accounts out. After saving, connect them again in <a href="#" onclick="showTab('integrations');return false">Integrations</a>.</div>
     </details>
   </div>
 
@@ -6005,6 +6038,8 @@ async function loadConfig({resetSystem = false} = {}){
       renderLanWarning();
       $('s-ovdir').value = c.overlays_dir || '';
       $('s-trace').checked = c.tracing_enabled !== false;
+      $('s-twitch-client').value = c.twitch_client_id || '';
+      renderTwitchApp(c);
       // Reflects the actual Run-key entry, not a stored preference - so if
       // the user removed it via Task Manager's Startup tab, this shows off.
       $('s-startup').checked = !!c.start_with_windows;
@@ -9591,6 +9626,7 @@ function settingsBody(){
     ingest_bind_all:$('s-ibind').checked?'on':'off',
     web_bind_all:$('s-wbind').checked?'on':'off',
     tracing_enabled:$('s-trace').checked?'true':'false',
+    twitch_client_id:$('s-twitch-client').value.trim(),
     start_with_windows:$('s-startup').checked?'on':'off',
     open_dashboard_on_launch:$('s-open-dash').checked?'true':'false',
     update_check_enabled:$('s-update-check').checked?'true':'false',
@@ -9600,6 +9636,19 @@ function settingsBody(){
   });
   Object.entries(cpFields()).forEach(([k, v]) => body.append(k, v));
   return body;
+}
+// Which Twitch app Integrations use, from what was last saved. With no app
+// at all the section opens by itself: it is the one way to get Twitch.
+function renderTwitchApp(c){
+  const own = !!c.twitch_client_id, builtIn = !!c.twitch_app_built_in;
+  const status = $('sys-twitch-app-status'), note = $('sys-twitch-app-note');
+  if (!status) return;
+  status.textContent = own ? 'Using your own Twitch app.'
+    : builtIn ? 'Using InstantClone\'s Twitch app.'
+    : 'No Twitch app in this copy: Twitch login is off until you add one below.';
+  status.classList.toggle('warn', !own && !builtIn);
+  note.textContent = own ? 'your own app' : builtIn ? 'built in' : 'needs an app';
+  if (!own && !builtIn) $('sys-twitch-app').open = true;
 }
 function settingsMarkClean(){
   settingsSnapshot = settingsBody().toString();

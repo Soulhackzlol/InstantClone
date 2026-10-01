@@ -246,6 +246,7 @@ pub fn start(
         store.clone(),
         chat_tx,
         Box::new(move |line| log_ctrl.log(line)),
+        &settings.borrow().twitch_client_id,
     ));
     let handle = Arc::new(Handle {
         tx,
@@ -370,6 +371,7 @@ impl Engine {
         self.host
             .default_delay_ms
             .store(s.auto_arm_delay_ms.max(1000), Ordering::Relaxed);
+        self.host.twitch.use_client_id(&s.twitch_client_id);
         // Forget per-trigger state for integrations that are gone.
         let alive: Vec<&str> = self.integrations.iter().map(|i| i.id.as_str()).collect();
         let keep = |key: &String| alive.iter().any(|id| key.starts_with(&format!("{id}#")));

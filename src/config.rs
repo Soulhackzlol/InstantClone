@@ -156,6 +156,10 @@ pub struct Settings {
     /// Discord connection plus a "Stream alerts" integration. False only in
     /// configs written before integrations existed.
     pub integrations_migrated: bool,
+    /// The user's own Twitch app (Client ID from dev.twitch.tv), used to log
+    /// in to Twitch instead of the one built into releases. Empty uses the
+    /// built-in app. Not a secret: public apps have no client secret.
+    pub twitch_client_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -922,6 +926,7 @@ impl Settings {
             // A fresh install has no old webhook to migrate; `load` sets
             // this after its one-time pass either way.
             integrations_migrated: false,
+            twitch_client_id: String::new(),
         }
     }
 
@@ -1230,6 +1235,9 @@ impl Settings {
             }
         }
         // MIDI bindings, same only-when-bound rule.
+        if !self.twitch_client_id.is_empty() {
+            writeln!(f, "twitch_client_id={}", one_line(&self.twitch_client_id))?;
+        }
         if !self.midi_device.is_empty() {
             writeln!(f, "midi_device={}", one_line(&self.midi_device))?;
         }
@@ -1382,6 +1390,7 @@ impl Settings {
                 self.hotkeys.set(&k["hotkey.".len()..], value);
             }
             "midi_device" => self.midi_device = sanitize_device_name(value),
+            "twitch_client_id" => self.twitch_client_id = value.trim().to_string(),
             // midi.<action>=<signature>. `set` validates and drops anything
             // malformed, so a hand-edited config can't load a bad signature.
             k if k.starts_with("midi.") => {
@@ -1673,7 +1682,7 @@ impl Settings {
             ""
         };
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"crash_protection":{cp},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"crash_protection":{cp},"twitch_client_id":{tci},"twitch_app_built_in":{tbi},"destinations":{dests}}}"#,
             c = self.configured,
             sww = start_with_windows,
             ik = json_str(ik_shown),
@@ -1702,6 +1711,8 @@ impl Settings {
             hotkeys = hotkeys,
             midi = midi,
             midid = json_str(&self.midi_device),
+            tci = json_str(&self.twitch_client_id),
+            tbi = !crate::integrations::twitch::default_client_id().is_empty(),
             cp = self.crash_protection.to_json(),
             dests = dests,
         )
@@ -1734,6 +1745,12 @@ impl Settings {
         {
             errs.push(
                 "ingest key may only contain letters, numbers, '-' and '_' (no spaces or '?')"
+                    .into(),
+            );
+        }
+        if !is_twitch_client_id(&self.twitch_client_id) {
+            errs.push(
+                "That Twitch Client ID doesn't look right: copy the Client ID (letters and numbers) from your app at dev.twitch.tv/console"
                     .into(),
             );
         }
@@ -2012,6 +2029,14 @@ fn os_name() -> &'static str {
     {
         "linux"
     }
+}
+
+/// Empty (use the built-in app) or a Twitch Client ID: Twitch issues 30
+/// lowercase letters and digits; a little slack either way in case that
+/// ever changes, but never spaces, quotes or anything else.
+fn is_twitch_client_id(id: &str) -> bool {
+    id.is_empty()
+        || ((20..=64).contains(&id.len()) && id.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
 /// Strip control characters (notably CR/LF) from a value bound for the
@@ -3851,6 +3876,30 @@ Name@x"
                 topic: "texaz-alerts".into(),
             },
             integrations_migrated: true,
+            twitch_client_id: "abcdefghij0123456789klmnopqrst".into(),
+        }
+    }
+
+    /// A pasted Client ID is checked before it is saved, so a stray space
+    /// or the client secret by mistake never reaches Twitch.
+    #[test]
+    fn a_twitch_client_id_must_look_like_one() {
+        let twitch_errors = |id: &str| {
+            let mut s = Settings::defaults();
+            s.twitch_client_id = id.into();
+            s.validate()
+                .iter()
+                .filter(|e| e.contains("Twitch Client ID"))
+                .count()
+        };
+        assert_eq!(twitch_errors(""), 0);
+        assert_eq!(twitch_errors("abcdefghij0123456789klmnopqrst"), 0);
+        for bad in [
+            "short",
+            "has space in it 0123456789abc",
+            "abc\"defghij0123456789klmnopq",
+        ] {
+            assert_eq!(twitch_errors(bad), 1, "{bad}");
         }
     }
 

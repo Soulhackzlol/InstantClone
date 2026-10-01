@@ -2700,6 +2700,7 @@ const SETTABLE_KEYS: &[&str] = &[
     "update_check_enabled",
     "open_dashboard_on_launch",
     "midi_device",
+    "twitch_client_id",
 ];
 
 /// Whether `POST /config` may write key `k`. See `SETTABLE_KEYS`.
@@ -2882,6 +2883,8 @@ async fn post_config_reset(
         next.discord_channels = prev.discord_channels;
         next.phone = prev.phone;
         next.integrations_migrated = prev.integrations_migrated;
+        // Resetting it would silently log out of Twitch.
+        next.twitch_client_id = prev.twitch_client_id;
     } else if scope != "all" {
         return (
             "400 Bad Request",
@@ -4292,6 +4295,7 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         // matches no device, and the user sees a pick that silently does
         // nothing until the next restart tidies it up.
         "midi_device" => s.midi_device = config::sanitize_device_name(value),
+        "twitch_client_id" => s.twitch_client_id = value.trim().to_string(),
         _ => {}
     }
 }
@@ -5627,6 +5631,13 @@ mod tests {
                 reads_as: "LoopDevice",
                 reset: "",
                 read: |s| s.midi_device.clone(),
+            },
+            SettableRow {
+                key: "twitch_client_id",
+                set: " abcdefghij0123456789klmnopqrst ",
+                reads_as: "abcdefghij0123456789klmnopqrst",
+                reset: "",
+                read: |s| s.twitch_client_id.clone(),
             },
         ];
 
