@@ -38,6 +38,10 @@ const PER_INTEGRATION: usize = 4;
 const GLOBAL_RUNS: usize = 32;
 const ACTIVITY_KEEP: usize = 150;
 const TICK: Duration = Duration::from_millis(250);
+/// How often per-viewer and per-trigger bookkeeping is trimmed. A busy
+/// chat adds an entry per viewer per command; without trimming, a long
+/// stream would only ever grow them.
+const PRUNE_EVERY: Duration = Duration::from_secs(60);
 /// A destination stuck in a connect-then-drop loop (a key the platform
 /// accepts, then refuses) would otherwise alert on every round. Each
 /// destination gets at most one "live" and one "dropped" per window.
@@ -216,6 +220,13 @@ impl Handle {
         )
     }
 
+    /// Forget the stats of integrations that no longer exist.
+    fn retain_stats(&self, alive: &[&str]) {
+        self.stats
+            .lock()
+            .retain(|id, _| alive.contains(&id.as_str()));
+    }
+
     pub fn dropped_events(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
@@ -263,6 +274,7 @@ pub fn start(
                     ctrl: ctrl.clone(),
                     twitch: twitch.clone(),
                     default_delay_ms: Default::default(),
+                    programs: Default::default(),
                 });
                 let mut engine = Engine::new(engine_handle, host, store, ctrl);
                 engine.run(rx, chat_rx, settings).await;
@@ -320,6 +332,7 @@ impl Engine {
     ) {
         self.apply_settings(&settings.borrow_and_update());
         let mut tick = tokio::time::interval(TICK);
+        let mut last_prune = Instant::now();
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
@@ -338,6 +351,10 @@ impl Engine {
                 _ = tick.tick() => {
                     self.watch_delay();
                     self.run_timers();
+                    if last_prune.elapsed() >= PRUNE_EVERY {
+                        last_prune = Instant::now();
+                        self.prune();
+                    }
                 }
             }
         }
@@ -360,6 +377,27 @@ impl Engine {
         self.viewer_last.retain(|k, _| keep(k));
         self.timers.retain(|k, _| keep(k));
         self.limits.retain(|id, _| alive.contains(&id.as_str()));
+        self.handle.retain_stats(&alive);
+    }
+
+    /// Drop bookkeeping that can no longer affect anything: viewer and
+    /// trigger cooldowns that have run out, and old flap records.
+    fn prune(&mut self) {
+        let (mut longest_viewer, mut longest_run) = (Duration::ZERO, Duration::ZERO);
+        for i in &self.integrations {
+            longest_run = longest_run.max(Duration::from_millis(i.cooldown_ms));
+            for h in &i.handlers {
+                if let Trigger::ChatCommand {
+                    user_cooldown_ms, ..
+                } = h.trigger
+                {
+                    longest_viewer = longest_viewer.max(Duration::from_millis(user_cooldown_ms));
+                }
+            }
+        }
+        self.viewer_last.retain(|_, t| t.elapsed() < longest_viewer);
+        self.last_run.retain(|_, t| t.elapsed() < longest_run);
+        self.flap.prune(Instant::now());
     }
 
     fn input(&mut self, input: Input) {
@@ -664,6 +702,11 @@ struct FlapGuard {
 }
 
 impl FlapGuard {
+    fn prune(&mut self, now: Instant) {
+        self.last
+            .retain(|_, t| now.duration_since(*t) < FLAP_WINDOW);
+    }
+
     fn suppress(&mut self, event: &Event, now: Instant) -> bool {
         let key = match event.kind {
             EventKind::DestinationLive | EventKind::DestinationDropped => format!(

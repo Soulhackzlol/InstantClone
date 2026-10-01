@@ -2151,32 +2151,188 @@ details.sys-collapse>summary .ic-label{margin:0}
 /* - Integrations -------------------
    Built from the Destinations pieces: a module is a .dcard whose screen
    shows exactly what it sends, and every editor is the destination modal
-   (.ic-modal + .dest-form). Only the new shapes live here. */
+   (.ic-modal + .dest-form). Only the new shapes live here. Items entering,
+   leaving and moving are animated from integrations.js (see morph). */
+.ig-pane{display:flex;flex-direction:column;gap:14px}
+[data-flip]{position:relative}
+.ig-sub{text-wrap:pretty}
+.ig-num,.ig-count{font-variant-numeric:tabular-nums}
+.ig-count{color:var(--fg-4)}
+.ig-head-actions{display:flex;gap:8px;flex-wrap:wrap}
+.ic-btn.ig-small{padding:6px 11px;font-size:12px;border-radius:8px}
+.ig-self-start{align-self:flex-start}
+.ig-dim{opacity:.5}
+.ig-btn-ic{width:13px;height:13px;flex:none}
+/* Waiting on the app: same size, a spinner instead of the label. */
+.ic-btn.is-busy,.ic-btn-tiny.is-busy{position:relative;color:transparent !important;pointer-events:none}
+.ic-btn.is-busy>*,.ic-btn-tiny.is-busy>*{visibility:hidden}
+.ic-btn.is-busy::after,.ic-btn-tiny.is-busy::after{content:'';position:absolute;inset:0;margin:auto;width:14px;height:14px;
+  border-radius:50%;border:2px solid color-mix(in oklch,var(--fg) 25%,transparent);border-top-color:var(--fg);
+  animation:igSpin .7s linear infinite}
+.ic-btn-primary.is-busy::after{border-color:color-mix(in oklch,var(--accent-ink) 30%,transparent);border-top-color:var(--accent-ink)}
+.ig-spin{width:12px;height:12px;flex:none;border-radius:50%;border:2px solid color-mix(in oklch,var(--accent) 25%,transparent);
+  border-top-color:var(--accent);animation:igSpin .7s linear infinite}
+@keyframes igSpin{to{transform:rotate(360deg)}}
+.ig-running{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-3)}
+/* A destructive button waiting for its second click. */
+.ic-btn.ig-armed,.ic-btn-tiny.ig-armed{color:var(--danger) !important;
+  border-color:color-mix(in oklch,var(--danger) 45%,transparent);
+  background:color-mix(in oklch,var(--danger) 12%,var(--surface-3));animation:igArm .3s var(--ease-spring)}
+.ic-btn-tiny.ig-armed{width:auto;padding:0 9px;font-size:11.5px;font-weight:600;white-space:nowrap}
+@keyframes igArm{from{transform:scale(.96)}to{transform:none}}
+@keyframes igFadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes igPop{from{opacity:0;transform:scale(.25);filter:blur(4px)}to{opacity:1;transform:none;filter:blur(0)}}
+/* Loading. */
+.ig-skel{position:relative;overflow:hidden;height:150px;padding:8px;border-radius:14px;background:var(--bg-2);
+  border:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.ig-skel i{display:block;height:92px;border-radius:6px;background:var(--bg-1)}
+.ig-skel b{display:block;height:12px;width:55%;margin-left:4px;border-radius:4px;background:var(--surface-3)}
+.ig-skel u{display:block;height:9px;width:35%;margin:-4px 0 0 4px;border-radius:4px;background:var(--surface-3)}
+.ig-skel::after{content:'';position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent,color-mix(in oklch,var(--fg) 6%,transparent),transparent);
+  animation:igShimmer 1.4s ease-in-out infinite}
+@keyframes igShimmer{to{transform:translateX(100%)}}
+/* Notices and connections. */
+.ig-notices{display:flex;flex-direction:column;gap:8px}
+.ig-notices:empty{display:none}
+.ig-notice{margin-top:0;align-items:center}
+.ig-notice-text{flex:1;min-width:0;text-wrap:pretty}
+.ig-notice-text b{color:var(--fg)}
+.ig-inline-warn{margin-top:0}
+.ig-conns{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ig-conns .ic-label{margin-right:4px}
+.ig-conns .ic-pill{cursor:pointer;font:inherit;font-size:12px;
+  transition:border-color .2s var(--ease-out),background-color .2s var(--ease-out),color .2s var(--ease-out),transform .15s var(--ease-out)}
+.ig-conns .ic-pill:hover{border-color:var(--line-2);color:var(--fg)}
+.ig-conns .ic-pill:active{transform:scale(.96)}
+/* Segmented controls, with the dashboard's sliding pill. */
+.ig-seg{display:inline-flex;flex:0 0 auto;max-width:100%}
+.ig-seg .sub-tab{flex:0 0 auto;padding:6px 13px;transition:color .2s var(--ease-out),transform .15s var(--ease-out)}
+.ig-seg .sub-tab:active{transform:scale(.96)}
+.ig-seg .sub-tab-ind{opacity:0;transition:left .28s var(--ease-spring),width .28s var(--ease-spring),opacity .2s var(--ease-out)}
+.ig-views .sub-tab{padding:6px 9px}
+.ig-views svg{width:14px;height:14px;display:block}
 .ig-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .ig-toolbar .ig-search{margin-left:auto;width:220px;padding:7px 11px}
-.ig-conns{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.ig-conns .ic-pill{cursor:pointer;font:inherit;font-size:12px}
+/* Grid. */
 .ig-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
-.ig-card{padding:10px;gap:10px;cursor:default}
-.ig-card .dcard-screen{position:relative;display:flex;align-items:center;height:92px;padding:10px;cursor:pointer;
+.ig-card{padding:8px;gap:8px;cursor:default}
+.ig-card .dcard-screen{display:flex;align-items:center;height:96px;padding:10px;border-radius:6px;cursor:pointer;
   transition:border-color .15s var(--ease-out)}
 .ig-card .dcard-screen:hover{border-color:color-mix(in oklch,var(--dc,var(--accent)) 45%,var(--line))}
-.ig-card-foot{display:flex;align-items:center;gap:9px}
-.ig-card-foot .dcard-icon{width:28px;height:28px;border-radius:8px}
-.ig-card-foot .dcard-icon svg{width:14px;height:14px}
-.ig-card .ig-flag{position:absolute;right:6px;top:6px;min-width:0}
-.ig-add-tile{min-height:160px}
+.ig-card .dcard-screen:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ig-card-foot{display:flex;align-items:center;gap:9px;padding:2px 4px 4px}
+.ig-card-foot .dcard-icon,.ig-row .dcard-icon{width:28px;height:28px;border-radius:8px}
+.ig-card-foot .dcard-icon svg,.ig-row .dcard-icon svg{width:14px;height:14px}
+.ig-card .dcard-name{font-size:13px}
+.ig-card .dcard-host{font-size:10.5px;font-family:inherit;font-variant-numeric:tabular-nums}
+.ig-flag{min-width:0;max-width:none}
+.ig-card .ig-flag{position:absolute;right:6px;top:6px;backdrop-filter:blur(6px)}
+.ig-flag.warn{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 35%,var(--line));
+  background:color-mix(in oklch,var(--warn) 10%,var(--surface-3))}
+.ig-flag.warn .d-dot{background:var(--warn)}
+.ig-flag.bad{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 40%,var(--line));
+  background:color-mix(in oklch,var(--danger) 10%,var(--surface-3))}
+.ig-flag.bad .d-dot{background:var(--danger);box-shadow:0 0 6px var(--danger)}
+.ig-add-tile{min-height:150px}
+/* Switches: a bigger hit area and a knob that stretches on press. */
+.ig-pane .dcard-switch::after{content:'';position:absolute;inset:-11px -4px}
+.ig-pane .dcard-switch>span{transition:transform .22s var(--ease-spring),width .15s var(--ease-out),background .2s var(--ease-out)}
+.ig-pane .dcard-switch:active>span{width:18px}
+.ig-pane .dcard-switch.on:active>span{transform:translateX(12px)}
+.ig-pane .dcard-switch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* List. */
 .ig-list{display:flex;flex-direction:column;gap:8px}
 .ig-row{padding:0;gap:0}
-.ig-row-main{display:flex;align-items:center;gap:12px;padding:9px 12px 9px 16px}
-.ig-row-main .dcard-icon{width:30px;height:30px}
-.ig-row-name{flex:0 0 240px;min-width:0;cursor:pointer}
-.ig-row-sum{flex:1;min-width:0;font-size:12px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ig-row-last{flex:0 0 96px;text-align:right;font-size:11.5px;color:var(--fg-4)}
-.ig-row-peek{display:flex;gap:12px;padding:0 12px 12px 58px}
-.ig-row-peek .dcard-screen{flex:1;padding:12px}
+.ig-row-main{display:flex;align-items:center;gap:12px;min-height:52px;padding:8px 10px 8px 14px}
+.ig-row-name{flex:0 0 220px;min-width:0;display:flex;flex-direction:column;gap:1px;padding:4px 6px;margin:-4px -6px;
+  border:0;border-radius:8px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;
+  transition:background-color .15s var(--ease-out)}
+.ig-row-name:hover{background:var(--surface-3)}
+.ig-row-sum{flex:1;min-width:0;font-size:12.5px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-row-last{flex:0 0 auto;min-width:84px;text-align:right;font-size:11.5px;color:var(--fg-4);font-variant-numeric:tabular-nums}
+.ig-row .ic-btn-tiny svg{width:14px;height:14px}
+.ig-row-peek{display:flex;gap:12px;padding:0 12px 12px 56px;animation:igFadeUp .26s var(--ease-out)}
+.ig-row-peek .dcard-screen{flex:1;padding:12px;border-radius:8px}
+.ig-row-peek-actions{width:150px;display:flex;flex-direction:column;gap:6px}
+.ig-row-peek-actions .ic-btn{padding:8px 12px}
+.ig-add-row{min-height:52px;flex-direction:row}
+.ig-add-row .dest-add-icon{width:28px;height:28px}
+.ig-add-row .dest-add-icon svg{width:15px;height:15px}
+.ig-none{padding:18px 4px;color:var(--fg-3);grid-column:1/-1}
+@media (max-width:760px){
+  .ig-row-sum{display:none}
+  .ig-row-name{flex:1}
+  .ig-row-peek{padding-left:12px;flex-direction:column}
+  .ig-row-peek-actions{width:auto;flex-direction:row}
+}
+/* First run. */
+.ig-packs{width:min(900px,100%)}
+.ig-pack{gap:8px;padding:18px}
+.ig-pack .dest-starter-name{font-size:15px}
+.ig-pack .dest-starter-note{line-height:1.5;text-wrap:pretty}
+.ig-pack.ig-pack-rec{border-color:color-mix(in oklch,var(--accent) 45%,var(--line))}
+.ig-rec{min-width:0;max-width:none;margin-left:6px;padding:1px 7px;font-size:10.5px;vertical-align:1px}
+.ig-pack-list{display:flex;flex-direction:column;gap:5px;margin-top:4px;font-size:12.5px;color:var(--fg-2)}
+.ig-pack-list span{display:flex;align-items:center;gap:7px}
+.ig-pack-list svg{width:13px;height:13px;flex:none;color:var(--fg-3)}
+.ig-empty-more{margin-top:14px}
+/* Activity. */
+.ig-activity-box{padding:0}
+.ig-activity-box summary{display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:10px;cursor:pointer;
+  list-style:none;transition:background-color .15s var(--ease-out)}
+.ig-activity-box summary::-webkit-details-marker{display:none}
+.ig-activity-box summary:hover{background:color-mix(in oklch,var(--fg) 3%,transparent)}
+.ig-act-title{font-weight:600}
+.ig-activity-box summary .muted{flex:1;font-variant-numeric:tabular-nums}
+.ig-activity-box summary svg{width:14px;height:14px;color:var(--fg-3);transition:transform .25s var(--ease-out)}
+.ig-activity-box[open] summary svg{transform:rotate(180deg)}
+.ig-activity{display:flex;flex-direction:column;gap:2px;padding:0 12px 12px;font-size:12.5px}
+.ig-activity-box[open] .ig-activity{animation:igFadeUp .26s var(--ease-out)}
+.ig-act-row{display:grid;grid-template-columns:62px minmax(0,200px) minmax(0,1fr) 64px;gap:10px;align-items:center;
+  padding:6px 4px;border-bottom:1px solid var(--line);background:var(--bg-2)}
+.ig-act-row:last-child{border-bottom:0}
+.ig-activity .t{color:var(--fg-4);font-family:'JetBrains Mono',monospace;font-size:11.5px;font-variant-numeric:tabular-nums}
+.ig-activity .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-activity .d{color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-activity .s{text-align:right;font-size:11.5px}
+.ig-activity .ok{color:var(--live)}.ig-activity .failed{color:var(--danger)}.ig-activity .stopped,.ig-activity .busy{color:var(--fg-3)}
+.ig-act-empty{padding:6px 4px;color:var(--fg-3)}
+/* Modal shell. */
+.ig-modal .dest-form:focus{outline:none}
+.ig-modal.closing .ic-modal-backdrop{animation:igFadeOut .18s var(--ease-out) forwards}
+.ig-modal.closing .dest-form{animation:igModalOut .18s var(--ease-out) forwards}
+@keyframes igFadeOut{to{opacity:0}}
+@keyframes igModalOut{to{opacity:0;transform:translateY(6px) scale(.98)}}
+.ig-modal .ic-btn:disabled:not(.is-busy){opacity:.45;cursor:not-allowed;box-shadow:none}
+.ig-modal .dest-form-x svg{width:14px;height:14px}
+.ig-modal .dest-form-x{display:grid;place-items:center}
+.ig-title-input{width:100%;max-width:420px;padding:2px 6px;margin:-2px -6px;border:1px solid transparent;border-radius:7px;
+  background:transparent;color:var(--fg);font:inherit;font-weight:600;outline:none;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),box-shadow .2s var(--ease-out)}
+.ig-title-input:hover{background:color-mix(in oklch,var(--fg) 4%,transparent)}
+.ig-title-input:focus{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:var(--bg-1);
+  box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 16%,transparent)}
+.ig-head-btn{padding:8px 14px}
+.ig-foot-msg{display:flex;align-items:center;gap:10px;min-width:0}
+.ig-last{display:inline-flex;align-items:center;gap:6px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-last i{width:6px;height:6px;flex:none;border-radius:50%;background:var(--fg-4)}
+.ig-last.ok i{background:var(--live)}.ig-last.bad i{background:var(--danger)}
+.ig-unsaved{flex:none;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;color:var(--warn);
+  background:color-mix(in oklch,var(--warn) 12%,transparent);border:1px solid color-mix(in oklch,var(--warn) 35%,transparent);
+  animation:igPop .26s cubic-bezier(.2,0,0,1)}
+.ig-del{color:var(--fg-3)}
+.ig-del:hover:not(:disabled){color:var(--danger)}
+.ig-guard{position:absolute;left:12px;right:12px;bottom:10px;z-index:5;display:flex;align-items:center;gap:8px;
+  padding:10px 10px 10px 14px;border-radius:12px;background:color-mix(in oklch,var(--warn) 10%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--warn) 40%,var(--line));box-shadow:0 18px 40px -16px rgba(0,0,0,.7);
+  animation:igGuardIn .24s var(--ease-out)}
+.ig-guard-text{flex:1;display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600}
+.ig-guard-text svg{width:16px;height:16px;flex:none;color:var(--warn)}
+@keyframes igGuardIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 /* Message previews, styled like where they land. */
 .ig-pv{flex:1;min-width:0;font-size:11.5px;line-height:1.4}
+.ig-pv-col{min-width:0}
 .ig-pv-discord{display:flex;gap:8px;padding:8px 9px;border-radius:8px;background:#313338}
 .ig-pv-discord .ig-av{width:22px;height:22px;flex:none;border-radius:50%;background:var(--accent);
   display:grid;place-items:center;color:#051018}
@@ -2191,8 +2347,9 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-pv-phone{display:flex;gap:8px;padding:8px 9px;border-radius:12px;background:rgba(255,255,255,.08)}
 .ig-pv-phone .ig-av{width:22px;height:22px;flex:none;border-radius:6px;background:var(--accent)}
 .ig-pv-phone small{display:block;font-size:9.5px;letter-spacing:.04em;color:var(--fg-3)}
+.ig-pv-phone b{font-weight:600}
 .ig-pv-json{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--fg-2);white-space:pre;overflow:hidden}
-.ig-pv-json .k{color:var(--accent)}.ig-pv-json .v{color:var(--live)}
+.ig-pv-json .k{color:var(--accent)}
 .ig-pv-marker{display:flex;flex-direction:column;gap:7px}
 .ig-pv-marker .tag{align-self:center;padding:2px 7px;border-radius:5px;background:#9146ff;color:#fff;font-size:10px;font-weight:600;
   max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -2206,118 +2363,265 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-pv-action span{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex:none;
   background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));color:var(--accent)}
 .ig-pv-action svg{width:15px;height:15px}
-.ig-pv-steps{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--fg-2)}
-.ig-pv-steps div{display:flex;gap:7px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ig-pv-steps i{width:6px;height:6px;border-radius:2px;flex:none;background:var(--accent)}
-/* Big previews inside editors. */
 .ig-pv.big{font-size:14px}
 .ig-pv.big.ig-pv-discord,.ig-pv.big.ig-pv-chat,.ig-pv.big.ig-pv-phone{padding:14px;gap:12px}
 .ig-pv.big .ig-av{width:40px;height:40px}
 .ig-pv.big .ig-av svg{width:18px;height:18px}
 .ig-pv.big .ig-txt{display:block;-webkit-line-clamp:unset}
 .ig-pv.big.ig-pv-chat div{white-space:normal}
-/* Tokens and the in-place message editor. */
+/* Module editor: the live preview you write on. */
+.ig-ed-body{padding:20px 24px 22px;gap:18px}
+.ig-ed-preview{display:flex;flex-direction:column}
+.ig-ed-pv{display:flex;flex-direction:column;gap:10px}
+.ig-ed-options{display:flex;flex-direction:column;gap:10px}
+.ig-live{border-radius:14px;overflow:hidden}
+.ig-live-tag{font-size:10.5px;font-weight:700;letter-spacing:.06em;color:#adadb8}
+.ig-live-discord{background:#313338;color:#dbdee1}
+.ig-live-head{height:40px;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid rgba(0,0,0,.3);
+  color:#f2f3f5;font-size:14px;font-weight:600}
+.ig-live-head .hash{color:#80848e;font-size:18px;font-weight:400}
+.ig-live-head .ig-live-tag{margin-left:auto;font-weight:500;letter-spacing:0;color:#949ba4}
+.ig-live-msg{display:flex;gap:14px;padding:16px}
+.ig-live-av{width:40px;height:40px;flex:none;border-radius:50%;background:var(--accent);display:grid;place-items:center;color:#051018}
+.ig-live-av svg{width:18px;height:18px}
+.ig-live-col{flex:1;min-width:0;font-size:14.5px}
+.ig-live-meta{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.ig-live-meta b{color:#f2f3f5}
+.ig-live-meta .ig-app{padding:0 4px;border-radius:3px;background:#5865f2;color:#fff;font-size:10px;font-weight:700}
+.ig-ping{padding:0 4px;border-radius:3px;background:rgba(88,101,242,.3);color:#c9cdfb;font-size:12px;animation:igPop .26s cubic-bezier(.2,0,0,1)}
+.ig-live-chat{background:#18181b;padding:14px 16px;color:#efeff1;font-size:14px;display:flex;flex-direction:column;gap:8px}
+.ig-live-chat .u1{color:#ff7eb6}.ig-live-chat .u2{color:#5ac8fa}
+.ig-live-phone{border-radius:22px;background:#1d2530;padding:18px;display:flex;flex-direction:column;gap:10px;color:#fff}
+.ig-live-phone .ig-live-tag{color:rgba(255,255,255,.7);font-weight:500}
+.ig-live-phone .ic-input{background:rgba(255,255,255,.08)}
+.ig-live-plain{padding:14px 16px;display:flex;flex-direction:column;gap:10px;border-radius:12px}
 .ig-token{display:inline-flex;align-items:baseline;gap:4px;padding:1px 8px;border-radius:999px;cursor:pointer;
   border:1px solid color-mix(in oklch,var(--accent) 40%,transparent);background:transparent;
   color:color-mix(in oklch,var(--accent) 70%,#fff);font:500 11px/1.6 'JetBrains Mono',monospace;
-  transition:background .15s var(--ease-out)}
+  transition:background-color .15s var(--ease-out),transform .15s var(--ease-out)}
 .ig-token:hover{background:color-mix(in oklch,var(--accent) 14%,transparent)}
+.ig-token:active{transform:scale(.96)}
+.ig-token.more{border-style:dashed;border-color:var(--line-2);color:var(--fg-3);font-family:inherit}
 .ig-tokens{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11.5px;color:var(--fg-3)}
 .ig-msg{width:100%;box-sizing:border-box;resize:none;overflow:hidden;min-height:48px;padding:8px 10px;margin:0;
   border-radius:8px;border:1px dashed color-mix(in oklch,var(--accent) 55%,transparent);
-  background:color-mix(in oklch,var(--accent) 5%,transparent);color:inherit;font:inherit;line-height:1.5;outline:none}
+  background:color-mix(in oklch,var(--accent) 5%,transparent);color:inherit;font:inherit;line-height:1.5;outline:none;
+  transition:border-color .15s var(--ease-out),box-shadow .2s var(--ease-out),background-color .15s var(--ease-out)}
+.ig-msg:hover{background:color-mix(in oklch,var(--accent) 8%,transparent)}
 .ig-msg:focus{border-style:solid;box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 18%,transparent)}
 .ig-sample{margin-top:6px;font-size:12px;color:#949ba4}
+.ig-sample.empty{display:none}
 .ig-sample b{color:#b5bac1;font-weight:500}
 /* Moments timeline. */
 .ig-moments{position:relative;display:grid;grid-template-columns:repeat(var(--n,4),minmax(0,1fr));gap:4px}
 .ig-moments::before{content:'';position:absolute;left:calc(50% / var(--n,4));right:calc(50% / var(--n,4));top:11px;height:2px;background:var(--line-2)}
 .ig-moment{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0}
-.ig-dot{width:24px;height:24px;padding:0;border-radius:50%;border:2px solid var(--line-2);background:var(--surface-3);
-  box-shadow:0 0 0 4px var(--bg-2);cursor:pointer;display:grid;place-items:center;color:transparent;
-  transition:background .2s var(--ease-out),border-color .2s var(--ease-out)}
-.ig-dot svg{width:12px;height:12px}
-.ig-dot.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.ig-dot{position:relative;width:24px;height:24px;padding:0;border-radius:50%;border:2px solid var(--line-2);background:var(--surface-3);
+  box-shadow:0 0 0 4px var(--bg-2);cursor:pointer;display:grid;place-items:center;color:var(--accent-ink);
+  transition:background-color .2s var(--ease-out),border-color .2s var(--ease-out),transform .15s var(--ease-out)}
+.ig-dot::after{content:'';position:absolute;inset:-9px}
+.ig-dot:active{transform:scale(.96)}
+.ig-dot svg{width:12px;height:12px;opacity:0;transform:scale(.25);filter:blur(4px);
+  transition:opacity .2s cubic-bezier(.2,0,0,1),transform .2s cubic-bezier(.2,0,0,1),filter .2s cubic-bezier(.2,0,0,1)}
+.ig-dot.on{background:var(--accent);border-color:var(--accent)}
+.ig-dot.on svg{opacity:1;transform:none;filter:blur(0)}
 .ig-moment-name{max-width:100%;padding:5px 12px;border-radius:999px;border:1px solid transparent;background:transparent;
-  color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:background-color .2s var(--ease-out),border-color .2s var(--ease-out),color .2s var(--ease-out)}
+.ig-moment-name:hover{color:var(--fg)}
 .ig-moment-name.on{background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));
   border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--fg)}
 /* Option chips and their panel. */
 .ig-chips{display:flex;flex-wrap:wrap;gap:8px}
 .ig-chip{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;border:1px solid var(--line);
   background:var(--surface-3);color:var(--fg);font:inherit;font-size:12.5px;cursor:pointer;
-  transition:border-color .15s var(--ease-out),background .15s var(--ease-out)}
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),transform .15s var(--ease-out)}
 .ig-chip:hover{border-color:var(--line-2)}
-.ig-chip span{color:var(--fg-3)}.ig-chip b{font-weight:600;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ig-chip svg{width:11px;height:11px;color:var(--fg-3)}
+.ig-chip:active{transform:scale(.96)}
+.ig-chip span{color:var(--fg-3)}
+.ig-chip b{font-weight:600;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-chip svg{width:11px;height:11px;color:var(--fg-3);transition:transform .25s var(--ease-out),color .15s var(--ease-out)}
 .ig-chip.warn{border-color:color-mix(in oklch,var(--warn) 55%,transparent);background:color-mix(in oklch,var(--warn) 9%,var(--surface-3))}
 .ig-chip.warn b{color:var(--warn)}
 .ig-chip.on{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 12%,var(--surface-3))}
-.ig-pop{min-height:96px;padding:14px 16px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line);
-  display:flex;flex-direction:column;gap:10px}
-.ig-seg{display:inline-flex;flex-wrap:wrap}
-.ig-seg .sub-tab{flex:0 0 auto;padding:6px 13px}
-.ig-seg .sub-tab.on{background:var(--surface-3)}
+.ig-chip.on svg{transform:rotate(180deg);color:var(--accent)}
+.ig-pop{overflow:hidden;box-sizing:border-box;border-radius:12px;background:var(--bg-2);border:1px solid var(--line);
+  transition:border-color .2s var(--ease-out),background-color .2s var(--ease-out)}
+.ig-pop.closed{border-color:transparent;background:transparent}
+.ig-pop-in{display:flex;flex-direction:column;gap:10px;padding:14px 16px}
+.ig-pop-in .ig-seg{align-self:flex-start}
 .ig-pick{display:flex;flex-wrap:wrap;gap:8px}
-.ig-pick .dest-starter{padding:10px 14px;gap:2px}
+.ig-pick .dest-starter{--dc:#a5b4fc;padding:10px 14px;gap:2px}
+.ig-pick .dest-starter-name{font-size:13px}
 .ig-pick .dest-starter.on{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 20%,transparent)}
+.ig-pick-add{min-height:0;padding:10px 16px;flex-direction:row;gap:6px}
+.ig-pick-add svg{width:14px;height:14px}
+/* Checkbox rows: undo the destination form's uppercase field labels. */
+.ig-modal .crash-check{display:flex;margin:0;font-size:13px;font-weight:400;color:var(--fg);text-transform:none;letter-spacing:0}
+.ig-modal .crash-check .muted{font-size:12px}
+.ig-pack.is-busy{opacity:.6;pointer-events:none;cursor:progress}
+/* Who can use it: toggle pills. */
+.ig-roles{display:flex;flex-wrap:wrap;gap:6px}
+.dest-form .ig-role{position:relative;display:inline-flex;margin:0;cursor:pointer;font-size:inherit;color:inherit;
+  text-transform:none;letter-spacing:0}
+.ig-role input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.ig-role>span{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);
+  background:var(--surface-3);font-size:12.5px;font-weight:500;color:var(--fg-2);
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-role>span svg{width:12px;height:12px;margin-left:-18px;opacity:0;transform:scale(.25);filter:blur(4px);
+  transition:opacity .2s cubic-bezier(.2,0,0,1),transform .2s cubic-bezier(.2,0,0,1),filter .2s cubic-bezier(.2,0,0,1),margin .2s cubic-bezier(.2,0,0,1)}
+.ig-role input:checked+span{border-color:color-mix(in oklch,var(--accent) 55%,transparent);
+  background:color-mix(in oklch,var(--accent) 12%,var(--surface-3));color:var(--fg)}
+.ig-role input:checked+span svg{margin-left:0;opacity:1;transform:none;filter:blur(0);color:var(--accent)}
+.ig-role input:focus-visible+span{outline:2px solid var(--accent);outline-offset:2px}
+.ig-role:active>span{transform:scale(.96)}
 /* Catalog. */
 .ig-cat{flex:1;min-height:0;display:flex}
 .ig-cat-nav{width:200px;flex:none;padding:16px 12px;display:flex;flex-direction:column;gap:2px;border-right:1px solid var(--line)}
 .ig-cat-nav button{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:8px;
-  border:1px solid transparent;background:transparent;color:var(--fg-3);font:inherit;font-size:13px;font-weight:500;cursor:pointer;text-align:left}
+  border:1px solid transparent;background:transparent;color:var(--fg-3);font:inherit;font-size:13px;font-weight:500;cursor:pointer;text-align:left;
+  transition:background-color .15s var(--ease-out),color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-cat-nav button:hover{color:var(--fg);background:color-mix(in oklch,var(--fg) 4%,transparent)}
+.ig-cat-nav button:active{transform:scale(.96)}
 .ig-cat-nav button.on{background:var(--surface-3);border-color:var(--line-2);color:var(--fg)}
-.ig-cat-nav button small{color:var(--fg-4)}
+.ig-cat-nav button small{color:var(--fg-4);font-variant-numeric:tabular-nums}
+.ig-cat-import{margin-top:auto;padding:10px;border-radius:10px;border:1px dashed var(--line-2);font-size:12px;line-height:1.5;color:var(--fg-3)}
+.ig-cat-import a{color:var(--accent);font-weight:600}
 .ig-cat-grid{flex:1;min-width:0;overflow-y:auto;padding:16px 18px 20px;display:grid;
   grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;align-content:start}
+/* A category's tiles fade in one after another; tiles already shown stay. */
+.ig-cat-grid>*{animation:igTileIn .32s var(--ease-out) both;animation-delay:calc(min(var(--i,0),10) * 26ms)}
+@keyframes igTileIn{from{opacity:0;transform:translateY(8px) scale(.98);filter:blur(3px)}to{opacity:1;transform:none;filter:blur(0)}}
+.ig-cat-tile{padding:8px;gap:10px}
+.ig-cat-tile .dcard-screen{min-height:84px;padding:10px;border-radius:6px;display:flex;align-items:center}
+.ig-cat-id{display:flex;gap:10px;align-items:flex-start;padding:0 4px}
+.ig-cat-id .dcard-icon{width:28px;height:28px;border-radius:8px}
+.ig-cat-id .dcard-icon svg{width:14px;height:14px}
+.ig-cat-desc{margin-top:2px;font-size:12px;line-height:1.45;color:var(--fg-3);text-wrap:pretty}
+.ig-cat-needs{margin-top:4px;font-size:11px;color:var(--warn)}
+.ig-cat-tile>.ic-btn{margin:auto 4px 4px}
+.ig-cat-pack{padding:14px;gap:10px}
+.ig-cat-pack>.ic-btn{align-self:flex-start;margin-top:auto}
+.ig-cat-build{min-height:214px;padding:16px;text-align:center}
+.ig-cat-build-t{font-size:14px;font-weight:600;color:var(--fg)}
+.ig-cat-build-d{max-width:220px;font-size:12px;line-height:1.5;color:var(--fg-3);text-wrap:pretty}
+.ic-btn.ig-added{color:var(--live);border-color:color-mix(in oklch,var(--live) 40%,transparent);
+  background:color-mix(in oklch,var(--live) 10%,transparent)}
+.ig-added svg{width:13px;height:13px;animation:igPop .3s cubic-bezier(.2,0,0,1)}
+@media (max-width:720px){
+  .ig-cat{flex-direction:column}
+  .ig-cat-nav{width:auto;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line)}
+  .ig-cat-import{display:none}
+}
 /* Builder. */
 .ig-bld{flex:1;min-height:0;display:flex}
 .ig-palette{width:224px;flex:none;padding:12px;display:flex;flex-direction:column;gap:2px;border-right:1px solid var(--line);overflow-y:auto}
+.ig-palette-hint{padding:2px 4px 4px;line-height:1.45}
 .ig-palette .ic-label{margin:10px 4px 3px}
-.ig-palette button{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:7px;border:1px solid transparent;
-  background:transparent;color:var(--fg-2);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
+.ig-palette button{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;border:1px solid transparent;
+  background:transparent;color:var(--fg-2);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;
+  transition:background-color .15s var(--ease-out),color .15s var(--ease-out),transform .15s var(--ease-out)}
 .ig-palette button:hover{background:var(--surface-3);color:var(--fg)}
+.ig-palette button:active{transform:scale(.96)}
 .ig-palette button i{width:8px;height:8px;border-radius:3px;flex:none;background:var(--c)}
 .ig-canvas{flex:1;min-width:0;padding:16px 20px;overflow-y:auto;background:var(--bg)}
-.ig-triggers{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
-.ig-steps{display:flex;flex-direction:column;gap:8px}
-.ig-step{display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);
-  background:var(--bg-2);color:inherit;font:inherit;text-align:left;cursor:pointer;transition:border-color .15s var(--ease-out)}
+.ig-triggers{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.ig-trig{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);
+  background:transparent;color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;
+  transition:background-color .15s var(--ease-out),color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-trig:hover{color:var(--fg);border-color:var(--line-2)}
+.ig-trig:active{transform:scale(.96)}
+.ig-trig.on{background:var(--surface-3);color:var(--fg);border-color:color-mix(in oklch,var(--accent) 45%,var(--line-2))}
+.ig-trig.add{border-style:dashed}
+.ig-trig svg{width:12px;height:12px}
+.ig-steps,.ig-branch-list{display:flex;flex-direction:column;gap:8px}
+/* The spine that ties the steps together, showing between them. */
+.ig-steps::before{content:'';position:absolute;left:24px;top:18px;bottom:18px;width:2px;border-radius:2px;background:var(--line)}
+.ig-step{position:relative;z-index:1;display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border-radius:12px;
+  border:1px solid var(--line);background:var(--bg-2);color:inherit;font:inherit;text-align:left;cursor:pointer;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),box-shadow .2s var(--ease-out)}
 .ig-step:hover{border-color:var(--line-2)}
+.ig-step:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .ig-step.on{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
   background:color-mix(in oklch,var(--accent) 7%,var(--bg-2));box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 16%,transparent)}
+.ig-step.ig-when{--c:#5ac8fa}
+.ig-step.ig-when:not(.on){border-color:color-mix(in oklch,var(--accent) 35%,var(--line))}
 .ig-step-kind{flex:0 0 62px;font-size:9.5px;font-weight:700;letter-spacing:.1em;color:var(--c)}
 .ig-step-text{flex:1;min-width:0;font-size:13px;line-height:1.5;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ig-step-text .v{font-family:'JetBrains Mono',monospace;font-size:12px;color:color-mix(in oklch,var(--accent) 70%,#fff)}
-.ig-step-tools{display:flex;gap:2px;opacity:0;transition:opacity .15s}
-.ig-step:hover .ig-step-tools,.ig-step.on .ig-step-tools{opacity:1}
-.ig-branch{margin-left:30px;padding-left:12px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.ig-step-tools{display:flex;gap:2px;opacity:0;transition:opacity .15s var(--ease-out)}
+.ig-step:hover .ig-step-tools,.ig-step.on .ig-step-tools,.ig-step:focus-within .ig-step-tools{opacity:1}
+.ig-step-tools svg{width:13px;height:13px}
+.ig-step-tools .ic-btn-tiny:disabled{opacity:.3;cursor:default}
+.ig-branch{position:relative;z-index:1;margin-left:30px;padding-left:14px;border-left:2px solid var(--line);
+  display:flex;flex-direction:column;gap:8px}
 .ig-branch-label{font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--fg-3);text-transform:uppercase}
-.ig-drop{min-height:34px;border-radius:10px;border:1px dashed var(--line-2);background:transparent;color:var(--fg-4);
-  font:inherit;font-size:12px;cursor:pointer}
-.ig-drop.on{border-color:var(--accent);color:var(--accent);background:color-mix(in oklch,var(--accent) 6%,transparent)}
-.ig-inspector{width:320px;flex:none;padding:16px 18px;display:flex;flex-direction:column;gap:12px;border-left:1px solid var(--line);overflow-y:auto}
+.ig-branch-label.else{color:var(--warn)}
+.ig-drop{position:relative;z-index:1;min-height:34px;border-radius:10px;border:1px dashed var(--line-2);background:var(--bg);
+  color:var(--fg-4);font:inherit;font-size:12px;cursor:pointer;
+  transition:border-color .2s var(--ease-out),color .2s var(--ease-out),background-color .2s var(--ease-out)}
+.ig-drop:hover{color:var(--fg-2);border-color:var(--fg-4)}
+.ig-drop.on{border-color:var(--accent);color:var(--accent);background:color-mix(in oklch,var(--accent) 6%,var(--bg))}
+.ig-run-box{margin-top:16px;display:flex;flex-direction:column;gap:8px;animation:igFadeUp .26s var(--ease-out)}
+.ig-inspector{width:320px;flex:none;padding:16px 18px;border-left:1px solid var(--line);overflow-y:auto}
+.ig-insp{display:flex;flex-direction:column;gap:12px;min-height:100%}
+.ig-insp-title small{display:block;font-size:9.5px;font-weight:700;letter-spacing:.1em;color:var(--c)}
+.ig-insp-title b{display:block;margin-top:3px;font-size:15px;font-weight:600}
+.ig-insp-vars{margin-top:auto;padding-top:12px;display:flex;flex-direction:column;gap:8px}
+.ig-insp-vars .muted{font-size:11.5px}
+.ig-insp-p{margin:0;font-size:13px;line-height:1.6;color:var(--fg-2);text-wrap:pretty}
+.ig-insp-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .ig-inspector .dff>label{font-size:12px;font-weight:600;color:var(--fg-2)}
 .ig-inspector textarea.ic-input{resize:vertical;min-height:70px;font-family:'JetBrains Mono',monospace;font-size:12.5px}
+.ig-copy-row{display:flex;gap:6px}
+.ig-copy-row .ic-input{flex:1;min-width:0;font-size:11.5px}
 .ig-run{display:flex;flex-direction:column;gap:2px;font-size:12.5px}
 .ig-run div{display:grid;grid-template-columns:62px 190px minmax(0,1fr);gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}
-.ig-run .t{color:var(--fg-4);font-family:'JetBrains Mono',monospace;font-size:11.5px}
+.ig-run .t{color:var(--fg-4);font-family:'JetBrains Mono',monospace;font-size:11.5px;font-variant-numeric:tabular-nums}
 .ig-run .ok{color:var(--live)}.ig-run .failed{color:var(--danger)}.ig-run .skipped{color:var(--fg-3)}
 .ig-run .d{color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Twitch device code. */
-.ig-code{font:600 30px/1 'JetBrains Mono',monospace;letter-spacing:.18em;color:var(--fg);text-align:center;padding:14px;
-  border-radius:12px;background:var(--bg-2);border:1px dashed color-mix(in oklch,var(--accent) 45%,var(--line))}
+/* Connections. */
+.ig-conn-body{padding:18px 22px 22px;gap:14px}
+.ig-conn-body>.ig-seg{align-self:flex-start}
+.ig-conn-pane{display:flex;flex-direction:column}
+.ig-conn-in{display:flex;flex-direction:column;gap:12px}
+.ig-accts{display:flex;flex-direction:column;gap:8px}
 .ig-acct{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line)}
-.ig-acct .dcard-icon{--dc:#a78bfa}
-.ig-activity{display:flex;flex-direction:column;gap:2px;font-size:12.5px}
-.ig-activity > div{display:grid;grid-template-columns:54px minmax(0,220px) minmax(0,1fr) 76px;gap:10px;align-items:center;
-  padding:6px 4px;border-bottom:1px solid var(--line)}
-.ig-activity .t{color:var(--fg-4);font-family:'JetBrains Mono',monospace;font-size:11.5px}
-.ig-activity .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ig-activity .d{color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ig-activity .s{text-align:right;font-size:11.5px}
-.ig-activity .ok{color:var(--live)}.ig-activity .failed{color:var(--danger)}.ig-activity .stopped,.ig-activity .busy{color:var(--fg-3)}
+.ig-acct.bare{padding:0;border:0;background:none}
+.ig-acct .dcard-icon{width:32px;height:32px}
+.ig-acct .ic-btn-tiny svg{width:13px;height:13px}
+.ig-ic-discord{--dc:#a5b4fc}
+.ig-ic-twitch{--dc:#a78bfa}
+.ig-blurb{font-family:inherit;white-space:normal;line-height:1.45}
+.ig-account,.ig-form{display:flex;flex-direction:column;gap:12px}
+.ig-form-actions{display:flex;gap:8px;justify-content:flex-end}
+.ig-device{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;animation:igFadeUp .3s var(--ease-out)}
+.ig-device-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.ig-device-actions a{text-decoration:none}
+.ig-code{align-self:stretch;padding:14px;border-radius:12px;background:var(--bg-2);border:1px dashed color-mix(in oklch,var(--accent) 45%,var(--line));
+  font:600 30px/1 'JetBrains Mono',monospace;letter-spacing:.18em;color:var(--fg);text-align:center;font-variant-numeric:tabular-nums;
+  animation:igPop .35s cubic-bezier(.2,0,0,1)}
+/* Recipes. */
 .ig-textarea-code{width:100%;min-height:90px;resize:vertical;font-family:'JetBrains Mono',monospace;font-size:12px}
+.ig-recipe{display:flex;flex-direction:column;gap:12px;animation:igFadeUp .3s var(--ease-out)}
+.ig-recipe-list{display:flex;flex-direction:column;gap:8px}
+.ig-recipe-head{display:flex;align-items:center;gap:8px}
+.ig-ok{width:20px;height:20px;flex:none;border-radius:50%;display:grid;place-items:center;
+  background:color-mix(in oklch,var(--live) 18%,transparent);color:var(--live)}
+.ig-ok svg{width:12px;height:12px;animation:igPop .3s cubic-bezier(.2,0,0,1)}
+.ig-recipe-item{padding-left:28px;font-size:13px;color:var(--fg-2)}
+.ig-recipe-item b{color:var(--fg)}
+.ig-recipe-safe{display:flex;align-items:flex-start;gap:8px}
+.ig-recipe-safe svg{width:14px;height:14px;flex:none;margin-top:2px;color:var(--accent)}
+.ig-share-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto}
+@media (prefers-reduced-motion: reduce){
+  .ig-skel::after{animation:none}
+  .ig-spin,.ic-btn.is-busy::after,.ic-btn-tiny.is-busy::after{animation-duration:1.6s}
+  .ig-row-peek,.ig-run-box,.ig-device,.ig-code,.ig-recipe,.ig-unsaved,.ig-guard,.ig-ping,.ig-added svg,.ig-ok svg,
+  .ig-activity-box[open] .ig-activity,.ig-modal.closing .dest-form,.ig-modal.closing .ic-modal-backdrop,
+  .ic-btn.ig-armed,.ic-btn-tiny.ig-armed,.ig-cat-grid>*{animation:none}
+  .ig-dot svg,.ig-role>span svg,.ig-chip svg,.ig-seg .sub-tab-ind{transition:none}
+}
 @media (max-width:760px){
   .ig-bld,.ig-cat{flex-direction:column}
   .ig-palette,.ig-inspector,.ig-cat-nav{width:auto;border:0;border-bottom:1px solid var(--line)}

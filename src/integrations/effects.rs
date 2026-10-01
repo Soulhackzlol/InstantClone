@@ -16,11 +16,17 @@ const MAX_RESPONSE: u64 = 1024 * 1024;
 /// Largest text a file step writes.
 const MAX_FILE_TEXT: usize = 1024 * 1024;
 
+/// Programs started by integrations that may still be running. Kept so
+/// they are reaped (no zombies on Unix) without a waiting thread each, and
+/// capped so a runaway trigger can't fork the machine to its knees.
+const MAX_RUNNING_PROGRAMS: usize = 16;
+
 pub struct RealHost {
     pub ctrl: Arc<Controller>,
     pub twitch: Arc<Twitch>,
     /// The streamer's usual delay, used when `arm` names none.
     pub default_delay_ms: AtomicU32,
+    pub programs: crate::sync::Mutex<Vec<std::process::Child>>,
 }
 
 impl Host for RealHost {
@@ -200,17 +206,22 @@ impl Host for RealHost {
         if path.is_empty() {
             return Err("pick a program to run".to_string());
         }
-        let mut child = std::process::Command::new(path)
+        let mut running = self.programs.lock();
+        // Reap whatever has finished since last time.
+        running.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+        if running.len() >= MAX_RUNNING_PROGRAMS {
+            return Err(format!(
+                "{MAX_RUNNING_PROGRAMS} programs started by integrations are still running; not starting another"
+            ));
+        }
+        let child = std::process::Command::new(path)
             .args(args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|e| format!("couldn't start it: {e}"))?;
-        // Reap it whenever it ends, so nothing is left behind.
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
+        running.push(child);
         Ok(())
     }
 

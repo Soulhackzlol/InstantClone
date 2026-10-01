@@ -59,11 +59,24 @@ pub fn export(name: &str, integrations: &[Integration]) -> String {
     format!("{PREFIX}{}", base64url_encode(doc.to_json().as_bytes()))
 }
 
+/// Blank whatever a recipe must never carry: the Discord connection,
+/// web addresses and headers (they hold API keys and webhook secrets), and
+/// file and program paths (they name the user's folders).
 fn strip_private(steps: &mut [super::model::Step]) {
     for s in steps {
-        if s.kind == StepKind::Discord {
-            s.params
-                .insert("connection".into(), DISCORD_PLACEHOLDER.into());
+        match s.kind {
+            StepKind::Discord => {
+                s.params
+                    .insert("connection".into(), DISCORD_PLACEHOLDER.into());
+            }
+            StepKind::Http => {
+                s.params.insert("url".into(), String::new());
+                s.params.remove("headers");
+            }
+            StepKind::Program | StepKind::File => {
+                s.params.insert("path".into(), String::new());
+            }
+            _ => {}
         }
         strip_private(&mut s.then);
         strip_private(&mut s.otherwise);
@@ -210,6 +223,30 @@ mod tests {
             recipe.integrations[0].handlers[0].steps[0].param("connection"),
             "mine"
         );
+    }
+
+    #[test]
+    fn addresses_headers_and_paths_are_never_shared() {
+        use super::super::model::Step;
+        let mut i = presets::build("webhook", "w".into(), "").unwrap();
+        i.handlers[0].steps = vec![
+            Step::new(
+                StepKind::Http,
+                &[
+                    ("url", "https://api.example/secret-key"),
+                    ("headers", "Authorization: Bearer s3cret"),
+                ],
+            ),
+            Step::new(
+                StepKind::File,
+                &[("path", r"C:\Users\oriol\stream.txt"), ("text", "x")],
+            ),
+        ];
+        let text = export("x", &[i]);
+        let decoded = String::from_utf8(base64url_decode(&text[PREFIX.len()..]).unwrap()).unwrap();
+        for secret in ["secret-key", "s3cret", "oriol"] {
+            assert!(!decoded.contains(secret), "{secret} leaked");
+        }
     }
 
     #[test]

@@ -133,14 +133,18 @@ impl Runner {
     }
 
     fn record(&mut self, label: impl Into<String>, status: StepStatus, detail: impl Into<String>) {
+        let mut detail = detail.into();
         if status == StepStatus::Failed {
             self.failed = true;
+            // Errors can quote the address they failed on, and webhook and
+            // API addresses carry their secret in the path or query.
+            detail = redact_urls(&detail);
         }
         self.log.push(StepLog {
             label: label.into(),
             status,
             at_ms: self.started.elapsed().as_millis() as u64,
-            detail: detail.into(),
+            detail,
         });
     }
 
@@ -650,6 +654,40 @@ fn parse_headers(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Cut every URL in `text` down to its scheme and host, so error messages
+/// that quote an address never show the token in its path or query.
+pub fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = ["https://", "http://"]
+        .iter()
+        .filter_map(|p| rest.find(p))
+        .min()
+    {
+        out.push_str(&rest[..at]);
+        let url = &rest[at..];
+        let end = url
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ')' | '>' | ','))
+            .unwrap_or(url.len());
+        // Sentence punctuation after an address is not part of it.
+        let end = url[..end]
+            .trim_end_matches(['.', ',', ':', ';', '!', '?'])
+            .len();
+        let (whole, tail) = url.split_at(end);
+        let scheme_end = whole.find("://").map_or(0, |i| i + 3);
+        let host_end = whole[scheme_end..]
+            .find(['/', '?', '#'])
+            .map_or(whole.len(), |i| scheme_end + i);
+        out.push_str(&whole[..host_end]);
+        if host_end < whole.len() {
+            out.push_str("/…");
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Split program arguments on spaces, keeping "quoted parts" together.
 pub fn split_args(text: &str) -> Vec<String> {
     let mut args = Vec::new();
@@ -989,6 +1027,63 @@ mod tests {
         assert!(compare("no", "empty", ""));
         assert!(compare("hello world", "contains", "WORLD"));
         assert!(!compare("x", "bogus_op", "x"));
+    }
+
+    #[test]
+    fn urls_in_errors_lose_their_secrets() {
+        assert_eq!(
+            redact_urls("request failed: https://discord.com/api/webhooks/1/tok3n: 404"),
+            "request failed: https://discord.com/…: 404"
+        );
+        assert_eq!(
+            redact_urls("see http://host?key=1, ok"),
+            "see http://host/…, ok"
+        );
+        assert_eq!(redact_urls("no urls here"), "no urls here");
+        assert_eq!(redact_urls("https://bare.host"), "https://bare.host");
+    }
+
+    #[tokio::test]
+    async fn failed_steps_never_log_a_webhook_token() {
+        struct Fails;
+        impl Host for Fails {
+            fn live(&self) -> LiveState {
+                LiveState::default()
+            }
+            fn discord(&self, url: &str, _: &str, _: &str) -> Result<(), String> {
+                Err(format!("couldn't reach {url}"))
+            }
+            fn http(&self, _: HttpRequest) -> Result<super::super::host::HttpResponse, String> {
+                Err("x".into())
+            }
+            fn phone(&self, _: &str, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn chat(&self, _: &str, _: bool, _: Option<&str>) -> Result<(), String> {
+                Ok(())
+            }
+            fn marker(&self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn clip(&self) -> Result<super::super::host::ClipInfo, String> {
+                Err("x".into())
+            }
+            fn delay_action(&self, _: &str, _: u32) -> Result<(), String> {
+                Ok(())
+            }
+            fn program(&self, _: &str, _: &[String]) -> Result<(), String> {
+                Ok(())
+            }
+            fn file(&self, _: &str, _: &str, _: bool) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let steps = [Step::new(
+            StepKind::Discord,
+            &[("connection", "mods"), ("text", "x")],
+        )];
+        let (_, log) = run(&steps, ctx(&[], false), Arc::new(Fails), env()).await;
+        assert!(!log[0].detail.contains("/1/x"), "{}", log[0].detail);
     }
 
     #[test]

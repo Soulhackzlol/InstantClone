@@ -193,6 +193,27 @@ fn overview(handle: &super::Handle, s: &Settings) -> Value {
                 ),
             ]),
         ),
+        // What each integration still needs before it can run, so a card
+        // can say "Pick a Discord channel" without opening the editor.
+        (
+            "issues",
+            Value::Obj(
+                s.integrations
+                    .iter()
+                    .map(|i| {
+                        let mut p = i.problems();
+                        p.invalid.extend(p.incomplete);
+                        if let Err(e) = check_connections(i, s) {
+                            p.invalid.push(e);
+                        }
+                        (
+                            i.id.clone(),
+                            Value::Arr(p.invalid.into_iter().map(json::str).collect()),
+                        )
+                    })
+                    .collect(),
+            ),
+        ),
         ("twitch", handle.twitch.status_json()),
         ("catalog", presets::catalog_json()),
         ("events", event::catalog_json()),
