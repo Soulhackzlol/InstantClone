@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 /// Largest response body a step keeps.
 const MAX_RESPONSE: u64 = 1024 * 1024;
 /// Largest text a file step writes.
@@ -36,6 +36,7 @@ pub fn send_http(r: HttpRequest) -> Result<HttpResponse, String> {
             }
             .config()
             .timeout_global(Some(HTTP_TIMEOUT))
+            .max_redirects(0)
             .build();
             for (name, value) in &r.headers {
                 req = req.header(name.as_str(), value.as_str());
@@ -50,6 +51,7 @@ pub fn send_http(r: HttpRequest) -> Result<HttpResponse, String> {
             }
             .config()
             .timeout_global(Some(HTTP_TIMEOUT))
+            .max_redirects(0)
             .build();
             let has_type = r
                 .headers
@@ -72,6 +74,16 @@ pub fn send_http(r: HttpRequest) -> Result<HttpResponse, String> {
     };
     let mut resp = result.map_err(|e| format!("request failed: {e}"))?;
     let status = resp.status().as_u16();
+    // Redirects aren't followed: one could point a request made from this
+    // PC at the dashboard itself, and post what it answers to chat.
+    if (300..400).contains(&status) {
+        let to = resp
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("another address");
+        return Err(format!("the server moved this to {to}; use that address"));
+    }
     let body = resp
         .body_mut()
         .with_config()
@@ -82,13 +94,13 @@ pub fn send_http(r: HttpRequest) -> Result<HttpResponse, String> {
 }
 
 /// Post a Discord message, or edit message `edit` (see `Host::discord`).
+/// An edit never pings; `ping` is for when it has to be posted anew.
 pub fn send_discord(
     webhook_url: &str,
     content: &str,
     ping: &str,
     edit: Option<&str>,
 ) -> Result<DiscordPosted, String> {
-    let body = discord_body(content, ping);
     if let Some(id) = edit {
         let resp = crate::https::https_agent()
             .patch(&webhook_message_url(webhook_url, id))
@@ -96,7 +108,7 @@ pub fn send_discord(
             .timeout_global(Some(HTTP_TIMEOUT))
             .build()
             .header("Content-Type", "application/json")
-            .send(body.as_str())
+            .send(discord_body(content, ""))
             .map_err(|e| format!("couldn't reach Discord: {e}"))?;
         // 404 here is the message, not the webhook: someone deleted it.
         // The update still has to reach the channel, as a new message.
@@ -115,7 +127,7 @@ pub fn send_discord(
         .timeout_global(Some(HTTP_TIMEOUT))
         .build()
         .header("Content-Type", "application/json")
-        .send(body)
+        .send(discord_body(content, ping))
         .map_err(|e| format!("couldn't reach Discord: {e}"))?;
     discord_status(resp.status().as_u16())?;
     let answer = resp
@@ -431,7 +443,11 @@ mod tests {
                     ("PATCH", p) if p.ends_with("/messages/111") => ("200 OK", r#"{"id":"111"}"#),
                     _ => ("404 Not Found", r#"{"message":"Unknown Message"}"#),
                 };
-                seen.push(format!("{method} {path}"));
+                let pinged = String::from_utf8_lossy(&body).contains("@here");
+                seen.push(format!(
+                    "{method} {path}{}",
+                    if pinged { " @here" } else { "" }
+                ));
                 let reply = format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
                     answer.len()
@@ -448,10 +464,11 @@ mod tests {
         let (url, seen) = fake_discord(4);
         let first = send_discord(&url, "down", "", None).unwrap();
         assert_eq!((first.message_id.as_str(), first.edited), ("111", false));
-        let edit = send_discord(&url, "back", "", Some("111")).unwrap();
+        let edit = send_discord(&url, "back", "here", Some("111")).unwrap();
         assert_eq!((edit.message_id.as_str(), edit.edited), ("111", true));
-        // Someone deleted message 999: the update still goes out, as new.
-        let gone = send_discord(&url, "back", "", Some("999")).unwrap();
+        // Someone deleted message 999: the update still goes out, as new,
+        // and pings like a new message does.
+        let gone = send_discord(&url, "back", "here", Some("999")).unwrap();
         assert_eq!((gone.message_id.as_str(), gone.edited), ("111", false));
         assert_eq!(
             seen.join().unwrap(),
@@ -459,7 +476,7 @@ mod tests {
                 "POST /api/webhooks/1/tok?wait=true",
                 "PATCH /api/webhooks/1/tok/messages/111",
                 "PATCH /api/webhooks/1/tok/messages/999",
-                "POST /api/webhooks/1/tok?wait=true",
+                "POST /api/webhooks/1/tok?wait=true @here",
             ]
         );
     }

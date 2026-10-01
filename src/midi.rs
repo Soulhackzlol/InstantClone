@@ -12,6 +12,8 @@
 //! `available` stays false and the dashboard hides the section - exactly
 //! like the keyboard hotkeys on Linux.
 
+#[cfg(any(windows, test))]
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -256,6 +258,27 @@ fn signature_for(status: u8, data1: u8, data2: u8) -> Option<String> {
     }
 }
 
+/// Whether a control-change message is a press: its value just crossed up
+/// past the middle. A knob or fader sends a stream of values as it turns;
+/// without this, one turn would be dozens of presses. `high` remembers the
+/// controls (by device, status and number) currently up.
+#[cfg(any(windows, test))]
+fn cc_press_edge(
+    high: &mut HashSet<(usize, u8, u8)>,
+    device: usize,
+    status: u8,
+    cc: u8,
+    value: u8,
+) -> bool {
+    let key = (device, status, cc);
+    if value >= 64 {
+        high.insert(key)
+    } else {
+        high.remove(&key);
+        false
+    }
+}
+
 /// Spawn the MIDI listener. Windows opens every input device via winmm;
 /// other platforms have no backend yet, so this is a no-op and `available`
 /// stays false (the dashboard then hides the MIDI section). The settings
@@ -306,9 +329,10 @@ fn should_hold_devices(learning: bool, settings: &Settings) -> bool {
 
 #[cfg(windows)]
 mod win {
-    use super::{signature_for, MidiState};
+    use super::{cc_press_edge, signature_for, MidiState};
     use crate::config::Settings;
     use crate::controller::Controller;
+    use std::collections::HashSet;
     use std::sync::Arc;
     use tokio::sync::watch;
     use windows_sys::Win32::Media::Audio::{
@@ -331,6 +355,8 @@ mod win {
         /// it came from. winmm hands the handle to every callback; without
         /// this map two controllers sending the same note are one control.
         by_handle: crate::sync::Mutex<Vec<(usize, String)>>,
+        /// Control-changes currently up; see `cc_press_edge`.
+        cc_high: crate::sync::Mutex<HashSet<(usize, u8, u8)>>,
     }
 
     pub fn run(ctrl: Arc<Controller>, state: Arc<MidiState>, settings: watch::Receiver<Settings>) {
@@ -339,6 +365,7 @@ mod win {
             state,
             settings,
             by_handle: crate::sync::Mutex::new(Vec::new()),
+            cc_high: crate::sync::Mutex::new(HashSet::new()),
         }));
         let instance = ctx as *const CallbackCtx as usize;
 
@@ -518,10 +545,15 @@ mod win {
         let status = (param1 & 0xFF) as u8;
         let data1 = ((param1 >> 8) & 0x7F) as u8;
         let data2 = ((param1 >> 16) & 0x7F) as u8;
+        let ctx = &*(instance as *const CallbackCtx);
+        if status & 0xF0 == 0xB0
+            && !cc_press_edge(&mut ctx.cc_high.lock(), hmi as usize, status, data1, data2)
+        {
+            return;
+        }
         let Some(sig) = signature_for(status, data1, data2) else {
             return;
         };
-        let ctx = &*(instance as *const CallbackCtx);
         // Name the device the press came from. A deck we somehow have no
         // name for still works as an any-device signature rather than
         // going silent.
@@ -545,6 +577,7 @@ mod win {
 mod tests {
     use super::should_hold_devices;
     use super::signature_for;
+    use std::collections::HashSet;
     // `MidiState` itself is cross-platform - only the listener that feeds it
     // is Windows-only - so the device-choice test below runs everywhere.
     use super::MidiState;
@@ -569,6 +602,24 @@ mod tests {
         assert!(signature_for(0xB0, 20, 0).is_none(), "cc release ignored");
         assert!(signature_for(0xB0, 20, 63).is_none(), "cc below threshold");
         assert!(signature_for(0xE0, 0, 0).is_none(), "pitch bend ignored");
+    }
+
+    #[test]
+    fn a_knob_turned_up_presses_once() {
+        let mut high = HashSet::new();
+        let presses = (40..=127u8)
+            .filter(|v| super::cc_press_edge(&mut high, 1, 0xB0, 20, *v))
+            .count();
+        assert_eq!(presses, 1, "one turn up is one press");
+        assert!(!super::cc_press_edge(&mut high, 1, 0xB0, 20, 0), "release");
+        assert!(
+            super::cc_press_edge(&mut high, 1, 0xB0, 20, 127),
+            "a new press"
+        );
+        assert!(
+            super::cc_press_edge(&mut high, 2, 0xB0, 20, 127),
+            "another deck's control"
+        );
     }
 
     // Build a real Controller backed by a temp ring, so the dispatch below

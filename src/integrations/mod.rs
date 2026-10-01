@@ -33,5 +33,8 @@ pub mod store;
 pub mod template;
 pub mod twitch;
 
-pub use engine::{Handle, Shortcut};
+pub use engine::Handle;
+/// Only the tray (hotkeys) and the MIDI listener press shortcuts: Windows.
+#[cfg(windows)]
+pub use engine::Shortcut;
 pub use event::{Event, EventKind};

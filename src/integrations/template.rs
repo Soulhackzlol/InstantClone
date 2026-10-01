@@ -63,6 +63,10 @@ pub fn render_escaped(template: &str, vars: &dyn Vars, escape: &dyn Fn(&str) -> 
 /// Percent-encode a value for a URL path or query: everything but the
 /// unreserved characters, so `!rank ana&key=x` stays one value.
 pub fn url_component(value: &str) -> String {
+    // `.` and `..` would still walk the path (`/users/../admin`).
+    if value == "." || value == ".." {
+        return value.replace('.', "%2E");
+    }
     let mut out = String::with_capacity(value.len());
     for b in value.bytes() {
         match b {
@@ -344,6 +348,8 @@ mod tests {
             r#"{"n":"a\",\"admin\":true"}"#
         );
         assert_eq!(one_line("a\r\nX-Evil: 1"), "a  X-Evil: 1");
+        assert_eq!(url_component(".."), "%2E%2E");
+        assert_eq!(url_component("v1.2"), "v1.2");
     }
 
     #[test]

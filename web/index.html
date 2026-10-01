@@ -1060,6 +1060,9 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
    content and nudges it sideways. The right padding gives that room back
    (22px = 12px + the 10px scrollbar). */
 .pane-card,.dest-form-body{scrollbar-gutter:stable}
+/* Phones: the hero fills the screen, so a pane sized to what's left is a
+   360px box scrolling inside a scrolling page. Let the page scroll it. */
+@media (max-width:560px){.pane-card{max-height:none}}
 @supports (scrollbar-gutter:stable){.pane-card{padding-right:12px}}
 /* Directional enter: the body slides in from the side the tab moved toward
    (showTab sets --pane-dx: + for a rightward move, - for leftward, 0 on first
@@ -2871,8 +2874,31 @@ details.sys-collapse>summary .ic-label{margin:0}
 }
 @media (max-width:760px){
   .ig-bld,.ig-cat{flex-direction:column}
+  /* Stacked, the palette, canvas and inspector scroll as one page. */
+  .ig-bld{overflow-y:auto}
+  .ig-canvas,.ig-inspector{overflow-y:visible;flex:none}
   .ig-palette,.ig-inspector,.ig-cat-nav{width:auto;border:0;border-bottom:1px solid var(--line)}
   .ig-row-name{flex-basis:140px}.ig-row-last{display:none}
+}
+/* Top-anchored: a modal that grows (a chip opens, a taller tab) grows
+   downward, instead of re-centering and moving what's under the cursor. */
+.ig-modal{align-items:flex-start;padding-top:max(20px,6vh)}
+.ig-modal .dest-form{width:var(--ig-w,min(820px,100%));height:var(--ig-h,auto)}
+/* Phones: a full-screen sheet, the header kept to one row, the footer's
+   buttons wrapping with Save last and widest, and the builder's blocks a
+   strip to swipe instead of a list to scroll past. */
+@media (max-width:560px){
+  .ig-modal{padding:0}
+  .ig-modal .dest-form{width:100%;height:100dvh}
+  .ig-modal .dest-form-head{gap:10px}
+  .ig-modal .dest-form-head .dest-form-mark{display:none}
+  .ig-modal .dest-form-enable>span:last-child{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .ig-modal .dest-form-foot{flex-wrap:wrap;row-gap:10px}
+  .ig-modal .ig-foot-msg{order:-1;flex-basis:100%}
+  .ig-modal .dest-form-foot .ic-btn{flex:1 1 auto;justify-content:center}
+  .ig-palette{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;gap:4px;flex:none}
+  .ig-palette-hint,.ig-palette .ic-label{display:none}
+  .ig-palette button{flex:none;white-space:nowrap}
 }
 </style>
 </head>

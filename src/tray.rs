@@ -491,7 +491,14 @@ unsafe fn register_integration_hotkeys(hwnd: HWND, state: &TrayState, delay: &co
     let (mut keys, _) =
         crate::integrations::model::shortcuts(&state.settings.borrow().integrations);
     keys.retain(|combo| !delay.entries().iter().any(|(_, bound)| bound == combo));
-    keys.truncate(MAX_INTEGRATION_HOTKEYS);
+    // Past the id range nothing registers: say so rather than drop them.
+    let mut refused = keys.split_off(keys.len().min(MAX_INTEGRATION_HOTKEYS));
+    if !refused.is_empty() {
+        state.ctrl.log(format!(
+            "[hotkey] only {MAX_INTEGRATION_HOTKEYS} integration hotkeys can be live; {} more won't start anything",
+            refused.len()
+        ));
+    }
     for (n, combo) in keys.iter().enumerate() {
         let Some((mods, vk)) = config::parse_hotkey(combo) else {
             continue;
@@ -506,7 +513,12 @@ unsafe fn register_integration_hotkeys(hwnd: HWND, state: &TrayState, delay: &co
             state.ctrl.log(format!(
                 "[hotkey] {combo} is already in use by another app - the integration using it won't start from it"
             ));
+            refused.push(combo.clone());
         }
+    }
+    // Always published, the empty case too, so a fixed key clears its warning.
+    if let Some(integrations) = state.ctrl.integrations() {
+        integrations.set_refused_keys(refused);
     }
     *INTEGRATION_KEYS.lock() = keys;
 }

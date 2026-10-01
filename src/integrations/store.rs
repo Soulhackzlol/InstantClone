@@ -66,12 +66,17 @@ pub struct Store {
 
 impl Store {
     /// Load from `dir`, starting empty if the file is missing or unreadable.
+    /// A file that doesn't parse is kept beside it (`.bad`) rather than
+    /// overwritten by the first save, so the logins in it can be recovered.
     pub fn open(dir: &Path) -> Store {
         let path = dir.join(FILE_NAME);
-        let doc = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| json::parse(&text).ok())
-            .unwrap_or(Value::Null);
+        let doc = match std::fs::read_to_string(&path) {
+            Ok(text) => json::parse(&text).unwrap_or_else(|_| {
+                let _ = std::fs::rename(&path, path.with_extension("json.bad"));
+                Value::Null
+            }),
+            Err(_) => Value::Null,
+        };
         let account = |key: &str| doc.path(key).and_then(TwitchAccount::from_json);
         let counters = match doc.get("counters") {
             Some(Value::Obj(fields)) => fields
@@ -135,8 +140,13 @@ impl Store {
             );
             json::obj([("twitch", twitch), ("counters", counters), ("uses", uses)])
         };
+        // On disk before the rename: after a power cut the file is the old
+        // one or the new one, never a truncated one.
         let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, doc.to_json())?;
+        let mut file = std::fs::File::create(&tmp)?;
+        std::io::Write::write_all(&mut file, doc.to_json().as_bytes())?;
+        file.sync_all()?;
+        drop(file);
         std::fs::rename(&tmp, &self.path)
     }
 }
@@ -170,13 +180,16 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_file_starts_empty() {
+    fn a_broken_file_starts_empty_and_is_kept_aside() {
         let dir = std::env::temp_dir().join(format!("ic-store-bad-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE_NAME), "{not json").unwrap();
         let store = Store::open(&dir);
         assert!(store.accounts.lock().main.is_none());
         assert!(store.counters.lock().is_empty());
+        store.save().unwrap();
+        let kept = dir.join(FILE_NAME).with_extension("json.bad");
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), "{not json");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

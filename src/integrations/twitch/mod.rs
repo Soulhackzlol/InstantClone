@@ -20,6 +20,7 @@ use super::store::{Store, TwitchAccount};
 use crate::json::{self, Value};
 use crate::sync::Mutex;
 use irc::{ChatMessage, ChatState, Outgoing};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch, Notify};
@@ -54,6 +55,9 @@ fn effective_client_id(custom: &str) -> String {
 const REFRESH_MARGIN: Duration = Duration::from_secs(20 * 60);
 const UPKEEP_EVERY: Duration = Duration::from_secs(5 * 60);
 const VALIDATE_EVERY: Duration = Duration::from_secs(55 * 60);
+/// Every call to Twitch gives up after this: the token upkeep runs them in
+/// one loop, and a stalled one would stop every later refresh.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
@@ -90,18 +94,27 @@ struct LoginFlow {
 
 #[derive(Default)]
 struct Conn {
-    state: Arc<Mutex<ChatState>>,
+    /// The running connection's state. Each start gets a fresh one, so a
+    /// stopped connection still winding down can't overwrite the new one's.
+    state: Mutex<Arc<Mutex<ChatState>>>,
+    /// The token the running connection logs in with, kept fresh.
+    token: Mutex<Option<Arc<Mutex<String>>>>,
     out: Mutex<Option<mpsc::Sender<Outgoing>>>,
     stop: Mutex<Option<watch::Sender<bool>>>,
 }
 
 impl Conn {
+    fn state(&self) -> ChatState {
+        self.state.lock().lock().clone()
+    }
+
     fn stop(&self) {
         if let Some(stop) = self.stop.lock().take() {
             let _ = stop.send(true);
         }
         self.out.lock().take();
-        *self.state.lock() = ChatState::Off;
+        self.token.lock().take();
+        *self.state.lock() = Arc::default();
     }
 }
 
@@ -117,6 +130,8 @@ pub struct Twitch {
     /// Shown on the dashboard when Twitch logged us out.
     notice: Mutex<Option<String>>,
     upkeep_now: Arc<Notify>,
+    /// Set by `check_tokens_soon`: validate on the next upkeep round.
+    validate_soon: AtomicBool,
     /// Writes a line to the dashboard log.
     log: Box<dyn Fn(String) + Send + Sync>,
 }
@@ -138,6 +153,7 @@ impl Twitch {
             incoming,
             notice: Mutex::new(None),
             upkeep_now: Arc::new(Notify::new()),
+            validate_soon: AtomicBool::new(false),
             log,
         }
     }
@@ -198,7 +214,11 @@ impl Twitch {
                 Which::Bot => accounts.bot = account,
             }
         }
-        let _ = self.store.save();
+        if let Err(e) = self.store.save() {
+            // The refresh token rotates: one only in memory is a logout at
+            // the next start, so say so while it can still be fixed.
+            (self.log)(format!("[twitch] couldn't save the Twitch login: {e}"));
+        }
     }
 
     /// The streamer's channel login, or empty.
@@ -226,13 +246,16 @@ impl Twitch {
         let (stop_tx, stop_rx) = watch::channel(false);
         *conn.out.lock() = Some(out_tx);
         *conn.stop.lock() = Some(stop_tx);
+        let token = Arc::new(Mutex::new(account.access));
+        *conn.token.lock() = Some(token.clone());
         let login = irc::Login {
             login: account.login,
-            token: account.access,
+            token,
             channel: main.login,
         };
         let incoming = (which == Which::Main).then(|| self.incoming.clone());
-        let state = conn.state.clone();
+        let state = Arc::new(Mutex::new(ChatState::Connecting));
+        *conn.state.lock() = state.clone();
         let upkeep_now = self.upkeep_now.clone();
         tokio::spawn(async move {
             irc::run(login, incoming, out_rx, state.clone(), stop_rx).await;
@@ -374,7 +397,7 @@ impl Twitch {
                     ("client_id", client_id.as_str()),
                     ("token", account.access.as_str()),
                 ];
-                let _ = crate::https::https_agent()
+                let _ = crate::https::https_agent_with_timeout(HTTP_TIMEOUT)
                     .post("https://id.twitch.tv/oauth2/revoke")
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .send(auth::form_encode(&form));
@@ -388,11 +411,14 @@ impl Twitch {
     }
 
     async fn upkeep(self: Arc<Self>) {
-        let mut last_validate = Instant::now() - VALIDATE_EVERY;
+        // None until the first check. Not `now - VALIDATE_EVERY`: Windows
+        // counts Instant from boot, so that panics in the first hour after it.
+        let mut last_validate: Option<Instant> = None;
         loop {
-            let validate_now = last_validate.elapsed() >= VALIDATE_EVERY;
+            let validate_now = self.validate_soon.swap(false, Ordering::Relaxed)
+                || last_validate.is_none_or(|at| at.elapsed() >= VALIDATE_EVERY);
             if validate_now {
-                last_validate = Instant::now();
+                last_validate = Some(Instant::now());
             }
             for which in [Which::Main, Which::Bot] {
                 self.keep_fresh(which, validate_now).await;
@@ -408,7 +434,7 @@ impl Twitch {
         let Some(account) = self.account(which) else {
             return;
         };
-        let auth_failed = *self.conn(which).state.lock() == ChatState::AuthFailed;
+        let auth_failed = self.conn(which).state() == ChatState::AuthFailed;
         let expiring = account.expires_at_ms <= unix_ms() + REFRESH_MARGIN.as_millis() as u64;
         if validate && !expiring && !auth_failed {
             let access = account.access.clone();
@@ -426,13 +452,20 @@ impl Twitch {
         })
         .await
         .unwrap_or_else(|_| Err(auth::TokenError::Temporary("refresh crashed".into())));
-        // The user switched apps meanwhile: that logged this account out,
-        // and saving the old app's tokens would bring it back.
-        if self.client_id() != id {
+        // The account changed while Twitch answered: the user logged out,
+        // logged in again, or switched apps (which logs out). Applying this
+        // answer would bring the old login back or wipe the new one.
+        let unchanged = self
+            .account(which)
+            .is_some_and(|now| now.refresh == account.refresh);
+        if self.client_id() != id || !unchanged {
             return;
         }
         match result {
             Ok(tokens) => {
+                if let Some(token) = &*self.conn(which).token.lock() {
+                    *token.lock() = tokens.access.clone();
+                }
                 self.set_account(
                     which,
                     Some(TwitchAccount {
@@ -442,12 +475,16 @@ impl Twitch {
                         ..account
                     }),
                 );
-                if auth_failed || *self.conn(which).state.lock() == ChatState::Off {
+                if auth_failed || self.conn(which).state() == ChatState::Off {
                     self.restart_chat(which);
                 }
             }
             Err(auth::TokenError::Revoked) => {
                 self.conn(which).stop();
+                if which == Which::Main {
+                    // The bot posts in the streamer's channel: no channel now.
+                    self.bot.stop();
+                }
                 self.set_account(which, None);
                 let who = if which == Which::Main {
                     "your Twitch account"
@@ -470,14 +507,16 @@ impl Twitch {
         }
     }
 
-    /// Ask the upkeep loop to check tokens now (after a refused call).
+    /// Ask the upkeep loop to check tokens now (after a refused call):
+    /// Twitch may have revoked one that isn't due for a refresh yet.
     pub fn check_tokens_soon(&self) {
+        self.validate_soon.store(true, Ordering::Relaxed);
         self.upkeep_now.notify_one();
     }
 
     /// Queue a chat message. Blocking-safe: only a channel send.
     pub fn send(&self, text: &str, as_bot: bool, reply_to: Option<&str>) -> Result<(), String> {
-        let connected = |c: &Conn| *c.state.lock() == ChatState::Connected;
+        let connected = |c: &Conn| c.state() == ChatState::Connected;
         let conn = if as_bot && connected(&self.bot) {
             &self.bot
         } else {
@@ -530,7 +569,7 @@ impl Twitch {
     pub fn status_json(&self) -> Value {
         let conn_json = |which: Which| {
             let account = self.account(which);
-            let state = match &*self.conn(which).state.lock() {
+            let state = match self.conn(which).state() {
                 _ if account.is_none() => "off".to_string(),
                 ChatState::Off => "off".to_string(),
                 ChatState::Connecting => "connecting".to_string(),

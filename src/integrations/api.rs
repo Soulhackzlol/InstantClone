@@ -8,7 +8,8 @@
 
 use super::event;
 use super::model::{
-    valid_discord_webhook, valid_id, DiscordChannel, Integration, PhoneConnection, MAX_INTEGRATIONS,
+    valid_discord_webhook, valid_id, DiscordChannel, Integration, PhoneConnection, Trigger,
+    MAX_INTEGRATIONS,
 };
 use super::{presets, recipe, runner, twitch::Which};
 use crate::config::Settings;
@@ -274,6 +275,10 @@ fn overview(handle: &super::Handle, s: &Settings) -> Value {
             json::obj([
                 ("available", Value::Bool(cfg!(windows))),
                 (
+                    "refused",
+                    Value::Arr(handle.refused_keys().into_iter().map(json::str).collect()),
+                ),
+                (
                     "taken",
                     Value::Arr(
                         s.hotkeys
@@ -296,11 +301,16 @@ fn overview(handle: &super::Handle, s: &Settings) -> Value {
 }
 
 /// `https://discord.com/api/webhooks/1234/abcd...` shown as `…/1234/••••`.
+/// The id is read right after `/webhooks/`, never by counting from the
+/// end: a link ending in `/slack` would show the token in its place.
 fn mask_webhook(url: &str) -> String {
-    let parts: Vec<&str> = url.trim_end_matches('/').rsplitn(3, '/').collect();
-    match parts.as_slice() {
-        [_token, id, _] => format!("…/webhooks/{id}/••••"),
-        _ => "set".to_string(),
+    let id = url
+        .split_once("/webhooks/")
+        .and_then(|(_, rest)| rest.split('/').next())
+        .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()));
+    match id {
+        Some(id) => format!("…/webhooks/{id}/••••"),
+        None => "set".to_string(),
     }
 }
 
@@ -368,7 +378,7 @@ fn save(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -
 /// Variables the integration's messages use that nothing provides: most
 /// likely a typo, which would otherwise render as nothing.
 pub fn unknown_vars(integration: &Integration) -> Vec<String> {
-    use super::model::{visit_steps, StepKind, Trigger};
+    use super::model::{visit_steps, StepKind};
     let mut unknown: Vec<String> = Vec::new();
     for h in &integration.handlers {
         let mut known: Vec<String> = runner::GLOBAL_VARS
@@ -432,7 +442,6 @@ fn with_id(reply: Reply, id: &str) -> Reply {
 /// A hotkey or pad an integration wants that already runs a delay action:
 /// Windows gives a hotkey to one owner, and a pad would do both.
 fn shortcut_taken(integration: &Integration, s: &Settings) -> Option<String> {
-    use super::model::Trigger;
     integration.handlers.iter().find_map(|h| {
         let Trigger::Shortcut { hotkey, midi } = &h.trigger else {
             return None;
@@ -525,24 +534,25 @@ fn toggle(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path)
     let id = req.str_or("id", "").to_string();
     let enabled = req.bool_or("enabled", true);
     update(settings, cfg_path, |s| {
-        let channels = s.discord_channels.clone();
-        let integration = s
+        let at = s
             .integrations
-            .iter_mut()
-            .find(|i| i.id == id)
+            .iter()
+            .position(|i| i.id == id)
             .ok_or("that integration no longer exists")?;
         if enabled {
+            let integration = &s.integrations[at];
             let errors = integration.validate();
             if !errors.is_empty() {
                 return Err(format!("finish setting it up first: {}", errors.join("; ")));
             }
-            let probe = Settings {
-                discord_channels: channels,
-                ..Settings::defaults()
-            };
-            check_connections(integration, &probe)?;
+            check_connections(integration, s)?;
+            // A delay hotkey bound since it was switched off wins otherwise,
+            // and the integration would never start from it.
+            if let Some(taken) = shortcut_taken(integration, s) {
+                return Err(taken);
+            }
         }
-        integration.enabled = enabled;
+        s.integrations[at].enabled = enabled;
         Ok(())
     })
 }
@@ -561,9 +571,22 @@ fn duplicate(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Pa
             .find(|i| i.id == id)
             .cloned()
             .ok_or("that integration no longer exists")?;
+        // The copy starts off, with no hotkey or pad and its own web call
+        // link: otherwise one press, command or link would run both.
         let mut copy = original;
         copy.id = copy_id;
         copy.name = format!("{} (copy)", copy.name).chars().take(80).collect();
+        copy.enabled = false;
+        for h in &mut copy.handlers {
+            match &mut h.trigger {
+                Trigger::Webhook { token } => *token = new_id() + &new_id(),
+                Trigger::Shortcut { hotkey, midi } => {
+                    hotkey.clear();
+                    midi.clear();
+                }
+                _ => {}
+            }
+        }
         s.integrations.push(copy);
         Ok(())
     });
@@ -762,14 +785,14 @@ fn summary(i: &Integration) -> String {
         .handlers
         .iter()
         .map(|h| match &h.trigger {
-            super::model::Trigger::Event { kind, .. } => kind.label().to_string(),
-            super::model::Trigger::ChatCommand { command, .. } => format!("{command} in chat"),
-            super::model::Trigger::ChatMessage { .. } => "a chat message".to_string(),
-            super::model::Trigger::Timer { every_ms, .. } => {
+            Trigger::Event { kind, .. } => kind.label().to_string(),
+            Trigger::ChatCommand { command, .. } => format!("{command} in chat"),
+            Trigger::ChatMessage { .. } => "a chat message".to_string(),
+            Trigger::Timer { every_ms, .. } => {
                 format!("every {} min", every_ms / 60_000)
             }
-            super::model::Trigger::Webhook { .. } => "a web call".to_string(),
-            super::model::Trigger::Shortcut { .. } => "a hotkey or MIDI pad".to_string(),
+            Trigger::Webhook { .. } => "a web call".to_string(),
+            Trigger::Shortcut { .. } => "a hotkey or MIDI pad".to_string(),
         })
         .collect();
     let steps: usize = i
@@ -855,7 +878,7 @@ async fn test_discord(req: &Value, channels: Vec<DiscordChannel>) -> Reply {
     };
     let sent = tokio::task::spawn_blocking(move || {
         let body = super::effects::discord_body("🧪 Test message: InstantClone can post here.", "");
-        crate::https::https_agent()
+        crate::https::https_agent_with_timeout(super::effects::HTTP_TIMEOUT)
             .post(&channel.url)
             .header("Content-Type", "application/json")
             .send(body)
@@ -911,7 +934,7 @@ async fn test_phone(phone: PhoneConnection) -> Reply {
     ])
     .to_json();
     let sent = tokio::task::spawn_blocking(move || {
-        crate::https::https_agent()
+        crate::https::https_agent_with_timeout(super::effects::HTTP_TIMEOUT)
             .post(phone.server_or_default())
             .header("Content-Type", "application/json")
             .send(body)
@@ -935,6 +958,10 @@ mod tests {
     fn webhooks_are_masked() {
         assert_eq!(
             mask_webhook("https://discord.com/api/webhooks/123/abcDEF"),
+            "…/webhooks/123/••••"
+        );
+        assert_eq!(
+            mask_webhook("https://discord.com/api/webhooks/123/abcDEF/slack"),
             "…/webhooks/123/••••"
         );
     }

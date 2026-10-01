@@ -408,11 +408,12 @@ async fn serve(
     )
     .await;
 
-    // ACAO is intentionally restrictive now - only set on GET responses
-    // so overlays / docks loaded as foreign origins can still read state.
-    // POST endpoints get NO ACAO header, which (with credentials=false)
-    // blocks cross-origin script-readable responses too.
-    let acao = if method == "GET" {
+    // ACAO is intentionally restrictive: only GETs that carry no secret, so
+    // overlays and widgets loaded from other origins can still read state.
+    // Everything else (config, destinations, integrations, logs) gets none,
+    // or any website could read stream keys and webhooks from a dashboard
+    // without a password. POSTs get none either.
+    let acao = if method == "GET" && readable_cross_origin(bare_path) {
         "Access-Control-Allow-Origin: *\r\n"
     } else {
         ""
@@ -624,6 +625,30 @@ async fn auth_gate(
                 secure_flag(head_str)
             );
         }
+    }
+
+    // DNS rebinding guard. With no password, the browser's same-origin rule
+    // is all that keeps a website away from this API, and a site whose name
+    // re-resolves to 127.0.0.1 passes it: its pages become "same origin" with
+    // the dashboard and could save an integration that runs a program. Such a
+    // request names the attacker's domain in Host, while the dashboard is
+    // reached by an IP or localhost. A password closes this on its own (the
+    // session cookie never belongs to the attacker's origin), so names stay
+    // allowed then, for reverse proxies and LAN host names.
+    if settings.borrow().dashboard_password_hash.is_empty()
+        && classify_access(method, bare_path) != Access::Public
+        && !host_is_address(&parse_origin_host(head_str).1)
+    {
+        write_simple(
+            sock,
+            "403 Forbidden",
+            "text/plain; charset=utf-8",
+            "Open InstantClone by its address (http://127.0.0.1:<port>), \
+             or set a dashboard password to reach it by name.",
+            "",
+        )
+        .await?;
+        return Ok(AuthDecision::Handled);
     }
 
     // Auth management (cookie-bearing responses). Reached only after the gate
@@ -2817,6 +2842,13 @@ async fn post_config(
             format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&msg)),
         );
     }
+    if let Some(msg) = binding_taken_by_integration(&form, &new_settings) {
+        return (
+            "409 Conflict",
+            "application/json",
+            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&msg)),
+        );
+    }
 
     let old = settings.borrow().clone();
     let needs_restart =
@@ -2858,6 +2890,48 @@ async fn post_config(
         "application/json",
         format!(r#"{{"ok":true{}}}"#, restart_msg),
     )
+}
+
+/// A delay hotkey or pad being set that an enabled integration starts from.
+/// The delay action would take it over without a word, so it's refused the
+/// way the Integrations tab refuses the reverse.
+fn binding_taken_by_integration(
+    form: &std::collections::HashMap<String, String>,
+    s: &Settings,
+) -> Option<String> {
+    use crate::integrations::model::Trigger;
+    let owner = |wanted: &str, is_pad: bool| {
+        s.integrations.iter().filter(|i| i.enabled).find_map(|i| {
+            i.handlers
+                .iter()
+                .filter(|h| h.enabled)
+                .find_map(|h| match &h.trigger {
+                    Trigger::Shortcut { hotkey, midi } => {
+                        let bound = if is_pad { midi } else { hotkey };
+                        (bound == wanted).then_some(i.name.as_str())
+                    }
+                    _ => None,
+                })
+        })
+    };
+    let bindings = [
+        ("hotkey.", s.hotkeys.entries(), false),
+        ("midi.", s.midi.entries(), true),
+    ];
+    for (prefix, entries, is_pad) in bindings {
+        for (action, bound) in entries {
+            if bound.is_empty() || !form.contains_key(&format!("{prefix}{action}")) {
+                continue;
+            }
+            if let Some(name) = owner(bound, is_pad) {
+                let what = if is_pad { "That pad" } else { bound };
+                return Some(format!(
+                    "{what} already starts the integration \"{name}\"; pick another, or change it there"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Reset the persisted config to defaults. Two scopes:
@@ -4633,6 +4707,27 @@ fn wants_html(head: &str) -> bool {
 /// IPv4/IPv6 loopback address. Used to keep first-time password bootstrap on
 /// the local machine. An unparseable value is treated as non-loopback so the
 /// restriction fails closed.
+/// GET routes another origin may read: the public ones (overlays, alerts)
+/// and the delay status widgets poll. None of them carries a secret.
+fn readable_cross_origin(path: &str) -> bool {
+    classify_access("GET", path) == Access::Public || path == "/state"
+}
+
+/// True when a `Host` header names an IP address or localhost rather than a
+/// domain. An empty Host (HTTP/1.0 tools) is a local tool, not a browser.
+fn host_is_address(host: &str) -> bool {
+    let name = match host.strip_prefix('[') {
+        // [::1]:7799
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => host.rsplit_once(':').map_or(host, |(name, _)| name),
+    };
+    let name = name.to_ascii_lowercase();
+    host.is_empty()
+        || name == "localhost"
+        || name.ends_with(".localhost")
+        || name.parse::<std::net::IpAddr>().is_ok()
+}
+
 fn is_loopback(ip: &str) -> bool {
     ip.parse::<std::net::IpAddr>()
         .map(|a| a.is_loopback())
@@ -5807,6 +5902,25 @@ mod tests {
                 "preview-only params never persist"
             );
         }
+    }
+
+    #[test]
+    fn a_delay_hotkey_cannot_take_an_integrations_key() {
+        use crate::integrations::model::Trigger;
+        let mut s = Settings::defaults();
+        let mut clip = crate::integrations::presets::build("clip_button", "c".into(), "").unwrap();
+        clip.enabled = true;
+        clip.handlers[0].trigger = Trigger::Shortcut {
+            hotkey: "Ctrl+Alt+K".into(),
+            midi: String::new(),
+        };
+        s.integrations.push(clip);
+        let form = config::parse_form("hotkey.cut=ctrl%2Balt%2Bk");
+        apply_field_str(&mut s, "hotkey.cut", "ctrl+alt+k");
+        let refused = binding_taken_by_integration(&form, &s).unwrap();
+        assert!(refused.contains("Clip button"), "{refused}");
+        // A form that doesn't touch that binding isn't refused for it.
+        assert!(binding_taken_by_integration(&config::parse_form("buffer_mb=300"), &s).is_none());
     }
 
     #[test]
@@ -7507,6 +7621,46 @@ mod tests {
                 .await;
             assert_eq!(r.status, 403, "from {peer}: {}", r.body);
             assert!(live.settings.borrow().dashboard_password_hash.is_empty());
+        }
+    }
+
+    #[test]
+    fn only_addresses_pass_the_rebinding_guard() {
+        for host in [
+            "127.0.0.1:7799",
+            "localhost:7799",
+            "LOCALHOST",
+            "dock.localhost:7799",
+            "192.168.1.50:7799",
+            "[::1]:7799",
+            "",
+        ] {
+            assert!(host_is_address(host), "{host}");
+        }
+        for host in [
+            "evil.example:7799",
+            "evil.example",
+            "127.0.0.1.nip.io:7799",
+            "localhost.evil.com",
+        ] {
+            assert!(!host_is_address(host), "{host}");
+        }
+    }
+
+    #[test]
+    fn secrets_are_never_readable_cross_origin() {
+        for path in ["/overlay", "/overlay-state", "/alerts", "/state"] {
+            assert!(readable_cross_origin(path), "{path}");
+        }
+        for path in [
+            "/config",
+            "/destinations",
+            "/integrations",
+            "/integrations/activity",
+            "/logs",
+            "/docks",
+        ] {
+            assert!(!readable_cross_origin(path), "{path}");
         }
     }
 

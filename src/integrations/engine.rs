@@ -66,14 +66,16 @@ enum Input {
         handler: usize,
         reply: oneshot::Sender<Record>,
     },
+    #[cfg_attr(not(windows), allow(dead_code))]
     Shortcut(Shortcut, String),
     Login(Which),
     CancelLogin,
     Logout(Which),
 }
 
-/// What a shortcut press came from.
+/// What a shortcut press came from. Only Windows has hotkeys and MIDI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub enum Shortcut {
     Hotkey,
     Midi,
@@ -140,6 +142,10 @@ pub struct Handle {
     pub twitch: Arc<Twitch>,
     /// What "Show on stream" steps put on the alerts browser source.
     pub alerts: Arc<Board>,
+    store: Arc<Store>,
+    /// Integration hotkeys Windows wouldn't register (another app holds
+    /// them, or there are too many), for the dashboard to point out.
+    refused_keys: Mutex<Vec<String>>,
     dropped: AtomicU64,
 }
 
@@ -153,15 +159,38 @@ impl Handle {
 
     /// A call to `/hooks/<token>`.
     pub fn hook(&self, token: String, body: String, query: String) {
-        let _ = self.tx.try_send(Input::Hook { token, body, query });
+        if self
+            .tx
+            .try_send(Input::Hook { token, body, query })
+            .is_err()
+        {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// A global hotkey or MIDI pad was pressed; `signature` is the combo
     /// (`Ctrl+Alt+K`) or the pad (`note:1:36@Device`). Never blocks.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn shortcut(&self, from: Shortcut, signature: &str) {
-        let _ = self
-            .tx
-            .try_send(Input::Shortcut(from, signature.to_string()));
+        let input = Input::Shortcut(from, signature.to_string());
+        if self.tx.try_send(input).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn set_refused_keys(&self, combos: Vec<String>) {
+        *self.refused_keys.lock() = combos;
+    }
+
+    pub fn refused_keys(&self) -> Vec<String> {
+        self.refused_keys.lock().clone()
+    }
+
+    /// Write what is kept in memory between saves (the `{uses}` counts).
+    /// Call before the app exits.
+    pub fn flush(&self) {
+        let _ = self.store.save();
     }
 
     /// Run one handler now with sample values, messages marked `[TEST]`.
@@ -193,10 +222,23 @@ impl Handle {
     }
 
     fn push(&self, record: Record) {
+        // "busy" isn't a run: it must not clear a failing streak or fill the
+        // history dots, and a flood of them is one line in the log.
+        let busy = record.status == "busy";
+        if busy {
+            let mut activity = self.activity.lock();
+            if let Some(last) = activity
+                .back_mut()
+                .filter(|r| r.status == "busy" && r.integration_id == record.integration_id)
+            {
+                last.at_ms = record.at_ms;
+                return;
+            }
+        }
         {
             let mut stats = self.stats.lock();
             let stat = stats.entry(record.integration_id.clone()).or_default();
-            if !record.test {
+            if !record.test && !busy {
                 stat.last_ms = record.at_ms;
                 stat.last_status = record.status;
                 stat.runs += 1;
@@ -290,6 +332,8 @@ pub fn start(
         stats: Mutex::new(HashMap::new()),
         twitch: twitch.clone(),
         alerts: alerts.clone(),
+        store: store.clone(),
+        refused_keys: Mutex::new(Vec::new()),
         dropped: AtomicU64::new(0),
     });
     let engine_handle = handle.clone();
@@ -475,9 +519,9 @@ impl Engine {
 
     fn save_uses_if_due(&mut self) {
         if self.uses_dirty && self.uses_saved.elapsed() >= USES_SAVE_EVERY {
-            self.uses_dirty = false;
             self.uses_saved = Instant::now();
-            let _ = self.store.save();
+            // A failed write stays due, for the next round.
+            self.uses_dirty = self.store.save().is_err();
         }
     }
 
@@ -569,17 +613,18 @@ impl Engine {
             })
             .collect();
         for (integration, idx, label) in candidates {
-            self.viewer_last.insert(
-                format!("{}#{idx}#{}", integration.id, msg.user_login),
-                Instant::now(),
-            );
+            let key = format!("{}#{idx}#{}", integration.id, msg.user_login);
             let vars = chat_vars(&msg, &args);
             let trigger = if label == "chat" {
                 "Chat message".to_string()
             } else {
                 format!("{label} in chat")
             };
-            self.start_run(integration, idx, vars, Some(msg.id.clone()), trigger);
+            // A command that didn't run (quiet hours, busy) doesn't make the
+            // viewer wait before trying again.
+            if self.start_run(integration, idx, vars, Some(msg.id.clone()), trigger) {
+                self.viewer_last.insert(key, Instant::now());
+            }
         }
     }
 
@@ -634,6 +679,13 @@ impl Engine {
                 _ => None,
             })
             .collect();
+        // A timer switched off forgets its last run, so switching it back on
+        // waits a full period instead of firing at once.
+        let running: Vec<String> = timers
+            .iter()
+            .map(|(i, idx, ..)| format!("{}#{idx}", i.id))
+            .collect();
+        self.timers.retain(|key, _| running.contains(key));
         for (integration, idx, every_ms, only_live) in timers {
             let key = format!("{}#{idx}", integration.id);
             // A new timer waits one full period before its first run.
@@ -690,6 +742,8 @@ impl Engine {
             })
     }
 
+    /// Start a run unless quiet hours, the cooldown or the run limits say
+    /// no. True when it started: only then does it count toward cooldowns.
     fn start_run(
         &mut self,
         integration: Arc<Integration>,
@@ -697,11 +751,11 @@ impl Engine {
         mut vars: BTreeMap<String, String>,
         reply_to: Option<String>,
         trigger: String,
-    ) {
+    ) -> bool {
         if let Some(quiet) = integration.quiet {
             let now = super::clock::now();
             if quiet.contains((now.hour * 60 + now.minute) as u16) {
-                return;
+                return false;
             }
         }
         let key = format!("{}#{idx}", integration.id);
@@ -711,9 +765,8 @@ impl Engine {
                 .get(&key)
                 .is_some_and(|t| t.elapsed() < Duration::from_millis(integration.cooldown_ms))
         {
-            return;
+            return false;
         }
-        self.last_run.insert(key, Instant::now());
         let limit = self
             .limits
             .entry(integration.id.clone())
@@ -733,8 +786,9 @@ impl Engine {
                 test: false,
                 steps: Vec::new(),
             });
-            return;
+            return false;
         };
+        self.last_run.insert(key, Instant::now());
         let uses = {
             let mut uses = self.store.uses.lock();
             let count = uses.entry(integration.id.clone()).or_insert(0);
@@ -780,6 +834,7 @@ impl Engine {
                 steps,
             });
         });
+        true
     }
 
     fn test(&mut self, integration: Integration, idx: usize, reply: oneshot::Sender<Record>) {

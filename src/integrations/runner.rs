@@ -29,6 +29,9 @@ const MAX_WAIT: Duration = Duration::from_secs(3600);
 const DELAY_POLL: Duration = Duration::from_millis(200);
 /// Chat messages are cut to Twitch's limit.
 const MAX_CHAT_LEN: usize = 500;
+/// Counters are all saved in one file, rewritten on every change.
+const MAX_COUNTERS: usize = 5000;
+const MAX_COUNTER_NAME: usize = 100;
 /// How long a "Show on stream" card stays up when the step names no time.
 const OVERLAY_SECONDS: u64 = 6;
 
@@ -159,13 +162,17 @@ impl Runner {
 
     /// Fill in a step parameter's template.
     fn fill(&self, step: &Step, name: &str) -> String {
+        self.fill_text(step.param(name))
+    }
+
+    fn fill_text(&self, text: &str) -> String {
         let live = self.host.live();
         let lookup = Lookup {
             vars: &self.ctx.vars,
             counters: &self.env.counters,
             live: &live,
         };
-        template::render(step.param(name), &lookup)
+        template::render(text, &lookup)
     }
 
     /// `fill`, escaping inserted values with `escape`.
@@ -277,7 +284,7 @@ impl Runner {
                 StepStatus::Skipped,
                 format!(
                     "would wait {} (skipped in tests)",
-                    fmt_duration(start_delay + extra)
+                    fmt_duration(start_delay.saturating_add(extra))
                 ),
             );
             return;
@@ -289,11 +296,14 @@ impl Runner {
             } else {
                 start_delay
             };
-            let due = Duration::from_millis(delay + extra).min(MAX_WAIT);
-            if since.elapsed() >= due {
+            // `extra` can come from chat, so it can be anything.
+            let due = Duration::from_millis(delay.saturating_add(extra)).min(MAX_WAIT);
+            // One reading: a second one could pass `due` and underflow.
+            let elapsed = since.elapsed();
+            if elapsed >= due {
                 break;
             }
-            tokio::time::sleep((due - since.elapsed()).min(DELAY_POLL)).await;
+            tokio::time::sleep((due - elapsed).min(DELAY_POLL)).await;
         }
         self.record(
             "Wait for the delay",
@@ -334,8 +344,9 @@ impl Runner {
         let previous = (step.param("edit") == "last")
             .then(|| self.env.discord_messages.lock().get(&key).cloned())
             .flatten();
-        // A test must never ping a whole server, and an edit can't ping.
-        let ping = if self.ctx.test || previous.is_some() {
+        // A test must never ping a whole server. An edit doesn't ping; the
+        // ping still goes out if the message was deleted and is posted anew.
+        let ping = if self.ctx.test {
             String::new()
         } else {
             step.param("ping").to_string()
@@ -417,11 +428,17 @@ impl Runner {
             name => name.to_string(),
         };
         // Values can come from chat, so each lands escaped for where it goes:
-        // one URL component, one JSON string, one header line.
-        let json_body = matches!(
-            step.param("body").trim_start().chars().next(),
-            Some('{' | '[')
-        );
+        // one URL component, one JSON string, one form field, one header line.
+        let body = step.param("body").trim_start();
+        // `{"a": …}` or `[…]` is JSON; `{user} said hi` is a variable.
+        let json_body = body.starts_with('[')
+            || body
+                .strip_prefix('{')
+                .is_some_and(|rest| rest.trim_start().starts_with(['"', '}']));
+        let form_body = step
+            .param("headers")
+            .to_ascii_lowercase()
+            .contains("application/x-www-form-urlencoded");
         let request = HttpRequest {
             method: match step.param("method").trim() {
                 "" => "POST".to_string(),
@@ -434,6 +451,8 @@ impl Runner {
             headers: parse_headers(&self.fill_escaped(step, "headers", &template::one_line)),
             body: if json_body {
                 self.fill_escaped(step, "body", &template::json_string_content)
+            } else if form_body {
+                self.fill_escaped(step, "body", &template::url_component)
             } else {
                 self.fill(step, "body")
             },
@@ -524,7 +543,13 @@ impl Runner {
     async fn program(&mut self, step: &Step) {
         // Never templated: see `model::validate_steps`.
         let path = step.param("path").trim().to_string();
-        let args = split_args(&self.fill(step, "args"));
+        // Split first, then fill each piece: a value from chat stays one
+        // argument whatever spaces or quotes it holds, so a viewer can't add
+        // arguments of their own.
+        let args: Vec<String> = split_args(step.param("args"))
+            .iter()
+            .map(|arg| self.fill_text(arg))
+            .collect();
         let label = format!("Run {}", file_name(&path));
         if self.ctx.test {
             self.record(label, StepStatus::Skipped, "tests never run programs");
@@ -594,11 +619,26 @@ impl Runner {
     }
 
     fn counter(&mut self, step: &Step) {
-        let name = self.fill(step, "name").trim().to_string();
+        // Names can hold `{user}`, so viewers decide how many there are.
+        let name: String = self
+            .fill(step, "name")
+            .trim()
+            .chars()
+            .take(MAX_COUNTER_NAME)
+            .collect();
         let by = self.fill(step, "by").trim().parse::<i64>().unwrap_or(1);
         let op = step.param("op");
         let value = {
             let mut counters = self.env.counters.lock();
+            if counters.len() >= MAX_COUNTERS && !counters.contains_key(&name) {
+                drop(counters);
+                self.record(
+                    format!("Counter {name}"),
+                    StepStatus::Failed,
+                    format!("there are already {MAX_COUNTERS} counters; reset some first"),
+                );
+                return;
+            }
             let current = counters.get(&name).copied().unwrap_or(0);
             let next = match op {
                 "subtract" => current.saturating_sub(by),
@@ -745,8 +785,11 @@ pub fn safe_chat_text(text: &str) -> String {
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
     let trimmed = one_line.trim();
-    let mut out: String = trimmed.chars().take(MAX_CHAT_LEN).collect();
-    if out.starts_with('/') || out.starts_with('.') {
+    let command_like = trimmed.starts_with('/') || trimmed.starts_with('.');
+    // The guard character counts toward the limit too.
+    let room = MAX_CHAT_LEN - usize::from(command_like);
+    let mut out: String = trimmed.chars().take(room).collect();
+    if command_like {
         out.insert(0, '\u{200B}');
     }
     out
@@ -787,7 +830,12 @@ pub fn redact_urls(text: &str) -> String {
         let host_end = whole[scheme_end..]
             .find(['/', '?', '#'])
             .map_or(whole.len(), |i| scheme_end + i);
-        out.push_str(&whole[..host_end]);
+        // `user:password@` before the host is a secret too.
+        let host_start = whole[scheme_end..host_end]
+            .rfind('@')
+            .map_or(scheme_end, |i| scheme_end + i + 1);
+        out.push_str(&whole[..scheme_end]);
+        out.push_str(&whole[host_start..host_end]);
         if host_end < whole.len() {
             out.push_str("/…");
         }
@@ -833,7 +881,9 @@ fn file_name(path: &str) -> &str {
 
 fn short_url(url: &str) -> String {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    rest.split(['/', '?']).next().unwrap_or(rest).to_string()
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    // Without any `user:password@` in front of it.
+    host.rsplit('@').next().unwrap_or(host).to_string()
 }
 
 fn delay_action_label(action: &str, ms: u32) -> String {
@@ -1010,7 +1060,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_update_edits_the_last_message_and_never_pings() {
+    async fn an_update_edits_the_last_message() {
         let host = Arc::new(FakeHost::default());
         let env = env();
         let down = [Step::new(
@@ -1037,9 +1087,28 @@ mod tests {
             "nothing to edit yet: {calls:?}"
         );
         assert!(calls[1].contains("[here] edit=None down"));
-        assert!(calls[2].contains("[] edit=Some(\"m2\") back"), "{calls:?}");
+        // The ping rides along for when the message is gone and is reposted.
+        assert!(
+            calls[2].contains("[here] edit=Some(\"m2\") back"),
+            "{calls:?}"
+        );
         assert!(calls[3].contains("edit=None [TEST] back"), "{calls:?}");
         assert!(log[0].label.ends_with("(updated)"));
+    }
+
+    #[tokio::test]
+    async fn chat_values_stay_one_program_argument() {
+        let host = Arc::new(FakeHost::default());
+        let steps = [Step::new(
+            StepKind::Program,
+            &[("path", "say.exe"), ("args", "--from \"{user}\" {message}")],
+        )];
+        let said = [("user", "ana b"), ("message", "hi\" --admin \"x")];
+        go(&host, &steps, ctx(&said, false)).await;
+        assert_eq!(
+            host.calls.lock()[0],
+            r#"program say.exe ["--from", "ana b", "hi\" --admin \"x"]"#
+        );
     }
 
     #[tokio::test]
@@ -1282,6 +1351,11 @@ mod tests {
         );
         assert_eq!(redact_urls("no urls here"), "no urls here");
         assert_eq!(redact_urls("https://bare.host"), "https://bare.host");
+        assert_eq!(
+            redact_urls("failed: https://ana:pw@api.host/x"),
+            "failed: https://api.host/…"
+        );
+        assert_eq!(short_url("https://ana:pw@api.host/x?k=1"), "api.host");
     }
 
     #[tokio::test]
@@ -1339,6 +1413,7 @@ mod tests {
         assert_eq!(safe_chat_text("/ban someone"), "\u{200B}/ban someone");
         assert_eq!(safe_chat_text("a\r\nb"), "a  b");
         assert_eq!(safe_chat_text(&"x".repeat(900)).chars().count(), 500);
+        assert_eq!(safe_chat_text(&"/".repeat(900)).chars().count(), 500);
     }
 
     #[test]

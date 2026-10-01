@@ -82,8 +82,69 @@ Your existing Discord webhook moves over by itself: it becomes a Discord
 connection plus a "Stream alerts" integration that sends the same
 messages as before.
 
+### Security
+
+- **Websites can't reach the dashboard any more.** With no dashboard
+  password, a web page could reach InstantClone through DNS rebinding: a
+  domain that re-resolves to your own PC. It could then save an
+  integration that runs a program. The dashboard now answers only when
+  it's opened by its address (`127.0.0.1`, `localhost` or a LAN IP).
+  Opening it by a name, such as behind a reverse proxy, needs a password.
+  Overlays, the alerts page and web call links keep working from
+  anywhere.
+- **Your settings can't be read by other websites.** Every page used to
+  let any website read it. Now only the overlay, alerts and delay-status
+  pages can be read from another site. The config (stream keys),
+  destinations, integrations and logs can't.
+- **Chat can't add arguments to a program.** A value typed in chat stays
+  one argument, whatever spaces or quotes it contains.
+- **Recipes leave out more**: request bodies and program arguments too.
+  An import is now cleaned the same way, so a hand-made recipe can't
+  bring in a web address, a program or a hotkey.
+- **Web requests don't follow redirects.** A redirect could have pointed
+  a request at the dashboard itself and posted its answer to chat. The
+  step now says where the server moved instead.
+
 ### Fixes
 
+- **InstantClone no longer crashes in the first hour after Windows
+  starts.** The Twitch login check worked out "an hour ago" from the
+  time since boot, and that is negative right after a restart. Launching
+  at startup hit it every time.
+- **The Twitch login can't get stuck.** A Twitch request that never
+  answered could stop token refreshes for the rest of the session. Twitch
+  requests now time out. Logging out during a refresh no longer logs you
+  back in. A clip or marker refused for a revoked login checks the login
+  right away. Chat reconnects with the current login instead of the one
+  it started with.
+- **Hotkeys and MIDI pads, sorted out:**
+  - A delay hotkey or pad can't silently take one an integration uses.
+  - An integration can't be switched on with a key the delay already
+    uses.
+  - A key another app holds shows "Key taken" on its card.
+  - A knob or fader fires once per turn, not dozens of times.
+- **Duplicate makes a copy that starts switched off**, with its own web
+  call link and no hotkey, so one press never runs both.
+- **Cooldowns only start when something ran.** A command skipped during
+  quiet hours, or while the integration was busy, no longer makes the
+  viewer wait. "Busy" runs no longer hide a failing integration, and a
+  flood of them is one line in the log.
+- **A Discord ping is kept when the message it edits was deleted** and
+  has to be posted again.
+- **`{uses}` survives a restart or quit**, and the integrations data file
+  is written safely: a file damaged by a power cut is kept aside as
+  `.bad` instead of being overwritten.
+- **Phones:** the editor's Save button and the builder's close button no
+  longer fall off the screen. The builder scrolls as one page, and the
+  dashboard scrolls normally instead of in a small box.
+- **Modals stay put.** The Connections tabs and opening a chip no longer
+  shift the window, and Esc closes an open chip before the whole editor.
+- **Smaller fixes:**
+  - A timer switched back on waits a full period.
+  - "Wait for the delay" can't crash on an unlucky tick.
+  - A chat reply starting with `/` stays within Twitch's 500 characters.
+  - Logins in web addresses (`user:pass@`) are hidden like the rest.
+  - Counters named after viewers stop at 5,000.
 - **Discord webhooks work.** The HTTPS client checked certificates
   against a bundled list instead of Windows' own store, and refused
   Discord's certificate chain, so every Discord alert failed silently. It

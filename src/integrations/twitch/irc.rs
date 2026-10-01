@@ -61,7 +61,9 @@ pub enum ChatState {
 #[derive(Clone)]
 pub struct Login {
     pub login: String,
-    pub token: String,
+    /// Shared with the manager, which swaps in each refreshed token: a
+    /// reconnect hours later must not log in with the one we started with.
+    pub token: Arc<Mutex<String>>,
     /// Channel to join (the streamer's login).
     pub channel: String,
 }
@@ -112,7 +114,7 @@ pub async fn run(
         }
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }
-    *state.lock() = ChatState::Off;
+    // No state write here: whoever stopped us owns the state now.
 }
 
 enum SessionEnd {
@@ -144,7 +146,7 @@ async fn session(
     let channel = login.channel.to_lowercase();
     let hello = format!(
         "CAP REQ :twitch.tv/tags twitch.tv/commands\r\nPASS oauth:{}\r\nNICK {}\r\nJOIN #{}\r\n",
-        login.token,
+        login.token.lock(),
         login.login.to_lowercase(),
         channel
     );

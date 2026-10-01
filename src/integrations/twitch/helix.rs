@@ -49,7 +49,7 @@ pub fn create_clip(auth: &Auth) -> Result<String, String> {
 }
 
 fn post(auth: &Auth, url: &str, body: &str) -> Result<(u16, String), String> {
-    let resp = crate::https::https_agent()
+    let resp = crate::https::https_agent_with_timeout(super::HTTP_TIMEOUT)
         .post(url)
         .header("Client-Id", auth.client_id)
         .header("Authorization", format!("Bearer {}", auth.token))

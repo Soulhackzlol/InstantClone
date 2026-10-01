@@ -23,6 +23,7 @@
 //!
 //! Use [`https_agent`] everywhere we need to call out to an HTTPS URL.
 
+use std::time::Duration;
 use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
 use ureq::Agent;
 
@@ -31,7 +32,19 @@ use ureq::Agent;
 /// access to non-2xx response bodies. Native-tls uses Windows schannel
 /// under the hood - no rustls + ring dependency chain.
 pub fn https_agent() -> Agent {
+    agent(None)
+}
+
+/// `https_agent` whose every call gives up after `timeout`, connect to last
+/// byte. For calls made from a loop that must keep going: a stalled server
+/// would otherwise hold it forever.
+pub fn https_agent_with_timeout(timeout: Duration) -> Agent {
+    agent(Some(timeout))
+}
+
+fn agent(timeout: Option<Duration>) -> Agent {
     Agent::config_builder()
+        .timeout_global(timeout)
         .tls_config(
             TlsConfig::builder()
                 .provider(TlsProvider::NativeTls)

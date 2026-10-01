@@ -512,6 +512,11 @@ fn main() -> std::io::Result<()> {
         // Flush the egress trace so the last few thousand events make
         // it to disk before the BufWriter is dropped on process exit.
         trace::flush();
+        // Integration run counts (`{uses}`) are saved a few seconds late;
+        // write the latest now or a restart replays numbers.
+        if let Some(integrations) = ctrl.integrations() {
+            integrations.flush();
+        }
         // Flip shutdown on every active destination so each pump sends
         // `deleteStream` to its upstream before the runtime drops them.
         // Tiny window - if a pump is mid-await it'll just exit on next

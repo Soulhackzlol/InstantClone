@@ -118,7 +118,7 @@ pub fn refresh(client_id: &str, refresh_token: &str) -> Result<Tokens, TokenErro
 }
 
 pub fn validate(access: &str) -> Result<Validated, TokenError> {
-    let resp = crate::https::https_agent()
+    let resp = crate::https::https_agent_with_timeout(super::HTTP_TIMEOUT)
         .get(VALIDATE_URL)
         .header("Authorization", format!("OAuth {access}"))
         .call()
@@ -155,7 +155,7 @@ fn message(v: &Value, status: u16) -> String {
 }
 
 fn post_form(url: &str, form: &[(&str, &str)]) -> Result<(u16, String), String> {
-    let resp = crate::https::https_agent()
+    let resp = crate::https::https_agent_with_timeout(super::HTTP_TIMEOUT)
         .post(url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .send(form_encode(form))
