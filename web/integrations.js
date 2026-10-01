@@ -154,6 +154,101 @@ function lowerFirst(s){
   return /^[A-Z][a-z]/.test(s || '') ? s[0].toLowerCase() + s.slice(1) : s;
 }
 
+// What each variable holds, for the card shown over a variable chip.
+const VAR_HELP = {
+  reason:'Why it happened. For OBS: crash or freeze. For a destination: what went wrong.',
+  hold:'How long the reconnect screen can stay on air.',
+  down_for:'How long OBS was gone.',
+  destination:'The destination\'s name.',
+  platform:'The destination\'s platform, like youtube or twitch.',
+  previous:'The delay before this change.',
+  stopped:'yes when you stopped the stream yourself, no when OBS dropped.',
+  protected:'yes when crash protection kept your destinations up.',
+  delay:'The delay, written for people. On delay events, the new one.',
+  delay_ms:'The delay in milliseconds, for maths and comparisons.',
+  delay_state:'on or off.',
+  phase:'What the delay is doing: idle, preparing, ready or active.',
+  hold_active:'yes while the reconnect screen is on air.',
+  hold_left:'Time left on the reconnect screen.',
+  destinations_live:'How many destinations are live right now.',
+  destinations_total:'How many destinations are switched on.',
+  obs_live:'yes while OBS is sending to InstantClone.',
+  bitrate:'What OBS is sending, in kbps.',
+  channel:'Your Twitch channel.',
+  time:'The time now, on this PC.',
+  date:'Today\'s date.',
+  user:'The viewer\'s display name.',
+  user_login:'The viewer\'s login name, in lowercase.',
+  user_role:'The viewer\'s role: broadcaster, mod, vip, sub or viewer.',
+  message:'The whole chat message.',
+  args:'Everything typed after the command.',
+  arg1:'The first word after the command.',
+  arg2:'The second word after the command.',
+  arg3:'The third word after the command.',
+  body:'What the caller sent. If it is JSON, use {body.field} for one field.',
+  query:'The part of the address after the ?.',
+  'clip.url':'The link to the clip the Clip step made.',
+  'clip.ok':'yes when the Clip step made a clip.',
+};
+// A variable's description, including the ones named by the user's own
+// steps (web answers, counters, remembered values).
+function varHelp(name){
+  if (VAR_HELP[name]) return VAR_HELP[name];
+  let m;
+  if ((m = /^(.+)\.json\.(.+)$/.exec(name))) return `The value at ${m[2].split('.').join(' › ')} in the "${m[1]}" web answer.`;
+  if ((m = /^(.+)\.status$/.exec(name))) return `The status the "${m[1]}" web request got back, like 200.`;
+  if ((m = /^(.+)\.ok$/.exec(name))) return `yes when the "${m[1]}" web request worked, otherwise no.`;
+  if ((m = /^(.+)\.body$/.exec(name))) return `Everything the "${m[1]}" web request got back.`;
+  if ((m = /^counter\.(.+)$/.exec(name))) return `The "${m[1]}" counter, kept between runs.`;
+  if ((m = /^body\.(.+)$/.exec(name))) return `The ${m[1].split('.').join(' › ')} field of what the caller sent.`;
+  return 'A value a Remember step set earlier in this run.';
+}
+
+// The card over a hovered or focused variable chip: what it holds and an
+// example. One element, reused; a short delay so sweeping across chips
+// doesn't flash cards.
+const VarTip = {
+  el:null, target:null, timer:null,
+  want(target){
+    if (target === this.target) return;
+    clearTimeout(this.timer);
+    this.target = target;
+    if (!target){ this.hide(); return; }
+    const showing = this.el && this.el.classList.contains('on');
+    this.timer = setTimeout(() => this.show(target), showing ? 0 : 260);
+  },
+  show(target){
+    if (!target.isConnected) return;
+    if (!this.el){
+      this.el = document.createElement('div');
+      this.el.className = 'ig-vtip';
+      this.el.setAttribute('role', 'tooltip');
+      this.el.innerHTML = '<code></code><p></p><div class="ig-vtip-eg"><span>e.g.</span><b></b></div><small>Click to insert</small>';
+      document.body.appendChild(this.el);
+    }
+    const name = target.dataset.token, sample = target.dataset.sample || '';
+    this.el.querySelector('code').textContent = '{' + name + '}';
+    this.el.querySelector('p').textContent = varHelp(name);
+    this.el.querySelector('.ig-vtip-eg b').textContent = sample.length > 120 ? sample.slice(0, 120) + '…' : (sample || '(empty)');
+    const r = target.getBoundingClientRect(), w = this.el.offsetWidth, h = this.el.offsetHeight;
+    const above = r.top - h - 8 >= 8;
+    this.el.style.left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8)) + 'px';
+    this.el.style.top = (above ? r.top - h - 8 : r.bottom + 8) + 'px';
+    this.el.classList.toggle('below', !above);
+    this.el.classList.add('on');
+  },
+  hide(){
+    clearTimeout(this.timer);
+    this.target = null;
+    if (this.el) this.el.classList.remove('on');
+  },
+};
+const tokenAt = e => (e.target && e.target.closest) ? e.target.closest('.ig-modal .ig-token[data-token]') : null;
+document.addEventListener('pointerover', e => VarTip.want(tokenAt(e)));
+document.addEventListener('focusin', e => VarTip.want(tokenAt(e)));
+document.addEventListener('pointerdown', () => VarTip.hide(), true);
+window.addEventListener('scroll', () => VarTip.hide(), true);
+
 // Sample values for previews: the variables this handler can use.
 function varsFor(handler){
   const d = S.data;
@@ -1143,6 +1238,7 @@ const Modal = {
     this.el = this.form = this.opener = this.swapFrom = null;
     // Shown secrets hide again: the next time could be on stream.
     S.revealed.clear();
+    VarTip.hide();
     document.removeEventListener('keydown', onModalKey);
     el.classList.add('closing');
     el.inert = true;
@@ -1473,7 +1569,7 @@ const Editor = {
     const common = new Set(['delay', 'delay_state', 'hold_left', 'time']);
     const globals = new Set(S.data.vars.global.map(v => v.name));
     const shown = this.moreVars ? all : all.filter(v => !globals.has(v.name) || common.has(v.name));
-    const tokens = shown.map(v => `<button class="ig-token" data-act="token" data-token="${esc(v.name)}" title="e.g. ${esc(v.sample)}">+ ${esc(v.name)}</button>`).join('')
+    const tokens = shown.map(v => `<button class="ig-token" data-act="token" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}">+ ${esc(v.name)}</button>`).join('')
       + (shown.length < all.length ? `<button class="ig-token more" data-act="more-vars">${all.length - shown.length} more…</button>` : '');
     const sample = sampleLine(value, h);
     const editor = `<textarea class="ig-msg" data-bind="text" rows="1" aria-label="Message" spellcheck="true" data-keep-style>${esc(value)}</textarea>
@@ -1731,7 +1827,47 @@ const PALETTE = [
   ['Stream', [['delay_action', 'Delay action'], ['marker', 'VOD marker'], ['clip', 'Clip']]],
   ['Anything', [['program', 'Run a program'], ['file', 'Write a file'], ['set_var', 'Remember a value'], ['counter', 'Counter']]],
 ];
-const TRIGGERS = [['event', 'An InstantClone event'], ['chat_command', 'A chat command'], ['chat_message', 'A chat message'], ['timer', 'Every few minutes'], ['webhook', 'A web call (URL)']];
+// What can start an integration, shown as tiles so every kind is in sight.
+const TRIGGERS = [
+  {id:'event', icon:'bolt', label:'Something happens', hint:'OBS crashes, a destination drops, the delay changes…',
+    eg:'OBS crashes: tell the mods on Discord'},
+  {id:'chat_command', icon:'hash', label:'A chat command', hint:'!rank, !delay, anything', chat:true,
+    eg:'!rank answers with your rank'},
+  {id:'chat_message', icon:'bubble', label:'A chat message', hint:'When chat says something', chat:true,
+    eg:'Someone says "gg": thank them'},
+  {id:'timer', icon:'clock', label:'On a timer', hint:'Every few minutes', eg:'Every 15 min: remind chat to follow'},
+  {id:'webhook', icon:'link', label:'A web call', hint:'Stream Deck, scripts, other apps', eg:'A Stream Deck button cuts the delay'},
+];
+// How each event looks when picking one.
+const EVENT_INFO = {
+  obs_connected:{icon:'play', desc:'OBS starts sending to InstantClone.'},
+  obs_disconnected:{icon:'signal', desc:'OBS stops sending, on purpose or not.'},
+  eb_detected:{icon:'film', desc:'OBS starts Twitch Enhanced Broadcasting.'},
+  hold_opened:{icon:'shield', desc:'OBS dropped; the reconnect screen holds your stream.'},
+  obs_back:{icon:'check', desc:'OBS reconnects and the stream carries on.'},
+  hold_expired:{icon:'clock', desc:'OBS didn\'t come back in time.'},
+  hold_ended:{icon:'cut', desc:'You end the reconnect screen yourself.'},
+  destination_live:{icon:'megaphone', desc:'A destination starts showing your stream.'},
+  destination_dropped:{icon:'warn', desc:'A destination loses your stream.'},
+  all_destinations_down:{icon:'signal', desc:'No destination is live any more.'},
+  delay_on:{icon:'clock', desc:'The delay starts.'},
+  delay_off:{icon:'clock', desc:'The delay stops: viewers see you live.'},
+  delay_changed:{icon:'clock', desc:'The delay gets longer or shorter.'},
+};
+// Every event as a tile, grouped; `big` for the canvas chooser.
+function eventTilesHtml(selected, big){
+  const groups = {};
+  S.data.events.forEach(e => { (groups[e.group] = groups[e.group] || []).push(e); });
+  let n = 0;
+  return Object.entries(groups).map(([g, list]) => `<div class="ig-evgroup"><div class="ic-label">${esc(g)}</div>
+    <div class="ig-evs${big ? ' big' : ''}" role="radiogroup" aria-label="${esc(g)}">${list.map(e => {
+      const info = EVENT_INFO[e.id] || {icon:'bolt', desc:''};
+      const on = e.id === selected;
+      return `<button type="button" class="ig-ev${on ? ' on' : ''}" role="radio" aria-checked="${on}" data-act="b-event" data-v="${esc(e.id)}" style="--i:${n++}">
+        <span class="ig-ev-ic">${svg(info.icon)}</span><span class="ig-ev-t"><b>${esc(e.label)}</b><small>${esc(info.desc)}</small></span>
+        ${on ? `<span class="ig-ev-on">${svg('check', ' stroke-width="3"')}</span>` : ''}</button>`;
+    }).join('')}</div></div>`).join('');
+}
 const pathKey = p => p.join('.');
 
 const Builder = {
@@ -1747,6 +1883,12 @@ const Builder = {
     this.tries = new Map();
     this.d = i ? withHandler(clone(i)) : {id:'', name:'My integration', enabled:true, preset:'', cooldown_ms:0,
       handlers:[{enabled:true, trigger:{type:'event', event:'hold_opened', filters:{}}, steps:[]}]};
+    // A trigger nobody picked yet: the canvas asks how it starts instead of
+    // quietly assuming "OBS crashes".
+    this.unpicked = new WeakSet();
+    if (!i) this.unpicked.add(this.d.handlers[0]);
+    this.choosing = i ? null : 'kind';
+    this.cancelTrigger = null;
     this.dirty = !!opts.dirty || (!!opts.switchOn && !this.d.enabled);
     if (opts.switchOn) this.d.enabled = true;
     this.h = 0;
@@ -1773,7 +1915,7 @@ const Builder = {
     Modal.body(`${modalHead('steps', 'var(--accent)', titleInput(d.name),
       `Your own · runs on this PC · ${plural(n, 'step')}`,
       `<button class="ic-btn ig-head-btn" data-act="b-test">${svg('play', ' class="ig-btn-ic"')}Test run</button>${enableSwitch('enabled', d.enabled)}`)}
-      <div class="ig-bld">
+      <div class="ig-bld${this.choosing ? ' picking' : ''}">
         <aside class="ig-palette" aria-label="Blocks">
           <div class="muted ig-palette-hint">Click a block to add it where the dashed box is lit.</div>
           ${PALETTE.map(([group, items]) => `<div class="ic-label">${group}</div>${items.map(([k, label]) =>
@@ -1781,9 +1923,9 @@ const Builder = {
         </aside>
         <section class="ig-canvas" aria-label="Steps">
           <div class="ig-triggers" data-flip>${d.handlers.map((x, i) => `<button class="ig-trig${i === this.h ? ' on' : ''}${x.enabled ? '' : ' ig-dim'}" data-act="b-handler" data-n="${i}" data-key="h-${uidOf(x)}">
-            When ${esc(lowerFirst(triggerLabel(x.trigger)))}</button>`).join('')}
+            ${this.unpicked.has(x) ? 'New trigger' : 'When ' + esc(lowerFirst(triggerLabel(x.trigger)))}</button>`).join('')}
             <button class="ig-trig add" data-act="b-add-handler" data-key="h-add">${svg('plus')}Another trigger</button></div>
-          <div class="ig-steps" data-flip>
+          ${this.choosing ? this.chooserHtml(h) : `<div class="ig-steps" data-flip>
             <button class="ig-step ig-when${this.sel === 'trigger' ? ' on' : ''}" data-act="b-sel" data-path="trigger" data-key="when">
               <span class="ig-step-kind">WHEN</span><span class="ig-step-text">${esc(triggerSentence(h.trigger))}</span></button>
             ${this.stepsHtml(h.steps, [], 'root')}
@@ -1791,11 +1933,29 @@ const Builder = {
           ${this.selectedHttp() ? `<div class="ig-try-wrap" data-key="try-${uidOf(this.selectedHttp())}">${this.tryHtml(this.selectedHttp())}</div>` : ''}
           ${this.run ? `<div class="sys-section ig-run-box"><div class="ic-label">Test run: ${esc(this.run.status || 'error')}</div>
             ${this.run.error ? warnHtml(esc(this.run.error)) : this.run.status === 'running'
-              ? '<div class="ig-running"><span class="ig-spin"></span>Running the test…</div>' : runLogHtml(this.run.steps)}</div>` : ''}
+              ? '<div class="ig-running"><span class="ig-spin"></span>Running the test…</div>' : runLogHtml(this.run.steps)}</div>` : ''}`}
         </section>
         <aside class="ig-inspector" aria-label="Settings" data-flip><div class="ig-insp" data-key="${this.inspectorKey()}">${this.inspectorHtml()}</div></aside>
       </div>
       ${footHtml(d, this.dirty)}`);
+  },
+  // "How does it start?" then, for events, "What happens?": big tiles in
+  // the canvas, so the first decision is visible and can't be skipped.
+  chooserHtml(h){
+    const picked = !this.unpicked.has(h);
+    if (this.choosing === 'event'){
+      return `<div class="ig-chooser" data-key="chooser-event">
+        <div class="ig-chooser-head">
+          <button type="button" class="ig-chooser-back" data-act="b-pick-back">${svg('back')}${picked ? 'Keep it as it was' : 'Other ways to start'}</button>
+          <h3>What happens?</h3><p>Pick the moment it reacts to.</p></div>
+        ${eventTilesHtml(picked ? h.trigger.event : '', true)}</div>`;
+    }
+    const noChat = !S.data.twitch.main.login;
+    return `<div class="ig-chooser" data-key="chooser-kind">
+      <div class="ig-chooser-head"><h3>How does it start?</h3><p>Pick what sets it off. You can change it any time.</p></div>
+      <div class="ig-kinds">${TRIGGERS.map((k, n) => `<button type="button" class="ig-kind" data-act="b-trigger-type" data-v="${k.id}" style="--i:${n}">
+        <span class="ig-kind-ic">${svg(k.icon)}</span><b>${k.label}</b><small>${k.hint}</small>
+        <span class="ig-kind-eg">${k.chat && noChat ? 'Needs Twitch connected' : 'e.g. ' + esc(k.eg)}</span></button>`).join('')}</div></div>`;
   },
   // A different selection is a different panel (fresh fields, crossfade).
   inspectorKey(){
@@ -1849,9 +2009,13 @@ const Builder = {
   },
   inspectorHtml(){
     const h = this.handler();
-    const tokens = varsFor(h).map(v => `<button class="ig-token" data-act="b-token" data-token="${esc(v.name)}" title="e.g. ${esc(v.sample)}">${esc(v.name)}</button>`).join('');
+    const tokens = varsFor(h).map(v => `<button class="ig-token" data-act="b-token" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}">${esc(v.name)}</button>`).join('');
     const varsBox = `<div class="ig-insp-vars"><div class="ic-label">Variables here</div>
       <div class="ig-tokens">${tokens}</div><div class="muted">Click one to insert it in the field you last used. <span class="mono">{name|text}</span> uses the text when the value is empty or 0.</div></div>`;
+    if (this.choosing){
+      return `<div class="ig-insp-title" style="--c:#5ac8fa"><small>WHEN</small><b>${this.choosing === 'event' ? 'What happens?' : 'How does it start?'}</b></div>
+        <p class="ig-insp-p">Pick it in the middle. Then add steps from the list on the left: each one runs in order.</p>`;
+    }
     if (this.sel === 'trigger') return this.triggerInspector(h) + varsBox;
     const s = this.stepAt(this.sel);
     if (!s) return varsBox;
@@ -1905,13 +2069,16 @@ const Builder = {
   },
   triggerInspector(h){
     const t = h.trigger;
-    const typeSel = `<div class="dff"><label>When</label><select class="ic-input" data-bind="t-type">${TRIGGERS.map(([id, l]) => `<option value="${id}" ${id === t.type ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
+    const noChat = !S.data.twitch.main.login;
+    const typeSel = `<div class="dff"><label>Starts when</label><div class="ig-ttypes" role="radiogroup" aria-label="Starts when">${TRIGGERS.map(k =>
+      `<button type="button" class="ig-ttype${k.id === t.type ? ' on' : ''}" role="radio" aria-checked="${k.id === t.type}" data-act="b-trigger-type" data-v="${k.id}">
+        ${svg(k.icon)}<b>${k.label}</b><small>${k.chat && noChat ? 'Needs Twitch connected' : k.hint}</small></button>`).join('')}</div></div>`;
     let body = '';
     if (t.type === 'event'){
-      const groups = {};
-      S.data.events.forEach(e => { (groups[e.group] = groups[e.group] || []).push(e); });
-      body = `<div class="dff"><label>Event</label><select class="ic-input" data-bind="t-event">${Object.entries(groups).map(([g, list]) =>
-        `<optgroup label="${esc(g)}">${list.map(e => `<option value="${e.id}" ${e.id === t.event ? 'selected' : ''}>${esc(e.label)}</option>`).join('')}</optgroup>`).join('')}</select></div>`;
+      const current = eventOf(t.event), info = EVENT_INFO[t.event] || {icon:'bolt', desc:''};
+      body = `<div class="dff"><label>What happens</label><button type="button" class="ig-evcurrent" data-act="b-change-event">
+        <span class="ig-ev-ic">${svg(info.icon)}</span><span class="ig-ev-t"><b>${esc(current ? current.label : t.event)}</b><small>${esc(info.desc)}</small></span>
+        <span class="ig-evchange">Change</span></button></div>`;
       const e = eventOf(t.event);
       (e ? e.vars : []).filter(v => FILTER_CHOICES[v.name] || v.name === 'destination').forEach(v => {
         const cur = (t.filters || {})[v.name] || '';
@@ -1952,8 +2119,6 @@ const Builder = {
     else if (b === 'enabled') this.d.enabled = el.checked;
     else if (b === 'b-cooldown') this.d.cooldown_ms = Math.max(0, (parseFloat(el.value) || 0) * 1000);
     else if (b === 'h-enabled') h.enabled = el.checked;
-    else if (b === 't-type') h.trigger = newTrigger(el.value);
-    else if (b === 't-event'){ t.event = el.value; t.filters = {}; }
     else if (b === 't-filter'){ t.filters = t.filters || {}; t.filters[el.dataset.name] = el.value.trim(); }
     else if (b === 't-command') t.command = el.value.trim().toLowerCase();
     else if (b === 't-aliases') t.aliases = el.value.split(/[\s,]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
@@ -2023,27 +2188,97 @@ const Builder = {
         this.edited();
         return true;
       }
-      case 'b-handler': this.h = +el.dataset.n; this.sel = 'trigger'; this.target = []; this.run = null; this.render(); return true;
-      case 'b-add-handler':
-        d.handlers.push({enabled:true, trigger:newTrigger('event'), steps:[]});
+      case 'b-handler':
+        this.h = +el.dataset.n; this.sel = 'trigger'; this.target = []; this.run = null;
+        this.choosing = this.unpicked.has(this.handler()) ? 'kind' : null;
+        this.render();
+        return true;
+      case 'b-add-handler': {
+        const added = {enabled:true, trigger:newTrigger('event'), steps:[]};
+        d.handlers.push(added);
+        this.unpicked.add(added);
+        this.choosing = 'kind';
         this.h = d.handlers.length - 1; this.sel = 'trigger'; this.target = []; this.run = null;
         this.edited();
         return true;
+      }
       case 'b-del-handler':
         if (d.handlers.length < 2 || !armConfirm(el, 'Remove it and its steps?')) return true;
         d.handlers.splice(this.h, 1);
         this.h = 0; this.sel = 'trigger'; this.target = []; this.run = null;
         this.edited();
         return true;
+      case 'b-trigger-type': {
+        const h = this.handler(), v = el.dataset.v;
+        if (v === 'event'){
+          // Which event is the next question, asked in the canvas.
+          this.cancelTrigger = this.unpicked.has(h) ? null : clone(h.trigger);
+          if (h.trigger.type !== 'event') h.trigger = newTrigger('event');
+          this.choosing = 'event';
+          this.render();
+          return true;
+        }
+        if (h.trigger.type !== v || this.unpicked.has(h)) h.trigger = newTrigger(v);
+        this.unpicked.delete(h);
+        this.choosing = null;
+        this.sel = 'trigger';
+        this.edited();
+        const first = {chat_command:'t-command', chat_message:'t-pattern', timer:'t-every'}[v];
+        if (first){
+          // The starting value is a placeholder: typing replaces it.
+          focusField(first);
+          const f = q(`[data-bind="${first}"]`);
+          if (f) f.select();
+        }
+        return true;
+      }
+      case 'b-change-event':
+        this.cancelTrigger = clone(this.handler().trigger);
+        this.choosing = 'event';
+        this.render();
+        return true;
+      case 'b-event': {
+        const h = this.handler();
+        h.trigger = {type:'event', event:el.dataset.v, filters:{}};
+        this.unpicked.delete(h);
+        this.choosing = null;
+        this.cancelTrigger = null;
+        this.sel = 'trigger';
+        this.edited();
+        return true;
+      }
+      case 'b-pick-back': {
+        const h = this.handler();
+        if (this.unpicked.has(h)) this.choosing = 'kind';
+        else {
+          if (this.cancelTrigger) h.trigger = this.cancelTrigger;
+          this.cancelTrigger = null;
+          this.choosing = null;
+        }
+        this.render();
+        return true;
+      }
       case 'b-new-token': this.handler().trigger.token = randomToken(); this.edited(); return true;
       case 'b-token': insertAtCursor(this.lastField, '{' + el.dataset.token + '}'); return true;
-      case 'b-test': busy(el, () => this.test()); return true;
+      case 'b-test': if (this.askToPick()) busy(el, () => this.test()); return true;
       case 'b-try': busy(el, () => this.tryRequest()); return true;
       case 'b-pick': this.pick(el.dataset.token, el.dataset.sample || ''); return true;
       case 'b-use-reply': this.replyWithPick(); return true;
       case 'delete': if (armConfirm(el, 'Delete for good?')) busy(el, () => remove(d.id)); return true;
-      case 'save': busy(el, () => saveIntegration(d, () => { this.dirty = false; })); return true;
+      case 'save': if (this.askToPick()) busy(el, () => saveIntegration(d, () => { this.dirty = false; })); return true;
     }
+    return false;
+  },
+  // A trigger still waiting for "How does it start?" can't be saved or run.
+  // Shows it and says so; true when every trigger is picked.
+  askToPick(){
+    const at = this.d.handlers.findIndex(x => this.unpicked.has(x));
+    if (at < 0) return true;
+    this.h = at;
+    this.choosing = 'kind';
+    this.sel = 'trigger';
+    this.render();
+    toast('Pick how it starts first', 'info');
     return false;
   },
   // The selected step, when it is a web request (it gets "Try it").

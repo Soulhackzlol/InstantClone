@@ -2575,6 +2575,81 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-drop.on{border-color:var(--accent);color:var(--accent);background:color-mix(in oklch,var(--accent) 6%,var(--bg))}
 .ig-run-box{margin-top:16px;display:flex;flex-direction:column;gap:8px;animation:igFadeUp .26s var(--ease-out)}
 .ig-inspector{width:320px;flex:none;padding:16px 18px;border-left:1px solid var(--line);overflow-y:auto}
+/* The card over a variable chip. */
+.ig-vtip{position:fixed;z-index:2100;width:max-content;max-width:260px;padding:10px 12px;border-radius:10px;
+  background:var(--bg-2);border:1px solid var(--line-2);box-shadow:0 14px 34px -12px rgba(0,0,0,.75);
+  display:flex;flex-direction:column;gap:6px;pointer-events:none;opacity:0;transform:translateY(4px);
+  transition:opacity .14s var(--ease-out),transform .14s var(--ease-out)}
+.ig-vtip.below{transform:translateY(-4px)}
+.ig-vtip.on{opacity:1;transform:none}
+.ig-vtip code{font:600 12px/1.4 'JetBrains Mono',monospace;color:color-mix(in oklch,var(--accent) 70%,#fff)}
+.ig-vtip p{margin:0;font-size:12.5px;line-height:1.45;color:var(--fg-2);text-wrap:pretty}
+.ig-vtip-eg{display:flex;align-items:baseline;gap:6px;min-width:0;font-size:12px}
+.ig-vtip-eg span{color:var(--fg-4);flex:none}
+.ig-vtip-eg b{min-width:0;padding:1px 6px;border-radius:5px;background:var(--surface-3);color:var(--fg);font:500 11.5px/1.5 'JetBrains Mono',monospace;
+  overflow-wrap:anywhere}
+.ig-vtip small{font-size:11px;color:var(--fg-4)}
+@media (prefers-reduced-motion: reduce){.ig-vtip,.ig-vtip.below{transform:none;transition:opacity .1s linear}}
+/* "How does it start?": the first decision of a new integration. */
+.ig-bld.picking .ig-palette{opacity:.4;pointer-events:none;transition:opacity .2s var(--ease-out)}
+.ig-chooser{display:flex;flex-direction:column;gap:16px;padding:6px 2px 10px}
+.ig-chooser-head h3{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em;color:var(--fg);text-wrap:balance}
+.ig-chooser-head p{margin:4px 0 0;font-size:13px;color:var(--fg-3)}
+.ig-chooser-back{display:inline-flex;align-items:center;gap:6px;margin:0 0 10px -6px;padding:5px 10px 5px 6px;border:0;border-radius:8px;
+  background:transparent;color:var(--fg-3);font:inherit;font-size:12.5px;cursor:pointer;
+  transition:background-color .15s var(--ease-out),color .15s var(--ease-out)}
+.ig-chooser-back:hover{background:var(--surface-3);color:var(--fg)}
+.ig-chooser-back svg{width:14px;height:14px}
+.ig-kinds{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+.ig-kind{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:16px;border-radius:14px;border:1px solid var(--line);
+  background:var(--bg-2);color:var(--fg-2);font:inherit;text-align:left;cursor:pointer;
+  animation:igTileIn .3s var(--ease-out) both;animation-delay:calc(var(--i,0) * 35ms);
+  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),transform .2s var(--ease-out)}
+.ig-kind:hover{border-color:color-mix(in oklch,var(--accent) 45%,var(--line-2));transform:translateY(-2px);
+  box-shadow:0 18px 40px -24px color-mix(in oklch,var(--accent) 80%,transparent)}
+.ig-kind:active{transform:scale(.96)}
+.ig-kind:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ig-kind-ic{width:36px;height:36px;margin-bottom:6px;border-radius:10px;display:grid;place-items:center;
+  background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));color:var(--accent)}
+.ig-kind-ic svg{width:18px;height:18px}
+.ig-kind b{font-size:14px;font-weight:600;color:var(--fg)}
+.ig-kind small{font-size:12px;line-height:1.45;color:var(--fg-3);text-wrap:pretty}
+.ig-kind-eg{margin-top:6px;padding:4px 8px;border-radius:7px;background:var(--bg-1);font-size:11.5px;color:var(--fg-3);text-wrap:pretty}
+.ig-evgroup{display:flex;flex-direction:column;gap:8px}
+.ig-evs{display:flex;flex-direction:column;gap:6px}
+.ig-evs.big{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}
+.ig-ev,.ig-evcurrent{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--line);
+  background:var(--bg-2);color:var(--fg-2);font:inherit;text-align:left;cursor:pointer;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-evs.big .ig-ev{animation:igTileIn .3s var(--ease-out) both;animation-delay:calc(min(var(--i,0),12) * 22ms)}
+.ig-ev:hover,.ig-evcurrent:hover{border-color:color-mix(in oklch,var(--accent) 45%,var(--line-2))}
+.ig-ev:active,.ig-evcurrent:active{transform:scale(.98)}
+.ig-ev:focus-visible,.ig-evcurrent:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ig-ev.on{border-color:color-mix(in oklch,var(--accent) 60%,transparent);background:color-mix(in oklch,var(--accent) 10%,var(--bg-2))}
+.ig-ev-ic{width:30px;height:30px;flex:none;border-radius:9px;display:grid;place-items:center;
+  background:color-mix(in oklch,var(--accent) 12%,var(--surface-3));color:var(--accent)}
+.ig-ev-ic svg{width:15px;height:15px}
+.ig-ev-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ig-ev-t b{font-size:13px;font-weight:600;color:var(--fg)}
+.ig-ev-t small{font-size:11.5px;line-height:1.4;color:var(--fg-3);text-wrap:pretty}
+.ig-ev-on{color:var(--accent);flex:none}
+.ig-ev-on svg{width:14px;height:14px;animation:igPop .25s cubic-bezier(.2,0,0,1)}
+.ig-evchange{flex:none;font-size:12px;font-weight:600;color:var(--accent)}
+@media (prefers-reduced-motion: reduce){.ig-kind,.ig-evs.big .ig-ev,.ig-ev-on svg{animation:none}}
+/* Trigger kinds as tiles: every way to start is in sight. */
+.ig-ttypes{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.ig-ttype{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0;padding:9px 10px;border-radius:10px;
+  border:1px solid var(--line);background:var(--bg-2);color:var(--fg-2);font:inherit;text-align:left;cursor:pointer;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-ttype:last-child:nth-child(odd){grid-column:1/-1}
+.ig-ttype:hover{border-color:var(--line-2);color:var(--fg)}
+.ig-ttype:active{transform:scale(.96)}
+.ig-ttype:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ig-ttype svg{width:15px;height:15px;color:var(--fg-3);transition:color .15s var(--ease-out)}
+.ig-ttype b{font-size:12.5px;font-weight:600;color:var(--fg)}
+.ig-ttype small{font-size:11px;line-height:1.35;color:var(--fg-3);text-wrap:pretty}
+.ig-ttype.on{border-color:color-mix(in oklch,var(--accent) 60%,transparent);background:color-mix(in oklch,var(--accent) 10%,var(--bg-2))}
+.ig-ttype.on svg{color:var(--accent)}
 .ig-insp{display:flex;flex-direction:column;gap:12px;min-height:100%}
 .ig-insp-title small{display:block;font-size:9.5px;font-weight:700;letter-spacing:.1em;color:var(--c)}
 .ig-insp-title b{display:block;margin-top:3px;font-size:15px;font-weight:600}
