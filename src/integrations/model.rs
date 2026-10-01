@@ -30,7 +30,61 @@ pub struct Integration {
     pub preset: String,
     /// Least time between two runs of the same handler. 0 = no limit.
     pub cooldown_ms: u64,
+    /// Hours it stays silent, on this PC's clock.
+    pub quiet: Option<QuietHours>,
     pub handlers: Vec<Handler>,
+}
+
+/// A daily window, in minutes since midnight, when an integration doesn't
+/// run. `from` after `to` spans midnight (23:00 to 08:00).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuietHours {
+    pub from: u16,
+    pub to: u16,
+}
+
+impl QuietHours {
+    pub fn contains(self, minute_of_day: u16) -> bool {
+        if self.from <= self.to {
+            (self.from..self.to).contains(&minute_of_day)
+        } else {
+            minute_of_day >= self.from || minute_of_day < self.to
+        }
+    }
+
+    fn to_json(self) -> Value {
+        json::obj([
+            ("from", json::str(hhmm(self.from))),
+            ("to", json::str(hhmm(self.to))),
+        ])
+    }
+
+    /// `{"from":"23:00","to":"08:00"}`; both blank is no quiet hours.
+    fn from_json(v: Option<&Value>) -> Result<Option<QuietHours>, String> {
+        let Some(v) = v.filter(|v| !matches!(v, Value::Null)) else {
+            return Ok(None);
+        };
+        let (from, to) = (v.str_or("from", "").trim(), v.str_or("to", "").trim());
+        if from.is_empty() && to.is_empty() {
+            return Ok(None);
+        }
+        match (parse_hhmm(from), parse_hhmm(to)) {
+            (Some(from), Some(to)) if from != to => Ok(Some(QuietHours { from, to })),
+            (Some(_), Some(_)) => Err("quiet hours can't start and end at the same time".into()),
+            _ => Err("quiet hours need times like 23:00".into()),
+        }
+    }
+}
+
+fn hhmm(minutes: u16) -> String {
+    format!("{:02}:{:02}", minutes / 60, minutes % 60)
+}
+
+/// `23:00` or `8:05` to minutes since midnight.
+fn parse_hhmm(text: &str) -> Option<u16> {
+    let (h, m) = text.split_once(':')?;
+    let (h, m) = (h.trim().parse::<u16>().ok()?, m.trim().parse::<u16>().ok()?);
+    (h < 24 && m < 60 && text.len() <= 5).then_some(h * 60 + m)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +119,9 @@ pub enum Trigger {
     Timer { every_ms: u64, only_live: bool },
     /// A call to `/hooks/<token>`, from a Stream Deck, a script or any app.
     Webhook { token: String },
+    /// A global hotkey (`Ctrl+Alt+K`) or a MIDI pad (`note:1:36@Device`)
+    /// on this PC. Either may be blank, not both.
+    Shortcut { hotkey: String, midi: String },
 }
 
 /// Who may fire a chat trigger. The broadcaster always may.
@@ -137,10 +194,15 @@ pub enum StepKind {
     File,
     SetVar,
     Counter,
+    /// A card on the alerts browser source, on stream.
+    Overlay,
+    /// Reshape a value (first line, between two texts, round...) into a
+    /// new variable.
+    EditText,
 }
 
 impl StepKind {
-    pub const ALL: [StepKind; 15] = [
+    pub const ALL: [StepKind; 17] = [
         StepKind::Discord,
         StepKind::Chat,
         StepKind::Phone,
@@ -156,6 +218,8 @@ impl StepKind {
         StepKind::File,
         StepKind::SetVar,
         StepKind::Counter,
+        StepKind::Overlay,
+        StepKind::EditText,
     ];
 
     pub fn id(self) -> &'static str {
@@ -175,6 +239,8 @@ impl StepKind {
             StepKind::File => "file",
             StepKind::SetVar => "set_var",
             StepKind::Counter => "counter",
+            StepKind::Overlay => "overlay",
+            StepKind::EditText => "edit_text",
         }
     }
 
@@ -202,6 +268,8 @@ impl StepKind {
             StepKind::Program => &[("path", "pick the program to run")],
             StepKind::File => &[("path", "pick the file to write")],
             StepKind::SetVar | StepKind::Counter => &[("name", "name the value")],
+            StepKind::Overlay => &[("text", "write what shows on stream")],
+            StepKind::EditText => &[("op", "pick how to change the text")],
             StepKind::WaitDelay | StepKind::Stop | StepKind::Marker | StepKind::Clip => &[],
         }
     }
@@ -320,6 +388,7 @@ impl Integration {
             ("enabled", Value::Bool(self.enabled)),
             ("preset", json::str(&self.preset)),
             ("cooldown_ms", Value::Num(self.cooldown_ms as f64)),
+            ("quiet", self.quiet.map_or(Value::Null, QuietHours::to_json)),
             (
                 "handlers",
                 Value::Arr(self.handlers.iter().map(handler_json).collect()),
@@ -343,9 +412,31 @@ impl Integration {
             enabled: v.bool_or("enabled", true),
             preset: v.str_or("preset", "").to_string(),
             cooldown_ms: v.u64_or("cooldown_ms", 0),
+            quiet: QuietHours::from_json(v.get("quiet"))?,
             handlers,
         })
     }
+}
+
+/// The hotkeys and MIDI pads that switched-on integrations listen for,
+/// each once.
+pub fn shortcuts(integrations: &[Integration]) -> (Vec<String>, Vec<String>) {
+    let (mut keys, mut pads) = (Vec::new(), Vec::new());
+    let live = integrations
+        .iter()
+        .filter(|i| i.enabled)
+        .flat_map(|i| i.handlers.iter().filter(|h| h.enabled));
+    for handler in live {
+        if let Trigger::Shortcut { hotkey, midi } = &handler.trigger {
+            if !hotkey.is_empty() && !keys.contains(hotkey) {
+                keys.push(hotkey.clone());
+            }
+            if !midi.is_empty() && !pads.contains(midi) {
+                pads.push(midi.clone());
+            }
+        }
+    }
+    (keys, pads)
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -377,6 +468,21 @@ fn validate_trigger(trigger: &Trigger, errors: &mut Vec<String>) {
         }
         Trigger::Webhook { token } if token.len() < 16 || !valid_id(token) => {
             errors.push("the web call link is invalid; make a new one".to_string());
+        }
+        Trigger::Shortcut { hotkey, midi } => {
+            if hotkey.is_empty() && midi.is_empty() {
+                errors.push("press a key or a MIDI pad for the shortcut".to_string());
+            }
+            if !hotkey.is_empty()
+                && crate::config::canonicalize_hotkey(hotkey).as_ref() != Some(hotkey)
+            {
+                errors.push(format!(
+                    "\"{hotkey}\" isn't a hotkey: hold Ctrl, Alt, Shift or Win and press one key"
+                ));
+            }
+            if !midi.is_empty() && crate::config::canonicalize_midi(midi).as_ref() != Some(midi) {
+                errors.push("that MIDI pad isn't valid; learn it again".to_string());
+            }
         }
         _ => {}
     }
@@ -526,6 +632,11 @@ fn trigger_json(t: &Trigger) -> Value {
         Trigger::Webhook { token } => {
             json::obj([("type", json::str("webhook")), ("token", json::str(token))])
         }
+        Trigger::Shortcut { hotkey, midi } => json::obj([
+            ("type", json::str("shortcut")),
+            ("hotkey", json::str(hotkey)),
+            ("midi", json::str(midi)),
+        ]),
     }
 }
 
@@ -565,7 +676,17 @@ fn trigger_from_json(v: &Value) -> Result<Trigger, String> {
         "webhook" => Ok(Trigger::Webhook {
             token: v.str_or("token", "").to_string(),
         }),
+        "shortcut" => Ok(Trigger::Shortcut {
+            hotkey: v.str_or("hotkey", "").trim().to_string(),
+            midi: v.str_or("midi", "").trim().to_string(),
+        }),
         other => Err(format!("unknown trigger \"{other}\"")),
+    }
+}
+
+impl Handler {
+    pub fn to_json(&self) -> Value {
+        handler_json(self)
     }
 }
 
@@ -691,6 +812,10 @@ mod tests {
             enabled: true,
             preset: "tell_chat".into(),
             cooldown_ms: 60_000,
+            quiet: Some(QuietHours {
+                from: 23 * 60,
+                to: 8 * 60,
+            }),
             handlers: vec![
                 Handler {
                     enabled: true,
@@ -709,6 +834,14 @@ mod tests {
                         user_cooldown_ms: 30_000,
                     },
                     steps: vec![Step::new(StepKind::Clip, &[])],
+                },
+                Handler {
+                    enabled: true,
+                    trigger: Trigger::Shortcut {
+                        hotkey: "Ctrl+Alt+K".into(),
+                        midi: "note:1:36@Launchpad".into(),
+                    },
+                    steps: vec![Step::new(StepKind::Overlay, &[("text", "Clipped!")])],
                 },
             ],
         }
@@ -808,6 +941,72 @@ mod tests {
         let p = i.problems();
         assert!(p.invalid.is_empty());
         assert!(!p.incomplete.is_empty());
+    }
+
+    #[test]
+    fn quiet_hours_can_span_midnight() {
+        let night = QuietHours {
+            from: 23 * 60,
+            to: 8 * 60,
+        };
+        assert!(night.contains(23 * 60));
+        assert!(night.contains(2 * 60));
+        assert!(!night.contains(8 * 60));
+        assert!(!night.contains(12 * 60));
+        let lunch = QuietHours {
+            from: 12 * 60,
+            to: 13 * 60,
+        };
+        assert!(lunch.contains(12 * 60 + 30));
+        assert!(!lunch.contains(13 * 60));
+    }
+
+    #[test]
+    fn quiet_hours_read_clock_times_and_refuse_nonsense() {
+        let read = |text: &str| QuietHours::from_json(Some(&json::parse(text).unwrap()));
+        assert_eq!(
+            read(r#"{"from":"23:00","to":"8:05"}"#),
+            Ok(Some(QuietHours {
+                from: 23 * 60,
+                to: 8 * 60 + 5
+            }))
+        );
+        assert_eq!(read(r#"{"from":"","to":""}"#), Ok(None));
+        assert_eq!(QuietHours::from_json(None), Ok(None));
+        assert!(read(r#"{"from":"25:00","to":"08:00"}"#).is_err());
+        assert!(read(r#"{"from":"10:00","to":"10:00"}"#).is_err());
+        assert!(read(r#"{"from":"10:00","to":""}"#).is_err());
+    }
+
+    #[test]
+    fn shortcuts_need_a_real_key_or_pad() {
+        let mut i = sample();
+        let at = i.handlers.len() - 1;
+        i.handlers[at].trigger = Trigger::Shortcut {
+            hotkey: String::new(),
+            midi: String::new(),
+        };
+        assert!(i.validate().iter().any(|e| e.contains("press a key")));
+        i.handlers[at].trigger = Trigger::Shortcut {
+            hotkey: "K".into(),
+            midi: String::new(),
+        };
+        assert!(i.validate().iter().any(|e| e.contains("isn't a hotkey")));
+        i.handlers[at].trigger = Trigger::Shortcut {
+            hotkey: String::new(),
+            midi: "note:1:36".into(),
+        };
+        assert!(i.validate().is_empty(), "{:?}", i.validate());
+    }
+
+    #[test]
+    fn only_live_shortcuts_are_listened_for() {
+        let mut i = sample();
+        let (keys, pads) = shortcuts(std::slice::from_ref(&i));
+        assert_eq!(keys, ["Ctrl+Alt+K"]);
+        assert_eq!(pads, ["note:1:36@Launchpad"]);
+        i.enabled = false;
+        assert_eq!(shortcuts(&[i]), (vec![], vec![]));
     }
 
     #[test]

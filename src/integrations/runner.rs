@@ -9,14 +9,15 @@
 //!
 //! Test runs send messages for real, marked `[TEST]`, so the streamer sees
 //! exactly what arrives. They skip waits and never touch the stream, the
-//! VOD, programs or files: those are reported as what would have happened.
+//! VOD, the on-stream alerts, programs or files: those are reported as what
+//! would have happened.
 
 use super::clock;
 use super::host::{fmt_delay, fmt_duration, Host, HttpRequest, LiveState};
 use super::model::{DiscordChannel, PhoneConnection, Step, StepKind};
 use super::template::{self, Vars};
 use crate::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -28,6 +29,8 @@ const MAX_WAIT: Duration = Duration::from_secs(3600);
 const DELAY_POLL: Duration = Duration::from_millis(200);
 /// Chat messages are cut to Twitch's limit.
 const MAX_CHAT_LEN: usize = 500;
+/// How long a "Show on stream" card stays up when the step names no time.
+const OVERLAY_SECONDS: u64 = 6;
 
 /// Connections and persistent values a run can use.
 pub struct RunEnv {
@@ -36,10 +39,16 @@ pub struct RunEnv {
     pub counters: Arc<crate::sync::Mutex<BTreeMap<String, i64>>>,
     /// Called after a counter changes, to save it.
     pub counters_changed: Box<dyn Fn() + Send + Sync>,
+    /// The last Discord message each integration posted per channel (key
+    /// `integration:channel`), so a later step can edit it. In memory only:
+    /// after a restart the next update simply posts a new message.
+    pub discord_messages: Arc<crate::sync::Mutex<HashMap<String, String>>>,
 }
 
 /// Per-run state: the trigger's variables plus what steps produce.
 pub struct RunContext {
+    /// The integration this run belongs to.
+    pub integration_id: String,
     pub vars: BTreeMap<String, String>,
     /// Chat message to reply to, when a chat trigger started the run.
     pub reply_to: Option<String>,
@@ -210,6 +219,8 @@ impl Runner {
                 self.set(name, value);
             }
             StepKind::Counter => self.counter(step),
+            StepKind::Overlay => self.overlay(step),
+            StepKind::EditText => self.edit_text(step),
         }
         Flow::Continue
     }
@@ -313,19 +324,42 @@ impl Runner {
             return;
         };
         let text = self.marked(self.fill(step, "text"));
-        // A test must never ping a whole server.
-        let ping = if self.ctx.test {
+        // Test messages are tracked apart, so a test never edits a real one.
+        let key = format!(
+            "{}{}:{}",
+            if self.ctx.test { "test:" } else { "" },
+            self.ctx.integration_id,
+            channel.id
+        );
+        let previous = (step.param("edit") == "last")
+            .then(|| self.env.discord_messages.lock().get(&key).cloned())
+            .flatten();
+        // A test must never ping a whole server, and an edit can't ping.
+        let ping = if self.ctx.test || previous.is_some() {
             String::new()
         } else {
             step.param("ping").to_string()
         };
         let label = format!("Discord · {}", channel.name);
         let shown = text.clone();
-        match self
-            .blocking(move |h| h.discord(&channel.url, &text, &ping))
-            .await
-        {
-            Ok(()) => self.record(label, StepStatus::Ok, shown),
+        let sent = self
+            .blocking(move |h| h.discord(&channel.url, &text, &ping, previous.as_deref()))
+            .await;
+        match sent {
+            Ok(posted) => {
+                if !posted.message_id.is_empty() {
+                    self.env
+                        .discord_messages
+                        .lock()
+                        .insert(key, posted.message_id);
+                }
+                let label = if posted.edited {
+                    format!("{label} (updated)")
+                } else {
+                    label
+                };
+                self.record(label, StepStatus::Ok, shown);
+            }
             Err(e) => self.record(label, StepStatus::Failed, e),
         }
     }
@@ -523,6 +557,42 @@ impl Runner {
         }
     }
 
+    fn overlay(&mut self, step: &Step) {
+        let title = self.fill(step, "title");
+        let text = self.fill(step, "text");
+        if text.trim().is_empty() {
+            self.record("On stream", StepStatus::Skipped, "the text came out empty");
+            return;
+        }
+        let seconds = self
+            .fill(step, "seconds")
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(OVERLAY_SECONDS);
+        if self.ctx.test {
+            self.record(
+                "On stream",
+                StepStatus::Skipped,
+                format!("would show \"{text}\" (tests stay off stream)"),
+            );
+            return;
+        }
+        self.host.overlay(&title, &text, seconds);
+        self.record("On stream", StepStatus::Ok, text);
+    }
+
+    fn edit_text(&mut self, step: &Step) {
+        let input = self.fill(step, "input");
+        let (a, b) = (self.fill(step, "a"), self.fill(step, "b"));
+        let out = template::edit_text(step.param("op"), &input, &a, &b);
+        let name = match step.param("save_as").trim() {
+            "" => "text".to_string(),
+            name => name.to_string(),
+        };
+        self.record(format!("Edit text → {name}"), StepStatus::Ok, out.clone());
+        self.set(name, out);
+    }
+
     fn counter(&mut self, step: &Step) {
         let name = self.fill(step, "name").trim().to_string();
         let by = self.fill(step, "by").trim().parse::<i64>().unwrap_or(1);
@@ -602,7 +672,8 @@ pub const CHAT_VARS: &[(&str, &str)] = &[
     ("arg1", "30"),
 ];
 
-/// The variables every run can use, whatever triggered it.
+/// The variables every run can use, whatever triggered it. `uses` is the
+/// engine's to fill (it counts runs); the rest come from the live state.
 pub const GLOBAL_VARS: &[(&str, &str)] = &[
     ("delay", "30s"),
     ("delay_ms", "30000"),
@@ -617,6 +688,7 @@ pub const GLOBAL_VARS: &[(&str, &str)] = &[
     ("channel", "yourchannel"),
     ("time", "21:04"),
     ("date", "2026-09-30"),
+    ("uses", "42"),
 ];
 
 fn live_var(name: &str, live: &LiveState) -> Option<String> {
@@ -780,7 +852,7 @@ fn delay_action_label(action: &str, ms: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::host::{ClipInfo, HttpResponse};
+    use super::super::host::{ClipInfo, DiscordPosted, HttpResponse};
     use super::*;
     use crate::sync::Mutex;
 
@@ -801,15 +873,22 @@ mod tests {
                 ..LiveState::default()
             }
         }
-        fn discord(&self, url: &str, content: &str, ping: &str) -> Result<(), String> {
-            self.calls
-                .lock()
-                .push(format!("discord {url} [{ping}] {content}"));
+        fn discord(
+            &self,
+            url: &str,
+            content: &str,
+            ping: &str,
+            edit: Option<&str>,
+        ) -> Result<DiscordPosted, String> {
+            let mut calls = self.calls.lock();
+            calls.push(format!("discord {url} [{ping}] edit={edit:?} {content}"));
             if self.fail_discord {
-                Err("Discord answered 500".into())
-            } else {
-                Ok(())
+                return Err("Discord answered 500".into());
             }
+            Ok(DiscordPosted {
+                message_id: edit.map_or_else(|| format!("m{}", calls.len()), str::to_string),
+                edited: edit.is_some(),
+            })
         }
         fn http(&self, r: HttpRequest) -> Result<HttpResponse, String> {
             self.calls
@@ -864,6 +943,11 @@ mod tests {
                 .push(format!("file {path} {append} {text}"));
             Ok(())
         }
+        fn overlay(&self, title: &str, text: &str, seconds: u64) {
+            self.calls
+                .lock()
+                .push(format!("overlay {title}|{text}|{seconds}"));
+        }
     }
 
     fn env() -> Arc<RunEnv> {
@@ -879,11 +963,13 @@ mod tests {
             },
             counters: Arc::new(Mutex::new(BTreeMap::new())),
             counters_changed: Box::new(|| {}),
+            discord_messages: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     fn ctx(vars: &[(&str, &str)], test: bool) -> RunContext {
         RunContext {
+            integration_id: "crash".into(),
             vars: vars
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -921,6 +1007,82 @@ mod tests {
             calls[0].ends_with("OBS dropped (crash), 1m 42s left, delay 30s"),
             "{calls:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn an_update_edits_the_last_message_and_never_pings() {
+        let host = Arc::new(FakeHost::default());
+        let env = env();
+        let down = [Step::new(
+            StepKind::Discord,
+            &[("connection", "mods"), ("text", "down"), ("ping", "here")],
+        )];
+        let back = [Step::new(
+            StepKind::Discord,
+            &[
+                ("connection", "mods"),
+                ("text", "back"),
+                ("edit", "last"),
+                ("ping", "here"),
+            ],
+        )];
+        run(&back, ctx(&[], false), host.clone(), env.clone()).await;
+        run(&down, ctx(&[], false), host.clone(), env.clone()).await;
+        let (_, log) = run(&back, ctx(&[], false), host.clone(), env.clone()).await;
+        // A test's message is its own: it never edits the real one.
+        run(&back, ctx(&[], true), host.clone(), env.clone()).await;
+        let calls = host.calls.lock();
+        assert!(
+            calls[0].contains("[here] edit=None back"),
+            "nothing to edit yet: {calls:?}"
+        );
+        assert!(calls[1].contains("[here] edit=None down"));
+        assert!(calls[2].contains("[] edit=Some(\"m2\") back"), "{calls:?}");
+        assert!(calls[3].contains("edit=None [TEST] back"), "{calls:?}");
+        assert!(log[0].label.ends_with("(updated)"));
+    }
+
+    #[tokio::test]
+    async fn overlay_shows_on_stream_except_in_tests() {
+        let host = Arc::new(FakeHost::default());
+        let steps = [
+            Step::new(
+                StepKind::Overlay,
+                &[("title", "Clip"), ("text", "by {user}"), ("seconds", "8")],
+            ),
+            Step::new(StepKind::Overlay, &[("text", "{nothing}")]),
+        ];
+        let (_, log) = go(&host, &steps, ctx(&[("user", "Ana")], false)).await;
+        assert_eq!(log[1].status, StepStatus::Skipped);
+        let (_, log) = go(&host, &steps, ctx(&[("user", "Ana")], true)).await;
+        assert_eq!(log[0].status, StepStatus::Skipped);
+        assert_eq!(host.calls.lock().as_slice(), ["overlay Clip|by Ana|8"]);
+    }
+
+    #[tokio::test]
+    async fn edited_text_feeds_later_steps() {
+        let host = Arc::new(FakeHost::default());
+        let steps = [
+            Step::new(
+                StepKind::EditText,
+                &[
+                    ("input", "{answer}"),
+                    ("op", "between"),
+                    ("a", "rank:"),
+                    ("b", "("),
+                    ("save_as", "rank"),
+                ],
+            ),
+            Step::new(StepKind::EditText, &[("input", "{rank}"), ("op", "upper")]),
+            Step::new(StepKind::Chat, &[("text", "{rank} / {text}")]),
+        ];
+        go(
+            &host,
+            &steps,
+            ctx(&[("answer", "rank: Gold 2 (34 RR)")], false),
+        )
+        .await;
+        assert!(host.calls.lock()[0].ends_with("Gold 2 / GOLD 2"));
     }
 
     #[tokio::test]
@@ -1129,7 +1291,13 @@ mod tests {
             fn live(&self) -> LiveState {
                 LiveState::default()
             }
-            fn discord(&self, url: &str, _: &str, _: &str) -> Result<(), String> {
+            fn discord(
+                &self,
+                url: &str,
+                _: &str,
+                _: &str,
+                _: Option<&str>,
+            ) -> Result<DiscordPosted, String> {
                 Err(format!("couldn't reach {url}"))
             }
             fn http(&self, _: HttpRequest) -> Result<super::super::host::HttpResponse, String> {
@@ -1156,6 +1324,7 @@ mod tests {
             fn file(&self, _: &str, _: &str, _: bool) -> Result<(), String> {
                 Ok(())
             }
+            fn overlay(&self, _: &str, _: &str, _: u64) {}
         }
         let steps = [Step::new(
             StepKind::Discord,

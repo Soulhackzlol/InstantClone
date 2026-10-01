@@ -2231,7 +2231,12 @@ impl Controller {
                         crate::crash_hold::HoldReason::Freeze => "freeze",
                     },
                 )
-                .with("hold", fmt_duration(hold_for.as_millis() as u64)),
+                .with("hold", fmt_duration(hold_for.as_millis() as u64))
+                .with(
+                    "hold_ends_at",
+                    (crate::integrations::twitch::unix_ms() / 1000 + hold_for.as_secs())
+                        .to_string(),
+                ),
         );
     }
 

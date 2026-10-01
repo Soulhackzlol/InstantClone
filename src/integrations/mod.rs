@@ -10,12 +10,14 @@
 //! - `botcmd`: Nightbot / StreamElements / Fossabot / Streamlabs commands
 //!   converted into a "command from a website".
 //! - `runner`: runs one handler's steps against a `host::Host`.
+//! - `alerts`: what "Show on stream" steps put on the alerts page in OBS.
 //! - `host` / `effects`: the live state and I/O a run needs, and the real
 //!   implementation of both.
 //! - `engine`: the isolated thread that matches events to integrations.
 //! - `twitch`: login, token upkeep, chat, markers and clips.
 //! - `store`: Twitch logins and counters, kept apart from the settings.
 
+pub mod alerts;
 pub mod api;
 pub mod botcmd;
 pub mod clock;
@@ -31,5 +33,5 @@ pub mod store;
 pub mod template;
 pub mod twitch;
 
-pub use engine::Handle;
+pub use engine::{Handle, Shortcut};
 pub use event::{Event, EventKind};

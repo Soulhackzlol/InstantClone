@@ -82,6 +82,34 @@ pub async fn route(
         ("POST", "/integrations/test") => test(&req(), &handle).await,
         ("POST", "/integrations/fetch") => fetch(&req()).await,
         ("POST", "/integrations/convert") => convert(&req()),
+        ("POST", "/integrations/alerts/test") => {
+            handle.alerts.show(
+                "InstantClone",
+                "This is where your alerts show up on stream.",
+                6,
+            );
+            done()
+        }
+        ("POST", "/integrations/midi/learn") => midi_learn(ctrl),
+        ("POST", "/integrations/midi/poll") => {
+            let captured = ctrl.midi().take_captured_for(&[MIDI_LEARN]);
+            ok(json::obj([
+                (
+                    "learning",
+                    Value::Bool(ctrl.midi().learning().as_deref() == Some(MIDI_LEARN)),
+                ),
+                (
+                    "captured",
+                    captured.map_or(Value::Null, |(_, sig)| json::str(sig)),
+                ),
+            ]))
+        }
+        ("POST", "/integrations/midi/cancel") => {
+            if ctrl.midi().learning().as_deref() == Some(MIDI_LEARN) {
+                ctrl.midi().cancel_learn();
+            }
+            done()
+        }
         ("POST", "/integrations/export") => export(&req(), &settings.borrow()),
         ("POST", "/integrations/import") => import(&req(), settings, cfg_path),
         ("POST", "/connections/discord") => save_discord(&req(), settings, cfg_path),
@@ -111,6 +139,23 @@ pub async fn route(
         _ => return None,
     };
     Some(reply)
+}
+
+/// What a MIDI learn for an integration's shortcut is filed under, apart
+/// from the delay actions' own learns.
+const MIDI_LEARN: &str = "integration";
+
+/// Arm a MIDI learn: the next pad pressed becomes the shortcut. The
+/// dashboard polls `/integrations/midi/poll` for it.
+fn midi_learn(ctrl: &Arc<Controller>) -> Reply {
+    if !cfg!(windows) {
+        return fail("MIDI shortcuts work on Windows only");
+    }
+    if !ctrl.midi().connected() {
+        return fail("no MIDI controller found; plug one in and try again");
+    }
+    ctrl.midi().start_learn(MIDI_LEARN);
+    done()
 }
 
 /// `/hooks/<token>`: fire the web call integrations holding this token.
@@ -148,6 +193,20 @@ fn update(
 }
 
 fn overview(handle: &super::Handle, s: &Settings) -> Value {
+    // Previews and "Try it" use the real channel once Twitch is connected.
+    let channel = handle.twitch.channel();
+    let global = Value::Arr(
+        runner::GLOBAL_VARS
+            .iter()
+            .map(|&(name, sample)| {
+                let sample = match name {
+                    "channel" if !channel.is_empty() => channel.as_str(),
+                    _ => sample,
+                };
+                json::obj([("name", json::str(name)), ("sample", json::str(sample))])
+            })
+            .collect(),
+    );
     let discord = s
         .discord_channels
         .iter()
@@ -160,7 +219,7 @@ fn overview(handle: &super::Handle, s: &Settings) -> Value {
         })
         .collect();
     let vars = json::obj([
-        ("global", event::vars_json(runner::GLOBAL_VARS)),
+        ("global", global),
         ("chat", event::vars_json(runner::CHAT_VARS)),
         (
             "web",
@@ -208,6 +267,26 @@ fn overview(handle: &super::Handle, s: &Settings) -> Value {
         ),
         ("twitch", handle.twitch.status_json()),
         ("catalog", presets::catalog_json()),
+        // Global hotkeys and MIDI pads only exist on Windows, and a combo
+        // or pad that runs a delay action can't start an integration too.
+        (
+            "shortcuts",
+            json::obj([
+                ("available", Value::Bool(cfg!(windows))),
+                (
+                    "taken",
+                    Value::Arr(
+                        s.hotkeys
+                            .entries()
+                            .iter()
+                            .chain(s.midi.entries().iter())
+                            .filter(|(_, v)| !v.is_empty())
+                            .map(|(_, v)| json::str(*v))
+                            .collect(),
+                    ),
+                ),
+            ]),
+        ),
         ("events", event::catalog_json()),
         ("vars", vars),
         ("activity", handle.activity_json()),
@@ -239,6 +318,9 @@ fn save(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -
     }
     if let Err(e) = check_connections(&integration, &settings.borrow()) {
         problems.incomplete.push(e);
+    }
+    if let Some(e) = shortcut_taken(&integration, &settings.borrow()) {
+        return fail(e);
     }
     // Switched on, it must be ready to run; switched off, it saves as a
     // draft and the dashboard lists what is still missing.
@@ -308,7 +390,7 @@ pub fn unknown_vars(integration: &Integration) -> Vec<String> {
                 known.extend(["body", "query"].map(String::from));
                 prefixes.push("body.".to_string());
             }
-            Trigger::Timer { .. } => {}
+            Trigger::Timer { .. } | Trigger::Shortcut { .. } => {}
         }
         visit_steps(&h.steps, &mut |s| match s.kind {
             StepKind::Http => prefixes.push(match s.param("save_as").trim() {
@@ -316,6 +398,10 @@ pub fn unknown_vars(integration: &Integration) -> Vec<String> {
                 name => format!("{name}."),
             }),
             StepKind::SetVar => known.push(s.param("name").trim().to_string()),
+            StepKind::EditText => known.push(match s.param("save_as").trim() {
+                "" => "text".to_string(),
+                name => name.to_string(),
+            }),
             _ => {}
         });
         visit_steps(&h.steps, &mut |s| {
@@ -341,6 +427,35 @@ fn with_id(reply: Reply, id: &str) -> Reply {
         ("ok", Value::Bool(true)),
         ("id", json::str(id)),
     ]))
+}
+
+/// A hotkey or pad an integration wants that already runs a delay action:
+/// Windows gives a hotkey to one owner, and a pad would do both.
+fn shortcut_taken(integration: &Integration, s: &Settings) -> Option<String> {
+    use super::model::Trigger;
+    integration.handlers.iter().find_map(|h| {
+        let Trigger::Shortcut { hotkey, midi } = &h.trigger else {
+            return None;
+        };
+        let owner = |entries: [(&'static str, &str); 6], wanted: &str| {
+            entries
+                .into_iter()
+                .find(|(_, bound)| !wanted.is_empty() && *bound == wanted)
+                .map(|(action, _)| action)
+        };
+        if let Some(action) = owner(s.hotkeys.entries(), hotkey) {
+            return Some(format!(
+                "{hotkey} already runs the delay's {} action (Controls tab); pick another key",
+                action.replace('_', " ")
+            ));
+        }
+        owner(s.midi.entries(), midi).map(|action| {
+            format!(
+                "that MIDI pad already runs the delay's {} action (Controls tab); pick another",
+                action.replace('_', " ")
+            )
+        })
+    })
 }
 
 /// Every Discord step must point at a connection that exists.
@@ -654,6 +769,7 @@ fn summary(i: &Integration) -> String {
                 format!("every {} min", every_ms / 60_000)
             }
             super::model::Trigger::Webhook { .. } => "a web call".to_string(),
+            super::model::Trigger::Shortcut { .. } => "a hotkey or MIDI pad".to_string(),
         })
         .collect();
     let steps: usize = i
@@ -840,6 +956,29 @@ mod tests {
                 unknown_vars(&built)
             );
         }
+    }
+
+    #[test]
+    fn a_delay_hotkey_or_pad_cannot_start_an_integration_too() {
+        use super::super::model::{Handler, Step, StepKind, Trigger};
+        let mut s = Settings::defaults();
+        s.hotkeys.set("cut", "Ctrl+Alt+C");
+        s.midi.set("toggle", "note:1:36");
+        let mut i = presets::build("delay_command", "d".into(), "").unwrap();
+        let mut shortcut = |hotkey: &str, midi: &str| {
+            i.handlers = vec![Handler {
+                enabled: true,
+                trigger: Trigger::Shortcut {
+                    hotkey: hotkey.into(),
+                    midi: midi.into(),
+                },
+                steps: vec![Step::new(StepKind::Clip, &[])],
+            }];
+            shortcut_taken(&i, &s)
+        };
+        assert!(shortcut("Ctrl+Alt+C", "").unwrap().contains("cut"));
+        assert!(shortcut("", "note:1:36").unwrap().contains("toggle"));
+        assert_eq!(shortcut("Ctrl+Alt+K", "note:1:37"), None);
     }
 
     #[test]

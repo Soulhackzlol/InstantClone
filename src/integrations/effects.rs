@@ -1,7 +1,7 @@
 //! The real `Host`: reads the controller, and does the I/O each step asks
 //! for. Every method may block and is only called from `spawn_blocking`.
 
-use super::host::{ClipInfo, Host, HttpRequest, HttpResponse, LiveState};
+use super::host::{ClipInfo, DiscordPosted, Host, HttpRequest, HttpResponse, LiveState};
 use super::twitch::Twitch;
 use crate::controller::Controller;
 use crate::json::{self, Value};
@@ -81,12 +81,67 @@ pub fn send_http(r: HttpRequest) -> Result<HttpResponse, String> {
     Ok(HttpResponse { status, body })
 }
 
+/// Post a Discord message, or edit message `edit` (see `Host::discord`).
+pub fn send_discord(
+    webhook_url: &str,
+    content: &str,
+    ping: &str,
+    edit: Option<&str>,
+) -> Result<DiscordPosted, String> {
+    let body = discord_body(content, ping);
+    if let Some(id) = edit {
+        let resp = crate::https::https_agent()
+            .patch(&webhook_message_url(webhook_url, id))
+            .config()
+            .timeout_global(Some(HTTP_TIMEOUT))
+            .build()
+            .header("Content-Type", "application/json")
+            .send(body.as_str())
+            .map_err(|e| format!("couldn't reach Discord: {e}"))?;
+        // 404 here is the message, not the webhook: someone deleted it.
+        // The update still has to reach the channel, as a new message.
+        if resp.status().as_u16() != 404 {
+            discord_status(resp.status().as_u16())?;
+            return Ok(DiscordPosted {
+                message_id: id.to_string(),
+                edited: true,
+            });
+        }
+    }
+    // `wait=true` makes Discord answer with the message, and its id.
+    let mut resp = crate::https::https_agent()
+        .post(&with_query(webhook_url, "wait=true"))
+        .config()
+        .timeout_global(Some(HTTP_TIMEOUT))
+        .build()
+        .header("Content-Type", "application/json")
+        .send(body)
+        .map_err(|e| format!("couldn't reach Discord: {e}"))?;
+    discord_status(resp.status().as_u16())?;
+    let answer = resp
+        .body_mut()
+        .with_config()
+        .limit(64 * 1024)
+        .read_to_string()
+        .unwrap_or_default();
+    let message_id = json::parse(&answer)
+        .ok()
+        .and_then(|v| v.get("id").and_then(Value::as_str).map(str::to_string))
+        .filter(|id| id.bytes().all(|b| b.is_ascii_digit()))
+        .unwrap_or_default();
+    Ok(DiscordPosted {
+        message_id,
+        edited: false,
+    })
+}
+
 pub struct RealHost {
     pub ctrl: Arc<Controller>,
     pub twitch: Arc<Twitch>,
     /// The streamer's usual delay, used when `arm` names none.
     pub default_delay_ms: AtomicU32,
     pub programs: crate::sync::Mutex<Vec<std::process::Child>>,
+    pub alerts: Arc<super::alerts::Board>,
 }
 
 impl Host for RealHost {
@@ -106,25 +161,14 @@ impl Host for RealHost {
         }
     }
 
-    fn discord(&self, webhook_url: &str, content: &str, ping: &str) -> Result<(), String> {
-        let body = discord_body(content, ping);
-        let resp = crate::https::https_agent()
-            .post(webhook_url)
-            .config()
-            .timeout_global(Some(HTTP_TIMEOUT))
-            .build()
-            .header("Content-Type", "application/json")
-            .send(body)
-            .map_err(|e| format!("couldn't reach Discord: {e}"))?;
-        match resp.status().as_u16() {
-            200..=299 => Ok(()),
-            401 | 403 => {
-                Err("Discord refused this webhook link; copy it again from Discord".to_string())
-            }
-            404 => Err("Discord says this webhook no longer exists".to_string()),
-            429 => Err("Discord is rate limiting this webhook; slow down".to_string()),
-            s => Err(format!("Discord answered {s}")),
-        }
+    fn discord(
+        &self,
+        webhook_url: &str,
+        content: &str,
+        ping: &str,
+        edit: Option<&str>,
+    ) -> Result<DiscordPosted, String> {
+        send_discord(webhook_url, content, ping, edit)
     }
 
     fn http(&self, r: HttpRequest) -> Result<HttpResponse, String> {
@@ -252,6 +296,42 @@ impl Host for RealHost {
         };
         result.map_err(|e| format!("couldn't write it: {e}"))
     }
+
+    fn overlay(&self, title: &str, text: &str, seconds: u64) {
+        self.alerts.show(title, text, seconds);
+    }
+}
+
+fn discord_status(status: u16) -> Result<(), String> {
+    match status {
+        200..=299 => Ok(()),
+        401 | 403 => {
+            Err("Discord refused this webhook link; copy it again from Discord".to_string())
+        }
+        404 => Err("Discord says this webhook no longer exists".to_string()),
+        429 => Err("Discord is rate limiting this webhook; slow down".to_string()),
+        s => Err(format!("Discord answered {s}")),
+    }
+}
+
+/// `url` with `param` added to its query (a webhook link can already carry
+/// one, like `?thread_id=` for a forum thread).
+fn with_query(url: &str, param: &str) -> String {
+    let joint = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{joint}{param}")
+}
+
+/// Where one of a webhook's messages is edited: `<webhook>/messages/<id>`,
+/// keeping the webhook's query so a thread message is found in its thread.
+fn webhook_message_url(url: &str, id: &str) -> String {
+    let (base, query) = url
+        .split_once('?')
+        .map_or((url, None), |(b, q)| (b, Some(q)));
+    let base = base.trim_end_matches('/');
+    match query {
+        Some(q) => format!("{base}/messages/{id}?{q}"),
+        None => format!("{base}/messages/{id}"),
+    }
 }
 
 /// A Discord message that can only ping what the streamer chose. Text from
@@ -313,6 +393,94 @@ mod tests {
         );
         let bad = json::parse(&discord_body("x", "role:1 OR 1")).unwrap();
         assert_eq!(bad.str_or("content", ""), "x");
+    }
+
+    /// A webhook that answers like Discord does: a new message gets an id,
+    /// an edit of a known id works, an edit of a deleted one is a 404.
+    fn fake_discord(answers: usize) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/api/webhooks/1/tok",
+            listener.local_addr().unwrap()
+        );
+        let seen = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for stream in listener.incoming().take(answers) {
+                let mut stream = stream.unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: Vec<&str> = line.split_whitespace().collect();
+                let (method, path) = (request[0].to_string(), request[1].to_string());
+                let mut length = 0;
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                let (status, answer) = match (method.as_str(), path.as_str()) {
+                    ("POST", _) => ("200 OK", r#"{"id":"111"}"#),
+                    ("PATCH", p) if p.ends_with("/messages/111") => ("200 OK", r#"{"id":"111"}"#),
+                    _ => ("404 Not Found", r#"{"message":"Unknown Message"}"#),
+                };
+                seen.push(format!("{method} {path}"));
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                    answer.len()
+                );
+                stream.write_all(reply.as_bytes()).unwrap();
+            }
+            seen
+        });
+        (url, seen)
+    }
+
+    #[test]
+    fn a_message_is_posted_edited_and_reposted_once_deleted() {
+        let (url, seen) = fake_discord(4);
+        let first = send_discord(&url, "down", "", None).unwrap();
+        assert_eq!((first.message_id.as_str(), first.edited), ("111", false));
+        let edit = send_discord(&url, "back", "", Some("111")).unwrap();
+        assert_eq!((edit.message_id.as_str(), edit.edited), ("111", true));
+        // Someone deleted message 999: the update still goes out, as new.
+        let gone = send_discord(&url, "back", "", Some("999")).unwrap();
+        assert_eq!((gone.message_id.as_str(), gone.edited), ("111", false));
+        assert_eq!(
+            seen.join().unwrap(),
+            [
+                "POST /api/webhooks/1/tok?wait=true",
+                "PATCH /api/webhooks/1/tok/messages/111",
+                "PATCH /api/webhooks/1/tok/messages/999",
+                "POST /api/webhooks/1/tok?wait=true",
+            ]
+        );
+    }
+
+    #[test]
+    fn edits_go_to_the_message_and_keep_the_thread() {
+        let hook = "https://discord.com/api/webhooks/1/tok";
+        assert_eq!(with_query(hook, "wait=true"), format!("{hook}?wait=true"));
+        assert_eq!(
+            webhook_message_url(hook, "99"),
+            format!("{hook}/messages/99")
+        );
+        let thread = "https://discord.com/api/webhooks/1/tok?thread_id=5";
+        assert_eq!(
+            with_query(thread, "wait=true"),
+            format!("{thread}&wait=true")
+        );
+        assert_eq!(
+            webhook_message_url(thread, "99"),
+            "https://discord.com/api/webhooks/1/tok/messages/99?thread_id=5"
+        );
     }
 
     #[test]

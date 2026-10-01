@@ -106,7 +106,13 @@ impl EventKind {
         match self {
             // `protected`: crash protection took over (a hold opened).
             EventKind::ObsDisconnected => &[("stopped", "no"), ("protected", "no")],
-            EventKind::HoldOpened => &[("reason", "crash"), ("hold", "2m 00s")],
+            // `hold_ends_at`: when the hold runs out, in Unix seconds. Discord
+            // shows `<t:{hold_ends_at}:R>` as a live countdown.
+            EventKind::HoldOpened => &[
+                ("reason", "crash"),
+                ("hold", "2m 00s"),
+                ("hold_ends_at", "1790000000"),
+            ],
             EventKind::ObsBack => &[("down_for", "38 s")],
             EventKind::HoldExpired => &[("hold", "2m 00s")],
             EventKind::HoldEnded => &[("down_for", "1m 12s")],

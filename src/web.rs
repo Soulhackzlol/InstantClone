@@ -355,6 +355,10 @@ async fn serve(
     if method == "GET" && bare_path == "/overlay-events" {
         return handle_sse(sock, ctrl, settings, sysstat, Feed::Overlay).await;
     }
+    // The alerts browser source's feed: what "Show on stream" steps put up.
+    if method == "GET" && bare_path == "/alerts-events" {
+        return handle_sse(sock, ctrl, settings, sysstat, Feed::Alerts).await;
+    }
 
     // Lifecycle controls (admin-gated by auth_gate above): acknowledge and
     // flush the 200 to the client BEFORE tripping the shutdown signal. The main
@@ -830,6 +834,11 @@ async fn route(
         // GET / and GET /dock are handled in serve() as a fast-path
         // (static gz blob, no allocation, no String round-trip).
         ("GET", "/overlay") => ("200 OK", "text/html; charset=utf-8", overlay_html(query)),
+        ("GET", "/alerts") => (
+            "200 OK",
+            "text/html; charset=utf-8",
+            ALERTS_HTML.to_string(),
+        ),
         ("GET", "/state") => (
             "200 OK",
             "application/json",
@@ -1221,6 +1230,8 @@ async fn route(
 enum Feed {
     Dashboard,
     Overlay,
+    /// The integrations' on-stream alerts: only the cards themselves.
+    Alerts,
 }
 
 async fn handle_sse(
@@ -1252,6 +1263,10 @@ async fn handle_sse(
         let cur = match feed {
             Feed::Dashboard => state_json(&ctrl, &settings, &sysstat),
             Feed::Overlay => overlay_state_json(&ctrl, &settings),
+            Feed::Alerts => ctrl.integrations().map_or_else(
+                || r#"{"boot":"","alerts":[]}"#.to_string(),
+                |h| h.alerts.to_json(),
+            ),
         };
         let now = std::time::Instant::now();
         let changed = cur != last_payload;
@@ -3220,7 +3235,7 @@ async fn post_midi_poll(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
-    if let Some((action, signature)) = ctrl.midi().take_captured() {
+    if let Some((action, signature)) = ctrl.midi().take_captured_for(&config::ACTIONS) {
         let _wl = settings_write_guard();
         let mut new_settings = settings.borrow().clone();
         new_settings.midi.set(&action, &signature);
@@ -4510,6 +4525,12 @@ fn classify_access(method: &str, path: &str) -> Access {
     if method == "GET" && (path == "/overlay-state" || path == "/overlay-events") {
         return Access::Public;
     }
+    // The alerts browser source, for the same reason, and safe for the same
+    // reason: its feed is only the cards integrations chose to put on
+    // stream. Nothing there identifies the streamer or controls anything.
+    if method == "GET" && (path == "/alerts" || path == "/alerts-events") {
+        return Access::Public;
+    }
     match (method, path) {
         ("GET", "/state")
         | ("GET", "/events")
@@ -4706,6 +4727,9 @@ static DOCK_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js.gz"
 /// Main dashboard / first-run wizard. Source lives in `web/index.html`;
 /// build-time minified + gzipped (see `build.rs`).
 static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
+/// The alerts browser source (`/alerts`); see `integrations::alerts`.
+static ALERTS_HTML: &str = include_str!("../web/alerts.html");
+
 /// The dashboard's Integrations tab; source in `web/integrations.js`,
 /// build-time gzipped like the dock script.
 static INTEGRATIONS_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js.gz"));
@@ -5283,6 +5307,13 @@ mod tests {
         // inheriting the read exemption.
         assert_eq!(classify_access("POST", "/overlay-state"), Access::Admin);
         assert_eq!(classify_access("POST", "/overlay-events"), Access::Admin);
+        assert_eq!(classify_access("GET", "/alerts-events"), Access::Public);
+        assert_eq!(classify_access("POST", "/alerts-events"), Access::Admin);
+        // Putting a test card up is a dashboard action.
+        assert_eq!(
+            classify_access("POST", "/integrations/alerts/test"),
+            Access::Admin
+        );
 
         // The dashboard's own feed stays behind a login. If this ever
         // relaxes to Public, the overlay split above has been undone and
@@ -7012,6 +7043,7 @@ mod tests {
         ("GET", "/obs/vod-script/download", Access::Admin),
         ("GET", "/events", Access::Control),
         ("GET", "/overlay-events", Access::Public),
+        ("GET", "/alerts-events", Access::Public),
         // Renders arbitrary settings from the query: a settings page tool.
         ("GET", "/crash-protection/preview", Access::Admin),
         ("POST", "/app/restart", Access::Admin),
@@ -7024,6 +7056,7 @@ mod tests {
         ("GET", "/overlay", Access::Public),
         ("GET", "/state", Access::Control),
         ("GET", "/overlay-state", Access::Public),
+        ("GET", "/alerts", Access::Public),
         // Ending a hold is operational, like a cut: the dock has the button.
         ("POST", "/crash-protection/end", Access::Control),
         ("GET", "/config", Access::Control),

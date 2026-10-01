@@ -4,6 +4,8 @@
 //! - Discord connections are replaced by a placeholder; the importer picks
 //!   one of their own connections for it.
 //! - Web call links get new secret tokens on import.
+//! - Hotkeys and MIDI pads are left for the importer to pick: a pad names
+//!   the sharer's controller, and their keys may be taken on another PC.
 //! - Everything imported arrives switched off.
 //! - Steps that run programs or write files are flagged, and the import
 //!   needs an explicit yes for them.
@@ -45,8 +47,13 @@ pub fn export(name: &str, integrations: &[Integration]) -> String {
             let mut i = i.clone();
             for h in &mut i.handlers {
                 strip_private(&mut h.steps);
-                if let Trigger::Webhook { token } = &mut h.trigger {
-                    token.clear();
+                match &mut h.trigger {
+                    Trigger::Webhook { token } => token.clear(),
+                    Trigger::Shortcut { hotkey, midi } => {
+                        hotkey.clear();
+                        midi.clear();
+                    }
+                    _ => {}
                 }
             }
             i.to_json()
@@ -263,6 +270,22 @@ mod tests {
             Trigger::Webhook { token } => assert!(token.starts_with("fresh")),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn shortcuts_are_left_for_the_importer() {
+        let mut i = presets::build("delay_command", "x".into(), "").unwrap();
+        i.handlers[0].trigger = Trigger::Shortcut {
+            hotkey: "Ctrl+Alt+K".into(),
+            midi: "note:1:36@Oriol's Launchpad".into(),
+        };
+        let text = export("x", &[i]);
+        let decoded = String::from_utf8(base64url_decode(&text[PREFIX.len()..]).unwrap()).unwrap();
+        assert!(!decoded.contains("Launchpad") && !decoded.contains("Ctrl+Alt+K"));
+        assert!(
+            parse(&text, || "fresh1234567890ab".into()).is_ok(),
+            "still imports, unfinished"
+        );
     }
 
     #[test]

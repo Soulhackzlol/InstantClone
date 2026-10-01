@@ -73,6 +73,17 @@ const RESUME_TIMER_ID: usize = 1;
 /// back, the newer one is the one worth showing.
 static PENDING_BALLOON: crate::sync::Mutex<String> = crate::sync::Mutex::new(String::new());
 
+/// Integration shortcuts register from this id up, one per combo, in the
+/// order of `INTEGRATION_KEYS`. Far above the delay actions' ids.
+const INTEGRATION_HOTKEY_BASE: i32 = 100;
+/// More combos than anyone binds; keeps a broken config from registering
+/// hundreds of system-wide hotkeys.
+const MAX_INTEGRATION_HOTKEYS: usize = 64;
+
+/// The combos integrations listen for, as registered: id
+/// `INTEGRATION_HOTKEY_BASE + n` is `INTEGRATION_KEYS[n]`.
+static INTEGRATION_KEYS: crate::sync::Mutex<Vec<String>> = crate::sync::Mutex::new(Vec::new());
+
 /// RegisterHotKey id for an action: its 1-based position in
 /// `config::ACTIONS` (0 is not a valid application hotkey id). Deriving both
 /// directions from that one list is what keeps the id a binding is filed
@@ -470,6 +481,34 @@ unsafe fn register_hotkeys(hwnd: HWND) {
     // Always published, including the empty case, so the dashboard clears a
     // warning the moment the user picks a combo that is actually free.
     state.ctrl.set_hotkey_conflicts(conflicts);
+    register_integration_hotkeys(hwnd, state, &hotkeys);
+}
+
+/// Register the combos integrations start from. A combo a delay action
+/// already holds stays the delay action's (the dashboard refuses to save
+/// that pair, so this only guards a hand-edited config).
+unsafe fn register_integration_hotkeys(hwnd: HWND, state: &TrayState, delay: &config::Hotkeys) {
+    let (mut keys, _) =
+        crate::integrations::model::shortcuts(&state.settings.borrow().integrations);
+    keys.retain(|combo| !delay.entries().iter().any(|(_, bound)| bound == combo));
+    keys.truncate(MAX_INTEGRATION_HOTKEYS);
+    for (n, combo) in keys.iter().enumerate() {
+        let Some((mods, vk)) = config::parse_hotkey(combo) else {
+            continue;
+        };
+        if RegisterHotKey(
+            hwnd,
+            INTEGRATION_HOTKEY_BASE + n as i32,
+            mods | MOD_NOREPEAT,
+            vk,
+        ) == 0
+        {
+            state.ctrl.log(format!(
+                "[hotkey] {combo} is already in use by another app - the integration using it won't start from it"
+            ));
+        }
+    }
+    *INTEGRATION_KEYS.lock() = keys;
 }
 
 /// Keep the resume timer in step with the suspension: armed for whatever is
@@ -495,12 +534,25 @@ unsafe fn unregister_hotkeys(hwnd: HWND) {
     for i in 0..config::ACTIONS.len() {
         UnregisterHotKey(hwnd, i as i32 + 1);
     }
+    let registered = std::mem::take(&mut *INTEGRATION_KEYS.lock());
+    for n in 0..registered.len() {
+        UnregisterHotKey(hwnd, INTEGRATION_HOTKEY_BASE + n as i32);
+    }
 }
 
 /// Run the delay action bound to a fired hotkey. The RegisterHotKey id maps
 /// back to an action name via `hotkey_action`; the shared controller method
 /// carries the semantics (identical to the MIDI path).
 fn dispatch_hotkey(state: &TrayState, id: i32) {
+    if id >= INTEGRATION_HOTKEY_BASE {
+        let combo = usize::try_from(id - INTEGRATION_HOTKEY_BASE)
+            .ok()
+            .and_then(|n| INTEGRATION_KEYS.lock().get(n).cloned());
+        if let (Some(combo), Some(integrations)) = (combo, state.ctrl.integrations()) {
+            integrations.shortcut(crate::integrations::Shortcut::Hotkey, &combo);
+        }
+        return;
+    }
     let Some(action) = hotkey_action(id) else {
         return;
     };

@@ -135,11 +135,18 @@ impl MidiState {
             None => None,
         }
     }
-    /// Take a captured (action, signature) if one is waiting and still
-    /// inside its learn window. The web layer persists it to config, so it
-    /// is consumed exactly once.
-    pub fn take_captured(&self) -> Option<(String, String)> {
+    /// Take a captured (action, signature) if one is waiting, still inside
+    /// its learn window, and learned for one of `actions`. The delay
+    /// actions' poll and the integrations' poll each take only their own,
+    /// so neither can swallow the other's press. Consumed exactly once.
+    pub fn take_captured_for(&self, actions: &[&str]) -> Option<(String, String)> {
         let mut captured = self.captured.lock();
+        if !captured
+            .as_ref()
+            .is_some_and(|(action, _, _)| actions.contains(&action.as_str()))
+        {
+            return None;
+        }
         match captured.take() {
             Some((action, signature, deadline)) if Instant::now() < deadline => {
                 Some((action, signature))
@@ -173,6 +180,9 @@ impl MidiState {
             if let Some(problem) = ctrl.run_named_action(action, default_ms, "midi") {
                 crate::tray::notify_problem(&problem);
             }
+        } else if let Some(integrations) = ctrl.integrations() {
+            // Not a delay action's pad: maybe an integration's shortcut.
+            integrations.shortcut(crate::integrations::Shortcut::Midi, signature);
         }
     }
 
@@ -282,8 +292,16 @@ pub fn spawn(
 /// Built everywhere so its rule is tested on every CI target; only Windows
 /// has a listener to act on it.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn should_hold_devices(learning: bool, midi: &crate::config::MidiBindings) -> bool {
-    learning || midi.entries().iter().any(|(_, sig)| !sig.is_empty())
+fn should_hold_devices(learning: bool, settings: &Settings) -> bool {
+    learning
+        || settings
+            .midi
+            .entries()
+            .iter()
+            .any(|(_, sig)| !sig.is_empty())
+        || !crate::integrations::model::shortcuts(&settings.integrations)
+            .1
+            .is_empty()
 }
 
 #[cfg(windows)]
@@ -387,7 +405,7 @@ mod win {
         // Scoped: the borrow parks the settings watch, and opening devices
         // below is slow enough to matter.
         let settings = ctx.settings.borrow();
-        super::should_hold_devices(learning, &settings.midi)
+        super::should_hold_devices(learning, &settings)
     }
 
     /// Idle between sweeps, but notice a learn starting sooner than the
@@ -678,12 +696,12 @@ mod tests {
     #[test]
     fn a_fresh_install_can_still_record_its_first_binding() {
         let state = MidiState::new();
-        let midi = crate::config::MidiBindings::default();
+        let fresh = crate::config::Settings::defaults();
 
         // Fresh install: a controller is plugged in, nothing is bound yet.
         state.set_devices(vec!["Launchpad MK2".to_string()], Vec::new());
         assert!(
-            !should_hold_devices(false, &midi),
+            !should_hold_devices(false, &fresh),
             "nothing bound: the controller stays free for other software"
         );
         assert!(!state.available(), "so nothing is open");
@@ -695,7 +713,7 @@ mod tests {
         // Arming a learn is what asks for the device.
         state.start_learn("arm");
         assert!(
-            should_hold_devices(state.learning().is_some(), &midi),
+            should_hold_devices(state.learning().is_some(), &fresh),
             "an armed learn opens the device so the press can be heard"
         );
 
@@ -719,27 +737,67 @@ mod tests {
     /// nothing until there is a reason to.
     #[test]
     fn no_bindings_means_we_leave_every_midi_device_alone() {
-        let mut midi = crate::config::MidiBindings::default();
+        let mut s = crate::config::Settings::defaults();
         assert!(
-            !should_hold_devices(false, &midi),
+            !should_hold_devices(false, &s),
             "nothing bound and not learning: hold nothing"
         );
         assert!(
-            should_hold_devices(true, &midi),
+            should_hold_devices(true, &s),
             "a learn needs a device open to hear the press"
         );
 
-        midi.set("arm", "note:1:36");
+        s.midi.set("arm", "note:1:36");
         assert!(
-            should_hold_devices(false, &midi),
+            should_hold_devices(false, &s),
             "one binding is reason enough"
         );
 
         // Clearing the last binding hands the controller back.
-        midi.set("arm", "");
+        s.midi.set("arm", "");
         assert!(
-            !should_hold_devices(false, &midi),
+            !should_hold_devices(false, &s),
             "the last binding going away releases the device"
+        );
+    }
+
+    /// An integration started from a pad is a binding too.
+    #[test]
+    fn an_integration_pad_holds_the_device() {
+        use crate::integrations::model::{Handler, Step, StepKind, Trigger};
+        let mut s = crate::config::Settings::defaults();
+        let mut i = crate::integrations::presets::build("delay_command", "p".into(), "").unwrap();
+        i.handlers = vec![Handler {
+            enabled: true,
+            trigger: Trigger::Shortcut {
+                hotkey: String::new(),
+                midi: "note:1:40".into(),
+            },
+            steps: vec![Step::new(StepKind::Clip, &[])],
+        }];
+        s.integrations.push(i);
+        assert!(should_hold_devices(false, &s));
+        s.integrations[0].enabled = false;
+        assert!(
+            !should_hold_devices(false, &s),
+            "a switched-off one doesn't"
+        );
+    }
+
+    /// The Controls tab's poll and the Integrations tab's poll each take
+    /// only their own capture.
+    #[test]
+    fn each_learn_is_collected_by_its_own_poll() {
+        let state = MidiState::new();
+        *state.captured.lock() = Some((
+            "integration".into(),
+            "note:1:36@Pad".into(),
+            std::time::Instant::now() + super::LEARN_WINDOW,
+        ));
+        assert_eq!(state.take_captured_for(&crate::config::ACTIONS), None);
+        assert_eq!(
+            state.take_captured_for(&["integration"]),
+            Some(("integration".into(), "note:1:36@Pad".into()))
         );
     }
 
@@ -824,7 +882,11 @@ mod tests {
             15_000,
             "the press must run its bound action"
         );
-        assert_eq!(state.take_captured(), None, "and must not be captured");
+        assert_eq!(
+            state.take_captured_for(&crate::config::ACTIONS),
+            None,
+            "and must not be captured"
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -842,7 +904,7 @@ mod tests {
         state.on_signature(&ctrl, 15_000, &sig);
         state.cancel_learn();
 
-        assert_eq!(state.take_captured(), None);
+        assert_eq!(state.take_captured_for(&crate::config::ACTIONS), None);
 
         let _ = std::fs::remove_file(&path);
     }
@@ -867,7 +929,7 @@ mod tests {
         state.on_signature(&ctrl, 15_000, &sig);
 
         assert_eq!(
-            state.take_captured(),
+            state.take_captured_for(&crate::config::ACTIONS),
             Some(("arm".to_string(), "cc:1:20".to_string())),
             "learn must capture the pressed control"
         );

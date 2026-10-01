@@ -147,9 +147,141 @@ fn placeholder(s: &str) -> Option<(&str, Option<&str>, usize)> {
     Some((name, Some(fallback), 1 + name_len + 1 + end + 1))
 }
 
+/// What an "Edit text" step does to its input, for answers that need a
+/// little shaping before they go out: a web answer's first line, the part
+/// between two markers, a rounded number. `a` and `b` are the operation's
+/// two settings (what to find and what to put instead, a length, decimals).
+/// Unknown operations leave the text as it is.
+pub fn edit_text(op: &str, input: &str, a: &str, b: &str) -> String {
+    match op {
+        "first_line" => input
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("")
+            .to_string(),
+        "between" => between(input, a, b).unwrap_or("").trim().to_string(),
+        "replace" if !a.is_empty() => input.replace(a, b),
+        "cut" => {
+            let max = a.trim().parse::<usize>().unwrap_or(100).max(1);
+            if input.chars().count() <= max {
+                input.to_string()
+            } else {
+                let kept: String = input.chars().take(max).collect();
+                format!("{}…", kept.trim_end())
+            }
+        }
+        "round" => match input.trim().parse::<f64>() {
+            Ok(n) if n.is_finite() => {
+                let decimals = a.trim().parse::<usize>().unwrap_or(0).min(6);
+                format!("{n:.decimals$}")
+            }
+            _ => input.to_string(),
+        },
+        "digits" => group_digits(input.trim()).unwrap_or_else(|| input.to_string()),
+        "upper" => input.to_uppercase(),
+        "lower" => input.to_lowercase(),
+        "random" => random_choice(input),
+        _ => input.to_string(),
+    }
+}
+
+/// The text after the first `start` and before the next `end`. A blank
+/// `start` means from the beginning, a blank `end` to the end.
+fn between<'a>(input: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let from = if start.is_empty() {
+        0
+    } else {
+        input.find(start)? + start.len()
+    };
+    let rest = &input[from..];
+    let to = if end.is_empty() {
+        rest.len()
+    } else {
+        rest.find(end)?
+    };
+    Some(&rest[..to])
+}
+
+/// `12571578` as `12,571,578`; `None` for anything but a whole number.
+fn group_digits(text: &str) -> Option<String> {
+    let (sign, digits) = match text.strip_prefix('-') {
+        Some(d) => ("-", d),
+        None => ("", text),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    Some(format!("{sign}{out}"))
+}
+
+/// One of the input's lines, or of its `|`-separated parts when it is a
+/// single line: an 8-ball answer, a random greeting.
+fn random_choice(input: &str) -> String {
+    let separator = if input.contains('\n') { '\n' } else { '|' };
+    let parts: Vec<&str> = input
+        .split(separator)
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return String::new();
+    }
+    let mut bytes = [0u8; 4];
+    crate::crypto::os_random(&mut bytes);
+    parts[u32::from_le_bytes(bytes) as usize % parts.len()].to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_text_shapes_answers() {
+        assert_eq!(
+            edit_text("first_line", "\n  Radiant \n450 RR", "", ""),
+            "Radiant"
+        );
+        assert_eq!(
+            edit_text("between", "rank: Gold 2 (34 RR)", "rank:", "("),
+            "Gold 2"
+        );
+        assert_eq!(edit_text("between", "a=1&b=2", "b=", ""), "2");
+        assert_eq!(edit_text("between", "no marker", "x=", ""), "");
+        assert_eq!(edit_text("replace", "a-b-c", "-", " "), "a b c");
+        assert_eq!(edit_text("replace", "abc", "", "x"), "abc");
+        assert_eq!(edit_text("cut", "hello world", "5", ""), "hello…");
+        assert_eq!(edit_text("cut", "hi", "5", ""), "hi");
+        assert_eq!(edit_text("round", " 3.14159 ", "2", ""), "3.14");
+        assert_eq!(edit_text("round", "2.5e1", "", ""), "25");
+        assert_eq!(edit_text("round", "n/a", "2", ""), "n/a");
+        assert_eq!(edit_text("digits", "12571578", "", ""), "12,571,578");
+        assert_eq!(edit_text("digits", "-1000", "", ""), "-1,000");
+        assert_eq!(edit_text("digits", "999", "", ""), "999");
+        assert_eq!(edit_text("digits", "1.5", "", ""), "1.5");
+        assert_eq!(edit_text("upper", "gg", "", ""), "GG");
+        assert_eq!(edit_text("nope", "same", "", ""), "same");
+    }
+
+    #[test]
+    fn random_picks_one_of_the_parts() {
+        for _ in 0..20 {
+            let pick = edit_text("random", "Yes | No | Ask again", "", "");
+            assert!(
+                ["Yes", "No", "Ask again"].contains(&pick.as_str()),
+                "{pick}"
+            );
+        }
+        assert_eq!(edit_text("random", "only\n\n", "", ""), "only");
+        assert_eq!(edit_text("random", " | ", "", ""), "");
+    }
 
     fn vars(name: &str) -> Option<String> {
         match name {

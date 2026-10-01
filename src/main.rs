@@ -425,16 +425,21 @@ fn main() -> std::io::Result<()> {
             // The MIDI half of this is (bindings, chosen device): both live
             // in the listener's mirror, and a device change with the same
             // bindings still has to reach it or the pick is inert.
-            let (mut bound_hotkeys, mut bound_midi) = {
-                let s = hk_rx.borrow();
-                (s.hotkeys.clone(), (s.midi.clone(), s.midi_device.clone()))
+            // Integrations started from a hotkey register through the tray
+            // too, so their combos count as hotkey bindings here.
+            let bindings = |s: &config::Settings| {
+                (
+                    (
+                        s.hotkeys.clone(),
+                        integrations::model::shortcuts(&s.integrations).0,
+                    ),
+                    (s.midi.clone(), s.midi_device.clone()),
+                )
             };
+            let (mut bound_hotkeys, mut bound_midi) = bindings(&hk_rx.borrow());
             tokio::spawn(async move {
                 while hk_rx.changed().await.is_ok() {
-                    let (hotkeys, midi) = {
-                        let s = hk_rx.borrow();
-                        (s.hotkeys.clone(), (s.midi.clone(), s.midi_device.clone()))
-                    };
+                    let (hotkeys, midi) = bindings(&hk_rx.borrow());
                     if midi != bound_midi {
                         hk_ctrl.midi().update_from_settings(&hk_rx.borrow());
                         bound_midi = midi;

@@ -29,7 +29,7 @@ pub const PRESETS: &[Preset] = &[
         id: "crash_alert",
         name: "Crash alert",
         category: "alerts",
-        description: "Discord hears about every drop, start to finish.",
+        description: "One Discord message per drop that updates itself: down, then back.",
         needs: "discord",
         recommended: true,
         preview: (
@@ -122,10 +122,19 @@ pub const PRESETS: &[Preset] = &[
         id: "api_command",
         name: "Command from a website",
         category: "chat",
-        description: "Answers with anything a website returns: ranks, stats, quotes. Paste a Nightbot or StreamElements command to start.",
+        description: "Answers with anything a website returns: ranks, stats, quotes. Paste a Nightbot or StreamElements command, or start from !uptime and friends.",
         needs: "twitch",
         recommended: false,
         preview: ("chat", "Radiant 450RR", "!rank"),
+    },
+    Preset {
+        id: "clip_button",
+        name: "Clip button",
+        category: "auto",
+        description: "A key or a MIDI pad clips the last moments, drops the link in chat and says so on stream.",
+        needs: "twitch",
+        recommended: false,
+        preview: ("chat", "🎬 Clipped: https://clips.twitch.tv/BraveSnipe", ""),
     },
     Preset {
         id: "vod_markers",
@@ -226,6 +235,15 @@ fn discord(channel: &str, text: &str) -> Step {
     )
 }
 
+/// Edits the message this integration last posted in the channel, so a
+/// drop stays one message that changes ("down", then "back").
+fn discord_update(channel: &str, text: &str) -> Step {
+    Step::new(
+        StepKind::Discord,
+        &[("connection", channel), ("text", text), ("edit", "last")],
+    )
+}
+
 fn chat(text: &str) -> Step {
     Step::new(StepKind::Chat, &[("text", text)])
 }
@@ -254,13 +272,15 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
         "crash_alert" => {
             let mut ended = on(
                 EventKind::HoldEnded,
-                vec![discord(d, "Crash protection ended by the streamer. The stream has ended.")],
+                vec![discord_update(d, "⏹️ Crash protection ended by the streamer. The stream has ended.")],
             );
             ended.enabled = false;
             vec![
-                on(EventKind::HoldOpened, vec![discord(d, "OBS dropped ({reason}). Holding the stream for {hold_left}.")]),
-                on(EventKind::ObsBack, vec![discord(d, "OBS is back after {down_for}. Live again.")]),
-                on(EventKind::HoldExpired, vec![discord(d, "OBS didn't come back within {hold}. The stream has ended.")]),
+                // `<t:…:R>` is Discord's own countdown: it ticks in the
+                // message without anyone editing it.
+                on(EventKind::HoldOpened, vec![discord(d, "🔴 OBS dropped ({reason}). Holding the stream: it ends <t:{hold_ends_at}:R> unless OBS is back.")]),
+                on(EventKind::ObsBack, vec![discord_update(d, "🟢 OBS dropped, and was back after {down_for}. Live again.")]),
+                on(EventKind::HoldExpired, vec![discord_update(d, "⚫ OBS didn't come back within {hold}. The stream has ended.")]),
                 ended,
             ]
         }
@@ -361,21 +381,40 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
         }
         "api_command" => {
             cooldown_ms = 3_000;
-            vec![command(
-                "!rank",
-                Roles::EVERYONE,
-                10_000,
-                vec![
-                    Step::new(StepKind::Http, &[("method", "GET"), ("url", ""), ("save_as", "api")]),
+            vec![api_handler(&ApiStart {
+                id: "",
+                command: "!rank",
+                url: "",
+                reply: super::botcmd::ANSWER,
+                unless: None,
+            })]
+        }
+        "clip_button" => {
+            // Twitch refuses clips made seconds apart anyway.
+            cooldown_ms = 10_000;
+            vec![Handler {
+                enabled: true,
+                trigger: Trigger::Shortcut {
+                    hotkey: String::new(),
+                    midi: String::new(),
+                },
+                steps: vec![
+                    Step::new(StepKind::Clip, &[]),
                     check(
-                        "{api.ok}",
+                        "{clip.ok}",
                         "is",
                         "yes",
-                        vec![reply(super::botcmd::ANSWER)],
-                        vec![reply("Couldn't get that right now, try again in a bit.")],
+                        vec![
+                            chat("🎬 Clipped: {clip.url}"),
+                            Step::new(
+                                StepKind::Overlay,
+                                &[("title", "Clip"), ("text", "That moment is a clip now"), ("seconds", "5")],
+                            ),
+                        ],
+                        vec![],
                     ),
                 ],
-            )]
+            }]
         }
         "vod_markers" => vec![
             on(EventKind::HoldOpened, vec![Step::new(StepKind::Marker, &[("description", "Crash ({reason})")])]),
@@ -409,6 +448,7 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
         enabled: true,
         preset: p.id.to_string(),
         cooldown_ms,
+        quiet: None,
         handlers,
     };
     // Something still to fill in (a webhook address, a Discord channel):
@@ -417,6 +457,85 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
         integration.enabled = false;
     }
     Some(integration)
+}
+
+/// A ready-made "command from a website": one click in the editor fills
+/// the address, the reply and the command. DecAPI answers in plain text
+/// and needs no key, which is what makes these work out of the box.
+pub struct ApiStart {
+    pub id: &'static str,
+    pub command: &'static str,
+    pub url: &'static str,
+    pub reply: &'static str,
+    /// When the answer contains this, reply with that instead: the
+    /// website's way of saying "offline" or "no such user".
+    pub unless: Option<(&'static str, &'static str)>,
+}
+
+pub const API_STARTS: &[ApiStart] = &[
+    ApiStart {
+        id: "uptime",
+        command: "!uptime",
+        url: "https://decapi.me/twitch/uptime/{channel}",
+        reply: "{channel} has been live for {api.body}",
+        unless: Some(("offline", "{channel} isn't live right now.")),
+    },
+    ApiStart {
+        id: "accountage",
+        command: "!accountage",
+        url: "https://decapi.me/twitch/accountage/{target}",
+        reply: "{target} made their account {api.body} ago",
+        unless: Some(("not found", "Couldn't find {target} on Twitch.")),
+    },
+    ApiStart {
+        id: "followers",
+        command: "!followers",
+        url: "https://decapi.me/twitch/followcount/{channel}",
+        reply: "{channel} has {api.body} followers",
+        unless: None,
+    },
+    ApiStart {
+        id: "game",
+        command: "!game",
+        url: "https://decapi.me/twitch/game/{channel}",
+        reply: "Playing {api.body} right now",
+        unless: None,
+    },
+];
+
+/// The handler of a "command from a website": fetch, then reply with the
+/// answer, a nicer line for a known "no", or a sorry when the site is down.
+pub fn api_handler(start: &ApiStart) -> Handler {
+    let answer = match start.unless {
+        // The answer's reply comes first in walk order, so it is the one
+        // the simple editor edits, not the fallback.
+        Some((says, instead)) => vec![check(
+            "{api.body}",
+            "not_contains",
+            says,
+            vec![reply(start.reply)],
+            vec![reply(instead)],
+        )],
+        None => vec![reply(start.reply)],
+    };
+    command(
+        start.command,
+        Roles::EVERYONE,
+        10_000,
+        vec![
+            Step::new(
+                StepKind::Http,
+                &[("method", "GET"), ("url", start.url), ("save_as", "api")],
+            ),
+            check(
+                "{api.ok}",
+                "is",
+                "yes",
+                answer,
+                vec![reply("Couldn't get that right now, try again in a bit.")],
+            ),
+        ],
+    )
 }
 
 /// The integration that replaces the old "Discord webhook" setting: the
@@ -429,6 +548,7 @@ pub fn legacy_alerts(id: String, channel: &str) -> Integration {
         enabled: true,
         preset: "stream_alerts".to_string(),
         cooldown_ms: 0,
+        quiet: None,
         // Ordered by the life of a stream; the card previews the first.
         handlers: vec![
             on(
@@ -520,9 +640,20 @@ pub fn catalog_json() -> Value {
             ])
         })
         .collect();
+    let starts = API_STARTS
+        .iter()
+        .map(|s| {
+            json::obj([
+                ("id", json::str(s.id)),
+                ("command", json::str(s.command)),
+                ("handler", api_handler(s).to_json()),
+            ])
+        })
+        .collect();
     json::obj([
         ("presets", Value::Arr(presets)),
         ("packs", Value::Arr(packs)),
+        ("api_starts", Value::Arr(starts)),
     ])
 }
 
@@ -538,6 +669,9 @@ mod tests {
             // Fill what a user fills in before switching these on.
             for h in &mut i.handlers {
                 fill_blank_paths(&mut h.steps);
+                if let Trigger::Shortcut { hotkey, .. } = &mut h.trigger {
+                    *hotkey = "Ctrl+Alt+C".into();
+                }
             }
             assert!(i.validate().is_empty(), "{}: {:?}", p.id, i.validate());
             assert_eq!(i.preset, p.id);
@@ -585,6 +719,35 @@ mod tests {
             })
         });
         assert!(crate::config::is_valid_json(&filled), "{filled}");
+    }
+
+    #[test]
+    fn api_starts_validate_and_their_reply_is_the_one_edited() {
+        for start in API_STARTS {
+            let mut i = build("api_command", "a".into(), "").unwrap();
+            i.handlers = vec![api_handler(start)];
+            assert!(i.validate().is_empty(), "{}: {:?}", start.id, i.validate());
+            let unknown = super::super::api::unknown_vars(&i);
+            assert!(unknown.is_empty(), "{}: {unknown:?}", start.id);
+            let mut first = None;
+            super::super::model::visit_steps(&i.handlers[0].steps, &mut |s| {
+                if s.kind == StepKind::Chat && first.is_none() {
+                    first = Some(s.param("text").to_string());
+                }
+            });
+            assert_eq!(first.as_deref(), Some(start.reply));
+        }
+    }
+
+    #[test]
+    fn crash_alert_is_one_message_that_updates() {
+        let i = build("crash_alert", "c".into(), "chan").unwrap();
+        let edits: Vec<&str> = i
+            .handlers
+            .iter()
+            .map(|h| h.steps[0].param("edit"))
+            .collect();
+        assert_eq!(edits, ["", "last", "last", "last"]);
     }
 
     #[test]

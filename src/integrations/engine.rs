@@ -13,8 +13,10 @@
 //!   them at most `GLOBAL_RUNS`;
 //! - `cooldown_ms` spaces runs of the same trigger; chat commands also have
 //!   a per-viewer cooldown;
+//! - quiet hours keep an integration silent for part of the day;
 //! - the runner caps waits, nesting and message sizes.
 
+use super::alerts::Board;
 use super::effects::RealHost;
 use super::event::{Event, EventKind};
 use super::model::{DiscordChannel, Integration, MatchMode, PhoneConnection, Roles, Trigger};
@@ -42,6 +44,11 @@ const TICK: Duration = Duration::from_millis(250);
 /// chat adds an entry per viewer per command; without trimming, a long
 /// stream would only ever grow them.
 const PRUNE_EVERY: Duration = Duration::from_secs(60);
+/// Runs counted for `{uses}` are written at most this often: a busy chat
+/// command would otherwise rewrite the data file on every use.
+const USES_SAVE_EVERY: Duration = Duration::from_secs(5);
+/// Runs each card's history strip shows.
+const RECENT_KEEP: usize = 12;
 /// A destination stuck in a connect-then-drop loop (a key the platform
 /// accepts, then refuses) would otherwise alert on every round. Each
 /// destination gets at most one "live" and one "dropped" per window.
@@ -59,9 +66,17 @@ enum Input {
         handler: usize,
         reply: oneshot::Sender<Record>,
     },
+    Shortcut(Shortcut, String),
     Login(Which),
     CancelLogin,
     Logout(Which),
+}
+
+/// What a shortcut press came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shortcut {
+    Hotkey,
+    Midi,
 }
 
 /// One run, for the activity log.
@@ -113,6 +128,8 @@ struct Stat {
     /// Failures in a row; 0 after a good run.
     failing: u32,
     runs: u64,
+    /// The latest runs' outcomes, oldest first.
+    recent: VecDeque<&'static str>,
 }
 
 /// The engine's public face: shared with the controller and the web layer.
@@ -121,6 +138,8 @@ pub struct Handle {
     activity: Mutex<VecDeque<Record>>,
     stats: Mutex<HashMap<String, Stat>>,
     pub twitch: Arc<Twitch>,
+    /// What "Show on stream" steps put on the alerts browser source.
+    pub alerts: Arc<Board>,
     dropped: AtomicU64,
 }
 
@@ -135,6 +154,14 @@ impl Handle {
     /// A call to `/hooks/<token>`.
     pub fn hook(&self, token: String, body: String, query: String) {
         let _ = self.tx.try_send(Input::Hook { token, body, query });
+    }
+
+    /// A global hotkey or MIDI pad was pressed; `signature` is the combo
+    /// (`Ctrl+Alt+K`) or the pad (`note:1:36@Device`). Never blocks.
+    pub fn shortcut(&self, from: Shortcut, signature: &str) {
+        let _ = self
+            .tx
+            .try_send(Input::Shortcut(from, signature.to_string()));
     }
 
     /// Run one handler now with sample values, messages marked `[TEST]`.
@@ -178,6 +205,10 @@ impl Handle {
                 } else {
                     0
                 };
+                if stat.recent.len() >= RECENT_KEEP {
+                    stat.recent.pop_front();
+                }
+                stat.recent.push_back(record.status);
             }
         }
         let mut activity = self.activity.lock();
@@ -213,6 +244,10 @@ impl Handle {
                             ("last_status", json::str(s.last_status)),
                             ("failing", Value::Num(s.failing as f64)),
                             ("runs", Value::Num(s.runs as f64)),
+                            (
+                                "recent",
+                                Value::Arr(s.recent.iter().map(|r| json::str(*r)).collect()),
+                            ),
                         ]),
                     )
                 })
@@ -248,11 +283,13 @@ pub fn start(
         Box::new(move |line| log_ctrl.log(line)),
         &settings.borrow().twitch_client_id,
     ));
+    let alerts = Arc::new(Board::new());
     let handle = Arc::new(Handle {
         tx,
         activity: Mutex::new(VecDeque::new()),
         stats: Mutex::new(HashMap::new()),
         twitch: twitch.clone(),
+        alerts: alerts.clone(),
         dropped: AtomicU64::new(0),
     });
     let engine_handle = handle.clone();
@@ -276,6 +313,7 @@ pub fn start(
                     twitch: twitch.clone(),
                     default_delay_ms: Default::default(),
                     programs: Default::default(),
+                    alerts,
                 });
                 let mut engine = Engine::new(engine_handle, host, store, ctrl);
                 engine.run(rx, chat_rx, settings).await;
@@ -298,6 +336,10 @@ struct Engine {
     global: Arc<Semaphore>,
     delay_seen: Option<u32>,
     flap: FlapGuard,
+    discord_messages: Arc<Mutex<HashMap<String, String>>>,
+    /// `{uses}` changed since the data file was last written.
+    uses_dirty: bool,
+    uses_saved: Instant,
 }
 
 impl Engine {
@@ -307,7 +349,13 @@ impl Engine {
         store: Arc<Store>,
         ctrl: Arc<Controller>,
     ) -> Engine {
-        let env = Arc::new(make_env(Vec::new(), PhoneConnection::default(), &store));
+        let discord_messages = Arc::new(Mutex::new(HashMap::new()));
+        let env = Arc::new(make_env(
+            Vec::new(),
+            PhoneConnection::default(),
+            &store,
+            &discord_messages,
+        ));
         Engine {
             handle,
             host,
@@ -322,6 +370,9 @@ impl Engine {
             global: Arc::new(Semaphore::new(GLOBAL_RUNS)),
             delay_seen: None,
             flap: FlapGuard::default(),
+            discord_messages,
+            uses_dirty: false,
+            uses_saved: Instant::now(),
         }
     }
 
@@ -352,6 +403,7 @@ impl Engine {
                 _ = tick.tick() => {
                     self.watch_delay();
                     self.run_timers();
+                    self.save_uses_if_due();
                     if last_prune.elapsed() >= PRUNE_EVERY {
                         last_prune = Instant::now();
                         self.prune();
@@ -367,6 +419,7 @@ impl Engine {
             s.discord_channels.clone(),
             s.phone.clone(),
             &self.store,
+            &self.discord_messages,
         ));
         self.host
             .default_delay_ms
@@ -400,6 +453,32 @@ impl Engine {
         self.viewer_last.retain(|_, t| t.elapsed() < longest_viewer);
         self.last_run.retain(|_, t| t.elapsed() < longest_run);
         self.flap.prune(Instant::now());
+        // Here rather than on every settings change: a delete undone within
+        // the minute keeps its count and its Discord message.
+        let alive: Vec<&str> = self.integrations.iter().map(|i| i.id.as_str()).collect();
+        {
+            let mut uses = self.store.uses.lock();
+            let before = uses.len();
+            uses.retain(|id, _| alive.contains(&id.as_str()));
+            self.uses_dirty |= uses.len() != before;
+        }
+        // Keys are `[test:]integration:channel`.
+        self.discord_messages.lock().retain(|key, _| {
+            let id = key
+                .trim_start_matches("test:")
+                .split(':')
+                .next()
+                .unwrap_or("");
+            alive.contains(&id)
+        });
+    }
+
+    fn save_uses_if_due(&mut self) {
+        if self.uses_dirty && self.uses_saved.elapsed() >= USES_SAVE_EVERY {
+            self.uses_dirty = false;
+            self.uses_saved = Instant::now();
+            let _ = self.store.save();
+        }
     }
 
     fn input(&mut self, input: Input) {
@@ -411,6 +490,7 @@ impl Engine {
                 handler,
                 reply,
             } => self.test(*integration, handler, reply),
+            Input::Shortcut(from, signature) => self.shortcut(from, &signature),
             Input::Login(which) => self.handle.twitch.begin_login(which),
             Input::CancelLogin => self.handle.twitch.cancel_login(),
             Input::Logout(which) => self.handle.twitch.logout(which),
@@ -500,6 +580,27 @@ impl Engine {
                 format!("{label} in chat")
             };
             self.start_run(integration, idx, vars, Some(msg.id.clone()), trigger);
+        }
+    }
+
+    fn shortcut(&mut self, from: Shortcut, signature: &str) {
+        let matches: Vec<(Arc<Integration>, usize)> = self
+            .enabled_handlers()
+            .filter(|(_, _, h)| match (&h.trigger, from) {
+                (Trigger::Shortcut { hotkey, .. }, Shortcut::Hotkey) => {
+                    !hotkey.is_empty() && hotkey == signature
+                }
+                (Trigger::Shortcut { midi, .. }, Shortcut::Midi) => midi_matches(midi, signature),
+                _ => false,
+            })
+            .map(|(i, idx, _)| (i, idx))
+            .collect();
+        let label = match from {
+            Shortcut::Hotkey => format!("Hotkey {signature}"),
+            Shortcut::Midi => "MIDI pad".to_string(),
+        };
+        for (integration, idx) in matches {
+            self.start_run(integration, idx, BTreeMap::new(), None, label.clone());
         }
     }
 
@@ -593,10 +694,16 @@ impl Engine {
         &mut self,
         integration: Arc<Integration>,
         idx: usize,
-        vars: BTreeMap<String, String>,
+        mut vars: BTreeMap<String, String>,
         reply_to: Option<String>,
         trigger: String,
     ) {
+        if let Some(quiet) = integration.quiet {
+            let now = super::clock::now();
+            if quiet.contains((now.hour * 60 + now.minute) as u16) {
+                return;
+            }
+        }
         let key = format!("{}#{idx}", integration.id);
         if integration.cooldown_ms > 0
             && self
@@ -628,7 +735,16 @@ impl Engine {
             });
             return;
         };
+        let uses = {
+            let mut uses = self.store.uses.lock();
+            let count = uses.entry(integration.id.clone()).or_insert(0);
+            *count += 1;
+            *count
+        };
+        self.uses_dirty = true;
+        vars.insert("uses".to_string(), uses.to_string());
         let ctx = RunContext {
+            integration_id: integration.id.clone(),
             vars,
             reply_to,
             test: false,
@@ -670,8 +786,19 @@ impl Engine {
         let Some(handler) = integration.handlers.get(idx).cloned() else {
             return;
         };
-        let (vars, trigger) = sample_vars(&handler.trigger);
+        let (mut vars, trigger) = sample_vars(&handler.trigger);
+        // What it would read on its next real run.
+        let next = self
+            .store
+            .uses
+            .lock()
+            .get(&integration.id)
+            .copied()
+            .unwrap_or(0)
+            + 1;
+        vars.insert("uses".to_string(), next.to_string());
         let ctx = RunContext {
+            integration_id: integration.id.clone(),
             vars,
             reply_to: None,
             test: true,
@@ -739,7 +866,12 @@ fn status_id(status: &RunStatus) -> &'static str {
     }
 }
 
-fn make_env(discord: Vec<DiscordChannel>, phone: PhoneConnection, store: &Arc<Store>) -> RunEnv {
+fn make_env(
+    discord: Vec<DiscordChannel>,
+    phone: PhoneConnection,
+    store: &Arc<Store>,
+    discord_messages: &Arc<Mutex<HashMap<String, String>>>,
+) -> RunEnv {
     let saver = store.clone();
     RunEnv {
         discord,
@@ -748,7 +880,15 @@ fn make_env(discord: Vec<DiscordChannel>, phone: PhoneConnection, store: &Arc<St
         counters_changed: Box::new(move || {
             let _ = saver.save();
         }),
+        discord_messages: discord_messages.clone(),
     }
+}
+
+/// Whether a pad a trigger is bound to is the one pressed. The press always
+/// names its device; a binding that names none matches that control on any
+/// device (the same rule as the delay actions' MIDI bindings).
+fn midi_matches(bound: &str, pressed: &str) -> bool {
+    !bound.is_empty() && (bound == pressed || pressed.split('@').next() == Some(bound))
 }
 
 fn filters_match(filters: &BTreeMap<String, String>, event: &Event) -> bool {
@@ -813,14 +953,18 @@ fn sample_vars(trigger: &Trigger) -> (BTreeMap<String, String>, String) {
             .collect::<BTreeMap<_, _>>()
     };
     match trigger {
-        Trigger::Event { kind, .. } => (
-            Event::sample(*kind)
+        Trigger::Event { kind, .. } => {
+            let mut vars: BTreeMap<String, String> = Event::sample(*kind)
                 .vars
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v))
-                .collect(),
-            format!("Test: {}", kind.label()),
-        ),
+                .collect();
+            // A countdown in a test message should count down from now.
+            if let Some(ends) = vars.get_mut("hold_ends_at") {
+                *ends = (unix_ms() / 1000 + 120).to_string();
+            }
+            (vars, format!("Test: {}", kind.label()))
+        }
         Trigger::ChatCommand { command, .. } => (
             owned(&[
                 ("user", "TestViewer"),
@@ -847,6 +991,7 @@ fn sample_vars(trigger: &Trigger) -> (BTreeMap<String, String>, String) {
             owned(&[("body", r#"{"test":true}"#), ("query", "")]),
             "Test: web call".to_string(),
         ),
+        Trigger::Shortcut { .. } => (BTreeMap::new(), "Test: shortcut".to_string()),
     }
 }
 
@@ -960,6 +1105,15 @@ mod tests {
         assert_eq!(v["arg2"], "now");
         assert_eq!(v["args"], "45 now");
         assert_eq!(v["user_role"], "viewer");
+    }
+
+    #[test]
+    fn pads_match_on_their_device_or_any() {
+        assert!(midi_matches("note:1:36@Deck A", "note:1:36@Deck A"));
+        assert!(!midi_matches("note:1:36@Deck A", "note:1:36@Deck B"));
+        assert!(midi_matches("note:1:36", "note:1:36@Deck B"));
+        assert!(!midi_matches("note:1:37", "note:1:36@Deck B"));
+        assert!(!midi_matches("", "note:1:36@Deck B"));
     }
 
     #[test]

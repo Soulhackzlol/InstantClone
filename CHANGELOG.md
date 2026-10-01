@@ -39,7 +39,24 @@ know what each one does before you switch it on.
   web request has **Try it**: send it for real, see the answer as a tree
   and click the value you want in the reply. What viewers type is encoded into
   its own spot of the request, so `!rank` can't be bent into calling
-  something else.
+  something else. Or start from a ready-made one: `!uptime`,
+  `!accountage`, `!followers` and `!game` work in one click, and the
+  preview shows the real answer right away.
+- **One Discord message per drop.** The crash alert posts "OBS dropped"
+  with a live countdown to the end of the hold, then edits that same
+  message to "back after 38 s" instead of adding another. Any Discord step
+  can "edit the last one".
+- **Start an integration from a hotkey or a MIDI pad**, even in game.
+  The new **Clip button** clips the last moments, drops the link in chat
+  and says so on stream, from one key.
+- **Show on stream.** Add InstantClone's alerts page to OBS once as a
+  browser source; "Show on stream" steps put a card on it, queued so two
+  never overlap. Tests never put anything on stream.
+- **Edit text** shapes an answer before it goes out: its first line, the
+  part between two texts, find and replace, round a number, group digits,
+  or pick one line at random (an 8-ball in two steps).
+- **Quiet hours** keep an integration silent overnight, `{uses}` counts
+  how often one ran, and every card shows its last runs as a row of dots.
 - **Everything can be taken back.** Every card has a menu (edit,
   duplicate, share, delete), adding and deleting come with **Undo**, and
   views opened from the catalog or the simple editor have a back button.

@@ -1,5 +1,5 @@
 //! What integrations keep between runs, in its own file next to the config:
-//! the Twitch logins and the counters.
+//! the Twitch logins, the counters and how often each integration ran.
 //!
 //! Kept apart from the settings on purpose. Tokens change on their own
 //! every few hours and counters on every crash; routing those through the
@@ -58,6 +58,8 @@ pub struct Store {
     path: PathBuf,
     pub accounts: Mutex<Accounts>,
     pub counters: Arc<Mutex<BTreeMap<String, i64>>>,
+    /// Runs per integration id, for `{uses}`.
+    pub uses: Mutex<BTreeMap<String, u64>>,
     /// Serialises writes so two savers never interleave.
     write_lock: Mutex<()>,
 }
@@ -78,6 +80,13 @@ impl Store {
                 .collect(),
             _ => BTreeMap::new(),
         };
+        let uses = match doc.get("uses") {
+            Some(Value::Obj(fields)) => fields
+                .iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.as_f64()? as u64)))
+                .collect(),
+            _ => BTreeMap::new(),
+        };
         Store {
             path,
             accounts: Mutex::new(Accounts {
@@ -85,6 +94,7 @@ impl Store {
                 bot: account("twitch.bot"),
             }),
             counters: Arc::new(Mutex::new(counters)),
+            uses: Mutex::new(uses),
             write_lock: Mutex::new(()),
         }
     }
@@ -116,7 +126,14 @@ impl Store {
                     .map(|(k, v)| (k.clone(), Value::Num(*v as f64)))
                     .collect(),
             );
-            json::obj([("twitch", twitch), ("counters", counters)])
+            let uses = Value::Obj(
+                self.uses
+                    .lock()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Value::Num(*v as f64)))
+                    .collect(),
+            );
+            json::obj([("twitch", twitch), ("counters", counters), ("uses", uses)])
         };
         let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, doc.to_json())?;
@@ -141,12 +158,14 @@ mod tests {
             expires_at_ms: 123,
         });
         store.counters.lock().insert("crashes".into(), 3);
+        store.uses.lock().insert("i1".into(), 41);
         store.save().unwrap();
 
         let back = Store::open(&dir);
         assert_eq!(back.accounts.lock().main.as_ref().unwrap().login, "texaz");
         assert!(back.accounts.lock().bot.is_none());
         assert_eq!(back.counters.lock().get("crashes"), Some(&3));
+        assert_eq!(back.uses.lock().get("i1"), Some(&41));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -64,6 +64,10 @@ const PATHS = {
   dots:'M5 12h.01M12 12h.01M19 12h.01',
   eye:'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   eyeOff:'M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3 3.9M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7c1.9 0 3.6-.6 5-1.5',
+  screen:'M3 4h18v12H3zM8 20h8M12 16v4',
+  type:'M4 7V4h16v3M9 20h6M12 4v16',
+  keyboard:'M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10',
+  moon:'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z',
 };
 const svg = (name, extra) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra||''}><path d="${PATHS[name]}"/></svg>`;
@@ -85,15 +89,18 @@ const KINDS = {
   file:         {label:'Write a file',  tag:'FILE',   c:'#fcd34d', icon:'file',     text:'text'},
   set_var:      {label:'Remember a value', tag:'VALUE', c:'#93c5fd', icon:'steps', text:'value'},
   counter:      {label:'Counter',       tag:'VALUE',  c:'#93c5fd', icon:'steps'},
+  overlay:      {label:'Show on stream', tag:'STREAM', c:'#5ac8fa', icon:'screen',  text:'text'},
+  edit_text:    {label:'Edit text',     tag:'VALUE',  c:'#93c5fd', icon:'type'},
 };
 // The icon a catalog module wears: what it is about, not how it sends.
 const PRESET_ICON = {
   crash_alert:'shield', destination_down:'signal', going_live:'megaphone', phone_crash:'phone',
   tell_chat:'bubble', delay_command:'hash', delay_notice:'clock', mod_controls:'cut', socials:'hash',
   vod_markers:'bookmark', webhook:'link', crash_counter:'file', stream_alerts:'bell', api_command:'globe',
+  clip_button:'film',
 };
 // Which step a card previews: the first one that says something.
-const PREVIEW_ORDER = ['discord','chat','phone','marker','http','file','clip','delay_action','program'];
+const PREVIEW_ORDER = ['discord','chat','phone','overlay','marker','http','file','clip','delay_action','program'];
 const DELAY_ACTIONS = {
   cut:'Cut the delay', arm:'Set the delay to…', activate:'Turn the delay on', toggle:'Toggle the delay',
   cut_after:'Cut after this airs', end_hold:'End the reconnect screen',
@@ -101,6 +108,19 @@ const DELAY_ACTIONS = {
 const OPS = {
   is:'is', is_not:'is not', contains:'contains', not_contains:'does not contain', starts_with:'starts with',
   greater:'is more than', less:'is less than', empty:'is empty', not_empty:'is not empty',
+};
+// What an "Edit text" step can do: [label, what `a` is, what `b` is].
+// Mirrors template::edit_text.
+const EDIT_OPS = {
+  first_line:['Keep the first line', '', ''],
+  between:['Keep the part between two texts', 'After', 'Before'],
+  replace:['Find and replace', 'Find', 'Replace with'],
+  cut:['Cut it to a length', 'Characters', ''],
+  round:['Round a number', 'Decimals', ''],
+  digits:['Group the digits (12,571,578)', '', ''],
+  upper:['UPPERCASE', '', ''],
+  lower:['lowercase', '', ''],
+  random:['Pick one line at random', '', ''],
 };
 // Known values for event filters, so "Only if" offers choices.
 const FILTER_CHOICES = {reason:['crash','freeze'], stopped:['yes','no'], protected:['yes','no']};
@@ -148,18 +168,33 @@ function triggerLabel(t){
     case 'chat_message': return 'Chat message';
     case 'timer': return `Every ${Math.round((t.every_ms||0)/60000)} min`;
     case 'webhook': return 'Web call';
+    case 'shortcut': return shortcutLabel(t) || 'A hotkey or pad';
   }
   return t.type;
 }
-// "The hold runs out" reads "When the hold runs out"; "OBS crashed" stays.
+// `Ctrl+Alt+K or pad 36`, or '' when nothing is set yet.
+function shortcutLabel(t){
+  return [t.hotkey, t.midi && padLabel(t.midi)].filter(Boolean).join(' or ');
+}
+// `note:1:36@Launchpad` reads "pad 36 (Launchpad)".
+function padLabel(sig){
+  const m = /^(note|cc):(\d+):(\d+)(?:@(.+))?$/.exec(sig || '');
+  if (!m) return sig || '';
+  return `${m[1] === 'note' ? 'pad' : 'knob'} ${m[3]}${m[2] !== '1' ? ' ch ' + m[2] : ''}${m[4] ? ' (' + m[4] + ')' : ''}`;
+}
+// "The hold runs out" reads "When the hold runs out", "A web call" "When
+// a web call"; "OBS crashed" stays.
 function lowerFirst(s){
-  return /^[A-Z][a-z]/.test(s || '') ? s[0].toLowerCase() + s.slice(1) : s;
+  return /^[A-Z][a-z ]/.test(s || '') ? s[0].toLowerCase() + s.slice(1) : s;
 }
 
 // What each variable holds, for the card shown over a variable chip.
 const VAR_HELP = {
   reason:'Why it happened. For OBS: crash or freeze. For a destination: what went wrong.',
   hold:'How long the reconnect screen can stay on air.',
+  hold_ends_at:'When the reconnect screen runs out, as a Unix time. In Discord, <t:{hold_ends_at}:R> is a live countdown.',
+  uses:'How many times this integration has run, this time included. Kept across restarts.',
+  text:'What the Edit text step made.',
   down_for:'How long OBS was gone.',
   destination:'The destination\'s name.',
   platform:'The destination\'s platform, like youtube or twitch.',
@@ -205,7 +240,7 @@ function varHelp(name){
   if ((m = /^counter\.(.+)$/.exec(name))) return `The "${m[1]}" counter, kept between runs.`;
   if ((m = /^arg([4-9])$/.exec(name))) return `Word number ${m[1]} after the command.`;
   if ((m = /^body\.(.+)$/.exec(name))) return `The ${m[1].split('.').join(' › ')} field of what the caller sent.`;
-  return 'A value a Remember step set earlier in this run.';
+  return 'A value an earlier step in this run set.';
 }
 
 // The card over a hovered or focused variable chip: what it holds and an
@@ -258,7 +293,11 @@ function varsFor(handler){
   const d = S.data;
   const list = d.vars.global.slice();
   const t = handler && handler.trigger;
-  if (t && t.type === 'event'){ const e = eventOf(t.event); if (e) list.unshift(...e.vars); }
+  if (t && t.type === 'event'){
+    const e = eventOf(t.event);
+    // A countdown sample should count down from now.
+    if (e) list.unshift(...e.vars.map(v => v.name === 'hold_ends_at' ? {name:v.name, sample:String(Math.floor(Date.now() / 1000) + 120)} : v));
+  }
   if (t && (t.type === 'chat_command' || t.type === 'chat_message')) list.unshift(...d.vars.chat);
   if (t && t.type === 'webhook') list.unshift(...d.vars.web);
   walk(handler && handler.steps, s => {
@@ -278,6 +317,11 @@ function varsFor(handler){
     if (s.type === 'clip') list.push({name:'clip.url', sample:'https://clips.twitch.tv/BraveSnipe'});
     if (s.type === 'counter' && s.params.name) list.push({name:'counter.' + s.params.name, sample:'2'});
     if (s.type === 'set_var' && s.params.name) list.push({name:s.params.name, sample:s.params.value || ''});
+    if (s.type === 'edit_text'){
+      const m = {};
+      list.forEach(v => { m[v.name] = v.sample; });
+      list.push({name:(s.params.save_as || '').trim() || 'text', sample:editTextSample(s, m)});
+    }
   });
   const seen = new Set();
   return list.filter(v => !seen.has(v.name) && seen.add(v.name));
@@ -298,6 +342,81 @@ function renderSample(text, vars, escape){
       if (fallback !== undefined && (v === '' || v === '0')) return fallback;
       return escape ? escape(v) : v;
     });
+}
+// Mirrors template::edit_text, for previews. "Pick one" previews its
+// first choice.
+function editText(op, input, a, b){
+  switch (op){
+    case 'first_line': return (input.split('\n').map(l => l.trim()).find(Boolean)) || '';
+    case 'between': {
+      const from = a ? input.indexOf(a) : 0;
+      if (from < 0) return '';
+      const rest = input.slice(from + a.length), to = b ? rest.indexOf(b) : rest.length;
+      return to < 0 ? '' : rest.slice(0, to).trim();
+    }
+    case 'replace': return a ? input.split(a).join(b) : input;
+    case 'cut': {
+      const max = Math.max(1, parseInt(a, 10) || 100), chars = [...input];
+      return chars.length <= max ? input : chars.slice(0, max).join('').trimEnd() + '…';
+    }
+    case 'round': {
+      const n = Number(input.trim());
+      return input.trim() && Number.isFinite(n) ? n.toFixed(Math.min(6, parseInt(a, 10) || 0)) : input;
+    }
+    case 'digits': return /^-?\d+$/.test(input.trim()) ? input.trim().replace(/\B(?=(\d{3})+(?!\d))/g, ',') : input;
+    case 'upper': return input.toUpperCase();
+    case 'lower': return input.toLowerCase();
+    case 'random': return (input.split(input.includes('\n') ? '\n' : '|').map(p => p.trim()).find(Boolean)) || '';
+  }
+  return input;
+}
+// Mirrors runner::compare, so previews follow checks like a run does.
+function compareSample(left, op, right){
+  const l = String(left).trim().toLowerCase(), r = String(right).trim().toLowerCase();
+  const blank = l === '' || l === '0' || l === 'no';
+  const nums = l !== '' && r !== '' && Number.isFinite(+l) && Number.isFinite(+r);
+  switch (op){
+    case 'is': return l === r;
+    case 'is_not': return l !== r;
+    case 'contains': return l.includes(r);
+    case 'not_contains': return !l.includes(r);
+    case 'starts_with': return l.startsWith(r);
+    case 'empty': return blank;
+    case 'not_empty': return !blank;
+    case 'greater': return nums && +l > +r;
+    case 'less': return nums && +l < +r;
+  }
+  return false;
+}
+// The first step of `type` a run would reach with these values: undefined
+// when none, null when a Stop comes first.
+function reachedStep(steps, vars, type){
+  for (const s of steps || []){
+    if (s.type === 'stop') return null;
+    if (s.type === type) return s;
+    if (s.type !== 'if') continue;
+    const pass = compareSample(renderSample(s.params.left, vars), s.params.op, renderSample(s.params.right, vars));
+    const found = reachedStep(pass ? s.then : s.else, vars, type);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+function editTextSample(s, vars){
+  const p = s.params;
+  return editText(p.op, renderSample(p.input, vars), renderSample(p.a, vars), renderSample(p.b, vars));
+}
+// Discord writes `<t:1790000000:R>` as a time that keeps itself current
+// ("in 2 minutes"). Previews show it the same way; `html` is escaped text.
+function discordTimes(html){
+  return html.replace(/&lt;t:(\d{1,12})(?::([tTdDfFR]))?&gt;/g, (all, secs, style) => {
+    const at = +secs * 1000;
+    let shown;
+    if (style === 'R'){
+      const diff = Math.round((at - Date.now()) / 60000);
+      shown = diff === 0 ? 'now' : diff > 0 ? `in ${plural(diff, 'minute')}` : `${plural(-diff, 'minute')} ago`;
+    } else shown = new Date(at).toLocaleString([], style === 't' || style === 'T' ? {timeStyle:'short'} : {dateStyle:'medium', timeStyle:'short'});
+    return `<span class="ig-ts">${esc(shown)}</span>`;
+  });
 }
 // Mirrors template::url_component: only unreserved characters stay.
 // A pasted command from a chat bot rather than a plain address.
@@ -937,7 +1056,7 @@ function previewHtml(step, handler, big){
     case 'discord': {
       const ping = step.params.ping === 'here' ? '@here ' : step.params.ping === 'everyone' ? '@everyone ' : '';
       return `<div class="${cls} ig-pv-discord"><span class="ig-av">${svg('shield')}</span><span class="ig-pv-col">
-        <b>InstantClone</b><span class="ig-app">APP</span><div class="ig-txt">${esc(ping + text)}</div></span></div>`;
+        <b>InstantClone</b><span class="ig-app">APP</span><div class="ig-txt">${discordTimes(esc(ping + text))}</div></span></div>`;
     }
     case 'chat':
       return `<div class="${cls} ig-pv-chat">${ask ? `<div><span class="u1">viewer</span>: ${esc(ask)}</div>` : ''}
@@ -945,6 +1064,9 @@ function previewHtml(step, handler, big){
     case 'phone':
       return `<div class="${cls} ig-pv-phone"><span class="ig-av"></span><span class="ig-pv-col">
         <small>INSTANTCLONE · now</small><b>${esc(renderSample(step.params.title, vars) || 'InstantClone')}</b><div>${esc(text)}</div></span></div>`;
+    case 'overlay':
+      return `<div class="${cls} ig-pv-overlay"><div class="ig-pv-alert">
+        ${step.params.title ? `<small>${esc(renderSample(step.params.title, vars))}</small>` : ''}<b>${esc(text || 'Something on stream')}</b><i></i></div></div>`;
     case 'marker':
       return `<div class="${cls} ig-pv-marker"><span class="tag">${esc(text || 'Marker')} · 1:02:14</span>
         <div class="bar"><i></i><b style="left:22%"></b><b style="left:48%"></b><b style="left:80%"></b></div></div>`;
@@ -1052,13 +1174,34 @@ function cardInfo(i){
   else if (issues.length) flag = {cls:'warn', label:i.enabled ? 'Needs a fix' : 'Finish setup', tip:issues.join('; ')};
   else if (i.enabled && needsTwitch(i)) flag = {cls:'warn', label:'Needs Twitch', tip:'Connect Twitch in Connections'};
   const text = step && k && k.text ? step.params[k.text] : '';
+  const quiet = i.enabled && quietNow(i.quiet);
   return {
     h, step, flag, failing, where,
     dc: k ? k.c : 'var(--accent)',
     icon: PRESET_ICON[i.preset] || (k ? k.icon : 'steps'),
-    last: st && st.last_ms ? fmtAgo(st.last_ms) : 'never ran',
+    last: quiet ? 'quiet until ' + i.quiet.to : st && st.last_ms ? fmtAgo(st.last_ms) : 'never ran',
+    hist: histHtml(st),
     summary: text ? renderSample(text, sampleMap(h)) : (h ? triggerSentence(h.trigger) : ''),
   };
+}
+
+// Whether quiet hours (`{from:'23:00', to:'08:00'}`) cover this minute.
+// Mirrors model::QuietHours::contains.
+function quietNow(q){
+  if (!q || !q.from || !q.to) return false;
+  const min = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+  const d = new Date(), now = d.getHours() * 60 + d.getMinutes(), from = min(q.from), to = min(q.to);
+  return from <= to ? now >= from && now < to : now >= from || now < to;
+}
+
+// The last runs as a row of dots, oldest first: a card that fails now and
+// then shows it before it is "Failing".
+function histHtml(st){
+  const recent = (st && st.recent) || [];
+  if (!recent.length) return '';
+  const bad = recent.filter(r => r === 'failed').length;
+  const label = `Last ${plural(recent.length, 'run')}${bad ? `, ${bad} failed` : ', all fine'}`;
+  return `<span class="ig-hist" title="${label}" aria-label="${label}">${recent.map(r => `<i class="${esc(r)}"></i>`).join('')}</span>`;
 }
 
 function visibleIntegrations(){
@@ -1175,7 +1318,7 @@ function gridHtml(items, none){
     const c = cardInfo(i);
     return `<div class="dcard ig-card ${i.enabled ? 'alive' : 'off'}" style="--dc:${c.dc}" data-key="c-${esc(i.id)}">
       <div class="dcard-screen" data-act="edit" data-id="${esc(i.id)}" role="button" tabindex="0" aria-label="Edit ${esc(i.name)}">
-        ${previewHtml(c.step, c.h, false)}${flagHtml(c.flag)}
+        ${previewHtml(c.step, c.h, false)}${flagHtml(c.flag)}${c.hist}
       </div>
       <div class="ig-card-foot">
         <span class="dcard-icon">${svg(c.icon)}</span>
@@ -1198,7 +1341,7 @@ function listHtml(items, none){
         <button class="ig-row-name" data-act="peek" data-id="${esc(i.id)}" aria-expanded="${open}">
           <span class="dcard-name">${esc(i.name)}</span><span class="dcard-host">${esc(c.where)}</span></button>
         <span class="ig-row-sum" title="${esc(c.summary)}">${esc(c.summary)}</span>
-        ${c.flag ? flagHtml(c.flag) : `<span class="ig-row-last">${esc(c.last)}</span>`}
+        ${c.hist}${c.flag ? flagHtml(c.flag) : `<span class="ig-row-last">${esc(c.last)}</span>`}
         ${switchHtml(i)}
         <button class="ic-btn-tiny" data-act="edit" data-id="${esc(i.id)}" aria-label="Edit ${esc(i.name)}">${svg('pencil')}</button>
         ${moreHtml(i)}
@@ -1430,6 +1573,7 @@ const Modal = {
     // Shown secrets hide again: the next time could be on stream.
     S.revealed.clear();
     VarTip.hide();
+    Keys.stop();
     document.removeEventListener('keydown', onModalKey);
     el.classList.add('closing');
     el.inert = true;
@@ -1696,8 +1840,9 @@ const Editor = {
     // Missing a detail: open straight on the chip that fixes it.
     const known = id => S.data.connections.discord.some(c => c.id === id);
     const steps = allSteps(this.d);
+    const keyless = this.d.handlers.some(h => h.trigger.type === 'shortcut' && !h.trigger.hotkey && !h.trigger.midi);
     this.chip = steps.some(s => s.type === 'discord' && !known(s.params.connection)) ? 'where'
-      : steps.some(s => s.type === 'http' && !s.params.url) ? 'url' : null;
+      : steps.some(s => s.type === 'http' && !s.params.url) ? 'url' : keyless ? 'key' : null;
     this.run = null;
     this.moreVars = false;
     this.converted = null;
@@ -1760,10 +1905,37 @@ const Editor = {
     const c = this.converted;
     if (!c) return '';
     if (c.error) return warnHtml(esc(c.error));
+    if (c.start){
+      return `<div class="ig-converted">${svg('check', ' stroke-width="3"')}<span>Ready to go: ${esc(c.start)} asks decapi.me, a free service many streamers use. Change the reply on the preview above.</span></div>`;
+    }
     const filled = ['the address'].concat(c.reply ? ['the reply'] : [], c.command ? [`the command (${esc(c.command)})`] : []);
     const unknown = c.unknown.length
       ? ` These have no InstantClone match and stay as written: ${c.unknown.map(u => `<code>${esc(u)}</code>`).join(' ')}` : '';
     return `<div class="ig-converted">${svg('check', ' stroke-width="3"')}<span>Converted from ${esc(c.from)}: ${filled.join(', ')} filled in.${unknown}</span></div>`;
+  },
+  // A ready-made command takes this trigger's place, and answers right
+  // away so the preview reads like the real thing.
+  async useStart(id){
+    const start = (S.data.catalog.api_starts || []).find(x => x.id === id);
+    if (!start) return;
+    const was = this.handler();
+    const fresh = clone(start.handler);
+    fresh.enabled = was.enabled;
+    this.d.handlers[this.sel] = fresh;
+    const p = presetOf(this.d);
+    const named = (p && this.d.name === p.name) || S.data.catalog.api_starts.some(x => x.command === this.d.name);
+    if (named) this.d.name = start.command;
+    this.converted = {start:start.command};
+    TRIES.clear();
+    this.changed();
+    // The request button spins while the real answer comes in.
+    await busy(q('[data-act="b-try"]'), () => tryRequest(firstStep(fresh, 'http'), fresh));
+    if (Modal.kind === 'editor' && this.handler() === fresh) this.render();
+  },
+  startsHtml(http){
+    const starts = S.data.catalog.api_starts || [];
+    return `<div class="ig-starts"><span class="ic-label">Ready-made</span>${starts.map(x =>
+      `<button class="ig-start${x.handler.steps[0].params.url === http.params.url ? ' on' : ''}" data-act="ed-start" data-v="${esc(x.id)}">${esc(x.command)}</button>`).join('')}</div>`;
   },
   // Back from "Open in builder", with whatever was changed there.
   fromBuilder(d, dirty){
@@ -1827,16 +1999,22 @@ const Editor = {
       : all.filter(v => (!globals.has(v.name) || common.has(v.name)) && !v.name.includes('.json.'));
     const tokens = shown.map(v => `<button class="ig-token" data-act="token" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}">+ ${esc(v.name)}</button>`).join('')
       + (shown.length < all.length ? `<button class="ig-token more" data-act="more-vars">${all.length - shown.length} more…</button>` : '');
-    const sample = sampleLine(value, h);
+    const sample = sampleLine(value, h, step.type === 'discord');
+    // A tried answer can send the run down another branch ("offline").
+    const vars = sampleMap(h), reached = reachedStep(h.steps, vars, step.type);
+    const instead = reached && reached !== step
+      ? `<div class="ig-sample ig-instead">Right now it would say: <b>${esc(renderSample(reached.params[k.text], vars))}</b></div>` : '';
     const editor = `<textarea class="ig-msg" data-bind="text" rows="1" aria-label="Message" spellcheck="true" data-keep-style>${esc(value)}</textarea>
-      <div class="ig-sample${sample ? '' : ' empty'}">${sample}</div>`;
+      <div class="ig-sample${sample ? '' : ' empty'}">${sample}</div>${instead}`;
     let box;
     if (step.type === 'discord'){
       const ping = step.params.ping === 'here' ? '@here' : step.params.ping === 'everyone' ? '@everyone' : '';
+      const updates = step.params.edit === 'last';
       box = `<div class="ig-live ig-live-discord">
         <div class="ig-live-head"><span class="hash">#</span>${esc(channelName(step.params.connection).replace(/^#/, ''))}<span class="ig-live-tag">Live preview</span></div>
         <div class="ig-live-msg"><span class="ig-live-av">${svg('shield')}</span>
-          <div class="ig-live-col"><div class="ig-live-meta"><b>InstantClone</b><span class="ig-app">APP</span>${ping ? `<span class="ig-ping">${esc(ping)}</span>` : ''}</div>
+          <div class="ig-live-col"><div class="ig-live-meta"><b>InstantClone</b><span class="ig-app">APP</span>${ping && !updates ? `<span class="ig-ping">${esc(ping)}</span>` : ''}
+            ${updates ? `<span class="ig-live-upd">${svg('pencil')}edits the last message</span>` : ''}</div>
           ${editor}</div></div></div>`;
     } else if (step.type === 'chat'){
       const t = h.trigger;
@@ -1867,9 +2045,11 @@ const Editor = {
       out.push({id:'where', k:'Post in', v:set ? channelName(id) : 'pick a channel', warn:!set});
       if (step && step.type === 'discord'){
         const ping = step.params.ping || '';
-        out.push({id:'ping', k:'Ping', v:ping === 'here' ? '@here' : ping === 'everyone' ? '@everyone' : 'nobody'});
+        out.push({id:'msg', k:'Message', v:step.params.edit === 'last' ? 'edits the last one' : 'a new one'});
+        if (step.params.edit !== 'last') out.push({id:'ping', k:'Ping', v:ping === 'here' ? '@here' : ping === 'everyone' ? '@everyone' : 'nobody'});
       }
     }
+    if (t.type === 'shortcut') out.push({id:'key', k:'Starts with', v:shortcutLabel(t) || 'set a key or pad', warn:!t.hotkey && !t.midi});
     if (t.type === 'event' || t.type === 'timer' || t.type === 'webhook') out.push({id:'send', k:'Send', v:this.sendValue(h).label});
     if (t.type === 'event' && this.filterVars(t).length){
       const set = Object.entries(t.filters || {}).filter(([, v]) => v);
@@ -1885,6 +2065,7 @@ const Editor = {
     if (http) out.push({id:'url', k:t.type.startsWith('chat') ? 'Answer from' : 'Send to', v:maskUrl(http.params.url) || 'set the address', warn:!http.params.url});
     if (step && step.type === 'file') out.push({id:'file', k:'File', v:step.params.path || 'pick a file', warn:!step.params.path});
     out.push({id:'cooldown', k:'Wait between', v:fmtMs(d.cooldown_ms) || 'no limit'});
+    out.push({id:'quiet', k:'Quiet hours', v:d.quiet ? `${d.quiet.from} to ${d.quiet.to}` : 'off'});
     return out;
   },
   filterVars(t){
@@ -1913,6 +2094,11 @@ const Editor = {
             <span class="dest-starter-name">#${esc(c.name)}</span><span class="dest-starter-note mono">${esc(c.hint)}</span></button>`).join('')}
           <button class="dest-add ig-pick-add" data-act="conn" data-tab="discord">${svg('plus')}Add a Discord channel</button></div>`;
       }
+      case 'msg':
+        return `<div class="ic-label">Message</div>${seg([['', 'Send a new one'], ['last', 'Edit the last one']], step.params.edit || '', 'set-edit')}
+          <div class="muted">"Edit the last one" changes the message this integration last posted in that channel, so a drop stays one message that goes from down to back. If someone deleted it, a new one goes out.</div>`;
+      case 'key': return shortcutHtml(t);
+      case 'quiet': return quietHtml(d);
       case 'ping':
         return `<div class="ic-label">Ping</div>${seg([['', 'Nobody'], ['here', '@here'], ['everyone', '@everyone']], step.params.ping || '', 'set-ping')}
           <div class="muted">Text from chat or a web service can never ping anyone: only this option can.</div>`;
@@ -1943,7 +2129,7 @@ const Editor = {
         return `<div class="ic-label">Priority</div>${seg([['', 'Normal'], ['high', 'High'], ['urgent', 'Urgent']], step.params.priority || '', 'set-priority')}`;
       case 'url': {
         const http = firstStep(h, 'http'), chatty = t.type.startsWith('chat');
-        return `<div class="dfg"><div class="dff"><label>${chatty ? 'Address, or a bot command to convert' : 'Address'}</label>
+        return `${chatty && d.preset === 'api_command' ? this.startsHtml(http) : ''}<div class="dfg"><div class="dff"><label>${chatty ? 'Address, or a bot command to convert' : 'Address'}</label>
             <input class="ic-input mono" data-bind="url" value="${esc(http.params.url || '')}" placeholder="${chatty ? 'https://… or $(urlfetch https://…)' : 'https://…'}" spellcheck="false" autocomplete="off"></div>
           <div class="dff"><label>Method</label><select class="ic-input" data-bind="method">${['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => `<option ${m === (http.params.method || 'POST') ? 'selected' : ''}>${m}</option>`).join('')}</select></div></div>
           ${chatty ? '<div class="muted">Paste a command from Nightbot, StreamElements, Fossabot or Streamlabs: the address, the reply and the command name fill in for you.</div>' : ''}
@@ -1993,7 +2179,7 @@ const Editor = {
       return;
     }
     else if ((b === 'path' || b === 'mode') && step) step.params[b] = el.value;
-    else return;
+    else if (!quietInput(this.d, el)) return;
     this.changed();
   },
   changed(){
@@ -2010,6 +2196,8 @@ const Editor = {
       case 'more-vars': this.moreVars = true; this.render(); return true;
       case 'set-where': allSteps(this.d).filter(s => s.type === 'discord').forEach(s => { s.params.connection = v; }); this.changed(); return true;
       case 'set-ping': if (step) step.params.ping = v; this.changed(); return true;
+      case 'set-edit': if (step) step.params.edit = v; this.changed(); return true;
+      case 'ed-start': this.useStart(v); return true;
       case 'set-send': setSend(h, v); this.changed(); return true;
       case 'set-ucd': h.trigger.user_cooldown_ms = +v; this.changed(); return true;
       case 'set-as': if (step) step.params.as = v; this.changed(); return true;
@@ -2047,9 +2235,137 @@ const Editor = {
 };
 
 // How a message with variables will read, or nothing when it has none.
-function sampleLine(text, h){
+function sampleLine(text, h, discord){
   if (!/\{[A-Za-z0-9_.]/.test(text || '')) return '';
-  return 'Reads like: <b>' + esc(renderSample(text, sampleMap(h))) + '</b>';
+  const read = esc(renderSample(text, sampleMap(h)));
+  return 'Reads like: <b>' + (discord ? discordTimes(read) : read) + '</b>';
+}
+
+// Quiet hours, shared by both editors.
+function quietHtml(d){
+  const q = d.quiet;
+  return `<div class="ic-label">Quiet hours</div>
+    <div class="sub-tabs ig-seg">${[['off', 'Off'], ['on', 'On']].map(([id, label]) =>
+      `<button class="sub-tab${(id === 'on') === !!q ? ' on' : ''}" data-act="set-quiet" data-v="${id}" aria-pressed="${(id === 'on') === !!q}">${label}</button>`).join('')}${SEG_IND}</div>
+    ${q ? `<div class="ig-quiet"><div class="dff"><label>From</label><input class="ic-input mono" type="time" data-bind="quiet-from" value="${esc(q.from)}"></div>
+      <div class="dff"><label>To</label><input class="ic-input mono" type="time" data-bind="quiet-to" value="${esc(q.to)}"></div></div>` : ''}
+    <div class="muted">${svg('moon', ' class="ig-inline-ic"')}Nothing runs between these times, on this PC's clock. For alerts that would wake you up.</div>`;
+}
+function quietInput(d, el){
+  const b = el.dataset.bind;
+  if ((b !== 'quiet-from' && b !== 'quiet-to') || !d.quiet || !el.value) return false;
+  d.quiet[b === 'quiet-from' ? 'from' : 'to'] = el.value;
+  return true;
+}
+
+// Picking a hotkey or a MIDI pad for a "shortcut" trigger. The hotkey is
+// recorded right here, with the Controls tab's own key reading (hkMods,
+// hkMainKey) and its "stand down while recording" (hkCaptureMode); the pad
+// is learned by the app, which hears the controller, and polled for.
+const Keys = {
+  recording:false, padTimer:null, padUntil:0,
+  owner(){ return OWNERS[Modal.kind]; },
+  trigger(){ const o = this.owner(); return o && o.handler ? o.handler().trigger : null; },
+  record(){
+    if (this.recording) return;
+    this.recording = true;
+    if (typeof hkCaptureMode === 'function') hkCaptureMode(true);
+    document.addEventListener('keydown', this.onKey, true);
+    document.addEventListener('pointerdown', this.onOutside, true);
+    this.owner().render();
+    focusAct('key-record');
+  },
+  stopRecording(){
+    if (!this.recording) return;
+    this.recording = false;
+    document.removeEventListener('keydown', this.onKey, true);
+    document.removeEventListener('pointerdown', this.onOutside, true);
+    if (typeof hkCaptureMode === 'function') hkCaptureMode(false);
+  },
+  onOutside: e => {
+    if (e.target.closest && e.target.closest('[data-act="key-record"]')) return;
+    Keys.stopRecording();
+    const o = Keys.owner();
+    if (o) o.render();
+  },
+  onKey: e => {
+    e.preventDefault();
+    e.stopPropagation();
+    const t = Keys.trigger();
+    if (e.key === 'Escape' || !t){ Keys.stopRecording(); Keys.owner().render(); return; }
+    if (e.key === 'Backspace' || e.key === 'Delete'){ Keys.stopRecording(); t.hotkey = ''; Keys.owner().changed(); return; }
+    const mods = hkMods(e), key = hkMainKey(e.code);
+    if (!key) return;
+    if (!mods.length){ toast('Hold Ctrl, Alt, Shift or Win too, so a stray key never fires it', 'info'); return; }
+    const combo = mods.concat(key).join('+');
+    Keys.stopRecording();
+    if ((S.data.shortcuts.taken || []).includes(combo)){
+      toast(`${combo} already runs a delay action (Controls tab). Pick another.`, 'err', 5000);
+      Keys.owner().render();
+      return;
+    }
+    t.hotkey = combo;
+    Keys.owner().changed();
+  },
+  async learnPad(btn){
+    const r = await busy(btn, () => api('/integrations/midi/learn', {}));
+    if (!r || !r.ok){ toast((r && r.error) || 'Could not listen for a pad', 'err', 5000); return; }
+    this.padUntil = Date.now() + 30000;
+    this.owner().render();
+    clearInterval(this.padTimer);
+    this.padTimer = setInterval(() => this.pollPad(), 400);
+  },
+  async pollPad(){
+    const r = await api('/integrations/midi/poll', {});
+    const t = this.trigger();
+    if (!t){ this.stop(); return; }
+    if (r.captured){
+      this.stopPad();
+      if ((S.data.shortcuts.taken || []).some(sig => sig === r.captured || sig === r.captured.split('@')[0])){
+        toast('That pad already runs a delay action (Controls tab). Pick another.', 'err', 5000);
+        this.owner().render();
+        return;
+      }
+      t.midi = r.captured;
+      this.owner().changed();
+    } else if (!r.learning || Date.now() > this.padUntil){
+      this.stopPad();
+      this.owner().render();
+    }
+  },
+  stopPad(){
+    clearInterval(this.padTimer);
+    this.padTimer = null;
+    this.padUntil = 0;
+  },
+  // Leaving the editor ends both, and gives the hotkeys back.
+  stop(){
+    this.stopRecording();
+    if (this.padTimer){ this.stopPad(); api('/integrations/midi/cancel', {}); }
+  },
+};
+
+function shortcutHtml(t){
+  if (!S.data.shortcuts.available){
+    return warnHtml('Hotkeys and MIDI pads work on Windows only. On this system, start it with a web call instead.');
+  }
+  const keys = t.hotkey ? t.hotkey.split('+').map(p => `<span class="hk-chip">${esc(p)}</span>`).join('<span class="hk-sep">+</span>') : '';
+  const listening = !!Keys.padTimer;
+  return `<div class="ig-keys">
+    <div class="dff"><label>Hotkey</label><div class="ig-key-row">
+      <button class="hk-capture ig-key${Keys.recording ? ' recording' : t.hotkey ? '' : ' empty'}" data-act="key-record">${Keys.recording
+        ? '<span class="hk-cue">Press the keys… Esc cancels</span>' : keys || '<span class="hk-cue">Click, then press keys</span>'}</button>
+      ${t.hotkey ? `<button class="ic-btn-tiny" data-act="key-clear" aria-label="Remove the hotkey">${svg('x')}</button>` : ''}</div></div>
+    <div class="dff"><label>MIDI pad</label><div class="ig-key-row">
+      <button class="hk-capture ig-key${listening ? ' recording' : t.midi ? '' : ' empty'}" data-act="pad-learn">${listening
+        ? '<span class="hk-cue">Press a pad or knob…</span>' : t.midi ? `<span class="hk-chip">${esc(padLabel(t.midi))}</span>` : '<span class="hk-cue">Click, then press a pad</span>'}</button>
+      ${t.midi ? `<button class="ic-btn-tiny" data-act="pad-clear" aria-label="Remove the pad">${svg('x')}</button>` : ''}</div></div>
+  </div>
+  <div class="muted">Works while you're in a game. Use either one, or both. Keys and pads that run the delay (Controls tab) stay theirs.</div>`;
+}
+function focusAct(act){
+  const el = q(`[data-act="${act}"]`);
+  if (el) el.focus({preventScroll:true});
 }
 
 // A draft saved with no trigger still opens: it gets a starting one.
@@ -2109,8 +2425,8 @@ function insertAtCursor(field, text){
 const PALETTE = [
   ['Send', [['discord', 'Discord'], ['chat', 'Twitch chat'], ['phone', 'Phone'], ['http', 'Web request']]],
   ['Flow', [['if', 'If / otherwise'], ['wait', 'Wait'], ['wait_delay', 'Wait for the delay'], ['stop', 'Stop']]],
-  ['Stream', [['delay_action', 'Delay action'], ['marker', 'VOD marker'], ['clip', 'Clip']]],
-  ['Anything', [['program', 'Run a program'], ['file', 'Write a file'], ['set_var', 'Remember a value'], ['counter', 'Counter']]],
+  ['Stream', [['overlay', 'Show on stream'], ['delay_action', 'Delay action'], ['marker', 'VOD marker'], ['clip', 'Clip']]],
+  ['Anything', [['edit_text', 'Edit text'], ['set_var', 'Remember a value'], ['counter', 'Counter'], ['program', 'Run a program'], ['file', 'Write a file']]],
 ];
 // What can start an integration, shown as tiles so every kind is in sight.
 const TRIGGERS = [
@@ -2122,7 +2438,14 @@ const TRIGGERS = [
     eg:'Someone says "gg": thank them'},
   {id:'timer', icon:'clock', label:'On a timer', hint:'Every few minutes', eg:'Every 15 min: remind chat to follow'},
   {id:'webhook', icon:'link', label:'A web call', hint:'Stream Deck, scripts, other apps', eg:'A Stream Deck button cuts the delay'},
+  {id:'shortcut', icon:'keyboard', label:'A hotkey or MIDI pad', hint:'A key combo or a pad, even in game', windows:true,
+    eg:'Ctrl+Alt+C clips and posts the link'},
 ];
+// Why a trigger tile can't be picked right now, or ''.
+function triggerBlocked(k){
+  if (k.windows && !S.data.shortcuts.available) return 'Windows only';
+  return k.chat && !S.data.twitch.main.login ? 'Needs Twitch connected' : '';
+}
 // How each event looks when picking one.
 const EVENT_INFO = {
   obs_connected:{icon:'play', desc:'OBS starts sending to InstantClone.'},
@@ -2235,12 +2558,14 @@ const Builder = {
           <h3>What happens?</h3><p>Pick the moment it reacts to.</p></div>
         ${eventTilesHtml(picked ? h.trigger.event : '', true)}</div>`;
     }
-    const noChat = !S.data.twitch.main.login;
     return `<div class="ig-chooser" data-key="chooser-kind">
       <div class="ig-chooser-head"><h3>How does it start?</h3><p>Pick what sets it off. You can change it any time.</p></div>
-      <div class="ig-kinds">${TRIGGERS.map((k, n) => `<button type="button" class="ig-kind" data-act="b-trigger-type" data-v="${k.id}" style="--i:${n}">
+      <div class="ig-kinds">${TRIGGERS.map((k, n) => {
+        const blocked = triggerBlocked(k);
+        return `<button type="button" class="ig-kind" data-act="b-trigger-type" data-v="${k.id}" style="--i:${n}"${blocked && k.windows ? ' disabled' : ''}>
         <span class="ig-kind-ic">${svg(k.icon)}</span><b>${k.label}</b><small>${k.hint}</small>
-        <span class="ig-kind-eg">${k.chat && noChat ? 'Needs Twitch connected' : 'e.g. ' + esc(k.eg)}</span></button>`).join('')}</div></div>`;
+        <span class="ig-kind-eg">${blocked || 'e.g. ' + esc(k.eg)}</span></button>`;
+      }).join('')}</div></div>`;
   },
   // A different selection is a different panel (fresh fields, crossfade).
   inspectorKey(){
@@ -2319,7 +2644,11 @@ const Builder = {
     const channels = S.data.connections.discord.map(c => [c.id, '#' + c.name]);
     switch (s.type){
       case 'discord': return (channels.length ? field('connection', 'Channel', {select:[['', 'Pick a channel']].concat(channels)}) : note('No Discord channel yet. <a href="#" data-act="conn" data-tab="discord">Add one</a>.'))
-        + field('text', 'Message', {area:true}) + field('ping', 'Ping', {select:[['', 'Nobody'], ['here', '@here'], ['everyone', '@everyone']]});
+        + field('text', 'Message', {area:true})
+        + field('edit', 'Message', {select:[['', 'Send a new one'], ['last', 'Edit the last one it sent there']]})
+        + (s.params.edit === 'last' ? note('A drop stays one message: "down", then "back". If the last one was deleted, a new one goes out.')
+          : field('ping', 'Ping', {select:[['', 'Nobody'], ['here', '@here'], ['everyone', '@everyone']]}))
+        + note('<span class="mono">&lt;t:{hold_ends_at}:R&gt;</span> shows a live countdown in Discord.');
       case 'chat': return field('text', 'Message', {area:true}) + field('as', 'Send as', {select:[['', 'Your account'], ['bot', 'Bot account']]})
         + field('reply', 'Reply to the viewer', {select:[['', 'No'], ['yes', 'Yes, in their thread']]});
       case 'phone': return field('title', 'Title') + field('text', 'Message', {area:true}) + field('priority', 'Priority', {select:[['', 'Normal'], ['high', 'High'], ['urgent', 'Urgent']]});
@@ -2347,6 +2676,19 @@ const Builder = {
         + warnHtml('Runs on your PC. Recipes you import can never add this without asking you first.');
       case 'file': return field('path', 'File (a fixed path, no variables)', {mono:true, ph:'C:\\Stream\\status.txt'}) + field('text', 'Text', {area:true}) + field('mode', 'Each time', {select:[['', 'Replace the text'], ['append', 'Add a line']]});
       case 'set_var': return field('name', 'Name', {mono:true, ph:'winner'}) + field('value', 'Value', {ph:'{user}'}) + note('Later steps use it as <span class="mono">{name}</span>. Lasts for this run.');
+      case 'overlay': return field('title', 'Small title', {ph:'Clip'}) + field('text', 'Text', {area:true, ph:'{user} just clipped that'})
+        + field('seconds', 'On screen for', {select:[['3', '3 s'], ['6', '6 s'], ['10', '10 s'], ['15', '15 s'], ['30', '30 s']]})
+        + alertsSetupHtml() + note('Tests never put anything on stream: use "Show a test alert" above.');
+      case 'edit_text': {
+        const op = EDIT_OPS[s.params.op] || EDIT_OPS.first_line;
+        const got = editTextSample(s, sampleMap(this.handler()));
+        return field('input', 'Text', {mono:true, ph:'{api.body}'})
+          + field('op', 'Do', {select:Object.entries(EDIT_OPS).map(([id, o]) => [id, o[0]])})
+          + (op[1] ? field('a', op[1], {mono:true}) : '') + (op[2] ? field('b', op[2], {mono:true}) : '')
+          + field('save_as', 'Save it as', {mono:true, ph:'text'})
+          + note(`Gives <b>${esc(got) || '(nothing)'}</b> with the sample values.${s.params.op === 'random' ? ' Each run picks one of the lines, or one of the parts between |.' : ''}`)
+          + note(`Later steps use it as <span class="mono">{${esc((s.params.save_as || '').trim() || 'text')}}</span>.`);
+      }
       case 'counter': return field('name', 'Name', {mono:true, ph:'crashes'}) + field('op', 'Do', {select:[['', 'Add'], ['subtract', 'Subtract'], ['set', 'Set to'], ['reset', 'Reset to 0']]})
         + field('by', 'By', {mono:true, ph:'1'}) + note(`Kept between runs. Use it anywhere as <span class="mono">{counter.${esc(s.params.name || 'name')}}</span>.`);
     }
@@ -2354,10 +2696,11 @@ const Builder = {
   },
   triggerInspector(h){
     const t = h.trigger;
-    const noChat = !S.data.twitch.main.login;
-    const typeSel = `<div class="dff"><label>Starts when</label><div class="ig-ttypes" role="radiogroup" aria-label="Starts when">${TRIGGERS.map(k =>
-      `<button type="button" class="ig-ttype${k.id === t.type ? ' on' : ''}" role="radio" aria-checked="${k.id === t.type}" data-act="b-trigger-type" data-v="${k.id}">
-        ${svg(k.icon)}<b>${k.label}</b><small>${k.chat && noChat ? 'Needs Twitch connected' : k.hint}</small></button>`).join('')}</div></div>`;
+    const typeSel = `<div class="dff"><label>Starts when</label><div class="ig-ttypes" role="radiogroup" aria-label="Starts when">${TRIGGERS.map(k => {
+      const blocked = triggerBlocked(k);
+      return `<button type="button" class="ig-ttype${k.id === t.type ? ' on' : ''}" role="radio" aria-checked="${k.id === t.type}" data-act="b-trigger-type" data-v="${k.id}"${blocked && k.windows && k.id !== t.type ? ' disabled' : ''}>
+        ${svg(k.icon)}<b>${k.label}</b><small>${blocked || k.hint}</small></button>`;
+    }).join('')}</div></div>`;
     let body = '';
     if (t.type === 'event'){
       const current = eventOf(t.event), info = EVENT_INFO[t.event] || {icon:'bolt', desc:''};
@@ -2390,13 +2733,16 @@ const Builder = {
         <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(url)}">Copy</button></div>`, 'Call this address (keep it secret)') + `
         <div class="muted">GET or POST from a Stream Deck, a script or any app on this network. The body is <span class="mono">{body}</span>; JSON fields are <span class="mono">{body.field}</span>.</div>
         <button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="b-new-token">Make a new secret address</button>`;
+    } else if (t.type === 'shortcut'){
+      body = shortcutHtml(t);
     }
     const more = this.d.handlers.length > 1
       ? `<div class="ig-insp-row">${enableSwitch('h-enabled', h.enabled, 'This trigger is on')}
          <button class="ic-btn ic-btn-ghost ig-small" data-act="b-del-handler">Remove trigger</button></div>` : '';
     return `<div class="ig-insp-title" style="--c:#5ac8fa"><small>WHEN</small><b>${esc(triggerLabel(t))}</b></div>
       ${typeSel}${body}
-      <div class="dff"><label>Wait between two runs (seconds)</label><input class="ic-input mono" data-bind="b-cooldown" inputmode="numeric" value="${Math.round((this.d.cooldown_ms || 0) / 1000)}"></div>${more}`;
+      <div class="dff"><label>Wait between two runs (seconds)</label><input class="ic-input mono" data-bind="b-cooldown" inputmode="numeric" value="${Math.round((this.d.cooldown_ms || 0) / 1000)}"></div>
+      <div class="ig-insp-quiet">${quietHtml(this.d)}</div>${more}`;
   },
   input(el){
     const b = el.dataset.bind, h = this.handler(), t = h.trigger;
@@ -2419,11 +2765,10 @@ const Builder = {
       tryEntry(this.stepAt(this.sel)).inputs[el.dataset.name] = el.value;
       return;
     }
-    else return;
-    this.dirty = true;
-    this.render();
+    else if (!quietInput(this.d, el)) return;
+    this.changed();
   },
-  edited(){
+  changed(){
     this.dirty = true;
     this.render();
   },
@@ -2442,7 +2787,7 @@ const Builder = {
         list.push(newStep(el.dataset.kind));
         this.sel = this.target.concat(list.length - 1);
         if (el.dataset.kind === 'if') this.target = this.sel.concat('then');
-        this.edited();
+        this.changed();
         const added = q('.ig-step.on');
         if (added) added.scrollIntoView({block:'nearest', behavior:reduced() ? 'auto' : 'smooth'});
         return true;
@@ -2454,7 +2799,7 @@ const Builder = {
         [list[index], list[to]] = [list[to], list[index]];
         this.sel = path.slice(0, -1).concat(to);
         this.target = [];
-        this.edited();
+        this.changed();
         return true;
       }
       case 'b-dup': {
@@ -2462,7 +2807,7 @@ const Builder = {
         list.splice(index + 1, 0, clone(list[index]));
         this.sel = path.slice(0, -1).concat(index + 1);
         this.target = [];
-        this.edited();
+        this.changed();
         return true;
       }
       case 'b-del': {
@@ -2470,7 +2815,7 @@ const Builder = {
         list.splice(index, 1);
         this.sel = 'trigger';
         this.target = [];
-        this.edited();
+        this.changed();
         return true;
       }
       case 'b-handler':
@@ -2484,14 +2829,14 @@ const Builder = {
         this.unpicked.add(added);
         this.choosing = 'kind';
         this.h = d.handlers.length - 1; this.sel = 'trigger'; this.target = []; this.run = null;
-        this.edited();
+        this.changed();
         return true;
       }
       case 'b-del-handler':
         if (d.handlers.length < 2 || !armConfirm(el, 'Remove it and its steps?')) return true;
         d.handlers.splice(this.h, 1);
         this.h = 0; this.sel = 'trigger'; this.target = []; this.run = null;
-        this.edited();
+        this.changed();
         return true;
       case 'b-trigger-type': {
         const h = this.handler(), v = el.dataset.v;
@@ -2507,7 +2852,8 @@ const Builder = {
         this.unpicked.delete(h);
         this.choosing = null;
         this.sel = 'trigger';
-        this.edited();
+        this.changed();
+        if (v === 'shortcut') focusAct('key-record');
         const first = {chat_command:'t-command', chat_message:'t-pattern', timer:'t-every'}[v];
         if (first){
           // The starting value is a placeholder: typing replaces it.
@@ -2529,7 +2875,7 @@ const Builder = {
         this.choosing = null;
         this.cancelTrigger = null;
         this.sel = 'trigger';
-        this.edited();
+        this.changed();
         return true;
       }
       case 'b-pick-back': {
@@ -2543,7 +2889,7 @@ const Builder = {
         this.render();
         return true;
       }
-      case 'b-new-token': this.handler().trigger.token = randomToken(); this.edited(); return true;
+      case 'b-new-token': this.handler().trigger.token = randomToken(); this.changed(); return true;
       case 'b-token': insertAtCursor(this.lastField, '{' + el.dataset.token + '}'); return true;
       case 'b-test': if (this.askToPick()) busy(el, () => this.test()); return true;
       case 'b-try':
@@ -2583,7 +2929,7 @@ const Builder = {
     }
     this.sel = this.sel.slice(0, -1).concat(index + 1);
     this.target = [];
-    this.edited();
+    this.changed();
   },
   // A trigger still waiting for "How does it start?" can't be saved or run.
   // Shows it and says so; true when every trigger is picked.
@@ -2622,6 +2968,7 @@ function newTrigger(type){
     case 'chat_message': return {type, pattern:'', mode:'contains', roles:{everyone:true, subs:true, vips:true, mods:true}};
     case 'timer': return {type, every_ms:600000, only_live:true};
     case 'webhook': return {type, token:randomToken()};
+    case 'shortcut': return {type, hotkey:'', midi:''};
   }
   return {type:'event', event:'hold_opened', filters:{}};
 }
@@ -2632,6 +2979,7 @@ function newStep(kind){
     wait:{ms:'10000'}, wait_delay:{}, if:{left:'', op:'is', right:''}, stop:{},
     delay_action:{action:'cut'}, marker:{description:'Highlight'}, clip:{}, program:{path:'', args:''},
     file:{path:'', text:'', mode:''}, set_var:{name:'', value:''}, counter:{name:'count', op:'', by:'1'},
+    overlay:{title:'', text:'', seconds:'6'}, edit_text:{input:'', op:'first_line', a:'', b:'', save_as:'text'},
   }[kind] || {};
   return {type:kind, params:clone(p), then:[], else:[]};
 }
@@ -2643,6 +2991,7 @@ function triggerSentence(t){
     case 'chat_message': return `A chat message ${t.mode === 'exact' ? 'is' : t.mode === 'starts_with' ? 'starts with' : 'matches'} "${t.pattern || ''}"`;
     case 'timer': return `Every ${Math.round((t.every_ms || 0) / 60000)} min${t.only_live !== false ? ' while streaming' : ''}`;
     case 'webhook': return 'Something calls its secret address';
+    case 'shortcut': return shortcutLabel(t) ? `You press ${shortcutLabel(t)}` : 'You press a hotkey or pad (not set yet)';
   }
   return t.type;
 }
@@ -2650,7 +2999,7 @@ function stepSentence(s){
   const p = s.params || {};
   const q = v => `“${highlightVars(v || '')}”`;
   switch (s.type){
-    case 'discord': return `Discord ${esc(channelName(p.connection))} ${q(p.text)}${p.ping ? ' · @' + esc(p.ping) : ''}`;
+    case 'discord': return `Discord ${esc(channelName(p.connection))} ${q(p.text)}${p.edit === 'last' ? ' · edits the last one' : p.ping ? ' · @' + esc(p.ping) : ''}`;
     case 'chat': return `Chat ${q(p.text)}${p.as === 'bot' ? ' · as bot' : ''}${p.reply === 'yes' ? ' · as a reply' : ''}`;
     case 'phone': return `Phone ${q(p.text)}`;
     case 'http': return `${esc(p.method || 'POST')} ${esc(maskUrl(p.url) || '(address)')}${p.save_as ? ' → ' + esc(p.save_as) : ''}`;
@@ -2664,6 +3013,8 @@ function stepSentence(s){
     case 'program': return `Run ${esc((p.path || '(program)').split(/[\\/]/).pop())} ${highlightVars(p.args || '')}`;
     case 'file': return `${p.mode === 'append' ? 'Add to' : 'Write'} ${esc((p.path || '(file)').split(/[\\/]/).pop())} ${q(p.text)}`;
     case 'set_var': return `Remember ${esc(p.name || '…')} = ${highlightVars(p.value || '')}`;
+    case 'overlay': return `On stream ${q(p.text)}`;
+    case 'edit_text': return `${esc((EDIT_OPS[p.op] || EDIT_OPS.first_line)[0])}: ${highlightVars(p.input || '…')} → <span class="v">{${esc((p.save_as || '').trim() || 'text')}}</span>`;
     case 'counter': return `Counter ${esc(p.name || '…')} ${p.op === 'reset' ? 'reset' : p.op === 'set' ? '= ' + esc(p.by || '0') : (p.op === 'subtract' ? '-' : '+') + esc(p.by || '1')}`;
   }
   return esc(s.type);
@@ -2686,9 +3037,10 @@ const Conn = {
   render(){
     // A slow reply can land after the user left this page.
     if (Modal.kind !== 'connections') return;
-    const tabs = [['discord', 'Discord'], ['twitch', 'Twitch'], ['phone', 'Phone']].map(([id, l]) =>
+    const tabs = [['discord', 'Discord'], ['twitch', 'Twitch'], ['phone', 'Phone'], ['stream', 'On stream']].map(([id, l]) =>
       `<button class="sub-tab${this.tab === id ? ' on' : ''}" role="tab" aria-selected="${this.tab === id}" data-act="conn-tab" data-tab="${id}">${l}</button>`).join('');
-    const pane = this.tab === 'discord' ? this.discordHtml() : this.tab === 'twitch' ? this.twitchHtml() : this.phoneHtml();
+    const pane = {discord:() => this.discordHtml(), twitch:() => this.twitchHtml(), phone:() => this.phoneHtml(),
+      stream:() => `<div class="sys-section ig-form">${alertsSetupHtml()}</div>`}[this.tab]();
     Modal.body(`${modalHead('link', 'var(--accent)', 'Connections', 'Where integrations post. Set each one up once.')}
       <div class="dest-form-body ig-conn-body">
         <div class="sub-tabs ig-seg" role="tablist">${tabs}${SEG_IND}</div>
@@ -2848,6 +3200,17 @@ const Conn = {
     return false;
   },
 };
+
+// The alerts browser source: where "Show on stream" cards appear.
+function alertsSetupHtml(){
+  const url = `${location.origin}/alerts`;
+  return `<div class="ig-setup">
+    <div class="ig-insp-p"><b>Once, in OBS:</b> add a <b>Browser source</b> with this address, as big as your canvas. Cards appear at the bottom; add <span class="mono">?at=top</span> to put them at the top.</div>
+    <div class="ig-copy-row"><input class="ic-input mono" readonly value="${esc(url)}" aria-label="Alerts address">
+      <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(url)}">Copy</button></div>
+    <button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="alert-test">${svg('play', ' class="ig-btn-ic"')}Show a test alert</button>
+  </div>`;
+}
 
 // System > Twitch & OBS, with the Twitch login app section open.
 function openTwitchAppSettings(){
@@ -3012,6 +3375,23 @@ async function onClick(e){
     case 'view': S.view = el.dataset.v; store.set('ig-view', S.view); render(); break;
     case 'copy': copyText(el); break;
     case 'twitch-app': openTwitchAppSettings(); break;
+    case 'alert-test':
+      busy(el, async () => {
+        const r = await api('/integrations/alerts/test', {});
+        toast(r.ok ? 'A test card is on the alerts source now' : r.error || 'Could not show it', r.ok ? 'ok' : 'err');
+      });
+      break;
+    // Shortcut and quiet hours: the same in both editors.
+    case 'key-record': Keys.record(); break;
+    case 'key-clear': Keys.trigger().hotkey = ''; OWNERS[Modal.kind].changed(); break;
+    case 'pad-learn': if (!Keys.padTimer) Keys.learnPad(el); break;
+    case 'pad-clear': Keys.trigger().midi = ''; OWNERS[Modal.kind].changed(); break;
+    case 'set-quiet': {
+      const o = OWNERS[Modal.kind];
+      o.d.quiet = el.dataset.v === 'on' ? (o.d.quiet || {from:'23:00', to:'08:00'}) : null;
+      o.changed();
+      break;
+    }
     case 'pack':
       busy(el, async () => {
         if (Modal.kind === 'catalog') Modal.close(true);

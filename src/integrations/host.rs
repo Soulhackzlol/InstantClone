@@ -42,9 +42,25 @@ pub struct ClipInfo {
     pub url: String,
 }
 
+/// A Discord message that went out.
+pub struct DiscordPosted {
+    /// Discord's id for it, for editing it later; empty if none came back.
+    pub message_id: String,
+    /// The earlier message was edited (rather than a new one posted).
+    pub edited: bool,
+}
+
 pub trait Host: Send + Sync {
     fn live(&self) -> LiveState;
-    fn discord(&self, webhook_url: &str, content: &str, ping: &str) -> Result<(), String>;
+    /// Post a message, or edit message `edit` when given. An edit whose
+    /// message is gone (deleted in Discord) posts a new one instead.
+    fn discord(
+        &self,
+        webhook_url: &str,
+        content: &str,
+        ping: &str,
+        edit: Option<&str>,
+    ) -> Result<DiscordPosted, String>;
     fn http(&self, request: HttpRequest) -> Result<HttpResponse, String>;
     fn phone(
         &self,
@@ -64,6 +80,8 @@ pub trait Host: Send + Sync {
     fn delay_action(&self, action: &str, ms: u32) -> Result<(), String>;
     fn program(&self, path: &str, args: &[String]) -> Result<(), String>;
     fn file(&self, path: &str, text: &str, append: bool) -> Result<(), String>;
+    /// Put a card on the alerts browser source for `seconds`.
+    fn overlay(&self, title: &str, text: &str, seconds: u64);
 }
 
 /// `30s`, `1m 30s`, or empty for no delay, so `{delay|off}` reads naturally.
