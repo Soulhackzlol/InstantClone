@@ -19,7 +19,9 @@
 use super::alerts::Board;
 use super::effects::RealHost;
 use super::event::{Event, EventKind};
-use super::model::{DiscordChannel, Integration, MatchMode, PhoneConnection, Roles, Trigger};
+use super::model::{
+    pad_matches, DiscordChannel, Integration, MatchMode, PhoneConnection, Roles, Trigger,
+};
 use super::runner::{self, RunContext, RunEnv, RunStatus, StepLog};
 use super::store::Store;
 use super::twitch::irc::ChatMessage;
@@ -445,6 +447,9 @@ impl Engine {
                     self.apply_settings(&snapshot);
                 }
                 _ = tick.tick() => {
+                    for event in self.flap.release(Instant::now()) {
+                        self.event(event);
+                    }
                     self.watch_delay();
                     self.run_timers();
                     self.save_uses_if_due();
@@ -635,7 +640,7 @@ impl Engine {
                 (Trigger::Shortcut { hotkey, .. }, Shortcut::Hotkey) => {
                     !hotkey.is_empty() && hotkey == signature
                 }
-                (Trigger::Shortcut { midi, .. }, Shortcut::Midi) => midi_matches(midi, signature),
+                (Trigger::Shortcut { midi, .. }, Shortcut::Midi) => pad_matches(midi, signature),
                 _ => false,
             })
             .map(|(i, idx, _)| (i, idx))
@@ -879,10 +884,17 @@ impl Engine {
     }
 }
 
-/// See `FLAP_WINDOW`.
+/// See `FLAP_WINDOW`. What it holds back isn't lost: a destination whose
+/// last held event differs from what was last said about it gets that event
+/// once the window ends, so "live" is never the final word on a dead one.
 #[derive(Default)]
 struct FlapGuard {
+    /// When each event (kind and destination) last went out.
     last: HashMap<String, Instant>,
+    /// What each destination was last reported as: live or dropped.
+    reported: HashMap<String, EventKind>,
+    /// Each destination's newest held-back event.
+    held: HashMap<String, Event>,
 }
 
 impl FlapGuard {
@@ -891,25 +903,62 @@ impl FlapGuard {
             .retain(|_, t| now.duration_since(*t) < FLAP_WINDOW);
     }
 
-    fn suppress(&mut self, event: &Event, now: Instant) -> bool {
-        let key = match event.kind {
-            EventKind::DestinationLive | EventKind::DestinationDropped => format!(
-                "{}:{}",
-                event.kind.id(),
-                event.var("destination").unwrap_or("")
-            ),
-            EventKind::AllDestinationsDown => event.kind.id().to_string(),
-            _ => return false,
-        };
-        if self
-            .last
-            .get(&key)
+    /// The window key of an event the guard watches, and its destination.
+    fn key(event: &Event) -> Option<(String, Option<String>)> {
+        match event.kind {
+            EventKind::DestinationLive | EventKind::DestinationDropped => {
+                let destination = event.var("destination").unwrap_or("").to_string();
+                Some((
+                    format!("{}:{destination}", event.kind.id()),
+                    Some(destination),
+                ))
+            }
+            EventKind::AllDestinationsDown => Some((event.kind.id().to_string(), None)),
+            _ => None,
+        }
+    }
+
+    fn in_window(&self, key: &str, now: Instant) -> bool {
+        self.last
+            .get(key)
             .is_some_and(|t| now.duration_since(*t) < FLAP_WINDOW)
-        {
+    }
+
+    fn suppress(&mut self, event: &Event, now: Instant) -> bool {
+        let Some((key, destination)) = Self::key(event) else {
+            return false;
+        };
+        if self.in_window(&key, now) {
+            if let Some(destination) = destination {
+                self.held.insert(destination, event.clone());
+            }
             return true;
         }
         self.last.insert(key, now);
+        if let Some(destination) = destination {
+            self.reported.insert(destination.clone(), event.kind);
+            self.held.remove(&destination);
+        }
         false
+    }
+
+    /// Held events whose window is over and that still change what was
+    /// last reported: the destination's real state, said late, not never.
+    fn release(&mut self, now: Instant) -> Vec<Event> {
+        let due: Vec<String> = self
+            .held
+            .iter()
+            .filter(|(_, event)| {
+                Self::key(event).is_some_and(|(key, _)| !self.in_window(&key, now))
+            })
+            .map(|(destination, _)| destination.clone())
+            .collect();
+        due.into_iter()
+            .filter_map(|destination| {
+                let event = self.held.remove(&destination)?;
+                (self.reported.get(&destination) != Some(&event.kind)).then_some(event)
+            })
+            .collect()
     }
 }
 
@@ -937,13 +986,6 @@ fn make_env(
         }),
         discord_messages: discord_messages.clone(),
     }
-}
-
-/// Whether a pad a trigger is bound to is the one pressed. The press always
-/// names its device; a binding that names none matches that control on any
-/// device (the same rule as the delay actions' MIDI bindings).
-fn midi_matches(bound: &str, pressed: &str) -> bool {
-    !bound.is_empty() && (bound == pressed || pressed.split('@').next() == Some(bound))
 }
 
 fn filters_match(filters: &BTreeMap<String, String>, event: &Event) -> bool {
@@ -1126,6 +1168,35 @@ mod tests {
     }
 
     #[test]
+    fn a_drop_held_back_is_still_said_once_the_window_ends() {
+        let mut guard = FlapGuard::default();
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let ev = |kind| Event::new(kind).with("destination", "YouTube");
+        assert!(!guard.suppress(&ev(EventKind::DestinationDropped), at(0)));
+        assert!(!guard.suppress(&ev(EventKind::DestinationLive), at(10)));
+        assert!(guard.suppress(&ev(EventKind::DestinationDropped), at(180)));
+        assert!(guard.release(at(200)).is_empty(), "still inside the window");
+        let late = guard.release(at(301));
+        assert_eq!(late.len(), 1);
+        assert_eq!(late[0].kind, EventKind::DestinationDropped);
+        assert!(guard.release(at(302)).is_empty(), "said once");
+    }
+
+    #[test]
+    fn a_flap_that_ends_live_says_nothing_more() {
+        let mut guard = FlapGuard::default();
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let ev = |kind| Event::new(kind).with("destination", "YouTube");
+        assert!(!guard.suppress(&ev(EventKind::DestinationDropped), at(0)));
+        assert!(!guard.suppress(&ev(EventKind::DestinationLive), at(10)));
+        assert!(guard.suppress(&ev(EventKind::DestinationDropped), at(20)));
+        assert!(guard.suppress(&ev(EventKind::DestinationLive), at(30)));
+        assert!(guard.release(at(400)).is_empty(), "live was already said");
+    }
+
+    #[test]
     fn wildcards_match_like_file_globs() {
         assert!(wildcard("gg wp everyone", "gg*"));
         assert!(wildcard("clip it", "clip ??"));
@@ -1160,15 +1231,6 @@ mod tests {
         assert_eq!(v["arg2"], "now");
         assert_eq!(v["args"], "45 now");
         assert_eq!(v["user_role"], "viewer");
-    }
-
-    #[test]
-    fn pads_match_on_their_device_or_any() {
-        assert!(midi_matches("note:1:36@Deck A", "note:1:36@Deck A"));
-        assert!(!midi_matches("note:1:36@Deck A", "note:1:36@Deck B"));
-        assert!(midi_matches("note:1:36", "note:1:36@Deck B"));
-        assert!(!midi_matches("note:1:37", "note:1:36@Deck B"));
-        assert!(!midi_matches("", "note:1:36@Deck B"));
     }
 
     #[test]

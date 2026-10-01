@@ -40,10 +40,23 @@ pub struct ChatMessage {
     pub is_sub: bool,
 }
 
-/// A line to post, optionally as a reply.
+/// A line to post, optionally as a reply. `delivery` hears what became of
+/// it: Twitch confirms a posted message (USERSTATE) and says why it refused
+/// one (a NOTICE: slow mode, a duplicate, a ban...).
 pub struct Outgoing {
     pub text: String,
     pub reply_to: Option<String>,
+    pub delivery: Option<std::sync::mpsc::SyncSender<Delivery>>,
+}
+
+/// What became of an outgoing message, in the order it happens.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Delivery {
+    /// Written to the connection, past the rate limit.
+    Written,
+    Posted,
+    /// Twitch refused it; its own words for why.
+    Refused(String),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -131,6 +144,9 @@ async fn session(
     sent: &mut VecDeque<Instant>,
 ) -> Result<(), SessionEnd> {
     let io = |e: std::io::Error| SessionEnd::Io(e.to_string());
+    // Messages written and not yet confirmed or refused, oldest first:
+    // Twitch answers each in the order it was sent.
+    let mut awaiting: VecDeque<std::sync::mpsc::SyncSender<Delivery>> = VecDeque::new();
     let tcp = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect((HOST, PORT)))
         .await
         .map_err(|_| SessionEnd::Io("Twitch chat did not answer".to_string()))?
@@ -170,6 +186,13 @@ async fn session(
                     "001" => *state.lock() = ChatState::Connected,
                     "NOTICE" if is_auth_failure(msg.trailing) => return Err(SessionEnd::AuthFailed),
                     "RECONNECT" => return Ok(()),
+                    "USERSTATE" | "NOTICE" => {
+                        if let Some(outcome) = delivery_for(&msg) {
+                            if let Some(waiting) = awaiting.pop_front() {
+                                let _ = waiting.try_send(outcome);
+                            }
+                        }
+                    }
                     "PRIVMSG" => {
                         if let (Some(tx), Some(chat)) = (incoming, chat_message(&msg)) {
                             // A full queue drops the message: chat keeps
@@ -185,6 +208,10 @@ async fn session(
                 pace(sent).await;
                 let line = privmsg_line(&channel, &out);
                 writer.write_all(line.as_bytes()).await.map_err(io)?;
+                if let Some(delivery) = out.delivery {
+                    let _ = delivery.try_send(Delivery::Written);
+                    awaiting.push_back(delivery);
+                }
             }
             _ = stop.changed() => return Ok(()),
         }
@@ -222,6 +249,18 @@ fn privmsg_line(channel: &str, out: &Outgoing) -> String {
 
 fn valid_msg_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+}
+
+/// The answer to a message we sent, if this line is one: USERSTATE follows
+/// a posted message, and a NOTICE with a `msg_*` id refuses one.
+fn delivery_for(line: &Line) -> Option<Delivery> {
+    match line.command {
+        "USERSTATE" => Some(Delivery::Posted),
+        "NOTICE" if line.tag("msg-id").starts_with("msg_") => {
+            Some(Delivery::Refused(line.trailing.to_string()))
+        }
+        _ => None,
+    }
 }
 
 fn is_auth_failure(text: &str) -> bool {
@@ -372,10 +411,26 @@ mod tests {
     }
 
     #[test]
+    fn twitch_answers_say_whether_a_message_was_posted() {
+        let posted = parse_line("@badges=;mod=0 :tmi.twitch.tv USERSTATE #texaz");
+        assert_eq!(delivery_for(&posted), Some(Delivery::Posted));
+        let slow = parse_line(
+            "@msg-id=msg_slowmode :tmi.twitch.tv NOTICE #texaz :This room is in slow mode.",
+        );
+        assert_eq!(
+            delivery_for(&slow),
+            Some(Delivery::Refused("This room is in slow mode.".into()))
+        );
+        let other = parse_line("@msg-id=host_on :tmi.twitch.tv NOTICE #texaz :Now hosting.");
+        assert_eq!(delivery_for(&other), None, "not about a message");
+    }
+
+    #[test]
     fn outgoing_lines_are_single_line_and_reply_safely() {
         let out = Outgoing {
             text: "hi\r\nPRIVMSG #x :spam".into(),
             reply_to: Some("abc-123".into()),
+            delivery: None,
         };
         assert_eq!(
             privmsg_line("texaz", &out),
@@ -384,6 +439,7 @@ mod tests {
         let hostile = Outgoing {
             text: "x".into(),
             reply_to: Some("1; evil".into()),
+            delivery: None,
         };
         assert_eq!(privmsg_line("texaz", &hostile), "PRIVMSG #texaz :x\r\n");
     }

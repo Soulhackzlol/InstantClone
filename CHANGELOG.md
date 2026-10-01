@@ -123,6 +123,15 @@ messages as before.
     uses.
   - A key another app holds shows "Key taken" on its card.
   - A knob or fader fires once per turn, not dozens of times.
+  - An integration's pad works on any controller, not just the one
+    picked in Controls, and learning one can use any controller.
+  - Learning a delay pad in Controls refuses a pad an integration uses,
+    and says which one.
+- **A chat message Twitch refuses fails its step**, with Twitch's reason
+  (slow mode, a duplicate, a ban), instead of showing as sent.
+- **A destination that drops again during the alert cooldown still gets
+  its "dropped" alert** once the 5 minutes are up, so "live" is never the
+  last word on a dead one.
 - **Duplicate makes a copy that starts switched off**, with its own web
   call link and no hotkey, so one press never runs both.
 - **Cooldowns only start when something ran.** A command skipped during

@@ -439,6 +439,45 @@ pub fn shortcuts(integrations: &[Integration]) -> (Vec<String>, Vec<String>) {
     (keys, pads)
 }
 
+/// Whether a pad a trigger is bound to is the one pressed. The press always
+/// names its device; a binding that names none matches that control on any
+/// device (the same rule as the delay actions' MIDI bindings).
+pub fn pad_matches(bound: &str, pressed: &str) -> bool {
+    !bound.is_empty() && (bound == pressed || pressed.split('@').next() == Some(bound))
+}
+
+/// Whether one press could set off both pad bindings: the same control,
+/// on the same device or with either one bound to any device.
+pub fn pads_overlap(a: &str, b: &str) -> bool {
+    let (control_a, device_a) = a.split_once('@').map_or((a, None), |(c, d)| (c, Some(d)));
+    let (control_b, device_b) = b.split_once('@').map_or((b, None), |(c, d)| (c, Some(d)));
+    !a.is_empty()
+        && control_a == control_b
+        && (device_a.is_none() || device_b.is_none() || device_a == device_b)
+}
+
+/// The switched-on integration that already starts from `hotkey` or `pad`
+/// (either may be empty), by name.
+pub fn shortcut_owner<'a>(
+    integrations: &'a [Integration],
+    hotkey: &str,
+    pad: &str,
+) -> Option<&'a str> {
+    integrations.iter().filter(|i| i.enabled).find_map(|i| {
+        let owns = i
+            .handlers
+            .iter()
+            .filter(|h| h.enabled)
+            .any(|h| match &h.trigger {
+                Trigger::Shortcut { hotkey: key, midi } => {
+                    (!hotkey.is_empty() && key == hotkey) || pads_overlap(midi, pad)
+                }
+                _ => false,
+            });
+        owns.then_some(i.name.as_str())
+    })
+}
+
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_ID_LEN
@@ -976,6 +1015,28 @@ mod tests {
         assert!(read(r#"{"from":"25:00","to":"08:00"}"#).is_err());
         assert!(read(r#"{"from":"10:00","to":"10:00"}"#).is_err());
         assert!(read(r#"{"from":"10:00","to":""}"#).is_err());
+    }
+
+    #[test]
+    fn pads_match_on_their_device_or_any() {
+        assert!(pad_matches("note:1:36@Deck A", "note:1:36@Deck A"));
+        assert!(!pad_matches("note:1:36@Deck A", "note:1:36@Deck B"));
+        assert!(pad_matches("note:1:36", "note:1:36@Deck B"));
+        assert!(!pad_matches("note:1:37", "note:1:36@Deck B"));
+        assert!(!pad_matches("", "note:1:36@Deck B"));
+    }
+
+    #[test]
+    fn pads_overlap_when_one_press_sets_off_both() {
+        assert!(pads_overlap("note:1:36@Deck A", "note:1:36@Deck A"));
+        assert!(pads_overlap("note:1:36", "note:1:36@Deck B"), "any device");
+        assert!(
+            pads_overlap("note:1:36@Deck B", "note:1:36"),
+            "either way round"
+        );
+        assert!(!pads_overlap("note:1:36@Deck A", "note:1:36@Deck B"));
+        assert!(!pads_overlap("note:1:36", "cc:1:36"));
+        assert!(!pads_overlap("", ""));
     }
 
     #[test]

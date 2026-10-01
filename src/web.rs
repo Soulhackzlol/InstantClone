@@ -2899,20 +2899,9 @@ fn binding_taken_by_integration(
     form: &std::collections::HashMap<String, String>,
     s: &Settings,
 ) -> Option<String> {
-    use crate::integrations::model::Trigger;
     let owner = |wanted: &str, is_pad: bool| {
-        s.integrations.iter().filter(|i| i.enabled).find_map(|i| {
-            i.handlers
-                .iter()
-                .filter(|h| h.enabled)
-                .find_map(|h| match &h.trigger {
-                    Trigger::Shortcut { hotkey, midi } => {
-                        let bound = if is_pad { midi } else { hotkey };
-                        (bound == wanted).then_some(i.name.as_str())
-                    }
-                    _ => None,
-                })
-        })
+        let (key, pad) = if is_pad { ("", wanted) } else { (wanted, "") };
+        crate::integrations::model::shortcut_owner(&s.integrations, key, pad)
     };
     let bindings = [
         ("hotkey.", s.hotkeys.entries(), false),
@@ -3309,16 +3298,31 @@ async fn post_midi_poll(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
+    let mut refused = None;
     if let Some((action, signature)) = ctrl.midi().take_captured_for(&config::ACTIONS) {
         let _wl = settings_write_guard();
         let mut new_settings = settings.borrow().clone();
-        new_settings.midi.set(&action, &signature);
-        if new_settings.save(cfg_path).is_ok() {
-            ctrl.midi().update_from_settings(&new_settings);
-            let _ = settings.send(new_settings);
+        // The pad an integration starts from: taking it for the delay would
+        // leave that integration deaf without a word.
+        let owner =
+            crate::integrations::model::shortcut_owner(&new_settings.integrations, "", &signature);
+        if let Some(name) = owner {
+            refused = Some(format!(
+                "That pad already starts the integration \"{name}\". Press another, or change it there."
+            ));
+        } else {
+            new_settings.midi.set(&action, &signature);
+            if new_settings.save(cfg_path).is_ok() {
+                ctrl.midi().update_from_settings(&new_settings);
+                let _ = settings.send(new_settings);
+            }
         }
     }
-    ("200 OK", "application/json", ctrl.midi().to_json())
+    (
+        "200 OK",
+        "application/json",
+        ctrl.midi().to_json(refused.as_deref()),
+    )
 }
 
 /// Write the current delay state (armed / target, and the "last manually
@@ -5921,6 +5925,14 @@ mod tests {
         assert!(refused.contains("Clip button"), "{refused}");
         // A form that doesn't touch that binding isn't refused for it.
         assert!(binding_taken_by_integration(&config::parse_form("buffer_mb=300"), &s).is_none());
+        // A pad bound for any device overlaps the same pad on one deck.
+        s.integrations[0].handlers[0].trigger = Trigger::Shortcut {
+            hotkey: String::new(),
+            midi: "note:1:36".into(),
+        };
+        apply_field_str(&mut s, "midi.arm", "note:1:36@Deck A");
+        let form = config::parse_form("midi.arm=note%3A1%3A36%40Deck%20A");
+        assert!(binding_taken_by_integration(&form, &s).is_some());
     }
 
     #[test]

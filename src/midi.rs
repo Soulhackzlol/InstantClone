@@ -33,6 +33,9 @@ use crate::sync::Mutex;
 /// someone next opened the dashboard.
 const LEARN_WINDOW: Duration = Duration::from_secs(30);
 
+/// The learn the Integrations tab arms. Its pad may be on any device.
+pub const INTEGRATION_LEARN: &str = "integration";
+
 /// Shared MIDI state between the listener thread and the web layer.
 #[derive(Default)]
 pub struct MidiState {
@@ -157,6 +160,27 @@ impl MidiState {
         }
     }
 
+    /// A press from a device opened only for integrations (not the one
+    /// picked in Controls): it never runs a delay action, and only the
+    /// Integrations tab's learn may capture it.
+    #[cfg(windows)]
+    pub fn on_integration_signature(&self, ctrl: &Controller, signature: &str) {
+        {
+            let mut learn = self.learn.lock();
+            if let Some((action, deadline)) = learn.take() {
+                if action == INTEGRATION_LEARN && Instant::now() < deadline {
+                    *self.captured.lock() = Some((action, signature.to_string(), deadline));
+                    return;
+                }
+                // Not ours: the Controls learn keeps waiting for its device.
+                *learn = Some((action, deadline));
+            }
+        }
+        if let Some(integrations) = ctrl.integrations() {
+            integrations.shortcut(crate::integrations::Shortcut::Midi, signature);
+        }
+    }
+
     /// Called by the listener on each press-edge message. In learn mode it
     /// records the signature for the pending action; otherwise it routes to
     /// the bound action via the shared controller path. `default_ms` is the
@@ -192,7 +216,9 @@ impl MidiState {
     /// listening, the device names, which action (if any) is learning, and
     /// the current bindings (so a just-committed one shows without a full
     /// config refetch).
-    pub fn to_json(&self) -> String {
+    /// The state the dashboard renders. `refused` says why a press that
+    /// was just learned wasn't bound.
+    pub fn to_json(&self, refused: Option<&str>) -> String {
         let learning = match self.learning() {
             Some(a) => json_string(&a),
             None => "null".to_string(),
@@ -212,7 +238,7 @@ impl MidiState {
             )
         };
         format!(
-            r#"{{"available":{a},"connected":{c},"learning":{l},"devices":[{d}],"listening":[{li}],"device":{sel},"bindings":{b}}}"#,
+            r#"{{"available":{a},"connected":{c},"learning":{l},"devices":[{d}],"listening":[{li}],"device":{sel},"bindings":{b},"refused":{r}}}"#,
             a = self.available(),
             c = self.connected(),
             l = learning,
@@ -220,6 +246,7 @@ impl MidiState {
             li = listening.join(","),
             sel = json_string(&self.selected_device()),
             b = bindings,
+            r = refused.map_or("null".to_string(), json_string),
         )
     }
 }
@@ -304,6 +331,14 @@ pub fn spawn(
 ) {
 }
 
+/// Whether the listener opens `device`: the one picked in Controls (every
+/// one when none is), any device an integration's pad was learned on, and
+/// every device while the Integrations tab learns a pad.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn should_open(device: &str, selected: &str, pad_devices: &[&str], learning_pad: bool) -> bool {
+    selected.is_empty() || device == selected || learning_pad || pad_devices.contains(&device)
+}
+
 /// Whether the listener should be holding MIDI inputs open.
 ///
 /// Opening one claims it exclusively: for as long as we hold a device, no
@@ -371,7 +406,7 @@ mod win {
 
         let mut handles: Vec<HMIDIIN> = Vec::new();
         let mut last_present: Vec<String> = Vec::new();
-        let mut last_selected = String::new();
+        let mut last_targets: Vec<String> = Vec::new();
         let mut last_listening = false;
         loop {
             // winmm gives no hot-plug event, so a periodic sweep is the only
@@ -382,20 +417,17 @@ mod win {
             // means the open failed - another app had it exclusively - so
             // that retries every tick until it is handed back.
             let present = device_names();
-            let selected = ctx.state.selected_device();
+            let targets = devices_to_open(ctx, &present);
             let listening = wants_to_listen(ctx);
-            let wanted = listening
-                && present
-                    .iter()
-                    .any(|d| selected.is_empty() || *d == selected);
+            let wanted = listening && !targets.is_empty();
             if present != last_present
-                || selected != last_selected
+                || targets != last_targets
                 || listening != last_listening
                 || (handles.is_empty() && wanted)
             {
                 close_all(&mut handles);
                 let opened = if listening {
-                    open_matching(&present, &selected, instance, &mut handles)
+                    open_matching(&present, &targets, instance, &mut handles)
                 } else {
                     Vec::new()
                 };
@@ -412,7 +444,7 @@ mod win {
                 // while we are holding none of them.
                 ctx.state.set_devices(present.clone(), opened);
                 last_present = present;
-                last_selected = selected;
+                last_targets = targets;
                 last_listening = listening;
             }
             sleep_until_worth_another_look(ctx, listening);
@@ -433,6 +465,26 @@ mod win {
         // below is slow enough to matter.
         let settings = ctx.settings.borrow();
         super::should_hold_devices(learning, &settings)
+    }
+
+    /// The present devices `should_open` picks.
+    fn devices_to_open(ctx: &CallbackCtx, present: &[String]) -> Vec<String> {
+        let selected = ctx.state.selected_device();
+        let learning_pad = ctx.state.learning().as_deref() == Some(super::INTEGRATION_LEARN);
+        let pads = {
+            let settings = ctx.settings.borrow();
+            crate::integrations::model::shortcuts(&settings.integrations).1
+        };
+        let pad_devices: Vec<&str> = pads
+            .iter()
+            .filter_map(|p| p.split_once('@'))
+            .map(|(_, d)| d)
+            .collect();
+        present
+            .iter()
+            .filter(|d| super::should_open(d, &selected, &pad_devices, learning_pad))
+            .cloned()
+            .collect()
     }
 
     /// Idle between sweeps, but notice a learn starting sooner than the
@@ -456,19 +508,18 @@ mod win {
             .collect()
     }
 
-    /// Open and start the input devices the user asked for, returning the
-    /// names actually opened. An empty `selected` means every device.
-    /// Devices that fail to open are skipped (another app may hold one
-    /// exclusively) and retried on a later sweep.
+    /// Open and start the `targets` among the present devices, returning
+    /// the names actually opened. Devices that fail to open are skipped
+    /// (another app may hold one exclusively) and retried on a later sweep.
     fn open_matching(
         present: &[String],
-        selected: &str,
+        targets: &[String],
         instance: usize,
         handles: &mut Vec<HMIDIIN>,
     ) -> Vec<String> {
         let mut names = Vec::new();
         for (dev, name) in present.iter().enumerate() {
-            if !selected.is_empty() && name != selected {
+            if !targets.contains(name) {
                 continue;
             }
             let dev = dev as u32;
@@ -557,15 +608,23 @@ mod win {
         // Name the device the press came from. A deck we somehow have no
         // name for still works as an any-device signature rather than
         // going silent.
-        let sig = match ctx
+        let device = ctx
             .by_handle
             .lock()
             .iter()
             .find(|(handle, _)| *handle == hmi as usize)
-        {
-            Some((_, name)) => format!("{sig}@{name}"),
+            .map(|(_, name)| name.clone());
+        let sig = match &device {
+            Some(name) => format!("{sig}@{name}"),
             None => sig,
         };
+        // A device outside the Controls pick is open only for integrations,
+        // so its presses never reach a delay action.
+        let selected = ctx.state.selected_device();
+        if !selected.is_empty() && device.is_some_and(|name| name != selected) {
+            ctx.state.on_integration_signature(&ctx.ctrl, &sig);
+            return;
+        }
         // Read the default delay live so a mid-session change in the
         // dashboard is reflected without restarting the listener.
         let default_ms = ctx.settings.borrow().auto_arm_delay_ms;
@@ -602,6 +661,25 @@ mod tests {
         assert!(signature_for(0xB0, 20, 0).is_none(), "cc release ignored");
         assert!(signature_for(0xB0, 20, 63).is_none(), "cc below threshold");
         assert!(signature_for(0xE0, 0, 0).is_none(), "pitch bend ignored");
+    }
+
+    #[test]
+    fn devices_open_for_controls_and_for_integration_pads() {
+        use super::should_open;
+        assert!(
+            should_open("Deck A", "", &[], false),
+            "no pick: every device"
+        );
+        assert!(should_open("Deck A", "Deck A", &[], false));
+        assert!(
+            !should_open("Deck B", "Deck A", &[], false),
+            "not picked, not used"
+        );
+        assert!(
+            should_open("Deck B", "Deck A", &["Deck B"], false),
+            "an integration's pad"
+        );
+        assert!(should_open("Deck B", "Deck A", &[], true), "learning a pad");
     }
 
     #[test]
@@ -902,7 +980,7 @@ mod tests {
         state.update_from_settings(&s);
         assert_eq!(state.selected_device(), "Launchpad MK2");
 
-        let json = state.to_json();
+        let json = state.to_json(None);
         assert!(json.contains(r#""device":"Launchpad MK2""#), "{json}");
         assert!(json.contains(r#""devices":[]"#), "{json}");
         assert!(json.contains(r#""listening":[]"#), "{json}");

@@ -7930,9 +7930,10 @@ async function midiPollOnce(){
     // actually worked.
     if (got) setTimeout(midiPollOnce, 700);
     if (was && !got){
-      // The listener drops a learn nobody finished, so the field going back
-      // to normal on its own needs a reason attached to it.
-      midiSetWarn('Learn timed out. Click the field and press a control within 30 seconds.');
+      // The listener drops a learn nobody finished, and the app refuses a
+      // pad an integration uses: either way the field going back to normal
+      // on its own needs a reason attached to it.
+      midiSetWarn(j.refused || 'Learn timed out. Click the field and press a control within 30 seconds.');
     }
     if (was && got){
       // One control drives one action, so learning a pad that was already

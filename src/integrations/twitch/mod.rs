@@ -19,7 +19,7 @@ pub mod irc;
 use super::store::{Store, TwitchAccount};
 use crate::json::{self, Value};
 use crate::sync::Mutex;
-use irc::{ChatMessage, ChatState, Outgoing};
+use irc::{ChatMessage, ChatState, Delivery, Outgoing};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -58,6 +58,11 @@ const VALIDATE_EVERY: Duration = Duration::from_secs(55 * 60);
 /// Every call to Twitch gives up after this: the token upkeep runs them in
 /// one loop, and a stalled one would stop every later refresh.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a chat message may wait behind Twitch's rate limit (20 per 30 s)
+/// before its step stops waiting; it still goes out.
+const SEND_WAIT: Duration = Duration::from_secs(35);
+/// How long Twitch gets to confirm or refuse a message once it's sent.
+const ANSWER_WAIT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
@@ -515,6 +520,9 @@ impl Twitch {
     }
 
     /// Queue a chat message. Blocking-safe: only a channel send.
+    /// Post in chat and wait for Twitch's answer, so a message it refused
+    /// (slow mode, a duplicate, a ban) fails its step instead of passing.
+    /// Blocks: call from a blocking thread.
     pub fn send(&self, text: &str, as_bot: bool, reply_to: Option<&str>) -> Result<(), String> {
         let connected = |c: &Conn| c.state() == ChatState::Connected;
         let conn = if as_bot && connected(&self.bot) {
@@ -533,11 +541,24 @@ impl Twitch {
             .lock()
             .clone()
             .ok_or("Twitch chat is not running")?;
+        let (delivery, outcome) = std::sync::mpsc::sync_channel(2);
         out.try_send(Outgoing {
             text: text.to_string(),
             reply_to: reply_to.map(str::to_string),
+            delivery: Some(delivery),
         })
-        .map_err(|_| "too many chat messages queued; slow down".to_string())
+        .map_err(|_| "too many chat messages queued; slow down".to_string())?;
+        // Queued behind the rate limit at worst, then answered within a
+        // second or so. No answer in time (or a reconnect) isn't a refusal.
+        match outcome.recv_timeout(SEND_WAIT) {
+            Ok(Delivery::Written) => {}
+            Ok(Delivery::Refused(why)) => return Err(format!("Twitch didn't post it: {why}")),
+            _ => return Ok(()),
+        }
+        match outcome.recv_timeout(ANSWER_WAIT) {
+            Ok(Delivery::Refused(why)) => Err(format!("Twitch didn't post it: {why}")),
+            _ => Ok(()),
+        }
     }
 
     fn helix_call<T>(

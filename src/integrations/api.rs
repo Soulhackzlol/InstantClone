@@ -144,7 +144,7 @@ pub async fn route(
 
 /// What a MIDI learn for an integration's shortcut is filed under, apart
 /// from the delay actions' own learns.
-const MIDI_LEARN: &str = "integration";
+const MIDI_LEARN: &str = crate::midi::INTEGRATION_LEARN;
 
 /// Arm a MIDI learn: the next pad pressed becomes the shortcut. The
 /// dashboard polls `/integrations/midi/poll` for it.
@@ -152,7 +152,9 @@ fn midi_learn(ctrl: &Arc<Controller>) -> Reply {
     if !cfg!(windows) {
         return fail("MIDI shortcuts work on Windows only");
     }
-    if !ctrl.midi().connected() {
+    // Any device will do: the learn opens them all, not only the one
+    // picked in Controls.
+    if ctrl.midi().devices().is_empty() {
         return fail("no MIDI controller found; plug one in and try again");
     }
     ctrl.midi().start_learn(MIDI_LEARN);
@@ -446,19 +448,23 @@ fn shortcut_taken(integration: &Integration, s: &Settings) -> Option<String> {
         let Trigger::Shortcut { hotkey, midi } = &h.trigger else {
             return None;
         };
-        let owner = |entries: [(&'static str, &str); 6], wanted: &str| {
-            entries
-                .into_iter()
-                .find(|(_, bound)| !wanted.is_empty() && *bound == wanted)
-                .map(|(action, _)| action)
-        };
-        if let Some(action) = owner(s.hotkeys.entries(), hotkey) {
+        let key_owner = s
+            .hotkeys
+            .entries()
+            .into_iter()
+            .find(|(_, bound)| !hotkey.is_empty() && *bound == hotkey.as_str());
+        if let Some((action, _)) = key_owner {
             return Some(format!(
                 "{hotkey} already runs the delay's {} action (Controls tab); pick another key",
                 action.replace('_', " ")
             ));
         }
-        owner(s.midi.entries(), midi).map(|action| {
+        let pad_owner = s
+            .midi
+            .entries()
+            .into_iter()
+            .find(|(_, bound)| super::model::pads_overlap(bound, midi));
+        pad_owner.map(|(action, _)| {
             format!(
                 "that MIDI pad already runs the delay's {} action (Controls tab); pick another",
                 action.replace('_', " ")
