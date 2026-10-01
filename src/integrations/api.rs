@@ -81,6 +81,7 @@ pub async fn route(
         ("POST", "/integrations/duplicate") => duplicate(&req(), settings, cfg_path),
         ("POST", "/integrations/test") => test(&req(), &handle).await,
         ("POST", "/integrations/fetch") => fetch(&req()).await,
+        ("POST", "/integrations/convert") => convert(&req()),
         ("POST", "/integrations/export") => export(&req(), &settings.borrow()),
         ("POST", "/integrations/import") => import(&req(), settings, cfg_path),
         ("POST", "/connections/discord") => save_discord(&req(), settings, cfg_path),
@@ -160,17 +161,7 @@ fn overview(handle: &super::Handle, s: &Settings) -> Value {
         .collect();
     let vars = json::obj([
         ("global", event::vars_json(runner::GLOBAL_VARS)),
-        (
-            "chat",
-            event::vars_json(&[
-                ("user", "Ana"),
-                ("user_login", "ana"),
-                ("user_role", "mod"),
-                ("message", "!delay"),
-                ("args", "30"),
-                ("arg1", "30"),
-            ]),
-        ),
+        ("chat", event::vars_json(runner::CHAT_VARS)),
         (
             "web",
             event::vars_json(&[("body", "{\"x\":1}"), ("query", "a=1")]),
@@ -307,19 +298,12 @@ pub fn unknown_vars(integration: &Integration) -> Vec<String> {
             Trigger::Event { kind, .. } => {
                 known.extend(kind.vars().iter().map(|(n, _)| n.to_string()))
             }
-            Trigger::ChatCommand { .. } | Trigger::ChatMessage { .. } => known.extend(
-                [
-                    "user",
-                    "user_login",
-                    "user_role",
-                    "message",
-                    "args",
-                    "arg1",
-                    "arg2",
-                    "arg3",
-                ]
-                .map(String::from),
-            ),
+            Trigger::ChatCommand { .. } | Trigger::ChatMessage { .. } => {
+                for n in 1..=9 {
+                    known.push(format!("arg{n}"));
+                }
+                known.extend(runner::CHAT_VARS.iter().map(|(n, _)| n.to_string()));
+            }
             Trigger::Webhook { .. } => {
                 known.extend(["body", "query"].map(String::from));
                 prefixes.push("body.".to_string());
@@ -504,6 +488,25 @@ async fn test(req: &Value, handle: &super::Handle) -> Reply {
             ),
         ])),
         None => fail("the test didn't finish within a minute"),
+    }
+}
+
+/// The editor's paste box: a bot command (or an address) to the pieces of
+/// a "command from a website". See `botcmd`.
+fn convert(req: &Value) -> Reply {
+    match super::botcmd::convert(req.str_or("text", "")) {
+        Ok(c) => ok(json::obj([
+            ("ok", Value::Bool(true)),
+            ("command", c.command.map_or(Value::Null, json::str)),
+            ("url", json::str(c.url)),
+            ("reply", c.reply.map_or(Value::Null, json::str)),
+            ("from", json::str(c.from)),
+            (
+                "unknown",
+                Value::Arr(c.unknown.into_iter().map(json::str).collect()),
+            ),
+        ])),
+        Err(e) => fail(e),
     }
 }
 

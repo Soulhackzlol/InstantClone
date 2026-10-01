@@ -119,6 +119,15 @@ pub const PRESETS: &[Preset] = &[
         preview: ("chat", "Join the Discord: [YOUR INVITE LINK]", "!discord"),
     },
     Preset {
+        id: "api_command",
+        name: "Command from a website",
+        category: "chat",
+        description: "Answers with anything a website returns: ranks, stats, quotes. Paste a Nightbot or StreamElements command to start.",
+        needs: "twitch",
+        recommended: false,
+        preview: ("chat", "Radiant 450RR", "!rank"),
+    },
+    Preset {
         id: "vod_markers",
         name: "VOD markers",
         category: "auto",
@@ -349,6 +358,24 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
         "socials" => {
             cooldown_ms = 10_000;
             vec![command("!discord", Roles::EVERYONE, 30_000, vec![reply("Join the Discord: [YOUR INVITE LINK]")])]
+        }
+        "api_command" => {
+            cooldown_ms = 3_000;
+            vec![command(
+                "!rank",
+                Roles::EVERYONE,
+                10_000,
+                vec![
+                    Step::new(StepKind::Http, &[("method", "GET"), ("url", ""), ("save_as", "api")]),
+                    check(
+                        "{api.ok}",
+                        "is",
+                        "yes",
+                        vec![reply(super::botcmd::ANSWER)],
+                        vec![reply("Couldn't get that right now, try again in a bit.")],
+                    ),
+                ],
+            )]
         }
         "vod_markers" => vec![
             on(EventKind::HoldOpened, vec![Step::new(StepKind::Marker, &[("description", "Crash ({reason})")])]),

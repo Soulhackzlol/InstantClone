@@ -2575,6 +2575,13 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-drop.on{border-color:var(--accent);color:var(--accent);background:color-mix(in oklch,var(--accent) 6%,var(--bg))}
 .ig-run-box{margin-top:16px;display:flex;flex-direction:column;gap:8px;animation:igFadeUp .26s var(--ease-out)}
 .ig-inspector{width:320px;flex:none;padding:16px 18px;border-left:1px solid var(--line);overflow-y:auto}
+/* A converted bot command. */
+.ig-converted{display:flex;align-items:flex-start;gap:8px;padding:9px 11px;border-radius:9px;font-size:12.5px;line-height:1.5;color:var(--fg-2);
+  background:color-mix(in oklch,var(--live) 9%,transparent);border:1px solid color-mix(in oklch,var(--live) 32%,transparent);
+  animation:igFadeUp .26s var(--ease-out)}
+.ig-converted svg{width:13px;height:13px;flex:none;margin-top:3px;color:var(--live);animation:igPop .3s cubic-bezier(.2,0,0,1)}
+.ig-converted code{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--warn)}
+@media (prefers-reduced-motion: reduce){.ig-converted,.ig-converted svg{animation:none}}
 /* Motion details. */
 .ig-pane [data-tick],.ig-modal [data-tick]{display:inline-block}
 .ig-secret-field{position:relative}

@@ -589,6 +589,19 @@ fn json_field(body: &str, path: &str) -> Option<String> {
     doc.path(path).map(|v| v.to_display())
 }
 
+/// The variables a chat command or chat message brings, with the samples
+/// previews use. `arg4` to `arg9` exist too; they are left out here so the
+/// editor's list stays short.
+pub const CHAT_VARS: &[(&str, &str)] = &[
+    ("user", "Ana"),
+    ("user_login", "ana"),
+    ("user_role", "mod"),
+    ("target", "Ana"),
+    ("message", "!delay"),
+    ("args", "30"),
+    ("arg1", "30"),
+];
+
 /// The variables every run can use, whatever triggered it.
 pub const GLOBAL_VARS: &[(&str, &str)] = &[
     ("delay", "30s"),

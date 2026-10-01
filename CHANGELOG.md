@@ -32,9 +32,12 @@ know what each one does before you switch it on.
   captures what they actually saw.
 - **Test runs** send the real messages marked `[TEST]`, skip the waits
   and never touch the stream, then show every step and what it answered.
-- **Chat commands that call any API.** In the builder, a web request has
-  **Try it**: send it for real, see the answer as a tree, click the value
-  you want and **Reply in chat with it**. What viewers type is encoded into
+- **Chat commands that call any API.** Add **Command from a website** and
+  paste the command a site gives you for Nightbot, StreamElements,
+  Fossabot or Streamlabs: the address, the reply and the command name fill
+  in, their variables translated (`$(user)`, `${1}`, `$(touser)`). Every
+  web request has **Try it**: send it for real, see the answer as a tree
+  and click the value you want in the reply. What viewers type is encoded into
   its own spot of the request, so `!rank` can't be bent into calling
   something else.
 - **Everything can be taken back.** Every card has a menu (edit,

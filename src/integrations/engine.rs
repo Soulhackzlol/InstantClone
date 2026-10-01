@@ -789,8 +789,16 @@ fn chat_vars(msg: &ChatMessage, args: &[&str]) -> BTreeMap<String, String> {
         ("user_role".to_string(), role_of(msg).to_string()),
         ("message".to_string(), msg.text.clone()),
         ("args".to_string(), args.join(" ")),
+        // Who a command is about: `!so @ana` names ana, `!so` alone the viewer.
+        (
+            "target".to_string(),
+            args.first()
+                .map(|a| a.trim_start_matches('@').to_string())
+                .filter(|a| !a.is_empty())
+                .unwrap_or_else(|| msg.display_name.clone()),
+        ),
     ]);
-    for (i, arg) in args.iter().take(3).enumerate() {
+    for (i, arg) in args.iter().take(9).enumerate() {
         vars.insert(format!("arg{}", i + 1), arg.to_string());
     }
     vars
@@ -818,6 +826,7 @@ fn sample_vars(trigger: &Trigger) -> (BTreeMap<String, String>, String) {
                 ("user", "TestViewer"),
                 ("user_login", "testviewer"),
                 ("user_role", "mod"),
+                ("target", "TestViewer"),
                 ("message", &format!("{command} 30")),
                 ("args", "30"),
                 ("arg1", "30"),
@@ -947,6 +956,7 @@ mod tests {
     fn chat_vars_split_arguments() {
         let v = chat_vars(&msg("!setdelay 45 now"), &["45", "now"]);
         assert_eq!(v["arg1"], "45");
+        assert_eq!(v["target"], "45");
         assert_eq!(v["arg2"], "now");
         assert_eq!(v["args"], "45 now");
         assert_eq!(v["user_role"], "viewer");

@@ -7,6 +7,8 @@
 //! - `model`: integrations, their triggers and steps, and how they save.
 //! - `presets`: the catalog of ready-made integrations and packs.
 //! - `template`: `{var}` / `{var|fallback}` message templates.
+//! - `botcmd`: Nightbot / StreamElements / Fossabot / Streamlabs commands
+//!   converted into a "command from a website".
 //! - `runner`: runs one handler's steps against a `host::Host`.
 //! - `host` / `effects`: the live state and I/O a run needs, and the real
 //!   implementation of both.
@@ -15,6 +17,7 @@
 //! - `store`: Twitch logins and counters, kept apart from the settings.
 
 pub mod api;
+pub mod botcmd;
 pub mod clock;
 pub mod effects;
 pub mod engine;

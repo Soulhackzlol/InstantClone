@@ -58,6 +58,7 @@ const PATHS = {
   megaphone:'M3 11v2a1 1 0 0 0 1 1h3l5 4V6L7 10H4a1 1 0 0 0-1 1zM16 8.5a5 5 0 0 1 0 7M19 5.5a9 9 0 0 1 0 13',
   hash:'M4 9h16M4 15h16M10 3L8 21M16 3l-2 18',
   bell:'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0',
+  globe:'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20',
   pencil:'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
   back:'M15 18l-6-6 6-6',
   dots:'M5 12h.01M12 12h.01M19 12h.01',
@@ -89,7 +90,7 @@ const KINDS = {
 const PRESET_ICON = {
   crash_alert:'shield', destination_down:'signal', going_live:'megaphone', phone_crash:'phone',
   tell_chat:'bubble', delay_command:'hash', delay_notice:'clock', mod_controls:'cut', socials:'hash',
-  vod_markers:'bookmark', webhook:'link', crash_counter:'file', stream_alerts:'bell',
+  vod_markers:'bookmark', webhook:'link', crash_counter:'file', stream_alerts:'bell', api_command:'globe',
 };
 // Which step a card previews: the first one that says something.
 const PREVIEW_ORDER = ['discord','chat','phone','marker','http','file','clip','delay_action','program'];
@@ -183,6 +184,7 @@ const VAR_HELP = {
   user_role:'The viewer\'s role: broadcaster, mod, vip, sub or viewer.',
   message:'The whole chat message.',
   args:'Everything typed after the command.',
+  target:'Who the command is about: the name after it (without @), or whoever typed it.',
   arg1:'The first word after the command.',
   arg2:'The second word after the command.',
   arg3:'The third word after the command.',
@@ -201,6 +203,7 @@ function varHelp(name){
   if ((m = /^(.+)\.ok$/.exec(name))) return `yes when the "${m[1]}" web request worked, otherwise no.`;
   if ((m = /^(.+)\.body$/.exec(name))) return `Everything the "${m[1]}" web request got back.`;
   if ((m = /^counter\.(.+)$/.exec(name))) return `The "${m[1]}" counter, kept between runs.`;
+  if ((m = /^arg([4-9])$/.exec(name))) return `Word number ${m[1]} after the command.`;
   if ((m = /^body\.(.+)$/.exec(name))) return `The ${m[1].split('.').join(' › ')} field of what the caller sent.`;
   return 'A value a Remember step set earlier in this run.';
 }
@@ -262,7 +265,7 @@ function varsFor(handler){
     if (s.type === 'http'){
       const n = (s.params.save_as || '').trim() || 'response';
       // Once "Send request" ran, the real answer is the sample.
-      const tried = Builder.tries.get(uidOf(s));
+      const tried = TRIES.get(uidOf(s));
       const got = tried && tried.status ? tried : null;
       list.push({name:n + '.status', sample:got ? String(got.status) : '200'},
         {name:n + '.ok', sample:got ? (got.status >= 200 && got.status < 300 ? 'yes' : 'no') : 'yes'},
@@ -297,6 +300,8 @@ function renderSample(text, vars, escape){
     });
 }
 // Mirrors template::url_component: only unreserved characters stay.
+// A pasted command from a chat bot rather than a plain address.
+const BOT_SYNTAX = /\$\(|\$\{|\{readapi\.|\$readapi\(/i;
 const urlComponent = v => encodeURIComponent(v).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 const jsonStringContent = v => JSON.stringify(v).slice(1, -1);
 const oneLine = v => v.replace(/[\u0000-\u001f\u007f]/g, ' ');
@@ -771,6 +776,78 @@ function jsonTreeHtml(root, saveAs){
       : `<div class="ig-jleaf off"${order} title="This name has characters a variable can't reach">${label}<span class="v ${kind}">${esc(shown)}</span></div>`;
   };
   return node(root, [], null, 0, 0);
+}
+
+// ---------------------------------------------------------------- try a web request
+
+// What "Send request" got, per web request step (by uidOf). Cleared
+// whenever an editor opens: the steps are fresh objects each time.
+const TRIES = new Map();
+
+function tryEntry(s){
+  let e = TRIES.get(uidOf(s));
+  if (!e){ e = {inputs:{}}; TRIES.set(uidOf(s), e); }
+  return e;
+}
+
+// "Try it": values for the variables the request uses, the button, and
+// what came back, where every value can be picked. `useLabel` names what
+// the picked value's main button does in this editor ('' for none).
+function tryHtml(s, handler, useLabel){
+  const t = tryEntry(s);
+  const used = [...new Set(['url', 'headers', 'body'].flatMap(f =>
+    [...String(s.params[f] || '').matchAll(/\{([A-Za-z0-9_.]{1,64})(?:\|[^}]*)?\}/g)].map(m => m[1])))];
+  const samples = sampleMap(handler);
+  const inputs = used.map(n => `<div class="dff"><label class="mono">${esc(n)}</label><input class="ic-input" data-bind="try" data-name="${esc(n)}"
+    value="${esc(n in t.inputs ? t.inputs[n] : (samples[n] || ''))}" placeholder="a value to try"></div>`).join('');
+  return `<div class="ig-try">
+    <div class="ig-try-head"><span class="ic-label">Try it</span>
+      <button class="ic-btn ic-btn-primary ig-small" data-act="b-try" ${s.params.url ? '' : 'disabled'}>${svg('play', ' class="ig-btn-ic"')}Send request</button></div>
+    ${used.length ? `<div class="muted">Try it with:</div><div class="ig-try-inputs">${inputs}</div>` : ''}
+    ${tryResultHtml(s, t, useLabel)}
+  </div>`;
+}
+
+function tryResultHtml(s, t, useLabel){
+  if (t.error) return warnHtml(esc(t.error));
+  if (!t.status) return '<div class="muted">Sends the request for real and shows the answer. Then pick what to use from it.</div>';
+  const n = (s.params.save_as || '').trim() || 'response';
+  const ok = t.status >= 200 && t.status < 300;
+  const head = `<div class="ig-try-meta"><span class="ig-status-pill ${ok ? 'ok' : 'bad'}">${t.status}</span>
+    <span class="muted">${t.ms} ms${t.truncated ? ' · long answer, cut for display' : ''}</span></div>`;
+  const picked = t.picked ? `<div class="ig-picked" data-key="picked-${esc(t.picked.token)}">
+    <div class="ig-picked-what"><code>{${esc(t.picked.token)}}</code><span title="${esc(t.picked.sample)}">${esc(t.picked.sample) || '<i>empty</i>'}</span></div>
+    <div class="ig-picked-actions">${useLabel ? `<button class="ic-btn ic-btn-primary ig-small" data-act="b-use-reply">${useLabel}</button>` : ''}
+    <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="{${esc(t.picked.token)}}">Copy</button></div></div>` : '';
+  if (t.json === undefined){
+    return `${head}${picked}<div class="ig-try-text">${t.body ? esc(t.body.slice(0, 3000)) : '<span class="muted">The answer was empty.</span>'}</div>
+      ${t.body ? `<button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="b-pick" data-token="${esc(n)}.body" data-sample="${esc(t.body.slice(0, 200))}">Use the whole answer</button>` : ''}`;
+  }
+  return `${head}${picked}<div class="muted">Click the value you want to use.</div><div class="ig-jtree" data-key="answer-${t.answer}">${jsonTreeHtml(t.json, n)}</div>`;
+}
+
+// Send the request with the typed values, escaped exactly as a run would.
+async function tryRequest(s, handler){
+  if (!s) return;
+  const t = tryEntry(s);
+  const vars = Object.assign(sampleMap(handler), t.inputs);
+  const jsonBody = /^\s*[{[]/.test(s.params.body || '');
+  const r = await api('/integrations/fetch', {
+    method: s.params.method || 'POST',
+    url: renderSample(s.params.url, vars, urlComponent).trim(),
+    headers: renderSample(s.params.headers, vars, oneLine),
+    body: renderSample(s.params.body, vars, jsonBody ? jsonStringContent : null),
+  });
+  t.picked = null;
+  if (!r.ok){ t.error = r.error || 'The request failed'; t.status = 0; return; }
+  Object.assign(t, {error:'', status:r.status, ms:Math.round(r.ms), body:r.body, truncated:r.truncated,
+    json:parseJson(r.body), answer:(t.answer || 0) + 1});
+}
+
+function firstStep(handler, type){
+  let found = null;
+  walk(handler && handler.steps, s => { if (!found && s.type === type) found = s; });
+  return found;
 }
 
 // The "⋯" menu of a card or row: everything you can do to it, Delete
@@ -1616,11 +1693,15 @@ const Editor = {
     this.dirty = !!switchOn && !this.d.enabled && !this.justAdded;
     if (switchOn) this.d.enabled = true;
     this.sel = Math.max(0, this.d.handlers.findIndex(h => h.enabled));
-    // Missing a channel: open straight on the chip that fixes it.
+    // Missing a detail: open straight on the chip that fixes it.
     const known = id => S.data.connections.discord.some(c => c.id === id);
-    this.chip = allSteps(this.d).some(s => s.type === 'discord' && !known(s.params.connection)) ? 'where' : null;
+    const steps = allSteps(this.d);
+    this.chip = steps.some(s => s.type === 'discord' && !known(s.params.connection)) ? 'where'
+      : steps.some(s => s.type === 'http' && !s.params.url) ? 'url' : null;
     this.run = null;
     this.moreVars = false;
+    this.converted = null;
+    TRIES.clear();
     this.show();
   },
   resume(){
@@ -1639,6 +1720,50 @@ const Editor = {
       return true;
     };
     this.render();
+  },
+  // The picked value takes the whole answer's place in the reply, or
+  // joins the end of it.
+  useInReply(){
+    const h = this.handler(), http = firstStep(h, 'http'), step = primaryStep(h);
+    const t = http && tryEntry(http), field = step && (KINDS[step.type] || {}).text;
+    if (!t || !t.picked || !field) return;
+    const token = '{' + t.picked.token + '}';
+    const whole = '{' + ((http.params.save_as || '').trim() || 'response') + '.body}';
+    const text = step.params[field] || '';
+    step.params[field] = text.includes(whole) ? text.replace(whole, token) : (text.trimEnd() + ' ' + token).trim();
+    this.changed();
+  },
+  convertSoon(text){
+    clearTimeout(this.convertTimer);
+    this.convertTimer = setTimeout(() => this.convert(text), 300);
+  },
+  // Fill the address, the reply and the command from a bot command.
+  async convert(text){
+    const r = await api('/integrations/convert', {text});
+    if (Modal.kind !== 'editor') return;
+    if (!r.ok){
+      this.converted = {error:r.error};
+      this.render();
+      return;
+    }
+    const h = this.handler(), step = primaryStep(h), field = step && (KINDS[step.type] || {}).text;
+    allSteps(this.d).filter(s => s.type === 'http').forEach(s => { s.params.url = r.url; });
+    if (r.reply && field) step.params[field] = r.reply;
+    if (r.command && h.trigger.type === 'chat_command') h.trigger.command = r.command;
+    this.converted = {from:r.from, reply:!!r.reply, command:r.command, unknown:r.unknown || []};
+    this.changed();
+    // The field still shows the pasted text while it has focus.
+    const f = q('[data-bind="url"]');
+    if (f) f.value = r.url;
+  },
+  convertedHtml(){
+    const c = this.converted;
+    if (!c) return '';
+    if (c.error) return warnHtml(esc(c.error));
+    const filled = ['the address'].concat(c.reply ? ['the reply'] : [], c.command ? [`the command (${esc(c.command)})`] : []);
+    const unknown = c.unknown.length
+      ? ` These have no InstantClone match and stay as written: ${c.unknown.map(u => `<code>${esc(u)}</code>`).join(' ')}` : '';
+    return `<div class="ig-converted">${svg('check', ' stroke-width="3"')}<span>Converted from ${esc(c.from)}: ${filled.join(', ')} filled in.${unknown}</span></div>`;
   },
   // Back from "Open in builder", with whatever was changed there.
   fromBuilder(d, dirty){
@@ -1697,7 +1822,9 @@ const Editor = {
     const all = varsFor(h);
     const common = new Set(['delay', 'delay_state', 'hold_left', 'time']);
     const globals = new Set(S.data.vars.global.map(v => v.name));
-    const shown = this.moreVars ? all : all.filter(v => !globals.has(v.name) || common.has(v.name));
+    // Fields of a tried answer are picked from its tree, so they wait here.
+    const shown = this.moreVars ? all
+      : all.filter(v => (!globals.has(v.name) || common.has(v.name)) && !v.name.includes('.json.'));
     const tokens = shown.map(v => `<button class="ig-token" data-act="token" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}">+ ${esc(v.name)}</button>`).join('')
       + (shown.length < all.length ? `<button class="ig-token more" data-act="more-vars">${all.length - shown.length} more…</button>` : '');
     const sample = sampleLine(value, h);
@@ -1754,7 +1881,8 @@ const Editor = {
     }
     if (step && step.type === 'chat') out.push({id:'reply', k:'Reply as', v:step.params.as === 'bot' ? 'bot account' : 'your account'});
     if (step && step.type === 'phone') out.push({id:'priority', k:'Priority', v:step.params.priority || 'normal'});
-    if (step && step.type === 'http') out.push({id:'url', k:'Send to', v:maskUrl(step.params.url) || 'set the address', warn:!step.params.url});
+    const http = firstStep(h, 'http');
+    if (http) out.push({id:'url', k:t.type.startsWith('chat') ? 'Answer from' : 'Send to', v:maskUrl(http.params.url) || 'set the address', warn:!http.params.url});
     if (step && step.type === 'file') out.push({id:'file', k:'File', v:step.params.path || 'pick a file', warn:!step.params.path});
     out.push({id:'cooldown', k:'Wait between', v:fmtMs(d.cooldown_ms) || 'no limit'});
     return out;
@@ -1813,9 +1941,15 @@ const Editor = {
           ${S.data.twitch.bot.login ? '' : '<div class="muted">No bot account yet: <a href="#" data-act="conn" data-tab="twitch">connect one</a>, or messages go out as you.</div>'}`;
       case 'priority':
         return `<div class="ic-label">Priority</div>${seg([['', 'Normal'], ['high', 'High'], ['urgent', 'Urgent']], step.params.priority || '', 'set-priority')}`;
-      case 'url':
-        return `<div class="dfg"><div class="dff"><label>Address</label><input class="ic-input mono" data-bind="url" value="${esc(step.params.url || '')}" placeholder="https://…" spellcheck="false"></div>
-          <div class="dff"><label>Method</label><select class="ic-input" data-bind="method">${['POST', 'GET', 'PUT', 'PATCH', 'DELETE'].map(m => `<option ${m === (step.params.method || 'POST') ? 'selected' : ''}>${m}</option>`).join('')}</select></div></div>`;
+      case 'url': {
+        const http = firstStep(h, 'http'), chatty = t.type.startsWith('chat');
+        return `<div class="dfg"><div class="dff"><label>${chatty ? 'Address, or a bot command to convert' : 'Address'}</label>
+            <input class="ic-input mono" data-bind="url" value="${esc(http.params.url || '')}" placeholder="${chatty ? 'https://… or $(urlfetch https://…)' : 'https://…'}" spellcheck="false" autocomplete="off"></div>
+          <div class="dff"><label>Method</label><select class="ic-input" data-bind="method">${['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => `<option ${m === (http.params.method || 'POST') ? 'selected' : ''}>${m}</option>`).join('')}</select></div></div>
+          ${chatty ? '<div class="muted">Paste a command from Nightbot, StreamElements, Fossabot or Streamlabs: the address, the reply and the command name fill in for you.</div>' : ''}
+          ${this.convertedHtml()}
+          ${tryHtml(http, h, chatty ? 'Use in the reply' : '')}`;
+      }
       case 'file':
         return `<div class="dfg"><div class="dff"><label>File</label><input class="ic-input mono" data-bind="path" value="${esc(step.params.path || '')}" placeholder="C:\\Stream\\crashes.txt" spellcheck="false"></div>
           <div class="dff"><label>Each time</label><select class="ic-input" data-bind="mode"><option value="" ${step.params.mode !== 'append' ? 'selected' : ''}>Replace the text</option><option value="append" ${step.params.mode === 'append' ? 'selected' : ''}>Add a line</option></select></div></div>
@@ -1843,9 +1977,20 @@ const Editor = {
     else if (b === 'aliases') t.aliases = el.value.split(/[\s,]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
     else if (b === 'role'){ t.roles = t.roles || {}; t.roles[el.dataset.name] = el.checked; }
     else if (b === 'reply' && step) step.params.reply = el.checked ? 'yes' : '';
-    else if ((b === 'url' || b === 'method') && step){
+    else if (b === 'url' && t.type.startsWith('chat') && BOT_SYNTAX.test(el.value)){
+      // A pasted bot command: converted once typing pauses, not saved raw.
+      this.convertSoon(el.value);
+      return;
+    }
+    else if (b === 'url' || b === 'method'){
       // A catalog webhook sends every event to one address: set them all.
       allSteps(this.d).filter(s => s.type === 'http').forEach(s => { s.params[b] = el.value; });
+      if (b === 'url') this.converted = null;
+    }
+    else if (b === 'try'){
+      // Values to try the request with; not part of the integration.
+      tryEntry(firstStep(h, 'http')).inputs[el.dataset.name] = el.value;
+      return;
     }
     else if ((b === 'path' || b === 'mode') && step) step.params[b] = el.value;
     else return;
@@ -1877,6 +2022,17 @@ const Editor = {
       case 'ed-test': busy(el, () => this.test()); return true;
       case 'delete': if (armConfirm(el, 'Delete for good?')) busy(el, () => remove(this.d.id)); return true;
       case 'save': busy(el, () => saveIntegration(this.d, () => { this.dirty = false; })); return true;
+      case 'b-try':
+        busy(el, async () => {
+          await tryRequest(firstStep(h, 'http'), h);
+          if (Modal.kind === 'editor') this.render();
+        });
+        return true;
+      case 'b-pick':
+        tryEntry(firstStep(h, 'http')).picked = {token:el.dataset.token, sample:el.dataset.sample || ''};
+        this.render();
+        return true;
+      case 'b-use-reply': this.useInReply(); return true;
     }
     return false;
   },
@@ -2009,7 +2165,7 @@ const Builder = {
     opts = opts || {};
     this.back = opts.back !== undefined ? opts.back
       : Modal.kind === 'catalog' ? {title:'Back to the catalog', go:() => Catalog.reopen()} : null;
-    this.tries = new Map();
+    TRIES.clear();
     this.d = i ? withHandler(clone(i)) : {id:'', name:'My integration', enabled:true, preset:'', cooldown_ms:0,
       handlers:[{enabled:true, trigger:{type:'event', event:'hold_opened', filters:{}}, steps:[]}]};
     // A trigger nobody picked yet: the canvas asks how it starts instead of
@@ -2059,7 +2215,7 @@ const Builder = {
               <span class="ig-step-kind">WHEN</span><span class="ig-step-text">${esc(triggerSentence(h.trigger))}</span></button>
             ${this.stepsHtml(h.steps, [], 'root')}
           </div>
-          ${this.selectedHttp() ? `<div class="ig-try-wrap" data-key="try-${uidOf(this.selectedHttp())}">${this.tryHtml(this.selectedHttp())}</div>` : ''}
+          ${this.selectedHttp() ? `<div class="ig-try-wrap" data-key="try-${uidOf(this.selectedHttp())}">${tryHtml(this.selectedHttp(), h, 'Reply in chat with it')}</div>` : ''}
           ${this.run ? `<div class="sys-section ig-run-box"><div class="ic-label">Test run: ${esc(this.run.status || 'error')}</div>
             ${this.run.error ? warnHtml(esc(this.run.error)) : this.run.status === 'running'
               ? '<div class="ig-running"><span class="ig-spin"></span>Running the test…</div>' : runLogHtml(this.run.steps)}</div>` : ''}`}
@@ -2260,7 +2416,7 @@ const Builder = {
     else if (b === 'p') this.stepAt(this.sel).params[el.dataset.name] = el.value;
     else if (b === 'try'){
       // Values to try the request with; not part of the integration.
-      this.tryEntry(this.stepAt(this.sel)).inputs[el.dataset.name] = el.value;
+      tryEntry(this.stepAt(this.sel)).inputs[el.dataset.name] = el.value;
       return;
     }
     else return;
@@ -2390,13 +2546,44 @@ const Builder = {
       case 'b-new-token': this.handler().trigger.token = randomToken(); this.edited(); return true;
       case 'b-token': insertAtCursor(this.lastField, '{' + el.dataset.token + '}'); return true;
       case 'b-test': if (this.askToPick()) busy(el, () => this.test()); return true;
-      case 'b-try': busy(el, () => this.tryRequest()); return true;
-      case 'b-pick': this.pick(el.dataset.token, el.dataset.sample || ''); return true;
+      case 'b-try':
+        busy(el, async () => {
+          await tryRequest(this.selectedHttp(), this.handler());
+          if (Modal.kind !== 'builder') return;
+          this.render();
+          this.reveal('.ig-try-wrap');
+        });
+        return true;
+      case 'b-pick':
+        tryEntry(this.selectedHttp()).picked = {token:el.dataset.token, sample:el.dataset.sample || ''};
+        this.render();
+        this.reveal('.ig-picked');
+        return true;
       case 'b-use-reply': this.replyWithPick(); return true;
       case 'delete': if (armConfirm(el, 'Delete for good?')) busy(el, () => remove(d.id)); return true;
       case 'save': if (this.askToPick()) busy(el, () => saveIntegration(d, () => { this.dirty = false; })); return true;
     }
     return false;
+  },
+  // The picked value goes into the chat reply right after the request: the
+  // one already there, or a new one.
+  replyWithPick(){
+    const s = this.stepAt(this.sel), t = tryEntry(s);
+    if (!t.picked) return;
+    const token = '{' + t.picked.token + '}';
+    const {list, index} = this.locate(this.sel);
+    const next = list[index + 1];
+    if (next && next.type === 'chat'){
+      next.params.text = ((next.params.text || '').trimEnd() + ' ' + token).trim();
+    } else {
+      const chat = newStep('chat');
+      const trig = this.handler().trigger;
+      chat.params.text = trig.type.startsWith('chat') ? `{user}: ${token}` : token;
+      list.splice(index + 1, 0, chat);
+    }
+    this.sel = this.sel.slice(0, -1).concat(index + 1);
+    this.target = [];
+    this.edited();
   },
   // A trigger still waiting for "How does it start?" can't be saved or run.
   // Shows it and says so; true when every trigger is picked.
@@ -2419,90 +2606,6 @@ const Builder = {
   reveal(selector){
     const el = q(selector);
     if (el) el.scrollIntoView({block:'nearest', behavior:reduced() ? 'auto' : 'smooth'});
-  },
-  tryEntry(s){
-    let e = this.tries.get(uidOf(s));
-    if (!e){ e = {inputs:{}}; this.tries.set(uidOf(s), e); }
-    return e;
-  },
-  // "Try it": values for the variables the request uses, the button, and
-  // what came back, where every value can be picked.
-  tryHtml(s){
-    const t = this.tryEntry(s);
-    const used = [...new Set(['url', 'headers', 'body'].flatMap(f =>
-      [...String(s.params[f] || '').matchAll(/\{([A-Za-z0-9_.]{1,64})(?:\|[^}]*)?\}/g)].map(m => m[1])))];
-    const samples = sampleMap(this.handler());
-    const inputs = used.map(n => `<div class="dff"><label class="mono">${esc(n)}</label><input class="ic-input" data-bind="try" data-name="${esc(n)}"
-      value="${esc(n in t.inputs ? t.inputs[n] : (samples[n] || ''))}" placeholder="a value to try"></div>`).join('');
-    return `<div class="ig-try">
-      <div class="ig-try-head"><span class="ic-label">Try it</span>
-        <button class="ic-btn ic-btn-primary ig-small" data-act="b-try">${svg('play', ' class="ig-btn-ic"')}Send request</button></div>
-      ${used.length ? `<div class="muted">Try it with:</div><div class="ig-try-inputs">${inputs}</div>` : ''}
-      ${this.tryResultHtml(s, t)}
-    </div>`;
-  },
-  tryResultHtml(s, t){
-    if (t.error) return warnHtml(esc(t.error));
-    if (!t.status) return '<div class="muted">Sends the request for real and shows the answer. Then pick what to use from it.</div>';
-    const n = (s.params.save_as || '').trim() || 'response';
-    const ok = t.status >= 200 && t.status < 300;
-    const head = `<div class="ig-try-meta"><span class="ig-status-pill ${ok ? 'ok' : 'bad'}">${t.status}</span>
-      <span class="muted">${t.ms} ms${t.truncated ? ' · long answer, cut for display' : ''}</span></div>`;
-    const picked = t.picked ? `<div class="ig-picked" data-key="picked-${esc(t.picked.token)}">
-      <div class="ig-picked-what"><code>{${esc(t.picked.token)}}</code><span title="${esc(t.picked.sample)}">${esc(t.picked.sample) || '<i>empty</i>'}</span></div>
-      <div class="ig-picked-actions"><button class="ic-btn ic-btn-primary ig-small" data-act="b-use-reply">Reply in chat with it</button>
-      <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="{${esc(t.picked.token)}}">Copy</button></div></div>` : '';
-    if (t.json === undefined){
-      return `${head}${picked}<div class="ig-try-text">${t.body ? esc(t.body.slice(0, 3000)) : '<span class="muted">The answer was empty.</span>'}</div>
-        ${t.body ? `<button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="b-pick" data-token="${esc(n)}.body" data-sample="${esc(t.body.slice(0, 200))}">Use the whole answer</button>` : ''}`;
-    }
-    return `${head}${picked}<div class="muted">Click the value you want to use.</div><div class="ig-jtree" data-key="answer-${t.answer}">${jsonTreeHtml(t.json, n)}</div>`;
-  },
-  async tryRequest(){
-    const s = Array.isArray(this.sel) ? this.stepAt(this.sel) : null;
-    if (!s || s.type !== 'http') return;
-    const t = this.tryEntry(s);
-    const vars = Object.assign(sampleMap(this.handler()), t.inputs);
-    const jsonBody = /^\s*[{[]/.test(s.params.body || '');
-    const r = await api('/integrations/fetch', {
-      method: s.params.method || 'POST',
-      url: renderSample(s.params.url, vars, urlComponent).trim(),
-      headers: renderSample(s.params.headers, vars, oneLine),
-      body: renderSample(s.params.body, vars, jsonBody ? jsonStringContent : null),
-    });
-    t.picked = null;
-    if (!r.ok){ t.error = r.error || 'The request failed'; t.status = 0; }
-    else Object.assign(t, {error:'', status:r.status, ms:Math.round(r.ms), body:r.body, truncated:r.truncated,
-      json:parseJson(r.body), answer:(t.answer || 0) + 1});
-    if (Modal.kind !== 'builder') return;
-    this.render();
-    this.reveal('.ig-try-wrap');
-  },
-  pick(token, sample){
-    const s = this.stepAt(this.sel);
-    this.tryEntry(s).picked = {token, sample};
-    this.render();
-    this.reveal('.ig-picked');
-  },
-  // The picked value goes into the chat reply right after the request: the
-  // one already there, or a new one.
-  replyWithPick(){
-    const s = this.stepAt(this.sel), t = this.tryEntry(s);
-    if (!t.picked) return;
-    const token = '{' + t.picked.token + '}';
-    const {list, index} = this.locate(this.sel);
-    const next = list[index + 1];
-    if (next && next.type === 'chat'){
-      next.params.text = ((next.params.text || '').trimEnd() + ' ' + token).trim();
-    } else {
-      const chat = newStep('chat');
-      const trig = this.handler().trigger;
-      chat.params.text = trig.type.startsWith('chat') ? `{user}: ${token}` : token;
-      list.splice(index + 1, 0, chat);
-    }
-    this.sel = this.sel.slice(0, -1).concat(index + 1);
-    this.target = [];
-    this.edited();
   },
   async test(){
     this.run = {status:'running', steps:[]};
