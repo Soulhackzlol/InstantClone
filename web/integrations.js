@@ -62,6 +62,7 @@ const PATHS = {
   back:'M15 18l-6-6 6-6',
   dots:'M5 12h.01M12 12h.01M19 12h.01',
   eye:'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+  eyeOff:'M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3 3.9M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7c1.9 0 3.6-.6 5-1.5',
 };
 const svg = (name, extra) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra||''}><path d="${PATHS[name]}"/></svg>`;
@@ -418,7 +419,11 @@ function morphChildren(parent, src, ctx){
 
 function patch(a, b, ctx){
   if (a.nodeType !== 1){
-    if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue;
+    if (a.nodeValue !== b.nodeValue){
+      const was = a.nodeValue;
+      a.nodeValue = b.nodeValue;
+      if (ctx.before) tick(a.parentElement, was, b.nodeValue);
+    }
     return;
   }
   const tag = a.tagName;
@@ -428,6 +433,7 @@ function patch(a, b, ctx){
   const oldSelected = tag === 'SELECT' ? selectedOf(a) : null;
   syncAttrs(a, b);
   if (busyEls.has(a)){ a.classList.add('is-busy'); a.disabled = true; a.setAttribute('aria-busy', 'true'); }
+  if (decoders.has(a)) a.classList.add('ig-decoding');
   if (tag === 'INPUT'){
     if (a.type === 'checkbox' || a.type === 'radio'){
       if (b.hasAttribute('checked') !== oldChecked) a.checked = b.hasAttribute('checked');
@@ -551,6 +557,94 @@ function placeIndicators(root){
   });
 }
 
+// ---------------------------------------------------------------- motion details
+
+// A changed number or short value rolls in instead of snapping: up when a
+// number grew, down when it shrank. Only for elements marked data-tick.
+function tick(el, was, now){
+  if (!el || !el.hasAttribute('data-tick')) return;
+  const a = parseFloat(was), b = parseFloat(now);
+  const from = !isNaN(a) && !isNaN(b) && b < a ? '-45%' : '45%';
+  el.animate([
+    {transform:`translateY(${from})`, opacity:0, filter:'blur(2px)'},
+    {transform:'none', opacity:1, filter:'blur(0)'},
+  ], {duration:260, easing:EASE});
+}
+
+// A secret field decodes letter by letter when shown and folds back into
+// dots, from the end, when hidden. Each letter scrambles for a moment, then
+// settles. It is drawn on a layer over the field (which morph owns and
+// leaves untouched); one animation frame loop, writing only what changed,
+// and typing into the field ends it at once.
+const SCRAMBLE = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789#%&*+=?';
+const DECODE_MAX = 300;          // longer values just switch
+const decoders = new WeakMap();  // field -> stop()
+
+function decodeField(control, reveal){
+  if (!control || reduced()) return;
+  const host = control.closest('.ig-secret-field');
+  const chars = [...(control.value || '')];
+  if (!host || !chars.length || chars.length > DECODE_MAX) return;
+  if (decoders.has(control)) decoders.get(control)();
+  const layer = decodeLayer(control, host);
+  const cells = [];
+  for (const ch of chars){
+    if (ch === '\n'){ layer.appendChild(document.createElement('br')); continue; }
+    const span = layer.appendChild(document.createElement('span'));
+    cells.push({span, ch, state:-1});
+  }
+  layer.scrollTop = control.scrollTop;
+  layer.scrollLeft = control.scrollLeft;
+  const n = cells.length;
+  const step = Math.min(24, 480 / n), settle = 130;
+  const total = (n - 1) * step + settle;
+  const started = performance.now();
+  let frame = 0;
+  const stop = () => {
+    cancelAnimationFrame(frame);
+    control.removeEventListener('input', stop);
+    control.classList.remove('ig-decoding');
+    decoders.delete(control);
+    layer.remove();
+  };
+  const draw = now => {
+    const t = now - started;
+    // Scrambled letters change 20 times a second, not every frame.
+    const beat = Math.floor(t / 50);
+    cells.forEach((c, i) => {
+      const at = (reveal ? i : n - 1 - i) * step;
+      const state = t < at ? (reveal ? 0 : 2) : t < at + settle ? 1 : (reveal ? 2 : 0);
+      const text = state === 0 ? '•' : state === 2 ? c.ch : SCRAMBLE[(i * 7 + beat * 13) % SCRAMBLE.length];
+      if (c.span.textContent !== text) c.span.textContent = text;
+      if (c.state !== state){ c.state = state; c.span.className = 's' + state; }
+    });
+    if (t < total) frame = requestAnimationFrame(draw); else stop();
+  };
+  control.classList.add('ig-decoding');
+  control.addEventListener('input', stop);
+  decoders.set(control, stop);
+  frame = requestAnimationFrame(draw);
+}
+
+// The layer the decode draws on: the field's exact box and type metrics,
+// so letters land where the field's own letters are.
+function decodeLayer(control, host){
+  const cs = getComputedStyle(control);
+  const box = control.getBoundingClientRect(), at = host.getBoundingClientRect();
+  const layer = document.createElement('div');
+  layer.className = 'ig-decode' + (control.tagName === 'TEXTAREA' ? ' area' : '');
+  layer.setAttribute('aria-hidden', 'true');
+  layer.setAttribute('data-persist', '');
+  Object.assign(layer.style, {
+    left:(box.left - at.left) + 'px', top:(box.top - at.top) + 'px', width:box.width + 'px', height:box.height + 'px',
+  });
+  for (const prop of ['fontFamily', 'fontSize', 'fontWeight', 'letterSpacing', 'lineHeight', 'paddingTop', 'paddingRight',
+    'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth']){
+    layer.style[prop] = cs[prop];
+  }
+  return host.appendChild(layer);
+}
+
 // Spinner on a button while `fn` runs; a second click is ignored.
 async function busy(btn, fn){
   if (!btn || busyEls.has(btn)) return undefined;
@@ -598,7 +692,8 @@ function undoToast(text, undo){
   if (!rail){ toast(text, 'ok'); return; }
   const el = document.createElement('div');
   el.className = 'ic-toast ok ig-undo';
-  el.innerHTML = `<span class="ic-toast-icon">✓</span><span class="ig-undo-text"></span><button type="button" class="ig-undo-btn">Undo</button>`;
+  el.innerHTML = `<span class="ic-toast-icon">✓</span><span class="ig-undo-text"></span><button type="button" class="ig-undo-btn">Undo</button>
+    <i class="ig-undo-bar" style="animation-duration:${UNDO_MS}ms"></i>`;
   el.querySelector('.ig-undo-text').textContent = text;
   let used = false;
   const leave = () => {
@@ -613,15 +708,20 @@ function undoToast(text, undo){
     await undo();
   });
   rail.appendChild(el);
-  setTimeout(leave, 8000);
+  // Pointing at it holds the countdown (the bar pauses in CSS too).
+  let left = UNDO_MS, since = Date.now(), timer = setTimeout(leave, left);
+  el.addEventListener('pointerenter', () => { clearTimeout(timer); left -= Date.now() - since; });
+  el.addEventListener('pointerleave', () => { since = Date.now(); timer = setTimeout(leave, Math.max(left, 600)); });
 }
+const UNDO_MS = 8000;
 
 // A secret field (topic, webhook link, headers, secret address): hidden
 // like a password until the user asks to see it.
 function secretField(id, control, label){
   const shown = S.revealed.has(id);
-  return `<div class="dff ig-secret-field${shown ? ' shown' : ''}"><label>${label}
-    <button type="button" class="ig-reveal" data-act="reveal" data-field="${esc(id)}" aria-pressed="${shown}">${svg('eye')}${shown ? 'Hide' : 'Show'}</button></label>${control}</div>`;
+  return `<div class="dff ig-secret-field${shown ? ' shown' : ''}" data-field="${esc(id)}"><label>${label}
+    <button type="button" class="ig-reveal" data-act="reveal" data-field="${esc(id)}" aria-pressed="${shown}">
+      <span class="ig-eye">${svg('eye')}${svg('eyeOff')}</span><span data-tick>${shown ? 'Hide' : 'Show'}</span></button></label>${control}</div>`;
 }
 
 function parseJson(text){
@@ -648,16 +748,18 @@ function jsonLeaves(root){
 // The answer as a tree; every value is a button that picks its variable.
 function jsonTreeHtml(root, saveAs){
   let budget = 400;
-  const node = (v, path, key, depth) => {
+  const node = (v, path, key, depth, index) => {
     if (budget-- <= 0) return '';
     const label = key === null ? '' : `<span class="k">${esc(key)}</span>`;
+    // The first level eases in one row after another.
+    const order = depth === 1 ? ` style="--i:${index}"` : '';
     if (v !== null && typeof v === 'object'){
       const all = Array.isArray(v) ? v.length : Object.keys(v).length;
       const entries = Array.isArray(v) ? v.slice(0, 25).map((x, i) => [i, x]) : Object.entries(v).slice(0, 60);
-      const kids = entries.map(([k, x]) => node(x, path.concat(k), String(k), depth + 1)).join('')
+      const kids = entries.map(([k, x], i) => node(x, path.concat(k), String(k), depth + 1, i)).join('')
         + (all > entries.length ? `<div class="ig-jmore">… ${all - entries.length} more</div>` : '');
       if (key === null) return kids || '<div class="muted">(empty)</div>';
-      return `<details class="ig-jnode" ${depth < 2 ? 'open' : ''}><summary>${svg('chev')}${label}<span class="ig-jcount">${Array.isArray(v) ? `[${all}]` : `{${all}}`}</span></summary><div class="ig-jkids">${kids}</div></details>`;
+      return `<details class="ig-jnode"${order} ${depth < 2 ? 'open' : ''}><summary>${svg('chev')}${label}<span class="ig-jcount">${Array.isArray(v) ? `[${all}]` : `{${all}}`}</span></summary><div class="ig-jkids">${kids}</div></details>`;
     }
     const name = `${saveAs}.json.${path.join('.')}`;
     const usable = path.every(k => /^[A-Za-z0-9_]+$/.test(String(k))) && name.length <= 64;
@@ -665,10 +767,10 @@ function jsonTreeHtml(root, saveAs){
     const shown = typeof v === 'string' ? `"${text.length > 80 ? text.slice(0, 80) + '…' : text}"` : text;
     const kind = v === null ? 'null' : typeof v;
     return usable
-      ? `<button class="ig-jleaf" data-act="b-pick" data-token="${esc(name)}" data-sample="${esc(text.slice(0, 200))}" title="{${esc(name)}}">${label}<span class="v ${kind}">${esc(shown)}</span><span class="ig-juse">Use</span></button>`
-      : `<div class="ig-jleaf off" title="This name has characters a variable can't reach">${label}<span class="v ${kind}">${esc(shown)}</span></div>`;
+      ? `<button class="ig-jleaf"${order} data-act="b-pick" data-token="${esc(name)}" data-sample="${esc(text.slice(0, 200))}" title="{${esc(name)}}">${label}<span class="v ${kind}">${esc(shown)}</span><span class="ig-juse">Use</span></button>`
+      : `<div class="ig-jleaf off"${order} title="This name has characters a variable can't reach">${label}<span class="v ${kind}">${esc(shown)}</span></div>`;
   };
-  return node(root, [], null, 0);
+  return node(root, [], null, 0, 0);
 }
 
 // The "⋯" menu of a card or row: everything you can do to it, Delete
@@ -686,11 +788,11 @@ const Menu = {
     const el = document.createElement('div');
     el.className = 'ig-menu';
     el.setAttribute('role', 'menu');
-    el.innerHTML = `<button role="menuitem" data-act="edit" data-id="${esc(id)}">${svg('pencil')}Edit</button>
-      <button role="menuitem" data-act="duplicate" data-id="${esc(id)}">${svg('copy')}Duplicate</button>
-      <button role="menuitem" data-act="share-one" data-id="${esc(id)}">${svg('link')}Share as a recipe</button>
+    el.innerHTML = `<button role="menuitem" data-act="edit" data-id="${esc(id)}" style="--i:0">${svg('pencil')}Edit</button>
+      <button role="menuitem" data-act="duplicate" data-id="${esc(id)}" style="--i:1">${svg('copy')}Duplicate</button>
+      <button role="menuitem" data-act="share-one" data-id="${esc(id)}" style="--i:2">${svg('link')}Share as a recipe</button>
       <div class="ig-menu-sep" role="separator"></div>
-      <button role="menuitem" class="danger" data-act="menu-delete" data-id="${esc(id)}">${svg('x')}Delete</button>`;
+      <button role="menuitem" class="danger" data-act="menu-delete" data-id="${esc(id)}" style="--i:3">${svg('x')}Delete</button>`;
     document.body.appendChild(el);
     el.addEventListener('click', onClick);
     el.addEventListener('keydown', e => this.keys(e));
@@ -903,7 +1005,7 @@ function render(){
   const failing = d.integrations.filter(i => cardInfo(i).failing);
   const empty = d.integrations.length === 0;
   const sub = empty ? 'Alerts, chat commands and automations. Each card shows exactly what it sends.'
-    : `<span class="ig-num">${on}</span> on${failing.length ? ` · <span class="ig-num">${failing.length}</span> need${failing.length === 1 ? 's' : ''} attention` : ''}. Each card shows exactly what it sends.`;
+    : `<span class="ig-num" data-tick>${on}</span> on${failing.length ? ` · <span class="ig-num" data-tick>${failing.length}</span> need${failing.length === 1 ? 's' : ''} attention` : ''}. Each card shows exactly what it sends.`;
   morph(root, `<div class="ig-pane" data-flip>
       <div class="tab-head" data-key="head">
         <div><div class="tab-title">Integrations</div><div class="tab-sub ig-sub">${sub}</div></div>
@@ -958,7 +1060,7 @@ function toolbarHtml(){
   const counts = {all:S.data.integrations.length};
   S.data.integrations.forEach(i => { const c = categoryOf(i); counts[c] = (counts[c] || 0) + 1; });
   const tab = (id, label) => `<button class="sub-tab${S.filter === id ? ' on' : ''}" role="tab" aria-selected="${S.filter === id}"
-    data-act="filter" data-f="${id}">${label} <span class="ig-count">${counts[id] || 0}</span></button>`;
+    data-act="filter" data-f="${id}">${label} <span class="ig-count" data-tick>${counts[id] || 0}</span></button>`;
   const view = (id, icon, label) => `<button class="sub-tab${S.view === id ? ' on' : ''}" data-act="view" data-v="${id}" aria-label="${label}" aria-pressed="${S.view === id}">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${icon}"/></svg></button>`;
   return `<div class="ig-toolbar" data-key="toolbar">
@@ -1090,12 +1192,24 @@ async function toggle(id){
   // Flip at once; put it back if the app says no.
   i.enabled = want;
   render();
+  if (want) glow(id);
   const r = await api('/integrations/toggle', {id, enabled:want});
   if (r.ok) return;
   i.enabled = !want;
   render();
   toast(r.error || 'Could not switch it', 'err', 5000);
   if (want) openEditor(i, true);
+}
+
+// A card that just switched on gives one soft pulse of its colour.
+function glow(id){
+  const card = document.querySelector(`[data-key="c-${CSS.escape(id)}"], [data-key="r-${CSS.escape(id)}"]`);
+  if (!card || reduced()) return;
+  const color = getComputedStyle(card).getPropertyValue('--dc').trim() || 'currentColor';
+  card.animate([
+    {boxShadow:`0 0 0 0 color-mix(in oklch, ${color} 55%, transparent)`},
+    {boxShadow:`0 0 0 10px color-mix(in oklch, ${color} 0%, transparent)`},
+  ], {duration:620, easing:'cubic-bezier(.2,.7,.2,1)'});
 }
 
 async function addFrom(body, openAfter){
@@ -1343,12 +1457,24 @@ function footHtml(d, dirty, extra, canSave){
 }
 function runLogHtml(steps){
   if (!steps || !steps.length) return '<div class="muted">No steps ran.</div>';
-  return `<div class="ig-run">${steps.map(s => `<div><span class="t">${(s.at_ms / 1000).toFixed(2)} s</span>
+  return `<div class="ig-run">${steps.map((s, i) => `<div style="--i:${i}"><span class="t">${(s.at_ms / 1000).toFixed(2)} s</span>
     <span class="${esc(s.status)}">${s.status === 'ok' ? '✓' : s.status === 'failed' ? '✕' : '–'} ${esc(s.label)}</span>
     <span class="d" title="${esc(s.detail)}">${esc(s.detail)}</span></div>`).join('')}</div>`;
 }
 function warnHtml(text){
   return `<div class="lan-warn ig-inline-warn"><span class="lw-ic">⚠</span><span>${text}</span></div>`;
+}
+
+// The Save button turns into "Saved" with its check popping in, for a
+// beat, before the editor closes.
+function savedBeat(){
+  const btn = q('.dest-form-foot [data-act="save"]');
+  if (!btn || reduced()) return Promise.resolve();
+  busyEls.delete(btn);
+  btn.classList.remove('is-busy');
+  btn.classList.add('ig-saved');
+  btn.innerHTML = `${svg('check', ' stroke-width="3"')}Saved`;
+  return new Promise(done => setTimeout(done, 380));
 }
 
 async function saveIntegration(d, onSaved){
@@ -1361,7 +1487,10 @@ async function saveIntegration(d, onSaved){
   } else if (r.warnings && r.warnings.length){
     toast(`Saved. Check these names, nothing fills them: ${r.warnings.map(w => '{' + w + '}').join(', ')}`, 'info', 7000);
   } else toast('Saved', 'ok');
-  if (Modal.kind === kind) Modal.close(true);
+  if (Modal.kind === kind){
+    await savedBeat();
+    if (Modal.kind === kind) Modal.close(true);
+  }
   await load();
   return true;
 }
@@ -1385,7 +1514,7 @@ const Catalog = {
     const counts = id => id === 'packs' ? cat.packs.length
       : cat.presets.filter(p => id === 'rec' ? p.recommended : p.category === id).length;
     const nav = [['rec', 'Recommended'], ['alerts', 'Alerts'], ['chat', 'Chat'], ['auto', 'Automation'], ['packs', 'Packs']]
-      .map(([id, label]) => `<button class="${this.cat === id ? 'on' : ''}" data-act="cat" data-cat="${id}" aria-current="${this.cat === id}">${label}<small>${counts(id)}</small></button>`).join('');
+      .map(([id, label]) => `<button class="${this.cat === id ? 'on' : ''}" data-act="cat" data-cat="${id}" aria-current="${this.cat === id}">${label}<small data-tick>${counts(id)}</small></button>`).join('');
     const tiles = this.cat === 'packs' ? this.packsHtml() : this.presetsHtml();
     Modal.body(`${modalHead('plus', 'var(--accent)', 'Add an integration', 'Every card shows exactly what it sends. Add it, then tweak anything.')}
       <div class="ig-cat"><nav class="ig-cat-nav" aria-label="Categories">${nav}
@@ -1530,7 +1659,7 @@ const Editor = {
       esc(p ? p.description : 'Pick a moment, then write on the message itself. Everything else is one click away.'),
       enableSwitch('enabled', d.enabled));
     const chips = this.chips(step, h).map(c => `<button class="ig-chip${this.chip === c.id ? ' on' : ''}${c.warn ? ' warn' : ''}" data-act="chip" data-chip="${c.id}" data-key="chip-${c.id}" aria-expanded="${this.chip === c.id}">
-      <span>${esc(c.k)}</span><b>${esc(c.v)}</b>${svg('chev')}</button>`).join('');
+      <span>${esc(c.k)}</span><b data-tick>${esc(c.v)}</b>${svg('chev')}</button>`).join('');
     Modal.body(`${head}
       <div class="dest-form-body ig-ed-body">
         ${this.momentsHtml()}
@@ -1913,7 +2042,7 @@ const Builder = {
     const d = this.d, h = this.handler();
     const n = allSteps(d).length;
     Modal.body(`${modalHead('steps', 'var(--accent)', titleInput(d.name),
-      `Your own · runs on this PC · ${plural(n, 'step')}`,
+      `Your own · runs on this PC · <span data-tick>${plural(n, 'step')}</span>`,
       `<button class="ic-btn ig-head-btn" data-act="b-test">${svg('play', ' class="ig-btn-ic"')}Test run</button>${enableSwitch('enabled', d.enabled)}`)}
       <div class="ig-bld${this.choosing ? ' picking' : ''}">
         <aside class="ig-palette" aria-label="Blocks">
@@ -2327,7 +2456,7 @@ const Builder = {
       return `${head}${picked}<div class="ig-try-text">${t.body ? esc(t.body.slice(0, 3000)) : '<span class="muted">The answer was empty.</span>'}</div>
         ${t.body ? `<button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="b-pick" data-token="${esc(n)}.body" data-sample="${esc(t.body.slice(0, 200))}">Use the whole answer</button>` : ''}`;
     }
-    return `${head}${picked}<div class="muted">Click the value you want to use.</div><div class="ig-jtree">${jsonTreeHtml(t.json, n)}</div>`;
+    return `${head}${picked}<div class="muted">Click the value you want to use.</div><div class="ig-jtree" data-key="answer-${t.answer}">${jsonTreeHtml(t.json, n)}</div>`;
   },
   async tryRequest(){
     const s = Array.isArray(this.sel) ? this.stepAt(this.sel) : null;
@@ -2343,7 +2472,8 @@ const Builder = {
     });
     t.picked = null;
     if (!r.ok){ t.error = r.error || 'The request failed'; t.status = 0; }
-    else Object.assign(t, {error:'', status:r.status, ms:Math.round(r.ms), body:r.body, truncated:r.truncated, json:parseJson(r.body)});
+    else Object.assign(t, {error:'', status:r.status, ms:Math.round(r.ms), body:r.body, truncated:r.truncated,
+      json:parseJson(r.body), answer:(t.answer || 0) + 1});
     if (Modal.kind !== 'builder') return;
     this.render();
     this.reveal('.ig-try-wrap');
@@ -2592,7 +2722,7 @@ const Conn = {
           this.render();
           const fresh = q('[data-bind="p-topic"]');
           fresh.value = 'instantclone-' + randomToken().slice(0, 12);
-          fresh.focus();
+          decodeField(fresh, true);
         }
         return true;
       }
@@ -2751,10 +2881,14 @@ async function onClick(e){
       if (armConfirm(el, 'Click again to delete')){ Menu.close(); remove(el.dataset.id); }
       break;
     case 'share-one': Recipes.openShare(el.dataset.id); break;
-    case 'reveal':
-      if (S.revealed.has(el.dataset.field)) S.revealed.delete(el.dataset.field); else S.revealed.add(el.dataset.field);
+    case 'reveal': {
+      const id = el.dataset.field, show = !S.revealed.has(id);
+      if (show) S.revealed.add(id); else S.revealed.delete(id);
       if (OWNERS[Modal.kind] && OWNERS[Modal.kind].render) OWNERS[Modal.kind].render();
+      const field = q(`.ig-secret-field[data-field="${CSS.escape(id)}"] .ig-secret`);
+      decodeField(field, show);
       break;
+    }
     case 'guard-save': {
       const save = q('.dest-form-foot [data-act="save"]');
       Modal.hideGuard();

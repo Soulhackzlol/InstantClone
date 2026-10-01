@@ -2575,6 +2575,34 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-drop.on{border-color:var(--accent);color:var(--accent);background:color-mix(in oklch,var(--accent) 6%,var(--bg))}
 .ig-run-box{margin-top:16px;display:flex;flex-direction:column;gap:8px;animation:igFadeUp .26s var(--ease-out)}
 .ig-inspector{width:320px;flex:none;padding:16px 18px;border-left:1px solid var(--line);overflow-y:auto}
+/* Motion details. */
+.ig-pane [data-tick],.ig-modal [data-tick]{display:inline-block}
+.ig-secret-field{position:relative}
+.ig-decode{position:absolute;z-index:1;box-sizing:border-box;border-style:solid;border-color:transparent;pointer-events:none;
+  overflow:hidden;display:flex;align-items:center;white-space:pre;color:var(--fg)}
+.ig-decode.area{display:block;white-space:pre-wrap;overflow-wrap:anywhere}
+.ig-decode span{transition:color .2s var(--ease-out)}
+.ig-decode .s0{color:var(--fg-3)}
+.ig-decode .s1{color:var(--accent)}
+.ig-secret.ig-decoding{color:transparent;-webkit-text-fill-color:transparent}
+.ig-eye{position:relative;display:inline-grid;width:12px;height:12px}
+.ig-eye svg{grid-area:1/1;width:12px;height:12px;transition:opacity .2s cubic-bezier(.2,0,0,1),transform .2s cubic-bezier(.2,0,0,1),filter .2s cubic-bezier(.2,0,0,1)}
+.ig-secret-field:not(.shown) .ig-eye svg:last-child,.ig-secret-field.shown .ig-eye svg:first-child{opacity:0;transform:scale(.25);filter:blur(4px)}
+.ic-toast.ig-undo{position:relative;overflow:hidden}
+.ig-undo-bar{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--accent);opacity:.6;transform-origin:left;
+  animation:igDrain linear forwards}
+.ig-undo:hover .ig-undo-bar{animation-play-state:paused}
+@keyframes igDrain{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+.ic-btn.ig-saved{gap:6px}
+.ic-btn.ig-saved svg{width:14px;height:14px;animation:igPop .3s cubic-bezier(.2,0,0,1)}
+.ig-menu button{animation:igFadeUp .2s var(--ease-out) both;animation-delay:calc(var(--i,0) * 22ms)}
+.ig-run>div{animation:igFadeUp .24s var(--ease-out) both;animation-delay:calc(min(var(--i,0),12) * 40ms)}
+.ig-jtree>*{animation:igFadeUp .24s var(--ease-out) both;animation-delay:calc(min(var(--i,0),16) * 16ms)}
+@media (prefers-reduced-motion: reduce){
+  .ig-menu button,.ig-run>div,.ig-jtree>*,.ic-btn.ig-saved svg{animation:none}
+  .ig-undo-bar{animation:none;display:none}
+  .ig-eye svg{transition:none}
+}
 /* The card over a variable chip. */
 .ig-vtip{position:fixed;z-index:2100;width:max-content;max-width:260px;padding:10px 12px;border-radius:10px;
   background:var(--bg-2);border:1px solid var(--line-2);box-shadow:0 14px 34px -12px rgba(0,0,0,.75);
