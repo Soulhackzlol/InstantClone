@@ -32,6 +32,17 @@ know what each one does before you switch it on.
   captures what they actually saw.
 - **Test runs** send the real messages marked `[TEST]`, skip the waits
   and never touch the stream, then show every step and what it answered.
+- **Chat commands that call any API.** In the builder, a web request has
+  **Try it**: send it for real, see the answer as a tree, click the value
+  you want and **Reply in chat with it**. What viewers type is encoded into
+  its own spot of the request, so `!rank` can't be bent into calling
+  something else.
+- **Everything can be taken back.** Every card has a menu (edit,
+  duplicate, share, delete), adding and deleting come with **Undo**, and
+  views opened from the catalog or the simple editor have a back button.
+- **Nothing private on screen by default.** Your phone topic, webhook
+  links, API headers and secret addresses are hidden until you click
+  Show, and addresses elsewhere only show their site.
 - **Twitch: log in once and forget it.** You approve InstantClone on
   twitch.tv with a code; no password goes through the app. The login
   refreshes itself, so as long as you open InstantClone at least once a

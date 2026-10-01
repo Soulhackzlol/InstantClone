@@ -2625,12 +2625,91 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-recipe-safe{display:flex;align-items:flex-start;gap:8px}
 .ig-recipe-safe svg{width:14px;height:14px;flex:none;margin-top:2px;color:var(--accent)}
 .ig-share-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto}
+/* Back, menu and undo: every step can be taken back. */
+.ig-modal .dest-form-head .ig-back{margin-right:-4px}
+.ig-card .ig-more{opacity:.7;transition:opacity .15s var(--ease-out),background-color .15s var(--ease-out)}
+.ig-card:hover .ig-more,.ig-more[aria-expanded="true"],.ig-more:focus-visible{opacity:1}
+.ig-more svg{width:16px;height:16px}
+.ig-menu{position:fixed;z-index:1100;min-width:200px;padding:5px;border-radius:12px;background:var(--bg-2);
+  border:1px solid var(--line-2);box-shadow:0 18px 40px -14px rgba(0,0,0,.7),0 2px 6px rgba(0,0,0,.3);
+  display:flex;flex-direction:column;gap:1px;transform-origin:top right;animation:igMenuIn .16s var(--ease-out)}
+.ig-menu.closing{opacity:0;transform:scale(.97);transition:opacity .12s var(--ease-out),transform .12s var(--ease-out)}
+@keyframes igMenuIn{from{opacity:0;transform:scale(.96) translateY(-4px)}to{opacity:1;transform:none}}
+.ig-menu button{display:flex;align-items:center;gap:10px;padding:8px 10px;border:0;border-radius:7px;background:transparent;
+  color:var(--fg-2);font:inherit;font-size:13px;text-align:left;cursor:pointer;
+  transition:background-color .12s var(--ease-out),color .12s var(--ease-out)}
+.ig-menu button svg{width:14px;height:14px;flex:none;color:var(--fg-3)}
+.ig-menu button:hover,.ig-menu button:focus-visible{background:var(--surface-3);color:var(--fg);outline:none}
+.ig-menu button.danger{color:var(--danger)}
+.ig-menu button.danger svg{color:var(--danger)}
+.ig-menu button.danger:hover,.ig-menu button.danger:focus-visible,.ig-menu button.ig-armed{background:color-mix(in oklch,var(--danger) 14%,transparent)}
+.ig-menu-sep{height:1px;margin:4px 6px;background:var(--line)}
+.ic-toast.ig-undo{pointer-events:auto;align-items:center}
+.ig-undo-btn{margin-left:10px;padding:4px 11px;border-radius:7px;border:1px solid color-mix(in oklch,var(--accent) 45%,transparent);
+  background:color-mix(in oklch,var(--accent) 12%,transparent);color:var(--accent);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
+  transition:background-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-undo-btn:hover{background:color-mix(in oklch,var(--accent) 20%,transparent)}
+.ig-undo-btn:active{transform:scale(.96)}
+.ig-act-row.link{cursor:pointer;border-radius:6px;transition:background-color .15s var(--ease-out)}
+.ig-act-row.link:hover{background:var(--surface-3)}
+.ig-act-row.link:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+/* Secrets stay hidden until asked: a dashboard is often on stream. */
+.dest-form .ig-secret-field>label{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ig-reveal{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:6px;border:1px solid var(--line);
+  background:transparent;color:var(--fg-3);font:inherit;font-size:11.5px;font-weight:500;text-transform:none;letter-spacing:0;cursor:pointer;
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.ig-reveal:hover{color:var(--fg);border-color:var(--line-2)}
+.ig-reveal svg{width:12px;height:12px}
+.ig-secret-field:not(.shown) .ig-secret{-webkit-text-security:disc}
+/* Try a web request, then pick a value from the answer. */
+.ig-try-wrap{margin-top:16px;animation:igFadeUp .26s var(--ease-out)}
+.ig-try{display:flex;flex-direction:column;gap:10px;padding:12px;border-radius:12px;background:var(--bg-1);border:1px solid var(--line)}
+.ig-try-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ig-try-inputs{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.ig-try-meta{display:flex;align-items:center;gap:8px}
+.ig-status-pill{padding:2px 8px;border-radius:999px;font:600 11.5px/1.5 'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+.ig-status-pill.ok{color:var(--live);background:color-mix(in oklch,var(--live) 14%,transparent)}
+.ig-status-pill.bad{color:var(--danger);background:color-mix(in oklch,var(--danger) 14%,transparent)}
+.ig-try-text{max-height:220px;overflow:auto;padding:10px;border-radius:8px;background:var(--bg-2);
+  font:12px/1.5 'JetBrains Mono',monospace;color:var(--fg-2);white-space:pre-wrap;word-break:break-word}
+.ig-picked{display:flex;flex-direction:column;gap:8px;padding:10px;border-radius:10px;
+  border:1px solid color-mix(in oklch,var(--accent) 45%,transparent);background:color-mix(in oklch,var(--accent) 8%,transparent);
+  animation:igFadeUp .24s var(--ease-out)}
+.ig-picked-what{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:12.5px}
+.ig-picked-what code{font-family:'JetBrains Mono',monospace;color:color-mix(in oklch,var(--accent) 70%,#fff);flex:none;max-width:60%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-picked-what span{min-width:0;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-picked-actions{display:flex;gap:6px;flex-wrap:wrap}
+.ig-jtree{max-height:420px;overflow:auto;padding:6px;border-radius:8px;background:var(--bg-2);font:12px/1.5 'JetBrains Mono',monospace}
+.ig-jnode>summary{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:6px;cursor:pointer;list-style:none;color:var(--fg-2)}
+.ig-jnode>summary::-webkit-details-marker{display:none}
+.ig-jnode>summary:hover{background:var(--surface-3)}
+.ig-jnode>summary svg{width:11px;height:11px;flex:none;color:var(--fg-4);transform:rotate(-90deg);transition:transform .2s var(--ease-out)}
+.ig-jnode[open]>summary svg{transform:none}
+.ig-jkids{margin-left:11px;padding-left:8px;border-left:1px solid var(--line)}
+.ig-jcount{color:var(--fg-4)}
+.ig-jleaf{display:flex;align-items:baseline;gap:8px;width:100%;padding:3px 6px;border:0;border-radius:6px;background:transparent;
+  color:inherit;font:inherit;text-align:left;cursor:pointer;transition:background-color .12s var(--ease-out)}
+.ig-jleaf:hover,.ig-jleaf:focus-visible{background:color-mix(in oklch,var(--accent) 12%,transparent);outline:none}
+.ig-jleaf .k,.ig-jnode .k{color:var(--fg-3);flex:none}
+.ig-jleaf .k::after{content:':'}
+.ig-jleaf .v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-jleaf .v.string{color:var(--live)}
+.ig-jleaf .v.number{color:#fcd34d}
+.ig-jleaf .v.boolean{color:#a78bfa}
+.ig-jleaf .v.null{color:var(--fg-4)}
+.ig-juse{flex:none;font:600 11px/1.5 Inter,system-ui,sans-serif;color:var(--accent);opacity:0;transition:opacity .12s var(--ease-out)}
+.ig-jleaf:hover .ig-juse,.ig-jleaf:focus-visible .ig-juse{opacity:1}
+.ig-jleaf.off{cursor:default;opacity:.55}
+.ig-jleaf.off:hover{background:transparent}
+.ig-jmore{padding:3px 6px;color:var(--fg-4)}
 @media (prefers-reduced-motion: reduce){
   .ig-skel::after{animation:none}
   .ig-spin,.ic-btn.is-busy::after,.ic-btn-tiny.is-busy::after{animation-duration:1.6s}
   .ig-row-peek,.ig-run-box,.ig-device,.ig-code,.ig-recipe,.ig-unsaved,.ig-guard,.ig-ping,.ig-added svg,.ig-ok svg,
   .ig-activity-box[open] .ig-activity,.ig-modal.closing .dest-form,.ig-modal.closing .ic-modal-backdrop,
-  .ic-btn.ig-armed,.ic-btn-tiny.ig-armed,.ig-cat-grid>*{animation:none}
+  .ic-btn.ig-armed,.ic-btn-tiny.ig-armed,.ig-cat-grid>*,.ig-menu,.ig-picked,.ig-try-wrap{animation:none}
+  .ig-menu.closing{transition:none}
   .ig-dot svg,.ig-role>span svg,.ig-chip svg,.ig-seg .sub-tab-ind{transition:none}
 }
 @media (max-width:760px){

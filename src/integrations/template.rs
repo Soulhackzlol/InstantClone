@@ -24,6 +24,13 @@ impl<F: Fn(&str) -> Option<String>> Vars for F {
 const MAX_NAME: usize = 64;
 
 pub fn render(template: &str, vars: &dyn Vars) -> String {
+    render_escaped(template, vars, &|value| value.to_string())
+}
+
+/// `render`, passing every inserted value through `escape` first. Text the
+/// user wrote, fallbacks included, is left as written: only values (which
+/// can come from chat or a web answer) are escaped.
+pub fn render_escaped(template: &str, vars: &dyn Vars, escape: &dyn Fn(&str) -> String) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(i) = rest.find('{') {
@@ -39,7 +46,7 @@ pub fn render(template: &str, vars: &dyn Vars) -> String {
                 let value = vars.lookup(name).unwrap_or_default();
                 match fallback {
                     Some(text) if is_blank(&value) => out.push_str(text),
-                    _ => out.push_str(&value),
+                    _ => out.push_str(&escape(&value)),
                 }
                 rest = &tail[len..];
             }
@@ -51,6 +58,37 @@ pub fn render(template: &str, vars: &dyn Vars) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Percent-encode a value for a URL path or query: everything but the
+/// unreserved characters, so `!rank ana&key=x` stays one value.
+pub fn url_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Escape a value for the inside of a JSON string, so a quote typed in chat
+/// can't add fields to a JSON body.
+pub fn json_string_content(value: &str) -> String {
+    let mut quoted = String::new();
+    crate::json::write_string(value, &mut quoted);
+    quoted[1..quoted.len() - 1].to_string()
+}
+
+/// One line: no control characters, so a value can't start a new header.
+pub fn one_line(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// Every variable name a template uses, in order, without repeats.
@@ -159,6 +197,21 @@ mod tests {
         assert_eq!(render("{delay", &vars), "{delay");
         assert_eq!(render("{delay|off", &vars), "{delay|off");
         assert_eq!(render("{ spaced }", &vars), "{ spaced }");
+    }
+
+    #[test]
+    fn escaping_touches_values_only() {
+        let vars = |name: &str| (name == "q").then(|| "a b&c=d/é".to_string());
+        assert_eq!(
+            render_escaped("x?q={q}&r={none|a b}", &vars, &url_component),
+            "x?q=a%20b%26c%3Dd%2F%C3%A9&r=a b"
+        );
+        let quote = |name: &str| (name == "q").then(|| "a\",\"admin\":true".to_string());
+        assert_eq!(
+            render_escaped(r#"{"n":"{q}"}"#, &quote, &json_string_content),
+            r#"{"n":"a\",\"admin\":true"}"#
+        );
+        assert_eq!(one_line("a\r\nX-Evil: 1"), "a  X-Evil: 1");
     }
 
     #[test]

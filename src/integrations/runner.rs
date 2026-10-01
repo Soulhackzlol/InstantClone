@@ -159,6 +159,17 @@ impl Runner {
         template::render(step.param(name), &lookup)
     }
 
+    /// `fill`, escaping inserted values with `escape`.
+    fn fill_escaped(&self, step: &Step, name: &str, escape: &dyn Fn(&str) -> String) -> String {
+        let live = self.host.live();
+        let lookup = Lookup {
+            vars: &self.ctx.vars,
+            counters: &self.env.counters,
+            live: &live,
+        };
+        template::render_escaped(step.param(name), &lookup, escape)
+    }
+
     fn set(&mut self, name: impl Into<String>, value: impl Into<String>) {
         self.ctx.vars.insert(name.into(), value.into());
     }
@@ -371,14 +382,27 @@ impl Runner {
             "" => "response".to_string(),
             name => name.to_string(),
         };
+        // Values can come from chat, so each lands escaped for where it goes:
+        // one URL component, one JSON string, one header line.
+        let json_body = matches!(
+            step.param("body").trim_start().chars().next(),
+            Some('{' | '[')
+        );
         let request = HttpRequest {
             method: match step.param("method").trim() {
                 "" => "POST".to_string(),
                 m => m.to_ascii_uppercase(),
             },
-            url: self.fill(step, "url").trim().to_string(),
-            headers: parse_headers(&self.fill(step, "headers")),
-            body: self.fill(step, "body"),
+            url: self
+                .fill_escaped(step, "url", &template::url_component)
+                .trim()
+                .to_string(),
+            headers: parse_headers(&self.fill_escaped(step, "headers", &template::one_line)),
+            body: if json_body {
+                self.fill_escaped(step, "body", &template::json_string_content)
+            } else {
+                self.fill(step, "body")
+            },
         };
         let label = format!("{} {}", request.method, short_url(&request.url));
         match self.blocking(move |h| h.http(request)).await {
@@ -963,6 +987,48 @@ mod tests {
         assert!(calls[0].starts_with("http GET https://api.example/u"));
         assert!(
             calls[2].ends_with("ana 200 https://clips.twitch.tv/Abc"),
+            "{calls:?}"
+        );
+    }
+
+    /// What a viewer types fills its own part of a request and nothing
+    /// more: one URL component, one JSON string.
+    #[tokio::test]
+    async fn chat_values_cannot_escape_their_place_in_a_request() {
+        let host = Arc::new(FakeHost::default());
+        let steps = [
+            Step::new(
+                StepKind::Http,
+                &[
+                    ("method", "GET"),
+                    ("url", "https://api.example/rank/{arg1}?q={args}"),
+                ],
+            ),
+            Step::new(
+                StepKind::Http,
+                &[
+                    ("url", "https://api.example/log"),
+                    ("body", r#"{"who":"{args}"}"#),
+                ],
+            ),
+        ];
+        let typed = r#"ana/../admin?key=1&x="#;
+        go(
+            &host,
+            &steps,
+            ctx(
+                &[("arg1", typed), ("args", r#"a","admin":true,"b":""#)],
+                false,
+            ),
+        )
+        .await;
+        let calls = host.calls.lock();
+        assert_eq!(
+            calls[0].trim_end(),
+            "http GET https://api.example/rank/ana%2F..%2Fadmin%3Fkey%3D1%26x%3D?q=a%22%2C%22admin%22%3Atrue%2C%22b%22%3A%22"
+        );
+        assert!(
+            calls[1].ends_with(r#"{"who":"a\",\"admin\":true,\"b\":\""}"#),
             "{calls:?}"
         );
     }

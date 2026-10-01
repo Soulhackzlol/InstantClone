@@ -80,6 +80,7 @@ pub async fn route(
         }
         ("POST", "/integrations/duplicate") => duplicate(&req(), settings, cfg_path),
         ("POST", "/integrations/test") => test(&req(), &handle).await,
+        ("POST", "/integrations/fetch") => fetch(&req()).await,
         ("POST", "/integrations/export") => export(&req(), &settings.borrow()),
         ("POST", "/integrations/import") => import(&req(), settings, cfg_path),
         ("POST", "/connections/discord") => save_discord(&req(), settings, cfg_path),
@@ -259,13 +260,18 @@ fn save(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -
     let id = integration.id.clone();
     let warnings = unknown_vars(&integration);
     let missing = problems.incomplete;
+    // Undoing a delete puts it back where it was.
+    let restore_at = req.get("at").and_then(Value::as_f64).map(|n| n as usize);
     let reply = update(settings, cfg_path, move |s| {
         match s.integrations.iter().position(|i| i.id == integration.id) {
             Some(at) => s.integrations[at] = integration,
             None if s.integrations.len() >= MAX_INTEGRATIONS => {
                 return Err(format!("you already have {MAX_INTEGRATIONS} integrations"))
             }
-            None => s.integrations.push(integration),
+            None => {
+                let at = restore_at.unwrap_or(usize::MAX).min(s.integrations.len());
+                s.integrations.insert(at, integration);
+            }
         }
         Ok(())
     });
@@ -498,6 +504,51 @@ async fn test(req: &Value, handle: &super::Handle) -> Reply {
             ),
         ])),
         None => fail("the test didn't finish within a minute"),
+    }
+}
+
+/// Longest answer the editor's "Send request" shows.
+const FETCH_SHOWN: usize = 200_000;
+
+/// The editor's "Send request": make the request a web request step would,
+/// with the values the user typed, and show what came back.
+async fn fetch(req: &Value) -> Reply {
+    let headers = req
+        .str_or("headers", "")
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            let name = name.trim();
+            (!name.is_empty()).then(|| (name.to_string(), value.trim().to_string()))
+        })
+        .collect();
+    let request = super::host::HttpRequest {
+        method: match req.str_or("method", "GET").trim() {
+            "" => "GET".to_string(),
+            m => m.to_ascii_uppercase(),
+        },
+        url: req.str_or("url", "").trim().to_string(),
+        headers,
+        body: req.str_or("body", "").to_string(),
+    };
+    let started = std::time::Instant::now();
+    let result = tokio::task::spawn_blocking(move || super::effects::send_http(request))
+        .await
+        .unwrap_or_else(|_| Err("the request crashed".to_string()));
+    let ms = started.elapsed().as_millis() as f64;
+    match result {
+        Ok(resp) => {
+            let truncated = resp.body.chars().count() > FETCH_SHOWN;
+            let body: String = resp.body.chars().take(FETCH_SHOWN).collect();
+            ok(json::obj([
+                ("ok", Value::Bool(true)),
+                ("status", Value::Num(f64::from(resp.status))),
+                ("ms", Value::Num(ms)),
+                ("body", json::str(body)),
+                ("truncated", Value::Bool(truncated)),
+            ]))
+        }
+        Err(e) => fail(e),
     }
 }
 

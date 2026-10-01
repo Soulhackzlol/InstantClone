@@ -59,6 +59,9 @@ const PATHS = {
   hash:'M4 9h16M4 15h16M10 3L8 21M16 3l-2 18',
   bell:'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0',
   pencil:'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
+  back:'M15 18l-6-6 6-6',
+  dots:'M5 12h.01M12 12h.01M19 12h.01',
+  eye:'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
 };
 const svg = (name, extra) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra||''}><path d="${PATHS[name]}"/></svg>`;
@@ -162,7 +165,16 @@ function varsFor(handler){
   walk(handler && handler.steps, s => {
     if (s.type === 'http'){
       const n = (s.params.save_as || '').trim() || 'response';
-      list.push({name:n + '.status', sample:'200'}, {name:n + '.ok', sample:'yes'}, {name:n + '.body', sample:'{...}'});
+      // Once "Send request" ran, the real answer is the sample.
+      const tried = Builder.tries.get(uidOf(s));
+      const got = tried && tried.status ? tried : null;
+      list.push({name:n + '.status', sample:got ? String(got.status) : '200'},
+        {name:n + '.ok', sample:got ? (got.status >= 200 && got.status < 300 ? 'yes' : 'no') : 'yes'},
+        {name:n + '.body', sample:got ? got.body.slice(0, 200) : '{...}'});
+      if (got && got.json !== undefined){
+        jsonLeaves(got.json).filter(l => l.usable && (n + '.json.' + l.path).length <= 64).slice(0, 60)
+          .forEach(l => list.push({name:`${n}.json.${l.path}`, sample:l.text}));
+      }
     }
     if (s.type === 'clip') list.push({name:'clip.url', sample:'https://clips.twitch.tv/BraveSnipe'});
     if (s.type === 'counter' && s.params.name) list.push({name:'counter.' + s.params.name, sample:'2'});
@@ -177,14 +189,27 @@ function sampleMap(handler){
   return m;
 }
 // Mirrors src/integrations/template.rs, for previews.
-function renderSample(text, vars){
+// `escape`, when given, is applied to inserted values only, like the
+// server does for web requests (see template::render_escaped).
+function renderSample(text, vars, escape){
   return String(text || '').replace(/\{\{([A-Za-z0-9_.]+)\}\}|\{([A-Za-z0-9_.]{1,64})(?:\|([^}]*))?\}/g,
     (all, escaped, name, fallback) => {
       if (escaped) return '{' + escaped + '}';
       const v = vars[name] == null ? '' : String(vars[name]);
       if (fallback !== undefined && (v === '' || v === '0')) return fallback;
-      return v;
+      return escape ? escape(v) : v;
     });
+}
+// Mirrors template::url_component: only unreserved characters stay.
+const urlComponent = v => encodeURIComponent(v).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+const jsonStringContent = v => JSON.stringify(v).slice(1, -1);
+const oneLine = v => v.replace(/[\u0000-\u001f\u007f]/g, ' ');
+// An address as safe to show on stream: scheme and host only, since the
+// path and query often carry an API key or a webhook secret.
+function maskUrl(url){
+  const m = /^(https?:\/\/[^/?#\s]+)(\S*)/i.exec(String(url || '').trim());
+  if (!m) return String(url || '').trim() ? 'an address' : '';
+  return m[1] + (m[2] && m[2] !== '/' ? '/…' : '');
 }
 function highlightVars(text){
   return esc(text).replace(/\{[A-Za-z0-9_.]{1,64}(?:\|[^}]*)?\}/g, m => `<span class="v">${m}</span>`);
@@ -472,6 +497,146 @@ function q(sel){
   return [...Modal.el.querySelectorAll(sel)].find(el => !el.closest('[data-leaving]')) || null;
 }
 
+// A toast with Undo, for actions that are easy to regret.
+function undoToast(text, undo){
+  const rail = $('toast-rail');
+  if (!rail){ toast(text, 'ok'); return; }
+  const el = document.createElement('div');
+  el.className = 'ic-toast ok ig-undo';
+  el.innerHTML = `<span class="ic-toast-icon">✓</span><span class="ig-undo-text"></span><button type="button" class="ig-undo-btn">Undo</button>`;
+  el.querySelector('.ig-undo-text').textContent = text;
+  let used = false;
+  const leave = () => {
+    if (!el.isConnected || el.classList.contains('leaving')) return;
+    el.classList.add('leaving');
+    setTimeout(() => el.remove(), 350);
+  };
+  el.querySelector('button').addEventListener('click', async () => {
+    if (used) return;
+    used = true;
+    leave();
+    await undo();
+  });
+  rail.appendChild(el);
+  setTimeout(leave, 8000);
+}
+
+// A secret field (topic, webhook link, headers, secret address): hidden
+// like a password until the user asks to see it.
+function secretField(id, control, label){
+  const shown = S.revealed.has(id);
+  return `<div class="dff ig-secret-field${shown ? ' shown' : ''}"><label>${label}
+    <button type="button" class="ig-reveal" data-act="reveal" data-field="${esc(id)}" aria-pressed="${shown}">${svg('eye')}${shown ? 'Hide' : 'Show'}</button></label>${control}</div>`;
+}
+
+function parseJson(text){
+  try {
+    const v = JSON.parse(text);
+    return v !== null && typeof v === 'object' ? v : undefined;
+  } catch(_){ return undefined; }
+}
+// Every value in a JSON answer, with the path a variable uses to reach it.
+// `usable`: the path fits a variable name (letters, digits, _).
+function jsonLeaves(root){
+  const out = [];
+  const visit = (v, path) => {
+    if (out.length >= 200) return;
+    if (v !== null && typeof v === 'object'){
+      (Array.isArray(v) ? v.slice(0, 25).map((x, i) => [i, x]) : Object.entries(v)).forEach(([k, x]) => visit(x, path.concat(k)));
+      return;
+    }
+    out.push({path:path.join('.'), text:v === null ? '' : String(v), usable:path.length > 0 && path.every(k => /^[A-Za-z0-9_]+$/.test(String(k)))});
+  };
+  visit(root, []);
+  return out;
+}
+// The answer as a tree; every value is a button that picks its variable.
+function jsonTreeHtml(root, saveAs){
+  let budget = 400;
+  const node = (v, path, key, depth) => {
+    if (budget-- <= 0) return '';
+    const label = key === null ? '' : `<span class="k">${esc(key)}</span>`;
+    if (v !== null && typeof v === 'object'){
+      const all = Array.isArray(v) ? v.length : Object.keys(v).length;
+      const entries = Array.isArray(v) ? v.slice(0, 25).map((x, i) => [i, x]) : Object.entries(v).slice(0, 60);
+      const kids = entries.map(([k, x]) => node(x, path.concat(k), String(k), depth + 1)).join('')
+        + (all > entries.length ? `<div class="ig-jmore">… ${all - entries.length} more</div>` : '');
+      if (key === null) return kids || '<div class="muted">(empty)</div>';
+      return `<details class="ig-jnode" ${depth < 2 ? 'open' : ''}><summary>${svg('chev')}${label}<span class="ig-jcount">${Array.isArray(v) ? `[${all}]` : `{${all}}`}</span></summary><div class="ig-jkids">${kids}</div></details>`;
+    }
+    const name = `${saveAs}.json.${path.join('.')}`;
+    const usable = path.every(k => /^[A-Za-z0-9_]+$/.test(String(k))) && name.length <= 64;
+    const text = v === null ? 'null' : String(v);
+    const shown = typeof v === 'string' ? `"${text.length > 80 ? text.slice(0, 80) + '…' : text}"` : text;
+    const kind = v === null ? 'null' : typeof v;
+    return usable
+      ? `<button class="ig-jleaf" data-act="b-pick" data-token="${esc(name)}" data-sample="${esc(text.slice(0, 200))}" title="{${esc(name)}}">${label}<span class="v ${kind}">${esc(shown)}</span><span class="ig-juse">Use</span></button>`
+      : `<div class="ig-jleaf off" title="This name has characters a variable can't reach">${label}<span class="v ${kind}">${esc(shown)}</span></div>`;
+  };
+  return node(root, [], null, 0);
+}
+
+// The "⋯" menu of a card or row: everything you can do to it, Delete
+// included, without opening it. Lives on <body> so no card clips it.
+const Menu = {
+  el:null, id:null, btn:null,
+  toggle(btn, id){
+    if (this.id === id){ this.close(); return; }
+    this.open(btn, id);
+  },
+  open(btn, id){
+    this.close();
+    const i = find(id);
+    if (!i) return;
+    const el = document.createElement('div');
+    el.className = 'ig-menu';
+    el.setAttribute('role', 'menu');
+    el.innerHTML = `<button role="menuitem" data-act="edit" data-id="${esc(id)}">${svg('pencil')}Edit</button>
+      <button role="menuitem" data-act="duplicate" data-id="${esc(id)}">${svg('copy')}Duplicate</button>
+      <button role="menuitem" data-act="share-one" data-id="${esc(id)}">${svg('link')}Share as a recipe</button>
+      <div class="ig-menu-sep" role="separator"></div>
+      <button role="menuitem" class="danger" data-act="menu-delete" data-id="${esc(id)}">${svg('x')}Delete</button>`;
+    document.body.appendChild(el);
+    el.addEventListener('click', onClick);
+    el.addEventListener('keydown', e => this.keys(e));
+    const r = btn.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight;
+    el.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
+    el.style.top = (r.bottom + 6 + h > innerHeight - 8 ? r.top - h - 6 : r.bottom + 6) + 'px';
+    this.el = el;
+    this.id = id;
+    this.btn = btn;
+    btn.setAttribute('aria-expanded', 'true');
+    el.querySelector('button').focus({preventScroll:true});
+    document.addEventListener('pointerdown', this.outside, true);
+    window.addEventListener('scroll', this.dismiss, true);
+    window.addEventListener('resize', this.dismiss);
+  },
+  close(){
+    if (!this.el) return;
+    const el = this.el, btn = this.btn, hadFocus = el.contains(document.activeElement);
+    this.el = this.id = this.btn = null;
+    document.removeEventListener('pointerdown', this.outside, true);
+    window.removeEventListener('scroll', this.dismiss, true);
+    window.removeEventListener('resize', this.dismiss);
+    el.classList.add('closing');
+    setTimeout(() => el.remove(), reduced() ? 0 : 120);
+    if (btn && btn.isConnected){
+      btn.setAttribute('aria-expanded', 'false');
+      if (hadFocus) btn.focus({preventScroll:true});
+    }
+  },
+  keys(e){
+    const items = [...this.el.querySelectorAll('[role="menuitem"]')];
+    const at = items.indexOf(document.activeElement);
+    if (e.key === 'Escape'){ e.preventDefault(); this.close(); }
+    else if (e.key === 'ArrowDown'){ e.preventDefault(); items[(at + 1) % items.length].focus(); }
+    else if (e.key === 'ArrowUp'){ e.preventDefault(); items[(at - 1 + items.length) % items.length].focus(); }
+    else if (e.key === 'Tab') this.close();
+  },
+  outside: e => { if (Menu.el && !Menu.el.contains(e.target) && !e.target.closest('[data-act="menu"]')) Menu.close(); },
+  dismiss: e => { if (Menu.el && !(e && e.target && Menu.el.contains(e.target))) Menu.close(); },
+};
+
 function copyText(btn){
   const text = btn.dataset.text || '';
   navigator.clipboard.writeText(text).then(
@@ -511,7 +676,7 @@ function previewHtml(step, handler, big){
         <div class="bar"><i></i><b style="left:22%"></b><b style="left:48%"></b><b style="left:80%"></b></div></div>`;
     case 'http': {
       const body = text.trim();
-      let shown = body ? body : `${step.params.method || 'POST'} ${step.params.url || '(address to set)'}`;
+      let shown = body ? body : `${step.params.method || 'POST'} ${maskUrl(step.params.url) || '(address to set)'}`;
       try { shown = JSON.stringify(JSON.parse(body), null, 1).replace(/\n\s*/g, ' '); } catch(_){}
       return `<div class="${cls} ig-pv-json">${esc(shown).replace(/&quot;([^&]*)&quot;:/g, '<span class="k">"$1"</span>:')}</div>`;
     }
@@ -537,6 +702,9 @@ const S = {
   data:null, visible:false, filter:'all', search:'', peek:null,
   view: store.get('ig-view') === 'list' ? 'list' : 'grid',
   pollTimer:null, activityOpen:false,
+  // Secret fields the user chose to show (by field id). Hidden by default:
+  // a dashboard is often on a stream.
+  revealed:new Set(),
 };
 
 async function load(){
@@ -686,8 +854,8 @@ function connectionsHtml(){
     `<button class="ic-pill ${cls}" data-act="conn" data-tab="${tab}"><span class="dot"></span><span class="ic-pill-k">${k}</span><span class="ic-pill-v">${esc(v)}</span></button>`;
   return `<div class="ig-conns" data-key="conns"><span class="ic-label">Connections</span>
     ${pill('discord', discord ? 'ok' : '', 'Discord', discord ? plural(discord, 'channel') : 'Add')}
-    ${pill('twitch', twitchOn ? (twitchLive ? 'ok' : 'warn') : '', 'Twitch', twitchOn ? (twitchLive ? t.main.login : t.main.login + ' · ' + t.main.chat) : (t.available ? 'Connect' : 'Unavailable'))}
-    ${pill('phone', phoneOn ? 'ok' : '', 'Phone', phoneOn ? c.phone.topic : 'Connect')}
+    ${pill('twitch', twitchOn ? (twitchLive ? 'ok' : 'warn') : '', 'Twitch', twitchOn ? (twitchLive ? 'connected' : 'chat ' + t.main.chat) : (t.available ? 'Connect' : 'Unavailable'))}
+    ${pill('phone', phoneOn ? 'ok' : '', 'Phone', phoneOn ? 'connected' : 'Connect')}
   </div>`;
 }
 
@@ -719,6 +887,10 @@ function switchHtml(i){
   return `<button class="dcard-switch${i.enabled ? ' on' : ''}" role="switch" aria-checked="${i.enabled}"
     aria-label="${esc(i.name)}" data-act="toggle" data-id="${esc(i.id)}"><span></span></button>`;
 }
+function moreHtml(i){
+  return `<button class="ic-btn-tiny ig-more" data-act="menu" data-id="${esc(i.id)}" aria-label="More for ${esc(i.name)}"
+    aria-haspopup="menu" aria-expanded="${Menu.id === i.id}">${svg('dots', ' stroke-width="3"')}</button>`;
+}
 function flagHtml(flag){
   if (!flag) return '';
   return `<span class="dcard-status ig-flag ${flag.cls}" title="${esc(flag.tip)}"><span class="d-dot"></span><span class="dcard-status-l">${flag.label}</span></span>`;
@@ -735,7 +907,7 @@ function gridHtml(items, none){
         <span class="dcard-icon">${svg(c.icon)}</span>
         <div class="dcard-id"><div class="dcard-name">${esc(i.name)}</div>
           <div class="dcard-host">${esc(c.where)} · ${esc(c.last)}</div></div>
-        ${switchHtml(i)}
+        ${moreHtml(i)}${switchHtml(i)}
       </div>
     </div>`;
   }).join('')}
@@ -755,6 +927,7 @@ function listHtml(items, none){
         ${c.flag ? flagHtml(c.flag) : `<span class="ig-row-last">${esc(c.last)}</span>`}
         ${switchHtml(i)}
         <button class="ic-btn-tiny" data-act="edit" data-id="${esc(i.id)}" aria-label="Edit ${esc(i.name)}">${svg('pencil')}</button>
+        ${moreHtml(i)}
       </div>
       ${open ? `<div class="ig-row-peek"><div class="dcard-screen">${previewHtml(c.step, c.h, true)}</div>
         <div class="ig-row-peek-actions">
@@ -795,7 +968,9 @@ function activityHtml(){
     const detail = failed ? failed.label + ': ' + failed.detail
       : r.status === 'busy' ? 'skipped: already running'
       : r.steps.filter(s => s.status === 'ok').map(s => s.label).join(' · ') || r.trigger;
-    return `<div class="ig-act-row" data-key="a-${esc(key)}"><span class="t">${esc(fmtClock(r.at_ms))}</span>
+    const open = find(r.integration_id)
+      ? ` data-act="edit" data-id="${esc(r.integration_id)}" role="button" tabindex="0" title="Open ${esc(r.name)}"` : '';
+    return `<div class="ig-act-row${open ? ' link' : ''}" data-key="a-${esc(key)}"${open}><span class="t">${esc(fmtClock(r.at_ms))}</span>
       <span class="n">${esc(r.name)}${r.test ? ' <span class="muted">(test)</span>' : ''}</span>
       <span class="d" title="${esc(detail)}">${esc(r.trigger)} → ${esc(detail)}</span><span class="s ${esc(r.status)}">${esc(r.status)}</span></div>`;
   }).join('') : '<div class="ig-act-empty" data-key="a-none">Runs show up here, with every step and what it answered.</div>';
@@ -829,16 +1004,26 @@ async function toggle(id){
 }
 
 async function addFrom(body, openAfter){
+  const fromCatalog = Modal.kind === 'catalog';
   const r = await api('/integrations/add', body);
   if (!r.ok){ toast(r.error || 'Could not add it', 'err', 5000); return; }
   await load();
   const added = (r.ids || []).map(find).filter(Boolean);
+  const ids = added.map(i => i.id);
   const unfinished = added.find(i => !i.enabled);
   if (openAfter && unfinished){
-    openEditor(unfinished, true);
+    // Going back from here means "not this one": the draft goes again.
+    const back = fromCatalog ? {title:'Back to the catalog, without adding it', go:async () => {
+      await deleteIds([unfinished.id]);
+      Catalog.reopen();
+    }} : null;
+    openEditor(unfinished, true, {justAdded:true, back});
     return;
   }
-  toast(added.length > 1 ? `Added ${added.length} integrations` : `Added ${added[0] ? added[0].name : ''}`, 'ok');
+  undoToast(added.length > 1 ? `Added ${added.length} integrations` : `Added ${added[0] ? added[0].name : ''}`, async () => {
+    await deleteIds(ids);
+    if (Modal.kind === 'catalog') Catalog.render();
+  });
   if (unfinished) toast(`${unfinished.name} needs one more detail before it can switch on`, 'info', 4500);
   if (Modal.kind === 'catalog' && body.preset) Catalog.flashAdded(body.preset);
 }
@@ -852,18 +1037,32 @@ async function duplicate(id){
 
 async function remove(id){
   const kind = Modal.kind;
+  const i = find(id);
+  // Kept so Undo can put it back exactly, in the same place.
+  const snapshot = i ? clone(i) : null;
+  const at = i ? S.data.integrations.indexOf(i) : -1;
   const r = await api('/integrations/delete', {id});
   if (!r.ok){ toast(r.error || 'Could not delete it', 'err'); return; }
   // Only close the editor that asked; the user may have moved on.
-  if (Modal.kind === kind) Modal.close(true);
+  if (kind && Modal.kind === kind) Modal.close(true);
   await load();
-  toast('Deleted', 'ok');
+  if (!snapshot){ toast('Deleted', 'ok'); return; }
+  undoToast(`Deleted ${snapshot.name}`, async () => {
+    const back = await api('/integrations/save', Object.assign(snapshot, {at}));
+    if (!back.ok) toast(back.error || 'Could not bring it back', 'err', 5000);
+    await load();
+  });
+}
+
+async function deleteIds(ids){
+  for (const id of ids) await api('/integrations/delete', {id});
+  await load();
 }
 
 // `switchOn`: it should end up on, and waits for a detail first.
-function openEditor(i, switchOn){
-  if (i.preset) Editor.open(i, switchOn);
-  else Builder.open(i, {switchOn});
+function openEditor(i, switchOn, opts){
+  if (i.preset) Editor.open(i, switchOn, opts);
+  else Builder.open(i, Object.assign({switchOn}, opts));
 }
 
 // ---------------------------------------------------------------- modal shell
@@ -874,7 +1073,11 @@ function openEditor(i, switchOn){
 // close to ask about unsaved changes, `after` runs once it really closes.
 const Modal = {
   el:null, form:null, kind:null, onClose:null, after:null, opener:null, swapFrom:null,
+  // `back`: {go, title, keepsEdits} for a view opened from another one.
+  // `pending`: what the unsaved-changes bar's Discard should finish.
+  back:null, pending:null,
   open(kind, width, height){
+    Menu.close();
     if (this.el){
       this.swapFrom = this.form.getBoundingClientRect();
       this.hideGuard();
@@ -898,6 +1101,8 @@ const Modal = {
     this.kind = kind;
     this.onClose = null;
     this.after = null;
+    this.back = null;
+    this.pending = null;
     this.form.style.width = `min(${width || 820}px,100%)`;
     this.form.style.height = height || '';
     return this.el;
@@ -922,7 +1127,10 @@ const Modal = {
   },
   close(force){
     if (!this.el) return;
-    if (!force && this.onClose && this.onClose() === false) return;
+    if (!force){
+      this.pending = 'close';
+      if (this.onClose && this.onClose() === false) return;
+    }
     const after = this.after;
     this.after = null;
     this.onClose = null;
@@ -933,12 +1141,31 @@ const Modal = {
     }
     const el = this.el, opener = this.opener;
     this.el = this.form = this.opener = this.swapFrom = null;
+    // Shown secrets hide again: the next time could be on stream.
+    S.revealed.clear();
     document.removeEventListener('keydown', onModalKey);
     el.classList.add('closing');
     el.inert = true;
     setTimeout(() => el.remove(), reduced() ? 0 : 180);
     if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus({preventScroll:true});
     if (!S.visible) clearInterval(S.pollTimer);
+  },
+  // Back to the view this one was opened from. Edits that travel back
+  // with it skip the unsaved-changes question; with nowhere to go back to,
+  // it closes (and `after` returns to the opener).
+  goBack(){
+    if (!this.back){ this.close(); return; }
+    if (!this.back.keepsEdits){
+      this.pending = 'back';
+      if (this.onClose && this.onClose() === false) return;
+    }
+    this.leaveBack();
+  },
+  leaveBack(){
+    const go = this.back.go;
+    this.back = null;
+    this.pending = null;
+    go();
   },
   // The "unsaved changes" bar, over the footer.
   guard(){
@@ -989,7 +1216,9 @@ function trapFocus(e){
 }
 
 function modalHead(icon, color, title, hint, extra){
-  return `<div class="dest-form-head">
+  const back = Modal.back || Modal.after
+    ? `<button type="button" class="dest-form-x ig-back" data-act="modal-back" aria-label="Back" title="${esc((Modal.back && Modal.back.title) || 'Back')}">${svg('back')}</button>` : '';
+  return `<div class="dest-form-head">${back}
     <span class="dest-form-mark" style="--dc:${color}">${svg(icon)}</span>
     <div class="dest-form-titles"><h4>${title}</h4><div class="dest-form-hint">${hint}</div></div>
     ${extra || ''}
@@ -1008,12 +1237,12 @@ function lastRunHtml(d){
   return `<span class="ig-last ${st.last_status === 'failed' ? 'bad' : 'ok'}"><i></i>Last ran ${esc(fmtAgo(st.last_ms))} · ${esc(st.last_status)}</span>`;
 }
 // The editors' footer: Delete away from Save, Save lit only with changes.
-function footHtml(d, dirty, extra){
+function footHtml(d, dirty, extra, canSave){
   return `<div class="dest-form-foot">
     ${d.id ? '<button class="ic-btn ic-btn-ghost ig-del" data-act="delete">Delete</button>' : ''}
     <div class="dest-form-msg muted ig-foot-msg">${d.id ? lastRunHtml(d) : '<span class="ig-last">New integration</span>'}${dirty ? '<span class="ig-unsaved">Unsaved</span>' : ''}</div>
     ${extra || ''}
-    <button class="ic-btn ic-btn-primary" data-act="save" ${dirty || !d.id ? '' : 'disabled'} title="Save (Ctrl+S)">Save</button>
+    <button class="ic-btn ic-btn-primary" data-act="save" ${dirty || canSave || !d.id ? '' : 'disabled'} title="Save (Ctrl+S)">Save</button>
   </div>`;
 }
 function runLogHtml(steps){
@@ -1048,6 +1277,10 @@ const Catalog = {
   open(){
     this.cat = 'rec';
     this.added = null;
+    this.reopen();
+  },
+  // Back from something opened here: same category as before.
+  reopen(){
     Modal.open('catalog', 1040, 'min(86vh,820px)');
     this.render();
   },
@@ -1145,12 +1378,17 @@ function needsNote(needs){
 // The simple editor for catalog modules: pick a moment, write on the
 // preview itself, and every option is a chip that opens its own panel.
 const Editor = {
-  d:null, sel:0, chip:null, run:null, dirty:false, moreVars:false,
-  open(i, switchOn){
+  d:null, sel:0, chip:null, run:null, dirty:false, moreVars:false, back:null, justAdded:false,
+  // opts: {back} (see Modal.back); {justAdded} when the catalog just made
+  // it as a draft, which closing keeps and Back removes again.
+  open(i, switchOn, opts){
+    opts = opts || {};
     this.d = withHandler(clone(i));
-    // Freshly added and waiting for one detail: shown switched on, so
-    // saving once it is complete also turns it on.
-    this.dirty = !!switchOn && !this.d.enabled;
+    this.back = opts.back || null;
+    this.justAdded = !!opts.justAdded;
+    // Waiting for one detail: shown switched on, so saving once it is
+    // complete also turns it on.
+    this.dirty = !!switchOn && !this.d.enabled && !this.justAdded;
     if (switchOn) this.d.enabled = true;
     this.sel = Math.max(0, this.d.handlers.findIndex(h => h.enabled));
     // Missing a channel: open straight on the chip that fixes it.
@@ -1169,8 +1407,22 @@ const Editor = {
   },
   show(){
     Modal.open('editor', 920);
-    Modal.onClose = () => !this.dirty || (Modal.guard(), false);
+    Modal.back = this.back;
+    Modal.onClose = () => {
+      if (this.dirty){ Modal.guard(); return false; }
+      if (this.justAdded && Modal.pending === 'close') toast(`${this.d.name} is kept as a draft, switched off`, 'info', 4000);
+      return true;
+    };
     this.render();
+  },
+  // Back from "Open in builder", with whatever was changed there.
+  fromBuilder(d, dirty){
+    this.d = withHandler(d);
+    this.dirty = dirty;
+    this.sel = Math.min(this.sel, this.d.handlers.length - 1);
+    this.chip = null;
+    this.run = null;
+    this.show();
   },
   handler(){ return this.d.handlers[this.sel]; },
   render(){
@@ -1194,7 +1446,7 @@ const Editor = {
         </div>
       </div>
       ${footHtml(d, this.dirty, `<button class="ic-btn ic-btn-ghost" data-act="ed-builder">Open in builder</button>
-        <button class="ic-btn ic-btn-ghost" data-act="ed-test">${svg('play', ' class="ig-btn-ic"')}Send a test</button>`)}`);
+        <button class="ic-btn ic-btn-ghost" data-act="ed-test">${svg('play', ' class="ig-btn-ic"')}Send a test</button>`, this.justAdded)}`);
     Modal.form.querySelectorAll('.ig-msg').forEach(autosize);
   },
   momentsHtml(){
@@ -1277,7 +1529,7 @@ const Editor = {
     }
     if (step && step.type === 'chat') out.push({id:'reply', k:'Reply as', v:step.params.as === 'bot' ? 'bot account' : 'your account'});
     if (step && step.type === 'phone') out.push({id:'priority', k:'Priority', v:step.params.priority || 'normal'});
-    if (step && step.type === 'http') out.push({id:'url', k:'Send to', v:step.params.url || 'set the address', warn:!step.params.url});
+    if (step && step.type === 'http') out.push({id:'url', k:'Send to', v:maskUrl(step.params.url) || 'set the address', warn:!step.params.url});
     if (step && step.type === 'file') out.push({id:'file', k:'File', v:step.params.path || 'pick a file', warn:!step.params.path});
     out.push({id:'cooldown', k:'Wait between', v:fmtMs(d.cooldown_ms) || 'no limit'});
     return out;
@@ -1393,7 +1645,10 @@ const Editor = {
       case 'set-as': if (step) step.params.as = v; this.changed(); return true;
       case 'set-priority': if (step) step.params.priority = v; this.changed(); return true;
       case 'set-cooldown': this.d.cooldown_ms = +v; this.changed(); return true;
-      case 'ed-builder': Builder.open(this.d, {dirty:this.dirty}); return true;
+      case 'ed-builder':
+        Builder.open(this.d, {dirty:this.dirty, back:{title:'Back to the simple editor', keepsEdits:true,
+          go:() => Editor.fromBuilder(Builder.d, Builder.dirty)}});
+        return true;
       case 'ed-test': busy(el, () => this.test()); return true;
       case 'delete': if (armConfirm(el, 'Delete for good?')) busy(el, () => remove(this.d.id)); return true;
       case 'save': busy(el, () => saveIntegration(this.d, () => { this.dirty = false; })); return true;
@@ -1480,10 +1735,16 @@ const TRIGGERS = [['event', 'An InstantClone event'], ['chat_command', 'A chat c
 const pathKey = p => p.join('.');
 
 const Builder = {
-  d:null, h:0, sel:'trigger', target:[], run:null, dirty:false, lastField:null,
-  // opts: {dirty} carries the editor's unsaved state over, {switchOn} as in Editor.open.
+  d:null, h:0, sel:'trigger', target:[], run:null, dirty:false, lastField:null, back:null,
+  // "Send request" results per web request step (by uidOf), this session.
+  tries:new Map(),
+  // opts: {dirty} carries the editor's unsaved state over, {switchOn} as in
+  // Editor.open, {back} as in Modal.back (default: the catalog, if open).
   open(i, opts){
     opts = opts || {};
+    this.back = opts.back !== undefined ? opts.back
+      : Modal.kind === 'catalog' ? {title:'Back to the catalog', go:() => Catalog.reopen()} : null;
+    this.tries = new Map();
     this.d = i ? withHandler(clone(i)) : {id:'', name:'My integration', enabled:true, preset:'', cooldown_ms:0,
       handlers:[{enabled:true, trigger:{type:'event', event:'hold_opened', filters:{}}, steps:[]}]};
     this.dirty = !!opts.dirty || (!!opts.switchOn && !this.d.enabled);
@@ -1501,6 +1762,7 @@ const Builder = {
   },
   show(){
     Modal.open('builder', 1240, 'min(92vh,900px)');
+    Modal.back = this.back;
     Modal.onClose = () => !this.dirty || (Modal.guard(), false);
     this.render();
   },
@@ -1526,6 +1788,7 @@ const Builder = {
               <span class="ig-step-kind">WHEN</span><span class="ig-step-text">${esc(triggerSentence(h.trigger))}</span></button>
             ${this.stepsHtml(h.steps, [], 'root')}
           </div>
+          ${this.selectedHttp() ? `<div class="ig-try-wrap" data-key="try-${uidOf(this.selectedHttp())}">${this.tryHtml(this.selectedHttp())}</div>` : ''}
           ${this.run ? `<div class="sys-section ig-run-box"><div class="ic-label">Test run: ${esc(this.run.status || 'error')}</div>
             ${this.run.error ? warnHtml(esc(this.run.error)) : this.run.status === 'running'
               ? '<div class="ig-running"><span class="ig-spin"></span>Running the test…</div>' : runLogHtml(this.run.steps)}</div>` : ''}
@@ -1611,10 +1874,14 @@ const Builder = {
       case 'chat': return field('text', 'Message', {area:true}) + field('as', 'Send as', {select:[['', 'Your account'], ['bot', 'Bot account']]})
         + field('reply', 'Reply to the viewer', {select:[['', 'No'], ['yes', 'Yes, in their thread']]});
       case 'phone': return field('title', 'Title') + field('text', 'Message', {area:true}) + field('priority', 'Priority', {select:[['', 'Normal'], ['high', 'High'], ['urgent', 'Urgent']]});
-      case 'http': return field('method', 'Method', {select:['POST', 'GET', 'PUT', 'PATCH', 'DELETE'].map(m => [m, m])}) + field('url', 'Address', {mono:true, ph:'https://…'})
-        + field('headers', 'Headers (one per line, Name: value)', {area:true}) + field('body', 'Body', {area:true, ph:'{"event":"{delay}"}'})
+      case 'http': return field('method', 'Method', {select:['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => [m, m])})
+        + field('url', 'Address', {mono:true, ph:'https://api.example/rank/{arg1}'})
+        + note('Values from chat are encoded for you, so a viewer can only fill in their part. Keep API keys in Headers: they stay hidden here and never go into recipes.')
+        + secretField('headers-' + uidOf(s), `<textarea class="ic-input ig-secret" data-bind="p" data-name="headers" placeholder="Authorization: Bearer …">${esc(s.params.headers || '')}</textarea>`, 'Headers (one per line, Name: value)')
+        + field('body', 'Body', {area:true, ph:'{"event":"{delay}"}'})
         + field('save_as', 'Save the answer as', {mono:true, ph:'response'})
-        + note(`Later steps can use <span class="mono">{${esc(s.params.save_as || 'response')}.status}</span>, <span class="mono">.ok</span>, <span class="mono">.body</span> and <span class="mono">.json.field</span>.`);
+        + note(`Later steps can use <span class="mono">{${esc(s.params.save_as || 'response')}.status}</span>, <span class="mono">.ok</span>, <span class="mono">.body</span> and <span class="mono">.json.field</span>.`)
+        + note('Try it under the steps: send the request for real and pick what to use from the answer.');
       case 'wait': return field('ms', 'Wait (milliseconds)', {mono:true, ph:'20000'}) + note(`${esc(fmtMs(s.params.ms) || '0 s')}. Up to an hour.`);
       case 'wait_delay': return '<p class="ig-insp-p">Waits until the moment this started has reached your viewers. Only InstantClone can do this: it knows your delay.</p>'
         + field('extra_ms', 'Then wait a bit more (ms)', {mono:true, ph:'0'}) + field('follow', 'If the delay changes meanwhile', {select:[['', 'Follow it'], ['no', 'Keep the delay from the start']]});
@@ -1667,8 +1934,8 @@ const Builder = {
         <label class="crash-check"><input type="checkbox" data-bind="t-live" ${t.only_live !== false ? 'checked' : ''}><span><span class="crash-check-title">Only while streaming</span></span></label>`;
     } else if (t.type === 'webhook'){
       const url = `${location.origin}/hooks/${t.token || ''}`;
-      body = `<div class="dff"><label>Call this address</label><div class="ig-copy-row"><input class="ic-input mono" readonly value="${esc(url)}">
-        <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(url)}">Copy</button></div></div>
+      body = secretField('hook', `<div class="ig-copy-row"><input class="ic-input mono ig-secret" readonly value="${esc(url)}">
+        <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(url)}">Copy</button></div>`, 'Call this address (keep it secret)') + `
         <div class="muted">GET or POST from a Stream Deck, a script or any app on this network. The body is <span class="mono">{body}</span>; JSON fields are <span class="mono">{body.field}</span>.</div>
         <button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="b-new-token">Make a new secret address</button>`;
     }
@@ -1697,6 +1964,11 @@ const Builder = {
     else if (b === 't-every') t.every_ms = Math.max(1, parseFloat(el.value) || 1) * 60000;
     else if (b === 't-live') t.only_live = el.checked;
     else if (b === 'p') this.stepAt(this.sel).params[el.dataset.name] = el.value;
+    else if (b === 'try'){
+      // Values to try the request with; not part of the integration.
+      this.tryEntry(this.stepAt(this.sel)).inputs[el.dataset.name] = el.value;
+      return;
+    }
     else return;
     this.dirty = true;
     this.render();
@@ -1766,10 +2038,106 @@ const Builder = {
       case 'b-new-token': this.handler().trigger.token = randomToken(); this.edited(); return true;
       case 'b-token': insertAtCursor(this.lastField, '{' + el.dataset.token + '}'); return true;
       case 'b-test': busy(el, () => this.test()); return true;
+      case 'b-try': busy(el, () => this.tryRequest()); return true;
+      case 'b-pick': this.pick(el.dataset.token, el.dataset.sample || ''); return true;
+      case 'b-use-reply': this.replyWithPick(); return true;
       case 'delete': if (armConfirm(el, 'Delete for good?')) busy(el, () => remove(d.id)); return true;
       case 'save': busy(el, () => saveIntegration(d, () => { this.dirty = false; })); return true;
     }
     return false;
+  },
+  // The selected step, when it is a web request (it gets "Try it").
+  selectedHttp(){
+    const s = Array.isArray(this.sel) ? this.stepAt(this.sel) : null;
+    return s && s.type === 'http' ? s : null;
+  },
+  // Bring a just-drawn part of the canvas into view.
+  reveal(selector){
+    const el = q(selector);
+    if (el) el.scrollIntoView({block:'nearest', behavior:reduced() ? 'auto' : 'smooth'});
+  },
+  tryEntry(s){
+    let e = this.tries.get(uidOf(s));
+    if (!e){ e = {inputs:{}}; this.tries.set(uidOf(s), e); }
+    return e;
+  },
+  // "Try it": values for the variables the request uses, the button, and
+  // what came back, where every value can be picked.
+  tryHtml(s){
+    const t = this.tryEntry(s);
+    const used = [...new Set(['url', 'headers', 'body'].flatMap(f =>
+      [...String(s.params[f] || '').matchAll(/\{([A-Za-z0-9_.]{1,64})(?:\|[^}]*)?\}/g)].map(m => m[1])))];
+    const samples = sampleMap(this.handler());
+    const inputs = used.map(n => `<div class="dff"><label class="mono">${esc(n)}</label><input class="ic-input" data-bind="try" data-name="${esc(n)}"
+      value="${esc(n in t.inputs ? t.inputs[n] : (samples[n] || ''))}" placeholder="a value to try"></div>`).join('');
+    return `<div class="ig-try">
+      <div class="ig-try-head"><span class="ic-label">Try it</span>
+        <button class="ic-btn ic-btn-primary ig-small" data-act="b-try">${svg('play', ' class="ig-btn-ic"')}Send request</button></div>
+      ${used.length ? `<div class="muted">Try it with:</div><div class="ig-try-inputs">${inputs}</div>` : ''}
+      ${this.tryResultHtml(s, t)}
+    </div>`;
+  },
+  tryResultHtml(s, t){
+    if (t.error) return warnHtml(esc(t.error));
+    if (!t.status) return '<div class="muted">Sends the request for real and shows the answer. Then pick what to use from it.</div>';
+    const n = (s.params.save_as || '').trim() || 'response';
+    const ok = t.status >= 200 && t.status < 300;
+    const head = `<div class="ig-try-meta"><span class="ig-status-pill ${ok ? 'ok' : 'bad'}">${t.status}</span>
+      <span class="muted">${t.ms} ms${t.truncated ? ' · long answer, cut for display' : ''}</span></div>`;
+    const picked = t.picked ? `<div class="ig-picked" data-key="picked-${esc(t.picked.token)}">
+      <div class="ig-picked-what"><code>{${esc(t.picked.token)}}</code><span title="${esc(t.picked.sample)}">${esc(t.picked.sample) || '<i>empty</i>'}</span></div>
+      <div class="ig-picked-actions"><button class="ic-btn ic-btn-primary ig-small" data-act="b-use-reply">Reply in chat with it</button>
+      <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="{${esc(t.picked.token)}}">Copy</button></div></div>` : '';
+    if (t.json === undefined){
+      return `${head}${picked}<div class="ig-try-text">${t.body ? esc(t.body.slice(0, 3000)) : '<span class="muted">The answer was empty.</span>'}</div>
+        ${t.body ? `<button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="b-pick" data-token="${esc(n)}.body" data-sample="${esc(t.body.slice(0, 200))}">Use the whole answer</button>` : ''}`;
+    }
+    return `${head}${picked}<div class="muted">Click the value you want to use.</div><div class="ig-jtree">${jsonTreeHtml(t.json, n)}</div>`;
+  },
+  async tryRequest(){
+    const s = Array.isArray(this.sel) ? this.stepAt(this.sel) : null;
+    if (!s || s.type !== 'http') return;
+    const t = this.tryEntry(s);
+    const vars = Object.assign(sampleMap(this.handler()), t.inputs);
+    const jsonBody = /^\s*[{[]/.test(s.params.body || '');
+    const r = await api('/integrations/fetch', {
+      method: s.params.method || 'POST',
+      url: renderSample(s.params.url, vars, urlComponent).trim(),
+      headers: renderSample(s.params.headers, vars, oneLine),
+      body: renderSample(s.params.body, vars, jsonBody ? jsonStringContent : null),
+    });
+    t.picked = null;
+    if (!r.ok){ t.error = r.error || 'The request failed'; t.status = 0; }
+    else Object.assign(t, {error:'', status:r.status, ms:Math.round(r.ms), body:r.body, truncated:r.truncated, json:parseJson(r.body)});
+    if (Modal.kind !== 'builder') return;
+    this.render();
+    this.reveal('.ig-try-wrap');
+  },
+  pick(token, sample){
+    const s = this.stepAt(this.sel);
+    this.tryEntry(s).picked = {token, sample};
+    this.render();
+    this.reveal('.ig-picked');
+  },
+  // The picked value goes into the chat reply right after the request: the
+  // one already there, or a new one.
+  replyWithPick(){
+    const s = this.stepAt(this.sel), t = this.tryEntry(s);
+    if (!t.picked) return;
+    const token = '{' + t.picked.token + '}';
+    const {list, index} = this.locate(this.sel);
+    const next = list[index + 1];
+    if (next && next.type === 'chat'){
+      next.params.text = ((next.params.text || '').trimEnd() + ' ' + token).trim();
+    } else {
+      const chat = newStep('chat');
+      const trig = this.handler().trigger;
+      chat.params.text = trig.type.startsWith('chat') ? `{user}: ${token}` : token;
+      list.splice(index + 1, 0, chat);
+    }
+    this.sel = this.sel.slice(0, -1).concat(index + 1);
+    this.target = [];
+    this.edited();
   },
   async test(){
     this.run = {status:'running', steps:[]};
@@ -1817,7 +2185,7 @@ function stepSentence(s){
     case 'discord': return `Discord ${esc(channelName(p.connection))} ${q(p.text)}${p.ping ? ' · @' + esc(p.ping) : ''}`;
     case 'chat': return `Chat ${q(p.text)}${p.as === 'bot' ? ' · as bot' : ''}${p.reply === 'yes' ? ' · as a reply' : ''}`;
     case 'phone': return `Phone ${q(p.text)}`;
-    case 'http': return `${esc(p.method || 'POST')} ${esc(p.url || '(address)')}${p.save_as ? ' → ' + esc(p.save_as) : ''}`;
+    case 'http': return `${esc(p.method || 'POST')} ${esc(maskUrl(p.url) || '(address)')}${p.save_as ? ' → ' + esc(p.save_as) : ''}`;
     case 'wait': return `Wait ${esc(fmtMs(p.ms) || '0 s')}`;
     case 'wait_delay': return 'Wait until it has aired for viewers <span class="v">{delay}</span>';
     case 'if': return `If ${highlightVars(p.left || '…')} ${esc(OPS[p.op] || p.op || '')} ${highlightVars(p.right || '')}`;
@@ -1869,7 +2237,7 @@ const Conn = {
     const form = e ? `<div class="sys-section ig-form" data-key="d-form-${esc(e.id || 'new')}">
         <div class="ic-label">${e.id ? 'Edit channel' : 'New channel'}</div>
         <div class="dfg"><div class="dff"><label>Name</label><input class="ic-input" data-bind="d-name" value="${esc(e.name)}" placeholder="Mods" autofocus></div>
-        <div class="dff"><label>Webhook link</label><input class="ic-input mono" data-bind="d-url" value="" placeholder="${e.id ? 'leave blank to keep it' : 'https://discord.com/api/webhooks/…'}" spellcheck="false"></div></div>
+        ${secretField('d-url', `<input class="ic-input mono ig-secret" data-bind="d-url" value="" placeholder="${e.id ? 'leave blank to keep it' : 'https://discord.com/api/webhooks/…'}" spellcheck="false" autocomplete="off">`, 'Webhook link')}</div>
         <div class="muted">In Discord: Server settings › Integrations › Webhooks › New webhook › Copy webhook URL.</div>
         <div class="ig-form-actions"><button class="ic-btn ic-btn-ghost" data-act="d-cancel">Cancel</button><button class="ic-btn ic-btn-primary" data-act="d-save">Save channel</button></div>
       </div>` : `<button class="dest-add ig-add-row" data-act="d-new" data-key="d-add"><span class="dest-add-icon">${svg('plus')}</span>Add a Discord channel</button>`;
@@ -1921,8 +2289,8 @@ const Conn = {
     const p = S.data.connections.phone;
     return `<div class="sys-section ig-form">
       <div class="ig-insp-p">Phone pushes use <b>ntfy</b>, a free app for Android and iPhone. Install it, subscribe to a topic, and put the same topic here. Anyone who knows the topic can read it, so make it hard to guess.</div>
-      <div class="dfg"><div class="dff"><label>Topic</label><div class="ig-copy-row"><input class="ic-input mono" data-bind="p-topic" value="${esc(p.topic)}" placeholder="instantclone-…" spellcheck="false">
-        <button class="ic-btn ic-btn-ghost ig-small" data-act="p-random" title="Make a hard-to-guess topic">Random</button></div></div>
+      <div class="dfg">${secretField('p-topic', `<div class="ig-copy-row"><input class="ic-input mono ig-secret" data-bind="p-topic" value="${esc(p.topic)}" placeholder="instantclone-…" spellcheck="false" autocomplete="off">
+        <button class="ic-btn ic-btn-ghost ig-small" data-act="p-random" title="Make a hard-to-guess topic">Random</button></div>`, 'Topic')}
         <div class="dff"><label>Server <span class="muted">(optional)</span></label><input class="ic-input mono" data-bind="p-server" value="${esc(p.server)}" placeholder="https://ntfy.sh" spellcheck="false"></div></div>
       <div class="ig-form-actions"><button class="ic-btn ic-btn-ghost" data-act="p-test" ${p.topic ? '' : 'disabled'}>Send a test push</button><button class="ic-btn ic-btn-primary" data-act="p-save">Save</button></div>
     </div>`;
@@ -1983,7 +2351,14 @@ const Conn = {
         return true;
       case 'p-random': {
         const f = q('[data-bind="p-topic"]');
-        if (f){ f.value = 'instantclone-' + randomToken().slice(0, 12); f.focus(); }
+        if (f){
+          // A new topic has to be typed into the phone app, so show it.
+          S.revealed.add('p-topic');
+          this.render();
+          const fresh = q('[data-bind="p-topic"]');
+          fresh.value = 'instantclone-' + randomToken().slice(0, 12);
+          fresh.focus();
+        }
         return true;
       }
       case 'p-save':
@@ -2030,16 +2405,17 @@ function focusField(bind){
 // ---------------------------------------------------------------- recipes
 
 const Recipes = {
-  preview:null, text:'',
+  preview:null, text:'', back:null,
   resume(){
     Modal.open('import', 700);
+    Modal.back = this.back;
     this.render();
   },
   openImport(){
     this.preview = null;
     this.text = '';
-    Modal.open('import', 700);
-    this.render();
+    this.back = Modal.kind === 'catalog' ? {title:'Back to the catalog', go:() => Catalog.reopen()} : null;
+    this.resume();
     focusField('r-text');
   },
   render(){
@@ -2090,13 +2466,13 @@ const Recipes = {
     if (a === 's-make'){ await busy(el, () => this.share()); return true; }
     return false;
   },
-  openShare(){
+  openShare(only){
     Modal.open('share', 700);
     Modal.body(`${modalHead('copy', 'var(--accent)', 'Share as a recipe', 'Pick what to share. Your connections, keys and secret links are never included.')}
       <div class="dest-form-body ig-conn-body">
         <div class="dff"><label>Recipe name</label><input class="ic-input" data-bind="s-name" placeholder="My crash kit"></div>
         <div class="ig-share-list">${S.data.integrations.map(i =>
-          `<label class="crash-check"><input type="checkbox" data-bind="s-pick" value="${esc(i.id)}"><span><span class="crash-check-title">${esc(i.name)}</span></span></label>`).join('')}</div>
+          `<label class="crash-check"><input type="checkbox" data-bind="s-pick" value="${esc(i.id)}" ${i.id === only ? 'checked' : ''}><span><span class="crash-check-title">${esc(i.name)}</span></span></label>`).join('')}</div>
         <textarea class="ic-input ig-textarea-code" data-bind="s-out" readonly hidden></textarea>
       </div>
       <div class="dest-form-foot"><div class="dest-form-msg"></div>
@@ -2125,12 +2501,25 @@ async function onClick(e){
   if (!el || el.disabled) return;
   const a = el.dataset.act;
   if (el.tagName === 'A') e.preventDefault();
+  if (el.closest('.ig-menu') && a !== 'menu-delete') Menu.close();
   const owner = el.closest('.ig-modal') && OWNERS[Modal.kind];
   if (owner && await owner.act(a, el)) return;
   switch (a){
     case 'modal-close': Modal.close(); break;
+    case 'modal-back': Modal.goBack(); break;
     case 'guard-keep': Modal.hideGuard(); break;
-    case 'guard-discard': Modal.close(true); break;
+    case 'guard-discard':
+      if (Modal.pending === 'back' && Modal.back) Modal.leaveBack(); else Modal.close(true);
+      break;
+    case 'menu': Menu.toggle(el, el.dataset.id); break;
+    case 'menu-delete':
+      if (armConfirm(el, 'Click again to delete')){ Menu.close(); remove(el.dataset.id); }
+      break;
+    case 'share-one': Recipes.openShare(el.dataset.id); break;
+    case 'reveal':
+      if (S.revealed.has(el.dataset.field)) S.revealed.delete(el.dataset.field); else S.revealed.add(el.dataset.field);
+      if (OWNERS[Modal.kind] && OWNERS[Modal.kind].render) OWNERS[Modal.kind].render();
+      break;
     case 'guard-save': {
       const save = q('.dest-form-foot [data-act="save"]');
       Modal.hideGuard();

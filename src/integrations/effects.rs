@@ -21,6 +21,66 @@ const MAX_FILE_TEXT: usize = 1024 * 1024;
 /// capped so a runaway trigger can't fork the machine to its knees.
 const MAX_RUNNING_PROGRAMS: usize = 16;
 
+/// Make a web request for a step, or for the editor's "Send request".
+pub fn send_http(r: HttpRequest) -> Result<HttpResponse, String> {
+    if !(r.url.starts_with("http://") || r.url.starts_with("https://")) {
+        return Err("the address must start with http:// or https://".to_string());
+    }
+    let agent = crate::https::https_agent();
+    let result = match r.method.as_str() {
+        "GET" | "DELETE" | "HEAD" => {
+            let mut req = match r.method.as_str() {
+                "GET" => agent.get(&r.url),
+                "HEAD" => agent.head(&r.url),
+                _ => agent.delete(&r.url),
+            }
+            .config()
+            .timeout_global(Some(HTTP_TIMEOUT))
+            .build();
+            for (name, value) in &r.headers {
+                req = req.header(name.as_str(), value.as_str());
+            }
+            req.call()
+        }
+        "POST" | "PUT" | "PATCH" => {
+            let mut req = match r.method.as_str() {
+                "PUT" => agent.put(&r.url),
+                "PATCH" => agent.patch(&r.url),
+                _ => agent.post(&r.url),
+            }
+            .config()
+            .timeout_global(Some(HTTP_TIMEOUT))
+            .build();
+            let has_type = r
+                .headers
+                .iter()
+                .any(|(n, _)| n.eq_ignore_ascii_case("content-type"));
+            if !has_type && !r.body.is_empty() {
+                let kind = if json::parse(&r.body).is_ok() {
+                    "application/json"
+                } else {
+                    "text/plain; charset=utf-8"
+                };
+                req = req.header("Content-Type", kind);
+            }
+            for (name, value) in &r.headers {
+                req = req.header(name.as_str(), value.as_str());
+            }
+            req.send(r.body.as_str())
+        }
+        other => return Err(format!("{other} is not a supported method")),
+    };
+    let mut resp = result.map_err(|e| format!("request failed: {e}"))?;
+    let status = resp.status().as_u16();
+    let body = resp
+        .body_mut()
+        .with_config()
+        .limit(MAX_RESPONSE)
+        .read_to_string()
+        .unwrap_or_default();
+    Ok(HttpResponse { status, body })
+}
+
 pub struct RealHost {
     pub ctrl: Arc<Controller>,
     pub twitch: Arc<Twitch>,
@@ -68,62 +128,7 @@ impl Host for RealHost {
     }
 
     fn http(&self, r: HttpRequest) -> Result<HttpResponse, String> {
-        if !(r.url.starts_with("http://") || r.url.starts_with("https://")) {
-            return Err("the address must start with http:// or https://".to_string());
-        }
-        let agent = crate::https::https_agent();
-        let result = match r.method.as_str() {
-            "GET" | "DELETE" | "HEAD" => {
-                let mut req = match r.method.as_str() {
-                    "GET" => agent.get(&r.url),
-                    "HEAD" => agent.head(&r.url),
-                    _ => agent.delete(&r.url),
-                }
-                .config()
-                .timeout_global(Some(HTTP_TIMEOUT))
-                .build();
-                for (name, value) in &r.headers {
-                    req = req.header(name.as_str(), value.as_str());
-                }
-                req.call()
-            }
-            "POST" | "PUT" | "PATCH" => {
-                let mut req = match r.method.as_str() {
-                    "PUT" => agent.put(&r.url),
-                    "PATCH" => agent.patch(&r.url),
-                    _ => agent.post(&r.url),
-                }
-                .config()
-                .timeout_global(Some(HTTP_TIMEOUT))
-                .build();
-                let has_type = r
-                    .headers
-                    .iter()
-                    .any(|(n, _)| n.eq_ignore_ascii_case("content-type"));
-                if !has_type && !r.body.is_empty() {
-                    let kind = if json::parse(&r.body).is_ok() {
-                        "application/json"
-                    } else {
-                        "text/plain; charset=utf-8"
-                    };
-                    req = req.header("Content-Type", kind);
-                }
-                for (name, value) in &r.headers {
-                    req = req.header(name.as_str(), value.as_str());
-                }
-                req.send(r.body.as_str())
-            }
-            other => return Err(format!("{other} is not a supported method")),
-        };
-        let mut resp = result.map_err(|e| format!("request failed: {e}"))?;
-        let status = resp.status().as_u16();
-        let body = resp
-            .body_mut()
-            .with_config()
-            .limit(MAX_RESPONSE)
-            .read_to_string()
-            .unwrap_or_default();
-        Ok(HttpResponse { status, body })
+        send_http(r)
     }
 
     fn phone(
