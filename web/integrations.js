@@ -1774,11 +1774,11 @@ const Catalog = {
       const added = this.added === p.id;
       const button = added
         ? `<button class="ic-btn ic-btn-ghost ig-small ig-added" data-act="add-preset" data-preset="${esc(p.id)}">${svg('check')}Added</button>`
-        : `<button class="ic-btn ${have(p.id) ? 'ic-btn-ghost' : 'ic-btn-primary'} ig-small" data-act="add-preset" data-preset="${esc(p.id)}">${have(p.id) ? 'Add another' : 'Add'}</button>`;
+        : `<button class="ic-btn ${have(p.id) ? 'ic-btn-ghost' : 'ig-cat-add'} ig-small" data-act="add-preset" data-preset="${esc(p.id)}">${have(p.id) ? 'Add another' : 'Add'}</button>`;
       return `<div class="dcard ig-cat-tile" style="--dc:${(KINDS[fake.step.type] || {}).c || 'var(--accent)'};--i:${n + 1}" data-key="t-${esc(p.id)}">
         <div class="dcard-screen">${previewHtml(fake.step, fake.handler, false)}</div>
         <div class="ig-cat-id"><span class="dcard-icon">${svg(PRESET_ICON[p.id] || 'steps')}</span>
-          <div class="dcard-id"><div class="dcard-name">${esc(p.name)}</div><div class="ig-cat-desc">${esc(p.description)}</div>
+          <div class="dcard-id"><div class="dcard-name">${esc(p.name)}</div><div class="ig-cat-desc" title="${esc(p.description)}">${esc(p.description)}</div>
           ${needs ? `<div class="ig-cat-needs">${esc(needs)}</div>` : ''}</div></div>
         ${button}
       </div>`;
@@ -1821,7 +1821,7 @@ function fakeStep(p){
 function needsNote(needs){
   const c = S.data.connections, t = S.data.twitch;
   if (needs === 'discord' && !c.discord.length) return 'Needs a Discord channel (you can add it next)';
-  if (needs === 'twitch' && !t.available) return 'Needs Twitch, which this build can\'t log in to';
+  if (needs === 'twitch' && !t.available) return 'Needs Twitch, not in this build';
   if (needs === 'twitch' && !t.main.login) return 'Needs Twitch connected';
   if (needs === 'phone' && !c.phone.topic) return 'Needs your phone connected';
   if (needs === 'web') return 'You paste the address it sends to';

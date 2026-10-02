@@ -2504,7 +2504,11 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-cat-import{margin-top:auto;padding:10px;border-radius:10px;border:1px dashed var(--line-2);font-size:12px;line-height:1.5;color:var(--fg-3)}
 .ig-cat-import a{color:var(--accent);font-weight:600}
 .ig-cat-grid{flex:1;min-width:0;overflow-y:auto;padding:16px 18px 20px;display:grid;
-  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;align-content:start}
+  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;align-content:start;
+  /* Rows as tall as their tiles. Plain auto rows shrink to share the
+     grid's fixed height once there are more tiles than fit, and the
+     tiles (overflow hidden) lose their buttons. */
+  grid-auto-rows:max-content}
 /* A category's tiles fade in one after another; tiles already shown stay. */
 .ig-cat-grid>*{animation:igTileIn .32s var(--ease-out) both;animation-delay:calc(min(var(--i,0),10) * 26ms)}
 @keyframes igTileIn{from{opacity:0;transform:translateY(8px) scale(.98);filter:blur(3px)}to{opacity:1;transform:none;filter:blur(0)}}
@@ -2514,8 +2518,14 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-cat-id .dcard-icon{width:28px;height:28px;border-radius:8px}
 .ig-cat-id .dcard-icon svg{width:14px;height:14px}
 .ig-cat-desc{margin-top:2px;font-size:12px;line-height:1.45;color:var(--fg-3);text-wrap:pretty}
+.ig-cat-tile .ig-cat-desc{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .ig-cat-needs{margin-top:4px;font-size:11px;color:var(--warn)}
 .ig-cat-tile>.ic-btn{margin:auto 4px 4px}
+/* Add: the tile's colour, tinted, so a grid of them reads as cards and
+   not as a wall of solid buttons. It fills on hover. */
+.ig-cat-tile>.ig-cat-add{color:var(--dc);background:color-mix(in oklch,var(--dc) 12%,transparent);
+  border-color:color-mix(in oklch,var(--dc) 32%,transparent)}
+.ig-cat-tile>.ig-cat-add:hover{color:var(--bg);background:var(--dc);border-color:transparent}
 .ig-cat-pack{padding:14px;gap:10px}
 .ig-cat-pack>.ic-btn{align-self:flex-start;margin-top:auto}
 .ig-cat-build{min-height:214px;padding:16px;text-align:center}
