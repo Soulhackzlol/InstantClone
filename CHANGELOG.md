@@ -6,11 +6,15 @@ All notable changes will land here. Format loosely follows
 
 ## [Unreleased]
 
-### Integrations: InstantClone talks to Discord, Twitch chat, your phone and your tools
+### Integrations (experimental): InstantClone talks to Discord, Twitch chat, your phone and your tools
 
 A new **Integrations** tab. Every card shows exactly what it sends (the
 Discord message, the chat reply, the phone push, the VOD marker), so you
 know what each one does before you switch it on.
+
+Integrations are **experimental**: they work, but how they look and how
+you set them up (mostly the screens) may still change between versions.
+The tab says so too.
 
 - **A catalog of ready-made integrations**, one click to add: a crash
   alert on Discord, a `!delay` command that always answers with your
@@ -55,6 +59,10 @@ know what each one does before you switch it on.
 - **Edit text** shapes an answer before it goes out: its first line, the
   part between two texts, find and replace, round a number, group digits,
   or pick one line at random (an 8-ball in two steps).
+- **React to every step of the delay**: you arm one, it's ready to go on
+  air, it goes on, changes, goes off, or you cancel it before it went on.
+  The new **Delay status** alert keeps one Discord message in step with
+  all of it, and a delay step can now also **disarm** the delay.
 - **Quiet hours** keep an integration silent overnight, `{uses}` counts
   how often one ran, and every card shows its last runs as a row of dots.
 - **Everything can be taken back.** Every card has a menu (edit,
@@ -148,6 +156,20 @@ messages as before.
   dashboard scrolls normally instead of in a small box.
 - **Modals stay put.** The Connections tabs and opening a chip no longer
   shift the window, and Esc closes an open chip before the whole editor.
+- **The builder is easier to follow:**
+  - Each trigger's on/off switch and Remove sit right under its name,
+    instead of at the end of the panel, where the confirm overflowed it.
+  - Two triggers alike are numbered, so their tabs never read the same.
+  - Settings for the whole integration (wait between runs, quiet hours)
+    are grouped apart from the trigger's own.
+  - Every block says what it does, and an empty trigger says how to
+    start.
+  - The catalog's tiles no longer cut off their Add button.
+  - Integrations with many moments show them as chips that wrap, each
+    with its switch, instead of a bar running off the edge.
+  - Choices that don't fit a phone's width wrap instead of sticking out.
+- **A delay changed by an integration says "Integration"** in its toast,
+  not "Hotkey".
 - **Smaller fixes:**
   - A timer switched back on waits a full period.
   - "Wait for the delay" can't crash on an unlucky tick.

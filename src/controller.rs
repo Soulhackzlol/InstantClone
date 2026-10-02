@@ -2540,6 +2540,15 @@ impl Controller {
         self.state_dirty.notify_one();
     }
 
+    /// Back to no delay at all (an integration's "Disarm"): live, and
+    /// nothing armed. What the dashboard's "Cancel arming" does.
+    pub fn disarm(&self, source: &str) {
+        self.arm_delay(0);
+        self.log(format!("[{source}] delay disarmed"));
+        self.record_fired_action("disarm", source, None);
+        self.state_dirty.notify_one();
+    }
+
     fn dispatch_named_action(&self, action: &str, default_ms: u32, source: &str) -> Option<String> {
         match action {
             "toggle" => self.action_toggle(default_ms, source),

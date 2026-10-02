@@ -250,6 +250,10 @@ impl Host for RealHost {
                 self.ctrl.set_delay_to(default_ms, "integration");
                 Ok(())
             }
+            "disarm" => {
+                self.ctrl.disarm("integration");
+                Ok(())
+            }
             "toggle" | "activate" | "cut" | "cut_after" | "end_hold" => {
                 match self
                     .ctrl

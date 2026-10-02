@@ -57,6 +57,15 @@ pub const PRESETS: &[Preset] = &[
         preview: ("discord", "We're live! Come hang out.", ""),
     },
     Preset {
+        id: "delay_status",
+        name: "Delay status",
+        category: "alerts",
+        description: "One Discord message that follows your delay: armed, ready, on, off.",
+        needs: "discord",
+        recommended: false,
+        preview: ("discord", "✅ Delay ready: 30s. It can go on air.", ""),
+    },
+    Preset {
         id: "phone_crash",
         name: "Phone push on crash",
         category: "alerts",
@@ -284,6 +293,15 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
                 ended,
             ]
         }
+        // One message per arming, edited as the delay moves along.
+        "delay_status" => vec![
+            on(EventKind::DelayArmed, vec![discord(d, "⏳ Delay armed: {delay}. Filling the buffer…")]),
+            on(EventKind::DelayReady, vec![discord_update(d, "✅ Delay ready: {delay}. It can go on air.")]),
+            on(EventKind::DelayOn, vec![discord_update(d, "🟢 Delay on air: {delay}.")]),
+            on(EventKind::DelayChanged, vec![discord_update(d, "🔁 Delay changed to {delay}.")]),
+            on(EventKind::DelayOff, vec![discord_update(d, "⚪ Delay off: viewers see you live.")]),
+            on(EventKind::DelayDisarmed, vec![discord_update(d, "⚪ Delay cancelled before it went on air.")]),
+        ],
         "destination_down" => vec![on(
             EventKind::DestinationDropped,
             vec![discord(d, "{destination} dropped: {reason}")],

@@ -74,36 +74,36 @@ const svg = (name, extra) =>
 
 // What each step kind is, how it looks, and which parameter holds its text.
 const KINDS = {
-  discord:      {label:'Discord',       tag:'SEND',   c:'#a5b4fc', icon:'bubble',   text:'text'},
-  chat:         {label:'Twitch chat',   tag:'SEND',   c:'#a78bfa', icon:'bubble',   text:'text'},
-  phone:        {label:'Phone push',    tag:'SEND',   c:'#f9a8d4', icon:'phone',    text:'text'},
-  http:         {label:'Web request',   tag:'SEND',   c:'#fcd34d', icon:'link',     text:'body'},
-  wait:         {label:'Wait',          tag:'WAIT',   c:'#c3cad1', icon:'clock'},
-  wait_delay:   {label:'Wait for the delay', tag:'WAIT', c:'#c3cad1', icon:'clock'},
-  if:           {label:'If / otherwise',tag:'IF',     c:'#f0a53a', icon:'bolt'},
-  stop:         {label:'Stop',          tag:'STOP',   c:'#f2665a', icon:'x'},
-  delay_action: {label:'Delay action',  tag:'STREAM', c:'#86efac', icon:'cut'},
-  marker:       {label:'VOD marker',    tag:'TWITCH', c:'#a78bfa', icon:'bookmark', text:'description'},
-  clip:         {label:'Clip',          tag:'TWITCH', c:'#a78bfa', icon:'film'},
-  program:      {label:'Run a program', tag:'RUN',    c:'#fcd34d', icon:'terminal'},
-  file:         {label:'Write a file',  tag:'FILE',   c:'#fcd34d', icon:'file',     text:'text'},
-  set_var:      {label:'Remember a value', tag:'VALUE', c:'#93c5fd', icon:'steps', text:'value'},
-  counter:      {label:'Counter',       tag:'VALUE',  c:'#93c5fd', icon:'steps'},
-  overlay:      {label:'Show on stream', tag:'STREAM', c:'#5ac8fa', icon:'screen',  text:'text'},
-  edit_text:    {label:'Edit text',     tag:'VALUE',  c:'#93c5fd', icon:'type'},
+  discord:      {label:'Discord',       tag:'SEND',   c:'#a5b4fc', icon:'bubble',   text:'text', hint:'Posts a message in one of your Discord channels.'},
+  chat:         {label:'Twitch chat',   tag:'SEND',   c:'#a78bfa', icon:'bubble',   text:'text', hint:'Says something in your Twitch chat.'},
+  phone:        {label:'Phone push',    tag:'SEND',   c:'#f9a8d4', icon:'phone',    text:'text', hint:'A notification on your phone.'},
+  http:         {label:'Web request',   tag:'SEND',   c:'#fcd34d', icon:'link',     text:'body', hint:'Calls a website or an API, and keeps its answer for later steps.'},
+  wait:         {label:'Wait',          tag:'WAIT',   c:'#c3cad1', icon:'clock', hint:'Pauses before the next step.'},
+  wait_delay:   {label:'Wait for the delay', tag:'WAIT', c:'#c3cad1', icon:'clock', hint:'Waits until your viewers see this moment.'},
+  if:           {label:'If / otherwise',tag:'IF',     c:'#f0a53a', icon:'bolt', hint:'Runs some steps only when a check is true, others when it isn\'t.'},
+  stop:         {label:'Stop',          tag:'STOP',   c:'#f2665a', icon:'x', hint:'Ends the run here.'},
+  delay_action: {label:'Delay action',  tag:'STREAM', c:'#86efac', icon:'cut', hint:'Sets, switches on, cuts or disarms your delay.'},
+  marker:       {label:'VOD marker',    tag:'TWITCH', c:'#a78bfa', icon:'bookmark', text:'description', hint:'Marks this moment in your Twitch VOD.'},
+  clip:         {label:'Clip',          tag:'TWITCH', c:'#a78bfa', icon:'film', hint:'Clips the last moments of your Twitch stream.'},
+  program:      {label:'Run a program', tag:'RUN',    c:'#fcd34d', icon:'terminal', hint:'Starts a program on this PC.'},
+  file:         {label:'Write a file',  tag:'FILE',   c:'#fcd34d', icon:'file',     text:'text', hint:'Writes text to a file, for an OBS text source for example.'},
+  set_var:      {label:'Remember a value', tag:'VALUE', c:'#93c5fd', icon:'steps', text:'value', hint:'Keeps a value for the next steps of this run.'},
+  counter:      {label:'Counter',       tag:'VALUE',  c:'#93c5fd', icon:'steps', hint:'Counts up or down, and keeps the count between runs.'},
+  overlay:      {label:'Show on stream', tag:'STREAM', c:'#5ac8fa', icon:'screen',  text:'text', hint:'Shows a card on your stream, through the alerts browser source.'},
+  edit_text:    {label:'Edit text',     tag:'VALUE',  c:'#93c5fd', icon:'type', hint:'Reshapes text: a line, a part, a rounded number, a random pick.'},
 };
 // The icon a catalog module wears: what it is about, not how it sends.
 const PRESET_ICON = {
   crash_alert:'shield', destination_down:'signal', going_live:'megaphone', phone_crash:'phone',
   tell_chat:'bubble', delay_command:'hash', delay_notice:'clock', mod_controls:'cut', socials:'hash',
   vod_markers:'bookmark', webhook:'link', crash_counter:'file', stream_alerts:'bell', api_command:'globe',
-  clip_button:'film',
+  clip_button:'film', delay_status:'clock',
 };
 // Which step a card previews: the first one that says something.
 const PREVIEW_ORDER = ['discord','chat','phone','overlay','marker','http','file','clip','delay_action','program'];
 const DELAY_ACTIONS = {
   cut:'Cut the delay', arm:'Set the delay to…', activate:'Turn the delay on', toggle:'Toggle the delay',
-  cut_after:'Cut after this airs', end_hold:'End the reconnect screen',
+  cut_after:'Cut after this airs', end_hold:'End the reconnect screen', disarm:'Disarm (no delay at all)',
 };
 const OPS = {
   is:'is', is_not:'is not', contains:'contains', not_contains:'does not contain', starts_with:'starts with',
@@ -670,6 +670,7 @@ function enterStagger(root){
 
 // Segmented controls carry the dashboard's sliding pill; it is placed
 // under the active tab after every redraw, and glides when that changes.
+// Its row too: a narrow window wraps a control onto two lines.
 const SEG_IND = '<span class="sub-tab-ind" data-keep-style aria-hidden="true"></span>';
 function placeIndicators(root){
   root.querySelectorAll('.ig-seg').forEach(seg => {
@@ -679,6 +680,8 @@ function placeIndicators(root){
     if (!on || !on.offsetWidth){ ind.style.opacity = '0'; return; }
     ind.style.left = on.offsetLeft + 'px';
     ind.style.width = on.offsetWidth + 'px';
+    ind.style.top = on.offsetTop + 'px';
+    ind.style.height = on.offsetHeight + 'px';
     ind.style.opacity = '1';
   });
 }
@@ -1234,7 +1237,7 @@ function render(){
     : `<span class="ig-num" data-tick>${on}</span> on${failing.length ? ` · <span class="ig-num" data-tick>${failing.length}</span> need${failing.length === 1 ? 's' : ''} attention` : ''}. Each card shows exactly what it sends.`;
   morph(root, `<div class="ig-pane" data-flip>
       <div class="tab-head" data-key="head">
-        <div><div class="tab-title">Integrations</div><div class="tab-sub ig-sub">${sub}</div></div>
+        <div><div class="tab-title">Integrations <span class="ig-exp" title="Integrations work, but how they look and how you set them up may still change between versions.">Experimental</span></div><div class="tab-sub ig-sub">${sub}</div></div>
         <div class="ig-head-actions">
           ${empty ? '' : '<button class="ic-btn ic-btn-ghost" data-act="share">Share</button>'}
           <button class="ic-btn ic-btn-ghost" data-act="import">Import recipe</button>
@@ -1994,9 +1997,12 @@ const Editor = {
   momentsHtml(){
     const hs = this.d.handlers;
     if (hs.length === 1) return '';
+    // Too many for a timeline: chips that wrap, each keeping its switch.
     if (hs.length > 5){
-      return `<div class="sub-tabs ig-seg" role="tablist">${hs.map((h, n) => `<button class="sub-tab${n === this.sel ? ' on' : ''}${h.enabled ? '' : ' ig-dim'}" role="tab" aria-selected="${n === this.sel}"
-        data-act="moment" data-n="${n}">${esc(triggerLabel(h.trigger))}</button>`).join('')}${SEG_IND}</div>`;
+      return `<div class="ig-mchips" role="tablist">${hs.map((h, n) => `<div class="ig-mchip${n === this.sel ? ' on' : ''}">
+        <button class="ig-dot${h.enabled ? ' on' : ''}" role="switch" aria-checked="${h.enabled}" aria-label="Send on: ${esc(triggerLabel(h.trigger))}" data-act="moment-toggle" data-n="${n}">${svg('check', ' stroke-width="3.2"')}</button>
+        <button class="ig-mchip-name" role="tab" aria-selected="${n === this.sel}" data-act="moment" data-n="${n}">${esc(triggerLabel(h.trigger))}</button>
+      </div>`).join('')}</div>`;
     }
     return `<div class="ig-moments" role="tablist" style="--n:${hs.length}">${hs.map((h, n) => `<div class="ig-moment">
       <button class="ig-dot${h.enabled ? ' on' : ''}" role="switch" aria-checked="${h.enabled}" aria-label="Send on: ${esc(triggerLabel(h.trigger))}" data-act="moment-toggle" data-n="${n}">${svg('check', ' stroke-width="3.2"')}</button>
@@ -2436,6 +2442,15 @@ function autosize(t){
   t.style.height = 'auto';
   t.style.height = (t.scrollHeight + 2) + 'px';
 }
+// A narrower window wraps messages and segmented controls onto more lines:
+// grow with it, and keep each sliding pill under its tab.
+window.addEventListener('resize', () => {
+  const root = $('ig-root');
+  if (root) placeIndicators(root);
+  if (!Modal.form) return;
+  Modal.form.querySelectorAll('.ig-msg').forEach(autosize);
+  placeIndicators(Modal.form);
+});
 function insertAtCursor(field, text){
   if (!field || !field.isConnected || field.closest('[data-leaving]')) return;
   const start = field.selectionStart == null ? field.value.length : field.selectionStart;
@@ -2489,6 +2504,9 @@ const EVENT_INFO = {
   delay_on:{icon:'clock', desc:'The delay starts.'},
   delay_off:{icon:'clock', desc:'The delay stops: viewers see you live.'},
   delay_changed:{icon:'clock', desc:'The delay gets longer or shorter.'},
+  delay_armed:{icon:'clock', desc:'You arm one: the buffer starts filling.'},
+  delay_ready:{icon:'check', desc:'The buffer holds it: it can go on air.'},
+  delay_disarmed:{icon:'x', desc:'You cancel it before it goes on air.'},
 };
 // Every event as a tile, grouped; `big` for the canvas chooser.
 function eventTilesHtml(selected, big){
@@ -2553,11 +2571,11 @@ const Builder = {
         <aside class="ig-palette" aria-label="Blocks">
           <div class="muted ig-palette-hint">Click a block to add it where the dashed box is lit.</div>
           ${PALETTE.map(([group, items]) => `<div class="ic-label">${group}</div>${items.map(([k, label]) =>
-            `<button data-act="b-add" data-kind="${k}" style="--c:${KINDS[k].c}"><i></i>${esc(label)}</button>`).join('')}`).join('')}
+            `<button data-act="b-add" data-kind="${k}" style="--c:${KINDS[k].c}" title="${esc(KINDS[k].hint)}"><i></i>${esc(label)}</button>`).join('')}`).join('')}
         </aside>
         <section class="ig-canvas" aria-label="Steps">
-          <div class="ig-triggers" data-flip>${d.handlers.map((x, i) => `<button class="ig-trig${i === this.h ? ' on' : ''}${x.enabled ? '' : ' ig-dim'}" data-act="b-handler" data-n="${i}" data-key="h-${uidOf(x)}">
-            ${this.unpicked.has(x) ? 'New trigger' : 'When ' + esc(lowerFirst(triggerLabel(x.trigger)))}</button>`).join('')}
+          <div class="ig-triggers" data-flip>${this.triggerTabs().map((label, i) => `<button class="ig-trig${i === this.h ? ' on' : ''}${d.handlers[i].enabled ? '' : ' ig-dim'}" data-act="b-handler" data-n="${i}" data-key="h-${uidOf(d.handlers[i])}"${d.handlers[i].enabled ? '' : ' title="Switched off"'}>
+            ${esc(label)}</button>`).join('')}
             <button class="ig-trig add" data-act="b-add-handler" data-key="h-add">${svg('plus')}Another trigger</button></div>
           ${this.choosing ? this.chooserHtml(h) : `<div class="ig-steps" data-flip>
             <button class="ig-step ig-when${this.sel === 'trigger' ? ' on' : ''}" data-act="b-sel" data-path="trigger" data-key="when">
@@ -2572,6 +2590,13 @@ const Builder = {
         <aside class="ig-inspector" aria-label="Settings" data-flip><div class="ig-insp" data-key="${this.inspectorKey()}">${this.inspectorHtml()}</div></aside>
       </div>
       ${footHtml(d, this.dirty)}`);
+  },
+  // Each trigger's tab label. Two alike get a number, so no two tabs read
+  // the same and the one being edited is never in doubt.
+  triggerTabs(){
+    const labels = this.d.handlers.map(x => this.unpicked.has(x) ? 'New trigger' : 'When ' + lowerFirst(triggerLabel(x.trigger)));
+    return labels.map((l, i) => labels.filter(x => x === l).length > 1
+      ? `${l} · ${labels.slice(0, i + 1).filter(x => x === l).length}` : l);
   },
   // "How does it start?" then, for events, "What happens?": big tiles in
   // the canvas, so the first decision is visible and can't be skipped.
@@ -2623,7 +2648,9 @@ const Builder = {
       }
       return html;
     }).join('');
-    return out + `<button class="ig-drop${lit ? ' on' : ''}" data-act="b-target" data-path="${here}" data-key="drop-${owner}">${lit ? 'New blocks land here' : '+ Add a step here'}</button>`;
+    const empty = !base.length && !(steps || []).length
+      ? `<div class="ig-empty-steps" data-key="empty-steps">${svg('steps')}<span><b>Nothing happens yet.</b> Pick what it does from the blocks on the left: post in Discord, answer in chat, show it on stream… Steps run from top to bottom.</span></div>` : '';
+    return out + empty + `<button class="ig-drop${lit ? ' on' : ''}" data-act="b-target" data-path="${here}" data-key="drop-${owner}">${lit ? 'New blocks land here' : '+ Add a step here'}</button>`;
   },
   resolve(pathStr){
     return pathStr === '' ? [] : pathStr.split('.').map(p => /^\d+$/.test(p) ? +p : p);
@@ -2656,7 +2683,8 @@ const Builder = {
     const s = this.stepAt(this.sel);
     if (!s) return varsBox;
     const k = KINDS[s.type];
-    return `<div class="ig-insp-title" style="--c:${k.c}"><small>${k.tag}</small><b>${esc(k.label)}</b></div>${this.stepFields(s)}${varsBox}`;
+    return `<div class="ig-insp-title" style="--c:${k.c}"><small>${k.tag}</small><b>${esc(k.label)}</b></div>
+      <div class="muted ig-insp-hint">${esc(k.hint)}</div>${this.stepFields(s)}${varsBox}`;
   },
   stepFields(s){
     const field = (name, label, opts) => {
@@ -2762,13 +2790,17 @@ const Builder = {
     } else if (t.type === 'shortcut'){
       body = shortcutHtml(t);
     }
-    const more = this.d.handlers.length > 1
-      ? `<div class="ig-insp-row">${enableSwitch('h-enabled', h.enabled, 'This trigger is on')}
-         <button class="ic-btn ic-btn-ghost ig-small" data-act="b-del-handler">Remove trigger</button></div>` : '';
+    // With more than one trigger, each can be switched off or removed,
+    // right under its name rather than at the end of a long panel.
+    const manage = this.d.handlers.length > 1
+      ? `<div class="ig-trig-manage">${enableSwitch('h-enabled', h.enabled, h.enabled ? 'This trigger is on' : 'This trigger is off')}
+         <button class="ic-btn ic-btn-ghost ig-small ig-trig-del" data-act="b-del-handler" aria-label="Remove this trigger">${svg('x')}Remove</button></div>` : '';
     return `<div class="ig-insp-title" style="--c:#5ac8fa"><small>WHEN</small><b>${esc(triggerLabel(t))}</b></div>
-      ${typeSel}${body}
-      <div class="dff"><label>Wait between two runs (seconds)</label><input class="ic-input mono" data-bind="b-cooldown" inputmode="numeric" value="${Math.round((this.d.cooldown_ms || 0) / 1000)}"></div>
-      <div class="ig-insp-quiet">${quietHtml(this.d)}</div>${more}`;
+      ${manage}${typeSel}${body}
+      <div class="ig-insp-group"><div class="ic-label">For the whole integration</div>
+        <div class="muted">Every trigger shares these.</div>
+        <div class="dff"><label>Wait between two runs (seconds)</label><input class="ic-input mono" data-bind="b-cooldown" inputmode="numeric" value="${Math.round((this.d.cooldown_ms || 0) / 1000)}"></div>
+        <div class="ig-insp-quiet">${quietHtml(this.d)}</div></div>`;
   },
   input(el){
     const b = el.dataset.bind, h = this.handler(), t = h.trigger;
@@ -2859,7 +2891,7 @@ const Builder = {
         return true;
       }
       case 'b-del-handler':
-        if (d.handlers.length < 2 || !armConfirm(el, 'Remove it and its steps?')) return true;
+        if (d.handlers.length < 2 || !armConfirm(el, 'Click again: removes it and its steps')) return true;
         d.handlers.splice(this.h, 1);
         this.h = 0; this.sel = 'trigger'; this.target = []; this.run = null;
         this.changed();

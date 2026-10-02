@@ -2220,10 +2220,10 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-conns .ic-pill:hover{border-color:var(--line-2);color:var(--fg)}
 .ig-conns .ic-pill:active{transform:scale(.96)}
 /* Segmented controls, with the dashboard's sliding pill. */
-.ig-seg{display:inline-flex;flex:0 0 auto;max-width:100%}
+.ig-seg{display:inline-flex;flex:0 0 auto;flex-wrap:wrap;max-width:100%}
 .ig-seg .sub-tab{flex:0 0 auto;padding:6px 13px;transition:color .2s var(--ease-out),transform .15s var(--ease-out)}
 .ig-seg .sub-tab:active{transform:scale(.96)}
-.ig-seg .sub-tab-ind{opacity:0;transition:left .28s var(--ease-spring),width .28s var(--ease-spring),opacity .2s var(--ease-out)}
+.ig-seg .sub-tab-ind{bottom:auto;opacity:0;transition:left .28s var(--ease-spring),top .28s var(--ease-spring),width .28s var(--ease-spring),opacity .2s var(--ease-out)}
 .ig-views .sub-tab{padding:6px 9px}
 .ig-views svg{width:14px;height:14px;display:block}
 .ig-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -2447,6 +2447,17 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-moment-name:hover{color:var(--fg)}
 .ig-moment-name.on{background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));
   border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--fg)}
+.ig-mchips{display:flex;flex-wrap:wrap;gap:6px}
+.ig-mchip{display:inline-flex;align-items:center;gap:4px;padding:3px 3px 3px 4px;border-radius:999px;border:1px solid var(--line);background:var(--bg-1);
+  transition:background-color .2s var(--ease-out),border-color .2s var(--ease-out)}
+.ig-mchip .ig-dot{width:20px;height:20px;box-shadow:none}
+.ig-mchip .ig-dot::after{inset:-6px}
+.ig-mchip .ig-dot svg{width:10px;height:10px}
+.ig-mchip-name{padding:4px 10px 4px 4px;border:0;background:transparent;color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
+  transition:color .2s var(--ease-out)}
+.ig-mchip-name:hover{color:var(--fg)}
+.ig-mchip.on{background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));border-color:color-mix(in oklch,var(--accent) 55%,transparent)}
+.ig-mchip.on .ig-mchip-name{color:var(--fg)}
 /* Option chips and their panel. */
 .ig-chips{display:flex;flex-wrap:wrap;gap:8px}
 .ig-chip{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;border:1px solid var(--line);
@@ -2521,6 +2532,28 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-cat-tile .ig-cat-desc{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .ig-cat-needs{margin-top:4px;font-size:11px;color:var(--warn)}
 .ig-cat-tile>.ic-btn{margin:auto 4px 4px}
+/* A confirm label ("Click again: …") is longer than the button it
+   replaces: it wraps inside its row instead of pushing out of it. */
+.ig-modal .ic-btn.ig-armed{max-width:100%;white-space:normal;text-align:center;height:auto;min-height:30px}
+/* Builder: the trigger's own switch and remove, under its name. */
+.ig-trig-manage{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;
+  padding:8px 10px;margin-bottom:4px;border:1px solid var(--line);border-radius:10px;background:var(--bg-1)}
+.ig-trig-manage .dest-form-enable{font-size:12.5px}
+.ig-trig-del{color:var(--fg-3)}
+.ig-trig-del svg{width:12px;height:12px}
+.ig-trig-del:hover,.ig-trig-del.ig-armed{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,transparent)}
+.ig-insp-hint{margin:-4px 0 4px;font-size:12px;line-height:1.5;text-wrap:pretty}
+.ig-insp-group{display:flex;flex-direction:column;gap:8px;margin-top:6px;padding-top:14px;border-top:1px solid var(--line)}
+.ig-insp-group>.muted{margin-top:-6px;font-size:12px}
+/* Opaque and above the spine, like a step, so the line doesn't run through. */
+.ig-empty-steps{position:relative;z-index:1;display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:10px;
+  background:color-mix(in oklch,var(--accent) 6%,var(--bg-2));border:1px solid color-mix(in oklch,var(--accent) 18%,var(--line));
+  font-size:12.5px;line-height:1.5;color:var(--fg-2);text-wrap:pretty}
+.ig-empty-steps svg{width:16px;height:16px;flex:none;margin-top:2px;color:var(--accent)}
+.ig-empty-steps b{color:var(--fg)}
+.ig-exp{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:600;
+  letter-spacing:.02em;vertical-align:2px;color:var(--warn);cursor:help;
+  background:color-mix(in oklch,var(--warn) 12%,transparent);border:1px solid color-mix(in oklch,var(--warn) 35%,transparent)}
 /* Add: the tile's colour, tinted, so a grid of them reads as cards and
    not as a wall of solid buttons. It fills on hover. */
 .ig-cat-tile>.ig-cat-add{color:var(--dc);background:color-mix(in oklch,var(--dc) 12%,transparent);
@@ -2706,7 +2739,6 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-insp-vars{margin-top:auto;padding-top:12px;display:flex;flex-direction:column;gap:8px}
 .ig-insp-vars .muted{font-size:11.5px}
 .ig-insp-p{margin:0;font-size:13px;line-height:1.6;color:var(--fg-2);text-wrap:pretty}
-.ig-insp-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .ig-inspector .dff>label{font-size:12px;font-weight:600;color:var(--fg-2)}
 .ig-inspector textarea.ic-input{resize:vertical;min-height:70px;font-family:'JetBrains Mono',monospace;font-size:12.5px}
 .ig-copy-row{display:flex;gap:6px}
@@ -7484,6 +7516,9 @@ let hkRec = null; // {action, el} while recording, else null
 let hkWarnTimer = null;
 
 const hkTitleOf = a => (HOTKEY_ACTIONS.find(x => x[0] === a) || [,''])[1];
+// What an integration's delay step did, for the toast (its "arm" sets the
+// delay rather than toggling it).
+const FIRED_BY_INTEGRATION = {arm:'Set the delay', disarm:'Disarm the delay'};
 
 // Named keys beyond letters/digits/F-keys, keyed by KeyboardEvent.code and
 // mapped to the exact tokens the server's NAMED_KEYS table expects.
@@ -7593,7 +7628,9 @@ function showFiredAction(fired){
   if (fired.seq < lastFiredSeq){ lastFiredSeq = fired.seq; return; }
   lastFiredSeq = fired.seq;
   const where = fired.source === 'midi' ? '#midi-list' : '#hk-list';
-  const label = (fired.source === 'midi' ? 'MIDI' : 'Hotkey') + ' · ' + hkTitleOf(fired.action);
+  const via = {midi:'MIDI', integration:'Integration'}[fired.source] || 'Hotkey';
+  const what = (fired.source === 'integration' && FIRED_BY_INTEGRATION[fired.action]) || hkTitleOf(fired.action) || fired.action;
+  const label = `${via} · ${what}`;
   toast(fired.problem ? `${label}: ${fired.problem}` : label, fired.problem ? 'err' : 'ok');
   const cap = document.querySelector(`${where} .hk-capture[data-action="${fired.action}"]`);
   if (!cap) return;

@@ -381,6 +381,8 @@ struct Engine {
     limits: HashMap<String, Arc<Semaphore>>,
     global: Arc<Semaphore>,
     delay_seen: Option<u32>,
+    /// The delay's phase and armed delay at the last tick: see `watch_phase`.
+    phase_seen: Option<(&'static str, u32)>,
     flap: FlapGuard,
     discord_messages: Arc<Mutex<HashMap<String, String>>>,
     /// `{uses}` changed since the data file was last written.
@@ -415,6 +417,7 @@ impl Engine {
             limits: HashMap::new(),
             global: Arc::new(Semaphore::new(GLOBAL_RUNS)),
             delay_seen: None,
+            phase_seen: None,
             flap: FlapGuard::default(),
             discord_messages,
             uses_dirty: false,
@@ -450,6 +453,7 @@ impl Engine {
                     for event in self.flap.release(Instant::now()) {
                         self.event(event);
                     }
+                    self.watch_phase();
                     self.watch_delay();
                     self.run_timers();
                     self.save_uses_if_due();
@@ -705,6 +709,18 @@ impl Engine {
         }
     }
 
+    /// Turn arming a delay into events: armed, ready, cancelled. Going on
+    /// air and off it are `watch_delay`'s.
+    fn watch_phase(&mut self) {
+        let now = (self.ctrl.phase(), self.ctrl.armed_delay_ms());
+        let Some(before) = self.phase_seen.replace(now) else {
+            return;
+        };
+        for event in phase_events(before, now) {
+            self.event(event);
+        }
+    }
+
     /// Turn changes in the applied delay into delay events.
     fn watch_delay(&mut self) {
         let now = self.ctrl.target_delay_ms();
@@ -882,6 +898,30 @@ impl Engine {
             let _ = reply.send(record);
         });
     }
+}
+
+/// The events a change of the delay's phase (`Controller::phase`) makes,
+/// from `(phase, armed ms)` before to after. "Ready" is the armed delay
+/// becoming ready to go on, never the delay coming back to ready after a
+/// cut; a delay switched on as soon as it was ready was ready too.
+fn phase_events(before: (&str, u32), now: (&str, u32)) -> Vec<Event> {
+    let fmt = super::host::fmt_delay;
+    let ((was, was_armed), (is, armed)) = (before, now);
+    let mut events = Vec::new();
+    if was == is {
+        return events;
+    }
+    if was == "idle" {
+        events.push(Event::new(EventKind::DelayArmed).with("delay", fmt(armed)));
+    }
+    let became_ready = is == "ready" || (was == "preparing" && is == "active");
+    if became_ready && matches!(was, "idle" | "preparing") {
+        events.push(Event::new(EventKind::DelayReady).with("delay", fmt(armed)));
+    }
+    if is == "idle" && matches!(was, "preparing" | "ready") {
+        events.push(Event::new(EventKind::DelayDisarmed).with("previous", fmt(was_armed)));
+    }
+    events
 }
 
 /// See `FLAP_WINDOW`. What it holds back isn't lost: a destination whose
@@ -1165,6 +1205,40 @@ mod tests {
             "other events pass"
         );
         assert!(!guard.suppress(&Event::new(EventKind::HoldOpened), t0));
+    }
+
+    #[test]
+    fn arming_a_delay_says_armed_then_ready_or_cancelled() {
+        let kinds = |before, now| -> Vec<EventKind> {
+            phase_events(before, now).iter().map(|e| e.kind).collect()
+        };
+        use EventKind::*;
+        assert_eq!(kinds(("idle", 0), ("preparing", 30_000)), [DelayArmed]);
+        assert_eq!(
+            kinds(("preparing", 30_000), ("ready", 30_000)),
+            [DelayReady]
+        );
+        assert_eq!(
+            kinds(("idle", 0), ("ready", 30_000)),
+            [DelayArmed, DelayReady],
+            "buffer already full"
+        );
+        assert_eq!(
+            kinds(("preparing", 30_000), ("active", 30_000)),
+            [DelayReady],
+            "switched on as it got ready"
+        );
+        assert_eq!(kinds(("ready", 30_000), ("idle", 0)), [DelayDisarmed]);
+        assert!(
+            kinds(("active", 30_000), ("ready", 30_000)).is_empty(),
+            "a cut isn't ready news"
+        );
+        assert!(
+            kinds(("active", 30_000), ("idle", 0)).is_empty(),
+            "turning off is watch_delay's"
+        );
+        let armed = &phase_events(("idle", 0), ("preparing", 30_000))[0];
+        assert_eq!(armed.var("delay"), Some("30s"));
     }
 
     #[test]

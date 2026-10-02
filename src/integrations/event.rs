@@ -22,13 +22,16 @@ pub enum EventKind {
     DelayOn,
     DelayOff,
     DelayChanged,
+    DelayArmed,
+    DelayReady,
+    DelayDisarmed,
 }
 
 /// One variable an event carries: its name and a sample value.
 pub type VarSpec = (&'static str, &'static str);
 
 impl EventKind {
-    pub const ALL: [EventKind; 13] = [
+    pub const ALL: [EventKind; 16] = [
         EventKind::ObsConnected,
         EventKind::ObsDisconnected,
         EventKind::EbDetected,
@@ -39,9 +42,13 @@ impl EventKind {
         EventKind::DestinationLive,
         EventKind::DestinationDropped,
         EventKind::AllDestinationsDown,
+        // The delay's life, in order: armed, ready, on air, changed, off.
+        EventKind::DelayArmed,
+        EventKind::DelayReady,
         EventKind::DelayOn,
-        EventKind::DelayOff,
         EventKind::DelayChanged,
+        EventKind::DelayOff,
+        EventKind::DelayDisarmed,
     ];
 
     pub fn id(self) -> &'static str {
@@ -59,6 +66,9 @@ impl EventKind {
             EventKind::DelayOn => "delay_on",
             EventKind::DelayOff => "delay_off",
             EventKind::DelayChanged => "delay_changed",
+            EventKind::DelayArmed => "delay_armed",
+            EventKind::DelayReady => "delay_ready",
+            EventKind::DelayDisarmed => "delay_disarmed",
         }
     }
 
@@ -68,8 +78,8 @@ impl EventKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            EventKind::ObsConnected => "OBS connects",
-            EventKind::ObsDisconnected => "OBS disconnects",
+            EventKind::ObsConnected => "OBS starts streaming",
+            EventKind::ObsDisconnected => "OBS stops or drops",
             EventKind::EbDetected => "Enhanced Broadcasting detected",
             EventKind::HoldOpened => "OBS crashes",
             EventKind::ObsBack => "OBS is back",
@@ -81,6 +91,9 @@ impl EventKind {
             EventKind::DelayOn => "The delay turns on",
             EventKind::DelayOff => "The delay turns off",
             EventKind::DelayChanged => "The delay changes",
+            EventKind::DelayArmed => "You arm a delay",
+            EventKind::DelayReady => "The armed delay is ready",
+            EventKind::DelayDisarmed => "You cancel an armed delay",
         }
     }
 
@@ -96,7 +109,12 @@ impl EventKind {
             EventKind::DestinationLive
             | EventKind::DestinationDropped
             | EventKind::AllDestinationsDown => "Destinations",
-            EventKind::DelayOn | EventKind::DelayOff | EventKind::DelayChanged => "Delay",
+            EventKind::DelayOn
+            | EventKind::DelayOff
+            | EventKind::DelayChanged
+            | EventKind::DelayArmed
+            | EventKind::DelayReady
+            | EventKind::DelayDisarmed => "Delay",
         }
     }
 
@@ -125,6 +143,9 @@ impl EventKind {
             EventKind::DelayOn => &[("delay", "30s"), ("previous", "0s")],
             EventKind::DelayOff => &[("previous", "30s")],
             EventKind::DelayChanged => &[("delay", "30s"), ("previous", "20s")],
+            // Armed: the delay that will go on air once the buffer holds it.
+            EventKind::DelayArmed | EventKind::DelayReady => &[("delay", "30s")],
+            EventKind::DelayDisarmed => &[("previous", "30s")],
             EventKind::ObsConnected | EventKind::EbDetected | EventKind::AllDestinationsDown => &[],
         }
     }
