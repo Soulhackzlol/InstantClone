@@ -214,7 +214,11 @@ Please try them and tell us what breaks or confuses you: the tab's
 - **Recipes say what they do before you add them:** who can start each
   integration (anyone in chat, only mods…) and everything it reaches. A
   program or file on your PC, or a delay anyone in chat can change, shows
-  in red; the delay and OBS in amber.
+  in red; the delay and OBS in amber. **See every step** lists each step
+  in plain words, checks and their branches included, and **Show the raw
+  settings** shows exactly what gets added. A recipe can never choose a
+  program, its arguments, a file, a web address or an OBS scene: you pick
+  those yourself after adding it, and the steps say so.
 - **Shared Chat is your choice.** While you share chat with other
   streamers, their viewers can't use your commands or count toward "chat
   gets busy" unless you switch on "listen to partner channels" in

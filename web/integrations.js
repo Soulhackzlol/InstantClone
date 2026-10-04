@@ -126,7 +126,7 @@ const RULES = {
 const TIMELINE_KINDS = {note:'A line', chapter:'A chapter', highlight:'A highlight'};
 const DELAY_ACTIONS = {
   arm:'Turn the delay on', cut_after:'Back to live, viewers miss nothing', cut:'Back to live now, viewers skip ahead',
-  activate:'Turn on the delay that\'s ready', toggle:'Turn the delay on or off', disarm:'Cancel a delay that\'s still getting ready',
+  activate:'Turn on the delay that\'s ready', toggle:'Turn the delay on or off', disarm:'Turn the delay off',
   end_hold:'End the reconnect screen',
 };
 // What an OBS step can do, and what each needs.
@@ -4428,8 +4428,8 @@ function stepSentence(s){
       : p.action === 'arm' && p.seconds ? `Turn on a ${highlightVars(p.seconds)} s delay` : esc(DELAY_ACTIONS[p.action] || 'Delay action');
     case 'marker': return `VOD marker ${q(p.description)}`;
     case 'clip': return 'Create a clip';
-    case 'program': return `Run ${esc((p.path || '(program)').split(/[\\/]/).pop())} ${highlightVars(p.args || '')}`;
-    case 'file': return `${p.mode === 'append' ? 'Add to' : 'Write'} ${esc((p.path || '(file)').split(/[\\/]/).pop())} ${q(p.text)}`;
+    case 'program': return `Run ${p.path ? esc(p.path.split(/[\\/]/).pop()) : 'a program you pick'} ${highlightVars(p.args || '')}`;
+    case 'file': return `${p.mode === 'append' ? 'Add to' : 'Write'} ${p.path ? esc(p.path.split(/[\\/]/).pop()) : 'a file you pick'} ${q(p.text)}`;
     case 'set_var': return `Remember ${esc(p.name || '…')} = ${highlightVars(p.value || '')}`;
     case 'overlay': return `On stream ${q(p.text)}`;
     case 'edit_text': return `${esc((EDIT_OPS[p.op] || EDIT_OPS.first_line)[0])}: ${highlightVars(p.input || '…')} → <span class="v">{${esc((p.save_as || '').trim() || 'text')}}</span>`;
@@ -4683,9 +4683,40 @@ function recipeItemHtml(it){
     + (t.who ? ` <span class="ig-rwho">(${esc(t.who)})</span>` : '')).join(', ');
   const effects = (it.effects || []).map(e =>
     `<span class="ig-rflag ${esc(e.level)}">${e.level === 'info' ? '' : '⚠ '}${esc(e.text)}</span>`).join('');
+  const handlers = (it.integration && it.integration.handlers) || [];
   return `<div class="ig-recipe-item"><b>${esc(it.name)}</b>
     <div class="ig-rwhen">When ${who || 'nothing'}</div>
-    ${effects ? `<div class="ig-rflags">${effects}</div>` : ''}</div>`;
+    ${effects ? `<div class="ig-rflags">${effects}</div>` : ''}
+    ${handlers.length ? `<details class="ig-rdetails"><summary>See every step</summary>${handlers.map(h =>
+      `<div class="ig-rhandler"><div class="ig-rtrig">${esc(triggerSentence(h.trigger))}${h.enabled === false ? ' <span class="muted">(switched off)</span>' : ''}</div>
+        <ol class="ig-rsteps">${recipeStepsHtml(h.steps)}</ol></div>`).join('')}</details>` : ''}
+    ${it.integration ? `<details class="ig-rdetails"><summary>Show the raw settings</summary>
+      <pre class="ig-rraw">${esc(JSON.stringify(it.integration, null, 2))}</pre></details>` : ''}</div>`;
+}
+// Recipes never carry where a step reaches: shared and imported, they lose
+// the program and its arguments, the file, the web address and the OBS
+// scene or source (recipe::strip_private). Say so where that step is, so
+// nobody wonders which program it would run.
+const RECIPE_FILLS = {program:[['path'], 'program and its arguments'], file:[['path'], 'file'],
+  http:[['url'], 'address'], obs:[['scene', 'source'], 'scene or source']};
+function recipeFillNote(s){
+  const fill = RECIPE_FILLS[s.type], p = s.params || {};
+  if (!fill || fill[0].some(name => p[name])) return '';
+  return ` <span class="ig-rnote">· a recipe can't choose the ${fill[1]}: you pick it after adding</span>`;
+}
+// The steps of a recipe being imported, in the builder's words, checks
+// with their branches nested. What runs on the PC is tinted red; what
+// changes the delay, OBS or calls a web address, amber.
+function recipeStepsHtml(steps){
+  if (!steps || !steps.length) return '<li class="ig-rstep muted">Nothing</li>';
+  return steps.map(s => {
+    const k = KINDS[s.type] || {};
+    const risk = LOCAL_KINDS.includes(s.type) ? ' danger' : ['delay_action', 'obs', 'http'].includes(s.type) ? ' caution' : '';
+    const branches = s.type !== 'if' ? '' : `<ol class="ig-rsteps">${recipeStepsHtml(s.then)}</ol>`
+      + ((s.else || []).length ? `<div class="ig-relse">Otherwise</div><ol class="ig-rsteps">${recipeStepsHtml(s.else)}</ol>` : '');
+    return `<li class="ig-rstep${risk}"><div class="ig-rline"><span class="ig-rtag" style="--c:${k.c || 'var(--fg-3)'}">${esc(k.tag || s.type)}</span>
+      <span class="ig-step-text">${stepSentence(s)}${recipeFillNote(s)}${s.enabled === false ? ' <span class="muted">(switched off)</span>' : ''}</span></div>${branches}</li>`;
+  }).join('');
 }
 // Said once above the Add button when anything in the recipe is risky.
 function recipeWarningHtml(p){

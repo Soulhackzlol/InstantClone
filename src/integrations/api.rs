@@ -866,6 +866,9 @@ fn import(
                     ("summary", json::str(summary(i))),
                     ("triggers", Value::Arr(trigger_review(i))),
                     ("effects", Value::Arr(effect_review(i))),
+                    // Every step, for "See every step". Parsing already
+                    // dropped what a recipe never carries (addresses, paths).
+                    ("integration", i.to_json()),
                 ])
             })
             .collect();

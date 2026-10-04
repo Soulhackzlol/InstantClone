@@ -2807,6 +2807,23 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-rflag.caution{background:color-mix(in oklch,var(--warn) 16%,transparent);color:var(--warn)}
 .ig-rflag.danger{background:color-mix(in oklch,var(--err) 16%,transparent);color:var(--err);font-weight:600}
 .ig-palette button.ig-pal-locked{opacity:.45;cursor:not-allowed}
+.ig-rdetails{margin-top:2px}
+.ig-rdetails>summary{cursor:pointer;width:max-content;font-size:12px;color:var(--accent)}
+.ig-rdetails>summary:hover{text-decoration:underline}
+.ig-rhandler{margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--surface-2);display:flex;flex-direction:column;gap:6px}
+.ig-rtrig{font-size:12px;font-weight:600;color:var(--fg)}
+.ig-rsteps{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.ig-rsteps .ig-rsteps{margin-top:4px;border-left:1px dashed var(--line);padding-left:16px}
+.ig-rstep{font-size:12.5px;color:var(--fg-2);overflow-wrap:anywhere}
+.ig-rline{display:flex;align-items:baseline;gap:8px}
+.ig-rtag{flex:none;font-size:9.5px;font-weight:700;letter-spacing:.08em;color:var(--c)}
+.ig-rstep.danger>.ig-rline>.ig-step-text{color:var(--err)}
+.ig-rstep.caution>.ig-rline>.ig-step-text{color:var(--warn)}
+.ig-relse{font-size:11px;color:var(--fg-3);margin-top:2px}
+.ig-rstep .ig-step-text{white-space:normal;overflow:visible;text-overflow:clip;min-width:0}
+.ig-rstep .ig-rnote{color:var(--fg-3);font-size:11.5px}
+.ig-rraw{margin:8px 0 0;padding:10px;max-height:280px;overflow:auto;border-radius:8px;background:var(--surface-2);
+  font:11.5px/1.5 'JetBrains Mono',monospace;color:var(--fg-2);white-space:pre-wrap;overflow-wrap:anywhere}
 .ig-recipe-safe{display:flex;align-items:flex-start;gap:8px}
 .ig-recipe-safe svg{width:14px;height:14px;flex:none;margin-top:2px;color:var(--accent)}
 .ig-share-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto}
