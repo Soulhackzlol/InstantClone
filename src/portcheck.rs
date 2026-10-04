@@ -300,13 +300,21 @@ mod tests {
 
     #[test]
     fn find_free_port_skips_held_and_returns_next() {
-        // Hold a known port and ask find_free_port to start there.
-        // It should jump to a later one.
-        let (held, port) = bind_eph();
-        let found = find_free_port("127.0.0.1", port, 50)
-            .expect("some port in the +50 window must be free");
+        const WINDOW: u16 = 50;
+        // Hold a known port and ask find_free_port to start there. It
+        // should jump to a later one. The OS can hand out an ephemeral port
+        // within WINDOW of 65535, where the scan has no room to move on and
+        // `port + WINDOW` would overflow, so draw again until it has room.
+        let (held, port) = loop {
+            let (listener, port) = bind_eph();
+            if port <= u16::MAX - WINDOW {
+                break (listener, port);
+            }
+        };
+        let found = find_free_port("127.0.0.1", port, WINDOW)
+            .expect("some port in the window must be free");
         assert_ne!(found, port, "must skip the held port");
-        assert!(found > port && found <= port + 50);
+        assert!(found > port && found <= port + WINDOW);
         drop(held);
     }
 

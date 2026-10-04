@@ -44,7 +44,7 @@ static SETTINGS_WRITE_LOCK: crate::sync::Mutex<()> = crate::sync::Mutex::new(())
 /// Take the settings write lock for a full read-modify-write-send cycle. Hold
 /// the guard from just before `settings.borrow().clone()` until after
 /// `settings.send(..)`.
-fn settings_write_guard() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn settings_write_guard() -> std::sync::MutexGuard<'static, ()> {
     SETTINGS_WRITE_LOCK.lock()
 }
 
@@ -144,17 +144,7 @@ async fn serve(
     let Some(content_length) = content_length else {
         let body =
             r#"{"ok":false,"error":"malformed Content-Length or unsupported Transfer-Encoding"}"#;
-        let r = format!(
-            "HTTP/1.1 400 Bad Request
-Content-Type: application/json
-             Content-Length: {}
-Connection: close
-
-{}",
-            body.len(),
-            body
-        );
-        sock.write_all(r.as_bytes()).await?;
+        write_simple(&mut sock, "400 Bad Request", "application/json", body, "").await?;
         return Ok(());
     };
     let (origin, host) = parse_origin_host(head_str);
@@ -215,12 +205,20 @@ Connection: close
             let mut tmp = [0u8; 4096];
             let n = match tokio::time::timeout_at(body_deadline, sock.read(&mut tmp)).await {
                 Ok(r) => r?,
-                Err(_) => break, // body took too long; use what we have
+                Err(_) => break, // body took too long; refused below
             };
             if n == 0 {
                 break;
             }
             b.extend_from_slice(&tmp[..n]);
+        }
+        // The client stopped (EOF or the deadline) before the body it
+        // announced. Running the route on the fragment would read a cut-off
+        // `ms=30000` as `ms=3` and arm that, so refuse instead.
+        if b.len() < content_length {
+            let body = r#"{"ok":false,"error":"request body shorter than its Content-Length"}"#;
+            write_simple(&mut sock, "400 Bad Request", "application/json", body, "").await?;
+            return Ok(());
         }
         // Drop any pipelined bytes past this request (we always Connection:
         // close, so there is no next request on this socket anyway).
@@ -229,7 +227,13 @@ Connection: close
     } else {
         Vec::new()
     };
-    let body = std::str::from_utf8(&body_buf).unwrap_or("");
+    // Same reasoning as the Content-Length refusal: reading a body that is not
+    // UTF-8 as "" would run `POST /arm` with no `ms`, which is a disarm.
+    let Ok(body) = std::str::from_utf8(&body_buf) else {
+        let body = r#"{"ok":false,"error":"request body is not valid UTF-8"}"#;
+        write_simple(&mut sock, "400 Bad Request", "application/json", body, "").await?;
+        return Ok(());
+    };
 
     // Optional dashboard auth. Off by default (a single is_empty() inside),
     // fail-closed once a password is set. The whole security-critical surface
@@ -283,7 +287,11 @@ Connection: close
     // Overlay Studio runtime - static pre-gzipped JS, same fast-path as
     // the dashboard. Served to the dashboard tab only; baked overlays
     // inline what they need and never request this.
-    if method == "GET" && (bare_path == "/overlay-runtime.js" || bare_path == "/dock.js") {
+    if method == "GET"
+        && (bare_path == "/overlay-runtime.js"
+            || bare_path == "/dock.js"
+            || bare_path == "/integrations.js")
+    {
         if !accept_gzip {
             let body = b"this build serves gzip-encoded JS; \
                          retry with Accept-Encoding: gzip" as &[u8];
@@ -296,10 +304,10 @@ Connection: close
             sock.write_all(body).await?;
             return Ok(());
         }
-        let blob: &'static [u8] = if bare_path == "/dock.js" {
-            DOCK_JS_GZ
-        } else {
-            OVERLAY_RUNTIME_JS_GZ
+        let blob: &'static [u8] = match bare_path {
+            "/dock.js" => DOCK_JS_GZ,
+            "/integrations.js" => INTEGRATIONS_JS_GZ,
+            _ => OVERLAY_RUNTIME_JS_GZ,
         };
         let r = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\n\
@@ -347,6 +355,10 @@ Connection: close
     if method == "GET" && bare_path == "/overlay-events" {
         return handle_sse(sock, ctrl, settings, sysstat, Feed::Overlay).await;
     }
+    // The alerts browser source's feed: what "Show on stream" steps put up.
+    if method == "GET" && bare_path == "/alerts-events" {
+        return handle_sse(sock, ctrl, settings, sysstat, Feed::Alerts).await;
+    }
 
     // Lifecycle controls (admin-gated by auth_gate above): acknowledge and
     // flush the 200 to the client BEFORE tripping the shutdown signal. The main
@@ -370,27 +382,106 @@ Connection: close
         return Ok(());
     }
 
+    // Crash-protection preview: the reconnect screen from the same renderer
+    // the stream uses. Binary, so it can't go through `route`. Admin-gated
+    // by auth_gate (classify_access's default). A 24-frame strip takes tens
+    // of milliseconds to draw, so it renders on a blocking thread: on this
+    // runtime's one thread it would stall every destination's egress.
+    if method == "GET" && bare_path == "/crash-protection/preview" {
+        let query = path.split_once('?').map_or("", |(_, q)| q).to_string();
+        let saved = settings.borrow().crash_protection.clone();
+        let image = tokio::task::spawn_blocking(move || crash_protection_preview(&query, &saved))
+            .await
+            .map_err(io::Error::other)?;
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\
+             Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+            image.len()
+        );
+        sock.write_all(head.as_bytes()).await?;
+        sock.write_all(&image).await?;
+        return Ok(());
+    }
+
+    let local_steps_allowed = may_set_up_local_steps(&settings.borrow(), &peer_ip, head_str);
+    let caller = RouteCaller {
+        is_admin,
+        local_steps_allowed,
+    };
     let (status, ctype, payload) = route(
-        method, path, body, &ctrl, &settings, &cfg_path, &sysstat, is_admin,
+        method, path, body, &ctrl, &settings, &cfg_path, &sysstat, caller,
     )
     .await;
 
-    // ACAO is intentionally restrictive now - only set on GET responses
-    // so overlays / docks loaded as foreign origins can still read state.
-    // POST endpoints get NO ACAO header, which (with credentials=false)
-    // blocks cross-origin script-readable responses too.
-    let acao = if method == "GET" {
+    // ACAO is intentionally restrictive: only GETs that carry no secret, so
+    // overlays and widgets loaded from other origins can still read state.
+    // Everything else (config, destinations, integrations, logs) gets none,
+    // or any website could read stream keys and webhooks from a dashboard
+    // without a password. POSTs get none either.
+    let acao = if method == "GET" && readable_cross_origin(bare_path) {
         "Access-Control-Allow-Origin: *\r\n"
     } else {
         ""
     };
+    // An overlay is a page from the overlays folder, which anyone can drop
+    // files into. Sandboxed, it runs with an origin of its own: its scripts
+    // still paint (the feeds it reads allow any origin), but it can't act
+    // as the dashboard, whose API refuses a POST from a foreign origin.
+    let sandbox = if method == "GET" && bare_path.starts_with("/overlay/") {
+        "Content-Security-Policy: sandbox allow-scripts\r\n"
+    } else {
+        ""
+    };
     let resp = format!(
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
-        status, ctype, payload.len(), acao
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        status, ctype, payload.len(), acao, sandbox
     );
     sock.write_all(resp.as_bytes()).await?;
     sock.write_all(payload.as_bytes()).await?;
     Ok(())
+}
+
+/// Render the preview for the saved crash-protection settings with any
+/// unsaved `crash_protection.*` edits from the query applied on top, so
+/// the dashboard can preview before Save. `orientation=vertical` flips it
+/// to 9:16; `phase` (0..1) picks the moment in the 2 s loop, or
+/// `frames=N` stacks N evenly spaced moments into one strip the dashboard
+/// animates; `size=thumb` draws the small version the theme picker shows.
+fn crash_protection_preview(
+    query: &str,
+    saved: &crate::crash_protection::CrashProtection,
+) -> Vec<u8> {
+    const DEFAULT_PHASE: f32 = 0.25;
+    const MAX_FRAMES: usize = 24;
+    let form = config::parse_form(query);
+    let mut settings = saved.clone();
+    for (key, value) in &form {
+        if let Some(field) = key.strip_prefix(crate::crash_protection::KEY_PREFIX) {
+            settings.set(field, value);
+        }
+    }
+    let (long_side, short_side) = match form.get("size").map(String::as_str) {
+        Some("thumb") => (192, 108),
+        _ => (480, 270),
+    };
+    let (width, height) = if form.get("orientation").map(String::as_str) == Some("vertical") {
+        (short_side, long_side)
+    } else {
+        (long_side, short_side)
+    };
+    let frames = form
+        .get("frames")
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|count| count.clamp(1, MAX_FRAMES));
+    let phases: Vec<f32> = match frames {
+        Some(count) => (0..count).map(|i| i as f32 / count as f32).collect(),
+        None => vec![form
+            .get("phase")
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| (0.0..1.0).contains(value))
+            .unwrap_or(DEFAULT_PHASE)],
+    };
+    crate::slate::preview_png(&settings, width, height, &phases)
 }
 
 /// Result of the auth gate: either it already wrote a response (login page,
@@ -550,6 +641,30 @@ async fn auth_gate(
         }
     }
 
+    // DNS rebinding guard. With no password, the browser's same-origin rule
+    // is all that keeps a website away from this API, and a site whose name
+    // re-resolves to 127.0.0.1 passes it: its pages become "same origin" with
+    // the dashboard and could save an integration that runs a program. Such a
+    // request names the attacker's domain in Host, while the dashboard is
+    // reached by an IP or localhost. A password closes this on its own (the
+    // session cookie never belongs to the attacker's origin), so names stay
+    // allowed then, for reverse proxies and LAN host names.
+    if settings.borrow().dashboard_password_hash.is_empty()
+        && classify_access(method, bare_path) != Access::Public
+        && !host_is_address(&parse_origin_host(head_str).1)
+    {
+        write_simple(
+            sock,
+            "403 Forbidden",
+            "text/plain; charset=utf-8",
+            "Open InstantClone by its address (http://127.0.0.1:<port>), \
+             or set a dashboard password to reach it by name.",
+            "",
+        )
+        .await?;
+        return Ok(AuthDecision::Handled);
+    }
+
     // Auth management (cookie-bearing responses). Reached only after the gate
     // above (these classify as admin, so session-gated when auth is on); open
     // when auth is off so the very first password can be set locally.
@@ -560,7 +675,7 @@ async fn auth_gate(
         // from seizing the dashboard before the owner sets a password; changing
         // an existing password already required an admin session at the gate.
         let first_time = settings.borrow().dashboard_password_hash.is_empty();
-        if first_time && !is_loopback(peer_ip) {
+        if first_time && !from_this_pc(peer_ip, head_str) {
             write_simple(
                 sock,
                 "403 Forbidden",
@@ -681,8 +796,17 @@ async fn auth_gate(
     })
 }
 
+/// Who is asking, as far as `route` needs to know.
+#[derive(Clone, Copy)]
+struct RouteCaller {
+    is_admin: bool,
+    /// The request may set up integration steps that run programs or
+    /// write files: it comes from this PC, or the dashboard has a password.
+    local_steps_allowed: bool,
+}
+
 // The central request dispatcher genuinely needs all of these: the request
-// parts, the shared runtime handles, and the caller's admin flag. Bundling them
+// parts, the shared runtime handles, and who the caller is. Bundling them
 // into a struct would only move the argument list, not remove it.
 #[allow(clippy::too_many_arguments)]
 async fn route(
@@ -693,8 +817,9 @@ async fn route(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
     sysstat: &Arc<SysStat>,
-    is_admin: bool,
+    caller: RouteCaller,
 ) -> (&'static str, &'static str, String) {
+    let is_admin = caller.is_admin;
     // Strip ?query - we only read it for /overlay.
     let (bare_path, query) = match path.split_once('?') {
         Some((p, q)) => (p, q),
@@ -738,10 +863,39 @@ async fn route(
         }
     }
 
+    // Integrations: `/hooks/<token>` is how outside apps trigger a web call
+    // integration; the rest is the dashboard's integrations API.
+    if let Some(token) = bare_path.strip_prefix("/hooks/") {
+        return crate::integrations::api::hook(ctrl, token, body, query);
+    }
+    if bare_path.starts_with("/integrations")
+        || bare_path.starts_with("/connections/")
+        || bare_path.starts_with("/twitch/")
+    {
+        if let Some(reply) = crate::integrations::api::route(
+            method,
+            bare_path,
+            body,
+            ctrl,
+            settings,
+            cfg_path,
+            caller.local_steps_allowed,
+        )
+        .await
+        {
+            return reply;
+        }
+    }
+
     match (method, bare_path) {
         // GET / and GET /dock are handled in serve() as a fast-path
         // (static gz blob, no allocation, no String round-trip).
         ("GET", "/overlay") => ("200 OK", "text/html; charset=utf-8", overlay_html(query)),
+        ("GET", "/alerts") => (
+            "200 OK",
+            "text/html; charset=utf-8",
+            ALERTS_HTML.to_string(),
+        ),
         ("GET", "/state") => (
             "200 OK",
             "application/json",
@@ -773,15 +927,20 @@ async fn route(
         // no Twitch destination is configured or the upstream call
         // fails. GET is supported as an escape hatch for poking the
         // static fallback from a browser address bar.
-        ("POST", "/obs/multitrack-config") => (
-            "200 OK",
-            "application/json",
-            obs_multitrack_config_proxy(body, query, ctrl, settings).await,
-        ),
+        ("POST", "/obs/multitrack-config") => {
+            let authorized = eb_request_authorized(body, &settings.borrow().ingest_key);
+            let config = obs_multitrack_config_proxy(body, query, ctrl, settings).await;
+            // A refused request gets the static config and its publish is
+            // turned away: it must not replace the live session's tracks.
+            if authorized {
+                ctrl.note_eb_config(&config);
+            }
+            ("200 OK", "application/json", config)
+        }
         ("GET", "/obs/multitrack-config") => (
             "200 OK",
             "application/json",
-            obs_multitrack_config_static(query, settings),
+            obs_multitrack_config_static(query, body, settings),
         ),
         ("GET", "/obs/register-status") => {
             let s = settings.borrow();
@@ -1052,7 +1211,8 @@ async fn route(
         ("GET", "/destinations") => (
             "200 OK",
             "application/json",
-            destinations_json(ctrl, settings),
+            // Custom URLs raw for a full session only; see destinations_json.
+            destinations_json(ctrl, settings, is_admin),
         ),
 
         ("POST", "/config") => post_config(body, ctrl, settings, cfg_path).await,
@@ -1067,6 +1227,21 @@ async fn route(
         ("POST", "/go-live") => post_stop(ctrl, settings, cfg_path, sysstat).await,
         ("POST", "/cut-after") => post_cut_after(ctrl, settings, sysstat).await,
         ("POST", "/cut-after/cancel") => post_cut_after_cancel(ctrl, settings, sysstat).await,
+        ("POST", "/crash-protection/end") => {
+            if !ctrl.end_hold_now() {
+                return (
+                    "409 Conflict",
+                    "application/json",
+                    r#"{"ok":false,"error":"Nothing to end: the stream already ended"}"#
+                        .to_string(),
+                );
+            }
+            (
+                "200 OK",
+                "application/json",
+                state_json(ctrl, settings, sysstat),
+            )
+        }
         // MIDI mapping (Windows). Learn mode is server-side because the MIDI
         // events arrive at the backend, not the browser; the dashboard polls.
         #[cfg(windows)]
@@ -1075,7 +1250,6 @@ async fn route(
         ("POST", "/midi/learn/cancel") => post_midi_learn_cancel(ctrl).await,
         ("POST", "/midi/poll") => post_midi_poll(ctrl, settings, cfg_path).await,
         ("POST", "/test-egress") => test_egress(settings).await,
-        ("POST", "/test-webhook") => post_test_webhook(ctrl).await,
         ("POST", "/logs/clear") => {
             ctrl.clear_logs();
             ("200 OK", "application/json", r#"{"ok":true}"#.into())
@@ -1120,6 +1294,8 @@ async fn route(
 enum Feed {
     Dashboard,
     Overlay,
+    /// The integrations' on-stream alerts: only the cards themselves.
+    Alerts,
 }
 
 async fn handle_sse(
@@ -1151,6 +1327,10 @@ async fn handle_sse(
         let cur = match feed {
             Feed::Dashboard => state_json(&ctrl, &settings, &sysstat),
             Feed::Overlay => overlay_state_json(&ctrl, &settings),
+            Feed::Alerts => ctrl.integrations().map_or_else(
+                || r#"{"boot":"","alerts":[]}"#.to_string(),
+                |h| h.alerts.to_json(),
+            ),
         };
         let now = std::time::Instant::now();
         let changed = cur != last_payload;
@@ -1198,7 +1378,7 @@ fn video_readouts(ctrl: &Controller) -> std::collections::BTreeMap<u8, (String, 
         .collect()
 }
 
-/// Live video state for one destination: whether the Dual Format canvas
+/// Live video state for one destination: whether a vertical 9:16 canvas
 /// is on the wire, whether this destination can forward yet, and the
 /// resolution + codec of the track it actually sends.
 ///
@@ -1228,7 +1408,9 @@ fn dest_video(
         .destination_state(&dest.id)
         .vertical_primary_track
         .load(Ordering::Relaxed);
-    let vertical_canvas_present = track != 0xFF;
+    // The sequence-header cache outlives the OBS session (it is cleared on
+    // the next publish), so a canvas only counts while OBS is live.
+    let vertical_canvas_present = track != 0xFF && ctrl.ingest_alive();
     let vertical = dest.wants_vertical();
     // The track this destination actually forwards: the detected portrait
     // primary for vertical dests, track 0 (horizontal primary) otherwise.
@@ -1248,6 +1430,24 @@ fn dest_video(
         },
         res,
         codec,
+    }
+}
+
+/// The crash-protection hold for `/state`: `null`, or why it is on air and
+/// how long it has left.
+fn hold_json(ctrl: &Controller) -> String {
+    match ctrl.hold_status() {
+        Some(status) => format!(
+            r#"{{"reason":"{}","remaining_ms":{},"total_ms":{}}}"#,
+            match status.reason {
+                crate::crash_hold::HoldReason::Crash => "crash",
+                crate::crash_hold::HoldReason::Freeze => "freeze",
+                crate::crash_hold::HoldReason::Stopped => "stopped",
+            },
+            status.remaining.as_millis(),
+            status.total.as_millis()
+        ),
+        None => "null".into(),
     }
 }
 
@@ -1277,6 +1477,7 @@ fn state_json(
     // only refetched on config edits; anything live that lives solely
     // there freezes on the cards until the user reloads.
     let readouts = video_readouts(ctrl);
+    let holding = ctrl.hold_active();
     let dest_list = s.destinations.iter().map(|d| {
         let st = snap.iter().find(|t| t.0 == d.id);
         let (alive, kbps, tags, bytes, cuts, recon) = st
@@ -1284,7 +1485,7 @@ fn state_json(
             .unwrap_or((false, 0u32, 0u64, 0u64, 0u32, 0u32));
         let v = dest_video(ctrl, d, &readouts);
         format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"reconnects":{rc},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"reconnects":{rc},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"on_hold":{oh}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled, al = alive, br = kbps, ts = tags, bs = bytes, cu = cuts, rc = recon,
@@ -1292,6 +1493,7 @@ fn state_json(
             vcp = v.vertical_canvas_present,
             vres = json_escape_quoted(&v.res),
             vcod = json_escape_quoted(&v.codec),
+            oh = holding && alive && crate::crash_hold::covers(ctrl, &ctrl.destination_state(&d.id)),
         )
     }).collect::<Vec<_>>().join(",");
 
@@ -1301,21 +1503,29 @@ fn state_json(
     // measured params are stale or zero, and a warning about a session
     // that already ended is pure noise.
     let compat_warning = if ctrl.ingest_alive() {
-        crate::compat::compat_warning(&ctrl.stream_params(), &s.destinations).unwrap_or_default()
+        [
+            crate::compat::compat_warning(&ctrl.stream_params(), &s.destinations),
+            eb_not_applied_warning(ctrl),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
     } else {
         String::new()
     };
 
-    // A portrait canvas is present on the wire (Twitch Dual Format is live).
-    // Drives the header "Dual Format" pill.
-    let vertical_present =
-        crate::h264::detect_vertical_primary_track(&ctrl.ring.video_seq_headers.lock()).is_some();
+    // A portrait canvas is on the wire right now (OBS's Additional canvas,
+    // or Twitch Dual Format). Drives the header "Vertical" pill.
+    let vertical_present = ctrl.ingest_alive() && ctrl.vertical_track_on_wire().is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
+        hold = hold_json(ctrl),
+        tail = ctrl.tail_left().map_or(0, |left| left.as_millis()),
         cw = json_escape_quoted(&compat_warning),
         la = ctrl
             .last_action()
@@ -1359,6 +1569,7 @@ fn state_json(
         id = ctrl.ingest_disconnects(),
         er = ctrl.egress_reconnects(),
         br = ctrl.bitrate_kbps(),
+        vbr = ctrl.video_bitrate_kbps(),
         vc = ctrl.video_codec().label(),
         ac = ctrl.audio_codec().label(),
         mtv = ctrl.multitrack_video(),
@@ -1372,6 +1583,44 @@ fn state_json(
         bp = backpressure,
         dl = dest_list,
     )
+}
+
+/// Shown when OBS's saved profile asks for Enhanced Broadcasting but the
+/// stream arriving is single-track. OBS rebuilds its stream output only
+/// while nothing is running, so a Stream settings change applied while the
+/// Replay Buffer or a recording runs never reaches the next stream.
+const EB_NOT_APPLIED: &str = "OBS has Enhanced Broadcasting on but is not using it. \
+    Stop the stream, Replay Buffer and recording (or restart OBS), then go live again.";
+
+/// How long one read of OBS's saved profile is reused. `/state` is polled
+/// several times a second; the setting changes at human speed.
+const OBS_PROFILE_TTL: Duration = Duration::from_secs(10);
+
+fn eb_not_applied_warning(ctrl: &Controller) -> Option<String> {
+    // A measured keyframe interval means a few seconds of video arrived,
+    // and an EB stream marks its very first video tag as multi-track, so
+    // a stream that is just starting never trips this. A remote publisher
+    // runs some other machine's OBS, whose profile isn't the one here.
+    if ctrl.multitrack_video() || ctrl.keyframe_interval_ms() == 0 || !ctrl.publisher_local() {
+        return None;
+    }
+    obs_profile_wants_eb().then(|| EB_NOT_APPLIED.to_string())
+}
+
+/// `obs_register::active_profile_wants_eb`, re-read at most once per
+/// `OBS_PROFILE_TTL`.
+fn obs_profile_wants_eb() -> bool {
+    static CACHE: crate::sync::Mutex<Option<(std::time::Instant, bool)>> =
+        crate::sync::Mutex::new(None);
+    let mut cache = CACHE.lock();
+    if let Some((read_at, wants)) = *cache {
+        if read_at.elapsed() < OBS_PROFILE_TTL {
+            return wants;
+        }
+    }
+    let wants = crate::obs_register::active_profile_wants_eb();
+    *cache = Some((std::time::Instant::now(), wants));
+    wants
 }
 
 /// The state an overlay is allowed to see: the numbers it paints, and
@@ -1527,7 +1776,23 @@ async fn obs_multitrack_config_proxy(
             "OBS_MULTITRACK",
             "wrong ingest key in request - refusing to broker an EB session",
         );
-        return obs_multitrack_config_static(query, settings);
+        return obs_multitrack_config_static(query, body, settings);
+    }
+
+    // OBS is back while crash protection keeps its Twitch session live on
+    // the reconnect screen: hand it the same config, so it publishes the
+    // same tracks with the same session token and the destination carries
+    // on without a restart.
+    if let Some(config) = ctrl.held_eb_config() {
+        ctrl.log(
+            "[OBS multitrack] crash protection: OBS is back - continuing the live \
+             Twitch session",
+        );
+        crate::trace::log(
+            "OBS_MULTITRACK",
+            "hold active - reusing the live EB session",
+        );
+        return config;
     }
 
     // The streamer's real Twitch key lives in our destinations list.
@@ -1546,14 +1811,7 @@ async fn obs_multitrack_config_proxy(
             .map(|d| d.stream_key.clone())
     };
     let Some(twitch_key) = twitch_key else {
-        ctrl.log(
-            "[OBS multitrack] no enabled Twitch destination with a stream key - \
-             returning static config. Twitch will accept the multi-track stream \
-             but won't go live to viewers without an API-allocated session. \
-             Fix: Destinations → enable a Twitch destination with the real key.",
-        );
-        crate::trace::log("OBS_MULTITRACK", "no twitch destination - static fallback");
-        return obs_multitrack_config_static(query, settings);
+        return obs_multitrack_config_local(body, query, ctrl, settings);
     };
 
     // Swap the `authentication` field in OBS's payload with the real
@@ -1571,8 +1829,27 @@ async fn obs_multitrack_config_proxy(
                 "OBS_MULTITRACK",
                 "could not patch authentication field - static fallback",
             );
-            return obs_multitrack_config_static(query, settings);
+            return obs_multitrack_config_static(query, body, settings);
         }
+    };
+
+    // Twitch picks the main track's codec from the ones OBS offers: HEVC
+    // for a 2K (1440p) channel on a GPU that has it. A horizontal
+    // destination besides Twitch gets that same track, so while one is
+    // enabled only H.264 is offered. Twitch keeps the vertical track's codec
+    // whatever this list says, and refuses a session whose tracks don't
+    // match its config, so the vertical track is forwarded as it comes.
+    let needs_h264 = feeds_main_track_beyond_twitch(&settings.borrow().destinations, &twitch_key);
+    let modified_body = match offer_only_h264(&modified_body) {
+        Some(h264_only) if needs_h264 && h264_only != modified_body => {
+            ctrl.log(
+                "[OBS multitrack] asking Twitch for an H.264 main track - your \
+                 other destinations can't play HEVC or AV1",
+            );
+            crate::trace::log("OBS_MULTITRACK", "supported_codecs narrowed to h264");
+            h264_only
+        }
+        _ => modified_body,
     };
 
     let ingest_port = settings.borrow().ingest_port;
@@ -1646,12 +1923,12 @@ async fn obs_multitrack_config_proxy(
                  from this machine.",
             );
             crate::trace::log("OBS_MULTITRACK", "Twitch API timed out - static fallback");
-            return obs_multitrack_config_static(query, settings);
+            return obs_multitrack_config_static(query, body, settings);
         }
-        ProxyOutcome::HttpError(code, body) => {
+        ProxyOutcome::HttpError(code, response) => {
             // Truncate the body so a verbose Twitch error page doesn't
             // flood the dashboard log line.
-            let snippet: String = body.chars().take(300).collect();
+            let snippet: String = response.chars().take(300).collect();
             ctrl.log(format!(
                 "[OBS multitrack] Twitch API returned HTTP {code} - returning static \
                  config. Response body (first 300 chars): {snippet}"
@@ -1660,7 +1937,7 @@ async fn obs_multitrack_config_proxy(
                 "OBS_MULTITRACK",
                 &format!("Twitch API HTTP {code} - static fallback. body={snippet}"),
             );
-            return obs_multitrack_config_static(query, settings);
+            return obs_multitrack_config_static(query, body, settings);
         }
         ProxyOutcome::TransportError(e) => {
             ctrl.log(format!(
@@ -1671,7 +1948,7 @@ async fn obs_multitrack_config_proxy(
                 "OBS_MULTITRACK",
                 &format!("Twitch API transport error: {e} - static fallback"),
             );
-            return obs_multitrack_config_static(query, settings);
+            return obs_multitrack_config_static(query, body, settings);
         }
         ProxyOutcome::ReadError(e) => {
             ctrl.log(format!(
@@ -1682,10 +1959,25 @@ async fn obs_multitrack_config_proxy(
                 "OBS_MULTITRACK",
                 &format!("Twitch API read error: {e} - static fallback"),
             );
-            return obs_multitrack_config_static(query, settings);
+            return obs_multitrack_config_static(query, body, settings);
         }
     };
 
+    apply_twitch_multitrack_config(&twitch_json, &twitch_key, ingest_port, ctrl, settings)
+}
+
+/// What the proxy does with a successful Twitch response: point OBS at our
+/// ingest, remember the session tokens OBS will publish with, and aim the
+/// matching Twitch destination at the session's IVS endpoint. Split from the
+/// HTTP call in `obs_multitrack_config_proxy` so it can be tested without the
+/// network; the behaviour is unchanged.
+fn apply_twitch_multitrack_config(
+    twitch_json: &str,
+    twitch_key: &str,
+    ingest_port: u16,
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+) -> String {
     // Twitch's response has one or more `ingest_endpoints` entries
     // with `url_template` values like
     // `rtmps://<region>.contribute.live-video.net/app/{stream_key}`.
@@ -1696,7 +1988,7 @@ async fn obs_multitrack_config_proxy(
     // set that token would not match it, so we remember the token below and
     // begin_publish accepts it (see Controller::remember_eb_key).
     let rewritten = rewrite_url_templates(
-        &twitch_json,
+        twitch_json,
         &format!("rtmp://localhost:{}/live/{{stream_key}}", ingest_port),
     );
     // Extract the *original* IVS ingest URL from Twitch's response
@@ -1715,7 +2007,7 @@ async fn obs_multitrack_config_proxy(
     // any error html_en_us payload. The stream key gets redacted out
     // of any url_template via simple substring replacement so the
     // trace stays shareable.
-    let sanitized = twitch_json.replace(&twitch_key, "<STREAM_KEY>");
+    let sanitized = twitch_json.replace(twitch_key, "<STREAM_KEY>");
     crate::trace::log(
         "OBS_MULTITRACK_RESPONSE",
         &format!("(stream key redacted) {sanitized}"),
@@ -1736,10 +2028,10 @@ async fn obs_multitrack_config_proxy(
     // value. When absent (rare - non-IVS multitrack services), fall
     // back to the user's configured Twitch stream key so we at least
     // attempt a valid auth.
-    let (ivs_template, ivs_auth) = first_ingest_endpoint(&twitch_json)
+    let (ivs_template, ivs_auth) = first_ingest_endpoint(twitch_json)
         .map(|e| (Some(e.url_template), e.authentication))
         .unwrap_or((None, None));
-    let substitution = ivs_auth.as_deref().unwrap_or(&twitch_key);
+    let substitution = ivs_auth.as_deref().unwrap_or(twitch_key);
     // OBS will publish the EB stream to our ingest using an endpoint's session
     // token as the stream key (it fills the {stream_key} token in the url_template
     // we returned). Remember EVERY endpoint's token, not just the first: OBS's
@@ -1748,7 +2040,7 @@ async fn obs_multitrack_config_proxy(
     // token for its RTMP and RTMPS endpoints, but we don't rely on that. Each is
     // remembered so begin_publish accepts the EB publish once an ingest key is set
     // - the token and the ingest key are different by design.
-    let endpoint_auths = all_ingest_endpoint_auths(&twitch_json);
+    let endpoint_auths = all_ingest_endpoint_auths(twitch_json);
     for auth in &endpoint_auths {
         ctrl.remember_eb_key(auth.clone());
     }
@@ -1756,7 +2048,7 @@ async fn obs_multitrack_config_proxy(
     // Key field, which our proxy swapped for the real Twitch key - remember that
     // so the publish is still accepted.
     if endpoint_auths.is_empty() {
-        ctrl.remember_eb_key(twitch_key.clone());
+        ctrl.remember_eb_key(twitch_key.to_string());
     }
     let ivs_url = ivs_template.map(|t| t.replace("{stream_key}", substitution));
     if let Some(ivs) = ivs_url.as_ref() {
@@ -1786,6 +2078,17 @@ async fn obs_multitrack_config_proxy(
         if let Some(id) = chosen_id {
             let state = ctrl.destination_state(&id);
             *state.eb_override_url.lock() = Some(ivs.clone());
+            let auths = if endpoint_auths.is_empty() {
+                vec![twitch_key.to_string()]
+            } else {
+                endpoint_auths.clone()
+            };
+            ctrl.remember_eb_session(crate::controller::EbSession {
+                config: rewritten.clone(),
+                auths,
+                dest_id: id,
+                ivs_url: ivs.clone(),
+            });
         }
         // Clean up any stale override on OTHER Twitch destinations -
         // the proxy might have run before and left stale state from a
@@ -1832,6 +2135,13 @@ async fn obs_multitrack_config_proxy(
         "OBS_MULTITRACK",
         "Twitch config received + rewritten to localhost ingest",
     );
+    if !crate::local_eb_config::names_additional_canvas(&rewritten) {
+        log_vertical_destinations_waiting(
+            ctrl,
+            settings,
+            "Twitch's config for this channel has no vertical track (Dual Format isn't on for it)",
+        );
+    }
     rewritten
 }
 
@@ -1957,6 +2267,39 @@ fn replace_auth_field(json: &str, new_value: &str) -> Option<String> {
     ))
 }
 
+/// Whether an enabled horizontal destination other than the Twitch one
+/// holding the EB session (`session_key`) gets the main EB track. Kick and
+/// most ingests only decode H.264, and so does a second Twitch account,
+/// which streams outside any EB session. The local test sink takes anything.
+fn feeds_main_track_beyond_twitch(destinations: &[config::Destination], session_key: &str) -> bool {
+    destinations.iter().any(|d| {
+        let holds_session = d.platform == "twitch" && d.stream_key == session_key;
+        d.enabled && !holds_session && d.platform != "sink" && !d.wants_vertical()
+    })
+}
+
+/// OBS's config request with `client.supported_codecs` narrowed to
+/// `["h264"]`, so Twitch builds every track as H.264. `None` when the list
+/// is missing or has no H.264 to keep; the request then goes unchanged.
+fn offer_only_h264(json: &str) -> Option<String> {
+    const KEY: &str = r#""supported_codecs""#;
+    let after_key = &json[json.find(KEY)? + KEY.len()..];
+    let list = after_key.trim_start().strip_prefix(':')?.trim_start();
+    if !list.starts_with('[') {
+        return None;
+    }
+    let list_len = list.find(']')? + 1;
+    if !list[..list_len].contains(r#""h264""#) {
+        return None;
+    }
+    let list_start = json.len() - list.len();
+    Some(format!(
+        r#"{}["h264"]{}"#,
+        &json[..list_start],
+        &json[list_start + list_len..]
+    ))
+}
+
 /// Self-triggered Twitch GetClientConfiguration for VOD-audio mode.
 /// Called from the supervisor when a destination has `vod_audio=true`
 /// but no eb_override_url yet. We construct a minimal POST body asking
@@ -2023,18 +2366,21 @@ fn rewrite_url_templates(json: &str, new_value: &str) -> String {
         let key_pos = cursor + rel_pos;
         // Copy everything before the key verbatim.
         out.push_str(&json[cursor..key_pos]);
-        // Walk through key + `:` + whitespace + opening quote.
+        // Walk through key + `:` + whitespace + opening quote. Only a key is
+        // followed by a colon: the same text as a VALUE ("note":"url_template")
+        // is followed by `,` `}` or `]`, and searching on for the next colon
+        // would take the next field's value for ours and drop the key between.
+        // Likewise a non-string value (`null`) is not a URL to replace. In both
+        // cases copy the match verbatim and keep looking.
         let after_key = &json[key_pos + key.len()..];
-        let Some(colon_off) = after_key.find(':') else {
-            // Malformed - bail and emit the remainder unchanged.
-            out.push_str(&json[key_pos..]);
-            return out;
-        };
-        let after_colon = &after_key[colon_off + 1..];
-        let Some(quote_off) = after_colon.find('"') else {
-            out.push_str(&json[key_pos..]);
-            return out;
-        };
+        let colon_off = after_key.len() - after_key.trim_start().len();
+        let after_colon = after_key[colon_off..].strip_prefix(':').unwrap_or("");
+        let quote_off = after_colon.len() - after_colon.trim_start().len();
+        if !after_key[colon_off..].starts_with(':') || !after_colon[quote_off..].starts_with('"') {
+            out.push_str(key);
+            cursor = key_pos + key.len();
+            continue;
+        }
         let value_start_abs = key_pos + key.len() + colon_off + 1 + quote_off;
         let after_quote = &json[value_start_abs + 1..];
         let Some(end_quote_off) = after_quote.find('"') else {
@@ -2057,60 +2403,33 @@ fn rewrite_url_templates(json: &str, new_value: &str) -> String {
     out
 }
 
-fn obs_multitrack_config_static(query: &str, settings: &Arc<watch::Sender<Settings>>) -> String {
+/// `body` is OBS's config request when there is one (empty for GET): it
+/// names the GPU, so the ladder uses its hardware encoder.
+fn obs_multitrack_config_static(
+    query: &str,
+    body: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+) -> String {
     let params = config::parse_form(query);
-    let encoder = params.get("encoder").map(|s| s.as_str()).unwrap_or("x264");
+    let available = crate::obs_register::available_video_encoders();
+    let encoder = choose_encoder(query, body, available.as_deref());
+    let bandwidth = config_url_bandwidth(query).unwrap_or(10000);
     let tracks: u32 = params
         .get("tracks")
         .and_then(|s| s.parse().ok())
         .unwrap_or(3)
         .clamp(1, 3);
-    let bandwidth: u32 = params
-        .get("bandwidth")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10000)
-        .clamp(1500, 50000);
 
     let ingest_port = settings.borrow().ingest_port;
 
-    let (enc_type, settings_json_1080, settings_json_720, settings_json_480): (
-        &str,
-        String,
-        String,
-        String,
+    let track = |index: u32| encoder_for(&encoder, bitrate_for_track(bandwidth, tracks, index));
+    let (top, middle, bottom) = (track(0), track(1), track(2));
+    let enc_type = top.encoder_type;
+    let (settings_json_1080, settings_json_720, settings_json_480) = (
+        top.settings_json,
+        middle.settings_json,
+        bottom.settings_json,
     );
-    // Per-encoder presets: libobs encoder IDs + the settings keys each
-    // implementation understands. x264 uses `preset` strings like
-    // "veryfast"; nvenc uses "p1"-"p7"; AMD uses similar tier names.
-    // `profile=main` is what every Twitch / YouTube / Kick decoder
-    // accepts; baseline would drop B-frames entirely and main+high
-    // are functionally equivalent on the wire for ~1080p60.
-    match encoder {
-        "nvenc" => {
-            enc_type = "jim_nvenc";
-            settings_json_1080 = encoder_settings_nvenc(bitrate_for_track(bandwidth, tracks, 0));
-            settings_json_720 = encoder_settings_nvenc(bitrate_for_track(bandwidth, tracks, 1));
-            settings_json_480 = encoder_settings_nvenc(bitrate_for_track(bandwidth, tracks, 2));
-        }
-        "amd" => {
-            enc_type = "h264_texture_amf";
-            settings_json_1080 = encoder_settings_amd(bitrate_for_track(bandwidth, tracks, 0));
-            settings_json_720 = encoder_settings_amd(bitrate_for_track(bandwidth, tracks, 1));
-            settings_json_480 = encoder_settings_amd(bitrate_for_track(bandwidth, tracks, 2));
-        }
-        "qsv" => {
-            enc_type = "obs_qsv11";
-            settings_json_1080 = encoder_settings_qsv(bitrate_for_track(bandwidth, tracks, 0));
-            settings_json_720 = encoder_settings_qsv(bitrate_for_track(bandwidth, tracks, 1));
-            settings_json_480 = encoder_settings_qsv(bitrate_for_track(bandwidth, tracks, 2));
-        }
-        _ => {
-            enc_type = "obs_x264";
-            settings_json_1080 = encoder_settings_x264(bitrate_for_track(bandwidth, tracks, 0));
-            settings_json_720 = encoder_settings_x264(bitrate_for_track(bandwidth, tracks, 1));
-            settings_json_480 = encoder_settings_x264(bitrate_for_track(bandwidth, tracks, 2));
-        }
-    }
 
     // Per-call config_id: a monotonic-ish value derived from the
     // process clock means OBS treats each config-fetch as fresh
@@ -2184,7 +2503,7 @@ fn encoder_settings_x264(bitrate: u32) -> String {
 
 fn encoder_settings_nvenc(bitrate: u32) -> String {
     format!(
-        r#"{{"bitrate":{b},"rate_control":"CBR","keyint_sec":2,"profile":"main","preset":"p5","tune":"hq","multipass":"qres"}}"#,
+        r#"{{"bitrate":{b},"rate_control":"CBR","keyint_sec":2,"profile":"main","preset":"p5","preset2":"p5","tune":"hq","multipass":"qres"}}"#,
         b = bitrate
     )
 }
@@ -2203,6 +2522,274 @@ fn encoder_settings_qsv(bitrate: u32) -> String {
     )
 }
 
+/// Encoder for InstantClone's own configs: the family (which settings
+/// keys apply), the exact libobs id, and why, for the log.
+struct EncoderChoice {
+    family: &'static str,
+    id: &'static str,
+    reason: String,
+}
+
+/// libobs H.264 encoder ids per family, newest first. OBS 31 moved NVENC to
+/// `obs_nvenc_h264_tex` and QSV to `obs_qsv11_v2`; OBS 30.2, the first with
+/// Enhanced Broadcasting, only has `jim_nvenc` and `obs_qsv11`.
+fn encoder_ids(family: &str) -> &'static [&'static str] {
+    match family {
+        "nvenc" => &["obs_nvenc_h264_tex", "jim_nvenc"],
+        "amd" => &["h264_texture_amf"],
+        "qsv" => &["obs_qsv11_v2", "obs_qsv11"],
+        _ => &["obs_x264"],
+    }
+}
+
+/// Canonical family name for a config URL's `encoder=` value.
+fn encoder_family(name: &str) -> &'static str {
+    match name {
+        "nvenc" => "nvenc",
+        "amd" => "amd",
+        "qsv" => "qsv",
+        _ => "x264",
+    }
+}
+
+/// An explicit `encoder=` in the config URL wins, otherwise the GPU OBS
+/// composites on. Either way the id must be one OBS's log lists as
+/// available: naming an encoder OBS doesn't have stops the stream from
+/// starting at all, which is worse than x264 being heavy. `available` is
+/// None when no OBS log could be read; then an explicit choice is trusted
+/// and a guessed one falls back to x264.
+fn choose_encoder(query: &str, body: &str, available: Option<&[String]>) -> EncoderChoice {
+    let x264 = |reason: String| EncoderChoice {
+        family: "x264",
+        id: "obs_x264",
+        reason,
+    };
+    let explicit = config::parse_form(query)
+        .get("encoder")
+        .map(|name| encoder_family(name));
+    let (family, source) = match explicit {
+        Some(family) => (family, "set in the config URL"),
+        None => match crate::local_eb_config::gpu_encoder_family(body) {
+            Some(family) => (family, "the GPU OBS runs on"),
+            None => return x264("OBS reported no NVIDIA, AMD or Intel GPU".into()),
+        },
+    };
+    if family == "x264" {
+        return x264(source.into());
+    }
+    let listed = |id: &str| available.is_some_and(|list| list.iter().any(|e| e == id));
+    match (
+        available,
+        encoder_ids(family).iter().copied().find(|id| listed(id)),
+    ) {
+        (_, Some(id)) => EncoderChoice {
+            family,
+            id,
+            reason: format!("{source}; {id} is available in OBS"),
+        },
+        // Can't check: the oldest id, which every OBS with Enhanced
+        // Broadcasting still registers (newer ones as a compatibility alias).
+        (None, None) if explicit.is_some() => EncoderChoice {
+            family,
+            id: encoder_ids(family).last().copied().unwrap_or("obs_x264"),
+            reason: source.into(),
+        },
+        (Some(_), None) => x264(format!("OBS lists no {family} encoder")),
+        (None, None) => x264("OBS's log couldn't be read to check GPU encoders".into()),
+    }
+}
+
+/// `bandwidth` from the config URL's query, in kbps, when it has one.
+fn config_url_bandwidth(query: &str) -> Option<u32> {
+    config::parse_form(query)
+        .get("bandwidth")
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|kbps| kbps.clamp(1500, 50000))
+}
+
+/// Log, once per config request, which enabled vertical destinations will
+/// get nothing this stream and why, so a streamer isn't left guessing.
+fn log_vertical_destinations_waiting(
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    why: &str,
+) {
+    let names: Vec<String> = settings
+        .borrow()
+        .destinations
+        .iter()
+        .filter(|d| d.enabled && d.wants_vertical())
+        .map(|d| d.name.clone())
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    ctrl.log(format!(
+        "[OBS multitrack] {} set to Vertical, but {why}, so it gets nothing this stream.",
+        names.join(", ")
+    ));
+}
+
+/// Encoder id and settings for one track. x264 uses `preset` strings like
+/// "veryfast"; nvenc uses "p1"-"p7"; AMD uses similar tier names.
+/// `profile=main` is what every Twitch / YouTube / Kick decoder accepts;
+/// baseline would drop B-frames entirely and main+high are functionally
+/// equivalent on the wire for ~1080p60.
+fn encoder_for(choice: &EncoderChoice, kbps: u32) -> crate::local_eb_config::TrackEncoder {
+    let settings_json = match choice.family {
+        "nvenc" => encoder_settings_nvenc(kbps),
+        "amd" => encoder_settings_amd(kbps),
+        "qsv" => encoder_settings_qsv(kbps),
+        _ => encoder_settings_x264(kbps),
+    };
+    crate::local_eb_config::TrackEncoder {
+        encoder_type: choice.id.into(),
+        settings_json,
+    }
+}
+
+/// No Twitch destination, so there is no Twitch config to proxy: build one
+/// from the canvases OBS described (see `local_eb_config`). The main canvas
+/// gets one track, and OBS's Additional canvas gets one when it sends one,
+/// which is what feeds destinations set to Vertical. Falls back to the
+/// static ladder when OBS didn't describe its canvases.
+fn obs_multitrack_config_local(
+    body: &str,
+    query: &str,
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+) -> String {
+    let offered = crate::local_eb_config::parse_canvases(body);
+    let canvases = canvases_to_encode(&offered, &settings.borrow().destinations);
+    if canvases.len() < offered.len() {
+        ctrl.log(
+            "[OBS multitrack] OBS's Additional canvas is not encoded: no destination is set \
+             to Vertical",
+        );
+    }
+    let available = crate::obs_register::available_video_encoders();
+    let choice = choose_encoder(query, body, available.as_deref());
+    // Explicit URL value, then OBS's own bandwidth cap, then a default
+    // that keeps the main track at a normal 1080p60 bitrate.
+    let bandwidth = config_url_bandwidth(query)
+        .or_else(|| crate::local_eb_config::requested_budget_kbps(body))
+        .unwrap_or_else(|| crate::local_eb_config::default_budget_kbps(&canvases));
+    // The main track is what OBS streams with Enhanced Broadcasting off, so
+    // turning EB on changes nothing about it (see `StreamerSettings`).
+    let streamer = crate::obs_register::active_stream_settings();
+    match &streamer {
+        Some(own) => ctrl.log(format!(
+            "[OBS multitrack] main track uses your OBS stream settings: {}, {} kbps",
+            own.encoder
+                .as_ref()
+                .map_or("your bitrate with InstantClone's encoder", |e| {
+                    e.encoder_type.as_str()
+                }),
+            own.bitrate_kbps
+        )),
+        None => ctrl.log(
+            "[OBS multitrack] couldn't read your OBS stream settings (Settings > Output) - \
+             using InstantClone's defaults",
+        ),
+    }
+    let own_encoder = streamer.as_ref().and_then(|own| own.encoder.as_ref());
+    let vertical_own = own_encoder_for_vertical(own_encoder, &settings.borrow().destinations);
+    if canvases.len() > 1 {
+        ctrl.log(match vertical_own {
+            Some(own) => format!(
+                "[OBS multitrack] vertical track uses your encoder ({})",
+                own.codec().label()
+            ),
+            None => "[OBS multitrack] vertical track uses H.264, which every vertical \
+                     destination plays"
+                .to_string(),
+        });
+    }
+    let ingest_port = settings.borrow().ingest_port;
+    let built = crate::local_eb_config::build(
+        &canvases,
+        bandwidth,
+        streamer.as_ref(),
+        ingest_port,
+        |kbps| picked_encoder(vertical_own, &choice, kbps),
+    );
+    let Some((config, plan)) = built else {
+        ctrl.log(
+            "[OBS multitrack] no Twitch destination, and OBS didn't describe its canvases - \
+             using the default 1080p ladder.",
+        );
+        crate::trace::log(
+            "OBS_MULTITRACK",
+            "no twitch destination, no canvases - static fallback",
+        );
+        return obs_multitrack_config_static(query, body, settings);
+    };
+    let budget = match streamer {
+        Some(_) => String::new(),
+        None => format!("{bandwidth} kbps total, "),
+    };
+    ctrl.log(format!(
+        "[OBS multitrack] no Twitch destination - building the config here: {}, \
+         {budget}InstantClone's encoder: {} ({})",
+        plan.describe(),
+        choice.family,
+        choice.reason
+    ));
+    crate::trace::log("OBS_MULTITRACK", "local config built from OBS's canvases");
+    if !plan.feeds_vertical() {
+        log_vertical_destinations_waiting(
+            ctrl,
+            settings,
+            "OBS sent no 9:16 canvas (in OBS: Settings → Stream → Enhanced Broadcasting → \
+             Additional canvas, pick your vertical canvas, for example Aitum Vertical)",
+        );
+    }
+    config
+}
+
+/// The canvases OBS offered that are worth encoding. The Additional canvas
+/// only feeds destinations set to Vertical, so with none enabled it would
+/// cost a whole encode (and, on the defaults, a share of the bitrate) for a
+/// track nobody receives.
+fn canvases_to_encode(
+    offered: &[crate::local_eb_config::ObsCanvas],
+    destinations: &[config::Destination],
+) -> Vec<crate::local_eb_config::ObsCanvas> {
+    let streams_vertical = destinations.iter().any(|d| d.enabled && d.wants_vertical());
+    let keep = if streams_vertical { offered.len() } else { 1 };
+    offered.iter().take(keep).copied().collect()
+}
+
+/// The encoder for a track InstantClone fills in: the streamer's own at
+/// `kbps` when it suits every vertical destination (see
+/// `own_encoder_for_vertical`), otherwise InstantClone's choice.
+fn picked_encoder(
+    own_for_vertical: Option<&crate::local_eb_config::TrackEncoder>,
+    choice: &EncoderChoice,
+    kbps: u32,
+) -> crate::local_eb_config::TrackEncoder {
+    match own_for_vertical {
+        Some(own) => own.at_bitrate(kbps),
+        None => encoder_for(choice, kbps),
+    }
+}
+
+/// The streamer's own encoder when every enabled vertical destination plays
+/// its codec (HEVC to YouTube, say), so the vertical track matches the main
+/// one; None means InstantClone's H.264, which plays everywhere.
+fn own_encoder_for_vertical<'a>(
+    own: Option<&'a crate::local_eb_config::TrackEncoder>,
+    destinations: &[config::Destination],
+) -> Option<&'a crate::local_eb_config::TrackEncoder> {
+    own.filter(|own| {
+        let codec = own.codec();
+        destinations
+            .iter()
+            .filter(|d| d.enabled && d.wants_vertical())
+            .all(|d| d.plays(codec))
+    })
+}
+
 fn twitch_ingests_json() -> String {
     let mut out = String::from("[");
     for (i, (slug, label)) in config::twitch_ingests().iter().enumerate() {
@@ -2215,33 +2802,40 @@ fn twitch_ingests_json() -> String {
     out
 }
 
-/// Config keys this route will write. Every other field has its own route
+/// Exact config keys `POST /config` will write, besides the `hotkey.<action>`
+/// and `midi.<action>` families. Every other field has its own route
 /// (destinations, auth, profiles) or is not user-settable at all, and the
 /// default is refusal.
 ///
 /// This list and `apply_field_str` must cover the same keys: a key allowed
 /// here that the applier does not know is silently dropped, which is how the
-/// MIDI clear button spent 0.1.14 pretending to work.
+/// MIDI clear button spent 0.1.14 pretending to work. A named list rather than
+/// a `matches!` so a test can walk every key through save and load.
+const SETTABLE_KEYS: &[&str] = &[
+    "ingest_port",
+    "ingest_bind_all",
+    "ingest_key",
+    "web_port",
+    "web_bind_all",
+    "buffer_mb",
+    "buffer_path",
+    "overlays_dir",
+    "tracing_enabled",
+    "auto_arm_on_connect",
+    "auto_activate_when_ready",
+    "auto_arm_delay_ms",
+    "update_check_enabled",
+    "open_dashboard_on_launch",
+    "midi_device",
+    "twitch_client_id",
+];
+
+/// Whether `POST /config` may write key `k`. See `SETTABLE_KEYS`.
 fn is_settable_key(k: &str) -> bool {
-    matches!(
-        k,
-        "ingest_port"
-            | "ingest_bind_all"
-            | "ingest_key"
-            | "web_port"
-            | "web_bind_all"
-            | "buffer_mb"
-            | "buffer_path"
-            | "overlays_dir"
-            | "tracing_enabled"
-            | "auto_arm_on_connect"
-            | "auto_activate_when_ready"
-            | "auto_arm_delay_ms"
-            | "update_check_enabled"
-            | "open_dashboard_on_launch"
-    ) || k.starts_with("hotkey.")
+    SETTABLE_KEYS.contains(&k)
+        || k.starts_with("hotkey.")
         || k.starts_with("midi.")
-        || k == "midi_device"
+        || k.starts_with(crate::crash_protection::KEY_PREFIX)
 }
 
 async fn post_config(
@@ -2266,15 +2860,6 @@ async fn post_config(
         if is_settable_key(k) {
             apply_field_str(&mut new_settings, k, v);
         }
-    }
-    if let Some(v) = form.get("discord_webhook_url") {
-        if !v.is_empty() {
-            apply_field_str(&mut new_settings, "discord_webhook_url", v);
-        }
-        // explicit clear: caller must POST `webhook_clear=1`
-    }
-    if form.get("webhook_clear").map(|s| s.as_str()) == Some("1") {
-        new_settings.discord_webhook_url.clear();
     }
 
     // Autostart lives in the registry, not in Settings, so it is applied
@@ -2344,6 +2929,13 @@ async fn post_config(
             format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&msg)),
         );
     }
+    if let Some(msg) = binding_taken_by_integration(&form, &new_settings) {
+        return (
+            "409 Conflict",
+            "application/json",
+            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&msg)),
+        );
+    }
 
     let old = settings.borrow().clone();
     let needs_restart =
@@ -2364,9 +2956,6 @@ async fn post_config(
             ),
         );
     }
-    // Mirror webhook into the controller so events fire correctly even
-    // before the next supervisor settings-change tick.
-    ctrl.update_webhook(new_settings.discord_webhook_url.clone());
     // Same for the ingest key: mirror it inline so locking down the ingest port
     // takes effect this instant. Waiting for the supervisor tick would leave a
     // brief window where begin_publish still enforces the previous (usually
@@ -2388,6 +2977,37 @@ async fn post_config(
         "application/json",
         format!(r#"{{"ok":true{}}}"#, restart_msg),
     )
+}
+
+/// A delay hotkey or pad being set that an enabled integration starts from.
+/// The delay action would take it over without a word, so it's refused the
+/// way the Integrations tab refuses the reverse.
+fn binding_taken_by_integration(
+    form: &std::collections::HashMap<String, String>,
+    s: &Settings,
+) -> Option<String> {
+    let owner = |wanted: &str, is_pad: bool| {
+        let (key, pad) = if is_pad { ("", wanted) } else { (wanted, "") };
+        crate::integrations::model::shortcut_owner(&s.integrations, key, pad)
+    };
+    let bindings = [
+        ("hotkey.", s.hotkeys.entries(), false),
+        ("midi.", s.midi.entries(), true),
+    ];
+    for (prefix, entries, is_pad) in bindings {
+        for (action, bound) in entries {
+            if bound.is_empty() || !form.contains_key(&format!("{prefix}{action}")) {
+                continue;
+            }
+            if let Some(name) = owner(bound, is_pad) {
+                let what = if is_pad { "That pad" } else { bound };
+                return Some(format!(
+                    "{what} already starts the integration \"{name}\"; pick another, or change it there"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Reset the persisted config to defaults. Two scopes:
@@ -2423,6 +3043,13 @@ async fn post_config_reset(
         next.destinations = prev.destinations;
         next.profiles = prev.profiles;
         next.configured = prev.configured;
+        // Integrations and their connections are the user's own work too.
+        next.integrations = prev.integrations;
+        next.discord_channels = prev.discord_channels;
+        next.phone = prev.phone;
+        next.integrations_migrated = prev.integrations_migrated;
+        // Resetting it would silently log out of Twitch.
+        next.twitch_client_id = prev.twitch_client_id;
     } else if scope != "all" {
         return (
             "400 Bad Request",
@@ -2440,7 +3067,6 @@ async fn post_config_reset(
             ),
         );
     }
-    ctrl.update_webhook(next.discord_webhook_url.clone());
     crate::trace::set_enabled(next.tracing_enabled);
     if scope == "all" {
         // Nuke the controller's live delay state too. Settings on
@@ -2454,6 +3080,11 @@ async fn post_config_reset(
         // send below swaps in defaults). The seeded flag is back to false in
         // `next`, so the dashboard re-bakes the presets on its next load.
         wipe_studio_overlays(&settings.borrow().overlays_dir);
+        // A factory reset forgets the Twitch logins as well.
+        if let Some(integrations) = ctrl.integrations() {
+            integrations.twitch_logout(crate::integrations::twitch::Which::Main);
+            integrations.twitch_logout(crate::integrations::twitch::Which::Bot);
+        }
     }
     ctrl.log(format!("config reset (scope={})", scope));
     reconcile_obs_vod_files(&next, ctrl);
@@ -2754,16 +3385,31 @@ async fn post_midi_poll(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
 ) -> (&'static str, &'static str, String) {
-    if let Some((action, signature)) = ctrl.midi().take_captured() {
+    let mut refused = None;
+    if let Some((action, signature)) = ctrl.midi().take_captured_for(&config::ACTIONS) {
         let _wl = settings_write_guard();
         let mut new_settings = settings.borrow().clone();
-        new_settings.midi.set(&action, &signature);
-        if new_settings.save(cfg_path).is_ok() {
-            ctrl.midi().update_from_settings(&new_settings);
-            let _ = settings.send(new_settings);
+        // The pad an integration starts from: taking it for the delay would
+        // leave that integration deaf without a word.
+        let owner =
+            crate::integrations::model::shortcut_owner(&new_settings.integrations, "", &signature);
+        if let Some(name) = owner {
+            refused = Some(format!(
+                "That pad already starts the integration \"{name}\". Press another, or change it there."
+            ));
+        } else {
+            new_settings.midi.set(&action, &signature);
+            if new_settings.save(cfg_path).is_ok() {
+                ctrl.midi().update_from_settings(&new_settings);
+                let _ = settings.send(new_settings);
+            }
         }
     }
-    ("200 OK", "application/json", ctrl.midi().to_json())
+    (
+        "200 OK",
+        "application/json",
+        ctrl.midi().to_json(refused.as_deref()),
+    )
 }
 
 /// Write the current delay state (armed / target, and the "last manually
@@ -2780,7 +3426,7 @@ pub(crate) fn persist_delay_state(
     let armed = ctrl.armed_delay_ms();
     let target = ctrl.target_delay_ms();
     // Track "last manually armed delay" in auto_arm_delay_ms so the
-    // System -> Behavior auto-arm picks up wherever the streamer last
+    // System -> General auto-arm picks up wherever the streamer last
     // explicitly armed. Only updates on non-zero arm so a Disarm
     // (arm_delay(0)) doesn't wipe the preference.
     let new_auto_arm = if armed > 0 { Some(armed) } else { None };
@@ -3127,6 +3773,21 @@ async fn post_destination_toggle(
         );
     };
     dest.enabled = enabled;
+    // Switching on a half-filled destination would stream nothing and, once
+    // on, fail every later save. Say what's missing instead.
+    if enabled {
+        let errors = ns.validate();
+        if !errors.is_empty() {
+            return (
+                "400 Bad Request",
+                "application/json",
+                format!(
+                    r#"{{"ok":false,"error":"{}"}}"#,
+                    json_escape(&errors.join("; "))
+                ),
+            );
+        }
+    }
 
     // `configured` is a first-run setup latch, not a live "has an active
     // destination" flag. Toggling your last destination off must not bounce
@@ -3294,7 +3955,16 @@ async fn dock_layout_save(
 /// Live per-destination snapshot: id, name, status, bitrate, frames, etc.
 /// Joins settings (the user's configured list) with the controller's
 /// runtime stats (only present for destinations that were spawned).
-fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>) -> String {
+///
+/// `include_secrets` is the caller's admin flag. A custom URL can carry the
+/// stream key in its path (rtmp://host/app/SECRET), so only a full dashboard
+/// session (whose edit form needs it) gets it raw; a dock-token caller gets it
+/// blank plus `custom_egress_url_set`, the same rule `GET /config` applies.
+fn destinations_json(
+    ctrl: &Controller,
+    settings: &Arc<watch::Sender<Settings>>,
+    include_secrets: bool,
+) -> String {
     let s = settings.borrow();
     let snap = ctrl.destination_snapshot();
     let stats_for = |id: &str| {
@@ -3316,17 +3986,19 @@ fn destinations_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>)
         // dashboard turns this into a green "Vertical" badge vs an amber
         // "waiting for Dual Format" hint.
         let v = dest_video(ctrl, d, &readouts);
+        let custom_url_shown = if include_secrets {
+            d.custom_egress_url.as_str()
+        } else {
+            ""
+        };
         out.push_str(&format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"audio_track":{at},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"custom_egress_url_set":{cus},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"audio_track":{at},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled,
             p  = json_escape_quoted(&d.platform),
-            // NOTE: returned raw, NOT redacted, because the dashboard's edit
-            // form needs it to populate the input field. Anyone reading this
-            // endpoint already has localhost access and can read the plaintext
-            // config file directly, so this doesn't expand the risk surface.
-            cu = json_escape_quoted(&d.custom_egress_url),
+            cu = json_escape_quoted(custom_url_shown),
+            cus = !d.custom_egress_url.is_empty(),
             ti = json_escape_quoted(&d.twitch_ingest),
             yi = json_escape_quoted(&d.youtube_ingest),
             va = d.vod_audio,
@@ -3725,78 +4397,6 @@ fn serve_overlay_file(
     }
 }
 
-// ----------------------------------------------------------------------
-// Discord webhook test ping
-// ----------------------------------------------------------------------
-
-async fn post_test_webhook(ctrl: &Arc<Controller>) -> (&'static str, &'static str, String) {
-    // Verbose test path. The fire-and-forget `fire_webhook` is the wrong
-    // tool here because it (a) silently returns when the URL is empty,
-    // (b) silently returns when its 2-second throttle is active (a fresh
-    // destination-connect notification suppresses the user's test for 2s),
-    // and (c) drops any HTTP/TLS error from Discord on the floor. This
-    // path bypasses the throttle, validates the URL, and surfaces the
-    // real result so the user knows whether the webhook is actually
-    // reachable from this machine.
-    let url = ctrl.webhook_url_snapshot();
-    if url.is_empty() {
-        return (
-            "200 OK",
-            "application/json",
-            r#"{"ok":false,"error":"webhook URL is empty - set it in the System tab and save first"}"#.into(),
-        );
-    }
-    let body =
-        r#"{"content":"🧪 **InstantClone**: Test message - webhook is wired up and working."}"#;
-    // Map ureq::Error (a fat enum that would trip clippy::result_large_err
-    // if propagated) down to just the status code on success or a short
-    // string on failure inside the worker thread.
-    let send = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        tokio::task::spawn_blocking(move || -> Result<u16, String> {
-            crate::https::https_agent()
-                .post(&url)
-                .config()
-                .timeout_connect(Some(std::time::Duration::from_secs(5)))
-                .timeout_global(Some(std::time::Duration::from_secs(8)))
-                .build()
-                .header("Content-Type", "application/json")
-                .send(body)
-                .map(|r| r.status().as_u16())
-                .map_err(|e| e.to_string())
-        }),
-    )
-    .await;
-    let (ok, msg) = match send {
-        Ok(Ok(Ok(status))) if (200..300).contains(&status) => {
-            (true, format!("Discord accepted (HTTP {})", status))
-        }
-        Ok(Ok(Ok(status))) => (
-            false,
-            format!(
-                "Discord rejected with HTTP {} - check the webhook URL",
-                status
-            ),
-        ),
-        Ok(Ok(Err(e))) => (false, format!("connection error: {}", e)),
-        Ok(Err(e)) => (false, format!("internal: {}", e)),
-        Err(_) => (
-            false,
-            "timed out after 10 s waiting for Discord".to_string(),
-        ),
-    };
-    // Match the dashboard contract: `ok=true` carries a friendly status
-    // in `message`, `ok=false` carries the same string in `error` so the
-    // existing toast handler ("Webhook test failed: ${r.error}") just
-    // works without a client-side change.
-    let json = if ok {
-        format!(r#"{{"ok":true,"message":{}}}"#, json_escape_quoted(&msg))
-    } else {
-        format!(r#"{{"ok":false,"error":{}}}"#, json_escape_quoted(&msg))
-    };
-    ("200 OK", "application/json", json)
-}
-
 fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
     // Wraps Settings::apply_field but is callable from outside the module.
     // Implementing here avoids exposing it on Settings.
@@ -3824,7 +4424,6 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         }
         "buffer_path" => s.buffer_path = std::path::PathBuf::from(value),
         "overlays_dir" => s.overlays_dir = std::path::PathBuf::from(value),
-        "discord_webhook_url" => s.discord_webhook_url = value.into(),
         "tracing_enabled" => {
             // Form encoding: checkbox sends "true"/"false" or "on"/"" -
             // treat anything non-empty-non-false as truthy.
@@ -3858,6 +4457,12 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         k if k.starts_with("midi.") => {
             s.midi.set(&k["midi.".len()..], value);
         }
+        // crash_protection.<field>=<value>. `set` clamps and drops anything
+        // malformed, same contract as the config loader.
+        k if k.starts_with(crate::crash_protection::KEY_PREFIX) => {
+            s.crash_protection
+                .set(&k[crate::crash_protection::KEY_PREFIX.len()..], value);
+        }
         // Empty means "every device", which is also what an unknown name
         // amounts to - the listener simply finds nothing to open and the
         // dashboard says so.
@@ -3869,6 +4474,7 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         // matches no device, and the user sees a pick that silently does
         // nothing until the next restart tidies it up.
         "midi_device" => s.midi_device = config::sanitize_device_name(value),
+        "twitch_client_id" => s.twitch_client_id = value.trim().to_string(),
         _ => {}
     }
 }
@@ -4048,9 +4654,16 @@ fn classify_access(method: &str, path: &str) -> Access {
     if path == "/login" {
         return Access::Public;
     }
+    // Web call integrations: outside apps (a Stream Deck, a script) can't log
+    // in. The secret token in the path is the credential, and all a caller
+    // can do is run the integrations that hold that exact token.
+    if path.starts_with("/hooks/") && (method == "GET" || method == "POST") {
+        return Access::Public;
+    }
     // Overlay DISPLAY only (browser sources can't log in); saving overlays is
-    // a POST to /overlays/ which stays Admin.
-    if path == "/overlay" || path.starts_with("/overlay/") {
+    // a POST to /overlays/ which stays Admin. GET only: nothing writes under
+    // /overlay, and a future route that does must not inherit this exemption.
+    if method == "GET" && (path == "/overlay" || path.starts_with("/overlay/")) {
         return Access::Public;
     }
     // OBS fetches the multitrack (Enhanced Broadcasting) config when it starts
@@ -4074,6 +4687,12 @@ fn classify_access(method: &str, path: &str) -> Access {
     // to unauthenticated callers, and Control is arm, activate, cut and
     // go-live. A picture must not be a way to drive the delay.
     if method == "GET" && (path == "/overlay-state" || path == "/overlay-events") {
+        return Access::Public;
+    }
+    // The alerts browser source, for the same reason, and safe for the same
+    // reason: its feed is only the cards integrations chose to put on
+    // stream. Nothing there identifies the streamer or controls anything.
+    if method == "GET" && (path == "/alerts" || path == "/alerts-events") {
         return Access::Public;
     }
     match (method, path) {
@@ -4101,7 +4720,9 @@ fn classify_access(method: &str, path: &str) -> Access {
         | ("POST", "/delay")
         | ("POST", "/go-live")
         | ("POST", "/cut-after")
-        | ("POST", "/cut-after/cancel") => Access::Control,
+        | ("POST", "/cut-after/cancel")
+        // Ending a crash-protection hold is operational, like a cut.
+        | ("POST", "/crash-protection/end") => Access::Control,
         ("POST", p) if p.starts_with("/docks/") => Access::Control,
         // GET a saved dock layout (the dock loads its own persisted layout).
         ("GET", p) if p.starts_with("/docks/") => Access::Control,
@@ -4176,6 +4797,69 @@ fn wants_html(head: &str) -> bool {
 /// IPv4/IPv6 loopback address. Used to keep first-time password bootstrap on
 /// the local machine. An unparseable value is treated as non-loopback so the
 /// restriction fails closed.
+/// GET routes another origin may read: the public ones (overlays, alerts)
+/// and the delay status widgets poll. None of them carries a secret.
+fn readable_cross_origin(path: &str) -> bool {
+    classify_access("GET", path) == Access::Public || path == "/state"
+}
+
+/// True when a `Host` header names an IP address or localhost rather than a
+/// domain. An empty Host (HTTP/1.0 tools) is a local tool, not a browser.
+fn host_is_address(host: &str) -> bool {
+    let name = match host.strip_prefix('[') {
+        // [::1]:7799
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => host.rsplit_once(':').map_or(host, |(name, _)| name),
+    };
+    let name = name.to_ascii_lowercase();
+    host.is_empty()
+        || name == "localhost"
+        || name.ends_with(".localhost")
+        || name.parse::<std::net::IpAddr>().is_ok()
+}
+
+/// Whether a request may set up integration steps that run programs or
+/// write files. A password always may. Without one, only while the
+/// dashboard is closed to the network: then nothing but this PC can reach
+/// it. Open to the network, anyone on it could plant a page that the
+/// streamer's own browser or OBS loads from this PC (an overlay, say), and
+/// a check on who connected would let that page through.
+fn may_set_up_local_steps(settings: &Settings, peer_ip: &str, head: &str) -> bool {
+    !settings.dashboard_password_hash.is_empty()
+        || (!settings.web_bind_all && from_this_pc(peer_ip, head))
+}
+
+/// Whether a request comes from this PC itself: a loopback connection,
+/// addressed to a loopback name, not relayed. A port forwarder on this PC
+/// (netsh portproxy, ssh -R) connects from loopback too, but keeps the
+/// address the remote side dialled in Host.
+fn from_this_pc(peer_ip: &str, head: &str) -> bool {
+    let host = parse_origin_host(head).1;
+    let name = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or("").to_string(),
+        None => host
+            .rsplit_once(':')
+            .map_or(host.as_str(), |(n, _)| n)
+            .to_ascii_lowercase(),
+    };
+    let loopback_name = name == "localhost"
+        || name
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    is_loopback(peer_ip) && loopback_name && !is_proxied(head)
+}
+
+/// Whether the request came through a reverse proxy, which connects from
+/// this PC on behalf of someone who may be anywhere.
+fn is_proxied(head: &str) -> bool {
+    head.lines().skip(1).any(|line| {
+        let name = line.split(':').next().unwrap_or("").trim();
+        ["x-forwarded-for", "forwarded", "via", "x-real-ip"]
+            .iter()
+            .any(|h| name.eq_ignore_ascii_case(h))
+    })
+}
+
 fn is_loopback(ip: &str) -> bool {
     ip.parse::<std::net::IpAddr>()
         .map(|a| a.is_loopback())
@@ -4270,6 +4954,12 @@ static DOCK_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js.gz"
 /// Main dashboard / first-run wizard. Source lives in `web/index.html`;
 /// build-time minified + gzipped (see `build.rs`).
 static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
+/// The alerts browser source (`/alerts`); see `integrations::alerts`.
+static ALERTS_HTML: &str = include_str!("../web/alerts.html");
+
+/// The dashboard's Integrations tab; source in `web/integrations.js`,
+/// build-time gzipped like the dock script.
+static INTEGRATIONS_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js.gz"));
 
 /// Overlay Studio author-time runtime + baker. Loaded only by the
 /// dashboard (never by a live overlay in OBS). Source lives in
@@ -4844,6 +5534,13 @@ mod tests {
         // inheriting the read exemption.
         assert_eq!(classify_access("POST", "/overlay-state"), Access::Admin);
         assert_eq!(classify_access("POST", "/overlay-events"), Access::Admin);
+        assert_eq!(classify_access("GET", "/alerts-events"), Access::Public);
+        assert_eq!(classify_access("POST", "/alerts-events"), Access::Admin);
+        // Putting a test card up is a dashboard action.
+        assert_eq!(
+            classify_access("POST", "/integrations/alerts/test"),
+            Access::Admin
+        );
 
         // The dashboard's own feed stays behind a login. If this ever
         // relaxes to Public, the overlay split above has been undone and
@@ -4860,6 +5557,25 @@ mod tests {
     /// time a user set a dashboard password.
     #[test]
     fn neither_overlay_renderer_asks_for_the_dashboard_feed() {
+        // Matching one exact spelling (`fetch('/state')`) let every other
+        // spelling through: double quotes, a template literal, a query string,
+        // an origin prefix. So the check is "a URL string that ends in this
+        // path", whatever surrounds it. Prose in comments ("not /events and
+        // /state.") is not a URL string and must not count.
+        for (js, want) in [
+            (r#"fetch("/state")"#, 1),
+            ("new EventSource(`/events`)", 1),
+            ("fetch('/state?t=1')", 1),
+            ("fetch(location.origin + '/events#x')", 1),
+            ("// read /overlay-events, not /events and /state.", 0),
+        ] {
+            assert_eq!(
+                feed_references(js, "/events") + feed_references(js, "/state"),
+                want,
+                "{js}"
+            );
+        }
+
         let saved = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/web/overlay-runtime.js"
@@ -4870,14 +5586,30 @@ mod tests {
             ("the built-in overlay", builtin.as_str()),
         ] {
             assert!(
-                js.contains("/overlay-events") && js.contains("/overlay-state"),
+                feed_references(js, "/overlay-events") > 0
+                    && feed_references(js, "/overlay-state") > 0,
                 "{what} must read the overlay feed"
             );
-            assert!(
-                !js.contains("EventSource('/events')") && !js.contains("fetch('/state')"),
+            assert_eq!(
+                feed_references(js, "/events") + feed_references(js, "/state"),
+                0,
                 "{what} must not read the dashboard feed - it needs a session"
             );
         }
+    }
+
+    /// How many times `js` uses `path` as a URL: the path followed by a
+    /// string's closing quote, a query or a fragment. `/overlay-state` does not
+    /// contain `/state`, so the two feeds never match each other.
+    fn feed_references(js: &str, path: &str) -> usize {
+        js.match_indices(path)
+            .filter(|(at, _)| {
+                matches!(
+                    js[at + path.len()..].chars().next(),
+                    Some('\'' | '"' | '`' | '?' | '#')
+                )
+            })
+            .count()
     }
 
     /// The dashboard's copy of the offline guard. The hotkey and MIDI paths
@@ -5015,61 +5747,339 @@ mod tests {
         );
     }
 
-    #[test]
-    fn apply_field_str_persists_ingest_key() {
-        // Regression: ingest_key is in post_config's form whitelist, so
-        // apply_field_str must have a matching arm or the "Save key" button
-        // silently no-ops and the ingest is never actually locked.
-        let mut s = crate::config::Settings::defaults();
-        assert!(s.ingest_key.is_empty());
-        apply_field_str(&mut s, "ingest_key", "hunter2ingest");
-        assert_eq!(s.ingest_key, "hunter2ingest");
-        apply_field_str(&mut s, "ingest_key", "");
-        assert!(s.ingest_key.is_empty());
+    /// One settable key in the save round trip below: what the form posts to
+    /// set it, what the field then reads as, what the form posts to put it
+    /// back, and how to read the field.
+    struct SettableRow {
+        key: &'static str,
+        set: &'static str,
+        reads_as: &'static str,
+        reset: &'static str,
+        read: fn(&Settings) -> String,
+    }
+
+    /// A form value, percent-encoded so `parse_form` hands the route exactly
+    /// this string (a raw `+` in a hotkey would otherwise arrive as a space).
+    fn form_encode(value: &str) -> String {
+        value
+            .bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect()
+    }
+
+    /// Every key `POST /config` accepts, driven through the real handler, the
+    /// config file, and `Settings::load`, then set back the same way.
+    ///
+    /// This is the regression class that kept recurring: a key missing from
+    /// the whitelist, from `apply_field_str`, or from save/load is dropped
+    /// without an error, and the dashboard shows "Saved" for a setting that
+    /// reverts on the next launch (tracing_enabled, ingest_key and the MIDI
+    /// clear button all shipped like that). Calling `apply_field_str` alone
+    /// skipped the whitelist, so removing a key from it still passed.
+    #[tokio::test]
+    async fn every_settable_key_survives_post_config_save_and_load() {
+        let rows: &[SettableRow] = &[
+            SettableRow {
+                key: "ingest_port",
+                set: "19350",
+                reads_as: "19350",
+                reset: "1935",
+                read: |s| s.ingest_port.to_string(),
+            },
+            SettableRow {
+                key: "ingest_bind_all",
+                set: "on",
+                reads_as: "true",
+                reset: "false",
+                read: |s| s.ingest_bind_all.to_string(),
+            },
+            SettableRow {
+                key: "ingest_key",
+                set: "loop_key-1",
+                reads_as: "loop_key-1",
+                reset: "",
+                read: |s| s.ingest_key.clone(),
+            },
+            SettableRow {
+                key: "web_port",
+                set: "17799",
+                reads_as: "17799",
+                reset: "7799",
+                read: |s| s.web_port.to_string(),
+            },
+            SettableRow {
+                key: "web_bind_all",
+                set: "1",
+                reads_as: "true",
+                reset: "",
+                read: |s| s.web_bind_all.to_string(),
+            },
+            SettableRow {
+                key: "buffer_mb",
+                set: "640",
+                reads_as: "640",
+                reset: "500",
+                read: |s| s.buffer_mb.to_string(),
+            },
+            SettableRow {
+                key: "buffer_path",
+                set: "loop-ring.buf",
+                reads_as: "loop-ring.buf",
+                reset: "./instantclone.buf",
+                read: |s| s.buffer_path.display().to_string(),
+            },
+            SettableRow {
+                key: "overlays_dir",
+                set: "loop-overlays",
+                reads_as: "loop-overlays",
+                reset: "./overlays",
+                read: |s| s.overlays_dir.display().to_string(),
+            },
+            SettableRow {
+                key: "tracing_enabled",
+                set: "true",
+                reads_as: "true",
+                reset: "false",
+                read: |s| s.tracing_enabled.to_string(),
+            },
+            // A checkbox posts "on" when ticked; it must read as true.
+            SettableRow {
+                key: "auto_arm_on_connect",
+                set: "on",
+                reads_as: "true",
+                reset: "off",
+                read: |s| s.auto_arm_on_connect.to_string(),
+            },
+            SettableRow {
+                key: "auto_activate_when_ready",
+                set: "true",
+                reads_as: "true",
+                reset: "0",
+                read: |s| s.auto_activate_when_ready.to_string(),
+            },
+            SettableRow {
+                key: "auto_arm_delay_ms",
+                set: "30000",
+                reads_as: "30000",
+                reset: "15000",
+                read: |s| s.auto_arm_delay_ms.to_string(),
+            },
+            SettableRow {
+                key: "update_check_enabled",
+                set: "false",
+                reads_as: "false",
+                reset: "true",
+                read: |s| s.update_check_enabled.to_string(),
+            },
+            SettableRow {
+                key: "open_dashboard_on_launch",
+                set: "off",
+                reads_as: "false",
+                reset: "on",
+                read: |s| s.open_dashboard_on_launch.to_string(),
+            },
+            SettableRow {
+                key: "midi_device",
+                set: "LoopDevice",
+                reads_as: "LoopDevice",
+                reset: "",
+                read: |s| s.midi_device.clone(),
+            },
+            SettableRow {
+                key: "twitch_client_id",
+                set: " abcdefghij0123456789klmnopqrst ",
+                reads_as: "abcdefghij0123456789klmnopqrst",
+                reset: "",
+                read: |s| s.twitch_client_id.clone(),
+            },
+        ];
+
+        // The table and the whitelist must list the same keys, so a new
+        // settable key cannot skip this test and a dropped one cannot hide.
+        for key in SETTABLE_KEYS {
+            assert!(
+                rows.iter().any(|r| r.key == *key),
+                "{key} is settable but has no row here - add one"
+            );
+        }
+        for row in rows {
+            assert!(is_settable_key(row.key), "{} is not settable", row.key);
+        }
+
+        let defaults = Settings::defaults();
+        for row in rows {
+            // Precondition: the new value differs from the default, or the
+            // round trip would pass on a key that never landed.
+            assert_ne!(
+                (row.read)(&defaults),
+                row.reads_as,
+                "{}: pick a non-default",
+                row.key
+            );
+        }
+
+        // Every binding, too: `hotkey.<action>` and `midi.<action>`.
+        let letters = ["A", "B", "C", "D", "E"];
+        let bindings: Vec<(String, String, String)> = config::ACTIONS
+            .iter()
+            .zip(letters)
+            .enumerate()
+            .flat_map(|(i, (action, letter))| {
+                [
+                    (
+                        action.to_string(),
+                        format!("hotkey.{action}"),
+                        format!("Ctrl+Alt+{letter}"),
+                    ),
+                    (
+                        action.to_string(),
+                        format!("midi.{action}"),
+                        format!("note:1:{}", 36 + i),
+                    ),
+                ]
+            })
+            .collect();
+
+        let live = Live::new(Settings::defaults());
+        let post = |pairs: Vec<(String, String)>| {
+            pairs
+                .iter()
+                .map(|(k, v)| format!("{k}={}", form_encode(v)))
+                .collect::<Vec<_>>()
+                .join("&")
+        };
+
+        let set_body = post(
+            rows.iter()
+                .map(|r| (r.key.to_string(), r.set.to_string()))
+                .chain(bindings.iter().map(|(_, k, v)| (k.clone(), v.clone())))
+                .collect(),
+        );
+        let (status, _, body) =
+            post_config(&set_body, &live.ctrl, &live.settings, &live.cfg_path).await;
+        assert_eq!(status, "200 OK", "{body}");
+        let loaded = Settings::load(&live.cfg_path).expect("config was written");
+        for row in rows {
+            assert_eq!((row.read)(&loaded), row.reads_as, "{} after load", row.key);
+            assert_eq!(
+                (row.read)(&live.settings.borrow()),
+                row.reads_as,
+                "{} live",
+                row.key
+            );
+        }
+        for (action, key, value) in &bindings {
+            let bound = if key.starts_with("hotkey.") {
+                loaded.hotkeys.entries()
+            } else {
+                loaded.midi.entries()
+            };
+            let got = bound
+                .iter()
+                .find(|(a, _)| *a == action.as_str())
+                .map(|(_, v)| *v);
+            assert_eq!(got, Some(value.as_str()), "{key} after load");
+        }
+
+        let reset_body = post(
+            rows.iter()
+                .map(|r| (r.key.to_string(), r.reset.to_string()))
+                .chain(bindings.iter().map(|(_, k, _)| (k.clone(), String::new())))
+                .collect(),
+        );
+        let (status, _, body) =
+            post_config(&reset_body, &live.ctrl, &live.settings, &live.cfg_path).await;
+        assert_eq!(status, "200 OK", "{body}");
+        let loaded = Settings::load(&live.cfg_path).expect("config was written");
+        for row in rows {
+            assert_eq!(
+                (row.read)(&loaded),
+                (row.read)(&defaults),
+                "{} back to default",
+                row.key
+            );
+        }
+        assert!(loaded.hotkeys.entries().iter().all(|(_, c)| c.is_empty()));
+        assert!(loaded.midi.entries().iter().all(|(_, m)| m.is_empty()));
     }
 
     #[test]
-    fn apply_field_str_persists_tracing_enabled_value() {
-        // The dispatch in post_config gates which keys reach this
-        // function. The test below asserts the gate includes our
-        // key by simulating the form-loop assignment.
-        let mut s = crate::config::Settings::defaults();
-        // beta.6 default is `false`.
-        assert!(!s.tracing_enabled);
-        apply_field_str(&mut s, "tracing_enabled", "true");
-        assert!(s.tracing_enabled);
-        apply_field_str(&mut s, "tracing_enabled", "false");
-        assert!(!s.tracing_enabled);
-    }
-
-    // ── Behavior toggles: dispatch path tests ─────────────────────
-    //
-    // Same regression class as the tracing_enabled test above. The
-    // post_config form-key whitelist plus apply_field_str's match arm
-    // both have to know each new behaviour key, or settings silently
-    // round-trip to the default. These tests pin both sides for the
-    // v0.1.4 auto-arm fields.
-
-    #[test]
-    fn apply_field_str_persists_auto_arm_on_connect() {
-        let mut s = crate::config::Settings::defaults();
-        assert!(!s.auto_arm_on_connect);
-        apply_field_str(&mut s, "auto_arm_on_connect", "true");
-        assert!(s.auto_arm_on_connect);
-        apply_field_str(&mut s, "auto_arm_on_connect", "false");
-        assert!(!s.auto_arm_on_connect);
-        apply_field_str(&mut s, "auto_arm_on_connect", "on");
-        assert!(s.auto_arm_on_connect, "checkbox 'on' must read as truthy");
+    fn crash_protection_preview_applies_unsaved_edits() {
+        let saved = crate::crash_protection::CrashProtection::default();
+        let landscape = crash_protection_preview("", &saved);
+        let arcade = crash_protection_preview("crash_protection.theme=arcade", &saved);
+        let vertical = crash_protection_preview("orientation=vertical", &saved);
+        // PNG: width and height sit big-endian at bytes 16 and 20.
+        let size = |png: &[u8]| {
+            let read = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+            (read(16), read(20))
+        };
+        assert_eq!(&landscape[1..4], b"PNG");
+        assert_ne!(landscape, arcade, "query edits reach the render");
+        assert_eq!(size(&vertical), (270, 480));
+        let thumb = crash_protection_preview("size=thumb", &saved);
+        assert_eq!(size(&thumb), (192, 108));
+        let strip = crash_protection_preview("frames=24", &saved);
+        assert_eq!(size(&strip), (480, 270 * 24), "24 frames stacked");
+        let capped = crash_protection_preview("frames=500&size=thumb", &saved);
+        assert_eq!(size(&capped), (192, 108 * 24));
+        for preview_only in ["orientation", "size", "phase", "frames"] {
+            assert!(
+                !is_settable_key(preview_only),
+                "preview-only params never persist"
+            );
+        }
     }
 
     #[test]
-    fn apply_field_str_persists_auto_activate_when_ready() {
+    fn a_delay_hotkey_cannot_take_an_integrations_key() {
+        use crate::integrations::model::Trigger;
+        let mut s = Settings::defaults();
+        let mut clip = crate::integrations::presets::build("clip_button", "c".into(), "").unwrap();
+        clip.enabled = true;
+        clip.handlers[0].trigger = Trigger::Shortcut {
+            hotkey: "Ctrl+Alt+K".into(),
+            midi: String::new(),
+            token: String::new(),
+            only_live: false,
+        };
+        s.integrations.push(clip);
+        let form = config::parse_form("hotkey.cut=ctrl%2Balt%2Bk");
+        apply_field_str(&mut s, "hotkey.cut", "ctrl+alt+k");
+        let refused = binding_taken_by_integration(&form, &s).unwrap();
+        assert!(refused.contains("Clip button"), "{refused}");
+        // A form that doesn't touch that binding isn't refused for it.
+        assert!(binding_taken_by_integration(&config::parse_form("buffer_mb=300"), &s).is_none());
+        // A pad bound for any device overlaps the same pad on one deck.
+        s.integrations[0].handlers[0].trigger = Trigger::Shortcut {
+            hotkey: String::new(),
+            midi: "note:1:36".into(),
+            token: String::new(),
+            only_live: false,
+        };
+        apply_field_str(&mut s, "midi.arm", "note:1:36@Deck A");
+        let form = config::parse_form("midi.arm=note%3A1%3A36%40Deck%20A");
+        assert!(binding_taken_by_integration(&form, &s).is_some());
+    }
+
+    #[test]
+    fn apply_field_str_persists_crash_protection_fields() {
         let mut s = crate::config::Settings::defaults();
-        assert!(!s.auto_activate_when_ready);
-        apply_field_str(&mut s, "auto_activate_when_ready", "true");
-        assert!(s.auto_activate_when_ready);
-        apply_field_str(&mut s, "auto_activate_when_ready", "off");
-        assert!(!s.auto_activate_when_ready);
+        assert!(is_settable_key("crash_protection.enabled"));
+        apply_field_str(&mut s, "crash_protection.enabled", "on");
+        apply_field_str(&mut s, "crash_protection.theme", "arcade");
+        apply_field_str(&mut s, "crash_protection.hold_secs", "45");
+        assert!(s.crash_protection.enabled);
+        assert_eq!(
+            s.crash_protection.theme,
+            crate::crash_protection::SlateTheme::Arcade
+        );
+        assert_eq!(s.crash_protection.hold_secs, 45);
     }
 
     #[test]
@@ -5128,6 +6138,74 @@ mod tests {
     }
 
     #[test]
+    fn offer_only_h264_narrows_the_codecs_obs_offers() {
+        // OBS 32 serialises the request with nlohmann (compact, keys sorted).
+        let body = r#"{"client":{"name":"obs-studio","supported_codecs":["av1","h265","h264"],"version":"32.2.2"},"preferences":{"canvases":[{"width":1080}]}}"#;
+        assert_eq!(
+            offer_only_h264(body).unwrap(),
+            r#"{"client":{"name":"obs-studio","supported_codecs":["h264"],"version":"32.2.2"},"preferences":{"canvases":[{"width":1080}]}}"#
+        );
+        let spaced = r#"{"client": {"supported_codecs" : [ "h265", "h264" ] }}"#;
+        assert_eq!(
+            offer_only_h264(spaced).unwrap(),
+            r#"{"client": {"supported_codecs" : ["h264"] }}"#
+        );
+    }
+
+    #[test]
+    fn offer_only_h264_leaves_requests_it_cannot_narrow() {
+        // No list, no H.264 in it, or a list that isn't an array: Twitch
+        // must still get a request, so the caller keeps the original.
+        assert!(offer_only_h264(r#"{"client":{"name":"obs-studio"}}"#).is_none());
+        assert!(offer_only_h264(r#"{"client":{"supported_codecs":["h265"]}}"#).is_none());
+        assert!(offer_only_h264(r#"{"supported_codecs":"h264","x":["h264"]}"#).is_none());
+    }
+
+    #[test]
+    fn only_a_horizontal_destination_besides_twitch_narrows_the_codecs() {
+        let dest = |platform: &str, enabled: bool, format: &str| config::Destination {
+            id: platform.into(),
+            name: platform.into(),
+            enabled,
+            platform: platform.into(),
+            stream_key: "k".into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: format.into(),
+            audio_track: "auto".into(),
+        };
+        let twitch = dest("twitch", true, "horizontal");
+        let test_sink = dest("sink", true, "horizontal");
+        let kick = dest("kick", true, "horizontal");
+        let kick_off = dest("kick", false, "horizontal");
+        let tiktok = dest("restream", true, "vertical");
+        let second_twitch = config::Destination {
+            stream_key: "other-account".into(),
+            ..twitch.clone()
+        };
+        assert!(!feeds_main_track_beyond_twitch(
+            &[twitch.clone(), test_sink],
+            "k"
+        ));
+        assert!(!feeds_main_track_beyond_twitch(
+            &[twitch.clone(), kick_off],
+            "k"
+        ));
+        assert!(!feeds_main_track_beyond_twitch(
+            &[twitch.clone(), tiktok],
+            "k"
+        ));
+        assert!(feeds_main_track_beyond_twitch(
+            &[twitch.clone(), second_twitch],
+            "k"
+        ));
+        assert!(feeds_main_track_beyond_twitch(&[twitch, kick], "k"));
+    }
+
+    #[test]
     fn rewrite_url_templates_replaces_every_endpoint() {
         // Twitch returns multiple `ingest_endpoints` for regional
         // load-balancing. Every one of them must end up pointing at
@@ -5155,6 +6233,22 @@ mod tests {
         let rewritten = rewrite_url_templates(response, "rtmp://new");
         assert!(rewritten.contains(r#""description":"see url_template""#));
         assert!(rewritten.contains(r#""rtmp://new""#));
+
+        // The sharper decoy: a VALUE that is exactly "url_template", quotes
+        // and all. Only a key is followed by a colon; the matcher used to take
+        // the next field's value for this one's and drop the key in between.
+        let response = r#"{"note":"url_template","keep":"rtmp://decoy","ingest_endpoints":[{"url_template":"rtmp://old"}]}"#;
+        let rewritten = rewrite_url_templates(response, "rtmp://new");
+        assert!(
+            rewritten.contains(r#""note":"url_template","keep":"rtmp://decoy""#),
+            "{rewritten}"
+        );
+        assert_eq!(rewritten.matches("rtmp://new").count(), 1, "{rewritten}");
+        assert!(!rewritten.contains("rtmp://old"), "{rewritten}");
+
+        // A non-string value is not a URL to replace either.
+        let response = r#"{"url_template":null,"keep":"rtmp://decoy"}"#;
+        assert_eq!(rewrite_url_templates(response, "rtmp://new"), response);
     }
 
     #[test]
@@ -5355,13 +6449,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_request_head_treats_missing_content_length_as_zero() {
-        let head = "GET / HTTP/1.1\r\nHost: x\r\n";
-        let (_, _, len) = parse_request_head(head);
-        assert_eq!(len, Some(0));
-    }
-
-    #[test]
     fn parse_request_head_is_case_insensitive_on_header_name() {
         let head = "POST /x HTTP/1.1\r\ncontent-length: 7\r\n";
         let (_, _, len) = parse_request_head(head);
@@ -5379,6 +6466,46 @@ mod tests {
     }
 
     // ── CSRF policy ──────────────────────────────────────────────────
+
+    #[test]
+    fn programs_need_a_password_once_the_dashboard_is_on_the_network() {
+        let head = "POST /integrations/save HTTP/1.1\r\nHost: 127.0.0.1:7799\r\n";
+        let proxied = "POST /integrations/save HTTP/1.1\r\nHost: 127.0.0.1:7799\r\nX-Forwarded-For: 203.0.113.9\r\n";
+        let mut s = Settings::defaults();
+        assert!(
+            may_set_up_local_steps(&s, "127.0.0.1", head),
+            "closed to the network"
+        );
+        assert!(
+            !may_set_up_local_steps(&s, "127.0.0.1", proxied),
+            "a proxy on this PC"
+        );
+        s.web_bind_all = true;
+        assert!(
+            !may_set_up_local_steps(&s, "127.0.0.1", head),
+            "open to the network, even from this PC"
+        );
+        assert!(!may_set_up_local_steps(&s, "192.168.1.50", head));
+        s.web_bind_all = false;
+        let forwarded = "POST /integrations/save HTTP/1.1\r\nHost: 192.168.1.20:8080\r\n";
+        assert!(
+            !may_set_up_local_steps(&s, "127.0.0.1", forwarded),
+            "a port forwarder"
+        );
+        let own =
+            "POST /integrations/save HTTP/1.1\r\nHost: 127.0.0.1:7799\r\nVia: 1.1 instantclone\r\n";
+        assert!(
+            !may_set_up_local_steps(&s, "127.0.0.1", own),
+            "a web request step"
+        );
+        let localhost = "POST /integrations/save HTTP/1.1\r\nHost: localhost:7799\r\n";
+        assert!(may_set_up_local_steps(&s, "127.0.0.1", localhost));
+        s.dashboard_password_hash = "pbkdf2$1000$c2FsdA$aGFzaA".into();
+        assert!(
+            may_set_up_local_steps(&s, "192.168.1.50", head),
+            "a password"
+        );
+    }
 
     #[test]
     fn csrf_allows_all_gets() {
@@ -5448,6 +6575,145 @@ mod tests {
         }
     }
 
+    /// The vertical track takes the streamer's own encoder only when every
+    /// enabled vertical destination plays its codec; one that doesn't (or an
+    /// unknown encoder) means H.264 for the whole vertical track.
+    #[test]
+    fn the_vertical_track_uses_the_streamers_codec_only_where_it_plays() {
+        let hevc = crate::local_eb_config::TrackEncoder {
+            encoder_type: "h265_texture_amf".into(),
+            settings_json: "{}".into(),
+        };
+        let own = Some(&hevc);
+        let to = |dests: &[crate::config::Destination]| own_encoder_for_vertical(own, dests);
+        assert!(
+            to(&[vertical_dest("youtube", true)]).is_some(),
+            "YouTube plays HEVC"
+        );
+        assert!(to(&[vertical_dest("youtube", true), vertical_dest("kick", true)]).is_none());
+        assert!(
+            to(&[vertical_dest("youtube", true), vertical_dest("kick", false)]).is_some(),
+            "a disabled destination doesn't hold the codec back"
+        );
+        assert!(
+            to(&[vertical_dest("custom", true)]).is_none(),
+            "unknown server"
+        );
+        let h264 = crate::local_eb_config::TrackEncoder {
+            encoder_type: "h264_texture_amf".into(),
+            settings_json: "{}".into(),
+        };
+        let kick_only = [vertical_dest("kick", true)];
+        assert!(
+            own_encoder_for_vertical(Some(&h264), &kick_only).is_some(),
+            "the streamer's own H.264 plays everywhere"
+        );
+        assert!(own_encoder_for_vertical(None, &kick_only).is_none());
+    }
+
+    fn vertical_dest(platform: &str, enabled: bool) -> crate::config::Destination {
+        crate::config::Destination {
+            platform: platform.into(),
+            stream_format: "vertical".into(),
+            enabled,
+            ..twitch_dest(true, "key")
+        }
+    }
+
+    /// OBS's Additional canvas is encoded only while an enabled destination
+    /// streams vertical; otherwise it is a whole encode nobody receives.
+    #[test]
+    fn the_additional_canvas_is_encoded_only_for_a_vertical_destination() {
+        use crate::local_eb_config::ObsCanvas;
+        let at = |width, height| ObsCanvas {
+            width,
+            height,
+            fps_num: 60,
+            fps_den: 1,
+        };
+        let offered = [at(2560, 1440), at(1080, 1920)];
+        let horizontal_only = [twitch_dest(true, "key")];
+        assert_eq!(canvases_to_encode(&offered, &horizontal_only).len(), 1);
+        assert_eq!(
+            canvases_to_encode(&offered, &[]).len(),
+            1,
+            "no destinations"
+        );
+        let off = [vertical_dest("youtube", false)];
+        assert_eq!(canvases_to_encode(&offered, &off).len(), 1, "disabled");
+        let twitch_set_vertical = [crate::config::Destination {
+            stream_format: "vertical".into(),
+            ..twitch_dest(true, "key")
+        }];
+        assert_eq!(
+            canvases_to_encode(&offered, &twitch_set_vertical).len(),
+            1,
+            "Twitch never takes the vertical feed from here"
+        );
+        let on = [twitch_dest(true, "key"), vertical_dest("kick", true)];
+        assert_eq!(canvases_to_encode(&offered, &on), offered.to_vec());
+        assert!(canvases_to_encode(&[], &on).is_empty());
+    }
+
+    /// End to end past OBS's files: the streamer's own HEVC settings, and a
+    /// vertical destination. YouTube plays HEVC, so the vertical track is
+    /// the streamer's encoder at the main track's quality per pixel; Kick
+    /// doesn't, so it is InstantClone's H.264 at that same bitrate. The main
+    /// track is the streamer's untouched either way.
+    #[test]
+    fn a_vertical_destination_gets_the_streamers_codec_only_if_it_plays_it() {
+        use crate::local_eb_config::{build, parse_canvases, StreamerSettings, TrackEncoder};
+        let own_settings = r#"{"bitrate":6000,"rate_control":"CBR","preset":"quality"}"#;
+        let streamer = StreamerSettings {
+            encoder: Some(TrackEncoder {
+                encoder_type: "h265_texture_amf".into(),
+                settings_json: own_settings.into(),
+            }),
+            bitrate_kbps: 6000,
+            rescale: None,
+        };
+        let request = r#"{"preferences":{"canvases":[
+            {"width":2560,"height":1440,"framerate":{"numerator":60,"denominator":1}},
+            {"width":1080,"height":1920,"framerate":{"numerator":60,"denominator":1}}]}}"#;
+        let choice = EncoderChoice {
+            family: "amd",
+            id: "h264_texture_amf",
+            reason: String::new(),
+        };
+        let config_for = |vertical: &str| {
+            let dests = [vertical_dest(vertical, true)];
+            let canvases = canvases_to_encode(&parse_canvases(request), &dests);
+            let own = streamer.encoder.as_ref();
+            let vertical_own = own_encoder_for_vertical(own, &dests);
+            let (config, _) = build(&canvases, 10_000, Some(&streamer), 1935, |kbps| {
+                picked_encoder(vertical_own, &choice, kbps)
+            })
+            .expect("canvases were sent");
+            assert!(crate::config::is_valid_json(&config), "{config}");
+            config
+        };
+
+        let youtube = config_for("youtube");
+        assert!(youtube.contains(r#""type":"h265_texture_amf","width":2560"#));
+        assert!(
+            youtube.contains(own_settings),
+            "main track untouched: {youtube}"
+        );
+        assert!(
+            youtube.contains(r#""type":"h265_texture_amf","width":1080"#),
+            "{youtube}"
+        );
+        assert!(youtube.contains(r#"{"bitrate":3375,"rate_control":"CBR","preset":"quality"}"#));
+
+        let kick = config_for("kick");
+        assert!(kick.contains(own_settings), "main track untouched: {kick}");
+        assert!(
+            kick.contains(r#""type":"h264_texture_amf","width":1080"#),
+            "{kick}"
+        );
+        assert!(kick.contains(r#""bitrate":3375"#), "{kick}");
+    }
+
     fn settings_with_dests(dests: Vec<crate::config::Destination>) -> Settings {
         let mut s = Settings::defaults();
         s.destinations = dests;
@@ -5473,21 +6739,47 @@ mod tests {
         ])));
     }
 
-    #[test]
-    fn configured_latch_only_rises() {
-        // Mirror the handler's latch step - `if has_streamable_dest { =true }`
-        // starting from an already-configured install whose last destination
-        // is now disabled. The flag must stay true (no wizard reopen); only a
-        // full reset clears it.
-        let s = settings_with_dests(vec![twitch_dest(false, "livekey123")]);
+    /// The latch through the real settings handler: a completed setup whose
+    /// only destination is now disabled saves an unrelated setting, and must
+    /// stay configured (no wizard reopen); a fresh install saving a usable
+    /// destination through the wizard fields must become configured.
+    ///
+    /// `post_destination_toggle` and `post_destination_delete` carry the same
+    /// latch but are not driven here: both call `reconcile_obs_vod_files`,
+    /// which rewrites the developer's real OBS `user.ini` (it has no test
+    /// seam), and a test must never flip someone's VOD-track flag.
+    #[tokio::test]
+    async fn configured_latch_only_rises() {
+        let mut s = settings_with_dests(vec![twitch_dest(false, "livekey123")]);
+        s.configured = true;
         assert!(!has_streamable_dest(&s), "precondition: not streamable");
-        let mut configured = true; // setup completed earlier
-        if has_streamable_dest(&s) {
-            configured = true;
-        }
+        let live = Live::new(s);
+        let (status, _, body) = post_config(
+            "auto_arm_delay_ms=20000",
+            &live.ctrl,
+            &live.settings,
+            &live.cfg_path,
+        )
+        .await;
+        assert_eq!(status, "200 OK", "{body}");
         assert!(
-            configured,
+            live.settings.borrow().configured,
             "a completed setup must never re-open the wizard"
+        );
+        assert!(Settings::load(&live.cfg_path).unwrap().configured);
+
+        let fresh = Live::new(Settings::defaults());
+        let (status, _, body) = post_config(
+            "platform=twitch&stream_key=livekey123",
+            &fresh.ctrl,
+            &fresh.settings,
+            &fresh.cfg_path,
+        )
+        .await;
+        assert_eq!(status, "200 OK", "{body}");
+        assert!(
+            fresh.settings.borrow().configured,
+            "a usable destination raises it"
         );
     }
 
@@ -5525,8 +6817,68 @@ mod tests {
         s.ingest_port = 1935;
         s.ingest_key = "abc123def".into();
         let (tx, _rx) = watch::channel(s);
-        let cfg = obs_multitrack_config_static("encoder=x264&tracks=1", &Arc::new(tx));
+        let cfg = obs_multitrack_config_static("encoder=x264&tracks=1", "", &Arc::new(tx));
         assert!(cfg.contains("/live/{stream_key}"));
+        // This route is public (OBS fetches it with no session), so the
+        // ingest key it would otherwise protect must never ride along.
+        assert!(
+            !cfg.contains("abc123def"),
+            "public config leaked the ingest key"
+        );
+    }
+
+    #[test]
+    fn own_configs_use_the_gpu_encoder_only_when_obs_has_it() {
+        let amd_request = r#"{"capabilities":{"gpu":[{"vendor_id":4098}]}}"#;
+        let with_amf = vec!["h264_texture_amf".to_string(), "obs_x264".to_string()];
+        let without_amf = vec!["obs_x264".to_string()];
+        assert_eq!(
+            choose_encoder("", amd_request, Some(&with_amf)).family,
+            "amd"
+        );
+        let nvidia_request = r#"{"capabilities":{"gpu":[{"vendor_id":4318}]}}"#;
+        let obs_30_2 = vec!["jim_nvenc".to_string(), "obs_x264".to_string()];
+        assert_eq!(
+            choose_encoder("", nvidia_request, Some(&obs_30_2)).id,
+            "jim_nvenc",
+            "OBS 30.2 has only the old NVENC id"
+        );
+        assert_eq!(
+            choose_encoder("encoder=nvenc", "", Some(&with_amf)).family,
+            "x264",
+            "an explicit encoder OBS doesn't list must not stop the stream"
+        );
+        assert_eq!(
+            choose_encoder("", amd_request, Some(&without_amf)).family,
+            "x264",
+            "an AMD card without AMF in OBS must not get an encoder OBS can't create"
+        );
+        assert_eq!(choose_encoder("", amd_request, None).family, "x264");
+        assert_eq!(choose_encoder("", "", Some(&with_amf)).family, "x264");
+        assert_eq!(
+            choose_encoder("encoder=qsv", amd_request, None).id,
+            "obs_qsv11",
+            "with no log to check, an explicit encoder is trusted"
+        );
+    }
+
+    #[test]
+    fn static_ladder_keeps_encoder_ids_and_bitrate_split() {
+        let (tx, _rx) = watch::channel(crate::config::Settings::defaults());
+        let cfg = obs_multitrack_config_static(
+            "encoder=x264&tracks=3&bandwidth=10000",
+            "",
+            &Arc::new(tx),
+        );
+        assert_eq!(cfg.matches(r#""type":"obs_x264""#).count(), 3);
+        assert!(
+            cfg.contains(r#""bitrate":6000"#),
+            "top rung keeps its 60% share"
+        );
+        assert!(
+            !cfg.contains(r#""canvas_index":1"#),
+            "the ladder never names a second canvas"
+        );
     }
 
     #[test]
@@ -5694,5 +7046,1125 @@ mod tests {
             extract_title("<title>  spaced  </title>"),
             Some("spaced".to_string())
         );
+    }
+
+    // ── Live HTTP surface ────────────────────────────────────────────
+    //
+    // These drive the real `serve` (head parse, CSRF guard, auth gate,
+    // router) over a loopback socket: the bugs they pin live in the glue
+    // between those pieces, which no helper-level test reaches.
+
+    /// Removes a test's temp directory when dropped. Kept as the last field of
+    /// `Live` so it drops after the controller, whose ring file lives inside
+    /// and cannot be deleted on Windows while it is open.
+    struct TempDir(PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Everything `serve` and the handlers need, confined to a private temp
+    /// directory. Holds a settings receiver because `watch::Sender::send` is a
+    /// silent no-op without one: a handler would "save" nothing and every
+    /// assertion about the live settings would pass without testing anything.
+    struct Live {
+        ctrl: Arc<Controller>,
+        settings: Arc<watch::Sender<Settings>>,
+        _rx: watch::Receiver<Settings>,
+        cfg_path: PathBuf,
+        auth: Arc<crate::auth::AuthState>,
+        _dir: TempDir,
+    }
+
+    impl Live {
+        fn new(mut s: Settings) -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("ic-live-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            // Nothing a request does may land outside the temp directory.
+            s.overlays_dir = dir.join("overlays");
+            s.buffer_path = dir.join("ring.buf");
+            let ring = crate::buffer::DiskRing::create(&dir.join("ctrl.buf"), 4 * 1024 * 1024)
+                .expect("ring create");
+            let (tx, rx) = watch::channel(s);
+            Live {
+                ctrl: Arc::new(Controller::new(Arc::new(ring), 0)),
+                settings: Arc::new(tx),
+                _rx: rx,
+                cfg_path: dir.join("instantclone.cfg"),
+                auth: Arc::new(crate::auth::AuthState::new()),
+                _dir: TempDir(dir),
+            }
+        }
+
+        async fn send(&self, raw: &[u8]) -> Response {
+            self.send_from("127.0.0.1", raw).await
+        }
+
+        /// One request through the real `serve`, as if from `peer_ip`. The
+        /// write half is closed after the request, so a body shorter than its
+        /// Content-Length reaches EOF instead of waiting out the body deadline.
+        async fn send_from(&self, peer_ip: &str, raw: &[u8]) -> Response {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            let mut client = TcpStream::connect(addr).await.expect("connect");
+            let (sock, _) = listener.accept().await.expect("accept");
+            let server = tokio::spawn(serve(
+                sock,
+                self.ctrl.clone(),
+                self.settings.clone(),
+                self.cfg_path.clone(),
+                Arc::new(SysStat::new()),
+                self.auth.clone(),
+                peer_ip.to_string(),
+            ));
+            client.write_all(raw).await.expect("write request");
+            client.shutdown().await.expect("half-close");
+            let mut out = Vec::new();
+            // Windows can end a loopback connection with a reset instead of
+            // a close once the whole response is out (seen under load). A
+            // client reading by Content-Length never notices, and `parse`
+            // below still fails on a response the reset cut short.
+            match client.read_to_end(&mut out).await {
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::ConnectionReset && !out.is_empty() => {}
+                Err(e) => {
+                    let got = String::from_utf8_lossy(&out);
+                    panic!(
+                        "read response failed after {} bytes: {e:?}\n{got}",
+                        out.len()
+                    );
+                }
+            }
+            server.await.expect("serve task").expect("serve");
+            Response::parse(&out)
+        }
+    }
+
+    struct Response {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: String,
+    }
+
+    impl Response {
+        /// Parse, asserting on the way that the bytes are a well-formed
+        /// HTTP/1.1 response: CRLF line ends, no folded header lines, a status
+        /// code, and a Content-Length that matches the body. Every live test
+        /// gets this check for free.
+        fn parse(raw: &[u8]) -> Self {
+            let text = std::str::from_utf8(raw).expect("response is UTF-8");
+            let (head, body) = text
+                .split_once("\r\n\r\n")
+                .unwrap_or_else(|| panic!("no CRLF blank line ends the head: {text:?}"));
+            assert!(
+                !head.replace("\r\n", "").contains(['\r', '\n']),
+                "bare CR or LF in the head: {head:?}"
+            );
+            let mut lines = head.split("\r\n");
+            let status_line = lines.next().unwrap_or_default();
+            let status = status_line
+                .strip_prefix("HTTP/1.1 ")
+                .and_then(|s| s.get(..3))
+                .and_then(|code| code.parse().ok())
+                .unwrap_or_else(|| panic!("bad status line: {status_line:?}"));
+            let mut headers = Vec::new();
+            for line in lines {
+                assert!(
+                    !line.starts_with([' ', '\t']),
+                    "folded (obsolete) header line: {line:?}"
+                );
+                let (name, value) = line
+                    .split_once(':')
+                    .unwrap_or_else(|| panic!("header without a colon: {line:?}"));
+                headers.push((name.to_ascii_lowercase(), value.trim().to_string()));
+            }
+            let response = Response {
+                status,
+                headers,
+                body: body.to_string(),
+            };
+            let length: usize = response
+                .header("content-length")
+                .and_then(|v| v.parse().ok())
+                .expect("a numeric Content-Length");
+            assert_eq!(
+                length,
+                response.body.len(),
+                "Content-Length must match the body"
+            );
+            response
+        }
+
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.as_str())
+        }
+
+        /// The `ic_session` token a Set-Cookie on this response hands out.
+        fn session_cookie(&self) -> String {
+            self.header("set-cookie")
+                .and_then(|c| c.split(';').next())
+                .and_then(|c| c.strip_prefix("ic_session="))
+                .expect("a session cookie")
+                .to_string()
+        }
+    }
+
+    /// A request with a correct Content-Length. `headers` is zero or more
+    /// complete `Name: value\r\n` lines.
+    fn request(method: &str, path: &str, headers: &str, body: &[u8]) -> Vec<u8> {
+        let mut raw = format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{headers}Content-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(body);
+        raw
+    }
+
+    /// A request whose body length cannot be read gets a 400 that is itself a
+    /// valid HTTP response. It used to be built from a multi-line raw string:
+    /// bare LF line ends and an indented `Content-Length:` line, which reads as
+    /// an obsolete folded header, so a client got garbage instead of the error.
+    #[tokio::test]
+    async fn a_malformed_content_length_gets_a_well_formed_400() {
+        let live = Live::new(Settings::defaults());
+        let r = live
+            .send(b"POST /arm HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: abc\r\n\r\n")
+            .await;
+        assert_eq!(r.status, 400);
+        assert!(r.body.contains("malformed Content-Length"), "{}", r.body);
+    }
+
+    /// A publisher connected and a 5 s delay armed: the state a bad request
+    /// must leave alone.
+    fn armed_live() -> Live {
+        let live = Live::new(Settings::defaults());
+        live.ctrl.mark_ingest_alive_for_test();
+        live.ctrl.arm_delay(5_000);
+        live
+    }
+
+    /// One byte that is not UTF-8 used to turn the whole body into "", and
+    /// `POST /arm` with no `ms` is a disarm: a corrupt request dropped the
+    /// streamer's delay. Same bug class as the Content-Length fix.
+    #[tokio::test]
+    async fn a_body_that_is_not_utf8_is_refused_not_read_as_empty() {
+        let live = armed_live();
+        let r = live
+            .send(&request("POST", "/arm", "", b"ms=9000\xff"))
+            .await;
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert_eq!(
+            live.ctrl.armed_delay_ms(),
+            5_000,
+            "the armed delay must survive"
+        );
+    }
+
+    /// A client that stops before the body it announced (EOF or the body
+    /// deadline) must not have the fragment run: `ms=30000` cut after four
+    /// bytes is `ms=3`, a 3 ms delay armed in place of a 30 s one.
+    #[tokio::test]
+    async fn a_body_shorter_than_its_content_length_is_refused_not_run_truncated() {
+        let live = armed_live();
+        let r = live
+            .send(b"POST /arm HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 8\r\n\r\nms=3")
+            .await;
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert_eq!(
+            live.ctrl.armed_delay_ms(),
+            5_000,
+            "the armed delay must survive"
+        );
+    }
+
+    /// Over 32 MB is refused from the head alone, before any body is read or
+    /// buffered. Exactly 32 MB passes the size check, which the short-body
+    /// refusal then shows without the test sending 32 MB.
+    #[tokio::test]
+    async fn an_oversized_body_is_refused_before_any_of_it_is_read() {
+        const LIMIT: usize = 32 * 1024 * 1024;
+        let live = Live::new(Settings::defaults());
+        let head = |len: usize| {
+            format!("POST /config HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {len}\r\n\r\n")
+        };
+        let over = live.send(head(LIMIT + 1).as_bytes()).await;
+        assert_eq!(over.status, 413, "{}", over.body);
+        let at_limit = live.send(head(LIMIT).as_bytes()).await;
+        assert_eq!(
+            at_limit.status, 400,
+            "the limit itself is not too large: {}",
+            at_limit.body
+        );
+    }
+
+    /// A head that fills the 16 KB buffer without ending is answered with a
+    /// 400, not a silently dropped connection.
+    #[tokio::test]
+    async fn a_request_head_larger_than_the_buffer_is_refused() {
+        let live = Live::new(Settings::defaults());
+        let mut raw = b"GET /state HTTP/1.1\r\nX-Pad: ".to_vec();
+        raw.resize(16 * 1024, b'a');
+        let r = live.send(&raw).await;
+        assert_eq!(r.status, 400);
+    }
+
+    // ── Route access: the regression net ────────────────────────────
+    //
+    // With a dashboard password set, every route is Public, Control (session
+    // or the dock token) or Admin (session only), and anything unlisted in
+    // `classify_access` falls to Admin. The net below reads this file's own
+    // source, so a new route fails the build's tests until someone writes
+    // down which level it should have.
+
+    /// Routes answered before the access gate runs. They skip auth entirely,
+    /// so this list is exact: the login page and the login/logout actions.
+    const BEFORE_GATE: &[(&str, &str)] =
+        &[("GET", "/login"), ("POST", "/login"), ("POST", "/logout")];
+
+    /// Every exact route and the level it must have once a password is set.
+    const ROUTE_ACCESS: &[(&str, &str, Access)] = &[
+        // Fast paths in `serve`.
+        ("GET", "/", Access::Admin),
+        ("GET", "/dock", Access::Control),
+        ("GET", "/dock.js", Access::Control),
+        ("GET", "/overlay-runtime.js", Access::Admin),
+        ("GET", "/integrations.js", Access::Admin),
+        ("GET", "/obs/vod-script/download", Access::Admin),
+        ("GET", "/events", Access::Control),
+        ("GET", "/overlay-events", Access::Public),
+        ("GET", "/alerts-events", Access::Public),
+        // Renders arbitrary settings from the query: a settings page tool.
+        ("GET", "/crash-protection/preview", Access::Admin),
+        ("POST", "/app/restart", Access::Admin),
+        ("POST", "/app/quit", Access::Admin),
+        // Auth management in `auth_gate`, after the gate.
+        ("POST", "/auth/set-password", Access::Admin),
+        ("POST", "/auth/disable", Access::Admin),
+        ("POST", "/auth/regen-dock", Access::Admin),
+        // The router.
+        ("GET", "/overlay", Access::Public),
+        ("GET", "/state", Access::Control),
+        ("GET", "/overlay-state", Access::Public),
+        ("GET", "/alerts", Access::Public),
+        // Ending a hold is operational, like a cut: the dock has the button.
+        ("POST", "/crash-protection/end", Access::Control),
+        ("GET", "/config", Access::Control),
+        ("GET", "/docks", Access::Control),
+        ("GET", "/platforms", Access::Control),
+        ("POST", "/obs/multitrack-config", Access::Public),
+        ("GET", "/obs/multitrack-config", Access::Public),
+        ("GET", "/obs/register-status", Access::Admin),
+        ("POST", "/obs/register", Access::Admin),
+        ("POST", "/obs/unregister", Access::Admin),
+        ("POST", "/obs/launch-with-eb", Access::Admin),
+        ("POST", "/obs/setup-vod-eb", Access::Admin),
+        ("POST", "/shortcut/create-eb", Access::Admin),
+        ("GET", "/update-check", Access::Admin),
+        ("POST", "/update/apply", Access::Admin),
+        ("POST", "/reveal/buffer", Access::Admin),
+        ("POST", "/reveal/overlays", Access::Admin),
+        ("POST", "/reveal/trace", Access::Admin),
+        ("GET", "/obs/launch-status", Access::Admin),
+        ("GET", "/twitch_ingests", Access::Admin),
+        ("GET", "/profiles", Access::Control),
+        ("GET", "/logs", Access::Admin),
+        ("GET", "/overlays", Access::Control),
+        ("GET", "/destinations", Access::Control),
+        ("POST", "/config", Access::Admin),
+        ("POST", "/config/reset", Access::Admin),
+        ("POST", "/arm", Access::Control),
+        ("POST", "/activate", Access::Control),
+        ("POST", "/stop", Access::Control),
+        ("POST", "/disarm", Access::Control),
+        ("POST", "/delay", Access::Control),
+        ("POST", "/go-live", Access::Control),
+        ("POST", "/cut-after", Access::Control),
+        ("POST", "/cut-after/cancel", Access::Control),
+        ("POST", "/hotkeys/capture", Access::Admin),
+        ("POST", "/midi/learn", Access::Admin),
+        ("POST", "/midi/learn/cancel", Access::Admin),
+        ("POST", "/midi/poll", Access::Admin),
+        ("POST", "/test-egress", Access::Admin),
+        ("POST", "/logs/clear", Access::Admin),
+        ("POST", "/profiles", Access::Admin),
+        ("POST", "/profiles/delete", Access::Admin),
+        ("POST", "/destinations", Access::Admin),
+        ("POST", "/destinations/toggle", Access::Control),
+        ("POST", "/destinations/delete", Access::Admin),
+    ];
+
+    /// Prefix routes in the router, checked with a sample path beneath each.
+    const PREFIX_ACCESS: &[(&str, &str, Access)] = &[
+        ("GET", "/overlay/", Access::Public),
+        ("POST", "/overlays/", Access::Admin),
+        ("GET", "/docks/", Access::Control),
+        ("POST", "/docks/", Access::Control),
+        // Web call integrations: the token in the path is the credential.
+        ("GET", "/hooks/", Access::Public),
+        ("POST", "/hooks/", Access::Public),
+        // The integrations API (see `integrations::api`): settings and
+        // secrets, so a session only.
+        ("GET", "/integrations", Access::Admin),
+        ("POST", "/integrations", Access::Admin),
+        ("POST", "/connections/", Access::Admin),
+        ("POST", "/twitch/", Access::Admin),
+    ];
+
+    /// The production half of this file, so the tables above are never
+    /// mistaken for routes.
+    fn production_source() -> &'static str {
+        let src = include_str!("web.rs");
+        &src[..src.find("mod tests {").expect("the test module")]
+    }
+
+    /// The body of `fn <name>(`, up to the first line that is a lone `}`.
+    fn fn_body<'a>(src: &'a str, name: &str) -> &'a str {
+        let start = src
+            .find(&format!("fn {name}("))
+            .unwrap_or_else(|| panic!("fn {name} not found"));
+        let rest = &src[start..];
+        let end = rest
+            .match_indices("\n}")
+            .map(|(at, _)| at)
+            .find(|at| matches!(rest[at + 2..].chars().next(), None | Some('\r' | '\n')))
+            .unwrap_or_else(|| panic!("end of fn {name} not found"));
+        &rest[..end]
+    }
+
+    /// The text of the string literal starting at `s` (just past its quote).
+    fn literal(s: &str) -> &str {
+        &s[..s.find('"').unwrap_or(0)]
+    }
+
+    /// `("METHOD", "/path")` match arms, for any upper-case method.
+    fn match_arm_routes(body: &str) -> Vec<(String, String)> {
+        let mut routes = Vec::new();
+        for (at, _) in body.match_indices("(\"") {
+            let rest = &body[at + 2..];
+            let method = literal(rest);
+            if method.is_empty() || !method.bytes().all(|b| b.is_ascii_uppercase()) {
+                continue;
+            }
+            let Some(after) = rest[method.len()..].strip_prefix("\", \"") else {
+                continue;
+            };
+            let path = literal(after);
+            if path.starts_with('/') {
+                routes.push((method.to_string(), path.to_string()));
+            }
+        }
+        routes
+    }
+
+    /// Paths compared with `bare_path` via `needle` (`bare_path == "`, or a
+    /// prefix test), each with the method its statement checks, if any. The
+    /// statement runs back to the previous `{`, `}` or `;`, so a condition
+    /// rustfmt wraps over several lines is still read whole.
+    fn bare_path_tests(body: &str, needle: &str) -> Vec<(Option<String>, String)> {
+        let method_marker = "method == \"";
+        let mut found = Vec::new();
+        for (at, _) in body.match_indices(needle) {
+            let path = literal(&body[at + needle.len()..]).to_string();
+            let statement_start = body[..at].rfind(['{', '}', ';']).map_or(0, |i| i + 1);
+            let statement = &body[statement_start..at];
+            let method = statement
+                .find(method_marker)
+                .map(|m| literal(&statement[m + method_marker.len()..]).to_string());
+            found.push((method, path));
+        }
+        found
+    }
+
+    /// `method == "M" && bare_path == "/p"` fast paths. A comparison with no
+    /// method in its statement (`let restart = bare_path == ...`) is not a
+    /// route of its own.
+    fn guarded_routes(body: &str) -> Vec<(String, String)> {
+        bare_path_tests(body, "bare_path == \"")
+            .into_iter()
+            .filter_map(|(method, path)| Some((method?, path)))
+            .collect()
+    }
+
+    fn route_set<'a>(
+        routes: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> std::collections::BTreeSet<(String, String)> {
+        routes
+            .into_iter()
+            .map(|(m, p)| (m.to_string(), p.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn every_route_has_a_deliberate_access_level() {
+        let src = production_source();
+        let gate = fn_body(src, "auth_gate");
+        let (before_gate, after_gate) =
+            gate.split_at(gate.find("classify_access(").expect("the gate classifies"));
+
+        let answered_before = route_set(
+            guarded_routes(before_gate)
+                .iter()
+                .map(|(m, p)| (m.as_str(), p.as_str())),
+        );
+        assert_eq!(
+            answered_before,
+            route_set(BEFORE_GATE.iter().copied()),
+            "a route answered before the access gate needs no login at all"
+        );
+
+        let mut found = route_set(
+            match_arm_routes(fn_body(src, "route"))
+                .iter()
+                .map(|(m, p)| (m.as_str(), p.as_str())),
+        );
+        for body in [fn_body(src, "serve"), after_gate] {
+            for (m, p) in guarded_routes(body) {
+                found.insert((m, p));
+            }
+        }
+        let table = route_set(ROUTE_ACCESS.iter().map(|(m, p, _)| (*m, *p)));
+        for (m, p) in &found {
+            assert!(
+                table.contains(&(m.clone(), p.clone())),
+                "unclassified route {m} {p}: add it to ROUTE_ACCESS with the access \
+                 level it must have once a dashboard password is set"
+            );
+        }
+        for (m, p) in &table {
+            assert!(
+                found.contains(&(m.clone(), p.clone())),
+                "ROUTE_ACCESS lists {m} {p}, which no longer exists: remove the row"
+            );
+        }
+
+        let route = fn_body(src, "route");
+        let mut prefixes: Vec<String> = ["bare_path.starts_with(\"", "bare_path.strip_prefix(\""]
+            .iter()
+            .flat_map(|needle| bare_path_tests(route, needle))
+            .map(|(_, p)| p)
+            .collect();
+        prefixes.sort();
+        prefixes.dedup();
+        let mut listed: Vec<String> = PREFIX_ACCESS
+            .iter()
+            .map(|(_, p, _)| p.to_string())
+            .collect();
+        listed.sort();
+        listed.dedup();
+        assert_eq!(
+            prefixes, listed,
+            "a prefix route was added or removed: update PREFIX_ACCESS"
+        );
+
+        for (m, p, want) in ROUTE_ACCESS {
+            assert_eq!(&classify_access(m, p), want, "{m} {p}");
+        }
+        for (m, prefix, want) in PREFIX_ACCESS {
+            assert_eq!(
+                &classify_access(m, &format!("{prefix}sample")),
+                want,
+                "{m} {prefix}*"
+            );
+        }
+        for p in [
+            "/overlays/seeded",
+            "/overlays/reset",
+            "/overlays/sample/delete",
+        ] {
+            assert_eq!(classify_access("POST", p), Access::Admin, "POST {p}");
+        }
+        // Fail closed: whatever nobody listed needs a session.
+        for m in ["GET", "POST", "PUT", "DELETE", "HEAD"] {
+            assert_eq!(classify_access(m, "/not-a-route"), Access::Admin, "{m}");
+        }
+    }
+
+    /// The overlay display is public because an OBS browser source cannot log
+    /// in, and it only ever GETs. Public for any method would hand a future
+    /// `POST /overlay/...` to anyone who can reach the port, so the exemption
+    /// is GET only. The multitrack config is public for both methods on
+    /// purpose: OBS POSTs it, and GET is the browser escape hatch.
+    #[test]
+    fn public_exemptions_cover_only_the_methods_their_callers_use() {
+        assert_eq!(classify_access("GET", "/overlay"), Access::Public);
+        assert_eq!(classify_access("GET", "/overlay/x.html"), Access::Public);
+        assert_eq!(classify_access("POST", "/overlay"), Access::Admin);
+        assert_eq!(classify_access("POST", "/overlay/x.html"), Access::Admin);
+        assert_eq!(
+            classify_access("GET", "/obs/multitrack-config"),
+            Access::Public
+        );
+        assert_eq!(
+            classify_access("POST", "/obs/multitrack-config"),
+            Access::Public
+        );
+    }
+
+    /// A valid stored hash for the password "password" (the published PBKDF2
+    /// vector, one iteration), so a test can turn auth on without paying for
+    /// 210 000 iterations of an unoptimized hash.
+    const TEST_PASSWORD_HASH: &str = "pbkdf2-sha256$1$73616c74$\
+        120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b";
+    const TEST_DOCK_TOKEN: &str = "dock0token0under0test";
+
+    /// Auth on, with a known dock token.
+    fn locked_live() -> Live {
+        let mut s = Settings::defaults();
+        s.dashboard_password_hash = TEST_PASSWORD_HASH.into();
+        s.dock_token = TEST_DOCK_TOKEN.into();
+        Live::new(s)
+    }
+
+    fn session_header(token: &str) -> String {
+        format!("Cookie: ic_session={token}\r\n")
+    }
+
+    /// The dock token opens Control routes and nothing more. Only routes that
+    /// are harmless even if the gate broke are sent for real: a regression
+    /// here must fail the test, not register with the developer's OBS or open
+    /// a file browser. The rest of the Admin list is pinned by the
+    /// classification table above.
+    #[tokio::test]
+    async fn the_dock_token_cannot_reach_admin_routes() {
+        let live = locked_live();
+        let by_query = |path: &str| {
+            let sep = if path.contains('?') { '&' } else { '?' };
+            format!("{path}{sep}token={TEST_DOCK_TOKEN}")
+        };
+        let by_cookie = format!("Cookie: ic_dock={TEST_DOCK_TOKEN}\r\n");
+
+        // The token itself is good: it opens a Control route both ways.
+        let ok = live
+            .send(&request("GET", &by_query("/state"), "", b""))
+            .await;
+        assert_eq!(ok.status, 200, "{}", ok.body);
+        let ok = live.send(&request("GET", "/state", &by_cookie, b"")).await;
+        assert_eq!(ok.status, 200, "{}", ok.body);
+
+        for (method, path) in [
+            ("GET", "/"),
+            ("GET", "/logs"),
+            ("POST", "/config"),
+            ("POST", "/config/reset"),
+            ("POST", "/auth/set-password"),
+            ("POST", "/auth/disable"),
+            ("POST", "/auth/regen-dock"),
+            ("POST", "/app/quit"),
+            ("POST", "/app/restart"),
+            ("POST", "/destinations"),
+            ("POST", "/destinations/delete"),
+            ("POST", "/logs/clear"),
+            ("POST", "/profiles"),
+            ("POST", "/overlays/probe"),
+        ] {
+            let r = live.send(&request(method, &by_query(path), "", b"")).await;
+            assert_eq!(r.status, 401, "{method} {path} via ?token=");
+            let r = live.send(&request(method, path, &by_cookie, b"")).await;
+            assert_eq!(r.status, 401, "{method} {path} via the ic_dock cookie");
+        }
+        let s = live.settings.borrow();
+        assert_eq!(
+            s.dashboard_password_hash, TEST_PASSWORD_HASH,
+            "auth untouched"
+        );
+        assert_eq!(s.dock_token, TEST_DOCK_TOKEN, "dock token untouched");
+    }
+
+    /// An empty stored dock token means "no dock access", never "an empty
+    /// token matches": `?token=` must not open anything.
+    #[tokio::test]
+    async fn an_empty_dock_token_grants_nothing() {
+        let mut s = Settings::defaults();
+        s.dashboard_password_hash = TEST_PASSWORD_HASH.into();
+        s.dock_token.clear();
+        let live = Live::new(s);
+        for (path, headers) in [
+            ("/state?token=", ""),
+            ("/state?token=anything", ""),
+            ("/state", "Cookie: ic_dock=\r\n"),
+        ] {
+            let r = live.send(&request("GET", path, headers, b"")).await;
+            assert_eq!(r.status, 401, "{path} {headers:?}");
+        }
+    }
+
+    /// Changing the password ends every earlier session, so a stolen cookie
+    /// dies with the old password; whoever changed it gets a fresh one.
+    #[tokio::test]
+    async fn changing_the_password_ends_every_old_session() {
+        let live = locked_live();
+        let old = live.auth.create_session();
+        let r = live
+            .send(&request("GET", "/logs", &session_header(&old), b""))
+            .await;
+        assert_eq!(r.status, 200, "precondition: the session is admin");
+
+        let r = live
+            .send(&request(
+                "POST",
+                "/auth/set-password",
+                &session_header(&old),
+                b"password=a-new-password",
+            ))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let fresh = r.session_cookie();
+
+        let r = live
+            .send(&request("GET", "/logs", &session_header(&old), b""))
+            .await;
+        assert_eq!(r.status, 401, "the old session must be dead");
+        let r = live
+            .send(&request("GET", "/logs", &session_header(&fresh), b""))
+            .await;
+        assert_eq!(r.status, 200, "the new session works");
+        assert_ne!(
+            live.settings.borrow().dashboard_password_hash,
+            TEST_PASSWORD_HASH
+        );
+    }
+
+    /// Turning auth off clears the dock token too, in memory and on disk, so
+    /// switching auth back on later cannot revive an old token.
+    #[tokio::test]
+    async fn disabling_auth_clears_the_dock_token() {
+        let live = locked_live();
+        let session = live.auth.create_session();
+        let r = live
+            .send(&request(
+                "POST",
+                "/auth/disable",
+                &session_header(&session),
+                b"",
+            ))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        for s in [
+            live.settings.borrow().clone(),
+            Settings::load(&live.cfg_path).expect("saved"),
+        ] {
+            assert!(s.dashboard_password_hash.is_empty());
+            assert!(s.dock_token.is_empty());
+        }
+    }
+
+    /// Rotating the dock token retires the old one at once.
+    #[tokio::test]
+    async fn regenerating_the_dock_token_retires_the_old_one() {
+        let live = locked_live();
+        let session = live.auth.create_session();
+        let r = live
+            .send(&request(
+                "POST",
+                "/auth/regen-dock",
+                &session_header(&session),
+                b"",
+            ))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let fresh = read_string_field(&r.body, "dock_token").expect("the new token");
+        assert!(!fresh.is_empty() && fresh != TEST_DOCK_TOKEN);
+
+        let old = live
+            .send(&request(
+                "GET",
+                &format!("/state?token={TEST_DOCK_TOKEN}"),
+                "",
+                b"",
+            ))
+            .await;
+        assert_eq!(old.status, 401, "the old token must stop working");
+        let new = live
+            .send(&request("GET", &format!("/state?token={fresh}"), "", b""))
+            .await;
+        assert_eq!(new.status, 200, "{}", new.body);
+    }
+
+    /// The first password is the one admin action reachable without a
+    /// session, so it is local-only: a LAN peer on a bind-all box must not be
+    /// able to claim the dashboard before its owner does. An IPv4-mapped IPv6
+    /// loopback is not recognised as local and is refused too (fail closed).
+    #[tokio::test]
+    async fn the_first_password_must_be_set_from_this_machine() {
+        let live = Live::new(Settings::defaults());
+        for peer in ["192.168.1.50", "::ffff:127.0.0.1"] {
+            let r = live
+                .send_from(
+                    peer,
+                    &request("POST", "/auth/set-password", "", b"password=long-enough-pw"),
+                )
+                .await;
+            assert_eq!(r.status, 403, "from {peer}: {}", r.body);
+            assert!(live.settings.borrow().dashboard_password_hash.is_empty());
+        }
+    }
+
+    #[test]
+    fn only_addresses_pass_the_rebinding_guard() {
+        for host in [
+            "127.0.0.1:7799",
+            "localhost:7799",
+            "LOCALHOST",
+            "dock.localhost:7799",
+            "192.168.1.50:7799",
+            "[::1]:7799",
+            "",
+        ] {
+            assert!(host_is_address(host), "{host}");
+        }
+        for host in [
+            "evil.example:7799",
+            "evil.example",
+            "127.0.0.1.nip.io:7799",
+            "localhost.evil.com",
+        ] {
+            assert!(!host_is_address(host), "{host}");
+        }
+    }
+
+    #[test]
+    fn secrets_are_never_readable_cross_origin() {
+        for path in ["/overlay", "/overlay-state", "/alerts", "/state"] {
+            assert!(readable_cross_origin(path), "{path}");
+        }
+        for path in [
+            "/config",
+            "/destinations",
+            "/integrations",
+            "/integrations/activity",
+            "/logs",
+            "/docks",
+        ] {
+            assert!(!readable_cross_origin(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn is_loopback_fails_closed() {
+        for ip in ["127.0.0.1", "127.8.9.10", "::1"] {
+            assert!(is_loopback(ip), "{ip}");
+        }
+        for ip in [
+            "::ffff:127.0.0.1",
+            "192.168.1.50",
+            "0.0.0.0",
+            "",
+            "localhost",
+            "garbage",
+        ] {
+            assert!(!is_loopback(ip), "{ip}");
+        }
+    }
+
+    /// A custom URL can carry the stream key in its path, so `/destinations`
+    /// shows it raw only to a full session (the edit form needs it). The dock
+    /// token reads this route too, and gets it blank plus a "set" flag.
+    #[tokio::test]
+    async fn the_dock_token_cannot_read_a_custom_egress_url() {
+        const SECRET: &str = "SECRETKEY1234567890";
+        let mut s = Settings::defaults();
+        s.dashboard_password_hash = TEST_PASSWORD_HASH.into();
+        s.dock_token = TEST_DOCK_TOKEN.into();
+        s.destinations.push(crate::config::Destination {
+            platform: "custom".into(),
+            stream_key: String::new(),
+            custom_egress_url: format!("rtmp://host/app/{SECRET}"),
+            ..twitch_dest(true, "")
+        });
+        let live = Live::new(s);
+
+        let dock = live
+            .send(&request(
+                "GET",
+                &format!("/destinations?token={TEST_DOCK_TOKEN}"),
+                "",
+                b"",
+            ))
+            .await;
+        assert_eq!(dock.status, 200, "{}", dock.body);
+        assert!(
+            !dock.body.contains(SECRET),
+            "the dock read the key: {}",
+            dock.body
+        );
+        assert!(
+            dock.body.contains(r#""custom_egress_url":"""#),
+            "{}",
+            dock.body
+        );
+        assert!(
+            dock.body.contains(r#""custom_egress_url_set":true"#),
+            "{}",
+            dock.body
+        );
+
+        let session = live.auth.create_session();
+        let admin = live
+            .send(&request(
+                "GET",
+                "/destinations",
+                &session_header(&session),
+                b"",
+            ))
+            .await;
+        assert_eq!(admin.status, 200, "{}", admin.body);
+        assert!(
+            admin.body.contains(&format!(
+                r#""custom_egress_url":"rtmp://host/app/{SECRET}""#
+            )),
+            "the dashboard's edit form needs the raw URL: {}",
+            admin.body
+        );
+        assert!(admin.body.contains(r#""custom_egress_url_set":true"#));
+    }
+
+    // ── OBS multitrack config ────────────────────────────────────────
+
+    /// A usable Twitch destination with id `id` and stream key `key`.
+    fn twitch_dest_with(id: &str, key: &str) -> crate::config::Destination {
+        crate::config::Destination {
+            id: id.into(),
+            name: format!("Twitch {id}"),
+            ..twitch_dest(true, key)
+        }
+    }
+
+    /// During a crash-protection hold the kept config carries the live
+    /// Twitch session's token. A wrong ingest key must not get it, nor move
+    /// the destination off that session; the right key gets it back as is.
+    #[tokio::test]
+    async fn a_wrong_ingest_key_never_gets_the_config_a_hold_keeps() {
+        let mut s = settings_with_dests(vec![twitch_dest_with("a", "live_real_key_123")]);
+        s.ingest_key = "right-key".into();
+        let live = Live::new(s);
+        let ctrl = &live.ctrl;
+        ctrl.update_crash_protection(crate::crash_protection::CrashProtection {
+            enabled: true,
+            ..Default::default()
+        });
+        let dest = ctrl.destination_state("a");
+        dest.egress_alive
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let held_ivs = "rtmps://ivs/app/held-token";
+        *dest.eb_override_url.lock() = Some(held_ivs.into());
+        ctrl.remember_eb_session(crate::controller::EbSession {
+            config: "{held-config}".into(),
+            auths: vec!["held-token".into()],
+            dest_id: "a".into(),
+            ivs_url: held_ivs.into(),
+        });
+        ctrl.begin_publish("right-key", "127.0.0.1").await.unwrap();
+        ctrl.on_tag(9, 0, &[0x17, 0, 0, 0, 0, 1], false, true);
+        ctrl.mark_ingest_dead();
+        assert!(ctrl.hold_active());
+
+        let wrong = r#"{"authentication":"wrong-key","client":{}}"#;
+        let cfg = obs_multitrack_config_proxy(wrong, "", ctrl, &live.settings).await;
+        assert!(!cfg.contains("{held-config}"), "{cfg}");
+        assert_eq!(dest.eb_override_url.lock().as_deref(), Some(held_ivs));
+
+        let right = r#"{"authentication":"right-key","client":{}}"#;
+        let cfg = obs_multitrack_config_proxy(right, "", ctrl, &live.settings).await;
+        assert_eq!(cfg, "{held-config}");
+    }
+
+    /// The ingest key is the only thing standing between a stranger's OBS and
+    /// a brokered Twitch session. A wrong key gets the static config and
+    /// nothing else: no Twitch key, no session, no egress override.
+    #[tokio::test]
+    async fn a_wrong_ingest_key_brokers_nothing() {
+        let mut s = settings_with_dests(vec![twitch_dest_with("a", "live_real_key_123")]);
+        s.ingest_key = "right-key".into();
+        let live = Live::new(s);
+        let body = r#"{"authentication":"wrong-key","client":{}}"#;
+        let query = "encoder=x264&tracks=1";
+        let cfg = obs_multitrack_config_proxy(body, query, &live.ctrl, &live.settings).await;
+        assert_eq!(
+            cfg,
+            obs_multitrack_config_static(query, body, &live.settings)
+        );
+        assert!(!cfg.contains("live_real_key_123") && !cfg.contains("right-key"));
+        assert!(live
+            .ctrl
+            .destination_state("a")
+            .eb_override_url
+            .lock()
+            .is_none());
+        assert!(logs_json(&live.ctrl).contains("rejected config request"));
+    }
+
+    /// With no usable Twitch destination there is nothing to broker: the
+    /// static config comes back and the log says why. Asserting the log line,
+    /// not just the output, matters: were a bad destination ever picked, the
+    /// Twitch call would fail and fall back to the same static config.
+    #[tokio::test]
+    async fn no_usable_twitch_destination_falls_back_to_the_static_config() {
+        let youtube = crate::config::Destination {
+            platform: "youtube".into(),
+            ..twitch_dest(true, "yt_key")
+        };
+        for (dests, why) in [
+            (vec![], "no destinations"),
+            (vec![twitch_dest(false, "livekey123")], "disabled"),
+            (vec![twitch_dest(true, "")], "no stream key"),
+            (vec![youtube], "not Twitch"),
+        ] {
+            let live = Live::new(settings_with_dests(dests));
+            let body = r#"{"authentication":"anything"}"#;
+            let cfg = obs_multitrack_config_proxy(body, "", &live.ctrl, &live.settings).await;
+            assert_eq!(
+                cfg,
+                obs_multitrack_config_static("", body, &live.settings),
+                "{why}"
+            );
+            assert!(
+                logs_json(&live.ctrl).contains("no Twitch destination, and OBS didn't describe"),
+                "{why}"
+            );
+        }
+    }
+
+    /// OBS's body without an `authentication` field cannot be patched with
+    /// the real key, so the proxy falls back rather than send Twitch a body
+    /// it did not mean to.
+    #[tokio::test]
+    async fn a_body_without_authentication_falls_back_to_the_static_config() {
+        let live = Live::new(settings_with_dests(vec![twitch_dest_with("a", "live_key")]));
+        let body = r#"{"client":{}}"#;
+        let cfg = obs_multitrack_config_proxy(body, "", &live.ctrl, &live.settings).await;
+        assert_eq!(cfg, obs_multitrack_config_static("", body, &live.settings));
+        assert!(logs_json(&live.ctrl).contains("didn't expose an authentication"));
+    }
+
+    /// A real-shaped Twitch answer: OBS is pointed at us on every endpoint,
+    /// the Twitch destination whose key was sent gets the session's IVS URL
+    /// with the session token, and a stale override on another Twitch
+    /// destination is cleared (two egresses on one session token collide).
+    #[tokio::test]
+    async fn a_twitch_session_is_applied_to_exactly_the_matching_destination() {
+        let live = Live::new(settings_with_dests(vec![
+            twitch_dest_with("a", "key_a"),
+            twitch_dest_with("b", "key_b"),
+        ]));
+        *live.ctrl.destination_state("b").eb_override_url.lock() = Some("rtmps://stale".into());
+        let twitch = r#"{"meta":{"config_id":"x"},"ingest_endpoints":[
+            {"protocol":"RTMP","url_template":"rtmp://jfk.contribute.live-video.net/app/{stream_key}","authentication":"v1_session"},
+            {"protocol":"RTMPS","url_template":"rtmps://jfk.contribute.live-video.net:443/app/{stream_key}","authentication":"v1_session"}
+        ],"encoder_configurations":[]}"#;
+
+        let out = apply_twitch_multitrack_config(twitch, "key_a", 1935, &live.ctrl, &live.settings);
+
+        assert_eq!(out.matches("contribute.live-video.net").count(), 0, "{out}");
+        assert_eq!(
+            out.matches("rtmp://localhost:1935/live/{stream_key}")
+                .count(),
+            2
+        );
+        assert_eq!(
+            *live.ctrl.destination_state("a").eb_override_url.lock(),
+            Some("rtmp://jfk.contribute.live-video.net/app/v1_session".to_string())
+        );
+        assert!(live
+            .ctrl
+            .destination_state("b")
+            .eb_override_url
+            .lock()
+            .is_none());
+        assert!(logs_json(&live.ctrl).contains("2 enabled Twitch destinations"));
+    }
+
+    /// Endpoints without a session token (non-IVS multitrack): the user's own
+    /// Twitch key fills the template instead.
+    #[tokio::test]
+    async fn endpoints_without_a_token_use_the_twitch_key() {
+        let live = Live::new(settings_with_dests(vec![twitch_dest_with("a", "key_a")]));
+        let twitch = r#"{"ingest_endpoints":[{"url_template":"rtmp://x.contribute.live-video.net/app/{stream_key}"}]}"#;
+        apply_twitch_multitrack_config(twitch, "key_a", 1935, &live.ctrl, &live.settings);
+        assert_eq!(
+            *live.ctrl.destination_state("a").eb_override_url.lock(),
+            Some("rtmp://x.contribute.live-video.net/app/key_a".to_string())
+        );
+    }
+
+    /// A 200 with no ingest endpoints carries no session to switch to: no
+    /// override is set and the response passes through unchanged.
+    #[tokio::test]
+    async fn a_response_without_endpoints_sets_no_override() {
+        let live = Live::new(settings_with_dests(vec![twitch_dest_with("a", "key_a")]));
+        let twitch = r#"{"meta":{"config_id":"x"},"encoder_configurations":[]}"#;
+        let out = apply_twitch_multitrack_config(twitch, "key_a", 1935, &live.ctrl, &live.settings);
+        assert_eq!(out, twitch);
+        assert!(live
+            .ctrl
+            .destination_state("a")
+            .eb_override_url
+            .lock()
+            .is_none());
+        assert!(logs_json(&live.ctrl).contains("couldn't parse the ingest URL"));
+    }
+
+    // ── Overlay files ────────────────────────────────────────────────
+
+    /// `/overlay/<name>` is public, so its name check is the first line of
+    /// defence against reading files outside the overlays folder.
+    #[test]
+    fn overlay_names_that_could_leave_the_folder_are_refused() {
+        let dir = unique_tmp_dir("names");
+        let settings = settings_with_overlays_dir(&dir);
+        for name in [
+            "",
+            "..",
+            "../x",
+            "..\\x",
+            "a/b",
+            "a\\b",
+            "c:x",
+            "C:\\Windows\\win.ini",
+        ] {
+            let (status, _, body) = serve_overlay_file(name, &settings);
+            assert_eq!(status, "400 Bad Request", "{name:?}");
+            assert_eq!(body, "invalid overlay name", "{name:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The second line of defence: a clean name that is a symlink to a file
+    /// outside the folder must not be served. Creating a symlink on Windows
+    /// needs Developer Mode or admin rights; without them the check is skipped
+    /// with a printed note rather than silently passing.
+    #[test]
+    fn an_overlay_symlink_cannot_escape_the_folder() {
+        let dir = unique_tmp_dir("symlink-in");
+        let outside = unique_tmp_dir("symlink-out");
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, "PRIVATE-MATERIAL").unwrap();
+        let link = dir.join("escape.html");
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&secret, &link);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&secret, &link);
+        match made {
+            Err(e) => eprintln!(
+                "NOTE: skipped the overlay symlink-escape check: cannot create a symlink \
+                 here ({e}). On Windows this needs Developer Mode or admin rights."
+            ),
+            Ok(()) => {
+                let (status, _, body) =
+                    serve_overlay_file("escape.html", &settings_with_overlays_dir(&dir));
+                assert_eq!(status, "403 Forbidden", "{body}");
+                assert!(!body.contains("PRIVATE"));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 }

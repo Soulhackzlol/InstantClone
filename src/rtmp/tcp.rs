@@ -243,6 +243,81 @@ pub fn set_v6_only(_sock: &tokio::net::TcpSocket) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        getsockopt, IPPROTO_IPV6, IPV6_V6ONLY, SOL_SOCKET, SO_KEEPALIVE, SO_SNDBUF,
+    };
+
+    fn opt(sock: &impl AsRawSocket, level: i32, name: i32) -> i32 {
+        // Zeroed, not -1: Winsock writes a single byte for BOOL options
+        // like SO_KEEPALIVE, leaving the rest of the int as it found it.
+        let mut v: i32 = 0;
+        let mut len = std::mem::size_of::<i32>() as i32;
+        let rc = unsafe {
+            getsockopt(
+                sock.as_raw_socket() as usize,
+                level,
+                name,
+                &mut v as *mut i32 as *mut u8,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        v
+    }
+
+    async fn connected_pair() -> (TcpStream, TcpStream) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listen");
+        let client = TcpStream::connect(listener.local_addr().expect("addr"))
+            .await
+            .expect("connect");
+        let (server, _) = listener.accept().await.expect("accept");
+        (client, server)
+    }
+
+    /// The raw `WSAIoctl` declaration is hand-written FFI: a wrong struct
+    /// layout or control code fails silently at runtime, leaving the
+    /// two-hour OS default in place. Read the option back to prove it took.
+    #[tokio::test]
+    async fn keepalive_and_send_buffer_reach_the_socket_on_windows() {
+        let (client, _server) = connected_pair().await;
+        assert_eq!(
+            opt(&client, SOL_SOCKET, SO_KEEPALIVE),
+            0,
+            "off until we set it"
+        );
+        set_aggressive_keepalive(&client).expect("set keepalive");
+        assert_eq!(opt(&client, SOL_SOCKET, SO_KEEPALIVE), 1);
+
+        set_send_buffer(&client, 1024 * 1024).expect("set send buffer");
+        assert_eq!(opt(&client, SOL_SOCKET, SO_SNDBUF), 1024 * 1024);
+    }
+
+    /// `bind_v6_only` relies on this sticking before the bind; a dual-stack
+    /// socket would collide with the IPv4 leg and report local peers as
+    /// v4-mapped (not loopback).
+    #[test]
+    fn v6_only_sticks_on_an_unbound_socket() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            let Ok(sock) = tokio::net::TcpSocket::new_v6() else {
+                eprintln!("skipping: no IPv6 on this machine");
+                return;
+            };
+            set_v6_only(&sock).expect("set v6 only");
+            assert_eq!(opt(&sock, IPPROTO_IPV6, IPV6_V6ONLY), 1);
+        });
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;

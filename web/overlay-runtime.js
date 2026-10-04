@@ -108,10 +108,6 @@
 
   // ---- Defaults ----
 
-  function defaultStateProps() {
-    return {}; // sparse - falls back to base
-  }
-
   function defaultWidget(kind, id) {
     const k = KINDS.find(function (x) { return x.key === kind; }) || KINDS[0];
     const SIZES = {
@@ -936,7 +932,7 @@
       }
 
       // Per-state text overrides surfaced as data attributes for the runtime.
-      let dataAttrs = 'data-kind="' + w.kind + '"';
+      let dataAttrs = 'data-kind="' + esc(w.kind) + '"';
       // LiquidFill fixed level (vs the default buffer-following fill).
       if (w.kind === 'LiquidFill' && w.level != null && w.level !== 'buffer') {
         dataAttrs += ' data-level="' + r(Math.max(0, Math.min(100, +w.level))) + '"';
@@ -983,7 +979,13 @@
     let animCss = '';
     Object.keys(usedAnim).forEach(function (k) { if (KEYFRAMES[k]) animCss += KEYFRAMES[k] + '\n'; });
 
-    const css = themeCss(doc.theme) + '\n' + BASE_CSS + '\n' + animCss + widgetCssAll;
+    // A doc read back from a file in the overlays folder is anyone's: its
+    // colours, fonts and easings all land in this stylesheet, and the
+    // Studio previews it on the dashboard's own origin. None may close the
+    // <style> element: `\3c ` is CSS's own escape for `<`, so a real `<`
+    // inside a CSS string still reads as one.
+    const css = (themeCss(doc.theme) + '\n' + BASE_CSS + '\n' + animCss + widgetCssAll)
+      .split('<').join('\\3c ');
     // The editable source doc rides along inside an HTML comment, URL-
     // encoded so its payload can never contain "-->". OBS ignores it; the
     // Studio extracts it on load via readDoc() to re-edit. One file does
@@ -1023,6 +1025,11 @@
     if (!d.canvas) d.canvas = { w: 1920, h: 1080, safe_area: true };
     d.theme = Object.assign(defaultTheme(), d.theme || {});
     if (!Array.isArray(d.widgets)) d.widgets = [];
+    // Only the kinds the Studio knows: a made-up one has no CSS or markup,
+    // and its name would land in the page as is.
+    d.widgets = d.widgets.filter(function (w) {
+      return w && KINDS.some(function (k) { return k.key === w.kind; });
+    });
     d.widgets.forEach(function (w) {
       if (!w.base) w.base = { color: '#5ac8fa', opacity: 1, text: null, anim: { style: 'fade', duration_ms: 400, easing: 'ease-out', delay_ms: 0 } };
       if (!w.states) w.states = {};

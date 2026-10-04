@@ -206,6 +206,51 @@ mod tests {
         );
     }
 
+    /// RFC 4231 test case 6: a 131-byte key, longer than the 64-byte block, so
+    /// it must be hashed down first. Cases 1 and 2 use short keys and never
+    /// reach that branch; a password longer than 64 bytes does.
+    #[test]
+    fn hmac_rfc4231_case6_hashes_an_oversized_key() {
+        let mac = hmac_sha256(
+            &[0xaa; 131],
+            b"Test Using Larger Than Block-Size Key - Hash Key First",
+        );
+        assert_eq!(
+            sha256::hex_bytes(&mac),
+            "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+        );
+    }
+
+    /// RFC 4231 test case 7: an oversized key AND a message longer than one
+    /// block, so the inner hash spans several blocks.
+    #[test]
+    fn hmac_rfc4231_case7_oversized_key_and_message() {
+        let mac = hmac_sha256(
+            &[0xaa; 131],
+            b"This is a test using a larger than block-size key and a larger than \
+              block-size data. The key needs to be hashed before being used by the \
+              HMAC algorithm.",
+        );
+        assert_eq!(
+            sha256::hex_bytes(&mac),
+            "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2"
+        );
+    }
+
+    /// A key of exactly one block is used as-is, not hashed. This is the
+    /// boundary of the `>` in `hmac_sha256`: turning it into `>=` would hash a
+    /// 64-byte key and change every MAC made with one. Expected value is the
+    /// NIST HMAC-SHA256 "keylen=blocklen" example (key = bytes 0x00..0x3f).
+    #[test]
+    fn hmac_key_of_exactly_one_block_is_not_hashed() {
+        let key: Vec<u8> = (0u8..64).collect();
+        let mac = hmac_sha256(&key, b"Sample message for keylen=blocklen");
+        assert_eq!(
+            sha256::hex_bytes(&mac),
+            "8bb9a1db9806f20df7f77b82138c7914d174d59e13dc4d0169c9057b133e1d62"
+        );
+    }
+
     /// Published PBKDF2-HMAC-SHA256 vectors (password "password", salt "salt").
     #[test]
     fn pbkdf2_known_vectors() {
@@ -233,12 +278,66 @@ mod tests {
         assert_ne!(h, h2);
     }
 
+    /// A stored hash in the exact on-disk format, built from the published
+    /// PBKDF2 vector (password "password", salt "salt" = hex 73616c74, c = 1).
+    ///
+    /// `password_round_trip` only proves `hash_password` and `verify_password`
+    /// agree with each other, so a format change made to both sides passes it
+    /// while locking every existing user out of their dashboard. This one is
+    /// what a config file written by an older build actually contains.
+    const STORED_VECTOR: &str = "pbkdf2-sha256$1$73616c74$\
+        120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b";
+
+    #[test]
+    fn an_existing_stored_hash_still_verifies() {
+        assert!(verify_password("password", STORED_VECTOR));
+        assert!(!verify_password("Password", STORED_VECTOR));
+    }
+
     #[test]
     fn verify_rejects_garbage() {
         assert!(!verify_password("x", ""));
         assert!(!verify_password("x", "not-a-hash"));
         assert!(!verify_password("x", "pbkdf2-sha256$0$aa$bb"));
         assert!(!verify_password("x", "pbkdf2-sha256$1$zz$bb")); // non-hex salt
+    }
+
+    /// Every malformed variant of a hash that is otherwise correct for this
+    /// password. Starting from a valid value is the point: each case fails for
+    /// exactly the one reason it names, not because the password is wrong.
+    #[test]
+    fn verify_rejects_damaged_copies_of_a_valid_hash() {
+        let dk_len = STORED_VECTOR.len();
+        for (stored, why) in [
+            (
+                STORED_VECTOR.replace("pbkdf2-sha256$", "pbkdf2-sha1$"),
+                "another algorithm's prefix",
+            ),
+            (
+                STORED_VECTOR[..dk_len - 1].to_string(),
+                "an odd-length digest",
+            ),
+            (
+                STORED_VECTOR[..dk_len - 2].to_string(),
+                "a truncated digest (31 bytes)",
+            ),
+            (
+                format!("{STORED_VECTOR}00"),
+                "an overlong digest (33 bytes)",
+            ),
+            (format!("{STORED_VECTOR}$extra"), "five fields"),
+            (
+                STORED_VECTOR.replacen("$1$", "$", 1),
+                "three fields (no iteration count)",
+            ),
+            (
+                STORED_VECTOR.replacen("$1$", "$x$", 1),
+                "a non-numeric count",
+            ),
+            (STORED_VECTOR.replacen("$1$", "$-1$", 1), "a negative count"),
+        ] {
+            assert!(!verify_password("password", &stored), "{why}: {stored}");
+        }
     }
 
     #[test]

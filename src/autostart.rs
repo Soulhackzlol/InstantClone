@@ -43,8 +43,15 @@ fn run_command() -> io::Result<String> {
 /// means the same thing to the user either way.
 #[cfg(windows)]
 pub fn is_enabled() -> bool {
+    is_enabled_under(RUN_KEY)
+}
+
+/// `is_enabled` against any HKCU subkey. Split out so the round-trip test
+/// can use a private key instead of the developer's real Run key.
+#[cfg(windows)]
+fn is_enabled_under(subkey: &str) -> bool {
     use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
-    let subkey = wide(RUN_KEY);
+    let subkey = wide(subkey);
     let name = wide(VALUE_NAME);
     // Null output buffer + null size: asks only "does this value exist,
     // and is it a string?" without reading the data back.
@@ -69,10 +76,17 @@ pub fn is_enabled() -> bool {
 /// of pointing at an executable that no longer exists.
 #[cfg(windows)]
 pub fn set(enabled: bool) -> io::Result<()> {
+    set_under(RUN_KEY, enabled)
+}
+
+/// `set` against any HKCU subkey. Split out so the round-trip test can use
+/// a private key instead of the developer's real Run key.
+#[cfg(windows)]
+fn set_under(subkey: &str, enabled: bool) -> io::Result<()> {
     use windows_sys::Win32::System::Registry::{
         RegDeleteKeyValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
     };
-    let subkey = wide(RUN_KEY);
+    let subkey = wide(subkey);
     let name = wide(VALUE_NAME);
 
     let rc = if enabled {
@@ -297,29 +311,47 @@ mod tests {
         );
     }
 
-    /// Round-trip against the real registry. Writes under HKCU, which
-    /// needs no elevation, and restores whatever state the machine was in
-    /// so running the suite never changes the developer's own startup.
+    /// Private HKCU key the round-trip test owns outright. A single level so
+    /// deleting it leaves nothing behind, and never the real Run key: a test
+    /// that touched that could rewrite or drop the developer's own startup
+    /// entry, and a panic midway would leave it that way.
+    const TEST_KEY: &str = r"Software\InstantCloneAutostartTest";
+
+    /// Deletes `TEST_KEY` on drop, so a failed assertion still cleans up.
+    struct TestKeyGuard;
+
+    impl Drop for TestKeyGuard {
+        fn drop(&mut self) {
+            use windows_sys::Win32::System::Registry::{RegDeleteTreeW, HKEY_CURRENT_USER};
+            let subkey = wide(TEST_KEY);
+            unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, subkey.as_ptr()) };
+        }
+    }
+
+    /// Round-trip through the same code path `set`/`is_enabled` use, but
+    /// against a private key, so running the suite never changes the
+    /// developer's own startup.
     #[test]
     fn enable_disable_round_trip() {
-        let original = is_enabled();
+        let _cleanup = TestKeyGuard;
+        assert!(
+            !is_enabled_under(TEST_KEY),
+            "stale test key from an earlier run"
+        );
 
-        set(true).expect("enable");
-        assert!(is_enabled(), "value must exist after enabling");
+        set_under(TEST_KEY, true).expect("enable");
+        assert!(
+            is_enabled_under(TEST_KEY),
+            "value must exist after enabling"
+        );
 
-        set(false).expect("disable");
-        assert!(!is_enabled(), "value must be gone after disabling");
+        set_under(TEST_KEY, false).expect("disable");
+        assert!(
+            !is_enabled_under(TEST_KEY),
+            "value must be gone after disabling"
+        );
 
         // Disabling an already-absent value is a no-op, not an error.
-        set(false).expect("disable twice");
-
-        if original {
-            set(true).expect("restore");
-        }
-        assert_eq!(
-            is_enabled(),
-            original,
-            "test must leave startup state as found"
-        );
+        set_under(TEST_KEY, false).expect("disable twice");
     }
 }

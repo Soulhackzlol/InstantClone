@@ -11,6 +11,8 @@
 use crate::buffer::{DiskRing, TagMeta};
 use crate::compat::StreamParams;
 use crate::h264::{AudioCodec, VideoCodec};
+use crate::integrations::host::fmt_duration;
+use crate::integrations::{Event, EventKind};
 use crate::rtmp::client::{EgressClient, EgressSink, EgressUrl};
 use std::collections::HashMap;
 use std::io;
@@ -30,6 +32,62 @@ fn process_now_ms() -> u64 {
     static ANCHOR: OnceLock<Instant> = OnceLock::new();
     let start = ANCHOR.get_or_init(Instant::now);
     Instant::now().saturating_duration_since(*start).as_millis() as u64
+}
+
+/// Rolling bitrate, lock-free: bytes are summed over windows of at least
+/// `RATE_WINDOW_MS` and the rate is the last full window. A window that
+/// hasn't rolled for `RATE_STALE_MS` means nothing has arrived since (the
+/// stream stopped or froze), so the rate reads 0 rather than holding the
+/// last second's value forever.
+#[derive(Default)]
+pub struct RateMeter {
+    window_bytes: AtomicU64,
+    /// 0 = no window yet.
+    window_start_ms: AtomicU64,
+    kbps: AtomicU32,
+}
+
+const RATE_WINDOW_MS: u64 = 1_000;
+const RATE_STALE_MS: u64 = 2_500;
+
+impl RateMeter {
+    pub fn note(&self, bytes: usize) {
+        self.note_at(bytes, process_now_ms());
+    }
+
+    fn note_at(&self, bytes: usize, now_ms: u64) {
+        let now_ms = now_ms.max(1);
+        let start = self.window_start_ms.load(Ordering::Relaxed);
+        // First bytes, or the first after a gap: they mark the start of a
+        // fresh window (so they count toward the time before it), instead
+        // of the silence being averaged into the rate.
+        if start == 0 || now_ms.saturating_sub(start) > RATE_STALE_MS {
+            self.window_bytes.store(0, Ordering::Relaxed);
+            self.window_start_ms.store(now_ms, Ordering::Relaxed);
+            return;
+        }
+        let total = self.window_bytes.fetch_add(bytes as u64, Ordering::Relaxed) + bytes as u64;
+        let elapsed = now_ms.saturating_sub(start);
+        if elapsed >= RATE_WINDOW_MS {
+            // bytes * 8 / ms = kbps
+            self.kbps
+                .store(((total * 8) / elapsed) as u32, Ordering::Relaxed);
+            self.window_bytes.store(0, Ordering::Relaxed);
+            self.window_start_ms.store(now_ms, Ordering::Relaxed);
+        }
+    }
+
+    pub fn kbps(&self) -> u32 {
+        self.kbps_at(process_now_ms())
+    }
+
+    fn kbps_at(&self, now_ms: u64) -> u32 {
+        let start = self.window_start_ms.load(Ordering::Relaxed);
+        if start == 0 || now_ms.saturating_sub(start) > RATE_STALE_MS {
+            return 0;
+        }
+        self.kbps.load(Ordering::Relaxed)
+    }
 }
 
 /// Encode VideoCodec as a u8 for atomic storage.
@@ -110,6 +168,9 @@ impl ActivateError {
 /// because a 24/7 relay logs for months: the oldest line is dropped rather
 /// than letting the buffer track uptime.
 const LOG_LINES_MAX: usize = 1_500;
+/// How long OBS gets to send its first video frame after coming back from
+/// a crash-protection hold before a missing picture counts as a freeze.
+const FIRST_VIDEO_GRACE: Duration = Duration::from_secs(10);
 
 pub const NO_INGEST: &str = "OBS isn't sending anything yet - start streaming first";
 
@@ -152,7 +213,7 @@ pub struct DestinationState {
     pub bytes_sent: AtomicU64,
     pub cuts_performed: AtomicU32,
     pub reconnects: AtomicU32,
-    pub bitrate_kbps_out: AtomicU32,
+    pub rate_out: RateMeter,
     /// Set by the supervisor when this destination is being removed or
     /// the app is shutting down. The egress pump checks it once per loop
     /// and tears down the upstream session politely (deleteStream) before
@@ -166,8 +227,6 @@ pub struct DestinationState {
     /// bytes don't match and the upstream decoder silently rejects every
     /// subsequent frame.
     last_seq_header_gen: AtomicU32,
-    rate_window_bytes: AtomicU64,
-    rate_window_start_ms: AtomicU64,
     /// True if this destination accepts Enhanced Broadcasting multi-track
     /// video on the wire. Set by the supervisor to `true` when the
     /// destination's platform is `twitch` and to `false` for everything
@@ -204,9 +263,9 @@ pub struct DestinationState {
     /// The OneTrack TrackId of the vertical-canvas primary, discovered by
     /// `h264::detect_vertical_primary_track` from the per-track seq-header
     /// cache and refreshed whenever that cache changes. `0xFF` means
-    /// "not resolved yet" (Twitch Dual Format isn't active, or no portrait
-    /// track has been seen): a vertical destination then sends no video
-    /// and surfaces a "waiting for Dual Format" status, while every other
+    /// "not resolved yet" (OBS sends no 9:16 canvas, from its Additional
+    /// canvas or Twitch Dual Format): a vertical destination then sends no
+    /// video and the dashboard says what's missing, while every other
     /// destination is unaffected.
     pub vertical_primary_track: AtomicU8,
     /// Twitch only: when our /obs/multitrack-config proxy successfully
@@ -251,6 +310,19 @@ pub struct DestinationState {
     pub session_epoch: AtomicU64,
 }
 
+/// The Enhanced Broadcasting config last handed to OBS, and the Twitch
+/// session it opened on one destination.
+#[derive(Debug, Clone)]
+pub struct EbSession {
+    /// The rewritten GetClientConfiguration response OBS received.
+    pub config: String,
+    /// The session tokens OBS may publish with.
+    pub auths: Vec<String>,
+    pub dest_id: String,
+    /// The IVS ingest URL the destination streams to for this session.
+    pub ivs_url: String,
+}
+
 /// Outcome of finishing a VOD-session fetch, returned by
 /// `complete_vod_fetch` so the supervisor can log it without re-deriving
 /// what happened.
@@ -281,12 +353,10 @@ impl DestinationState {
             bytes_sent: AtomicU64::new(0),
             cuts_performed: AtomicU32::new(0),
             reconnects: AtomicU32::new(0),
-            bitrate_kbps_out: AtomicU32::new(0),
+            rate_out: RateMeter::default(),
             shutdown_requested: AtomicBool::new(false),
             last_seq_header_gen: AtomicU32::new(0),
             eb_override_url: crate::sync::Mutex::new(None),
-            rate_window_bytes: AtomicU64::new(0),
-            rate_window_start_ms: AtomicU64::new(0),
             // Default false: every newly-spawned destination flattens
             // multi-track until the supervisor decides otherwise. This
             // preserves beta.6 behaviour for any code path that creates
@@ -308,9 +378,9 @@ impl DestinationState {
     /// The video egress policy for this destination right now. Read by
     /// both the live send path and the seq-header replay so they always
     /// agree on which canvas to forward. Returns `None` when a vertical
-    /// destination has no resolved canvas yet (Twitch Dual Format isn't
-    /// active): the caller drops all video and the dest waits, leaving
-    /// every other destination untouched.
+    /// destination has no resolved canvas yet (no 9:16 canvas on the wire):
+    /// the caller drops all video and the dest waits, leaving every other
+    /// destination untouched.
     pub fn video_egress(&self) -> Option<crate::h264::VideoEgress> {
         use crate::h264::VideoEgress;
         if self.pass_through_multitrack_video.load(Ordering::Relaxed) {
@@ -423,26 +493,19 @@ impl DestinationState {
         outcome
     }
 
-    fn note_outbound_bytes(&self, n: usize) {
-        let now = process_now_ms();
-        let total = self
-            .rate_window_bytes
-            .fetch_add(n as u64, Ordering::Relaxed)
-            + n as u64;
-        let start = self.rate_window_start_ms.load(Ordering::Relaxed);
-        if start == 0 {
-            self.rate_window_start_ms.store(now, Ordering::Relaxed);
-            return;
-        }
-        let elapsed = now.saturating_sub(start);
-        if elapsed >= 1_000 {
-            let kbps = ((total * 8) / elapsed.max(1)) as u32;
-            self.bitrate_kbps_out.store(kbps, Ordering::Relaxed);
-            self.rate_window_bytes.store(0, Ordering::Relaxed);
-            self.rate_window_start_ms.store(now, Ordering::Relaxed);
-        }
+    pub(crate) fn note_outbound_bytes(&self, n: usize) {
+        self.rate_out.note(n);
     }
 }
+
+/// `Controller::resumed_after_seq` when the ring held nothing.
+const NO_SEQ: u64 = u64::MAX;
+/// `Controller::eb_vertical_track` when the config has no vertical track.
+const NO_TRACK: u8 = 0xFF;
+
+/// `Controller::last_hold_end` values.
+const HOLD_END_RESUMED: u8 = 1;
+const HOLD_END_ENDED: u8 = 2;
 
 /// What the main loop should do after a graceful shutdown: exit for good, or
 /// relaunch a fresh process in place.
@@ -494,6 +557,68 @@ pub struct Controller {
     ingest_alive: AtomicBool,
     buffer_building: AtomicBool,
     publisher_token: AtomicU64,
+    /// Set when the live publisher sends FCUnpublish or deleteStream, read
+    /// (and cleared) when its connection closes: a disconnect after that
+    /// goodbye is a deliberate stop, not a crash.
+    unpublish_received: AtomicBool,
+    /// When the last video tag arrived (process ms), 0 before the first
+    /// one of a session or while crash protection is off. Used to spot a
+    /// frozen OBS.
+    last_video_tag_ms: AtomicU64,
+    /// OBS froze (a freeze hold opened) and has sent no video since. The
+    /// next video tag clears it and resumes; until then freeze detection
+    /// stays quiet, so a freeze hold that ran out or was ended doesn't
+    /// reopen itself. Kept apart from `hold` to stay lock-free per tag.
+    ingest_frozen: AtomicBool,
+    /// `hold` is Some. Lets the per-tag checks skip the lock.
+    hold_open: AtomicBool,
+    /// The newest ring seq when the last hold opened (`NO_SEQ`: none, or
+    /// OBS is back): the delay tail ends there. A frozen OBS can keep
+    /// sending audio, so the ring's own newest seq would keep moving.
+    hold_tail_end_seq: AtomicU64,
+    /// OBS is gone with no hold covering it (crash protection off, OBS
+    /// stopped on purpose, or the hold ran out): a destination still airing
+    /// the delay tail finishes it, then ends, as if OBS had sent its end
+    /// through the delay too. Not when the streamer ended it.
+    tail_plays_out: AtomicBool,
+    /// "The buffer holds only N s" was logged for the armed delay; cleared
+    /// on the next arm so each new value is checked once.
+    capacity_capped_logged: AtomicBool,
+    /// Process ms of the last "rejected publisher" log line (see
+    /// `log_rejected_publish`).
+    last_rejection_log_ms: AtomicU64,
+    /// The newest ring seq when the last hold ended because OBS came back
+    /// (`NO_SEQ` when the ring was empty): the video before it is from
+    /// before the hold, and a rejoin never starts there.
+    resumed_after_seq: AtomicU64,
+    /// The newest ring seq when a frozen OBS recovered after its hold had
+    /// already ended (`NO_SEQ`: none this session). The destinations ended
+    /// with the hold, so the video before it is over for viewers: a pump
+    /// that starts later never seeds there (see `fresh_from_seq`).
+    replay_floor_seq: AtomicU64,
+    /// How the last hold closed: 0 none yet, 1 resumed, 2 ended.
+    last_hold_end: AtomicU8,
+    /// Crash protection settings, mirrored from Settings by the supervisor.
+    crash_protection: crate::sync::Mutex<crate::crash_protection::CrashProtection>,
+    /// `crash_protection.enabled`, readable without a lock: the ingest path
+    /// does its crash-protection bookkeeping only while this is set.
+    crash_protection_on: AtomicBool,
+    /// The open crash-protection hold: OBS dropped and destinations are
+    /// being kept live on the reconnect screen. See `crate::crash_hold`.
+    hold: crate::sync::Mutex<Option<crate::crash_hold::Hold>>,
+    /// Encoded reconnect-screen loops, shared by every destination.
+    pub slate_cache: Arc<crate::crash_hold::SlateCache>,
+    /// The latest keyframe of each track the reconnect screen can't
+    /// replace (HEVC, AV1), keyed like `video_seq_headers`: a hold re-sends
+    /// it instead. See `crash_hold::is_held_keyframe`.
+    held_keyframes: crate::sync::Mutex<std::collections::BTreeMap<u8, Arc<[u8]>>>,
+    /// The Enhanced Broadcasting config last handed to OBS and the Twitch
+    /// session it opened, so OBS coming back during a hold continues it.
+    eb_session: crate::sync::Mutex<Option<EbSession>>,
+    /// OBS asked for an Enhanced Broadcasting config (the kept one or a new
+    /// one) since the hold opened: it is coming back on that session.
+    /// Cleared when a hold opens.
+    eb_session_claimed: AtomicBool,
 
     // --- Per-destination state, keyed by Destination.id -----------------
     // RwLock not Mutex: every `on_tag` (~150-300/s per active stream)
@@ -506,12 +631,17 @@ pub struct Controller {
 
     // Ingest-side stats
     ingest_disconnects: AtomicU32,
-    bitrate_kbps: AtomicU32, // inbound (from OBS)
-    rate_window_bytes: AtomicU64,
-    rate_window_start_ms: AtomicU64,
+    rate_in: RateMeter, // inbound (from OBS)
+    // Video tags only. Viewers decode the video track, so the Twitch
+    // mobile-decoder check compares this, not the total with audio.
+    rate_video_in: RateMeter,
+    // The current publisher connected over loopback, so the OBS profile on
+    // this machine is the one streaming. Set per publisher in `begin_publish`.
+    publisher_local: AtomicBool,
 
-    // Discord webhook URL. Empty = disabled. Updated live via update_webhook.
-    webhook_url: crate::sync::Mutex<String>,
+    // The integrations engine, attached once at startup. Events reach it
+    // through `emit`, which never blocks and works from any thread.
+    integrations: std::sync::OnceLock<Arc<crate::integrations::Handle>>,
     // Required RTMP stream key. Empty = accept any publisher (local default).
     // Mirrored from Settings via update_ingest_key so `begin_publish` can
     // enforce it without the ingest task needing a settings handle.
@@ -525,10 +655,6 @@ pub struct Controller {
     // token out, so `begin_publish` trusts it alongside the ingest key. Bounded
     // and TTL'd (see remember_eb_key) so tokens never accumulate.
     eb_keys: crate::sync::Mutex<Vec<(String, Instant)>>,
-    // Wall-clock ms (since UNIX epoch) of last webhook fire. Throttles
-    // rapid event sequences (e.g. reconnect flapping) so we never spawn
-    // more than one curl every ~2 s.
-    webhook_last_fire_ms: AtomicU64,
 
     // Coordination
     publish_lock: Mutex<()>,
@@ -539,8 +665,16 @@ pub struct Controller {
     // whether Enhanced Broadcasting was caught + flattened.
     video_codec: AtomicU8,
     audio_codec: AtomicU8,
+    /// The track the last Enhanced Broadcasting config OBS got puts the
+    /// vertical canvas on, `NO_TRACK` when it has none. Finds the vertical
+    /// track when its SPS can't be read (Twitch's HEVC for 2K channels).
+    eb_vertical_track: AtomicU8,
     multitrack_video: AtomicBool,
     multitrack_audio: AtomicBool,
+    /// OBS is sending a 2nd audio track (TrackId 1, the VOD / clean track)
+    /// in this stream. A destination set to that track then gets only it
+    /// (see `h264::select_audio_bytes`). Reset with the publisher.
+    second_audio_track: AtomicBool,
 
     // --- Measured encoder parameters (per publisher session) ---
     // Feed `compat::compat_warning`, which compares them against the
@@ -676,12 +810,27 @@ impl Controller {
             ingest_alive: AtomicBool::new(false),
             buffer_building: AtomicBool::new(false),
             publisher_token: AtomicU64::new(0),
+            unpublish_received: AtomicBool::new(false),
+            last_video_tag_ms: AtomicU64::new(0),
+            ingest_frozen: AtomicBool::new(false),
+            hold_open: AtomicBool::new(false),
+            hold_tail_end_seq: AtomicU64::new(NO_SEQ),
+            tail_plays_out: AtomicBool::new(false),
+            capacity_capped_logged: AtomicBool::new(false),
+            last_rejection_log_ms: AtomicU64::new(0),
+            resumed_after_seq: AtomicU64::new(NO_SEQ),
+            replay_floor_seq: AtomicU64::new(NO_SEQ),
+            last_hold_end: AtomicU8::new(0),
+            crash_protection: crate::sync::Mutex::new(Default::default()),
+            crash_protection_on: AtomicBool::new(false),
+            hold: crate::sync::Mutex::new(None),
+            slate_cache: Arc::default(),
             destinations: crate::sync::RwLock::new(HashMap::new()),
             ingest_disconnects: AtomicU32::new(0),
-            bitrate_kbps: AtomicU32::new(0),
-            rate_window_bytes: AtomicU64::new(0),
-            rate_window_start_ms: AtomicU64::new(0),
-            webhook_url: crate::sync::Mutex::new(String::new()),
+            rate_in: RateMeter::default(),
+            rate_video_in: RateMeter::default(),
+            publisher_local: AtomicBool::new(false),
+            integrations: std::sync::OnceLock::new(),
             ingest_key: crate::sync::Mutex::new(String::new()),
             // 5 wrong keys then a short exponential lockout. A legit OBS uses
             // the right key and clears its record on the first accept, so this
@@ -693,10 +842,13 @@ impl Controller {
                 std::time::Duration::from_secs(10 * 60),
             ),
             eb_keys: crate::sync::Mutex::new(Vec::new()),
-            webhook_last_fire_ms: AtomicU64::new(0),
+            held_keyframes: crate::sync::Mutex::new(std::collections::BTreeMap::new()),
+            eb_session: crate::sync::Mutex::new(None),
+            eb_session_claimed: AtomicBool::new(false),
             publish_lock: Mutex::new(()),
             video_codec: AtomicU8::new(0),
             audio_codec: AtomicU8::new(0),
+            eb_vertical_track: AtomicU8::new(NO_TRACK),
             video_dims: AtomicU64::new(0),
             idr_window_open: AtomicBool::new(false),
             first_idr_ts_ms: AtomicU64::new(0),
@@ -705,6 +857,7 @@ impl Controller {
             keyframe_interval_cached: AtomicU32::new(0),
             multitrack_video: AtomicBool::new(false),
             multitrack_audio: AtomicBool::new(false),
+            second_audio_track: AtomicBool::new(false),
             seq_header_gen: AtomicU32::new(0),
             last_input_ts_u32: AtomicU32::new(0),
             input_ts_wrap_high: AtomicU32::new(0),
@@ -766,6 +919,26 @@ impl Controller {
 
     pub fn video_codec(&self) -> VideoCodec {
         dec_vcodec(self.video_codec.load(Ordering::Relaxed))
+    }
+    /// Remember which track the config just handed to OBS puts the
+    /// vertical canvas on.
+    pub fn note_eb_config(&self, config: &str) {
+        let track = crate::local_eb_config::vertical_track(config).unwrap_or(NO_TRACK);
+        self.eb_vertical_track.store(track, Ordering::Relaxed);
+    }
+    /// The vertical track of the last config handed to OBS.
+    pub fn eb_vertical_track(&self) -> Option<u8> {
+        Some(self.eb_vertical_track.load(Ordering::Relaxed)).filter(|&t| t != NO_TRACK)
+    }
+    /// The portrait (9:16) track OBS is sending now. Only H.264 headers can
+    /// be measured; for any other codec, the vertical track the Enhanced
+    /// Broadcasting config named counts once OBS is actually sending it.
+    pub fn vertical_track_on_wire(&self) -> Option<u8> {
+        let headers = self.ring.video_seq_headers.lock();
+        crate::h264::detect_vertical_primary_track(&headers).or_else(|| {
+            self.eb_vertical_track()
+                .filter(|track| headers.contains_key(track))
+        })
     }
     pub fn audio_codec(&self) -> AudioCodec {
         dec_acodec(self.audio_codec.load(Ordering::Relaxed))
@@ -899,15 +1072,27 @@ impl Controller {
                  forwarding raw to Twitch destinations, flattening to the \
                  primary resolution for any other platform.",
             );
-            self.fire_webhook(
-                "🎚️",
-                "Enhanced Broadcasting detected - multi-track forwarding active.",
-            );
+            self.emit(Event::new(EventKind::EbDetected));
         }
     }
-    pub fn note_multitrack_audio(&self) {
+    pub fn note_multitrack_audio(&self, payload: &[u8]) {
         if !self.multitrack_audio.swap(true, Ordering::Relaxed) {
             self.log("ingest: multi-track audio detected (VOD audio track) - forwarding as-is.");
+        }
+        if !self.second_audio_track.load(Ordering::Relaxed)
+            && crate::h264::multitrack_audio_has_track(payload, 1)
+        {
+            self.second_audio_track.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Whether the audio track `egress` asks for is in this stream (the live
+    /// track always is). See `h264::select_audio_bytes`.
+    pub fn audio_target_on_wire(&self, egress: crate::h264::AudioEgress) -> bool {
+        match egress {
+            crate::h264::AudioEgress::Passthrough | crate::h264::AudioEgress::Track(0) => true,
+            crate::h264::AudioEgress::Track(1) => self.second_audio_track.load(Ordering::Relaxed),
+            crate::h264::AudioEgress::Track(_) => false,
         }
     }
     /// Wipe codec/multitrack state when the publisher disconnects so a
@@ -929,6 +1114,7 @@ impl Controller {
         self.keyframe_interval_cached.store(0, Ordering::Relaxed);
         self.multitrack_video.store(false, Ordering::Relaxed);
         self.multitrack_audio.store(false, Ordering::Relaxed);
+        self.second_audio_track.store(false, Ordering::Relaxed);
         self.last_multitrack_video_ms.store(0, Ordering::Relaxed);
         self.backpressure_since_ms.store(0, Ordering::Relaxed);
         self.last_input_ts_u32.store(0, Ordering::Relaxed);
@@ -999,6 +1185,14 @@ impl Controller {
                 return last as u64;
             }
             wrap_high -= 1;
+        } else if last - wire_ts > MAX_TS_STEP_BACK_MS {
+            // Far behind the timeline, and not a wrap: no interleaving is
+            // seconds long. OBS ends an Enhanced Broadcasting stream with
+            // SequenceEnd tags stamped 0, and adopting that stamp made the
+            // buffer's newest moment read 0: the delay still to air looked
+            // like none, and the destination was restarted mid-tail. Pin it
+            // to where we are, as for a stamp from before the session.
+            return ((wrap_high as u64) << 32) | (last as u64);
         }
         self.input_ts_wrap_high.store(wrap_high, Ordering::Relaxed);
         self.last_input_ts_u32.store(wire_ts, Ordering::Relaxed);
@@ -1044,7 +1238,7 @@ impl Controller {
                     d.id.clone(),
                     d.egress_alive.load(Ordering::Relaxed),
                     d.consumer_seq.load(Ordering::Relaxed),
-                    d.bitrate_kbps_out.load(Ordering::Relaxed),
+                    d.rate_out.kbps(),
                     d.tags_sent.load(Ordering::Relaxed),
                     d.bytes_sent.load(Ordering::Relaxed),
                     d.cuts_performed.load(Ordering::Relaxed),
@@ -1090,6 +1284,7 @@ impl Controller {
     pub fn arm_delay(&self, ms: u32) {
         let ms = ms.min(600_000);
         let previous_target = self.target_delay_ms.load(Ordering::Relaxed);
+        self.capacity_capped_logged.store(false, Ordering::Relaxed);
         self.armed_delay_ms.store(ms, Ordering::Relaxed);
         if ms == 0 {
             // Disarm wipes target as well.
@@ -1133,9 +1328,8 @@ impl Controller {
         if !self.ingest_alive() {
             return Err(ActivateError::NoIngest);
         }
-        let fill = self.buffer_fill_ms();
-        if fill + 500 < armed {
-            let remaining_ms = armed.saturating_sub(fill);
+        if !self.buffer_holds(armed) {
+            let remaining_ms = armed.saturating_sub(self.buffer_fill_ms());
             return Err(ActivateError::BufferShort { remaining_ms });
         }
         self.target_delay_ms.store(armed, Ordering::Relaxed);
@@ -1163,6 +1357,12 @@ impl Controller {
         // A manual cut supersedes any scheduled "cut after this airs" -
         // the streamer chose "now" over "when the mark airs".
         self.safe_cut_input_ts.store(0, Ordering::Relaxed);
+        // OBS already left and its delay is still airing: there is no live
+        // to cut to, so the cut ends the stream. Jumping to the newest
+        // keyframe would still air the stream's last moments.
+        if self.tail_left().is_some() {
+            self.end_tail_now();
+        }
     }
 
     // --- "Cut after this airs" (scheduled safe cut) -------------------
@@ -1326,10 +1526,17 @@ impl Controller {
         if armed == 0 {
             return "idle";
         }
-        if self.buffer_fill_ms() + 500 < armed {
+        if !self.buffer_holds(armed) {
             return "preparing";
         }
         "ready"
+    }
+
+    /// Whether the buffer holds a delay of `delay_ms`: it spans that much,
+    /// or it is full and spans all it ever will at this bitrate (the delay
+    /// then runs at what it holds, see `delayed_idr`).
+    fn buffer_holds(&self, delay_ms: u32) -> bool {
+        self.buffer_fill_ms() + 500 >= delay_ms || self.ring.is_saturated()
     }
 
     pub fn ingest_alive(&self) -> bool {
@@ -1389,32 +1596,22 @@ impl Controller {
         self.ingest_disconnects.load(Ordering::Relaxed)
     }
     pub fn bitrate_kbps(&self) -> u32 {
-        self.bitrate_kbps.load(Ordering::Relaxed)
+        self.rate_in.kbps()
+    }
+    /// Inbound video bitrate alone (no audio tracks, no sequence headers).
+    pub fn video_bitrate_kbps(&self) -> u32 {
+        self.rate_video_in.kbps()
+    }
+    /// The current publisher connected from this machine.
+    pub fn publisher_local(&self) -> bool {
+        self.publisher_local.load(Ordering::Relaxed)
     }
 
     // ---- Internal: ingest counters ----
 
-    /// Called from the ingest path on every audio/video tag. Maintains a
-    /// 1-second rolling bitrate average (kbps) - cheap, lock-free.
+    /// Called from the ingest path on every audio/video tag.
     pub fn note_inbound_bytes(&self, n: usize) {
-        let now = process_now_ms();
-        let total = self
-            .rate_window_bytes
-            .fetch_add(n as u64, Ordering::Relaxed)
-            + n as u64;
-        let start = self.rate_window_start_ms.load(Ordering::Relaxed);
-        if start == 0 {
-            self.rate_window_start_ms.store(now, Ordering::Relaxed);
-            return;
-        }
-        let elapsed = now.saturating_sub(start);
-        if elapsed >= 1_000 {
-            // Convert bytes/ms → kbps:  bytes * 8 / ms
-            let kbps = ((total * 8) / elapsed.max(1)) as u32;
-            self.bitrate_kbps.store(kbps, Ordering::Relaxed);
-            self.rate_window_bytes.store(0, Ordering::Relaxed);
-            self.rate_window_start_ms.store(now, Ordering::Relaxed);
-        }
+        self.rate_in.note(n);
     }
 
     pub fn note_ingest_disconnect(&self) {
@@ -1450,6 +1647,11 @@ impl Controller {
         // stream-key identity, so strip it here - otherwise the exact ingest key
         // arrives as `mykey?clientConfigId=...` and gets rejected as a wrong key.
         let stream_key = stream_key.split('?').next().unwrap_or(stream_key);
+        // An unparseable IP is treated as remote (fail-safe).
+        let local = peer_ip
+            .parse::<std::net::IpAddr>()
+            .map(|a| a.is_loopback())
+            .unwrap_or(false);
         // Ingest auth: when a key is configured, only a publisher using that
         // exact key gets in. Empty key (the default) accepts anyone, which is
         // the right behaviour on a local machine. Checked before the slot lock
@@ -1462,14 +1664,11 @@ impl Controller {
                 // behind an HTTP reverse proxy that could mask its IP - so it is
                 // no brute-force threat and must not be locked out of its own
                 // machine for a mistyped key. Apply the limiter to remote peers
-                // only; an unparseable IP is treated as remote (fail-safe).
-                let remote = !peer_ip
-                    .parse::<std::net::IpAddr>()
-                    .map(|a| a.is_loopback())
-                    .unwrap_or(false);
+                // only.
+                let remote = !local;
                 // Throttle first so a locked-out guesser burns no work.
                 if remote && self.ingest_limiter.check(peer_ip).is_err() {
-                    self.log("ingest: rejected publisher (rate limited)");
+                    self.log_rejected_publish("ingest: rejected publisher (rate limited)");
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
                         "too many attempts",
@@ -1489,7 +1688,7 @@ impl Controller {
                     if remote {
                         self.ingest_limiter.record_failure(peer_ip);
                     }
-                    self.log("ingest: rejected publisher (wrong stream key)");
+                    self.log_rejected_publish("ingest: rejected publisher (wrong stream key)");
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
                         "invalid stream key",
@@ -1505,21 +1704,34 @@ impl Controller {
         // interleave its tags into the buffer with its own timestamp
         // origin and guarantee a viewer-visible glitch.
         if self.ingest_alive.load(Ordering::Relaxed) {
-            self.log("ingest: rejected second publisher (slot in use)");
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "another publisher is already active",
-            ));
+            if !self.video_frozen_at(process_now_ms()) {
+                self.log_rejected_publish("ingest: rejected second publisher (slot in use)");
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "another publisher is already active",
+                ));
+            }
+            // The publisher holding the slot has sent no video for
+            // FREEZE_AFTER: a hung OBS whose connection the OS keeps alive
+            // would otherwise lock a restarted OBS out indefinitely. Hand the
+            // slot over; the new token shuts the old connection out (see
+            // `end_publish`). A freeze hold, if one is up, resumes below as
+            // for any returning publisher.
+            self.log("ingest: the connected publisher stopped sending video - handing over to the new one");
+            self.ingest_alive.store(false, Ordering::Relaxed);
+            self.note_ingest_disconnect();
+            self.reset_codec_state();
         }
 
         // Wipe every per-session cache that survives mark_ingest_dead.
         // The seq-header caches deliberately persist across an in-session
-        // egress restart (see `eb_seq_headers_survive_egress_restart`) so
+        // egress restart (see `every_track_config_leads_each_twitch_connection`) so
         // we clear them only when a new publisher takes the slot -
         // otherwise stale multi-track SPS/PPS leak into a non-EB
         // session and freeze the destination's decoder.
         self.ring.video_seq_headers.lock().clear();
         self.ring.audio_seq_headers.lock().clear();
+        self.held_keyframes.lock().clear();
         // onMetaData leaks the same way: the prior publisher's
         // resolution / fps / encoder fields would be replayed at every
         // pump start until the new publisher's first onMetaData arrives.
@@ -1545,11 +1757,39 @@ impl Controller {
         // fire hours later (or never) - clear it with the session.
         self.safe_cut_input_ts.store(0, Ordering::Relaxed);
 
+        // A goodbye from an earlier connection must not mark this session's
+        // end as a clean stop.
+        self.unpublish_received.store(false, Ordering::Relaxed);
+        self.last_video_tag_ms.store(0, Ordering::Relaxed);
+        self.ingest_frozen.store(false, Ordering::Relaxed);
+        // The ring is cleared above: nothing in it is from before a freeze.
+        self.replay_floor_seq.store(NO_SEQ, Ordering::Relaxed);
+        // A hold past its deadline already ended for the pumps. Close it as
+        // ended while ingest still reads as dead, so the sessions it kept
+        // are forgotten rather than carried into this stream.
+        self.expire_hold();
+        let resuming = self.hold_active();
+        if resuming {
+            self.forget_unclaimed_eb_session();
+        }
         // Bump token so any prior egress reader knows it's stale.
         let token = self.publisher_token.fetch_add(1, Ordering::SeqCst) + 1;
+        self.publisher_local.store(local, Ordering::Relaxed);
         self.ingest_alive.store(true, Ordering::Relaxed);
+        self.resume_from_hold();
+        if resuming {
+            // Freeze detection only starts at a session's first video
+            // frame, so an OBS that reconnects and never sends any would
+            // keep the screen up with no deadline. Start its clock now,
+            // with room for a slow encoder start before it counts.
+            let grace = FIRST_VIDEO_GRACE.saturating_sub(crate::crash_hold::FREEZE_AFTER);
+            self.last_video_tag_ms.store(
+                process_now_ms() + grace.as_millis() as u64,
+                Ordering::Relaxed,
+            );
+        }
         self.log("ingest: publisher connected");
-        self.fire_webhook("✅", "OBS publisher connected - going live.");
+        self.emit(Event::new(EventKind::ObsConnected));
         Ok(token)
     }
 
@@ -1563,11 +1803,9 @@ impl Controller {
         // which are tiny and one-shot).
         if !is_seq {
             self.note_inbound_bytes(payload.len());
-        }
-        // Bump the generation on every seq header so each egress pump
-        // knows to re-emit its cached config bytes on the next iteration.
-        if is_seq {
-            self.seq_header_gen.fetch_add(1, Ordering::Relaxed);
+            if kind == 9 {
+                self.rate_video_in.note(payload.len());
+            }
         }
         // Sample the encoder parameters the compatibility check compares
         // against the enabled destinations. Both are cheap: the dimension
@@ -1576,11 +1814,44 @@ impl Controller {
         if kind == 9 {
             if is_seq {
                 self.note_video_dimensions(payload);
-            } else if is_idr {
-                self.sample_keyframe_interval(ts_ms);
+            } else {
+                if self.crash_protection_on.load(Ordering::Relaxed) {
+                    self.note_video_for_crash_protection(payload);
+                }
+                if self.ingest_frozen.load(Ordering::Relaxed) {
+                    self.ingest_frozen.store(false, Ordering::Relaxed);
+                    // Back in time, the pumps rejoin past the freeze on
+                    // their own and a short freeze's tail may still be
+                    // airing. Everything before the freeze is behind viewers
+                    // once the hold is over (ended or run out), or once the
+                    // delay has moved past it: a freeze longer than the
+                    // delay aired its whole tail, and the screen took over.
+                    let tail_aired = self.ring.latest_ts().is_some_and(|last| {
+                        ts_ms.saturating_sub(u64::from(self.target_delay_ms())) > last
+                    });
+                    let hold_was_over = !self.hold_active() || tail_aired;
+                    // A hold past its deadline already ended for the pumps:
+                    // report it as ended, not as OBS being back in time.
+                    self.expire_hold();
+                    self.resume_from_hold();
+                    if hold_was_over {
+                        self.mark_replay_floor();
+                    }
+                }
+                if is_idr {
+                    self.sample_keyframe_interval(ts_ms);
+                }
             }
         }
         let _ = self.ring.append(kind, ts_ms, payload, is_idr, is_seq);
+        // Bump the generation on every seq header so each egress pump
+        // knows to re-emit its cached config bytes on the next iteration.
+        // After the append: a pump that sees the new generation must find
+        // the new header in the cache, or it would resend the old one and
+        // never learn of the change.
+        if is_seq {
+            self.seq_header_gen.fetch_add(1, Ordering::Relaxed);
+        }
         // Cap the buffer to the user's armed delay (plus a small slack for
         // IDR alignment). This keeps the on-screen "Buffer N/N s" exactly
         // what the user asked for, instead of growing to the full disk cap.
@@ -1588,9 +1859,38 @@ impl Controller {
         // so we never evict a tag any pump is still about to read.
         if !is_seq {
             let target = self.effective_target_buffer_ms();
-            let min_consumer = self.min_consumer_seq();
-            self.ring.trim_older_than(target, ts_ms, min_consumer);
+            // Never trim the keyframe a delay of the whole buffer lands on
+            // (see `delayed_idr`): with a GOP longer than the slack, it is
+            // older than the cutoff, and without it the delay can't join.
+            let delay_keyframe = self
+                .ring
+                .newest_idr_at_or_before(ts_ms.saturating_sub(u64::from(self.target_buffer_ms())))
+                .map_or(u64::MAX, |idr| idr.seq);
+            let keep_from = self.min_consumer_seq().min(delay_keyframe);
+            self.ring.trim_older_than(target, ts_ms, keep_from);
+            self.note_capacity_cap();
         }
+    }
+
+    /// Say once per armed value when the buffer is full before it spans the
+    /// armed delay: the delay then runs at what the buffer holds.
+    fn note_capacity_cap(&self) {
+        let armed = self.armed_delay_ms();
+        let fill = self.buffer_fill_ms();
+        if armed == 0
+            || self.capacity_capped_logged.load(Ordering::Relaxed)
+            || fill + 500 >= armed
+            || !self.ring.is_saturated()
+        {
+            return;
+        }
+        self.capacity_capped_logged.store(true, Ordering::Relaxed);
+        self.log(format!(
+            "delay: the buffer is full at {} s at this bitrate, short of the {} s armed, so the              delay runs at {} s. Raise the buffer size in System for the full delay.",
+            fill / 1000,
+            armed / 1000,
+            fill / 1000
+        ));
     }
 
     /// Slowest consumer across all destinations. Used by trim to ensure
@@ -1701,28 +2001,110 @@ impl Controller {
         self.target_buffer_ms() + BUFFER_SLACK_MS
     }
 
+    /// Whether a delayed destination can join right now: no delay is on,
+    /// or the buffer reaches back to it (see `delayed_idr`).
+    pub fn delay_reachable(&self) -> bool {
+        let target = u64::from(self.target_delay_ms());
+        target == 0 || delayed_idr(self, target).is_some()
+    }
+
     pub fn on_metadata(&self, payload: Vec<u8>) {
         *self.ring.metadata.lock() = Some(payload);
     }
 
+    /// A publishing connection closed. Only the current publisher's closing
+    /// counts: one that was handed over (`begin_publish`) has a stale token
+    /// and must not end the session that replaced it.
+    pub fn end_publish(&self, token: u64) {
+        if token == self.publisher_token() {
+            self.mark_ingest_dead();
+        }
+    }
+
+    /// Log a refused publish at most once every 10 s: a peer reconnecting
+    /// in a loop would otherwise push everything else out of the bounded
+    /// log.
+    fn log_rejected_publish(&self, line: &str) {
+        // Stamped one ms late, so 0 only ever means "never" (the process
+        // clock itself starts at 0).
+        let stamp = process_now_ms() + 1;
+        let last = self.last_rejection_log_ms.load(Ordering::Relaxed);
+        if last != 0 && stamp.saturating_sub(last) < 10_000 {
+            return;
+        }
+        self.last_rejection_log_ms.store(stamp, Ordering::Relaxed);
+        self.log(line.to_string());
+    }
+
     pub fn mark_ingest_dead(&self) {
+        // Only the live publisher's own disconnect gets here (its
+        // PublishGuard), once per session.
+        if !self.ingest_alive() {
+            return;
+        }
+        // Decide the hold before ingest reads as dead: a pump that sees
+        // ingest gone with no hold open ends its destination.
+        let stopped = self.unpublish_received.swap(false, Ordering::Relaxed);
+        if !stopped {
+            self.start_hold(crate::crash_hold::HoldReason::Crash);
+        } else if self.crash_protection.lock().every_disconnect {
+            self.start_hold(crate::crash_hold::HoldReason::Stopped);
+        } else if self.close_hold(HOLD_END_ENDED).is_some() {
+            // Stopped on purpose while a freeze hold was up: that ends it.
+            self.log("crash protection: OBS stopped the stream - destinations ended");
+        }
+        // No hold took over: what the delay still holds airs, then the
+        // destinations end. Viewers see the stream end when they would have
+        // seen everything else, not the delay's length early.
+        if !self.hold_active() {
+            self.hold_tail_end_seq
+                .store(self.ring.latest_seq().unwrap_or(NO_SEQ), Ordering::Relaxed);
+            self.tail_plays_out.store(true, Ordering::Relaxed);
+            let behind = self.current_delay_ms();
+            if behind >= 1_000 {
+                self.log(format!(
+                    "delay: airing the last {} s before the destinations end (End now cuts it)",
+                    behind / 1000
+                ));
+            }
+        }
         // Only count when transitioning alive → dead, so a stray call
         // doesn't inflate the counter.
         if self.ingest_alive.swap(false, Ordering::Relaxed) {
             self.note_ingest_disconnect();
             self.reset_codec_state();
+            if stopped {
+                self.log("ingest: publisher stopped the stream");
+            } else {
+                self.log(
+                    "ingest: publisher dropped without stopping (crash, kill or network loss)",
+                );
+            }
+            // `protected`: a hold opened and has its own, more useful event.
+            self.emit(
+                Event::new(EventKind::ObsDisconnected)
+                    .with("stopped", if stopped { "yes" } else { "no" })
+                    .with("protected", if self.hold_active() { "yes" } else { "no" }),
+            );
             // Clear any Enhanced Broadcasting URL overrides on the
             // way out - the next stream may or may not be EB, and a
             // stale override would force a non-EB stream onto an IVS
             // endpoint that has no allocated session. The
             // /obs/multitrack-config proxy sets a fresh override on
             // every new EB session anyway.
+            //
+            // A destination a crash-protection hold keeps live keeps its
+            // session: OBS coming back continues it (see `held_eb_config`),
+            // and the hold ending without OBS forgets it (`close_hold`).
             for (_id, state) in self.all_destination_states() {
-                // Clear the override AND bump the session epoch atomically,
-                // so a VOD-session fetch still in flight discards its stale
-                // result instead of writing a dead-session IVS URL into the
-                // next stream (the late-completion race).
-                state.invalidate_session_override();
+                if !self.hold_keeps(&state) {
+                    // Clear the override AND bump the session epoch
+                    // atomically, so a VOD-session fetch still in flight
+                    // discards its stale result instead of writing a
+                    // dead-session IVS URL into the next stream (the
+                    // late-completion race).
+                    state.invalidate_session_override();
+                }
                 // Note: we deliberately do NOT touch `vod_fetch_pending`
                 // here. It's owned solely by the fetch lifecycle (claim sets
                 // it, the task clears it on completion within ~15 s). If a
@@ -1731,15 +2113,413 @@ impl Controller {
                 // being spawned for the same destination - clearing it here
                 // would reintroduce the multi-session bug on a fast restart.
             }
-            self.log("ingest: publisher disconnected");
-            self.fire_webhook("⚠️", "OBS publisher disconnected.");
         }
     }
 
-    /// Update the Discord webhook URL - call when settings change. Empty
-    /// string disables webhook delivery entirely.
-    pub fn update_webhook(&self, url: String) {
-        *self.webhook_url.lock() = url;
+    /// Whether the open hold keeps `dest` live on the reconnect screen.
+    fn hold_keeps(&self, dest: &DestinationState) -> bool {
+        self.hold_active()
+            && dest.egress_alive.load(Ordering::Relaxed)
+            && crate::crash_hold::covers(self, dest)
+    }
+
+    /// Remember the Enhanced Broadcasting config just handed to OBS and
+    /// the Twitch session it opened.
+    pub fn remember_eb_session(&self, session: EbSession) {
+        *self.eb_session.lock() = Some(session);
+        // OBS asked for this session, so it is Enhanced Broadcasting's own
+        // even when a hold is open (one that had no session to hand back):
+        // OBS publishing next must continue it, not drop it as stale.
+        self.eb_session_claimed.store(true, Ordering::Relaxed);
+    }
+
+    /// The config to hand OBS again when it asks during a hold that is
+    /// keeping its Twitch session live: the same tracks and session token,
+    /// so its new publish continues the session instead of opening another
+    /// one (which would restart the destination once OBS is back).
+    pub fn held_eb_config(&self) -> Option<String> {
+        if !self.hold_active() {
+            return None;
+        }
+        let session = self.eb_session.lock().clone()?;
+        let dest = self.destinations.read().get(&session.dest_id).cloned()?;
+        if dest.eb_override_url.lock().as_deref() != Some(session.ivs_url.as_str()) {
+            return None;
+        }
+        // The tokens were remembered when the session opened, possibly
+        // longer ago than their TTL.
+        for auth in &session.auths {
+            self.remember_eb_key(auth.clone());
+        }
+        self.eb_session_claimed.store(true, Ordering::Relaxed);
+        Some(session.config)
+    }
+
+    /// OBS is publishing again during a hold without having asked for an
+    /// Enhanced Broadcasting config (held or fresh) since the hold opened:
+    /// Enhanced Broadcasting is off now, and that multitrack session can't
+    /// take a single-track stream, so the destination starts a fresh one.
+    fn forget_unclaimed_eb_session(&self) {
+        if self.eb_session_claimed.load(Ordering::Relaxed) {
+            return;
+        }
+        let Some(session) = self.eb_session.lock().take() else {
+            return;
+        };
+        if let Some(dest) = self.destinations.read().get(&session.dest_id) {
+            if dest.eb_override_url.lock().as_deref() == Some(session.ivs_url.as_str()) {
+                dest.invalidate_session_override();
+                self.log(format!(
+                    "[{}] OBS came back without Enhanced Broadcasting - starting a new \
+                     Twitch session",
+                    session.dest_id
+                ));
+            }
+        }
+    }
+
+    /// The newest ring seq when OBS came back from the last hold, or None
+    /// when the ring was empty (a new publisher starts it afresh).
+    pub fn resumed_after_seq(&self) -> Option<u64> {
+        Some(self.resumed_after_seq.load(Ordering::Relaxed)).filter(|seq| *seq != NO_SEQ)
+    }
+
+    /// The first ring seq a destination may start from. When a frozen OBS
+    /// recovers after its hold ended, everything it sent before the freeze
+    /// is over for viewers (aired as the delay tail, or cut by End now), so
+    /// a pump that starts later, or a cut back to restore the delay, must
+    /// never land there and replay it. 0 otherwise.
+    fn fresh_from_seq(&self) -> u64 {
+        match self.replay_floor_seq.load(Ordering::Relaxed) {
+            NO_SEQ => 0,
+            seq => seq + 1,
+        }
+    }
+
+    /// Everything in the ring now is over for viewers (see `fresh_from_seq`).
+    fn mark_replay_floor(&self) {
+        if let Some(latest) = self.ring.latest_seq() {
+            self.replay_floor_seq.store(latest, Ordering::Relaxed);
+        }
+    }
+
+    /// The latest keyframe of a track the hold re-sends instead of the
+    /// reconnect screen.
+    pub fn held_keyframe(&self, track: u8) -> Option<Arc<[u8]>> {
+        self.held_keyframes.lock().get(&track).cloned()
+    }
+
+    /// The live publisher sent FCUnpublish or deleteStream: it is ending
+    /// the stream on purpose, so its disconnect is a stop, not a crash.
+    pub fn note_unpublish(&self) {
+        self.unpublish_received.store(true, Ordering::Relaxed);
+    }
+
+    /// Mirror the crash-protection settings (the supervisor calls this).
+    pub fn update_crash_protection(&self, settings: crate::crash_protection::CrashProtection) {
+        self.crash_protection_on
+            .store(settings.enabled, Ordering::Relaxed);
+        if !settings.enabled {
+            // Off means no bookkeeping, and nothing stale left behind: an
+            // old video stamp would read as a freeze and hold back egress.
+            self.last_video_tag_ms.store(0, Ordering::Relaxed);
+            // Switched off mid-freeze: no reconnect screen any more, so the
+            // freeze ends the stream like any OBS drop without protection,
+            // and when OBS is back the destinations start again past it.
+            if self.ingest_frozen.swap(false, Ordering::Relaxed) {
+                self.mark_replay_floor();
+                self.end_hold_now();
+            }
+            self.held_keyframes.lock().clear();
+            self.slate_cache.clear();
+        }
+        *self.crash_protection.lock() = settings;
+    }
+
+    /// Per video frame while crash protection is on: when video last
+    /// arrived (for freeze detection), and the latest keyframe of any track
+    /// the reconnect screen can't replace.
+    fn note_video_for_crash_protection(&self, payload: &[u8]) {
+        // Never 0: that means "no video yet this session".
+        self.last_video_tag_ms
+            .store(process_now_ms().max(1), Ordering::Relaxed);
+        if crate::crash_hold::is_held_keyframe(payload) {
+            let track = crate::h264::seq_header_track_id(payload);
+            self.held_keyframes.lock().insert(track, Arc::from(payload));
+        }
+    }
+
+    pub fn crash_protection(&self) -> crate::crash_protection::CrashProtection {
+        self.crash_protection.lock().clone()
+    }
+
+    /// Whether destinations are being held on the reconnect screen now.
+    pub fn hold_active(&self) -> bool {
+        self.hold_open.load(Ordering::Relaxed)
+            && self.hold_state() == crate::crash_hold::HoldState::Holding
+    }
+
+    /// Where the hold stands. A hold past its deadline already counts as
+    /// ended, before `expire_hold` gets round to reporting it.
+    pub fn hold_state(&self) -> crate::crash_hold::HoldState {
+        use crate::crash_hold::HoldState;
+        match *self.hold.lock() {
+            Some(hold) if Instant::now() < hold.deadline => HoldState::Holding,
+            Some(_) => HoldState::Ended,
+            None if self.last_hold_end.load(Ordering::Relaxed) == HOLD_END_RESUMED => {
+                HoldState::Resumed
+            }
+            None => HoldState::Ended,
+        }
+    }
+
+    /// The hold while it is on air, for the dashboard, dock and tray.
+    pub fn hold_status(&self) -> Option<crate::crash_hold::HoldStatus> {
+        let hold = (*self.hold.lock())?;
+        Some(crate::crash_hold::HoldStatus {
+            reason: hold.reason,
+            remaining: hold.deadline.checked_duration_since(Instant::now())?,
+            total: hold.deadline - hold.started,
+        })
+    }
+
+    /// Open a hold when crash protection is on and a destination is live
+    /// to protect.
+    fn start_hold(&self, reason: crate::crash_hold::HoldReason) {
+        let settings = self.crash_protection();
+        let any_live = self
+            .all_destination_states()
+            .iter()
+            .any(|(_, state)| state.egress_alive.load(Ordering::Relaxed));
+        if !settings.enabled || !any_live {
+            return;
+        }
+        let hold_for = Duration::from_secs(u64::from(settings.hold_secs));
+        let now = Instant::now();
+        {
+            let mut hold = self.hold.lock();
+            if hold.is_some() {
+                return;
+            }
+            *hold = Some(crate::crash_hold::Hold {
+                reason,
+                started: now,
+                deadline: now + hold_for,
+            });
+        }
+        self.hold_open.store(true, Ordering::Relaxed);
+        self.hold_tail_end_seq
+            .store(self.ring.latest_seq().unwrap_or(NO_SEQ), Ordering::Relaxed);
+        self.tail_plays_out.store(false, Ordering::Relaxed);
+        self.eb_session_claimed.store(false, Ordering::Relaxed);
+        if reason == crate::crash_hold::HoldReason::Freeze {
+            self.ingest_frozen.store(true, Ordering::Relaxed);
+        }
+        let window = crate::crash_hold::minutes_seconds(hold_for);
+        let what = match reason {
+            crate::crash_hold::HoldReason::Crash => "OBS dropped",
+            crate::crash_hold::HoldReason::Freeze => "OBS stopped sending video",
+            crate::crash_hold::HoldReason::Stopped => "OBS stopped the stream",
+        };
+        self.log(format!(
+            "crash protection: {what} - destinations stay live on the reconnect screen for up to {window}"
+        ));
+        self.emit(
+            Event::new(EventKind::HoldOpened)
+                .with(
+                    "reason",
+                    match reason {
+                        crate::crash_hold::HoldReason::Crash => "crash",
+                        crate::crash_hold::HoldReason::Freeze => "freeze",
+                        crate::crash_hold::HoldReason::Stopped => "stopped",
+                    },
+                )
+                .with("hold", fmt_duration(hold_for.as_millis() as u64))
+                .with(
+                    "hold_ends_at",
+                    (crate::integrations::twitch::unix_ms() / 1000 + hold_for.as_secs())
+                        .to_string(),
+                ),
+        );
+    }
+
+    /// Close the open hold, remembering how it ended for the pumps.
+    fn close_hold(&self, end: u8) -> Option<crate::crash_hold::Hold> {
+        // How it ended is stored before the lock is released, so
+        // `hold_state` never reads "no hold" with the previous hold's end.
+        let hold = {
+            let mut open = self.hold.lock();
+            let hold = open.take()?;
+            self.last_hold_end.store(end, Ordering::Relaxed);
+            hold
+        };
+        self.hold_open.store(false, Ordering::Relaxed);
+        // OBS never came back: forget the sessions the hold kept for it
+        // (see `mark_ingest_dead`); ending the hold ended them on Twitch. A
+        // frozen OBS is still connected, so its session is still the
+        // current one, and a config OBS asked for during the hold (the kept
+        // session or a new one) is the one it is about to publish on.
+        let obs_is_coming_back = self.eb_session_claimed.load(Ordering::Relaxed);
+        if end == HOLD_END_ENDED && !self.ingest_alive() && !obs_is_coming_back {
+            for (_id, state) in self.all_destination_states() {
+                state.invalidate_session_override();
+            }
+        }
+        Some(hold)
+    }
+
+    /// OBS is sending again (a new publisher, or video after a freeze).
+    /// Runs before the tag that brought it back reaches the ring.
+    fn resume_from_hold(&self) {
+        let after = self.ring.latest_seq().unwrap_or(NO_SEQ);
+        self.resumed_after_seq.store(after, Ordering::Relaxed);
+        self.tail_plays_out.store(false, Ordering::Relaxed);
+        self.hold_tail_end_seq.store(NO_SEQ, Ordering::Relaxed);
+        let Some(hold) = self.close_hold(HOLD_END_RESUMED) else {
+            return;
+        };
+        let lasted = crate::crash_hold::minutes_seconds(hold.started.elapsed());
+        self.log(format!(
+            "crash protection: OBS is back after {lasted} - resuming live"
+        ));
+        self.emit(Event::new(EventKind::ObsBack).with(
+            "down_for",
+            fmt_duration(hold.started.elapsed().as_millis() as u64),
+        ));
+    }
+
+    /// Whether the publisher has sent no video for `FREEZE_AFTER` as of
+    /// `now_ms` (process ms). Never true before its first video frame.
+    fn video_frozen_at(&self, now_ms: u64) -> bool {
+        let last = self.last_video_tag_ms.load(Ordering::Relaxed);
+        last != 0
+            && now_ms.saturating_sub(last) >= crate::crash_hold::FREEZE_AFTER.as_millis() as u64
+    }
+
+    /// A connected OBS that has sent no video for `FREEZE_AFTER` is frozen:
+    /// open a hold for it (the supervisor calls this every tick).
+    pub fn check_ingest_freeze(&self) {
+        self.check_ingest_freeze_at(process_now_ms());
+    }
+
+    fn check_ingest_freeze_at(&self, now_ms: u64) {
+        let latched = self.ingest_frozen.load(Ordering::Relaxed);
+        if !latched
+            && self.ingest_alive()
+            && self.video_frozen_at(now_ms)
+            && self.hold.lock().is_none()
+        {
+            self.start_hold(crate::crash_hold::HoldReason::Freeze);
+        }
+    }
+
+    /// Whether OBS is connected and actually sending video, as opposed to
+    /// connected but frozen. Egress waits for this before connecting.
+    pub fn ingest_sending(&self) -> bool {
+        self.ingest_alive() && !self.video_frozen_at(process_now_ms())
+    }
+
+    /// OBS is gone: disconnected, or frozen with a freeze hold opened for
+    /// it and no video since. Nothing new reaches the buffer either way.
+    pub fn obs_gone(&self) -> bool {
+        !self.ingest_alive() || self.ingest_frozen.load(Ordering::Relaxed)
+    }
+
+    /// Whether a destination still airing the delay tail of an OBS that is
+    /// gone finishes it before ending: yes once crash protection's time ran
+    /// out (the tail airs in full), not when the streamer ended the hold.
+    fn tail_plays_out(&self) -> bool {
+        self.tail_plays_out.load(Ordering::Relaxed)
+            || matches!(*self.hold.lock(), Some(open) if Instant::now() >= open.deadline)
+    }
+
+    /// The last tag of the delay tail: the newest when the hold opened, or
+    /// the newest now when no hold marked it.
+    fn delay_tail_end_seq(&self) -> Option<u64> {
+        match self.hold_tail_end_seq.load(Ordering::Relaxed) {
+            NO_SEQ => self.ring.latest_seq(),
+            seq => Some(seq),
+        }
+    }
+
+    /// Close a hold whose time ran out. The pumps end their sessions at the
+    /// deadline on their own; this reports it once (the supervisor calls it
+    /// every tick).
+    pub fn expire_hold(&self) {
+        let expired = matches!(*self.hold.lock(), Some(open) if Instant::now() >= open.deadline);
+        let Some(hold) = expired.then(|| self.close_hold(HOLD_END_ENDED)).flatten() else {
+            return;
+        };
+        self.tail_plays_out
+            .store(self.obs_gone(), Ordering::Relaxed);
+        let window = crate::crash_hold::minutes_seconds(hold.deadline - hold.started);
+        self.log(format!(
+            "crash protection: OBS didn't come back within {window} - destinations ended"
+        ));
+        self.emit(Event::new(EventKind::HoldExpired).with(
+            "hold",
+            fmt_duration((hold.deadline - hold.started).as_millis() as u64),
+        ));
+    }
+
+    /// End the hold now (dashboard, dock, tray or hotkey), or the delay
+    /// tail still airing after OBS left. True when either was on.
+    pub fn end_hold_now(&self) -> bool {
+        let Some(hold) = self.close_hold(HOLD_END_ENDED) else {
+            return self.end_tail_now();
+        };
+        self.tail_plays_out.store(false, Ordering::Relaxed);
+        let lasted = crate::crash_hold::minutes_seconds(hold.started.elapsed());
+        self.log(format!(
+            "crash protection: ended after {lasted} - destinations ended"
+        ));
+        self.emit(Event::new(EventKind::HoldEnded).with(
+            "down_for",
+            fmt_duration(hold.started.elapsed().as_millis() as u64),
+        ));
+        true
+    }
+
+    /// Stop airing the delay tail: the destinations end at once.
+    fn end_tail_now(&self) -> bool {
+        if self.tail_left().is_none() {
+            return false;
+        }
+        self.tail_plays_out.store(false, Ordering::Relaxed);
+        self.log("delay: ended now - the rest of the delay didn't air");
+        true
+    }
+
+    /// How much of the delay is still to air after OBS left with no hold
+    /// covering it: `None` once no destination is airing it.
+    pub fn tail_left(&self) -> Option<Duration> {
+        if !self.obs_gone() || self.hold_active() || !self.tail_plays_out() {
+            return None;
+        }
+        let airing = self
+            .all_destination_states()
+            .iter()
+            .any(|(_, state)| state.egress_alive.load(Ordering::Relaxed));
+        let left = self.current_delay_ms();
+        (airing && left > 0).then(|| Duration::from_millis(u64::from(left)))
+    }
+
+    /// Attach the integrations engine. Called once at startup; events
+    /// emitted before it is attached are dropped.
+    pub fn attach_integrations(&self, handle: Arc<crate::integrations::Handle>) {
+        let _ = self.integrations.set(handle);
+    }
+
+    pub fn integrations(&self) -> Option<&Arc<crate::integrations::Handle>> {
+        self.integrations.get()
+    }
+
+    /// Tell the integrations something happened. Never blocks and needs no
+    /// runtime, so it is safe from the tray, hotkey and MIDI threads.
+    pub fn emit(&self, event: Event) {
+        if let Some(handle) = self.integrations.get() {
+            handle.emit(event);
+        }
     }
 
     /// Mirror the required ingest stream key from Settings. Empty disables the
@@ -1781,60 +2561,26 @@ impl Controller {
                 && crate::crypto::constant_time_eq(k.as_bytes(), key.as_bytes())
         })
     }
+}
 
-    /// Snapshot the current webhook URL. Used by the test endpoint so it
-    /// can route the request with verbose error reporting instead of
-    /// going through `fire_webhook` (which is fire-and-forget and
-    /// silently swallows everything from empty-URL to TLS failures).
-    pub fn webhook_url_snapshot(&self) -> String {
-        self.webhook_url.lock().clone()
-    }
-
-    /// Fire-and-forget Discord post. Skips silently when no webhook is
-    /// configured, OR when the last fire was less than 2 s ago (rate
-    /// limit - prevents subprocess spam if a destination flaps).
-    ///
-    /// Uses `ureq` (tiny blocking HTTPS client, ~150 KB) wrapped in
-    /// `spawn_blocking` so the actual TCP+TLS work doesn't park the
-    /// current-thread runtime. Previously shelled out to `curl`, which
-    /// (a) silently failed when `curl.exe` wasn't on PATH and (b) made
-    /// "runtime deps" technically include the system curl binary.
-    pub fn fire_webhook(&self, emoji: &str, message: &str) {
-        let url = self.webhook_url.lock().clone();
-        if url.is_empty() {
-            return;
-        }
-
-        // Throttle: skip if we fired less than 2 s ago.
-        let now = process_now_ms();
-        let last = self.webhook_last_fire_ms.load(Ordering::Relaxed);
-        if now.saturating_sub(last) < 2_000 {
-            return;
-        }
-        self.webhook_last_fire_ms.store(now, Ordering::Relaxed);
-
-        let content = format!("{emoji} **InstantClone**: {message}");
-        let body = format!(r#"{{"content":"{}"}}"#, json_escape_inline(&content));
-
-        tokio::spawn(async move {
-            // Spawn-blocking + 10 s outer timeout so a wedged Discord
-            // edge can't keep a thread tied up forever. Ignore the
-            // result: webhooks are fire-and-forget by design.
-            let _ = tokio::time::timeout(
-                Duration::from_secs(10),
-                tokio::task::spawn_blocking(move || {
-                    let _ = crate::https::https_agent()
-                        .post(&url)
-                        .config()
-                        .timeout_connect(Some(Duration::from_secs(5)))
-                        .timeout_global(Some(Duration::from_secs(8)))
-                        .build()
-                        .header("Content-Type", "application/json")
-                        .send(&body);
-                }),
-            )
-            .await;
-        });
+/// The platform a destination's ingest host belongs to, for the `{platform}`
+/// variable of destination events.
+fn platform_of_host(host: &str) -> &'static str {
+    let host = host.to_ascii_lowercase();
+    if host.contains("twitch") {
+        "twitch"
+    } else if host.contains("youtube") || host.contains("google") {
+        "youtube"
+    } else if host.contains("kick") || host.contains("live-video.net") {
+        "kick"
+    } else if host.contains("trovo") {
+        "trovo"
+    } else if host.contains("restream") {
+        "restream"
+    } else if host == "127.0.0.1" || host == "localhost" {
+        "sink"
+    } else {
+        "custom"
     }
 }
 
@@ -1909,6 +2655,27 @@ impl Controller {
         problem
     }
 
+    /// Set the delay to `ms` (an integration's "set the delay"): arms it
+    /// when nothing is armed, and changes it in place when a delay is armed
+    /// or on air. Unlike the `arm` hotkey action, which toggles, this never
+    /// disarms, so `!setdelay 30` twice leaves a 30 s delay.
+    pub fn set_delay_to(&self, ms: u32, source: &str) {
+        let ms = ms.clamp(1000, 600_000);
+        self.arm_delay(ms);
+        self.log(format!("[{source}] delay set to {} s", ms / 1000));
+        self.record_fired_action("arm", source, None);
+        self.state_dirty.notify_one();
+    }
+
+    /// Back to no delay at all (an integration's "Disarm"): live, and
+    /// nothing armed. What the dashboard's "Cancel arming" does.
+    pub fn disarm(&self, source: &str) {
+        self.arm_delay(0);
+        self.log(format!("[{source}] delay disarmed"));
+        self.record_fired_action("disarm", source, None);
+        self.state_dirty.notify_one();
+    }
+
     fn dispatch_named_action(&self, action: &str, default_ms: u32, source: &str) -> Option<String> {
         match action {
             "toggle" => self.action_toggle(default_ms, source),
@@ -1920,6 +2687,15 @@ impl Controller {
                 None
             }
             "cut_after" => self.action_cut_after(source),
+            "end_hold" => {
+                if self.end_hold_now() {
+                    return None;
+                }
+                self.log(format!(
+                    "[{source}] end crash protection ignored - nothing is on hold"
+                ));
+                Some("Crash protection isn't holding anything right now".to_string())
+            }
             _ => None,
         }
     }
@@ -2043,31 +2819,6 @@ impl Controller {
     }
 }
 
-/// JSON-string escape that handles every C0 control char that would
-/// otherwise produce an invalid Discord payload (the previous
-/// `replace('\\', ..).replace('"', ..).replace('\n', ..)` chain missed
-/// `\r`, `\t`, `\u{0008}` and friends - any destination name with a
-/// stray control character could nuke the webhook body).
-fn json_escape_inline(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 8);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str(r#"\""#),
-            '\\' => out.push_str(r"\\"),
-            '\n' => out.push_str(r"\n"),
-            '\r' => out.push_str(r"\r"),
-            '\t' => out.push_str(r"\t"),
-            '\u{0008}' => out.push_str(r"\b"),
-            '\u{000C}' => out.push_str(r"\f"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 // ---------------------------------------------------------------------------
 // Egress driver - the timing & cut-alignment core.
 // ---------------------------------------------------------------------------
@@ -2095,6 +2846,7 @@ pub async fn run_egress(
 
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(30);
+    let mut waiting_for_delay = false;
 
     loop {
         // Cooperative shutdown - check BEFORE attempting another
@@ -2119,10 +2871,28 @@ pub async fn run_egress(
         // spam visible in /logs. Wait for ingest to come back instead,
         // polling cheaply every 500 ms so we react quickly to OBS
         // resuming a publish session.
-        if !ctrl.ingest_alive() {
+        // During a crash-protection hold a destination that lost its
+        // platform connection reconnects and goes straight back onto the
+        // reconnect screen - if the screen can cover it at all.
+        let holding = ctrl.hold_active() && crate::crash_hold::covers(&ctrl, &dest);
+        if !ctrl.ingest_sending() && !holding {
             tokio::time::sleep(Duration::from_millis(500)).await;
             continue;
         }
+        // With a delay on, join only once the buffer reaches back to it (an
+        // OBS restart empties it; a new destination may find it short).
+        // Joining sooner would put viewers on live video, then jump back.
+        if !holding && !ctrl.delay_reachable() {
+            if !waiting_for_delay {
+                waiting_for_delay = true;
+                ctrl.log(format!(
+                    "[{label}] waiting for the buffer to reach the delay before going live"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+        waiting_for_delay = false;
         eprintln!(
             "[egress {}] connecting to {}:{}/{}",
             label, parsed.host, parsed.port, parsed.app
@@ -2131,16 +2901,49 @@ pub async fn run_egress(
             "[{}] connecting to {}:{}",
             label, parsed.host, parsed.port
         ));
-        match EgressClient::connect(&parsed).await {
+        // Bounded: an edge that accepts TCP and then stalls in the TLS or
+        // RTMP handshake would otherwise hold this destination on
+        // "connecting" forever, never retrying.
+        let connected = tokio::time::timeout(CONNECT_TIMEOUT, EgressClient::connect(&parsed))
+            .await
+            .unwrap_or_else(|_| {
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("no answer within {} s", CONNECT_TIMEOUT.as_secs()),
+                ))
+            });
+        match connected {
             Ok(client) => {
-                backoff = Duration::from_secs(1);
+                let connected_at = Instant::now();
                 let was_alive = dest.egress_alive.swap(true, Ordering::Relaxed);
                 if !was_alive {
-                    ctrl.fire_webhook("🟢", &format!("**{}** is now live.", label));
+                    ctrl.emit(
+                        Event::new(EventKind::DestinationLive)
+                            .with("destination", label.clone())
+                            .with("platform", platform_of_host(&parsed.host)),
+                    );
                 }
                 let sink = client.spawn_reader_drain();
                 let pump_result = pump_dest(&ctrl, &dest, sink).await;
                 dest.egress_alive.store(false, Ordering::Relaxed);
+                // Not reading any more: its position must not hold back the
+                // buffer's trim while it reconnects or waits.
+                dest.consumer_seq.store(u64::MAX, Ordering::Relaxed);
+                // Only a platform connection that failed counts as a
+                // reconnect. The pump also ends cleanly when OBS goes away
+                // or the destination is switched off; neither is one.
+                let dropped = pump_result.is_err();
+                // A session that stayed up, or ended because of OBS rather
+                // than the platform, proves the endpoint works: an OBS
+                // restart must not wait out backoff left from old failures.
+                // A platform that accepts the publish and drops it at once
+                // (a bad key, a refusing edge), or a session that ends
+                // cleanly the moment it starts, backs off like a failed
+                // connect instead of being redialled every second forever.
+                let lasted = connected_at.elapsed();
+                if (!dropped && lasted >= MIN_CLEAN_SESSION) || lasted >= STABLE_SESSION {
+                    backoff = Duration::from_secs(1);
+                }
                 if let Err(e) = pump_result {
                     // Twitch/etc. sometimes echo the stream key in error
                     // descriptions ("Authentication failed for live_…").
@@ -2150,15 +2953,23 @@ pub async fn run_egress(
                     let safe = scrub_secret(&e.to_string(), &parsed.stream_key);
                     eprintln!("[egress {}] pump error: {}", label, safe);
                     ctrl.log(format!("[{}] disconnected ({})", label, safe));
-                    ctrl.fire_webhook("🔴", &format!("**{}** disconnected: {}", label, safe));
+                    ctrl.emit(
+                        Event::new(EventKind::DestinationDropped)
+                            .with("destination", label.clone())
+                            .with("platform", platform_of_host(&parsed.host))
+                            .with("reason", safe.clone()),
+                    );
+                    if ctrl.destination_alive_summary().0 == 0 {
+                        ctrl.emit(Event::new(EventKind::AllDestinationsDown));
+                    }
                 }
-                // Count this as a reconnect: the next loop iteration WILL
-                // re-establish a connection. Incrementing here (instead of
-                // at the loop tail) avoids the old bug where every initial
-                // connect AND every connect-failure bumped the counter,
-                // making "Egress reconnects: 1" the resting state of a
-                // healthy fresh stream.
-                dest.reconnects.fetch_add(1, Ordering::Relaxed);
+                // Counted here (instead of at the loop tail) so a fresh
+                // connect or a connect failure never bumps it: "Egress
+                // reconnects: 1" must not be the resting state of a healthy
+                // fresh stream.
+                if dropped {
+                    dest.reconnects.fetch_add(1, Ordering::Relaxed);
+                }
             }
             Err(e) => {
                 let safe = scrub_secret(&e.to_string(), &parsed.stream_key);
@@ -2246,6 +3057,28 @@ async fn pump_dest(
     state.last_publisher_token = ctrl.publisher_token();
     let mut io_buf: Vec<u8> = Vec::with_capacity(64 * 1024);
 
+    // Connected to the platform in the middle of a crash-protection hold
+    // (the platform connection itself dropped and came back, or this
+    // destination was just switched on): go straight onto the reconnect
+    // screen, whether OBS crashed or froze, then rejoin on its new video.
+    let mut resume_after_ts: Option<u32> = None;
+    let mut rejoin_from_seq: Option<u64> = None;
+    if ctrl.hold_active() {
+        send_sequence_headers(ctrl, dest, &mut sink, 0).await?;
+        let outcome = crate::crash_hold::play(ctrl, dest, &mut sink, 0).await?;
+        let crate::crash_hold::HoldExit::Resumed {
+            rejoin_from_seq: from_seq,
+        } = outcome.exit
+        else {
+            let _ = sink.send_delete_stream().await;
+            return Ok(());
+        };
+        resume_after_ts = Some(outcome.last_ts);
+        rejoin_from_seq = Some(from_seq);
+        // The seed below is on the publisher OBS came back as.
+        state.last_publisher_token = ctrl.publisher_token();
+    }
+
     // Initial seed: if a delay is ALREADY active when this pump spawns
     // (multi-destination case - a second destination added mid-stream
     // while the first is on a 5 s delay), join at the right delayed
@@ -2255,16 +3088,21 @@ async fn pump_dest(
     // No seed means the publisher went away (or this destination was
     // disabled) before a keyframe arrived. Leave rather than hold an open
     // session to the platform with nothing to send down it.
-    let Some(first_idr) = seed_idr(ctrl, dest).await else {
+    let seed = match rejoin_from_seq {
+        Some(from_seq) => rejoin_idr(ctrl, dest, from_seq).await,
+        None => seed_idr(ctrl, dest).await,
+    };
+    let Some(first_idr) = seed else {
         ctrl.log(format!(
             "[{}] nothing to send - the publisher went away before a keyframe",
             dest.id
         ));
+        let _ = sink.send_delete_stream().await;
         return Ok(());
     };
     state.consumer_seq = first_idr.seq;
     state.input_ts_anchor = first_idr.ts_ms;
-    state.output_ts_base = 0;
+    state.output_ts_base = resume_after_ts.map_or(0, |ts| ts.wrapping_add(1));
     state.wall_anchor = Instant::now();
     state.wall_anchor_input_ts = first_idr.ts_ms;
     state.last_sent_input_ts = first_idr.ts_ms;
@@ -2289,6 +3127,8 @@ async fn pump_dest(
     // Always lead with sequence headers + the IDR itself.
     send_sequence_headers(ctrl, dest, &mut sink, state.output_ts_base).await?;
 
+    // Airing what the delay held when OBS left with no hold covering it.
+    let mut airing_tail = false;
     loop {
         // Cooperative shutdown: when the supervisor flips this, we end
         // the session cleanly (sending deleteStream) instead of dropping
@@ -2311,13 +3151,52 @@ async fn pump_dest(
         // YouTube long after OBS dropped. The supervisor's gate on
         // ingest_alive prevents an immediate respawn here, so the
         // destination stays cleanly disconnected until OBS comes back.
-        if !ctrl.ingest_alive() {
-            ctrl.log(format!(
-                "[{}] ingest gone - closing destination session",
-                dest.id
-            ));
-            let _ = sink.send_delete_stream().await;
-            return Ok(());
+        //
+        // Crash protection changes that: during a hold the pump first plays
+        // out whatever delay is still buffered, then loops the reconnect
+        // screen until OBS returns (the reconnect branch below takes over)
+        // or the hold ends.
+        // A frozen OBS (connected, no video) gets the same treatment.
+        //
+        // With no hold covering OBS being gone (crash protection off, its
+        // time ran out, or the streamer ended it) the session ends. When the
+        // time ran out mid-tail, the tail airs in full first: the pump keeps
+        // sending until it is out (a delay as long as the hold or longer).
+        if ctrl.obs_gone() || ctrl.hold_active() {
+            if !ctrl.hold_active() {
+                if !ctrl.tail_plays_out() || delay_tail_sent(ctrl, &state) {
+                    ctrl.log(format!(
+                        "[{}] OBS is gone - closing destination session",
+                        dest.id
+                    ));
+                    let _ = sink.send_delete_stream().await;
+                    return Ok(());
+                }
+                airing_tail = true;
+            } else if delay_tail_sent(ctrl, &state) {
+                let outcome =
+                    crate::crash_hold::play(ctrl, dest, &mut sink, last_output_ts(&state)).await?;
+                // Continue the timeline from the last slate frame, so the
+                // reconnect re-anchor stays strictly after it.
+                state.output_ts_base = outcome.last_ts;
+                state.input_ts_anchor = state.last_sent_input_ts;
+                let crate::crash_hold::HoldExit::Resumed { rejoin_from_seq } = outcome.exit else {
+                    let _ = sink.send_delete_stream().await;
+                    return Ok(());
+                };
+                // OBS is back (a new publisher, or the same one after a
+                // freeze): rejoin on its new video, a delay back when one is
+                // armed. The destination's decoder holds the screen's
+                // pictures, so it has to start at a keyframe.
+                ctrl.log(format!("[{}] OBS is back - rejoining", dest.id));
+                let Some(idr) = rejoin_idr(ctrl, dest, rejoin_from_seq).await else {
+                    let _ = sink.send_delete_stream().await;
+                    return Ok(());
+                };
+                state.last_publisher_token = ctrl.publisher_token();
+                rejoin_at(ctrl, dest, &mut sink, &mut state, idr).await?;
+                continue;
+            }
         }
 
         // Detect publisher reconnect (OBS stopped and re-started, new
@@ -2327,6 +3206,18 @@ async fn pump_dest(
         // tag - the upstream stream would freeze forever even though
         // ingest is happily receiving bytes.
         let current_token = ctrl.publisher_token();
+        if current_token != state.last_publisher_token && airing_tail {
+            // OBS started again before the old stream's delay finished
+            // airing. The new session wiped the buffer, and rejoining here
+            // would air its video live: end, and the supervisor reconnects
+            // at the delay, as it would after a stop.
+            ctrl.log(format!(
+                "[{}] OBS started again while the delay was airing - reconnecting",
+                dest.id
+            ));
+            let _ = sink.send_delete_stream().await;
+            return Ok(());
+        }
         if current_token != state.last_publisher_token {
             ctrl.log(format!("[{}] publisher reconnect - re-anchoring", dest.id));
             let watermark = ctrl.ring.latest_seq().unwrap_or(0);
@@ -2335,17 +3226,33 @@ async fn pump_dest(
                     "[{}] publisher went away again before re-anchoring",
                     dest.id
                 ));
+                let _ = sink.send_delete_stream().await;
                 return Ok(());
             };
-            reseed_after_publisher_change(&mut state, new_idr);
             state.last_publisher_token = current_token;
-            send_sequence_headers(ctrl, dest, &mut sink, state.output_ts_base).await?;
-            dest.consumer_seq
-                .store(state.consumer_seq, Ordering::Relaxed);
-            dest.last_seq_header_gen.store(
-                ctrl.seq_header_gen.load(Ordering::Relaxed),
-                Ordering::Relaxed,
-            );
+            // OBS came back from a crash while the delay tail was still
+            // airing: the rest of the tail went with the old session (a new
+            // publisher starts the buffer afresh), and rejoining here would
+            // put viewers on live. Cover the gap with the screen until the
+            // delay has rebuilt from the new video, then rejoin delayed.
+            if resumed_mid_delay(ctrl, dest) {
+                let outcome =
+                    crate::crash_hold::play(ctrl, dest, &mut sink, last_output_ts(&state)).await?;
+                state.output_ts_base = outcome.last_ts;
+                state.input_ts_anchor = state.last_sent_input_ts;
+                let crate::crash_hold::HoldExit::Resumed { rejoin_from_seq } = outcome.exit else {
+                    let _ = sink.send_delete_stream().await;
+                    return Ok(());
+                };
+                let Some(idr) = rejoin_idr(ctrl, dest, rejoin_from_seq).await else {
+                    let _ = sink.send_delete_stream().await;
+                    return Ok(());
+                };
+                state.last_publisher_token = ctrl.publisher_token();
+                rejoin_at(ctrl, dest, &mut sink, &mut state, idr).await?;
+                continue;
+            }
+            rejoin_at(ctrl, dest, &mut sink, &mut state, new_idr).await?;
             continue;
         }
 
@@ -2356,19 +3263,39 @@ async fn pump_dest(
         let cur_gen = ctrl.seq_header_gen.load(Ordering::Relaxed);
         if cur_gen != dest.last_seq_header_gen.load(Ordering::Relaxed) {
             ctrl.log(format!("[{}] sequence header changed - resending", dest.id));
-            // Use last_sent_input_ts so the resent header lands AFTER
-            // anything we've already sent (same trick as apply_cut).
-            let delta_u32 = state
-                .last_sent_input_ts
-                .saturating_sub(state.input_ts_anchor) as u32;
-            let resend_ts = state.output_ts_base.wrapping_add(delta_u32);
-            send_sequence_headers(ctrl, dest, &mut sink, resend_ts).await?;
+            // On the last output timestamp, so the resent header lands
+            // AFTER anything we've already sent (same trick as apply_cut).
+            send_sequence_headers(ctrl, dest, &mut sink, last_output_ts(&state)).await?;
             dest.last_seq_header_gen.store(cur_gen, Ordering::Relaxed);
         }
 
         let next_real = next_or_wait(&ctrl.ring, state.consumer_seq, 500).await;
+        // A new publisher or sequence header can arrive while we wait, and
+        // the tag that woke us belongs to it: re-anchor or resend the header
+        // above first, or that tag airs on the old timeline or config.
+        let header_changed = ctrl.seq_header_gen.load(Ordering::Relaxed)
+            != dest.last_seq_header_gen.load(Ordering::Relaxed);
+        if header_changed || ctrl.publisher_token() != state.last_publisher_token {
+            continue;
+        }
 
         if let Some(meta) = next_real {
+            // Fell off the back of the ring (eviction passed this pump), so
+            // `next_or_wait` jumped ahead to the oldest keyframe. Take it as
+            // a cut: the timeline re-anchors instead of pausing for the
+            // skipped stretch, and a vertical destination waits for its
+            // own keyframe.
+            if meta.seq > state.consumer_seq {
+                apply_cut(
+                    ctrl,
+                    dest,
+                    &mut sink,
+                    &mut state,
+                    PendingCut { target: meta },
+                )
+                .await?;
+                continue;
+            }
             let target_now = ctrl.target_delay_ms();
             let due = target_now != state.last_seen_target
                 || state.last_cut_check.elapsed() >= Duration::from_millis(500);
@@ -2393,6 +3320,74 @@ async fn pump_dest(
     }
 }
 
+/// Output timestamp of the last tag this pump sent.
+fn last_output_ts(state: &EgressState) -> u32 {
+    let delta = state
+        .last_sent_input_ts
+        .saturating_sub(state.input_ts_anchor) as u32;
+    state.output_ts_base.wrapping_add(delta)
+}
+
+/// OBS just came back from a crash-protection hold, with a delay armed
+/// that the screen can hold viewers behind while it rebuilds.
+fn resumed_mid_delay(ctrl: &Controller, dest: &DestinationState) -> bool {
+    ctrl.crash_protection_on.load(Ordering::Relaxed)
+        && ctrl.target_delay_ms() > 0
+        && ctrl.hold_state() == crate::crash_hold::HoldState::Resumed
+        && crate::crash_hold::covers(ctrl, dest)
+}
+
+/// Re-anchor on `idr` and lead with the sequence headers: how every
+/// rejoin starts (a new publisher, or OBS back after a hold).
+async fn rejoin_at(
+    ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
+    sink: &mut EgressSink,
+    state: &mut EgressState,
+    idr: TagMeta,
+) -> io::Result<()> {
+    reseed_after_publisher_change(state, idr);
+    send_sequence_headers(ctrl, dest, sink, state.output_ts_base).await?;
+    dest.consumer_seq
+        .store(state.consumer_seq, Ordering::Relaxed);
+    dest.last_seq_header_gen.store(
+        ctrl.seq_header_gen.load(Ordering::Relaxed),
+        Ordering::Relaxed,
+    );
+    Ok(())
+}
+
+/// The keyframe to rejoin at once OBS is back: the newest at least a delay
+/// back from the live edge, like every delayed join (`delayed_idr`), and
+/// never one from before `from_seq`, where OBS's new video starts. Without
+/// a delay that is the newest keyframe.
+async fn rejoin_idr(
+    ctrl: &Arc<Controller>,
+    dest: &Arc<DestinationState>,
+    from_seq: u64,
+) -> Option<TagMeta> {
+    let delay = ctrl.target_delay_ms() as u64;
+    let delayed = ctrl
+        .ring
+        .latest_ts()
+        .and_then(|latest| {
+            ctrl.ring
+                .newest_idr_at_or_before(latest.saturating_sub(delay))
+        })
+        .filter(|idr| idr.seq >= from_seq);
+    match delayed.or_else(|| ctrl.ring.oldest_idr_at_or_after(from_seq)) {
+        Some(idr) => Some(idr),
+        None => wait_for_idr(ctrl, dest, Some(from_seq.saturating_sub(1))).await,
+    }
+}
+
+/// Whether every tag the ended publisher left in the buffer has been sent
+/// (the delay tail), so the reconnect screen can take over.
+fn delay_tail_sent(ctrl: &Controller, state: &EgressState) -> bool {
+    ctrl.delay_tail_end_seq()
+        .is_none_or(|end| state.consumer_seq > end)
+}
+
 /// Per-egress-session state. Lost on reconnect; re-anchored from scratch.
 struct EgressState {
     consumer_seq: u64,
@@ -2400,7 +3395,8 @@ struct EgressState {
     output_ts_base: u32, // output ts assigned to the most recent cut target (RTMP wire is u32)
     wall_anchor: Instant, // wall clock at the most recent cut
     wall_anchor_input_ts: u64, // input ts that pairs with wall_anchor
-    last_sent_input_ts: u64, // input ts of the last tag we actually emitted -
+    last_sent_input_ts: u64, // highest input ts we actually emitted (audio and
+    // video interleave a few ms out of order) -
     // required so apply_cut can re-anchor the
     // output timeline *after* the last sent frame
     // (instead of after the last cut, which would
@@ -2470,11 +3466,11 @@ async fn pace_and_send(
         return Ok(());
     }
     let raw_delta_u64 = meta.ts_ms - state.input_ts_anchor;
-    // The wire send carries a u32. Truncation is fine here because the
-    // delta is bounded by buffer_target_ms + slack (~10 min absolute
-    // max), which fits in u32. wrapping_add against output_ts_base
-    // handles the (rare) out_ts wrap at the 49-day mark; downstream
-    // players accept the wrap because rtmp ts is defined as wrap-modulo.
+    // The wire send carries a u32. The delta is the time since the last
+    // cut or reseed, which can run for days, so the truncation relies on
+    // RTMP timestamps being modulo 2^32: wrapping_add against
+    // output_ts_base gives the same wire value as the untruncated sum, and
+    // players accept the wrap at the 49-day mark.
     let raw_delta = raw_delta_u64 as u32;
 
     let logical_offset_ms = meta.ts_ms.saturating_sub(state.wall_anchor_input_ts);
@@ -2511,7 +3507,7 @@ async fn pace_and_send(
     match meta.kind {
         8 => {
             // A vertical destination whose 9:16 canvas isn't on the wire yet
-            // (Dual Format off) has `video_egress() == None`. Drop its AUDIO
+            // has `video_egress() == None`. Drop its AUDIO
             // too - otherwise we'd feed the platform an audio-only stream
             // with no video, which reads as a broken/black broadcast. It
             // should send nothing until the canvas appears.
@@ -2527,7 +3523,9 @@ async fn pace_and_send(
             // (`audio_egress`), flattened, so a simulcast YouTube / Kick
             // gets exactly one audio track it can decode. Single-track
             // audio borrows through unchanged.
-            let Some(selected) = crate::h264::select_audio_bytes(io_buf, dest.audio_egress())
+            let egress = dest.audio_egress();
+            let Some(selected) =
+                crate::h264::select_audio_bytes(io_buf, egress, ctrl.audio_target_on_wire(egress))
             else {
                 state.consumer_seq = meta.seq + 1;
                 dest.consumer_seq
@@ -2536,7 +3534,7 @@ async fn pace_and_send(
             };
             let bytes_out: &[u8] = &selected;
             let tags_so_far = dest.tags_sent.load(Ordering::Relaxed);
-            if tags_so_far < 20 || tags_so_far.is_multiple_of(200) {
+            if crate::trace::is_enabled() && (tags_so_far < 20 || tags_so_far.is_multiple_of(200)) {
                 crate::trace::log(
                     "TAG_AUDIO",
                     &format!(
@@ -2644,7 +3642,7 @@ async fn pace_and_send(
                 .fetch_add(bytes_out.len() as u64, Ordering::Relaxed);
             dest.note_outbound_bytes(bytes_out.len());
             state.consumer_seq = meta.seq + 1;
-            state.last_sent_input_ts = meta.ts_ms;
+            state.last_sent_input_ts = state.last_sent_input_ts.max(meta.ts_ms);
             dest.consumer_seq
                 .store(state.consumer_seq, Ordering::Relaxed);
             return Ok(());
@@ -2656,7 +3654,7 @@ async fn pace_and_send(
         .fetch_add(io_buf.len() as u64, Ordering::Relaxed);
     dest.note_outbound_bytes(io_buf.len());
     state.consumer_seq = meta.seq + 1;
-    state.last_sent_input_ts = meta.ts_ms;
+    state.last_sent_input_ts = state.last_sent_input_ts.max(meta.ts_ms);
     // Tell the ingest-side trimmer how far we've read. The trimmer takes
     // the MIN across all destinations, so a slow consumer protects all
     // others from over-aggressive eviction.
@@ -2701,46 +3699,146 @@ fn idr_search_tolerance_ms(keyframe_interval_ms: u32) -> u32 {
     IDR_SEARCH_FLOOR_MS.max(keyframe_interval_ms / 2)
 }
 
+/// The IDR a delay of `target_ms` lands on: the newest one at least that
+/// old, so viewers are never closer to live than asked. None until the
+/// buffer reaches back that far.
+fn delayed_idr(ctrl: &Controller, target_ms: u64) -> Option<TagMeta> {
+    let latest = ctrl.ring.latest_ts()?;
+    let fresh = ctrl.fresh_from_seq();
+    let at_delay = latest
+        .checked_sub(target_ms)
+        .and_then(|desired| ctrl.ring.newest_idr_at_or_before(desired))
+        .filter(|idr| idr.seq >= fresh);
+    // A full ring reaches back no further at this bitrate, so a longer
+    // delay could never fill: it delays by as much as the ring holds
+    // instead of waiting forever (`is_saturated`). Not from its very oldest
+    // keyframe: each new tag overwrites the oldest, and a pump parked there
+    // would be overwritten as it reads and keep falling off the back.
+    at_delay.or_else(|| {
+        if !ctrl.ring.is_saturated() {
+            return None;
+        }
+        let oldest = ctrl.ring.oldest_ts()?;
+        let margin = ctrl
+            .ring
+            .newest_idr_at_or_before(oldest + FULL_RING_MARGIN_MS);
+        // After a freeze the keyframe there can be from before it: wait for
+        // the ring to roll past the freeze rather than join on OBS's newest
+        // video, far short of the delay.
+        if fresh > 0 {
+            return margin.filter(|idr| idr.seq >= fresh);
+        }
+        margin.or_else(|| ctrl.ring.oldest_idr_at_or_after(0))
+    })
+}
+
+/// How far in from its oldest tag a delay capped by a full ring starts
+/// (see `delayed_idr`): room for the reads to stay ahead of the overwrites.
+const FULL_RING_MARGIN_MS: u64 = 3_000;
+
+/// How long a connect to a platform (TCP, TLS and the RTMP handshake) may
+/// take before it counts as failed and is retried.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long a platform session has to stay up before a reconnect starts
+/// from the shortest backoff again.
+const STABLE_SESSION: Duration = Duration::from_secs(30);
+
+/// A session that ends cleanly (OBS stopped, the destination was switched
+/// off) resets the backoff only after this long. One that ends the moment
+/// it starts would otherwise redial the platform every second.
+const MIN_CLEAN_SESSION: Duration = Duration::from_secs(5);
+
+/// How far a tag may be stamped behind the last one and still be read as
+/// audio and video interleaving (a few ms in practice). Anything further
+/// back is pinned to the current moment (see `Controller::expand_ts`).
+const MAX_TS_STEP_BACK_MS: u32 = 10_000;
+
+/// A delay lands at or above its target (see `delayed_idr`); this much
+/// below it still counts as on target, for send jitter.
+const DELAY_JITTER_MS: u64 = 500;
+
+/// Keyframe interval assumed until one is measured (OBS's default).
+const DEFAULT_KEYFRAME_INTERVAL_MS: u64 = 2_000;
+
 fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<PendingCut> {
     let target_delay = ctrl.target_delay_ms.load(Ordering::Relaxed) as u64;
     let latest = ctrl.ring.latest_ts()?;
-    let oldest = ctrl.ring.oldest_ts()?;
     let current_delay = latest.saturating_sub(current.ts_ms);
-
-    // Dead band scales with the measured GOP (see recut_dead_band_ms). At the
-    // default 2 s cadence this is the tuned 1500 ms; the trade-off is the
-    // delivered delay may sit up to one dead-band away from the requested
-    // value, which is exactly the price of not re-cutting to the same IDR.
-    let keyframe_interval = ctrl.keyframe_interval_ms();
-    let dead_band = recut_dead_band_ms(keyframe_interval);
-    let diff = (current_delay as i64) - (target_delay as i64);
-    if diff.abs() < dead_band as i64 {
-        ctrl.buffer_building.store(false, Ordering::Relaxed);
-        return None;
-    }
-
-    // "Build buffer first" - if the user asked for a delay deeper than
-    // the buffer currently extends, we can't honor it yet. Mark the state
-    // and hold our position; the buffer keeps filling at real time, and
-    // once the requested delay becomes reachable, the next iteration cuts.
-    // Same dead band as the re-cut gate so the two agree on "close enough".
-    let have_seconds_back = latest.saturating_sub(oldest);
-    if target_delay > have_seconds_back.saturating_add(dead_band) {
-        ctrl.buffer_building.store(true, Ordering::Relaxed);
-        return None;
+    if target_delay > 0 {
+        return compute_delayed_cut(ctrl, current, current_delay, target_delay);
     }
     ctrl.buffer_building.store(false, Ordering::Relaxed);
 
+    // Back to live: the keyframe nearest the live edge. Dead band scales
+    // with the measured GOP (see recut_dead_band_ms), so a pump already
+    // parked on the best keyframe doesn't re-cut to it every tick.
+    let keyframe_interval = ctrl.keyframe_interval_ms();
+    if current_delay < recut_dead_band_ms(keyframe_interval) {
+        return None;
+    }
     // Binary-search on the IDR-only secondary index (~log n over just
     // the keyframes) rather than the old O(n) walk over every tag.
-    let desired_input_ts = latest.saturating_sub(target_delay);
     let target = ctrl
         .ring
-        .find_idr_near(desired_input_ts, idr_search_tolerance_ms(keyframe_interval))?;
+        .find_idr_near(latest, idr_search_tolerance_ms(keyframe_interval))?;
     if target.seq == current.seq {
         return None;
     }
     Some(PendingCut { target })
+}
+
+/// The cut a delay of `target_delay` needs, if any. A delay lands on the
+/// newest keyframe at least that old (see `delayed_idr`), so it sits
+/// between the target and one keyframe interval above it. Re-cutting only
+/// outside that window means a landed delay never re-trips the check, and
+/// viewers are never closer to live than asked, even on long GOPs.
+fn compute_delayed_cut(
+    ctrl: &Controller,
+    current: &TagMeta,
+    current_delay: u64,
+    target_delay: u64,
+) -> Option<PendingCut> {
+    let keyframe_interval = ctrl.keyframe_interval_ms();
+    let gop = match keyframe_interval {
+        0 => DEFAULT_KEYFRAME_INTERVAL_MS,
+        measured => u64::from(measured),
+    };
+    let too_little = current_delay + DELAY_JITTER_MS < target_delay;
+    let upper_band = recut_dead_band_ms(keyframe_interval).max(gop + DELAY_JITTER_MS);
+    let too_much = current_delay > target_delay + upper_band;
+    if !too_little && !too_much {
+        ctrl.buffer_building.store(false, Ordering::Relaxed);
+        return None;
+    }
+    // While OBS is gone (crashed, or frozen and held) the buffer can't
+    // grow, so the delay only shrinks as the delay tail plays out. Jumping
+    // back to restore it would replay the tail instead of finishing it.
+    if too_little && (ctrl.hold_active() || ctrl.obs_gone()) {
+        return None;
+    }
+    // "Build buffer first": until the buffer reaches back to the delay,
+    // hold position; it fills at real time and the next check cuts.
+    let Some(target) = delayed_idr(ctrl, target_delay) else {
+        ctrl.buffer_building.store(true, Ordering::Relaxed);
+        return None;
+    };
+    ctrl.buffer_building.store(false, Ordering::Relaxed);
+    // A cut has to fix what it was called for. Too much delay moves
+    // forward; with a keyframe gap longer than measured, the keyframe at
+    // the delay can be the one this pump is already past, and cutting back
+    // to it would replay the same stretch on every check. Too little delay
+    // moves back, by more than the jitter: on a full ring the oldest
+    // keyframe is barely behind this pump, and re-cutting to it would
+    // replay a moment of video every check without adding any delay.
+    let latest = current_delay + current.ts_ms;
+    let worth_it = if too_much {
+        target.seq > current.seq
+    } else {
+        target.seq < current.seq
+            && latest.saturating_sub(target.ts_ms) > current_delay + DELAY_JITTER_MS
+    };
+    worth_it.then_some(PendingCut { target })
 }
 
 async fn apply_cut(
@@ -2913,10 +4011,14 @@ async fn send_sequence_headers(
         } else {
             v_headers.iter().find(|(k, _)| *k == target)
         };
-        if let Some((_, h)) = pick {
-            let selected =
-                crate::h264::select_video_bytes(h, crate::h264::VideoEgress::Track(target))
-                    .unwrap_or(std::borrow::Cow::Borrowed(h.as_slice()));
+        // A header that can't be flattened for this destination (only
+        // another track's has arrived so far) is not sent at all: a raw
+        // multi-track header means nothing to a single-track platform. The
+        // right one goes out when it arrives (new generation).
+        let selected = pick.and_then(|(_, h)| {
+            crate::h264::select_video_bytes(h, crate::h264::VideoEgress::Track(target))
+        });
+        if let Some(selected) = selected {
             let bytes_out: &[u8] = &selected;
             crate::trace::log(
                 "VIDEO_SEQ_HDR_SENT",
@@ -2976,7 +4078,9 @@ async fn send_sequence_headers(
                 .or_else(|| a_headers.first())
                 .map(|(_, v)| v);
             if let Some(h) = header {
-                if let Some(bytes) = crate::h264::select_audio_bytes(h, egress) {
+                if let Some(bytes) =
+                    crate::h264::select_audio_bytes(h, egress, ctrl.audio_target_on_wire(egress))
+                {
                     crate::trace::log(
                         "AUDIO_SEQ_HDR_SENT",
                         &format!(
@@ -3024,7 +4128,10 @@ async fn wait_for_idr(
         let notified = ctrl.ring.on_append.notified();
         let found = match min_seq {
             Some(seq) => ctrl.ring.newest_idr_after(seq),
-            None => ctrl.ring.newest_idr(),
+            None => ctrl
+                .ring
+                .newest_idr()
+                .filter(|idr| idr.seq >= ctrl.fresh_from_seq()),
         };
         if let Some(m) = found {
             return Some(m);
@@ -3039,26 +4146,28 @@ async fn wait_for_idr(
     }
 }
 
-/// Pick the seed IDR for a freshly spawned egress pump. If a delay is
-/// already active and the ring has enough history, seed at the delayed
-/// position so the new pump joins mid-stream cleanly; otherwise fall
-/// back to the newest IDR (live edge).
+/// Pick the seed IDR for a freshly spawned egress pump. With a delay on,
+/// join at the delayed position, waiting for the buffer to reach back that
+/// far (`run_egress` normally waits before connecting); a live start would
+/// air live video, then jump back. With no delay, the newest IDR.
 async fn seed_idr(ctrl: &Arc<Controller>, dest: &Arc<DestinationState>) -> Option<TagMeta> {
-    let target = ctrl.target_delay_ms() as u64;
-    if target > 0 {
-        if let (Some(latest), Some(oldest)) = (ctrl.ring.latest_ts(), ctrl.ring.oldest_ts()) {
-            // Only attempt the delayed seed if the buffer actually spans
-            // far enough back - otherwise find_idr_near may give us an
-            // IDR much closer to live than the user asked for.
-            if latest.saturating_sub(oldest) + 1_500 >= target {
-                let desired = latest.saturating_sub(target);
-                if let Some(idr) = ctrl.ring.find_idr_near(desired, 2_000) {
-                    return Some(idr);
-                }
-            }
+    loop {
+        let target = u64::from(ctrl.target_delay_ms());
+        if target == 0 {
+            return wait_for_idr(ctrl, dest, None).await;
+        }
+        let notified = ctrl.ring.on_append.notified();
+        if let Some(idr) = delayed_idr(ctrl, target) {
+            return Some(idr);
+        }
+        if !ctrl.ingest_alive() || dest.shutdown_requested.load(Ordering::Relaxed) {
+            return None;
+        }
+        tokio::select! {
+            _ = notified => {}
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {}
         }
     }
-    wait_for_idr(ctrl, dest, None).await
 }
 
 /// Re-anchor egress state after the publisher changed identity. Mirrors
@@ -3116,8 +4225,39 @@ async fn next_or_wait(ring: &Arc<DiskRing>, seq: u64, wait_ms: u64) -> Option<Ta
 }
 
 #[cfg(test)]
+mod sim;
+
+#[cfg(test)]
+mod hold_sim;
+
+#[cfg(test)]
+mod delay_sim;
+
+#[cfg(test)]
+mod user_sim;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1 MB/s for three seconds reads 8000 kbps; two and a half seconds
+    /// after the last byte it reads 0 (the stuck "17.40 Mbps" after OBS
+    /// stopped); and the first bytes after the gap start a fresh window
+    /// instead of averaging the silence in.
+    #[test]
+    fn a_bitrate_drops_to_zero_when_bytes_stop() {
+        let meter = RateMeter::default();
+        for ms in (0..=3_000).step_by(100) {
+            meter.note_at(100_000, 10_000 + ms);
+        }
+        assert_eq!(meter.kbps_at(13_000), 8_000);
+        assert_eq!(meter.kbps_at(15_400), 8_000, "a short pause keeps the rate");
+        assert_eq!(meter.kbps_at(15_600), 0, "stale after 2.5 s");
+        for ms in (0..=1_000).step_by(100) {
+            meter.note_at(50_000, 30_000 + ms);
+        }
+        assert_eq!(meter.kbps_at(31_000), 4_000, "no silence averaged in");
+    }
     use std::env;
     use std::sync::atomic::{AtomicU32 as TestUniq, Ordering as TestOrd};
 
@@ -3310,35 +4450,46 @@ mod tests {
         assert_eq!(h.ctrl.target_delay_ms(), 2_000);
     }
 
+    /// The mark fires only once every live destination has aired past it:
+    /// the slowest one decides, a dead destination (whatever its cursor)
+    /// has no say, a cursor sitting ON the mark has not aired it yet, and
+    /// with nothing live there is nothing to measure against.
     #[test]
     fn safe_cut_fires_only_after_slowest_consumer_passes_mark() {
         let h = harness(0);
         h.ctrl.arm_delay(2_000);
         feed_seconds(&h.ctrl, 0, 4, 30);
         h.ctrl.activate_delay().expect("buffer is past armed");
-
-        // A live destination whose consumer is still early in the ring.
-        let st = h.ctrl.destination_state("d1");
-        st.egress_alive.store(true, Ordering::Relaxed);
-        st.consumer_seq.store(10, Ordering::Relaxed);
-
+        let mark_seq = h.ctrl.ring.latest_seq().expect("ring has tags");
         h.ctrl.schedule_safe_cut().expect("delay is active");
-        let before = h.ctrl.safe_cut_remaining_ms();
-        assert!(before > 0, "mark is ahead of the consumer");
-
-        // Consumer hasn't aired the mark yet → must NOT fire.
-        h.ctrl.maybe_fire_safe_cut();
-        assert!(h.ctrl.safe_cut_pending());
-        assert_eq!(h.ctrl.target_delay_ms(), 2_000);
-
-        // More stream arrives, and the consumer advances past the mark
-        // (the newest tag's ts is beyond the mark by construction).
+        // More stream arrives, all of it after the mark.
         feed_seconds(&h.ctrl, 4_000, 2, 30);
-        let latest_seq = h.ctrl.ring.latest_seq().expect("ring has tags");
-        st.consumer_seq.store(latest_seq, Ordering::Relaxed);
+        let still_pending = |why: &str| {
+            h.ctrl.maybe_fire_safe_cut();
+            assert!(h.ctrl.safe_cut_pending(), "{why}");
+            assert_eq!(h.ctrl.target_delay_ms(), 2_000, "{why}");
+        };
+        let dest = |id: &str, alive: bool, seq: u64| {
+            let st = h.ctrl.destination_state(id);
+            st.egress_alive.store(alive, Ordering::Relaxed);
+            st.consumer_seq.store(seq, Ordering::Relaxed);
+        };
 
+        dest("slow", false, 10);
+        dest("fast", false, mark_seq + 5);
+        dest("dead", false, 0);
+        still_pending("no live destination to measure against");
+
+        dest("slow", true, 10);
+        dest("fast", true, mark_seq + 5);
+        still_pending("the slower live destination has not aired the mark");
+
+        dest("slow", true, mark_seq);
+        still_pending("the mark's own frame has not gone out yet");
+
+        dest("slow", true, mark_seq + 1);
         h.ctrl.maybe_fire_safe_cut();
-        assert!(!h.ctrl.safe_cut_pending(), "mark aired - must fire");
+        assert!(!h.ctrl.safe_cut_pending(), "aired everywhere live - fires");
         assert_eq!(h.ctrl.target_delay_ms(), 0, "fire runs the normal cut");
         // The armed value survives, same as a manual Cut - the next
         // activate is instant.
@@ -3489,31 +4640,16 @@ mod tests {
     }
 
     #[test]
-    fn activate_consumes_auto_activate_pending() {
-        let h = harness(0);
-        h.ctrl.arm_delay(2_000);
-        feed_seconds(&h.ctrl, 0, 3, 30);
-        assert!(h.ctrl.auto_activate_pending());
-        h.ctrl.activate_delay().expect("buffer is full");
-        assert!(
-            !h.ctrl.auto_activate_pending(),
-            "successful activate must consume the pending slot"
-        );
-    }
-
-    #[test]
     fn cut_consumes_auto_activate_pending_so_it_sticks() {
         // The bug-of-record: without this clear, the supervisor sees
         // phase revert to "ready" after cut and re-fires activate_delay.
+        // Cut while the buffer is still preparing: the slot is still set
+        // (nothing has activated yet), and the streamer's "stay live" has
+        // to win over the auto-activate the buffer filling would trigger.
         let h = harness(0);
         h.ctrl.arm_delay(2_000);
-        feed_seconds(&h.ctrl, 0, 3, 30);
-        h.ctrl.activate_delay().unwrap();
-        // Slot was already cleared by activate. Re-arm to set it again,
-        // then exercise the cut path explicitly. (arm_delay live-update
-        // path - target > 0, so this DOESN'T set pending; we have to
-        // simulate the post-cut state.)
-        h.ctrl.stop_delay(); // cut: target -> 0, pending -> false
+        assert!(h.ctrl.auto_activate_pending(), "armed, not yet activated");
+        h.ctrl.stop_delay();
         assert!(
             !h.ctrl.auto_activate_pending(),
             "cut must keep pending false so the supervisor doesn't re-activate"
@@ -3626,6 +4762,27 @@ mod tests {
         h.ctrl.run_named_action("arm", 5_000, "hotkey");
         assert_eq!(h.ctrl.armed_delay_ms(), 0);
         assert_eq!(h.ctrl.phase(), "idle");
+    }
+
+    #[test]
+    fn setting_the_delay_twice_never_disarms_and_updates_a_live_delay() {
+        let h = harness(0);
+        h.ctrl.mark_ingest_alive_for_test();
+        h.ctrl.set_delay_to(30_000, "integration");
+        h.ctrl.set_delay_to(30_000, "integration");
+        assert_eq!(h.ctrl.armed_delay_ms(), 30_000, "a repeat keeps it armed");
+
+        let h = harness(0);
+        h.ctrl.arm_delay(3_000);
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.activate_delay().unwrap();
+        h.ctrl.set_delay_to(2_000, "integration");
+        assert_eq!(
+            h.ctrl.target_delay_ms(),
+            2_000,
+            "changed on air, not refused"
+        );
+        assert_eq!(h.ctrl.phase(), "active");
     }
 
     #[test]
@@ -4058,6 +5215,38 @@ mod tests {
     /// actually stamped in: promoting it puts one tag 49.7 days ahead, and
     /// `on_tag` feeds that to the trim, which then measures the whole ring
     /// against a cutoff past every frame in it and evicts the lot.
+    /// OBS stops an Enhanced Broadcasting stream with SequenceEnd tags
+    /// stamped 0. They must not rewind the timeline: the buffer's newest
+    /// moment is what the delay still to air is measured against.
+    #[test]
+    fn an_end_of_stream_tag_stamped_zero_does_not_rewind_the_timeline() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+        h.ctrl.on_tag(9, 200_000, &v, false, false);
+        h.ctrl.on_tag(9, 200_033, &v, false, false);
+
+        h.ctrl.on_tag(9, 0, &v, false, false);
+        assert_eq!(
+            h.ctrl.ring.latest_ts(),
+            Some(200_033),
+            "pinned, not rewound"
+        );
+
+        h.ctrl.on_tag(8, 200_020, &v, false, false);
+        assert_eq!(
+            h.ctrl.ring.latest_ts(),
+            Some(200_020),
+            "ordinary interleaving still reads as stamped"
+        );
+        h.ctrl.on_tag(9, 200_066, &v, false, false);
+        assert_eq!(
+            h.ctrl.ring.latest_ts(),
+            Some(200_066),
+            "and the timeline goes on"
+        );
+    }
+
     #[test]
     fn a_late_tag_at_the_wrap_stays_in_the_epoch_it_came_from() {
         let h = harness(0);
@@ -4335,111 +5524,556 @@ mod tests {
         }
     }
 
-    // ── Ring + index correctness ─────────────────────────────────────
-
-    #[test]
-    fn on_tag_appends_to_ring_with_monotonic_ts() {
-        // The wrap-expansion path is the load-bearing piece of timestamp
-        // logic. Even a small wrap should produce strictly increasing
-        // u64 timestamps in the ring.
+    /// Harness with crash protection on and one destination streaming.
+    fn protected_harness(every_disconnect: bool) -> Harness {
         let h = harness(0);
-        // Two tags well below any wrap point - strictly increasing.
-        h.ctrl.on_tag(9, 100, &[0u8; 10], true, false);
-        h.ctrl.on_tag(9, 200, &[0u8; 10], false, false);
-        h.ctrl.on_tag(9, 300, &[0u8; 10], false, false);
-
-        let oldest = h.ctrl.ring.oldest_ts().unwrap();
-        let latest = h.ctrl.ring.latest_ts().unwrap();
-        assert_eq!(oldest, 100);
-        assert_eq!(latest, 300);
-        assert!(latest > oldest);
+        h.ctrl
+            .update_crash_protection(crate::crash_protection::CrashProtection {
+                enabled: true,
+                every_disconnect,
+                ..Default::default()
+            });
+        h.ctrl
+            .destination_state("live")
+            .egress_alive
+            .store(true, Ordering::Relaxed);
+        h
     }
 
-    #[test]
-    fn idr_index_seek_finds_the_right_frame() {
-        let h = harness(0);
-        feed_seconds(&h.ctrl, 0, 5, 30); // IDR at 0, 1000, 2000, 3000, 4000
-                                         // Target 2500, tolerance 600 → closest IDR is 2000 (distance 500)
-        let m = h
-            .ctrl
-            .ring
-            .find_idr_near(2500, 600)
-            .expect("should find IDR near 2500");
-        assert_eq!(m.ts_ms, 2000);
-        assert!(m.is_idr);
-    }
-
-    // ── Timestamp wrap (the load-bearing one) ──────────────────────
-
-    #[test]
-    fn wire_ts_wrap_promotes_to_monotonic_u64() {
-        // RTMP wire timestamps are u32 ms, so they wrap every ~49.7 days.
-        // The Controller's expand_ts() promotes them to u64 by detecting
-        // a wrap (current u32 << previous u32) and bumping a "high"
-        // counter. Without this, a wrap would make `latest_ts - oldest_ts`
-        // negative and the whole delay accounting would explode.
-        //
-        // We can't call expand_ts directly (private), so we exercise it
-        // through on_tag() and observe the result via ring.latest_ts().
-        let h = harness(0);
-        // Walk forward toward the wrap boundary, then over it.
-        let near_max = u32::MAX - 1000;
-        h.ctrl.on_tag(9, near_max, &[0u8; 20], true, false);
-        h.ctrl.on_tag(9, near_max + 500, &[0u8; 20], false, false);
-        // Cross the boundary: wire_ts drops near 0 (this LOOKS LIKE
-        // going backwards if you only had u32 math).
-        h.ctrl.on_tag(9, 200, &[0u8; 20], false, false);
-
-        let latest = h.ctrl.ring.latest_ts().unwrap();
-        let oldest = h.ctrl.ring.oldest_ts().unwrap();
-        assert!(
-            latest > oldest,
-            "post-wrap latest ({latest}) must be > oldest ({oldest}); \
-             wrap promotion is broken"
-        );
-        // The expand_ts machinery should have lifted the post-wrap value
-        // above u32::MAX (high bit promoted).
-        assert!(
-            latest > u32::MAX as u64,
-            "expected post-wrap ts above u32::MAX, got {latest}"
-        );
-    }
-
-    // ── Enhanced Broadcasting stability ──────────────────────────────
-
-    /// EB seq headers must survive across the `pace_and_send` resync
-    /// path: the supervisor restarts egress without disturbing the
-    /// publisher, the per-track BTreeMap stays populated, and the next
-    /// `send_sequence_headers` for a Twitch destination re-emits every
-    /// track from the cache. The bug we shipped + reverted was the
-    /// pre-BTreeMap single-Option cache stomping all tracks down to
-    /// just the last one received - verify via the ring's cache
-    /// directly so we'd catch a regression to that storage shape.
-    #[test]
-    fn eb_seq_headers_survive_egress_restart() {
-        let h = harness(0);
-        // Simulate OBS sending OneTrack-format seq headers for tracks
-        // 0..=3 (a typical Twitch EB four-rung ladder).
-        for track in 0u8..=3 {
-            let mut tag = vec![0x96, 0x00, 0x61, 0x76, 0x63, 0x31, track];
-            tag.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
-            h.ctrl
-                .ring
-                .append(9, 0, &tag, false, true)
-                .expect("seq-header append");
-        }
-        // mark_ingest_dead clears codec state and EB overrides, but
-        // the seq-header cache itself belongs to the ring and only
-        // gets wiped by a fresh publisher session - verify it stays.
-        let dest = h.ctrl.destination_state("d1");
-        *dest.eb_override_url.lock() = Some("rtmps://stale".into());
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+    /// OBS sends FCUnpublish + deleteStream from `RTMP_Close` on every
+    /// deliberate stop; a crash closes the socket without them. Only a
+    /// crash opens a hold, and a goodbye never leaks into the next session.
+    #[tokio::test]
+    async fn only_a_crash_opens_a_hold() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.note_unpublish();
         h.ctrl.mark_ingest_dead();
-        let cache = h.ctrl.ring.video_seq_headers.lock();
-        assert_eq!(cache.len(), 4, "all 4 tracks must persist across cut");
-        for track in 0u8..=3 {
-            assert!(cache.contains_key(&track), "track {track} dropped");
+        assert!(!h.ctrl.hold_active(), "a deliberate stop ends the stream");
+
+        h.ctrl.note_unpublish(); // stray goodbye between sessions
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.mark_ingest_dead();
+        assert!(h.ctrl.hold_active(), "a drop without goodbye is a crash");
+
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        assert_eq!(h.ctrl.hold_state(), crate::crash_hold::HoldState::Resumed);
+    }
+
+    #[tokio::test]
+    async fn end_hold_hotkey_ends_a_hold_and_explains_when_there_is_none() {
+        let h = protected_harness(false);
+        assert!(h.ctrl.run_named_action("end_hold", 0, "hotkey").is_some());
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.mark_ingest_dead();
+        assert!(h.ctrl.hold_active());
+        assert_eq!(h.ctrl.run_named_action("end_hold", 0, "hotkey"), None);
+        assert_eq!(h.ctrl.hold_state(), crate::crash_hold::HoldState::Ended);
+        assert!(
+            h.ctrl.run_named_action("end_hold", 0, "hotkey").is_some(),
+            "nothing left to end"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_hold_when_protection_is_off_or_nothing_is_live() {
+        let h = harness(0);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.mark_ingest_dead();
+        assert!(!h.ctrl.hold_active(), "protection is off by default");
+
+        let h = protected_harness(false);
+        h.ctrl
+            .destination_state("live")
+            .egress_alive
+            .store(false, Ordering::Relaxed);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.mark_ingest_dead();
+        assert!(
+            !h.ctrl.hold_active(),
+            "no live destination, nothing to protect"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_frozen_publisher_opens_a_hold_that_its_next_frame_closes() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.on_tag(9, 0, &[0x27, 1, 0, 0, 0], false, false);
+        assert!(h.ctrl.ingest_sending());
+        let last = h.ctrl.last_video_tag_ms.load(Ordering::Relaxed);
+        let freeze_ms = crate::crash_hold::FREEZE_AFTER.as_millis() as u64;
+        assert!(!h.ctrl.video_frozen_at(last + freeze_ms - 1));
+        assert!(
+            h.ctrl.video_frozen_at(last + freeze_ms),
+            "connected but frozen"
+        );
+        h.ctrl.check_ingest_freeze_at(last + 500);
+        assert!(!h.ctrl.hold_active(), "a short gap is not a freeze");
+        h.ctrl.check_ingest_freeze_at(last + freeze_ms);
+        assert!(h.ctrl.hold_active());
+        h.ctrl.on_tag(9, 40, &[0x27, 1, 0, 0, 0], false, false);
+        assert_eq!(h.ctrl.hold_state(), crate::crash_hold::HoldState::Resumed);
+        assert!(h.ctrl.ingest_sending());
+    }
+
+    /// OBS crashes with a 10 s delay on air: the buffer stops growing, so
+    /// the delay only shrinks while the tail plays out. Live, that gap
+    /// would re-cut back; during the hold it must not, or the tail loops.
+    #[tokio::test]
+    async fn a_crash_mid_delay_never_jumps_back_into_the_tail() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.arm_delay(10_000);
+        feed_seconds(&h.ctrl, 0, 12, 30);
+        h.ctrl.activate_delay().expect("the buffer holds the delay");
+        // The pump is 4 s from the frozen live edge: 6 s short of the delay.
+        let current = h.ctrl.ring.find_idr_near(8_000, 500).unwrap();
+        assert!(
+            compute_delay_cut(&h.ctrl, &current).is_some(),
+            "live, it re-cuts"
+        );
+        h.ctrl.mark_ingest_dead();
+        assert!(h.ctrl.hold_active());
+        assert!(
+            compute_delay_cut(&h.ctrl, &current).is_none(),
+            "holding, the tail plays out once"
+        );
+    }
+
+    /// The tray, global hotkeys and MIDI run on plain threads with no Tokio
+    /// runtime. Ending a hold from them emits an integrations event, which
+    /// must not need one: a panic there aborts the whole process.
+    #[tokio::test]
+    async fn ending_a_hold_off_the_runtime_does_not_panic() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.mark_ingest_dead();
+        assert!(h.ctrl.hold_active());
+        let ctrl = h.ctrl.clone();
+        let hotkey = std::thread::spawn(move || ctrl.run_named_action("end_hold", 0, "hotkey"));
+        assert_eq!(hotkey.join().expect("no panic off the runtime"), None);
+        assert!(!h.ctrl.hold_active());
+    }
+
+    /// Opens a freeze hold for `h` and returns the last video stamp.
+    fn freeze(h: &Harness) -> u64 {
+        h.ctrl.on_tag(9, 0, &[0x27, 1, 0, 0, 0], false, false);
+        let last = h.ctrl.last_video_tag_ms.load(Ordering::Relaxed);
+        let freeze_ms = crate::crash_hold::FREEZE_AFTER.as_millis() as u64;
+        h.ctrl.check_ingest_freeze_at(last + freeze_ms);
+        assert!(h.ctrl.hold_active());
+        last
+    }
+
+    #[tokio::test]
+    async fn stopping_in_obs_ends_a_freeze_hold() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        freeze(&h);
+        h.ctrl.note_unpublish();
+        h.ctrl.mark_ingest_dead();
+        assert!(!h.ctrl.hold_active(), "a deliberate stop ends it");
+        assert_eq!(h.ctrl.hold_state(), crate::crash_hold::HoldState::Ended);
+    }
+
+    #[tokio::test]
+    async fn a_freeze_hold_that_ended_does_not_reopen_until_video_returns() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        let last = freeze(&h);
+        assert!(h.ctrl.end_hold_now());
+        h.ctrl.check_ingest_freeze_at(last + 60_000);
+        assert!(!h.ctrl.hold_active(), "still the same freeze");
+        // Video comes back, then OBS freezes again: that one is protected.
+        let last = freeze(&h);
+        assert!(last > 0);
+    }
+
+    /// With a delay armed, the screen stays up after OBS is back until its
+    /// new video spans the delay, and the pump rejoins from that video.
+    #[tokio::test]
+    async fn the_screen_waits_for_the_delay_to_rebuild_from_new_video() {
+        let h = harness(0);
+        h.ctrl.arm_delay(10_000);
+        feed_seconds(&h.ctrl, 0, 2, 10);
+        // OBS comes back (after a freeze: the old video stays in the ring).
+        h.ctrl.resume_from_hold();
+        let mut rebuild = None;
+        let rebuilt =
+            |rebuild: &mut Option<_>| crate::crash_hold::delay_rebuilt(&h.ctrl, rebuild, 3_000);
+        assert_eq!(rebuilt(&mut rebuild), None, "no new video yet");
+        let first_new = h.ctrl.ring.latest_seq().unwrap() + 1;
+        feed_seconds(&h.ctrl, 10_000, 2, 10);
+        assert_eq!(rebuilt(&mut rebuild), None, "1.9 s of new video");
+        feed_seconds(&h.ctrl, 12_000, 2, 10);
+        assert_eq!(rebuilt(&mut rebuild), Some(first_new), "3.9 s: rejoin");
+    }
+
+    const KEPT_IVS: &str = "rtmps://ivs/app/kept";
+    const KEPT_TOKEN: &str = "kept-token";
+    const FRESH_IVS: &str = "rtmps://ivs/app/fresh";
+    const FRESH_TOKEN: &str = "fresh-token";
+
+    /// How OBS left the stream.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum ObsLeaves {
+        Crashes,
+        /// Stopped on purpose, with "protect every disconnect" on.
+        Stops,
+        /// Still connected, but sending no video.
+        Freezes,
+    }
+
+    /// When OBS asked for its Enhanced Broadcasting config again.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum ObsAsks {
+        Never,
+        DuringHold,
+        AfterHold,
+    }
+
+    /// How the hold closed.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum HoldCloses {
+        ObsReturns,
+        /// `ticked`: the supervisor reported the deadline before OBS came back.
+        Deadline {
+            ticked: bool,
+            obs_returns: bool,
+        },
+        EndNow {
+            obs_returns: bool,
+        },
+    }
+
+    #[derive(Debug)]
+    struct HoldCase {
+        had_eb_session: bool,
+        leaves: ObsLeaves,
+        asks: ObsAsks,
+        closes: HoldCloses,
+    }
+
+    impl HoldCase {
+        fn obs_returns(&self) -> bool {
+            match self.closes {
+                HoldCloses::ObsReturns => true,
+                HoldCloses::Deadline { obs_returns, .. } | HoldCloses::EndNow { obs_returns } => {
+                    obs_returns
+                }
+            }
         }
+
+        fn is_possible(&self) -> bool {
+            match self.asks {
+                ObsAsks::Never => true,
+                // A frozen OBS is still streaming: it asks for nothing.
+                ObsAsks::DuringHold => self.leaves != ObsLeaves::Freezes,
+                ObsAsks::AfterHold => {
+                    self.leaves != ObsLeaves::Freezes
+                        && self.obs_returns()
+                        && self.closes != HoldCloses::ObsReturns
+                }
+            }
+        }
+
+        /// The Twitch session the destination must end on: the one OBS
+        /// asked for and publishes on, or none for a single-track stream.
+        fn expected_session(&self) -> Option<&'static str> {
+            let kept = self.had_eb_session.then_some(KEPT_IVS);
+            if self.leaves == ObsLeaves::Freezes {
+                return kept;
+            }
+            match self.asks {
+                ObsAsks::Never => None,
+                ObsAsks::DuringHold => Some(kept.unwrap_or(FRESH_IVS)),
+                ObsAsks::AfterHold => Some(FRESH_IVS),
+            }
+        }
+
+        fn expected_state(&self) -> crate::crash_hold::HoldState {
+            if self.closes == HoldCloses::ObsReturns {
+                crate::crash_hold::HoldState::Resumed
+            } else {
+                crate::crash_hold::HoldState::Ended
+            }
+        }
+    }
+
+    fn all_hold_cases() -> Vec<HoldCase> {
+        let mut closings = vec![HoldCloses::ObsReturns];
+        for obs_returns in [true, false] {
+            closings.push(HoldCloses::EndNow { obs_returns });
+            for ticked in [true, false] {
+                closings.push(HoldCloses::Deadline {
+                    ticked,
+                    obs_returns,
+                });
+            }
+        }
+        let mut cases = Vec::new();
+        for had_eb_session in [true, false] {
+            for leaves in [ObsLeaves::Crashes, ObsLeaves::Stops, ObsLeaves::Freezes] {
+                for asks in [ObsAsks::Never, ObsAsks::DuringHold, ObsAsks::AfterHold] {
+                    for &closes in &closings {
+                        let case = HoldCase {
+                            had_eb_session,
+                            leaves,
+                            asks,
+                            closes,
+                        };
+                        if case.is_possible() {
+                            cases.push(case);
+                        }
+                    }
+                }
+            }
+        }
+        cases
+    }
+
+    /// The fresh-session path of /obs/multitrack-config (web.rs): accept the
+    /// token, point the Twitch destination at the session, keep it for a hold.
+    fn open_eb_session(h: &Harness, ivs: &str, token: &str) {
+        h.ctrl.remember_eb_key(token.into());
+        *h.ctrl.destination_state("live").eb_override_url.lock() = Some(ivs.into());
+        h.ctrl.remember_eb_session(EbSession {
+            config: format!("{{{token}}}"),
+            auths: vec![token.into()],
+            dest_id: "live".into(),
+            ivs_url: ivs.into(),
+        });
+    }
+
+    /// OBS asks /obs/multitrack-config for its config, which hands back the
+    /// session a hold kept or opens a new one. Returns OBS's stream key.
+    fn obs_asks_for_eb_config(h: &Harness) -> &'static str {
+        if h.ctrl.held_eb_config().is_some() {
+            return KEPT_TOKEN;
+        }
+        open_eb_session(h, FRESH_IVS, FRESH_TOKEN);
+        FRESH_TOKEN
+    }
+
+    /// Plays `case` out and returns what went wrong, if anything.
+    async fn run_hold_case(case: &HoldCase) -> Vec<String> {
+        let h = protected_harness(case.leaves == ObsLeaves::Stops);
+        h.ctrl.update_ingest_key("k".into());
+        let mut stream_key = "k";
+        if case.had_eb_session {
+            open_eb_session(&h, KEPT_IVS, KEPT_TOKEN);
+            stream_key = KEPT_TOKEN;
+        }
+        h.ctrl.begin_publish(stream_key, "127.0.0.1").await.unwrap();
+        h.ctrl.on_tag(9, 0, &[0x17, 0, 0, 0, 0, 1], false, true);
+        match case.leaves {
+            ObsLeaves::Crashes => h.ctrl.mark_ingest_dead(),
+            ObsLeaves::Stops => {
+                h.ctrl.note_unpublish();
+                h.ctrl.mark_ingest_dead();
+            }
+            ObsLeaves::Freezes => {
+                freeze(&h);
+            }
+        }
+        assert!(h.ctrl.hold_active(), "{case:?}: no hold opened");
+
+        stream_key = "k";
+        if case.asks == ObsAsks::DuringHold {
+            stream_key = obs_asks_for_eb_config(&h);
+        }
+        match case.closes {
+            HoldCloses::ObsReturns => {}
+            HoldCloses::Deadline { ticked, .. } => {
+                if let Some(hold) = h.ctrl.hold.lock().as_mut() {
+                    hold.deadline = Instant::now() - Duration::from_millis(1);
+                }
+                if ticked {
+                    h.ctrl.expire_hold();
+                }
+            }
+            HoldCloses::EndNow { .. } => {
+                assert!(h.ctrl.end_hold_now(), "{case:?}: End now found no hold");
+            }
+        }
+        if case.obs_returns() {
+            if case.asks == ObsAsks::AfterHold {
+                stream_key = obs_asks_for_eb_config(&h);
+            }
+            if case.leaves == ObsLeaves::Freezes {
+                h.ctrl.on_tag(9, 40, &[0x27, 1, 0, 0, 0], false, false);
+            } else if let Err(e) = h.ctrl.begin_publish(stream_key, "127.0.0.1").await {
+                return vec![format!("{case:?}: OBS's publish was refused: {e}")];
+            }
+        }
+        // The supervisor's next tick.
+        h.ctrl.expire_hold();
+
+        let mut failures = Vec::new();
+        let session = h
+            .ctrl
+            .destination_state("live")
+            .eb_override_url
+            .lock()
+            .clone();
+        if session.as_deref() != case.expected_session() {
+            failures.push(format!(
+                "{case:?}: Twitch session {session:?}, expected {:?}",
+                case.expected_session()
+            ));
+        }
+        let state = h.ctrl.hold_state();
+        if state != case.expected_state() {
+            failures.push(format!(
+                "{case:?}: hold {state:?}, expected {:?}",
+                case.expected_state()
+            ));
+        }
+        failures
+    }
+
+    /// OBS asking for its config again during a hold gets the kept session
+    /// back, and that session's token is brokered again: it was accepted
+    /// when the session opened, possibly longer ago than its TTL, and OBS's
+    /// publish with it must still get past the ingest key. (The matrix below
+    /// pre-brokers every token, so it can't see this.) Outside a hold there
+    /// is nothing to hand back.
+    #[tokio::test]
+    async fn a_kept_session_is_handed_back_only_during_a_hold_and_rebrokers_its_token() {
+        let h = protected_harness(false);
+        h.ctrl.update_ingest_key("k".into());
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.on_tag(9, 0, &[0x17, 0, 0, 0, 0, 1], false, true);
+        let live = h.ctrl.destination_state("live");
+        *live.eb_override_url.lock() = Some(KEPT_IVS.into());
+        // Remembered without brokering its token: as if the token expired.
+        h.ctrl.remember_eb_session(EbSession {
+            config: "{config}".into(),
+            auths: vec![KEPT_TOKEN.into()],
+            dest_id: "live".into(),
+            ivs_url: KEPT_IVS.into(),
+        });
+        assert_eq!(h.ctrl.held_eb_config(), None, "only during a hold");
+
+        h.ctrl.mark_ingest_dead();
+        assert!(!h.ctrl.is_brokered_eb_key(KEPT_TOKEN));
+        assert_eq!(h.ctrl.held_eb_config().as_deref(), Some("{config}"));
+        h.ctrl
+            .begin_publish(KEPT_TOKEN, "127.0.0.1")
+            .await
+            .expect("the token is let in again");
+        assert_eq!(live.eb_override_url.lock().as_deref(), Some(KEPT_IVS));
+        assert_eq!(h.ctrl.held_eb_config(), None, "the hold is over");
+    }
+
+    /// Every way a hold can play out with Enhanced Broadcasting in the mix.
+    /// Twitch refuses a stream on the wrong session (the multitrack ladder on
+    /// plain ingest, or one track on a multitrack session), so the
+    /// destination must end on exactly the session OBS publishes on.
+    #[tokio::test]
+    async fn every_hold_path_leaves_twitch_on_the_session_obs_publishes_on() {
+        let mut failures = Vec::new();
+        for case in all_hold_cases() {
+            failures.extend(run_hold_case(&case).await);
+        }
+        assert!(
+            failures.is_empty(),
+            "{} hold paths went wrong:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
+    /// OBS reconnects after a crash but never sends video: once the grace
+    /// runs out that counts as a freeze, so the screen gets a deadline.
+    #[tokio::test]
+    async fn a_returning_obs_that_sends_no_video_is_a_freeze() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.on_tag(9, 0, &[0x17, 0, 0, 0, 0, 1], false, true);
+        h.ctrl.mark_ingest_dead();
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        assert!(!h.ctrl.hold_active(), "resumed");
+        let now = process_now_ms();
+        let grace = FIRST_VIDEO_GRACE.as_millis() as u64;
+        h.ctrl.check_ingest_freeze_at(now + grace - 1_000);
+        assert!(!h.ctrl.hold_active(), "still within the grace");
+        h.ctrl.check_ingest_freeze_at(now + grace + 1_000);
+        assert!(h.ctrl.hold_active(), "no video after the grace is a freeze");
+    }
+
+    #[tokio::test]
+    async fn protection_off_keeps_no_per_frame_state() {
+        let h = harness(0);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        let hevc_keyframe = [0x91, b'h', b'v', b'c', b'1', 0, 0, 0, 7];
+        h.ctrl.on_tag(9, 0, &hevc_keyframe, true, false);
+        assert_eq!(h.ctrl.last_video_tag_ms.load(Ordering::Relaxed), 0);
+        assert!(h.ctrl.held_keyframe(0).is_none());
+
+        // Switched off mid-stream: nothing stale can later read as a freeze.
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.on_tag(9, 0, &hevc_keyframe, true, false);
+        assert!(h.ctrl.held_keyframe(0).is_some());
+        h.ctrl
+            .update_crash_protection(crate::crash_protection::CrashProtection::default());
+        assert_eq!(h.ctrl.last_video_tag_ms.load(Ordering::Relaxed), 0);
+        assert!(h.ctrl.held_keyframe(0).is_none());
+        assert!(h.ctrl.ingest_sending());
+    }
+
+    #[tokio::test]
+    async fn an_hevc_stream_is_covered_by_holding_its_last_keyframe() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        let live = h.ctrl.destination_state("live");
+        // Enhanced RTMP HEVC: SequenceStart, then a coded keyframe.
+        h.ctrl
+            .on_tag(9, 0, &[0x90, b'h', b'v', b'c', b'1', 1], false, true);
+        assert!(
+            !crate::crash_hold::covers(&h.ctrl, &live),
+            "nothing to hold yet"
+        );
+        let keyframe = [0x91, b'h', b'v', b'c', b'1', 0, 0, 0, 7];
+        h.ctrl.on_tag(9, 33, &keyframe, true, false);
+        assert!(crate::crash_hold::covers(&h.ctrl, &live));
+        assert_eq!(h.ctrl.held_keyframe(0).as_deref(), Some(&keyframe[..]));
+    }
+
+    #[tokio::test]
+    async fn an_enhanced_broadcasting_destination_is_covered_track_by_track() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        let live = h.ctrl.destination_state("live");
+        live.pass_through_multitrack_video
+            .store(true, Ordering::Relaxed);
+        // Track 0 legacy H.264, track 1 an H.264 rung, track 2 an HEVC rung.
+        let one_track = |fourcc: &[u8; 4], track: u8, first: u8, packet: u8| {
+            let mut tag = vec![first, packet];
+            tag.extend_from_slice(fourcc);
+            tag.extend_from_slice(&[track, 0, 0, 0, 7]);
+            tag
+        };
+        h.ctrl.on_tag(9, 0, &[0x17, 0, 0, 0, 0, 1], false, true);
+        h.ctrl
+            .on_tag(9, 0, &one_track(b"avc1", 1, 0x96, 0x00), false, true);
+        assert!(crate::crash_hold::covers(&h.ctrl, &live));
+        h.ctrl
+            .on_tag(9, 0, &one_track(b"hvc1", 2, 0x96, 0x00), false, true);
+        assert!(
+            !crate::crash_hold::covers(&h.ctrl, &live),
+            "every track needs a picture"
+        );
+        h.ctrl
+            .on_tag(9, 33, &one_track(b"hvc1", 2, 0x96, 0x01), false, false);
+        assert!(crate::crash_hold::covers(&h.ctrl, &live));
+        assert!(h.ctrl.held_keyframe(2).is_some());
+        assert!(
+            h.ctrl.held_keyframe(1).is_none(),
+            "H.264 rungs get the screen"
+        );
     }
 
     /// `mark_ingest_dead` must clear every destination's
@@ -4472,6 +6106,44 @@ mod tests {
     /// Twitch Inspector. The latch is released by the fetch task on
     /// completion (modelled here by the explicit store), after which the
     /// next tick may claim again (e.g. to retry a failed fetch).
+    /// A hold keeps a destination's Twitch session only when it keeps that
+    /// destination on air: live, and coverable by the screen. One that is
+    /// down, or a vertical one whose canvas isn't known yet (the screen
+    /// can't cover it), ends with OBS, so its session goes with it, and a
+    /// session fetch still in flight for it is discarded.
+    #[tokio::test]
+    async fn a_hold_keeps_the_session_only_of_destinations_it_keeps_on_air() {
+        let h = protected_harness(false);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl.on_tag(9, 0, &[0x17, 0, 0, 0, 0, 1], false, true);
+        let live = h.ctrl.destination_state("live");
+        let down = h.ctrl.destination_state("down");
+        let vertical = h.ctrl.destination_state("vertical");
+        vertical.egress_alive.store(true, Ordering::Relaxed);
+        vertical.egress_vertical.store(true, Ordering::Relaxed);
+        assert!(crate::crash_hold::covers(&h.ctrl, &live));
+        assert!(
+            !crate::crash_hold::covers(&h.ctrl, &vertical),
+            "no canvas to cover yet"
+        );
+        for dest in [&live, &down, &vertical] {
+            *dest.eb_override_url.lock() = Some(format!("rtmps://ivs/app/{}", dest.id));
+        }
+        let epochs = [&down, &vertical].map(|dest| dest.session_epoch());
+
+        h.ctrl.mark_ingest_dead();
+        assert!(h.ctrl.hold_active());
+        assert_eq!(
+            live.eb_override_url.lock().as_deref(),
+            Some("rtmps://ivs/app/live"),
+            "kept on air, so its session is kept"
+        );
+        for (dest, epoch) in [&down, &vertical].into_iter().zip(epochs) {
+            assert!(dest.eb_override_url.lock().is_none(), "{} ended", dest.id);
+            assert!(dest.session_epoch() > epoch, "{}: fetch discarded", dest.id);
+        }
+    }
+
     #[test]
     fn try_claim_vod_fetch_admits_one_claimant() {
         let s = DestinationState::new("main".into());
@@ -4738,7 +6410,7 @@ mod tests {
     /// A fresh publisher session must clear out all cached audio and multi-track
     /// video sequence headers left over from a previous stream. While those
     /// headers are required to survive mid-stream egress supervisor restarts
-    /// (tested via `eb_seq_headers_survive_egress_restart`), allowing them to
+    /// (tested via `every_track_config_leads_each_twitch_connection`), allowing them to
     /// leak into a subsequent session causes severe pipeline pollution. If a
     /// publisher reconnects without Enhanced Broadcasting, a failure to clear
     /// this state causes the egress engine to inject stale multi-track headers
@@ -5010,31 +6682,32 @@ mod tests {
     }
 
     /// A reconnect may bring a completely different OBS profile, so the
-    /// previous session's measurement must not leak into the new one.
+    /// previous session's measurements must not leak into the new one.
     #[test]
     fn reset_codec_state_clears_the_measurement() {
         let h = harness(0);
         feed_idrs(&h.ctrl, 0, 4_000, 4);
-        assert_eq!(h.ctrl.keyframe_interval_ms(), 4_000);
+        let header = crate::slate::test_sequence_header(64, 36);
+        h.ctrl.on_tag(9, 12_000, &header, false, true);
+        let before = h.ctrl.stream_params();
+        assert_eq!(before.keyframe_interval_ms, 4_000);
+        assert_eq!((before.width, before.height), (64, 36));
         h.ctrl.reset_codec_state();
-        assert_eq!(h.ctrl.keyframe_interval_ms(), 0);
-        assert_eq!(h.ctrl.stream_params().width, 0);
-        assert_eq!(h.ctrl.stream_params().height, 0);
+        let after = h.ctrl.stream_params();
+        assert_eq!(after.keyframe_interval_ms, 0);
+        assert_eq!((after.width, after.height), (0, 0));
     }
 
-    /// The packed dims atomic must round-trip a real resolution and never
-    /// bleed width into height or vice-versa.
+    /// OBS's sequence header decodes to the resolution the compatibility
+    /// check sees, width and height each in their own place.
     #[test]
-    fn stream_params_reports_packed_dimensions() {
+    fn stream_params_reports_the_resolution_obs_sends() {
         let h = harness(0);
-        // 0x11 = AVC keyframe; sps_dimensions decodes 1920x1080 from a real
-        // SPS, but the unit here only needs the packing path exercised via a
-        // known resolution, so drive it through the public snapshot instead.
-        h.ctrl
-            .video_dims
-            .store(((1920u64) << 32) | 1080, Ordering::Relaxed);
+        assert_eq!(h.ctrl.stream_params().width, 0, "nothing sent yet");
+        let header = crate::slate::test_sequence_header(64, 36);
+        h.ctrl.on_tag(9, 0, &header, false, true);
         let p = h.ctrl.stream_params();
-        assert_eq!((p.width, p.height), (1920, 1080));
+        assert_eq!((p.width, p.height), (64, 36));
     }
 
     /// Dead band stays at the tuned 1500 ms for a 2 s GOP (and while
@@ -5055,6 +6728,25 @@ mod tests {
         }
     }
 
+    /// Going delayed from live has to jump back even when the delay is no
+    /// longer than the re-cut dead band. Live sits a whole delay short of
+    /// it, which the dead band (hysteresis for a delay already in place)
+    /// used to read as close enough: 1 s against its 1.5 s floor, so the
+    /// dashboard said the delay was on while viewers stayed on live.
+    #[test]
+    fn a_one_second_delay_jumps_back_from_live() {
+        let h = harness(0);
+        h.ctrl.arm_delay(1_000);
+        feed_seconds(&h.ctrl, 0, 3, 30);
+        h.ctrl.activate_delay().expect("the buffer holds the delay");
+        let latest = h.ctrl.ring.latest_seq().expect("a populated ring");
+        let (_, live_edge) = h.ctrl.ring.find_by_seq(latest).unwrap();
+        assert!(
+            compute_delay_cut(&h.ctrl, &live_edge).is_some(),
+            "live is a whole second short of the delay"
+        );
+    }
+
     #[test]
     fn idr_search_tolerance_never_below_floor_and_scales_up() {
         assert_eq!(idr_search_tolerance_ms(0), 2_000);
@@ -5065,5 +6757,65 @@ mod tests {
             3_000,
             "6 s GOP needs 3 s reach"
         );
+    }
+
+    /// OBS hung without its connection closing (the OS keeps ACKing), and
+    /// the streamer restarts it: the new publisher takes the slot once the
+    /// old one has sent no video for the freeze threshold, instead of being
+    /// refused until the old socket dies. The old connection closing later
+    /// must not end the new session.
+    #[tokio::test]
+    async fn a_new_publisher_takes_over_from_one_that_stopped_sending_video() {
+        let h = harness(0);
+        let first = h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl
+            .on_tag(9, 0, &[0x17, 1, 0, 0, 0, 0, 0, 0, 1, 0x65], true, false);
+        assert!(
+            h.ctrl.begin_publish("k", "127.0.0.1").await.is_err(),
+            "a publisher that is sending keeps the slot"
+        );
+
+        // The process clock starts at 0: let it pass the freeze threshold,
+        // so "the last video frame" can sit that far back.
+        let freeze_ms = crate::crash_hold::FREEZE_AFTER.as_millis() as u64;
+        while process_now_ms() <= freeze_ms + 10 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        h.ctrl.last_video_tag_ms.store(1, Ordering::Relaxed);
+        let second = h
+            .ctrl
+            .begin_publish("k", "127.0.0.1")
+            .await
+            .expect("a publisher that stopped sending video hands over");
+        assert_ne!(first, second);
+
+        h.ctrl.end_publish(first);
+        assert!(
+            h.ctrl.ingest_alive(),
+            "the old connection closing is ignored"
+        );
+        h.ctrl.end_publish(second);
+        assert!(!h.ctrl.ingest_alive(), "the current one closing ends it");
+    }
+
+    /// A peer retrying a refused publish in a loop logs one line per 10 s,
+    /// not one per attempt, so the bounded log keeps everything else.
+    #[tokio::test]
+    async fn refused_publishes_are_logged_at_most_once_per_ten_seconds() {
+        let h = harness(0);
+        h.ctrl.begin_publish("k", "127.0.0.1").await.unwrap();
+        h.ctrl
+            .on_tag(9, 0, &[0x17, 1, 0, 0, 0, 0, 0, 0, 1, 0x65], true, false);
+        for _ in 0..50 {
+            let _ = h.ctrl.begin_publish("k", "127.0.0.1").await;
+        }
+        let refusals = h
+            .ctrl
+            .logs
+            .lock()
+            .iter()
+            .filter(|line| line.contains("slot in use"))
+            .count();
+        assert_eq!(refusals, 1);
     }
 }

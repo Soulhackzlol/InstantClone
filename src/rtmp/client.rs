@@ -6,7 +6,8 @@
 //! URL form: rtmp://host[:port]/app/stream_key (default port 1935), or
 //! rtmps://host[:port]/app/stream_key for TLS (default port 443). Kick's
 //! ingest is RTMPS-only, so the egress socket transparently upgrades to
-//! TLS when the URL scheme is `rtmps://` - see `EgressStream`.
+//! TLS when the URL scheme is `rtmps://` - see `EgressStream`. An IPv6
+//! host is written in brackets: rtmp://[::1]:1935/app/stream_key.
 
 use crate::rtmp::amf0::{self, Amf0};
 use crate::rtmp::chunk::{ChunkReader, ChunkWriter, Message};
@@ -47,24 +48,25 @@ impl EgressUrl {
         let slash = rest
             .find('/')
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing app path"))?;
-        let host_part = &rest[..slash];
+        let (host, port) = split_host_port(&rest[..slash], default_port)?;
         let path = &rest[slash + 1..];
-        let (host, port) = match host_part.find(':') {
-            Some(c) => (
-                host_part[..c].to_string(),
-                host_part[c + 1..]
-                    .parse()
-                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad port"))?,
-            ),
-            None => (host_part.to_string(), default_port),
-        };
-        let last_slash = path
-            .rfind('/')
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing stream key"))?;
+        let missing_key = || io::Error::new(io::ErrorKind::InvalidInput, "missing stream key");
+        let last_slash = path.rfind('/').ok_or_else(missing_key)?;
         let app = path[..last_slash].to_string();
         let stream_key = path[last_slash + 1..].to_string();
+        // A trailing slash leaves nothing after it. Publishing with "" only
+        // earns a platform auth error that never says the key was missing.
+        if stream_key.is_empty() {
+            return Err(missing_key());
+        }
         let scheme = if tls { "rtmps" } else { "rtmp" };
-        let tc_url = format!("{}://{}:{}/{}", scheme, host, port, app);
+        // tcUrl is a URL, so an IPv6 host goes back inside its brackets.
+        let url_host = if host.contains(':') {
+            format!("[{host}]")
+        } else {
+            host.clone()
+        };
+        let tc_url = format!("{}://{}:{}/{}", scheme, url_host, port, app);
         Ok(Self {
             host,
             port,
@@ -74,6 +76,35 @@ impl EgressUrl {
             tls,
         })
     }
+}
+
+/// Split `host[:port]` or `[ipv6]:port` into the host to dial and the port.
+/// An IPv6 literal has colons of its own, so it must be bracketed and its
+/// port can only follow the `]`; splitting on the first ':' tore it apart.
+fn split_host_port(host_part: &str, default_port: u16) -> io::Result<(String, u16)> {
+    let invalid = |msg: &str| io::Error::new(io::ErrorKind::InvalidInput, msg.to_string());
+    let (host, port) = match host_part.strip_prefix('[') {
+        Some(bracketed) => {
+            let (host, after) = bracketed
+                .split_once(']')
+                .ok_or_else(|| invalid("unclosed [ in host"))?;
+            if after.is_empty() {
+                (host, None)
+            } else {
+                let port = after.strip_prefix(':').ok_or_else(|| invalid("bad port"))?;
+                (host, Some(port))
+            }
+        }
+        None => match host_part.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (host_part, None),
+        },
+    };
+    let port = match port {
+        Some(p) => p.parse().map_err(|_| invalid("bad port"))?,
+        None => default_port,
+    };
+    Ok((host.to_string(), port))
 }
 
 /// Egress socket that is either a plain TCP stream or a TLS stream over
@@ -263,7 +294,7 @@ impl EgressClient {
                 FOURCC_LIST.join(",")
             ),
         );
-        let connect_resp = await_command_status(&mut reader, "_result").await?;
+        let connect_resp = await_command_status(&mut reader, "_result", Some(1.0)).await?;
         crate::trace::log(
             "AMF_IN",
             &format!(
@@ -294,7 +325,7 @@ impl EgressClient {
         // --- createStream ---
         send_cmd(&mut writer, "createStream", 4.0, &[]).await?;
         crate::trace::log("AMF_OUT", "cmd=createStream");
-        let create_resp = await_command_status(&mut reader, "_result").await?;
+        let create_resp = await_command_status(&mut reader, "_result", Some(4.0)).await?;
         let stream_id = create_resp.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as u32;
         crate::trace::log(
             "AMF_IN",
@@ -311,7 +342,7 @@ impl EgressClient {
         writer.write_message(4, 0, 20, stream_id, &buf).await?;
         writer.flush().await?;
         crate::trace::log("AMF_OUT", "cmd=publish key_redacted=true type=live");
-        let publish_resp = await_command_status(&mut reader, "onStatus").await?;
+        let publish_resp = await_command_status(&mut reader, "onStatus", None).await?;
         crate::trace::log(
             "AMF_IN",
             &format!(
@@ -390,7 +421,7 @@ impl EgressClient {
             stream_id: self.stream_id,
             ping_rx,
             ack_rx,
-            _drain_abort: drain.abort_handle(),
+            drain,
         }
     }
 }
@@ -408,14 +439,17 @@ pub struct EgressSink {
     /// see `spawn_reader_drain`. Drained by `drain_pings` on every
     /// pump tick.
     ack_rx: tokio::sync::mpsc::UnboundedReceiver<u32>,
-    // Aborts the paired drain task when the sink is dropped. Held only
-    // for its Drop side-effect; never read.
-    _drain_abort: tokio::task::AbortHandle,
+    /// The paired drain task: aborted when the sink is dropped, and
+    /// awaited by `send_delete_stream` to close the connection cleanly.
+    drain: tokio::task::JoinHandle<()>,
 }
+
+/// How long a goodbye waits for the platform to read it and close.
+const GOODBYE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl Drop for EgressSink {
     fn drop(&mut self) {
-        self._drain_abort.abort();
+        self.drain.abort();
     }
 }
 
@@ -518,7 +552,20 @@ impl EgressSink {
         amf0::enc_null(&mut buf);
         amf0::enc_number(&mut buf, self.stream_id as f64);
         self.writer.write_message(3, 0, 20, 0, &buf).await?;
-        self.writer.flush().await
+        self.writer.flush().await?;
+        // Close cleanly rather than just dropping the socket. The platform
+        // answers FCUnpublish, and closing with that answer unread makes
+        // the OS reset the connection, which can discard the deleteStream
+        // the platform hasn't read yet: it then sees a dropped stream, not
+        // a finished one. So send FIN, keep draining its replies, and let
+        // it close first (bounded, in case it never does).
+        let _ = self.writer.shutdown().await;
+        // A finished task can't be awaited again (it would panic, and
+        // panics abort the process), so only wait while it's running.
+        if !self.drain.is_finished() {
+            let _ = tokio::time::timeout(GOODBYE_WAIT, &mut self.drain).await;
+        }
+        Ok(())
     }
 }
 
@@ -555,9 +602,15 @@ async fn send_cmd<W: tokio::io::AsyncWrite + Unpin>(
     writer.flush().await
 }
 
+/// Wait for `expect`. With `txn`, only the `_result` / `_error` answering
+/// that transaction counts: servers also answer releaseStream / FCPublish,
+/// sometimes with `_error` (no such stream yet), and taking that reply for
+/// createStream's - or failing on it - broke the connect on those servers.
+/// onStatus carries no transaction (0), so it is matched by name alone.
 async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
     reader: &mut ChunkReader<R>,
     expect: &str,
+    txn: Option<f64>,
 ) -> io::Result<Vec<Amf0>> {
     // Hard cap so a wedged Twitch / YouTube edge that goes silent
     // mid-handshake can't hang the egress task forever. 15 s is well
@@ -575,11 +628,13 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
             }
             let vals = amf0::decode_all(&msg.payload)?;
             let cmd = vals.first().and_then(|v| v.as_str());
+            let answers_us =
+                txn.is_none_or(|txn| vals.get(1).and_then(|v| v.as_f64()) == Some(txn));
 
             // Both `_error` and `onStatus { level: "error" }` indicate failure.
             // Surface them as io::Errors so the supervisor can log a useful
             // reason instead of silently looping forever waiting for `_result`.
-            if cmd == Some("_error") {
+            if cmd == Some("_error") && answers_us {
                 let desc = vals
                     .iter()
                     .find_map(|v| v.as_object())
@@ -602,7 +657,7 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
                     }
                 }
             }
-            if cmd == Some(expect) {
+            if cmd == Some(expect) && answers_us {
                 return Ok(vals);
             }
             // Anything else (Window Ack, onBWDone, onFCPublish, ping …) is
@@ -667,5 +722,191 @@ mod tests {
     fn parse_rejects_unknown_scheme() {
         assert!(EgressUrl::parse("http://host/app/k").is_err());
         assert!(EgressUrl::parse("host/app/k").is_err());
+    }
+
+    #[test]
+    fn parse_accepts_bracketed_ipv6_hosts() {
+        // An IPv6 literal has to be bracketed in a URL; splitting host and
+        // port on the first ':' cut it apart and failed on "bad port".
+        let u = EgressUrl::parse("rtmp://[::1]:1936/app/k").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("::1", 1936));
+        // The host is dialled bare, but tcUrl is a URL, so it keeps brackets.
+        assert_eq!(u.tc_url, "rtmp://[::1]:1936/app");
+
+        let u = EgressUrl::parse("rtmps://[2001:db8::7]/app/k").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("2001:db8::7", 443));
+        assert_eq!(u.tc_url, "rtmps://[2001:db8::7]:443/app");
+
+        for bad in [
+            "rtmp://[::1/app/k",     // no closing bracket
+            "rtmp://[::1]x/app/k",   // junk after it
+            "rtmp://[::1]:/app/k",   // empty port
+            "rtmp://::1:1935/app/k", // unbracketed
+        ] {
+            assert!(EgressUrl::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn parse_refuses_an_empty_stream_key() {
+        // A trailing slash left the key empty, and we published with "" -
+        // the platform then refuses with an auth error that doesn't say the
+        // key was missing. Saying so up front is the useful error.
+        let err = EgressUrl::parse("rtmp://live.twitch.tv/app/")
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("stream key"), "{err}");
+        assert!(EgressUrl::parse("rtmp://live.twitch.tv/app").is_err());
+    }
+
+    #[test]
+    fn parse_keeps_nested_app_paths_and_rejects_bad_ports() {
+        // Everything between the host and the last '/' is the app, which is
+        // how Wowza-style `app/instance` ingests are addressed.
+        let u = EgressUrl::parse("rtmp://host:1935/app/inst/key?x=1").unwrap();
+        assert_eq!(u.app, "app/inst");
+        assert_eq!(
+            u.stream_key, "key?x=1",
+            "query rides on the key, as OBS sends it"
+        );
+        assert_eq!(u.tc_url, "rtmp://host:1935/app/inst");
+
+        for bad in [
+            "rtmp://host:abc/app/k",
+            "rtmp://host:70000/app/k",
+            "rtmp://host:/app/k",
+        ] {
+            assert!(EgressUrl::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// Wire bytes of AMF0 command messages as a server would send them.
+    async fn server_replies(commands: &[(u8, BytesMut)]) -> Vec<u8> {
+        let mut wire: Vec<u8> = Vec::new();
+        let mut w = ChunkWriter::new(&mut wire);
+        for (type_id, body) in commands {
+            w.write_message(3, 0, *type_id, 0, body).await.unwrap();
+        }
+        wire
+    }
+
+    fn command(name: &str, info: Option<Vec<(&str, &str)>>) -> BytesMut {
+        let mut buf = BytesMut::new();
+        amf0::enc_string(&mut buf, name);
+        amf0::enc_number(&mut buf, 1.0);
+        amf0::enc_null(&mut buf);
+        if let Some(pairs) = info {
+            let values: Vec<Amf0> = pairs
+                .iter()
+                .map(|(_, v)| Amf0::String(v.to_string()))
+                .collect();
+            let fields: Vec<(&str, &Amf0)> = pairs
+                .iter()
+                .zip(&values)
+                .map(|((k, _), v)| (*k, v))
+                .collect();
+            amf0::enc_object(&mut buf, &fields);
+        }
+        buf
+    }
+
+    async fn await_on(wire: Vec<u8>, expect: &str) -> io::Result<Vec<Amf0>> {
+        let mut reader = ChunkReader::new(std::io::Cursor::new(wire));
+        await_command_status(&mut reader, expect, None).await
+    }
+
+    #[tokio::test]
+    async fn await_command_status_skips_unrelated_traffic_until_the_answer() {
+        // Servers interleave onBWDone, onFCPublish and control messages
+        // with the reply we wait for; none of those is the answer.
+        let mut info_with_date = command("_result", None);
+        info_with_date.extend_from_slice(&[0x0B, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let wire = server_replies(&[
+            (18, command("onMetaData", None)),
+            (20, command("onBWDone", None)),
+            (
+                20,
+                command(
+                    "onFCPublish",
+                    Some(vec![("code", "NetStream.Publish.Start")]),
+                ),
+            ),
+            (20, info_with_date),
+        ])
+        .await;
+        let vals = await_on(wire, "_result").await.expect("the _result");
+        assert_eq!(vals[0].as_str(), Some("_result"));
+        assert!(
+            matches!(vals[3], Amf0::Date(_)),
+            "a Date in a reply is fine"
+        );
+    }
+
+    #[tokio::test]
+    async fn await_command_status_turns_server_errors_into_errors() {
+        let wire = server_replies(&[(
+            20,
+            command(
+                "_error",
+                Some(vec![("level", "error"), ("description", "bad app")]),
+            ),
+        )])
+        .await;
+        let err = await_on(wire, "_result").await.unwrap_err();
+        assert!(err.to_string().contains("bad app"), "{err}");
+
+        let wire = server_replies(&[(
+            20,
+            command(
+                "onStatus",
+                Some(vec![
+                    ("level", "error"),
+                    ("code", "NetStream.Publish.BadName"),
+                    ("description", "in use"),
+                ]),
+            ),
+        )])
+        .await;
+        let err = await_on(wire, "onStatus").await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("NetStream.Publish.BadName: in use"),
+            "{err}"
+        );
+
+        // A status-level onStatus is the answer, not a failure.
+        let wire =
+            server_replies(&[(20, command("onStatus", Some(vec![("level", "status")])))]).await;
+        assert!(await_on(wire, "onStatus").await.is_ok());
+
+        // The connection closing before any answer is an error too.
+        assert!(await_on(Vec::new(), "_result").await.is_err());
+    }
+
+    /// Some servers answer releaseStream / FCPublish, even with `_error`
+    /// (no such stream yet). Only the reply to the awaited transaction
+    /// counts: createStream's `_result` carries the stream id, and an
+    /// `_error` for an earlier command doesn't fail the connect.
+    #[tokio::test]
+    async fn replies_are_matched_by_transaction() {
+        let reply = |name: &str, txn: f64, id: f64| {
+            let mut buf = BytesMut::new();
+            amf0::enc_string(&mut buf, name);
+            amf0::enc_number(&mut buf, txn);
+            amf0::enc_null(&mut buf);
+            amf0::enc_number(&mut buf, id);
+            buf
+        };
+        let wire = server_replies(&[
+            (20, reply("_error", 2.0, 0.0)),
+            (20, reply("_result", 3.0, 0.0)),
+            (20, reply("_result", 4.0, 7.0)),
+        ])
+        .await;
+        let mut reader = ChunkReader::new(std::io::Cursor::new(wire));
+        let vals = await_command_status(&mut reader, "_result", Some(4.0))
+            .await
+            .expect("createStream's own reply");
+        assert_eq!(vals.get(3).and_then(|v| v.as_f64()), Some(7.0));
     }
 }

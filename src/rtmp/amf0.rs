@@ -20,6 +20,10 @@
 //!                       to read the list's contents, but the in-tree
 //!                       sink and any cross-talk between proxies has
 //!                       to be able to step over it.
+//!   0x0B date       - 8-byte f64 ms since epoch + 2-byte time zone (unused)
+//!   0x0C long string - 4-byte length BE + UTF-8 bytes, for text over 64 KiB.
+//!                      Servers may use either in a reply; one unknown
+//!                      marker fails the whole command, so both decode.
 
 use bytes::{BufMut, BytesMut};
 use std::collections::HashMap;
@@ -35,6 +39,9 @@ pub enum Amf0 {
     Undefined,
     EcmaArray(HashMap<String, Amf0>),
     StrictArray(Vec<Amf0>),
+    /// Milliseconds since the Unix epoch. The wire also carries a 2-byte
+    /// time zone that the spec reserves (always 0), so it is not kept.
+    Date(f64),
 }
 
 impl Amf0 {
@@ -63,10 +70,17 @@ impl Amf0 {
 /// Maximum nesting depth we'll honour when decoding AMF0. Real RTMP
 /// command/data payloads from OBS, ffmpeg, Twitch etc. never go more
 /// than 3-4 levels deep. A malicious peer sending `0x03 0x03 0x03 …` ad
-/// infinitum would otherwise blow the stack and crash the ingest task
-/// (or, worse with `ingest_bind_all=true`, the whole process from a
-/// LAN attacker).
+/// infinitum would otherwise overflow the stack, and a stack overflow
+/// aborts the whole process, not just the ingest task - reachable from
+/// the LAN with `ingest_bind_all=true`.
 const AMF0_MAX_DEPTH: u32 = 16;
+
+/// Most items a strict array reserves room for up front. Real arrays are
+/// a handful of items; a longer one still decodes, the Vec just grows as
+/// items arrive. Reserving the declared count (even capped at the bytes
+/// left) let one 16 MB command reserve ~56 bytes per input byte - about
+/// 1 GB - before any stream key is checked.
+const AMF0_MAX_PREALLOC: usize = 64;
 
 pub fn decode_all(mut data: &[u8]) -> io::Result<Vec<Amf0>> {
     let mut out = Vec::new();
@@ -119,13 +133,12 @@ fn decode_one(data: &[u8], depth: u32) -> io::Result<(Amf0, &[u8])> {
         0x0A => {
             need(rest, 4)?;
             let count = u32::from_be_bytes(rest[..4].try_into().unwrap()) as usize;
-            // Cap the declared count at the number of bytes remaining; a
-            // malicious peer could otherwise advertise a huge count and
-            // walk us into an OOM by pushing into a Vec we pre-grew.
-            // Each AMF0 value is at least 1 byte (the marker), so the
-            // remaining buffer length is a strict upper bound.
+            // Never trust the declared count for the reservation: a peer
+            // could advertise a huge one and walk us into an OOM. Each
+            // AMF0 value is at least 1 byte, so the bytes left bound the
+            // items, and `AMF0_MAX_PREALLOC` bounds the up-front memory.
             let mut data = &rest[4..];
-            let cap = count.min(data.len());
+            let cap = count.min(data.len()).min(AMF0_MAX_PREALLOC);
             let mut items = Vec::with_capacity(cap);
             for _ in 0..count {
                 let (v, next) = decode_one(data, depth + 1)?;
@@ -133,6 +146,22 @@ fn decode_one(data: &[u8], depth: u32) -> io::Result<(Amf0, &[u8])> {
                 data = next;
             }
             Ok((Amf0::StrictArray(items), data))
+        }
+        0x0B => {
+            // Date: f64 ms since the epoch, then a reserved 2-byte time zone.
+            need(rest, 10)?;
+            let ms = f64::from_be_bytes(rest[..8].try_into().unwrap());
+            Ok((Amf0::Date(ms), &rest[10..]))
+        }
+        0x0C => {
+            // Long string: like 0x02 but with a 4-byte length, for text
+            // over 64 KiB. Surfaces as a plain String - callers never care
+            // which length prefix it came with.
+            need(rest, 4)?;
+            let len = u32::from_be_bytes(rest[..4].try_into().unwrap()) as usize;
+            let body = &rest[4..];
+            need(body, len)?;
+            Ok((Amf0::String(utf8(&body[..len])?), &body[len..]))
         }
         m => Err(io::Error::new(
             ErrorKind::InvalidData,
@@ -145,10 +174,13 @@ fn decode_string(data: &[u8]) -> io::Result<(String, &[u8])> {
     need(data, 2)?;
     let len = u16::from_be_bytes([data[0], data[1]]) as usize;
     need(&data[2..], len)?;
-    let s = std::str::from_utf8(&data[2..2 + len])
-        .map_err(|_| io::Error::new(ErrorKind::InvalidData, "amf0: utf8"))?
-        .to_owned();
-    Ok((s, &data[2 + len..]))
+    Ok((utf8(&data[2..2 + len])?, &data[2 + len..]))
+}
+
+fn utf8(bytes: &[u8]) -> io::Result<String> {
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|_| io::Error::new(ErrorKind::InvalidData, "amf0: utf8"))
 }
 
 fn decode_object_body(mut data: &[u8], depth: u32) -> io::Result<(HashMap<String, Amf0>, &[u8])> {
@@ -215,6 +247,11 @@ pub fn enc_value(out: &mut BytesMut, v: &Amf0) {
         Amf0::Object(m) | Amf0::EcmaArray(m) => {
             let pairs: Vec<(&str, &Amf0)> = m.iter().map(|(k, v)| (k.as_str(), v)).collect();
             enc_object(out, &pairs);
+        }
+        Amf0::Date(ms) => {
+            out.put_u8(0x0B);
+            out.put_f64(*ms);
+            out.put_i16(0); // time zone: reserved, always 0
         }
         Amf0::StrictArray(items) => {
             out.put_u8(0x0A);
@@ -392,21 +429,234 @@ mod tests {
     }
 
     #[test]
-    fn deeply_nested_object_rejected() {
-        // Hand-craft a deeply nested object payload - each 0x03 starts a
-        // new object body. AMF0_MAX_DEPTH=16, so a 17-deep chain trips the
-        // guard. The empty-key + 0x09 end markers are appended in reverse
-        // to keep the payload syntactically closeable (the decoder bails
-        // on the depth check before getting that far).
-        // 17 opening Object markers, then 17 (empty-key + end) trailers.
-        let mut payload: Vec<u8> = vec![0x03; 17];
-        for _ in 0..17 {
-            payload.extend_from_slice(&[0x00, 0x00, 0x09]);
-        }
-        let r = decode_all(&payload);
+    fn date_and_long_string_decode_instead_of_failing_the_command() {
+        // Servers are free to put a Date (0x0B) or a long string (0x0C) in
+        // a `_result` / `onStatus`, and one unknown marker fails decode_all
+        // for the whole command: an egress connect then dies on a reply it
+        // did not even need, and an ingest connection is dropped.
+        let mut buf = vec![0x0B];
+        buf.extend_from_slice(&1_700_000_000_000.0f64.to_be_bytes());
+        buf.extend_from_slice(&[0x00, 0x00]); // time zone, reserved
+        buf.push(0x0C);
+        buf.extend_from_slice(&5u32.to_be_bytes());
+        buf.extend_from_slice(b"hello");
+        buf.extend_from_slice(&[0x05]); // something after both
+        let decoded = decode_all(&buf).unwrap();
+        assert_eq!(decoded.len(), 3);
+        assert!(matches!(decoded[0], Amf0::Date(ms) if ms == 1_700_000_000_000.0));
+        assert_eq!(decoded[1].as_str(), Some("hello"));
+        assert!(matches!(decoded[2], Amf0::Null));
+
+        // A long string longer than 64 KiB, which is the point of 0x0C.
+        let big = "x".repeat(70_000);
+        let mut buf = vec![0x0C];
+        buf.extend_from_slice(&(big.len() as u32).to_be_bytes());
+        buf.extend_from_slice(big.as_bytes());
+        assert_eq!(decode_all(&buf).unwrap()[0].as_str(), Some(big.as_str()));
+
+        // And they re-encode to the same bytes a Date is sent as.
+        let mut out = BytesMut::new();
+        enc_value(&mut out, &Amf0::Date(2.0));
+        let mut expected = vec![0x0B];
+        expected.extend_from_slice(&2.0f64.to_be_bytes());
+        expected.extend_from_slice(&[0, 0]);
+        assert_eq!(&out[..], &expected[..]);
+    }
+
+    #[test]
+    fn truncated_date_and_long_string_are_errors() {
+        // Short on the time zone, short on the length, and a length that
+        // claims more than is there: never read past the buffer.
+        assert!(decode_all(&[0x0B, 0, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
+        assert!(decode_all(&[0x0C, 0, 0, 0]).is_err());
+        assert!(decode_all(&[0x0C, 0xFF, 0xFF, 0xFF, 0xFF, b'a']).is_err());
         assert!(
-            r.is_err(),
-            "deeply nested objects must be rejected to prevent stack-blow"
+            decode_all(&[0x0C, 0, 0, 0, 2, 0xC3, 0x28]).is_err(),
+            "bad UTF-8"
         );
+    }
+
+    /// `levels` containers nested inside each other, each holding exactly
+    /// one child, built with the real wire syntax for each container type.
+    fn nested(levels: usize, marker: u8) -> Vec<u8> {
+        let (open, empty, close): (&[u8], &[u8], &[u8]) = match marker {
+            0x03 => (
+                &[0x03, 0x00, 0x01, b'k'],
+                &[0x03, 0x00, 0x00, 0x09],
+                &[0x00, 0x00, 0x09],
+            ),
+            0x08 => (
+                &[0x08, 0, 0, 0, 1, 0x00, 0x01, b'k'],
+                &[0x08, 0, 0, 0, 0, 0x00, 0x00, 0x09],
+                &[0x00, 0x00, 0x09],
+            ),
+            _ => (&[0x0A, 0, 0, 0, 1], &[0x0A, 0, 0, 0, 0], &[]),
+        };
+        let mut out = open.repeat(levels - 1);
+        out.extend_from_slice(empty);
+        out.extend(close.repeat(levels - 1));
+        out
+    }
+
+    #[test]
+    fn nesting_past_the_depth_limit_is_rejected_for_every_container() {
+        // A peer can nest containers without bound and recurse the decoder
+        // off the stack. The guard allows AMF0_MAX_DEPTH + 1 levels (the
+        // top-level value is depth 0) and refuses the next one with
+        // InvalidData - not UnexpectedEof, which is what malformed bytes
+        // produce, so this fails if the guard is removed.
+        let max_levels = AMF0_MAX_DEPTH as usize + 1;
+        for marker in [0x03, 0x08, 0x0A] {
+            assert!(
+                decode_all(&nested(max_levels, marker)).is_ok(),
+                "marker {marker:#x}: {max_levels} levels are legal"
+            );
+            let err = decode_all(&nested(max_levels + 1, marker)).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::InvalidData, "marker {marker:#x}");
+        }
+        // Mixed containers count toward the same limit.
+        let mut mixed = nested(max_levels, 0x03);
+        mixed.splice(0..0, [0x0A, 0, 0, 0, 1]);
+        let err = decode_all(&mixed).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_strict_array_claiming_four_billion_items_errors_quickly() {
+        // The count is capped by the bytes left before anything is
+        // reserved, so this is a short error, not a 64 GB allocation.
+        let mut buf = vec![0x0A, 0xFF, 0xFF, 0xFF, 0xFF];
+        buf.extend_from_slice(&[0x05, 0x05, 0x05]);
+        assert!(decode_all(&buf).is_err());
+    }
+
+    #[test]
+    fn edge_values_decode_exactly() {
+        let mut nan = vec![0x00];
+        nan.extend_from_slice(&f64::NAN.to_be_bytes());
+        assert!(decode_all(&nan).unwrap()[0].as_f64().unwrap().is_nan());
+        assert_eq!(
+            decode_all(&[0x02, 0x00, 0x00]).unwrap()[0].as_str(),
+            Some("")
+        );
+        assert!(matches!(decode_all(&[0x06]).unwrap()[0], Amf0::Undefined));
+        // An object whose end marker never comes is an error, whether the
+        // bytes stop after a value or after the empty key.
+        assert!(decode_all(&[0x03, 0x00, 0x01, b'a', 0x05]).is_err());
+        assert!(decode_all(&[0x03, 0x00, 0x00]).is_err());
+        // An empty key followed by anything but 0x09 is a value, not the end.
+        assert!(decode_all(&[0x03, 0x00, 0x00, 0x05, 0x00, 0x00, 0x09]).is_ok());
+    }
+
+    #[test]
+    fn enc_object_writes_known_bytes() {
+        // The shape every _result / onStatus we send is built from.
+        let mut out = BytesMut::new();
+        enc_object(
+            &mut out,
+            &[("a", &Amf0::Number(1.0)), ("ok", &Amf0::Boolean(true))],
+        );
+        let mut expected = vec![0x03, 0x00, 0x01, b'a', 0x00];
+        expected.extend_from_slice(&1.0f64.to_be_bytes());
+        expected.extend_from_slice(&[0x00, 0x02, b'o', b'k', 0x01, 0x01]);
+        expected.extend_from_slice(&[0x00, 0x00, 0x09]);
+        assert_eq!(&out[..], &expected[..]);
+    }
+
+    /// Structural equality. Amf0 has no PartialEq (maps hold f64s), and
+    /// the tests only need it here.
+    fn same(a: &Amf0, b: &Amf0) -> bool {
+        match (a, b) {
+            (Amf0::Number(x), Amf0::Number(y)) | (Amf0::Date(x), Amf0::Date(y)) => {
+                x.to_bits() == y.to_bits()
+            }
+            (Amf0::Boolean(x), Amf0::Boolean(y)) => x == y,
+            (Amf0::String(x), Amf0::String(y)) => x == y,
+            (Amf0::Null, Amf0::Null) | (Amf0::Undefined, Amf0::Undefined) => true,
+            (Amf0::Object(x), Amf0::Object(y)) | (Amf0::EcmaArray(x), Amf0::EcmaArray(y)) => {
+                x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w)))
+            }
+            (Amf0::StrictArray(x), Amf0::StrictArray(y)) => {
+                x.len() == y.len() && x.iter().zip(y).all(|(v, w)| same(v, w))
+            }
+            _ => false,
+        }
+    }
+
+    /// A connect command as an Enhanced-RTMP publisher sends it, plus the
+    /// containers and markers servers use in replies. Returns the bytes
+    /// and the offset where each top-level value ends.
+    fn rich_connect_payload() -> (Vec<u8>, Vec<usize>) {
+        let mut buf = BytesMut::new();
+        let mut ends = Vec::new();
+        enc_string(&mut buf, "connect");
+        ends.push(buf.len());
+        enc_number(&mut buf, 1.0);
+        ends.push(buf.len());
+        enc_object_begin(&mut buf);
+        enc_object_key(&mut buf, "app");
+        enc_string(&mut buf, "live");
+        enc_object_key(&mut buf, "fpad");
+        enc_value(&mut buf, &Amf0::Boolean(false));
+        enc_object_key(&mut buf, "fourCcList");
+        enc_strict_array_str(&mut buf, &["avc1", "hvc1"]);
+        enc_object_key(&mut buf, "ecma");
+        buf.extend_from_slice(&[0x08, 0, 0, 0, 2, 0x00, 0x01, b'u', 0x06]);
+        buf.extend_from_slice(&[0x00, 0x01, b'd', 0x0B]);
+        buf.extend_from_slice(&3.0f64.to_be_bytes());
+        buf.extend_from_slice(&[0, 0, 0x00, 0x00, 0x09]);
+        enc_object_key(&mut buf, "long");
+        buf.extend_from_slice(&[0x0C, 0, 0, 0, 3, b'a', b'b', b'c']);
+        enc_object_end(&mut buf);
+        ends.push(buf.len());
+        enc_null(&mut buf);
+        ends.push(buf.len());
+        (buf.to_vec(), ends)
+    }
+
+    #[test]
+    fn every_truncation_of_a_connect_payload_is_an_error_or_a_clean_prefix() {
+        // Commands arrive as whole messages, but a peer controls their
+        // length. Cut anywhere inside a value, decoding must fail; cut
+        // exactly between top-level values, it must return exactly the
+        // values before the cut. Never a panic, never a half-built value.
+        let (payload, ends) = rich_connect_payload();
+        let full = decode_all(&payload).expect("the full payload decodes");
+        assert_eq!(full.len(), 4);
+        for cut in 0..payload.len() {
+            match decode_all(&payload[..cut]) {
+                Ok(values) => {
+                    let boundary = cut == 0 || ends.contains(&cut);
+                    assert!(boundary, "a cut at {cut} decoded mid-value");
+                    assert!(values.iter().zip(&full).all(|(v, w)| same(v, w)));
+                }
+                Err(e) => assert!(!ends.contains(&cut), "a cut at {cut} failed: {e}"),
+            }
+        }
+    }
+
+    #[test]
+    fn random_marker_soup_never_panics() {
+        // Deterministic LCG, fixed seed. Markers are drawn from the full
+        // range the decoder knows (plus a few it doesn't) so each branch
+        // sees garbage lengths and counts.
+        let mut state: u64 = 0xA3F0_2026;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as u8
+        };
+        for _ in 0..20_000 {
+            let len = next() % 24;
+            let blob: Vec<u8> = (0..len)
+                .map(|_| match next() % 4 {
+                    0 => next() % 0x0E,
+                    1 => 0x00,
+                    _ => next(),
+                })
+                .collect();
+            let _ = decode_all(&blob);
+        }
     }
 }

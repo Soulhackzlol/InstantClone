@@ -24,13 +24,13 @@
 //!   * macOS: not handled yet (no candidates).
 
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 /// Candidate OBS config directories for this platform, in priority order.
 /// Both `services.json` and the log folder are resolved relative to these,
 /// so one list drives every OBS-path lookup.
-fn obs_config_dirs() -> Vec<PathBuf> {
+pub(crate) fn obs_config_dirs() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
         ["APPDATA", "LOCALAPPDATA"]
@@ -283,26 +283,38 @@ pub fn register(web_port: u16, ingest_port: u16) -> io::Result<()> {
         )
     })?;
     let original = fs::read_to_string(&path)?;
-    looks_like_services_json(&original)?;
-    // If our entry is already there, strip it first so a port-changed
-    // re-register actually refreshes the URL. remove_entry's parse is
-    // forgiving - falling back to the raw file keeps register() a
-    // no-fail path when the entry isn't structurally cleanly bounded.
-    let base = if entry_exists(&original) {
-        remove_entry(&original).unwrap_or_else(|| original.clone())
-    } else {
-        original.clone()
-    };
-    let patched = insert_entry(&base, &entry_json(web_port, ingest_port)).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "couldn't locate the `\"services\":[` array in services.json - file shape unexpected",
-        )
-    })?;
+    let patched = with_entry_registered(&original, web_port, ingest_port)?;
     let bak = path.with_extension("json.instantclone.bak");
     write_or_friendly(&bak, &original)?;
     write_or_friendly(&path, &patched)?;
     Ok(())
+}
+
+/// `register`'s whole edit of services.json, without the disk. Pure so the
+/// properties that matter (idempotent, everything else byte-for-byte
+/// untouched, never a second entry) are unit-testable.
+fn with_entry_registered(original: &str, web_port: u16, ingest_port: u16) -> io::Result<String> {
+    looks_like_services_json(original)?;
+    // If our entry is already there, strip it first so a port-changed
+    // re-register actually refreshes the URL. When it cannot be cut out
+    // cleanly, refuse: inserting anyway would leave OBS two entries.
+    let base = if entry_exists(original) {
+        remove_entry(original).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "couldn't cleanly replace the existing InstantClone entry in services.json - \
+                 restore it from .instantclone.bak or let OBS regenerate it",
+            )
+        })?
+    } else {
+        original.to_string()
+    };
+    insert_entry(&base, &entry_json(web_port, ingest_port)).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "couldn't locate the `\"services\":[` array in services.json - file shape unexpected",
+        )
+    })
 }
 
 /// Remove our entry from services.json. Returns Ok(()) even when not
@@ -394,8 +406,13 @@ fn insert_entry(file: &str, entry: &str) -> Option<String> {
     let absolute_bracket = key_pos + key.len() + bracket_offset;
     let (head, tail) = file.split_at(absolute_bracket + 1);
     // Insert our entry followed by a comma so the existing first
-    // service stays valid JSON.
-    Some(format!("{head}\n{entry},{tail}"))
+    // service stays valid JSON; an empty list gets no comma.
+    let separator = if tail.trim_start().starts_with(']') {
+        ""
+    } else {
+        ","
+    };
+    Some(format!("{head}\n{entry}{separator}{tail}"))
 }
 
 /// Byte range of our service object in `file`, braces included.
@@ -469,6 +486,12 @@ fn remove_entry(file: &str) -> Option<String> {
     }
     if probe < bytes.len() && bytes[probe] == b',' {
         right = probe + 1;
+        // Take the whitespace before the entry too. The whitespace after
+        // the comma stays for the next element, so leaving this run as
+        // well would add a blank line on every re-register.
+        while left > 0 && bytes[left - 1].is_ascii_whitespace() {
+            left -= 1;
+        }
     } else {
         // No trailing comma - try eating a leading one instead so the
         // remaining array doesn't end with a stray `,]`.
@@ -705,7 +728,10 @@ fn ini_set(file: &str, section: &str, key: &str, enable: bool) -> String {
             out.push('\n');
             continue;
         }
-        if in_target_section && !wrote_key {
+        // Every occurrence, not just the first: a file with duplicate
+        // target sections would otherwise keep a stale value in the later
+        // block (disable would leave a second `=true` behind).
+        if in_target_section {
             if let Some((k, _)) = trimmed.split_once('=') {
                 if k.trim() == key {
                     out.push_str(key);
@@ -857,6 +883,106 @@ pub fn active_profile_service_json_path() -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
+/// The active profile's stream settings (Settings > Output > Streaming):
+/// what OBS streams with when Enhanced Broadcasting is off. None when OBS,
+/// the profile, or a usable bitrate can't be read.
+pub fn active_stream_settings() -> Option<crate::local_eb_config::StreamerSettings> {
+    let profile = active_profile_path()?;
+    let basic = fs::read_to_string(profile.join("basic.ini")).ok()?;
+    let encoder = fs::read_to_string(profile.join("streamEncoder.json")).ok();
+    stream_settings_from(&basic, encoder.as_deref())
+}
+
+/// The active profile's folder, the first config dir that holds its basic.ini.
+fn active_profile_path() -> Option<PathBuf> {
+    let dir = active_profile_dir()?;
+    obs_config_dirs()
+        .into_iter()
+        .map(|obs_dir| obs_dir.join(PROFILES_DIR_REL).join(&dir))
+        .find(|p| p.join("basic.ini").exists())
+}
+
+/// True when the active profile's SAVED settings ask for Enhanced
+/// Broadcasting on a service that can deliver it. Saved is not applied:
+/// OBS rebuilds its stream output only while nothing is running, so a
+/// Stream settings change made while the Replay Buffer or a recording runs
+/// is written to disk but the next stream still goes out on the old setup.
+/// The dashboard compares this against what actually arrives.
+pub fn active_profile_wants_eb() -> bool {
+    let Some(profile) = active_profile_path() else {
+        return false;
+    };
+    let (Ok(basic), Ok(service)) = (
+        fs::read_to_string(profile.join("basic.ini")),
+        fs::read_to_string(profile.join("service.json")),
+    ) else {
+        return false;
+    };
+    profile_wants_eb(&basic, &service)
+}
+
+/// See `active_profile_wants_eb`. Only a Common service (the registered
+/// InstantClone entry) carries the config URL to OBS: Custom RTMP drops the
+/// key on load (see Phase C below), so a leftover URL there never enables EB
+/// and must not count.
+fn profile_wants_eb(basic_ini: &str, service_json: &str) -> bool {
+    if ini_get(basic_ini, "Stream1", "EnableMultitrackVideo") != Some("true") {
+        return false;
+    }
+    let compact: String = service_json
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    compact.contains(r#""type":"rtmp_common""#)
+        && compact.contains(r#""multitrack_video_configuration_url":"http"#)
+}
+
+/// Parse a profile's `basic.ini` and `streamEncoder.json`. Advanced output
+/// names the encoder in `[AdvOut] Encoder` and keeps its settings in
+/// `streamEncoder.json`; Simple output keeps only `[SimpleOutput] VBitrate`
+/// (OBS derives the rest), so there only the bitrate is taken.
+fn stream_settings_from(
+    basic_ini: &str,
+    encoder_json: Option<&str>,
+) -> Option<crate::local_eb_config::StreamerSettings> {
+    use crate::local_eb_config::{number_field, StreamerSettings, TrackEncoder};
+    let positive = |kbps: u32| (kbps > 0).then_some(kbps);
+    if ini_get(basic_ini, "Output", "Mode") != Some("Advanced") {
+        let kbps = ini_get(basic_ini, "SimpleOutput", "VBitrate")?.parse().ok();
+        return Some(StreamerSettings {
+            encoder: None,
+            bitrate_kbps: kbps.and_then(positive)?,
+            rescale: None,
+        });
+    }
+    let id = ini_get(basic_ini, "AdvOut", "Encoder").filter(|id| !id.is_empty())?;
+    // Handed back to OBS as the track's settings, and OBS refuses to start a
+    // stream on a malformed config: a broken hand edit keeps the defaults.
+    let json = encoder_json?.trim_start_matches('\u{feff}').trim();
+    if !(json.starts_with('{') && crate::config::is_valid_json(json)) {
+        return None;
+    }
+    let rescale = match ini_get(basic_ini, "AdvOut", "Rescale") {
+        Some("true") => ini_get(basic_ini, "AdvOut", "RescaleRes").and_then(parse_size),
+        _ => None,
+    };
+    Some(StreamerSettings {
+        bitrate_kbps: number_field(json, "bitrate").and_then(positive)?,
+        encoder: Some(TrackEncoder {
+            encoder_type: id.to_string(),
+            settings_json: json.to_string(),
+        }),
+        rescale,
+    })
+}
+
+/// "1920x1080" as (width, height), both non-zero.
+fn parse_size(value: &str) -> Option<(u32, u32)> {
+    let (width, height) = value.split_once('x')?;
+    let size = (width.trim().parse().ok()?, height.trim().parse().ok()?);
+    (size.0 > 0 && size.1 > 0).then_some(size)
+}
+
 /// True when our `multitrack_video_configuration_url` is currently
 /// injected into the active profile's service.json. Used by the UI
 /// status indicator so a manual edit / profile switch is reflected.
@@ -990,6 +1116,61 @@ fn first_version_triple(s: &str) -> Option<(u32, u32, u32)> {
 /// a note", not a hard block: this only gates the experimental
 /// VOD-unlocker script.
 pub fn obs_version() -> Option<(u32, u32, u32)> {
+    newest_obs_log_head()?
+        .lines()
+        .take(30)
+        .filter(|l| l.contains("OBS"))
+        .find_map(first_version_triple)
+}
+
+/// Video encoder ids OBS registered in its most recent session, from the
+/// "Available Encoders" block it logs at startup. None when there is no
+/// readable log. Enhanced Broadcasting configs must only name encoders in
+/// this list: OBS refuses to start the stream on one it doesn't have.
+pub fn available_video_encoders() -> Option<Vec<String>> {
+    let encoders = parse_available_video_encoders(&newest_obs_log_head()?);
+    (!encoders.is_empty()).then_some(encoders)
+}
+
+/// Parse the block OBS logs at startup:
+///
+/// ```text
+/// 15:28:19.316: Available Encoders:
+/// 15:28:19.316:   Video Encoders:
+/// 15:28:19.316: \t- obs_x264 (x264)
+/// 15:28:19.316:   Audio Encoders:
+/// ```
+fn parse_available_video_encoders(log: &str) -> Vec<String> {
+    let mut lines = log
+        .lines()
+        .skip_while(|l| !l.contains("Available Encoders:"))
+        .skip_while(|l| !l.contains("Video Encoders:"))
+        .skip(1);
+    let mut encoders = Vec::new();
+    for line in lines.by_ref() {
+        // Drop the "HH:MM:SS.mmm: " timestamp, then expect "- <id> (<name>)".
+        let entry = line.split_once(": ").map_or(line, |(_, rest)| rest).trim();
+        let Some(item) = entry.strip_prefix("- ") else {
+            break;
+        };
+        if let Some(id) = item.split_whitespace().next() {
+            encoders.push(id.to_string());
+        }
+    }
+    encoders
+}
+
+/// Enough of an OBS log to hold its startup section: the version line and
+/// the "Available Encoders" block come right after plugin loading. A log
+/// grows for the whole OBS session (tens of MB on a long one), and this is
+/// read on every stream start, so the rest is never loaded.
+const OBS_LOG_HEAD_BYTES: u64 = 512 * 1024;
+
+/// The start of the most recently written OBS log, which is the running
+/// session's while OBS is open. Read lossily: a plugin that writes one
+/// non-UTF-8 byte must not hide the whole log (and with it the encoder
+/// list and the OBS version).
+fn newest_obs_log_head() -> Option<String> {
     let logs_dir = obs_config_dirs()
         .into_iter()
         .map(|d| d.join("logs"))
@@ -1006,12 +1187,13 @@ pub fn obs_version() -> Option<(u32, u32, u32)> {
             }
         }
     }
-    let contents = fs::read_to_string(newest?.1).ok()?;
-    contents
-        .lines()
-        .take(30)
-        .filter(|l| l.contains("OBS"))
-        .find_map(first_version_triple)
+    let mut head = Vec::new();
+    fs::File::open(newest?.1)
+        .ok()?
+        .take(OBS_LOG_HEAD_BYTES)
+        .read_to_end(&mut head)
+        .ok()?;
+    Some(String::from_utf8_lossy(&head).into_owned())
 }
 
 /// Whether an `obs64.exe` process is currently running. Used by the setup
@@ -1375,15 +1557,20 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32 as TestUniq, Ordering as TestOrd};
 
-    // OBS resolves the server URL with the address family picked in
-    // Settings -> Advanced -> IP Family. An IPv4 literal is not resolvable
-    // under IPv6, so the single entry we register has to carry a hostname.
     #[test]
-    fn the_registered_server_url_is_resolvable_under_either_ip_family() {
-        assert_eq!(server_url(1935), "rtmp://localhost:1935/live");
-        let entry = entry_json(7799, 1935);
-        assert!(entry.contains("rtmp://localhost:1935/live"), "{entry}");
-        assert!(!entry.contains("rtmp://127.0.0.1"), "{entry}");
+    fn available_video_encoders_are_read_from_the_startup_block() {
+        let log = "15:28:19.316: Available Encoders:\n\
+                   15:28:19.316:   Video Encoders:\n\
+                   15:28:19.316: \t- ffmpeg_svt_av1 (SVT-AV1)\n\
+                   15:28:19.316: \t- h264_texture_amf (AMD HW H.264 (AVC))\n\
+                   15:28:19.316: \t- obs_x264 (x264)\n\
+                   15:28:19.316:   Audio Encoders:\n\
+                   15:28:19.316: \t- ffmpeg_aac (FFmpeg AAC)\n";
+        assert_eq!(
+            parse_available_video_encoders(log),
+            vec!["ffmpeg_svt_av1", "h264_texture_amf", "obs_x264"]
+        );
+        assert!(parse_available_video_encoders("no block here").is_empty());
     }
 
     #[cfg(target_os = "linux")]
@@ -1440,19 +1627,103 @@ mod tests {
         assert_eq!(first_version_triple("no digits here"), None);
     }
 
+    /// Whitespace-blind view of a JSON fixture, for "same document" checks
+    /// where only indentation may differ.
+    fn without_whitespace(s: &str) -> String {
+        s.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    fn count_entries(file: &str) -> usize {
+        file.matches(r#""name": "InstantClone""#).count()
+    }
+
+    /// Register then unregister must give the user back the file they
+    /// had. A leftover comma or brace still "contains Twitch", so the
+    /// result is compared whole and parsed, not probed for substrings.
     #[test]
-    fn insert_then_detect_then_remove_roundtrips() {
+    fn register_then_remove_restores_the_original_document() {
         let original = fake_services_json();
-        let entry = entry_json(7799, 1935);
-        let patched = insert_entry(&original, &entry).expect("insert must succeed");
-        assert!(entry_exists(&patched));
+        let patched = with_entry_registered(&original, 7799, 1935).expect("register");
+        assert!(crate::config::is_valid_json(&patched), "{patched}");
+        assert_eq!(count_entries(&patched), 1);
+
         let stripped = remove_entry(&patched).expect("remove must succeed");
-        assert!(!entry_exists(&stripped));
-        // Whitespace differences are expected (we insert with a
-        // newline, remove just strips the entry + a comma) but the
-        // services array should still contain both original entries.
-        assert!(stripped.contains("Twitch"));
-        assert!(stripped.contains("YouTube"));
+        assert!(crate::config::is_valid_json(&stripped), "{stripped}");
+        assert_eq!(without_whitespace(&stripped), without_whitespace(&original));
+    }
+
+    /// An OBS with no services listed: our entry becomes the only element,
+    /// so it takes no comma (`[{entry},]` is invalid JSON, and OBS would
+    /// drop the whole list), and removing it gives the empty list back.
+    #[test]
+    fn registering_into_an_empty_service_list_keeps_the_file_valid() {
+        let original = "{\n  \"format_version\": 5,\n  \"services\": []\n}\n";
+        let patched = with_entry_registered(original, 7799, 1935).expect("register");
+        assert!(crate::config::is_valid_json(&patched), "{patched}");
+        assert_eq!(count_entries(&patched), 1);
+
+        let stripped = remove_entry(&patched).expect("remove must succeed");
+        assert!(crate::config::is_valid_json(&stripped), "{stripped}");
+        assert_eq!(without_whitespace(&stripped), without_whitespace(original));
+    }
+
+    /// Registering touches nothing but our own entry: cut the entry back
+    /// out of the result by its exact span and every other byte of OBS's
+    /// file must still be there, in order.
+    #[test]
+    fn register_preserves_every_other_byte() {
+        let original = fake_services_json();
+        let patched = with_entry_registered(&original, 7799, 1935).expect("register");
+        let spliced = format!("\n{},", entry_json(7799, 1935));
+        assert_eq!(patched.replacen(&spliced, "", 1), original);
+    }
+
+    /// `register` runs from the dashboard button and again from the stale
+    /// entry repair at startup. Running it twice must be the same file as
+    /// running it once, not a second entry or a file that grows each time.
+    #[test]
+    fn register_twice_is_the_same_as_once() {
+        let once = with_entry_registered(&fake_services_json(), 7799, 1935).unwrap();
+        let twice = with_entry_registered(&once, 7799, 1935).unwrap();
+        assert_eq!(twice, once);
+    }
+
+    /// OBS rewrites services.json on its own schedule and does not keep our
+    /// entry first. With our entry last, removal takes the leading-comma
+    /// path, which must still leave one entry and valid JSON behind.
+    #[test]
+    fn register_and_remove_handle_our_entry_last_in_the_array() {
+        let original = fake_services_json();
+        let last = original.replacen(
+            "\n  ]",
+            &format!(",\n    {}\n  ]", entry_json(7799, 1935)),
+            1,
+        );
+        assert!(crate::config::is_valid_json(&last), "fixture: {last}");
+
+        let refreshed = with_entry_registered(&last, 8800, 1935).expect("register");
+        assert!(crate::config::is_valid_json(&refreshed), "{refreshed}");
+        assert_eq!(count_entries(&refreshed), 1);
+        assert!(refreshed.contains(":8800/") && !refreshed.contains(":7799/"));
+
+        let stripped = remove_entry(&last).expect("remove");
+        assert!(crate::config::is_valid_json(&stripped), "{stripped}");
+        assert_eq!(without_whitespace(&stripped), without_whitespace(&original));
+    }
+
+    /// When our old entry cannot be cut out cleanly (here: a file cut off
+    /// mid-entry by a crash during a write), inserting anyway would leave
+    /// two InstantClone entries in OBS's service list. Refuse instead.
+    #[test]
+    fn register_refuses_when_the_old_entry_cannot_be_removed() {
+        let truncated =
+            r#"{"format_version": 4, "services": [{"name": "InstantClone", "common": true"#;
+        assert!(entry_exists(truncated) && remove_entry(truncated).is_none());
+        match with_entry_registered(truncated, 7799, 1935) {
+            Ok(patched) => panic!("must refuse, wrote {} entries", count_entries(&patched)),
+            Err(e) => assert_eq!(e.kind(), io::ErrorKind::InvalidData),
+        }
+        assert!(with_entry_registered("definitely not services.json", 7799, 1935).is_err());
     }
 
     /// The single server entry must be the `localhost` spelling. An IP
@@ -1610,23 +1881,6 @@ mod tests {
     }
 
     #[test]
-    fn insert_is_idempotent_for_caller() {
-        // Caller (`register`) checks `entry_exists` before splicing,
-        // so the second call to `register` is the cheap no-op path
-        // even though `insert_entry` would happily double-insert.
-        let original = fake_services_json();
-        let entry = entry_json(7799, 1935);
-        let once = insert_entry(&original, &entry).unwrap();
-        assert!(entry_exists(&once));
-        // `register` would short-circuit here, but verify the helper
-        // doesn't crash on a second insert call and produces a file
-        // with exactly two `"name": "InstantClone"` markers (other
-        // "InstantClone" mentions in URLs and labels don't count).
-        let twice = insert_entry(&once, &entry).unwrap();
-        assert_eq!(twice.matches(r#""name": "InstantClone""#).count(), 2);
-    }
-
-    #[test]
     fn remove_handles_single_entry_array() {
         // After our entry has been the only thing in the services
         // array, removing it should leave a syntactically valid (if
@@ -1701,37 +1955,20 @@ mod tests {
         assert!(looks_like_services_json(&fake_services_json()).is_ok());
     }
 
-    #[test]
-    fn insert_into_garbage_file_is_refused_at_validate_step() {
-        // Confirms the validate step in register() catches garbage
-        // before insert_entry would happily splice into nonsense.
-        // We can't drive register() in unit tests (it touches the
-        // filesystem) but the validator + insert chain is what
-        // protects us.
-        let bad = "definitely not services.json";
-        assert!(looks_like_services_json(bad).is_err());
-    }
-
+    /// Re-registering after the dashboard or ingest port changed must
+    /// swap the URLs in place, through the same transform `register` runs.
     #[test]
     fn re_register_refreshes_changed_port() {
-        // The flow we exercise here: register at port A, then "register"
-        // at port B with the same entry already present. We can't call
-        // `register()` directly (it touches disk), but the helpers it
-        // uses - remove_entry + insert_entry - must compose into a file
-        // that contains the *new* port.
-        let original = fake_services_json();
-        let v1 = insert_entry(&original, &entry_json(7799, 1935)).unwrap();
+        let v1 = with_entry_registered(&fake_services_json(), 7799, 1935).unwrap();
         assert!(v1.contains(":7799/"));
-        // Re-register with a new port: strip the old entry, splice fresh.
-        let cleaned = remove_entry(&v1).expect("strip must succeed");
-        let v2 = insert_entry(&cleaned, &entry_json(8800, 1935)).unwrap();
-        assert!(v2.contains(":8800/"), "must reflect new port");
-        assert!(!v2.contains(":7799/"), "old port must be gone");
-        assert_eq!(
-            v2.matches(r#""name": "InstantClone""#).count(),
-            1,
-            "exactly one InstantClone entry, not two"
+        let v2 = with_entry_registered(&v1, 8800, 1936).unwrap();
+        assert!(
+            v2.contains(":8800/") && v2.contains("localhost:1936/"),
+            "{v2}"
         );
+        assert!(!v2.contains(":7799/") && !v2.contains(":1935/"), "{v2}");
+        assert_eq!(count_entries(&v2), 1, "exactly one InstantClone entry");
+        assert!(crate::config::is_valid_json(&v2), "{v2}");
     }
 
     // ── INI read/write ───────────────────────────────────────────────
@@ -1781,6 +2018,25 @@ mod tests {
         assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
     }
 
+    /// Files written by older builds can carry two `[General]` blocks,
+    /// each with the flag (see the BOM test above). Rewriting only the
+    /// first left the second at `=true`, so turning VOD audio off did not
+    /// turn the OBS checkbox off for whichever block OBS reads.
+    #[test]
+    fn ini_set_rewrites_the_key_in_every_duplicate_section() {
+        let ini = "[General]\nEnableCustomServerVodTrack=true\n\n[Basic]\nProfile=A\n\n\
+                   [General]\nEnableCustomServerVodTrack=true\nName=X\n";
+        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
+
+        assert_eq!(out.matches("EnableCustomServerVodTrack=false").count(), 2);
+        assert!(!out.contains("EnableCustomServerVodTrack=true"), "{out}");
+        // Every other line is untouched and nothing is appended.
+        assert_eq!(out.matches("[General]").count(), 2);
+        assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
+        assert!(out.contains("Name=X\n"));
+        assert_eq!(out.lines().count(), ini.lines().count());
+    }
+
     // ── Active profile directory resolution ──────────────────────────
 
     /// `[Basic] Profile` is a display name and `[Basic] ProfileDir` is the
@@ -1814,6 +2070,117 @@ mod tests {
         assert_eq!(profile_dir_by_name(&roots, "Nope"), None);
         // No profiles directory at all must not panic.
         assert_eq!(profile_dir_by_name(&[fresh_obs_dir("empty")], "A"), None);
+    }
+
+    /// A real Advanced-output profile (AMD H.264, CBR 6000): the local
+    /// Enhanced Broadcasting config must stream with exactly these.
+    const ADVANCED_BASIC_INI: &str = "[General]\nName=Main\n\n[Output]\nMode=Advanced\n\n\
+        [AdvOut]\nEncoder=h264_texture_amf\nRescale=false\nRescaleRes=1920x1080\n";
+    const AMD_STREAM_ENCODER: &str =
+        r#"{"bitrate":6000,"rate_control":"CBR","preset":"quality","profile":"high","bf":2}"#;
+
+    #[test]
+    fn advanced_output_settings_are_taken_whole() {
+        let own = stream_settings_from(ADVANCED_BASIC_INI, Some(AMD_STREAM_ENCODER))
+            .expect("readable settings");
+        let encoder = own.encoder.expect("Advanced output names its encoder");
+        assert_eq!(encoder.encoder_type, "h264_texture_amf");
+        assert_eq!(encoder.settings_json, AMD_STREAM_ENCODER);
+        assert_eq!(own.bitrate_kbps, 6000);
+        assert_eq!(own.rescale, None, "Rescale Output is off");
+    }
+
+    #[test]
+    fn rescale_output_sets_the_main_track_size_only_when_on() {
+        let on = ADVANCED_BASIC_INI.replace("Rescale=false", "Rescale=true");
+        let own = stream_settings_from(&on, Some(AMD_STREAM_ENCODER)).unwrap();
+        assert_eq!(own.rescale, Some((1920, 1080)));
+        let bad_size = on.replace("RescaleRes=1920x1080", "RescaleRes=0x1080");
+        let own = stream_settings_from(&bad_size, Some(AMD_STREAM_ENCODER)).unwrap();
+        assert_eq!(own.rescale, None, "a size OBS would refuse is ignored");
+    }
+
+    #[test]
+    fn simple_output_contributes_only_its_bitrate() {
+        let simple = "[Output]\nMode=Simple\n\n[SimpleOutput]\nVBitrate=4500\n";
+        let own = stream_settings_from(simple, Some(AMD_STREAM_ENCODER)).unwrap();
+        assert!(
+            own.encoder.is_none(),
+            "Simple output keeps no encoder settings"
+        );
+        assert_eq!(own.bitrate_kbps, 4500);
+        let no_mode = "[SimpleOutput]\nVBitrate=3000\n";
+        let own = stream_settings_from(no_mode, None).unwrap();
+        assert_eq!(own.bitrate_kbps, 3000, "OBS defaults to Simple output");
+    }
+
+    /// Anything that can't be mirrored faithfully gives None, and the local
+    /// config keeps its own defaults instead of guessing.
+    #[test]
+    fn settings_that_cannot_be_mirrored_are_not_guessed() {
+        let unreadable = [
+            (ADVANCED_BASIC_INI, None),
+            (ADVANCED_BASIC_INI, Some("not json")),
+            (ADVANCED_BASIC_INI, Some(r#"{"bitrate":6000,}"#)),
+            (
+                ADVANCED_BASIC_INI,
+                Some(r#"{"bitrate":6000,"preset":"quality"}}"#),
+            ),
+            (ADVANCED_BASIC_INI, Some(r#"["bitrate",6000]"#)),
+            (
+                ADVANCED_BASIC_INI,
+                Some(r#"{"rate_control":"CQP","cqp":20}"#),
+            ),
+            (ADVANCED_BASIC_INI, Some(r#"{"bitrate":0}"#)),
+        ];
+        for (ini, json) in unreadable {
+            assert!(stream_settings_from(ini, json).is_none(), "{json:?}");
+        }
+        let no_encoder = ADVANCED_BASIC_INI.replace("Encoder=h264_texture_amf", "Encoder=");
+        assert!(stream_settings_from(&no_encoder, Some(AMD_STREAM_ENCODER)).is_none());
+        let simple_without_bitrate = "[Output]\nMode=Simple\n";
+        assert!(stream_settings_from(simple_without_bitrate, None).is_none());
+    }
+
+    #[test]
+    fn a_bom_prefixed_stream_encoder_file_still_reads() {
+        let with_bom = format!("\u{feff}{AMD_STREAM_ENCODER}\r\n");
+        let own = stream_settings_from(ADVANCED_BASIC_INI, Some(&with_bom)).unwrap();
+        assert_eq!(own.encoder.unwrap().settings_json, AMD_STREAM_ENCODER);
+    }
+
+    const EB_ON_INI: &str =
+        "\u{feff}[General]\nName=Main\n\n[Stream1]\nEnableMultitrackVideo=true\n";
+    const INSTANTCLONE_SERVICE: &str = r#"{"type":"rtmp_common","settings":{"service":"InstantClone","server":"rtmp://localhost:1935/live","multitrack_video_configuration_url":"http://127.0.0.1:7799/obs/multitrack-config"}}"#;
+
+    #[test]
+    fn eb_ticked_on_the_instantclone_service_is_wanted() {
+        assert!(profile_wants_eb(EB_ON_INI, INSTANTCLONE_SERVICE));
+        let spaced = INSTANTCLONE_SERVICE.replace("\":", "\": ");
+        assert!(
+            profile_wants_eb(EB_ON_INI, &spaced),
+            "JSON spacing is not meaningful"
+        );
+    }
+
+    #[test]
+    fn eb_unticked_or_unset_is_not_wanted() {
+        let off = EB_ON_INI.replace("=true", "=false");
+        assert!(!profile_wants_eb(&off, INSTANTCLONE_SERVICE));
+        assert!(!profile_wants_eb("[Stream1]\n", INSTANTCLONE_SERVICE));
+    }
+
+    /// Custom RTMP drops the config URL on load, so a leftover one there
+    /// can't turn EB on, and warning that EB "didn't apply" would be wrong.
+    #[test]
+    fn a_service_that_cannot_deliver_eb_is_not_wanted() {
+        let custom = INSTANTCLONE_SERVICE.replace("rtmp_common", "rtmp_custom");
+        assert!(!profile_wants_eb(EB_ON_INI, &custom));
+        let no_url = r#"{"type":"rtmp_common","settings":{"service":"InstantClone"}}"#;
+        assert!(!profile_wants_eb(EB_ON_INI, no_url));
+        let empty_url =
+            INSTANTCLONE_SERVICE.replace("http://127.0.0.1:7799/obs/multitrack-config", "");
+        assert!(!profile_wants_eb(EB_ON_INI, &empty_url));
     }
 
     #[test]

@@ -23,12 +23,15 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 /* Phase chip */
 .phase{padding:3px 10px;border-radius:999px;font-size:10.5px;font-weight:700;
   text-transform:uppercase;letter-spacing:1.2px;border:1px solid var(--line);
-  background:var(--panel);color:var(--fg-3);
+  background:var(--panel);color:var(--fg-3);white-space:nowrap;overflow:hidden;
   transition:color .25s,background-color .25s,border-color .25s,box-shadow .25s}
+/* The word is its own box so it can rise in while the chip glides to its width. */
+.phase>span{display:inline-block}
 .phase.live  {color:var(--live);  border-color:color-mix(in srgb,var(--live) 40%,var(--line));  background:color-mix(in srgb,var(--live) 12%,var(--panel))}
 .phase.arming{color:var(--warn);  border-color:color-mix(in srgb,var(--warn) 40%,var(--line));  background:color-mix(in srgb,var(--warn) 12%,var(--panel))}
 .phase.armed {color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line));background:color-mix(in srgb,var(--accent) 12%,var(--panel))}
 .phase.active{color:var(--live);  border-color:color-mix(in srgb,var(--live) 50%,var(--line));  background:color-mix(in srgb,var(--live) 16%,var(--panel));box-shadow:0 0 0 1px color-mix(in srgb,var(--live) 30%,transparent)}
+.phase.holding{color:var(--warn); border-color:color-mix(in srgb,var(--warn) 55%,var(--line));  background:color-mix(in srgb,var(--warn) 14%,var(--panel))}
 
 /* Signal pill */
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
@@ -54,11 +57,13 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .cur{font-size:clamp(23px,11vw,34px);font-weight:800;letter-spacing:-1.5px;
   font-variant-numeric:tabular-nums;line-height:1.08;
   transition:color .25s,transform .25s cubic-bezier(.32,.72,0,1);
-  display:inline-flex;align-items:baseline}
+  display:inline-flex;align-items:baseline;justify-content:center;min-width:2.4em}
 /* The idle setter shares the readout's exact type so nothing jumps when the
-   dock crosses from passthrough into an armed delay. */
+   dock crosses from passthrough into an armed delay. It is sized to its
+   digits (fitDelayInput) so the unit sits right after them, while the
+   fixed-width .cur keeps the +/- buttons from moving under the cursor. */
 .cur input{font:inherit;letter-spacing:inherit;color:inherit;background:transparent;border:0;
-  outline:none;text-align:center;width:2.7em;font-variant-numeric:tabular-nums;
+  outline:none;text-align:center;width:1ch;padding:0;font-variant-numeric:tabular-nums;
   -moz-appearance:textfield}
 .cur input::-webkit-outer-spin-button,.cur input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .cur .u{font-size:.4em;color:var(--fg-3);font-weight:600;margin-left:2px;letter-spacing:0}
@@ -96,6 +101,24 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .eg b{color:var(--fg-2);font-weight:600}
 .eg .sep{color:var(--fg-4)}
 
+/* Crash protection hold: why, how long is left, who is on the reconnect
+   screen, and End now (two-step). It takes the place of the delay controls
+   (see applyCfg), which don't apply while OBS is gone. */
+.hold{display:flex;flex-direction:column;gap:6px;padding:9px 10px;border-radius:11px;
+  border:1px solid color-mix(in srgb,var(--warn) 55%,var(--line));
+  background:color-mix(in srgb,var(--warn) 8%,var(--panel-2))}
+.hold-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.hold-why{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:700;
+  letter-spacing:1.2px;text-transform:uppercase;color:var(--warn)}
+.hold-why::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;
+  animation:blink 1.4s ease-in-out infinite}
+@keyframes blink{50%{opacity:.35}}
+.hold-clock{font-size:24px;font-weight:800;letter-spacing:-1px;line-height:1;font-variant-numeric:tabular-nums}
+.hold-sub{font-size:11px;color:var(--fg-2)}
+.hold .hold-end{padding:8px;font-size:12px;color:var(--danger);
+  border-color:color-mix(in srgb,var(--danger) 45%,var(--line))}
+.hold .hold-end.armed,.hold .hold-end.armed:hover:not(:disabled){background:var(--danger);color:#fff;border-color:transparent}
+
 /* Sub-tip with crossfade */
 .tip{font-size:10.5px;color:var(--fg-3);text-align:center;min-height:0;line-height:1.3;
   transition:opacity .15s,transform .15s}
@@ -116,6 +139,12 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .dest.pc .d-plat{color:color-mix(in srgb,var(--pc) 80%,var(--fg-3))}
 .dest.pc.alive .d-dot{background:var(--pc);box-shadow:0 0 0 3px color-mix(in srgb,var(--pc) 20%,transparent)}
 .dest.pc .sw.on{background:var(--pc)}
+/* On but not streaming yet (connecting, or waiting for the delay), and
+   on the crash-protection reconnect screen: amber, so a failing platform
+   never looks like one that is simply off. */
+.dest.wait .d-dot,.dest.held .d-dot{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 18%,transparent)}
+.dest.wait .d-dot{animation:blink 1.2s ease-in-out infinite}
+.dest.wait .d-plat,.dest.held .d-plat{color:var(--warn)}
 /* iOS-style switch */
 .sw{width:34px;height:20px;flex:0 0 auto;border-radius:999px;border:0;background:var(--line-2);
   position:relative;cursor:pointer;transition:background-color .2s cubic-bezier(.32,.72,0,1)}
@@ -153,6 +182,7 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .dico.pc{color:color-mix(in srgb,var(--pc) 75%,var(--fg-3))}
 .dico.pc.on{color:var(--pc);border-color:color-mix(in srgb,var(--pc) 50%,var(--line))}
 .dico.pc.alive{border-color:color-mix(in srgb,var(--pc) 70%,var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--pc) 20%,transparent)}
+.dico.wait{border-color:color-mix(in srgb,var(--warn) 55%,var(--line))}
 .dico.arm,.dico.pc.arm{border-color:var(--warn);color:var(--warn);font-size:15px;animation:dico-pulse 1s ease-in-out infinite}
 @keyframes dico-pulse{0%,100%{box-shadow:0 0 0 2px color-mix(in srgb,var(--warn) 28%,transparent)}50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--warn) 8%,transparent)}}
 
@@ -247,8 +277,14 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .btn.ghost:hover:not(:disabled){background:var(--panel);color:var(--fg)}
 .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
 .btn.full{width:100%}
-.spin{display:inline-block;width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite}
-@keyframes sp{to{transform:rotate(360deg)}}
+/* Buffering: the main button fills toward Activate (--p is 0..1) and counts
+   down the wait. Disabled, but at full strength so the countdown reads. */
+.btn.filling{position:relative;overflow:hidden;color:var(--fg);font-variant-numeric:tabular-nums;
+  border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
+.btn.filling:disabled{opacity:1;cursor:default}
+.btn.filling::before{content:"";position:absolute;inset:0;transform-origin:left;transform:scaleX(var(--p,0));
+  background:color-mix(in srgb,var(--warn) 20%,transparent);transition:transform .35s cubic-bezier(.32,.72,0,1)}
+.btn.filling>span{position:relative}
 .cta-row{display:flex;gap:6px}
 .cta-row .btn{flex:1}
 .cta-row .btn.disarm{flex:0 0 auto;padding:10px 13px}
@@ -434,6 +470,11 @@ body.boot .wrap>*:nth-child(n+8){animation-delay:.28s}
       <button class="np" id="plus" onclick="bump(1)" title="more delay">+</button>
     </div>
     <div class="bar" id="w-bar"><span class="pct" id="pct" hidden></span><div class="fill" id="bar"></div></div>
+  </div>
+  <div class="hold" id="w-hold" role="status" hidden>
+    <div class="hold-top"><span class="hold-why" id="hold-why">OBS dropped</span><span class="hold-clock" id="hold-clock" aria-live="off"></span></div>
+    <div class="hold-sub" id="hold-sub"></div>
+    <button class="btn full hold-end" id="hold-end" onclick="endHold()">End now</button>
   </div>
   <div class="eg" id="w-eg" hidden></div>
   <div class="tip" id="w-tip">Waiting for your encoder&hellip;</div>

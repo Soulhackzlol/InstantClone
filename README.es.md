@@ -149,7 +149,7 @@ Haz simulcast de una señal de OBS a Twitch, YouTube, Kick y RTMP personalizado 
 <td valign="top">
 
 **📱 Vertical (9:16) gratis**
-Activa **Formato Dual** de Twitch (Enhanced Broadcasting) y pon el formato de cualquier destino no-Twitch en **Vertical**. InstantClone reutiliza el lienzo 9:16 que OBS ya crea para Twitch y lo envía a YouTube Shorts, Kick móvil o TikTok, sin codificación extra.
+En OBS, activa **Enhanced Broadcasting** y elige tu lienzo vertical (por ejemplo Aitum Vertical) en **Lienzo adicional**, y pon el formato de cualquier destino no-Twitch en **Vertical**. InstantClone envía ese lienzo 9:16 a TikTok, YouTube Shorts o Kick móvil, con o sin un destino de Twitch. Activa el destino Vertical antes de empezar a emitir: sin Twitch, la pista vertical solo se codifica mientras haya uno activo. ¿También en Twitch? El **Formato Dual** de Twitch aporta el mismo lienzo.
 
 </td>
 <td valign="top">
@@ -191,13 +191,29 @@ Rearma o ajusta el delay arriba/abajo sin desarmar primero, expuesto como un con
 <td valign="top">
 
 **⌨ Atajos de teclado globales**
-Asigna delay on/off, armar, activar, cortar y **cortar cuando esto salga** a una combinación que funciona con un juego en pantalla completa por delante. Toda combinación necesita un modificador para que nada se dispare a media partida, una que otra app ya ocupa se marca en su fila en vez de fallar en silencio, y una acción rechazada te llega como globo en la bandeja.
+Asigna delay on/off, armar, activar, cortar, **cortar cuando esto salga** y terminar la protección contra crasheos a una combinación que funciona con un juego en pantalla completa por delante. Toda combinación necesita un modificador para que nada se dispare a media partida, una que otra app ya ocupa se marca en su fila en vez de fallar en silencio, y una acción rechazada te llega como globo en la bandeja.
 
 </td>
 <td valign="top">
 
 **🎹 Pads y controladoras MIDI**
-Mapea las mismas cinco acciones a un pad o un knob, aprendidos pulsando el control en vez de escribir un número de nota. Cada mapeo recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas aunque manden la misma nota, y puedes acotar a qué dispositivo escucha InstantClone.
+Mapea las mismas acciones a un pad o un knob, aprendidos pulsando el control en vez de escribir un número de nota. Cada mapeo recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas aunque manden la misma nota, y puedes acotar a qué dispositivo escucha InstantClone.
+
+</td>
+</tr>
+<tr>
+<td valign="top" colspan="2">
+
+**🛡 Protección contra crasheos**
+Si OBS se cuelga o se congela, todos los destinos siguen en directo con una pantalla de reconexión (cinco estilos, con tus colores y tu texto) y audio en silencio, hasta 5 minutos. Cuando OBS vuelve, retoma en la misma conexión desde su primer keyframe, Enhanced Broadcasting incluido: cada pista recibe su propia pantalla y OBS recibe la misma sesión de Twitch. Las pistas HEVC y AV1 mantienen su último fotograma. Termínala antes desde el panel, el dock de OBS, la bandeja, un atajo o un pad MIDI.
+
+</td>
+</tr>
+<tr>
+<td valign="top" colspan="2">
+
+**🧩 Integraciones (experimental)**
+InstantClone habla con Discord, el chat de Twitch, tu móvil y tus propias herramientas. Con un clic añades un aviso de crasheo, un comando `!delay`, controles para mods, un botón de highlight que clipea lo que los espectadores vieron de verdad, una tarjeta de Discord que escribe la línea de tiempo de tu stream, capítulos de YouTube, una luz de "en directo" y más, y un editor por pasos cubre el resto. Son nuevas y aún pueden cambiar: cuéntanos lo que falle o confunda con el enlace **Report it** de la pestaña.
 
 </td>
 </tr>
@@ -216,7 +232,7 @@ Mapea las mismas cinco acciones a un pad o un knob, aprendidos pulsando el contr
 <tr>
 <td valign="top" width="50%">
 
-**Dos fases por diseño.** **Armas** un buffer (un tamaño objetivo en segundos). InstantClone lo prellena desde la señal de OBS sin tocar lo que sale. Cuando se llena pulsas **Activar**, y el cambio a diferido es instantáneo en pantalla: el reproductor solo salta del borde en directo a un punto N segundos atrás.
+**Dos fases por diseño.** **Armas** un buffer (un tamaño objetivo en segundos). InstantClone lo prellena desde la señal de OBS sin tocar lo que sale. Cuando se llena pulsas **Activar**, y el cambio a diferido es instantáneo en pantalla: el reproductor solo salta del borde en directo al fotograma clave de al menos N segundos atrás, así que el público nunca queda más cerca del directo de lo que pusiste.
 
 </td>
 <td valign="top" width="50%">
@@ -249,6 +265,7 @@ Mapea las mismas cinco acciones a un pad o un knob, aprendidos pulsando el contr
 | <kbd>POST</kbd> | `/cut-after` | | Marca el borde en directo; autocorta cuando sale en todos. |
 | <kbd>POST</kbd> | `/cut-after/cancel` | | Descarta un corte programado pendiente. |
 | <kbd>POST</kbd> | `/delay` | `ms=NNN` | De un tiro: arma y autoactiva en cuanto esté listo. |
+| <kbd>POST</kbd> | `/crash-protection/end` | | Termina ya la pantalla de reconexión: todos los destinos terminan. |
 | <kbd>GET</kbd> | `/state` | | Instantánea JSON puntual. |
 | <kbd>GET</kbd> | `/events` | | Flujo de estado JSON por server-sent events. Solo push. |
 
@@ -306,7 +323,7 @@ Armado de un botón. Añade `/activate` y `/stop` a otros dos botones para contr
 
 - **Handshake RTMP con paridad total con OBS.** `connect` lleva la misma bolsa de capacidades de códec que envía librtmp (`audioCodecs=3191`, `videoCodecs=252`, `videoFunction=1`), el `fourCcList` de Enhanced-RTMP (AVC / HEVC / AV1 / VP9 / Opus / AC-3 / FLAC), `Set Chunk Size` antes de connect, `FCUnpublish → deleteStream` al cerrar, y RTMP Acknowledgement (BYTES_READ_REPORT) al umbral ventana/10 declarado por el par, en entrada y salida.
 - **Passthrough de Enhanced Broadcasting a Twitch.** Cuando OBS pasa a multipista "Auto" hacemos de proxy de `GetClientConfiguration` de Twitch, ruteamos la salida al endpoint IVS asignado a la sesión y reenviamos cada SPS/PPS por pista fielmente para que se encienda la escalera de transcodificado sin importar el nivel de cuenta. Los destinos no-Twitch reciben la pista primaria horizontal por defecto; las etiquetas de escalera con `TrackId != 0` se descartan para evitar la tormenta de varios frames por PTS que hace caer el decodificador de YouTube. Los cortes de EB caen en el IDR de la pista primaria (no en el keyframe del peldaño que gane el `partition_point`) para que el decodificador del destino siempre tenga su ancla.
-- **Selección del lienzo vertical (9:16).** El lienzo vertical se identifica decodificando el SPS de cada pista por orientación (retrato, mayor área) en vez de confiar en el JSON privado de sesión de Twitch, y se autocorrige según se activa/desactiva Formato Dual.
+- **Selección del lienzo vertical (9:16).** El lienzo vertical se identifica decodificando el SPS de cada pista por orientación (retrato, mayor área) en vez de confiar en el JSON privado de sesión de Twitch, y se autocorrige según aparece o desaparece el lienzo vertical.
 - **Audio de VOD de Twitch, desbloqueado en el servicio InstantClone.** OBS ata su pista de VOD al servicio llamado literalmente "Twitch" (`ServiceSupportsVodTrack == {"Twitch"}`), así que está bloqueada en el servicio InstantClone. Un pequeño script de OBS incluido (`optional-vod-unlocker.lua`, descargado desde el panel) engancha el mismo segundo codificador de audio que usaría la propia pista de VOD de OBS, sin la restricción. Su lector de formato coincide byte a byte con el `flv_packet_audio_ex` de OBS (`AudioPacketType` en el byte 0, `TrackId` en el byte 6). OBS 32.2+ necesita el script; OBS anterior puede usar la casilla de VOD Track integrada (escribimos `EnableCustomServerVodTrack` en el `user.ini` de OBS 32, con `global.ini` como respaldo).
 - **Ruteo de audio por destino.** Las pistas no seleccionadas se descartan y la elegida se aplana a una etiqueta de una sola pista estándar (AAC reescrito al `0xAF` legado), espejando el `flatten_multitrack_video` del lado de vídeo. Si la pista elegida no se está enviando, cae a la pista en directo en vez de quedarse en silencio.
 
@@ -336,7 +353,7 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 **E/S de disco síncrona en la ruta caliente de escritura al anillo, por elección.** La escritura con buffer aterriza en la caché de páginas del SO en microsegundos y el kernel vacía en segundo plano, así que la caché de páginas ya es el buffer asíncrono; el índice y los bytes avanzan bajo un solo lock para que un lector nunca vea una etiqueta cuyos bytes aún no están en disco.
 
-**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **392 tests, todos en verde.**
+**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, la configuración de Enhanced Broadcasting construida a partir de los lienzos y codificadores GPU de OBS, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), la protección contra crasheos (distinguir crasheo, parada y congelado, el codificador sin pérdidas de la pantalla de reconexión comprobado con ffmpeg, el empaquetado por pista de Enhanced Broadcasting, el AAC en silencio), el motor de integraciones (pasos, plantillas, recetas, chat, tarjetas de Discord, la línea de tiempo del stream), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **843 tests, todos en verde.**
 
 </details>
 
@@ -346,7 +363,7 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 392 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
+**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 843 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
 
 **Lo áspero, con honestidad**
 
@@ -415,7 +432,7 @@ En la pestaña **Destinos** de InstantClone, nunca en OBS. OBS solo apunta a Ins
 
 <br/>
 
-Sí, ambas cosas. Cinco acciones - delay on/off, armar, activar, cortar a directo y **cortar cuando esto salga** - se asignan a un atajo de teclado global, a un pad o knob MIDI, o a los dos a la vez, en **Ajustes**. Los atajos funcionan con un juego en pantalla completa por delante, así no haces alt-tab a media partida, y toda combinación necesita un modificador (Ctrl, Alt, Shift o Win) para que una tecla suelta no dispare una acción de delay. Los mapeos MIDI se aprenden pulsando el control en vez de escribir un número de nota, y cada uno recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas. Por ahora solo en Windows.
+Sí, ambas cosas. Seis acciones - delay on/off, armar, activar, cortar a directo, **cortar cuando esto salga** y terminar la protección contra crasheos - se asignan a un atajo de teclado global, a un pad o knob MIDI, o a los dos a la vez, en **Ajustes**. Los atajos funcionan con un juego en pantalla completa por delante, así no haces alt-tab a media partida, y toda combinación necesita un modificador (Ctrl, Alt, Shift o Win) para que una tecla suelta no dispare una acción de delay. Los mapeos MIDI se aprenden pulsando el control en vez de escribir un número de nota, y cada uno recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas. Por ahora solo en Windows.
 
 </details>
 

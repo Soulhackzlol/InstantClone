@@ -1,0 +1,58 @@
+name: Integrations (experimental)
+description: A bug, a rough edge or an idea for the Integrations tab.
+title: "[integrations] "
+labels: ["integrations"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Integrations are new and experimental, so every report helps shape them. Thanks for testing.
+
+  - type: input
+    id: version
+    attributes:
+      label: InstantClone version
+      description: Top-right of the dashboard, or the `v0.1.15` in the .exe name.
+      placeholder: "v0.1.15"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is it?
+      options:
+        - Something doesn't work
+        - Something is confusing
+        - An idea or a missing feature
+    validations:
+      required: true
+
+  - type: input
+    id: integration
+    attributes:
+      label: Which integration
+      description: Its name on the card, like "Smart platform alerts" or one you built.
+      placeholder: "Highlight button"
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, or what you'd like
+      description: In your words. Screenshots help a lot.
+    validations:
+      required: true
+
+  - type: textarea
+    id: run
+    attributes:
+      label: The run log (if something failed)
+      description: Open the integration and look at its last runs. Paste the steps and what each one answered. Check it first for links, keys or tokens and remove them.
+      render: text
+
+  - type: textarea
+    id: recipe
+    attributes:
+      label: The integration as a recipe (optional)
+      description: On the card, use Share and paste it here. Recipes never contain your webhooks, keys or tokens.
+      render: text

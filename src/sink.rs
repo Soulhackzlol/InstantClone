@@ -125,7 +125,9 @@ async fn run_sink(
     max_mb: Option<u64>,
     temp: bool,
 ) -> io::Result<()> {
-    let addr = format!("0.0.0.0:{}", port);
+    // Loopback only: InstantClone publishes to it on this machine, and the
+    // RTMP port takes a publish from anyone who can reach it.
+    let addr = format!("127.0.0.1:{}", port);
     let listener = TcpListener::bind(&addr).await?;
     let live = LiveStream::new();
 
@@ -624,7 +626,9 @@ fn flv_tag_bytes(tag_type: u8, ts: u32, payload: &[u8]) -> Vec<u8> {
 }
 
 async fn run_web(port: u16, live: Arc<LiveStream>) -> io::Result<()> {
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+    // Loopback only, like the RTMP side: the preview is the live stream,
+    // served with CORS open, so it must not reach the LAN.
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
     println!(
         "[sink-web] 🎬 open http://127.0.0.1:{}/ in your browser to watch live",
         port
@@ -1382,6 +1386,67 @@ start();
 </body></html>
 "##;
 
+/// One RTMP message a test platform received.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub(crate) struct Received {
+    /// Which connection it came on, counting from 0 in accept order.
+    pub conn: usize,
+    /// RTMP message type: 8 audio, 9 video, 20 command.
+    pub kind: u8,
+    pub ts: u32,
+    pub payload: Vec<u8>,
+    /// The command name, for type 20 (e.g. "deleteStream").
+    pub command: Option<String>,
+    pub at: Instant,
+}
+
+/// A platform for in-process egress tests: accept publishers on
+/// `listener`, answer them like the sink does, and forward every message
+/// they send, in order, to `tx`.
+#[cfg(test)]
+pub(crate) async fn record(
+    listener: TcpListener,
+    tx: tokio::sync::mpsc::UnboundedSender<Received>,
+) -> io::Result<()> {
+    for conn in 0.. {
+        let (mut sock, _) = listener.accept().await?;
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            handshake::perform_server(&mut sock).await?;
+            let (rd, wr) = split(sock);
+            let mut reader = ChunkReader::new(rd);
+            let mut writer = ChunkWriter::new(wr);
+            writer.send_set_chunk_size(4096).await?;
+            loop {
+                let msg = reader.read_message().await?;
+                let command = (msg.type_id == 20)
+                    .then(|| amf0::decode_all(&msg.payload).ok())
+                    .flatten()
+                    .and_then(|values| values.first().and_then(|v| v.as_str().map(String::from)));
+                let received = Received {
+                    conn,
+                    kind: msg.type_id,
+                    ts: msg.timestamp,
+                    payload: msg.payload.to_vec(),
+                    command,
+                    at: Instant::now(),
+                };
+                if tx.send(received).is_err() {
+                    return Ok::<(), io::Error>(());
+                }
+                // Recorded first: a publisher that is leaving (FCUnpublish,
+                // then deleteStream, then close) may be gone before the
+                // reply to its goodbye can be written.
+                if msg.type_id == 20 {
+                    let _ = handle_command(&mut writer, &msg).await;
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1392,6 +1457,33 @@ mod tests {
     /// would refuse to start for any path whose accent happened to straddle
     /// the cut. Same bug the config redactors and `scrub_secret` had; this
     /// was the last copy of it.
+    /// FLV splits the timestamp: the low 24 bits big-endian, then the top
+    /// 8 bits in a separate "extended" byte. Past 2^24 ms (~4.6 hours) a
+    /// writer that drops or misplaces that byte jumps the player's clock
+    /// backwards. The file recorder and the live web player each build
+    /// tags with their own copy of this code, so both are pinned.
+    #[test]
+    fn flv_tags_carry_the_extended_timestamp_byte() {
+        let expected = [
+            0x09, 0x00, 0x00, 0x02, // video, DataSize 2
+            0x34, 0x56, 0x78, 0x12, // ts low 24 bits, then bits 24..32
+            0x00, 0x00, 0x00, // StreamID
+            0xAA, 0xBB, // payload
+            0x00, 0x00, 0x00, 0x0D, // PreviousTagSize = 11 + 2
+        ];
+        assert_eq!(flv_tag_bytes(9, 0x1234_5678, &[0xAA, 0xBB]), expected);
+
+        let path = std::env::temp_dir().join(format!("ic-test-sink-{}.flv", std::process::id()));
+        {
+            let mut w = FlvWriter::create(path.to_str().unwrap(), None).unwrap();
+            w.write_tag(9, 0x1234_5678, &[0xAA, 0xBB]).unwrap();
+        }
+        let file = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(&file[..13], b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00");
+        assert_eq!(&file[13..], expected);
+    }
+
     #[test]
     fn truncate_cuts_on_characters_not_bytes() {
         // The accent straddles byte 41, which is where the old code cut.

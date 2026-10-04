@@ -29,6 +29,8 @@ fn main() {
         // overlay runtime), so skip the line minifier and let gzip do it.
         ("dock.js", false),
         ("overlay-runtime.js", false),
+        // Integrations UI: template-literal heavy like the dock.
+        ("integrations.js", false),
     ] {
         let src_path = web_dir.join(name);
         println!("cargo:rerun-if-changed={}", src_path.display());

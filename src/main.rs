@@ -30,9 +30,14 @@ mod buffer;
 mod compat;
 mod config;
 mod controller;
+mod crash_hold;
+mod crash_protection;
 mod crypto;
 mod h264;
 mod https;
+mod integrations;
+mod json;
+mod local_eb_config;
 mod midi;
 mod obs_register;
 mod portcheck;
@@ -40,6 +45,7 @@ mod rtmp;
 mod self_update;
 mod sha256;
 mod sink;
+mod slate;
 mod sync;
 mod sysstat;
 mod trace;
@@ -52,7 +58,7 @@ use crate::config::Settings;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 fn main() -> std::io::Result<()> {
@@ -126,16 +132,33 @@ fn main() -> std::io::Result<()> {
     // good capture. Opt-out via INSTANTCLONE_NO_TRACE=1.
     trace::init("./instantclone-trace.log");
 
-    let mut settings = Settings::load_or_default(&cfg_path);
+    // A missing file is a fresh install (defaults, written out at once). A
+    // file that exists but can't be read is never replaced at startup: see
+    // `Settings::load_for_startup` for the copy-aside rule.
+    let startup = match Settings::load_for_startup(&cfg_path) {
+        Ok(startup) => startup,
+        Err(e) => {
+            let msg = format!(
+                "InstantClone couldn't read its settings file, and couldn't make a \
+                 safety copy of it either, so it did not start (starting on defaults \
+                 could overwrite your settings).\n\nFile:  {}\nError: {e}\n\n\
+                 Close whatever is holding the file (antivirus, OneDrive, an editor) \
+                 and start InstantClone again.",
+                cfg_path.display()
+            );
+            notify_fatal("InstantClone settings error", &msg);
+            return Err(e);
+        }
+    };
+    if let Some(notice) = &startup.notice {
+        notify_fatal("InstantClone settings reset", notice);
+    }
+    let may_save_at_startup = startup.may_save;
+    let mut settings = startup.settings;
     // Honour the persisted tracing toggle from disk. init() defaults to
     // enabled; if the user disabled it last session, flip it off before
     // any code path starts writing.
     trace::set_enabled(settings.tracing_enabled);
-    // If the file didn't exist, persist the smart defaults so the file
-    // appears on disk immediately (useful for the user to find and edit).
-    if !cfg_path.exists() {
-        let _ = settings.save(&cfg_path);
-    }
 
     // Port pre-flight. Without this, a busy port leaves us in a silent
     // retry loop - the worst possible first-run UX (no console on Windows,
@@ -176,8 +199,10 @@ fn main() -> std::io::Result<()> {
             }
         }
         // Persist any chosen replacement port so the user doesn't get
-        // re-prompted on every launch.
-        let _ = settings.save(&cfg_path);
+        // re-prompted on every launch. Not over a file we couldn't read.
+        if may_save_at_startup {
+            let _ = settings.save(&cfg_path);
+        }
     }
 
     // Create overlays/ directory and write the three built-in templates if
@@ -245,6 +270,18 @@ fn main() -> std::io::Result<()> {
         let (tx, rx) = watch::channel(settings.clone());
         let tx = Arc::new(tx);
 
+        // Integrations run on their own thread, so nothing they do can
+        // delay the stream. Their data file sits next to the config.
+        let data_dir = cfg_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        match integrations::engine::start(ctrl.clone(), rx.clone(), data_dir) {
+            Ok(handle) => ctrl.attach_integrations(handle),
+            Err(e) => ctrl.log(format!("[integrations] could not start: {e}")),
+        }
+
         // An update can leave the OBS entry we wrote pointing at the old shape
         // of things, and on an in-app update the user never saw the dashboard
         // button change back to ask them about it. Repair it for them.
@@ -305,7 +342,7 @@ fn main() -> std::io::Result<()> {
         // tray icon stays running in the background - closing the tab
         // doesn't kill the proxy. `--no-browser` skips this for autostart
         // / headless setups; the persisted `open_dashboard_on_launch`
-        // toggle (System -> Behavior) does the same from the UI, so a
+        // toggle (System -> General) does the same from the UI, so a
         // tray-resident user isn't forced into a tab every launch.
         if !suppress_browser && settings.open_dashboard_on_launch {
             let url = format!("http://127.0.0.1:{}/", settings.web_port);
@@ -329,11 +366,28 @@ fn main() -> std::io::Result<()> {
                 tokio::time::sleep(Duration::from_millis(600)).await;
                 let _ =
                     tokio::task::spawn_blocking(move || {
-                        match obs_register::set_vod_audio_flag(true) {
-                            Ok(true) => ctrl_eb.log("[--launch-eb] VOD-track flag written"),
-                            Ok(false) => ctrl_eb
-                                .log("[--launch-eb] OBS config not found - is OBS installed?"),
-                            Err(e) => ctrl_eb.log(format!("[--launch-eb] flag write failed: {e}")),
+                        // On OBS 32.2+ this shortcut's Custom RTMP path is dead:
+                        // --config-url is no longer read for Custom RTMP, so the
+                        // VOD flag would only switch on a track that never gets
+                        // Enhanced Broadcasting. Leave OBS's config alone.
+                        let modern_obs =
+                            obs_register::obs_version().is_some_and(|v| v >= (32, 2, 0));
+                        if modern_obs {
+                            ctrl_eb.log(
+                                "[--launch-eb] this shortcut is the old VOD + Enhanced Broadcasting \
+                                 path for OBS before 32.2, so on your OBS it only opens OBS. For \
+                                 Enhanced Broadcasting pick the InstantClone service in OBS's Stream \
+                                 settings; for VOD audio use the VOD unlocker script in System.",
+                            );
+                        } else {
+                            match obs_register::set_vod_audio_flag(true) {
+                                Ok(true) => ctrl_eb.log("[--launch-eb] VOD-track flag written"),
+                                Ok(false) => ctrl_eb
+                                    .log("[--launch-eb] OBS config not found - is OBS installed?"),
+                                Err(e) => {
+                                    ctrl_eb.log(format!("[--launch-eb] flag write failed: {e}"));
+                                }
+                            }
                         }
                         match obs_register::launch_obs_with_eb_config(web_port, &dock_token) {
                             Ok(exe) => ctrl_eb
@@ -371,16 +425,21 @@ fn main() -> std::io::Result<()> {
             // The MIDI half of this is (bindings, chosen device): both live
             // in the listener's mirror, and a device change with the same
             // bindings still has to reach it or the pick is inert.
-            let (mut bound_hotkeys, mut bound_midi) = {
-                let s = hk_rx.borrow();
-                (s.hotkeys.clone(), (s.midi.clone(), s.midi_device.clone()))
+            // Integrations started from a hotkey register through the tray
+            // too, so their combos count as hotkey bindings here.
+            let bindings = |s: &config::Settings| {
+                (
+                    (
+                        s.hotkeys.clone(),
+                        integrations::model::shortcuts(&s.integrations).0,
+                    ),
+                    (s.midi.clone(), s.midi_device.clone()),
+                )
             };
+            let (mut bound_hotkeys, mut bound_midi) = bindings(&hk_rx.borrow());
             tokio::spawn(async move {
                 while hk_rx.changed().await.is_ok() {
-                    let (hotkeys, midi) = {
-                        let s = hk_rx.borrow();
-                        (s.hotkeys.clone(), (s.midi.clone(), s.midi_device.clone()))
-                    };
+                    let (hotkeys, midi) = bindings(&hk_rx.borrow());
                     if midi != bound_midi {
                         hk_ctrl.midi().update_from_settings(&hk_rx.borrow());
                         bound_midi = midi;
@@ -453,6 +512,11 @@ fn main() -> std::io::Result<()> {
         // Flush the egress trace so the last few thousand events make
         // it to disk before the BufWriter is dropped on process exit.
         trace::flush();
+        // Integration run counts (`{uses}`) are saved a few seconds late;
+        // write the latest now or a restart replays numbers.
+        if let Some(integrations) = ctrl.integrations() {
+            integrations.flush();
+        }
         // Flip shutdown on every active destination so each pump sends
         // `deleteStream` to its upstream before the runtime drops them.
         // Tiny window - if a pump is mid-await it'll just exit on next
@@ -583,20 +647,62 @@ async fn supervise_ingest_leg(addr: String, ctrl: Arc<controller::Controller>, r
     }
 }
 
+/// How long a vertical destination's 9:16 canvas must be missing, within
+/// one OBS session, before the log says so.
+const VERTICAL_WAIT_GRACE: Duration = Duration::from_secs(3);
+
+/// Decides when to log that a vertical destination has no 9:16 canvas: once
+/// per OBS session, and only after `VERTICAL_WAIT_GRACE`, so a vertical
+/// sequence header landing a moment after the main one (or a settings
+/// change waking the supervisor early) never raises a false alarm.
+#[derive(Default)]
+struct VerticalWaitLog {
+    /// Destination id -> (publisher session, first seen missing, logged).
+    seen: std::collections::HashMap<String, (u64, Instant, bool)>,
+}
+
+impl VerticalWaitLog {
+    /// Note that `dest_id` has no canvas at `now` during `session`. True
+    /// exactly once per session: when the grace period has run out.
+    fn missing(&mut self, dest_id: &str, session: u64, now: Instant) -> bool {
+        match self.seen.get_mut(dest_id) {
+            Some((seen_session, since, logged)) if *seen_session == session => {
+                if *logged || now.duration_since(*since) < VERTICAL_WAIT_GRACE {
+                    return false;
+                }
+                *logged = true;
+                true
+            }
+            _ => {
+                self.seen.insert(dest_id.to_string(), (session, now, false));
+                false
+            }
+        }
+    }
+
+    /// Forget destinations that no longer exist.
+    fn retain(&mut self, keep: impl Fn(&str) -> bool) {
+        self.seen.retain(|id, _| keep(id));
+    }
+}
+
 /// One egress pump per destination. Owns a map { dest_id → (url, JoinHandle) }
 /// and diffs it against the active-destinations list whenever settings
 /// change. Adds/removes/restarts as needed.
 async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controller::Controller>) {
-    // Currently-running egress pumps, indexed by Destination.id.
+    // Currently-running egress pumps, indexed by Destination.id, with the
+    // signature each started with (see `pump_signature`).
     let mut running: std::collections::HashMap<
         String,
         (String, tokio::task::JoinHandle<std::io::Result<()>>),
     > = std::collections::HashMap::new();
+    let mut vertical_wait = VerticalWaitLog::default();
+    // Destination id -> when its running pump first found no 9:16 canvas.
+    let mut vertical_gone_since: std::collections::HashMap<String, Instant> =
+        std::collections::HashMap::new();
 
-    // Mirror webhook URL + ingest key into the controller on every settings
-    // change (the ingest task enforces the key but has no settings handle).
-    let initial_webhook = { rx.borrow().discord_webhook_url.clone() };
-    ctrl.update_webhook(initial_webhook);
+    // Mirror the ingest key into the controller on every settings change
+    // (the ingest task enforces the key but has no settings handle).
     ctrl.update_ingest_key(rx.borrow().ingest_key.clone());
 
     // Managed "Local test sink" child process. Spawned while any
@@ -623,6 +729,10 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
     loop {
         // Snapshot the current desired destinations.
         let desired: Vec<(config::Destination, String)> = { rx.borrow().active_destinations() };
+        // Crash protection reads its settings from the controller, which
+        // decides whether to open a hold the instant OBS drops.
+        let crash_settings = rx.borrow().crash_protection.clone();
+        ctrl.update_crash_protection(crash_settings.clone());
 
         // Keep the managed test-sink child in sync with the desired set
         // BEFORE the pump diff below, so a freshly enabled sink
@@ -640,21 +750,8 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             .cloned()
             .collect();
         for id in to_remove {
-            if let Some((_url, handle)) = running.remove(&id) {
-                // Cooperative shutdown: ask the pump to send deleteStream
-                // and close cleanly. Give it a short window - then
-                // HARD-ABORT no matter what. Without the explicit abort,
-                // dropping the JoinHandle leaves the task running
-                // detached: a Twitch destination stuck in a connect-fail
-                // loop would keep retrying forever even after the user
-                // toggled it off.
-                let state = ctrl.destination_state(&id);
-                state
-                    .shutdown_requested
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-                let abort = handle.abort_handle();
-                let _ = tokio::time::timeout(Duration::from_millis(1500), handle).await;
-                abort.abort();
+            if let Some((_signature, handle)) = running.remove(&id) {
+                stop_pump(&ctrl, &id, handle).await;
                 ctrl.remove_destination_state(&id);
                 ctrl.log(format!("[{}] removed", id));
             }
@@ -670,11 +767,12 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // Format turns on/off mid-stream. `None` until a portrait track is
         // seen; we map that to the 0xFF "unresolved" sentinel each tick so
         // a vanished vertical canvas reverts vertical destinations to
-        // "waiting" without a restart.
-        let vertical_track = {
-            let headers = ctrl.ring.video_seq_headers.lock();
-            crate::h264::detect_vertical_primary_track(&headers)
-        };
+        // "waiting" without a restart. Only H.264 headers can be measured;
+        // for any other codec, the vertical track the Enhanced Broadcasting
+        // config named counts once OBS is actually sending it.
+        let vertical_track = ctrl.vertical_track_on_wire();
+        vertical_wait.retain(|id| desired.iter().any(|(d, _)| d.id == id));
+        vertical_gone_since.retain(|id, _| desired.iter().any(|(d, _)| &d.id == id));
         for (dest, url) in &desired {
             // Keep each destination's vertical policy in sync with its
             // current settings and the detected canvas every tick - this
@@ -695,23 +793,46 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             // nothing to send. Don't open the upstream connection - it would
             // just sit idle, get dropped on the platform's inactivity
             // timeout, and churn reconnects. Tear down any pump and wait for
-            // the canvas; the card shows "Waiting for Dual Format". It spawns
-            // the moment detection resolves (self-heals within a tick).
+            // the canvas; the card says what's missing. It spawns the
+            // moment detection resolves (self-heals within a tick).
+            // A running pump gets `VERTICAL_WAIT_GRACE` first: OBS coming
+            // back from a crash publishes before its vertical encoder sends
+            // a sequence header, and ending the session in that gap would
+            // drop this destination off the stream it was being held on.
             if dest.wants_vertical() && vertical_track.is_none() {
-                if let Some((_u, handle)) = running.remove(&dest.id) {
-                    let st = ctrl.destination_state(&dest.id);
-                    st.shutdown_requested
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
-                    let abort = handle.abort_handle();
-                    let _ = tokio::time::timeout(Duration::from_millis(1500), handle).await;
-                    abort.abort();
+                let gone_since = *vertical_gone_since
+                    .entry(dest.id.clone())
+                    .or_insert_with(Instant::now);
+                let settled = gone_since.elapsed() >= VERTICAL_WAIT_GRACE && !ctrl.hold_active();
+                if settled {
+                    if let Some((_signature, handle)) = running.remove(&dest.id) {
+                        stop_pump(&ctrl, &dest.id, handle).await;
+                        ctrl.log(format!(
+                            "[{}] vertical: the 9:16 canvas stopped - holding off connecting",
+                            dest.name
+                        ));
+                    }
+                }
+                // Say so once per OBS session, and only once video is
+                // flowing: before the first sequence header there is no way
+                // to know whether a vertical canvas is coming. Without this
+                // the destination sits silent for the whole stream.
+                let video_known = !ctrl.ring.video_seq_headers.lock().is_empty();
+                if ingest_alive
+                    && video_known
+                    && vertical_wait.missing(&dest.id, ctrl.publisher_token(), Instant::now())
+                {
                     ctrl.log(format!(
-                        "[{}] vertical: no Dual Format canvas yet - holding off connecting",
+                        "[{}] vertical: OBS isn't sending a 9:16 canvas, so nothing goes out. \
+                         In OBS: Settings → Stream → Enhanced Broadcasting on, then pick your \
+                         vertical canvas under Additional canvas. Or set this destination's \
+                         Stream format to Horizontal.",
                         dest.name
                     ));
                 }
                 continue;
             }
+            vertical_gone_since.remove(&dest.id);
             // Enhanced Broadcasting override: when the
             // /obs/multitrack-config proxy gets back a real
             // session-allocated IVS URL from Twitch's API, it stashes
@@ -786,14 +907,21 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             }
             let effective_url = override_url.as_deref().unwrap_or(url.as_str()).to_string();
             let url = &effective_url;
+            let signature = pump_signature(url, &dest.stream_format, &dest.audio_track);
+            // A change during a crash-protection hold, or while the delay
+            // still airs after OBS left, waits: dropping OBS clears Twitch's
+            // session URL, and restarting now would take the destination off
+            // the reconnect screen or cut the rest of the delay.
+            let settled = !ctrl.hold_active() && ctrl.tail_left().is_none();
             let needs_restart = match running.get(&dest.id) {
-                Some((existing_url, handle)) => existing_url != url || handle.is_finished(),
+                Some((running_signature, handle)) => {
+                    (running_signature != &signature && settled) || handle.is_finished()
+                }
                 None => true,
             };
             if needs_restart {
-                if let Some((_old_url, handle)) = running.remove(&dest.id) {
-                    handle.abort();
-                    let _ = handle.await;
+                if let Some((_old_signature, handle)) = running.remove(&dest.id) {
+                    stop_pump(&ctrl, &dest.id, handle).await;
                 }
                 // Don't open a fresh egress while OBS isn't sending -
                 // we'd either burn TCP to Twitch / YouTube for an empty
@@ -801,7 +929,10 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 // pump itself bails out cleanly on ingest loss; here we
                 // just refuse to spawn its replacement until ingest is
                 // back. The next supervisor tick (~2 s) re-checks.
-                if !ingest_alive {
+                // During a crash-protection hold it starts anyway: a
+                // destination switched on mid-hold goes onto the
+                // reconnect screen with the others (`pump_dest`).
+                if !ingest_alive && !ctrl.hold_active() {
                     continue;
                 }
                 let state = ctrl.destination_state(&dest.id);
@@ -857,15 +988,25 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                     .audio_track
                     .store(audio_track, std::sync::atomic::Ordering::Relaxed);
                 let label = dest.name.clone();
-                let url_clone = url.clone();
                 let handle = tokio::spawn(controller::run_egress(
                     ctrl.clone(),
                     label,
-                    url_clone.clone(),
+                    url.clone(),
                     state,
                 ));
-                running.insert(dest.id.clone(), (url_clone, handle));
+                running.insert(dest.id.clone(), (signature, handle));
                 ctrl.log(format!("[{}] starting egress", dest.name));
+            }
+        }
+
+        // Close a hold whose time ran out, and keep a reconnect loop encoded
+        // for each live destination's resolution, so a hold starts without
+        // waiting a second or two on the encoder.
+        ctrl.expire_hold();
+        ctrl.check_ingest_freeze();
+        if ingest_alive && crash_settings.enabled {
+            for id in running.keys() {
+                crash_hold::prebuild_for(&ctrl, &ctrl.destination_state(id), &crash_settings);
             }
         }
 
@@ -955,9 +1096,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         tokio::select! {
             ch = rx.changed() => {
                 if ch.is_err() { return; }
-                // Mirror webhook URL + ingest key on every settings change.
-                let new_webhook = { rx.borrow().discord_webhook_url.clone() };
-                ctrl.update_webhook(new_webhook);
+                // Mirror the ingest key on every settings change.
                 ctrl.update_ingest_key(rx.borrow().ingest_key.clone());
             }
             _ = periodic_wake => {
@@ -982,6 +1121,41 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
 /// The child's `[sink]`-prefixed lines are forwarded into the dashboard
 /// log ring, so "publish accepted" and the 1 Hz stat lines show up in
 /// the Logs tab - that's the whole point of a testing destination.
+/// What a running pump was started with: its URL, and the settings a pump
+/// reads only when it starts (stream format, audio track). A change to any
+/// of them restarts it: switching a live destination between horizontal and
+/// vertical mid-stream would otherwise send the new canvas's frames against
+/// the old canvas's sequence header until the next cut.
+fn pump_signature(url: &str, stream_format: &str, audio_track: &str) -> String {
+    format!("{url}\n{stream_format}\n{audio_track}")
+}
+
+/// Stop a destination's pump: ask it to close its session cleanly (the
+/// platform gets its goodbye instead of a dropped connection), give it 1.5 s,
+/// then abort whatever is left - a pump stuck in a connect loop would
+/// otherwise run on detached. A pump cut off mid-send never clears its own
+/// state, so it is cleared here: it no longer reads as live, and its read
+/// position no longer holds back the buffer's trim.
+async fn stop_pump(
+    ctrl: &controller::Controller,
+    id: &str,
+    handle: tokio::task::JoinHandle<std::io::Result<()>>,
+) {
+    let state = ctrl.destination_state(id);
+    state
+        .shutdown_requested
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let abort = handle.abort_handle();
+    let _ = tokio::time::timeout(Duration::from_millis(1500), handle).await;
+    abort.abort();
+    state
+        .egress_alive
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    state
+        .consumer_seq
+        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+}
+
 async fn manage_test_sink(
     child: &mut Option<tokio::process::Child>,
     last_spawn: &mut Option<std::time::Instant>,
@@ -1155,7 +1329,8 @@ fn resolve_port_conflict(label: &str, port: u16, host: &str) -> Option<u16> {
     }
 }
 
-/// Surface a fatal, pre-runtime error on every platform. The Windows release
+/// Surface a pre-runtime problem the user must see (fatal errors, and the
+/// settings-reset notice) on every platform. The Windows release
 /// build has no console, and a Linux desktop launched from a `.desktop` entry
 /// has none either, so a bare stderr line would vanish. Always print, then add
 /// the platform's native surface on top.
@@ -1375,6 +1550,32 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
+    fn vertical_wait_logs_once_per_session_after_the_grace() {
+        let mut log = super::VerticalWaitLog::default();
+        let start = std::time::Instant::now();
+        let later = start + super::VERTICAL_WAIT_GRACE;
+        assert!(
+            !log.missing("tiktok", 1, start),
+            "first look only starts the clock"
+        );
+        assert!(!log.missing("tiktok", 1, start + std::time::Duration::from_millis(10)));
+        assert!(
+            log.missing("tiktok", 1, later),
+            "logs once the grace has passed"
+        );
+        assert!(
+            !log.missing("tiktok", 1, later),
+            "and only once per session"
+        );
+        assert!(
+            !log.missing("tiktok", 2, later),
+            "a new OBS session starts over"
+        );
+        log.retain(|id| id != "tiktok");
+        assert!(log.seen.is_empty(), "deleted destinations are forgotten");
+    }
+
+    #[test]
     fn anchor_dir_picks_the_folder_holding_the_exe() {
         let exe = PathBuf::from("C:/Users/me/Desktop/InstantClone/instantclone.exe");
         assert_eq!(
@@ -1461,5 +1662,23 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// A running pump restarts when anything it only reads at start
+    /// changes: the URL, the stream format, or the audio track.
+    #[test]
+    fn a_pump_restarts_for_its_url_format_or_audio_track() {
+        let base = super::pump_signature("rtmp://a/app/key", "horizontal", "auto");
+        assert_eq!(
+            base,
+            super::pump_signature("rtmp://a/app/key", "horizontal", "auto")
+        );
+        for changed in [
+            super::pump_signature("rtmp://b/app/key", "horizontal", "auto"),
+            super::pump_signature("rtmp://a/app/key", "vertical", "auto"),
+            super::pump_signature("rtmp://a/app/key", "horizontal", "2"),
+        ] {
+            assert_ne!(base, changed);
+        }
     }
 }
