@@ -576,9 +576,10 @@ pub struct Controller {
     /// OBS is back): the delay tail ends there. A frozen OBS can keep
     /// sending audio, so the ring's own newest seq would keep moving.
     hold_tail_end_seq: AtomicU64,
-    /// The last hold ran out while OBS was still gone: a destination still
-    /// airing the delay tail finishes it, then ends (a delay as long as the
-    /// hold time or longer airs in full). Not when the streamer ended it.
+    /// OBS is gone with no hold covering it (crash protection off, OBS
+    /// stopped on purpose, or the hold ran out): a destination still airing
+    /// the delay tail finishes it, then ends, as if OBS had sent its end
+    /// through the delay too. Not when the streamer ended it.
     tail_plays_out: AtomicBool,
     /// "The buffer holds only N s" was logged for the armed delay; cleared
     /// on the next arm so each new value is checked once.
@@ -626,6 +627,12 @@ pub struct Controller {
     // Ingest-side stats
     ingest_disconnects: AtomicU32,
     rate_in: RateMeter, // inbound (from OBS)
+    // Video tags only. Viewers decode the video track, so the Twitch
+    // mobile-decoder check compares this, not the total with audio.
+    rate_video_in: RateMeter,
+    // The current publisher connected over loopback, so the OBS profile on
+    // this machine is the one streaming. Set per publisher in `begin_publish`.
+    publisher_local: AtomicBool,
 
     // The integrations engine, attached once at startup. Events reach it
     // through `emit`, which never blocks and works from any thread.
@@ -815,6 +822,8 @@ impl Controller {
             destinations: crate::sync::RwLock::new(HashMap::new()),
             ingest_disconnects: AtomicU32::new(0),
             rate_in: RateMeter::default(),
+            rate_video_in: RateMeter::default(),
+            publisher_local: AtomicBool::new(false),
             integrations: std::sync::OnceLock::new(),
             ingest_key: crate::sync::Mutex::new(String::new()),
             // 5 wrong keys then a short exponential lockout. A legit OBS uses
@@ -1170,6 +1179,14 @@ impl Controller {
                 return last as u64;
             }
             wrap_high -= 1;
+        } else if last - wire_ts > MAX_TS_STEP_BACK_MS {
+            // Far behind the timeline, and not a wrap: no interleaving is
+            // seconds long. OBS ends an Enhanced Broadcasting stream with
+            // SequenceEnd tags stamped 0, and adopting that stamp made the
+            // buffer's newest moment read 0: the delay still to air looked
+            // like none, and the destination was restarted mid-tail. Pin it
+            // to where we are, as for a stamp from before the session.
+            return ((wrap_high as u64) << 32) | (last as u64);
         }
         self.input_ts_wrap_high.store(wrap_high, Ordering::Relaxed);
         self.last_input_ts_u32.store(wire_ts, Ordering::Relaxed);
@@ -1334,6 +1351,12 @@ impl Controller {
         // A manual cut supersedes any scheduled "cut after this airs" -
         // the streamer chose "now" over "when the mark airs".
         self.safe_cut_input_ts.store(0, Ordering::Relaxed);
+        // OBS already left and its delay is still airing: there is no live
+        // to cut to, so the cut ends the stream. Jumping to the newest
+        // keyframe would still air the stream's last moments.
+        if self.tail_left().is_some() {
+            self.end_tail_now();
+        }
     }
 
     // --- "Cut after this airs" (scheduled safe cut) -------------------
@@ -1569,6 +1592,14 @@ impl Controller {
     pub fn bitrate_kbps(&self) -> u32 {
         self.rate_in.kbps()
     }
+    /// Inbound video bitrate alone (no audio tracks, no sequence headers).
+    pub fn video_bitrate_kbps(&self) -> u32 {
+        self.rate_video_in.kbps()
+    }
+    /// The current publisher connected from this machine.
+    pub fn publisher_local(&self) -> bool {
+        self.publisher_local.load(Ordering::Relaxed)
+    }
 
     // ---- Internal: ingest counters ----
 
@@ -1610,6 +1641,11 @@ impl Controller {
         // stream-key identity, so strip it here - otherwise the exact ingest key
         // arrives as `mykey?clientConfigId=...` and gets rejected as a wrong key.
         let stream_key = stream_key.split('?').next().unwrap_or(stream_key);
+        // An unparseable IP is treated as remote (fail-safe).
+        let local = peer_ip
+            .parse::<std::net::IpAddr>()
+            .map(|a| a.is_loopback())
+            .unwrap_or(false);
         // Ingest auth: when a key is configured, only a publisher using that
         // exact key gets in. Empty key (the default) accepts anyone, which is
         // the right behaviour on a local machine. Checked before the slot lock
@@ -1622,11 +1658,8 @@ impl Controller {
                 // behind an HTTP reverse proxy that could mask its IP - so it is
                 // no brute-force threat and must not be locked out of its own
                 // machine for a mistyped key. Apply the limiter to remote peers
-                // only; an unparseable IP is treated as remote (fail-safe).
-                let remote = !peer_ip
-                    .parse::<std::net::IpAddr>()
-                    .map(|a| a.is_loopback())
-                    .unwrap_or(false);
+                // only.
+                let remote = !local;
                 // Throttle first so a locked-out guesser burns no work.
                 if remote && self.ingest_limiter.check(peer_ip).is_err() {
                     self.log_rejected_publish("ingest: rejected publisher (rate limited)");
@@ -1733,6 +1766,7 @@ impl Controller {
         }
         // Bump token so any prior egress reader knows it's stale.
         let token = self.publisher_token.fetch_add(1, Ordering::SeqCst) + 1;
+        self.publisher_local.store(local, Ordering::Relaxed);
         self.ingest_alive.store(true, Ordering::Relaxed);
         self.resume_from_hold();
         if resuming {
@@ -1761,6 +1795,9 @@ impl Controller {
         // which are tiny and one-shot).
         if !is_seq {
             self.note_inbound_bytes(payload.len());
+            if kind == 9 {
+                self.rate_video_in.note(payload.len());
+            }
         }
         // Sample the encoder parameters the compatibility check compares
         // against the enabled destinations. Both are cheap: the dimension
@@ -1987,11 +2024,28 @@ impl Controller {
         // Decide the hold before ingest reads as dead: a pump that sees
         // ingest gone with no hold open ends its destination.
         let stopped = self.unpublish_received.swap(false, Ordering::Relaxed);
-        if !stopped || self.crash_protection.lock().every_disconnect {
+        if !stopped {
             self.start_hold(crate::crash_hold::HoldReason::Crash);
+        } else if self.crash_protection.lock().every_disconnect {
+            self.start_hold(crate::crash_hold::HoldReason::Stopped);
         } else if self.close_hold(HOLD_END_ENDED).is_some() {
             // Stopped on purpose while a freeze hold was up: that ends it.
             self.log("crash protection: OBS stopped the stream - destinations ended");
+        }
+        // No hold took over: what the delay still holds airs, then the
+        // destinations end. Viewers see the stream end when they would have
+        // seen everything else, not the delay's length early.
+        if !self.hold_active() {
+            self.hold_tail_end_seq
+                .store(self.ring.latest_seq().unwrap_or(NO_SEQ), Ordering::Relaxed);
+            self.tail_plays_out.store(true, Ordering::Relaxed);
+            let behind = self.current_delay_ms();
+            if behind >= 1_000 {
+                self.log(format!(
+                    "delay: airing the last {} s before the destinations end (End now cuts it)",
+                    behind / 1000
+                ));
+            }
         }
         // Only count when transitioning alive → dead, so a stray call
         // doesn't inflate the counter.
@@ -2109,6 +2163,15 @@ impl Controller {
         Some(self.resumed_after_seq.load(Ordering::Relaxed)).filter(|seq| *seq != NO_SEQ)
     }
 
+    /// The first ring seq a destination may start from. After a frozen OBS
+    /// recovers, everything it sent before the freeze has already aired
+    /// (as the delay tail of the hold), so a pump that starts later, or a
+    /// cut back to restore the delay, must never land there and replay it.
+    /// 0 when OBS never froze in this session.
+    fn fresh_from_seq(&self) -> u64 {
+        self.resumed_after_seq().map_or(0, |seq| seq + 1)
+    }
+
     /// The latest keyframe of a track the hold re-sends instead of the
     /// reconnect screen.
     pub fn held_keyframe(&self, track: u8) -> Option<Arc<[u8]>> {
@@ -2129,6 +2192,7 @@ impl Controller {
             // Off means no bookkeeping, and nothing stale left behind: an
             // old video stamp would read as a freeze and hold back egress.
             self.last_video_tag_ms.store(0, Ordering::Relaxed);
+            self.ingest_frozen.store(false, Ordering::Relaxed);
             self.held_keyframes.lock().clear();
             self.slate_cache.clear();
         }
@@ -2218,6 +2282,7 @@ impl Controller {
         let what = match reason {
             crate::crash_hold::HoldReason::Crash => "OBS dropped",
             crate::crash_hold::HoldReason::Freeze => "OBS stopped sending video",
+            crate::crash_hold::HoldReason::Stopped => "OBS stopped the stream",
         };
         self.log(format!(
             "crash protection: {what} - destinations stay live on the reconnect screen for up to {window}"
@@ -2229,6 +2294,7 @@ impl Controller {
                     match reason {
                         crate::crash_hold::HoldReason::Crash => "crash",
                         crate::crash_hold::HoldReason::Freeze => "freeze",
+                        crate::crash_hold::HoldReason::Stopped => "stopped",
                     },
                 )
                 .with("hold", fmt_duration(hold_for.as_millis() as u64))
@@ -2359,11 +2425,11 @@ impl Controller {
         ));
     }
 
-    /// End the hold now (dashboard, dock, tray or hotkey). True when a hold
-    /// was open.
+    /// End the hold now (dashboard, dock, tray or hotkey), or the delay
+    /// tail still airing after OBS left. True when either was on.
     pub fn end_hold_now(&self) -> bool {
         let Some(hold) = self.close_hold(HOLD_END_ENDED) else {
-            return false;
+            return self.end_tail_now();
         };
         self.tail_plays_out.store(false, Ordering::Relaxed);
         let lasted = crate::crash_hold::minutes_seconds(hold.started.elapsed());
@@ -2375,6 +2441,30 @@ impl Controller {
             fmt_duration(hold.started.elapsed().as_millis() as u64),
         ));
         true
+    }
+
+    /// Stop airing the delay tail: the destinations end at once.
+    fn end_tail_now(&self) -> bool {
+        if self.tail_left().is_none() {
+            return false;
+        }
+        self.tail_plays_out.store(false, Ordering::Relaxed);
+        self.log("delay: ended now - the rest of the delay didn't air");
+        true
+    }
+
+    /// How much of the delay is still to air after OBS left with no hold
+    /// covering it: `None` once no destination is airing it.
+    pub fn tail_left(&self) -> Option<Duration> {
+        if !self.obs_gone() || self.hold_active() || !self.tail_plays_out() {
+            return None;
+        }
+        let airing = self
+            .all_destination_states()
+            .iter()
+            .any(|(_, state)| state.egress_alive.load(Ordering::Relaxed));
+        let left = self.current_delay_ms();
+        (airing && left > 0).then(|| Duration::from_millis(u64::from(left)))
     }
 
     /// Attach the integrations engine. Called once at startup; events
@@ -2802,17 +2892,21 @@ pub async fn run_egress(
                 // Not reading any more: its position must not hold back the
                 // buffer's trim while it reconnects or waits.
                 dest.consumer_seq.store(u64::MAX, Ordering::Relaxed);
-                // Only a session that stayed up proves the endpoint works.
-                // A platform that accepts the publish and drops it at once
-                // (a bad key, a refusing edge) backs off like a failed
-                // connect instead of being redialled every second forever.
-                if connected_at.elapsed() >= STABLE_SESSION {
-                    backoff = Duration::from_secs(1);
-                }
                 // Only a platform connection that failed counts as a
                 // reconnect. The pump also ends cleanly when OBS goes away
                 // or the destination is switched off; neither is one.
                 let dropped = pump_result.is_err();
+                // A session that stayed up, or ended because of OBS rather
+                // than the platform, proves the endpoint works: an OBS
+                // restart must not wait out backoff left from old failures.
+                // A platform that accepts the publish and drops it at once
+                // (a bad key, a refusing edge), or a session that ends
+                // cleanly the moment it starts, backs off like a failed
+                // connect instead of being redialled every second forever.
+                let lasted = connected_at.elapsed();
+                if (!dropped && lasted >= MIN_CLEAN_SESSION) || lasted >= STABLE_SESSION {
+                    backoff = Duration::from_secs(1);
+                }
                 if let Err(e) = pump_result {
                     // Twitch/etc. sometimes echo the stream key in error
                     // descriptions ("Authentication failed for live_…").
@@ -2996,6 +3090,8 @@ async fn pump_dest(
     // Always lead with sequence headers + the IDR itself.
     send_sequence_headers(ctrl, dest, &mut sink, state.output_ts_base).await?;
 
+    // Airing what the delay held when OBS left with no hold covering it.
+    let mut airing_tail = false;
     loop {
         // Cooperative shutdown: when the supervisor flips this, we end
         // the session cleanly (sending deleteStream) instead of dropping
@@ -3039,6 +3135,7 @@ async fn pump_dest(
                     let _ = sink.send_delete_stream().await;
                     return Ok(());
                 }
+                airing_tail = true;
             } else if delay_tail_sent(ctrl, &state) {
                 let outcome =
                     crate::crash_hold::play(ctrl, dest, &mut sink, last_output_ts(&state)).await?;
@@ -3072,6 +3169,18 @@ async fn pump_dest(
         // tag - the upstream stream would freeze forever even though
         // ingest is happily receiving bytes.
         let current_token = ctrl.publisher_token();
+        if current_token != state.last_publisher_token && airing_tail {
+            // OBS started again before the old stream's delay finished
+            // airing. The new session wiped the buffer, and rejoining here
+            // would air its video live: end, and the supervisor reconnects
+            // at the delay, as it would after a stop.
+            ctrl.log(format!(
+                "[{}] OBS started again while the delay was airing - reconnecting",
+                dest.id
+            ));
+            let _ = sink.send_delete_stream().await;
+            return Ok(());
+        }
         if current_token != state.last_publisher_token {
             ctrl.log(format!("[{}] publisher reconnect - re-anchoring", dest.id));
             let watermark = ctrl.ring.latest_seq().unwrap_or(0);
@@ -3558,9 +3667,11 @@ fn idr_search_tolerance_ms(keyframe_interval_ms: u32) -> u32 {
 /// buffer reaches back that far.
 fn delayed_idr(ctrl: &Controller, target_ms: u64) -> Option<TagMeta> {
     let latest = ctrl.ring.latest_ts()?;
+    let fresh = ctrl.fresh_from_seq();
     let at_delay = latest
         .checked_sub(target_ms)
-        .and_then(|desired| ctrl.ring.newest_idr_at_or_before(desired));
+        .and_then(|desired| ctrl.ring.newest_idr_at_or_before(desired))
+        .filter(|idr| idr.seq >= fresh);
     // A full ring reaches back no further at this bitrate, so a longer
     // delay could never fill: it delays by as much as the ring holds
     // instead of waiting forever (`is_saturated`). Not from its very oldest
@@ -3573,7 +3684,8 @@ fn delayed_idr(ctrl: &Controller, target_ms: u64) -> Option<TagMeta> {
         let oldest = ctrl.ring.oldest_ts()?;
         ctrl.ring
             .newest_idr_at_or_before(oldest + FULL_RING_MARGIN_MS)
-            .or_else(|| ctrl.ring.oldest_idr_at_or_after(0))
+            .filter(|idr| idr.seq >= fresh)
+            .or_else(|| ctrl.ring.oldest_idr_at_or_after(fresh))
     })
 }
 
@@ -3588,6 +3700,16 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long a platform session has to stay up before a reconnect starts
 /// from the shortest backoff again.
 const STABLE_SESSION: Duration = Duration::from_secs(30);
+
+/// A session that ends cleanly (OBS stopped, the destination was switched
+/// off) resets the backoff only after this long. One that ends the moment
+/// it starts would otherwise redial the platform every second.
+const MIN_CLEAN_SESSION: Duration = Duration::from_secs(5);
+
+/// How far a tag may be stamped behind the last one and still be read as
+/// audio and video interleaving (a few ms in practice). Anything further
+/// back is pinned to the current moment (see `Controller::expand_ts`).
+const MAX_TS_STEP_BACK_MS: u32 = 10_000;
 
 /// A delay lands at or above its target (see `delayed_idr`); this much
 /// below it still counts as on target, for send jitter.
@@ -3963,7 +4085,10 @@ async fn wait_for_idr(
         let notified = ctrl.ring.on_append.notified();
         let found = match min_seq {
             Some(seq) => ctrl.ring.newest_idr_after(seq),
-            None => ctrl.ring.newest_idr(),
+            None => ctrl
+                .ring
+                .newest_idr()
+                .filter(|idr| idr.seq >= ctrl.fresh_from_seq()),
         };
         if let Some(m) = found {
             return Some(m);
@@ -4064,6 +4189,9 @@ mod hold_sim;
 
 #[cfg(test)]
 mod delay_sim;
+
+#[cfg(test)]
+mod user_sim;
 
 #[cfg(test)]
 mod tests {
@@ -5044,6 +5172,38 @@ mod tests {
     /// actually stamped in: promoting it puts one tag 49.7 days ahead, and
     /// `on_tag` feeds that to the trim, which then measures the whole ring
     /// against a cutoff past every frame in it and evicts the lot.
+    /// OBS stops an Enhanced Broadcasting stream with SequenceEnd tags
+    /// stamped 0. They must not rewind the timeline: the buffer's newest
+    /// moment is what the delay still to air is measured against.
+    #[test]
+    fn an_end_of_stream_tag_stamped_zero_does_not_rewind_the_timeline() {
+        let h = harness(0);
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        let v = [0x27u8; 64];
+        h.ctrl.on_tag(9, 200_000, &v, false, false);
+        h.ctrl.on_tag(9, 200_033, &v, false, false);
+
+        h.ctrl.on_tag(9, 0, &v, false, false);
+        assert_eq!(
+            h.ctrl.ring.latest_ts(),
+            Some(200_033),
+            "pinned, not rewound"
+        );
+
+        h.ctrl.on_tag(8, 200_020, &v, false, false);
+        assert_eq!(
+            h.ctrl.ring.latest_ts(),
+            Some(200_020),
+            "ordinary interleaving still reads as stamped"
+        );
+        h.ctrl.on_tag(9, 200_066, &v, false, false);
+        assert_eq!(
+            h.ctrl.ring.latest_ts(),
+            Some(200_066),
+            "and the timeline goes on"
+        );
+    }
+
     #[test]
     fn a_late_tag_at_the_wrap_stays_in_the_epoch_it_came_from() {
         let h = harness(0);

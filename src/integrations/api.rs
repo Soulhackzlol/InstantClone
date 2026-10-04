@@ -8,10 +8,10 @@
 
 use super::event;
 use super::model::{
-    valid_discord_webhook, valid_id, DiscordChannel, Integration, PhoneConnection, Trigger,
+    valid_discord_webhook, valid_id, DiscordChannel, Integration, PhoneConnection, Roles, Trigger,
     MAX_INTEGRATIONS,
 };
-use super::{presets, recipe, runner, twitch::Which};
+use super::{engine, presets, recipe, runner, twitch::Which};
 use crate::config::Settings;
 use crate::controller::Controller;
 use crate::json::{self, Value};
@@ -46,12 +46,21 @@ fn done() -> Reply {
     ok(json::obj([("ok", Value::Bool(true))]))
 }
 
+/// Why a Program or File step can't be set up from this request.
+const LOCAL_STEPS_LOCKED: &str = "running programs and writing files can only be set up on the \
+     streaming PC itself, or from here once the dashboard has a password (System > Security)";
+
 pub fn new_id() -> String {
     format!("i{}", &crate::crypto::random_token()[..12])
 }
 
 /// Handle `/integrations*`, `/connections/*`, `/twitch/*`. `None` when the
 /// path is not ours.
+///
+/// `local_steps_allowed` is false for a request from another device while
+/// the dashboard has no password. Anyone on the network could make such a
+/// request, so it may not add, change or switch on a step that runs a
+/// program or writes a file: from chat, that would run anything on the PC.
 pub async fn route(
     method: &str,
     path: &str,
@@ -59,19 +68,20 @@ pub async fn route(
     ctrl: &Arc<Controller>,
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
+    local_steps_allowed: bool,
 ) -> Option<Reply> {
     let handle = ctrl.integrations()?.clone();
     let req = || json::parse(body).unwrap_or(Value::Null);
     let reply = match (method, path) {
-        ("GET", "/integrations") => ok(overview(&handle, &settings.borrow())),
+        ("GET", "/integrations") => ok(overview(&handle, &settings.borrow(), local_steps_allowed)),
         ("GET", "/integrations/activity") => ok(json::obj([
             ("activity", handle.activity_json()),
             ("stats", handle.stats_json()),
             ("twitch", handle.twitch.status_json()),
         ])),
-        ("POST", "/integrations/save") => save(&req(), settings, cfg_path),
+        ("POST", "/integrations/save") => save(&req(), settings, cfg_path, local_steps_allowed),
         ("POST", "/integrations/add") => add(&req(), settings, cfg_path),
-        ("POST", "/integrations/toggle") => toggle(&req(), settings, cfg_path),
+        ("POST", "/integrations/toggle") => toggle(&req(), settings, cfg_path, local_steps_allowed),
         ("POST", "/integrations/delete") => {
             let id = req().str_or("id", "").to_string();
             update(settings, cfg_path, |s| {
@@ -81,6 +91,13 @@ pub async fn route(
         }
         ("POST", "/integrations/duplicate") => duplicate(&req(), settings, cfg_path),
         ("POST", "/integrations/test") => test(&req(), &handle).await,
+        // The live meter of a chat activity trigger being tuned.
+        ("POST", "/integrations/meter") => match req().get("trigger").map(meter_rules) {
+            Some(Ok(rules)) => ok(handle.chat_meter(&rules)),
+            Some(Err(e)) => fail(e),
+            None => fail("nothing to measure"),
+        },
+        ("GET", "/integrations/obs") => ok(handle.obs_status()),
         ("POST", "/integrations/fetch") => fetch(&req()).await,
         ("POST", "/integrations/convert") => convert(&req()),
         ("POST", "/integrations/alerts/test") => {
@@ -112,7 +129,7 @@ pub async fn route(
             done()
         }
         ("POST", "/integrations/export") => export(&req(), &settings.borrow()),
-        ("POST", "/integrations/import") => import(&req(), settings, cfg_path),
+        ("POST", "/integrations/import") => import(&req(), settings, cfg_path, local_steps_allowed),
         ("POST", "/connections/discord") => save_discord(&req(), settings, cfg_path),
         ("POST", "/connections/discord/delete") => delete_discord(&req(), settings, cfg_path),
         ("POST", "/connections/discord/test") => {
@@ -133,6 +150,13 @@ pub async fn route(
             handle.twitch_cancel_login();
             done()
         }
+        ("POST", "/twitch/shared-chat") => {
+            let on = req().bool_or("on", false);
+            update(settings, cfg_path, |s| {
+                s.twitch_shared_chat = on;
+                Ok(())
+            })
+        }
         ("POST", "/twitch/logout") => {
             handle.twitch_logout(Which::from_id(req().str_or("which", "main")));
             done()
@@ -140,6 +164,20 @@ pub async fn route(
         _ => return None,
     };
     Some(reply)
+}
+
+/// The rules of a chat activity trigger sent for the live meter.
+fn meter_rules(trigger: &Value) -> Result<super::model::ChatActivity, String> {
+    let handler = json::obj([
+        ("trigger", trigger.clone()),
+        ("steps", Value::Arr(Vec::new())),
+    ]);
+    let probe = json::obj([("handlers", Value::Arr(vec![handler]))]);
+    let integration = Integration::from_json(&probe)?;
+    match integration.handlers.into_iter().next().map(|h| h.trigger) {
+        Some(Trigger::ChatActivity(rules)) => Ok(rules),
+        _ => Err("that isn't a chat activity trigger".to_string()),
+    }
 }
 
 /// What a MIDI learn for an integration's shortcut is filed under, apart
@@ -195,7 +233,7 @@ fn update(
     done()
 }
 
-fn overview(handle: &super::Handle, s: &Settings) -> Value {
+fn overview(handle: &super::Handle, s: &Settings, local_steps_allowed: bool) -> Value {
     // Previews and "Try it" use the real channel once Twitch is connected.
     let channel = handle.twitch.channel();
     let global = Value::Arr(
@@ -226,8 +264,14 @@ fn overview(handle: &super::Handle, s: &Settings) -> Value {
         ("chat", event::vars_json(runner::CHAT_VARS)),
         (
             "web",
-            event::vars_json(&[("body", "{\"x\":1}"), ("query", "a=1")]),
+            event::vars_json(&[
+                ("body", "{\"x\":1}"),
+                ("query", "team=red"),
+                ("source", "stream_deck"),
+            ]),
         ),
+        ("activity", event::vars_json(engine::ACTIVITY_SAMPLES)),
+        ("scene", event::vars_json(engine::SCENE_SAMPLES)),
     ]);
     json::obj([
         (
@@ -269,6 +313,19 @@ fn overview(handle: &super::Handle, s: &Settings) -> Value {
             ),
         ),
         ("twitch", handle.twitch.status_json()),
+        ("twitch_shared_chat", Value::Bool(s.twitch_shared_chat)),
+        // Markers, clips and chat act on the logged-in channel; say so when
+        // the Twitch destinations stream somewhere else.
+        (
+            "twitch_other_channel",
+            Value::Bool(streams_to_other_channel(
+                &handle.twitch.main_user_id(),
+                &s.destinations,
+            )),
+        ),
+        // False on another device while the dashboard has no password:
+        // Run a program and Write a file are locked there (see `route`).
+        ("local_steps", Value::Bool(local_steps_allowed)),
         ("catalog", presets::catalog_json()),
         // Global hotkeys and MIDI pads only exist on Windows, and a combo
         // or pad that runs a delay action can't start an integration too.
@@ -316,11 +373,19 @@ fn mask_webhook(url: &str) -> String {
     }
 }
 
-fn save(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -> Reply {
+fn save(
+    req: &Value,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+    local_steps_allowed: bool,
+) -> Reply {
     let mut integration = match Integration::from_json(req) {
         Ok(i) => i,
         Err(e) => return fail(e),
     };
+    if !local_steps_allowed && integration.has_local_effects() {
+        return fail(LOCAL_STEPS_LOCKED);
+    }
     if integration.id.is_empty() {
         integration.id = new_id();
     }
@@ -398,11 +463,20 @@ pub fn unknown_vars(integration: &Integration) -> Vec<String> {
                 }
                 known.extend(runner::CHAT_VARS.iter().map(|(n, _)| n.to_string()));
             }
-            Trigger::Webhook { .. } => {
-                known.extend(["body", "query"].map(String::from));
+            // A button pressed through its Stream Deck address can carry a
+            // body too.
+            Trigger::Webhook { .. } | Trigger::Shortcut { .. } => {
+                known.extend(["body", "query", "source"].map(String::from));
                 prefixes.push("body.".to_string());
+                prefixes.push("query.".to_string());
             }
-            Trigger::Timer { .. } | Trigger::Shortcut { .. } => {}
+            Trigger::ChatActivity(_) => {
+                known.extend(engine::ACTIVITY_SAMPLES.iter().map(|(n, _)| n.to_string()))
+            }
+            Trigger::Scene { .. } => {
+                known.extend(engine::SCENE_SAMPLES.iter().map(|(n, _)| n.to_string()))
+            }
+            Trigger::Timer { .. } => {}
         }
         visit_steps(&h.steps, &mut |s| match s.kind {
             StepKind::Http => prefixes.push(match s.param("save_as").trim() {
@@ -445,7 +519,7 @@ fn with_id(reply: Reply, id: &str) -> Reply {
 /// Windows gives a hotkey to one owner, and a pad would do both.
 fn shortcut_taken(integration: &Integration, s: &Settings) -> Option<String> {
     integration.handlers.iter().find_map(|h| {
-        let Trigger::Shortcut { hotkey, midi } = &h.trigger else {
+        let Trigger::Shortcut { hotkey, midi, .. } = &h.trigger else {
             return None;
         };
         let key_owner = s
@@ -474,6 +548,24 @@ fn shortcut_taken(integration: &Integration, s: &Settings) -> Option<String> {
 }
 
 /// Every Discord step must point at a connection that exists.
+/// Whether every enabled Twitch destination streams to a channel other
+/// than `user_id`'s. The channel comes from the id Twitch puts in a stream
+/// key (`live_<id>_…`); keys in another shape say nothing either way.
+fn streams_to_other_channel(user_id: &str, destinations: &[crate::config::Destination]) -> bool {
+    let channels: Vec<&str> = destinations
+        .iter()
+        .filter(|d| d.enabled && d.platform == "twitch")
+        .filter_map(|d| key_channel(&d.stream_key))
+        .collect();
+    !user_id.is_empty() && !channels.is_empty() && !channels.contains(&user_id)
+}
+
+/// The channel id in a Twitch stream key, `live_<digits>_<secret>`.
+fn key_channel(key: &str) -> Option<&str> {
+    let (id, _) = key.trim().strip_prefix("live_")?.split_once('_')?;
+    (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then_some(id)
+}
+
 fn check_connections(integration: &Integration, s: &Settings) -> Result<(), String> {
     let mut gone = false;
     for h in &integration.handlers {
@@ -536,7 +628,12 @@ fn add(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) ->
     ]))
 }
 
-fn toggle(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -> Reply {
+fn toggle(
+    req: &Value,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+    local_steps_allowed: bool,
+) -> Reply {
     let id = req.str_or("id", "").to_string();
     let enabled = req.bool_or("enabled", true);
     update(settings, cfg_path, |s| {
@@ -547,6 +644,9 @@ fn toggle(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path)
             .ok_or("that integration no longer exists")?;
         if enabled {
             let integration = &s.integrations[at];
+            if !local_steps_allowed && integration.has_local_effects() {
+                return Err(LOCAL_STEPS_LOCKED.to_string());
+            }
             let errors = integration.validate();
             if !errors.is_empty() {
                 return Err(format!("finish setting it up first: {}", errors.join("; ")));
@@ -586,9 +686,17 @@ fn duplicate(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Pa
         for h in &mut copy.handlers {
             match &mut h.trigger {
                 Trigger::Webhook { token } => *token = new_id() + &new_id(),
-                Trigger::Shortcut { hotkey, midi } => {
+                Trigger::Shortcut {
+                    hotkey,
+                    midi,
+                    token,
+                    ..
+                } => {
                     hotkey.clear();
                     midi.clear();
+                    if !token.is_empty() {
+                        *token = new_id() + &new_id();
+                    }
                 }
                 _ => {}
             }
@@ -609,7 +717,18 @@ async fn test(req: &Value, handle: &super::Handle) -> Reply {
     if handler >= integration.handlers.len() {
         return fail("that trigger doesn't exist");
     }
-    match handle.test(integration, handler).await {
+    let values = match req.get("values") {
+        Some(Value::Obj(fields)) => fields
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_display()))
+            .collect(),
+        _ => Default::default(),
+    };
+    let run = engine::TestRun {
+        values,
+        dry: req.bool_or("dry", false),
+    };
+    match handle.test(integration, handler, run).await {
         Some(record) => ok(json::obj([
             ("ok", Value::Bool(true)),
             ("status", json::str(record.status)),
@@ -727,7 +846,12 @@ fn export(req: &Value, s: &Settings) -> Reply {
 }
 
 /// Preview a recipe (`apply` false) or add it (`apply` true).
-fn import(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -> Reply {
+fn import(
+    req: &Value,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+    local_steps_allowed: bool,
+) -> Reply {
     let mut parsed = match recipe::parse(req.str_or("recipe", ""), new_id) {
         Ok(r) => r,
         Err(e) => return fail(e),
@@ -740,6 +864,8 @@ fn import(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path)
                 json::obj([
                     ("name", json::str(&i.name)),
                     ("summary", json::str(summary(i))),
+                    ("triggers", Value::Arr(trigger_review(i))),
+                    ("effects", Value::Arr(effect_review(i))),
                 ])
             })
             .collect();
@@ -750,6 +876,9 @@ fn import(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path)
             ("uses_discord", Value::Bool(parsed.uses_discord())),
             ("local_effects", Value::Bool(parsed.has_local_effects())),
         ]));
+    }
+    if parsed.has_local_effects() && !local_steps_allowed {
+        return fail(LOCAL_STEPS_LOCKED);
     }
     if parsed.has_local_effects() && !req.bool_or("allow_local", false) {
         return fail("this recipe runs programs or writes files; confirm that you trust it");
@@ -785,6 +914,90 @@ fn import(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path)
     ]))
 }
 
+/// Who can start a chat trigger, in words. The broadcaster always can.
+fn who_can(roles: Roles) -> &'static str {
+    match (roles.everyone, roles.subs, roles.vips, roles.mods) {
+        (true, ..) => "anyone in chat",
+        (false, false, false, false) => "only you",
+        (false, false, false, true) => "only mods",
+        (false, false, true, true) => "mods and VIPs",
+        (false, true, _, _) => "subs and up",
+        _ => "chosen roles",
+    }
+}
+
+/// Every trigger of an imported integration and who can set it off, for
+/// the import preview.
+fn trigger_review(i: &Integration) -> Vec<Value> {
+    i.handlers
+        .iter()
+        .map(|h| {
+            let (what, who) = match &h.trigger {
+                Trigger::ChatCommand { command, roles, .. } => {
+                    (format!("{command} in chat"), who_can(*roles))
+                }
+                Trigger::ChatMessage { roles, .. } => ("a chat message".into(), who_can(*roles)),
+                Trigger::ChatActivity(a) => ("chat gets busy".into(), who_can(a.roles)),
+                Trigger::Webhook { .. } => ("a web call".into(), "apps with its secret link"),
+                Trigger::Shortcut { .. } => ("a button".into(), "you"),
+                Trigger::Event { kind, .. } => (kind.label().to_string(), ""),
+                Trigger::Timer { every_ms, .. } => (format!("every {} min", every_ms / 60_000), ""),
+                Trigger::Scene { scene, .. } => (format!("OBS switches to {scene}"), ""),
+            };
+            json::obj([("what", json::str(what)), ("who", json::str(who))])
+        })
+        .collect()
+}
+
+/// What an imported integration reaches, most serious first: `danger` for
+/// anything that runs on this PC or lets anyone in chat change the delay,
+/// `caution` for the stream and OBS, `info` for messages it sends.
+fn effect_review(i: &Integration) -> Vec<Value> {
+    use super::model::{visit_steps, StepKind};
+    let mut found: Vec<(&'static str, &'static str)> = Vec::new();
+    let mut add = |level, text| {
+        if !found.contains(&(level, text)) {
+            found.push((level, text));
+        }
+    };
+    for h in &i.handlers {
+        let from_anyone = match &h.trigger {
+            Trigger::ChatCommand { roles, .. } | Trigger::ChatMessage { roles, .. } => {
+                roles.everyone
+            }
+            Trigger::ChatActivity(a) => a.roles.everyone,
+            _ => false,
+        };
+        visit_steps(&h.steps, &mut |s| match s.kind {
+            StepKind::Program => add("danger", "Runs a program on this PC"),
+            StepKind::File => add("danger", "Writes a file on this PC"),
+            StepKind::DelayAction if from_anyone => {
+                add("danger", "Anyone in chat can change your delay")
+            }
+            StepKind::DelayAction => add("caution", "Changes your delay"),
+            StepKind::Obs => add("caution", "Controls OBS (scenes, sources, text)"),
+            StepKind::Http => add("caution", "Calls a web address you fill in"),
+            StepKind::Clip => add("info", "Makes clips"),
+            StepKind::Marker => add("info", "Adds VOD markers"),
+            StepKind::Discord => add("info", "Posts on Discord"),
+            StepKind::Chat => add("info", "Writes in your Twitch chat"),
+            StepKind::Phone => add("info", "Sends a push to your phone"),
+            StepKind::Overlay => add("info", "Shows an alert on stream"),
+            _ => {}
+        });
+    }
+    let rank = |level: &str| match level {
+        "danger" => 0,
+        "caution" => 1,
+        _ => 2,
+    };
+    found.sort_by_key(|(level, _)| rank(level));
+    found
+        .into_iter()
+        .map(|(level, text)| json::obj([("level", json::str(level)), ("text", json::str(text))]))
+        .collect()
+}
+
 /// One line describing an integration, for the import preview.
 fn summary(i: &Integration) -> String {
     let triggers: Vec<String> = i
@@ -798,7 +1011,9 @@ fn summary(i: &Integration) -> String {
                 format!("every {} min", every_ms / 60_000)
             }
             Trigger::Webhook { .. } => "a web call".to_string(),
-            Trigger::Shortcut { .. } => "a hotkey or MIDI pad".to_string(),
+            Trigger::Shortcut { .. } => "a button (hotkey, MIDI pad or Stream Deck)".to_string(),
+            Trigger::ChatActivity(_) => "chat gets busy".to_string(),
+            Trigger::Scene { scene, .. } => format!("OBS switches to {scene}"),
         })
         .collect();
     let steps: usize = i
@@ -883,7 +1098,18 @@ async fn test_discord(req: &Value, channels: Vec<DiscordChannel>) -> Reply {
         return fail("that channel no longer exists");
     };
     let sent = tokio::task::spawn_blocking(move || {
-        let body = super::effects::discord_body("🧪 Test message: InstantClone can post here.", "");
+        let body = super::effects::discord_body(&super::host::DiscordMessage {
+            content: String::new(),
+            card: Some(super::host::DiscordCard {
+                title: "🧪 Connected".into(),
+                description: "InstantClone can post here. Alerts, highlights and your stream timeline will show up like this.".into(),
+                color: runner::DEFAULT_CARD_COLOR,
+                footer: "InstantClone".into(),
+                timestamp: true,
+                ..Default::default()
+            }),
+            ping: String::new(),
+        });
         crate::https::https_agent_with_timeout(super::effects::HTTP_TIMEOUT)
             .post(&channel.url)
             .header("Content-Type", "application/json")
@@ -961,6 +1187,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_stream_key_names_its_channel() {
+        assert_eq!(key_channel("live_123456789_AbCdEf"), Some("123456789"));
+        assert_eq!(key_channel("live_abc_AbCdEf"), None);
+        assert_eq!(key_channel("sk_us-west_123"), None);
+        assert_eq!(key_channel("live_123"), None);
+    }
+
+    #[test]
+    fn streaming_to_another_channel_is_noticed() {
+        let twitch = |key: &str, enabled: bool| crate::config::Destination {
+            id: key.into(),
+            name: "Twitch".into(),
+            enabled,
+            platform: "twitch".into(),
+            stream_key: key.into(),
+            custom_egress_url: String::new(),
+            twitch_ingest: String::new(),
+            youtube_ingest: String::new(),
+            vod_audio: false,
+            vod_audio_inject_eb: false,
+            stream_format: "horizontal".into(),
+            audio_track: "auto".into(),
+        };
+        let mut list = vec![twitch("live_222_x", true)];
+        assert!(streams_to_other_channel("111", &list));
+        assert!(
+            !streams_to_other_channel("", &list),
+            "logged out says nothing"
+        );
+        list.push(twitch("live_111_y", true));
+        assert!(
+            !streams_to_other_channel("111", &list),
+            "one is the login's"
+        );
+        let off = vec![twitch("live_222_x", false)];
+        assert!(
+            !streams_to_other_channel("111", &off),
+            "only enabled ones count"
+        );
+    }
+
+    #[test]
     fn webhooks_are_masked() {
         assert_eq!(
             mask_webhook("https://discord.com/api/webhooks/123/abcDEF"),
@@ -1004,6 +1272,8 @@ mod tests {
                 trigger: Trigger::Shortcut {
                     hotkey: hotkey.into(),
                     midi: midi.into(),
+                    token: String::new(),
+                    only_live: false,
                 },
                 steps: vec![Step::new(StepKind::Clip, &[])],
             }];
@@ -1015,11 +1285,80 @@ mod tests {
     }
 
     #[test]
+    fn programs_and_files_are_set_up_only_from_this_pc_without_a_password() {
+        use super::super::model::{Step, StepKind};
+        let dir = std::env::temp_dir().join(format!("ic-local-steps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("instantclone.config.json");
+        let settings = Arc::new(watch::channel(Settings::defaults()).0);
+        let mut i = presets::build("delay_command", "d".into(), "").unwrap();
+        i.enabled = false;
+        i.handlers[0].steps.push(Step::new(
+            StepKind::Program,
+            &[("path", r"C:\Tools\thing.exe"), ("args", "")],
+        ));
+        let locked = |reply: Reply| reply.0 != "200 OK" && reply.2.contains("streaming PC");
+
+        assert!(locked(save(&i.to_json(), &settings, &cfg, false)));
+        assert_eq!(save(&i.to_json(), &settings, &cfg, true).0, "200 OK");
+        let switch = |on: bool| json::obj([("id", json::str(&i.id)), ("enabled", Value::Bool(on))]);
+        assert!(locked(toggle(&switch(true), &settings, &cfg, false)));
+        assert_eq!(
+            toggle(&switch(false), &settings, &cfg, false).0,
+            "200 OK",
+            "switching it off is always allowed"
+        );
+        let shared = json::obj([
+            (
+                "recipe",
+                json::str(recipe::export("kit", std::slice::from_ref(&i))),
+            ),
+            ("apply", Value::Bool(true)),
+            ("allow_local", Value::Bool(true)),
+        ]);
+        assert!(locked(import(&shared, &settings, &cfg, false)));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_import_preview_says_who_can_start_it_and_what_it_reaches() {
+        use super::super::model::{Step, StepKind};
+        let mut i = presets::build("mod_controls", "m".into(), "").unwrap();
+        let levels = |i: &Integration| -> Vec<(String, String)> {
+            effect_review(i)
+                .iter()
+                .map(|e| (e.str_or("level", "").into(), e.str_or("text", "").into()))
+                .collect()
+        };
+        assert_eq!(
+            trigger_review(&i)[0].str_or("who", ""),
+            "only mods",
+            "mod controls stay with mods"
+        );
+        assert!(levels(&i).contains(&("caution".into(), "Changes your delay".into())));
+
+        if let Trigger::ChatCommand { roles, .. } = &mut i.handlers[0].trigger {
+            *roles = Roles::EVERYONE;
+        }
+        i.handlers[0]
+            .steps
+            .push(Step::new(StepKind::Program, &[("path", ""), ("args", "")]));
+        let effects = levels(&i);
+        assert_eq!(effects[0].0, "danger", "the worst comes first");
+        assert!(effects.contains(&(
+            "danger".into(),
+            "Anyone in chat can change your delay".into()
+        )));
+        assert!(effects.contains(&("danger".into(), "Runs a program on this PC".into())));
+    }
+
+    #[test]
     fn summaries_name_the_triggers() {
         let i = presets::build("mod_controls", "m".into(), "").unwrap();
         assert_eq!(
             summary(&i),
-            "When !cut in chat, !setdelay in chat · 6 steps"
+            "When !cut in chat, !setdelay in chat · 8 steps"
         );
     }
 }

@@ -100,6 +100,9 @@ pub enum HoldReason {
     Crash,
     /// OBS is still connected but stopped sending video.
     Freeze,
+    /// OBS stopped the stream on purpose, and crash protection holds every
+    /// disconnect.
+    Stopped,
 }
 
 /// Where the hold stands, as the pumps see it.

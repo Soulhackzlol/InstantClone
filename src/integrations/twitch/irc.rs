@@ -38,6 +38,9 @@ pub struct ChatMessage {
     pub is_mod: bool,
     pub is_vip: bool,
     pub is_sub: bool,
+    /// Sent in a partner channel during a Shared Chat session: Twitch
+    /// shows it here too, tagged with the room it came from.
+    pub from_shared_chat: bool,
 }
 
 /// A line to post, optionally as a reply. `delivery` hears what became of
@@ -368,6 +371,10 @@ fn chat_message(line: &Line) -> Option<ChatMessage> {
         is_mod: line.tag("mod") == "1" || has_badge("moderator"),
         is_vip: has_badge("vip") || line.tag("vip") == "1",
         is_sub: line.tag("subscriber") == "1" || has_badge("subscriber") || has_badge("founder"),
+        from_shared_chat: {
+            let source = line.tag("source-room-id");
+            !source.is_empty() && source != line.tag("room-id")
+        },
     })
 }
 
@@ -387,6 +394,17 @@ mod tests {
         assert_eq!(msg.text, "!delay please");
         assert!(msg.is_mod && msg.is_sub && !msg.is_vip && !msg.is_broadcaster);
         assert_eq!(msg.id, "b34ccfc7-4977-403a-8a94-33c6bac34fb8");
+    }
+
+    #[test]
+    fn notices_messages_from_a_shared_chat_partner() {
+        let partner = "@badges=;display-name=Bo;room-id=111;source-room-id=222 :bo!bo@bo.tmi.twitch.tv PRIVMSG #texaz :!delay";
+        assert!(chat_message(&parse_line(partner)).unwrap().from_shared_chat);
+        let ours = "@badges=;display-name=Al;room-id=111;source-room-id=111 :al!al@al.tmi.twitch.tv PRIVMSG #texaz :!delay";
+        assert!(!chat_message(&parse_line(ours)).unwrap().from_shared_chat);
+        let plain =
+            "@badges=;display-name=Al;room-id=111 :al!al@al.tmi.twitch.tv PRIVMSG #texaz :!delay";
+        assert!(!chat_message(&parse_line(plain)).unwrap().from_shared_chat);
     }
 
     #[test]

@@ -23,6 +23,13 @@ pub struct LiveState {
     pub bitrate_kbps: u64,
     /// The connected Twitch channel's login, or empty.
     pub channel: String,
+    /// Whether a stream is on (see `session::Session`): between streams
+    /// there is no timeline to add to.
+    pub streaming: bool,
+    /// How long this stream has run, 0 when none is on.
+    pub uptime_ms: u64,
+    /// crash, delay, live or off: see `EventKind::OnAirChanged`.
+    pub onair: String,
 }
 
 pub struct HttpRequest {
@@ -42,6 +49,33 @@ pub struct ClipInfo {
     pub url: String,
 }
 
+/// A Discord message to post: plain `content`, a card, or both (the
+/// content then sits above the card, where a link unfurls into a player).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DiscordMessage {
+    pub content: String,
+    pub card: Option<DiscordCard>,
+    /// `here`, `everyone`, `role:<id>` or empty.
+    pub ping: String,
+}
+
+/// A Discord embed: the colored card. Every field is already filled in;
+/// `effects::discord_body` drops what Discord would refuse.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DiscordCard {
+    pub title: String,
+    /// The title links here when it is a web address.
+    pub url: String,
+    pub description: String,
+    pub color: u32,
+    /// (name, value, inline)
+    pub fields: Vec<(String, String, bool)>,
+    pub footer: String,
+    pub timestamp: bool,
+    pub image: String,
+    pub thumbnail: String,
+}
+
 /// A Discord message that went out.
 pub struct DiscordPosted {
     /// Discord's id for it, for editing it later; empty if none came back.
@@ -57,8 +91,7 @@ pub trait Host: Send + Sync {
     fn discord(
         &self,
         webhook_url: &str,
-        content: &str,
-        ping: &str,
+        message: &DiscordMessage,
         edit: Option<&str>,
     ) -> Result<DiscordPosted, String>;
     fn http(&self, request: HttpRequest) -> Result<HttpResponse, String>;
@@ -82,6 +115,8 @@ pub trait Host: Send + Sync {
     fn file(&self, path: &str, text: &str, append: bool) -> Result<(), String>;
     /// Put a card on the alerts browser source for `seconds`.
     fn overlay(&self, title: &str, text: &str, seconds: u64);
+    /// Ask OBS to do something, through its WebSocket server.
+    fn obs(&self, action: super::obsws::Action) -> Result<(), String>;
 }
 
 /// `30s`, `1m 30s`, or empty for no delay, so `{delay|off}` reads naturally.
@@ -94,6 +129,28 @@ pub fn fmt_delay(ms: u32) -> String {
         (0, s) => format!("{s}s"),
         (m, 0) => format!("{m}m"),
         (m, s) => format!("{m}m {s}s"),
+    }
+}
+
+/// A stream position, the way YouTube chapters and VOD players write it:
+/// `12:31`, or `1:04:10` past the hour.
+pub fn fmt_clock(ms: u64) -> String {
+    let total = ms / 1000;
+    let (h, m, s) = (total / 3600, total / 60 % 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// `3h 12m`, `12m`, `40 s`: how long a whole stream ran.
+pub fn fmt_span(ms: u64) -> String {
+    let total = ms / 1000;
+    match (total / 3600, total / 60 % 60) {
+        (0, 0) => format!("{total} s"),
+        (0, m) => format!("{m}m"),
+        (h, m) => format!("{h}h {m:02}m"),
     }
 }
 
@@ -118,6 +175,16 @@ mod tests {
         assert_eq!(fmt_delay(90_000), "1m 30s");
         assert_eq!(fmt_delay(120_000), "2m");
         assert_eq!(fmt_delay(29_600), "30s");
+    }
+
+    #[test]
+    fn stream_positions_read_like_a_player() {
+        assert_eq!(fmt_clock(0), "0:00");
+        assert_eq!(fmt_clock(751_000), "12:31");
+        assert_eq!(fmt_clock(3_850_000), "1:04:10");
+        assert_eq!(fmt_span(40_000), "40 s");
+        assert_eq!(fmt_span(720_000), "12m");
+        assert_eq!(fmt_span(11_520_000), "3h 12m");
     }
 
     #[test]

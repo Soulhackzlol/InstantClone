@@ -16,7 +16,11 @@
 //! - `engine`: the isolated thread that matches events to integrations.
 //! - `twitch`: login, token upkeep, chat, markers and clips.
 //! - `store`: Twitch logins and counters, kept apart from the settings.
+//! - `timeline`: this stream's timeline and YouTube chapters.
+//! - `activity`: the chat activity trigger's sliding window.
+//! - `obsws`: the obs-websocket connection scene triggers listen on.
 
+pub mod activity;
 pub mod alerts;
 pub mod api;
 pub mod botcmd;
@@ -26,11 +30,14 @@ pub mod engine;
 pub mod event;
 pub mod host;
 pub mod model;
+pub mod obsws;
 pub mod presets;
 pub mod recipe;
 pub mod runner;
+pub mod session;
 pub mod store;
 pub mod template;
+pub mod timeline;
 pub mod twitch;
 
 pub use engine::Handle;

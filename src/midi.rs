@@ -901,6 +901,8 @@ mod tests {
             trigger: Trigger::Shortcut {
                 hotkey: String::new(),
                 midi: "note:1:40".into(),
+                token: String::new(),
+                only_live: false,
             },
             steps: vec![Step::new(StepKind::Clip, &[])],
         }];

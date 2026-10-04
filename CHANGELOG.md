@@ -4,17 +4,69 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.15] - Crash protection, Integrations (experimental), vertical without Twitch, and Enhanced Broadcasting on your GPU
+
+### Crash protection: OBS crashes, the stream stays up
+
+When OBS crashed, froze or lost its connection, every destination went
+offline with it, and viewers were gone by the time OBS was back. Turn on
+**Settings -> System -> Crash protection** and they stay live on a
+reconnect screen instead, for up to the time you pick (30 s to 5 min).
+
+- **A reconnect screen, not a black frame.** Five styles: **Whisper**
+  (pulsing dots), **Beacon** (radar rings), **Orbit** (a spinner),
+  **Studio** (a lower third, lifted clear of TikTok's buttons on vertical
+  canvases) and **Arcade** (pixel art). Pick your own accent, background,
+  headline and subline. Settings shows every style as a card with your
+  colours and text on it, plus an animated preview in 16:9 and 9:16,
+  drawn by the same code that streams it. Every style animates in small
+  steps over a small area, so the loop stays light (under 1 Mbps at
+  1080p). It plays at the resolution each destination receives, with
+  silent audio, after any buffered delay has aired, and timestamps carry
+  on from the last real frame, so platforms see one unbroken stream.
+- **OBS coming back resumes on the same connection.** No reconnect on the
+  platform side: the stream picks up at OBS's first keyframe. With a delay
+  armed, the screen stays up until the delay has rebuilt, so viewers never
+  see live.
+- **Frozen OBS counts too.** OBS still connected but sending no video for
+  3 seconds opens the same screen, and its next frame closes it.
+- **Enhanced Broadcasting is covered.** Every track of a Twitch multitrack
+  stream gets its own screen at its own resolution, the VOD audio track
+  gets its own silence, and OBS reconnecting is handed the same Twitch
+  session, so the destination carries on instead of restarting. Twitch
+  VOD-audio sessions are kept the same way.
+- **HEVC and AV1 hold the last frame.** The screen is H.264, so those
+  tracks re-send their last keyframe once a second instead.
+- **Stopping in OBS never opens the screen,** even while it is up for a
+  frozen OBS: the stream ends once your delay has aired. Only a drop
+  without a goodbye opens it. **Protect every disconnect** (under
+  Advanced) covers encoders that fail cleanly, like an NVENC error.
+- **End it early from anywhere.** A banner on the dashboard and a strip in
+  the OBS dock show the countdown with **End now** (click twice), the tray
+  menu has **End crash protection** while it is on air, and it can be
+  bound to a global hotkey or a MIDI pad. `POST /crash-protection/end`
+  does the same for a Stream Deck.
+- **You hear about it.** The destination card reads **Reconnect screen**,
+  the tray status shows the time left, and the "Stream alerts" integration
+  posts on Discord when the screen goes on air, when OBS is back, and when
+  it ends.
+- **Good to know.** After a crash, OBS asks whether to run in Safe Mode:
+  pick **Run in Normal Mode**, or your scripts and plugins (the VOD track
+  script too) stay off. The banner says so while it waits. The hold time
+  counts from the crash, so a delay still airing uses part of it. A delay
+  as long as the hold time or longer airs in full, and then the stream
+  ends.
 
 ### Integrations (experimental): InstantClone talks to Discord, Twitch chat, your phone and your tools
 
-A new **Integrations** tab. Every card shows exactly what it sends (the
-Discord message, the chat reply, the phone push, the VOD marker), so you
-know what each one does before you switch it on.
+A new **Integrations** tab. Each card previews its Discord message, chat
+reply, phone push or VOD marker before you switch it on.
 
 Integrations are **experimental**: they work, but how they look and how
 you set them up (mostly the screens) may still change between versions.
-The tab says so too.
+Please try them and tell us what breaks or confuses you: the tab's
+**Report it** link opens an integrations issue form, and a recipe from
+**Share** shows what you built without any of your keys.
 
 - **A catalog of ready-made integrations**, one click to add: a crash
   alert on Discord, a `!delay` command that always answers with your
@@ -36,6 +88,10 @@ The tab says so too.
   captures what they actually saw.
 - **Test runs** send the real messages marked `[TEST]`, skip the waits
   and never touch the stream, then show every step and what it answered.
+  A **dry run** sends nothing at all and shows what each step would have
+  sent, and you can test with your own values ("a Kick drop", "a mod
+  typing !chapter Intro") instead of the samples. A test of a "Kick only"
+  alert reads Kick, not YouTube.
 - **Chat commands that call any API.** Add **Command from a website** and
   paste the command a site gives you for Nightbot, StreamElements,
   Fossabot or Streamlabs: the address, the reply and the command name fill
@@ -51,8 +107,9 @@ The tab says so too.
   message to "back after 38 s" instead of adding another. Any Discord step
   can "edit the last one".
 - **Start an integration from a hotkey or a MIDI pad**, even in game.
-  The new **Clip button** clips the last moments, drops the link in chat
-  and says so on stream, from one key.
+  The new **Clip button** clips the moment (once it has aired, so the delay
+  never makes it clip the wrong seconds), drops the link in chat and says
+  so on stream, from one key.
 - **Show on stream.** Add InstantClone's alerts page to OBS once as a
   browser source; "Show on stream" steps put a card on it, queued so two
   never overlap. Tests never put anything on stream.
@@ -85,35 +142,144 @@ The tab says so too.
   own thread; a slow webhook or a busy chat never delays a frame, and a
   failing integration shows up in the tab with the reason instead of
   failing quietly.
+- **Discord cards.** Any Discord step can send a card: a colored edge, a
+  title, fields side by side, a footer with the time, images, and a line
+  above it where a clip link unfurls into a player. You write on the card
+  itself in the editor, pick its color from swatches, and add or resize
+  fields in place. The catalog's Discord alerts are cards now.
+- **Smart platform alerts.** Quiet on blips: one card when a platform
+  is really down (still down after 60 s), turning green when it's back;
+  one card when it keeps dropping (3 drops in 10 min), updating its count
+  live and turning green once it's steady again; and a health report
+  when the stream ends. Every threshold is yours to change.
+- **Stream timeline.** One Discord card per stream that writes itself:
+  crashes, delay changes, platform outages, highlights and chapters, each
+  with its place in the VOD (the delay is taken into account). Any
+  integration can add a line with the new **Timeline** step.
+- **Highlight button.** A hotkey, MIDI pad or Stream Deck button clips the
+  moment once it has aired, marks the VOD, adds it to the timeline and
+  posts it to Discord. When Twitch can't clip, the moment is still marked
+  and the stream shows "Marked, but Twitch couldn't clip it". A
+  `!highlight` for mods is one switch away, and answers the mod either way.
+  Presses during a long delay queue up instead of being turned away.
+- **Hype clip.** Chat decides when to clip. The new **Chat gets busy**
+  trigger takes rules you stack (busier than normal, how many people,
+  the words they use), all or any of them, over a window you pick.
+  "Busier than normal" is measured against your own chat, so one setting
+  fits a small and a huge channel. A live meter shows where chat is
+  against each rule while you tune it. It fires once per burst, then waits
+  for chat to calm down, so one hype moment is one clip.
+- **Chapters.** Mods type `!chapter Boss fight` to mark the VOD; when the
+  stream ends you get a YouTube chapter list ready to paste, with
+  YouTube's rules applied (the first at 0:00, each at least 10 s, three or
+  more). An optional "Technical difficulties" chapter for crashes goes
+  back to the chapter before once OBS is back.
+- **On-air light.** A light by your door: red when live, amber with the
+  delay on, flashing if OBS crashed, off at the end. Pick Home Assistant,
+  WLED or Philips Hue and paste its address. The light hears the current
+  state as soon as the app starts or the integration is switched on.
+- **Scene delay.** Your OBS scene runs the delay: on in game, back to live
+  in the lobby. It only acts once a scene has stayed on air (3 s by
+  default), so flicking through scenes does nothing, and never during the
+  reconnect screen. Scenes come straight from OBS's own WebSocket server,
+  whose settings InstantClone reads itself: switch the server on in OBS
+  and pick from your scene list. The "back to live" rule is "any other
+  scene", which never counts the game scene, and starting the stream
+  already in game puts the delay on too. Scene and button triggers can be
+  limited to while you stream.
+- **OBS steps.** Switch to a scene, show or hide a source, or change what
+  a text source says, from any integration. Scenes and sources are picked
+  from OBS's own lists, and chat can never choose them.
+- **A builder for real flows.** Steps move into and out of checks with
+  the arrow buttons, any step can be switched off without deleting it,
+  removing a step can be undone, and new blocks land right after the step
+  you picked. Each step only offers the values it can really use, grouped
+  by where they come from, and a step that misses something says what.
+  Saving keeps the builder open.
+- **Times read like times.** Every wait, cooldown and timer takes "10s",
+  "2m" or "1m 30s".
+- **Buttons work everywhere.** A hotkey or MIDI pad trigger is now a
+  **button**: it also gets its own address a Stream Deck, Bitfocus
+  Companion or any program can press. That works on any system, not just
+  Windows.
+- **New moments to react to:** a stream starts or ends (a crash OBS comes
+  back from is the same stream), the on-air state changes, a destination
+  comes back, stays down, keeps dropping or is steady again, and a line
+  is added to the timeline. New variables: `{uptime}`, `{vod_time}`,
+  `{onair}`, `{timeline}` and `{chapters}`. A Discord message can now also
+  be **finished**: edited one last time, and the next alert starts fresh.
+- **New packs:** Stream pro, Highlights and Studio. Every catalog entry and
+  pack shows everything it needs (Discord, Twitch, OBS…) and what's
+  already connected.
+- **Recipes say what they do before you add them:** who can start each
+  integration (anyone in chat, only mods…) and everything it reaches. A
+  program or file on your PC, or a delay anyone in chat can change, shows
+  in red; the delay and OBS in amber.
+- **Shared Chat is your choice.** While you share chat with other
+  streamers, their viewers can't use your commands or count toward "chat
+  gets busy" unless you switch on "listen to partner channels" in
+  Connections › Twitch.
+- **Clearer editors.** Fields show what they will say (sample values
+  filled in, links and bold drawn like Discord) and turn back into what
+  you wrote while you edit them. Insert buttons say what they hold ("how
+  long it was down") instead of variable names, options read as plain
+  sentences ("Repeat at most: once every 10 s", "Each time: updates the
+  same message"), a card that misses something says what under its name,
+  and the editor's switch says On or Off (draft).
 
-Your existing Discord webhook moves over by itself: it becomes a Discord
-connection plus a "Stream alerts" integration that sends the same
-messages as before.
+Fixes in the new integrations, found before release:
 
-### Security
+- A network blip with crash protection off no longer ends the stream:
+  OBS has a minute to come back before the health report, the chapters
+  and a new timeline go out.
+- Stopping on purpose with "hold on every disconnect" is no longer counted
+  as a crash, and doesn't make the on-air light flash.
+- A platform that keeps reconnecting no longer floods the timeline, and a
+  full timeline drops plain lines before chapters and highlights.
+- A "down" or "keeps dropping" card left open when a stream ended is no
+  longer edited from the next stream, far up the channel.
+- Timeline card updates arrive in order, wait out Discord's rate limit
+  instead of failing, and a highlight that finished after the stream
+  ended no longer adds a `0:00` line.
+- A card with only a title or fields can be switched on; the "Ping" option
+  shows when it can actually ping; each words rule counts its own words;
+  OBS's crash reasons are only offered where they can match, and filters
+  take lists and wildcards (`YouTube, Kick`, `*timed out*`).
+- Shared recipes keep the on-air light's states and give buttons a fresh
+  Stream Deck address, and a switched-off trigger or step no longer stops
+  the rest from being switched on.
+- Recipes can never pick an OBS scene or source, or keep a web request's
+  body by claiming to be a light; a card's link and images can't come
+  from chat; a wait filled in from chat lasts a minute at most.
+- An OBS request that timed out is dropped instead of being done late, and
+  a busy chat (a raid) is judged a few times a second instead of on every
+  message. Counters are saved with the rest every few seconds.
+- An OBS drop without crash protection shows in the health report and
+  lights the on-air light, and a moment's reconnect of OBS's WebSocket no
+  longer re-runs the scene delay.
+- Adding a pack before any Discord channel opens the Discord setup right
+  away, and the pack's integrations switch on once it's saved.
+- In the builder, Alt+Up and Alt+Down move the picked step, Ctrl+D copies
+  it and Delete removes it.
+- On a smaller window, the builder's steps keep their text readable: only
+  the picked step shows its move, copy and delete buttons, on a row of
+  their own. Chat-activity rules fit the side panel too.
+- A switched-on integration that pushes to your phone says "Needs your
+  phone" on its card until a phone is connected.
+- `!setdelay 0` turns the delay off. It used to set your default delay
+  instead, while chat said "Delay set to 0s". A "Set the delay" step left
+  blank still uses your default, and a new Mod controls answers
+  `!setdelay 9999` with the 600 s limit instead of claiming it.
+- `!setdelay` takes whole seconds only. `!setdelay 0.5` used to set 1 s
+  and `!setdelay 0.0004` your default delay, while chat said otherwise; a
+  new Mod controls now answers with how to use it, and checks have a new
+  "is a whole number".
+- Removing a Discord channel that couldn't be removed says so, instead of
+  "Channel removed".
+- A card's message box no longer shrinks and cuts its text when the
+  editor redraws while you type in it (most visible on a phone).
 
-- **Websites can't reach the dashboard any more.** With no dashboard
-  password, a web page could reach InstantClone through DNS rebinding: a
-  domain that re-resolves to your own PC. It could then save an
-  integration that runs a program. The dashboard now answers only when
-  it's opened by its address (`127.0.0.1`, `localhost` or a LAN IP).
-  Opening it by a name, such as behind a reverse proxy, needs a password.
-  Overlays, the alerts page and web call links keep working from
-  anywhere.
-- **Your settings can't be read by other websites.** Every page used to
-  let any website read it. Now only the overlay, alerts and delay-status
-  pages can be read from another site. The config (stream keys),
-  destinations, integrations and logs can't.
-- **Chat can't add arguments to a program.** A value typed in chat stays
-  one argument, whatever spaces or quotes it contains.
-- **Recipes leave out more**: request bodies and program arguments too.
-  An import is now cleaned the same way, so a hand-made recipe can't
-  bring in a web address, a program or a hotkey.
-- **Web requests don't follow redirects.** A redirect could have pointed
-  a request at the dashboard itself and posted its answer to chat. The
-  step now says where the server moved instead.
-
-### Fixes
+Also fixed before release:
 
 - **InstantClone no longer crashes in the first hour after Windows
   starts.** The Twitch login check worked out "an hour ago" from the
@@ -176,58 +342,18 @@ messages as before.
   - A chat reply starting with `/` stays within Twitch's 500 characters.
   - Logins in web addresses (`user:pass@`) are hidden like the rest.
   - Counters named after viewers stop at 5,000.
-- **Discord webhooks work.** The HTTPS client checked certificates
-  against a bundled list instead of Windows' own store, and refused
-  Discord's certificate chain, so every Discord alert failed silently. It
-  now uses the system store.
+- When the Twitch account you logged in with isn't the channel your
+  Twitch destination streams to, Connections says so, and markers and
+  clips show "Other channel" instead of failing with Twitch's "offline".
 
-## [0.1.15] - Crash protection, vertical without Twitch, and Enhanced Broadcasting on your GPU
+Your existing Discord webhook moves over by itself: it becomes a Discord
+connection plus a "Stream alerts" integration that sends the same
+messages as before.
 
-### Crash protection: OBS crashes, the stream stays up
-
-When OBS crashed, froze or lost its connection, every destination went
-offline with it, and viewers were gone by the time OBS was back. Turn on
-**Settings -> System -> Crash protection** and they stay live on a
-reconnect screen instead, for up to the time you pick (30 s to 5 min).
-
-- **A reconnect screen, not a black frame.** Five styles: **Whisper**
-  (pulsing dots), **Beacon** (radar rings), **Orbit** (a spinner),
-  **Studio** (a lower third, lifted clear of TikTok's buttons on vertical
-  canvases) and **Arcade** (pixel art). Pick your own accent, background,
-  headline and subline. Settings shows every style as a card with your
-  colours and text on it, plus an animated preview in 16:9 and 9:16,
-  drawn by the same code that streams it. Every style animates in small
-  steps over a small area, so the loop stays light (under 1 Mbps at
-  1080p). It plays at the resolution each destination receives, with
-  silent audio, after any buffered delay has aired, and timestamps carry
-  on from the last real frame, so platforms see one unbroken stream.
-- **OBS coming back resumes on the same connection.** No reconnect on the
-  platform side: the stream picks up at OBS's first keyframe. With a delay
-  armed, the screen stays up until the delay has rebuilt, so viewers never
-  see live.
-- **Frozen OBS counts too.** OBS still connected but sending no video for
-  3 seconds opens the same screen, and its next frame closes it.
-- **Enhanced Broadcasting is covered.** Every track of a Twitch multitrack
-  stream gets its own screen at its own resolution, the VOD audio track
-  gets its own silence, and OBS reconnecting is handed the same Twitch
-  session, so the destination carries on instead of restarting. Twitch
-  VOD-audio sessions are kept the same way.
-- **HEVC and AV1 hold the last frame.** The screen is H.264, so those
-  tracks re-send their last keyframe once a second instead.
-- **Stopping in OBS still ends the stream right away,** even while the
-  screen is up for a frozen OBS. Only a drop without a goodbye opens it. **Protect every disconnect** (under
-  Advanced) covers encoders that fail cleanly, like an NVENC error.
-- **End it early from anywhere.** A banner on the dashboard and a strip in
-  the OBS dock show the countdown with **End now** (click twice), the tray
-  menu has **End crash protection** while it is on air, and it can be
-  bound to a global hotkey or a MIDI pad. `POST /crash-protection/end`
-  does the same for a Stream Deck.
-- **You hear about it.** The destination card reads **Reconnect screen**,
-  the tray status shows the time left, and the Discord webhook posts when
-  the screen goes on air, when OBS is back, and when it ends.
-- **Good to know.** The hold time counts from the crash, so a delay still
-  airing uses part of it. A delay as long as the hold time or longer airs
-  in full, and then the stream ends.
+Going back to 0.1.14 afterwards: 0.1.14 doesn't know integrations, so it
+stops posting to Discord and drops your integrations the first time it
+saves its settings. Copy `instantclone.config.json` first if you might go
+back.
 
 ### Vertical (9:16) no longer needs a Twitch destination
 
@@ -305,8 +431,83 @@ Now it copies you instead:
 The event log says which one you got, for example `main track uses your OBS
 stream settings: h264_texture_amf, 6000 kbps`.
 
+### Security
+
+- **Websites can't reach the dashboard any more.** With no dashboard
+  password, a web page could reach InstantClone through DNS rebinding: a
+  domain that re-resolves to your own PC. It could then save an
+  integration that runs a program. The dashboard now answers only when
+  it's opened by its address (`127.0.0.1`, `localhost` or a LAN IP).
+  Opening it by a name, such as behind a reverse proxy, needs a password.
+  Overlays, the alerts page and web call links keep working from
+  anywhere.
+- **Your settings can't be read by other websites.** Every page used to
+  let any website read it. Now only the overlay, alerts and delay-status
+  pages can be read from another site. The config (your ingest key and webhooks),
+  destinations, integrations and logs can't.
+- **Programs and files are set up on the streaming PC.** With the
+  dashboard open to your network and no password, anyone on the network
+  could add a step that runs a program and start it from chat. Run a
+  program and Write a file can now only be added, changed or switched on
+  from the streaming PC itself, or from anywhere once the dashboard has a
+  password. Elsewhere they show as locked and say why.
+- **Chat can't run commands through a program.** A value typed in chat
+  stays one argument, and keeps only letters, numbers, spaces and simple
+  punctuation: a step like `cmd /c echo {arg1}` can't be talked into
+  running something else, and a value can't pass itself off as an option
+  (`--config`, `/s`).
+- **Web request addresses are hidden** until you click Show, like webhook
+  links: they can hold keys (`?key=`, a Hue bridge username).
+- **A stream key under six characters is no longer logged in the clear**
+  when a destination drops. Platform keys are never that short, but a
+  custom RTMP destination takes whatever you paste.
+- **Recipes leave out more**: request bodies and program arguments too.
+  An import is now cleaned the same way, so a hand-made recipe can't
+  bring in a web address, a program or a hotkey.
+- **Web requests don't follow redirects.** A redirect could have pointed
+  a request at the dashboard itself and posted its answer to chat. The
+  step now says where the server moved instead.
+
 ### Fixes
 
+- **Stopping in OBS no longer cuts the end of a delayed stream.** With a
+  delay on and no crash protection hold (protection off, or a stop it
+  lets through), the last seconds of the delay used to vanish: viewers
+  never saw your goodbye. Now the rest of the delay airs, then the stream
+  ends. A crash without protection airs what OBS sent before it, too. The
+  dashboard and dock show "Your delay is still airing" with a countdown,
+  and **End now** or **Cut delay** cuts it short. Starting OBS again before
+  it finishes reconnects the destinations at your delay, as before.
+- **Restarting OBS no longer leaves a destination offline for up to 30 s.**
+  After a platform had refused a few connections, the wait between
+  retries stayed long even once it worked, so a quick OBS restart had to
+  sit it out. A stream that ended because of OBS now resets that wait,
+  and one that ends the moment it starts backs off instead of redialling
+  the platform every second.
+- **Nothing airs twice after a freeze you ended.** When you ended the
+  reconnect screen of a frozen OBS (or it ran out) and OBS then recovered,
+  a destination starting afterwards could join on video from before the
+  freeze and replay it, sometimes over and over. It now joins OBS's new
+  video at your delay.
+- **A 9:16 destination stays on when OBS comes back from a crash.** It was
+  ended if its vertical canvas arrived a moment after the main one; it now
+  gets a few seconds' grace.
+- **End now when there's nothing left to end** says so, instead of "Stream
+  ended on every destination".
+- **Discord webhooks work.** The HTTPS client checked certificates
+  against a bundled list instead of Windows' own store, and refused
+  Discord's certificate chain, so every Discord alert failed silently. It
+  now uses the system store.
+- **The "Twitch · mobile risk" chip no longer flickers.** It read the
+  total bitrate one second at a time, so a stream at 8 Mbps bounced
+  across the line with every keyframe, and audio plus the VOD track
+  pushed a 7.8 Mbps video over it. It now reads the video alone,
+  averaged over 10 s, and clears only once it drops back under 7.7 Mbps.
+- **A warning when OBS ignores Enhanced Broadcasting.** OBS only applies
+  Stream settings while nothing is running: tick EB with the Replay
+  Buffer on and the next stream still goes out single-track, with no
+  vertical canvas. When OBS's saved settings have EB on but the stream
+  arrives single-track, the dashboard says so and how to fix it.
 - **Crash protection keeps a new Twitch session when the hold ends first.**
   If OBS came back and asked for a fresh Enhanced Broadcasting session just
   as the hold ran out (or you pressed End now), the session was thrown away

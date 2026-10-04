@@ -298,7 +298,8 @@ async function endHold() {
   }
   disarmEndHold();
   const r = await fetchJ('/crash-protection/end', { method: 'POST' });
-  toast(r.ok ? 'Stream ended on every destination' : 'Could not end the stream', r.ok ? 'ok' : 'err');
+  if (r.status === 409) toast(r.j?.error || 'Nothing to end', 'info');
+  else toast(r.ok ? 'Stream ended on every destination' : 'Could not end the stream', r.ok ? 'ok' : 'err');
   tick();
 }
 function disarmEndHold() {
@@ -482,9 +483,16 @@ function paintEgress() {
 
 // Crash protection: the reconnect screen is holding the destinations.
 function paintHold(hold) {
-  setHidden($('w-hold'), !hold);
+  const tail = !hold && s.tail_ms > 0;
+  setHidden($('w-hold'), !hold && !tail);
+  if (tail) {
+    setText($('hold-why'), 'Delay airing');
+    setText($('hold-clock'), fmtClock(s.tail_ms));
+    setText($('hold-sub'), 'OBS stopped. Ends when viewers reach the end');
+    return;
+  }
   if (!hold) { disarmEndHold(); return; }
-  setText($('hold-why'), hold.reason === 'freeze' ? 'OBS froze' : 'OBS dropped');
+  setText($('hold-why'), hold.reason === 'freeze' ? 'OBS froze' : hold.reason === 'stopped' ? 'OBS stopped' : 'OBS dropped');
   setText($('hold-clock'), fmtClock(hold.remaining_ms));
   const held = (s.destinations || []).filter(d => d.on_hold).length;
   setText($('hold-sub'), held
@@ -494,7 +502,8 @@ function paintHold(hold) {
 
 // Hint text: full sentences, or errors-only (encoder offline) if opted.
 function paintTip(ds, hold) {
-  const tip = hold ? 'Start streaming in OBS to resume.'
+  const tip = hold ? (hold.reason === 'crash' ? 'Reopen OBS (Run in Normal Mode) and start streaming to resume.' : 'Start streaming in OBS to resume.')
+    : s.tail_ms > 0 ? 'End now cuts it short.'
     : !s.ingest_alive ? 'Point your encoder at rtmp://…/live'
     : ds === 'active' && s.safe_cut_pending ? `Auto-cut in ~${Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000))}s - marked footage still airs.`
     : ds === 'active' ? `Live ${(s.current_delay_ms / 1000).toFixed(1)}s behind real time.`
@@ -513,6 +522,7 @@ function applyState(j) {
   if (pending && pending === ds) { pending = null; clearTimeout(pendingTimer); }   // the server caught up
   setNumberMode(ds);
   const [cls, text] = s.hold ? ['holding', 'Holding']
+    : s.tail_ms > 0 ? ['holding', 'Ending']
     : PHASE_LOOK[ds] || (s.ingest_alive ? ['live', 'Live'] : ['off', 'Idle']);
   setPhase(cls, text);
   paintSource(!!s.ingest_alive);
@@ -737,14 +747,13 @@ function renderStats() {
 
 // Server settings mirrored on the dock (Auto behavior + Settings widgets).
 // Read from /config; each boolean flip is a safe partial POST /config.
-let srvCfg = { auto_arm_on_connect: false, auto_activate_when_ready: false, tracing_enabled: true, webhook_set: false };
+let srvCfg = { auto_arm_on_connect: false, auto_activate_when_ready: false, tracing_enabled: true };
 async function fetchServerCfg() {
   const r = await fetchJ('/config');
   if (!r.ok || !r.j) return;
   srvCfg.auto_arm_on_connect = !!r.j.auto_arm_on_connect;
   srvCfg.auto_activate_when_ready = !!r.j.auto_activate_when_ready;
   srvCfg.tracing_enabled = !!r.j.tracing_enabled;
-  srvCfg.webhook_set = !!r.j.webhook_set;
   if (typeof r.j.buffer_mb === 'number') { bufferMB = r.j.buffer_mb; renderProfiles(); }
   renderBehavior(); renderSettings();
 }
@@ -779,40 +788,23 @@ function renderSettings() {
   const box = $('w-settings'); if (box.hidden) return;
   box.innerHTML = '';
   box.appendChild(toggleRow('Wire trace log', 'tracing_enabled'));
-  const wh = document.createElement('div'); wh.className = 'brow';
-  const lb = document.createElement('span'); lb.className = 'blbl'; lb.textContent = srvCfg.webhook_set ? 'Discord webhook set' : 'No Discord webhook';
+  // Discord, chat and phone alerts are integrations, set up in the
+  // dashboard: they take secret links, awkward to paste into a dock.
+  const ig = document.createElement('div'); ig.className = 'brow';
+  const lb = document.createElement('span'); lb.className = 'blbl'; lb.textContent = 'Discord, chat and phone alerts';
   const btns = document.createElement('span'); btns.className = 'srow-btns';
-  if (srvCfg.webhook_set) {
-    const test = document.createElement('button'); test.className = 'minibtn'; test.textContent = 'Test'; test.onclick = testWebhook;
-    const clr = document.createElement('button'); clr.className = 'minibtn'; clr.textContent = 'Clear'; clr.onclick = clearWebhook;
-    btns.append(test, clr);
-  } else {
-    // Setting a webhook means pasting a secret URL - awkward on a dock, so
-    // "Set" bounces to the dashboard (behind a confirm).
-    const set = document.createElement('button'); set.className = 'minibtn'; set.textContent = 'Set'; set.onclick = () => confirmOpenDashboard(btns);
-    btns.append(set);
-  }
-  wh.append(lb, btns); box.appendChild(wh);
+  const open = document.createElement('button'); open.className = 'minibtn'; open.textContent = 'Set up'; open.onclick = () => confirmOpenDashboard(btns);
+  btns.append(open);
+  ig.append(lb, btns); box.appendChild(ig);
 }
 function confirmOpenDashboard(btns) {
   btns.innerHTML = '';
   const q = document.createElement('span'); q.className = 'cq'; q.textContent = 'Open dashboard?';
-  q.title = 'This opens the InstantClone dashboard in a new tab so you can paste the webhook URL.';
+  q.title = 'Opens the Integrations tab of the InstantClone dashboard in a new tab.';
   const yes = document.createElement('button'); yes.className = 'minibtn'; yes.textContent = 'Yes';
-  yes.onclick = () => { window.open(location.origin + '/', '_blank'); toast('Opening dashboard…', 'ok'); renderSettings(); };
+  yes.onclick = () => { window.open(location.origin + '/#integrations', '_blank'); toast('Opening dashboard…', 'ok'); renderSettings(); };
   const no = document.createElement('button'); no.className = 'minibtn'; no.textContent = 'No'; no.onclick = renderSettings;
   btns.append(q, yes, no);
-}
-async function testWebhook() {
-  const r = await fetchJ('/test-webhook', { method: 'POST' });
-  // The endpoint answers 200 even when Discord rejects, so trust the JSON ok.
-  const ok = r.ok && (!r.j || r.j.ok !== false);
-  toast(ok ? 'Test event sent' : (r.j?.error || 'Test failed'), ok ? 'ok' : 'err');
-}
-async function clearWebhook() {
-  const r = await fetchJ('/config', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'webhook_clear=1' });
-  if (r.ok) { srvCfg.webhook_set = false; renderSettings(); toast('Webhook cleared', 'ok'); }
-  else toast('Failed', 'err');
 }
 
 // Overlays: list the OBS browser-source overlays and copy their URLs, so a

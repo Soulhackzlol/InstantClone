@@ -58,6 +58,8 @@ pub struct Store {
     path: PathBuf,
     pub accounts: Mutex<Accounts>,
     pub counters: Arc<Mutex<BTreeMap<String, i64>>>,
+    /// A counter changed since the file was last written.
+    pub counters_dirty: std::sync::atomic::AtomicBool,
     /// Runs per integration id, for `{uses}`.
     pub uses: Mutex<BTreeMap<String, u64>>,
     /// Serialises writes so two savers never interleave.
@@ -99,6 +101,7 @@ impl Store {
                 bot: account("twitch.bot"),
             }),
             counters: Arc::new(Mutex::new(counters)),
+            counters_dirty: Default::default(),
             uses: Mutex::new(uses),
             write_lock: Mutex::new(()),
         }

@@ -209,6 +209,14 @@ If OBS crashes or freezes, every destination stays live on a reconnect screen (f
 
 </td>
 </tr>
+<tr>
+<td valign="top" colspan="2">
+
+**🧩 Integrations (experimental)**
+InstantClone talks to Discord, Twitch chat, your phone and your own tools. One click adds a crash alert, a `!delay` command, mod controls, a highlight button that clips what viewers actually saw, a Discord card that writes your stream's timeline, YouTube chapters, an on-air light and more, and a step builder covers the rest. They're new and may still change: please report what breaks or confuses you with the tab's **Report it** link.
+
+</td>
+</tr>
 </table>
 
 > [!TIP]
@@ -345,7 +353,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 **Sync disk I/O on the ring-append hot path, by choice.** The buffered write lands in the OS page cache in microseconds and the kernel flushes in the background, so the page cache is already the async buffer; the index and the bytes advance under one lock so a reader never sees a tag whose bytes aren't on disk yet.
 
-**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the Enhanced Broadcasting config built from OBS's canvases and GPU encoders, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), crash protection (crash vs. stop vs. freeze detection, the lossless reconnect-screen encoder checked against ffmpeg, per-track framing for Enhanced Broadcasting, silent AAC), and the self-update download + checksum-verify + exe swap. **474 tests, all green.**
+**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the Enhanced Broadcasting config built from OBS's canvases and GPU encoders, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), crash protection (crash vs. stop vs. freeze detection, the lossless reconnect-screen encoder checked against ffmpeg, per-track framing for Enhanced Broadcasting, silent AAC), the integrations engine (steps, templates, recipes, chat, Discord cards, the stream timeline), and the self-update download + checksum-verify + exe swap. **843 tests, all green.**
 
 </details>
 
@@ -355,7 +363,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 474 tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
+**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 843 tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's rough, honestly**
 

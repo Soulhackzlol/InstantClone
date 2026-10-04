@@ -14,7 +14,8 @@ use crate::json::{self, Value};
 use std::collections::BTreeMap;
 
 pub const MAX_INTEGRATIONS: usize = 100;
-pub const MAX_HANDLERS: usize = 16;
+/// Room for the "every event" webhook, one trigger per event.
+pub const MAX_HANDLERS: usize = 32;
 pub const MAX_STEPS: usize = 64;
 pub const MAX_DEPTH: usize = 4;
 const MAX_NAME_LEN: usize = 80;
@@ -119,10 +120,90 @@ pub enum Trigger {
     Timer { every_ms: u64, only_live: bool },
     /// A call to `/hooks/<token>`, from a Stream Deck, a script or any app.
     Webhook { token: String },
-    /// A global hotkey (`Ctrl+Alt+K`) or a MIDI pad (`note:1:36@Device`)
-    /// on this PC. Either may be blank, not both.
-    Shortcut { hotkey: String, midi: String },
+    /// A button: a global hotkey (`Ctrl+Alt+K`), a MIDI pad
+    /// (`note:1:36@Device`) on this PC, or a secret `/hooks/<token>`
+    /// address a Stream Deck or any program presses. Any may be blank, not
+    /// all three. `only_live`: presses while OBS isn't streaming do nothing.
+    Shortcut {
+        hotkey: String,
+        midi: String,
+        token: String,
+        only_live: bool,
+    },
+    /// Chat gets busy in a way the rules describe (see `ChatActivity`).
+    ChatActivity(ChatActivity),
+    /// OBS switches its program scene to one matching `scene` (`*` and `?`
+    /// wildcards) but not `except` (blank: none), coming from one matching
+    /// `from` (blank: any), and stays there `settle_ms`. `only_live`: only
+    /// while OBS is streaming; a stream that starts on a matching scene
+    /// counts as switching to it. Needs obs-websocket.
+    Scene {
+        scene: String,
+        from: String,
+        except: String,
+        settle_ms: u64,
+        only_live: bool,
+    },
 }
+
+/// A chat activity trigger: rules over the last `window_ms` of chat, all of
+/// them or any one of them. Only messages from `roles` count.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChatActivity {
+    pub window_ms: u64,
+    pub match_all: bool,
+    pub rules: Vec<ActivityRule>,
+    pub roles: Roles,
+    pub only_live: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActivityRule {
+    pub kind: RuleKind,
+    pub value: f64,
+    /// For `Words`: what counts, comma separated.
+    pub words: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleKind {
+    /// At least `value` messages in the window.
+    Messages,
+    /// At least `value` times the channel's normal speed.
+    Busier,
+    /// At least `value` different people talking.
+    Chatters,
+    /// At least `value` percent of messages contain one of `words`.
+    Words,
+}
+
+impl RuleKind {
+    pub fn id(self) -> &'static str {
+        match self {
+            RuleKind::Messages => "messages",
+            RuleKind::Busier => "busier",
+            RuleKind::Chatters => "chatters",
+            RuleKind::Words => "words",
+        }
+    }
+
+    fn from_id(id: &str) -> Option<RuleKind> {
+        [
+            RuleKind::Messages,
+            RuleKind::Busier,
+            RuleKind::Chatters,
+            RuleKind::Words,
+        ]
+        .into_iter()
+        .find(|k| k.id() == id)
+    }
+}
+
+const MIN_ACTIVITY_WINDOW_MS: u64 = 5_000;
+const MAX_ACTIVITY_WINDOW_MS: u64 = 120_000;
+const MAX_ACTIVITY_RULES: usize = 8;
+/// Longest a scene trigger may wait for the scene to settle.
+pub const MAX_SETTLE_MS: u64 = 60_000;
 
 /// Who may fire a chat trigger. The broadcaster always may.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,10 +280,14 @@ pub enum StepKind {
     /// Reshape a value (first line, between two texts, round...) into a
     /// new variable.
     EditText,
+    /// Add a line, a chapter or a highlight to this stream's timeline.
+    Timeline,
+    /// Switch a scene, show or hide a source, or set a text source in OBS.
+    Obs,
 }
 
 impl StepKind {
-    pub const ALL: [StepKind; 17] = [
+    pub const ALL: [StepKind; 19] = [
         StepKind::Discord,
         StepKind::Chat,
         StepKind::Phone,
@@ -220,6 +305,8 @@ impl StepKind {
         StepKind::Counter,
         StepKind::Overlay,
         StepKind::EditText,
+        StepKind::Timeline,
+        StepKind::Obs,
     ];
 
     pub fn id(self) -> &'static str {
@@ -241,6 +328,8 @@ impl StepKind {
             StepKind::Counter => "counter",
             StepKind::Overlay => "overlay",
             StepKind::EditText => "edit_text",
+            StepKind::Timeline => "timeline",
+            StepKind::Obs => "obs",
         }
     }
 
@@ -252,10 +341,8 @@ impl StepKind {
     /// the user when it is blank.
     fn required(self) -> &'static [(&'static str, &'static str)] {
         match self {
-            StepKind::Discord => &[
-                ("connection", "pick a Discord channel"),
-                ("text", "write the Discord message"),
-            ],
+            // A card needs any one of its parts: see `validate_steps`.
+            StepKind::Discord => &[("connection", "pick a Discord channel")],
             StepKind::Chat => &[("text", "write the chat message")],
             StepKind::Phone => &[("text", "write the phone message")],
             StepKind::Http => &[("url", "add the web address")],
@@ -270,6 +357,8 @@ impl StepKind {
             StepKind::SetVar | StepKind::Counter => &[("name", "name the value")],
             StepKind::Overlay => &[("text", "write what shows on stream")],
             StepKind::EditText => &[("op", "pick how to change the text")],
+            StepKind::Timeline => &[("text", "write the timeline line")],
+            StepKind::Obs => &[("action", "pick what to do in OBS")],
             StepKind::WaitDelay | StepKind::Stop | StepKind::Marker | StepKind::Clip => &[],
         }
     }
@@ -284,6 +373,8 @@ impl StepKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Step {
     pub kind: StepKind,
+    /// A switched-off step is skipped, with everything inside it.
+    pub enabled: bool,
     pub params: BTreeMap<String, String>,
     /// For `If`: the steps run when the check passes / fails.
     pub then: Vec<Step>,
@@ -294,6 +385,7 @@ impl Step {
     pub fn new(kind: StepKind, params: &[(&str, &str)]) -> Self {
         Self {
             kind,
+            enabled: true,
             params: params
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -361,8 +453,16 @@ impl Integration {
             errors.push(format!("more than {MAX_STEPS} steps"));
         }
         for handler in &self.handlers {
-            validate_trigger(&handler.trigger, &mut incomplete);
-            validate_steps(&handler.steps, 1, &mut errors, &mut incomplete);
+            // A switched-off trigger can stay half set up: it never runs, so
+            // only what makes it unsafe to save counts.
+            let mut unused = Vec::new();
+            let missing = if handler.enabled {
+                &mut incomplete
+            } else {
+                &mut unused
+            };
+            validate_trigger(&handler.trigger, missing);
+            validate_steps(&handler.steps, 1, &mut errors, missing);
         }
         errors.dedup();
         incomplete.dedup();
@@ -427,7 +527,7 @@ pub fn shortcuts(integrations: &[Integration]) -> (Vec<String>, Vec<String>) {
         .filter(|i| i.enabled)
         .flat_map(|i| i.handlers.iter().filter(|h| h.enabled));
     for handler in live {
-        if let Trigger::Shortcut { hotkey, midi } = &handler.trigger {
+        if let Trigger::Shortcut { hotkey, midi, .. } = &handler.trigger {
             if !hotkey.is_empty() && !keys.contains(hotkey) {
                 keys.push(hotkey.clone());
             }
@@ -469,9 +569,9 @@ pub fn shortcut_owner<'a>(
             .iter()
             .filter(|h| h.enabled)
             .any(|h| match &h.trigger {
-                Trigger::Shortcut { hotkey: key, midi } => {
-                    (!hotkey.is_empty() && key == hotkey) || pads_overlap(midi, pad)
-                }
+                Trigger::Shortcut {
+                    hotkey: key, midi, ..
+                } => (!hotkey.is_empty() && key == hotkey) || pads_overlap(midi, pad),
                 _ => false,
             });
         owns.then_some(i.name.as_str())
@@ -508,9 +608,19 @@ fn validate_trigger(trigger: &Trigger, errors: &mut Vec<String>) {
         Trigger::Webhook { token } if token.len() < 16 || !valid_id(token) => {
             errors.push("the web call link is invalid; make a new one".to_string());
         }
-        Trigger::Shortcut { hotkey, midi } => {
-            if hotkey.is_empty() && midi.is_empty() {
-                errors.push("press a key or a MIDI pad for the shortcut".to_string());
+        Trigger::Shortcut {
+            hotkey,
+            midi,
+            token,
+            ..
+        } => {
+            if hotkey.is_empty() && midi.is_empty() && token.is_empty() {
+                errors.push(
+                    "set a hotkey, a MIDI pad or a Stream Deck address for the button".to_string(),
+                );
+            }
+            if !token.is_empty() && (token.len() < 16 || !valid_id(token)) {
+                errors.push("the button's web address is invalid; make a new one".to_string());
             }
             if !hotkey.is_empty()
                 && crate::config::canonicalize_hotkey(hotkey).as_ref() != Some(hotkey)
@@ -523,7 +633,41 @@ fn validate_trigger(trigger: &Trigger, errors: &mut Vec<String>) {
                 errors.push("that MIDI pad isn't valid; learn it again".to_string());
             }
         }
+        Trigger::ChatActivity(activity) => validate_activity(activity, errors),
+        Trigger::Scene {
+            scene, settle_ms, ..
+        } => {
+            if scene.trim().is_empty() {
+                errors.push("pick the OBS scene it reacts to".to_string());
+            }
+            if *settle_ms > MAX_SETTLE_MS {
+                errors.push("a scene can settle for at most a minute".to_string());
+            }
+        }
         _ => {}
+    }
+}
+
+fn validate_activity(activity: &ChatActivity, errors: &mut Vec<String>) {
+    if !(MIN_ACTIVITY_WINDOW_MS..=MAX_ACTIVITY_WINDOW_MS).contains(&activity.window_ms) {
+        errors.push("watch chat for between 5 seconds and 2 minutes".to_string());
+    }
+    if activity.rules.is_empty() {
+        errors.push("add at least one chat rule".to_string());
+    }
+    if activity.rules.len() > MAX_ACTIVITY_RULES {
+        errors.push(format!("at most {MAX_ACTIVITY_RULES} chat rules"));
+    }
+    for rule in &activity.rules {
+        if !(rule.value.is_finite() && rule.value > 0.0) {
+            errors.push("every chat rule needs a number above 0".to_string());
+        }
+        if rule.kind == RuleKind::Words && rule.words.trim().is_empty() {
+            errors.push("the words rule needs words to look for".to_string());
+        }
+        if rule.kind == RuleKind::Words && rule.value > 100.0 {
+            errors.push("the words rule is a percentage, 100 at most".to_string());
+        }
     }
 }
 
@@ -545,9 +689,39 @@ fn validate_steps(
         return;
     }
     for step in steps {
+        // A switched-off step never runs: half-finished is fine. What would
+        // make it unsafe (below) still counts, as it can be switched on.
+        let mut unused = Vec::new();
+        let missing = if step.enabled {
+            &mut *incomplete
+        } else {
+            &mut unused
+        };
         for (name, ask) in step.kind.required() {
             if step.param(name).trim().is_empty() {
-                incomplete.push(ask.to_string());
+                missing.push(ask.to_string());
+            }
+        }
+        if step.kind == StepKind::Discord {
+            if let Some(ask) = discord_message_missing(step) {
+                missing.push(ask.to_string());
+            }
+        }
+        let ms = step.param("ms").trim();
+        if step.kind == StepKind::Wait
+            && !ms.is_empty()
+            && !ms.contains('{')
+            && ms.parse::<u64>().is_err()
+        {
+            missing.push("set how long to wait, in milliseconds".to_string());
+        }
+        if step.kind == StepKind::Obs {
+            if let Some(ask) = obs_step_missing(step) {
+                missing.push(ask.to_string());
+            }
+            // Like a program's path: chat must never pick what OBS shows.
+            if step.param("scene").contains('{') || step.param("source").contains('{') {
+                errors.push("an OBS step's scene and source can't use variables".to_string());
             }
         }
         // Where a program runs, a file is written or a request goes must be
@@ -564,6 +738,26 @@ fn validate_steps(
         if step.kind == StepKind::Http && !host_is_fixed(step.param("url")) {
             errors.push("a web request's address can't put variables in its host".to_string());
         }
+        // A card's link and pictures are fetched and shown by Discord:
+        // chat must not pick the site they come from.
+        if step.kind == StepKind::Discord
+            && ["url", "image", "thumbnail"]
+                .iter()
+                .any(|name| !host_is_fixed(step.param(name)))
+        {
+            errors.push(
+                "a Discord card's link and images can't put variables in their site".to_string(),
+            );
+        }
+        // The value's name is fixed: a viewer must not overwrite `{user}`.
+        let named = match step.kind {
+            StepKind::SetVar => step.param("name"),
+            StepKind::EditText => step.param("save_as"),
+            _ => "",
+        };
+        if named.contains('{') {
+            errors.push("a value's name can't use variables".to_string());
+        }
         if step.params.values().any(|v| v.len() > MAX_PARAM_LEN) {
             errors.push(format!(
                 "a {} step has a value that is too long",
@@ -573,8 +767,36 @@ fn validate_steps(
         if step.kind != StepKind::If && !(step.then.is_empty() && step.otherwise.is_empty()) {
             errors.push(format!("a {} step cannot hold other steps", step.kind.id()));
         }
-        validate_steps(&step.then, depth + 1, errors, incomplete);
-        validate_steps(&step.otherwise, depth + 1, errors, incomplete);
+        validate_steps(&step.then, depth + 1, errors, missing);
+        validate_steps(&step.otherwise, depth + 1, errors, missing);
+    }
+}
+
+/// What a Discord step still needs to say anything. A plain message needs
+/// its text; a card needs any one of its parts, since a title or fields
+/// alone make a whole card.
+fn discord_message_missing(step: &Step) -> Option<&'static str> {
+    let has = |name: &str| !step.param(name).trim().is_empty();
+    if step.param("style") != "card" {
+        return (!has("text")).then_some("write the Discord message");
+    }
+    let any = ["title", "text", "fields", "image", "above"]
+        .iter()
+        .any(|name| has(name));
+    (!any).then_some("give the Discord card a title or some text")
+}
+
+/// The OBS actions a step can take, with what each needs.
+pub const OBS_ACTIONS: [&str; 5] = ["scene", "show", "hide", "toggle", "text"];
+
+fn obs_step_missing(step: &Step) -> Option<&'static str> {
+    let blank = |name: &str| step.param(name).trim().is_empty();
+    match step.param("action") {
+        "" => None, // `required` asks for it
+        "scene" if blank("scene") => Some("pick the OBS scene to switch to"),
+        "show" | "hide" | "toggle" | "text" if blank("source") => Some("pick the OBS source"),
+        action if !OBS_ACTIONS.contains(&action) => Some("pick what to do in OBS"),
+        _ => None,
     }
 }
 
@@ -671,12 +893,79 @@ fn trigger_json(t: &Trigger) -> Value {
         Trigger::Webhook { token } => {
             json::obj([("type", json::str("webhook")), ("token", json::str(token))])
         }
-        Trigger::Shortcut { hotkey, midi } => json::obj([
+        Trigger::Shortcut {
+            hotkey,
+            midi,
+            token,
+            only_live,
+        } => json::obj([
             ("type", json::str("shortcut")),
             ("hotkey", json::str(hotkey)),
             ("midi", json::str(midi)),
+            ("token", json::str(token)),
+            ("only_live", Value::Bool(*only_live)),
+        ]),
+        Trigger::ChatActivity(a) => json::obj([
+            ("type", json::str("chat_activity")),
+            ("window_ms", Value::Num(a.window_ms as f64)),
+            ("match", json::str(if a.match_all { "all" } else { "any" })),
+            (
+                "rules",
+                Value::Arr(
+                    a.rules
+                        .iter()
+                        .map(|r| {
+                            json::obj([
+                                ("kind", json::str(r.kind.id())),
+                                ("value", Value::Num(r.value)),
+                                ("words", json::str(&r.words)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+            ("roles", roles_json(a.roles)),
+            ("only_live", Value::Bool(a.only_live)),
+        ]),
+        Trigger::Scene {
+            scene,
+            from,
+            except,
+            settle_ms,
+            only_live,
+        } => json::obj([
+            ("type", json::str("scene")),
+            ("scene", json::str(scene)),
+            ("from", json::str(from)),
+            ("except", json::str(except)),
+            ("settle_ms", Value::Num(*settle_ms as f64)),
+            ("only_live", Value::Bool(*only_live)),
         ]),
     }
+}
+
+fn activity_from_json(v: &Value) -> Result<ChatActivity, String> {
+    let rules = v
+        .get("rules")
+        .and_then(Value::as_array)
+        .unwrap_or(&[])
+        .iter()
+        .map(|r| {
+            let id = r.str_or("kind", "");
+            Ok(ActivityRule {
+                kind: RuleKind::from_id(id).ok_or_else(|| format!("unknown chat rule \"{id}\""))?,
+                value: r.get("value").and_then(Value::as_f64).unwrap_or(0.0),
+                words: r.str_or("words", "").to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(ChatActivity {
+        window_ms: v.u64_or("window_ms", 10_000),
+        match_all: v.str_or("match", "all") != "any",
+        rules,
+        roles: roles_from_json(v.get("roles")),
+        only_live: v.bool_or("only_live", true),
+    })
 }
 
 fn trigger_from_json(v: &Value) -> Result<Trigger, String> {
@@ -718,6 +1007,16 @@ fn trigger_from_json(v: &Value) -> Result<Trigger, String> {
         "shortcut" => Ok(Trigger::Shortcut {
             hotkey: v.str_or("hotkey", "").trim().to_string(),
             midi: v.str_or("midi", "").trim().to_string(),
+            token: v.str_or("token", "").trim().to_string(),
+            only_live: v.bool_or("only_live", false),
+        }),
+        "chat_activity" => activity_from_json(v).map(Trigger::ChatActivity),
+        "scene" => Ok(Trigger::Scene {
+            scene: v.str_or("scene", "").trim().to_string(),
+            from: v.str_or("from", "").trim().to_string(),
+            except: v.str_or("except", "").trim().to_string(),
+            settle_ms: v.u64_or("settle_ms", 3_000),
+            only_live: v.bool_or("only_live", false),
         }),
         other => Err(format!("unknown trigger \"{other}\"")),
     }
@@ -759,6 +1058,10 @@ fn steps_json(steps: &[Step]) -> Value {
                     ("type".to_string(), json::str(s.kind.id())),
                     ("params".to_string(), string_map_json(&s.params)),
                 ];
+                // Only written when off: most steps are on.
+                if !s.enabled {
+                    fields.push(("enabled".to_string(), Value::Bool(false)));
+                }
                 if s.kind == StepKind::If {
                     fields.push(("then".to_string(), steps_json(&s.then)));
                     fields.push(("else".to_string(), steps_json(&s.otherwise)));
@@ -781,6 +1084,7 @@ fn steps_from_json(v: Option<&Value>, depth: usize) -> Result<Vec<Step>, String>
             let kind = StepKind::from_id(id).ok_or_else(|| format!("unknown step \"{id}\""))?;
             Ok(Step {
                 kind,
+                enabled: s.bool_or("enabled", true),
                 params: string_map_from_json(s.get("params")),
                 then: steps_from_json(s.get("then"), depth + 1)?,
                 otherwise: steps_from_json(s.get("else"), depth + 1)?,
@@ -879,6 +1183,8 @@ mod tests {
                     trigger: Trigger::Shortcut {
                         hotkey: "Ctrl+Alt+K".into(),
                         midi: "note:1:36@Launchpad".into(),
+                        token: String::new(),
+                        only_live: false,
                     },
                     steps: vec![Step::new(StepKind::Overlay, &[("text", "Clipped!")])],
                 },
@@ -913,10 +1219,34 @@ mod tests {
             roles: Roles::EVERYONE,
             user_cooldown_ms: 0,
         };
+        bad.handlers[1].enabled = true;
         let errors = bad.validate();
         assert!(errors.iter().any(|e| e.contains("name")));
         assert!(errors.iter().any(|e| e == "pick a Discord channel"));
         assert!(errors.iter().any(|e| e.contains("\"clip\"")));
+        // Switched off, a half-set trigger doesn't stop it running.
+        bad.handlers[1].enabled = false;
+        assert!(!bad.validate().iter().any(|e| e.contains("\"clip\"")));
+    }
+
+    #[test]
+    fn a_card_needs_any_part_and_a_plain_message_its_text() {
+        let mut i = sample();
+        let card = Step::new(
+            StepKind::Discord,
+            &[("connection", "c"), ("style", "card"), ("title", "Live")],
+        );
+        i.handlers[0].steps = vec![card];
+        assert!(i.validate().is_empty(), "{:?}", i.validate());
+        i.handlers[0].steps[0].params.remove("title");
+        assert!(i
+            .validate()
+            .iter()
+            .any(|e| e.contains("title or some text")));
+        let mut off = Step::new(StepKind::Discord, &[("connection", "c")]);
+        off.enabled = false;
+        i.handlers[0].steps = vec![off];
+        assert!(i.validate().is_empty(), "a switched-off step can wait");
     }
 
     #[test]
@@ -1043,21 +1373,82 @@ mod tests {
     fn shortcuts_need_a_real_key_or_pad() {
         let mut i = sample();
         let at = i.handlers.len() - 1;
-        i.handlers[at].trigger = Trigger::Shortcut {
-            hotkey: String::new(),
-            midi: String::new(),
+        let button = |hotkey: &str, midi: &str, token: &str| Trigger::Shortcut {
+            hotkey: hotkey.into(),
+            midi: midi.into(),
+            token: token.into(),
+            only_live: false,
         };
-        assert!(i.validate().iter().any(|e| e.contains("press a key")));
-        i.handlers[at].trigger = Trigger::Shortcut {
-            hotkey: "K".into(),
-            midi: String::new(),
-        };
+        i.handlers[at].trigger = button("", "", "");
+        assert!(i.validate().iter().any(|e| e.contains("set a hotkey")));
+        i.handlers[at].trigger = button("K", "", "");
         assert!(i.validate().iter().any(|e| e.contains("isn't a hotkey")));
-        i.handlers[at].trigger = Trigger::Shortcut {
-            hotkey: String::new(),
-            midi: "note:1:36".into(),
+        i.handlers[at].trigger = button("", "note:1:36", "");
+        assert!(i.validate().is_empty(), "{:?}", i.validate());
+        i.handlers[at].trigger = button("", "", "0123456789abcdef0123");
+        assert!(i.validate().is_empty(), "a web address alone is a button");
+        i.handlers[at].trigger = button("", "", "short");
+        assert!(i.validate().iter().any(|e| e.contains("web address")));
+    }
+
+    #[test]
+    fn chat_activity_and_scene_triggers_round_trip_and_validate() {
+        let mut i = sample();
+        i.handlers[0].trigger = Trigger::ChatActivity(ChatActivity {
+            window_ms: 10_000,
+            match_all: false,
+            rules: vec![
+                ActivityRule {
+                    kind: RuleKind::Busier,
+                    value: 3.0,
+                    words: String::new(),
+                },
+                ActivityRule {
+                    kind: RuleKind::Words,
+                    value: 40.0,
+                    words: "clip, pog".into(),
+                },
+            ],
+            roles: Roles::EVERYONE,
+            only_live: true,
+        });
+        i.handlers[1].trigger = Trigger::Scene {
+            scene: "Game*".into(),
+            from: String::new(),
+            except: "Game over".into(),
+            settle_ms: 3_000,
+            only_live: true,
         };
         assert!(i.validate().is_empty(), "{:?}", i.validate());
+        let back = Integration::from_json(&json::parse(&i.to_json().to_json()).unwrap()).unwrap();
+        assert_eq!(back, i);
+    }
+
+    #[test]
+    fn chat_activity_rules_are_checked() {
+        let mut i = sample();
+        let mut activity = ChatActivity {
+            window_ms: 1_000,
+            match_all: true,
+            rules: vec![ActivityRule {
+                kind: RuleKind::Words,
+                value: 150.0,
+                words: " ".into(),
+            }],
+            roles: Roles::EVERYONE,
+            only_live: true,
+        };
+        i.handlers[0].trigger = Trigger::ChatActivity(activity.clone());
+        let errors = i.validate();
+        assert!(errors.iter().any(|e| e.contains("5 seconds")));
+        assert!(errors.iter().any(|e| e.contains("words to look for")));
+        assert!(errors.iter().any(|e| e.contains("percentage")));
+        activity.rules.clear();
+        i.handlers[0].trigger = Trigger::ChatActivity(activity);
+        assert!(i
+            .validate()
+            .iter()
+            .any(|e| e.contains("at least one chat rule")));
     }
 
     #[test]

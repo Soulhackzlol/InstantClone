@@ -378,6 +378,107 @@ async fn end_now_mid_tail_ends_the_stream_at_once() {
     );
 }
 
+/// OBS leaves with a 2 s delay on air and no hold to cover it. Returns the
+/// last frame OBS made and when it left.
+async fn obs_leaves_mid_delay(sim: &mut Sim, stopped: bool) -> (u32, Instant) {
+    sim.ctrl.arm_delay(2_000);
+    sim.obs_connects().await;
+    sim.destination_connects("platform").await;
+    sim.obs_sends(2_500).await;
+    sim.ctrl
+        .activate_delay()
+        .expect("the buffer holds the delay");
+    sim.obs_sends(1_500).await;
+    let last_live = sim.next_frame - 1;
+    if stopped {
+        sim.obs_stops();
+    } else {
+        sim.obs_crashes();
+    }
+    (last_live, Instant::now())
+}
+
+/// What viewers see once OBS left: everything it sent, over the delay's
+/// length, then a clean end with no reconnect screen.
+fn assert_tail_aired_then_ended(sim: &mut Sim, last_live: u32, left: Instant) {
+    let tail: Vec<Frame> = sim.frames(0).into_iter().filter(|f| f.at > left).collect();
+    assert_eq!(
+        tail.last().map(|f| f.number),
+        Some(last_live),
+        "the whole delay aired"
+    );
+    assert_strictly_increasing(&tail, "the tail");
+    let took = tail.last().unwrap().at.duration_since(left).as_millis();
+    assert!(
+        took >= 1_500,
+        "the tail took the delay to air, not {took} ms"
+    );
+    assert!(
+        sim.commands(0).contains(&"deleteStream".into()),
+        "then it ended"
+    );
+    assert_eq!(sim.screen_tags(0, left, Instant::now()), 0, "no screen");
+    assert!(sim.pumps[0].is_finished(), "the pump ended");
+    sim.assert_timestamps_monotonic(0);
+}
+
+/// Crash protection off, OBS stops on purpose with a delay on: the end of
+/// the stream reaches viewers through the delay like everything else. It
+/// used to cut the last 2 s off.
+#[tokio::test]
+async fn protection_off_a_stop_airs_the_rest_of_the_delay() {
+    let mut sim = Sim::new(false).await;
+    let (last_live, left) = obs_leaves_mid_delay(&mut sim, true).await;
+    wait(1_000).await;
+    assert!(
+        sim.ctrl
+            .tail_left()
+            .is_some_and(|left| left > Duration::ZERO),
+        "the dashboard shows the delay still airing"
+    );
+    wait(2_000).await;
+    assert_tail_aired_then_ended(&mut sim, last_live, left);
+    assert_eq!(sim.ctrl.tail_left(), None, "nothing left to air");
+}
+
+/// Crash protection off, OBS crashes with a delay on: what it sent before
+/// the crash airs too.
+#[tokio::test]
+async fn protection_off_a_crash_airs_the_rest_of_the_delay() {
+    let mut sim = Sim::new(false).await;
+    let (last_live, left) = obs_leaves_mid_delay(&mut sim, false).await;
+    wait(3_000).await;
+    assert_tail_aired_then_ended(&mut sim, last_live, left);
+}
+
+/// Crash protection on but only for crashes: a stop on purpose opens no
+/// hold, and the delay still airs in full before the end.
+#[tokio::test]
+async fn a_stop_crash_protection_lets_through_airs_the_rest_of_the_delay() {
+    let mut sim = Sim::new(true).await;
+    let (last_live, left) = obs_leaves_mid_delay(&mut sim, true).await;
+    assert!(!sim.ctrl.hold_active(), "no hold for a stop");
+    wait(3_000).await;
+    assert_tail_aired_then_ended(&mut sim, last_live, left);
+}
+
+/// End now while the delay airs after a stop: the stream ends at once.
+#[tokio::test]
+async fn end_now_after_a_stop_cuts_the_rest_of_the_delay() {
+    let mut sim = Sim::new(false).await;
+    let (last_live, _) = obs_leaves_mid_delay(&mut sim, true).await;
+    wait(500).await;
+    assert!(sim.ctrl.end_hold_now(), "the delay was airing");
+    wait(1_000).await;
+
+    assert!(sim.commands(0).contains(&"deleteStream".into()), "it ended");
+    assert!(
+        sim.frames(0).last().is_some_and(|f| f.number < last_live),
+        "without airing the rest of the delay"
+    );
+    assert!(!sim.ctrl.end_hold_now(), "nothing left to end");
+}
+
 /// OBS comes back from a freeze on a P-frame, mid-GOP, with a delay on.
 /// The rejoin lands at least the delay back: the rebuild counts from OBS's
 /// first keyframe, not its first frame, and the rejoin takes the newest
@@ -416,6 +517,50 @@ async fn a_freeze_rejoin_lands_at_least_the_delay_back() {
         "rejoined {delayed_by} ms behind, short of the {DELAY_MS} ms delay"
     );
     sim.assert_timestamps_monotonic(0);
+}
+
+/// The streamer ends a freeze hold, then OBS recovers on the same
+/// connection. A destination that starts afterwards joins OBS's new video
+/// at the delay; it used to seed on a keyframe from before the freeze and
+/// air the delay tail a second time.
+#[tokio::test]
+async fn a_destination_after_an_ended_freeze_never_replays_what_already_aired() {
+    const DELAY_MS: u32 = 1_500;
+    let mut sim = Sim::new(true).await;
+    sim.ctrl.arm_delay(DELAY_MS);
+    sim.obs_connects().await;
+    sim.destination_connects("platform").await;
+    sim.obs_sends(2_500).await;
+    sim.ctrl
+        .activate_delay()
+        .expect("the buffer holds the delay");
+    sim.obs_sends(2_000).await;
+    let last_before_freeze = sim.next_frame - 1;
+    sim.obs_stalls(300).await;
+    sim.freeze_detected();
+    assert!(sim.ctrl.end_hold_now(), "a hold was on");
+    sim.obs_stalls(2_000).await;
+    let back = Instant::now();
+    sim.obs_sends(500).await;
+    sim.destination_connects("platform").await;
+    sim.obs_sends(3_000).await;
+
+    let frames = sim.frames(1);
+    let first = frames.first().expect("the new session airs");
+    assert!(first.keyframe, "starts at a keyframe");
+    assert!(
+        frames.iter().all(|f| f.number > last_before_freeze),
+        "nothing from before the freeze airs again"
+    );
+    let delayed_by = first
+        .at
+        .duration_since(sim.produced[&first.number])
+        .as_millis() as u32;
+    assert!(
+        sim.produced[&first.number] > back && delayed_by + 50 >= DELAY_MS,
+        "joins OBS's new video {delayed_by} ms behind, at least the delay"
+    );
+    assert_strictly_increasing(&frames, "after an ended freeze");
 }
 
 /// A pump that ends (OBS gone, protection off) stops holding its place in

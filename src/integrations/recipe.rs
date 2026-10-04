@@ -3,7 +3,8 @@
 //! A recipe is data, never code, and carries nothing private:
 //! - Discord connections are replaced by a placeholder; the importer picks
 //!   one of their own connections for it.
-//! - Web call links get new secret tokens on import.
+//! - Web call links get new secret tokens on import, and buttons a new
+//!   Stream Deck address.
 //! - Hotkeys and MIDI pads are left for the importer to pick: a pad names
 //!   the sharer's controller, and their keys may be taken on another PC.
 //! - Everything imported arrives switched off.
@@ -60,24 +61,47 @@ pub fn export(name: &str, integrations: &[Integration]) -> String {
 }
 
 /// Blank whatever a recipe must never carry: see `strip_private`, plus web
-/// call tokens and the hotkey or pad an integration starts from.
+/// call tokens and the hotkey, pad or Stream Deck address a button starts
+/// from.
 fn make_private(i: &mut Integration) {
     for h in &mut i.handlers {
         strip_private(&mut h.steps);
         match &mut h.trigger {
             Trigger::Webhook { token } => token.clear(),
-            Trigger::Shortcut { hotkey, midi } => {
+            Trigger::Shortcut {
+                hotkey,
+                midi,
+                token,
+                ..
+            } => {
                 hotkey.clear();
                 midi.clear();
+                token.clear();
             }
             _ => {}
         }
     }
 }
 
+/// Whether a web request body is one the catalog itself writes (an on-air
+/// light state, the webhook's event JSON): those only say what happened,
+/// so a recipe keeps them, or an imported light would send nothing a
+/// device reads. Any other body can hold a key and goes. Judged by the
+/// body itself, never by what the recipe says it is.
+fn is_catalog_body(body: &str) -> bool {
+    super::presets::LIGHT_STARTS
+        .iter()
+        .any(|light| light.bodies.contains(&body))
+        || super::event::EventKind::ALL
+            .iter()
+            .any(|kind| body == super::presets::webhook_body(*kind))
+}
+
 /// The Discord connection, web requests (address, headers and body hold
-/// API keys and webhook secrets), and programs and files (their paths and
-/// arguments name the user's folders and carry tokens).
+/// API keys and webhook secrets), programs and files (their paths and
+/// arguments name the user's folders and carry tokens), and OBS steps'
+/// scene and source: the importer picks their own, so a recipe can never
+/// switch a scene or hide a source the user didn't choose.
 fn strip_private(steps: &mut [super::model::Step]) {
     for s in steps {
         match s.kind {
@@ -88,7 +112,13 @@ fn strip_private(steps: &mut [super::model::Step]) {
             StepKind::Http => {
                 s.params.insert("url".into(), String::new());
                 s.params.remove("headers");
-                s.params.remove("body");
+                if !is_catalog_body(s.param("body")) {
+                    s.params.remove("body");
+                }
+            }
+            StepKind::Obs => {
+                s.params.insert("scene".into(), String::new());
+                s.params.insert("source".into(), String::new());
             }
             StepKind::Program => {
                 s.params.insert("path".into(), String::new());
@@ -137,9 +167,14 @@ pub fn parse(text: &str, mut new_id: impl FnMut() -> String) -> Result<Recipe, S
         make_private(&mut i);
         i.id = new_id();
         i.enabled = false;
+        // Fresh secrets: a web call keeps working, and a button can be
+        // pressed from a Stream Deck before any key or pad is picked.
         for h in &mut i.handlers {
-            if let Trigger::Webhook { token } = &mut h.trigger {
-                *token = new_id() + &new_id();
+            match &mut h.trigger {
+                Trigger::Webhook { token } | Trigger::Shortcut { token, .. } => {
+                    *token = new_id() + &new_id();
+                }
+                _ => {}
             }
         }
         integrations.push(i);
@@ -293,6 +328,8 @@ mod tests {
         i.handlers[0].trigger = Trigger::Shortcut {
             hotkey: "Ctrl+Alt+K".into(),
             midi: "note:1:36@Oriol's Launchpad".into(),
+            token: String::new(),
+            only_live: false,
         };
         let text = export("x", &[i]);
         let decoded = String::from_utf8(base64url_decode(&text[PREFIX.len()..]).unwrap()).unwrap();
@@ -304,12 +341,58 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_light_keeps_what_each_state_sends_and_buttons_get_an_address() {
+        let light = presets::build("on_air_light", "l".into(), "").unwrap();
+        let highlight = presets::build("highlight", "h".into(), "").unwrap();
+        let text = export("studio", &[light, highlight]);
+        let mut n = 0;
+        let recipe = parse(&text, || {
+            n += 1;
+            format!("fresh{n:011}")
+        })
+        .unwrap();
+        let body = recipe.integrations[0].handlers[0].steps[0].param("body");
+        assert!(body.contains("state"), "{body}");
+        assert_eq!(recipe.integrations[0].handlers[0].steps[0].param("url"), "");
+        match &recipe.integrations[1].handlers[0].trigger {
+            Trigger::Shortcut { token, hotkey, .. } => {
+                assert!(token.starts_with("fresh") && hotkey.is_empty(), "{token}")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_recipe_never_picks_an_obs_scene_or_a_made_up_body() {
+        use super::super::model::Step;
+        let mut i = presets::build("delay_command", "x".into(), "").unwrap();
+        i.preset = "on_air_light".into();
+        i.handlers[0].steps = vec![
+            Step::new(StepKind::Obs, &[("action", "hide"), ("source", "Camera")]),
+            Step::new(
+                StepKind::Http,
+                &[("url", "https://x.example/"), ("body", "key=secret")],
+            ),
+        ];
+        let recipe = parse(&export("x", &[i]), || "fresh1234567890ab".into()).unwrap();
+        let steps = &recipe.integrations[0].handlers[0].steps;
+        assert_eq!(steps[0].param("source"), "");
+        assert_eq!(
+            steps[1].param("body"),
+            "",
+            "claiming to be a light keeps nothing"
+        );
+    }
+
+    #[test]
     fn a_hand_written_recipe_is_cleaned_on_import() {
         use super::super::model::Step;
         let mut i = presets::build("delay_command", "x".into(), "").unwrap();
         i.handlers[0].trigger = Trigger::Shortcut {
             hotkey: "Ctrl+C".into(),
             midi: String::new(),
+            token: String::new(),
+            only_live: false,
         };
         i.handlers[0].steps = vec![Step::new(
             StepKind::Http,

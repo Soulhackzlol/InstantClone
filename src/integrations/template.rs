@@ -95,6 +95,36 @@ pub fn one_line(value: &str) -> String {
         .collect()
 }
 
+/// A value inside a program's argument. Each value already stays one
+/// argument, but a shell or script host the step runs (cmd, PowerShell,
+/// bash, `python -c`) reads its own meaning into that argument: `&`, `|`,
+/// `;`, `$`, `%`, quotes and brackets could make a value from chat run a
+/// command of its own. So only letters, digits, spaces and `_ . , : # + =
+/// / -` survive; `..` can't walk up a path, and a value can't start with
+/// `-` or `/` (an option) unless it is a negative number.
+pub fn program_arg(value: &str) -> String {
+    let mut out: String = value
+        .chars()
+        .filter_map(|c| match c {
+            c if c.is_alphanumeric() => Some(c),
+            '_' | '.' | ',' | ':' | '#' | '+' | '=' | '/' | '-' => Some(c),
+            c if c.is_whitespace() => Some(' '),
+            _ => None,
+        })
+        .collect();
+    while out.contains("..") {
+        out = out.replace("..", ".");
+    }
+    loop {
+        let negative_number =
+            out.starts_with('-') && out[1..].starts_with(|c: char| c.is_ascii_digit());
+        if negative_number || !out.starts_with(['-', '/']) {
+            return out;
+        }
+        out.remove(0);
+    }
+}
+
 /// Every variable name a template uses, in order, without repeats.
 pub fn names(template: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
@@ -246,6 +276,20 @@ fn random_choice(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_program_argument_from_chat_cannot_run_a_command() {
+        assert_eq!(program_arg("a&calc"), "acalc");
+        assert_eq!(program_arg("x\" & calc & \""), "x  calc  ");
+        assert_eq!(program_arg("$(Start-Process calc)"), "Start-Process calc");
+        assert_eq!(program_arg("%USERPROFILE%|more"), "USERPROFILEmore");
+        assert_eq!(program_arg("--config=evil"), "config=evil");
+        assert_eq!(program_arg("/s /t 0"), "s /t 0");
+        assert_eq!(program_arg("../../secret"), "././secret");
+        assert_eq!(program_arg("-5"), "-5", "a negative number stays");
+        assert_eq!(program_arg("Café 2 + 2 = 4"), "Café 2 + 2 = 4");
+        assert_eq!(program_arg("line\nbreak"), "line break");
+    }
 
     #[test]
     fn edit_text_shapes_answers() {

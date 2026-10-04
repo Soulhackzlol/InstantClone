@@ -403,8 +403,16 @@ async fn serve(
         return Ok(());
     }
 
+    // Programs and file writes run on this PC: with no password, only the
+    // PC itself may set them up (see `integrations::api::route`).
+    let local_steps_allowed =
+        is_loopback(&peer_ip) || !settings.borrow().dashboard_password_hash.is_empty();
+    let caller = RouteCaller {
+        is_admin,
+        local_steps_allowed,
+    };
     let (status, ctype, payload) = route(
-        method, path, body, &ctrl, &settings, &cfg_path, &sysstat, is_admin,
+        method, path, body, &ctrl, &settings, &cfg_path, &sysstat, caller,
     )
     .await;
 
@@ -782,8 +790,17 @@ async fn auth_gate(
     })
 }
 
+/// Who is asking, as far as `route` needs to know.
+#[derive(Clone, Copy)]
+struct RouteCaller {
+    is_admin: bool,
+    /// The request may set up integration steps that run programs or
+    /// write files: it comes from this PC, or the dashboard has a password.
+    local_steps_allowed: bool,
+}
+
 // The central request dispatcher genuinely needs all of these: the request
-// parts, the shared runtime handles, and the caller's admin flag. Bundling them
+// parts, the shared runtime handles, and who the caller is. Bundling them
 // into a struct would only move the argument list, not remove it.
 #[allow(clippy::too_many_arguments)]
 async fn route(
@@ -794,8 +811,9 @@ async fn route(
     settings: &Arc<watch::Sender<Settings>>,
     cfg_path: &Path,
     sysstat: &Arc<SysStat>,
-    is_admin: bool,
+    caller: RouteCaller,
 ) -> (&'static str, &'static str, String) {
+    let is_admin = caller.is_admin;
     // Strip ?query - we only read it for /overlay.
     let (bare_path, query) = match path.split_once('?') {
         Some((p, q)) => (p, q),
@@ -848,8 +866,16 @@ async fn route(
         || bare_path.starts_with("/connections/")
         || bare_path.starts_with("/twitch/")
     {
-        if let Some(reply) =
-            crate::integrations::api::route(method, bare_path, body, ctrl, settings, cfg_path).await
+        if let Some(reply) = crate::integrations::api::route(
+            method,
+            bare_path,
+            body,
+            ctrl,
+            settings,
+            cfg_path,
+            caller.local_steps_allowed,
+        )
+        .await
         {
             return reply;
         }
@@ -1196,7 +1222,14 @@ async fn route(
         ("POST", "/cut-after") => post_cut_after(ctrl, settings, sysstat).await,
         ("POST", "/cut-after/cancel") => post_cut_after_cancel(ctrl, settings, sysstat).await,
         ("POST", "/crash-protection/end") => {
-            ctrl.end_hold_now();
+            if !ctrl.end_hold_now() {
+                return (
+                    "409 Conflict",
+                    "application/json",
+                    r#"{"ok":false,"error":"Nothing to end: the stream already ended"}"#
+                        .to_string(),
+                );
+            }
             (
                 "200 OK",
                 "application/json",
@@ -1403,6 +1436,7 @@ fn hold_json(ctrl: &Controller) -> String {
             match status.reason {
                 crate::crash_hold::HoldReason::Crash => "crash",
                 crate::crash_hold::HoldReason::Freeze => "freeze",
+                crate::crash_hold::HoldReason::Stopped => "stopped",
             },
             status.remaining.as_millis(),
             status.total.as_millis()
@@ -1463,7 +1497,14 @@ fn state_json(
     // measured params are stale or zero, and a warning about a session
     // that already ended is pure noise.
     let compat_warning = if ctrl.ingest_alive() {
-        crate::compat::compat_warning(&ctrl.stream_params(), &s.destinations).unwrap_or_default()
+        [
+            crate::compat::compat_warning(&ctrl.stream_params(), &s.destinations),
+            eb_not_applied_warning(ctrl),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
     } else {
         String::new()
     };
@@ -1473,11 +1514,12 @@ fn state_json(
     let vertical_present = ctrl.ingest_alive() && ctrl.vertical_track_on_wire().is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
         hold = hold_json(ctrl),
+        tail = ctrl.tail_left().map_or(0, |left| left.as_millis()),
         cw = json_escape_quoted(&compat_warning),
         la = ctrl
             .last_action()
@@ -1521,6 +1563,7 @@ fn state_json(
         id = ctrl.ingest_disconnects(),
         er = ctrl.egress_reconnects(),
         br = ctrl.bitrate_kbps(),
+        vbr = ctrl.video_bitrate_kbps(),
         vc = ctrl.video_codec().label(),
         ac = ctrl.audio_codec().label(),
         mtv = ctrl.multitrack_video(),
@@ -1534,6 +1577,44 @@ fn state_json(
         bp = backpressure,
         dl = dest_list,
     )
+}
+
+/// Shown when OBS's saved profile asks for Enhanced Broadcasting but the
+/// stream arriving is single-track. OBS rebuilds its stream output only
+/// while nothing is running, so a Stream settings change applied while the
+/// Replay Buffer or a recording runs never reaches the next stream.
+const EB_NOT_APPLIED: &str = "OBS has Enhanced Broadcasting on but is not using it. \
+    Stop the stream, Replay Buffer and recording (or restart OBS), then go live again.";
+
+/// How long one read of OBS's saved profile is reused. `/state` is polled
+/// several times a second; the setting changes at human speed.
+const OBS_PROFILE_TTL: Duration = Duration::from_secs(10);
+
+fn eb_not_applied_warning(ctrl: &Controller) -> Option<String> {
+    // A measured keyframe interval means a few seconds of video arrived,
+    // and an EB stream marks its very first video tag as multi-track, so
+    // a stream that is just starting never trips this. A remote publisher
+    // runs some other machine's OBS, whose profile isn't the one here.
+    if ctrl.multitrack_video() || ctrl.keyframe_interval_ms() == 0 || !ctrl.publisher_local() {
+        return None;
+    }
+    obs_profile_wants_eb().then(|| EB_NOT_APPLIED.to_string())
+}
+
+/// `obs_register::active_profile_wants_eb`, re-read at most once per
+/// `OBS_PROFILE_TTL`.
+fn obs_profile_wants_eb() -> bool {
+    static CACHE: crate::sync::Mutex<Option<(std::time::Instant, bool)>> =
+        crate::sync::Mutex::new(None);
+    let mut cache = CACHE.lock();
+    if let Some((read_at, wants)) = *cache {
+        if read_at.elapsed() < OBS_PROFILE_TTL {
+            return wants;
+        }
+    }
+    let wants = crate::obs_register::active_profile_wants_eb();
+    *cache = Some((std::time::Instant::now(), wants));
+    wants
 }
 
 /// The state an overlay is allowed to see: the numbers it paints, and
@@ -4337,7 +4418,6 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         }
         "buffer_path" => s.buffer_path = std::path::PathBuf::from(value),
         "overlays_dir" => s.overlays_dir = std::path::PathBuf::from(value),
-        "discord_webhook_url" => s.discord_webhook_url = value.into(),
         "tracing_enabled" => {
             // Form encoding: checkbox sends "true"/"false" or "on"/"" -
             // treat anything non-empty-non-false as truthy.
@@ -5917,6 +5997,8 @@ mod tests {
         clip.handlers[0].trigger = Trigger::Shortcut {
             hotkey: "Ctrl+Alt+K".into(),
             midi: String::new(),
+            token: String::new(),
+            only_live: false,
         };
         s.integrations.push(clip);
         let form = config::parse_form("hotkey.cut=ctrl%2Balt%2Bk");
@@ -5929,6 +6011,8 @@ mod tests {
         s.integrations[0].handlers[0].trigger = Trigger::Shortcut {
             hotkey: String::new(),
             midi: "note:1:36".into(),
+            token: String::new(),
+            only_live: false,
         };
         apply_field_str(&mut s, "midi.arm", "note:1:36@Deck A");
         let form = config::parse_form("midi.arm=note%3A1%3A36%40Deck%20A");

@@ -697,6 +697,9 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         (String, tokio::task::JoinHandle<std::io::Result<()>>),
     > = std::collections::HashMap::new();
     let mut vertical_wait = VerticalWaitLog::default();
+    // Destination id -> when its running pump first found no 9:16 canvas.
+    let mut vertical_gone_since: std::collections::HashMap<String, Instant> =
+        std::collections::HashMap::new();
 
     // Mirror the ingest key into the controller on every settings change
     // (the ingest task enforces the key but has no settings handle).
@@ -769,6 +772,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // config named counts once OBS is actually sending it.
         let vertical_track = ctrl.vertical_track_on_wire();
         vertical_wait.retain(|id| desired.iter().any(|(d, _)| d.id == id));
+        vertical_gone_since.retain(|id, _| desired.iter().any(|(d, _)| &d.id == id));
         for (dest, url) in &desired {
             // Keep each destination's vertical policy in sync with its
             // current settings and the detected canvas every tick - this
@@ -791,13 +795,23 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             // timeout, and churn reconnects. Tear down any pump and wait for
             // the canvas; the card says what's missing. It spawns the
             // moment detection resolves (self-heals within a tick).
+            // A running pump gets `VERTICAL_WAIT_GRACE` first: OBS coming
+            // back from a crash publishes before its vertical encoder sends
+            // a sequence header, and ending the session in that gap would
+            // drop this destination off the stream it was being held on.
             if dest.wants_vertical() && vertical_track.is_none() {
-                if let Some((_signature, handle)) = running.remove(&dest.id) {
-                    stop_pump(&ctrl, &dest.id, handle).await;
-                    ctrl.log(format!(
-                        "[{}] vertical: the 9:16 canvas stopped - holding off connecting",
-                        dest.name
-                    ));
+                let gone_since = *vertical_gone_since
+                    .entry(dest.id.clone())
+                    .or_insert_with(Instant::now);
+                let settled = gone_since.elapsed() >= VERTICAL_WAIT_GRACE && !ctrl.hold_active();
+                if settled {
+                    if let Some((_signature, handle)) = running.remove(&dest.id) {
+                        stop_pump(&ctrl, &dest.id, handle).await;
+                        ctrl.log(format!(
+                            "[{}] vertical: the 9:16 canvas stopped - holding off connecting",
+                            dest.name
+                        ));
+                    }
                 }
                 // Say so once per OBS session, and only once video is
                 // flowing: before the first sequence header there is no way
@@ -818,6 +832,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 }
                 continue;
             }
+            vertical_gone_since.remove(&dest.id);
             // Enhanced Broadcasting override: when the
             // /obs/multitrack-config proxy gets back a real
             // session-allocated IVS URL from Twitch's API, it stashes
@@ -893,12 +908,14 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             let effective_url = override_url.as_deref().unwrap_or(url.as_str()).to_string();
             let url = &effective_url;
             let signature = pump_signature(url, &dest.stream_format, &dest.audio_track);
-            // A change during a crash-protection hold waits: dropping OBS
-            // clears Twitch's session URL, and restarting now would take the
-            // destination off the reconnect screen.
+            // A change during a crash-protection hold, or while the delay
+            // still airs after OBS left, waits: dropping OBS clears Twitch's
+            // session URL, and restarting now would take the destination off
+            // the reconnect screen or cut the rest of the delay.
+            let settled = !ctrl.hold_active() && ctrl.tail_left().is_none();
             let needs_restart = match running.get(&dest.id) {
                 Some((running_signature, handle)) => {
-                    (running_signature != &signature && !ctrl.hold_active()) || handle.is_finished()
+                    (running_signature != &signature && settled) || handle.is_finished()
                 }
                 None => true,
             };

@@ -203,6 +203,13 @@ impl Twitch {
         }
     }
 
+    /// The logged-in main account's Twitch user id, empty when logged out.
+    pub fn main_user_id(&self) -> String {
+        self.account(Which::Main)
+            .map(|a| a.user_id)
+            .unwrap_or_default()
+    }
+
     fn account(&self, which: Which) -> Option<TwitchAccount> {
         let accounts = self.store.accounts.lock();
         match which {

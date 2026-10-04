@@ -2231,7 +2231,7 @@ details.sys-collapse>summary .ic-label{margin:0}
 /* Grid. */
 .ig-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
 .ig-card{padding:8px;gap:8px;cursor:default}
-.ig-card .dcard-screen{display:flex;align-items:center;height:96px;padding:10px;border-radius:6px;cursor:pointer;
+.ig-card .dcard-screen{display:flex;align-items:flex-start;height:96px;overflow:hidden;padding:10px;border-radius:6px;cursor:pointer;
   transition:border-color .15s var(--ease-out)}
 .ig-card .dcard-screen:hover{border-color:color-mix(in oklch,var(--dc,var(--accent)) 45%,var(--line))}
 .ig-card .dcard-screen:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -2352,7 +2352,7 @@ details.sys-collapse>summary .ic-label{margin:0}
   display:grid;place-items:center;color:#051018}
 .ig-pv-discord .ig-av svg{width:11px;height:11px}
 .ig-pv-discord b{color:#f2f3f5;font-weight:600}
-.ig-pv-discord .ig-app{padding:0 3px;margin-left:4px;border-radius:3px;background:#5865f2;color:#fff;font-size:8.5px;font-weight:700;vertical-align:1px}
+.ig-pv-discord .ig-app{padding:0 3px;margin-left:4px;border-radius:3px;background:#5865f2;color:#fff;font-size:10px;font-weight:500;vertical-align:1px}
 .ig-pv-discord .ig-txt{color:#dbdee1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
 .ig-pv-chat{display:flex;flex-direction:column;gap:3px;padding:8px 9px;border-radius:8px;background:#18181b;color:#efeff1}
 .ig-pv-chat div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -2401,7 +2401,7 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-live-col{flex:1;min-width:0;font-size:14.5px}
 .ig-live-meta{display:flex;align-items:center;gap:6px;margin-bottom:6px}
 .ig-live-meta b{color:#f2f3f5}
-.ig-live-meta .ig-app{padding:0 4px;border-radius:3px;background:#5865f2;color:#fff;font-size:10px;font-weight:700}
+.ig-live-meta .ig-app{padding:0 4px;border-radius:3px;background:#5865f2;color:#fff;font-size:10px;font-weight:500}
 .ig-ping{padding:0 4px;border-radius:3px;background:rgba(88,101,242,.3);color:#c9cdfb;font-size:12px;animation:igPop .26s cubic-bezier(.2,0,0,1)}
 .ig-live-chat{background:#18181b;padding:14px 16px;color:#efeff1;font-size:14px;display:flex;flex-direction:column;gap:8px}
 .ig-live-chat .u1{color:#ff7eb6}.ig-live-chat .u2{color:#5ac8fa}
@@ -2409,11 +2409,13 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-live-phone .ig-live-tag{color:rgba(255,255,255,.7);font-weight:500}
 .ig-live-phone .ic-input{background:rgba(255,255,255,.08)}
 .ig-live-plain{padding:14px 16px;display:flex;flex-direction:column;gap:10px;border-radius:12px}
-.ig-token{display:inline-flex;align-items:baseline;gap:4px;padding:1px 8px;border-radius:999px;cursor:pointer;
-  border:1px solid color-mix(in oklch,var(--accent) 40%,transparent);background:transparent;
-  color:color-mix(in oklch,var(--accent) 70%,#fff);font:500 11px/1.6 'JetBrains Mono',monospace;
-  transition:background-color .15s var(--ease-out),transform .15s var(--ease-out)}
-.ig-token:hover{background:color-mix(in oklch,var(--accent) 14%,transparent)}
+.ig-token{display:inline-flex;align-items:baseline;gap:4px;padding:2px 9px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line);background:transparent;color:var(--fg-2);font:500 12px/1.6 inherit;
+  transition:background-color .15s var(--ease-out),border-color .15s var(--ease-out),color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-token:hover,.ig-token:focus-visible{border-color:color-mix(in oklch,var(--accent) 50%,transparent);color:color-mix(in oklch,var(--accent) 75%,#fff);
+  background:color-mix(in oklch,var(--accent) 10%,transparent)}
+.ig-token code{font:500 10.5px/1.6 'JetBrains Mono',monospace;color:var(--fg-4)}
+.ig-tokens-group{color:var(--fg-4);font-size:11px;margin-left:4px}
 .ig-token:active{transform:scale(.96)}
 .ig-token.more{border-style:dashed;border-color:var(--line-2);color:var(--fg-3);font-family:inherit}
 .ig-tokens{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11.5px;color:var(--fg-3)}
@@ -2465,7 +2467,7 @@ details.sys-collapse>summary .ic-label{margin:0}
   transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),transform .15s var(--ease-out)}
 .ig-chip:hover{border-color:var(--line-2)}
 .ig-chip:active{transform:scale(.96)}
-.ig-chip span{color:var(--fg-3)}
+.ig-chip span{color:var(--fg-2)}
 .ig-chip b{font-weight:600;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ig-chip svg{width:11px;height:11px;color:var(--fg-3);transition:transform .25s var(--ease-out),color .15s var(--ease-out)}
 .ig-chip.warn{border-color:color-mix(in oklch,var(--warn) 55%,transparent);background:color-mix(in oklch,var(--warn) 9%,var(--surface-3))}
@@ -2524,13 +2526,19 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-cat-grid>*{animation:igTileIn .32s var(--ease-out) both;animation-delay:calc(min(var(--i,0),10) * 26ms)}
 @keyframes igTileIn{from{opacity:0;transform:translateY(8px) scale(.98);filter:blur(3px)}to{opacity:1;transform:none;filter:blur(0)}}
 .ig-cat-tile{padding:8px;gap:10px}
-.ig-cat-tile .dcard-screen{min-height:84px;padding:10px;border-radius:6px;display:flex;align-items:center}
+.ig-cat-tile .dcard-screen{height:128px;padding:10px;border-radius:6px;display:flex;align-items:flex-start;overflow:hidden;
+  -webkit-mask-image:linear-gradient(#000 78%,transparent);mask-image:linear-gradient(#000 78%,transparent)}
 .ig-cat-id{display:flex;gap:10px;align-items:flex-start;padding:0 4px}
 .ig-cat-id .dcard-icon{width:28px;height:28px;border-radius:8px}
 .ig-cat-id .dcard-icon svg{width:14px;height:14px}
 .ig-cat-desc{margin-top:2px;font-size:12px;line-height:1.45;color:var(--fg-3);text-wrap:pretty}
 .ig-cat-tile .ig-cat-desc{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
-.ig-cat-needs{margin-top:4px;font-size:11px;color:var(--warn)}
+.ig-cat-needs{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px}
+.ig-need{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:11px;
+  border:1px solid var(--line);color:var(--fg-3)}
+.ig-need.ok{color:var(--live);border-color:color-mix(in oklch,var(--live) 35%,transparent)}
+.ig-need.miss{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 40%,transparent)}
+.ig-need svg{width:10px;height:10px;flex:none}
 .ig-cat-tile>.ic-btn{margin:auto 4px 4px}
 /* A confirm label ("Click again: …") is longer than the button it
    replaces: it wraps inside its row instead of pushing out of it. */
@@ -2551,8 +2559,10 @@ details.sys-collapse>summary .ic-label{margin:0}
   font-size:12.5px;line-height:1.5;color:var(--fg-2);text-wrap:pretty}
 .ig-empty-steps svg{width:16px;height:16px;flex:none;margin-top:2px;color:var(--accent)}
 .ig-empty-steps b{color:var(--fg)}
+.ig-exp-note{margin-top:6px;font-size:12.5px;line-height:1.5;color:var(--fg-3)}
+.ig-exp-note a{color:var(--warn);font-weight:600;text-decoration:underline;text-underline-offset:2px}
 .ig-exp{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:600;
-  letter-spacing:.02em;vertical-align:2px;color:var(--warn);cursor:help;
+  letter-spacing:.02em;vertical-align:2px;color:var(--warn);
   background:color-mix(in oklch,var(--warn) 12%,transparent);border:1px solid color-mix(in oklch,var(--warn) 35%,transparent)}
 /* Add: the tile's colour, tinted, so a grid of them reads as cards and
    not as a wall of solid buttons. It fills on hover. */
@@ -2583,7 +2593,7 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-palette button:hover{background:var(--surface-3);color:var(--fg)}
 .ig-palette button:active{transform:scale(.96)}
 .ig-palette button i{width:8px;height:8px;border-radius:3px;flex:none;background:var(--c)}
-.ig-canvas{flex:1;min-width:0;padding:16px 20px;overflow-y:auto;background:var(--bg)}
+.ig-canvas{flex:1;min-width:0;padding:16px 20px;overflow-y:auto;background:var(--bg);container-type:inline-size}
 .ig-triggers{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
 .ig-trig{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);
   background:transparent;color:var(--fg-3);font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;
@@ -2600,7 +2610,9 @@ details.sys-collapse>summary .ic-label{margin:0}
   border:1px solid var(--line);background:var(--bg-2);color:inherit;font:inherit;text-align:left;cursor:pointer;
   transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),box-shadow .2s var(--ease-out)}
 .ig-step:hover{border-color:var(--line-2)}
-.ig-step:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ig-step:focus-visible,.ig-step:has(.ig-step-main:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.ig-step-main{flex:1;min-width:0;display:flex;align-items:center;gap:12px;padding:0;border:0;background:none;color:inherit;
+  font:inherit;text-align:left;cursor:pointer;outline:none}
 .ig-step.on{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
   background:color-mix(in oklch,var(--accent) 7%,var(--bg-2));box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 16%,transparent)}
 .ig-step.ig-when{--c:#5ac8fa}
@@ -2612,6 +2624,15 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-step:hover .ig-step-tools,.ig-step.on .ig-step-tools,.ig-step:focus-within .ig-step-tools{opacity:1}
 .ig-step-tools svg{width:13px;height:13px}
 .ig-step-tools .ic-btn-tiny:disabled{opacity:.3;cursor:default}
+/* A narrow canvas (inspector open on a small window, a phone): the tools
+   would squeeze the step's text to nothing, so only the picked step shows
+   them, on a row of their own. */
+@container (max-width:380px){
+  .ig-step{flex-wrap:wrap;row-gap:6px}
+  .ig-step-kind{flex-basis:48px}
+  .ig-step-tools{display:none}
+  .ig-step.on .ig-step-tools{display:flex;flex-basis:100%;justify-content:flex-end}
+}
 .ig-branch{position:relative;z-index:1;margin-left:30px;padding-left:14px;border-left:2px solid var(--line);
   display:flex;flex-direction:column;gap:8px}
 .ig-branch-label{font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--fg-3);text-transform:uppercase}
@@ -2777,8 +2798,15 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-ok{width:20px;height:20px;flex:none;border-radius:50%;display:grid;place-items:center;
   background:color-mix(in oklch,var(--live) 18%,transparent);color:var(--live)}
 .ig-ok svg{width:12px;height:12px;animation:igPop .3s cubic-bezier(.2,0,0,1)}
-.ig-recipe-item{padding-left:28px;font-size:13px;color:var(--fg-2)}
+.ig-recipe-item{padding-left:28px;font-size:13px;color:var(--fg-2);display:flex;flex-direction:column;gap:4px}
 .ig-recipe-item b{color:var(--fg)}
+.ig-rwhen{font-size:12px}
+.ig-rwho{color:var(--fg-3)}
+.ig-rflags{display:flex;flex-wrap:wrap;gap:6px}
+.ig-rflag{font-size:11.5px;padding:2px 8px;border-radius:999px;background:var(--surface-3);color:var(--fg-2)}
+.ig-rflag.caution{background:color-mix(in oklch,var(--warn) 16%,transparent);color:var(--warn)}
+.ig-rflag.danger{background:color-mix(in oklch,var(--err) 16%,transparent);color:var(--err);font-weight:600}
+.ig-palette button.ig-pal-locked{opacity:.45;cursor:not-allowed}
 .ig-recipe-safe{display:flex;align-items:flex-start;gap:8px}
 .ig-recipe-safe svg{width:14px;height:14px;flex:none;margin-top:2px;color:var(--accent)}
 .ig-share-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto}
@@ -2905,6 +2933,145 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-insp-quiet{display:flex;flex-direction:column;gap:8px}
 .ig-inline-ic{width:13px;height:13px;margin-right:5px;vertical-align:-2px;color:var(--fg-3)}
 .ig-kind:disabled,.ig-ttype:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}
+/* Discord cards (embeds), drawn the way Discord's dark theme draws them. */
+.ig-embed{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;margin-top:4px;max-width:520px;padding:7px 10px 9px 10px;border-radius:4px;
+  border-left:4px solid var(--ec,#5ac8fa);background:#2b2d31;color:#dbdee1;min-width:0}
+.ig-embed-title{color:#f2f3f5;font-weight:600;font-size:12px;line-height:1.3;overflow-wrap:anywhere}
+.ig-embed-title.link{color:#00a8fc}
+.ig-embed-desc{font-size:11.5px;line-height:1.4;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.ig-embed code{padding:0 .25em;border-radius:3px;background:#1e1f22;font:85% 'JetBrains Mono',monospace}
+.ig-embed pre{margin:4px 0;padding:6px 8px;border-radius:4px;background:#1e1f22;border:1px solid #1a1b1e;
+  font:11px/1.45 'JetBrains Mono',monospace;color:#dbdee1;white-space:pre-wrap}
+.ig-link{color:#00a8fc}
+.ig-txt .ig-link,.ig-embed-desc .ig-link,.ig-embed-fields .ig-link{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;vertical-align:bottom}
+.ig-embed-fields{display:none}
+.ig-embed-foot{display:none}
+.ig-embed.big{gap:8px;padding:8px 16px 16px 12px}
+.ig-embed.big .ig-embed-title{font-size:16px;line-height:22px}
+.ig-embed.big .ig-embed-desc{font-size:14px;line-height:1.375;-webkit-line-clamp:unset;display:block}
+.ig-embed.big .ig-embed-fields{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:8px 16px}
+.ig-embed-fields>div{grid-column:1/-1;display:flex;flex-direction:column;gap:2px;min-width:0;font-size:14px}
+.ig-embed-fields>div.in{grid-column:span var(--span,4)}
+.ig-embed-fields b{color:#f2f3f5;font-size:14px;font-weight:600}
+.ig-embed-fields span{overflow-wrap:anywhere}
+.ig-embed.big .ig-embed-foot{display:flex;align-items:center;gap:8px;font-size:12px;color:#b5bac1}
+.ig-embed-foot i{width:20px;height:20px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:#051018}
+.ig-embed-foot i svg{width:11px;height:11px}
+/* The card you write on: same card, every part a field. */
+.ig-above{width:100%;box-sizing:border-box;margin:0 0 6px;padding:5px 8px;border-radius:6px;border:1px dashed transparent;
+  background:transparent;color:#dbdee1;font:inherit;font-size:14px;outline:none;transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out)}
+.ig-above::placeholder,.ig-embed.edit input::placeholder,.ig-embed.edit .ig-msg::placeholder{color:#949ba4}
+.ig-above:hover,.ig-above:focus{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 5%,transparent)}
+.ig-above:focus-visible,.ig-embed.edit input:focus-visible{border-style:solid;border-color:var(--ec,var(--accent));
+  box-shadow:0 0 0 2px color-mix(in oklch,var(--ec,var(--accent)) 35%,transparent)}
+.ig-embed.edit{max-width:520px}
+.ig-embed.edit input{min-width:0;box-sizing:border-box;padding:4px 6px;margin:0;border-radius:5px;border:1px dashed transparent;
+  background:transparent;color:inherit;font:inherit;outline:none;transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out)}
+.ig-embed.edit input:hover,.ig-embed.edit input:focus{border-color:color-mix(in oklch,var(--ec) 60%,transparent);background:rgba(255,255,255,.03)}
+.ig-embed-title-in{width:100%;color:#f2f3f5 !important;font-size:16px !important;font-weight:600 !important}
+.ig-embed.edit .ig-msg{border-color:rgba(255,255,255,.12);background:transparent;font-size:14px}
+.ig-embed.edit .ig-msg:hover{border-color:rgba(255,255,255,.2);background:rgba(255,255,255,.02)}
+.ig-embed.edit .ig-msg:focus{border-color:var(--ec);box-shadow:0 0 0 2px color-mix(in oklch,var(--ec) 30%,transparent)}
+.ig-fields-edit{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:8px}
+.ig-field-edit{grid-column:span var(--span,4)}
+.ig-field-add{grid-column:1/-1}
+.ig-field-edit{position:relative;display:flex;flex-direction:column;gap:2px;padding:4px;border-radius:6px;background:rgba(0,0,0,.14)}
+.ig-field-edit.full{grid-column:1/-1}
+.ig-field-edit>:first-child,.ig-field-edit>:first-child input{color:#f2f3f5;font-weight:600;font-size:14px}
+.ig-field-edit>:first-child{padding-right:60px}
+.ig-field-edit>.ig-tpl:nth-child(2) :is(input,.ig-tpl-out){font-size:13.5px}
+.ig-field-edit .ic-btn-tiny,.ig-field-w{position:absolute;top:3px;width:24px;height:24px;opacity:0;transition:opacity .15s var(--ease-out)}
+.ig-field-edit .ic-btn-tiny{right:3px}
+.ig-field-w{right:29px;padding:0;border:0;border-radius:5px;background:#1e1f22;color:#b5bac1;
+  font-family:inherit;font-size:11px;font-weight:600;line-height:20px;cursor:pointer}
+.ig-field-edit:hover .ic-btn-tiny,.ig-field-edit:hover .ig-field-w,.ig-field-edit:focus-within .ic-btn-tiny,.ig-field-edit:focus-within .ig-field-w{opacity:1}
+.ig-field-add{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px;border-radius:6px;border:1px dashed rgba(255,255,255,.14);
+  background:transparent;color:#949ba4;font:inherit;font-size:12.5px;cursor:pointer;transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.ig-field-add:hover{color:#dbdee1;border-color:color-mix(in oklch,var(--ec) 60%,transparent)}
+.ig-field-add svg{width:13px;height:13px}
+.ig-embed-foot.edit{display:flex;align-items:center;gap:8px;font-size:12px;color:#b5bac1}
+.ig-embed-foot.edit input{flex:0 1 auto;field-sizing:content;min-width:60px;max-width:100%;font-size:12px}
+.ig-embed-foot.edit .ig-foot-dot{color:#949ba4}
+.ig-ts{display:inline-flex;align-items:center;gap:5px;flex:none;padding:3px 8px;border-radius:999px;border:1px dashed rgba(255,255,255,.16);
+  background:transparent;color:#949ba4;font:inherit;font-size:11.5px;cursor:pointer;transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.ig-ts svg{width:12px;height:12px}
+.ig-ts.on{border-style:solid;border-color:transparent;color:#b5bac1}
+.ig-ts:hover{color:#dbdee1}
+.ig-swatches{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px}
+.ig-swatch-set{display:contents}
+.ig-swatch{position:relative;width:22px;height:22px;padding:0;border-radius:50%;border:0;background:var(--sw);cursor:pointer;
+  box-shadow:0 0 0 2px #313338;transition:transform .15s var(--ease-out),box-shadow .15s var(--ease-out)}
+.ig-swatch:hover{transform:scale(1.1)}
+.ig-swatch:active{transform:scale(.94)}
+.ig-swatch.on{box-shadow:0 0 0 2px #313338,0 0 0 4px #f2f3f5}
+.ig-swatch.custom{background:conic-gradient(#f2665a,#fcd34d,#3fcf8e,#5ac8fa,#a78bfa,#ff7eb6,#f2665a);overflow:hidden}
+.ig-swatch.custom input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.ig-swatch:focus-visible,.ig-swatch.custom:focus-within{outline:2px solid #f2f3f5;outline-offset:3px}
+.ig-inspector .ig-swatches{margin-top:0}
+.ig-inspector .ig-swatch{box-shadow:0 0 0 2px var(--bg-2)}
+.ig-inspector .ig-swatch.on{box-shadow:0 0 0 2px var(--bg-2),0 0 0 4px var(--fg)}
+.ig-color-in{flex:1;min-width:120px}
+.ig-more-fields summary{cursor:pointer;color:var(--fg-3);font-size:12.5px;margin:2px 0 8px}
+.ig-more-fields[open] summary{color:var(--fg)}
+/* A timeline line, as {timeline} writes it. */
+.ig-pv-timeline{display:flex;flex-direction:column;gap:7px;color:var(--fg-2)}
+.ig-pv-timeline code{margin-right:7px;padding:1px 6px;border-radius:5px;background:var(--surface-3);color:var(--accent);font:600 10.5px 'JetBrains Mono',monospace}
+.ig-pv-tl-kind{align-self:flex-start;padding:1px 8px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));color:var(--accent)}
+.ig-pv-tl-kind.chapter{background:color-mix(in oklch,#a78bfa 18%,var(--surface-3));color:#a78bfa}
+.ig-pv-tl-kind.highlight{background:color-mix(in oklch,#fcd34d 18%,var(--surface-3));color:#fcd34d}
+/* Chat activity rules, each with a bar of where chat is right now. */
+.ig-rules{display:flex;flex-direction:column;gap:12px;container-type:inline-size}
+.ig-rules-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--fg-2)}
+.ig-rule-win{width:auto}
+.ig-rule-list{display:flex;flex-direction:column;gap:8px}
+.ig-rule{display:grid;grid-template-columns:minmax(150px,1fr) auto 72px auto auto;align-items:center;gap:8px;padding:10px 12px;
+  border-radius:10px;background:var(--bg-1);border:1px solid var(--line)}
+.ig-rule-at,.ig-rule-unit{font-size:12.5px;color:var(--fg-3);white-space:nowrap}
+.ig-rule-num{text-align:right}
+.ig-rule-words{grid-column:1/-1}
+.ig-rule-bar{grid-column:1/-1;position:relative;height:16px;border-radius:999px;background:var(--surface-3);overflow:hidden}
+.ig-rule-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:999px;min-width:0;background:color-mix(in oklch,var(--accent) 55%,transparent);
+  transition:width .5s var(--ease-out),background-color .3s var(--ease-out)}
+.ig-rule-bar i.on{background:color-mix(in oklch,var(--live) 70%,transparent)}
+/* Narrow homes (the builder's inspector, a phone): the rule's controls
+   share one line without "at least". */
+@container (max-width:420px){
+  .ig-rule{grid-template-columns:minmax(0,1fr) 64px auto auto}
+  .ig-rule .ig-rule-at{display:none}
+}
+.ig-rule-bar span{position:relative;display:block;padding:0 8px;font:600 10.5px/16px 'JetBrains Mono',monospace;color:var(--fg);text-align:right}
+.ig-meter{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:9px 12px;border-radius:10px;background:var(--bg-1);
+  border:1px solid var(--line);font-size:12.5px}
+.ig-meter-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--fg-4)}
+.ig-meter-dot.fire{background:var(--live);box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 60%,transparent);animation:igMeterPulse 1.6s infinite}
+.ig-meter-dot.learn{background:var(--warn)}
+.ig-meter-dot.ok{background:var(--live)}
+.ig-meter-dot.wait{background:var(--warn);animation:igSoftPulse 1.4s ease-in-out infinite}
+@keyframes igSoftPulse{50%{opacity:.35}}
+.ig-meter-dot.off{background:var(--danger)}
+@keyframes igMeterPulse{70%{box-shadow:0 0 0 7px color-mix(in oklch,var(--live) 0%,transparent)}100%{box-shadow:0 0 0 0 transparent}}
+/* The OBS scene picker. */
+.ig-scene{display:flex;flex-direction:column;gap:10px}
+.ig-scene-list{display:flex;flex-wrap:wrap;gap:6px}
+.ig-start.live{position:relative;padding-left:22px}
+.ig-start.live::before{content:'';position:absolute;left:9px;top:50%;width:7px;height:7px;margin-top:-3.5px;border-radius:50%;background:var(--danger)}
+.ig-btn-row{display:flex;flex-wrap:wrap;gap:6px}
+.ig-params{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.ig-narrow{max-width:220px}
+@media (prefers-reduced-motion: reduce){
+  .ig-meter-dot.fire,.ig-meter-dot.wait{animation:none}
+  .ig-rule-bar i,.ig-swatch{transition:none}
+}
+@media (max-width:560px){
+  .ig-fields-edit,.ig-embed.big .ig-embed-fields{grid-template-columns:minmax(0,1fr)}
+  .ig-field-edit,.ig-embed-fields>div.in{grid-column:1/-1}
+  /* A phone gives the card the avatar's room. */
+  .ig-live-discord .ig-live-av{display:none}
+  .ig-live-discord .ig-live-msg{padding:12px}
+  .ig-embed.big{padding:8px 10px 12px 10px}
+}
 @media (prefers-reduced-motion: reduce){
   .ig-skel::after{animation:none}
   .ig-spin,.ic-btn.is-busy::after,.ic-btn-tiny.is-busy::after{animation-duration:1.6s}
@@ -2941,6 +3108,72 @@ details.sys-collapse>summary .ic-label{margin:0}
   .ig-palette{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;gap:4px;flex:none}
   .ig-palette-hint,.ig-palette .ic-label{display:none}
   .ig-palette button{flex:none;white-space:nowrap}
+}
+/* A template field: shows what it will say, and turns back into what you
+   wrote (variables and all) while you edit it. */
+.ig-tpl{position:relative;min-width:0}
+.ig-tpl-out{display:none;cursor:text;white-space:pre-wrap;overflow-wrap:anywhere;border-radius:5px;border:1px dashed transparent}
+.ig-tpl-out:hover{border-color:rgba(255,255,255,.16)}
+.ig-tpl.has-vars:not(:focus-within)>.ig-tpl-out{display:block}
+.ig-tpl.has-vars:not(:focus-within)>.ig-tpl-in{position:absolute;inset:0;opacity:0;pointer-events:none}
+.ig-tpl.has-vars:focus-within~.ig-sample{display:block}
+.ig-tpl~.ig-sample:not(.ig-instead){display:none}
+.ig-tpl-out.msg{min-height:48px;padding:8px 10px;line-height:1.5;border-radius:8px;
+  border:1px dashed color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 5%,transparent)}
+.ig-embed.edit .ig-tpl-out.msg{border-color:rgba(255,255,255,.12);background:transparent;font-size:14px}
+.ig-live-phone .ig-tpl-out.line{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.08);font-size:13px}
+.ig-tpl-out.line{padding:4px 6px;line-height:20px}
+.ig-embed.edit input{line-height:20px}
+.ig-embed-title-in{line-height:22px !important}
+.ig-tpl-out.title{padding:4px 6px;color:#f2f3f5;font-size:16px;font-weight:600;line-height:22px}
+.ig-tpl-out.above{padding:5px 8px;margin:0 0 6px;font-size:14px}
+.ig-tpl-out .ig-tpl-none{color:#949ba4;font-style:italic}
+.ig-tpl-out .ig-tpl-hint{float:right;margin-left:8px;padding:0 5px;border-radius:4px;background:rgba(255,255,255,.06);
+  font:500 10px/1.8 'JetBrains Mono',monospace;color:#949ba4;text-transform:uppercase;letter-spacing:.04em}
+/* The channel header when no channel is picked. */
+.ig-live-head .hash.none+span,.ig-live-head button.none{color:var(--warn);font-style:italic}
+.ig-live-head button{padding:0;border:0;background:none;font:inherit;cursor:pointer;color:inherit}
+.ig-live-meta .ig-when{color:#949ba4;font-size:12px;font-weight:400;margin-left:2px}
+/* Requirements under a pack. */
+.ig-pack-needs{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+/* What still blocks switching on, under a card's name. */
+.dcard-host.ig-host-warn{color:var(--warn)}
+.ig-foot-need{color:var(--warn);font-size:12px}
+/* Builder: a switched-off step, one that misses something, insert points. */
+.ig-step.off :is(.ig-step-kind,.ig-step-text){opacity:.6}
+.ig-step.off .ig-step-text{text-decoration:line-through;text-decoration-color:var(--fg-4)}
+.ig-step.warn{box-shadow:inset 3px 0 0 var(--warn)}
+.ig-step-warn{flex:none;color:var(--warn);font-size:11px;white-space:nowrap}
+.ig-drop.after{margin:-2px 0 2px 18px;padding:4px 10px;font-size:11.5px}
+/* A moment that still misses something. */
+.ig-moment-name.warn,.ig-mchip-name.warn{color:var(--warn)}
+.ig-moment-name.warn::after,.ig-mchip-name.warn::after{content:' !';font-weight:700}
+/* Builder: a card's fields as rows, and the step's preview. */
+.ig-bfields{display:flex;flex-direction:column;gap:6px}
+.ig-bfield{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto auto;gap:6px;align-items:center}
+.ig-bfield .ic-btn-tiny svg{width:13px;height:13px}
+.ig-insp-pv{padding:10px;border-radius:8px;max-height:220px;overflow:auto}
+.ig-field-w svg{width:12px;height:12px;vertical-align:-2px}
+/* Duration fields. */
+.ig-dur[aria-invalid="true"],.ig-param[aria-invalid="true"]{border-color:var(--danger)}
+.ig-field-hint{font-size:11.5px;color:var(--danger)}
+/* Test panel. */
+.ig-testbox{display:flex;flex-direction:column;gap:10px}
+.ig-test-values{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px}
+.ig-test-values .dff label{font-family:inherit}
+.ig-test-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+/* The OBS step. */
+.ig-obs-pick{display:flex;flex-wrap:wrap;gap:6px;max-height:140px;overflow-y:auto}
+/* Touch screens have no hover: keep controls in sight, and big enough. */
+@media (hover:none){
+  .ig-field-edit .ic-btn-tiny,.ig-field-w,.ig-card .ig-more,.ig-step-tools{opacity:1}
+}
+@media (pointer:coarse){
+  .ig-field-edit .ic-btn-tiny,.ig-field-w{width:32px;height:32px;line-height:32px}
+  .ig-field-w{right:37px}
+  .ig-field-edit>:first-child{padding-right:76px}
+  .ig-token,.ig-ts{padding:5px 10px}
+  .ig-swatch{width:28px;height:28px}
 }
 </style>
 </head>
@@ -3195,7 +3428,7 @@ details.sys-collapse>summary .ic-label{margin:0}
 <section class="ic-card hero-card" id="hero" hidden>
   <div class="hold-banner" id="hold-banner" role="status" hidden>
     <span class="hold-dot" aria-hidden="true"></span>
-    <div class="hold-copy"><b id="hold-title">OBS dropped. Keeping your destinations live.</b><span id="hold-sub"></span></div>
+    <div class="hold-copy"><b id="hold-title">OBS dropped. Keeping your destinations live.</b><span id="hold-sub" aria-live="off"></span></div>
     <button class="ic-btn ic-btn-ghost" id="hold-end" onclick="endHold(this)">End now</button>
   </div>
   <div class="hero">
@@ -3894,7 +4127,7 @@ details.sys-collapse>summary .ic-label{margin:0}
         <input type="checkbox" id="s-cp-enabled" onchange="cpSyncVisibility()">
         <span>
           <span class="crash-check-title">Keep the stream up if OBS crashes</span>
-          <span class="tab-sub">Your destinations stay live and show a reconnect screen until OBS is back. Stopping the stream in OBS still ends it right away.</span>
+          <span class="tab-sub">Your destinations stay live and show a reconnect screen until OBS is back. Stopping in OBS ends the stream as usual, once your delay has aired.</span>
         </span>
       </label>
       <div class="crash-body" id="s-cp-details" hidden>
@@ -3909,7 +4142,7 @@ details.sys-collapse>summary .ic-label{margin:0}
           <div class="crash-preview-frame" id="s-cp-preview-frame">
             <div class="crash-preview" id="s-cp-preview" role="img" aria-label="Preview of the reconnect screen"></div>
           </div>
-          <span class="crash-note">Drawn by the same code that streams it. H.264 tracks show this screen; HEVC and AV1 tracks hold your last frame instead.</span>
+          <span class="crash-note">Drawn by the same code that streams it. Some Enhanced Broadcasting qualities (HEVC or AV1) show your last frame instead.</span>
         </div>
         <div class="crash-controls">
           <div class="crash-field">
@@ -4240,7 +4473,7 @@ details.sys-collapse>summary .ic-label{margin:0}
         </div>
         <div class="sys-reset-card sys-reset-card-danger">
           <div class="ic-label" style="color:var(--err)">Reset everything</div>
-          <div class="tab-sub">Also wipes destinations and profiles. Restarts into the wizard. <b>Cannot be undone.</b></div>
+          <div class="tab-sub">Also wipes destinations, profiles, integrations and your Discord, phone and Twitch connections. Restarts into the wizard. <b>Cannot be undone.</b></div>
           <button class="ic-btn ic-btn-danger" onclick="openResetModal('all')">Reset everything…</button>
         </div>
       </div>
@@ -5065,7 +5298,9 @@ function renderHero(s){
   // LIVE destination and reads 0 when none is connected - without the
   // gate, an active delay with no destination showed a permanent (and
   // fake) "adjusting to Xs (currently 0s)" line.
-  const adjusting = ds === 'active' && armedMs > 0 && s.egress_alive
+  // Also gated on OBS: with OBS gone the buffer only drains, so the gap
+  // grows without anything adjusting.
+  const adjusting = ds === 'active' && armedMs > 0 && s.egress_alive && s.ingest_alive
     && Math.abs(armedMs - curMs) > 1500;
   // Sub copy. When OBS hasn't connected there's no signal to forward, so
   // don't claim we're forwarding anything - say we're waiting for it.
@@ -5073,7 +5308,11 @@ function renderHero(s){
   // when the kind changes, so the live numbers embedded in these lines
   // (buffer fill, bitrate, countdown) tick in place without pulsing.
   let sub = '', subKey = ds;
-  if (ds === 'off'){
+  if (s.tail_ms > 0){
+    sub = 'OBS stopped · your viewers are still watching the delay';
+    subKey = 'tail';
+  }
+  else if (ds === 'off'){
     sub = s.ingest_alive
       ? `Forwarding live with no delay · ${fmtKbps(s.stats.bitrate_kbps)} in`
       : `Waiting for your encoder to connect…`;
@@ -5704,7 +5943,7 @@ function verticalDiag(d){
   if (s.multitrack_video)
     return {ready:false, label:'No 9:16 canvas', hint:'In OBS, pick an Additional canvas',
       title:'OBS is streaming with Enhanced Broadcasting but sends no 9:16 canvas. In OBS: Settings \u2192 Stream \u2192 Enhanced Broadcasting \u2192 Additional canvas, pick your vertical canvas (for example Aitum Vertical).'};
-  return {ready:false, label:'EB off', hint:'Turn on Enhanced Broadcasting in OBS',
+  return {ready:false, label:'Needs Enhanced Broadcasting', hint:'Turn on Enhanced Broadcasting in OBS',
     title:'OBS is streaming without Enhanced Broadcasting, so there is no 9:16 canvas. In OBS: Settings \u2192 Stream, turn on Enhanced Broadcasting and pick your vertical canvas under Additional canvas.'};
 }
 // Set the card's format icon + hover tooltip from the destination's
@@ -6462,7 +6701,30 @@ async function loadConfig({resetSystem = false} = {}){
 // transcoded ladder, so we warn unconditionally on Twitch + > 8 Mbps.
 // Streamers with confirmed transcoded ladders can dismiss it; the
 // alternative (silently letting beta.4 happen again) is worse.
+//
+// The check reads the video bitrate alone (viewers decode video; the
+// audio and VOD tracks don't load the decoder), averaged over 10 s. The
+// meter samples 1 s windows, and with a 2 s keyframe interval every other
+// window holds a keyframe, so a steady 8 Mbps stream reads 7.4, 9.1,
+// 7.6... and a raw threshold made the chip flicker. Showing above 8.0 and
+// clearing below 7.7 keeps it steady when the average sits on the line.
 const TWITCH_MOBILE_SAFE_KBPS = 8000;
+const TWITCH_MOBILE_CLEAR_KBPS = 7700;
+const TWITCH_CAP_AVG_MS = 10000;
+let twitchCapSamples = [];
+let twitchCapOn = false;
+let twitchCapKbps = 0;
+// Average of the last TWITCH_CAP_AVG_MS of samples, or 0 until most of a
+// window has been seen, so a stream's first second can't light the chip.
+function smoothedVideoKbps(s){
+  const kbps = (s.stats && s.stats.video_kbps) || 0;
+  if (!s.ingest_alive || kbps <= 0){ twitchCapSamples = []; return 0; }
+  const now = Date.now();
+  twitchCapSamples.push({t: now, kbps});
+  while (now - twitchCapSamples[0].t > TWITCH_CAP_AVG_MS) twitchCapSamples.shift();
+  if (now - twitchCapSamples[0].t < TWITCH_CAP_AVG_MS * 0.8) return 0;
+  return twitchCapSamples.reduce((sum, x) => sum + x.kbps, 0) / twitchCapSamples.length;
+}
 function renderTwitchCapPill(s){
   const pill = document.getElementById('hdr-twitch-cap');
   const v = document.getElementById('hdr-twitch-cap-v');
@@ -6472,7 +6734,9 @@ function renderTwitchCapPill(s){
   const hasTwitchDest = (s.destinations || []).some(
     d => platformOf(d.id) === 'twitch' && d.alive && d.enabled
   );
-  const kbps = (s.stats && s.stats.bitrate_kbps) || 0;
+  const kbps = smoothedVideoKbps(s);
+  twitchCapOn = twitchCapOn ? kbps >= TWITCH_MOBILE_CLEAR_KBPS : kbps > TWITCH_MOBILE_SAFE_KBPS;
+  twitchCapKbps = kbps;
   // When Enhanced Broadcasting is active the multi-track stream
   // bypasses Twitch's account-tier source-only fallback - viewers
   // get the full transcoded ladder regardless of bitrate, so the
@@ -6481,7 +6745,7 @@ function renderTwitchCapPill(s){
   // communicates the EB-active state, so silently suppress this
   // warning to avoid two chips telling the user different things.
   const ebActive = !!s.multitrack_video;
-  if (hasTwitchDest && kbps > TWITCH_MOBILE_SAFE_KBPS && !ebActive){
+  if (hasTwitchDest && twitchCapOn && !ebActive){
     v.textContent = `Twitch · mobile risk at ${(kbps/1000).toFixed(1)} Mbps`;
     pill.hidden = false;
     pill.style.cursor = 'pointer';
@@ -6493,8 +6757,7 @@ function renderTwitchCapPill(s){
   }
 }
 function openTwitchCapInfo(){
-  const measured = lastState && lastState.stats && lastState.stats.bitrate_kbps;
-  const at = measured ? `${(measured/1000).toFixed(1)} Mbps` : 'your current bitrate';
+  const at = twitchCapKbps ? `${(twitchCapKbps/1000).toFixed(1)} Mbps` : 'your current bitrate';
   toast(
     `If Twitch shows your stream as "Source-Only" (no quality ladder), viewers must decode the full ${at}. Above ~8 Mbps that's too heavy for many mobile decoders - they hit Error #1000 or black screen with audio. The transcoded ladder is account-tier gated (Affiliate / Partner), not bitrate gated. If you're not sure your account gets transcoded, drop OBS to ≤ 8 Mbps for safe mobile playback. If you know it's transcoded, ignore this - viewers will pick lower qualities themselves.`,
     'err'
@@ -7202,7 +7465,7 @@ function renderLanWarning(){
   const ingest = $('s-ibind').checked;
   const hasKey = !!($('s-ingest-key') && $('s-ingest-key').value.trim());
   const parts = [];
-  if (web && !_authEnabled) parts.push('The web UI has no password, so anyone on your network can change the delay, cut, and edit destinations. Set one in Security below.');
+  if (web && !_authEnabled) parts.push('The web UI has no password, so anyone on your network can change the delay, cut and edit destinations. Integrations that run programs or write files stay locked to this PC until you set one in Security below.');
   if (ingest && !hasKey) parts.push('The ingest port accepts any stream key, so anyone on your network can publish into your buffer. Set a required key below to lock it.');
   const on = parts.length > 0;
   $('lan-warn').hidden = !on;
@@ -9819,6 +10082,11 @@ document.addEventListener('animationend', e => {
   else if (e.animationName === 'step-deny') e.target.classList.remove('deny');
 });
 
+// A link like /#integrations opens on that tab (the OBS dock uses it).
+window.addEventListener('load', () => {
+  const name = location.hash.slice(1);
+  if (name && document.querySelector(`.tab[data-tab="${CSS.escape(name)}"]`)) showTab(name);
+});
 function showTab(name){
   // Guard unsaved Studio edits: switching away from the Overlay tab hides the
   // editor and abandons the in-progress doc, so confirm first.
@@ -10460,21 +10728,34 @@ function fmtUptime(sec){
   return r+'s';
 }
 // Crash protection: while a hold is on air, say why, how many destinations
-// it keeps live and how long is left, and offer End now.
+// it keeps live and how long is left, and offer End now. The same banner
+// covers the delay still airing after OBS left with no hold.
 function renderHoldBanner(s){
   const banner = $('hold-banner');
   if (!banner) return;
   const hold = s.hold;
-  if (banner.hidden !== !hold){
-    banner.hidden = !hold;
+  const tail = !hold && s.tail_ms > 0;
+  if (banner.hidden !== !(hold || tail)){
+    banner.hidden = !(hold || tail);
     fitPaneCard();
+  }
+  if (tail){
+    $('hold-title').textContent = 'OBS stopped. Your delay is still airing.';
+    const live = s.destinations_alive || 0;
+    $('hold-sub').textContent = `${live} destination${live === 1 ? '' : 's'} live · ends in ${fmtClock(s.tail_ms)}, when viewers reach the end`;
+    return;
   }
   if (!hold) return;
   $('hold-title').textContent = hold.reason === 'freeze'
     ? 'OBS stopped sending video. Keeping your destinations live.'
+    : hold.reason === 'stopped' ? 'OBS stopped the stream. Keeping your destinations live.'
     : 'OBS dropped. Keeping your destinations live.';
   const held = (s.destinations || []).filter(d => d.on_hold).length;
-  $('hold-sub').textContent = `${held} destination${held === 1 ? '' : 's'} live · waiting for OBS · ${fmtClock(hold.remaining_ms)} left`;
+  // After a crash OBS asks about Safe Mode, which leaves scripts and
+  // plugins off (the VOD track script among them).
+  const reopen = hold.reason === 'crash' ? 'reopen OBS in Normal Mode and start streaming' : 'waiting for OBS';
+  const live = held ? `${held} destination${held === 1 ? '' : 's'} live · ${reopen}` : reopen[0].toUpperCase() + reopen.slice(1);
+  $('hold-sub').textContent = `${live} · ${fmtClock(hold.remaining_ms)} left`;
 }
 // "1:05" for a millisecond countdown.
 function fmtClock(ms){
@@ -10495,8 +10776,10 @@ async function endHold(btn){
   btn.textContent = 'End now';
   try {
     const r = await fetch('/crash-protection/end', {method:'POST'});
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 409){ toast(j.error || 'Nothing to end', 'info'); return; }
     if (!r.ok){ toast('Could not end the stream', 'err'); return; }
-    applyState(await r.json());
+    applyState(j);
     toast('Stream ended on every destination', 'ok');
   } catch(_){ toast('Could not reach InstantClone', 'err'); }
 }

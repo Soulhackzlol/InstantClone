@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 /// Candidate OBS config directories for this platform, in priority order.
 /// Both `services.json` and the log folder are resolved relative to these,
 /// so one list drives every OBS-path lookup.
-fn obs_config_dirs() -> Vec<PathBuf> {
+pub(crate) fn obs_config_dirs() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
         ["APPDATA", "LOCALAPPDATA"]
@@ -887,14 +887,54 @@ pub fn active_profile_service_json_path() -> Option<PathBuf> {
 /// what OBS streams with when Enhanced Broadcasting is off. None when OBS,
 /// the profile, or a usable bitrate can't be read.
 pub fn active_stream_settings() -> Option<crate::local_eb_config::StreamerSettings> {
-    let dir = active_profile_dir()?;
-    let profile = obs_config_dirs()
-        .into_iter()
-        .map(|obs_dir| obs_dir.join(PROFILES_DIR_REL).join(&dir))
-        .find(|p| p.join("basic.ini").exists())?;
+    let profile = active_profile_path()?;
     let basic = fs::read_to_string(profile.join("basic.ini")).ok()?;
     let encoder = fs::read_to_string(profile.join("streamEncoder.json")).ok();
     stream_settings_from(&basic, encoder.as_deref())
+}
+
+/// The active profile's folder, the first config dir that holds its basic.ini.
+fn active_profile_path() -> Option<PathBuf> {
+    let dir = active_profile_dir()?;
+    obs_config_dirs()
+        .into_iter()
+        .map(|obs_dir| obs_dir.join(PROFILES_DIR_REL).join(&dir))
+        .find(|p| p.join("basic.ini").exists())
+}
+
+/// True when the active profile's SAVED settings ask for Enhanced
+/// Broadcasting on a service that can deliver it. Saved is not applied:
+/// OBS rebuilds its stream output only while nothing is running, so a
+/// Stream settings change made while the Replay Buffer or a recording runs
+/// is written to disk but the next stream still goes out on the old setup.
+/// The dashboard compares this against what actually arrives.
+pub fn active_profile_wants_eb() -> bool {
+    let Some(profile) = active_profile_path() else {
+        return false;
+    };
+    let (Ok(basic), Ok(service)) = (
+        fs::read_to_string(profile.join("basic.ini")),
+        fs::read_to_string(profile.join("service.json")),
+    ) else {
+        return false;
+    };
+    profile_wants_eb(&basic, &service)
+}
+
+/// See `active_profile_wants_eb`. Only a Common service (the registered
+/// InstantClone entry) carries the config URL to OBS: Custom RTMP drops the
+/// key on load (see Phase C below), so a leftover URL there never enables EB
+/// and must not count.
+fn profile_wants_eb(basic_ini: &str, service_json: &str) -> bool {
+    if ini_get(basic_ini, "Stream1", "EnableMultitrackVideo") != Some("true") {
+        return false;
+    }
+    let compact: String = service_json
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    compact.contains(r#""type":"rtmp_common""#)
+        && compact.contains(r#""multitrack_video_configuration_url":"http"#)
 }
 
 /// Parse a profile's `basic.ini` and `streamEncoder.json`. Advanced output
@@ -2107,6 +2147,40 @@ mod tests {
         let with_bom = format!("\u{feff}{AMD_STREAM_ENCODER}\r\n");
         let own = stream_settings_from(ADVANCED_BASIC_INI, Some(&with_bom)).unwrap();
         assert_eq!(own.encoder.unwrap().settings_json, AMD_STREAM_ENCODER);
+    }
+
+    const EB_ON_INI: &str =
+        "\u{feff}[General]\nName=Main\n\n[Stream1]\nEnableMultitrackVideo=true\n";
+    const INSTANTCLONE_SERVICE: &str = r#"{"type":"rtmp_common","settings":{"service":"InstantClone","server":"rtmp://localhost:1935/live","multitrack_video_configuration_url":"http://127.0.0.1:7799/obs/multitrack-config"}}"#;
+
+    #[test]
+    fn eb_ticked_on_the_instantclone_service_is_wanted() {
+        assert!(profile_wants_eb(EB_ON_INI, INSTANTCLONE_SERVICE));
+        let spaced = INSTANTCLONE_SERVICE.replace("\":", "\": ");
+        assert!(
+            profile_wants_eb(EB_ON_INI, &spaced),
+            "JSON spacing is not meaningful"
+        );
+    }
+
+    #[test]
+    fn eb_unticked_or_unset_is_not_wanted() {
+        let off = EB_ON_INI.replace("=true", "=false");
+        assert!(!profile_wants_eb(&off, INSTANTCLONE_SERVICE));
+        assert!(!profile_wants_eb("[Stream1]\n", INSTANTCLONE_SERVICE));
+    }
+
+    /// Custom RTMP drops the config URL on load, so a leftover one there
+    /// can't turn EB on, and warning that EB "didn't apply" would be wrong.
+    #[test]
+    fn a_service_that_cannot_deliver_eb_is_not_wanted() {
+        let custom = INSTANTCLONE_SERVICE.replace("rtmp_common", "rtmp_custom");
+        assert!(!profile_wants_eb(EB_ON_INI, &custom));
+        let no_url = r#"{"type":"rtmp_common","settings":{"service":"InstantClone"}}"#;
+        assert!(!profile_wants_eb(EB_ON_INI, no_url));
+        let empty_url =
+            INSTANTCLONE_SERVICE.replace("http://127.0.0.1:7799/obs/multitrack-config", "");
+        assert!(!profile_wants_eb(EB_ON_INI, &empty_url));
     }
 
     #[test]

@@ -160,6 +160,9 @@ pub struct Settings {
     /// in to Twitch instead of the one built into releases. Empty uses the
     /// built-in app. Not a secret: public apps have no client secret.
     pub twitch_client_id: String,
+    /// During Twitch Shared Chat, messages from the partner channels'
+    /// viewers trigger chat integrations too. Off: only this channel's.
+    pub twitch_shared_chat: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -927,6 +930,7 @@ impl Settings {
             // this after its one-time pass either way.
             integrations_migrated: false,
             twitch_client_id: String::new(),
+            twitch_shared_chat: false,
         }
     }
 
@@ -1234,10 +1238,13 @@ impl Settings {
                 writeln!(f, "hotkey.{}={}", action, combo)?;
             }
         }
-        // MIDI bindings, same only-when-bound rule.
         if !self.twitch_client_id.is_empty() {
             writeln!(f, "twitch_client_id={}", one_line(&self.twitch_client_id))?;
         }
+        if self.twitch_shared_chat {
+            writeln!(f, "twitch_shared_chat=true")?;
+        }
+        // MIDI bindings, same only-when-bound rule.
         if !self.midi_device.is_empty() {
             writeln!(f, "midi_device={}", one_line(&self.midi_device))?;
         }
@@ -1391,6 +1398,7 @@ impl Settings {
             }
             "midi_device" => self.midi_device = sanitize_device_name(value),
             "twitch_client_id" => self.twitch_client_id = value.trim().to_string(),
+            "twitch_shared_chat" => self.twitch_shared_chat = value == "true",
             // midi.<action>=<signature>. `set` validates and drops anything
             // malformed, so a hand-edited config can't load a bad signature.
             k if k.starts_with("midi.") => {
@@ -3877,6 +3885,7 @@ Name@x"
             },
             integrations_migrated: true,
             twitch_client_id: "abcdefghij0123456789klmnopqrst".into(),
+            twitch_shared_chat: true,
         }
     }
 

@@ -9,21 +9,28 @@
 //! falls behind, events are dropped and counted, never queued without end.
 //!
 //! Limits that keep a runaway integration harmless:
-//! - each integration runs at most `PER_INTEGRATION` copies at once, all of
-//!   them at most `GLOBAL_RUNS`;
+//! - each integration has at most `PER_INTEGRATION` runs doing something at
+//!   once (`GLOBAL_RUNS` for all of them), and at most `PER_INTEGRATION_RUNS`
+//!   started and not finished (`GLOBAL_STARTED`): a run waiting for the
+//!   delay gives its place back, so presses during a long delay queue up;
 //! - `cooldown_ms` spaces runs of the same trigger; chat commands also have
 //!   a per-viewer cooldown;
 //! - quiet hours keep an integration silent for part of the day;
 //! - the runner caps waits, nesting and message sizes.
 
+use super::activity::ChatWindow;
 use super::alerts::Board;
 use super::effects::RealHost;
 use super::event::{Event, EventKind};
 use super::model::{
-    pad_matches, DiscordChannel, Integration, MatchMode, PhoneConnection, Roles, Trigger,
+    pad_matches, ChatActivity, DiscordChannel, Integration, MatchMode, PhoneConnection, Roles,
+    Trigger,
 };
+use super::obsws::{self, SceneNews};
 use super::runner::{self, RunContext, RunEnv, RunStatus, StepLog};
+use super::session::Session;
 use super::store::Store;
+use super::timeline::{Kind as LineKind, Timeline};
 use super::twitch::irc::ChatMessage;
 use super::twitch::{unix_ms, Twitch, Which};
 use crate::config::Settings;
@@ -40,6 +47,8 @@ use tokio::sync::{mpsc, oneshot, watch, Semaphore};
 const QUEUE: usize = 512;
 const PER_INTEGRATION: usize = 4;
 const GLOBAL_RUNS: usize = 32;
+const PER_INTEGRATION_RUNS: usize = 16;
+const GLOBAL_STARTED: usize = 64;
 const ACTIVITY_KEEP: usize = 150;
 const TICK: Duration = Duration::from_millis(250);
 /// How often per-viewer and per-trigger bookkeeping is trimmed. A busy
@@ -55,6 +64,14 @@ const RECENT_KEEP: usize = 12;
 /// accepts, then refuses) would otherwise alert on every round. Each
 /// destination gets at most one "live" and one "dropped" per window.
 const FLAP_WINDOW: Duration = Duration::from_secs(300);
+/// A chat activity trigger stays quiet this long after a stream starts:
+/// the first seconds of chat ("hi!", "hello") are a burst by nature.
+pub const ACTIVITY_WARMUP: Duration = Duration::from_secs(30);
+/// How often chat activity triggers judge chat at most.
+const ACTIVITY_READ_EVERY: Duration = Duration::from_millis(250);
+/// How long the dashboard keeps the OBS connection open after asking for
+/// the scene list, so picking a scene works before anything is saved.
+const OBS_FOR_DASHBOARD: Duration = Duration::from_secs(60);
 
 enum Input {
     Event(Event),
@@ -66,13 +83,23 @@ enum Input {
     Test {
         integration: Box<Integration>,
         handler: usize,
+        run: TestRun,
         reply: oneshot::Sender<Record>,
     },
     #[cfg_attr(not(windows), allow(dead_code))]
     Shortcut(Shortcut, String),
+    Scene(SceneNews),
     Login(Which),
     CancelLogin,
     Logout(Which),
+}
+
+/// How a test runs: values to use instead of the samples, and whether it
+/// may send anything.
+#[derive(Clone, Debug, Default)]
+pub struct TestRun {
+    pub values: BTreeMap<String, String>,
+    pub dry: bool,
 }
 
 /// What a shortcut press came from. Only Windows has hotkeys and MIDI.
@@ -149,6 +176,17 @@ pub struct Handle {
     /// them, or there are too many), for the dashboard to point out.
     refused_keys: Mutex<Vec<String>>,
     dropped: AtomicU64,
+    /// The last minutes of chat, read by chat activity triggers and by the
+    /// dashboard's live meter while one is being tuned.
+    chat: Arc<Mutex<ChatWindow>>,
+    /// The OBS WebSocket connection, as scene triggers and the dashboard
+    /// see it.
+    obs: Arc<Mutex<obsws::Status>>,
+    /// Until when (Unix ms) the dashboard wants OBS connected.
+    obs_wanted_until: AtomicU64,
+    /// Why chat activity triggers can't fire right now, or empty: see
+    /// `Engine::activity_gate`. For the dashboard's live meter.
+    activity_held: Mutex<&'static str>,
 }
 
 impl Handle {
@@ -195,13 +233,20 @@ impl Handle {
         let _ = self.store.save();
     }
 
-    /// Run one handler now with sample values, messages marked `[TEST]`.
-    pub async fn test(&self, integration: Integration, handler: usize) -> Option<Record> {
+    /// Run one handler now with sample values (`values` override them),
+    /// messages marked `[TEST]`; a `dry` test sends nothing at all.
+    pub async fn test(
+        &self,
+        integration: Integration,
+        handler: usize,
+        run: TestRun,
+    ) -> Option<Record> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .try_send(Input::Test {
                 integration: Box::new(integration),
                 handler,
+                run,
                 reply,
             })
             .ok()?;
@@ -224,14 +269,18 @@ impl Handle {
     }
 
     fn push(&self, record: Record) {
-        // "busy" isn't a run: it must not clear a failing streak or fill the
-        // history dots, and a flood of them is one line in the log.
-        let busy = record.status == "busy";
+        // "busy" and "cooldown" aren't runs: they must not clear a failing
+        // streak or fill the history dots, and a flood of them is one line
+        // in the log.
+        let busy = matches!(record.status, "busy" | "cooldown");
         if busy {
             let mut activity = self.activity.lock();
-            if let Some(last) = activity
-                .back_mut()
-                .filter(|r| r.status == "busy" && r.integration_id == record.integration_id)
+            // Among the last few, so two integrations turned away in turn
+            // can't push real runs out of the log.
+            if let Some(last) =
+                activity.iter_mut().rev().take(8).find(|r| {
+                    r.status == record.status && r.integration_id == record.integration_id
+                })
             {
                 last.at_ms = record.at_ms;
                 return;
@@ -309,6 +358,47 @@ impl Handle {
     pub fn dropped_events(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
+
+    /// How chat reads right now against `rules`: the live meter of a chat
+    /// activity trigger being tuned, saved or not.
+    pub fn chat_meter(&self, rules: &ChatActivity) -> Value {
+        let r = self.chat.lock().read(rules, Instant::now());
+        // Not streaming and the first seconds only hold back a trigger that
+        // only runs while streaming; the reconnect screen holds back all.
+        let held = match *self.activity_held.lock() {
+            "offline" | "warmup" if !rules.only_live => "",
+            held => held,
+        };
+        json::obj([
+            ("held", json::str(held)),
+            (
+                "shares",
+                Value::Arr(r.shares.iter().map(|s| Value::Num(s.round())).collect()),
+            ),
+            ("messages", Value::Num(r.messages as f64)),
+            ("normal", Value::Num((r.normal * 10.0).round() / 10.0)),
+            ("busier", Value::Num((r.busier * 10.0).round() / 10.0)),
+            ("chatters", Value::Num(r.chatters as f64)),
+            ("word_share", Value::Num(r.word_share.round())),
+            ("top_word", json::str(&r.top_word)),
+            ("ready", Value::Bool(r.ready)),
+            (
+                "passing",
+                Value::Arr(r.passing.iter().map(|p| Value::Bool(*p)).collect()),
+            ),
+            ("fires", Value::Bool(r.fires)),
+        ])
+    }
+
+    /// The OBS connection and its scenes. Asking keeps OBS connected for a
+    /// minute, so the scene list fills in while a trigger is being set up.
+    pub fn obs_status(&self) -> Value {
+        self.obs_wanted_until.store(
+            unix_ms() + OBS_FOR_DASHBOARD.as_millis() as u64,
+            Ordering::Relaxed,
+        );
+        self.obs.lock().to_json()
+    }
 }
 
 /// Start the engine thread. `data_dir` holds the integrations data file.
@@ -328,6 +418,7 @@ pub fn start(
         &settings.borrow().twitch_client_id,
     ));
     let alerts = Arc::new(Board::new());
+    let obs = Arc::new(Mutex::new(obsws::Status::default()));
     let handle = Arc::new(Handle {
         tx,
         activity: Mutex::new(VecDeque::new()),
@@ -337,6 +428,10 @@ pub fn start(
         store: store.clone(),
         refused_keys: Mutex::new(Vec::new()),
         dropped: AtomicU64::new(0),
+        chat: Arc::new(Mutex::new(ChatWindow::default())),
+        obs: obs.clone(),
+        obs_wanted_until: AtomicU64::new(0),
+        activity_held: Mutex::new("offline"),
     });
     let engine_handle = handle.clone();
     std::thread::Builder::new()
@@ -354,14 +449,30 @@ pub fn start(
             };
             runtime.block_on(async move {
                 twitch.start();
+                let (obs_tx, obs_commands) = mpsc::channel(16);
                 let host = Arc::new(RealHost {
                     ctrl: ctrl.clone(),
                     twitch: twitch.clone(),
                     default_delay_ms: Default::default(),
                     programs: Default::default(),
                     alerts,
+                    stream_started_ms: AtomicU64::new(0),
+                    onair: Mutex::new("off"),
+                    obs: obs_tx,
                 });
-                let mut engine = Engine::new(engine_handle, host, store, ctrl);
+                // OBS's scene news reaches the engine like any other input.
+                let (want_obs, wanted) = watch::channel(false);
+                let (news_tx, mut news_rx) = mpsc::channel(64);
+                tokio::spawn(obsws::run(wanted, obs, news_tx, obs_commands));
+                let scene_tx = engine_handle.tx.clone();
+                tokio::spawn(async move {
+                    while let Some(news) = news_rx.recv().await {
+                        if scene_tx.send(Input::Scene(news)).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+                let mut engine = Engine::new(engine_handle, host, store, ctrl, want_obs);
                 engine.run(rx, chat_rx, settings).await;
             });
         })?;
@@ -375,19 +486,61 @@ struct Engine {
     ctrl: Arc<Controller>,
     integrations: Vec<Arc<Integration>>,
     env: Arc<RunEnv>,
+    /// Messages from Shared Chat partners count too (`twitch_shared_chat`).
+    shared_chat: bool,
     last_run: HashMap<String, Instant>,
     viewer_last: HashMap<String, Instant>,
     timers: HashMap<String, Instant>,
-    limits: HashMap<String, Arc<Semaphore>>,
-    global: Arc<Semaphore>,
+    /// Per integration: (started, doing something). See the module comment.
+    limits: HashMap<String, (Arc<Semaphore>, Arc<Semaphore>)>,
+    global: (Arc<Semaphore>, Arc<Semaphore>),
     delay_seen: Option<u32>,
     /// The delay's phase and armed delay at the last tick: see `watch_phase`.
     phase_seen: Option<(&'static str, u32)>,
     flap: FlapGuard,
-    discord_messages: Arc<Mutex<HashMap<String, String>>>,
+    discord_messages: DiscordMessages,
+    discord_turns: Arc<runner::DiscordTurns>,
     /// `{uses}` changed since the data file was last written.
     uses_dirty: bool,
     uses_saved: Instant,
+    session: Session,
+    timeline: Arc<Mutex<Timeline>>,
+    /// The on-air state at the last tick.
+    onair_seen: Option<&'static str>,
+    /// The on-air triggers that heard the state last (`id#idx`): one that
+    /// is new hears it at once, so a light is never out of date.
+    onair_told: Vec<String>,
+    /// Per trigger and destination (`id#idx#name`): the drop a "stays
+    /// down" already fired for, and the drops a "steady again" counted.
+    still_down_fired: HashMap<String, usize>,
+    steady_fired: HashMap<String, usize>,
+    /// Each destination's drop count when "keeps dropping" last looked.
+    drops_seen: HashMap<String, usize>,
+    /// When each chat activity trigger last fired. Once fired, it waits for
+    /// chat to calm down (its rules no longer met) before it can again.
+    activity_fired: HashMap<String, Instant>,
+    activity_calm: HashMap<String, bool>,
+    /// When chat was last judged for activity triggers: a raid's hundreds
+    /// of messages a second are judged a few times a second, not each.
+    activity_read: Option<Instant>,
+    scene_now: String,
+    /// The scene on air when the OBS connection was lost: the same scene
+    /// once it's back is no switch.
+    scene_lost: String,
+    /// Scene switches waiting out a trigger's settle time, per trigger.
+    scene_pending: HashMap<String, PendingScene>,
+    want_obs: watch::Sender<bool>,
+}
+
+/// The last Discord message each integration posted, by key (see
+/// `RunEnv::discord_messages`).
+type DiscordMessages = Arc<Mutex<HashMap<String, String>>>;
+
+/// A switch to a scene a trigger wants, not yet settled.
+struct PendingScene {
+    since: Instant,
+    scene: String,
+    previous: String,
 }
 
 impl Engine {
@@ -396,13 +549,17 @@ impl Engine {
         host: Arc<RealHost>,
         store: Arc<Store>,
         ctrl: Arc<Controller>,
+        want_obs: watch::Sender<bool>,
     ) -> Engine {
         let discord_messages = Arc::new(Mutex::new(HashMap::new()));
+        let discord_turns = Arc::new(runner::DiscordTurns::default());
+        let timeline = Arc::new(Mutex::new(Timeline::default()));
         let env = Arc::new(make_env(
             Vec::new(),
             PhoneConnection::default(),
             &store,
-            &discord_messages,
+            (&discord_messages, &discord_turns),
+            (&timeline, &handle),
         ));
         Engine {
             handle,
@@ -411,17 +568,36 @@ impl Engine {
             ctrl,
             integrations: Vec::new(),
             env,
+            shared_chat: false,
             last_run: HashMap::new(),
             viewer_last: HashMap::new(),
             timers: HashMap::new(),
             limits: HashMap::new(),
-            global: Arc::new(Semaphore::new(GLOBAL_RUNS)),
+            global: (
+                Arc::new(Semaphore::new(GLOBAL_STARTED)),
+                Arc::new(Semaphore::new(GLOBAL_RUNS)),
+            ),
             delay_seen: None,
             phase_seen: None,
             flap: FlapGuard::default(),
             discord_messages,
+            discord_turns,
             uses_dirty: false,
             uses_saved: Instant::now(),
+            session: Session::default(),
+            timeline,
+            onair_seen: None,
+            onair_told: Vec::new(),
+            still_down_fired: HashMap::new(),
+            steady_fired: HashMap::new(),
+            drops_seen: HashMap::new(),
+            activity_fired: HashMap::new(),
+            activity_calm: HashMap::new(),
+            activity_read: None,
+            scene_now: String::new(),
+            scene_lost: String::new(),
+            scene_pending: HashMap::new(),
+            want_obs,
         }
     }
 
@@ -450,11 +626,20 @@ impl Engine {
                     self.apply_settings(&snapshot);
                 }
                 _ = tick.tick() => {
+                    // Already followed when they happened (`event`
+                    // observes before the guard): only the integrations
+                    // hear them late.
                     for event in self.flap.release(Instant::now()) {
-                        self.event(event);
+                        self.dispatch(&event);
                     }
                     self.watch_phase();
                     self.watch_delay();
+                    self.watch_onair();
+                    self.watch_session();
+                    self.watch_destinations();
+                    self.update_activity_gate();
+                    self.settle_scenes();
+                    self.update_obs_want();
                     self.run_timers();
                     self.save_uses_if_due();
                     if last_prune.elapsed() >= PRUNE_EVERY {
@@ -472,18 +657,25 @@ impl Engine {
             s.discord_channels.clone(),
             s.phone.clone(),
             &self.store,
-            &self.discord_messages,
+            (&self.discord_messages, &self.discord_turns),
+            (&self.timeline, &self.handle),
         ));
         self.host
             .default_delay_ms
             .store(s.auto_arm_delay_ms.max(1000), Ordering::Relaxed);
         self.host.twitch.use_client_id(&s.twitch_client_id);
+        self.shared_chat = s.twitch_shared_chat;
         // Forget per-trigger state for integrations that are gone.
         let alive: Vec<&str> = self.integrations.iter().map(|i| i.id.as_str()).collect();
         let keep = |key: &String| alive.iter().any(|id| key.starts_with(&format!("{id}#")));
         self.last_run.retain(|k, _| keep(k));
         self.viewer_last.retain(|k, _| keep(k));
         self.timers.retain(|k, _| keep(k));
+        self.still_down_fired.retain(|k, _| keep(k));
+        self.steady_fired.retain(|k, _| keep(k));
+        self.activity_fired.retain(|k, _| keep(k));
+        self.activity_calm.retain(|k, _| keep(k));
+        self.scene_pending.retain(|k, _| keep(k));
         self.limits.retain(|id, _| alive.contains(&id.as_str()));
         self.handle.retain_stats(&alive);
     }
@@ -527,6 +719,7 @@ impl Engine {
     }
 
     fn save_uses_if_due(&mut self) {
+        self.uses_dirty |= self.store.counters_dirty.swap(false, Ordering::Relaxed);
         if self.uses_dirty && self.uses_saved.elapsed() >= USES_SAVE_EVERY {
             self.uses_saved = Instant::now();
             // A failed write stays due, for the next round.
@@ -541,9 +734,11 @@ impl Engine {
             Input::Test {
                 integration,
                 handler,
+                run,
                 reply,
-            } => self.test(*integration, handler, reply),
+            } => self.test(*integration, handler, run, reply),
             Input::Shortcut(from, signature) => self.shortcut(from, &signature),
+            Input::Scene(news) => self.scene(news),
             Input::Login(which) => self.handle.twitch.begin_login(which),
             Input::CancelLogin => self.handle.twitch.cancel_login(),
             Input::Logout(which) => self.handle.twitch.logout(which),
@@ -551,30 +746,321 @@ impl Engine {
     }
 
     fn event(&mut self, event: Event) {
-        if self.flap.suppress(&event, Instant::now()) {
-            return;
+        // The session sees every event, flapping or not: smart destination
+        // alerts are built on the drops the flap guard holds back.
+        let made = self.observe(&event);
+        if !self.flap.suppress(&event, Instant::now()) {
+            self.dispatch(&event);
         }
+        if event.kind == EventKind::DestinationDropped {
+            self.check_unstable(&event);
+        }
+        for next in made {
+            self.event(next);
+        }
+    }
+
+    /// Run every integration waiting for `event`.
+    fn dispatch(&mut self, event: &Event) {
         let matches: Vec<(Arc<Integration>, usize)> = self
             .enabled_handlers()
             .filter(|(_, _, h)| match &h.trigger {
                 Trigger::Event { kind, filters } => {
-                    *kind == event.kind && filters_match(filters, &event)
+                    *kind == event.kind && filters_match(filters, event)
                 }
                 _ => false,
             })
             .map(|(i, idx, _)| (i, idx))
             .collect();
         for (integration, idx) in matches {
-            let vars = event
-                .vars
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect();
-            self.start_run(integration, idx, vars, None, event.kind.label().to_string());
+            self.start_run(
+                integration,
+                idx,
+                event_vars(event),
+                None,
+                event.kind.label().to_string(),
+            );
         }
     }
 
+    /// Follow the stream's life. Returns the events it makes, after
+    /// setting up for them: a new stream gets a fresh timeline.
+    fn observe(&mut self, event: &Event) -> Vec<Event> {
+        let ending = matches!(
+            event.kind,
+            EventKind::ObsDisconnected | EventKind::HoldExpired | EventKind::HoldEnded
+        );
+        let timeline = if ending {
+            self.timeline_summary()
+        } else {
+            (0, String::new())
+        };
+        let made = self
+            .session
+            .observe(event, Instant::now(), unix_ms(), timeline);
+        self.follow_session(&made);
+        made
+    }
+
+    /// What the end-of-stream report says about the timeline.
+    fn timeline_summary(&self) -> (usize, String) {
+        let t = self.timeline.lock();
+        (t.count(LineKind::Highlight), t.chapters())
+    }
+
+    /// Set up for the stream events the session just made: a new stream
+    /// gets a fresh timeline, fresh Discord messages, and its scene looked
+    /// at.
+    fn follow_session(&mut self, made: &[Event]) {
+        for e in made {
+            match e.kind {
+                EventKind::StreamStarted => {
+                    self.timeline.lock().clear();
+                    self.still_down_fired.clear();
+                    self.steady_fired.clear();
+                    self.drops_seen.clear();
+                    forget_subject_messages(&mut self.discord_messages.lock());
+                    self.host
+                        .stream_started_ms
+                        .store(self.session.started_ms(), Ordering::Relaxed);
+                    let scene = self.scene_now.clone();
+                    if !scene.is_empty() {
+                        self.scene_entered(&scene, "", true);
+                    }
+                }
+                EventKind::StreamEnded => self.host.stream_started_ms.store(0, Ordering::Relaxed),
+                _ => {}
+            }
+        }
+    }
+
+    /// Each tick: a stream whose OBS dropped unprotected and stayed away
+    /// ends (see `session::END_GRACE`).
+    fn watch_session(&mut self) {
+        if !self.session.is_ending() {
+            return;
+        }
+        let timeline = self.timeline_summary();
+        let made = self.session.expire(Instant::now(), timeline);
+        self.follow_session(&made);
+        for event in made {
+            self.event(event);
+        }
+    }
+
+    /// A destination dropped: tell the "keeps dropping" triggers whose
+    /// threshold it reached, each with its own count and window.
+    fn check_unstable(&mut self, dropped: &Event) {
+        let name = dropped.var("destination").unwrap_or("");
+        let Some(health) = self.session.destinations().get(name).cloned() else {
+            return;
+        };
+        // A retry failing while it is still down isn't a new drop.
+        if self.drops_seen.insert(name.to_string(), health.drop_count) == Some(health.drop_count) {
+            return;
+        }
+        let now = Instant::now();
+        let kind = EventKind::DestinationUnstable;
+        let due: Vec<(Arc<Integration>, usize, Event)> = self
+            .enabled_handlers()
+            .filter_map(|(i, idx, h)| {
+                let Trigger::Event { kind: k, filters } = &h.trigger else {
+                    return None;
+                };
+                if *k != kind {
+                    return None;
+                }
+                let within_min = kind.param(filters, "within_min");
+                let window = Duration::from_secs_f64(within_min * 60.0);
+                let drops = health.drops_within(window, now);
+                let event = Event::new(kind)
+                    .with("destination", name)
+                    .with("platform", health.platform.clone())
+                    .with("reason", health.reason.clone())
+                    .with("drops", drops.to_string())
+                    .with("within", format!("{} min", within_min.round()));
+                let reached = drops as f64 >= kind.param(filters, "drops");
+                (reached && filters_match(filters, &event)).then_some((i, idx, event))
+            })
+            .collect();
+        for (integration, idx, event) in due {
+            self.start_run(
+                integration,
+                idx,
+                event_vars(&event),
+                None,
+                kind.label().to_string(),
+            );
+        }
+    }
+
+    /// Each tick: destinations that stayed down long enough, or have been
+    /// steady long enough after dropping, for the triggers that wait for it.
+    fn watch_destinations(&mut self) {
+        if !self.session.is_on() {
+            return;
+        }
+        let now = Instant::now();
+        let mut due: Vec<(Arc<Integration>, usize, Event, String, usize)> = Vec::new();
+        for (i, idx, h) in self.enabled_handlers() {
+            let Trigger::Event { kind, filters } = &h.trigger else {
+                continue;
+            };
+            for (name, health) in self.session.destinations() {
+                let key = format!("{}#{idx}#{name}", i.id);
+                let drops = health.drop_count;
+                let event = match kind {
+                    EventKind::DestinationStillDown => {
+                        let Some(since) = health.down_since else {
+                            continue;
+                        };
+                        let down = now.duration_since(since);
+                        let after = Duration::from_secs_f64(kind.param(filters, "after_s"));
+                        if down < after || self.still_down_fired.get(&key) == Some(&drops) {
+                            continue;
+                        }
+                        Event::new(*kind)
+                            .with("reason", health.reason.clone())
+                            .with(
+                                "down_for",
+                                super::host::fmt_duration(down.as_millis() as u64),
+                            )
+                    }
+                    EventKind::DestinationSteady => {
+                        let Some(since) = health.live_since else {
+                            continue;
+                        };
+                        let after = Duration::from_secs_f64(kind.param(filters, "for_min") * 60.0);
+                        let counted = self.steady_fired.get(&key).copied().unwrap_or(0);
+                        if drops == 0 || drops <= counted || now.duration_since(since) < after {
+                            continue;
+                        }
+                        Event::new(*kind).with(
+                            "down_total",
+                            super::host::fmt_duration(health.down_total.as_millis() as u64),
+                        )
+                    }
+                    _ => continue,
+                };
+                let event = event
+                    .with("destination", name.clone())
+                    .with("platform", health.platform.clone())
+                    .with("drops", drops.to_string());
+                // Marked whether or not a filter lets it through: either way
+                // this outage has been looked at.
+                due.push((i.clone(), idx, event, key, drops));
+            }
+        }
+        for (integration, idx, event, key, drops) in due {
+            let map = if event.kind == EventKind::DestinationStillDown {
+                &mut self.still_down_fired
+            } else {
+                &mut self.steady_fired
+            };
+            map.insert(key, drops);
+            let Trigger::Event { filters, .. } = &integration.handlers[idx].trigger else {
+                continue;
+            };
+            if filters_match(filters, &event) {
+                let label = event.kind.label().to_string();
+                self.start_run(integration.clone(), idx, event_vars(&event), None, label);
+            }
+        }
+    }
+
+    /// Each tick: the on-air state, and an event when it changes. On-air
+    /// triggers that haven't heard it yet (the app just started, or one was
+    /// just switched on) hear it at once, with `previous` the same as
+    /// `state`: a light by the door is never out of date.
+    fn watch_onair(&mut self) {
+        let stopped_on_purpose = self
+            .ctrl
+            .hold_status()
+            .is_some_and(|h| h.reason == crate::crash_hold::HoldReason::Stopped);
+        let now = if self.ctrl.hold_active() && !stopped_on_purpose {
+            "crash"
+        } else if self.ctrl.hold_active() && self.ctrl.target_delay_ms() > 0 {
+            // Stopped on purpose, held by crash protection: still on air.
+            "delay"
+        } else if self.ctrl.hold_active() {
+            "live"
+        } else if self.session.is_ending() {
+            // OBS dropped without crash protection and may be back any
+            // second: not "off", nobody should walk in.
+            "crash"
+        } else if self.ctrl.ingest_alive() && self.ctrl.target_delay_ms() > 0 {
+            "delay"
+        } else if self.ctrl.ingest_alive() {
+            "live"
+        } else {
+            "off"
+        };
+        *self.host.onair.lock() = now;
+        let before = self.onair_seen.replace(now);
+        if before.is_some_and(|b| b != now) {
+            self.onair_told = self.onair_keys();
+            self.event(
+                Event::new(EventKind::OnAirChanged)
+                    .with("state", now)
+                    .with("previous", before.unwrap_or(now)),
+            );
+            return;
+        }
+        let keys = self.onair_keys();
+        let newcomers: Vec<(Arc<Integration>, usize)> = self
+            .enabled_handlers()
+            .filter(|(i, idx, h)| {
+                matches!(
+                    &h.trigger,
+                    Trigger::Event {
+                        kind: EventKind::OnAirChanged,
+                        ..
+                    }
+                ) && !self.onair_told.contains(&format!("{}#{idx}", i.id))
+            })
+            .map(|(i, idx, _)| (i, idx))
+            .collect();
+        // Gone ones are forgotten; a new one is told once a run started.
+        self.onair_told.retain(|k| keys.contains(k));
+        let event = Event::new(EventKind::OnAirChanged)
+            .with("state", now)
+            .with("previous", now);
+        for (integration, idx) in newcomers {
+            let Trigger::Event { filters, .. } = &integration.handlers[idx].trigger else {
+                continue;
+            };
+            let key = format!("{}#{idx}", integration.id);
+            let label = event.kind.label().to_string();
+            let told = !filters_match(filters, &event)
+                || self.start_run(integration.clone(), idx, event_vars(&event), None, label);
+            if told {
+                self.onair_told.push(key);
+            }
+        }
+    }
+
+    /// The switched-on on-air triggers, as `id#idx`.
+    fn onair_keys(&self) -> Vec<String> {
+        self.enabled_handlers()
+            .filter(|(_, _, h)| {
+                matches!(
+                    &h.trigger,
+                    Trigger::Event {
+                        kind: EventKind::OnAirChanged,
+                        ..
+                    }
+                )
+            })
+            .map(|(i, idx, _)| format!("{}#{idx}", i.id))
+            .collect()
+    }
+
     fn chat(&mut self, msg: ChatMessage) {
+        // A Shared Chat partner's viewers only count when the streamer said
+        // so: otherwise anyone there could use this channel's commands.
+        if msg.from_shared_chat && !self.shared_chat {
+            return;
+        }
         // Our own bot talking must never trigger us. (Unless the "bot" is
         // the streamer's own account: then these are their own commands.)
         let is_own_bot = {
@@ -591,6 +1077,8 @@ impl Engine {
         if is_own_bot {
             return;
         }
+        self.handle.chat.lock().push(&msg, Instant::now());
+        self.check_activity(&msg);
         let text = msg.text.trim();
         let mut words = text.split_whitespace();
         let first = words.next().unwrap_or("").to_lowercase();
@@ -637,10 +1125,228 @@ impl Engine {
         }
     }
 
+    /// Why chat activity triggers that only run while streaming can't fire
+    /// now, or empty; "hold" holds back every one. For the meter.
+    fn activity_gate(&self, now: Instant) -> &'static str {
+        if self.ctrl.hold_active() {
+            "hold"
+        } else if !self.ctrl.ingest_alive() || !self.session.is_on() {
+            "offline"
+        } else if self.session.uptime(now) < ACTIVITY_WARMUP {
+            "warmup"
+        } else {
+            ""
+        }
+    }
+
+    fn update_activity_gate(&mut self) {
+        *self.handle.activity_held.lock() = self.activity_gate(Instant::now());
+    }
+
+    /// After each chat message: chat activity triggers whose rules chat now
+    /// meets. Each fires once per burst: then it waits for chat to calm
+    /// down (and at least one window) before it can fire again. Never
+    /// during the reconnect screen, and (when it only runs live) not in the
+    /// first seconds of a stream, when everyone says hi at once.
+    fn check_activity(&mut self, latest: &ChatMessage) {
+        let now = Instant::now();
+        if self
+            .activity_read
+            .is_some_and(|at| now.duration_since(at) < ACTIVITY_READ_EVERY)
+        {
+            return;
+        }
+        self.activity_read = Some(now);
+        let gate = self.activity_gate(now);
+        if gate == "hold" {
+            return;
+        }
+        let streaming = gate.is_empty();
+        let candidates: Vec<(Arc<Integration>, usize, ChatActivity)> = self
+            .enabled_handlers()
+            .filter_map(|(i, idx, h)| match &h.trigger {
+                Trigger::ChatActivity(a) if streaming || !a.only_live => Some((i, idx, a.clone())),
+                _ => None,
+            })
+            .collect();
+        for (integration, idx, rules) in candidates {
+            let key = format!("{}#{idx}", integration.id);
+            let window = Duration::from_millis(rules.window_ms);
+            let reading = self.handle.chat.lock().read(&rules, now);
+            if !reading.fires {
+                self.activity_calm.insert(key, true);
+                continue;
+            }
+            let spaced = self
+                .activity_fired
+                .get(&key)
+                .is_none_or(|t| now.duration_since(*t) >= window);
+            let calmed = self.activity_calm.get(&key).copied().unwrap_or(true);
+            if !spaced || !calmed {
+                continue;
+            }
+            let vars = BTreeMap::from([
+                ("messages".to_string(), reading.messages.to_string()),
+                ("normal".to_string(), format!("{:.1}", reading.normal)),
+                ("busier".to_string(), format!("{:.1}", reading.busier)),
+                ("chatters".to_string(), reading.chatters.to_string()),
+                (
+                    "word_share".to_string(),
+                    format!("{:.0}", reading.word_share),
+                ),
+                ("top_word".to_string(), reading.top_word.clone()),
+                ("user".to_string(), latest.display_name.clone()),
+                ("message".to_string(), latest.text.clone()),
+            ]);
+            if self.start_run(integration, idx, vars, None, "Chat got busy".to_string()) {
+                self.activity_fired.insert(key.clone(), now);
+                self.activity_calm.insert(key, false);
+            }
+        }
+    }
+
+    /// News from OBS about its scenes. A switch to a scene a trigger wants
+    /// starts that trigger's settle time; it fires once the scene stayed.
+    /// The scene on air when OBS connects counts as a switch to it when a
+    /// stream is already on (the app or OBS restarted mid-stream).
+    fn scene(&mut self, news: SceneNews) {
+        let (name, switched) = match news {
+            SceneNews::Current(name) => (name, false),
+            SceneNews::Switched(name) => (name, true),
+        };
+        let previous = std::mem::replace(&mut self.scene_now, name.clone());
+        if previous == name {
+            return;
+        }
+        if name.is_empty() {
+            self.scene_lost = previous;
+            return;
+        }
+        let lost = std::mem::take(&mut self.scene_lost);
+        if switched {
+            self.scene_entered(&name, &previous, false);
+        } else if previous.is_empty() && self.session.is_on() && name != lost {
+            self.scene_entered(&name, "", true);
+        }
+    }
+
+    /// `name` went on air after `previous` (empty: not known). `starting`:
+    /// a stream started on it, rather than OBS switching to it; a trigger
+    /// that only acts when coming from a certain scene then doesn't.
+    fn scene_entered(&mut self, name: &str, previous: &str, starting: bool) {
+        let now = Instant::now();
+        let streaming = self.ctrl.ingest_alive() || starting;
+        let keys: Vec<(String, bool)> = self
+            .enabled_handlers()
+            .filter_map(|(i, idx, h)| match &h.trigger {
+                Trigger::Scene {
+                    scene,
+                    from,
+                    except,
+                    only_live,
+                    ..
+                } => {
+                    let from_ok = if from.trim().is_empty() {
+                        true
+                    } else {
+                        !starting && matches_any(previous, from)
+                    };
+                    let excepted = !except.trim().is_empty() && matches_any(name, except);
+                    let wanted = matches_any(name, scene)
+                        && !excepted
+                        && from_ok
+                        && (streaming || !only_live);
+                    Some((format!("{}#{idx}", i.id), wanted))
+                }
+                _ => None,
+            })
+            .collect();
+        for (key, wanted) in keys {
+            if wanted {
+                let pending = PendingScene {
+                    since: now,
+                    scene: name.to_string(),
+                    previous: previous.to_string(),
+                };
+                self.scene_pending.insert(key, pending);
+            } else {
+                // Moved on before it settled: that switch never happened.
+                self.scene_pending.remove(&key);
+            }
+        }
+    }
+
+    /// Each tick: scene switches that have settled. The reconnect screen
+    /// cancels them: a crash isn't a scene change.
+    fn settle_scenes(&mut self) {
+        if self.scene_pending.is_empty() {
+            return;
+        }
+        if self.ctrl.hold_active() {
+            self.scene_pending.clear();
+            return;
+        }
+        let due: Vec<(Arc<Integration>, usize, String)> = self
+            .enabled_handlers()
+            .filter_map(|(i, idx, h)| {
+                let Trigger::Scene { settle_ms, .. } = &h.trigger else {
+                    return None;
+                };
+                let key = format!("{}#{idx}", i.id);
+                let pending = self.scene_pending.get(&key)?;
+                let settled = pending.since.elapsed() >= Duration::from_millis(*settle_ms);
+                (settled && pending.scene == self.scene_now).then_some((i, idx, key))
+            })
+            .collect();
+        for (integration, idx, key) in due {
+            let Some(pending) = self.scene_pending.remove(&key) else {
+                continue;
+            };
+            let vars = BTreeMap::from([
+                ("scene".to_string(), pending.scene.clone()),
+                ("previous_scene".to_string(), pending.previous),
+            ]);
+            self.start_run(
+                integration,
+                idx,
+                vars,
+                None,
+                format!("Scene {}", pending.scene),
+            );
+        }
+        // Whatever is left over for a scene no longer on air is stale.
+        let now_scene = self.scene_now.clone();
+        self.scene_pending.retain(|_, p| p.scene == now_scene);
+    }
+
+    /// Keep OBS connected while a scene trigger or an OBS step is on, or
+    /// the dashboard is picking a scene.
+    fn update_obs_want(&mut self) {
+        let uses_obs = |h: &super::model::Handler| {
+            let mut found = matches!(h.trigger, Trigger::Scene { .. });
+            super::model::visit_steps(&h.steps, &mut |s| {
+                found |= s.enabled && s.kind == super::model::StepKind::Obs
+            });
+            found
+        };
+        let wanted = self.enabled_handlers().any(|(_, _, h)| uses_obs(h))
+            || unix_ms() < self.handle.obs_wanted_until.load(Ordering::Relaxed);
+        if *self.want_obs.borrow() != wanted {
+            self.want_obs.send_replace(wanted);
+        }
+    }
+
     fn shortcut(&mut self, from: Shortcut, signature: &str) {
+        let live = self.ctrl.ingest_alive();
         let matches: Vec<(Arc<Integration>, usize)> = self
             .enabled_handlers()
             .filter(|(_, _, h)| match (&h.trigger, from) {
+                (
+                    Trigger::Shortcut {
+                        only_live: true, ..
+                    },
+                    _,
+                ) if !live => false,
                 (Trigger::Shortcut { hotkey, .. }, Shortcut::Hotkey) => {
                     !hotkey.is_empty() && hotkey == signature
                 }
@@ -649,30 +1355,47 @@ impl Engine {
             })
             .map(|(i, idx, _)| (i, idx))
             .collect();
-        let label = match from {
-            Shortcut::Hotkey => format!("Hotkey {signature}"),
-            Shortcut::Midi => "MIDI pad".to_string(),
+        let (label, source) = match from {
+            Shortcut::Hotkey => (format!("Hotkey {signature}"), "hotkey"),
+            Shortcut::Midi => ("MIDI pad".to_string(), "midi"),
         };
         for (integration, idx) in matches {
-            self.start_run(integration, idx, BTreeMap::new(), None, label.clone());
+            let vars = BTreeMap::from([("source".to_string(), source.to_string())]);
+            self.start_run(integration, idx, vars, None, label.clone());
         }
     }
 
+    /// A call to a secret address: a web call trigger, or a button's
+    /// Stream Deck address.
     fn hook(&mut self, token: &str, body: String, query: String) {
-        let matches: Vec<(Arc<Integration>, usize)> = self
+        let same = |t: &str| {
+            !t.is_empty() && crate::crypto::constant_time_eq(t.as_bytes(), token.as_bytes())
+        };
+        let live = self.ctrl.ingest_alive();
+        let matches: Vec<(Arc<Integration>, usize, &'static str)> = self
             .enabled_handlers()
-            .filter(|(_, _, h)| {
-                matches!(&h.trigger, Trigger::Webhook { token: t }
-                    if crate::crypto::constant_time_eq(t.as_bytes(), token.as_bytes()))
+            .filter_map(|(i, idx, h)| match &h.trigger {
+                Trigger::Webhook { token: t } if same(t) => Some((i, idx, "Web call")),
+                Trigger::Shortcut {
+                    token: t,
+                    only_live,
+                    ..
+                } if same(t) && (live || !only_live) => Some((i, idx, "Stream Deck or app")),
+                _ => None,
             })
-            .map(|(i, idx, _)| (i, idx))
             .collect();
-        for (integration, idx) in matches {
+        for (integration, idx, label) in matches {
+            let source = if label == "Web call" {
+                "web"
+            } else {
+                "stream_deck"
+            };
             let vars = BTreeMap::from([
                 ("body".to_string(), body.clone()),
                 ("query".to_string(), query.clone()),
+                ("source".to_string(), source.to_string()),
             ]);
-            self.start_run(integration, idx, vars, None, "Web call".to_string());
+            self.start_run(integration, idx, vars, None, label.to_string());
         }
     }
 
@@ -786,27 +1509,35 @@ impl Engine {
                 .get(&key)
                 .is_some_and(|t| t.elapsed() < Duration::from_millis(integration.cooldown_ms))
         {
+            // A button pressed too soon says so: the press wasn't lost.
+            // Chat, much busier, doesn't fill the log with them.
+            if matches!(
+                integration.handlers[idx].trigger,
+                Trigger::Shortcut { .. } | Trigger::ChatActivity(_)
+            ) {
+                self.turned_away(&integration, trigger, "cooldown");
+            }
             return false;
         }
-        let limit = self
+        let (started_limit, active_limit) = self
             .limits
             .entry(integration.id.clone())
-            .or_insert_with(|| Arc::new(Semaphore::new(PER_INTEGRATION)))
+            .or_insert_with(|| {
+                (
+                    Arc::new(Semaphore::new(PER_INTEGRATION_RUNS)),
+                    Arc::new(Semaphore::new(PER_INTEGRATION)),
+                )
+            })
             .clone();
+        let places = vec![active_limit.clone(), self.global.1.clone()];
         let permits = (
-            limit.try_acquire_owned(),
-            self.global.clone().try_acquire_owned(),
+            started_limit.try_acquire_owned(),
+            self.global.0.clone().try_acquire_owned(),
+            active_limit.try_acquire_owned(),
+            self.global.1.clone().try_acquire_owned(),
         );
-        let (Ok(own), Ok(global)) = permits else {
-            self.handle.push(Record {
-                at_ms: unix_ms(),
-                integration_id: integration.id.clone(),
-                name: integration.name.clone(),
-                trigger,
-                status: "busy",
-                test: false,
-                steps: Vec::new(),
-            });
+        let (Ok(started), Ok(started_all), Ok(active), Ok(active_all)) = permits else {
+            self.turned_away(&integration, trigger, "busy");
             return false;
         };
         self.last_run.insert(key, Instant::now());
@@ -823,13 +1554,15 @@ impl Engine {
             vars,
             reply_to,
             test: false,
+            dry: false,
+            gate: Some(runner::Gate::new(places, vec![active, active_all])),
         };
         let handle = self.handle.clone();
         let ctrl = self.ctrl.clone();
         let host: Arc<dyn super::host::Host> = self.host.clone();
         let env = self.env.clone();
         tokio::spawn(async move {
-            let _permits = (own, global);
+            let _started = (started, started_all);
             let at_ms = unix_ms();
             let (status, steps) =
                 runner::run(&integration.handlers[idx].steps, ctx, host, env).await;
@@ -858,11 +1591,37 @@ impl Engine {
         true
     }
 
-    fn test(&mut self, integration: Integration, idx: usize, reply: oneshot::Sender<Record>) {
+    /// A run that didn't start, in the activity log: `busy` (too many at
+    /// once) or `cooldown` (too soon after the last).
+    fn turned_away(&self, integration: &Integration, trigger: String, status: &'static str) {
+        self.handle.push(Record {
+            at_ms: unix_ms(),
+            integration_id: integration.id.clone(),
+            name: integration.name.clone(),
+            trigger,
+            status,
+            test: false,
+            steps: Vec::new(),
+        });
+    }
+
+    fn test(
+        &mut self,
+        integration: Integration,
+        idx: usize,
+        run: TestRun,
+        reply: oneshot::Sender<Record>,
+    ) {
         let Some(handler) = integration.handlers.get(idx).cloned() else {
             return;
         };
         let (mut vars, trigger) = sample_vars(&handler.trigger);
+        // The values the dashboard was given to test with.
+        for (name, value) in run.values.into_iter().take(MAX_TEST_VALUES) {
+            if !name.is_empty() && name.len() <= 64 {
+                vars.insert(name, value.chars().take(1000).collect());
+            }
+        }
         // What it would read on its next real run.
         let next = self
             .store
@@ -878,6 +1637,8 @@ impl Engine {
             vars,
             reply_to: None,
             test: true,
+            dry: run.dry,
+            gate: None,
         };
         let host: Arc<dyn super::host::Host> = self.host.clone();
         let env = self.env.clone();
@@ -1010,31 +1771,83 @@ fn status_id(status: &RunStatus) -> &'static str {
     }
 }
 
+/// Forget which Discord message each "one message per subject" is about
+/// (keys `[test:]integration:channel:subject`): a "down" card still open
+/// when the last stream ended must not be edited from the next one, far up
+/// the channel. Messages kept per channel (a delay status, say) stay.
+fn forget_subject_messages(messages: &mut HashMap<String, String>) {
+    messages.retain(|key, _| key.trim_start_matches("test:").matches(':').count() < 2);
+}
+
 fn make_env(
     discord: Vec<DiscordChannel>,
     phone: PhoneConnection,
     store: &Arc<Store>,
-    discord_messages: &Arc<Mutex<HashMap<String, String>>>,
+    (discord_messages, discord_turns): (&DiscordMessages, &Arc<runner::DiscordTurns>),
+    (timeline, handle): (&Arc<Mutex<Timeline>>, &Arc<Handle>),
 ) -> RunEnv {
     let saver = store.clone();
+    // Weak: the env lives inside the engine the handle owns a channel to.
+    let events = Arc::downgrade(handle);
     RunEnv {
         discord,
         phone,
         counters: store.counters.clone(),
+        // Written with the run counts a moment later (`save_uses_if_due`):
+        // a chat command counting every message must not rewrite the file
+        // each time, on the engine's own thread.
         counters_changed: Box::new(move || {
-            let _ = saver.save();
+            saver.counters_dirty.store(true, Ordering::Relaxed);
         }),
         discord_messages: discord_messages.clone(),
+        discord_turns: discord_turns.clone(),
+        timeline: timeline.clone(),
+        emit: Box::new(move |event| {
+            if let Some(handle) = events.upgrade() {
+                handle.emit(event);
+            }
+        }),
     }
 }
 
+fn event_vars(event: &Event) -> BTreeMap<String, String> {
+    event
+        .vars
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
+}
+
+/// Whether an event passes a trigger's filters. A trigger's settings
+/// (thresholds like `after_s`) live among them but aren't filters. A
+/// filter can list several values (`YouTube, Kick`) and use wildcards
+/// (`*timed out*`); case doesn't matter.
 fn filters_match(filters: &BTreeMap<String, String>, event: &Event) -> bool {
     filters.iter().all(|(name, want)| {
         want.trim().is_empty()
-            || event
-                .var(name)
-                .is_some_and(|have| have.trim().eq_ignore_ascii_case(want.trim()))
+            || event.kind.is_param(name)
+            || event.var(name).is_some_and(|have| matches_any(have, want))
     })
+}
+
+/// Whether `text` matches any of the comma separated `patterns`, each
+/// with `*` and `?` wildcards, ignoring case.
+pub fn matches_any(text: &str, patterns: &str) -> bool {
+    patterns
+        .split(',')
+        .any(|p| text_matches(text, p, MatchMode::Wildcard))
+}
+
+/// A trigger's filters as sample values, where a filter names one value:
+/// a test of a "Kick only" alert should read Kick, not YouTube.
+fn filter_samples(filters: &BTreeMap<String, String>, vars: &mut BTreeMap<String, String>) {
+    for (name, want) in filters {
+        let want = want.trim();
+        let plain = !want.is_empty() && !want.contains([',', '*', '?']);
+        if plain && vars.contains_key(name) {
+            vars.insert(name.clone(), want.to_string());
+        }
+    }
 }
 
 fn allowed(roles: Roles, msg: &ChatMessage) -> bool {
@@ -1090,12 +1903,13 @@ fn sample_vars(trigger: &Trigger) -> (BTreeMap<String, String>, String) {
             .collect::<BTreeMap<_, _>>()
     };
     match trigger {
-        Trigger::Event { kind, .. } => {
+        Trigger::Event { kind, filters } => {
             let mut vars: BTreeMap<String, String> = Event::sample(*kind)
                 .vars
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v))
                 .collect();
+            filter_samples(filters, &mut vars);
             // A countdown in a test message should count down from now.
             if let Some(ends) = vars.get_mut("hold_ends_at") {
                 *ends = (unix_ms() / 1000 + 120).to_string();
@@ -1128,9 +1942,39 @@ fn sample_vars(trigger: &Trigger) -> (BTreeMap<String, String>, String) {
             owned(&[("body", r#"{"test":true}"#), ("query", "")]),
             "Test: web call".to_string(),
         ),
-        Trigger::Shortcut { .. } => (BTreeMap::new(), "Test: shortcut".to_string()),
+        Trigger::Shortcut { .. } => (
+            owned(&[("body", ""), ("query", ""), ("source", "hotkey")]),
+            "Test: button".to_string(),
+        ),
+        Trigger::ChatActivity(_) => (owned(ACTIVITY_SAMPLES), "Test: chat got busy".to_string()),
+        Trigger::Scene { scene, .. } => (
+            owned(&[
+                ("scene", scene.trim_matches('*')),
+                ("previous_scene", "Just chatting"),
+            ]),
+            "Test: scene".to_string(),
+        ),
     }
 }
+
+/// What a chat activity trigger hands its steps, with sample values.
+pub const ACTIVITY_SAMPLES: &[(&str, &str)] = &[
+    ("messages", "24"),
+    ("normal", "4.0"),
+    ("busier", "6.0"),
+    ("chatters", "15"),
+    ("word_share", "58"),
+    ("top_word", "pog"),
+    ("user", "Ana"),
+    ("message", "CLIP THAT"),
+];
+
+/// Most values a test may bring.
+const MAX_TEST_VALUES: usize = 64;
+
+/// What a scene trigger hands its steps, with sample values.
+pub const SCENE_SAMPLES: &[(&str, &str)] =
+    &[("scene", "Game"), ("previous_scene", "Just chatting")];
 
 /// Match chat text against a pattern, ignoring case.
 pub fn text_matches(text: &str, pattern: &str, mode: MatchMode) -> bool {
@@ -1315,5 +2159,41 @@ mod tests {
         assert!(!filters_match(&want("freeze"), &crash));
         assert!(filters_match(&want(""), &crash));
         assert!(filters_match(&BTreeMap::new(), &crash));
+        assert!(filters_match(&want("crash, freeze"), &crash), "a list");
+        let drop = Event::new(EventKind::DestinationDropped).with("reason", "connection timed out");
+        assert!(filters_match(&want("*timed out*"), &drop), "a wildcard");
+        assert!(!filters_match(&want("crash"), &drop));
+    }
+
+    #[test]
+    fn tests_read_like_the_filtered_event() {
+        let filters = BTreeMap::from([
+            ("destination".to_string(), "Kick".to_string()),
+            ("reason".to_string(), "*timeout*".to_string()),
+        ]);
+        let trigger = Trigger::Event {
+            kind: EventKind::DestinationDropped,
+            filters,
+        };
+        let (vars, _) = sample_vars(&trigger);
+        assert_eq!(vars["destination"], "Kick");
+        assert_eq!(
+            vars["reason"], "connection timed out",
+            "a pattern isn't a value"
+        );
+    }
+
+    #[test]
+    fn a_new_stream_forgets_per_subject_messages_only() {
+        let mut messages = HashMap::from([
+            ("i1:ch".to_string(), "1".to_string()),
+            ("i1:ch:YouTube".to_string(), "2".to_string()),
+            ("test:i1:ch".to_string(), "3".to_string()),
+            ("test:i1:ch:flap Kick".to_string(), "4".to_string()),
+        ]);
+        forget_subject_messages(&mut messages);
+        let mut kept: Vec<_> = messages.into_keys().collect();
+        kept.sort();
+        assert_eq!(kept, ["i1:ch", "test:i1:ch"]);
     }
 }
