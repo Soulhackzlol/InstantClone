@@ -194,9 +194,11 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   border-color:color-mix(in oklch,var(--tint) 38%,rgba(255,255,255,.16));
   box-shadow:0 8px 20px -12px color-mix(in oklch,var(--tint) 70%,transparent);transform:translateY(-1px)}
 .ic-btn:active{transform:scale(.96);transition-duration:.08s}
-/* Cards ease in, staggered, when their tab opens (see staggerIn). */
+/* Cards ease in, staggered, when their tab opens (see staggerIn). No end
+   opacity: each card fades to its own, so a switched-off one is dim from
+   the start instead of bright until the animation ends. */
 .stagger-in{animation:staggerIn .34s var(--ease-out) both;animation-delay:var(--stagger,0ms)}
-@keyframes staggerIn{from{opacity:0;transform:translateY(8px);filter:blur(3px)}to{opacity:1;transform:none;filter:none}}
+@keyframes staggerIn{from{opacity:0;transform:translateY(8px);filter:blur(3px)}to{transform:none;filter:none}}
 @media (prefers-reduced-motion: reduce){.stagger-in,.dcard.went-live{animation:none}}
 /* Copy confirmation: the button turns success-green with a check that pops
    in (scale + blur per motion guidelines). Applied by flashCopied(). */
