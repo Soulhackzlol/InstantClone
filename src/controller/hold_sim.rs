@@ -563,6 +563,50 @@ async fn a_destination_after_an_ended_freeze_never_replays_what_already_aired() 
     assert_strictly_increasing(&frames, "after an ended freeze");
 }
 
+/// OBS freezes for a moment and is back while the hold is still up. What it
+/// sent before the freeze is still the delay viewers are watching, so a
+/// destination that starts right after joins at the delay at once. The
+/// replay guard above used to apply here too, and it waited out the whole
+/// delay again before going live.
+#[tokio::test]
+async fn a_destination_after_a_short_freeze_joins_at_once() {
+    const DELAY_MS: u32 = 3_000;
+    let mut sim = Sim::new(true).await;
+    sim.ctrl.arm_delay(DELAY_MS);
+    sim.obs_connects().await;
+    sim.destination_connects("platform").await;
+    sim.obs_sends(3_500).await;
+    sim.ctrl
+        .activate_delay()
+        .expect("the buffer holds the delay");
+    sim.obs_sends(1_000).await;
+    sim.obs_stalls(300).await;
+    sim.freeze_detected();
+    assert!(sim.ctrl.hold_active(), "the freeze is held");
+    sim.obs_stalls(300).await;
+    sim.obs_sends(500).await;
+    assert!(!sim.ctrl.hold_active(), "OBS is back in time");
+    let joined = Instant::now();
+    sim.destination_connects("second").await;
+    sim.obs_sends(1_500).await;
+
+    let frames = sim.frames(1);
+    let first = frames.first().expect("the new destination went live");
+    assert!(
+        first.at.duration_since(joined) < Duration::from_millis(1_000),
+        "it waited {:?} to go live",
+        first.at.duration_since(joined)
+    );
+    let delayed_by = first
+        .at
+        .duration_since(sim.produced[&first.number])
+        .as_millis() as u32;
+    assert!(
+        delayed_by + 50 >= DELAY_MS,
+        "joined {delayed_by} ms behind, short of the {DELAY_MS} ms delay"
+    );
+}
+
 /// A pump that ends (OBS gone, protection off) stops holding its place in
 /// the buffer. A stale place pinned the buffer's trim, so it grew to the
 /// whole disk allowance while the destination waited to reconnect.

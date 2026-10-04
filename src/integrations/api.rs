@@ -47,8 +47,8 @@ fn done() -> Reply {
 }
 
 /// Why a Program or File step can't be set up from this request.
-const LOCAL_STEPS_LOCKED: &str = "running programs and writing files can only be set up on the \
-     streaming PC itself, or from here once the dashboard has a password (System > Security)";
+const LOCAL_STEPS_LOCKED: &str = "running programs and writing files needs a dashboard password \
+     while the dashboard is open to your network (System > Security)";
 
 pub fn new_id() -> String {
     format!("i{}", &crate::crypto::random_token()[..12])
@@ -57,10 +57,11 @@ pub fn new_id() -> String {
 /// Handle `/integrations*`, `/connections/*`, `/twitch/*`. `None` when the
 /// path is not ours.
 ///
-/// `local_steps_allowed` is false for a request from another device while
-/// the dashboard has no password. Anyone on the network could make such a
-/// request, so it may not add, change or switch on a step that runs a
-/// program or writes a file: from chat, that would run anything on the PC.
+/// `local_steps_allowed` is false while the dashboard is open to the
+/// network with no password (see `web::may_set_up_local_steps`). Anyone on
+/// the network could then make the request, so it may not add, change or
+/// switch on a step that runs a program or writes a file: from chat, that
+/// would run anything on the PC.
 pub async fn route(
     method: &str,
     path: &str,
@@ -80,7 +81,7 @@ pub async fn route(
             ("twitch", handle.twitch.status_json()),
         ])),
         ("POST", "/integrations/save") => save(&req(), settings, cfg_path, local_steps_allowed),
-        ("POST", "/integrations/add") => add(&req(), settings, cfg_path),
+        ("POST", "/integrations/add") => add(&req(), settings, cfg_path, local_steps_allowed),
         ("POST", "/integrations/toggle") => toggle(&req(), settings, cfg_path, local_steps_allowed),
         ("POST", "/integrations/delete") => {
             let id = req().str_or("id", "").to_string();
@@ -588,7 +589,12 @@ fn check_connections(integration: &Integration, s: &Settings) -> Result<(), Stri
     }
 }
 
-fn add(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -> Reply {
+fn add(
+    req: &Value,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+    local_steps_allowed: bool,
+) -> Reply {
     let presets_to_add: Vec<String> = match (req.get("preset"), req.get("pack")) {
         (Some(p), _) => vec![p.as_str().unwrap_or("").to_string()],
         (_, Some(pack)) => match presets::PACKS.iter().find(|p| Some(p.id) == pack.as_str()) {
@@ -614,6 +620,13 @@ fn add(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) ->
             }
             let built =
                 presets::build(preset, new_id(), &channel).ok_or("unknown catalog entry")?;
+            // A catalog entry that writes a file could never be finished.
+            if !local_steps_allowed && built.has_local_effects() {
+                if presets_to_add.len() > 1 {
+                    continue;
+                }
+                return Err(LOCAL_STEPS_LOCKED.to_string());
+            }
             ids.push(built.id.clone());
             s.integrations.push(built);
         }
@@ -1288,7 +1301,7 @@ mod tests {
     }
 
     #[test]
-    fn programs_and_files_are_set_up_only_from_this_pc_without_a_password() {
+    fn programs_and_files_are_locked_when_the_request_may_not_set_them_up() {
         use super::super::model::{Step, StepKind};
         let dir = std::env::temp_dir().join(format!("ic-local-steps-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1300,7 +1313,8 @@ mod tests {
             StepKind::Program,
             &[("path", r"C:\Tools\thing.exe"), ("args", "")],
         ));
-        let locked = |reply: Reply| reply.0 != "200 OK" && reply.2.contains("streaming PC");
+        let locked =
+            |reply: Reply| reply.0 != "200 OK" && reply.2.contains("needs a dashboard password");
 
         assert!(locked(save(&i.to_json(), &settings, &cfg, false)));
         assert_eq!(save(&i.to_json(), &settings, &cfg, true).0, "200 OK");

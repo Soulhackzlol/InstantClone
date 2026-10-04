@@ -215,10 +215,12 @@ Please try them and tell us what breaks or confuses you: the tab's
   integration (anyone in chat, only mods…) and everything it reaches. A
   program or file on your PC, or a delay anyone in chat can change, shows
   in red; the delay and OBS in amber. **See every step** lists each step
-  in plain words, checks and their branches included, and **Show the raw
-  settings** shows exactly what gets added. A recipe can never choose a
-  program, its arguments, a file, a web address or an OBS scene: you pick
-  those yourself after adding it, and the steps say so.
+  in plain words, checks and their branches included, and **Raw settings**
+  shows exactly what gets added. A recipe can never choose a program, its
+  arguments, a file, a web address or an OBS scene: you pick those
+  yourself after adding it, and the steps say so. The delay action that
+  turns the delay off now says so ("Turn the delay off"); it used to read
+  as if it only cancelled one still getting ready.
 - **Shared Chat is your choice.** While you share chat with other
   streamers, their viewers can't use your commands or count toward "chat
   gets busy" unless you switch on "listen to partner channels" in
@@ -442,24 +444,29 @@ stream settings: h264_texture_amf, 6000 kbps`.
   domain that re-resolves to your own PC. It could then save an
   integration that runs a program. The dashboard now answers only when
   it's opened by its address (`127.0.0.1`, `localhost` or a LAN IP).
-  Opening it by a name, such as behind a reverse proxy, needs a password.
-  Overlays, the alerts page and web call links keep working from
+  Opening it by a name needs a password, and a reverse proxy should
+  always have one. Overlays, the alerts page and web call links keep working from
   anywhere.
 - **Your settings can't be read by other websites.** Every page used to
   let any website read it. Now only the overlay, alerts and delay-status
   pages can be read from another site. The config (your ingest key and webhooks),
   destinations, integrations and logs can't.
-- **Programs and files are set up on the streaming PC.** With the
-  dashboard open to your network and no password, anyone on the network
-  could add a step that runs a program and start it from chat. Run a
-  program and Write a file can now only be added, changed or switched on
-  from the streaming PC itself, or from anywhere once the dashboard has a
-  password. Elsewhere they show as locked and say why.
+- **Programs and files need a password once the dashboard is on your
+  network.** With the dashboard open to your network and no password,
+  anyone on the network could add a step that runs a program and start it
+  from chat, directly or through an overlay page the streaming PC loads.
+  While the dashboard is open to the network (or behind a reverse proxy),
+  Run a program and Write a file can only be added, changed or switched
+  on once it has a password; they show as locked and say why. With the
+  dashboard only on this PC (the default), nothing changes.
+- **Overlay pages run sandboxed.** An overlay is a page from the overlays
+  folder; it now runs with an origin of its own, so it still draws but
+  can't act as the dashboard.
 - **Chat can't run commands through a program.** A value typed in chat
-  stays one argument, and keeps only letters, numbers, spaces and simple
-  punctuation: a step like `cmd /c echo {arg1}` can't be talked into
-  running something else, and a value can't pass itself off as an option
-  (`--config`, `/s`).
+  stays one argument, and keeps only plain letters, numbers, spaces and
+  `_ . , + = / -`: a step like `cmd /c echo {arg1}` can't be talked into
+  running something else, look-alike letters can't turn into quotes, and
+  no word of it can pass itself off as an option (`--config`, `/s`).
 - **Web request addresses are hidden** until you click Show, like webhook
   links: they can hold keys (`?key=`, a Hue bridge username).
 - **A stream key under six characters is no longer logged in the clear**

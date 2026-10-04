@@ -787,7 +787,9 @@ impl Runner {
                 );
                 return;
             }
-            text => text.parse::<u64>().ok(),
+            // Too big for a number is past the 600 s top too.
+            text if is_whole_number(text) => Some(text.parse::<u64>().unwrap_or(u64::MAX)),
+            _ => None,
         };
         // A delay of 0 is no delay: what Disarm does (`!setdelay 0`).
         if action == "arm" && seconds == Some(0) {
@@ -1391,10 +1393,10 @@ fn delay_action_label(action: &str, ms: u32) -> String {
         "arm" if ms == 0 => "Set the delay to your default".to_string(),
         "arm" => format!("Set the delay to {}", fmt_delay(ms)),
         "activate" => "Turn the delay on".to_string(),
-        "cut" => "Cut the delay".to_string(),
-        "cut_after" => "Cut after this airs".to_string(),
-        "toggle" => "Toggle the delay".to_string(),
-        "disarm" => "Disarm the delay".to_string(),
+        "cut" => "Back to live now".to_string(),
+        "cut_after" => "Back to live after this airs".to_string(),
+        "toggle" => "Turn the delay on or off".to_string(),
+        "disarm" => "Turn the delay off".to_string(),
         "end_hold" => "End the reconnect screen".to_string(),
         other => format!("Delay action {other}"),
     }
@@ -1886,7 +1888,7 @@ mod tests {
         // The quotes and `&` are gone: a shell can't read a command into it.
         assert_eq!(
             host.calls.lock()[0],
-            r#"program say.exe ["--from", "ana b", "hi --admin x  calc"]"#
+            r#"program say.exe ["--from", "ana b", "hi admin x  calc"]"#
         );
     }
 
@@ -2079,7 +2081,7 @@ mod tests {
             ],
             "0 turns it off, blank means the default, the top is 600 s"
         );
-        assert_eq!(log[0].label, "Disarm the delay");
+        assert_eq!(log[0].label, "Turn the delay off");
         assert_eq!(log[1].label, "Set the delay to your default");
     }
 

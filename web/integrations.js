@@ -676,9 +676,10 @@ const oneLine = v => v.replace(/[\u0000-\u001f\u007f]/g, ' ');
 // An address as safe to show on stream: scheme and host only, since the
 // path and query often carry an API key or a webhook secret.
 function maskUrl(url){
-  const m = /^(https?:\/\/[^/?#\s]+)(\S*)/i.exec(String(url || '').trim());
+  // A login in the address (user:pass@) never shows, like the rest.
+  const m = /^(https?:\/\/)(?:[^@/?#\s]*@)?([^/?#\s]+)(\S*)/i.exec(String(url || '').trim());
   if (!m) return String(url || '').trim() ? 'an address' : '';
-  return m[1] + (m[2] && m[2] !== '/' ? '/…' : '');
+  return m[1] + m[2] + (m[3] && m[3] !== '/' ? '/…' : '');
 }
 // Whether a field holds something that reads differently once sent: a
 // variable, or (in Discord) Markdown, a link or a countdown.
@@ -877,7 +878,8 @@ function patch(a, b, ctx){
   if (tag === 'TEXTAREA' && a.classList.contains('ig-msg')) autosize(a);
   // A busy button redrawn as disabled (Preview turning into a locked Add)
   // stays disabled once the work is done: see `busy`.
-  if (busyEls.has(a)){ a._wantDisabled = b.hasAttribute('disabled'); a.classList.add('is-busy'); a.disabled = true; a.setAttribute('aria-busy', 'true'); }
+  if (tag === 'BUTTON') a._wantDisabled = b.hasAttribute('disabled');
+  if (busyEls.has(a)){ a.classList.add('is-busy'); a.disabled = true; a.setAttribute('aria-busy', 'true'); }
   if (decoders.has(a)) a.classList.add('ig-decoding');
   if (tag === 'INPUT'){
     if (a.type === 'checkbox' || a.type === 'radio'){
@@ -1168,7 +1170,12 @@ const UNDO_MS = 8000;
 // like a password until the user asks to see it.
 function secretField(id, control, label){
   const shown = S.revealed.has(id);
-  return `<div class="dff ig-secret-field${shown ? ' shown' : ''}" data-field="${esc(id)}"><label>${label}
+  // The label names the field: clicking it focuses it. Without `for`, the
+  // Show button inside it would be its control, and a click on the words
+  // would show the secret, maybe on stream.
+  const fid = 'sf-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_');
+  control = control.replace(/<(input|textarea)\b/, `<$1 id="${fid}"`);
+  return `<div class="dff ig-secret-field${shown ? ' shown' : ''}" data-field="${esc(id)}"><label for="${fid}">${label}
     <button type="button" class="ig-reveal" data-act="reveal" data-field="${esc(id)}" aria-pressed="${shown}">
       <span class="ig-eye">${svg('eye')}${svg('eyeOff')}</span><span data-tick>${shown ? 'Hide' : 'Show'}</span></button></label>${control}</div>`;
 }
@@ -1502,7 +1509,7 @@ function needsTwitch(i){
 // streaming PC itself may set them up: anyone on the network could reach
 // the dashboard from another device and run anything from chat.
 const LOCAL_KINDS = ['program', 'file'];
-const LOCAL_LOCK_TEXT = 'Running programs and writing files can only be set up on the streaming PC, or here once the dashboard has a password (System › Security). Anyone on your network could use them otherwise.';
+const LOCAL_LOCK_TEXT = 'Running programs and writing files needs a dashboard password while the dashboard is open to your network (System › Security). Anyone on your network could use them otherwise.';
 function localLocked(){ return !!S.data && S.data.local_steps === false; }
 function runsLocally(i){ return allSteps(i).some(s => LOCAL_KINDS.includes(s.type)); }
 
@@ -1531,7 +1538,7 @@ function cardInfo(i){
     flag = {cls:'warn', label:'Other channel', tip:`Markers and clips go to ${S.data.twitch.main.login}'s channel, not the one you stream to. See Connections › Twitch.`};
   else if (i.enabled && needsPhone(i)) flag = {cls:'warn', label:'Needs your phone', tip:'Connect your phone in Connections'};
   else if (i.enabled && refusedKey(i)) flag = {cls:'warn', label:'Key taken', tip:`Another app holds ${refusedKey(i)}. Open it to pick another key.`};
-  else if (localLocked() && runsLocally(i)) flag = {cls:'warn', label:'Streaming PC only', tip:LOCAL_LOCK_TEXT};
+  else if (localLocked() && runsLocally(i)) flag = {cls:'warn', label:'Needs a password', tip:LOCAL_LOCK_TEXT};
   const text = step && step.type === 'discord' && step.params.style === 'card'
     ? step.params.title || step.params.text : step && k && k.text ? step.params[k.text] : '';
   const quiet = i.enabled && quietNow(i.quiet);
@@ -1773,6 +1780,7 @@ async function toggle(id){
   const i = find(id);
   if (!i) return;
   const want = !i.enabled;
+  if (want && localLocked() && runsLocally(i)){ toast(LOCAL_LOCK_TEXT, 'info', 7000); return; }
   const issues = issuesOf(i);
   if (want && issues.length){
     toast(`${i.name}: ${issues[0]} first`, 'info', 4500);
@@ -2003,10 +2011,11 @@ const Modal = {
     bar.className = 'ig-guard';
     bar.setAttribute('data-persist', '');
     bar.setAttribute('role', 'alert');
+    const save = q('.dest-form-foot [data-act="save"]');
     bar.innerHTML = `<span class="ig-guard-text">${svg('warn')}You have unsaved changes</span>
       <button class="ic-btn ic-btn-ghost" data-act="guard-discard">Discard</button>
       <button class="ic-btn ic-btn-ghost" data-act="guard-keep">Keep editing</button>
-      <button class="ic-btn ic-btn-primary" data-act="guard-save">Save</button>`;
+      ${save && save.disabled ? '' : '<button class="ic-btn ic-btn-primary" data-act="guard-save">Save</button>'}`;
     this.form.appendChild(bar);
     bar.querySelector('[data-act="guard-keep"]').focus();
   },
@@ -2031,6 +2040,7 @@ function onModalKey(e){
     e.preventDefault();
     const save = q('.dest-form-foot [data-act="save"]');
     if (save && !save.disabled) save.click();
+    else if (save && localLocked()) toast(LOCAL_LOCK_TEXT, 'info', 7000);
     return;
   }
   if (e.key === 'Tab') trapFocus(e);
@@ -2073,7 +2083,7 @@ function footHtml(d, dirty, extra, canSave){
   const locked = localLocked() && runsLocally(d);
   return `<div class="dest-form-foot">
     ${d.id ? '<button class="ic-btn ic-btn-ghost ig-del" data-act="delete">Delete</button>' : ''}
-    <div class="dest-form-msg muted ig-foot-msg">${d.id ? lastRunHtml(d) : '<span class="ig-last">New integration</span>'}${locked ? `<span class="ig-foot-need" title="${esc(LOCAL_LOCK_TEXT)}">Change it on the streaming PC</span>`
+    <div class="dest-form-msg muted ig-foot-msg">${d.id ? lastRunHtml(d) : '<span class="ig-last">New integration</span>'}${locked ? `<button type="button" class="ig-foot-need ig-foot-why" data-act="lock-why">Needs a dashboard password: why?</button>`
       : dirty ? '<span class="ig-unsaved">Unsaved</span>'
       : d.id && issuesOf(d).length ? `<span class="ig-foot-need">To switch it on: ${esc(issuesOf(d)[0])}</span>` : ''}</div>
     ${extra || ''}
@@ -3939,7 +3949,7 @@ const Builder = {
       case 'clip': return note('Clips the last moments of your stream. Later steps can use <span class="mono">{clip.url}</span>, <span class="mono">{clip.ok}</span> and, when it failed, <span class="mono">{clip.error}</span>.');
       case 'program': return (localLocked() ? warnHtml(esc(LOCAL_LOCK_TEXT)) : '')
         + field('path', 'Program (a fixed path, no variables)', {mono:true, fixed:true, ph:'C:\\Tools\\thing.exe'}) + field('args', 'Arguments', {mono:true, ph:'--scene "Replay"'})
-        + note('Values like <span class="mono">{arg1}</span> keep only letters, numbers, spaces and <span class="mono">_ . , : # + = / -</span>, so chat can\'t sneak in a command of its own.')
+        + note('Values like <span class="mono">{arg1}</span> keep only plain letters, numbers, spaces and <span class="mono">_ . , + = / -</span>, so chat can\'t sneak in a command or an option of its own.')
         + warnHtml('Runs on your PC. Recipes you import can never add this without asking you first.');
       case 'file': return (localLocked() ? warnHtml(esc(LOCAL_LOCK_TEXT)) : '') + field('path', 'File (a fixed path, no variables)', {mono:true, fixed:true, ph:'C:\\Stream\\status.txt'}) + field('text', 'Text', {area:true}) + field('mode', 'Each time', {select:[['', 'Replace the text'], ['append', 'Add a line']]});
       case 'set_var': return field('name', 'Name', {mono:true, fixed:true, ph:'winner'}) + field('value', 'Value', {ph:'{user}'}) + note('Later steps use it as <span class="mono">{name}</span>. Lasts for this run.');
@@ -4697,7 +4707,8 @@ function recipeItemHtml(it, n){
     `<div class="ig-rhandler"><div class="ig-rtrig">${svg('bolt')}<span>${esc(triggerSentence(h.trigger))}${h.enabled === false ? ' <span class="muted">(switched off)</span>' : ''}</span></div>
       <ol class="ig-rsteps">${recipeStepsHtml(h.steps)}</ol></div>`).join('');
   const json = it.integration ? JSON.stringify(it.integration, null, 2) : '';
-  const raw = `<div class="ig-rraw-wrap"><button class="ic-btn ic-btn-ghost ig-small ig-rcopy" data-act="copy" data-text="${esc(json)}">${svg('copy', ' class="ig-btn-ic"')}Copy</button>
+  const raw = `<div class="ig-rraw-wrap"><div class="ig-rraw-head"><span>What gets added, exactly</span>
+      <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(json)}">${svg('copy', ' class="ig-btn-ic"')}Copy</button></div>
     <pre class="ig-rraw">${jsonColored(json)}</pre></div>`;
   return `<div class="ig-ritem ${level}" style="--i:${n}">
     <b class="ig-rname">${esc(it.name)}</b>
@@ -4735,7 +4746,7 @@ const RECIPE_FILLS = {program:[['path'], 'program and its arguments'], file:[['p
 function recipeFillNote(s){
   const fill = RECIPE_FILLS[s.type], p = s.params || {};
   if (!fill || fill[0].some(name => p[name])) return '';
-  return ` <span class="ig-rnote">· a recipe can't choose the ${fill[1]}: you pick it after adding</span>`;
+  return ` <span class="ig-rnote">· a recipe can't choose the ${fill[1]}: you pick ${s.type === 'program' ? 'them' : 'it'} after adding</span>`;
 }
 // The steps of a recipe being imported, in the builder's words, checks
 // with their branches nested. What runs on the PC is tinted red; what
@@ -4884,6 +4895,7 @@ async function onClick(e){
       decodeField(field, show);
       break;
     }
+    case 'lock-why': toast(LOCAL_LOCK_TEXT, 'info', 8000); break;
     case 'guard-save': {
       const save = q('.dest-form-foot [data-act="save"]');
       Modal.hideGuard();

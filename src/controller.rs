@@ -591,6 +591,11 @@ pub struct Controller {
     /// (`NO_SEQ` when the ring was empty): the video before it is from
     /// before the hold, and a rejoin never starts there.
     resumed_after_seq: AtomicU64,
+    /// The newest ring seq when a frozen OBS recovered after its hold had
+    /// already ended (`NO_SEQ`: none this session). The destinations ended
+    /// with the hold, so the video before it is over for viewers: a pump
+    /// that starts later never seeds there (see `fresh_from_seq`).
+    replay_floor_seq: AtomicU64,
     /// How the last hold closed: 0 none yet, 1 resumed, 2 ended.
     last_hold_end: AtomicU8,
     /// Crash protection settings, mirrored from Settings by the supervisor.
@@ -814,6 +819,7 @@ impl Controller {
             capacity_capped_logged: AtomicBool::new(false),
             last_rejection_log_ms: AtomicU64::new(0),
             resumed_after_seq: AtomicU64::new(NO_SEQ),
+            replay_floor_seq: AtomicU64::new(NO_SEQ),
             last_hold_end: AtomicU8::new(0),
             crash_protection: crate::sync::Mutex::new(Default::default()),
             crash_protection_on: AtomicBool::new(false),
@@ -1756,6 +1762,8 @@ impl Controller {
         self.unpublish_received.store(false, Ordering::Relaxed);
         self.last_video_tag_ms.store(0, Ordering::Relaxed);
         self.ingest_frozen.store(false, Ordering::Relaxed);
+        // The ring is cleared above: nothing in it is from before a freeze.
+        self.replay_floor_seq.store(NO_SEQ, Ordering::Relaxed);
         // A hold past its deadline already ended for the pumps. Close it as
         // ended while ingest still reads as dead, so the sessions it kept
         // are forgotten rather than carried into this stream.
@@ -1812,10 +1820,18 @@ impl Controller {
                 }
                 if self.ingest_frozen.load(Ordering::Relaxed) {
                     self.ingest_frozen.store(false, Ordering::Relaxed);
+                    // Back in time, the pumps rejoin past the freeze on
+                    // their own and a short freeze's tail may still be
+                    // airing. Only a hold that is already over (ended or
+                    // run out) left everything before the freeze behind.
+                    let hold_was_over = !self.hold_active();
                     // A hold past its deadline already ended for the pumps:
                     // report it as ended, not as OBS being back in time.
                     self.expire_hold();
                     self.resume_from_hold();
+                    if hold_was_over {
+                        self.mark_replay_floor();
+                    }
                 }
                 if is_idr {
                     self.sample_keyframe_interval(ts_ms);
@@ -2163,13 +2179,23 @@ impl Controller {
         Some(self.resumed_after_seq.load(Ordering::Relaxed)).filter(|seq| *seq != NO_SEQ)
     }
 
-    /// The first ring seq a destination may start from. After a frozen OBS
-    /// recovers, everything it sent before the freeze has already aired
-    /// (as the delay tail of the hold), so a pump that starts later, or a
-    /// cut back to restore the delay, must never land there and replay it.
-    /// 0 when OBS never froze in this session.
+    /// The first ring seq a destination may start from. When a frozen OBS
+    /// recovers after its hold ended, everything it sent before the freeze
+    /// is over for viewers (aired as the delay tail, or cut by End now), so
+    /// a pump that starts later, or a cut back to restore the delay, must
+    /// never land there and replay it. 0 otherwise.
     fn fresh_from_seq(&self) -> u64 {
-        self.resumed_after_seq().map_or(0, |seq| seq + 1)
+        match self.replay_floor_seq.load(Ordering::Relaxed) {
+            NO_SEQ => 0,
+            seq => seq + 1,
+        }
+    }
+
+    /// Everything in the ring now is over for viewers (see `fresh_from_seq`).
+    fn mark_replay_floor(&self) {
+        if let Some(latest) = self.ring.latest_seq() {
+            self.replay_floor_seq.store(latest, Ordering::Relaxed);
+        }
     }
 
     /// The latest keyframe of a track the hold re-sends instead of the
@@ -2192,7 +2218,11 @@ impl Controller {
             // Off means no bookkeeping, and nothing stale left behind: an
             // old video stamp would read as a freeze and hold back egress.
             self.last_video_tag_ms.store(0, Ordering::Relaxed);
-            self.ingest_frozen.store(false, Ordering::Relaxed);
+            // Switched off mid-freeze, OBS no longer counts as frozen and a
+            // destination reconnects at once: never onto what already aired.
+            if self.ingest_frozen.swap(false, Ordering::Relaxed) {
+                self.mark_replay_floor();
+            }
             self.held_keyframes.lock().clear();
             self.slate_cache.clear();
         }
@@ -3682,10 +3712,16 @@ fn delayed_idr(ctrl: &Controller, target_ms: u64) -> Option<TagMeta> {
             return None;
         }
         let oldest = ctrl.ring.oldest_ts()?;
-        ctrl.ring
-            .newest_idr_at_or_before(oldest + FULL_RING_MARGIN_MS)
-            .filter(|idr| idr.seq >= fresh)
-            .or_else(|| ctrl.ring.oldest_idr_at_or_after(fresh))
+        let margin = ctrl
+            .ring
+            .newest_idr_at_or_before(oldest + FULL_RING_MARGIN_MS);
+        // After a freeze the keyframe there can be from before it: wait for
+        // the ring to roll past the freeze rather than join on OBS's newest
+        // video, far short of the delay.
+        if fresh > 0 {
+            return margin.filter(|idr| idr.seq >= fresh);
+        }
+        margin.or_else(|| ctrl.ring.oldest_idr_at_or_after(0))
     })
 }
 

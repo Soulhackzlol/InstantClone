@@ -403,10 +403,7 @@ async fn serve(
         return Ok(());
     }
 
-    // Programs and file writes run on this PC: with no password, only the
-    // PC itself may set them up (see `integrations::api::route`).
-    let local_steps_allowed =
-        is_loopback(&peer_ip) || !settings.borrow().dashboard_password_hash.is_empty();
+    let local_steps_allowed = may_set_up_local_steps(&settings.borrow(), &peer_ip, head_str);
     let caller = RouteCaller {
         is_admin,
         local_steps_allowed,
@@ -426,9 +423,18 @@ async fn serve(
     } else {
         ""
     };
+    // An overlay is a page from the overlays folder, which anyone can drop
+    // files into. Sandboxed, it runs with an origin of its own: its scripts
+    // still paint (the feeds it reads allow any origin), but it can't act
+    // as the dashboard, whose API refuses a POST from a foreign origin.
+    let sandbox = if method == "GET" && bare_path.starts_with("/overlay/") {
+        "Content-Security-Policy: sandbox allow-scripts\r\n"
+    } else {
+        ""
+    };
     let resp = format!(
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
-        status, ctype, payload.len(), acao
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}{}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        status, ctype, payload.len(), acao, sandbox
     );
     sock.write_all(resp.as_bytes()).await?;
     sock.write_all(payload.as_bytes()).await?;
@@ -669,7 +675,7 @@ async fn auth_gate(
         // from seizing the dashboard before the owner sets a password; changing
         // an existing password already required an admin session at the gate.
         let first_time = settings.borrow().dashboard_password_hash.is_empty();
-        if first_time && !is_loopback(peer_ip) {
+        if first_time && (!is_loopback(peer_ip) || is_proxied(head_str)) {
             write_simple(
                 sock,
                 "403 Forbidden",
@@ -4812,6 +4818,28 @@ fn host_is_address(host: &str) -> bool {
         || name.parse::<std::net::IpAddr>().is_ok()
 }
 
+/// Whether a request may set up integration steps that run programs or
+/// write files. A password always may. Without one, only while the
+/// dashboard is closed to the network: then nothing but this PC can reach
+/// it. Open to the network, anyone on it could plant a page that the
+/// streamer's own browser or OBS loads from this PC (an overlay, say), and
+/// a check on who connected would let that page through.
+fn may_set_up_local_steps(settings: &Settings, peer_ip: &str, head: &str) -> bool {
+    !settings.dashboard_password_hash.is_empty()
+        || (!settings.web_bind_all && is_loopback(peer_ip) && !is_proxied(head))
+}
+
+/// Whether the request came through a reverse proxy, which connects from
+/// this PC on behalf of someone who may be anywhere.
+fn is_proxied(head: &str) -> bool {
+    head.lines().skip(1).any(|line| {
+        let name = line.split(':').next().unwrap_or("").trim();
+        ["x-forwarded-for", "forwarded", "via", "x-real-ip"]
+            .iter()
+            .any(|h| name.eq_ignore_ascii_case(h))
+    })
+}
+
 fn is_loopback(ip: &str) -> bool {
     ip.parse::<std::net::IpAddr>()
         .map(|a| a.is_loopback())
@@ -6418,6 +6446,32 @@ mod tests {
     }
 
     // ── CSRF policy ──────────────────────────────────────────────────
+
+    #[test]
+    fn programs_need_a_password_once_the_dashboard_is_on_the_network() {
+        let head = "POST /integrations/save HTTP/1.1\r\nHost: 127.0.0.1:7799\r\n";
+        let proxied = "POST /integrations/save HTTP/1.1\r\nHost: 127.0.0.1:7799\r\nX-Forwarded-For: 203.0.113.9\r\n";
+        let mut s = Settings::defaults();
+        assert!(
+            may_set_up_local_steps(&s, "127.0.0.1", head),
+            "closed to the network"
+        );
+        assert!(
+            !may_set_up_local_steps(&s, "127.0.0.1", proxied),
+            "a proxy on this PC"
+        );
+        s.web_bind_all = true;
+        assert!(
+            !may_set_up_local_steps(&s, "127.0.0.1", head),
+            "open to the network, even from this PC"
+        );
+        assert!(!may_set_up_local_steps(&s, "192.168.1.50", head));
+        s.dashboard_password_hash = "pbkdf2$1000$c2FsdA$aGFzaA".into();
+        assert!(
+            may_set_up_local_steps(&s, "192.168.1.50", head),
+            "a password"
+        );
+    }
 
     #[test]
     fn csrf_allows_all_gets() {

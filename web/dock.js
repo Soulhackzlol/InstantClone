@@ -488,7 +488,7 @@ function paintHold(hold) {
   if (tail) {
     setText($('hold-why'), 'Delay airing');
     setText($('hold-clock'), fmtClock(s.tail_ms));
-    setText($('hold-sub'), 'OBS stopped. Ends when viewers reach the end');
+    setText($('hold-sub'), 'OBS stopped. The stream ends once your delay has aired.');
     return;
   }
   if (!hold) { disarmEndHold(); return; }
@@ -502,7 +502,7 @@ function paintHold(hold) {
 
 // Hint text: full sentences, or errors-only (encoder offline) if opted.
 function paintTip(ds, hold) {
-  const tip = hold ? (hold.reason === 'crash' ? 'Reopen OBS (Run in Normal Mode) and start streaming to resume.' : 'Start streaming in OBS to resume.')
+  const tip = hold ? (hold.reason === 'crash' ? 'Reopen OBS in Normal Mode and start streaming to resume.' : 'Start streaming in OBS to resume.')
     : s.tail_ms > 0 ? 'End now cuts it short.'
     : !s.ingest_alive ? 'Point your encoder at rtmp://…/live'
     : ds === 'active' && s.safe_cut_pending ? `Auto-cut in ~${Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000))}s - marked footage still airs.`
