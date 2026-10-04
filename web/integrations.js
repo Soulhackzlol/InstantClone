@@ -45,6 +45,7 @@ const PATHS = {
   plus:'M12 5v14M5 12h14',
   check:'M20 6L9 17l-5-5',
   chev:'M6 9l6 6 6-6',
+  code:'M8 7l-5 5 5 5M16 7l5 5-5 5',
   up:'M18 15l-6-6-6 6',
   down:'M6 9l6 6 6-6',
   x:'M18 6L6 18M6 6l12 12',
@@ -1911,6 +1912,10 @@ const Modal = {
       wrap.addEventListener('input', onInput);
       wrap.addEventListener('keydown', onActivateKey);
       wrap.addEventListener('focusout', onFieldLeave);
+      wrap.addEventListener('toggle', e => {
+        const key = e.target.dataset && e.target.dataset.fold;
+        if (key) e.target.open ? Recipes.folds.add(key) : Recipes.folds.delete(key);
+      }, true);
       document.addEventListener('keydown', onModalKey);
       this.el = wrap;
       this.form = wrap.querySelector('.dest-form');
@@ -4677,21 +4682,49 @@ function focusField(bind){
 
 // One integration of a recipe being imported: its triggers and who can set
 // them off, then everything it reaches, the riskiest first.
-function recipeItemHtml(it){
+function recipeItemHtml(it, n){
   // "OBS crashes, the hold runs out": names after the first read on.
-  const who = (it.triggers || []).map((t, n) => esc(n && /^[A-Z][a-z]/.test(t.what) ? t.what[0].toLowerCase() + t.what.slice(1) : t.what)
+  const who = (it.triggers || []).map((t, i) => esc(i && /^[A-Z][a-z]/.test(t.what) ? t.what[0].toLowerCase() + t.what.slice(1) : t.what)
     + (t.who ? ` <span class="ig-rwho">(${esc(t.who)})</span>` : '')).join(', ');
-  const effects = (it.effects || []).map(e =>
-    `<span class="ig-rflag ${esc(e.level)}">${e.level === 'info' ? '' : '⚠ '}${esc(e.text)}</span>`).join('');
+  const effects = it.effects || [];
+  const level = effects.some(e => e.level === 'danger') ? 'danger' : effects.some(e => e.level === 'caution') ? 'caution' : 'safe';
+  const flags = effects.map((e, i) =>
+    `<span class="ig-rflag ${esc(e.level)}" style="--i:${i}">${e.level === 'info' ? '' : svg('warn')}${esc(e.text)}</span>`).join('');
   const handlers = (it.integration && it.integration.handlers) || [];
-  return `<div class="ig-recipe-item"><b>${esc(it.name)}</b>
+  let count = 0;
+  handlers.forEach(h => walk(h.steps, () => { count++; }));
+  const steps = handlers.map(h =>
+    `<div class="ig-rhandler"><div class="ig-rtrig">${svg('bolt')}<span>${esc(triggerSentence(h.trigger))}${h.enabled === false ? ' <span class="muted">(switched off)</span>' : ''}</span></div>
+      <ol class="ig-rsteps">${recipeStepsHtml(h.steps)}</ol></div>`).join('');
+  const json = it.integration ? JSON.stringify(it.integration, null, 2) : '';
+  const raw = `<div class="ig-rraw-wrap"><button class="ic-btn ic-btn-ghost ig-small ig-rcopy" data-act="copy" data-text="${esc(json)}">${svg('copy', ' class="ig-btn-ic"')}Copy</button>
+    <pre class="ig-rraw">${jsonColored(json)}</pre></div>`;
+  return `<div class="ig-ritem ${level}" style="--i:${n}">
+    <b class="ig-rname">${esc(it.name)}</b>
     <div class="ig-rwhen">When ${who || 'nothing'}</div>
-    ${effects ? `<div class="ig-rflags">${effects}</div>` : ''}
-    ${handlers.length ? `<details class="ig-rdetails"><summary>See every step</summary>${handlers.map(h =>
-      `<div class="ig-rhandler"><div class="ig-rtrig">${esc(triggerSentence(h.trigger))}${h.enabled === false ? ' <span class="muted">(switched off)</span>' : ''}</div>
-        <ol class="ig-rsteps">${recipeStepsHtml(h.steps)}</ol></div>`).join('')}</details>` : ''}
-    ${it.integration ? `<details class="ig-rdetails"><summary>Show the raw settings</summary>
-      <pre class="ig-rraw">${esc(JSON.stringify(it.integration, null, 2))}</pre></details>` : ''}</div>`;
+    ${flags ? `<div class="ig-rflags">${flags}</div>` : ''}
+    ${handlers.length ? `<div class="ig-rfolds">${recipeFold(`steps-${n}`, 'steps', `See every step <span class="ig-rcount">${count}</span>`, steps)}
+      ${json ? recipeFold(`raw-${n}`, 'code', 'Raw settings', raw) : ''}</div>` : ''}</div>`;
+}
+// A row that opens smoothly onto `body`. Which rows are open survives a
+// redraw of the import window (see Recipes.folds).
+function recipeFold(key, icon, label, body){
+  return `<details class="ig-rfold" data-fold="${esc(key)}"${Recipes.folds.has(key) ? ' open' : ''}>
+    <summary>${svg(icon, ' class="ig-rfold-ic"')}<span class="ig-rfold-label">${label}</span>${svg('chev', ' class="ig-rchev"')}</summary>
+    <div class="ig-rfold-body">${body}</div></details>`;
+}
+// JSON text with keys, strings, numbers and literals colored, every piece
+// escaped on its own.
+function jsonColored(text){
+  const token = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+  let out = '', last = 0, m;
+  while ((m = token.exec(text))){
+    out += esc(text.slice(last, m.index));
+    const cls = m[1] ? (m[2] ? 'jk' : 'js') : m[3] ? (m[3] === 'null' ? 'jn' : 'jb') : 'jd';
+    out += `<span class="${cls}">${esc(m[1] || m[0])}</span>${m[2] ? esc(m[2]) : ''}`;
+    last = token.lastIndex;
+  }
+  return out + esc(text.slice(last));
 }
 // Recipes never carry where a step reaches: shared and imported, they lose
 // the program and its arguments, the file, the web address and the OBS
@@ -4708,13 +4741,13 @@ function recipeFillNote(s){
 // with their branches nested. What runs on the PC is tinted red; what
 // changes the delay, OBS or calls a web address, amber.
 function recipeStepsHtml(steps){
-  if (!steps || !steps.length) return '<li class="ig-rstep muted">Nothing</li>';
-  return steps.map(s => {
+  if (!steps || !steps.length) return '<li class="ig-rstep ig-rnone">Nothing</li>';
+  return steps.map((s, i) => {
     const k = KINDS[s.type] || {};
     const risk = LOCAL_KINDS.includes(s.type) ? ' danger' : ['delay_action', 'obs', 'http'].includes(s.type) ? ' caution' : '';
     const branches = s.type !== 'if' ? '' : `<ol class="ig-rsteps">${recipeStepsHtml(s.then)}</ol>`
       + ((s.else || []).length ? `<div class="ig-relse">Otherwise</div><ol class="ig-rsteps">${recipeStepsHtml(s.else)}</ol>` : '');
-    return `<li class="ig-rstep${risk}"><div class="ig-rline"><span class="ig-rtag" style="--c:${k.c || 'var(--fg-3)'}">${esc(k.tag || s.type)}</span>
+    return `<li class="ig-rstep${risk}" style="--i:${i}"><div class="ig-rline"><span class="ig-rtag" style="--c:${k.c || 'var(--fg-3)'}">${esc(k.tag || s.type)}</span>
       <span class="ig-step-text">${stepSentence(s)}${recipeFillNote(s)}${s.enabled === false ? ' <span class="muted">(switched off)</span>' : ''}</span></div>${branches}</li>`;
   }).join('');
 }
@@ -4728,6 +4761,8 @@ function recipeWarningHtml(p){
 
 const Recipes = {
   preview:null, text:'', back:null,
+  // Which "See every step" and "Raw settings" rows are open.
+  folds:new Set(),
   resume(){
     Modal.open('import', 700);
     Modal.back = this.back;
@@ -4735,6 +4770,7 @@ const Recipes = {
   },
   openImport(){
     this.preview = null;
+    this.folds.clear();
     this.text = '';
     this.back = Modal.kind === 'catalog' ? {title:'Back to the catalog', go:() => Catalog.reopen()} : null;
     this.resume();
@@ -4750,7 +4786,7 @@ const Recipes = {
         ${p ? `<div class="ig-recipe" data-key="r-${esc(p.name)}">
           <div class="sys-section ig-recipe-list">
             <div class="ig-recipe-head"><span class="ig-ok">${svg('check')}</span><b>${esc(p.name)}</b><span class="muted">${plural(p.items.length, 'integration')}</span></div>
-            ${p.items.map(it => recipeItemHtml(it)).join('')}
+            ${p.items.map((it, n) => recipeItemHtml(it, n)).join('')}
           </div>
           ${recipeWarningHtml(p)}
           ${p.uses_discord ? (channels.length ? `<div class="dff"><label>Post its Discord messages in</label><select class="ic-input" data-bind="r-discord">${channels.map(c => `<option value="${esc(c.id)}">#${esc(c.name)}</option>`).join('')}</select></div>`
@@ -4771,6 +4807,7 @@ const Recipes = {
         const r = await api('/integrations/import', {recipe:this.text});
         if (!r.ok){ toast(r.error, 'err', 6000); return; }
         this.preview = r;
+        this.folds.clear();
         this.render();
       });
       return true;
