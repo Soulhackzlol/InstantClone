@@ -677,7 +677,8 @@ const oneLine = v => v.replace(/[\u0000-\u001f\u007f]/g, ' ');
 // path and query often carry an API key or a webhook secret.
 function maskUrl(url){
   // A login in the address (user:pass@) never shows, like the rest.
-  const m = /^(https?:\/\/)(?:[^@/?#\s]*@)?([^/?#\s]+)(\S*)/i.exec(String(url || '').trim());
+  // The login runs to the last @ before the host (user:p@ss@host).
+  const m = /^(https?:\/\/)(?:[^/?#\s]*@)?([^/?#\s@]+)(\S*)/i.exec(String(url || '').trim());
   if (!m) return String(url || '').trim() ? 'an address' : '';
   return m[1] + m[2] + (m[3] && m[3] !== '/' ? '/…' : '');
 }

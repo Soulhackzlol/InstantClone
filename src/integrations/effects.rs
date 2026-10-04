@@ -29,6 +29,12 @@ const MAX_FILE_TEXT: usize = 1024 * 1024;
 /// capped so a runaway trigger can't fork the machine to its knees.
 const MAX_RUNNING_PROGRAMS: usize = 16;
 
+/// Marks every web request InstantClone makes. A step can name this PC's
+/// own dashboard as its address; arriving with this, the dashboard treats
+/// it like a request through a proxy (`web::is_proxied`), so it can never
+/// set the first password or a Run a program step.
+const VIA: (&str, &str) = ("Via", "1.1 instantclone");
+
 /// Make a web request for a step, or for the editor's "Send request".
 pub fn send_http(r: HttpRequest) -> Result<HttpResponse, String> {
     if !(r.url.starts_with("http://") || r.url.starts_with("https://")) {
@@ -49,7 +55,7 @@ pub fn send_http(r: HttpRequest) -> Result<HttpResponse, String> {
             for (name, value) in &r.headers {
                 req = req.header(name.as_str(), value.as_str());
             }
-            req.call()
+            req.header(VIA.0, VIA.1).call()
         }
         "POST" | "PUT" | "PATCH" => {
             let mut req = match r.method.as_str() {
@@ -76,7 +82,7 @@ pub fn send_http(r: HttpRequest) -> Result<HttpResponse, String> {
             for (name, value) in &r.headers {
                 req = req.header(name.as_str(), value.as_str());
             }
-            req.send(r.body.as_str())
+            req.header(VIA.0, VIA.1).send(r.body.as_str())
         }
         other => return Err(format!("{other} is not a supported method")),
     };

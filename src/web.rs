@@ -675,7 +675,7 @@ async fn auth_gate(
         // from seizing the dashboard before the owner sets a password; changing
         // an existing password already required an admin session at the gate.
         let first_time = settings.borrow().dashboard_password_hash.is_empty();
-        if first_time && (!is_loopback(peer_ip) || is_proxied(head_str)) {
+        if first_time && !from_this_pc(peer_ip, head_str) {
             write_simple(
                 sock,
                 "403 Forbidden",
@@ -4826,7 +4826,27 @@ fn host_is_address(host: &str) -> bool {
 /// a check on who connected would let that page through.
 fn may_set_up_local_steps(settings: &Settings, peer_ip: &str, head: &str) -> bool {
     !settings.dashboard_password_hash.is_empty()
-        || (!settings.web_bind_all && is_loopback(peer_ip) && !is_proxied(head))
+        || (!settings.web_bind_all && from_this_pc(peer_ip, head))
+}
+
+/// Whether a request comes from this PC itself: a loopback connection,
+/// addressed to a loopback name, not relayed. A port forwarder on this PC
+/// (netsh portproxy, ssh -R) connects from loopback too, but keeps the
+/// address the remote side dialled in Host.
+fn from_this_pc(peer_ip: &str, head: &str) -> bool {
+    let host = parse_origin_host(head).1;
+    let name = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or("").to_string(),
+        None => host
+            .rsplit_once(':')
+            .map_or(host.as_str(), |(n, _)| n)
+            .to_ascii_lowercase(),
+    };
+    let loopback_name = name == "localhost"
+        || name
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    is_loopback(peer_ip) && loopback_name && !is_proxied(head)
 }
 
 /// Whether the request came through a reverse proxy, which connects from
@@ -6466,6 +6486,20 @@ mod tests {
             "open to the network, even from this PC"
         );
         assert!(!may_set_up_local_steps(&s, "192.168.1.50", head));
+        s.web_bind_all = false;
+        let forwarded = "POST /integrations/save HTTP/1.1\r\nHost: 192.168.1.20:8080\r\n";
+        assert!(
+            !may_set_up_local_steps(&s, "127.0.0.1", forwarded),
+            "a port forwarder"
+        );
+        let own =
+            "POST /integrations/save HTTP/1.1\r\nHost: 127.0.0.1:7799\r\nVia: 1.1 instantclone\r\n";
+        assert!(
+            !may_set_up_local_steps(&s, "127.0.0.1", own),
+            "a web request step"
+        );
+        let localhost = "POST /integrations/save HTTP/1.1\r\nHost: localhost:7799\r\n";
+        assert!(may_set_up_local_steps(&s, "127.0.0.1", localhost));
         s.dashboard_password_hash = "pbkdf2$1000$c2FsdA$aGFzaA".into();
         assert!(
             may_set_up_local_steps(&s, "192.168.1.50", head),

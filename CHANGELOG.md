@@ -455,13 +455,18 @@ stream settings: h264_texture_amf, 6000 kbps`.
   network.** With the dashboard open to your network and no password,
   anyone on the network could add a step that runs a program and start it
   from chat, directly or through an overlay page the streaming PC loads.
-  While the dashboard is open to the network (or behind a reverse proxy),
-  Run a program and Write a file can only be added, changed or switched
-  on once it has a password; they show as locked and say why. With the
-  dashboard only on this PC (the default), nothing changes.
+  While the dashboard is open to the network, or reached through a
+  reverse proxy or a port forwarder, Run a program and Write a file can
+  only be added, changed or switched on once it has a password; they show
+  as locked and say why. A web request step aimed at the dashboard itself
+  counts as coming from outside, so it can't set the first password
+  either. With the dashboard only on this PC (the default), nothing
+  changes.
 - **Overlay pages run sandboxed.** An overlay is a page from the overlays
   folder; it now runs with an origin of its own, so it still draws but
-  can't act as the dashboard.
+  can't act as the dashboard. An overlay file opened in the Studio is
+  cleaned first, so one made to break out of its styles can't run code
+  in the dashboard either.
 - **Chat can't run commands through a program.** A value typed in chat
   stays one argument, and keeps only plain letters, numbers, spaces and
   `_ . , + = / -`: a step like `cmd /c echo {arg1}` can't be talked into

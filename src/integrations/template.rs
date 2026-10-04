@@ -120,15 +120,21 @@ pub fn program_arg(value: &str) -> String {
     out.split(' ')
         .map(|word| {
             let mut word = word;
-            while word.starts_with(['-', '/'])
-                && !(word.starts_with('-') && word[1..].starts_with(|c: char| c.is_ascii_digit()))
-            {
+            while word.starts_with(['-', '/']) && !is_negative_number(word) {
                 word = &word[1..];
             }
             word
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// `-5`, `-0.5`: a minus and a number, nothing an option could be.
+fn is_negative_number(word: &str) -> bool {
+    word.strip_prefix('-').is_some_and(|rest| {
+        rest.starts_with(|c: char| c.is_ascii_digit())
+            && rest.chars().all(|c| c.is_ascii_digit() || c == '.')
+    })
 }
 
 /// Every variable name a template uses, in order, without repeats.
@@ -295,9 +301,14 @@ mod tests {
         assert_eq!(program_arg("../../secret"), "././secret");
         assert_eq!(program_arg("C:/Windows"), "C/Windows");
         assert_eq!(
-            program_arg("-5 and -7"),
-            "-5 and -7",
+            program_arg("-5 and -0.5"),
+            "-5 and -0.5",
             "negative numbers stay"
+        );
+        assert_eq!(
+            program_arg("-5x"),
+            "5x",
+            "an option starting with a digit goes"
         );
         assert_eq!(program_arg("2 + 2 = 4, ok"), "2 + 2 = 4, ok");
         assert_eq!(

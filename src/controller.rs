@@ -1822,9 +1822,14 @@ impl Controller {
                     self.ingest_frozen.store(false, Ordering::Relaxed);
                     // Back in time, the pumps rejoin past the freeze on
                     // their own and a short freeze's tail may still be
-                    // airing. Only a hold that is already over (ended or
-                    // run out) left everything before the freeze behind.
-                    let hold_was_over = !self.hold_active();
+                    // airing. Everything before the freeze is behind viewers
+                    // once the hold is over (ended or run out), or once the
+                    // delay has moved past it: a freeze longer than the
+                    // delay aired its whole tail, and the screen took over.
+                    let tail_aired = self.ring.latest_ts().is_some_and(|last| {
+                        ts_ms.saturating_sub(u64::from(self.target_delay_ms())) > last
+                    });
+                    let hold_was_over = !self.hold_active() || tail_aired;
                     // A hold past its deadline already ended for the pumps:
                     // report it as ended, not as OBS being back in time.
                     self.expire_hold();
@@ -2218,10 +2223,12 @@ impl Controller {
             // Off means no bookkeeping, and nothing stale left behind: an
             // old video stamp would read as a freeze and hold back egress.
             self.last_video_tag_ms.store(0, Ordering::Relaxed);
-            // Switched off mid-freeze, OBS no longer counts as frozen and a
-            // destination reconnects at once: never onto what already aired.
+            // Switched off mid-freeze: no reconnect screen any more, so the
+            // freeze ends the stream like any OBS drop without protection,
+            // and when OBS is back the destinations start again past it.
             if self.ingest_frozen.swap(false, Ordering::Relaxed) {
                 self.mark_replay_floor();
+                self.end_hold_now();
             }
             self.held_keyframes.lock().clear();
             self.slate_cache.clear();

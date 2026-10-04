@@ -607,6 +607,40 @@ async fn a_destination_after_a_short_freeze_joins_at_once() {
     );
 }
 
+/// OBS freezes for longer than the delay and is back while the hold is still
+/// up: the whole tail aired and the screen took over. A destination that
+/// reconnects then must not seed on the last keyframe before the freeze
+/// (it would replay it, then sit silent across the freeze's gap).
+#[tokio::test]
+async fn a_destination_after_a_freeze_longer_than_the_delay_never_replays() {
+    const DELAY_MS: u32 = 1_500;
+    let mut sim = Sim::new(true).await;
+    sim.ctrl.arm_delay(DELAY_MS);
+    sim.obs_connects().await;
+    sim.destination_connects("platform").await;
+    sim.obs_sends(2_500).await;
+    sim.ctrl
+        .activate_delay()
+        .expect("the buffer holds the delay");
+    sim.obs_sends(2_000).await;
+    let last_before_freeze = sim.next_frame - 1;
+    sim.obs_stalls(300).await;
+    sim.freeze_detected();
+    sim.obs_stalls(2_500).await;
+    assert!(sim.ctrl.hold_active(), "the hold is still up");
+    sim.obs_sends(300).await;
+    sim.destination_connects("second").await;
+    sim.obs_sends(3_000).await;
+
+    let frames = sim.frames(1);
+    assert!(!frames.is_empty(), "the new destination went live");
+    assert!(
+        frames.iter().all(|f| f.number > last_before_freeze),
+        "nothing from before the freeze airs again"
+    );
+    assert_strictly_increasing(&frames, "after a long freeze");
+}
+
 /// A pump that ends (OBS gone, protection off) stops holding its place in
 /// the buffer. A stale place pinned the buffer's trim, so it grew to the
 /// whole disk allowance while the destination waited to reconnect.
