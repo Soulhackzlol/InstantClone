@@ -113,7 +113,8 @@ pub struct Command {
 /// Not `Debug`: it holds the WebSocket password.
 struct Settings {
     port: u16,
-    password: String,
+    /// `None` when OBS's server doesn't ask for one.
+    password: Option<String>,
 }
 
 /// One whole message from OBS, as the reader task hands it over.
@@ -188,6 +189,8 @@ fn set_state(status: &Mutex<Status>, state: &'static str, problem: &str) {
     }
 }
 
+const NO_PASSWORD: &str = "OBS wants a WebSocket password but none is saved. Set one in OBS: Tools > WebSocket Server Settings.";
+
 /// OBS's WebSocket server settings, from the file OBS keeps them in.
 fn read_settings() -> Result<Settings, String> {
     let path = crate::obs_register::obs_config_dirs()
@@ -217,9 +220,14 @@ fn parse_settings(text: &str) -> Result<Settings, String> {
         .filter(|p| (1.0..=65535.0).contains(p))
         .map_or(DEFAULT_PORT, |p| p as u16);
     let password = if v.bool_or("auth_required", false) {
-        v.str_or("server_password", "").to_string()
+        let saved = v
+            .get("server_password")
+            .and_then(Value::as_str)
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| NO_PASSWORD.to_string())?;
+        Some(saved.to_string())
     } else {
-        String::new()
+        None
     };
     Ok(Settings { port, password })
 }
@@ -271,7 +279,7 @@ async fn session(
 async fn greet(stream: &mut TcpStream, settings: &Settings) -> Result<(), String> {
     handshake(stream, settings.port).await?;
     let hello = read_json(stream).await?;
-    let identify = identify_message(&hello, &settings.password)?;
+    let identify = identify_message(&hello, settings.password.as_deref())?;
     write_frame(stream, 1, identify.as_bytes()).await?;
     let identified = read_json(stream).await?;
     if identified.u64_or("op", 99) != 2 {
@@ -533,7 +541,7 @@ fn names(data: &Value, list: &str, field: &str, reversed: bool) -> Vec<String> {
 
 /// The Identify message answering OBS's Hello, with the password proof
 /// when OBS asks for one.
-fn identify_message(hello: &Value, password: &str) -> Result<String, String> {
+fn identify_message(hello: &Value, password: Option<&str>) -> Result<String, String> {
     if hello.u64_or("op", 99) != 0 {
         return Err("that isn't OBS's WebSocket server".to_string());
     }
@@ -545,14 +553,16 @@ fn identify_message(hello: &Value, password: &str) -> Result<String, String> {
         ),
     ];
     if let Some(auth) = hello.path("d.authentication") {
-        if password.is_empty() {
-            return Err("OBS wants a WebSocket password but none is saved. Set one in OBS: Tools > WebSocket Server Settings.".to_string());
-        }
-        let proof = auth_proof(
-            password,
-            auth.str_or("salt", ""),
-            auth.str_or("challenge", ""),
-        );
+        let password = password.ok_or_else(|| NO_PASSWORD.to_string())?;
+        // Without both, no proof could ever match: say so instead of
+        // sending one OBS can only refuse.
+        let (Some(salt), Some(challenge)) = (
+            auth.get("salt").and_then(Value::as_str),
+            auth.get("challenge").and_then(Value::as_str),
+        ) else {
+            return Err("OBS asked for a password without the challenge to answer it.".to_string());
+        };
+        let proof = auth_proof(password, salt, challenge);
         d.push(("authentication".to_string(), json::str(proof)));
     }
     Ok(json::obj([("op", Value::Num(1.0)), ("d", Value::Obj(d))]).to_json())
@@ -766,10 +776,13 @@ mod tests {
     fn settings_need_the_server_switched_on() {
         let on = r#"{"server_enabled":true,"server_port":4456,"auth_required":true,"server_password":"pw"}"#;
         let s = parse_settings(on).unwrap();
-        assert_eq!((s.port, s.password.as_str()), (4456, "pw"));
+        assert_eq!((s.port, s.password.as_deref()), (4456, Some("pw")));
         let open = r#"{"server_enabled":true,"auth_required":false,"server_password":"pw"}"#;
         let s = parse_settings(open).unwrap();
-        assert_eq!((s.port, s.password.as_str()), (4455, ""));
+        assert_eq!((s.port, s.password.as_deref()), (4455, None));
+        let unsaved = r#"{"server_enabled":true,"auth_required":true}"#;
+        let missing = parse_settings(unsaved).err();
+        assert!(missing.is_some_and(|e| e.contains("password")));
         let off = parse_settings(r#"{"server_enabled":false}"#).err();
         assert!(off.is_some_and(|e| e.contains("Tools")));
         assert!(parse_settings("nope").is_err());
@@ -778,7 +791,7 @@ mod tests {
     #[test]
     fn identify_answers_hello_with_or_without_a_password() {
         let open = json::parse(r#"{"op":0,"d":{"rpcVersion":1}}"#).unwrap();
-        let msg = json::parse(&identify_message(&open, "").unwrap()).unwrap();
+        let msg = json::parse(&identify_message(&open, None).unwrap()).unwrap();
         assert_eq!(msg.u64_or("op", 0), 1);
         assert!(msg.path("d.authentication").is_none());
         assert_eq!(
@@ -790,9 +803,12 @@ mod tests {
             r#"{"op":0,"d":{"rpcVersion":1,"authentication":{"salt":"s","challenge":"c"}}}"#,
         )
         .unwrap();
-        assert!(identify_message(&locked, "").is_err_and(|e| e.contains("password")));
-        let msg = json::parse(&identify_message(&locked, "pw").unwrap()).unwrap();
+        assert!(identify_message(&locked, None).is_err_and(|e| e.contains("password")));
+        let msg = json::parse(&identify_message(&locked, Some("pw")).unwrap()).unwrap();
         assert!(msg.path("d.authentication").is_some());
+        let no_challenge =
+            json::parse(r#"{"op":0,"d":{"rpcVersion":1,"authentication":{"salt":"s"}}}"#).unwrap();
+        assert!(identify_message(&no_challenge, Some("pw")).is_err_and(|e| e.contains("challenge")));
     }
 
     #[test]
