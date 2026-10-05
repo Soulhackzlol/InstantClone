@@ -4,27 +4,6 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.16] - The reconnect screen on 2K (HEVC) channels
-
-### Crash protection: the reconnect screen now plays on HEVC too
-
-- **2K Twitch channels get the reconnect screen, not a frozen frame.**
-  Twitch streams Partners and Affiliates at 1440p in HEVC under Enhanced
-  Broadcasting. The reconnect screen used to be H.264 only, so those
-  tracks re-sent their last frame once a second and viewers saw a still
-  picture. The screen is now encoded in HEVC for HEVC tracks, at each
-  track's own resolution, as light as the H.264 one (under 1 Mbps at
-  1080p). 10-bit HEVC and AV1 still hold the last frame.
-- The log names each track's codec when the screen goes on air, for
-  example `reconnect screen on air (2560x1440 HEVC, 1920x1080 HEVC)`.
-
-### Fixes
-
-- **Integrations: a clear error when OBS wants a WebSocket password you
-  haven't saved.** It used to try an empty one, and OBS closed the
-  connection with an unclear code. The same goes for a malformed OBS
-  greeting that asks for a password without saying how.
-
 ## [0.1.15] - Crash protection, Integrations (experimental), vertical without Twitch, and Enhanced Broadcasting on your GPU
 
 ### Crash protection: OBS crashes, the stream stays up
@@ -56,8 +35,13 @@ reconnect screen instead, for up to the time you pick (30 s to 5 min).
   gets its own silence, and OBS reconnecting is handed the same Twitch
   session, so the destination carries on instead of restarting. Twitch
   VOD-audio sessions are kept the same way.
-- **HEVC and AV1 hold the last frame.** The screen is H.264, so those
-  tracks re-send their last keyframe once a second instead.
+- **2K (HEVC) channels get the screen too.** Twitch streams Partners and
+  Affiliates at 1440p in HEVC under Enhanced Broadcasting, so the screen
+  is encoded in HEVC for HEVC tracks, at each track's own resolution and
+  as light as the H.264 one. The log names each track's codec when it
+  goes on air, for example `reconnect screen on air (2560x1440 HEVC,
+  1920x1080 HEVC)`. 10-bit HEVC and AV1 hold the last frame instead,
+  re-sent once a second.
 - **Stopping in OBS never opens the screen,** even while it is up for a
   frozen OBS: the stream ends once your delay has aired. Only a drop
   without a goodbye opens it. **Protect every disconnect** (under
@@ -507,6 +491,10 @@ stream settings: h264_texture_amf, 6000 kbps`.
 
 ### Fixes
 
+- **Integrations: a clear error when OBS wants a WebSocket password you
+  haven't saved.** It used to try an empty one, and OBS closed the
+  connection with an unclear code. The same goes for a malformed OBS
+  greeting that asks for a password without saying how.
 - **Stopping in OBS no longer cuts the end of a delayed stream.** With a
   delay on and no crash protection hold (protection off, or a stop it
   lets through), the last seconds of the delay used to vanish: viewers
