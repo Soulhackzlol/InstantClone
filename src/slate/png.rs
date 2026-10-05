@@ -251,6 +251,7 @@ mod tests {
             .collect();
         let path = std::env::temp_dir().join(format!("ic-png-test-{}.png", std::process::id()));
         std::fs::write(&path, encode(width, height, &rgb)).unwrap();
+        let _turn = super::super::ffmpeg_turn();
         let decoded = Command::new("ffmpeg")
             .args(["-v", "error", "-i"])
             .arg(&path)

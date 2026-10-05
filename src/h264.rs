@@ -667,6 +667,98 @@ pub fn sps_dimensions(seq_header: &[u8]) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
+/// Picture size of an 8-bit 4:2:0 HEVC stream with 4-byte NAL lengths,
+/// read from its HEVCDecoderConfigurationRecord (hvcC) with the
+/// conformance window applied: the HEVC the reconnect screen can be
+/// encoded for. `None` for any other HEVC, or a malformed or truncated
+/// record. Never panics.
+pub fn hevc_8bit_420_dimensions(hvcc: &[u8]) -> Option<(u32, u32)> {
+    const CHROMA_420: u32 = 1;
+    // The record repeats the SPS's chroma format and bit depths in
+    // bytes 16..19, and its NAL length size in byte 21.
+    let record_is_8bit_420 = u32::from(hvcc.get(16)? & 0x03) == CHROMA_420
+        && hvcc.get(17)? & 0x07 == 0
+        && hvcc.get(18)? & 0x07 == 0;
+    if !record_is_8bit_420 || hvcc.get(21)? & 0x03 != 3 {
+        return None;
+    }
+    // Drop the 2-byte NAL header, as `sps_dimensions` drops H.264's one.
+    let rbsp = strip_emulation_prevention(hevc_first_sps(hvcc)?.get(2..)?);
+    let mut r = BitReader::new(&rbsp);
+    let _vps_id = r.read_bits(4)?;
+    let max_sub_layers_minus1 = r.read_bits(3)?;
+    let _temporal_id_nesting = r.read_bit()?;
+    skip_hevc_profile_tier_level(&mut r, max_sub_layers_minus1)?;
+    let _sps_id = r.read_ue()?;
+    if r.read_ue()? != CHROMA_420 {
+        return None;
+    }
+    let mut width = r.read_ue()?;
+    let mut height = r.read_ue()?;
+    if r.read_bit()? == 1 {
+        // conformance_window offsets count chroma samples: 2 luma in 4:2:0.
+        let crop = |a: u32, b: u32| a.checked_add(b)?.checked_mul(2);
+        let (left, right, top, bottom) = (r.read_ue()?, r.read_ue()?, r.read_ue()?, r.read_ue()?);
+        width = width.checked_sub(crop(left, right)?)?;
+        height = height.checked_sub(crop(top, bottom)?)?;
+    }
+    let is_8bit = r.read_ue()? == 0 && r.read_ue()? == 0;
+    (is_8bit && width > 0 && height > 0).then_some((width, height))
+}
+
+/// The first SPS NAL unit (header included) in an hvcC's arrays.
+fn hevc_first_sps(hvcc: &[u8]) -> Option<&[u8]> {
+    const NAL_SPS: u8 = 33;
+    let read_u16 = |at: usize| Some(u16::from_be_bytes([*hvcc.get(at)?, *hvcc.get(at + 1)?]));
+    let array_count = *hvcc.get(22)?;
+    let mut at = 23;
+    for _ in 0..array_count {
+        let nal_type = hvcc.get(at)? & 0x3F;
+        let nal_count = read_u16(at + 1)?;
+        at += 3;
+        for _ in 0..nal_count {
+            let len = read_u16(at)? as usize;
+            let nal = hvcc.get(at + 2..at + 2 + len)?;
+            if nal_type == NAL_SPS {
+                return Some(nal);
+            }
+            at += 2 + len;
+        }
+    }
+    None
+}
+
+/// Skip profile_tier_level(1, max_sub_layers_minus1) (H.265 7.3.3).
+fn skip_hevc_profile_tier_level(r: &mut BitReader, max_sub_layers_minus1: u32) -> Option<()> {
+    // general_profile_space through general_level_idc: 96 bits.
+    for _ in 0..3 {
+        r.read_bits(32)?;
+    }
+    let mut present = Vec::new();
+    for _ in 0..max_sub_layers_minus1 {
+        let profile = r.read_bit()? == 1;
+        let level = r.read_bit()? == 1;
+        present.push((profile, level));
+    }
+    if max_sub_layers_minus1 > 0 {
+        for _ in max_sub_layers_minus1..8 {
+            r.read_bits(2)?; // reserved_zero_2bits
+        }
+    }
+    for (profile, level) in present {
+        if profile {
+            // sub_layer profile fields: 88 bits.
+            r.read_bits(32)?;
+            r.read_bits(32)?;
+            r.read_bits(24)?;
+        }
+        if level {
+            r.read_bits(8)?;
+        }
+    }
+    Some(())
+}
+
 /// Best-effort codec of a sequence-header tag, across the framings OBS
 /// emits (legacy AVC, Enhanced single-track, Enhanced OneTrack multi-track).
 /// Used for the per-destination "1080x1920 · H.264" readout. Returns
@@ -1774,6 +1866,42 @@ mod tests {
         hevc.extend_from_slice(b"hvc1");
         hevc.extend_from_slice(&[0u8; 16]);
         assert_eq!(sps_dimensions(&hevc), None);
+    }
+
+    /// Read back the size from the reconnect screen's own HEVC parameter
+    /// sets, cropping included (1080 and 360 aren't whole CTBs).
+    #[test]
+    fn hevc_dimensions_read_the_visible_size() {
+        for (width, height) in [(1920, 1080), (1080, 1920), (2560, 1440), (200, 360)] {
+            let config = crate::slate::test_hevc_config(width, height);
+            assert_eq!(
+                hevc_8bit_420_dimensions(&config),
+                Some((width as u32, height as u32)),
+                "{width}x{height}"
+            );
+        }
+    }
+
+    /// 10-bit, 4:4:4 or 2-byte NAL lengths are HEVC the screen can't stand
+    /// in for; every truncation of a good record fails cleanly.
+    #[test]
+    fn hevc_dimensions_refuse_what_the_screen_cannot_encode() {
+        let config = crate::slate::test_hevc_config(1920, 1080);
+        for (byte, value) in [(17, 0xFA), (18, 0xFA), (16, 0xFF), (21, 0x0D)] {
+            let mut other = config.clone();
+            other[byte] = value;
+            assert_eq!(
+                hevc_8bit_420_dimensions(&other),
+                None,
+                "byte {byte} = {value:#x}"
+            );
+        }
+        // Any truncation returns without panicking (these are wire bytes),
+        // and one cut before the SPS's size fields reads nothing.
+        for len in 0..config.len() {
+            let _ = hevc_8bit_420_dimensions(&config[..len]);
+        }
+        assert_eq!(hevc_8bit_420_dimensions(&config[..30]), None);
     }
 
     /// The SPS fields that change how many bits sit in front of the picture
