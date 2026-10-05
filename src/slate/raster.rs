@@ -128,11 +128,18 @@ impl Canvas {
         };
     }
 
-    /// Convert to 4:2:0 planes padded to whole macroblocks. Padding
-    /// repeats the edge pixels, which the SPS crops away again.
+    /// Convert to 4:2:0 planes padded to whole H.264 macroblocks.
+    #[cfg(test)]
     pub fn to_yuv420(&self) -> YuvFrame {
-        let coded_width = self.width.div_ceil(16) * 16;
-        let coded_height = self.height.div_ceil(16) * 16;
+        self.to_yuv420_padded(16)
+    }
+
+    /// Convert to 4:2:0 planes padded to whole `block` x `block` squares
+    /// (16 for H.264 macroblocks, 32 for HEVC CTBs). Padding repeats the
+    /// edge pixels, which the SPS crops away again.
+    pub fn to_yuv420_padded(&self, block: usize) -> YuvFrame {
+        let coded_width = self.width.div_ceil(block) * block;
+        let coded_height = self.height.div_ceil(block) * block;
         let mut frame = YuvFrame::blank(coded_width, coded_height);
         for pair in 0..coded_height / 2 {
             self.convert_row_pair(&mut frame, pair);
@@ -230,7 +237,7 @@ impl Canvas {
     }
 }
 
-/// Planar 4:2:0 frame at the coded size (multiples of 16).
+/// Planar 4:2:0 frame at the coded size (whole macroblocks or CTBs).
 #[derive(Clone)]
 pub struct YuvFrame {
     pub width: usize,

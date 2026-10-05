@@ -1,5 +1,5 @@
-//! H.264 bit-level writing: fixed-width and Exp-Golomb fields, RBSP
-//! trailing bits, and NAL unit framing with emulation prevention.
+//! H.264 and HEVC bit-level writing: fixed-width and Exp-Golomb fields,
+//! RBSP trailing bits, and NAL unit framing with emulation prevention.
 
 /// MSB-first bit writer for one RBSP.
 #[derive(Default)]
@@ -69,6 +69,12 @@ impl BitWriter {
     /// Close the RBSP with rbsp_stop_one_bit and alignment zeros.
     pub fn finish(mut self) -> Vec<u8> {
         self.bit(true);
+        self.into_aligned_bytes()
+    }
+
+    /// Pad with zeros to a byte boundary and return the bytes, for an RBSP
+    /// whose stop bit is already written (a CABAC flush writes its own).
+    pub fn into_aligned_bytes(mut self) -> Vec<u8> {
         self.align_with_zeros();
         self.bytes
     }
@@ -79,11 +85,28 @@ pub const NAL_IDR_SLICE: u8 = 5;
 pub const NAL_SPS: u8 = 7;
 pub const NAL_PPS: u8 = 8;
 
-/// NAL header plus the RBSP with emulation-prevention bytes inserted, so
-/// no 00 00 0x (x <= 3) start-code pattern appears inside the payload.
+pub const HEVC_NAL_TRAIL_R: u8 = 1;
+pub const HEVC_NAL_IDR_N_LP: u8 = 20;
+pub const HEVC_NAL_VPS: u8 = 32;
+pub const HEVC_NAL_SPS: u8 = 33;
+pub const HEVC_NAL_PPS: u8 = 34;
+
+/// H.264 NAL unit: header byte plus the escaped RBSP.
 pub fn nal_unit(nal_ref_idc: u8, nal_type: u8, rbsp: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(rbsp.len() + rbsp.len() / 64 + 1);
-    out.push((nal_ref_idc << 5) | nal_type);
+    escaped(&[(nal_ref_idc << 5) | nal_type], rbsp)
+}
+
+/// HEVC NAL unit: two header bytes (layer 0, temporal id 0) plus the
+/// escaped RBSP.
+pub fn hevc_nal_unit(nal_type: u8, rbsp: &[u8]) -> Vec<u8> {
+    escaped(&[nal_type << 1, 1], rbsp)
+}
+
+/// `header` plus the RBSP with emulation-prevention bytes inserted, so no
+/// 00 00 0x (x <= 3) start-code pattern appears inside the payload.
+fn escaped(header: &[u8], rbsp: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(header.len() + rbsp.len() + rbsp.len() / 64 + 1);
+    out.extend_from_slice(header);
     let mut zeros = 0;
     for &byte in rbsp {
         if zeros >= 2 && byte <= 3 {
@@ -145,5 +168,9 @@ mod tests {
             vec![0x67, 0, 0, 3, 1, 0, 0, 3, 0, 0]
         );
         assert_eq!(nal_unit(0, NAL_SLICE, &[0, 0, 4]), vec![0x01, 0, 0, 4]);
+        assert_eq!(
+            hevc_nal_unit(HEVC_NAL_SPS, &[0, 0, 2]),
+            vec![0x42, 0x01, 0, 0, 3, 2]
+        );
     }
 }

@@ -9,11 +9,13 @@
 //! pump's reconnect path takes over from there), the hold time runs out,
 //! or the streamer ends it early:
 //!
-//! - H.264 tracks loop the reconnect screen at the track's own resolution,
-//!   framed exactly like the stream's own tags (legacy, Enhanced RTMP, or
-//!   an Enhanced Broadcasting multitrack tag with its track id).
-//! - Other tracks (HEVC, AV1) hold their last keyframe, re-sent once a
-//!   second, because the screen's encoder only speaks H.264.
+//! - H.264 and 8-bit 4:2:0 HEVC tracks loop the reconnect screen, encoded
+//!   in the track's own codec at its own resolution and framed exactly
+//!   like the stream's own tags (legacy, Enhanced RTMP, or an Enhanced
+//!   Broadcasting multitrack tag with its track id).
+//! - Other tracks (10-bit HEVC, AV1) hold their last keyframe, re-sent
+//!   once a second, because the screen's encoders only speak 8-bit H.264
+//!   and HEVC.
 //! - Every AAC track gets digital silence in its own format.
 //!
 //! Timestamps continue from the last real frame, so the platform sees one
@@ -23,7 +25,7 @@ use crate::controller::{Controller, DestinationState};
 use crate::crash_protection::CrashProtection;
 use crate::h264::{AudioEgress, VideoEgress};
 use crate::rtmp::client::EgressSink;
-use crate::slate::{SlateLoop, StreamShape};
+use crate::slate::{SlateCodec, SlateLoop, StreamShape};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -47,8 +49,8 @@ const HELD_FRAME_EVERY: u64 = SLATE_FPS as u64;
 /// it, or a delay raised meanwhile) and rejoin where the video is.
 const REBUILD_GRACE: Duration = Duration::from_secs(5);
 
-/// Used when a destination's resolution can't be read from its SPS.
-const FALLBACK_SHAPE: (usize, usize) = (1280, 720);
+/// Used when an H.264 track's resolution can't be read from its SPS.
+const FALLBACK_SIZE: (u32, u32) = (1280, 720);
 
 // FLV and Enhanced RTMP tag header fields.
 const FLV_VIDEO_AVC: u8 = 7;
@@ -65,6 +67,8 @@ const ONE_TRACK: u8 = 0;
 const FRAME_KEY: u8 = 1;
 const FRAME_INTER: u8 = 2;
 const FOURCC_AVC1: [u8; 4] = *b"avc1";
+const FOURCC_HVC1: [u8; 4] = *b"hvc1";
+const FOURCC_HEV1: [u8; 4] = *b"hev1";
 const FOURCC_MP4A: [u8; 4] = *b"mp4a";
 
 /// Raw AAC-LC frames that decode to digital silence (verified with
@@ -155,13 +159,20 @@ struct HoldPlan {
 }
 
 enum VideoSource {
-    /// The reconnect screen, encoded at the track's own resolution.
-    Screen {
-        shape: StreamShape,
-        framing: Framing,
-    },
+    /// The reconnect screen, encoded like the track it replaces.
+    Screen(ScreenTarget),
     /// The track's last keyframe as the destination receives it.
     HeldFrame(Arc<[u8]>),
+}
+
+/// How the reconnect screen stands in for one video track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScreenTarget {
+    framing: Framing,
+    /// The track's own FourCC, which Enhanced RTMP tags repeat.
+    fourcc: [u8; 4],
+    codec: SlateCodec,
+    shape: StreamShape,
 }
 
 /// A `VideoSource` ready to play, as the tags the destination gets.
@@ -169,6 +180,7 @@ enum VideoTrack {
     /// The loop wrapped once in the track's framing, not once per frame.
     Screen {
         shape: StreamShape,
+        codec: SlateCodec,
         /// The two IDR variants, then the P frames, in loop order.
         keyframes: [Vec<u8>; 2],
         deltas: Vec<Vec<u8>>,
@@ -177,14 +189,18 @@ enum VideoTrack {
 }
 
 impl VideoTrack {
-    fn screen(slate: &SlateLoop, framing: Framing) -> Self {
+    fn screen(slate: &SlateLoop, target: ScreenTarget) -> Self {
+        let tag = |keyframe: bool, sample: &[u8]| {
+            video_tag(target.framing, target.fourcc, keyframe, sample)
+        };
         VideoTrack::Screen {
             shape: slate.shape,
-            keyframes: [0, 1].map(|replay| video_tag(framing, true, &slate.keyframes[replay])),
+            codec: target.codec,
+            keyframes: [0, 1].map(|replay| tag(true, &slate.keyframes[replay])),
             deltas: slate
                 .deltas
                 .iter()
-                .map(|sample| video_tag(framing, false, sample))
+                .map(|sample| tag(false, sample))
                 .collect(),
         }
     }
@@ -214,16 +230,19 @@ pub fn prebuild_for(ctrl: &Controller, dest: &DestinationState, settings: &Crash
         return;
     };
     for (_, header) in video_headers_for(ctrl, egress) {
-        if avc_framing(&header).is_some() {
-            ctrl.slate_cache.prebuild(settings, screen_shape(&header));
+        if let Some(target) = screen_target(&header) {
+            ctrl.slate_cache
+                .prebuild(settings, target.shape, target.codec);
         }
     }
 }
 
-/// Whether the hold plays this video tag's track by holding its last
+/// Whether the hold may play this video tag's track by holding its last
 /// keyframe: an Enhanced RTMP keyframe that isn't H.264 in a framing the
-/// reconnect screen matches (HEVC, AV1, bundled multitrack layouts). The
-/// controller keeps the latest one per track.
+/// reconnect screen matches (HEVC, AV1, bundled multitrack layouts). HEVC
+/// usually gets the screen instead; its keyframe is kept for the HEVC the
+/// screen can't encode (10-bit). The controller keeps the latest one per
+/// track.
 pub fn is_held_keyframe(tag: &[u8]) -> bool {
     let Some(&first) = tag.first() else {
         return false;
@@ -286,17 +305,16 @@ fn video_headers_for(ctrl: &Controller, egress: VideoEgress) -> Vec<(u8, Vec<u8>
     .collect()
 }
 
-/// The reconnect screen for an H.264 track, or its last keyframe for
-/// anything else.
+/// The reconnect screen for a track it can be encoded for, or its last
+/// keyframe for anything else.
 fn video_source(
     ctrl: &Controller,
     egress: VideoEgress,
     track: u8,
     header: &[u8],
 ) -> Result<VideoSource, String> {
-    if let Some(framing) = avc_framing(header) {
-        let shape = screen_shape(header);
-        return Ok(VideoSource::Screen { shape, framing });
+    if let Some(target) = screen_target(header) {
+        return Ok(VideoSource::Screen(target));
     }
     let codec = crate::h264::seq_header_codec(header).label();
     let Some(keyframe) = ctrl.held_keyframe(track) else {
@@ -312,29 +330,46 @@ fn video_source(
     Ok(VideoSource::HeldFrame(sent))
 }
 
-/// The screen's shape for an H.264 track: its resolution, rounded down
-/// to even sides, at the screen's frame rate.
-fn screen_shape(header: &[u8]) -> StreamShape {
-    let (width, height) = crate::h264::sps_dimensions(header)
-        .map(|(w, h)| (w as usize & !1, h as usize & !1))
-        .unwrap_or(FALLBACK_SHAPE);
+/// The screen's shape for a track of `width` x `height`: rounded down to
+/// even sides, at the screen's frame rate.
+fn screen_shape((width, height): (u32, u32)) -> StreamShape {
     StreamShape {
-        width,
-        height,
+        width: width as usize & !1,
+        height: height as usize & !1,
         fps: SLATE_FPS,
     }
 }
 
-/// The framing of an H.264 sequence header the reconnect screen can
-/// match, or `None` for other codecs and bundled multitrack layouts.
-fn avc_framing(header: &[u8]) -> Option<Framing> {
+/// How the reconnect screen replaces the track `header` describes, or
+/// `None` when it can't: codecs other than H.264 and 8-bit 4:2:0 HEVC,
+/// HEVC whose picture size can't be read, and bundled multitrack layouts.
+fn screen_target(header: &[u8]) -> Option<ScreenTarget> {
     let &first = header.first()?;
+    let avc_shape = || screen_shape(crate::h264::sps_dimensions(header).unwrap_or(FALLBACK_SIZE));
     if first & EX_VIDEO == 0 {
         let is_avc_config = first & 0x0F == FLV_VIDEO_AVC && header.get(1) == Some(&0);
-        return is_avc_config.then_some(Framing::Legacy);
+        return is_avc_config.then(|| ScreenTarget {
+            framing: Framing::Legacy,
+            fourcc: FOURCC_AVC1,
+            codec: SlateCodec::H264,
+            shape: avc_shape(),
+        });
     }
-    let (framing, fourcc, _) = enhanced_sequence_start(header, EX_VIDEO_MULTITRACK)?;
-    (fourcc == FOURCC_AVC1).then_some(framing)
+    let (framing, fourcc, config) = enhanced_sequence_start(header, EX_VIDEO_MULTITRACK)?;
+    let (codec, shape) = match fourcc {
+        FOURCC_AVC1 => (SlateCodec::H264, avc_shape()),
+        FOURCC_HVC1 | FOURCC_HEV1 => (
+            SlateCodec::Hevc,
+            screen_shape(crate::h264::hevc_8bit_420_dimensions(config)?),
+        ),
+        _ => return None,
+    };
+    Some(ScreenTarget {
+        framing,
+        fourcc,
+        codec,
+        shape,
+    })
 }
 
 /// Parse an Enhanced RTMP sequence-start tag (video or audio): its
@@ -443,15 +478,19 @@ pub async fn play(
     let mut video = Vec::with_capacity(plan.video.len());
     for source in plan.video {
         video.push(match source {
-            VideoSource::Screen { shape, framing } => {
-                let Some(slate) = ctrl.slate_cache.get(&settings, shape).await else {
+            VideoSource::Screen(target) => {
+                let built = ctrl
+                    .slate_cache
+                    .get(&settings, target.shape, target.codec)
+                    .await;
+                let Some(slate) = built else {
                     ctrl.log(format!(
                         "[{}] crash protection couldn't build the reconnect screen",
                         dest.id
                     ));
                     return Ok(ended);
                 };
-                VideoTrack::screen(&slate, framing)
+                VideoTrack::screen(&slate, target)
             }
             VideoSource::HeldFrame(tag) => VideoTrack::HeldFrame(tag),
         });
@@ -461,19 +500,22 @@ pub async fn play(
         dest.id,
         describe(&video)
     ));
-    // No sequence header: the loop's keyframes carry their own SPS/PPS
-    // in-band under ids the stream doesn't use (see slate::encoder), so the
-    // destination's decoder keeps the stream's config for the way back.
+    // No sequence header: the loop's keyframes carry their own parameter
+    // sets in-band under ids the stream doesn't use (see slate::encoder),
+    // so the destination's decoder keeps the stream's config for the way
+    // back.
     let base = after_ts.wrapping_add(1);
     stream_loop(ctrl, dest, sink, &video, &plan.audio, base).await
 }
 
-/// "1920x1080, 1280x720, last keyframe held" for the log.
+/// "2560x1440 HEVC, 1280x720 H.264, last keyframe held" for the log.
 fn describe(video: &[VideoTrack]) -> String {
     video
         .iter()
         .map(|track| match track {
-            VideoTrack::Screen { shape, .. } => format!("{}x{}", shape.width, shape.height),
+            VideoTrack::Screen { shape, codec, .. } => {
+                format!("{}x{} {}", shape.width, shape.height, codec.label())
+            }
             VideoTrack::HeldFrame(_) => "last keyframe held".to_string(),
         })
         .collect::<Vec<_>>()
@@ -612,20 +654,21 @@ fn video_frame(track: &VideoTrack, index: u64) -> Option<&[u8]> {
     }
 }
 
-/// An H.264 coded-frame tag in `framing`, zero composition time.
-fn video_tag(framing: Framing, keyframe: bool, sample: &[u8]) -> Vec<u8> {
+/// A coded-frame tag in `framing`, zero composition time. Enhanced RTMP
+/// framings name the codec by `fourcc`; legacy framing is H.264 only.
+fn video_tag(framing: Framing, fourcc: [u8; 4], keyframe: bool, sample: &[u8]) -> Vec<u8> {
     let frame_type = if keyframe { FRAME_KEY } else { FRAME_INTER };
     let mut tag = Vec::with_capacity(sample.len() + 12);
     match framing {
         Framing::Legacy => tag.extend_from_slice(&[frame_type << 4 | FLV_VIDEO_AVC, AVC_NALU]),
         Framing::Enhanced => {
             tag.push(EX_VIDEO | frame_type << 4 | EX_CODED_FRAMES);
-            tag.extend_from_slice(&FOURCC_AVC1);
+            tag.extend_from_slice(&fourcc);
         }
         Framing::OneTrack(track) => {
             tag.push(EX_VIDEO | frame_type << 4 | EX_VIDEO_MULTITRACK);
             tag.push(ONE_TRACK << 4 | EX_CODED_FRAMES);
-            tag.extend_from_slice(&FOURCC_AVC1);
+            tag.extend_from_slice(&fourcc);
             tag.push(track);
         }
     }
@@ -654,42 +697,48 @@ fn audio_tag(audio: &SilentAudio) -> Vec<u8> {
     tag
 }
 
-/// Encoded reconnect-screen loops, one per destination shape, rebuilt when
-/// the screen's look changes. Encoding a 1080p loop takes a few hundred
-/// ms of one core, so loops are built ahead of time while OBS is live and
-/// a hold usually starts with one ready.
+/// Encoded reconnect-screen loops, one per destination shape and codec,
+/// rebuilt when the screen's look changes. Encoding a 1080p loop takes a
+/// few hundred ms of one core, so loops are built ahead of time while OBS
+/// is live and a hold usually starts with one ready.
 #[derive(Default)]
 pub struct SlateCache {
-    /// Per (width, height): the loop and the settings it was built with.
+    /// Per (width, height, codec): the loop and the settings it was built
+    /// with.
     ready: crate::sync::Mutex<HashMap<SlateKey, (CrashProtection, Arc<SlateLoop>)>>,
     building: crate::sync::Mutex<HashSet<SlateKey>>,
 }
 
-/// A slate loop's (width, height).
-type SlateKey = (usize, usize);
+/// A slate loop's (width, height, codec).
+type SlateKey = (usize, usize, SlateCodec);
+
+fn slate_key(shape: StreamShape, codec: SlateCodec) -> SlateKey {
+    (shape.width, shape.height, codec)
+}
 
 impl SlateCache {
-    fn cached(&self, settings: &CrashProtection, shape: StreamShape) -> Option<Arc<SlateLoop>> {
+    fn cached(&self, settings: &CrashProtection, key: SlateKey) -> Option<Arc<SlateLoop>> {
         self.ready
             .lock()
-            .get(&(shape.width, shape.height))
+            .get(&key)
             .filter(|(built_with, _)| built_with.same_screen(settings))
             .map(|(_, slate)| slate.clone())
     }
 
-    /// The loop for `shape`, building it now if it isn't ready. When a
-    /// build of it is already running (a prebuild, or another destination
-    /// at the same resolution) this waits for that one rather than encode
-    /// the same loop twice at the moment OBS drops.
+    /// The loop for `shape` in `codec`, building it now if it isn't
+    /// ready. When a build of it is already running (a prebuild, or
+    /// another destination at the same resolution) this waits for that one
+    /// rather than encode the same loop twice at the moment OBS drops.
     pub async fn get(
         self: &Arc<Self>,
         settings: &CrashProtection,
         shape: StreamShape,
+        codec: SlateCodec,
     ) -> Option<Arc<SlateLoop>> {
         const BUILD_POLL: Duration = Duration::from_millis(50);
-        let key = (shape.width, shape.height);
+        let key = slate_key(shape, codec);
         loop {
-            if let Some(slate) = self.cached(settings, shape) {
+            if let Some(slate) = self.cached(settings, key) {
                 return Some(slate);
             }
             if self.building.lock().insert(key) {
@@ -703,7 +752,7 @@ impl SlateCache {
         let cache = self.clone();
         let settings = settings.clone();
         let task = tokio::spawn(async move {
-            let slate = build(settings.clone(), shape).await;
+            let slate = build(settings.clone(), shape, codec).await;
             if let Some(slate) = &slate {
                 cache.ready.lock().insert(key, (settings, slate.clone()));
             }
@@ -713,17 +762,22 @@ impl SlateCache {
         task.await.ok().flatten()
     }
 
-    /// Start building the loop for `shape` in the background, unless it is
-    /// ready or already being built.
-    pub fn prebuild(self: &Arc<Self>, settings: &CrashProtection, shape: StreamShape) {
-        let key = (shape.width, shape.height);
-        if self.cached(settings, shape).is_some() || self.building.lock().contains(&key) {
+    /// Start building the loop for `shape` in `codec` in the background,
+    /// unless it is ready or already being built.
+    pub fn prebuild(
+        self: &Arc<Self>,
+        settings: &CrashProtection,
+        shape: StreamShape,
+        codec: SlateCodec,
+    ) {
+        let key = slate_key(shape, codec);
+        if self.cached(settings, key).is_some() || self.building.lock().contains(&key) {
             return;
         }
         let cache = self.clone();
         let settings = settings.clone();
         tokio::spawn(async move {
-            cache.get(&settings, shape).await;
+            cache.get(&settings, shape, codec).await;
         });
     }
 
@@ -734,9 +788,13 @@ impl SlateCache {
 }
 
 /// Encode a loop off the async runtime.
-async fn build(settings: CrashProtection, shape: StreamShape) -> Option<Arc<SlateLoop>> {
+async fn build(
+    settings: CrashProtection,
+    shape: StreamShape,
+    codec: SlateCodec,
+) -> Option<Arc<SlateLoop>> {
     tokio::task::spawn_blocking(move || {
-        crate::slate::build_loop(&settings, shape)
+        crate::slate::build_loop(&settings, shape, codec)
             .ok()
             .map(Arc::new)
     })
@@ -806,35 +864,78 @@ mod tests {
         assert!(silent_audio_from_header(&one_track_header(0x95, b"Opus", 1, &[0; 8])).is_none());
     }
 
+    fn framing_and_codec(header: &[u8]) -> Option<(Framing, SlateCodec)> {
+        screen_target(header).map(|target| (target.framing, target.codec))
+    }
+
     #[test]
-    fn the_screen_matches_each_h264_framing_and_nothing_else() {
-        assert_eq!(avc_framing(&[0x17, 0, 0, 0, 0, 1]), Some(Framing::Legacy));
+    fn the_screen_matches_each_h264_framing() {
+        let legacy = Some((Framing::Legacy, SlateCodec::H264));
+        assert_eq!(framing_and_codec(&[0x17, 0, 0, 0, 0, 1]), legacy);
         let mut enhanced = vec![EX_VIDEO | FRAME_KEY << 4 | EX_SEQUENCE_START];
         enhanced.extend_from_slice(b"avc1");
-        assert_eq!(avc_framing(&enhanced), Some(Framing::Enhanced));
+        let enhanced_h264 = Some((Framing::Enhanced, SlateCodec::H264));
+        assert_eq!(framing_and_codec(&enhanced), enhanced_h264);
         let rung = one_track_header(0x96, b"avc1", 2, &[1]);
-        assert_eq!(avc_framing(&rung), Some(Framing::OneTrack(2)));
-        assert_eq!(avc_framing(&one_track_header(0x96, b"hvc1", 2, &[1])), None);
+        let rung_h264 = Some((Framing::OneTrack(2), SlateCodec::H264));
+        assert_eq!(framing_and_codec(&rung), rung_h264);
         // ManyTracks bundles several tracks' configs in one tag.
         let mut bundle = one_track_header(0x96, b"avc1", 0, &[1]);
         bundle[1] = 1 << 4;
-        assert_eq!(avc_framing(&bundle), None);
+        assert_eq!(framing_and_codec(&bundle), None);
+        assert_eq!(
+            framing_and_codec(&one_track_header(0x96, b"av01", 2, &[1])),
+            None
+        );
+    }
+
+    /// Twitch 2K channels send Enhanced Broadcasting tracks as 8-bit HEVC:
+    /// they get the screen in HEVC at their own size, under their own
+    /// FourCC and track id. 10-bit HEVC, or a config whose size can't be
+    /// read, falls back to the held keyframe.
+    #[test]
+    fn eight_bit_hevc_tracks_get_the_screen_in_hevc() {
+        let config = crate::slate::test_hevc_config(2560, 1440);
+        let rung = one_track_header(0x96, b"hvc1", 1, &config);
+        let target = screen_target(&rung).unwrap();
+        assert_eq!(target.framing, Framing::OneTrack(1));
+        assert_eq!(target.codec, SlateCodec::Hevc);
+        assert_eq!(target.fourcc, *b"hvc1");
+        assert_eq!((target.shape.width, target.shape.height), (2560, 1440));
+
+        let mut ten_bit = config.clone();
+        ten_bit[17] = 0xF8 | 2; // bitDepthLumaMinus8
+        assert_eq!(
+            screen_target(&one_track_header(0x96, b"hvc1", 1, &ten_bit)),
+            None
+        );
+        assert_eq!(
+            screen_target(&one_track_header(0x96, b"hvc1", 1, &[1])),
+            None
+        );
     }
 
     #[test]
     fn screen_frames_are_framed_like_the_track_they_replace() {
         assert_eq!(
-            video_tag(Framing::Legacy, true, &[9, 9]),
+            video_tag(Framing::Legacy, FOURCC_AVC1, true, &[9, 9]),
             vec![0x17, 1, 0, 0, 0, 9, 9]
         );
-        assert_eq!(video_tag(Framing::Legacy, false, &[9])[0], 0x27);
-        let rung = video_tag(Framing::OneTrack(3), true, &[9, 9]);
+        assert_eq!(
+            video_tag(Framing::Legacy, FOURCC_AVC1, false, &[9])[0],
+            0x27
+        );
+        let rung = video_tag(Framing::OneTrack(3), FOURCC_AVC1, true, &[9, 9]);
         assert_eq!(rung[..7], [0x96, 0x01, b'a', b'v', b'c', b'1', 3]);
         // A vertical destination fed track 3 sees the plain legacy frame.
         let flat = select_video_bytes(&rung, VideoEgress::Track(3)).unwrap();
         assert_eq!(&flat[..], &[0x17, 1, 0, 0, 0, 9, 9]);
-        let enhanced = video_tag(Framing::Enhanced, false, &[9]);
+        let enhanced = video_tag(Framing::Enhanced, FOURCC_AVC1, false, &[9]);
         assert_eq!(enhanced[..5], [0xA1, b'a', b'v', b'c', b'1']);
+        let hevc = video_tag(Framing::OneTrack(1), FOURCC_HVC1, true, &[9]);
+        assert_eq!(hevc[..10], [0x96, 0x01, b'h', b'v', b'c', b'1', 1, 0, 0, 0]);
+        // An HEVC keyframe is one the controller recognises as a keyframe.
+        assert!(crate::h264::classify_video_tag(&hevc).is_idr);
     }
 
     #[test]
@@ -887,11 +988,12 @@ mod tests {
         let first = {
             let cache = cache.clone();
             let settings = settings.clone();
-            tokio::spawn(async move { cache.get(&settings, shape).await })
+            tokio::spawn(async move { cache.get(&settings, shape, SlateCodec::H264).await })
         };
         tokio::task::yield_now().await;
         first.abort();
-        let later = tokio::time::timeout(Duration::from_secs(10), cache.get(&settings, shape));
+        let later = cache.get(&settings, shape, SlateCodec::H264);
+        let later = tokio::time::timeout(Duration::from_secs(10), later);
         assert!(later.await.expect("not wedged").is_some());
     }
 
