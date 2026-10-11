@@ -125,6 +125,12 @@ jobs:
       - name: test
         run: cargo test --release
 
+      # The dashboard, dock and alerts page scripts, loaded as shipped into
+      # Node's own test runner (web/tests/page.mjs): no packages to install.
+      # Here because the runner's shell expands the glob on any Node version.
+      - name: dashboard script tests
+        run: node --test web/tests/*.test.mjs
+
       - name: upload binary for e2e
         uses: actions/upload-artifact@v7
         with:
