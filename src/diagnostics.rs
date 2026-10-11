@@ -472,7 +472,7 @@ mod tests {
                 url: "s-channel".into(),
             });
         let listed = secrets_of(&s);
-        for secret in [
+        for placeholder in [
             "s-ingest",
             "s-stream",
             "s-egress",
@@ -484,7 +484,10 @@ mod tests {
             "s-dest-url",
             "s-channel",
         ] {
-            assert!(listed.iter().any(|l| l == secret), "{secret} is not listed");
+            assert!(
+                listed.iter().any(|l| l == placeholder),
+                "{placeholder} is not listed"
+            );
         }
     }
 
