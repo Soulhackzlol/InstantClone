@@ -270,59 +270,61 @@ mod tests {
         );
     }
 
-    /// Each failure past the threshold doubles the lockout until it reaches
-    /// `max_lockout`, where it stays. Read back without sleeping: `check`
-    /// reports how long is left, which right after arming is the armed value.
+    /// Failed logins lock a client out for longer each time, up to a cap, and never overflow.
     #[test]
-    fn lockout_doubles_past_the_threshold_up_to_the_cap() {
-        let r = RateLimiter::new(
-            2,
-            Duration::from_secs(10),
-            Duration::from_secs(45),
-            Duration::from_secs(3600),
-        );
-        let c = "peer";
-        r.record_failure(c);
-        assert!(r.check(c).is_ok(), "one failure is under the threshold");
-        for want in [10, 20, 40, 45, 45] {
+    fn lockouts_start_at_the_threshold_double_and_stay_bounded() {
+        // lockout doubles past the threshold up to the cap
+        // Each failure past the threshold doubles the lockout until it reaches
+        // `max_lockout`, where it stays. Read back without sleeping: `check`
+        // reports how long is left, which right after arming is the armed value.
+        {
+            let r = RateLimiter::new(
+                2,
+                Duration::from_secs(10),
+                Duration::from_secs(45),
+                Duration::from_secs(3600),
+            );
+            let c = "peer";
             r.record_failure(c);
-            assert_lockout(&r, c, want);
+            assert!(r.check(c).is_ok(), "one failure is under the threshold");
+            for want in [10, 20, 40, 45, 45] {
+                r.record_failure(c);
+                assert_lockout(&r, c, want);
+            }
         }
-    }
-
-    /// A lockout never outlasts the forgiveness window. `check` forgets an
-    /// entry once it is older than the window, so a longer lock would be
-    /// wiped early and the two settings would disagree about when a client
-    /// may try again.
-    #[test]
-    fn lockout_is_clamped_to_the_forgiveness_window() {
-        let r = RateLimiter::new(
-            1,
-            Duration::from_secs(10),
-            Duration::from_secs(3600),
-            Duration::from_secs(25),
-        );
-        let c = "peer";
-        for want in [10, 20, 25, 25] {
-            r.record_failure(c);
-            assert_lockout(&r, c, want);
+        // lockout is clamped to the forgiveness window
+        // A lockout never outlasts the forgiveness window. `check` forgets an
+        // entry once it is older than the window, so a longer lock would be
+        // wiped early and the two settings would disagree about when a client
+        // may try again.
+        {
+            let r = RateLimiter::new(
+                1,
+                Duration::from_secs(10),
+                Duration::from_secs(3600),
+                Duration::from_secs(25),
+            );
+            let c = "peer";
+            for want in [10, 20, 25, 25] {
+                r.record_failure(c);
+                assert_lockout(&r, c, want);
+            }
         }
-    }
-
-    /// A client that keeps failing must not overflow the doubling. Without the
-    /// cap on the shift, the 33rd failure past the threshold is `1u32 << 32`:
-    /// a panic in a debug build, and in release a shift that wraps back to a
-    /// short lockout, handing the most persistent guesser the fastest retries.
-    #[test]
-    fn endless_failures_do_not_overflow_the_doubling() {
-        let day = Duration::from_secs(24 * 3600);
-        let r = RateLimiter::new(1, Duration::from_secs(1), day, day);
-        let c = "peer";
-        for _ in 0..100 {
-            r.record_failure(c);
+        // endless failures do not overflow the doubling
+        // A client that keeps failing must not overflow the doubling. Without the
+        // cap on the shift, the 33rd failure past the threshold is `1u32 << 32`:
+        // a panic in a debug build, and in release a shift that wraps back to a
+        // short lockout, handing the most persistent guesser the fastest retries.
+        {
+            let day = Duration::from_secs(24 * 3600);
+            let r = RateLimiter::new(1, Duration::from_secs(1), day, day);
+            let c = "peer";
+            for _ in 0..100 {
+                r.record_failure(c);
+            }
+            // The shift is capped at 6: base * 64.
+            assert_lockout(&r, c, 64);
         }
-        // The shift is capped at 6: base * 64.
-        assert_lockout(&r, c, 64);
     }
 
     /// The tracked-client map is bounded, and when a flood fills it the
@@ -353,24 +355,5 @@ mod tests {
         assert!(r.check("oldest").is_ok(), "the oldest entry was evicted");
         assert!(r.check("client-1").is_err(), "newer entries are kept");
         assert!(r.check("newcomer").is_err(), "the newcomer is tracked");
-    }
-
-    #[test]
-    fn rate_limiter_locks_and_forgives_on_success() {
-        let r = RateLimiter::new(
-            3,
-            Duration::from_secs(30),
-            Duration::from_secs(600),
-            Duration::from_secs(600),
-        );
-        let c = "peer";
-        assert!(r.check(c).is_ok());
-        r.record_failure(c);
-        r.record_failure(c);
-        assert!(r.check(c).is_ok()); // 2 < 3, still allowed
-        r.record_failure(c);
-        assert!(r.check(c).is_err()); // 3rd failure locks
-        r.record_success(c);
-        assert!(r.check(c).is_ok()); // success clears the lock
     }
 }

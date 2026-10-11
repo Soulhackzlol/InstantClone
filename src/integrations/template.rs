@@ -1,6 +1,8 @@
 //! Message templates: `{name}` inserts a value, `{name|text}` inserts
-//! `text` instead when the value is empty or 0, and `{{name}}` writes a
-//! literal `{name}`.
+//! `text` instead when the value is empty or 0, `{name#one#many}` inserts
+//! the value and the word that fits its count ("1 viewer", "42 viewers"),
+//! `{name?yes:no}` writes `yes` when the value is yes and `no` otherwise,
+//! and `{{name}}` writes a literal `{name}`.
 //!
 //! Anything in braces that is not a variable name stays as written, so a
 //! JSON body like `{"event":"{event}"}` needs no escaping: `{"` can never
@@ -42,10 +44,22 @@ pub fn render_escaped(template: &str, vars: &dyn Vars, escape: &dyn Fn(&str) -> 
             continue;
         }
         match placeholder(tail) {
-            Some((name, fallback, len)) => {
+            Some((name, form, len)) => {
                 let value = vars.lookup(name).unwrap_or_default();
-                match fallback {
-                    Some(text) if is_blank(&value) => out.push_str(text),
+                match form {
+                    Form::Fallback(text) if is_blank(&value) => out.push_str(text),
+                    Form::Count(one, many) => {
+                        let count = if value.trim().is_empty() {
+                            "0"
+                        } else {
+                            value.trim()
+                        };
+                        let word = if count == "1" { one } else { many };
+                        out.push_str(&escape(count));
+                        out.push(' ');
+                        out.push_str(word);
+                    }
+                    Form::Choice(yes, no) => out.push_str(if is_yes(&value) { yes } else { no }),
                     _ => out.push_str(&escape(&value)),
                 }
                 rest = &tail[len..];
@@ -171,9 +185,29 @@ fn is_blank(value: &str) -> bool {
     value.is_empty() || value == "0"
 }
 
-/// Parse `{name}` or `{name|fallback}` at the start of `s`. Returns the
-/// name, the fallback and the byte length consumed.
-fn placeholder(s: &str) -> Option<(&str, Option<&str>, usize)> {
+/// A value the `?yes:no` form takes as yes: InstantClone's own answers
+/// say yes or no, web answers often say true.
+fn is_yes(value: &str) -> bool {
+    let value = value.trim();
+    ["yes", "true", "on", "1"]
+        .iter()
+        .any(|yes| value.eq_ignore_ascii_case(yes))
+}
+
+/// What follows a placeholder's name.
+enum Form<'a> {
+    Plain,
+    /// `{name|text}`: `text` when the value is empty or 0.
+    Fallback(&'a str),
+    /// `{name#one#many}`: the value, then the word for its count.
+    Count(&'a str, &'a str),
+    /// `{name?yes:no}`: one text or the other, by whether the value is yes.
+    Choice(&'a str, &'a str),
+}
+
+/// Parse `{name}`, `{name|fallback}`, `{name#one#many}` or `{name?yes:no}`
+/// at the start of `s`. Returns the name, what follows it and the byte length consumed.
+fn placeholder(s: &str) -> Option<(&str, Form<'_>, usize)> {
     let body = s.strip_prefix('{')?;
     let name_len = body
         .bytes()
@@ -185,12 +219,26 @@ fn placeholder(s: &str) -> Option<(&str, Option<&str>, usize)> {
     let name = &body[..name_len];
     let after = &body[name_len..];
     if after.starts_with('}') {
-        return Some((name, None, 1 + name_len + 1));
+        return Some((name, Form::Plain, 1 + name_len + 1));
     }
-    let fallback_body = after.strip_prefix('|')?;
-    let end = fallback_body.find('}')?;
-    let fallback = &fallback_body[..end];
-    Some((name, Some(fallback), 1 + name_len + 1 + end + 1))
+    // Sliced by the marker's own length: text after a name can be any
+    // character ("{user…"), and a byte slice inside one panics.
+    let marker = after.chars().next()?;
+    let body = &after[marker.len_utf8()..];
+    let end = body.find('}')?;
+    let len = 1 + name_len + 1 + end + 1;
+    match marker {
+        '|' => Some((name, Form::Fallback(&body[..end]), len)),
+        '#' => {
+            let (one, many) = body[..end].split_once('#')?;
+            (!many.contains('#')).then_some((name, Form::Count(one, many), len))
+        }
+        '?' => {
+            let (yes, no) = body[..end].split_once(':')?;
+            Some((name, Form::Choice(yes, no), len))
+        }
+        _ => None,
+    }
 }
 
 /// What an "Edit text" step does to its input, for answers that need a
@@ -370,42 +418,91 @@ mod tests {
         }
     }
 
+    /// A name followed by a character wider than a byte used to slice into
+    /// it and panic, which a release build turns into closing the app.
     #[test]
-    fn inserts_values() {
-        assert_eq!(render("Delay: {delay}", &vars), "Delay: 30s");
-        assert_eq!(render("{clip.url}!", &vars), "https://clips.twitch.tv/x!");
+    fn a_name_followed_by_any_character_is_left_as_text() {
+        for text in ["{delay…", "{delay—x}", "{delay\u{e9}}", "{delay😀|x}"] {
+            assert_eq!(render(text, &vars), text);
+            assert!(names(text).is_empty(), "{text}");
+        }
+    }
+
+    /// A known name is replaced, an unknown one renders empty, and a fallback
+    /// covers a value that is empty or zero.
+    #[test]
+    fn placeholders_fill_in_or_fall_back() {
+        // inserts values
+        {
+            assert_eq!(render("Delay: {delay}", &vars), "Delay: 30s");
+            assert_eq!(render("{clip.url}!", &vars), "https://clips.twitch.tv/x!");
+        }
+        // fallback covers empty and zero
+        {
+            assert_eq!(render("Delay: {off|off}", &vars), "Delay: off");
+            assert_eq!(render("{zero|none}", &vars), "none");
+            assert_eq!(render("{delay|off}", &vars), "30s");
+            assert_eq!(render("{missing|n/a}", &vars), "n/a");
+        }
+        // unknown names render empty
+        {
+            assert_eq!(render("a{nope}b", &vars), "ab");
+        }
+        // json bodies pass through
+        {
+            let body = r#"{"event":"{delay}","n":{"x":1}}"#;
+            assert_eq!(render(body, &vars), r#"{"event":"30s","n":{"x":1}}"#);
+        }
     }
 
     #[test]
-    fn fallback_covers_empty_and_zero() {
-        assert_eq!(render("Delay: {off|off}", &vars), "Delay: off");
-        assert_eq!(render("{zero|none}", &vars), "none");
-        assert_eq!(render("{delay|off}", &vars), "30s");
-        assert_eq!(render("{missing|n/a}", &vars), "n/a");
+    fn counts_take_the_word_that_fits() {
+        let vars = |name: &str| match name {
+            "one" => Some("1".to_string()),
+            "many" => Some("42".to_string()),
+            _ => None,
+        };
+        assert_eq!(render("{one#viewer#viewers}", &vars), "1 viewer");
+        assert_eq!(render("{many#viewer#viewers}", &vars), "42 viewers");
+        assert_eq!(render("{none#sub#subs}", &vars), "0 subs");
+        assert_eq!(render("{one#viewer}", &vars), "{one#viewer}");
+        assert_eq!(
+            names("{one#a#b} {many}"),
+            vec!["one".to_string(), "many".to_string()]
+        );
     }
 
     #[test]
-    fn unknown_names_render_empty() {
-        assert_eq!(render("a{nope}b", &vars), "ab");
+    fn yes_or_no_picks_its_text() {
+        let vars = |name: &str| match name {
+            "muted" => Some("yes".to_string()),
+            "live" => Some("no".to_string()),
+            "web" => Some(" True ".to_string()),
+            _ => None,
+        };
+        assert_eq!(render("mic {muted?muted:unmuted}", &vars), "mic muted");
+        assert_eq!(render("{live?live:offline}", &vars), "offline");
+        assert_eq!(render("{web?on:off}", &vars), "on");
+        assert_eq!(render("{none?a:b}", &vars), "b");
+        assert_eq!(render("{muted?a: b: c}", &vars), "a");
+        assert_eq!(render("{muted?no colon}", &vars), "{muted?no colon}");
+        assert_eq!(names("{muted?a:b}"), vec!["muted".to_string()]);
     }
 
+    /// Doubled braces write a literal placeholder; an unclosed one is left alone.
     #[test]
-    fn json_bodies_pass_through() {
-        let body = r#"{"event":"{delay}","n":{"x":1}}"#;
-        assert_eq!(render(body, &vars), r#"{"event":"30s","n":{"x":1}}"#);
-    }
-
-    #[test]
-    fn doubled_braces_write_a_literal_placeholder() {
-        assert_eq!(render("{{delay}} is {delay}", &vars), "{delay} is 30s");
-        assert_eq!(render("a }} b {{ c", &vars), "a }} b {{ c");
-    }
-
-    #[test]
-    fn unterminated_braces_stay_as_written() {
-        assert_eq!(render("{delay", &vars), "{delay");
-        assert_eq!(render("{delay|off", &vars), "{delay|off");
-        assert_eq!(render("{ spaced }", &vars), "{ spaced }");
+    fn braces_that_are_not_placeholders_stay_text() {
+        // doubled braces write a literal placeholder
+        {
+            assert_eq!(render("{{delay}} is {delay}", &vars), "{delay} is 30s");
+            assert_eq!(render("a }} b {{ c", &vars), "a }} b {{ c");
+        }
+        // unterminated braces stay as written
+        {
+            assert_eq!(render("{delay", &vars), "{delay");
+            assert_eq!(render("{delay|off", &vars), "{delay|off");
+            assert_eq!(render("{ spaced }", &vars), "{ spaced }");
+        }
     }
 
     #[test]

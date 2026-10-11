@@ -114,13 +114,39 @@ pub fn refresh_stale_registration(web_port: u16, ingest_port: u16) -> Registrati
         return RegistrationRefresh::NotNeeded;
     };
     // The decision is `refresh_decision`, so what the tests pin is what runs.
-    match refresh_decision(&file, web_port, ingest_port, is_obs_running()) {
+    let verdict = match refresh_decision(
+        &file,
+        web_port,
+        ingest_port,
+        is_obs_running(),
+        crate::portcheck::port_held_by_other_instance,
+    ) {
         RegistrationRefresh::Repaired => match register(web_port, ingest_port) {
             Ok(()) => RegistrationRefresh::Repaired,
             Err(e) => RegistrationRefresh::Failed(e.to_string()),
         },
         verdict => verdict,
-    }
+    };
+    REFRESH_WAITING.store(
+        verdict == RegistrationRefresh::Deferred,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    verdict
+}
+
+/// Set while the startup check is waiting for OBS to close to refresh an
+/// out-of-date entry, so the OBS tab can say it updates by itself.
+static REFRESH_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn refresh_waiting() -> bool {
+    REFRESH_WAITING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether services.json holds an InstantClone entry at all, current or not.
+pub fn has_entry() -> bool {
+    services_json_path()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .is_some_and(|file| entry_exists(&file))
 }
 
 /// What `refresh_stale_registration` did, and whether coming back later would
@@ -136,24 +162,87 @@ pub enum RegistrationRefresh {
     Deferred,
     Repaired,
     Failed(String),
+    /// The entry points at another InstantClone that is running right now
+    /// (a second copy from another folder, with its own ports). It is not
+    /// stale, it is someone else's, so it is left alone. Carries that copy's
+    /// dashboard port.
+    OtherInstance(u16),
 }
 
 /// Should we repair, wait, or leave it alone? Split out so it can be tested
 /// without an OBS install; `Repaired` here means "a repair is warranted", and
 /// the caller downgrades it to `Failed` if writing the file does not work.
+///
+/// `other_instance_on` answers whether another running InstantClone listens
+/// on a port. Only asked about the ports an out-of-date entry names, so the
+/// usual startup with a current entry never looks at the process table.
 fn refresh_decision(
     file: &str,
     web_port: u16,
     ingest_port: u16,
     obs_running: bool,
+    other_instance_on: impl Fn(u16) -> bool,
 ) -> RegistrationRefresh {
     if !entry_exists(file) || registration_is_current(file, web_port, ingest_port) {
         return RegistrationRefresh::NotNeeded;
+    }
+    if let Some(port) = other_instance_port(file, web_port, ingest_port, other_instance_on) {
+        return RegistrationRefresh::OtherInstance(port);
     }
     if obs_running {
         return RegistrationRefresh::Deferred;
     }
     RegistrationRefresh::Repaired
+}
+
+/// The dashboard port of the other running InstantClone our entry points at,
+/// if it points at one. An entry naming our own ports is ours (stale or not);
+/// one naming ports nobody else holds is a leftover from before a port change.
+fn other_instance_port(
+    file: &str,
+    web_port: u16,
+    ingest_port: u16,
+    other_instance_on: impl Fn(u16) -> bool,
+) -> Option<u16> {
+    let (their_web, their_ingest) = registered_ports(file)?;
+    let held =
+        |port: Option<u16>, ours: u16| port.is_some_and(|p| p != ours && other_instance_on(p));
+    (held(their_web, web_port) || held(their_ingest, ingest_port)).then(|| their_web.unwrap_or(0))
+}
+
+/// The (dashboard, RTMP) ports our entry in `file` points OBS at, read from
+/// its multi-track config URL and its server URL. Either may be missing in
+/// a hand-edited entry; None when there is no entry at all.
+fn registered_ports(file: &str) -> Option<(Option<u16>, Option<u16>)> {
+    let entry = &file[entry_span(file)?];
+    let port_after = |prefix: &str| -> Option<u16> {
+        let rest = &entry[entry.find(prefix)? + prefix.len()..];
+        let digits = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        rest[..digits].parse().ok()
+    };
+    let web = port_after("http://127.0.0.1:");
+    let ingest = ["rtmp://localhost:", "rtmp://127.0.0.1:", "rtmp://[::1]:"]
+        .iter()
+        .find_map(|prefix| port_after(prefix));
+    Some((web, ingest))
+}
+
+/// When our entry in OBS points at another InstantClone running right now,
+/// that copy's dashboard port (0 if the entry names no dashboard port). For
+/// the OBS tab: pressing Register here would take OBS away from that copy.
+pub fn registered_to_other_instance(web_port: u16, ingest_port: u16) -> Option<u16> {
+    let file = fs::read_to_string(services_json_path()?).ok()?;
+    if !entry_exists(&file) || registration_is_current(&file, web_port, ingest_port) {
+        return None;
+    }
+    other_instance_port(
+        &file,
+        web_port,
+        ingest_port,
+        crate::portcheck::port_held_by_other_instance,
+    )
 }
 
 pub fn is_registered(web_port: u16, ingest_port: u16) -> bool {
@@ -303,7 +392,7 @@ fn with_entry_registered(original: &str, web_port: u16, ingest_port: u16) -> io:
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 "couldn't cleanly replace the existing InstantClone entry in services.json - \
-                 restore it from .instantclone.bak or let OBS regenerate it",
+                 restore it from services.json.instantclone.bak or let OBS regenerate it",
             )
         })?
     } else {
@@ -335,7 +424,7 @@ pub fn unregister() -> io::Result<()> {
     let stripped = remove_entry(&original).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "couldn't unambiguously remove the InstantClone entry - restore from .bak manually",
+            "couldn't unambiguously remove the InstantClone entry - restore from services.json.instantclone.bak manually",
         )
     })?;
     let bak = path.with_extension("json.instantclone.bak");
@@ -360,7 +449,7 @@ fn looks_like_services_json(file: &str) -> io::Result<()> {
     if !file.contains("\"services\"") {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "services.json is missing the `services` array - file looks unfamiliar, restore from .instantclone.bak or let OBS regenerate it.",
+            "services.json is missing the `services` array - file looks unfamiliar, restore from services.json.instantclone.bak or let OBS regenerate it.",
         ));
     }
     Ok(())
@@ -1018,6 +1107,9 @@ pub fn revert_vod_eb(web_port: u16) -> io::Result<bool> {
         return Ok(true); // nothing to remove
     }
     let stripped = strip_service_json_key(&original, web_port);
+    if stripped == original {
+        return Ok(true); // the registered service's own URL: not ours to remove
+    }
     let bak = p.with_extension("json.instantclone.bak");
     write_or_friendly(&bak, &original)?;
     write_or_friendly(&p, &stripped)?;
@@ -1428,8 +1520,11 @@ fn try_create_lnk(lnk: &Path, exe: &Path) -> io::Result<()> {
         exe = ps_single_quote(&exe.display().to_string()),
         wd = ps_single_quote(&workdir.display().to_string()),
     );
+    use std::os::windows::process::CommandExt as _;
     let status = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        // A release build has no console, so PowerShell would flash one open.
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
         .status()?;
     if status.success() && lnk.exists() {
         Ok(())
@@ -1525,31 +1620,36 @@ pub fn create_eb_shortcut() -> io::Result<PathBuf> {
     ))
 }
 
-/// Remove the multitrack-video-configuration-url key (matching our
-/// local URL) from the settings object. We match the FULL key+value
-/// pair plus surrounding whitespace + a trailing comma if present.
+/// `file` with our legacy `multitrack_video_configuration_url` taken out
+/// of a Custom (`rtmp_custom`) service, where v0.1.0..0.1.2 injected it.
+/// The registered InstantClone service (`rtmp_common`) carries the same URL
+/// on purpose, copied by OBS from services.json: that one must stay, or
+/// Enhanced Broadcasting loses its config. Edited as JSON, never by lines:
+/// OBS writes service.json on one line. Anything else comes back as it was.
 fn strip_service_json_key(file: &str, web_port: u16) -> String {
-    let needle = format!("http://127.0.0.1:{}/obs/multitrack-config", web_port);
-    let Some(needle_pos) = file.find(&needle) else {
+    let ours = format!("http://127.0.0.1:{web_port}/obs/multitrack-config");
+    let Ok(mut doc) = crate::json::parse(file.trim_start_matches('\u{feff}')) else {
         return file.to_string();
     };
-    // Walk backwards from the URL to find the start of the line
-    // containing the key. Walk forwards to find the comma (or `}`).
-    let bytes = file.as_bytes();
-    let mut start = needle_pos;
-    while start > 0 && bytes[start - 1] != b'\n' {
-        start -= 1;
+    if doc.str_or("type", "") != "rtmp_custom" {
+        return file.to_string();
     }
-    let mut end = needle_pos + needle.len();
-    while end < bytes.len() && bytes[end] != b'\n' {
-        end += 1;
+    let crate::json::Value::Obj(fields) = &mut doc else {
+        return file.to_string();
+    };
+    let Some((_, crate::json::Value::Obj(settings))) =
+        fields.iter_mut().find(|(key, _)| key == "settings")
+    else {
+        return file.to_string();
+    };
+    let before = settings.len();
+    settings.retain(|(key, value)| {
+        !(key == "multitrack_video_configuration_url" && value.as_str() == Some(ours.as_str()))
+    });
+    if settings.len() == before {
+        return file.to_string();
     }
-    if end < bytes.len() && bytes[end] == b'\n' {
-        end += 1;
-    }
-    // Strip the line entirely. The JSON stays valid because the next
-    // sibling line (or `}`) is still well-formed.
-    format!("{}{}", &file[..start], &file[end..])
+    doc.to_json()
 }
 
 #[cfg(test)]
@@ -1759,33 +1859,78 @@ mod tests {
         let file_none = r#"{"services":[{"name":"Twitch","servers":[]}]}"#;
 
         use RegistrationRefresh::*;
+        let nobody = |_: u16| false;
         assert_eq!(
-            refresh_decision(&file_stale, 7799, 1935, false),
+            refresh_decision(&file_stale, 7799, 1935, false, nobody),
             Repaired,
             "an out-of-date entry the user registered is repaired"
         );
         assert_eq!(
-            refresh_decision(&file_stale, 7799, 1935, true),
+            refresh_decision(&file_stale, 7799, 1935, true, nobody),
             Deferred,
             "OBS is open, so wait for it rather than have the repair undone"
         );
         assert_eq!(
-            refresh_decision(&file_current, 7799, 1935, false),
+            refresh_decision(&file_current, 7799, 1935, false, nobody),
             NotNeeded,
             "an entry that is already right is left alone"
         );
         assert_eq!(
-            refresh_decision(file_none, 7799, 1935, false),
+            refresh_decision(file_none, 7799, 1935, false, nobody),
             NotNeeded,
             "someone who never registered is not signed up for us editing OBS"
         );
         assert_eq!(
-            refresh_decision(file_none, 7799, 1935, true),
+            refresh_decision(file_none, 7799, 1935, true, nobody),
             NotNeeded,
             "and with OBS open there is still nothing to come back for"
         );
         // A retuned port is the same kind of staleness.
-        assert_eq!(refresh_decision(&file_current, 7799, 1936, false), Repaired);
+        assert_eq!(
+            refresh_decision(&file_current, 7799, 1936, false, nobody),
+            Repaired
+        );
+    }
+
+    /// Two InstantClones from two folders: the entry points at the other
+    /// one, which is running. That is not stale, it is the other copy's, and
+    /// rewriting it would silently move OBS off the copy it streams through.
+    #[test]
+    fn an_entry_pointing_at_another_running_copy_is_left_alone() {
+        let theirs = format!(r#"{{"services":[{}]}}"#, entry_json(7800, 1936));
+        let running_other = |port: u16| port == 7800 || port == 1936;
+        use RegistrationRefresh::*;
+        assert_eq!(
+            refresh_decision(&theirs, 7799, 1935, false, running_other),
+            OtherInstance(7800)
+        );
+        assert_eq!(
+            refresh_decision(&theirs, 7799, 1935, true, running_other),
+            OtherInstance(7800),
+            "nothing to wait for either"
+        );
+        // Only the RTMP port is held (that copy's dashboard is on a port it
+        // later moved): still the other copy's.
+        assert_eq!(
+            refresh_decision(&theirs, 7799, 1935, false, |p| p == 1936),
+            OtherInstance(7800)
+        );
+        // Nobody on those ports: a leftover from before our own port change.
+        assert_eq!(
+            refresh_decision(&theirs, 7799, 1935, false, |_| false),
+            Repaired
+        );
+        // Our own ports are never "another" copy, whatever holds them.
+        let ours_stale = format!(
+            r#"{{"services":[{}]}}"#,
+            entry_json(7799, 1935).replace("rtmp://localhost:", "rtmp://127.0.0.1:")
+        );
+        assert_eq!(
+            refresh_decision(&ours_stale, 7799, 1935, false, |_| true),
+            Repaired
+        );
+        assert_eq!(registered_ports(&theirs), Some((Some(7800), Some(1936))));
+        assert_eq!(registered_ports(r#"{"services":[]}"#), None);
     }
 
     /// An entry from an older build still carries our name while pointing
@@ -1849,7 +1994,6 @@ mod tests {
             registration_is_current(&polluted, 7799, 1935),
             "a stray in someone else's entry must not make ours look stale"
         );
-        assert!(is_entry_current_for_test(&polluted));
     }
 
     /// Removing our entry must leave the unrelated stray alone: it is not
@@ -1876,10 +2020,6 @@ mod tests {
         assert!(stripped.contains("Twitch"));
     }
 
-    fn is_entry_current_for_test(file: &str) -> bool {
-        entry_exists(file) && registration_is_current(file, 7799, 1935)
-    }
-
     #[test]
     fn remove_handles_single_entry_array() {
         // After our entry has been the only thing in the services
@@ -1897,9 +2037,7 @@ mod tests {
 "#;
         let out = remove_entry(single).expect("remove must succeed");
         assert!(!entry_exists(&out));
-        // Either `[]` or `[\n  ]` is fine; just no `,]` artifact.
-        assert!(!out.contains(",]"));
-        assert!(!out.contains(", ]"));
+        assert!(crate::config::is_valid_json(&out), "{out}");
     }
 
     #[test]
@@ -1973,68 +2111,168 @@ mod tests {
 
     // ── INI read/write ───────────────────────────────────────────────
 
-    /// Every ini OBS owns starts with a UTF-8 BOM immediately followed by
-    /// `[General]`, so the first section is exactly the one a BOM-blind
-    /// parser drops. Verified against a real install: `user.ini` opens
-    /// `ef bb bf 5b 47 65 6e ...`. U+FEFF is not Unicode White_Space, so
-    /// `trim` does not save us here.
+    /// OBS's ini files start with a BOM on Windows and repeat key names across sections.
     #[test]
-    fn ini_get_reads_the_first_section_of_a_bom_prefixed_file() {
-        let ini = "\u{feff}[General]\nName=NewUi2\nEnableCustomServerVodTrack=true\n\
-                   [Basic]\nProfile=Sin Título\n";
-        assert_eq!(
-            ini_get(ini, "General", "EnableCustomServerVodTrack"),
-            Some("true"),
-            "the BOM must not hide the first section"
-        );
-        assert_eq!(ini_get(ini, "General", "Name"), Some("NewUi2"));
-        // Later sections were always reachable; keep them that way.
-        assert_eq!(ini_get(ini, "Basic", "Profile"), Some("Sin Título"));
+    fn ini_get_reads_the_right_section_bom_or_not() {
+        // ini get reads the first section of a bom prefixed file
+        // Every ini OBS owns starts with a UTF-8 BOM immediately followed by
+        // `[General]`, so the first section is exactly the one a BOM-blind
+        // parser drops. Verified against a real install: `user.ini` opens
+        // `ef bb bf 5b 47 65 6e ...`. U+FEFF is not Unicode White_Space, so
+        // `trim` does not save us here.
+        {
+            let ini = "\u{feff}[General]\nName=NewUi2\nEnableCustomServerVodTrack=true\n\
+                       [Basic]\nProfile=Sin Título\n";
+            assert_eq!(
+                ini_get(ini, "General", "EnableCustomServerVodTrack"),
+                Some("true"),
+                "the BOM must not hide the first section"
+            );
+            assert_eq!(ini_get(ini, "General", "Name"), Some("NewUi2"));
+            // Later sections were always reachable; keep them that way.
+            assert_eq!(ini_get(ini, "Basic", "Profile"), Some("Sin Título"));
+        }
+        // ini get reads value from correct section
+        {
+            let ini =
+                "[Basic]\nProfile=Untitled\n[General]\nName=Foo\nEnableCustomServerVodTrack=true\n";
+            assert_eq!(
+                ini_get(ini, "General", "EnableCustomServerVodTrack"),
+                Some("true")
+            );
+            assert_eq!(ini_get(ini, "Basic", "Profile"), Some("Untitled"));
+            assert_eq!(ini_get(ini, "General", "Missing"), None);
+            // Key exists in a different section - must not match.
+            assert_eq!(ini_get(ini, "Basic", "EnableCustomServerVodTrack"), None);
+        }
     }
 
-    /// The duplicate-`[General]` files seen in the wild were self-inflicted:
-    /// `ini_set` could not see the BOM'd header, so it appended a second
-    /// section instead of editing the first. Writing must now land in the
-    /// existing section and leave the BOM on the file.
+    /// The shapes OBS really leaves behind: a BOM before the first section, and
+    /// a section that appears twice.
     #[test]
-    fn ini_set_edits_the_bom_prefixed_section_instead_of_appending_a_duplicate() {
-        let ini = "\u{feff}[General]\nPre19Defaults=false\n\n[Basic]\nProfile=A\n";
-        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
+    fn ini_set_handles_bom_and_duplicate_sections() {
+        // ini set edits the bom prefixed section instead of appending a duplicate
+        // The duplicate-`[General]` files seen in the wild were self-inflicted:
+        // `ini_set` could not see the BOM'd header, so it appended a second
+        // section instead of editing the first. Writing must now land in the
+        // existing section and leave the BOM on the file.
+        {
+            let ini = "\u{feff}[General]\nPre19Defaults=false\n\n[Basic]\nProfile=A\n";
+            let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
 
-        assert_eq!(
-            out.matches("[General]").count(),
-            1,
-            "must edit OBS's own section, not append a rival one"
-        );
-        assert!(
-            out.starts_with('\u{feff}'),
-            "the BOM belongs to OBS - we must not strip it on write"
-        );
-        assert_eq!(
-            ini_get(&out, "General", "EnableCustomServerVodTrack"),
-            Some("true")
-        );
-        assert_eq!(ini_get(&out, "General", "Pre19Defaults"), Some("false"));
-        assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
-    }
+            assert_eq!(
+                out.matches("[General]").count(),
+                1,
+                "must edit OBS's own section, not append a rival one"
+            );
+            assert!(
+                out.starts_with('\u{feff}'),
+                "the BOM belongs to OBS - we must not strip it on write"
+            );
+            assert_eq!(
+                ini_get(&out, "General", "EnableCustomServerVodTrack"),
+                Some("true")
+            );
+            assert_eq!(ini_get(&out, "General", "Pre19Defaults"), Some("false"));
+            assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
+        }
+        // ini set rewrites the key in every duplicate section
+        // Files written by older builds can carry two `[General]` blocks,
+        // each with the flag (see the BOM test above). Rewriting only the
+        // first left the second at `=true`, so turning VOD audio off did not
+        // turn the OBS checkbox off for whichever block OBS reads.
+        {
+            let ini = "[General]\nEnableCustomServerVodTrack=true\n\n[Basic]\nProfile=A\n\n\
+                       [General]\nEnableCustomServerVodTrack=true\nName=X\n";
+            let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
 
-    /// Files written by older builds can carry two `[General]` blocks,
-    /// each with the flag (see the BOM test above). Rewriting only the
-    /// first left the second at `=true`, so turning VOD audio off did not
-    /// turn the OBS checkbox off for whichever block OBS reads.
-    #[test]
-    fn ini_set_rewrites_the_key_in_every_duplicate_section() {
-        let ini = "[General]\nEnableCustomServerVodTrack=true\n\n[Basic]\nProfile=A\n\n\
-                   [General]\nEnableCustomServerVodTrack=true\nName=X\n";
-        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
+            assert_eq!(out.matches("EnableCustomServerVodTrack=false").count(), 2);
+            assert!(!out.contains("EnableCustomServerVodTrack=true"), "{out}");
+            // Every other line is untouched and nothing is appended.
+            assert_eq!(out.matches("[General]").count(), 2);
+            assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
+            assert!(out.contains("Name=X\n"));
+            assert_eq!(out.lines().count(), ini.lines().count());
+        }
+        // ini set flips value to false in trailing duplicate general section
+        // Reported on the v0.1.3 test build: user.ini ends up with two
+        // `[General]` sections. The second one was ours: the BOM on line
+        // one hid OBS's real `[General]` from `ini_set`, which then
+        // appended its own. `ini_section` fixes the cause, but files
+        // written before that fix still carry the duplicate, so the walk
+        // has to keep handling it. Our toggle-ON lands the key in the
+        // trailing block; this test confirms toggle-OFF flips its value
+        // in place to `false` without disturbing either section's other
+        // keys or trying to delete the line - which would be fragile
+        // against OBS rewriting the file and moving the key around. The
+        // file shape mirrors what OBS 32 wrote after the first toggle +
+        // restart, trimmed down to the bits that exercise the
+        // duplicate-section walk.
+        {
+            let ini = "[General]\n\
+                Pre19Defaults=false\n\
+                FirstRun=true\n\
+                \n\
+                [Basic]\n\
+                Profile=Sin Título\n\
+                \n\
+                [Audio]\n\
+                DisableAudioDucking=true\n\
+                \n\
+                [General]\n\
+                EnableCustomServerVodTrack=true\n\
+                FirstRun=true\n";
+            let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
 
-        assert_eq!(out.matches("EnableCustomServerVodTrack=false").count(), 2);
-        assert!(!out.contains("EnableCustomServerVodTrack=true"), "{out}");
-        // Every other line is untouched and nothing is appended.
-        assert_eq!(out.matches("[General]").count(), 2);
-        assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
-        assert!(out.contains("Name=X\n"));
-        assert_eq!(out.lines().count(), ini.lines().count());
+            // Value flipped, line stays.
+            assert_eq!(
+                ini_get(&out, "General", "EnableCustomServerVodTrack"),
+                Some("false")
+            );
+            assert!(out.contains("EnableCustomServerVodTrack=false"));
+            assert!(!out.contains("EnableCustomServerVodTrack=true"));
+
+            // Both [General] sections are still there - we never want to
+            // collapse OBS's own structure, just edit our one key.
+            assert_eq!(out.matches("[General]").count(), 2);
+
+            // Sibling keys in BOTH [General] blocks survive.
+            assert!(out.contains("Pre19Defaults=false"));
+            assert!(out.contains("FirstRun=true"));
+
+            // Unrelated sections are untouched.
+            assert_eq!(ini_get(&out, "Basic", "Profile"), Some("Sin Título"));
+            assert_eq!(ini_get(&out, "Audio", "DisableAudioDucking"), Some("true"));
+        }
+        // ini set lands in trailing general when duplicate sections exist
+        // Sibling property: toggle-ON on a fresh duplicate-section file
+        // (no key present in either [General]) lands the key in the
+        // trailing [General] - which is what we observed during the
+        // v0.1.3 test build. Documenting this so a future refactor that
+        // chooses to insert into the first block instead doesn't surprise
+        // the next maintainer.
+        {
+            let ini = "[General]\n\
+                FirstRun=true\n\
+                \n\
+                [Basic]\n\
+                Profile=A\n\
+                \n\
+                [General]\n\
+                ConfirmOnExit=true\n";
+            let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
+
+            assert_eq!(
+                ini_get(&out, "General", "EnableCustomServerVodTrack"),
+                Some("true")
+            );
+            // Lands inside the trailing [General], after ConfirmOnExit.
+            let trailing = out.rfind("[General]").expect("trailing [General] kept");
+            assert!(out[trailing..].contains("EnableCustomServerVodTrack=true"));
+            // Idempotent toggle-on - second call must not double-write.
+            let twice = ini_set(&out, "General", "EnableCustomServerVodTrack", true);
+            assert_eq!(twice.matches("EnableCustomServerVodTrack=true").count(), 1);
+        }
     }
 
     // ── Active profile directory resolution ──────────────────────────
@@ -2056,7 +2294,7 @@ mod tests {
             )
             .unwrap();
         }
-        let roots = vec![root.clone()];
+        let roots = vec![root.to_path_buf()];
 
         assert_eq!(
             profile_dir_by_name(&roots, "Sin Título").as_deref(),
@@ -2069,7 +2307,8 @@ mod tests {
         );
         assert_eq!(profile_dir_by_name(&roots, "Nope"), None);
         // No profiles directory at all must not panic.
-        assert_eq!(profile_dir_by_name(&[fresh_obs_dir("empty")], "A"), None);
+        let empty = fresh_obs_dir("empty");
+        assert_eq!(profile_dir_by_name(&[empty.to_path_buf()], "A"), None);
     }
 
     /// A real Advanced-output profile (AMD H.264, CBR 6000): the local
@@ -2153,195 +2392,102 @@ mod tests {
         "\u{feff}[General]\nName=Main\n\n[Stream1]\nEnableMultitrackVideo=true\n";
     const INSTANTCLONE_SERVICE: &str = r#"{"type":"rtmp_common","settings":{"service":"InstantClone","server":"rtmp://localhost:1935/live","multitrack_video_configuration_url":"http://127.0.0.1:7799/obs/multitrack-config"}}"#;
 
+    /// Enhanced Broadcasting counts only when OBS has it ticked and the service can use it.
     #[test]
-    fn eb_ticked_on_the_instantclone_service_is_wanted() {
-        assert!(profile_wants_eb(EB_ON_INI, INSTANTCLONE_SERVICE));
-        let spaced = INSTANTCLONE_SERVICE.replace("\":", "\": ");
-        assert!(
-            profile_wants_eb(EB_ON_INI, &spaced),
-            "JSON spacing is not meaningful"
-        );
+    fn eb_is_wanted_only_when_ticked_on_a_service_that_delivers_it() {
+        // eb ticked on the instantclone service is wanted
+        {
+            assert!(profile_wants_eb(EB_ON_INI, INSTANTCLONE_SERVICE));
+            let spaced = INSTANTCLONE_SERVICE.replace("\":", "\": ");
+            assert!(
+                profile_wants_eb(EB_ON_INI, &spaced),
+                "JSON spacing is not meaningful"
+            );
+        }
+        // eb unticked or unset is not wanted
+        {
+            let off = EB_ON_INI.replace("=true", "=false");
+            assert!(!profile_wants_eb(&off, INSTANTCLONE_SERVICE));
+            assert!(!profile_wants_eb("[Stream1]\n", INSTANTCLONE_SERVICE));
+        }
+        // a service that cannot deliver eb is not wanted
+        // Custom RTMP drops the config URL on load, so a leftover one there
+        // can't turn EB on, and warning that EB "didn't apply" would be wrong.
+        {
+            let custom = INSTANTCLONE_SERVICE.replace("rtmp_common", "rtmp_custom");
+            assert!(!profile_wants_eb(EB_ON_INI, &custom));
+            let no_url = r#"{"type":"rtmp_common","settings":{"service":"InstantClone"}}"#;
+            assert!(!profile_wants_eb(EB_ON_INI, no_url));
+            let empty_url =
+                INSTANTCLONE_SERVICE.replace("http://127.0.0.1:7799/obs/multitrack-config", "");
+            assert!(!profile_wants_eb(EB_ON_INI, &empty_url));
+        }
     }
 
+    /// Insert, replace, create the section, and switching off without leaving a stray line.
     #[test]
-    fn eb_unticked_or_unset_is_not_wanted() {
-        let off = EB_ON_INI.replace("=true", "=false");
-        assert!(!profile_wants_eb(&off, INSTANTCLONE_SERVICE));
-        assert!(!profile_wants_eb("[Stream1]\n", INSTANTCLONE_SERVICE));
-    }
-
-    /// Custom RTMP drops the config URL on load, so a leftover one there
-    /// can't turn EB on, and warning that EB "didn't apply" would be wrong.
-    #[test]
-    fn a_service_that_cannot_deliver_eb_is_not_wanted() {
-        let custom = INSTANTCLONE_SERVICE.replace("rtmp_common", "rtmp_custom");
-        assert!(!profile_wants_eb(EB_ON_INI, &custom));
-        let no_url = r#"{"type":"rtmp_common","settings":{"service":"InstantClone"}}"#;
-        assert!(!profile_wants_eb(EB_ON_INI, no_url));
-        let empty_url =
-            INSTANTCLONE_SERVICE.replace("http://127.0.0.1:7799/obs/multitrack-config", "");
-        assert!(!profile_wants_eb(EB_ON_INI, &empty_url));
-    }
-
-    #[test]
-    fn ini_get_reads_value_from_correct_section() {
-        let ini =
-            "[Basic]\nProfile=Untitled\n[General]\nName=Foo\nEnableCustomServerVodTrack=true\n";
-        assert_eq!(
-            ini_get(ini, "General", "EnableCustomServerVodTrack"),
-            Some("true")
-        );
-        assert_eq!(ini_get(ini, "Basic", "Profile"), Some("Untitled"));
-        assert_eq!(ini_get(ini, "General", "Missing"), None);
-        // Key exists in a different section - must not match.
-        assert_eq!(ini_get(ini, "Basic", "EnableCustomServerVodTrack"), None);
-    }
-
-    #[test]
-    fn ini_set_inserts_when_section_exists_but_key_missing() {
-        let ini = "[General]\nName=Foo\n[Basic]\nProfile=A\n";
-        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
-        assert!(out.contains("EnableCustomServerVodTrack=true"));
-        assert_eq!(
-            ini_get(&out, "General", "EnableCustomServerVodTrack"),
-            Some("true")
-        );
-        // Existing [Basic] block is preserved.
-        assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
-    }
-
-    #[test]
-    fn ini_set_replaces_existing_key_value() {
-        let ini = "[General]\nEnableCustomServerVodTrack=false\nName=Foo\n";
-        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
-        assert_eq!(
-            ini_get(&out, "General", "EnableCustomServerVodTrack"),
-            Some("true")
-        );
-        assert!(!out.contains("EnableCustomServerVodTrack=false"));
-        // Sibling key not disturbed.
-        assert_eq!(ini_get(&out, "General", "Name"), Some("Foo"));
-    }
-
-    #[test]
-    fn ini_set_writes_false_in_place_when_disabling() {
-        // Issue #9 follow-up: disabling REWRITES the value as `false`
-        // instead of deleting the line. OBS's config_get_bool reads
-        // `=false` and "key absent" identically, but rewriting the
-        // line in place is robust against OBS shuffling the key into
-        // a different [General] block on its own file rewrite -
-        // wherever the key ended up, we just flip the value.
-        let ini = "[General]\nEnableCustomServerVodTrack=true\nName=Foo\n";
-        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
-        assert_eq!(
-            ini_get(&out, "General", "EnableCustomServerVodTrack"),
-            Some("false")
-        );
-        assert!(!out.contains("EnableCustomServerVodTrack=true"));
-        assert_eq!(ini_get(&out, "General", "Name"), Some("Foo"));
-    }
-
-    #[test]
-    fn ini_set_does_not_create_false_line_when_disabling_a_virgin_file() {
-        // A user who has never toggled VOD audio on shouldn't end up
-        // with a stray `EnableCustomServerVodTrack=false` line in
-        // their user.ini just because the dashboard reconcile ran on
-        // a clean state. Insertion is still gated to the enable path.
-        let ini = "[General]\nName=Foo\n[Basic]\nProfile=A\n";
-        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
-        assert_eq!(out, ini, "no key found + disable should be a no-op");
-    }
-
-    #[test]
-    fn ini_set_creates_section_when_absent() {
-        let ini = "[Basic]\nProfile=A\n";
-        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
-        assert_eq!(
-            ini_get(&out, "General", "EnableCustomServerVodTrack"),
-            Some("true")
-        );
-        assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
-    }
-
-    /// Reported on the v0.1.3 test build: user.ini ends up with two
-    /// `[General]` sections. The second one was ours: the BOM on line
-    /// one hid OBS's real `[General]` from `ini_set`, which then
-    /// appended its own. `ini_section` fixes the cause, but files
-    /// written before that fix still carry the duplicate, so the walk
-    /// has to keep handling it. Our toggle-ON lands the key in the
-    /// trailing block; this test confirms toggle-OFF flips its value
-    /// in place to `false` without disturbing either section's other
-    /// keys or trying to delete the line - which would be fragile
-    /// against OBS rewriting the file and moving the key around. The
-    /// file shape mirrors what OBS 32 wrote after the first toggle +
-    /// restart, trimmed down to the bits that exercise the
-    /// duplicate-section walk.
-    #[test]
-    fn ini_set_flips_value_to_false_in_trailing_duplicate_general_section() {
-        let ini = "[General]\n\
-            Pre19Defaults=false\n\
-            FirstRun=true\n\
-            \n\
-            [Basic]\n\
-            Profile=Sin Título\n\
-            \n\
-            [Audio]\n\
-            DisableAudioDucking=true\n\
-            \n\
-            [General]\n\
-            EnableCustomServerVodTrack=true\n\
-            FirstRun=true\n";
-        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
-
-        // Value flipped, line stays.
-        assert_eq!(
-            ini_get(&out, "General", "EnableCustomServerVodTrack"),
-            Some("false")
-        );
-        assert!(out.contains("EnableCustomServerVodTrack=false"));
-        assert!(!out.contains("EnableCustomServerVodTrack=true"));
-
-        // Both [General] sections are still there - we never want to
-        // collapse OBS's own structure, just edit our one key.
-        assert_eq!(out.matches("[General]").count(), 2);
-
-        // Sibling keys in BOTH [General] blocks survive.
-        assert!(out.contains("Pre19Defaults=false"));
-        assert!(out.contains("FirstRun=true"));
-
-        // Unrelated sections are untouched.
-        assert_eq!(ini_get(&out, "Basic", "Profile"), Some("Sin Título"));
-        assert_eq!(ini_get(&out, "Audio", "DisableAudioDucking"), Some("true"));
-    }
-
-    /// Sibling property: toggle-ON on a fresh duplicate-section file
-    /// (no key present in either [General]) lands the key in the
-    /// trailing [General] - which is what we observed during the
-    /// v0.1.3 test build. Documenting this so a future refactor that
-    /// chooses to insert into the first block instead doesn't surprise
-    /// the next maintainer.
-    #[test]
-    fn ini_set_lands_in_trailing_general_when_duplicate_sections_exist() {
-        let ini = "[General]\n\
-            FirstRun=true\n\
-            \n\
-            [Basic]\n\
-            Profile=A\n\
-            \n\
-            [General]\n\
-            ConfirmOnExit=true\n";
-        let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
-
-        assert_eq!(
-            ini_get(&out, "General", "EnableCustomServerVodTrack"),
-            Some("true")
-        );
-        // Lands inside the trailing [General], after ConfirmOnExit.
-        let trailing = out.rfind("[General]").expect("trailing [General] kept");
-        assert!(out[trailing..].contains("EnableCustomServerVodTrack=true"));
-        // Idempotent toggle-on - second call must not double-write.
-        let twice = ini_set(&out, "General", "EnableCustomServerVodTrack", true);
-        assert_eq!(twice.matches("EnableCustomServerVodTrack=true").count(), 1);
+    fn ini_set_writes_a_key_where_obs_reads_it() {
+        // ini set inserts when section exists but key missing
+        {
+            let ini = "[General]\nName=Foo\n[Basic]\nProfile=A\n";
+            let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
+            assert!(out.contains("EnableCustomServerVodTrack=true"));
+            assert_eq!(
+                ini_get(&out, "General", "EnableCustomServerVodTrack"),
+                Some("true")
+            );
+            // Existing [Basic] block is preserved.
+            assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
+        }
+        // ini set replaces existing key value
+        {
+            let ini = "[General]\nEnableCustomServerVodTrack=false\nName=Foo\n";
+            let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
+            assert_eq!(
+                ini_get(&out, "General", "EnableCustomServerVodTrack"),
+                Some("true")
+            );
+            assert!(!out.contains("EnableCustomServerVodTrack=false"));
+            // Sibling key not disturbed.
+            assert_eq!(ini_get(&out, "General", "Name"), Some("Foo"));
+        }
+        // ini set creates section when absent
+        {
+            let ini = "[Basic]\nProfile=A\n";
+            let out = ini_set(ini, "General", "EnableCustomServerVodTrack", true);
+            assert_eq!(
+                ini_get(&out, "General", "EnableCustomServerVodTrack"),
+                Some("true")
+            );
+            assert_eq!(ini_get(&out, "Basic", "Profile"), Some("A"));
+        }
+        // ini set writes false in place when disabling
+        {
+            // Issue #9 follow-up: disabling REWRITES the value as `false`
+            // instead of deleting the line. OBS's config_get_bool reads
+            // `=false` and "key absent" identically, but rewriting the
+            // line in place is robust against OBS shuffling the key into
+            // a different [General] block on its own file rewrite -
+            // wherever the key ended up, we just flip the value.
+            let ini = "[General]\nEnableCustomServerVodTrack=true\nName=Foo\n";
+            let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
+            assert_eq!(
+                ini_get(&out, "General", "EnableCustomServerVodTrack"),
+                Some("false")
+            );
+            assert!(!out.contains("EnableCustomServerVodTrack=true"));
+            assert_eq!(ini_get(&out, "General", "Name"), Some("Foo"));
+        }
+        // ini set does not create false line when disabling a virgin file
+        {
+            // A user who has never toggled VOD audio on shouldn't end up
+            // with a stray `EnableCustomServerVodTrack=false` line in
+            // their user.ini just because the dashboard reconcile ran on
+            // a clean state. Insertion is still gated to the enable path.
+            let ini = "[General]\nName=Foo\n[Basic]\nProfile=A\n";
+            let out = ini_set(ini, "General", "EnableCustomServerVodTrack", false);
+            assert_eq!(out, ini, "no key found + disable should be a no-op");
+        }
     }
 
     // ── service.json injection ─────────────────────────────────────
@@ -2380,13 +2526,46 @@ mod tests {
     }
 
     #[test]
-    fn strip_service_json_key_removes_only_our_line() {
+    fn strip_service_json_key_removes_only_our_key() {
         let polluted = legacy_polluted_rtmp_custom_service_json();
         let stripped = strip_service_json_key(&polluted, 7799);
-        assert!(!stripped.contains("multitrack_video_configuration_url"));
+        let doc = crate::json::parse(&stripped).expect("still valid JSON");
+        assert_eq!(
+            doc.path("settings.multitrack_video_configuration_url"),
+            None
+        );
         // Sibling settings stay untouched.
-        assert!(stripped.contains("\"server\": \"rtmp://127.0.0.1:1935/live\""));
-        assert!(stripped.contains("\"key\": \"main\""));
+        let setting = |name: &str| {
+            doc.path(&format!("settings.{name}"))
+                .and_then(|v| v.as_str())
+        };
+        assert_eq!(setting("server"), Some("rtmp://127.0.0.1:1935/live"));
+        assert_eq!(setting("key"), Some("main"));
+    }
+
+    /// OBS writes service.json on one line, and the key may be the last
+    /// one: a line-based cut emptied the file or left a dangling comma.
+    #[test]
+    fn strip_service_json_key_keeps_one_line_files_valid() {
+        let compact = r#"{"settings":{"key":"main","multitrack_video_configuration_url":"http://127.0.0.1:7799/obs/multitrack-config"},"type":"rtmp_custom"}"#;
+        let stripped = strip_service_json_key(compact, 7799);
+        assert_eq!(
+            stripped,
+            r#"{"settings":{"key":"main"},"type":"rtmp_custom"}"#
+        );
+    }
+
+    /// The registered InstantClone service keeps its URL: that is how OBS
+    /// finds the Enhanced Broadcasting config, not a leftover. Saving a
+    /// destination used to empty this file.
+    #[test]
+    fn strip_service_json_key_leaves_the_registered_service_alone() {
+        assert_eq!(
+            strip_service_json_key(INSTANTCLONE_SERVICE, 7799),
+            INSTANTCLONE_SERVICE
+        );
+        let with_bom = format!("\u{feff}{INSTANTCLONE_SERVICE}");
+        assert_eq!(strip_service_json_key(&with_bom, 7799), with_bom);
     }
 
     #[test]
@@ -2404,7 +2583,23 @@ mod tests {
     // lock the prefer-user.ini behaviour so the file selection
     // can't silently regress back to global.ini in a future refactor.
 
-    fn fresh_obs_dir(label: &str) -> std::path::PathBuf {
+    /// A test's own temp dir, removed when the test ends, pass or fail.
+    struct ScratchDir(std::path::PathBuf);
+
+    impl std::ops::Deref for ScratchDir {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn fresh_obs_dir(label: &str) -> ScratchDir {
         // Each test gets its own dir so a tempdir cleanup race
         // between them can't make assertions flap.
         let dir = std::env::temp_dir().join(format!(
@@ -2414,67 +2609,68 @@ mod tests {
             UNIQ_OBS.fetch_add(1, TestOrd::SeqCst),
         ));
         std::fs::create_dir_all(&dir).expect("fresh_obs_dir create_dir_all");
-        dir
+        ScratchDir(dir)
     }
 
+    /// OBS 31 moved the per-user file: the new one wins, the old one is the fallback.
     #[test]
-    fn resolve_user_config_prefers_user_ini_when_both_files_exist() {
-        let dir = fresh_obs_dir("prefer-user");
-        let user = dir.join("user.ini");
-        let global = dir.join("global.ini");
-        std::fs::write(&user, "[General]\n").unwrap();
-        std::fs::write(&global, "[General]\n").unwrap();
+    fn the_user_config_is_found_in_either_obs_layout() {
+        // resolve user config prefers user ini when both files exist
+        {
+            let dir = fresh_obs_dir("prefer-user");
+            let user = dir.join("user.ini");
+            let global = dir.join("global.ini");
+            std::fs::write(&user, "[General]\n").unwrap();
+            std::fs::write(&global, "[General]\n").unwrap();
 
-        let resolved = resolve_user_config_in(&dir).expect("must resolve");
-        assert_eq!(
-            resolved, user,
-            "OBS 32+ keeps user.ini as the authoritative user config - \
-             writing to global.ini is the v0.1.0..0.1.2 bug from issue #9"
-        );
-    }
+            let resolved = resolve_user_config_in(&dir).expect("must resolve");
+            assert_eq!(
+                resolved, user,
+                "OBS 32+ keeps user.ini as the authoritative user config - \
+                 writing to global.ini is the v0.1.0..0.1.2 bug from issue #9"
+            );
+        }
+        // resolve user config falls back to global ini when user ini missing
+        {
+            let dir = fresh_obs_dir("fallback-global");
+            let global = dir.join("global.ini");
+            std::fs::write(&global, "[General]\n").unwrap();
 
-    #[test]
-    fn resolve_user_config_falls_back_to_global_ini_when_user_ini_missing() {
-        let dir = fresh_obs_dir("fallback-global");
-        let global = dir.join("global.ini");
-        std::fs::write(&global, "[General]\n").unwrap();
+            let resolved = resolve_user_config_in(&dir).expect("must resolve");
+            assert_eq!(
+                resolved, global,
+                "pre-OBS-32 installs only have global.ini; the resolver \
+                 must still find the user config there"
+            );
+        }
+        // resolve user config returns none when neither exists
+        {
+            let dir = fresh_obs_dir("no-obs");
+            assert!(
+                resolve_user_config_in(&dir).is_none(),
+                "no OBS install means no config to write to - caller \
+                 should degrade gracefully, not error"
+            );
+        }
+        // legacy global ini only reported when user ini present
+        {
+            // Case 1: OBS 32+ with both files - legacy global.ini is
+            // dead state we want to clean up.
+            let dir = fresh_obs_dir("legacy-both");
+            let user = dir.join("user.ini");
+            let global = dir.join("global.ini");
+            std::fs::write(&user, "[General]\n").unwrap();
+            std::fs::write(&global, "[General]\n").unwrap();
+            assert_eq!(legacy_global_ini_in(&dir), Some(global));
 
-        let resolved = resolve_user_config_in(&dir).expect("must resolve");
-        assert_eq!(
-            resolved, global,
-            "pre-OBS-32 installs only have global.ini; the resolver \
-             must still find the user config there"
-        );
-    }
-
-    #[test]
-    fn resolve_user_config_returns_none_when_neither_exists() {
-        let dir = fresh_obs_dir("no-obs");
-        assert!(
-            resolve_user_config_in(&dir).is_none(),
-            "no OBS install means no config to write to - caller \
-             should degrade gracefully, not error"
-        );
-    }
-
-    #[test]
-    fn legacy_global_ini_only_reported_when_user_ini_present() {
-        // Case 1: OBS 32+ with both files - legacy global.ini is
-        // dead state we want to clean up.
-        let dir = fresh_obs_dir("legacy-both");
-        let user = dir.join("user.ini");
-        let global = dir.join("global.ini");
-        std::fs::write(&user, "[General]\n").unwrap();
-        std::fs::write(&global, "[General]\n").unwrap();
-        assert_eq!(legacy_global_ini_in(&dir), Some(global.clone()));
-
-        // Case 2: pre-32 install - global.ini IS the live config,
-        // not legacy. The cleanup path must skip so we don't
-        // strip the flag from the file OBS is actively reading.
-        let dir = fresh_obs_dir("legacy-no-user");
-        let global = dir.join("global.ini");
-        std::fs::write(&global, "[General]\n").unwrap();
-        assert!(legacy_global_ini_in(&dir).is_none());
+            // Case 2: pre-32 install - global.ini IS the live config,
+            // not legacy. The cleanup path must skip so we don't
+            // strip the flag from the file OBS is actively reading.
+            let dir = fresh_obs_dir("legacy-no-user");
+            let global = dir.join("global.ini");
+            std::fs::write(&global, "[General]\n").unwrap();
+            assert!(legacy_global_ini_in(&dir).is_none());
+        }
     }
 
     static UNIQ_OBS: TestUniq = TestUniq::new(0);

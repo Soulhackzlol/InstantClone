@@ -19,8 +19,11 @@
 //! - `timeline`: this stream's timeline and YouTube chapters.
 //! - `activity`: the chat activity trigger's sliding window.
 //! - `obsws`: the obs-websocket connection scene triggers listen on.
+//! - `ws`: the small WebSocket client `obsws` and Twitch EventSub share.
+//! - `lights`: smart lights and plugs on the local network, no hub needed.
 
 pub mod activity;
+pub mod alert_media;
 pub mod alerts;
 pub mod api;
 pub mod botcmd;
@@ -29,6 +32,7 @@ pub mod effects;
 pub mod engine;
 pub mod event;
 pub mod host;
+pub mod lights;
 pub mod model;
 pub mod obsws;
 pub mod presets;
@@ -39,6 +43,7 @@ pub mod store;
 pub mod template;
 pub mod timeline;
 pub mod twitch;
+pub mod ws;
 
 pub use engine::Handle;
 /// Only the tray (hotkeys) and the MIDI listener press shortcuts: Windows.

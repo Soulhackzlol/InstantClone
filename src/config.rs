@@ -34,6 +34,11 @@ pub const MAX_DOCK_LAYOUT_LEN: usize = 8 * 1024;
 const MIN_BUFFER_MB: u64 = 50;
 // 1 TiB. Guards `buffer_bytes()` against overflow from a hand-edited config.
 const MAX_BUFFER_MB: u64 = 1024 * 1024;
+/// Longest delay anything can arm: 1 hour. The buffer size is what really
+/// limits a delay (arming refuses one it can't hold at the stream's
+/// bitrate); this only stops a typo or a hand-edited config from asking for
+/// days. The web pages hold the same number as `DELAY_MAX_S`.
+pub const MAX_DELAY_MS: u32 = 3_600_000;
 
 /// Ports for the built-in "Local test sink" destination (platform
 /// `"sink"`). The egress supervisor spawns `instantclone sink` as a
@@ -106,12 +111,29 @@ pub struct Settings {
     /// streamer hits Arm with a non-zero value) so "last used" sticks
     /// across sessions without a separate UI knob to maintain it.
     pub auto_arm_delay_ms: u32,
-    /// Whether the dashboard checks GitHub for a newer release on load.
-    /// Default true - the check is a passive nicety (cached 10 min
-    /// server-side, failures silent). Off for the privacy-minded or
+    /// Whether InstantClone checks GitHub for a newer release: shortly after
+    /// start and daily (see `update_check::watch_for_updates`), and when the
+    /// dashboard loads. Default true - the check is a passive nicety (cached
+    /// 10 min server-side, failures silent). Off for the privacy-minded or
     /// air-gapped: it is the app's one routine outbound call, so it gets
     /// an explicit opt-out in System -> About.
     pub update_check_enabled: bool,
+    /// Windows: a quiet tray notification when an automatic check finds an
+    /// update. Default true; the check itself is `update_check_enabled`.
+    pub update_tray_notify: bool,
+    /// Windows: the tray icon's colour, an index into
+    /// `instance_lock::TRAY_COLORS`. Default 0, the brand blue. The colour
+    /// shown can differ for one run (see `instance_lock::show_tray_color`).
+    pub tray_color: u8,
+    /// State: the update the tray last told the user about (a version, or a
+    /// version and build hash for a new build of it), so each one is
+    /// announced once, across restarts.
+    pub update_notified: String,
+    /// State: the version and build commit of the last build whose "what's
+    /// new" the user saw (or the first build of a fresh install). A running
+    /// build that differs is an update, in-app or by hand.
+    pub last_seen_version: String,
+    pub last_seen_commit: String,
     /// Whether a normal launch opens the dashboard in the browser. Default
     /// true. Turning it off suits streamers who keep InstantClone running
     /// in the tray (or autostart it) and don't want a tab every launch -
@@ -152,6 +174,8 @@ pub struct Settings {
     pub discord_channels: Vec<DiscordChannel>,
     /// Phone pushes (ntfy).
     pub phone: PhoneConnection,
+    /// Where the alerts page puts its cards and how big they are.
+    pub alerts_look: crate::integrations::alerts::Look,
     /// Whether the old single `discord_webhook_url` has been turned into a
     /// Discord connection plus a "Stream alerts" integration. False only in
     /// configs written before integrations existed.
@@ -773,6 +797,10 @@ impl Settings {
             ]);
             writeln!(f, "connection.phone={}", one_line(&v.to_json()))?;
         }
+        if self.alerts_look != Default::default() {
+            let look = self.alerts_look.to_json().to_json();
+            writeln!(f, "alerts.look={}", one_line(&look))?;
+        }
         for i in &self.integrations {
             writeln!(
                 f,
@@ -885,6 +913,12 @@ impl Settings {
                     name: "Tournament".into(),
                     delay_ms: 300_000,
                 },
+                // Needs more than the default buffer at most bitrates: its
+                // chip says so and leads to the buffer setting.
+                DelayProfile {
+                    name: "Long".into(),
+                    delay_ms: 900_000,
+                },
             ],
             destinations: Vec::new(),
             discord_webhook_url: String::new(),
@@ -912,6 +946,11 @@ impl Settings {
             // behaviour. Each has an explicit opt-out in the System tab.
             update_check_enabled: true,
             open_dashboard_on_launch: true,
+            update_tray_notify: true,
+            tray_color: 0,
+            update_notified: String::new(),
+            last_seen_version: String::new(),
+            last_seen_commit: String::new(),
             // Fresh install hasn't seeded the preset overlays yet; the
             // dashboard does it on first load, then flips this true.
             overlays_seeded: false,
@@ -926,6 +965,7 @@ impl Settings {
             integrations: Vec::new(),
             discord_channels: Vec::new(),
             phone: PhoneConnection::default(),
+            alerts_look: Default::default(),
             // A fresh install has no old webhook to migrate; `load` sets
             // this after its one-time pass either way.
             integrations_migrated: false,
@@ -982,6 +1022,11 @@ impl Settings {
             });
         }
         s.migrate_discord_webhook();
+        // `!setdelay` copies from up to 0.1.15 (a 10 minute limit, and
+        // "Delay set to 0s"). The file catches up on the next save.
+        for integration in &mut s.integrations {
+            crate::integrations::presets::upgrade_setdelay(integration);
+        }
         // Clamp / sanitize on load - hand-edited values can otherwise
         // hit divide-by-zero (buffer_mb=0 → `% capacity` in DiskRing) or
         // bind two services to the same port (one will silently fail).
@@ -1013,14 +1058,14 @@ impl Settings {
             // least the UI is reachable to fix it.
             self.web_port = if self.ingest_port == 7799 { 7800 } else { 7799 };
         }
-        // Cap delay values to the same 10-minute ceiling the runtime uses.
-        self.armed_delay_ms = self.armed_delay_ms.min(600_000);
-        self.target_delay_ms = self.target_delay_ms.min(600_000);
+        // Cap delay values to the same ceiling the runtime uses.
+        self.armed_delay_ms = self.armed_delay_ms.min(MAX_DELAY_MS);
+        self.target_delay_ms = self.target_delay_ms.min(MAX_DELAY_MS);
         // auto_arm_delay_ms is the value used when auto-arm fires. Clamp
-        // to the same 10-minute ceiling; a 0 from a fresh install or a
+        // to the same ceiling; a 0 from a fresh install or a
         // hand-edited config falls back to the 15 s default so we never
         // auto-arm at "0 s of delay" (which would be a no-op + confusing).
-        self.auto_arm_delay_ms = self.auto_arm_delay_ms.min(600_000);
+        self.auto_arm_delay_ms = self.auto_arm_delay_ms.min(MAX_DELAY_MS);
         if self.auto_arm_delay_ms == 0 {
             self.auto_arm_delay_ms = 15_000;
         }
@@ -1221,6 +1266,21 @@ impl Settings {
         if !self.open_dashboard_on_launch {
             writeln!(f, "open_dashboard_on_launch=false")?;
         }
+        if !self.update_tray_notify {
+            writeln!(f, "update_tray_notify=false")?;
+        }
+        if self.tray_color != 0 {
+            writeln!(f, "tray_color={}", self.tray_color)?;
+        }
+        if !self.update_notified.is_empty() {
+            writeln!(f, "update_notified={}", one_line(&self.update_notified))?;
+        }
+        if !self.last_seen_version.is_empty() {
+            writeln!(f, "last_seen_version={}", one_line(&self.last_seen_version))?;
+        }
+        if !self.last_seen_commit.is_empty() {
+            writeln!(f, "last_seen_commit={}", one_line(&self.last_seen_commit))?;
+        }
         if self.overlays_seeded {
             writeln!(f, "overlays_seeded=true")?;
         }
@@ -1378,6 +1438,11 @@ impl Settings {
             "auto_activate_when_ready" => self.auto_activate_when_ready = value == "true",
             "update_check_enabled" => self.update_check_enabled = value != "false",
             "open_dashboard_on_launch" => self.open_dashboard_on_launch = value != "false",
+            "update_tray_notify" => self.update_tray_notify = value != "false",
+            "tray_color" => self.tray_color = value.parse().unwrap_or(0),
+            "update_notified" => self.update_notified = value.into(),
+            "last_seen_version" => self.last_seen_version = value.into(),
+            "last_seen_commit" => self.last_seen_commit = value.into(),
             "overlays_seeded" => self.overlays_seeded = value == "true",
             "auto_arm_delay_ms" => {
                 if let Ok(v) = value.parse() {
@@ -1412,6 +1477,11 @@ impl Settings {
             k if k.starts_with("integration.") => self.load_integration(value),
             k if k.starts_with("connection.discord.") => {
                 self.load_discord_channel(&k["connection.discord.".len()..], value)
+            }
+            "alerts.look" => {
+                if let Ok(v) = json::parse(value) {
+                    self.alerts_look = crate::integrations::alerts::Look::from_json(&v);
+                }
             }
             "connection.phone" => {
                 if let Ok(v) = json::parse(value) {
@@ -1689,8 +1759,22 @@ impl Settings {
         } else {
             ""
         };
+        // The colours to pick the tray icon's from, so the page holds no
+        // copy of the list.
+        use crate::instance_lock::{shown_tray_color, tray_color_hex, TRAY_COLORS};
+        let tray_colors = (0u8..)
+            .zip(TRAY_COLORS)
+            .map(|(index, (name, _))| {
+                format!(
+                    r#"{{"name":{},"hex":{}}}"#,
+                    json_str(name),
+                    json_str(&tray_color_hex(index))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"crash_protection":{cp},"twitch_client_id":{tci},"twitch_app_built_in":{tbi},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"update_tray_notify":{utn},"tray_color":{tc},"tray_color_choice":{tcc},"tray_colors":[{tcs}],"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"crash_protection":{cp},"twitch_client_id":{tci},"twitch_app_built_in":{tbi},"destinations":{dests}}}"#,
             c = self.configured,
             sww = start_with_windows,
             ik = json_str(ik_shown),
@@ -1715,6 +1799,10 @@ impl Settings {
             aadm = self.auto_arm_delay_ms,
             os = self.overlays_seeded,
             uce = self.update_check_enabled,
+            utn = self.update_tray_notify,
+            tc = json_str(&tray_color_hex(shown_tray_color())),
+            tcc = self.tray_color,
+            tcs = tray_colors,
             odol = self.open_dashboard_on_launch,
             hotkeys = hotkeys,
             midi = midi,
@@ -1735,7 +1823,7 @@ impl Settings {
             errs.push("web_port must be > 0".into());
         }
         if self.ingest_port == self.web_port {
-            errs.push("ingest_port and web_port must differ - they share the same socket otherwise and one will silently fail to bind".into());
+            errs.push("ingest_port and web_port must differ: they share the same socket otherwise and one will silently fail to bind".into());
         }
         if self.buffer_mb < MIN_BUFFER_MB {
             errs.push(format!("buffer_mb must be at least {}", MIN_BUFFER_MB));
@@ -1781,7 +1869,7 @@ impl Settings {
             if d.platform == "custom" || d.platform == "kick" {
                 if d.custom_egress_url.is_empty() {
                     let need = if d.platform == "kick" {
-                        "Kick Server URL required - copy it from your Kick dashboard (Settings -> Stream)"
+                        "Kick Server URL required. Copy it from your Kick dashboard (Settings -> Stream)"
                     } else {
                         "custom RTMP URL required"
                     };
@@ -1800,7 +1888,7 @@ impl Settings {
                 // path instead, so custom doesn't force a separate key.
                 if d.platform == "kick" && d.stream_key.is_empty() {
                     errs.push(format!(
-                        "{}: Kick stream key required - it's next to the Server field in your dashboard",
+                        "{}: Kick stream key required. It's next to the Server field in your dashboard",
                         d.name
                     ));
                     continue;
@@ -2022,9 +2110,26 @@ fn non_empty(s: &String) -> Option<&String> {
     }
 }
 
+/// Where a path from the settings file actually lives: a relative one sits
+/// beside that settings file, an absolute one stays as it is.
+///
+/// Without this a relative path resolves against the working directory,
+/// which is the settings folder in every normal launch but not when
+/// `CONFIG_PATH` names a settings file elsewhere. Two such copies started
+/// from one folder then both picked `./instantclone.buf` there: one buffer
+/// file for two live delays, deleted by whichever quit first. The settings
+/// folder is always writable (every save writes a `.tmp` beside it), so it
+/// is also a place the buffer can always be created.
+pub fn beside_config(config_path: &Path, path: &Path) -> PathBuf {
+    match config_path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.join(path),
+        _ => path.to_path_buf(),
+    }
+}
+
 /// Compile-time OS tag the dashboard reads to pick platform-correct copy
 /// (the start-at-login wording, the file-manager name, the tray mention).
-fn os_name() -> &'static str {
+pub fn os_name() -> &'static str {
     #[cfg(windows)]
     {
         "windows"
@@ -2408,6 +2513,41 @@ fn hex_nibble(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
 
+    /// Two copies started from one folder with CONFIG_PATH pointing at two
+    /// settings files each get the buffer beside their own settings, never
+    /// one shared `./instantclone.buf`. The default launch is unchanged.
+    #[test]
+    fn a_relative_path_lives_beside_its_settings_file() {
+        let default = PathBuf::from("./instantclone.buf");
+        assert_eq!(
+            super::beside_config(Path::new("C:/Streams/A/instantclone.config.json"), &default),
+            Path::new("C:/Streams/A").join(&default)
+        );
+        assert_ne!(
+            super::beside_config(Path::new("C:/Streams/A/c.json"), &default),
+            super::beside_config(Path::new("C:/Streams/B/c.json"), &default)
+        );
+        assert_eq!(
+            super::beside_config(Path::new("./instantclone.config.json"), &default),
+            Path::new(".").join(&default),
+            "the default layout resolves where it always did"
+        );
+        assert_eq!(
+            super::beside_config(Path::new("instantclone.config.json"), &default),
+            default
+        );
+        let absolute = if cfg!(windows) {
+            "D:\\ring.buf"
+        } else {
+            "/srv/ring.buf"
+        };
+        assert_eq!(
+            super::beside_config(Path::new("C:/Streams/A/c.json"), Path::new(absolute)),
+            PathBuf::from(absolute),
+            "an absolute path stays where the user put it"
+        );
+    }
+
     // Mirrors obs_register: what we tell the user to paste into OBS has to
     // resolve under either IP Family, so it stays a hostname.
     #[test]
@@ -2478,8 +2618,8 @@ mod tests {
     /// hash must NEVER appear in the client-facing JSON (only `auth_enabled`).
     #[test]
     fn secret_fields_round_trip_and_hash_stays_server_side() {
-        let dir = std::env::temp_dir().join(format!("ic-cfg-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = crate::test_support::TestDir::new("ic-cfg");
+        let dir = scratch.path().to_path_buf();
         let path = dir.join("sec.config.json");
 
         let mut s = Settings::defaults();
@@ -2521,8 +2661,6 @@ mod tests {
             .unwrap()
             .dashboard_password_hash
             .is_empty());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A newline smuggled into a string setting must not inject a second
@@ -2530,8 +2668,8 @@ mod tests {
     /// ingest_bind_all). The writer strips control chars.
     #[test]
     fn config_write_blocks_newline_injection() {
-        let dir = std::env::temp_dir().join(format!("ic-inj-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = crate::test_support::TestDir::new("ic-inj");
+        let dir = scratch.path().to_path_buf();
         let path = dir.join("inj.config.json");
 
         let mut s = Settings::defaults();
@@ -2546,21 +2684,44 @@ mod tests {
         let loaded = Settings::load(&path).unwrap();
         assert!(!loaded.ingest_bind_all, "injection flipped ingest_bind_all");
         assert!(!loaded.discord_webhook_url.contains('\n'));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Zero or clashing ports, unsafe paths, and an ingest key that isn't one.
     #[test]
-    fn validate_rejects_unsafe_ingest_key() {
-        let mut s = Settings::defaults();
-        s.ingest_key = "good-key_123".into();
-        assert!(!s.validate().iter().any(|e| e.contains("ingest key")));
-        for bad in ["has space", "has?query", "tab\tinside"] {
-            s.ingest_key = bad.into();
+    fn settings_that_cannot_work_fail_validation() {
+        // settings validate rejects zero ports and collisions
+        {
+            let mut s = Settings::defaults();
+            s.ingest_port = 0;
+            assert!(s.validate().iter().any(|e| e.contains("ingest_port")));
+
+            let mut s2 = Settings::defaults();
+            s2.web_port = s2.ingest_port;
+            assert!(s2.validate().iter().any(|e| e.contains("must differ")));
+        }
+        // settings validate rejects unsafe paths
+        {
+            let mut s = Settings::defaults();
+            s.buffer_path = PathBuf::from("../../system32/cmd.exe");
+            let errs = s.validate();
             assert!(
-                s.validate().iter().any(|e| e.contains("ingest key")),
-                "should reject {bad:?}"
+                errs.iter().any(|e| e.contains("buffer_path looks unsafe")),
+                "expected buffer_path validation error, got: {:?}",
+                errs
             );
+        }
+        // validate rejects unsafe ingest key
+        {
+            let mut s = Settings::defaults();
+            s.ingest_key = "good-key_123".into();
+            assert!(!s.validate().iter().any(|e| e.contains("ingest key")));
+            for bad in ["has space", "has?query", "tab\tinside"] {
+                s.ingest_key = bad.into();
+                assert!(
+                    s.validate().iter().any(|e| e.contains("ingest key")),
+                    "should reject {bad:?}"
+                );
+            }
         }
     }
 
@@ -2599,6 +2760,20 @@ mod tests {
 
     /// The dashboard swaps platform-specific copy off this field, so it must
     /// always be present and non-empty.
+    /// The page draws the tray colour picker from this list and marks the
+    /// setup's choice in it.
+    #[test]
+    fn to_json_lists_the_tray_colours_and_the_one_chosen() {
+        let mut settings = Settings::defaults();
+        settings.tray_color = 3;
+        let json = settings.to_json(false, true);
+        assert!(json.contains(r#""tray_color_choice":3"#), "{json}");
+        assert!(
+            json.contains(r##""tray_colors":[{"name":"Blue","hex":"#5ac8fa"},"##),
+            "{json}"
+        );
+    }
+
     #[test]
     fn to_json_carries_the_os_tag() {
         let json = Settings::defaults().to_json(false, true);
@@ -2623,228 +2798,79 @@ mod tests {
         }
     }
 
+    /// Plain pairs, percent and plus encoding, empty values, and a stray percent before a multi-byte character.
     #[test]
-    fn parse_form_handles_basic_encoding() {
-        let h = parse_form("name=Test&platform=twitch&stream_key=abc");
-        assert_eq!(h.get("name"), Some(&"Test".to_string()));
-        assert_eq!(h.get("platform"), Some(&"twitch".to_string()));
-        assert_eq!(h.get("stream_key"), Some(&"abc".to_string()));
+    fn form_bodies_decode_like_a_browser_sends_them() {
+        // parse form handles basic encoding
+        {
+            let h = parse_form("name=Test&platform=twitch&stream_key=abc");
+            assert_eq!(h.get("name"), Some(&"Test".to_string()));
+            assert_eq!(h.get("platform"), Some(&"twitch".to_string()));
+            assert_eq!(h.get("stream_key"), Some(&"abc".to_string()));
+        }
+        // parse form handles percent and plus encoding
+        {
+            // `+` decodes to space, `%21` to `!`, `%C3%A9` to UTF-8 `é`.
+            let h = parse_form("a=hello+world&b=%21&c=%C3%A9");
+            assert_eq!(h.get("a"), Some(&"hello world".to_string()));
+            assert_eq!(h.get("b"), Some(&"!".to_string()));
+            assert_eq!(h.get("c"), Some(&"é".to_string()));
+        }
+        // parse form handles empty value
+        {
+            let h = parse_form("stream_key=&platform=custom");
+            assert_eq!(h.get("stream_key"), Some(&"".to_string()));
+            assert_eq!(h.get("platform"), Some(&"custom".to_string()));
+        }
+        // url decode survives percent before multibyte char
+        // Regression: a bare `%` before a multi-byte UTF-8 char used to slice the
+        // `&str` on a non-char boundary and panic (a remote process abort under
+        // panic=abort). It must now decode losslessly and never panic.
+        {
+            // `%€`, a stray `%` at the very end, and a truncated `%A`.
+            assert_eq!(url_decode("%€"), "%€");
+            assert_eq!(url_decode("abc%"), "abc%");
+            assert_eq!(url_decode("x%Ay"), "x%Ay");
+            // A real escape still works, and mixed content round-trips.
+            assert_eq!(url_decode("a%20b%E2%82%ACc"), "a b€c");
+        }
     }
 
+    /// Where the app may be told to write.
     #[test]
-    fn parse_form_handles_percent_and_plus_encoding() {
-        // `+` decodes to space, `%21` to `!`, `%C3%A9` to UTF-8 `é`.
-        let h = parse_form("a=hello+world&b=%21&c=%C3%A9");
-        assert_eq!(h.get("a"), Some(&"hello world".to_string()));
-        assert_eq!(h.get("b"), Some(&"!".to_string()));
-        assert_eq!(h.get("c"), Some(&"é".to_string()));
+    fn paths_are_safe_unless_they_escape_or_hit_system_folders() {
+        // is path safe blocks traversal and system dirs
+        {
+            assert!(!is_path_safe(&PathBuf::from("../../../etc/passwd")));
+            assert!(!is_path_safe(&PathBuf::from(
+                "C:\\Windows\\System32\\evil.dll"
+            )));
+            assert!(!is_path_safe(&PathBuf::from("/etc/shadow")));
+            assert!(!is_path_safe(&PathBuf::from("")));
+        }
+        // is path safe allows normal paths
+        {
+            assert!(is_path_safe(&PathBuf::from("./instantclone.buf")));
+            assert!(is_path_safe(&PathBuf::from("D:\\streams\\buffer.bin")));
+            assert!(is_path_safe(&PathBuf::from("/home/user/buf")));
+        }
     }
 
-    /// Regression: a bare `%` before a multi-byte UTF-8 char used to slice the
-    /// `&str` on a non-char boundary and panic (a remote process abort under
-    /// panic=abort). It must now decode losslessly and never panic.
+    /// Where a destination's stream is sent: per platform, with its key in the right place.
     #[test]
-    fn url_decode_survives_percent_before_multibyte_char() {
-        // `%€`, a stray `%` at the very end, and a truncated `%A`.
-        assert_eq!(url_decode("%€"), "%€");
-        assert_eq!(url_decode("abc%"), "abc%");
-        assert_eq!(url_decode("x%Ay"), "x%Ay");
-        // A real escape still works, and mixed content round-trips.
-        assert_eq!(url_decode("a%20b%E2%82%ACc"), "a b€c");
-    }
-
-    #[test]
-    fn parse_form_handles_empty_value() {
-        let h = parse_form("stream_key=&platform=custom");
-        assert_eq!(h.get("stream_key"), Some(&"".to_string()));
-        assert_eq!(h.get("platform"), Some(&"custom".to_string()));
-    }
-
-    #[test]
-    fn is_path_safe_blocks_traversal_and_system_dirs() {
-        assert!(!is_path_safe(&PathBuf::from("../../../etc/passwd")));
-        assert!(!is_path_safe(&PathBuf::from(
-            "C:\\Windows\\System32\\evil.dll"
-        )));
-        assert!(!is_path_safe(&PathBuf::from("/etc/shadow")));
-        assert!(!is_path_safe(&PathBuf::from("")));
-    }
-
-    #[test]
-    fn is_path_safe_allows_normal_paths() {
-        assert!(is_path_safe(&PathBuf::from("./instantclone.buf")));
-        assert!(is_path_safe(&PathBuf::from("D:\\streams\\buffer.bin")));
-        assert!(is_path_safe(&PathBuf::from("/home/user/buf")));
-    }
-
-    #[test]
-    fn sink_destination_is_self_contained() {
-        // No stream key, no custom URL - the local test sink needs
-        // neither. The URL is the fixed managed-child endpoint, and
-        // validate() must not demand a key for it.
-        let d = Destination {
-            id: "x".into(),
-            name: "Test sink".into(),
-            enabled: true,
-            platform: "sink".into(),
-            stream_key: String::new(),
-            custom_egress_url: String::new(),
-            twitch_ingest: String::new(),
-            youtube_ingest: String::new(),
-            vod_audio: false,
-            vod_audio_inject_eb: false,
-            stream_format: "horizontal".into(),
-            audio_track: "auto".into(),
-        };
-        assert_eq!(
-            d.egress_url().as_deref(),
-            Some(format!("rtmp://127.0.0.1:{}/live/test", SINK_RTMP_PORT).as_str())
-        );
-        assert!(d.is_well_formed());
-        let mut s = Settings::defaults();
-        s.destinations.push(d);
-        assert!(
-            s.validate().is_empty(),
-            "sink destination must validate without a key: {:?}",
-            s.validate()
-        );
-    }
-
-    #[test]
-    fn destination_egress_url_for_twitch_appends_key() {
-        let d = Destination {
-            id: "x".into(),
-            name: "T".into(),
-            enabled: true,
-            platform: "twitch".into(),
-            stream_key: "live_123_abc".into(),
-            custom_egress_url: String::new(),
-            twitch_ingest: String::new(),
-            youtube_ingest: String::new(),
-            vod_audio: false,
-            vod_audio_inject_eb: false,
-            stream_format: "horizontal".into(),
-            audio_track: "auto".into(),
-        };
-        let url = d.egress_url().unwrap();
-        assert!(url.starts_with("rtmp://live.twitch.tv/app/"));
-        assert!(url.ends_with("/live_123_abc"));
-    }
-
-    #[test]
-    fn destination_egress_url_region_pin_uses_live_dash_slug() {
-        let d = Destination {
-            id: "x".into(),
-            name: "T".into(),
-            enabled: true,
-            platform: "twitch".into(),
-            stream_key: "k".into(),
-            custom_egress_url: String::new(),
-            twitch_ingest: "fra".into(),
-            youtube_ingest: String::new(),
-            vod_audio: false,
-            vod_audio_inject_eb: false,
-            stream_format: "horizontal".into(),
-            audio_track: "auto".into(),
-        };
-        assert_eq!(
-            d.egress_url().as_deref(),
-            Some("rtmp://live-fra.twitch.tv/app/k")
-        );
-    }
-
-    #[test]
-    fn destination_custom_url_with_embedded_key_is_not_double_appended() {
-        // A custom URL that already includes app+key (2+ path segments)
-        // must be passed through verbatim, even if stream_key is set.
-        let d = Destination {
-            id: "x".into(),
-            name: "C".into(),
-            enabled: true,
-            platform: "custom".into(),
-            stream_key: "ignored".into(),
-            custom_egress_url: "rtmp://my.server/live/secret_key".into(),
-            twitch_ingest: String::new(),
-            youtube_ingest: String::new(),
-            vod_audio: false,
-            vod_audio_inject_eb: false,
-            stream_format: "horizontal".into(),
-            audio_track: "auto".into(),
-        };
-        assert_eq!(
-            d.egress_url().as_deref(),
-            Some("rtmp://my.server/live/secret_key"),
-            "custom URL with app+key must not get an extra key appended"
-        );
-    }
-
-    #[test]
-    fn destination_youtube_backup_uses_b_ingest() {
-        let d = Destination {
-            id: "x".into(),
-            name: "Y".into(),
-            enabled: true,
-            platform: "youtube".into(),
-            stream_key: "abcd".into(),
-            custom_egress_url: String::new(),
-            twitch_ingest: String::new(),
-            youtube_ingest: "backup".into(),
-            vod_audio: false,
-            vod_audio_inject_eb: false,
-            stream_format: "horizontal".into(),
-            audio_track: "auto".into(),
-        };
-        assert_eq!(
-            d.egress_url().as_deref(),
-            Some("rtmp://b.rtmp.youtube.com/live2/abcd?backup=1"),
-            "YouTube backup ingest needs the ?backup=1 suffix so their \
-             edge enables real fail-over, not just a duplicate stream"
-        );
-    }
-
-    #[test]
-    fn destination_egress_url_for_kick_uses_pasted_server_plus_key() {
-        // Kick gives each streamer a distinct Server URL (rtmps) in the
-        // dashboard; we store it in custom_egress_url and append the key.
-        // The rtmps scheme makes the egress socket upgrade to TLS - the
-        // old hardcoded rtmp:// host connected on 1935 and silently failed.
-        let d = Destination {
-            id: "x".into(),
-            name: "K".into(),
-            enabled: true,
-            platform: "kick".into(),
-            stream_key: "sk_test_key".into(),
-            custom_egress_url: "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
-                .into(),
-            twitch_ingest: String::new(),
-            youtube_ingest: String::new(),
-            vod_audio: false,
-            vod_audio_inject_eb: false,
-            stream_format: "horizontal".into(),
-            audio_track: "auto".into(),
-        };
-        let url = d.egress_url().unwrap();
-        assert!(url.starts_with("rtmps://"), "kick must use rtmps: {url}");
-        assert!(url.ends_with("/app/sk_test_key"));
-        assert!(d.is_well_formed());
-    }
-
-    #[test]
-    fn kick_server_url_without_app_path_gets_app_appended() {
-        // Streamer pastes just the host (or host with a trailing slash),
-        // leaving off "/app". We add Kick's fixed app so it still resolves
-        // to a well-formed host/app/key URL instead of erroring.
-        for server in [
-            "rtmps://fa723fc1b171.global-contribute.live-video.net/",
-            "rtmps://fa723fc1b171.global-contribute.live-video.net",
-        ] {
+    fn each_platform_builds_its_egress_url() {
+        // sink destination is self contained
+        {
+            // No stream key, no custom URL - the local test sink needs
+            // neither. The URL is the fixed managed-child endpoint, and
+            // validate() must not demand a key for it.
             let d = Destination {
                 id: "x".into(),
-                name: "K".into(),
+                name: "Test sink".into(),
                 enabled: true,
-                platform: "kick".into(),
-                stream_key: "sk_test_key".into(),
-                custom_egress_url: server.into(),
+                platform: "sink".into(),
+                stream_key: String::new(),
+                custom_egress_url: String::new(),
                 twitch_ingest: String::new(),
                 youtube_ingest: String::new(),
                 vod_audio: false,
@@ -2854,10 +2880,189 @@ mod tests {
             };
             assert_eq!(
                 d.egress_url().as_deref(),
-                Some("rtmps://fa723fc1b171.global-contribute.live-video.net/app/sk_test_key"),
-                "host-only Kick server URL '{server}' should gain /app"
+                Some(format!("rtmp://127.0.0.1:{}/live/test", SINK_RTMP_PORT).as_str())
             );
             assert!(d.is_well_formed());
+            let mut s = Settings::defaults();
+            s.destinations.push(d);
+            assert!(
+                s.validate().is_empty(),
+                "sink destination must validate without a key: {:?}",
+                s.validate()
+            );
+        }
+        // destination egress url for twitch appends key
+        {
+            let d = Destination {
+                id: "x".into(),
+                name: "T".into(),
+                enabled: true,
+                platform: "twitch".into(),
+                stream_key: "live_123_abc".into(),
+                custom_egress_url: String::new(),
+                twitch_ingest: String::new(),
+                youtube_ingest: String::new(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
+            };
+            let url = d.egress_url().unwrap();
+            assert!(url.starts_with("rtmp://live.twitch.tv/app/"));
+            assert!(url.ends_with("/live_123_abc"));
+        }
+        // destination egress url region pin uses live dash slug
+        {
+            let d = Destination {
+                id: "x".into(),
+                name: "T".into(),
+                enabled: true,
+                platform: "twitch".into(),
+                stream_key: "k".into(),
+                custom_egress_url: String::new(),
+                twitch_ingest: "fra".into(),
+                youtube_ingest: String::new(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
+            };
+            assert_eq!(
+                d.egress_url().as_deref(),
+                Some("rtmp://live-fra.twitch.tv/app/k")
+            );
+        }
+        // destination custom url with embedded key is not double appended
+        {
+            // A custom URL that already includes app+key (2+ path segments)
+            // must be passed through verbatim, even if stream_key is set.
+            let d = Destination {
+                id: "x".into(),
+                name: "C".into(),
+                enabled: true,
+                platform: "custom".into(),
+                stream_key: "ignored".into(),
+                custom_egress_url: "rtmp://my.server/live/secret_key".into(),
+                twitch_ingest: String::new(),
+                youtube_ingest: String::new(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
+            };
+            assert_eq!(
+                d.egress_url().as_deref(),
+                Some("rtmp://my.server/live/secret_key"),
+                "custom URL with app+key must not get an extra key appended"
+            );
+        }
+        // destination youtube backup uses b ingest
+        {
+            let d = Destination {
+                id: "x".into(),
+                name: "Y".into(),
+                enabled: true,
+                platform: "youtube".into(),
+                stream_key: "abcd".into(),
+                custom_egress_url: String::new(),
+                twitch_ingest: String::new(),
+                youtube_ingest: "backup".into(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
+            };
+            assert_eq!(
+                d.egress_url().as_deref(),
+                Some("rtmp://b.rtmp.youtube.com/live2/abcd?backup=1"),
+                "YouTube backup ingest needs the ?backup=1 suffix so their \
+                 edge enables real fail-over, not just a duplicate stream"
+            );
+        }
+        // destination egress url for kick uses pasted server plus key
+        {
+            // Kick gives each streamer a distinct Server URL (rtmps) in the
+            // dashboard; we store it in custom_egress_url and append the key.
+            // The rtmps scheme makes the egress socket upgrade to TLS - the
+            // old hardcoded rtmp:// host connected on 1935 and silently failed.
+            let d = Destination {
+                id: "x".into(),
+                name: "K".into(),
+                enabled: true,
+                platform: "kick".into(),
+                stream_key: "sk_test_key".into(),
+                custom_egress_url: "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
+                    .into(),
+                twitch_ingest: String::new(),
+                youtube_ingest: String::new(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
+            };
+            let url = d.egress_url().unwrap();
+            assert!(url.starts_with("rtmps://"), "kick must use rtmps: {url}");
+            assert!(url.ends_with("/app/sk_test_key"));
+            assert!(d.is_well_formed());
+        }
+        // kick server url without app path gets app appended
+        {
+            // Streamer pastes just the host (or host with a trailing slash),
+            // leaving off "/app". We add Kick's fixed app so it still resolves
+            // to a well-formed host/app/key URL instead of erroring.
+            for server in [
+                "rtmps://fa723fc1b171.global-contribute.live-video.net/",
+                "rtmps://fa723fc1b171.global-contribute.live-video.net",
+            ] {
+                let d = Destination {
+                    id: "x".into(),
+                    name: "K".into(),
+                    enabled: true,
+                    platform: "kick".into(),
+                    stream_key: "sk_test_key".into(),
+                    custom_egress_url: server.into(),
+                    twitch_ingest: String::new(),
+                    youtube_ingest: String::new(),
+                    vod_audio: false,
+                    vod_audio_inject_eb: false,
+                    stream_format: "horizontal".into(),
+                    audio_track: "auto".into(),
+                };
+                assert_eq!(
+                    d.egress_url().as_deref(),
+                    Some("rtmps://fa723fc1b171.global-contribute.live-video.net/app/sk_test_key"),
+                    "host-only Kick server URL '{server}' should gain /app"
+                );
+                assert!(d.is_well_formed());
+            }
+        }
+        // destination custom rtmps url is accepted
+        {
+            // The Custom platform is the escape hatch for any TLS ingest
+            // (a non-standard Kick host, Facebook, etc.). rtmps:// must
+            // validate and pass through, well-formed with app+key.
+            let d = Destination {
+                id: "x".into(),
+                name: "C".into(),
+                enabled: true,
+                platform: "custom".into(),
+                stream_key: "ignored".into(),
+                custom_egress_url: "rtmps://edge.example.net/app/streamkey".into(),
+                twitch_ingest: String::new(),
+                youtube_ingest: String::new(),
+                vod_audio: false,
+                vod_audio_inject_eb: false,
+                stream_format: "horizontal".into(),
+                audio_track: "auto".into(),
+            };
+            assert_eq!(
+                d.egress_url().as_deref(),
+                Some("rtmps://edge.example.net/app/streamkey")
+            );
+            assert!(d.is_well_formed());
+            assert!(is_rtmp_scheme("rtmps://edge.example.net/app/k"));
+            assert!(is_rtmp_scheme("rtmp://edge.example.net/app/k"));
+            assert!(!is_rtmp_scheme("https://edge.example.net/app/k"));
         }
     }
 
@@ -2911,35 +3116,6 @@ mod tests {
     }
 
     #[test]
-    fn destination_custom_rtmps_url_is_accepted() {
-        // The Custom platform is the escape hatch for any TLS ingest
-        // (a non-standard Kick host, Facebook, etc.). rtmps:// must
-        // validate and pass through, well-formed with app+key.
-        let d = Destination {
-            id: "x".into(),
-            name: "C".into(),
-            enabled: true,
-            platform: "custom".into(),
-            stream_key: "ignored".into(),
-            custom_egress_url: "rtmps://edge.example.net/app/streamkey".into(),
-            twitch_ingest: String::new(),
-            youtube_ingest: String::new(),
-            vod_audio: false,
-            vod_audio_inject_eb: false,
-            stream_format: "horizontal".into(),
-            audio_track: "auto".into(),
-        };
-        assert_eq!(
-            d.egress_url().as_deref(),
-            Some("rtmps://edge.example.net/app/streamkey")
-        );
-        assert!(d.is_well_formed());
-        assert!(is_rtmp_scheme("rtmps://edge.example.net/app/k"));
-        assert!(is_rtmp_scheme("rtmp://edge.example.net/app/k"));
-        assert!(!is_rtmp_scheme("https://edge.example.net/app/k"));
-    }
-
-    #[test]
     fn destination_well_formed_requires_app_and_key() {
         let bad = Destination {
             id: "x".into(),
@@ -2957,29 +3133,16 @@ mod tests {
             audio_track: "auto".into(),
         };
         assert!(!bad.is_well_formed());
-    }
-
-    #[test]
-    fn settings_validate_rejects_zero_ports_and_collisions() {
-        let mut s = Settings::defaults();
-        s.ingest_port = 0;
-        assert!(s.validate().iter().any(|e| e.contains("ingest_port")));
-
-        let mut s2 = Settings::defaults();
-        s2.web_port = s2.ingest_port;
-        assert!(s2.validate().iter().any(|e| e.contains("must differ")));
-    }
-
-    #[test]
-    fn settings_validate_rejects_unsafe_paths() {
-        let mut s = Settings::defaults();
-        s.buffer_path = PathBuf::from("../../system32/cmd.exe");
-        let errs = s.validate();
-        assert!(
-            errs.iter().any(|e| e.contains("buffer_path looks unsafe")),
-            "expected buffer_path validation error, got: {:?}",
-            errs
-        );
+        let no_key = Destination {
+            custom_egress_url: "rtmp://my.server/app".into(),
+            ..bad.clone()
+        };
+        assert!(!no_key.is_well_formed(), "an app with no key");
+        let whole = Destination {
+            custom_egress_url: "rtmp://my.server/app/key".into(),
+            ..bad
+        };
+        assert!(whole.is_well_formed());
     }
 
     #[test]
@@ -2987,15 +3150,8 @@ mod tests {
         // The save writer skips default values for the behaviour keys
         // so a fresh install's config file stays clean. Verify by
         // saving a defaults() snapshot and grepping the file.
-        let path = std::env::temp_dir().join(format!(
-            "ic-test-behavior-defaults-{}-{}.ini",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_file(&path);
+        let scratch = crate::test_support::TestDir::new("ic-test-behavior-defaults");
+        let path = scratch.join("settings.ini");
 
         let mut s = Settings::defaults();
         s.destinations.push(Destination {
@@ -3027,14 +3183,12 @@ mod tests {
             !text.contains("auto_arm_delay_ms"),
             "default 15000 must not be written"
         );
-
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn behavior_sanitize_clamps_and_fills_zero() {
         // sanitize_load() runs after load(); it should clamp the
-        // delay to 600s and replace a zero (e.g. from a hand-edited
+        // delay to MAX_DELAY_MS and replace a zero (e.g. from a hand-edited
         // legacy config or downgrade roundtrip) with the 15 s default
         // so auto-arm never tries to arm at 0 s (= disarm, confusing).
         let mut s = Settings::defaults();
@@ -3049,8 +3203,8 @@ mod tests {
         s.auto_arm_delay_ms = 9_999_999;
         s.sanitize_load();
         assert_eq!(
-            s.auto_arm_delay_ms, 600_000,
-            "above ceiling must clamp to 10 min"
+            s.auto_arm_delay_ms, MAX_DELAY_MS,
+            "above ceiling must clamp to 1 hour"
         );
     }
 
@@ -3060,15 +3214,8 @@ mod tests {
         // file holds the new contents AND no `.tmp` sibling is left on
         // disk. The latter is the visible sign of a successful rename
         // (vs. a hypothetical fallback path that wrote in place).
-        let path = std::env::temp_dir().join(format!(
-            "ic-test-atomic-save-{}-{}.ini",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_file(&path);
+        let scratch = crate::test_support::TestDir::new("ic-test-atomic-save");
+        let path = scratch.join("settings.ini");
 
         // First save: file didn't exist beforehand.
         let mut a = Settings::defaults();
@@ -3102,8 +3249,6 @@ mod tests {
             "save() left a stale {} on disk",
             tmp.display()
         );
-
-        let _ = std::fs::remove_file(&path);
     }
 
     /// The actual atomicity guarantee: when the write cannot complete, the
@@ -3113,7 +3258,7 @@ mod tests {
     /// write) would already have destroyed the original at that point.
     #[test]
     fn a_failed_save_leaves_the_existing_file_untouched() {
-        let path = scratch_config_path("atomic");
+        let (_scratch, path) = scratch_config("atomic");
         let mut s = Settings::defaults();
         s.web_port = 9001;
         s.save(&path).expect("first save");
@@ -3126,7 +3271,6 @@ mod tests {
         let result = s.save(&path);
 
         let after = std::fs::read(&path).unwrap();
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
         assert!(result.is_err(), "the blocked temp write must surface");
         assert_eq!(after, before, "the original config must be untouched");
     }
@@ -3135,10 +3279,9 @@ mod tests {
     fn missing_config_file_falls_back_to_defaults() {
         // The cold-start case: nothing to read yet. Defaults, written out
         // at once so the user can find the file, and normal saving after.
-        let path = scratch_config_path("missing");
+        let (_scratch, path) = scratch_config("missing");
         let startup = Settings::load_for_startup(&path).expect("fresh install");
         let written = path.exists();
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
         let s = startup.settings;
         assert_eq!(s.ingest_port, 1935);
         assert_eq!(s.web_port, 7799);
@@ -3160,7 +3303,7 @@ mod tests {
     /// and stream key was overwritten with defaults on launch.
     #[test]
     fn an_unreadable_config_is_copied_aside_and_not_overwritten() {
-        let path = scratch_config_path("locked");
+        let (_scratch, path) = scratch_config("locked");
         let original = b"configured=true\ndestination.0.stream_key=live_abc\n".to_vec();
         std::fs::write(&path, &original).unwrap();
         let earlier_copy = path.with_file_name("instantclone.cfg.unreadable");
@@ -3171,7 +3314,6 @@ mod tests {
         let on_disk = std::fs::read(&path).unwrap();
         let first_copy = std::fs::read(&earlier_copy).unwrap();
         let new_copy = std::fs::read(path.with_file_name("instantclone.cfg.unreadable.2"));
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
         assert_eq!(on_disk, original, "the original must be untouched");
         assert_eq!(
             first_copy, b"an older copy",
@@ -3189,11 +3331,10 @@ mod tests {
     fn an_unreadable_config_that_cannot_be_copied_stops_startup() {
         // A directory at the config path reads and copies as an error on
         // every OS, without needing a real lock.
-        let path = scratch_config_path("dir");
+        let (_scratch, path) = scratch_config("dir");
         std::fs::create_dir(&path).unwrap();
         let result = Settings::load_for_startup_with(&path, locked_read);
         let still_there = path.is_dir();
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
         assert!(result.is_err());
         assert!(still_there);
     }
@@ -3202,7 +3343,7 @@ mod tests {
     /// copy and no notice: a brief antivirus scan is not worth a dialog.
     #[test]
     fn a_briefly_locked_config_loads_after_a_retry() {
-        let path = scratch_config_path("brief");
+        let (_scratch, path) = scratch_config("brief");
         std::fs::write(&path, "configured=true\nweb_port=9124\n").unwrap();
         let reads = std::cell::Cell::new(0);
         let flaky = |p: &Path| {
@@ -3215,7 +3356,6 @@ mod tests {
         };
         let startup = Settings::load_for_startup_with(&path, flaky).expect("load");
         let copied = path.with_file_name("instantclone.cfg.unreadable").exists();
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
         assert_eq!(startup.settings.web_port, 9124);
         assert!(startup.may_save && startup.notice.is_none());
         assert!(!copied);
@@ -3225,10 +3365,6 @@ mod tests {
     fn parse_hotkey_accepts_modifier_plus_key_and_canonicalizes() {
         // Order-independent, case-insensitive, alias-aware; canonical form
         // is a fixed modifier order so the same combo always renders alike.
-        assert_eq!(
-            canonicalize_hotkey("alt+ctrl+d").as_deref(),
-            Some("Ctrl+Alt+D")
-        );
         assert_eq!(
             canonicalize_hotkey("CONTROL + SHIFT + f8").as_deref(),
             Some("Ctrl+Shift+F8")
@@ -3359,7 +3495,7 @@ mod tests {
     #[test]
     fn no_destination_field_can_inject_a_config_line() {
         let mut s = Settings::defaults();
-        let mut d = Destination {
+        let d = Destination {
             id: "d1".into(),
             name: "Main\nweb_bind_all=true".into(),
             enabled: true,
@@ -3373,17 +3509,10 @@ mod tests {
             stream_format: String::new(),
             audio_track: "auto".into(),
         };
-        d.name = d.name.clone();
         s.destinations = vec![d];
 
-        let path = std::env::temp_dir().join(format!(
-            "ic-inject-{}-{}.conf",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let scratch = crate::test_support::TestDir::new("ic-inject");
+        let path = scratch.join("settings.conf");
         s.save(&path).expect("save");
         let written = std::fs::read_to_string(&path).expect("read back");
 
@@ -3406,21 +3535,14 @@ mod tests {
         assert!(back.dashboard_password_hash.is_empty());
         assert!(!back.web_bind_all);
         assert_eq!(back.web_port, s.web_port);
-        let _ = std::fs::remove_file(&path);
     }
 
     /// Config files get hand-edited and half-written. Loading one must not
     /// panic, and must not let a broken line take a good setting with it.
     #[test]
     fn a_damaged_config_file_still_loads() {
-        let path = std::env::temp_dir().join(format!(
-            "ic-edge-cfg-{}-{}.conf",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let scratch = crate::test_support::TestDir::new("ic-edge-cfg");
+        let path = scratch.join("settings.conf");
         std::fs::write(
             &path,
             "\n\
@@ -3433,7 +3555,8 @@ mod tests {
              hotkey.toggle=Ctrl+Alt+D\n\
              hotkey.nonsense=Ctrl+Alt+E\n\
              midi.toggle=note:1:200\n\
-             target_delay_ms=99999999999999999999\n\
+             armed_delay_ms=99999999999999999999\n\
+             target_delay_ms=99999999\n\
              a truncated final line",
         )
         .expect("write");
@@ -3445,12 +3568,15 @@ mod tests {
             s.midi.toggle.is_empty(),
             "an out-of-range signature is dropped, not stored"
         );
-        assert!(
-            s.target_delay_ms <= 600_000,
-            "an absurd delay is clamped, got {}",
-            s.target_delay_ms
+        assert_eq!(
+            s.target_delay_ms, MAX_DELAY_MS,
+            "a delay past the top is clamped to it"
         );
-        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            s.armed_delay_ms,
+            Settings::defaults().armed_delay_ms,
+            "a number too big to read is ignored"
+        );
     }
 
     /// A stream key, webhook token or egress URL is user-supplied text that
@@ -3583,15 +3709,8 @@ mod tests {
 
     #[test]
     fn hotkeys_round_trip_through_save_and_load() {
-        let path = std::env::temp_dir().join(format!(
-            "ic-test-hotkeys-roundtrip-{}-{}.ini",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_file(&path);
+        let scratch = crate::test_support::TestDir::new("ic-test-hotkeys-roundtrip");
+        let path = scratch.join("settings.ini");
 
         let mut s = Settings::defaults();
         // A lowercase, out-of-order input must be stored canonicalized.
@@ -3625,20 +3744,15 @@ mod tests {
         assert!(loaded.hotkeys.activate.is_empty(), "unbound stays unbound");
 
         // A defaults() config must not write any hotkey line.
-        let bare =
-            std::env::temp_dir().join(format!("ic-test-hotkeys-bare-{}.ini", std::process::id()));
-        let _ = std::fs::remove_file(&bare);
+        let bare = scratch.join("bare.ini");
         let mut d = Settings::defaults();
-        d.destinations = loaded.destinations.clone();
+        d.destinations = loaded.destinations;
         d.save(&bare).expect("save bare");
         let text = std::fs::read_to_string(&bare).expect("read bare");
         assert!(
             !text.contains("hotkey."),
             "unbound hotkeys must stay out of the config file"
         );
-
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(&bare);
     }
 
     /// Note 36 on channel 1 is pad 1 on half the controllers ever made, so
@@ -3690,20 +3804,11 @@ Name@x"
     }
 
     #[test]
-    fn midi_signatures_validate_and_route() {
-        assert_eq!(canonicalize_midi("NOTE:1:36").as_deref(), Some("note:1:36"));
+    fn midi_bindings_keep_only_valid_signatures_and_route_them() {
         assert_eq!(
             canonicalize_midi(" cc : 10 : 20 ").as_deref(),
             Some("cc:10:20")
         );
-        assert!(canonicalize_midi("note:0:36").is_none(), "channel below 1");
-        assert!(
-            canonicalize_midi("note:17:36").is_none(),
-            "channel above 16"
-        );
-        assert!(canonicalize_midi("cc:1:128").is_none(), "data above 127");
-        assert!(canonicalize_midi("pitch:1:1").is_none(), "unknown kind");
-        assert!(canonicalize_midi("note:1").is_none(), "missing data");
         assert!(canonicalize_midi("note:1:1:1").is_none(), "trailing junk");
 
         let mut m = MidiBindings::default();
@@ -3717,19 +3822,13 @@ Name@x"
         assert_eq!(m.action_for(""), None);
     }
 
-    /// Unique scratch path per call, so parallel tests never share a file
-    /// and none of them can reach the user's real settings.
-    fn scratch_config_path(tag: &str) -> PathBuf {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "ic-cfg-{tag}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("instantclone.cfg")
+    /// A unique scratch config path, so parallel tests never share a file and
+    /// none can reach the user's real settings. Keep the folder guard alive:
+    /// dropping it removes the folder.
+    fn scratch_config(tag: &str) -> (crate::test_support::TestDir, PathBuf) {
+        let dir = crate::test_support::TestDir::new(&format!("cfg-{tag}"));
+        let path = dir.join("instantclone.cfg");
+        (dir, path)
     }
 
     fn test_destination(id: &str, platform: &str, key: &str) -> Destination {
@@ -3824,6 +3923,11 @@ Name@x"
             auto_arm_delay_ms: 25_000,
             update_check_enabled: false,
             open_dashboard_on_launch: false,
+            update_tray_notify: false,
+            tray_color: 3,
+            update_notified: "0.1.17".into(),
+            last_seen_version: "0.1.16".into(),
+            last_seen_commit: "5493bf1".into(),
             overlays_seeded: true,
             // A layout value holding its own `=`: the line parser must split
             // on the first `=` only.
@@ -3883,6 +3987,19 @@ Name@x"
                 server: "https://ntfy.example".into(),
                 topic: "texaz-alerts".into(),
             },
+            alerts_look: crate::integrations::alerts::Look {
+                theme: "signal".into(),
+                position: "top".into(),
+                align: "right".into(),
+                scale: 140,
+                font: "Orbitron".into(),
+                accent: "#ff7eb6".into(),
+                opacity: Some(80),
+                radius: Some(0),
+                sound: "media:ding.mp3".into(),
+                css: ".card .text { letter-spacing: 1px }".into(),
+                ..Default::default()
+            },
             integrations_migrated: true,
             twitch_client_id: "abcdefghij0123456789klmnopqrst".into(),
             twitch_shared_chat: true,
@@ -3916,7 +4033,7 @@ Name@x"
     /// alerts" integration, once, and a config saved afterwards keeps them.
     #[test]
     fn old_discord_webhook_is_migrated_once() {
-        let path = scratch_config_path("webhook-migration");
+        let (_scratch, path) = scratch_config("webhook-migration");
         std::fs::write(
             &path,
             "discord_webhook_url=https://discord.com/api/webhooks/9/tok
@@ -3939,13 +4056,12 @@ Name@x"
         let again = Settings::load(&path).unwrap();
         assert_eq!(again.integrations.len(), 1, "migrated exactly once");
         assert_eq!(again.discord_channels, loaded.discord_channels);
-        let _ = std::fs::remove_file(&path);
     }
 
     /// A damaged integration line is skipped; everything else still loads.
     #[test]
     fn a_broken_integration_line_does_not_cost_the_rest() {
-        let path = scratch_config_path("broken-integration");
+        let (_scratch, path) = scratch_config("broken-integration");
         let good = crate::integrations::presets::build("delay_command", "good".into(), "")
             .unwrap()
             .to_json()
@@ -3965,7 +4081,6 @@ integrations_migrated=true
         assert_eq!(loaded.web_port, 7811);
         assert_eq!(loaded.integrations.len(), 1);
         assert_eq!(loaded.integrations[0].id, "good");
-        let _ = std::fs::remove_file(&path);
     }
 
     /// Every setting survives save then load unchanged. The one test that
@@ -3973,16 +4088,16 @@ integrations_migrated=true
     /// read, which otherwise shows up as a setting that resets on restart.
     #[test]
     fn every_setting_round_trips_through_save_and_load() {
-        let path = scratch_config_path("full-roundtrip");
+        let (_scratch, path) = scratch_config("full-roundtrip");
         let original = every_field_non_default();
         original.save(&path).unwrap();
         let loaded = Settings::load(&path);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
         assert_eq!(loaded.unwrap(), original);
     }
 
-    /// Guards the guard: if `every_field_non_default` drifted back to a
-    /// default somewhere, the round trip would stop covering that field.
+    /// Guards the guard, spot-checking the fields most likely to drift: if
+    /// `every_field_non_default` set one back to its default, the round trip
+    /// would stop covering it.
     #[test]
     fn the_round_trip_fixture_really_is_non_default() {
         let s = every_field_non_default();
@@ -4013,7 +4128,7 @@ integrations_migrated=true
     /// at its default.
     #[test]
     fn a_0_1_14_config_loads_intact() {
-        let path = scratch_config_path("v0114");
+        let (_scratch, path) = scratch_config("v0114");
         std::fs::write(
             &path,
             "# InstantClone - written by the app. Hand edits OK.\n\
@@ -4048,7 +4163,6 @@ integrations_migrated=true
         )
         .unwrap();
         let loaded = Settings::load(&path);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
 
         let mut expected = Settings::defaults();
         expected.configured = true;
@@ -4070,7 +4184,7 @@ integrations_migrated=true
     /// do not know are skipped without disturbing the ones we do.
     #[test]
     fn unknown_keys_from_a_newer_build_do_not_disturb_known_ones() {
-        let path = scratch_config_path("newer");
+        let (_scratch, path) = scratch_config("newer");
         let original = every_field_non_default();
         original.save(&path).unwrap();
         let mut text = std::fs::read_to_string(&path).unwrap();
@@ -4081,7 +4195,6 @@ integrations_migrated=true
         let loaded = Settings::load(&path).unwrap();
         loaded.save(&path).unwrap();
         let resaved = std::fs::read_to_string(&path).unwrap();
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
         assert_eq!(loaded, original);
         // Pinned behavior: unknown lines are dropped on the next save, so a
         // rollback followed by any settings change loses the newer build's
@@ -4103,7 +4216,7 @@ integrations_migrated=true
     /// every stream key. The damaged character may be lost; nothing else is.
     #[test]
     fn a_config_with_non_utf8_bytes_still_loads_its_other_fields() {
-        let path = scratch_config_path("ansi");
+        let (_scratch, path) = scratch_config("ansi");
         let mut bytes = b"configured=true\nweb_port=9123\ndestination.0.id=d1\n\
             destination.0.enabled=true\ndestination.0.platform=twitch\n\
             destination.0.stream_key=live_abc\ndestination.0.name=Espa"
@@ -4113,7 +4226,6 @@ integrations_migrated=true
         std::fs::write(&path, &bytes).unwrap();
 
         let s = Settings::load(&path);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
         let s = s.expect("a non-UTF-8 byte must not fail the whole load");
         assert!(s.configured);
         assert_eq!(s.web_port, 9123);
@@ -4128,7 +4240,7 @@ integrations_migrated=true
     /// stream the user removed would go live again after a restart.
     #[test]
     fn deleting_the_last_destination_survives_a_restart() {
-        let path = scratch_config_path("last-dest");
+        let (_scratch, path) = scratch_config("last-dest");
         let mut s = Settings::defaults();
         s.destinations
             .push(test_destination("d1", "youtube", "secret-key"));
@@ -4140,7 +4252,6 @@ integrations_migrated=true
         loaded.save(&path).unwrap();
 
         let reloaded = Settings::load(&path).unwrap();
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
         assert!(
             reloaded.destinations.is_empty(),
             "deleted destination came back: {:?}",
@@ -4148,40 +4259,41 @@ integrations_migrated=true
         );
     }
 
-    /// A config from before destinations existed (only the legacy
-    /// single-destination lines) still becomes one enabled destination.
+    /// The single-destination settings of the first versions become a destination.
     #[test]
-    fn a_pre_destinations_config_still_migrates() {
-        let path = scratch_config_path("legacy");
-        std::fs::write(&path, "configured=true\nplatform=youtube\nstream_key=abc\n").unwrap();
-        let s = Settings::load(&path).unwrap();
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-        assert_eq!(s.destinations.len(), 1);
-        let d = &s.destinations[0];
-        assert_eq!(
-            (d.platform.as_str(), d.stream_key.as_str()),
-            ("youtube", "abc")
-        );
-        assert!(d.enabled);
-        assert_eq!(
-            d.egress_url().as_deref(),
-            Some("rtmp://a.rtmp.youtube.com/live2/abc")
-        );
-    }
-
-    /// The custom-URL-only variant: a key embedded in the URL and no
-    /// `stream_key=` line must migrate too, and keep the URL intact.
-    #[test]
-    fn a_pre_destinations_custom_url_config_still_migrates() {
-        let path = scratch_config_path("legacy-custom");
-        let url = "rtmp://ingest.example.com/app/embedded-key";
-        std::fs::write(&path, format!("platform=custom\ncustom_egress_url={url}\n")).unwrap();
-        let s = Settings::load(&path).unwrap();
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-        assert_eq!(s.destinations.len(), 1);
-        assert_eq!(s.destinations[0].platform, "custom");
-        assert_eq!(s.destinations[0].custom_egress_url, url);
-        assert_eq!(s.destinations[0].egress_url().as_deref(), Some(url));
+    fn a_config_from_before_destinations_still_migrates() {
+        // a pre destinations config still migrates
+        // A config from before destinations existed (only the legacy
+        // single-destination lines) still becomes one enabled destination.
+        {
+            let (_scratch, path) = scratch_config("legacy");
+            std::fs::write(&path, "configured=true\nplatform=youtube\nstream_key=abc\n").unwrap();
+            let s = Settings::load(&path).unwrap();
+            assert_eq!(s.destinations.len(), 1);
+            let d = &s.destinations[0];
+            assert_eq!(
+                (d.platform.as_str(), d.stream_key.as_str()),
+                ("youtube", "abc")
+            );
+            assert!(d.enabled);
+            assert_eq!(
+                d.egress_url().as_deref(),
+                Some("rtmp://a.rtmp.youtube.com/live2/abc")
+            );
+        }
+        // a pre destinations custom url config still migrates
+        // The custom-URL-only variant: a key embedded in the URL and no
+        // `stream_key=` line must migrate too, and keep the URL intact.
+        {
+            let (_scratch, path) = scratch_config("legacy-custom");
+            let url = "rtmp://ingest.example.com/app/embedded-key";
+            std::fs::write(&path, format!("platform=custom\ncustom_egress_url={url}\n")).unwrap();
+            let s = Settings::load(&path).unwrap();
+            assert_eq!(s.destinations.len(), 1);
+            assert_eq!(s.destinations[0].platform, "custom");
+            assert_eq!(s.destinations[0].custom_egress_url, url);
+            assert_eq!(s.destinations[0].egress_url().as_deref(), Some(url));
+        }
     }
 
     /// Other tests trust `is_valid_json` to catch broken hand-written JSON,

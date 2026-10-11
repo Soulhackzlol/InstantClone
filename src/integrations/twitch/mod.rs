@@ -11,11 +11,15 @@
 //!   reconnect instead of a dead chat.
 //! - If Twitch really has logged us out, the dashboard says so with a
 //!   one-click reconnect. Nothing here ever touches the stream.
+//! - Follows, subs, bits, raids, redemptions and ad breaks arrive over
+//!   EventSub (see `eventsub`) while an integration listens for them.
 
 pub mod auth;
+pub mod eventsub;
 pub mod helix;
 pub mod irc;
 
+use super::event::{Event, EventKind};
 use super::store::{Store, TwitchAccount};
 use crate::json::{self, Value};
 use crate::sync::Mutex;
@@ -63,6 +67,9 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const SEND_WAIT: Duration = Duration::from_secs(35);
 /// How long Twitch gets to confirm or refuse a message once it's sent.
 const ANSWER_WAIT: Duration = Duration::from_secs(3);
+/// How long a call Twitch refused for its token waits for the upkeep loop to
+/// refresh that token, before it gives up and reports the refusal.
+const RENEW_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
@@ -139,12 +146,20 @@ pub struct Twitch {
     validate_soon: AtomicBool,
     /// Writes a line to the dashboard log.
     log: Box<dyn Fn(String) + Send + Sync>,
+    /// The Twitch events enabled integrations listen for.
+    events_wanted: watch::Sender<Vec<EventKind>>,
+    /// Bumped when the main account logs in or out, so EventSub starts
+    /// over with the new login (a token refresh keeps the session).
+    main_logins: watch::Sender<u64>,
+    event_status: Mutex<eventsub::Status>,
+    events_out: mpsc::Sender<Event>,
 }
 
 impl Twitch {
+    /// `incoming` hears chat, `events` the Twitch events (see `eventsub`).
     pub fn new(
         store: Arc<Store>,
-        incoming: mpsc::Sender<ChatMessage>,
+        (incoming, events): (mpsc::Sender<ChatMessage>, mpsc::Sender<Event>),
         log: Box<dyn Fn(String) + Send + Sync>,
         custom_client_id: &str,
     ) -> Twitch {
@@ -160,6 +175,47 @@ impl Twitch {
             upkeep_now: Arc::new(Notify::new()),
             validate_soon: AtomicBool::new(false),
             log,
+            events_wanted: watch::Sender::new(Vec::new()),
+            main_logins: watch::Sender::new(0),
+            event_status: Mutex::new(eventsub::Status::default()),
+            events_out: events,
+        }
+    }
+
+    /// Listen for exactly these Twitch events (none: close EventSub).
+    pub fn want_events(&self, kinds: Vec<EventKind>) {
+        self.events_wanted.send_if_modified(|wanted| {
+            let changed = *wanted != kinds;
+            *wanted = kinds;
+            changed
+        });
+    }
+
+    fn set_event_status(&self, change: impl FnOnce(&mut eventsub::Status)) {
+        change(&mut self.event_status.lock());
+    }
+
+    /// The main account logged in or out: EventSub starts over.
+    fn main_login_changed(&self) {
+        self.main_logins.send_modify(|n| *n += 1);
+    }
+
+    /// Subscribe an EventSub session to one event, as the main account.
+    /// Blocks: call from a blocking thread.
+    fn subscribe_event(
+        &self,
+        kind_type: &str,
+        version: &str,
+        session_id: &str,
+    ) -> eventsub::SubState {
+        let condition = eventsub::condition(kind_type, &self.main_user_id());
+        let result = self.helix_call(|a| {
+            helix::subscribe_event(a, (kind_type, version), condition.clone(), session_id)
+        });
+        match result {
+            Ok(helix::Subscribed::Yes) => eventsub::SubState::Listening,
+            Ok(helix::Subscribed::NeedsConsent) => eventsub::SubState::NeedsConsent,
+            Err(e) => eventsub::SubState::Failed(e),
         }
     }
 
@@ -246,6 +302,12 @@ impl Twitch {
         self.restart_chat(Which::Bot);
         let me = self.clone();
         tokio::spawn(async move { me.upkeep().await });
+        tokio::spawn(eventsub::run(
+            self.clone(),
+            self.events_wanted.subscribe(),
+            self.main_logins.subscribe(),
+            self.events_out.clone(),
+        ));
     }
 
     fn restart_chat(&self, which: Which) {
@@ -396,6 +458,7 @@ impl Twitch {
         if which == Which::Main {
             // The bot joins the streamer's channel, which may have changed.
             self.restart_chat(Which::Bot);
+            self.main_login_changed();
         }
     }
 
@@ -419,6 +482,7 @@ impl Twitch {
         if which == Which::Main {
             // No channel to join any more.
             self.bot.stop();
+            self.main_login_changed();
         }
     }
 
@@ -498,6 +562,9 @@ impl Twitch {
                     self.bot.stop();
                 }
                 self.set_account(which, None);
+                if which == Which::Main {
+                    self.main_login_changed();
+                }
                 let who = if which == Which::Main {
                     "your Twitch account"
                 } else {
@@ -568,22 +635,23 @@ impl Twitch {
         }
     }
 
-    fn helix_call<T>(
-        &self,
-        call: impl FnOnce(&helix::Auth) -> Result<T, String>,
-    ) -> Result<T, String> {
+    /// A Helix call as the main account. Blocks for up to `RENEW_WAIT` when
+    /// Twitch refuses the token: call from a blocking thread.
+    fn helix_call<T>(&self, call: impl Fn(&helix::Auth) -> Result<T, String>) -> Result<T, String> {
         let account = self.account(Which::Main).ok_or("connect Twitch first")?;
         let client_id = self.client_id();
-        let auth = helix::Auth {
-            client_id: &client_id,
-            token: &account.access,
-            user_id: &account.user_id,
-        };
-        let result = call(&auth);
-        if matches!(&result, Err(e) if e.contains("log in to Twitch again")) {
-            self.check_tokens_soon();
-        }
-        result
+        with_renewal(
+            account,
+            |account| {
+                call(&helix::Auth {
+                    client_id: &client_id,
+                    token: &account.access,
+                    user_id: &account.user_id,
+                })
+            },
+            || self.check_tokens_soon(),
+            || self.account(Which::Main),
+        )
     }
 
     pub fn marker(&self, description: &str) -> Result<(), String> {
@@ -651,8 +719,38 @@ impl Twitch {
                 "notice",
                 self.notice.lock().as_deref().map_or(Value::Null, json::str),
             ),
+            ("events", self.event_status.lock().to_json()),
         ])
     }
+}
+
+/// Run `call` as `account`. Refused with "log in to Twitch again", the token
+/// most likely ran out a moment ago, as it does when the app starts after
+/// hours off and calls Twitch before its first refresh. `renew` asks the
+/// upkeep loop to refresh it (a refresh token works once, so only that loop
+/// may use it), and once `current` holds a new token the call is tried once
+/// more with it. No new token within `RENEW_WAIT`, or the account gone
+/// (logged out, revoked): the refusal stands.
+fn with_renewal<T>(
+    account: TwitchAccount,
+    call: impl Fn(&TwitchAccount) -> Result<T, String>,
+    renew: impl Fn(),
+    current: impl Fn() -> Option<TwitchAccount>,
+) -> Result<T, String> {
+    let result = call(&account);
+    if !matches!(&result, Err(e) if e.contains("log in to Twitch again")) {
+        return result;
+    }
+    renew();
+    let deadline = Instant::now() + RENEW_WAIT;
+    while Instant::now() < deadline {
+        match current() {
+            None => return result,
+            Some(now) if now.access != account.access => return call(&now),
+            Some(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    result
 }
 
 pub fn unix_ms() -> u64 {
@@ -660,4 +758,103 @@ pub fn unix_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    const REFUSED: &str = "Twitch refused to listen for it: log in to Twitch again";
+
+    fn account(access: &str) -> TwitchAccount {
+        TwitchAccount {
+            access: access.to_string(),
+            ..TwitchAccount::default()
+        }
+    }
+
+    /// Twitch as it answers each token: refused for "old", fine otherwise.
+    /// Records the tokens it was called with.
+    fn twitch<'a>(
+        tokens: &'a RefCell<Vec<String>>,
+    ) -> impl Fn(&TwitchAccount) -> Result<u8, String> + 'a {
+        move |a| {
+            tokens.borrow_mut().push(a.access.clone());
+            if a.access == "old" {
+                Err(REFUSED.to_string())
+            } else {
+                Ok(7)
+            }
+        }
+    }
+
+    /// The app started after hours off: its first call meets an expired
+    /// token. It used to fail for good (follows stayed off until a restart);
+    /// now it waits for the refresh and goes through with the new token.
+    #[test]
+    fn a_call_refused_for_its_token_goes_through_once_it_is_refreshed() {
+        let tokens = RefCell::new(Vec::new());
+        let renewed = Cell::new(0);
+        // The upkeep loop answers the second time it is looked at.
+        let looks = Cell::new(0);
+        let current = || {
+            looks.set(looks.get() + 1);
+            Some(account(if looks.get() < 2 { "old" } else { "new" }))
+        };
+        let result = with_renewal(
+            account("old"),
+            twitch(&tokens),
+            || renewed.set(renewed.get() + 1),
+            current,
+        );
+        assert_eq!(result, Ok(7));
+        assert_eq!(
+            *tokens.borrow(),
+            ["old", "new"],
+            "tried once more, with the new token"
+        );
+        assert_eq!(renewed.get(), 1, "the refresh is asked for once");
+    }
+
+    /// Nothing to retry: a call that worked, or one that failed for any
+    /// other reason, runs once and never waits.
+    #[test]
+    fn only_a_refused_token_is_retried() {
+        for (token, answer) in [
+            ("new", Ok(7)),
+            (
+                "broken",
+                Err("Twitch couldn't create a clip: offline".to_string()),
+            ),
+        ] {
+            let tokens = RefCell::new(Vec::new());
+            let renewed = Cell::new(false);
+            let call = |a: &TwitchAccount| {
+                tokens.borrow_mut().push(a.access.clone());
+                answer.clone()
+            };
+            let started = Instant::now();
+            let result = with_renewal(account(token), call, || renewed.set(true), || None);
+            assert_eq!(result, answer);
+            assert_eq!(tokens.borrow().len(), 1, "{token}: called once");
+            assert!(!renewed.get(), "{token}: no refresh asked for");
+            assert!(
+                started.elapsed() < Duration::from_millis(50),
+                "{token}: no wait"
+            );
+        }
+    }
+
+    /// Logged out or revoked while waiting: the refusal stands at once,
+    /// with no second call and no wait for a token that won't come.
+    #[test]
+    fn a_login_that_is_gone_is_not_waited_for() {
+        let tokens = RefCell::new(Vec::new());
+        let started = Instant::now();
+        let result = with_renewal(account("old"), twitch(&tokens), || {}, || None);
+        assert_eq!(result, Err(REFUSED.to_string()));
+        assert_eq!(tokens.borrow().len(), 1);
+        assert!(started.elapsed() < Duration::from_millis(50));
+    }
 }

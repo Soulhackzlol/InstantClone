@@ -283,46 +283,58 @@ mod tests {
         assert_eq!(loaded, settings);
     }
 
+    /// Whatever the form sends, the settings stay in range and printable.
     #[test]
-    fn hold_secs_is_clamped_and_garbage_ignored() {
-        let mut settings = CrashProtection::default();
-        settings.set("hold_secs", "5");
-        assert_eq!(settings.hold_secs, HOLD_SECS_MIN);
-        settings.set("hold_secs", "9999");
-        assert_eq!(settings.hold_secs, HOLD_SECS_MAX);
-        settings.set("hold_secs", "soon");
-        assert_eq!(settings.hold_secs, HOLD_SECS_MAX);
-    }
-
-    #[test]
-    fn bad_colours_and_themes_are_dropped() {
-        let mut settings = CrashProtection::default();
-        settings.set("accent", "red");
-        settings.set("accent", "#12345");
-        settings.set("theme", "signal");
-        assert_eq!(settings.accent, ACCENT_DEFAULT);
-        assert_eq!(settings.theme, SlateTheme::Whisper);
-    }
-
-    #[test]
-    fn empty_background_means_theme_default() {
-        let mut settings = CrashProtection::default();
-        settings.set("background", "#202020");
-        settings.set("background", "");
-        assert_eq!(settings.background, None);
-        assert_eq!(
-            settings.resolved_background(),
-            SlateTheme::Whisper.default_background()
-        );
-    }
-
-    #[test]
-    fn text_loses_control_characters_and_is_capped() {
-        let mut settings = CrashProtection::default();
-        settings.set("headline", "  Back\nsoon\t ");
-        assert_eq!(settings.headline, "Backsoon");
-        settings.set("subline", &"x".repeat(100));
-        assert_eq!(settings.subline.chars().count(), SUBLINE_MAX_CHARS);
+    fn bad_values_are_clamped_dropped_or_cleaned() {
+        // hold secs is clamped and garbage ignored
+        {
+            let mut settings = CrashProtection::default();
+            settings.set("hold_secs", "5");
+            assert_eq!(settings.hold_secs, HOLD_SECS_MIN);
+            settings.set("hold_secs", "9999");
+            assert_eq!(settings.hold_secs, HOLD_SECS_MAX);
+            settings.set("hold_secs", "soon");
+            assert_eq!(settings.hold_secs, HOLD_SECS_MAX);
+        }
+        // bad colours and themes are dropped
+        {
+            let mut settings = CrashProtection::default();
+            settings.set("accent", "#ff8800");
+            settings.set("theme", "arcade");
+            let good = settings.accent;
+            assert_ne!(good, ACCENT_DEFAULT, "the good colour was taken");
+            settings.set("accent", "red");
+            settings.set("accent", "#12345");
+            settings.set("theme", "signal");
+            assert_eq!(
+                settings.accent, good,
+                "a bad colour keeps the last good one"
+            );
+            assert_eq!(
+                settings.theme,
+                SlateTheme::Arcade,
+                "and so does a bad theme"
+            );
+        }
+        // empty background means theme default
+        {
+            let mut settings = CrashProtection::default();
+            settings.set("background", "#202020");
+            settings.set("background", "");
+            assert_eq!(settings.background, None);
+            assert_eq!(
+                settings.resolved_background(),
+                SlateTheme::Whisper.default_background()
+            );
+        }
+        // text loses control characters and is capped
+        {
+            let mut settings = CrashProtection::default();
+            settings.set("headline", "  Back\nsoon\t ");
+            assert_eq!(settings.headline, "Backsoon");
+            settings.set("subline", &"x".repeat(100));
+            assert_eq!(settings.subline.chars().count(), SUBLINE_MAX_CHARS);
+        }
     }
 
     #[test]

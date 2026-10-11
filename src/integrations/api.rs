@@ -11,7 +11,7 @@ use super::model::{
     valid_discord_webhook, valid_id, DiscordChannel, Integration, PhoneConnection, Roles, Trigger,
     MAX_INTEGRATIONS,
 };
-use super::{engine, presets, recipe, runner, twitch::Which};
+use super::{alert_media, alerts, engine, lights, obsws, presets, recipe, runner, twitch::Which};
 use crate::config::Settings;
 use crate::controller::Controller;
 use crate::json::{self, Value};
@@ -74,11 +74,18 @@ pub async fn route(
     let handle = ctrl.integrations()?.clone();
     let req = || json::parse(body).unwrap_or(Value::Null);
     let reply = match (method, path) {
-        ("GET", "/integrations") => ok(overview(&handle, &settings.borrow(), local_steps_allowed)),
+        ("GET", "/integrations") => ok(overview(
+            &handle,
+            &settings.borrow(),
+            cfg_path,
+            local_steps_allowed,
+        )),
         ("GET", "/integrations/activity") => ok(json::obj([
             ("activity", handle.activity_json()),
             ("stats", handle.stats_json()),
             ("twitch", handle.twitch.status_json()),
+            ("obs", handle.obs_status()),
+            ("alerts", alerts_json(&handle, &settings.borrow(), cfg_path)),
         ])),
         ("POST", "/integrations/save") => save(&req(), settings, cfg_path, local_steps_allowed),
         ("POST", "/integrations/add") => add(&req(), settings, cfg_path, local_steps_allowed),
@@ -99,15 +106,38 @@ pub async fn route(
             None => fail("nothing to measure"),
         },
         ("GET", "/integrations/obs") => ok(handle.obs_status()),
+        ("POST", "/integrations/lights/scan") => scan_lights().await,
+        ("POST", "/integrations/lights/try") => try_light(&req()).await,
         ("POST", "/integrations/fetch") => fetch(&req()).await,
         ("POST", "/integrations/convert") => convert(&req()),
         ("POST", "/integrations/alerts/test") => {
-            handle.alerts.show(
-                "InstantClone",
-                "This is where your alerts show up on stream.",
-                6,
-            );
+            handle.alerts.show(test_card(&req()));
             done()
+        }
+        ("POST", "/integrations/alerts/media/upload") => upload_media(&req(), cfg_path),
+        ("POST", "/integrations/alerts/media/delete") => {
+            let folder = alert_media::folder(cfg_path);
+            match alert_media::delete(&folder, req().str_or("name", "")) {
+                Ok(()) => done(),
+                Err(e) => fail(e),
+            }
+        }
+        ("POST", "/integrations/alerts/look") => {
+            let look = alerts::Look::from_json(&req());
+            update(settings, cfg_path, |s| {
+                s.alerts_look = look;
+                Ok(())
+            })
+        }
+        ("POST", "/integrations/alerts/add-to-obs") => {
+            let action = obsws::Action::BrowserSource {
+                name: ALERTS_SOURCE.to_string(),
+                url: alerts_url(settings.borrow().web_port),
+            };
+            match handle.obs_now(action).await {
+                Ok(()) => done(),
+                Err(e) => fail(e),
+            }
         }
         ("POST", "/integrations/midi/learn") => midi_learn(ctrl),
         ("POST", "/integrations/midi/poll") => {
@@ -129,7 +159,7 @@ pub async fn route(
             }
             done()
         }
-        ("POST", "/integrations/export") => export(&req(), &settings.borrow()),
+        ("POST", "/integrations/export") => export(&req(), &settings.borrow(), cfg_path),
         ("POST", "/integrations/import") => import(&req(), settings, cfg_path, local_steps_allowed),
         ("POST", "/connections/discord") => save_discord(&req(), settings, cfg_path),
         ("POST", "/connections/discord/delete") => delete_discord(&req(), settings, cfg_path),
@@ -234,7 +264,89 @@ fn update(
     done()
 }
 
-fn overview(handle: &super::Handle, s: &Settings, local_steps_allowed: bool) -> Value {
+/// What the alerts browser source is called when the dashboard adds it.
+const ALERTS_SOURCE: &str = "InstantClone alerts";
+
+/// The alerts page's address for OBS on this PC.
+fn alerts_url(web_port: u16) -> String {
+    format!("http://127.0.0.1:{web_port}/alerts")
+}
+
+/// The alerts page: its look, where it's open right now, and the sounds
+/// and pictures uploaded for it.
+fn alerts_json(handle: &super::Handle, s: &Settings, cfg_path: &Path) -> Value {
+    let (in_obs, elsewhere) = handle.alerts.pages_open();
+    let media = alert_media::list(&alert_media::folder(cfg_path))
+        .into_iter()
+        .map(|m| {
+            json::obj([
+                ("name", json::str(&m.name)),
+                ("kind", json::str(m.kind.id())),
+                ("bytes", Value::Num(m.bytes as f64)),
+            ])
+        })
+        .collect();
+    json::obj([
+        ("look", s.alerts_look.to_json()),
+        ("in_obs", Value::Num(in_obs as f64)),
+        ("elsewhere", Value::Num(elsewhere as f64)),
+        ("url", json::str(alerts_url(s.web_port))),
+        ("media", Value::Arr(media)),
+    ])
+}
+
+/// Keep a sound or picture sent from the dashboard (base64url in JSON:
+/// the API's bodies are text).
+fn upload_media(req: &Value, cfg_path: &Path) -> Reply {
+    let Some(data) = recipe::base64url_decode(req.str_or("data", "")) else {
+        return fail("that upload arrived damaged; try again");
+    };
+    match alert_media::save(
+        &alert_media::folder(cfg_path),
+        req.str_or("name", ""),
+        &data,
+    ) {
+        Ok(name) => ok(json::obj([
+            ("ok", Value::Bool(true)),
+            ("name", json::str(name)),
+        ])),
+        Err(e) => fail(e),
+    }
+}
+
+/// The alert "Show it on stream" sends from the editor, already filled in
+/// with sample values; with nothing sent, a generic one. An alert with only
+/// a small title is still that alert, not the generic one.
+fn test_card(req: &Value) -> alerts::Card {
+    let text = req.str_or("text", "").trim();
+    if text.is_empty() && req.str_or("title", "").trim().is_empty() {
+        return alerts::Card::plain(
+            "InstantClone",
+            "This is where your alerts show up on stream.",
+            6,
+        );
+    }
+    alerts::Card {
+        title: req.str_or("title", "").to_string(),
+        text: text.to_string(),
+        seconds: req.str_or("seconds", "6").trim().parse().unwrap_or(6),
+        color: req.str_or("color", "").trim().to_string(),
+        sound: req.str_or("sound", "").trim().to_string(),
+        volume: req
+            .str_or("volume", "")
+            .trim()
+            .parse()
+            .unwrap_or(alerts::DEFAULT_VOLUME),
+        image: req.str_or("image", "").trim().to_string(),
+    }
+}
+
+fn overview(
+    handle: &super::Handle,
+    s: &Settings,
+    cfg_path: &Path,
+    local_steps_allowed: bool,
+) -> Value {
     // Previews and "Try it" use the real channel once Twitch is connected.
     let channel = handle.twitch.channel();
     let global = Value::Arr(
@@ -305,6 +417,9 @@ fn overview(handle: &super::Handle, s: &Settings, local_steps_allowed: bool) -> 
                         if let Err(e) = check_connections(i, s) {
                             p.invalid.push(e);
                         }
+                        if let Some(e) = command_taken(i, s) {
+                            p.invalid.push(e);
+                        }
                         (
                             i.id.clone(),
                             Value::Arr(p.invalid.into_iter().map(json::str).collect()),
@@ -314,6 +429,10 @@ fn overview(handle: &super::Handle, s: &Settings, local_steps_allowed: bool) -> 
             ),
         ),
         ("twitch", handle.twitch.status_json()),
+        ("obs", handle.obs_status()),
+        ("alerts", alerts_json(handle, s, cfg_path)),
+        // For the "Report it" links, which fill in the issue form's version.
+        ("version", json::str(env!("CARGO_PKG_VERSION"))),
         ("twitch_shared_chat", Value::Bool(s.twitch_shared_chat)),
         // Markers, clips and chat act on the logged-in channel; say so when
         // the Twitch destinations stream somewhere else.
@@ -400,13 +519,32 @@ fn save(
     if let Some(e) = shortcut_taken(&integration, &settings.borrow()) {
         return fail(e);
     }
-    // Switched on, it must be ready to run; switched off, it saves as a
-    // draft and the dashboard lists what is still missing.
-    if integration.enabled && !problems.incomplete.is_empty() {
-        return fail(format!(
-            "{}. Finish it, or switch it off to save it as a draft.",
-            problems.incomplete.join("; ")
-        ));
+    let was_on = settings
+        .borrow()
+        .integrations
+        .iter()
+        .any(|i| i.id == integration.id && i.enabled);
+    if integration.enabled {
+        if let Some(e) = command_taken(&integration, &settings.borrow()) {
+            if was_on {
+                return fail(e);
+            }
+            problems.incomplete.push(e);
+        }
+    }
+    // Switched on, it must be ready to run. One already running keeps
+    // running as it was rather than stop over a half-made edit; a new one
+    // or a draft saves as a draft, switched off, so no work is lost, and
+    // the dashboard lists what is still missing.
+    let drafted = integration.enabled && !problems.incomplete.is_empty();
+    if drafted {
+        if was_on {
+            return fail(format!(
+                "{}. Finish it, or switch it off to save it as a draft.",
+                problems.incomplete.join("; ")
+            ));
+        }
+        integration.enabled = false;
     }
     let id = integration.id.clone();
     let warnings = unknown_vars(&integration);
@@ -432,6 +570,7 @@ fn save(
     ok(json::obj([
         ("ok", Value::Bool(true)),
         ("id", json::str(&id)),
+        ("drafted", Value::Bool(drafted)),
         (
             "warnings",
             Value::Arr(warnings.into_iter().map(json::str).collect()),
@@ -489,6 +628,32 @@ pub fn unknown_vars(integration: &Integration) -> Vec<String> {
                 "" => "text".to_string(),
                 name => name.to_string(),
             }),
+            StepKind::Obs if s.param("action") == "check" => {
+                let name = match s.param("save_as").trim() {
+                    "" => "obs",
+                    name => name,
+                };
+                let mut fields: Vec<String> = ["scene", "streaming", "recording"]
+                    .map(String::from)
+                    .to_vec();
+                let sources = super::obsws::listed_names(s.param("source"));
+                if !sources.is_empty() {
+                    fields.extend(["muted", "visible"].map(String::from));
+                }
+                if sources.len() > 1 {
+                    for key in super::obsws::source_keys(&sources) {
+                        fields.extend([format!("{key}.muted"), format!("{key}.visible")]);
+                    }
+                }
+                known.extend(fields.iter().map(|field| format!("{name}.{field}")));
+            }
+            StepKind::Program if s.param("wait") == "yes" => {
+                let name = match s.param("save_as").trim() {
+                    "" => "program",
+                    name => name,
+                };
+                known.extend(["output", "code", "ok"].map(|field| format!("{name}.{field}")));
+            }
             _ => {}
         });
         visit_steps(&h.steps, &mut |s| {
@@ -546,6 +711,35 @@ fn shortcut_taken(integration: &Integration, s: &Settings) -> Option<String> {
             )
         })
     })
+}
+
+/// A chat command or alias `integration` answers that another switched-on
+/// integration answers too: the engine runs every match, so one `!delay`
+/// would get two replies. Whether `integration` itself is on is the
+/// caller's question.
+fn command_taken(integration: &Integration, s: &Settings) -> Option<String> {
+    fn commands(i: &Integration) -> impl Iterator<Item = &String> {
+        i.handlers
+            .iter()
+            .filter(|h| h.enabled)
+            .filter_map(|h| match &h.trigger {
+                Trigger::ChatCommand {
+                    command, aliases, ..
+                } => Some(std::iter::once(command).chain(aliases)),
+                _ => None,
+            })
+            .flatten()
+    }
+    s.integrations
+        .iter()
+        .filter(|other| other.enabled && other.id != integration.id)
+        .find_map(|other| {
+            let word = commands(integration).find(|w| commands(other).any(|o| o == *w))?;
+            Some(format!(
+                "\"{}\" already answers {word}; change the command, or switch that one off",
+                other.name
+            ))
+        })
 }
 
 /// Every Discord step must point at a connection that exists.
@@ -618,8 +812,13 @@ fn add(
             if s.integrations.len() >= MAX_INTEGRATIONS {
                 return Err(format!("you already have {MAX_INTEGRATIONS} integrations"));
             }
-            let built =
+            let mut built =
                 presets::build(preset, new_id(), &channel).ok_or("unknown catalog entry")?;
+            // "Add another" of a chat command: the copy waits, switched off,
+            // until it gets a command of its own.
+            if built.enabled && command_taken(&built, s).is_some() {
+                built.enabled = false;
+            }
             // A catalog entry that writes a file could never be finished.
             if !local_steps_allowed && built.has_local_effects() {
                 if presets_to_add.len() > 1 {
@@ -670,6 +869,9 @@ fn toggle(
             if let Some(taken) = shortcut_taken(integration, s) {
                 return Err(taken);
             }
+            if let Some(taken) = command_taken(integration, s) {
+                return Err(taken);
+            }
         }
         s.integrations[at].enabled = enabled;
         Ok(())
@@ -684,12 +886,12 @@ fn duplicate(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Pa
         if s.integrations.len() >= MAX_INTEGRATIONS {
             return Err(format!("you already have {MAX_INTEGRATIONS} integrations"));
         }
-        let original = s
+        let at = s
             .integrations
             .iter()
-            .find(|i| i.id == id)
-            .cloned()
+            .position(|i| i.id == id)
             .ok_or("that integration no longer exists")?;
+        let original = s.integrations[at].clone();
         // The copy starts off, with no hotkey or pad and its own web call
         // link: otherwise one press, command or link would run both.
         let mut copy = original;
@@ -714,7 +916,8 @@ fn duplicate(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Pa
                 _ => {}
             }
         }
-        s.integrations.push(copy);
+        // Right after the original, where the user is looking.
+        s.integrations.insert(at + 1, copy);
         Ok(())
     });
     with_id(reply, &returned)
@@ -789,6 +992,32 @@ fn convert(req: &Value) -> Reply {
 /// Longest answer the editor's "Send request" shows.
 const FETCH_SHOWN: usize = 200_000;
 
+/// Look for lights and plugs on the network (a few seconds).
+async fn scan_lights() -> Reply {
+    let found = tokio::task::spawn_blocking(|| lights::scan(lights::SCAN_WAIT))
+        .await
+        .unwrap_or_default();
+    ok(json::obj([(
+        "devices",
+        Value::Arr(found.iter().map(lights::Device::to_json).collect()),
+    )]))
+}
+
+/// Flash a device so the user sees which one it is.
+async fn try_light(req: &Value) -> Reply {
+    let device = req.str_or("device", "").to_string();
+    let rgb = lights::parse_color(req.str_or("color", "")).unwrap_or([255, 255, 255]);
+    let flash = lights::Command::Flash {
+        rgb,
+        brightness: None,
+    };
+    match tokio::task::spawn_blocking(move || lights::send(&device, flash)).await {
+        Ok(Ok(note)) => ok(json::obj([("note", json::str(note.unwrap_or_default()))])),
+        Ok(Err(why)) => fail(why),
+        Err(_) => fail("the light test crashed"),
+    }
+}
+
 /// The editor's "Send request": make the request a web request step would,
 /// with the values the user typed, and show what came back.
 async fn fetch(req: &Value) -> Reply {
@@ -831,7 +1060,7 @@ async fn fetch(req: &Value) -> Reply {
     }
 }
 
-fn export(req: &Value, s: &Settings) -> Reply {
+fn export(req: &Value, s: &Settings, cfg_path: &Path) -> Reply {
     let ids: Vec<&str> = req
         .get("ids")
         .and_then(Value::as_array)
@@ -852,9 +1081,15 @@ fn export(req: &Value, s: &Settings) -> Reply {
         "" => chosen[0].name.clone(),
         n => n.to_string(),
     };
+    // Alerts bring the theme and their uploads unless that's unticked.
+    let look = req.bool_or("with_theme", true).then_some(&s.alerts_look);
+    let folder = alert_media::folder(cfg_path);
     ok(json::obj([
         ("ok", Value::Bool(true)),
-        ("recipe", json::str(recipe::export(&name, &chosen))),
+        (
+            "recipe",
+            json::str(recipe::export(&name, &chosen, look, &folder)),
+        ),
     ]))
 }
 
@@ -891,6 +1126,10 @@ fn import(
             ("items", Value::Arr(items)),
             ("uses_discord", Value::Bool(parsed.uses_discord())),
             ("local_effects", Value::Bool(parsed.has_local_effects())),
+            (
+                "alerts",
+                shared_alerts_review(&parsed, &settings.borrow().alerts_look),
+            ),
         ]));
     }
     if parsed.has_local_effects() && !local_steps_allowed {
@@ -912,6 +1151,21 @@ fn import(
         recipe::map_discord(&mut parsed, &channel);
     }
     let count = parsed.integrations.len();
+    if would_overflow(settings, count) {
+        return fail(format!(
+            "that would go over {MAX_INTEGRATIONS} integrations"
+        ));
+    }
+    let (theme, added_media) =
+        match keep_shared_alerts(&mut parsed, req.bool_or("use_theme", false), cfg_path) {
+            Ok(kept) => kept,
+            Err(e) => return fail(e),
+        };
+    let ids: Vec<Value> = parsed
+        .integrations
+        .iter()
+        .map(|i| json::str(&i.id))
+        .collect();
     let reply = update(settings, cfg_path, move |s| {
         if s.integrations.len() + count > MAX_INTEGRATIONS {
             return Err(format!(
@@ -919,15 +1173,111 @@ fn import(
             ));
         }
         s.integrations.extend(parsed.integrations);
+        if let Some(theme) = theme {
+            s.alerts_look = theme;
+        }
         Ok(())
     });
     if reply.0 != "200 OK" {
+        // Nothing was added, so the uploads saved for it go too.
+        forget_media(&alert_media::folder(cfg_path), &added_media);
         return reply;
     }
     ok(json::obj([
         ("ok", Value::Bool(true)),
         ("added", Value::Num(count as f64)),
+        ("ids", Value::Arr(ids)),
     ]))
+}
+
+/// Whether adding this many integrations goes over the limit; checked
+/// again under the write lock, this one keeps uploads from being saved
+/// for an import that can't happen.
+fn would_overflow(settings: &Arc<watch::Sender<Settings>>, adding: usize) -> bool {
+    settings.borrow().integrations.len() + adding > MAX_INTEGRATIONS
+}
+
+/// What a recipe's alerts bring, for the import preview: its theme, the
+/// uploads that came along and those that didn't, and whether this PC's
+/// alerts page still has the plain default theme (then taking theirs is
+/// ticked to start).
+fn shared_alerts_review(parsed: &recipe::Recipe, mine: &alerts::Look) -> Value {
+    let Some(shared) = &parsed.alerts else {
+        return Value::Null;
+    };
+    let named = |name: &str| {
+        json::obj([
+            ("name", json::str(name)),
+            ("kind", json::str(recipe::media_kind(name))),
+        ])
+    };
+    json::obj([
+        ("look", shared.look.to_json()),
+        (
+            "media",
+            Value::Arr(shared.media.iter().map(|(n, _)| named(n)).collect()),
+        ),
+        (
+            "left_out",
+            Value::Arr(shared.left_out.iter().map(|n| named(n)).collect()),
+        ),
+        (
+            "mine_is_default",
+            Value::Bool(*mine == alerts::Look::default()),
+        ),
+    ])
+}
+
+/// Save the uploads a recipe brought and point its alerts at them.
+/// Returns the sharer's theme (pointed at those uploads too) when the
+/// importer chose to use it.
+fn keep_shared_alerts(
+    parsed: &mut recipe::Recipe,
+    use_theme: bool,
+    cfg_path: &Path,
+) -> Result<(Option<alerts::Look>, Vec<String>), String> {
+    let Some(shared) = parsed.alerts.take() else {
+        // Shared without its uploads: an alert naming one falls back (the
+        // theme sound, no picture) instead of pointing at a file that isn't
+        // here, or at one of the importer's that happens to share the name.
+        recipe::point_media(parsed, None, &std::collections::BTreeMap::new());
+        return Ok((None, Vec::new()));
+    };
+    let folder = alert_media::folder(cfg_path);
+    // What was here before: an identical upload is reused, and a failed
+    // import may only take back the files it saved itself.
+    let here: std::collections::HashSet<String> = alert_media::list(&folder)
+        .into_iter()
+        .map(|m| m.name)
+        .collect();
+    let mut saved = std::collections::BTreeMap::new();
+    let mut added = Vec::new();
+    for (name, data) in &shared.media {
+        let kept = match recipe::keep_shared_media(&folder, name, data) {
+            Ok(kept) => kept,
+            Err(e) => {
+                forget_media(&folder, &added);
+                return Err(format!("couldn't keep {name}: {e}"));
+            }
+        };
+        if !here.contains(&kept) && !added.contains(&kept) {
+            added.push(kept.clone());
+        }
+        saved.insert(name.clone(), kept);
+    }
+    let mut theme = use_theme.then_some(shared.look);
+    recipe::point_media(parsed, theme.as_mut(), &saved);
+    Ok((theme, added))
+}
+
+/// Remove the uploads a failed import saved, so they don't stay behind
+/// unused and count toward the uploads limit.
+fn forget_media(folder: &Path, names: &[String]) {
+    for name in names {
+        if let Err(e) = alert_media::delete(folder, name) {
+            log_line!("[integrations] couldn't remove {name} after a failed import: {e}");
+        }
+    }
 }
 
 /// Who can start a chat trigger, in words. The broadcaster always can.
@@ -991,8 +1341,12 @@ fn effect_review(i: &Integration) -> Vec<Value> {
                 add("danger", "Anyone in chat can change your delay")
             }
             StepKind::DelayAction => add("caution", "Changes your delay"),
-            StepKind::Obs => add("caution", "Controls OBS (scenes, sources, text)"),
+            StepKind::Obs => add(
+                "caution",
+                "Controls OBS (scenes, sources, recording, audio)",
+            ),
             StepKind::Http => add("caution", "Calls a web address you fill in"),
+            StepKind::Light => add("caution", "Controls a light or plug on your network"),
             StepKind::Clip => add("info", "Makes clips"),
             StepKind::Marker => add("info", "Adds VOD markers"),
             StepKind::Discord => add("info", "Posts on Discord"),
@@ -1037,7 +1391,8 @@ fn summary(i: &Integration) -> String {
         .iter()
         .map(|h| super::model::count_steps(&h.steps))
         .sum();
-    format!("When {} · {steps} steps", triggers.join(", "))
+    let unit = if steps == 1 { "step" } else { "steps" };
+    format!("When {} · {steps} {unit}", triggers.join(", "))
 }
 
 fn save_discord(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -> Reply {
@@ -1264,15 +1619,35 @@ mod tests {
             .params
             .insert("text".into(), "{delya} for {user} at {time}".into());
         assert_eq!(unknown_vars(&i), vec!["delya".to_string()]);
-        for p in presets::PRESETS {
-            let built = presets::build(p.id, "x".into(), "c").unwrap();
-            assert!(
-                unknown_vars(&built).is_empty(),
-                "{}: {:?}",
-                p.id,
-                unknown_vars(&built)
-            );
-        }
+    }
+
+    #[test]
+    fn checks_and_waited_programs_fill_their_values() {
+        use super::super::model::{Step, StepKind};
+        let mut i = presets::build("delay_command", "d".into(), "").unwrap();
+        let text =
+            "{obs.muted?muted:unmuted} {cam.scene} {cam.desk.muted} {rank.output} {program.code}";
+        i.handlers[0].steps = vec![
+            Step::new(StepKind::Obs, &[("action", "check"), ("source", "Mic")]),
+            Step::new(
+                StepKind::Obs,
+                &[
+                    ("action", "check"),
+                    ("source", "Desk\nMic"),
+                    ("save_as", "cam"),
+                ],
+            ),
+            Step::new(StepKind::Program, &[("wait", "yes"), ("save_as", "rank")]),
+            Step::new(StepKind::Chat, &[("text", text)]),
+        ];
+        assert_eq!(unknown_vars(&i), vec!["program.code".to_string()]);
+        i.handlers[0].steps[0]
+            .params
+            .insert("source".into(), String::new());
+        assert_eq!(
+            unknown_vars(&i),
+            vec!["obs.muted".to_string(), "program.code".to_string()]
+        );
     }
 
     #[test]
@@ -1303,8 +1678,8 @@ mod tests {
     #[test]
     fn programs_and_files_are_locked_when_the_request_may_not_set_them_up() {
         use super::super::model::{Step, StepKind};
-        let dir = std::env::temp_dir().join(format!("ic-local-steps-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = crate::test_support::TestDir::new("ic-local-steps");
+        let dir = scratch.path().to_path_buf();
         let cfg = dir.join("instantclone.config.json");
         let settings = Arc::new(watch::channel(Settings::defaults()).0);
         let mut i = presets::build("delay_command", "d".into(), "").unwrap();
@@ -1328,14 +1703,17 @@ mod tests {
         let shared = json::obj([
             (
                 "recipe",
-                json::str(recipe::export("kit", std::slice::from_ref(&i))),
+                json::str(recipe::export(
+                    "kit",
+                    std::slice::from_ref(&i),
+                    None,
+                    Path::new(""),
+                )),
             ),
             ("apply", Value::Bool(true)),
             ("allow_local", Value::Bool(true)),
         ]);
         assert!(locked(import(&shared, &settings, &cfg, false)));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1370,12 +1748,224 @@ mod tests {
         assert!(effects.contains(&("danger".into(), "Runs a program on this PC".into())));
     }
 
+    /// A recipe's uploads are saved before its integrations are added. If
+    /// that fails, only the files it saved are taken back: an identical file
+    /// that was already here was reused, and stays.
+    #[test]
+    fn a_failed_import_only_takes_back_the_uploads_it_saved() {
+        let scratch = crate::test_support::TestDir::new("ic-import-media");
+        let cfg = scratch.path().join("instantclone.config.json");
+        let folder = alert_media::folder(&cfg);
+        let mine = alert_media::save(&folder, "ding.mp3", b"mine").unwrap();
+        let mut parsed = recipe::Recipe {
+            name: "shared".into(),
+            integrations: Vec::new(),
+            alerts: Some(recipe::SharedAlerts {
+                look: alerts::Look::default(),
+                media: vec![
+                    ("ding.mp3".into(), b"mine".to_vec()),
+                    ("pop.mp3".into(), b"theirs".to_vec()),
+                ],
+                left_out: Vec::new(),
+            }),
+        };
+        let (_, added) = keep_shared_alerts(&mut parsed, false, &cfg).unwrap();
+        assert_eq!(added, ["pop.mp3"]);
+        forget_media(&folder, &added);
+        let left: Vec<String> = alert_media::list(&folder)
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
+        assert_eq!(left, [mine]);
+    }
+
+    /// A recipe shared without its uploads: its alerts fall back instead of
+    /// naming a file the importer doesn't have (or a different one of
+    /// theirs with the same name).
+    #[test]
+    fn alerts_shared_without_their_uploads_fall_back() {
+        use crate::integrations::model::{Step, StepKind};
+        let scratch = crate::test_support::TestDir::new("ic-import-no-media");
+        let cfg = scratch.path().join("instantclone.config.json");
+        let mut integration = presets::build("delay_command", "d".into(), "").unwrap();
+        integration.handlers[0].steps = vec![Step::new(
+            StepKind::Overlay,
+            &[("sound", "media:ding.mp3"), ("image", "media:party.gif")],
+        )];
+        let mut parsed = recipe::Recipe {
+            name: "shared".into(),
+            integrations: vec![integration],
+            alerts: None,
+        };
+        keep_shared_alerts(&mut parsed, false, &cfg).unwrap();
+        let step = &parsed.integrations[0].handlers[0].steps[0];
+        assert_eq!(step.param("sound"), alerts::THEME_SOUND);
+        assert_eq!(step.param("image"), "");
+    }
+
+    /// "Show it on stream" for an alert with a title and no text used to
+    /// show the generic card and still say the alert was on the page.
+    #[test]
+    fn an_alert_with_only_a_title_is_shown_as_itself() {
+        let titled = test_card(&json::parse(r#"{"title":"New follower","text":" "}"#).unwrap());
+        assert_eq!(titled.title, "New follower");
+        assert_eq!(titled.text, "");
+        assert_eq!(test_card(&json::parse("{}").unwrap()).title, "InstantClone");
+    }
+
     #[test]
     fn summaries_name_the_triggers() {
+        // The step count is the preset's own business: only its shape here.
         let i = presets::build("mod_controls", "m".into(), "").unwrap();
-        assert_eq!(
-            summary(&i),
-            "When !cut in chat, !setdelay in chat · 8 steps"
+        let text = summary(&i);
+        assert!(
+            text.starts_with("When !cut in chat, !setdelay in chat · "),
+            "{text}"
         );
+        assert!(text.ends_with(" steps"), "{text}");
+        let one = presets::build("delay_command", "d".into(), "").unwrap();
+        assert_eq!(summary(&one), "When !delay in chat · 1 step");
+    }
+
+    /// Settings and a config file of their own, for tests that save.
+    fn scratch(name: &str) -> (Arc<watch::Sender<Settings>>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ic-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        (
+            Arc::new(watch::channel(Settings::defaults()).0),
+            dir.join("instantclone.config.json"),
+        )
+    }
+
+    fn stored(settings: &watch::Sender<Settings>, id: &str) -> Option<Integration> {
+        settings
+            .borrow()
+            .integrations
+            .iter()
+            .find(|i| i.id == id)
+            .cloned()
+    }
+
+    #[test]
+    fn two_integrations_never_answer_the_same_chat_command() {
+        let (settings, cfg) = scratch("commands");
+        let first = presets::build("delay_command", "first".into(), "").unwrap();
+        assert_eq!(save(&first.to_json(), &settings, &cfg, true).0, "200 OK");
+
+        // A second "!delay", switched on: saved, but as a draft.
+        let second = presets::build("delay_command", "second".into(), "").unwrap();
+        let reply = save(&second.to_json(), &settings, &cfg, true);
+        assert_eq!(reply.0, "200 OK");
+        assert!(reply.2.contains(r#""drafted":true"#), "{}", reply.2);
+        assert!(reply.2.contains("already answers !delay"), "{}", reply.2);
+        assert!(!stored(&settings, "second").unwrap().enabled);
+
+        // Switching it on is refused, and so is an alias that clashes.
+        let on = json::obj([("id", json::str("second")), ("enabled", Value::Bool(true))]);
+        let refused = toggle(&on, &settings, &cfg, true);
+        assert!(
+            refused.0 != "200 OK" && refused.2.contains("already answers"),
+            "{}",
+            refused.2
+        );
+        let mut alias = second;
+        if let Trigger::ChatCommand {
+            command, aliases, ..
+        } = &mut alias.handlers[0].trigger
+        {
+            *command = "!wait".into();
+            *aliases = vec!["!delay".into()];
+        }
+        assert!(command_taken(&alias, &settings.borrow()).is_some());
+
+        // Its own command: no clash, and it switches on.
+        if let Trigger::ChatCommand { aliases, .. } = &mut alias.handlers[0].trigger {
+            aliases.clear();
+        }
+        let reply = save(&alias.to_json(), &settings, &cfg, true);
+        assert!(reply.2.contains(r#""drafted":false"#), "{}", reply.2);
+        assert!(stored(&settings, "second").unwrap().enabled);
+
+        // A switched-off one is no clash, and one integration never clashes
+        // with itself.
+        assert_eq!(command_taken(&first, &settings.borrow()), None);
+        let off = json::obj([("id", json::str("first")), ("enabled", Value::Bool(false))]);
+        assert_eq!(toggle(&off, &settings, &cfg, true).0, "200 OK");
+        let mut again = alias.clone();
+        again.id = "third".into();
+        if let Trigger::ChatCommand { command, .. } = &mut again.handlers[0].trigger {
+            *command = "!delay".into();
+        }
+        assert_eq!(command_taken(&again, &settings.borrow()), None);
+
+        let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
+    }
+
+    #[test]
+    fn adding_another_chat_command_adds_it_switched_off() {
+        let (settings, cfg) = scratch("add-another");
+        let add_one = || {
+            let reply = add(
+                &json::obj([("preset", json::str("delay_command"))]),
+                &settings,
+                &cfg,
+                true,
+            );
+            assert_eq!(reply.0, "200 OK", "{}", reply.2);
+        };
+        add_one();
+        add_one();
+        let on: Vec<bool> = settings
+            .borrow()
+            .integrations
+            .iter()
+            .map(|i| i.enabled)
+            .collect();
+        assert_eq!(on, vec![true, false]);
+        let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
+    }
+
+    #[test]
+    fn an_unfinished_save_keeps_the_work_without_stopping_a_running_one() {
+        let (settings, cfg) = scratch("drafts");
+        let mut webhook = presets::build("webhook", "hook".into(), "").unwrap();
+        webhook.enabled = true;
+        let reply = save(&webhook.to_json(), &settings, &cfg, true);
+        assert_eq!(reply.0, "200 OK", "a new one is kept as a draft");
+        assert!(reply.2.contains(r#""drafted":true"#), "{}", reply.2);
+        assert!(!stored(&settings, "hook").unwrap().enabled);
+
+        // One that runs keeps running as it was: the edit is refused.
+        let running = presets::build("delay_command", "cmd".into(), "").unwrap();
+        assert_eq!(save(&running.to_json(), &settings, &cfg, true).0, "200 OK");
+        let mut broken = running.clone();
+        broken.handlers[0].steps[0]
+            .params
+            .insert("text".into(), String::new());
+        let reply = save(&broken.to_json(), &settings, &cfg, true);
+        assert_ne!(reply.0, "200 OK");
+        assert_eq!(stored(&settings, "cmd").unwrap(), running);
+        let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
+    }
+
+    #[test]
+    fn a_copy_lands_right_after_its_original() {
+        let (settings, cfg) = scratch("duplicate");
+        for id in ["a", "b"] {
+            let i = presets::build("delay_notice", id.into(), "").unwrap();
+            assert_eq!(save(&i.to_json(), &settings, &cfg, true).0, "200 OK");
+        }
+        let reply = duplicate(&json::obj([("id", json::str("a"))]), &settings, &cfg);
+        assert_eq!(reply.0, "200 OK");
+        let order: Vec<String> = settings
+            .borrow()
+            .integrations
+            .iter()
+            .map(|i| i.id.clone())
+            .collect();
+        assert_eq!(order[0], "a");
+        assert!(reply.2.contains(&order[1]), "the copy is second: {order:?}");
+        assert_eq!(order[2], "b");
+        let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
     }
 }

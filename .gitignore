@@ -11,6 +11,8 @@
 /instantclone.config.json
 # Any ring-buffer file (custom buffer_path names used in local/e2e runs).
 *.buf
+# Sounds and pictures uploaded for alerts.
+/alerts-media/
 
 # Editor / IDE
 /.vscode/

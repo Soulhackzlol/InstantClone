@@ -651,34 +651,36 @@ mod tests {
         assert!(build(&[], 8_000, None, 1935, x264).is_none());
     }
 
+    /// Which track of an Enhanced Broadcasting config feeds 9:16 destinations.
     #[test]
-    fn the_vertical_track_is_found_in_any_codec() {
-        // Twitch's reply to a 2K channel on an AMD GPU, as a streamer's
-        // trace logged it: both tracks HEVC, the vertical one second.
-        let twitch = r#"{"encoder_configurations": [
-            {"type": "h265_texture_amf", "width": 2560, "height": 1440, "canvas_index": 0,
-             "framerate": {"numerator": 60, "denominator": 1}, "settings": {"bitrate": 9000}},
-            {"type": "h265_texture_amf", "width": 1080, "height": 1920, "canvas_index": 1,
-             "framerate": {"numerator": 60, "denominator": 1}, "settings": {"bitrate": 5000}}
-        ]}"#;
-        assert_eq!(vertical_track(twitch), Some(1));
-    }
-
-    #[test]
-    fn a_config_without_a_portrait_track_has_no_vertical_track() {
-        let landscape_ladder = r#"{"encoder_configurations": [
-            {"width": 1920, "height": 1080}, {"width": 1280, "height": 720}]}"#;
-        assert_eq!(vertical_track(landscape_ladder), None);
-        assert_eq!(vertical_track(r#"{"ingest_endpoints": []}"#), None);
-    }
-
-    #[test]
-    fn the_largest_portrait_track_is_the_vertical_one() {
-        let two_portrait_rungs = r#"{"encoder_configurations": [
-            {"width": 1920, "height": 1080},
-            {"width": 540, "height": 960},
-            {"width": 1080, "height": 1920}]}"#;
-        assert_eq!(vertical_track(two_portrait_rungs), Some(2));
+    fn the_vertical_track_is_the_largest_portrait_one_in_any_codec() {
+        // the vertical track is found in any codec
+        {
+            // Twitch's reply to a 2K channel on an AMD GPU, as a streamer's
+            // trace logged it: both tracks HEVC, the vertical one second.
+            let twitch = r#"{"encoder_configurations": [
+                {"type": "h265_texture_amf", "width": 2560, "height": 1440, "canvas_index": 0,
+                 "framerate": {"numerator": 60, "denominator": 1}, "settings": {"bitrate": 9000}},
+                {"type": "h265_texture_amf", "width": 1080, "height": 1920, "canvas_index": 1,
+                 "framerate": {"numerator": 60, "denominator": 1}, "settings": {"bitrate": 5000}}
+            ]}"#;
+            assert_eq!(vertical_track(twitch), Some(1));
+        }
+        // a config without a portrait track has no vertical track
+        {
+            let landscape_ladder = r#"{"encoder_configurations": [
+                {"width": 1920, "height": 1080}, {"width": 1280, "height": 720}]}"#;
+            assert_eq!(vertical_track(landscape_ladder), None);
+            assert_eq!(vertical_track(r#"{"ingest_endpoints": []}"#), None);
+        }
+        // the largest portrait track is the vertical one
+        {
+            let two_portrait_rungs = r#"{"encoder_configurations": [
+                {"width": 1920, "height": 1080},
+                {"width": 540, "height": 960},
+                {"width": 1080, "height": 1920}]}"#;
+            assert_eq!(vertical_track(two_portrait_rungs), Some(2));
+        }
     }
 
     const OWN_AMD: &str =

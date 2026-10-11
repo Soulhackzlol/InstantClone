@@ -26,7 +26,7 @@ use super::model::{
     pad_matches, ChatActivity, DiscordChannel, Integration, MatchMode, PhoneConnection, Roles,
     Trigger,
 };
-use super::obsws::{self, SceneNews};
+use super::obsws::{self, ObsNews};
 use super::runner::{self, RunContext, RunEnv, RunStatus, StepLog};
 use super::session::Session;
 use super::store::Store;
@@ -39,7 +39,7 @@ use crate::json::{self, Value};
 use crate::sync::Mutex;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot, watch, Semaphore};
@@ -51,6 +51,41 @@ const PER_INTEGRATION_RUNS: usize = 16;
 const GLOBAL_STARTED: usize = 64;
 const ACTIVITY_KEEP: usize = 150;
 const TICK: Duration = Duration::from_millis(250);
+/// Why a run may not start now, before the run limits are asked.
+#[derive(Debug, PartialEq)]
+enum HeldBack {
+    /// Inside the integration's quiet hours: silently skipped.
+    Quiet,
+    /// Too soon after this trigger's last run.
+    Cooldown,
+}
+
+/// Quiet hours first, then the trigger's cooldown. `last_run` is when this
+/// trigger last started a run; `minute_of_day` is local time.
+fn held_back(
+    integration: &Integration,
+    last_run: Option<Instant>,
+    minute_of_day: u16,
+    now: Instant,
+) -> Option<HeldBack> {
+    if integration.quiet.is_some_and(|q| q.contains(minute_of_day)) {
+        return Some(HeldBack::Quiet);
+    }
+    let cooldown = Duration::from_millis(integration.cooldown_ms);
+    let too_soon = last_run.is_some_and(|t| now.saturating_duration_since(t) < cooldown);
+    too_soon.then_some(HeldBack::Cooldown)
+}
+
+/// Whether a viewer used a chat command too recently to use it again.
+fn viewer_cooling_down(last: Option<Instant>, user_cooldown_ms: u64, now: Instant) -> bool {
+    last.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_millis(user_cooldown_ms))
+}
+
+/// Each viewer waits out a command's cooldown on their own.
+fn viewer_key(integration_id: &str, idx: usize, login: &str) -> String {
+    format!("{integration_id}#{idx}#{login}")
+}
+
 /// How often per-viewer and per-trigger bookkeeping is trimmed. A busy
 /// chat adds an entry per viewer per command; without trimming, a long
 /// stream would only ever grow them.
@@ -69,9 +104,11 @@ const FLAP_WINDOW: Duration = Duration::from_secs(300);
 pub const ACTIVITY_WARMUP: Duration = Duration::from_secs(30);
 /// How often chat activity triggers judge chat at most.
 const ACTIVITY_READ_EVERY: Duration = Duration::from_millis(250);
-/// How long the dashboard keeps the OBS connection open after asking for
-/// the scene list, so picking a scene works before anything is saved.
+/// How long the dashboard keeps the OBS connection open after it last
+/// asked, so its OBS pill and scene lists show the real thing.
 const OBS_FOR_DASHBOARD: Duration = Duration::from_secs(60);
+/// How long a dashboard request waits for OBS to connect.
+const OBS_CONNECT_WAIT: Duration = Duration::from_secs(8);
 
 enum Input {
     Event(Event),
@@ -88,7 +125,7 @@ enum Input {
     },
     #[cfg_attr(not(windows), allow(dead_code))]
     Shortcut(Shortcut, String),
-    Scene(SceneNews),
+    Obs(ObsNews),
     Login(Which),
     CancelLogin,
     Logout(Which),
@@ -184,6 +221,10 @@ pub struct Handle {
     obs: Arc<Mutex<obsws::Status>>,
     /// Until when (Unix ms) the dashboard wants OBS connected.
     obs_wanted_until: AtomicU64,
+    /// Whether an enabled integration uses OBS.
+    obs_in_use: AtomicBool,
+    /// Asks OBS for things the dashboard does itself (not a step's).
+    obs_commands: mpsc::Sender<obsws::Command>,
     /// Why chat activity triggers can't fire right now, or empty: see
     /// `Engine::activity_gate`. For the dashboard's live meter.
     activity_held: Mutex<&'static str>,
@@ -391,13 +432,70 @@ impl Handle {
     }
 
     /// The OBS connection and its scenes. Asking keeps OBS connected for a
-    /// minute, so the scene list fills in while a trigger is being set up.
+    /// minute: the open dashboard asks every few seconds, so it shows how
+    /// OBS really stands, not just whether an integration needed it. `used`
+    /// says whether one does.
     pub fn obs_status(&self) -> Value {
+        self.keep_obs_for_dashboard();
+        let mut status = self.obs.lock().clone();
+        // Asking connects it on the engine's next tick.
+        if matches!(status.state, "" | "off") {
+            status.state = "connecting";
+        }
+        let mut json = status.to_json();
+        if let Value::Obj(fields) = &mut json {
+            let used = self.obs_in_use.load(Ordering::Relaxed);
+            fields.push(("used".to_string(), Value::Bool(used)));
+        }
+        json
+    }
+
+    fn keep_obs_for_dashboard(&self) {
         self.obs_wanted_until.store(
             unix_ms() + OBS_FOR_DASHBOARD.as_millis() as u64,
             Ordering::Relaxed,
         );
-        self.obs.lock().to_json()
+    }
+
+    /// Ask OBS for something the dashboard does itself, connecting first
+    /// when nothing keeps OBS connected. Waits for OBS's answer.
+    pub async fn obs_now(&self, action: obsws::Action) -> Result<(), String> {
+        self.keep_obs_for_dashboard();
+        let give_up = Instant::now() + OBS_CONNECT_WAIT;
+        loop {
+            let (state, problem) = {
+                let s = self.obs.lock();
+                (s.state, s.problem.clone())
+            };
+            if state == "connected" {
+                break;
+            }
+            if Instant::now() >= give_up {
+                return Err(if problem.is_empty() {
+                    "OBS isn't connected. Is OBS open?".to_string()
+                } else {
+                    problem
+                });
+            }
+            tokio::time::sleep(TICK).await;
+        }
+        let (reply, outcome) = std::sync::mpsc::channel();
+        let wait = obsws::CALL_TIMEOUT * 3;
+        self.obs_commands
+            .try_send(obsws::Command {
+                action,
+                reply,
+                deadline: Instant::now() + wait,
+            })
+            .map_err(|_| "OBS is busy; try again in a moment".to_string())?;
+        tokio::task::spawn_blocking(move || {
+            outcome
+                .recv_timeout(wait)
+                .unwrap_or_else(|_| Err("OBS didn't answer in time".to_string()))
+                .map(drop)
+        })
+        .await
+        .unwrap_or_else(|_| Err("OBS didn't answer in time".to_string()))
     }
 }
 
@@ -409,16 +507,18 @@ pub fn start(
 ) -> std::io::Result<Arc<Handle>> {
     let (tx, rx) = mpsc::channel(QUEUE);
     let (chat_tx, chat_rx) = mpsc::channel(256);
+    let (twitch_events_tx, mut twitch_events) = mpsc::channel(64);
     let store = Arc::new(Store::open(&data_dir));
     let log_ctrl = ctrl.clone();
     let twitch = Arc::new(Twitch::new(
         store.clone(),
-        chat_tx,
+        (chat_tx, twitch_events_tx),
         Box::new(move |line| log_ctrl.log(line)),
         &settings.borrow().twitch_client_id,
     ));
     let alerts = Arc::new(Board::new());
     let obs = Arc::new(Mutex::new(obsws::Status::default()));
+    let (obs_tx, obs_commands) = mpsc::channel(16);
     let handle = Arc::new(Handle {
         tx,
         activity: Mutex::new(VecDeque::new()),
@@ -431,6 +531,8 @@ pub fn start(
         chat: Arc::new(Mutex::new(ChatWindow::default())),
         obs: obs.clone(),
         obs_wanted_until: AtomicU64::new(0),
+        obs_in_use: AtomicBool::new(false),
+        obs_commands: obs_tx.clone(),
         activity_held: Mutex::new("offline"),
     });
     let engine_handle = handle.clone();
@@ -449,7 +551,6 @@ pub fn start(
             };
             runtime.block_on(async move {
                 twitch.start();
-                let (obs_tx, obs_commands) = mpsc::channel(16);
                 let host = Arc::new(RealHost {
                     ctrl: ctrl.clone(),
                     twitch: twitch.clone(),
@@ -460,14 +561,23 @@ pub fn start(
                     onair: Mutex::new("off"),
                     obs: obs_tx,
                 });
-                // OBS's scene news reaches the engine like any other input.
+                // News from OBS reaches the engine like any other input.
                 let (want_obs, wanted) = watch::channel(false);
                 let (news_tx, mut news_rx) = mpsc::channel(64);
                 tokio::spawn(obsws::run(wanted, obs, news_tx, obs_commands));
-                let scene_tx = engine_handle.tx.clone();
+                // So do Twitch's events (follows, subs, raids...).
+                let twitch_events_to = engine_handle.tx.clone();
+                tokio::spawn(async move {
+                    while let Some(event) = twitch_events.recv().await {
+                        if twitch_events_to.send(Input::Event(event)).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+                let obs_news_tx = engine_handle.tx.clone();
                 tokio::spawn(async move {
                     while let Some(news) = news_rx.recv().await {
-                        if scene_tx.send(Input::Scene(news)).await.is_err() {
+                        if obs_news_tx.send(Input::Obs(news)).await.is_err() {
                             return;
                         }
                     }
@@ -640,6 +750,7 @@ impl Engine {
                     self.update_activity_gate();
                     self.settle_scenes();
                     self.update_obs_want();
+                    self.update_twitch_events();
                     self.run_timers();
                     self.save_uses_if_due();
                     if last_prune.elapsed() >= PRUNE_EVERY {
@@ -738,7 +849,8 @@ impl Engine {
                 reply,
             } => self.test(*integration, handler, run, reply),
             Input::Shortcut(from, signature) => self.shortcut(from, &signature),
-            Input::Scene(news) => self.scene(news),
+            Input::Obs(ObsNews::Happened(event)) => self.event(event),
+            Input::Obs(news) => self.scene(news),
             Input::Login(which) => self.handle.twitch.begin_login(which),
             Input::CancelLogin => self.handle.twitch.cancel_login(),
             Input::Logout(which) => self.handle.twitch.logout(which),
@@ -1092,25 +1204,25 @@ impl Engine {
                     roles,
                     user_cooldown_ms,
                 } if (*command == first || aliases.contains(&first)) && allowed(*roles, &msg) => {
-                    let key = format!("{}#{idx}#{}", i.id, msg.user_login);
-                    let cooled = self
+                    let last = self
                         .viewer_last
-                        .get(&key)
-                        .is_some_and(|t| t.elapsed() < Duration::from_millis(*user_cooldown_ms));
-                    (!cooled).then(|| (i.clone(), idx, first.clone()))
+                        .get(&viewer_key(&i.id, idx, &msg.user_login));
+                    let cooling =
+                        viewer_cooling_down(last.copied(), *user_cooldown_ms, Instant::now());
+                    (!cooling).then(|| (i.clone(), idx, first.clone()))
                 }
                 Trigger::ChatMessage {
                     pattern,
                     mode,
                     roles,
                 } if allowed(*roles, &msg) && text_matches(text, pattern, *mode) => {
-                    Some((i.clone(), idx, "chat".to_string()))
+                    Some((i, idx, "chat".to_string()))
                 }
                 _ => None,
             })
             .collect();
         for (integration, idx, label) in candidates {
-            let key = format!("{}#{idx}#{}", integration.id, msg.user_login);
+            let key = viewer_key(&integration.id, idx, &msg.user_login);
             let vars = chat_vars(&msg, &args);
             let trigger = if label == "chat" {
                 "Chat message".to_string()
@@ -1209,10 +1321,11 @@ impl Engine {
     /// starts that trigger's settle time; it fires once the scene stayed.
     /// The scene on air when OBS connects counts as a switch to it when a
     /// stream is already on (the app or OBS restarted mid-stream).
-    fn scene(&mut self, news: SceneNews) {
+    fn scene(&mut self, news: ObsNews) {
         let (name, switched) = match news {
-            SceneNews::Current(name) => (name, false),
-            SceneNews::Switched(name) => (name, true),
+            ObsNews::Current(name) => (name, false),
+            ObsNews::Switched(name) => (name, true),
+            ObsNews::Happened(_) => return,
         };
         let previous = std::mem::replace(&mut self.scene_now, name.clone());
         if previous == name {
@@ -1319,18 +1432,39 @@ impl Engine {
         self.scene_pending.retain(|_, p| p.scene == now_scene);
     }
 
-    /// Keep OBS connected while a scene trigger or an OBS step is on, or
-    /// the dashboard is picking a scene.
+    /// Listen on Twitch for the events enabled integrations start on.
+    fn update_twitch_events(&mut self) {
+        let mut wanted: Vec<EventKind> = Vec::new();
+        for (_, _, h) in self.enabled_handlers() {
+            if let Trigger::Event { kind, .. } = &h.trigger {
+                if super::twitch::eventsub::subscription(*kind).is_some() && !wanted.contains(kind)
+                {
+                    wanted.push(*kind);
+                }
+            }
+        }
+        // In a fixed order: the same set must compare equal.
+        wanted.sort_by_key(|k| EventKind::ALL.iter().position(|a| a == k));
+        self.host.twitch.want_events(wanted);
+    }
+
+    /// Keep OBS connected while a scene trigger, an OBS event trigger or an
+    /// OBS step is on, or the dashboard is open.
     fn update_obs_want(&mut self) {
         let uses_obs = |h: &super::model::Handler| {
-            let mut found = matches!(h.trigger, Trigger::Scene { .. });
+            let mut found = match &h.trigger {
+                Trigger::Scene { .. } => true,
+                Trigger::Event { kind, .. } => kind.needs_obs(),
+                _ => false,
+            };
             super::model::visit_steps(&h.steps, &mut |s| {
                 found |= s.enabled && s.kind == super::model::StepKind::Obs
             });
             found
         };
-        let wanted = self.enabled_handlers().any(|(_, _, h)| uses_obs(h))
-            || unix_ms() < self.handle.obs_wanted_until.load(Ordering::Relaxed);
+        let in_use = self.enabled_handlers().any(|(_, _, h)| uses_obs(h));
+        self.handle.obs_in_use.store(in_use, Ordering::Relaxed);
+        let wanted = in_use || unix_ms() < self.handle.obs_wanted_until.load(Ordering::Relaxed);
         if *self.want_obs.borrow() != wanted {
             self.want_obs.send_replace(wanted);
         }
@@ -1496,28 +1630,24 @@ impl Engine {
         reply_to: Option<String>,
         trigger: String,
     ) -> bool {
-        if let Some(quiet) = integration.quiet {
-            let now = super::clock::now();
-            if quiet.contains((now.hour * 60 + now.minute) as u16) {
+        let key = format!("{}#{idx}", integration.id);
+        let clock = super::clock::now();
+        let minute_of_day = (clock.hour * 60 + clock.minute) as u16;
+        let last = self.last_run.get(&key).copied();
+        match held_back(&integration, last, minute_of_day, Instant::now()) {
+            Some(HeldBack::Quiet) => return false,
+            Some(HeldBack::Cooldown) => {
+                // A button pressed too soon says so: the press wasn't lost.
+                // Chat, much busier, doesn't fill the log with them.
+                if matches!(
+                    integration.handlers[idx].trigger,
+                    Trigger::Shortcut { .. } | Trigger::ChatActivity(_)
+                ) {
+                    self.turned_away(&integration, trigger, "cooldown");
+                }
                 return false;
             }
-        }
-        let key = format!("{}#{idx}", integration.id);
-        if integration.cooldown_ms > 0
-            && self
-                .last_run
-                .get(&key)
-                .is_some_and(|t| t.elapsed() < Duration::from_millis(integration.cooldown_ms))
-        {
-            // A button pressed too soon says so: the press wasn't lost.
-            // Chat, much busier, doesn't fill the log with them.
-            if matches!(
-                integration.handlers[idx].trigger,
-                Trigger::Shortcut { .. } | Trigger::ChatActivity(_)
-            ) {
-                self.turned_away(&integration, trigger, "cooldown");
-            }
-            return false;
+            None => {}
         }
         let (started_limit, active_limit) = self
             .limits
@@ -1965,7 +2095,7 @@ pub const ACTIVITY_SAMPLES: &[(&str, &str)] = &[
     ("chatters", "15"),
     ("word_share", "58"),
     ("top_word", "pog"),
-    ("user", "Ana"),
+    ("user", "Nat"),
     ("message", "CLIP THAT"),
 ];
 
@@ -2048,7 +2178,6 @@ mod tests {
             !guard.suppress(&Event::new(EventKind::HoldOpened), t0),
             "other events pass"
         );
-        assert!(!guard.suppress(&Event::new(EventKind::HoldOpened), t0));
     }
 
     #[test]
@@ -2123,10 +2252,93 @@ mod tests {
         assert!(wildcard(&"a".repeat(200), &"*a".repeat(50)));
     }
 
+    /// An integration for the cooldown and quiet-hours tests.
+    fn timed(cooldown_ms: u64, quiet: Option<(u16, u16)>) -> Integration {
+        let mut i = crate::integrations::presets::build("delay_command", "t".into(), "").unwrap();
+        i.cooldown_ms = cooldown_ms;
+        i.quiet = quiet.map(|(from, to)| crate::integrations::model::QuietHours { from, to });
+        i
+    }
+
+    /// A run starts again only once its cooldown has passed, measured from
+    /// the run before; no cooldown, or no run yet, never holds one back.
+    #[test]
+    fn a_cooldown_holds_back_a_run_until_it_passes() {
+        let now = Instant::now() + Duration::from_secs(60);
+        let ago = |ms: u64| Some(now - Duration::from_millis(ms));
+        let every_10s = timed(10_000, None);
+        for (last, held, case) in [
+            (None, None, "never ran"),
+            (ago(1_000), Some(HeldBack::Cooldown), "1 s after"),
+            (ago(9_999), Some(HeldBack::Cooldown), "just short"),
+            (ago(10_000), None, "exactly the cooldown"),
+            (ago(30_000), None, "long after"),
+        ] {
+            assert_eq!(held_back(&every_10s, last, 600, now), held, "{case}");
+        }
+        assert_eq!(
+            held_back(&timed(0, None), ago(1), 600, now),
+            None,
+            "no cooldown"
+        );
+    }
+
+    /// Quiet hours run from `from` up to `to`, overnight too, and come
+    /// before the cooldown: a quiet run isn't "too soon", it's skipped.
+    #[test]
+    fn quiet_hours_hold_back_every_run_inside_them() {
+        let now = Instant::now();
+        let at = |i: &Integration, minute: u16| held_back(i, None, minute, now);
+        let office = timed(0, Some((9 * 60, 17 * 60)));
+        let night = timed(0, Some((23 * 60, 7 * 60)));
+        for (integration, minute, held, case) in [
+            (&office, 8 * 60 + 59, None, "08:59, before"),
+            (&office, 9 * 60, Some(HeldBack::Quiet), "09:00, from"),
+            (&office, 16 * 60 + 59, Some(HeldBack::Quiet), "16:59"),
+            (&office, 17 * 60, None, "17:00, to is not included"),
+            (&night, 22 * 60 + 59, None, "22:59"),
+            (&night, 23 * 60, Some(HeldBack::Quiet), "23:00"),
+            (&night, 0, Some(HeldBack::Quiet), "midnight"),
+            (&night, 6 * 60 + 59, Some(HeldBack::Quiet), "06:59"),
+            (&night, 7 * 60, None, "07:00"),
+        ] {
+            assert_eq!(at(integration, minute), held, "{case}");
+        }
+        let both = timed(10_000, Some((0, 24 * 60)));
+        assert_eq!(
+            held_back(&both, Some(now), 600, now),
+            Some(HeldBack::Quiet),
+            "quiet wins over the cooldown"
+        );
+    }
+
+    /// One viewer's cooldown doesn't hold back another, and it ends on time.
+    #[test]
+    fn each_viewer_waits_out_a_command_cooldown_alone() {
+        assert_ne!(viewer_key("i", 0, "ana"), viewer_key("i", 0, "bo"));
+        assert_ne!(
+            viewer_key("i", 0, "ana"),
+            viewer_key("i", 1, "ana"),
+            "per trigger too"
+        );
+        let now = Instant::now() + Duration::from_secs(60);
+        let used = Some(now - Duration::from_millis(5_000));
+        assert!(viewer_cooling_down(used, 30_000, now));
+        assert!(
+            !viewer_cooling_down(used, 5_000, now),
+            "over once it has passed"
+        );
+        assert!(!viewer_cooling_down(None, 30_000, now), "first time");
+    }
+
     #[test]
     fn matching_ignores_case() {
         assert!(text_matches("POG champ", "pog", MatchMode::StartsWith));
         assert!(text_matches(" GG ", "gg", MatchMode::Exact));
+    }
+
+    #[test]
+    fn an_empty_pattern_never_matches() {
         assert!(!text_matches("gg", "", MatchMode::Contains));
     }
 
@@ -2166,7 +2378,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_read_like_the_filtered_event() {
+    fn test_runs_sample_vars_take_filter_values() {
         let filters = BTreeMap::from([
             ("destination".to_string(), "Kick".to_string()),
             ("reason".to_string(), "*timeout*".to_string()),

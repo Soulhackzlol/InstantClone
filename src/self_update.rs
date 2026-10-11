@@ -11,11 +11,14 @@
 //!      folder - fails HERE, before the live exe is touched, and surfaces a
 //!      message to the UI. Nothing is committed.
 //!
-//!   2. [`commit_and_relaunch`]: rename the running exe to `.old` (Windows
-//!      lets you rename, but not delete/overwrite, a running image), move
-//!      the staged `.new` into its place, spawn a tiny detached `cmd` that
-//!      waits ~2 s for our TCP ports to free and then relaunches the fresh
-//!      exe, and hard-exit. The `.old` / `.new` leftovers are swept on the
+//!   2. [`stage`] parks the verified update and the caller asks for an
+//!      ordinary restart, so the update gets the same clean shutdown as
+//!      Restart and Quit (every destination sent `deleteStream`, the trace
+//!      flushed, integration counters saved). At the very end of that
+//!      shutdown, [`restart_now`] checks the staged file's hash again,
+//!      renames the running exe to `.old` (Windows lets you rename, but not
+//!      delete/overwrite, a running image), moves the staged `.new` into its
+//!      place and relaunches. The `.old` / `.new` leftovers are swept on the
 //!      next startup (see [`sweep_leftovers`]).
 //!
 //! Why the checksum matters: we download an executable and then run it, so
@@ -30,7 +33,19 @@ use std::path::{Path, PathBuf};
 
 const RELEASE_DL_BASE: &str = "https://github.com/Soulhackzlol/InstantClone/releases/download";
 
-/// A verified update staged on disk, ready for [`commit_and_relaunch`].
+/// Where release files are downloaded from. A debug build can point it at a
+/// local mock with INSTANTCLONE_RELEASE_DOWNLOADS (with the update check's
+/// INSTANTCLONE_GITHUB_API) to try a whole update without GitHub; a release
+/// build always downloads from GitHub.
+fn release_downloads() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(url) = std::env::var("INSTANTCLONE_RELEASE_DOWNLOADS") {
+        return url;
+    }
+    RELEASE_DL_BASE.to_string()
+}
+
+/// A verified update staged on disk, ready for [`stage`].
 pub struct Staged {
     /// Path of the currently running exe (the swap target).
     pub exe: PathBuf,
@@ -38,7 +53,16 @@ pub struct Staged {
     pub staged: PathBuf,
     /// The version we're moving to (no leading `v`), for UI display.
     pub version: String,
+    /// A new build of the version already running, not a newer version.
+    pub rebuild: bool,
+    /// SHA-256 the staged file was verified against, checked again just
+    /// before the swap: the file sits on disk through the shutdown.
+    sha256: String,
 }
+
+/// The verified update the next restart installs. Set by [`stage`], taken
+/// by [`restart_now`] once main has shut everything down cleanly.
+static PENDING: crate::sync::Mutex<Option<Staged>> = crate::sync::Mutex::new(None);
 
 /// Release asset filename for the running platform. MUST match the names
 /// produced by `.github/workflows/release.yml`. `tag` includes the leading
@@ -70,12 +94,29 @@ fn sidecar(exe: &Path, ext: &str) -> PathBuf {
 /// once at startup: a fresh process that just relaunched sweeps the `.old`
 /// copy of the version it replaced, and a stale `.new` (from an update that
 /// was staged but never committed) is harmless to drop - it re-downloads.
+/// A `.new` younger than `STAGED_IN_USE` stays: two setups can run from one
+/// exe (CONFIG_PATH), and the other may be about to swap it in.
 pub fn sweep_leftovers() {
     if let Ok(exe) = std::env::current_exe() {
-        for ext in ["old", "new"] {
-            let _ = std::fs::remove_file(sidecar(&exe, ext));
+        let _ = std::fs::remove_file(sidecar(&exe, "old"));
+        let staged = sidecar(&exe, "new");
+        if !is_younger_than(&staged, STAGED_IN_USE) {
+            let _ = std::fs::remove_file(staged);
         }
     }
+}
+
+/// How long a staged `.new` may be waiting for its own setup's shutdown to
+/// swap it in. That takes seconds; ten minutes is far beyond any of it.
+const STAGED_IN_USE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Whether `path` exists and was last written less than `age` ago.
+fn is_younger_than(path: &Path, age: std::time::Duration) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|at| at.elapsed().ok())
+        .is_some_and(|elapsed| elapsed < age)
 }
 
 /// Download + verify + stage the latest release. Returns a [`Staged`] on
@@ -84,19 +125,33 @@ pub fn sweep_leftovers() {
 pub fn prepare() -> Result<Staged, String> {
     let current = crate::update_check::current_version();
     let info = crate::update_check::check_update();
-    let latest = info
-        .latest
-        .ok_or_else(|| info.error.unwrap_or_else(|| "couldn't reach GitHub".into()))?;
+    let latest = info.latest.ok_or_else(|| {
+        let why = info.error.unwrap_or_else(|| "no answer".into());
+        format!("Couldn't reach GitHub to check for the update ({why}).")
+    })?;
     if !info.update_available {
-        return Err(format!("Already on the latest release (v{current})."));
+        return Err(format!(
+            "You already have the latest build of v{current}. Nothing to install."
+        ));
     }
 
     let agent = crate::https::https_agent();
-    let bytes = fetch_verified(&agent, RELEASE_DL_BASE, &latest)?;
+    let bytes = fetch_verified(&agent, &release_downloads(), &latest)?;
 
     let exe = std::env::current_exe().map_err(|e| format!("can't locate the running exe: {e}"))?;
-    let staged = sidecar(&exe, "new");
-    std::fs::write(&staged, &bytes)
+    stage_beside(&exe, &bytes, latest, info.rebuild)
+}
+
+/// Write verified `bytes` next to `exe` as `<exe>.new`, ready to swap in.
+/// The running exe is not touched: that waits for the restart.
+fn stage_beside(
+    exe: &Path,
+    bytes: &[u8],
+    version: String,
+    rebuild: bool,
+) -> Result<Staged, String> {
+    let staged = sidecar(exe, "new");
+    std::fs::write(&staged, bytes)
         .map_err(|e| format!("can't write the update next to the exe: {e}"))?;
 
     // A downloaded Linux binary lands non-executable; the swap-then-relaunch
@@ -114,10 +169,30 @@ pub fn prepare() -> Result<Staged, String> {
     }
 
     Ok(Staged {
-        exe,
+        exe: exe.to_path_buf(),
         staged,
-        version: latest,
+        version,
+        rebuild,
+        sha256: crate::sha256::hex(bytes),
     })
+}
+
+/// Park a verified update for the next restart, which installs it once the
+/// shutdown has closed every stream cleanly. The caller asks for that
+/// restart. A second update staged before it replaces the first.
+pub fn stage(s: Staged) {
+    *PENDING.lock() = Some(s);
+}
+
+/// Whether an update is staged and waiting for its restart.
+pub fn is_staged() -> bool {
+    PENDING.lock().is_some()
+}
+
+/// The staged update, taken by the restart that installs it, so a later
+/// restart can't install it again.
+fn take_pending() -> Option<Staged> {
+    PENDING.lock().take()
 }
 
 /// Download the release exe for `version` from `base` and verify it against
@@ -125,18 +200,13 @@ pub fn prepare() -> Result<Staged, String> {
 /// Split out from [`prepare`] so a localhost mock can exercise the full
 /// download-and-verify path with no GitHub round-trip (see tests).
 fn fetch_verified(agent: &ureq::Agent, base: &str, version: &str) -> Result<Vec<u8>, String> {
-    let tag = format!("v{version}");
-    let exe_name = release_asset_name(&tag);
-    let exe_url = format!("{base}/{tag}/{exe_name}");
-    let sums_url = format!("{base}/{tag}/SHA256SUMS.txt");
-
     // Checksum first - cheap, and it tells us what to expect.
-    let sums = http_get_text(agent, &sums_url)?;
-    let expected = parse_checksum(&sums, &exe_name)
-        .ok_or_else(|| format!("no checksum for {exe_name} in SHA256SUMS.txt"))?;
+    let expected = published_sha256(agent, base, version)?;
 
     // Then the binary, which we verify before it ever lands at a runnable
     // path.
+    let tag = format!("v{version}");
+    let exe_url = format!("{base}/{tag}/{}", release_asset_name(&tag));
     let bytes = http_get_bytes(agent, &exe_url)?;
     let got = crate::sha256::hex(&bytes);
     if !got.eq_ignore_ascii_case(&expected) {
@@ -145,19 +215,55 @@ fn fetch_verified(agent: &ureq::Agent, base: &str, version: &str) -> Result<Vec<
     Ok(bytes)
 }
 
-/// Swap the staged update into place and relaunch. Does not return on
-/// success (the process exits). On a swap failure it logs to stderr and
-/// returns, leaving the running version intact.
-pub fn commit_and_relaunch(s: Staged) {
-    if let Err(e) = swap_in_place(&s.exe, &s.staged) {
-        eprintln!("self-update: swap failed, staying on the current version: {e}");
-        return;
+/// The SHA-256 release `version` published for this platform's exe, from
+/// the release's `SHA256SUMS.txt` under `base`.
+fn published_sha256(agent: &ureq::Agent, base: &str, version: &str) -> Result<String, String> {
+    let tag = format!("v{version}");
+    let exe_name = release_asset_name(&tag);
+    let sums = http_get_text(agent, &format!("{base}/{tag}/SHA256SUMS.txt"))?;
+    parse_checksum(&sums, &exe_name)
+        .ok_or_else(|| format!("no checksum for {exe_name} in SHA256SUMS.txt"))
+}
+
+/// The SHA-256 of the exe release `version` publishes, when it differs from
+/// the one running: a new build shipped under the same version number. None
+/// when it's the same build or it can't tell (offline, no checksum for this
+/// platform, unreadable exe). The hash tells one rebuild from the next.
+pub fn published_rebuild(agent: &ureq::Agent, version: &str) -> Option<String> {
+    rebuild_hash(agent, &release_downloads(), version, running_sha256()?)
+}
+
+fn rebuild_hash(agent: &ureq::Agent, base: &str, version: &str, running: &str) -> Option<String> {
+    let published = published_sha256(agent, base, version).ok()?;
+    (!published.eq_ignore_ascii_case(running)).then_some(published)
+}
+
+/// SHA-256 of the running exe, hashed once per process. An update swap
+/// restarts the process, and a file replaced under a running process on
+/// Linux is not the code that is running anyway.
+fn running_sha256() -> Option<&'static str> {
+    static HASH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| {
+        let exe = std::env::current_exe().ok()?;
+        let bytes = std::fs::read(exe).ok()?;
+        Some(crate::sha256::hex(&bytes))
+    })
+    .as_deref()
+}
+
+/// Install a staged update: check the staged file still has the hash it was
+/// verified against, then swap it in. On any failure the running exe stays
+/// where it is and the staged file is dropped, so the relaunch that follows
+/// starts the current version again.
+fn install(s: &Staged) -> Result<(), String> {
+    let still_verified = std::fs::read(&s.staged)
+        .map(|bytes| crate::sha256::hex(&bytes).eq_ignore_ascii_case(&s.sha256))
+        .unwrap_or(false);
+    if !still_verified {
+        let _ = std::fs::remove_file(&s.staged);
+        return Err("the staged update changed or vanished before the restart".into());
     }
-    spawn_relauncher(&s.exe);
-    // Hard exit so our ports + buffer-file handle release immediately; the
-    // relauncher's short delay covers the OS freeing them before the new
-    // process binds. Config was already persisted on every change.
-    std::process::exit(0);
+    swap_in_place(&s.exe, &s.staged).map_err(|e| e.to_string())
 }
 
 /// Move `staged` into `exe`'s place, parking the running image at `.old`.
@@ -176,11 +282,21 @@ fn swap_in_place(exe: &Path, staged: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Relaunch the running exe and exit - the same mechanism as the update
-/// swap, minus the swap. Backs the "Restart now" button (e.g. to apply a
-/// buffer-size / port change that needs a fresh process). Does not return.
+/// Relaunch in place and exit: the last step of main's clean shutdown on a
+/// restart. A staged update is installed first, so the relaunch starts the
+/// new version; if installing fails, the current one starts again. Does not
+/// return.
 pub fn restart_now() -> ! {
-    if let Ok(exe) = std::env::current_exe() {
+    // Resolved before the swap: on Linux the running image's path follows
+    // the rename to `.old`, and the relaunch must start the file now at the
+    // original path.
+    let exe = std::env::current_exe();
+    if let Some(update) = take_pending() {
+        if let Err(e) = install(&update) {
+            log_line!("self-update: staying on the current version: {e}");
+        }
+    }
+    if let Ok(exe) = exe {
         spawn_relauncher(&exe);
     }
     std::process::exit(0);
@@ -355,20 +471,36 @@ fn http_get_bytes(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
+    /// Another setup's update, staged a moment ago from the same exe, is not
+    /// swept away; an old leftover, or none at all, is not kept.
+    #[test]
+    fn a_freshly_staged_update_is_left_for_its_setup() {
+        let dir = crate::test_support::TestDir::new("ic-staged-age");
+        let staged = dir.path().join("instantclone.exe.new");
+        assert!(
+            !super::is_younger_than(&staged, super::STAGED_IN_USE),
+            "no file"
+        );
+        std::fs::write(&staged, b"exe").unwrap();
+        assert!(super::is_younger_than(&staged, super::STAGED_IN_USE));
+        assert!(!super::is_younger_than(&staged, std::time::Duration::ZERO));
+    }
+
     use super::parse_checksum;
 
     const NAME: &str = "instantclone-v0.1.6-windows-x64.exe";
 
     /// The self-update asset name MUST match what release.yml publishes, or
-    /// the checksum lookup can never find its line. This locks that contract
-    /// per platform.
+    /// the checksum lookup can never find its line. Read from the workflow
+    /// itself, so a rename on either side fails here.
     #[test]
     fn release_asset_name_matches_release_workflow() {
-        let n = super::release_asset_name("v1.2.3");
-        #[cfg(windows)]
-        assert_eq!(n, "instantclone-v1.2.3-windows-x64.exe");
-        #[cfg(target_os = "linux")]
-        assert_eq!(n, "instantclone-v1.2.3-linux-x64");
+        let workflow = include_str!("../.github/workflows/release.yml");
+        let name = super::release_asset_name("$tag");
+        assert!(
+            workflow.contains(&name),
+            "release.yml never publishes {name}"
+        );
     }
 
     /// The relaunch handshake reads a process's state, not just whether its
@@ -475,7 +607,7 @@ mod tests {
 // try to update" check, just driven from a unit test.
 #[cfg(test)]
 mod e2e {
-    use super::{fetch_verified, sidecar, swap_in_place};
+    use super::{fetch_verified, install, rebuild_hash, sidecar, stage_beside, swap_in_place};
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
@@ -527,6 +659,44 @@ mod e2e {
         assert_eq!(got, exe);
     }
 
+    /// A release republished under the same version number: its checksum
+    /// file names a different exe than the one running.
+    #[test]
+    fn a_new_build_of_the_same_version_is_spotted() {
+        let running = crate::sha256::hex(b"BUILD-AS-FIRST-PUBLISHED");
+        let rebuilt = crate::sha256::hex(b"BUILD-REPUBLISHED-WITH-A-FIX");
+        let sums = format!("{rebuilt}  {}\n", super::release_asset_name("v9.9.9"));
+        let base = format!("http://127.0.0.1:{}", serve_release(Vec::new(), sums));
+        let agent = crate::https::https_agent();
+        assert_eq!(
+            rebuild_hash(&agent, &base, "9.9.9", &running),
+            Some(rebuilt)
+        );
+    }
+
+    #[test]
+    fn the_build_already_running_is_not_offered_again() {
+        let running = crate::sha256::hex(b"BUILD-AS-PUBLISHED");
+        // Published in uppercase: the comparison ignores case.
+        let sums = format!(
+            "{}  {}\n",
+            running.to_ascii_uppercase(),
+            super::release_asset_name("v9.9.9")
+        );
+        let base = format!("http://127.0.0.1:{}", serve_release(Vec::new(), sums));
+        let agent = crate::https::https_agent();
+        assert_eq!(rebuild_hash(&agent, &base, "9.9.9", &running), None);
+    }
+
+    #[test]
+    fn no_checksum_for_this_platform_is_unknown_not_an_update() {
+        let hash = crate::sha256::hex(b"SOME-OTHER-FILE");
+        let sums = format!("{hash}  optional-vod-unlocker.lua\n");
+        let base = format!("http://127.0.0.1:{}", serve_release(Vec::new(), sums));
+        let agent = crate::https::https_agent();
+        assert_eq!(rebuild_hash(&agent, &base, "9.9.9", &hash), None);
+    }
+
     #[test]
     fn fetch_verified_rejects_tampered_body() {
         // Publish the checksum of the genuine file, but serve a different
@@ -569,8 +739,8 @@ mod e2e {
 
     #[test]
     fn swap_in_place_replaces_exe_and_parks_old() {
-        let dir = std::env::temp_dir().join(format!("ic-swap-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = crate::test_support::TestDir::new("ic-swap");
+        let dir = scratch.path().to_path_buf();
         let exe = dir.join("instantclone.exe");
         let staged = sidecar(&exe, "new");
         std::fs::write(&exe, b"OLD-VERSION").unwrap();
@@ -581,7 +751,6 @@ mod e2e {
         assert_eq!(std::fs::read(&exe).unwrap(), b"NEW-VERSION");
         assert_eq!(std::fs::read(sidecar(&exe, "old")).unwrap(), b"OLD-VERSION");
         assert!(!staged.exists(), "staged .new should have been consumed");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The half-swap case: the running exe is already parked at `.old`
@@ -590,8 +759,8 @@ mod e2e {
     /// back, or the install is left with nothing to launch.
     #[test]
     fn swap_in_place_rolls_back_when_the_staged_file_is_missing() {
-        let dir = std::env::temp_dir().join(format!("ic-swap-rollback-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = crate::test_support::TestDir::new("ic-swap-rollback");
+        let dir = scratch.path().to_path_buf();
         let exe = dir.join("instantclone.exe");
         let staged = sidecar(&exe, "new");
         std::fs::write(&exe, b"OLD-VERSION").unwrap();
@@ -601,12 +770,91 @@ mod e2e {
 
         let exe_bytes = std::fs::read(&exe);
         let old_left_behind = sidecar(&exe, "old").exists();
-        let _ = std::fs::remove_dir_all(&dir);
         assert!(result.is_err(), "a missing staged file must fail the swap");
         assert_eq!(exe_bytes.unwrap(), b"OLD-VERSION");
         assert!(
             !old_left_behind,
             "rollback must move .old back, not copy it"
         );
+    }
+
+    /// A folder of its own per test, holding a fake running exe.
+    fn fake_install(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ic-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("instantclone.exe");
+        std::fs::write(&exe, b"OLD-VERSION").unwrap();
+        (dir, exe)
+    }
+
+    /// The order that keeps a clean shutdown possible: staging only writes
+    /// `.new`, the running exe stays put until the restart installs it.
+    #[test]
+    fn staging_leaves_the_running_exe_alone_until_the_restart_installs_it() {
+        let (dir, exe) = fake_install("stage-order");
+
+        let staged = stage_beside(&exe, b"NEW-VERSION", "9.9.9".into(), false).unwrap();
+        let before_restart = std::fs::read(&exe).unwrap();
+        let installed = install(&staged);
+        let after_restart = std::fs::read(&exe).unwrap();
+        let parked = std::fs::read(sidecar(&exe, "old")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(before_restart, b"OLD-VERSION", "staging must not swap");
+        assert!(installed.is_ok(), "{installed:?}");
+        assert_eq!(after_restart, b"NEW-VERSION");
+        assert_eq!(parked, b"OLD-VERSION");
+    }
+
+    /// The staged file waits on disk through the shutdown, so the restart
+    /// checks it again: a changed file is never run.
+    #[test]
+    fn a_staged_file_changed_before_the_restart_is_not_installed() {
+        let (dir, exe) = fake_install("stage-tamper");
+        let staged = stage_beside(&exe, b"NEW-VERSION", "9.9.9".into(), false).unwrap();
+        std::fs::write(&staged.staged, b"SOMETHING-ELSE").unwrap();
+
+        let installed = install(&staged);
+        let exe_bytes = std::fs::read(&exe).unwrap();
+        let leftovers = (staged.staged.exists(), sidecar(&exe, "old").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(installed.is_err());
+        assert_eq!(exe_bytes, b"OLD-VERSION", "the current version must stay");
+        assert_eq!(leftovers, (false, false), "dropped, and nothing parked");
+    }
+
+    /// Antivirus can take the staged file during the shutdown. The install
+    /// fails without touching the exe, so the relaunch starts it again.
+    #[test]
+    fn a_staged_file_that_vanished_leaves_the_install_runnable() {
+        let (dir, exe) = fake_install("stage-vanish");
+        let staged = stage_beside(&exe, b"NEW-VERSION", "9.9.9".into(), true).unwrap();
+        std::fs::remove_file(&staged.staged).unwrap();
+
+        let installed = install(&staged);
+        let exe_bytes = std::fs::read(&exe).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(installed.is_err());
+        assert_eq!(exe_bytes, b"OLD-VERSION");
+    }
+
+    /// One staged update at a time, taken by the restart that installs it.
+    #[test]
+    fn a_staged_update_waits_for_one_restart() {
+        let (dir, exe) = fake_install("stage-pending");
+        let staged = stage_beside(&exe, b"NEW-VERSION", "9.9.9".into(), false).unwrap();
+
+        super::stage(staged);
+        let waiting = super::is_staged();
+        let taken = super::take_pending();
+        let after = super::is_staged();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(waiting);
+        assert_eq!(taken.map(|s| s.version), Some("9.9.9".to_string()));
+        assert!(!after, "a later restart must not install it again");
     }
 }

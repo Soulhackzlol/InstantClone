@@ -18,7 +18,8 @@ pub struct Preset {
     pub category: &'static str,
     pub description: &'static str,
     /// What it can't work without: `discord`, `twitch`, `phone`, `web`
-    /// (an address to send to), `file` or `obs`. The first is the main one.
+    /// (an address to send to), `file`, `obs` or `light` (one on the
+    /// network). The first is the main one.
     pub needs: &'static [&'static str],
     pub recommended: bool,
     /// What the catalog card previews: (kind, sample text, sample chat line).
@@ -26,6 +27,15 @@ pub struct Preset {
 }
 
 pub const PRESETS: &[Preset] = &[
+    Preset {
+        id: "twitch_alerts",
+        name: "Twitch alerts",
+        category: "alerts",
+        description: "Follows, subs, gifted subs, bits and raids thanked on stream, in the alerts page you add to OBS once. No other alert service needed.",
+        needs: &["twitch"],
+        recommended: true,
+        preview: ("overlay", "Nat is raiding with 42 viewers", ""),
+    },
     Preset {
         id: "crash_alert",
         name: "OBS crash alert",
@@ -186,16 +196,16 @@ pub const PRESETS: &[Preset] = &[
         id: "on_air_light",
         name: "On-air light",
         category: "auto",
-        description: "A real light by your door: red when live, amber with the delay on, flashing if OBS crashed. Home Assistant, WLED, Hue.",
-        needs: &["web"],
+        description: "A real light by your door: red when live, amber with the delay on, flashing if OBS crashed. Finds WiZ, LIFX, Govee, Yeelight, Kasa, Shelly and WLED on your network, no hub needed.",
+        needs: &["light"],
         recommended: false,
-        preview: ("json", "", ""),
+        preview: ("light", "", ""),
     },
     Preset {
         id: "scene_delay",
         name: "Scene delay",
         category: "auto",
-        description: "Your OBS scene runs the delay: on in game, cut back to live in the lobby. Waits a moment, so flicking through scenes does nothing.",
+        description: "Your OBS scene runs the delay: armed in game, back to live in the lobby. Turn on Auto-activate so it goes on air by itself. Waits a moment, so flicking through scenes does nothing.",
         needs: &["obs"],
         recommended: false,
         preview: ("action", "", ""),
@@ -222,7 +232,7 @@ pub const PRESETS: &[Preset] = &[
         id: "webhook",
         name: "Webhook",
         category: "auto",
-        description: "Every event as JSON to n8n, Home Assistant, Zapier or your own tool.",
+        description: "Every InstantClone event as JSON to n8n, Home Assistant, Zapier or your own tool.",
         needs: &["web"],
         recommended: false,
         preview: ("json", "", ""),
@@ -405,6 +415,104 @@ fn check(left: &str, op: &str, right: &str, then: Vec<Step>, otherwise: Vec<Step
     step
 }
 
+/// `!setdelay`'s limit: past what the buffer holds right now it answers with
+/// that limit, otherwise it runs `arm` (set the delay, then reply).
+fn setdelay_limit(arm: Vec<Step>) -> Step {
+    check(
+        "{arg1}",
+        "greater",
+        "{delay_max}",
+        vec![reply(
+            "The buffer holds up to {delay_max}s right now. Usage: !setdelay 30",
+        )],
+        arm,
+    )
+}
+
+/// `!setdelay 0`: turns the delay off and says so, ahead of the checks
+/// that would otherwise answer "Delay set to 0s".
+fn setdelay_off() -> Step {
+    check(
+        "{arg1}",
+        "is",
+        "0",
+        vec![
+            Step::new(StepKind::DelayAction, &[("action", "disarm")]),
+            reply("Delay turned off by {user}."),
+            Step::new(StepKind::Stop, &[]),
+        ],
+        Vec::new(),
+    )
+}
+
+/// The answer `!setdelay` shipped with up to 0.1.15, also for 0.
+const SETDELAY_REPLY: &str = "Delay set to {arg1}s by {user}.";
+
+/// The limit check `!setdelay` shipped with up to 0.1.15: a fixed 600 s.
+const OLD_SETDELAY_TOP: &str = "601";
+const OLD_SETDELAY_REPLY: &str = "The delay goes up to 600s. Usage: !setdelay 30";
+
+/// Bring a `!setdelay` from up to 0.1.15 up to date, each part only while
+/// it is still exactly as shipped: the fixed 600 s limit becomes the
+/// buffer-aware one (the steps it runs when the delay fits are kept, so
+/// edits there survive), and its answer says when 0 turned the delay
+/// off. Returns whether anything changed.
+pub fn upgrade_setdelay(integration: &mut Integration) -> bool {
+    if integration.preset != "mod_controls" {
+        return false;
+    }
+    let mut changed = false;
+    for handler in &mut integration.handlers {
+        changed |= upgrade_setdelay_steps(&mut handler.steps);
+        let is_setdelay = matches!(&handler.trigger,
+            Trigger::ChatCommand { command, .. } if command == "!setdelay");
+        // Anywhere in the command counts: a check the user moved is theirs
+        // to keep where they put it, not to get a second copy of.
+        if is_setdelay
+            && !has_step(&handler.steps, &setdelay_off())
+            && has_step(&handler.steps, &reply(SETDELAY_REPLY))
+        {
+            handler.steps.insert(0, setdelay_off());
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Whether `wanted` is among `steps`, inside checks too.
+fn has_step(steps: &[Step], wanted: &Step) -> bool {
+    steps.iter().any(|step| {
+        step == wanted || has_step(&step.then, wanted) || has_step(&step.otherwise, wanted)
+    })
+}
+
+fn upgrade_setdelay_steps(steps: &mut [Step]) -> bool {
+    let mut changed = false;
+    for step in steps {
+        if is_old_setdelay_limit(step) {
+            *step = setdelay_limit(std::mem::take(&mut step.then));
+            changed = true;
+        } else {
+            changed |= upgrade_setdelay_steps(&mut step.then);
+            changed |= upgrade_setdelay_steps(&mut step.otherwise);
+        }
+    }
+    changed
+}
+
+fn is_old_setdelay_limit(step: &Step) -> bool {
+    let refusal_as_shipped = match step.otherwise.as_slice() {
+        [only] => only.kind == StepKind::Chat && only.param("text") == OLD_SETDELAY_REPLY,
+        _ => false,
+    };
+    step.kind == StepKind::If
+        && step.enabled
+        && step.param("left") == "{arg1}"
+        && step.param("op") == "less"
+        && step.param("right") == OLD_SETDELAY_TOP
+        && refusal_as_shipped
+}
+
 /// Build a catalog entry. `discord_channel` is the id of the Discord
 /// connection to post to (empty when none exists yet).
 pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integration> {
@@ -524,27 +632,24 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
                 "!setdelay",
                 Roles::MODS,
                 0,
-                vec![check(
-                    "{arg1}",
-                    "whole_number",
-                    "",
-                    vec![check(
+                vec![
+                    setdelay_off(),
+                    check(
                         "{arg1}",
-                        "less",
-                        "601",
-                        vec![
+                        "whole_number",
+                        "",
+                        vec![setdelay_limit(vec![
                             Step::new(
                                 StepKind::DelayAction,
                                 &[("action", "arm"), ("seconds", "{arg1}")],
                             ),
-                            reply("Delay set to {arg1}s by {user}."),
-                        ],
-                        vec![reply("The delay goes up to 600s. Usage: !setdelay 30")],
-                    )],
-                    vec![reply(
-                        "Usage: !setdelay 30, in whole seconds (0 turns it off)",
-                    )],
-                )],
+                            reply(SETDELAY_REPLY),
+                        ])],
+                        vec![reply(
+                            "Usage: !setdelay 30, in whole seconds (0 turns it off)",
+                        )],
+                    ),
+                ],
             ),
         ],
         "socials" => {
@@ -615,8 +720,11 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
                 vec![Step::new(StepKind::Marker, &[("description", "Delay cut")])],
             ),
         ],
+        // InstantClone's own events: OBS's and Twitch's would keep both
+        // connected (and ask Twitch for permissions) for one webhook.
         "webhook" => EventKind::ALL
             .iter()
+            .filter(|kind| kind.is_own())
             .map(|kind| {
                 let body = webhook_body(*kind);
                 on(
@@ -628,6 +736,7 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
                 )
             })
             .collect(),
+        "twitch_alerts" => twitch_alerts(),
         "crash_counter" => vec![on(
             EventKind::HoldOpened,
             vec![
@@ -1112,24 +1221,82 @@ fn hype_clip(d: &str) -> Vec<Handler> {
     }]
 }
 
-/// The on-air state as a light. Bodies follow Home Assistant's webhook
-/// style; the editor's device presets rewrite them for WLED or Hue.
+/// One "Show on stream" alert per Twitch event, each playing the alerts
+/// page's theme sound. A gifted sub reaches each viewer as a sub too:
+/// those are left to the one gift alert.
+fn twitch_alerts() -> Vec<Handler> {
+    let alert = |title: &str, text: &str| {
+        Step::new(
+            StepKind::Overlay,
+            &[
+                ("title", title),
+                ("text", text),
+                ("seconds", "6"),
+                ("sound", super::alerts::THEME_SOUND),
+            ],
+        )
+    };
+    // Welcoming raiders in chat is the streamer's call: off to start.
+    let mut welcome = chat("Welcome, raiders from {user}!");
+    welcome.enabled = false;
+    vec![
+        on(
+            EventKind::TwitchFollow,
+            vec![alert("New follower", "{user}")],
+        ),
+        on_filtered(
+            EventKind::TwitchSub,
+            &[("gift", "no")],
+            vec![alert("New sub", "{user} just subscribed")],
+        ),
+        on(
+            EventKind::TwitchResub,
+            vec![alert("Resub", "{user}: {months#month#months}")],
+        ),
+        on(
+            EventKind::TwitchGift,
+            vec![alert("Gifted subs", "{user} gifted {count#sub#subs}")],
+        ),
+        on(
+            EventKind::TwitchCheer,
+            vec![alert("Bits", "{user} cheered {bits#bit#bits}")],
+        ),
+        on(
+            EventKind::TwitchRaid,
+            vec![
+                alert("Raid", "{user} is raiding with {viewers#viewer#viewers}"),
+                welcome,
+            ],
+        ),
+    ]
+}
+
+/// The on-air state as a light on the network, picked in the editor.
+/// The editor can switch it to Home Assistant or Hue instead, which take
+/// a web request (see `LIGHT_STARTS`).
 fn on_air_light() -> Vec<Handler> {
-    ["live", "delay", "crash", "off"]
-        .iter()
-        .map(|state| {
-            let body = format!(r#"{{"state":"{state}"}}"#);
-            let mut h = on(
-                EventKind::OnAirChanged,
-                vec![Step::new(
-                    StepKind::Http,
-                    &[("method", "POST"), ("url", ""), ("body", &body)],
-                )],
-            );
-            set_filter(&mut h, "state", state);
-            h
-        })
-        .collect()
+    [
+        ("live", "color", "red"),
+        ("delay", "color", "amber"),
+        ("crash", "flash", "red"),
+        ("off", "off", ""),
+    ]
+    .iter()
+    .map(|(state, action, color)| {
+        let light = Step::new(
+            StepKind::Light,
+            &[
+                ("device", ""),
+                ("name", ""),
+                ("action", action),
+                ("color", color),
+            ],
+        );
+        let mut h = on(EventKind::OnAirChanged, vec![light]);
+        set_filter(&mut h, "state", state);
+        h
+    })
+    .collect()
 }
 
 /// Two scene rules to fill in: a delay for the game scene, live again for
@@ -1466,6 +1633,104 @@ pub fn catalog_json() -> Value {
 mod tests {
     use super::*;
 
+    /// Mod controls with `limit` in place of `!setdelay`'s limit check.
+    fn mod_controls_with_limit(limit: Step) -> Integration {
+        let mut i = build("mod_controls", "mc".into(), "").expect("builds");
+        let setdelay = i
+            .handlers
+            .iter_mut()
+            .find(|h| matches!(&h.trigger, Trigger::ChatCommand { command, .. } if command == "!setdelay"))
+            .expect("has !setdelay");
+        // Its check for whole seconds; the limit sits inside.
+        let whole = setdelay
+            .steps
+            .iter_mut()
+            .find(|s| s.param("op") == "whole_number")
+            .expect("checks for whole seconds");
+        whole.then = vec![limit];
+        i
+    }
+
+    /// The limit check as 0.1.15 shipped it, running `arm` when it passes.
+    fn old_limit(arm: Vec<Step>, refusal: &str) -> Step {
+        check(
+            "{arg1}",
+            "less",
+            OLD_SETDELAY_TOP,
+            arm,
+            vec![reply(refusal)],
+        )
+    }
+
+    #[test]
+    fn an_old_setdelay_limit_upgrades_and_keeps_its_arm_steps() {
+        let arm = vec![reply("Custom: delay is now {arg1}s")];
+        let mut old = mod_controls_with_limit(old_limit(arm.clone(), OLD_SETDELAY_REPLY));
+        assert!(upgrade_setdelay(&mut old));
+        assert_eq!(
+            old,
+            mod_controls_with_limit(setdelay_limit(arm)),
+            "the new limit, with the edited arm steps kept"
+        );
+        assert!(
+            !upgrade_setdelay(&mut old),
+            "running it again changes nothing"
+        );
+    }
+
+    #[test]
+    fn an_old_setdelay_learns_that_0_turns_the_delay_off() {
+        let fresh = build("mod_controls", "mc".into(), "").expect("builds");
+        let mut old = fresh.clone();
+        for h in &mut old.handlers {
+            if h.steps.first() == Some(&setdelay_off()) {
+                h.steps.remove(0);
+            }
+        }
+        assert_ne!(old, fresh);
+        assert!(upgrade_setdelay(&mut old));
+        assert_eq!(old, fresh);
+        assert!(
+            !upgrade_setdelay(&mut old),
+            "running it again changes nothing"
+        );
+    }
+
+    /// The user moved "0 turns it off" below another step: it stays there,
+    /// and no second copy is added at the top.
+    #[test]
+    fn a_moved_off_check_is_kept_where_the_user_put_it() {
+        let mut moved = build("mod_controls", "mc".into(), "").expect("builds");
+        for h in &mut moved.handlers {
+            if h.steps.first() == Some(&setdelay_off()) && h.steps.len() > 1 {
+                h.steps.swap(0, 1);
+            }
+        }
+        let before = moved.clone();
+        assert!(!upgrade_setdelay(&mut moved));
+        assert_eq!(moved, before);
+    }
+
+    #[test]
+    fn an_edited_setdelay_limit_is_left_alone() {
+        let arm = vec![reply("Delay is {arg1}s now")];
+        let mut edited = mod_controls_with_limit(old_limit(arm, "Max is 600, chat!"));
+        let before = edited.clone();
+        assert!(!upgrade_setdelay(&mut edited));
+        assert_eq!(edited, before);
+    }
+
+    #[test]
+    fn a_fresh_setdelay_is_already_buffer_aware() {
+        let mut fresh = build("mod_controls", "mc".into(), "").expect("builds");
+        assert!(!upgrade_setdelay(&mut fresh));
+        let text = fresh.to_json().to_json();
+        assert!(
+            text.contains("{delay_max}") && !text.contains("601"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn every_preset_builds_and_validates_once_connected() {
         for p in PRESETS {
@@ -1491,6 +1756,10 @@ mod tests {
                 if s.params.get(key).is_some_and(|v| v.is_empty()) {
                     s.params.insert(key.into(), "https://example.com/x".into());
                 }
+            }
+            if s.params.get("device").is_some_and(|v| v.is_empty()) {
+                s.params
+                    .insert("device".into(), "wiz:192.168.1.20#a8bb50a4f94d".into());
             }
             fill_blank_paths(&mut s.then);
             fill_blank_paths(&mut s.otherwise);
@@ -1636,10 +1905,5 @@ mod tests {
     #[test]
     fn legacy_alerts_validate() {
         assert!(legacy_alerts("legacy".into(), "chan").validate().is_empty());
-    }
-
-    #[test]
-    fn catalog_is_valid_json() {
-        assert!(crate::config::is_valid_json(&catalog_json().to_json()));
     }
 }

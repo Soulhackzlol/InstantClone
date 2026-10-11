@@ -44,6 +44,14 @@ const WANTS_2S_KEYFRAME: &[&str] = &["twitch", "youtube", "kick", "trovo", "rest
 /// accepted but downscaled server-side at best, rejected at worst.
 const KICK_MAX_HEIGHT: u32 = 1080;
 
+/// Where each fix lives in OBS, so the warning is something to act on. The
+/// dashboard adds that OBS applies it the next time streaming starts.
+const KEYFRAME_FIX: &str =
+    "In OBS: Settings → Output → Streaming (Output Mode: Advanced) → Keyframe Interval: 2 s.";
+const RESOLUTION_FIX: &str =
+    "In OBS: Settings → Video → Output (Scaled) Resolution: 1080p or lower.";
+const CODEC_FIX: &str = "In OBS: Settings → Output → Streaming → Video Encoder: an H.264 one.";
+
 /// Produce at most one line describing every compatibility problem with
 /// the current stream, or `None` when there is nothing worth saying.
 ///
@@ -88,7 +96,7 @@ fn keyframe_issue(params: &StreamParams, live: &[&Destination]) -> Option<String
         return None;
     }
     Some(format!(
-        "Keyframe interval measures {}. {} {} 2s.",
+        "Keyframe interval measures {}. {} {} 2s. {KEYFRAME_FIX}",
         format_seconds(params.keyframe_interval_ms),
         join_names(&names),
         verb_for(names.len(), "expects", "expect"),
@@ -114,7 +122,7 @@ fn resolution_issue(params: &StreamParams, live: &[&Destination]) -> Option<Stri
         return None;
     }
     Some(format!(
-        "Video is {}p. Kick caps at {}p.",
+        "Video is {}p. Kick caps at {}p. {RESOLUTION_FIX}",
         short_side, KICK_MAX_HEIGHT
     ))
 }
@@ -136,7 +144,7 @@ fn codec_issue(params: &StreamParams, live: &[&Destination]) -> Option<String> {
         return None;
     }
     Some(format!(
-        "Video codec is {}. Kick needs H.264.",
+        "Video codec is {}. Kick needs H.264. {CODEC_FIX}",
         params.codec.label()
     ))
 }
@@ -202,187 +210,182 @@ mod tests {
         }
     }
 
-    fn params() -> StreamParams {
-        StreamParams {
+    /// A healthy 1080p, 2 s keyframe, H.264 stream, changed by `change`.
+    fn stream(change: impl Fn(&mut StreamParams)) -> StreamParams {
+        let mut params = StreamParams {
             width: 1920,
             height: 1080,
             keyframe_interval_ms: 2_000,
             codec: VideoCodec::Avc,
+        };
+        change(&mut params);
+        params
+    }
+
+    fn healthy() -> StreamParams {
+        stream(|_| {})
+    }
+
+    fn long_keyframes() -> StreamParams {
+        stream(|p| p.keyframe_interval_ms = 4_000)
+    }
+
+    /// Nothing is said when the stream is fine, when the measurement isn't
+    /// in yet, or when nobody who would mind is being streamed to.
+    #[test]
+    fn stays_silent_when_nothing_is_wrong_or_nobody_minds() {
+        let kick = [dest("kick", true)];
+        let cases: [(&str, StreamParams, &[Destination]); 13] = [
+            (
+                "a healthy stream",
+                healthy(),
+                &[dest("twitch", true), dest("kick", true)],
+            ),
+            ("no destinations", healthy(), &[]),
+            // The whole point of the tolerance: a user who correctly set 2 s
+            // measures slightly over it because of encoder jitter.
+            (
+                "2 s with encoder jitter",
+                stream(|p| p.keyframe_interval_ms = 2_100),
+                &kick,
+            ),
+            // Pins the threshold: 2600 ms is the last silent value, so moving
+            // it is a deliberate edit to KEYFRAME_WARN_MS, not a `<=` slip.
+            (
+                "the last silent interval",
+                stream(|p| p.keyframe_interval_ms = 2_600),
+                &kick,
+            ),
+            (
+                "an interval not measured yet",
+                stream(|p| p.keyframe_interval_ms = 0),
+                &kick,
+            ),
+            (
+                "a switched-off destination",
+                long_keyframes(),
+                &[dest("kick", false)],
+            ),
+            // A custom ingest has unknown requirements: guessing is worse.
+            ("a custom server", long_keyframes(), &[dest("custom", true)]),
+            // The sink accepts anything: warning about it would be noise.
+            (
+                "the test sink, with everything wrong",
+                stream(|p| {
+                    p.keyframe_interval_ms = 4_000;
+                    p.height = 1440;
+                    p.codec = VideoCodec::Av1;
+                }),
+                &[dest("sink", true)],
+            ),
+            (
+                "1440p to Twitch only",
+                stream(|p| p.height = 1440),
+                &[dest("twitch", true)],
+            ),
+            // A 9:16 canvas is 1080p on its short side, which Kick accepts.
+            // Reading the height alone called it "1920p" and warned falsely.
+            (
+                "a portrait 1080p canvas",
+                stream(|p| (p.width, p.height) = (1080, 1920)),
+                &kick,
+            ),
+            ("a size not decoded yet", stream(|p| p.height = 0), &kick),
+            (
+                "HEVC to YouTube only",
+                stream(|p| p.codec = VideoCodec::Hevc),
+                &[dest("youtube", true)],
+            ),
+            (
+                "a codec not known yet",
+                stream(|p| p.codec = VideoCodec::Unknown),
+                &kick,
+            ),
+        ];
+        for (case, params, dests) in cases {
+            assert_eq!(compat_warning(&params, dests), None, "{case}");
         }
     }
 
+    /// The keyframe warning starts just past the threshold and names each
+    /// platform that expects 2 s once, however many destinations use it.
     #[test]
-    fn healthy_stream_is_silent() {
-        let dests = vec![dest("twitch", true), dest("kick", true)];
-        assert_eq!(compat_warning(&params(), &dests), None);
+    fn a_long_keyframe_interval_names_who_expects_2s() {
+        let mut second_twitch = dest("twitch", true);
+        second_twitch.id = "twitch-2".into();
+        let cases: [(StreamParams, &[Destination], &str); 3] = [
+            (
+                long_keyframes(),
+                &[dest("kick", true), dest("youtube", true)],
+                "Keyframe interval measures 4.0s. Kick and YouTube expect 2s.",
+            ),
+            (
+                long_keyframes(),
+                &[dest("twitch", true), second_twitch],
+                "Keyframe interval measures 4.0s. Twitch expects 2s.",
+            ),
+            (
+                stream(|p| p.keyframe_interval_ms = 2_601),
+                &[dest("kick", true)],
+                "Keyframe interval measures 2.6s. Kick expects 2s.",
+            ),
+        ];
+        for (params, dests, said) in cases {
+            assert_eq!(
+                compat_warning(&params, dests),
+                Some(format!("{said} {KEYFRAME_FIX}"))
+            );
+        }
     }
 
+    /// Kick caps video at 1080p on its short side, whichever way up and
+    /// whichever side was decoded, and takes H.264 only.
     #[test]
-    fn no_destinations_is_silent() {
-        assert_eq!(compat_warning(&params(), &[]), None);
-    }
-
-    /// The whole point of the tolerance: a user who correctly set 2 s
-    /// measures slightly over it because of encoder jitter, and must not
-    /// be nagged for it.
-    #[test]
-    fn two_second_keyframe_with_jitter_does_not_warn() {
-        let mut p = params();
-        p.keyframe_interval_ms = 2_100;
-        assert_eq!(compat_warning(&p, &[dest("kick", true)]), None);
-    }
-
-    #[test]
-    fn four_second_keyframe_warns_and_names_platforms() {
-        let mut p = params();
-        p.keyframe_interval_ms = 4_000;
-        let dests = vec![dest("kick", true), dest("youtube", true)];
-        assert_eq!(
-            compat_warning(&p, &dests),
-            Some("Keyframe interval measures 4.0s. Kick and YouTube expect 2s.".into())
-        );
-    }
-
-    #[test]
-    fn single_platform_uses_singular_verb() {
-        let mut p = params();
-        p.keyframe_interval_ms = 4_000;
-        assert_eq!(
-            compat_warning(&p, &[dest("kick", true)]),
-            Some("Keyframe interval measures 4.0s. Kick expects 2s.".into())
-        );
-    }
-
-    /// Two destinations on the same platform must not render as
-    /// "Twitch and Twitch".
-    #[test]
-    fn duplicate_platforms_are_deduplicated() {
-        let mut p = params();
-        p.keyframe_interval_ms = 4_000;
-        let mut second = dest("twitch", true);
-        second.id = "twitch-2".into();
-        let dests = vec![dest("twitch", true), second];
-        assert_eq!(
-            compat_warning(&p, &dests),
-            Some("Keyframe interval measures 4.0s. Twitch expects 2s.".into())
-        );
-    }
-
-    #[test]
-    fn disabled_destinations_are_ignored() {
-        let mut p = params();
-        p.keyframe_interval_ms = 4_000;
-        assert_eq!(compat_warning(&p, &[dest("kick", false)]), None);
-    }
-
-    /// The sink accepts anything - warning about it would be noise.
-    #[test]
-    fn sink_alone_never_warns() {
-        let mut p = params();
-        p.keyframe_interval_ms = 4_000;
-        p.height = 1440;
-        p.codec = VideoCodec::Av1;
-        assert_eq!(compat_warning(&p, &[dest("sink", true)]), None);
-    }
-
-    /// A custom ingest has unknown requirements, so guessing is worse
-    /// than staying quiet.
-    #[test]
-    fn custom_platform_has_no_keyframe_opinion() {
-        let mut p = params();
-        p.keyframe_interval_ms = 4_000;
-        assert_eq!(compat_warning(&p, &[dest("custom", true)]), None);
-    }
-
-    #[test]
-    fn unmeasured_keyframe_interval_is_silent() {
-        let mut p = params();
-        p.keyframe_interval_ms = 0;
-        assert_eq!(compat_warning(&p, &[dest("kick", true)]), None);
-    }
-
-    #[test]
-    fn tall_canvas_warns_only_when_kick_is_enabled() {
-        let mut p = params();
-        p.height = 1440;
-        assert_eq!(compat_warning(&p, &[dest("twitch", true)]), None);
-        assert_eq!(
-            compat_warning(&p, &[dest("kick", true)]),
-            Some("Video is 1440p. Kick caps at 1080p.".into())
-        );
-    }
-
-    /// Pins the threshold itself: 2600 ms is the last silent value. Moving
-    /// it either way changes who gets nagged, so it must be a deliberate
-    /// edit to `KEYFRAME_WARN_MS`, not a `<` vs `<=` slip.
-    #[test]
-    fn keyframe_warning_starts_just_past_the_threshold() {
-        let mut p = params();
-        p.keyframe_interval_ms = 2_600;
-        assert_eq!(compat_warning(&p, &[dest("kick", true)]), None);
-        p.keyframe_interval_ms = 2_601;
-        assert_eq!(
-            compat_warning(&p, &[dest("kick", true)]),
-            Some("Keyframe interval measures 2.6s. Kick expects 2s.".into())
-        );
-    }
-
-    /// A 9:16 canvas is 1080p on its short side, the same pixel budget as
-    /// 1920x1080, which Kick's ingest accepts in either orientation.
-    /// Reading the height alone called it "1920p" and warned falsely.
-    #[test]
-    fn portrait_1080p_canvas_does_not_trip_the_kick_cap() {
-        let mut p = params();
-        p.width = 1080;
-        p.height = 1920;
-        assert_eq!(compat_warning(&p, &[dest("kick", true)]), None);
-        // A portrait canvas past the cap still warns, named by its short side.
-        p.width = 1440;
-        p.height = 2560;
-        assert_eq!(
-            compat_warning(&p, &[dest("kick", true)]),
-            Some("Video is 1440p. Kick caps at 1080p.".into())
-        );
-    }
-
-    #[test]
-    fn undecoded_resolution_is_silent() {
-        let mut p = params();
-        p.height = 0;
-        assert_eq!(compat_warning(&p, &[dest("kick", true)]), None);
-    }
-
-    #[test]
-    fn non_h264_warns_for_kick_only() {
-        let mut p = params();
-        p.codec = VideoCodec::Hevc;
-        assert_eq!(compat_warning(&p, &[dest("youtube", true)]), None);
-        assert_eq!(
-            compat_warning(&p, &[dest("kick", true)]),
-            Some("Video codec is HEVC. Kick needs H.264.".into())
-        );
-    }
-
-    #[test]
-    fn unknown_codec_is_silent() {
-        let mut p = params();
-        p.codec = VideoCodec::Unknown;
-        assert_eq!(compat_warning(&p, &[dest("kick", true)]), None);
+    fn kick_is_warned_about_tall_video_and_other_codecs() {
+        let too_tall = format!("Video is 1440p. Kick caps at 1080p. {RESOLUTION_FIX}");
+        let cases = [
+            ("1440p", stream(|p| p.height = 1440), too_tall.clone()),
+            (
+                "portrait 1440p",
+                stream(|p| (p.width, p.height) = (1440, 2560)),
+                too_tall.clone(),
+            ),
+            (
+                "a height without a width",
+                stream(|p| (p.width, p.height) = (0, 1440)),
+                too_tall,
+            ),
+            (
+                "HEVC",
+                stream(|p| p.codec = VideoCodec::Hevc),
+                format!("Video codec is HEVC. Kick needs H.264. {CODEC_FIX}"),
+            ),
+        ];
+        for (case, params, said) in cases {
+            assert_eq!(
+                compat_warning(&params, &[dest("kick", true)]),
+                Some(said),
+                "{case}"
+            );
+        }
     }
 
     /// Multiple problems collapse into ONE line - the clutter guard.
     #[test]
     fn multiple_issues_join_into_a_single_line() {
-        let mut p = params();
-        p.keyframe_interval_ms = 4_000;
-        p.height = 1440;
-        p.codec = VideoCodec::Av1;
-        let warning = compat_warning(&p, &[dest("kick", true)]).unwrap();
+        let everything = stream(|p| {
+            p.keyframe_interval_ms = 4_000;
+            p.height = 1440;
+            p.codec = VideoCodec::Av1;
+        });
+        let warning = compat_warning(&everything, &[dest("kick", true)]).unwrap();
         assert_eq!(
             warning,
-            "Keyframe interval measures 4.0s. Kick expects 2s. · \
-             Video is 1440p. Kick caps at 1080p. · \
-             Video codec is AV1. Kick needs H.264."
+            format!(
+                "Keyframe interval measures 4.0s. Kick expects 2s. {KEYFRAME_FIX} · \
+                 Video is 1440p. Kick caps at 1080p. {RESOLUTION_FIX} · \
+                 Video codec is AV1. Kick needs H.264. {CODEC_FIX}"
+            )
         );
         assert_eq!(warning.lines().count(), 1);
     }

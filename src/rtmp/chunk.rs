@@ -569,6 +569,7 @@ fn u24_be(b: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::Lcg;
     use std::io::Cursor;
 
     // A `Cursor<Vec<u8>>` is a tokio `AsyncRead`, so it feeds the reader
@@ -643,25 +644,28 @@ mod tests {
         b
     }
 
+    /// What the writer sends, the reader gives back: in one chunk or many.
     #[tokio::test]
-    async fn roundtrip_small_message() {
-        let payload = b"hello-rtmp";
-        let msg = roundtrip(6, 1000, 9, 1, payload).await;
-        assert_eq!(msg.timestamp, 1000);
-        assert_eq!(msg.type_id, 9);
-        assert_eq!(msg.stream_id, 1);
-        assert_eq!(&msg.payload[..], payload);
-    }
-
-    #[tokio::test]
-    async fn roundtrip_fragmented_message() {
-        // 300 bytes at the default 128-byte chunk size forces one fmt-0
-        // header chunk plus two fmt-3 continuations; the reader must
-        // reassemble them back into the exact original payload.
-        let payload: Vec<u8> = (0..300u32).map(|i| i as u8).collect();
-        let msg = roundtrip(6, 42, 8, 3, &payload).await;
-        assert_eq!(msg.payload.len(), 300);
-        assert_eq!(&msg.payload[..], &payload[..]);
+    async fn messages_round_trip_whole_and_fragmented() {
+        // roundtrip small message
+        {
+            let payload = b"hello-rtmp";
+            let msg = roundtrip(6, 1000, 9, 1, payload).await;
+            assert_eq!(msg.timestamp, 1000);
+            assert_eq!(msg.type_id, 9);
+            assert_eq!(msg.stream_id, 1);
+            assert_eq!(&msg.payload[..], payload);
+        }
+        // roundtrip fragmented message
+        {
+            // 300 bytes at the default 128-byte chunk size forces one fmt-0
+            // header chunk plus two fmt-3 continuations; the reader must
+            // reassemble them back into the exact original payload.
+            let payload: Vec<u8> = (0..300u32).map(|i| i as u8).collect();
+            let msg = roundtrip(6, 42, 8, 3, &payload).await;
+            assert_eq!(msg.payload.len(), 300);
+            assert_eq!(&msg.payload[..], &payload[..]);
+        }
     }
 
     #[tokio::test]
@@ -724,71 +728,76 @@ mod tests {
         assert_eq!(msg.payload.len(), 200);
     }
 
+    /// fmt 1, 2 and 3 chunk headers each leave out what the last message already said.
     #[tokio::test]
-    async fn fmt1_reuses_stream_id_and_advances_timestamp() {
-        let mut wire = fmt0(4, 1000, 9, 7, b"aaaa");
-        wire.extend(fmt1(4, 33, 8, b"bb")); // new delta/length/type, reuse msid
-        let mut r = reader(wire);
-        let m1 = r.read_message().await.unwrap();
-        let m2 = r.read_message().await.unwrap();
-        assert_eq!((m1.timestamp, m1.type_id, m1.stream_id), (1000, 9, 7));
-        // fmt-1 carries a delta and inherits the fmt-0 message-stream-id.
-        assert_eq!((m2.timestamp, m2.type_id, m2.stream_id), (1033, 8, 7));
-        assert_eq!(&m2.payload[..], b"bb");
+    async fn compressed_headers_reuse_the_previous_message() {
+        // fmt1 reuses stream id and advances timestamp
+        {
+            let mut wire = fmt0(4, 1000, 9, 7, b"aaaa");
+            wire.extend(fmt1(4, 33, 8, b"bb")); // new delta/length/type, reuse msid
+            let mut r = reader(wire);
+            let m1 = r.read_message().await.unwrap();
+            let m2 = r.read_message().await.unwrap();
+            assert_eq!((m1.timestamp, m1.type_id, m1.stream_id), (1000, 9, 7));
+            // fmt-1 carries a delta and inherits the fmt-0 message-stream-id.
+            assert_eq!((m2.timestamp, m2.type_id, m2.stream_id), (1033, 8, 7));
+            assert_eq!(&m2.payload[..], b"bb");
+        }
+        // fmt2 reuses length type and stream
+        {
+            // fmt-2 carries only a timestamp delta; length, type, and stream-id
+            // all come from the prior chunk, so the payload MUST match the
+            // reused length (4 bytes here).
+            let mut wire = fmt0(4, 1000, 9, 7, b"aaaa");
+            wire.extend(fmt2(4, 33, b"bbbb"));
+            let mut r = reader(wire);
+            let _ = r.read_message().await.unwrap();
+            let m2 = r.read_message().await.unwrap();
+            assert_eq!((m2.timestamp, m2.type_id, m2.stream_id), (1033, 9, 7));
+            assert_eq!(&m2.payload[..], b"bbbb");
+        }
+        // fmt3 replays previous message header
+        {
+            // A fmt-3 basic header with no message in flight replays the last
+            // header: same length/type/stream, timestamp advanced by the last
+            // delta. Because fmt-0 seeds the delta to its absolute timestamp,
+            // the replayed message lands at 2000 (1000 + 1000).
+            let mut wire = fmt0(4, 1000, 9, 7, b"aaaa");
+            wire.extend(fmt3(4, b"cccc"));
+            let mut r = reader(wire);
+            let _ = r.read_message().await.unwrap();
+            let m2 = r.read_message().await.unwrap();
+            assert_eq!((m2.timestamp, m2.type_id, m2.stream_id), (2000, 9, 7));
+            assert_eq!(&m2.payload[..], b"cccc");
+        }
     }
 
+    /// Mid-header or mid-payload, a connection that ends is reported cleanly.
     #[tokio::test]
-    async fn fmt2_reuses_length_type_and_stream() {
-        // fmt-2 carries only a timestamp delta; length, type, and stream-id
-        // all come from the prior chunk, so the payload MUST match the
-        // reused length (4 bytes here).
-        let mut wire = fmt0(4, 1000, 9, 7, b"aaaa");
-        wire.extend(fmt2(4, 33, b"bbbb"));
-        let mut r = reader(wire);
-        let _ = r.read_message().await.unwrap();
-        let m2 = r.read_message().await.unwrap();
-        assert_eq!((m2.timestamp, m2.type_id, m2.stream_id), (1033, 9, 7));
-        assert_eq!(&m2.payload[..], b"bbbb");
-    }
-
-    #[tokio::test]
-    async fn fmt3_replays_previous_message_header() {
-        // A fmt-3 basic header with no message in flight replays the last
-        // header: same length/type/stream, timestamp advanced by the last
-        // delta. Because fmt-0 seeds the delta to its absolute timestamp,
-        // the replayed message lands at 2000 (1000 + 1000).
-        let mut wire = fmt0(4, 1000, 9, 7, b"aaaa");
-        wire.extend(fmt3(4, b"cccc"));
-        let mut r = reader(wire);
-        let _ = r.read_message().await.unwrap();
-        let m2 = r.read_message().await.unwrap();
-        assert_eq!((m2.timestamp, m2.type_id, m2.stream_id), (2000, 9, 7));
-        assert_eq!(&m2.payload[..], b"cccc");
-    }
-
-    #[tokio::test]
-    async fn truncated_header_errors_not_panics() {
-        // fmt-0 basic header promises an 11-byte message header but only 5
-        // are present. The reader must return an error, never panic.
-        let wire = vec![0x06u8, 0, 0, 1, 0, 0]; // 1 basic + 5 of 11 header bytes
-        let r = reader(wire).read_message().await;
-        assert!(r.is_err());
-    }
-
-    #[tokio::test]
-    async fn truncated_payload_errors_not_panics() {
-        // Header claims a 300-byte payload but the stream ends after 100.
-        let mut wire = {
-            let mut b = vec![0x06u8];
-            b.extend_from_slice(&u24(0)); // ts
-            b.extend_from_slice(&u24(300)); // length
-            b.push(9); // type
-            b.extend_from_slice(&1u32.to_le_bytes()); // msid
-            b
-        };
-        wire.extend(std::iter::repeat_n(0u8, 100));
-        let r = reader(wire).read_message().await;
-        assert!(r.is_err());
+    async fn a_stream_cut_short_is_an_error_not_a_panic() {
+        // truncated header errors not panics
+        {
+            // fmt-0 basic header promises an 11-byte message header but only 5
+            // are present. The reader must return an error, never panic.
+            let wire = vec![0x06u8, 0, 0, 1, 0, 0]; // 1 basic + 5 of 11 header bytes
+            let r = reader(wire).read_message().await;
+            assert!(r.is_err());
+        }
+        // truncated payload errors not panics
+        {
+            // Header claims a 300-byte payload but the stream ends after 100.
+            let mut wire = {
+                let mut b = vec![0x06u8];
+                b.extend_from_slice(&u24(0)); // ts
+                b.extend_from_slice(&u24(300)); // length
+                b.push(9); // type
+                b.extend_from_slice(&1u32.to_le_bytes()); // msid
+                b
+            };
+            wire.extend(std::iter::repeat_n(0u8, 100));
+            let r = reader(wire).read_message().await;
+            assert!(r.is_err());
+        }
     }
 
     #[tokio::test]
@@ -801,10 +810,11 @@ mod tests {
         assert!(msg.payload.is_empty());
     }
 
+    /// A message (one chunk) well under the default 2.5 MB window leaves nothing to ack.
     #[tokio::test]
     async fn take_pending_ack_none_before_threshold() {
-        // Fresh reader: 0 bytes in, default 2.5 MB window -> nothing to ack.
-        let mut r = reader(vec![]);
+        let mut r = reader(fmt0(6, 5, 9, 1, &[0x17; 100]));
+        r.read_message().await.unwrap();
         assert!(r.take_pending_ack().is_none());
     }
 
@@ -982,23 +992,6 @@ mod tests {
         assert_eq!(&r.read_message().await.unwrap().payload[..], b"media");
         assert_eq!(r.chunk_size, DEFAULT_CHUNK_SIZE);
         assert_eq!(r.window_ack_size, 2_500_000);
-    }
-
-    /// Deterministic LCG for the fuzz test: fixed seed, no dependency.
-    struct Lcg(u64);
-
-    impl Lcg {
-        fn next_u32(&mut self) -> u32 {
-            self.0 = self
-                .0
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            (self.0 >> 33) as u32
-        }
-
-        fn below(&mut self, n: u32) -> u32 {
-            self.next_u32() % n
-        }
     }
 
     /// Feed `wire` to a fresh reader until it errors. Returns the messages

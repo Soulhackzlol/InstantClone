@@ -1,4 +1,5 @@
-//! The two Helix API calls integrations use: VOD markers and clips.
+//! The Helix API calls integrations use: VOD markers, clips, and
+//! subscribing to Twitch events.
 //! Blocking; run off the async thread.
 
 use super::auth::read_body;
@@ -46,6 +47,43 @@ pub fn create_clip(auth: &Auth) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| "Twitch accepted the clip but sent no id".to_string())
+}
+
+/// Whether Twitch took a subscription.
+pub enum Subscribed {
+    Yes,
+    /// The login lacks the permission this event needs.
+    NeedsConsent,
+}
+
+/// Subscribe a WebSocket session to one EventSub event.
+pub fn subscribe_event(
+    auth: &Auth,
+    kind: (&str, &str),
+    condition: Value,
+    session_id: &str,
+) -> Result<Subscribed, String> {
+    let (kind_type, version) = kind;
+    let body = json::obj([
+        ("type", json::str(kind_type)),
+        ("version", json::str(version)),
+        ("condition", condition),
+        (
+            "transport",
+            json::obj([
+                ("method", json::str("websocket")),
+                ("session_id", json::str(session_id)),
+            ]),
+        ),
+    ])
+    .to_json();
+    let (status, text) = post(auth, &format!("{API}/eventsub/subscriptions"), &body)?;
+    match status {
+        // 409: this session already has it.
+        202 | 409 => Ok(Subscribed::Yes),
+        403 => Ok(Subscribed::NeedsConsent),
+        _ => Err(explain(status, &text, "listen for it")),
+    }
 }
 
 fn post(auth: &Auth, url: &str, body: &str) -> Result<(u16, String), String> {

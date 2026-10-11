@@ -827,41 +827,45 @@ mod tests {
         tag
     }
 
+    /// During a hold each audio track gets silence in its own format, or none when we can't make it.
     #[test]
-    fn silence_matches_the_streams_own_aac_config() {
-        // AAC-LC, 48 kHz (index 3), stereo: 00010 0011 0010 000.
-        let stereo = silent_audio_from_header(&aac_header(0xAF, [0x11, 0x90])).unwrap();
-        assert_eq!(stereo.frame, SILENT_AAC_STEREO);
-        assert_eq!(stereo.framing, Framing::Legacy);
-        assert_eq!(audio_tag(&stereo)[..2], [0xAF, AAC_RAW]);
-        assert!((stereo.frame_ms - 21.333).abs() < 0.01);
-        // AAC-LC, 44.1 kHz (index 4), mono.
-        let mono = silent_audio_from_header(&aac_header(0xAE, [0x12, 0x08])).unwrap();
-        assert_eq!(mono.frame, SILENT_AAC_MONO);
-        assert!((mono.frame_ms - 23.22).abs() < 0.01);
-    }
-
-    #[test]
-    fn a_vod_audio_track_gets_silence_under_its_own_track_id() {
-        let header = one_track_header(0x95, b"mp4a", 1, &[0x11, 0x90]);
-        let silence = silent_audio_from_header(&header).unwrap();
-        assert_eq!(silence.framing, Framing::OneTrack(1));
-        let tag = audio_tag(&silence);
-        assert_eq!(tag[..7], [0x95, 0x01, b'm', b'p', b'4', b'a', 1]);
-        // It flattens back to the legacy silent frame any ingest accepts.
-        let flat = crate::h264::flatten_multitrack_audio(&tag, 1).unwrap();
-        assert_eq!(flat[..2], [0xAF, AAC_RAW]);
-        assert_eq!(&flat[2..], SILENT_AAC_STEREO);
-    }
-
-    #[test]
-    fn unsupported_audio_gets_no_silence() {
-        // HE-AAC (object type 5), 5.1 channels, a non-AAC tag, Opus.
-        assert!(silent_audio_from_header(&aac_header(0xAF, [0x29, 0x90])).is_none());
-        assert!(silent_audio_from_header(&aac_header(0xAF, [0x11, 0xB0])).is_none());
-        assert!(silent_audio_from_header(&[0x2F, 0x00, 0x11, 0x90]).is_none());
-        assert!(silent_audio_from_header(&aac_header(0xAF, [0x11, 0x90])[..2]).is_none());
-        assert!(silent_audio_from_header(&one_track_header(0x95, b"Opus", 1, &[0; 8])).is_none());
+    fn silence_matches_the_audio_it_stands_in_for() {
+        // silence matches the streams own aac config
+        {
+            // AAC-LC, 48 kHz (index 3), stereo: 00010 0011 0010 000.
+            let stereo = silent_audio_from_header(&aac_header(0xAF, [0x11, 0x90])).unwrap();
+            assert_eq!(stereo.frame, SILENT_AAC_STEREO);
+            assert_eq!(stereo.framing, Framing::Legacy);
+            assert_eq!(audio_tag(&stereo)[..2], [0xAF, AAC_RAW]);
+            assert!((stereo.frame_ms - 21.333).abs() < 0.01);
+            // AAC-LC, 44.1 kHz (index 4), mono.
+            let mono = silent_audio_from_header(&aac_header(0xAE, [0x12, 0x08])).unwrap();
+            assert_eq!(mono.frame, SILENT_AAC_MONO);
+            assert!((mono.frame_ms - 23.22).abs() < 0.01);
+        }
+        // a vod audio track gets silence under its own track id
+        {
+            let header = one_track_header(0x95, b"mp4a", 1, &[0x11, 0x90]);
+            let silence = silent_audio_from_header(&header).unwrap();
+            assert_eq!(silence.framing, Framing::OneTrack(1));
+            let tag = audio_tag(&silence);
+            assert_eq!(tag[..7], [0x95, 0x01, b'm', b'p', b'4', b'a', 1]);
+            // It flattens back to the legacy silent frame any ingest accepts.
+            let flat = crate::h264::flatten_multitrack_audio(&tag, 1).unwrap();
+            assert_eq!(flat[..2], [0xAF, AAC_RAW]);
+            assert_eq!(&flat[2..], SILENT_AAC_STEREO);
+        }
+        // unsupported audio gets no silence
+        {
+            // HE-AAC (object type 5), 5.1 channels, a non-AAC tag, Opus.
+            assert!(silent_audio_from_header(&aac_header(0xAF, [0x29, 0x90])).is_none());
+            assert!(silent_audio_from_header(&aac_header(0xAF, [0x11, 0xB0])).is_none());
+            assert!(silent_audio_from_header(&[0x2F, 0x00, 0x11, 0x90]).is_none());
+            assert!(silent_audio_from_header(&aac_header(0xAF, [0x11, 0x90])[..2]).is_none());
+            assert!(
+                silent_audio_from_header(&one_track_header(0x95, b"Opus", 1, &[0; 8])).is_none()
+            );
+        }
     }
 
     fn framing_and_codec(header: &[u8]) -> Option<(Framing, SlateCodec)> {
@@ -903,7 +907,7 @@ mod tests {
         assert_eq!(target.fourcc, *b"hvc1");
         assert_eq!((target.shape.width, target.shape.height), (2560, 1440));
 
-        let mut ten_bit = config.clone();
+        let mut ten_bit = config;
         ten_bit[17] = 0xF8 | 2; // bitDepthLumaMinus8
         assert_eq!(
             screen_target(&one_track_header(0x96, b"hvc1", 1, &ten_bit)),
@@ -1004,9 +1008,8 @@ mod tests {
     #[test]
     fn the_screen_stops_waiting_for_the_delay_after_the_grace() {
         const DELAY_MS: u64 = 10_000;
-        let path =
-            std::env::temp_dir().join(format!("ic-rebuild-grace-{}.buf", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+        let scratch = crate::test_support::TestDir::new("ic-rebuild-grace");
+        let path = scratch.join("ring.buf");
         let ring = Arc::new(crate::buffer::DiskRing::create(&path, 1 << 20).unwrap());
         let ctrl = Controller::new(ring, 0);
         let keyframe = [0x17, 1, 0, 0, 0];
@@ -1026,7 +1029,6 @@ mod tests {
         let waited = Duration::from_millis(DELAY_MS) + REBUILD_GRACE;
         rebuild.as_mut().unwrap().since = Instant::now() - waited;
         assert_eq!(delay_rebuilt(&ctrl, &mut rebuild, DELAY_MS), first_new);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

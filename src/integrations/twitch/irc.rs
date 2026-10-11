@@ -382,50 +382,50 @@ fn chat_message(line: &Line) -> Option<ChatMessage> {
 mod tests {
     use super::*;
 
+    /// Chat messages with their tags and badges, shared-chat partners, pings and login failures.
     #[test]
-    fn parses_a_tagged_privmsg() {
-        let raw = "@badge-info=;badges=moderator/1,subscriber/12;display-name=Ana\\sB;id=b34ccfc7-4977-403a-8a94-33c6bac34fb8;mod=1;subscriber=1 :ana!ana@ana.tmi.twitch.tv PRIVMSG #texaz :!delay please\r\n";
-        let line = parse_line(raw);
-        assert_eq!(line.command, "PRIVMSG");
-        assert_eq!(line.target, "#texaz");
-        let msg = chat_message(&line).unwrap();
-        assert_eq!(msg.display_name, "Ana B");
-        assert_eq!(msg.user_login, "ana");
-        assert_eq!(msg.text, "!delay please");
-        assert!(msg.is_mod && msg.is_sub && !msg.is_vip && !msg.is_broadcaster);
-        assert_eq!(msg.id, "b34ccfc7-4977-403a-8a94-33c6bac34fb8");
-    }
-
-    #[test]
-    fn notices_messages_from_a_shared_chat_partner() {
-        let partner = "@badges=;display-name=Bo;room-id=111;source-room-id=222 :bo!bo@bo.tmi.twitch.tv PRIVMSG #texaz :!delay";
-        assert!(chat_message(&parse_line(partner)).unwrap().from_shared_chat);
-        let ours = "@badges=;display-name=Al;room-id=111;source-room-id=111 :al!al@al.tmi.twitch.tv PRIVMSG #texaz :!delay";
-        assert!(!chat_message(&parse_line(ours)).unwrap().from_shared_chat);
-        let plain =
-            "@badges=;display-name=Al;room-id=111 :al!al@al.tmi.twitch.tv PRIVMSG #texaz :!delay";
-        assert!(!chat_message(&parse_line(plain)).unwrap().from_shared_chat);
-    }
-
-    #[test]
-    fn reads_me_actions_and_broadcaster_badges() {
-        let raw = "@badges=broadcaster/1;display-name=Texaz :texaz!texaz@texaz.tmi.twitch.tv PRIVMSG #texaz :\u{1}ACTION waves\u{1}";
-        let msg = chat_message(&parse_line(raw)).unwrap();
-        assert_eq!(msg.text, "waves");
-        assert!(msg.is_broadcaster);
-    }
-
-    #[test]
-    fn parses_ping_in_both_shapes() {
-        assert_eq!(parse_line("PING :tmi.twitch.tv").trailing, "tmi.twitch.tv");
-        assert_eq!(parse_line("PING tmi.twitch.tv").trailing, "tmi.twitch.tv");
-    }
-
-    #[test]
-    fn spots_auth_failures() {
-        let line = parse_line(":tmi.twitch.tv NOTICE * :Login authentication failed");
-        assert_eq!(line.command, "NOTICE");
-        assert!(is_auth_failure(line.trailing));
+    fn incoming_lines_are_read_for_what_they_are() {
+        // parses a tagged privmsg
+        {
+            let raw = "@badge-info=;badges=moderator/1,subscriber/12;display-name=Ana\\sB;id=b34ccfc7-4977-403a-8a94-33c6bac34fb8;mod=1;subscriber=1 :ana!ana@ana.tmi.twitch.tv PRIVMSG #texaz :!delay please\r\n";
+            let line = parse_line(raw);
+            assert_eq!(line.command, "PRIVMSG");
+            assert_eq!(line.target, "#texaz");
+            let msg = chat_message(&line).unwrap();
+            assert_eq!(msg.display_name, "Ana B");
+            assert_eq!(msg.user_login, "ana");
+            assert_eq!(msg.text, "!delay please");
+            assert!(msg.is_mod && msg.is_sub && !msg.is_vip && !msg.is_broadcaster);
+            assert_eq!(msg.id, "b34ccfc7-4977-403a-8a94-33c6bac34fb8");
+        }
+        // notices messages from a shared chat partner
+        {
+            let partner = "@badges=;display-name=Bo;room-id=111;source-room-id=222 :bo!bo@bo.tmi.twitch.tv PRIVMSG #texaz :!delay";
+            assert!(chat_message(&parse_line(partner)).unwrap().from_shared_chat);
+            let ours = "@badges=;display-name=Al;room-id=111;source-room-id=111 :al!al@al.tmi.twitch.tv PRIVMSG #texaz :!delay";
+            assert!(!chat_message(&parse_line(ours)).unwrap().from_shared_chat);
+            let plain =
+                "@badges=;display-name=Al;room-id=111 :al!al@al.tmi.twitch.tv PRIVMSG #texaz :!delay";
+            assert!(!chat_message(&parse_line(plain)).unwrap().from_shared_chat);
+        }
+        // reads me actions and broadcaster badges
+        {
+            let raw = "@badges=broadcaster/1;display-name=Texaz :texaz!texaz@texaz.tmi.twitch.tv PRIVMSG #texaz :\u{1}ACTION waves\u{1}";
+            let msg = chat_message(&parse_line(raw)).unwrap();
+            assert_eq!(msg.text, "waves");
+            assert!(msg.is_broadcaster);
+        }
+        // parses ping in both shapes
+        {
+            assert_eq!(parse_line("PING :tmi.twitch.tv").trailing, "tmi.twitch.tv");
+            assert_eq!(parse_line("PING tmi.twitch.tv").trailing, "tmi.twitch.tv");
+        }
+        // spots auth failures
+        {
+            let line = parse_line(":tmi.twitch.tv NOTICE * :Login authentication failed");
+            assert_eq!(line.command, "NOTICE");
+            assert!(is_auth_failure(line.trailing));
+        }
     }
 
     #[test]
@@ -471,5 +471,11 @@ mod tests {
         assert_eq!(sent.len(), SEND_LIMIT);
         let next = tokio::time::timeout(Duration::from_millis(50), pace(&mut sent)).await;
         assert!(next.is_err(), "the 21st message must wait");
+
+        // Once the window has passed, the next one goes at once.
+        let long_ago = Instant::now() - SEND_WINDOW;
+        let mut old: VecDeque<Instant> = std::iter::repeat_n(long_ago, SEND_LIMIT).collect();
+        let next = tokio::time::timeout(Duration::from_millis(50), pace(&mut old)).await;
+        assert!(next.is_ok(), "a full but expired window frees up");
     }
 }

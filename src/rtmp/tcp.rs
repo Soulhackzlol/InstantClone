@@ -309,7 +309,7 @@ mod windows_tests {
             .expect("runtime");
         rt.block_on(async {
             let Ok(sock) = tokio::net::TcpSocket::new_v6() else {
-                eprintln!("skipping: no IPv6 on this machine");
+                log_line!("skipping: no IPv6 on this machine");
                 return;
             };
             set_v6_only(&sock).expect("set v6 only");

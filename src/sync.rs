@@ -37,6 +37,15 @@ impl<T> Mutex<T> {
     pub fn lock(&self) -> MutexGuard<'_, T> {
         self.0.lock().unwrap()
     }
+
+    /// The guard if nobody holds the lock right now, None otherwise. For the
+    /// panic hook, which runs on whatever thread panicked: that thread may
+    /// hold the very lock the hook wants, and waiting for it would hang the
+    /// process instead of letting it abort.
+    #[inline]
+    pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
+        self.0.try_lock().ok()
+    }
 }
 
 /// A `std::sync::RwLock` whose `read` / `write` return the guard directly.

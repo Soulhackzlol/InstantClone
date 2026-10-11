@@ -1,25 +1,30 @@
 //! The connection to OBS's own WebSocket server (obs-websocket 5, built
 //! into OBS 28 and later). Scene triggers hear from it which scene is on
-//! air and when it switches; OBS steps ask it to switch a scene, show or
-//! hide a source, or change a text source.
+//! air and when it switches, and OBS event triggers when recording starts
+//! or stops, a replay is saved or a source is muted. OBS steps ask it to
+//! switch a scene, show or hide a source, change a text source, record,
+//! save the replay buffer, mute, switch a filter, play media or press one
+//! of OBS's hotkeys.
 //!
-//! Only scene and source events are asked for, and OBS is only asked to do
-//! what an OBS step says. The address, port and password are read from
-//! OBS's own settings file, so the user only has to switch the server on in
-//! OBS.
+//! Only scene, source, filter and output events are asked for, and OBS is
+//! only asked to do what an OBS step says. The address, port and password
+//! are read from OBS's own settings file, so the user only has to switch
+//! the server on in OBS.
 //!
-//! A minimal WebSocket client (RFC 6455) lives here rather than a crate:
-//! one local connection, text frames, no extensions. A reader task owns the
-//! socket's read half, so waiting for a message can always be interrupted
-//! (by a step's request, or the connection no longer being wanted) without
-//! losing half a frame.
+//! The WebSocket client is `ws`, shared with Twitch EventSub. A reader
+//! task owns the socket's read half, so waiting for a message can always be
+//! interrupted (by a step's request, or the connection no longer being
+//! wanted) without losing half a frame.
 
+use super::event::{Event, EventKind};
+use super::ws::{self, base64};
 use crate::json::{self, Value};
 use crate::sync::Mutex;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
@@ -29,12 +34,17 @@ const RETRY: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long a step's request may wait for OBS's answer.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(5);
-/// A scene list is small; anything this big is not OBS talking.
-const MAX_MESSAGE: usize = 4 * 1024 * 1024;
-/// obs-websocket's event categories (`EventSubscription`): scenes, and
-/// inputs (sources added, removed or renamed).
+/// obs-websocket's event categories (`EventSubscription`): scenes, inputs
+/// (sources added, removed, renamed or muted), filters (added, removed or
+/// renamed) and outputs (recording, the replay buffer).
 const SCENE_EVENTS: u32 = 1 << 2;
 const INPUT_EVENTS: u32 = 1 << 3;
+const FILTER_EVENTS: u32 = 1 << 5;
+const OUTPUT_EVENTS: u32 = 1 << 6;
+/// A filter list's request id is this and the source's name.
+const FILTERS_ID: &str = "filters:";
+/// OBS's own Screenshot hotkey: it saves to OBS's recording folder.
+pub const SCREENSHOT_HOTKEY: &str = "OBSBasic.Screenshot";
 const DEFAULT_PORT: u16 = 4455;
 
 /// What the dashboard shows about the connection.
@@ -47,6 +57,10 @@ pub struct Status {
     pub scenes: Vec<String>,
     /// Every source (input) in OBS, for OBS steps to pick from.
     pub sources: Vec<String>,
+    /// Each source's and scene's filters, by its name.
+    pub filters: BTreeMap<String, Vec<String>>,
+    /// The hotkeys a step can press by name (see `pressable_hotkeys`).
+    pub hotkeys: Vec<String>,
     pub current: String,
 }
 
@@ -70,18 +84,38 @@ impl Status {
                 "sources",
                 Value::Arr(self.sources.iter().map(json::str).collect()),
             ),
+            (
+                "filters",
+                Value::Obj(
+                    self.filters
+                        .iter()
+                        .map(|(name, list)| {
+                            (
+                                name.clone(),
+                                Value::Arr(list.iter().map(json::str).collect()),
+                            )
+                        })
+                        .collect(),
+                ),
+            ),
+            (
+                "hotkeys",
+                Value::Arr(self.hotkeys.iter().map(json::str).collect()),
+            ),
             ("current", json::str(&self.current)),
         ])
     }
 }
 
 /// What OBS tells the engine.
-#[derive(Debug, PartialEq)]
-pub enum SceneNews {
+#[derive(Debug)]
+pub enum ObsNews {
     /// The scene on air when the connection opened: not a switch.
     Current(String),
     /// The program scene switched.
     Switched(String),
+    /// Recording started or stopped, a replay was saved, a source muted.
+    Happened(Event),
 }
 
 /// Something an OBS step asks OBS to do.
@@ -98,13 +132,88 @@ pub enum Action {
     },
     /// Set what a text source says.
     Text { source: String, text: String },
+    /// Start (`true`) or stop recording.
+    Record(bool),
+    /// Save what the replay buffer holds.
+    SaveReplay,
+    /// Mute (`Some(true)`), unmute (`Some(false)`) or flip (`None`) a
+    /// source's audio.
+    Mute { source: String, muted: Option<bool> },
+    /// Switch a source's or scene's filter on, off, or flip it (`None`).
+    Filter {
+        source: String,
+        filter: String,
+        enabled: Option<bool>,
+    },
+    /// Play a media source from the start (`true`), or stop it.
+    Media { source: String, play: bool },
+    /// Press one of OBS's hotkeys by name, bound to keys or not.
+    Hotkey(String),
+    /// Show this page in the scene on air, as a browser source as big as
+    /// the canvas: the dashboard's "Add to OBS" for the alerts page.
+    BrowserSource { name: String, url: String },
+    /// Read what OBS is doing (the scene on air, streaming, recording) and,
+    /// for each source, whether it is muted and showing in `scene` (blank:
+    /// the one on air). Changes nothing.
+    Check { scene: String, sources: Vec<String> },
 }
+
+/// Longest key a checked source's values get, so `{obs2.key.visible}`
+/// stays inside a variable name's 64 characters.
+const MAX_SOURCE_KEY: usize = 24;
+
+/// The names an OBS step lists in one field, one per line: one mute or
+/// show can take several sources. Blank lines and repeats are dropped.
+pub fn listed_names(field: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for name in field.lines().map(str::trim).filter(|name| !name.is_empty()) {
+        if !names.iter().any(|known| known == name) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+/// What a check that reads several sources names each one's values by:
+/// `{obs.mic_aux.muted}`. Lowercase letters, digits and `_`; a clash gets
+/// a number. The editor makes the same keys (`sourceKeys`).
+pub fn source_keys(sources: &[String]) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for source in sources {
+        let mut key = String::new();
+        for c in source.chars().flat_map(char::to_lowercase) {
+            if c.is_ascii_alphanumeric() {
+                key.push(c);
+            } else if !key.is_empty() && !key.ends_with('_') {
+                key.push('_');
+            }
+        }
+        let key: String = key.chars().take(MAX_SOURCE_KEY).collect();
+        let base = match key.trim_end_matches('_') {
+            "" => "source".to_string(),
+            key => key.to_string(),
+        };
+        let mut key = base.clone();
+        let mut n = 2;
+        while keys.contains(&key) {
+            key = format!("{base}{n}");
+            n += 1;
+        }
+        keys.push(key);
+    }
+    keys
+}
+
+/// What OBS said, as (field, value): the step keeps each one under its own
+/// answer name, like `{obs.muted}`. Empty for an action that only does
+/// something.
+pub type Answer = Vec<(String, String)>;
 
 /// An action and where its outcome goes. The answer channel is a std one:
 /// a step waits for it on a blocking thread.
 pub struct Command {
     pub action: Action,
-    pub reply: std::sync::mpsc::Sender<Result<(), String>>,
+    pub reply: std::sync::mpsc::Sender<Result<Answer, String>>,
     /// After this the step has given up: doing it then would switch a
     /// scene nobody asked for any more.
     pub deadline: std::time::Instant,
@@ -130,7 +239,7 @@ enum Incoming {
 pub async fn run(
     mut want: watch::Receiver<bool>,
     status: Arc<Mutex<Status>>,
-    news: mpsc::Sender<SceneNews>,
+    news: mpsc::Sender<ObsNews>,
     mut commands: mpsc::Receiver<Command>,
 ) {
     loop {
@@ -149,7 +258,7 @@ pub async fn run(
             Ok(settings) => {
                 let ended = session(&settings, &mut want, &status, &news, &mut commands).await;
                 // No scene is known to be on air any more.
-                let _ = news.send(SceneNews::Current(String::new())).await;
+                let _ = news.send(ObsNews::Current(String::new())).await;
                 match ended {
                     Ok(()) => continue,
                     Err(problem) => problem,
@@ -191,15 +300,20 @@ fn set_state(status: &Mutex<Status>, state: &'static str, problem: &str) {
 
 const NO_PASSWORD: &str = "OBS wants a WebSocket password but none is saved. Set one in OBS: Tools > WebSocket Server Settings.";
 
-/// OBS's WebSocket server settings, from the file OBS keeps them in.
+/// OBS's WebSocket server settings, from the file OBS keeps them in. A
+/// portable OBS keeps that file beside itself, out of reach: OBS's own
+/// defaults (port 4455, no password) are tried then.
 fn read_settings() -> Result<Settings, String> {
-    let path = crate::obs_register::obs_config_dirs()
+    let Some(path) = crate::obs_register::obs_config_dirs()
         .into_iter()
         .map(|dir| dir.join("plugin_config/obs-websocket/config.json"))
         .find(|p| p.exists())
-        .ok_or(
-            "OBS's WebSocket settings weren't found. In OBS: Tools > WebSocket Server Settings.",
-        )?;
+    else {
+        return Ok(Settings {
+            port: DEFAULT_PORT,
+            password: None,
+        });
+    };
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("couldn't read OBS's WebSocket settings: {e}"))?;
     parse_settings(&text)
@@ -238,7 +352,7 @@ async fn session(
     settings: &Settings,
     want: &mut watch::Receiver<bool>,
     status: &Arc<Mutex<Status>>,
-    news: &mpsc::Sender<SceneNews>,
+    news: &mpsc::Sender<ObsNews>,
     commands: &mut mpsc::Receiver<Command>,
 ) -> Result<(), String> {
     let addr = format!("127.0.0.1:{}", settings.port);
@@ -293,7 +407,7 @@ struct Link<'a> {
     writer: &'a mut OwnedWriteHalf,
     inbox: &'a mut mpsc::Receiver<Result<Incoming, String>>,
     status: &'a Arc<Mutex<Status>>,
-    news: &'a mpsc::Sender<SceneNews>,
+    news: &'a mpsc::Sender<ObsNews>,
 }
 
 impl Link<'_> {
@@ -316,7 +430,10 @@ impl Link<'_> {
                     if std::time::Instant::now() >= command.deadline {
                         continue;
                     }
-                    let outcome = self.perform(&command.action).await;
+                    let outcome = match &command.action {
+                        Action::Check { scene, sources } => self.check(scene, sources).await,
+                        action => self.perform(action).await.map(|()| Answer::new()),
+                    };
                     let _ = command.reply.send(outcome);
                 }
                 message = self.inbox.recv() => {
@@ -331,18 +448,29 @@ impl Link<'_> {
     async fn take(&mut self, message: Incoming) -> Result<(), String> {
         match message {
             Incoming::Ping(payload) => write_frame(self.writer, 10, &payload).await,
-            Incoming::Json(v) => {
-                if handle_message(&v, self.status, self.news).await {
-                    self.request_lists().await?;
-                }
-                Ok(())
-            }
+            Incoming::Json(v) => match handle_message(&v, self.status, self.news).await {
+                Follow::Nothing => Ok(()),
+                Follow::Lists => self.request_lists().await,
+                Follow::Filters(names) => self.request_filters(&names).await,
+            },
         }
     }
 
     async fn request_lists(&mut self) -> Result<(), String> {
         send_request(self.writer, "GetSceneList", "scenes", Value::Null).await?;
-        send_request(self.writer, "GetInputList", "inputs", Value::Null).await
+        send_request(self.writer, "GetInputList", "inputs", Value::Null).await?;
+        send_request(self.writer, "GetHotkeyList", "hotkeys", Value::Null).await
+    }
+
+    /// Ask for the filters of each named source or scene; the answers
+    /// land in the status (see `handle_message`).
+    async fn request_filters(&mut self, names: &[String]) -> Result<(), String> {
+        for name in names {
+            let data = json::obj([("sourceName", json::str(name))]);
+            let id = format!("{FILTERS_ID}{name}");
+            send_request(self.writer, "GetSourceFilterList", &id, data).await?;
+        }
+        Ok(())
     }
 
     /// Ask OBS for one thing and wait for its answer, dealing with whatever
@@ -387,7 +515,230 @@ impl Link<'_> {
                 source,
                 visible,
             } => self.show_source(scene, source, *visible).await,
+            Action::Record(start) => {
+                let request = if *start { "StartRecord" } else { "StopRecord" };
+                self.call(request, Value::Null).await.map(drop)
+            }
+            Action::SaveReplay => self.call("SaveReplayBuffer", Value::Null).await.map(drop),
+            Action::Mute { source, muted } => {
+                let name = ("inputName", json::str(source));
+                match muted {
+                    Some(muted) => {
+                        let data = json::obj([name, ("inputMuted", Value::Bool(*muted))]);
+                        self.call("SetInputMute", data).await.map(drop)
+                    }
+                    None => self
+                        .call("ToggleInputMute", json::obj([name]))
+                        .await
+                        .map(drop),
+                }
+            }
+            Action::Filter {
+                source,
+                filter,
+                enabled,
+            } => self.switch_filter(source, filter, *enabled).await,
+            Action::Media { source, play } => {
+                let action = if *play {
+                    "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"
+                } else {
+                    "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP"
+                };
+                let data = json::obj([
+                    ("inputName", json::str(source)),
+                    ("mediaAction", json::str(action)),
+                ]);
+                self.call("TriggerMediaInputAction", data).await.map(drop)
+            }
+            Action::Hotkey(name) => {
+                let data = json::obj([("hotkeyName", json::str(name))]);
+                self.call("TriggerHotkeyByName", data).await.map(drop)
+            }
+            Action::BrowserSource { name, url } => self.add_browser_source(name, url).await,
+            // Answered by `check`, which has values to give back.
+            Action::Check { .. } => Ok(()),
         }
+    }
+
+    /// What `Action::Check` reads. With sources, `muted` and `visible` say
+    /// whether all of them are; with several, each also has its own under
+    /// its key (`source_keys`). A source that has no sound gets no `muted`;
+    /// one OBS doesn't have at all fails the step, as a typo would
+    /// otherwise read as "not muted, not showing".
+    async fn check(&mut self, scene: &str, sources: &[String]) -> Result<Answer, String> {
+        let yes_no = |on: bool| if on { "yes" } else { "no" }.to_string();
+        let on_air = self.call("GetCurrentProgramScene", Value::Null).await?;
+        let current = on_air.str_or("currentProgramSceneName", "").to_string();
+        let streaming = self.call("GetStreamStatus", Value::Null).await?;
+        let recording = self.call("GetRecordStatus", Value::Null).await?;
+        let mut answer = vec![
+            ("scene".to_string(), current.clone()),
+            (
+                "streaming".to_string(),
+                yes_no(streaming.bool_or("outputActive", false)),
+            ),
+            (
+                "recording".to_string(),
+                yes_no(recording.bool_or("outputActive", false)),
+            ),
+        ];
+        if sources.is_empty() {
+            return Ok(answer);
+        }
+        let inputs = self.call("GetInputList", Value::Null).await?;
+        let scenes = self.call("GetSceneList", Value::Null).await?;
+        let known: Vec<String> = names(&inputs, "inputs", "inputName", false)
+            .into_iter()
+            .chain(names(&scenes, "scenes", "sceneName", false))
+            .collect();
+        if let Some(missing) = sources.iter().find(|source| !known.contains(source)) {
+            return Err(format!("OBS has no source \"{missing}\""));
+        }
+        let scene = match scene.trim() {
+            "" => current,
+            name => name.to_string(),
+        };
+        // (muted, if it has sound; showing) for each source.
+        let mut readings = Vec::new();
+        for source in sources {
+            let asked = json::obj([("inputName", json::str(source))]);
+            let muted = match self.call("GetInputMute", asked).await {
+                Ok(mute) => Some(mute.bool_or("inputMuted", false)),
+                Err(_) => None,
+            };
+            readings.push((muted, self.is_showing(&scene, source).await));
+        }
+        let with_sound: Vec<bool> = readings.iter().filter_map(|(muted, _)| *muted).collect();
+        if !with_sound.is_empty() {
+            answer.push(("muted".to_string(), yes_no(with_sound.iter().all(|m| *m))));
+        }
+        let all_showing = readings.iter().all(|(_, showing)| *showing);
+        answer.push(("visible".to_string(), yes_no(all_showing)));
+        if sources.len() > 1 {
+            for (key, (muted, showing)) in source_keys(sources).iter().zip(readings) {
+                if let Some(muted) = muted {
+                    answer.push((format!("{key}.muted"), yes_no(muted)));
+                }
+                answer.push((format!("{key}.visible"), yes_no(showing)));
+            }
+        }
+        Ok(answer)
+    }
+
+    /// Whether `source` is in `scene` and switched on there.
+    async fn is_showing(&mut self, scene: &str, source: &str) -> bool {
+        let at = json::obj([
+            ("sceneName", json::str(scene)),
+            ("sourceName", json::str(source)),
+        ]);
+        let Ok(found) = self.call("GetSceneItemId", at).await else {
+            return false;
+        };
+        let Some(item) = found.get("sceneItemId").and_then(Value::as_f64) else {
+            return false;
+        };
+        let item = json::obj([
+            ("sceneName", json::str(scene)),
+            ("sceneItemId", Value::Num(item)),
+        ]);
+        self.call("GetSceneItemEnabled", item)
+            .await
+            .is_ok_and(|v| v.bool_or("sceneItemEnabled", false))
+    }
+
+    /// A browser source showing `url` in the scene on air. One already in
+    /// OBS (by that name, or any showing the same page) is pointed at
+    /// `url` and added to this scene if it isn't there yet; otherwise a
+    /// new one is made, canvas-sized, its sound going through OBS so it
+    /// reaches the stream.
+    async fn add_browser_source(&mut self, name: &str, url: &str) -> Result<(), String> {
+        let on_air = self.call("GetCurrentProgramScene", Value::Null).await?;
+        let scene = on_air.str_or("currentProgramSceneName", "").to_string();
+        if let Some(existing) = self.browser_source_for(name, url).await? {
+            let source = json::str(&existing);
+            let point = json::obj([
+                ("inputName", source.clone()),
+                ("inputSettings", json::obj([("url", json::str(url))])),
+            ]);
+            self.call("SetInputSettings", point).await?;
+            let item = json::obj([("sceneName", json::str(&scene)), ("sourceName", source)]);
+            if self.call("GetSceneItemId", item.clone()).await.is_ok() {
+                return Ok(());
+            }
+            return self.call("CreateSceneItem", item).await.map(drop);
+        }
+        let source = json::str(name);
+        let video = self.call("GetVideoSettings", Value::Null).await?;
+        let settings = json::obj([
+            ("url", json::str(url)),
+            ("width", Value::Num(video.u64_or("baseWidth", 1920) as f64)),
+            (
+                "height",
+                Value::Num(video.u64_or("baseHeight", 1080) as f64),
+            ),
+            ("reroute_audio", Value::Bool(true)),
+        ]);
+        let create = json::obj([
+            ("sceneName", json::str(&scene)),
+            ("inputName", source),
+            ("inputKind", json::str("browser_source")),
+            ("inputSettings", settings),
+            ("sceneItemEnabled", Value::Bool(true)),
+        ]);
+        self.call("CreateInput", create).await.map(drop)
+    }
+
+    /// The browser source named `name`, or else one already showing the
+    /// page at `url`, so adding the page again never makes a second copy.
+    async fn browser_source_for(
+        &mut self,
+        name: &str,
+        url: &str,
+    ) -> Result<Option<String>, String> {
+        let kind = json::obj([("inputKind", json::str("browser_source"))]);
+        let list = self.call("GetInputList", kind).await?;
+        let sources = names(&list, "inputs", "inputName", false);
+        if sources.iter().any(|s| s == name) {
+            return Ok(Some(name.to_string()));
+        }
+        for source in sources {
+            let asked = json::obj([("inputName", json::str(&source))]);
+            let settings = self.call("GetInputSettings", asked).await?;
+            let shows = settings.path("inputSettings.url").and_then(Value::as_str);
+            if shows.is_some_and(|shows| same_page(shows, url)) {
+                return Ok(Some(source));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn switch_filter(
+        &mut self,
+        source: &str,
+        filter: &str,
+        enabled: Option<bool>,
+    ) -> Result<(), String> {
+        let where_ = || {
+            vec![
+                ("sourceName".to_string(), json::str(source)),
+                ("filterName".to_string(), json::str(filter)),
+            ]
+        };
+        let on = match enabled {
+            Some(on) => on,
+            None => {
+                let now = self
+                    .call("GetSourceFilter", Value::Obj(where_()))
+                    .await
+                    .map_err(|_| format!("\"{source}\" has no filter \"{filter}\""))?;
+                !now.bool_or("filterEnabled", true)
+            }
+        };
+        let mut set = where_();
+        set.push(("filterEnabled".to_string(), Value::Bool(on)));
+        self.call("SetSourceFilterEnabled", Value::Obj(set))
+            .await
+            .map(drop)
     }
 
     async fn show_source(
@@ -472,36 +823,37 @@ async fn send_request(
     write_frame(writer, 1, message.as_bytes()).await
 }
 
-/// Follow one message from OBS. True when the scene and source lists
-/// should be asked for again (one was added, removed or renamed).
+/// What a message from OBS asks for next.
+#[derive(Debug, PartialEq)]
+enum Follow {
+    Nothing,
+    /// The scene and source lists again: one was added, removed or renamed.
+    Lists,
+    /// The filters of these sources or scenes.
+    Filters(Vec<String>),
+}
+
+/// Follow one message from OBS.
 async fn handle_message(
     message: &Value,
     status: &Arc<Mutex<Status>>,
-    news: &mpsc::Sender<SceneNews>,
-) -> bool {
+    news: &mpsc::Sender<ObsNews>,
+) -> Follow {
     let d = message.get("d").cloned().unwrap_or(Value::Null);
     match message.u64_or("op", 99) {
-        // Event
-        5 => match d.str_or("eventType", "") {
-            "CurrentProgramSceneChanged" => {
-                let name = d
-                    .get("eventData")
-                    .map(|e| e.str_or("sceneName", "").to_string())
-                    .unwrap_or_default();
-                status.lock().current = name.clone();
-                let _ = news.send(SceneNews::Switched(name)).await;
-                false
-            }
-            "SceneListChanged" | "SceneNameChanged" | "SceneCreated" | "SceneRemoved"
-            | "InputCreated" | "InputRemoved" | "InputNameChanged" => true,
-            _ => false,
-        },
+        5 => handle_event(&d, status, news).await,
         // Request response: one of the lists.
         7 => {
             let Some(data) = d.get("responseData") else {
-                return false;
+                return Follow::Nothing;
             };
-            match d.str_or("requestId", "") {
+            let id = d.str_or("requestId", "");
+            if let Some(name) = id.strip_prefix(FILTERS_ID) {
+                let list = names(data, "filters", "filterName", false);
+                status.lock().filters.insert(name.to_string(), list);
+                return Follow::Nothing;
+            }
+            match id {
                 "scenes" => {
                     let current = data.str_or("currentProgramSceneName", "").to_string();
                     // OBS lists scenes bottom to top; the dashboard shows them
@@ -509,21 +861,125 @@ async fn handle_message(
                     let scenes = names(data, "scenes", "sceneName", true);
                     {
                         let mut s = status.lock();
-                        s.scenes = scenes;
+                        s.scenes = scenes.clone();
                         s.current = current.clone();
+                        forget_gone_filters(&mut s);
                     }
-                    let _ = news.send(SceneNews::Current(current)).await;
+                    let _ = news.send(ObsNews::Current(current)).await;
+                    Follow::Filters(scenes)
                 }
-                "inputs" => status.lock().sources = names(data, "inputs", "inputName", false),
-                _ => {}
+                "inputs" => {
+                    let sources = names(data, "inputs", "inputName", false);
+                    let mut s = status.lock();
+                    s.sources = sources.clone();
+                    forget_gone_filters(&mut s);
+                    Follow::Filters(sources)
+                }
+                "hotkeys" => {
+                    status.lock().hotkeys = pressable_hotkeys(data);
+                    Follow::Nothing
+                }
+                _ => Follow::Nothing,
             }
-            false
         }
-        _ => false,
+        _ => Follow::Nothing,
     }
 }
 
+/// An event from OBS: a scene switch, a list that changed, or one of the
+/// OBS events triggers can start on.
+async fn handle_event(
+    d: &Value,
+    status: &Arc<Mutex<Status>>,
+    news: &mpsc::Sender<ObsNews>,
+) -> Follow {
+    let data = d.get("eventData").cloned().unwrap_or(Value::Null);
+    let happened = match d.str_or("eventType", "") {
+        "CurrentProgramSceneChanged" => {
+            let name = data.str_or("sceneName", "").to_string();
+            status.lock().current = name.clone();
+            let _ = news.send(ObsNews::Switched(name)).await;
+            return Follow::Nothing;
+        }
+        "SceneListChanged" | "SceneNameChanged" | "SceneCreated" | "SceneRemoved"
+        | "InputCreated" | "InputRemoved" | "InputNameChanged" => return Follow::Lists,
+        "SourceFilterCreated" | "SourceFilterRemoved" | "SourceFilterNameChanged" => {
+            return Follow::Filters(vec![data.str_or("sourceName", "").to_string()]);
+        }
+        "RecordStateChanged" => match data.str_or("outputState", "") {
+            "OBS_WEBSOCKET_OUTPUT_STARTED" => Event::new(EventKind::ObsRecordingStarted),
+            "OBS_WEBSOCKET_OUTPUT_STOPPED" => Event::new(EventKind::ObsRecordingStopped)
+                .with("file", data.str_or("outputPath", "")),
+            _ => return Follow::Nothing,
+        },
+        "ReplayBufferSaved" => {
+            Event::new(EventKind::ObsReplaySaved).with("file", data.str_or("savedReplayPath", ""))
+        }
+        "InputMuteStateChanged" => Event::new(EventKind::ObsMuteChanged)
+            .with("obs_source", data.str_or("inputName", ""))
+            .with(
+                "muted",
+                if data.bool_or("inputMuted", false) {
+                    "yes"
+                } else {
+                    "no"
+                },
+            ),
+        _ => return Follow::Nothing,
+    };
+    let _ = news.send(ObsNews::Happened(happened)).await;
+    Follow::Nothing
+}
+
+/// Drop the filter lists of sources and scenes that are gone.
+fn forget_gone_filters(s: &mut Status) {
+    let Status {
+        scenes,
+        sources,
+        filters,
+        ..
+    } = s;
+    filters.retain(|name, _| scenes.contains(name) || sources.contains(name));
+}
+
+/// The hotkeys a step can press by name alone: each listed once (a
+/// hotkey every source or scene has, like mute or "switch to scene",
+/// can't say which one by name), and none of libobs' per-source ones.
+fn pressable_hotkeys(data: &Value) -> Vec<String> {
+    let all: Vec<&str> = data
+        .get("hotkeys")
+        .and_then(Value::as_array)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let mut out: Vec<String> = all
+        .iter()
+        .filter(|name| {
+            !name.starts_with("libobs.") && all.iter().filter(|n| n == name).count() == 1
+        })
+        .map(|name| name.to_string())
+        .collect();
+    out.sort();
+    out
+}
+
 /// The `field` of each item in the `list` of an answer.
+/// Two addresses of the same page on this PC: `localhost` and 127.0.0.1
+/// are one host, and the query (`?at=top`) doesn't make another page.
+fn same_page(a: &str, b: &str) -> bool {
+    let page = |url: &str| {
+        let url = url.trim().to_ascii_lowercase();
+        let url = url
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/');
+        url.replacen("://localhost:", "://127.0.0.1:", 1)
+    };
+    page(a) == page(b)
+}
+
 fn names(data: &Value, list: &str, field: &str, reversed: bool) -> Vec<String> {
     let mut out: Vec<String> = data
         .get(list)
@@ -549,7 +1005,9 @@ fn identify_message(hello: &Value, password: Option<&str>) -> Result<String, Str
         ("rpcVersion".to_string(), Value::Num(1.0)),
         (
             "eventSubscriptions".to_string(),
-            Value::Num(f64::from(SCENE_EVENTS | INPUT_EVENTS)),
+            Value::Num(f64::from(
+                SCENE_EVENTS | INPUT_EVENTS | FILTER_EVENTS | OUTPUT_EVENTS,
+            )),
         ),
     ];
     if let Some(auth) = hello.path("d.authentication") {
@@ -580,36 +1038,8 @@ fn auth_proof(password: &str, salt: &str, challenge: &str) -> String {
 }
 
 async fn handshake(stream: &mut TcpStream, port: u16) -> Result<(), String> {
-    let mut key = [0u8; 16];
-    crate::crypto::os_random(&mut key);
-    let request = format!(
-        "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
-         Sec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: obswebsocket.json\r\n\r\n",
-        base64(&key)
-    );
-    stream
-        .write_all(request.as_bytes())
-        .await
-        .map_err(|e| format!("lost OBS: {e}"))?;
-    // Read the answer's head, a byte at a time: it is short, and the first
-    // frame may follow right behind it.
-    let mut head = Vec::new();
-    while !head.ends_with(b"\r\n\r\n") {
-        if head.len() > 8192 {
-            return Err("that isn't OBS's WebSocket server".to_string());
-        }
-        head.push(
-            stream
-                .read_u8()
-                .await
-                .map_err(|e| format!("lost OBS: {e}"))?,
-        );
-    }
-    let status_line = String::from_utf8_lossy(&head);
-    if !status_line.starts_with("HTTP/1.1 101") {
-        return Err("OBS's WebSocket server refused the connection".to_string());
-    }
-    Ok(())
+    let host = format!("127.0.0.1:{port}");
+    ws::handshake(stream, (&host, "/"), Some("obswebsocket.json"), "OBS").await
 }
 
 /// The next whole text message during the handshake, as JSON, answering
@@ -625,27 +1055,12 @@ async fn read_json(stream: &mut TcpStream) -> Result<Value, String> {
 
 /// The next whole message. A close or a broken connection is an error.
 async fn read_message(stream: &mut (impl AsyncRead + Unpin)) -> Result<Incoming, String> {
-    let mut message = Vec::new();
-    loop {
-        let (fin, opcode, payload) = read_frame(stream).await?;
-        match opcode {
-            // Continuation, text, binary.
-            0..=2 => {
-                if message.len() + payload.len() > MAX_MESSAGE {
-                    return Err("OBS sent too much at once".to_string());
-                }
-                message.extend_from_slice(&payload);
-                if fin {
-                    let text = String::from_utf8_lossy(&message);
-                    return json::parse(&text)
-                        .map(Incoming::Json)
-                        .map_err(|_| "OBS sent something unreadable".to_string());
-                }
-            }
-            8 => return Err(close_reason(&payload)),
-            9 => return Ok(Incoming::Ping(payload)),
-            _ => {}
-        }
+    match ws::read_message(stream, "OBS").await? {
+        ws::Message::Text(text) => json::parse(&text)
+            .map(Incoming::Json)
+            .map_err(|_| "OBS sent something unreadable".to_string()),
+        ws::Message::Ping(payload) => Ok(Incoming::Ping(payload)),
+        ws::Message::Close(payload) => Err(close_reason(&payload)),
     }
 }
 
@@ -661,103 +1076,17 @@ fn close_reason(payload: &[u8]) -> String {
     }
 }
 
-async fn read_frame(stream: &mut (impl AsyncRead + Unpin)) -> Result<(bool, u8, Vec<u8>), String> {
-    let lost = |e: std::io::Error| format!("lost OBS: {e}");
-    let b0 = stream.read_u8().await.map_err(lost)?;
-    let b1 = stream.read_u8().await.map_err(lost)?;
-    let len = match b1 & 0x7f {
-        126 => u64::from(stream.read_u16().await.map_err(lost)?),
-        127 => stream.read_u64().await.map_err(lost)?,
-        n => u64::from(n),
-    };
-    if len > MAX_MESSAGE as u64 {
-        return Err("OBS sent too much at once".to_string());
-    }
-    let mask = if b1 & 0x80 != 0 {
-        let mut m = [0u8; 4];
-        stream.read_exact(&mut m).await.map_err(lost)?;
-        Some(m)
-    } else {
-        None
-    };
-    let mut payload = vec![0u8; len as usize];
-    stream.read_exact(&mut payload).await.map_err(lost)?;
-    if let Some(m) = mask {
-        payload
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, b)| *b ^= m[i % 4]);
-    }
-    Ok((b0 & 0x80 != 0, b0 & 0x0f, payload))
-}
-
-/// One frame from us: always final, always masked (clients must mask).
 async fn write_frame(
     stream: &mut (impl AsyncWrite + Unpin),
     opcode: u8,
     payload: &[u8],
 ) -> Result<(), String> {
-    stream
-        .write_all(&encode_frame(opcode, payload))
-        .await
-        .map_err(|e| format!("lost OBS: {e}"))
-}
-
-fn encode_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
-    let mut mask = [0u8; 4];
-    crate::crypto::os_random(&mut mask);
-    let mut out = Vec::with_capacity(payload.len() + 14);
-    out.push(0x80 | opcode);
-    match payload.len() {
-        n if n < 126 => out.push(0x80 | n as u8),
-        n if n <= 0xffff => {
-            out.push(0x80 | 126);
-            out.extend_from_slice(&(n as u16).to_be_bytes());
-        }
-        n => {
-            out.push(0x80 | 127);
-            out.extend_from_slice(&(n as u64).to_be_bytes());
-        }
-    }
-    out.extend_from_slice(&mask);
-    out.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
-    out
-}
-
-/// Standard base64 with padding, as obs-websocket and the handshake use.
-fn base64(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(ALPHABET[(n >> (18 - 6 * i)) as usize & 63] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
+    ws::write_frame(stream, opcode, payload, "OBS").await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base64_matches_the_standard() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
-    }
 
     /// The worked example from the obs-websocket protocol document.
     #[test]
@@ -770,6 +1099,45 @@ mod tests {
             ),
             "1Ct943GAT+6YQUUX47Ia/ncufilbe6+oD6lY+5kaCu4="
         );
+    }
+
+    #[test]
+    fn a_step_can_list_several_sources() {
+        assert_eq!(
+            listed_names(" Mic/Aux \n\nDesktop Audio\nMic/Aux\n"),
+            vec!["Mic/Aux".to_string(), "Desktop Audio".to_string()]
+        );
+        assert!(listed_names("  \n ").is_empty());
+        let sources = [
+            "Mic/Aux",
+            "mic aux",
+            "Cámara 1",
+            "!!",
+            "A very long source name for the stream",
+        ]
+        .map(String::from);
+        assert_eq!(
+            source_keys(&sources),
+            vec![
+                "mic_aux",
+                "mic_aux2",
+                "c_mara_1",
+                "source",
+                "a_very_long_source_name"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_alerts_page_is_found_under_any_of_its_addresses() {
+        let ours = "http://127.0.0.1:7799/alerts";
+        assert!(same_page("http://localhost:7799/alerts?at=top", ours));
+        assert!(same_page("HTTP://127.0.0.1:7799/alerts/", ours));
+        assert!(!same_page("http://127.0.0.1:7800/alerts", ours));
+        assert!(!same_page(
+            "http://127.0.0.1:7799/overlay/pulse-dot.html",
+            ours
+        ));
     }
 
     #[test]
@@ -796,8 +1164,8 @@ mod tests {
         assert!(msg.path("d.authentication").is_none());
         assert_eq!(
             msg.path("d.eventSubscriptions").and_then(Value::as_f64),
-            Some(12.0),
-            "scenes and sources"
+            Some(108.0),
+            "scenes, sources, filters and outputs"
         );
         let locked = json::parse(
             r#"{"op":0,"d":{"rpcVersion":1,"authentication":{"salt":"s","challenge":"c"}}}"#,
@@ -809,18 +1177,6 @@ mod tests {
         let no_challenge =
             json::parse(r#"{"op":0,"d":{"rpcVersion":1,"authentication":{"salt":"s"}}}"#).unwrap();
         assert!(identify_message(&no_challenge, Some("pw")).is_err_and(|e| e.contains("challenge")));
-    }
-
-    #[test]
-    fn frames_are_masked_and_sized() {
-        let small = encode_frame(1, b"hi");
-        assert_eq!(small[0], 0x81);
-        assert_eq!(small[1], 0x80 | 2);
-        let mask = [small[2], small[3], small[4], small[5]];
-        assert_eq!([small[6] ^ mask[0], small[7] ^ mask[1]], *b"hi");
-        let mid = encode_frame(1, &[0u8; 300]);
-        assert_eq!(mid[1], 0x80 | 126);
-        assert_eq!(u16::from_be_bytes([mid[2], mid[3]]), 300);
     }
 
     #[test]
@@ -855,8 +1211,19 @@ mod tests {
             r#"{"op":7,"d":{"requestId":"inputs","requestStatus":{"result":true},"responseData":{"inputs":[{"inputName":"Cam"},{"inputName":"Title"}]}}}"#,
         )
         .unwrap();
-        assert!(!handle_message(&scenes, &status, &news).await);
-        assert!(!handle_message(&inputs, &status, &news).await);
+        assert_eq!(
+            handle_message(&scenes, &status, &news).await,
+            Follow::Filters(vec!["Lobby".into(), "Game".into()])
+        );
+        assert_eq!(
+            handle_message(&inputs, &status, &news).await,
+            Follow::Filters(vec!["Cam".into(), "Title".into()])
+        );
+        let blur = json::parse(
+            r#"{"op":7,"d":{"requestId":"filters:Cam","requestStatus":{"result":true},"responseData":{"filters":[{"filterName":"Blur"}]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(handle_message(&blur, &status, &news).await, Follow::Nothing);
         let s = status.lock().clone();
         assert_eq!(
             s.scenes,
@@ -864,7 +1231,74 @@ mod tests {
             "as OBS's scene dock shows them"
         );
         assert_eq!(s.sources, ["Cam", "Title"]);
-        assert_eq!(heard.recv().await, Some(SceneNews::Current("Game".into())));
+        assert_eq!(
+            s.filters.get("Cam").map(Vec::as_slice),
+            Some(&["Blur".to_string()][..])
+        );
+        assert!(matches!(heard.recv().await, Some(ObsNews::Current(name)) if name == "Game"));
+    }
+
+    #[tokio::test]
+    async fn obs_events_become_integration_events() {
+        let status = Arc::new(Mutex::new(Status::default()));
+        let (news, mut heard) = mpsc::channel(4);
+        let event = |kind: &str, data: &str| {
+            json::parse(&format!(
+                r#"{{"op":5,"d":{{"eventType":"{kind}","eventData":{data}}}}}"#
+            ))
+            .unwrap()
+        };
+        let stopped = event(
+            "RecordStateChanged",
+            r#"{"outputActive":false,"outputState":"OBS_WEBSOCKET_OUTPUT_STOPPED","outputPath":"C:/v/a.mkv"}"#,
+        );
+        handle_message(&stopped, &status, &news).await;
+        let Some(ObsNews::Happened(e)) = heard.recv().await else {
+            panic!("a recording event");
+        };
+        assert_eq!(
+            (e.kind, e.var("file")),
+            (EventKind::ObsRecordingStopped, Some("C:/v/a.mkv"))
+        );
+
+        let stopping = event(
+            "RecordStateChanged",
+            r#"{"outputState":"OBS_WEBSOCKET_OUTPUT_STOPPING"}"#,
+        );
+        handle_message(&stopping, &status, &news).await;
+        let muted = event(
+            "InputMuteStateChanged",
+            r#"{"inputName":"Mic","inputMuted":true}"#,
+        );
+        handle_message(&muted, &status, &news).await;
+        let Some(ObsNews::Happened(e)) = heard.recv().await else {
+            panic!("a mute event, and nothing for stopping");
+        };
+        assert_eq!(
+            (e.var("obs_source"), e.var("muted")),
+            (Some("Mic"), Some("yes"))
+        );
+
+        let filter_added = event(
+            "SourceFilterCreated",
+            r#"{"sourceName":"Cam","filterName":"Blur"}"#,
+        );
+        assert_eq!(
+            handle_message(&filter_added, &status, &news).await,
+            Follow::Filters(vec!["Cam".into()])
+        );
+    }
+
+    #[test]
+    fn only_hotkeys_a_name_can_press_are_offered() {
+        let data = json::parse(
+            r#"{"hotkeys":["OBSBasic.StartRecording","libobs.mute","libobs.mute","OBSBasic.SelectScene","OBSBasic.SelectScene","OBSBasic.Screenshot"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            pressable_hotkeys(&data),
+            ["OBSBasic.Screenshot", "OBSBasic.StartRecording"]
+        );
     }
 
     #[test]

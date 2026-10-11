@@ -402,7 +402,7 @@ mod tests {
     /// Full-size vertical canvases are built in full by the budget tests in
     /// `slate`; this covers the tiny ones, either way up.
     #[test]
-    fn themes_fit_tiny_canvases() {
+    fn themes_render_on_tiny_canvases_without_panicking() {
         for theme in SlateTheme::ALL {
             for (width, height) in [(284, 160), (160, 284), (32, 32)] {
                 render(&style(theme), width, height, 0.3);

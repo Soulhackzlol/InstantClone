@@ -1,0 +1,3 @@
+disallowed-macros = [
+    { path = "std::eprintln", reason = "panics once stderr is gone, and a release build aborts on a panic: use log_line!" },
+]

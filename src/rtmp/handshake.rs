@@ -83,3 +83,44 @@ fn fill_handshake_payload() -> [u8; HS_SIZE] {
     }
     buf
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A server on another RTMP version is refused before anything else is
+    /// read or sent; we offered version 3.
+    #[tokio::test]
+    async fn a_server_on_another_rtmp_version_is_refused() {
+        let (mut client, mut server) = tokio::io::duplex(4 * (1 + HS_SIZE));
+        let peer = tokio::spawn(async move {
+            let mut c0c1 = vec![0u8; 1 + HS_SIZE];
+            server.read_exact(&mut c0c1).await.unwrap();
+            server.write_all(&[6]).await.unwrap();
+            c0c1[0]
+        });
+        let err = perform_client(&mut client).await.expect_err("version 6");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(peer.await.unwrap(), 3);
+    }
+
+    /// A version-3 server completes the handshake, and C2 echoes its S1.
+    #[tokio::test]
+    async fn the_handshake_echoes_the_servers_s1() {
+        let (mut client, mut server) = tokio::io::duplex(4 * (1 + HS_SIZE));
+        let peer = tokio::spawn(async move {
+            let mut c0c1 = vec![0u8; 1 + HS_SIZE];
+            server.read_exact(&mut c0c1).await.unwrap();
+            let s1: Vec<u8> = (0..HS_SIZE).map(|i| i as u8).collect();
+            server.write_all(&[3]).await.unwrap();
+            server.write_all(&s1).await.unwrap();
+            server.write_all(&c0c1[1..]).await.unwrap(); // S2 echoes C1
+            let mut c2 = vec![0u8; HS_SIZE];
+            server.read_exact(&mut c2).await.unwrap();
+            c2 == s1
+        });
+        perform_client(&mut client).await.expect("completes");
+        assert!(peer.await.unwrap(), "C2 echoes S1");
+    }
+}

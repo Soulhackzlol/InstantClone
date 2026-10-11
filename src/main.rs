@@ -1,7 +1,12 @@
 // Release builds on Windows run without a console - the tray icon is
 // the user-facing exit affordance. Debug builds keep the console so
 // `cargo run` still prints log output.
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+// The test program keeps its console: without one, every helper a test
+// runs (ffmpeg, mostly) would open a console window of its own.
+#![cfg_attr(
+    all(windows, not(debug_assertions), not(test)),
+    windows_subsystem = "windows"
+)]
 
 //! InstantClone entry point.
 //!
@@ -24,6 +29,18 @@
 //! full restart (the DiskRing is immutable once mapped). The UI shows a
 //! sticky "restart required" banner when those are pending.
 
+/// `eprintln!` that can't take the app down. `eprintln!` panics when stderr
+/// is gone (a Linux server whose terminal closed, or whose `| tee` exited),
+/// and a release build aborts on any panic: one log line would end every
+/// stream. A line nobody can read is dropped instead. Defined above the
+/// modules so all of them can use it; clippy.toml keeps `eprintln!` out.
+macro_rules! log_line {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 mod auth;
 mod autostart;
 mod buffer;
@@ -33,8 +50,11 @@ mod controller;
 mod crash_hold;
 mod crash_protection;
 mod crypto;
+mod diagnostics;
+mod egress_failure;
 mod h264;
 mod https;
+mod instance_lock;
 mod integrations;
 mod json;
 mod local_eb_config;
@@ -48,6 +68,8 @@ mod sink;
 mod slate;
 mod sync;
 mod sysstat;
+#[cfg(test)]
+mod test_support;
 mod trace;
 #[cfg(windows)]
 mod tray;
@@ -101,15 +123,11 @@ fn main() -> std::io::Result<()> {
     // clicks. Idempotent and safe to pass on every launch.
     let launch_eb = raw_args.iter().any(|a| a == "--launch-eb");
 
-    // Sweep any `.old` / `.new` exe left over from a self-update swap. When
-    // we got here via the relauncher, this deletes the previous version we
-    // just replaced; otherwise it's a harmless no-op.
-    self_update::sweep_leftovers();
-
     // Relaunch handshake: a restart / self-update spawns us with
     // `--await-pid <old>`. Wait for that instance to fully exit (and release
     // the ingest/web ports) before the port pre-flight + bind below, so the
     // two never collide. Capped so a stuck old process can't wedge us.
+    let relaunched = raw_args.iter().any(|a| a == "--await-pid");
     if let Some(i) = raw_args.iter().position(|a| a == "--await-pid") {
         if let Some(pid) = raw_args.get(i + 1).and_then(|s| s.parse::<u32>().ok()) {
             self_update::wait_for_pid_exit(pid, 10_000);
@@ -124,6 +142,39 @@ fn main() -> std::io::Result<()> {
     let cfg_path: PathBuf = std::env::var("CONFIG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("./instantclone.config.json"));
+
+    // One running copy per setup, decided before anything below reads or
+    // writes a file of it (see `instance_lock`). Copies in other folders
+    // are welcome; a second copy of THIS setup, almost always a
+    // double-click on the exe while it sits in the tray, opens the running
+    // one's dashboard instead and leaves without touching anything. A
+    // restart waits for the outgoing copy to let go of the lock.
+    let lock_wait = if relaunched {
+        Duration::from_secs(20)
+    } else {
+        Duration::ZERO
+    };
+    let _instance_lock = match instance_lock::acquire(&cfg_path, lock_wait) {
+        instance_lock::Acquired::Locked(lock) => Some(lock),
+        instance_lock::Acquired::HeldElsewhere => {
+            show_running_instance(&cfg_path, suppress_browser);
+            return Ok(());
+        }
+        instance_lock::Acquired::Unavailable(e) => {
+            log_line!(
+                "[startup] could not lock {} ({e}); not guarding against a second copy",
+                instance_lock::lock_path(&cfg_path).display()
+            );
+            None
+        }
+    };
+
+    // Sweep any `.old` / `.new` exe left over from a self-update swap. When
+    // we got here via the relauncher, this deletes the previous version we
+    // just replaced; otherwise it's a harmless no-op. After the lock: a
+    // second launch during an update's restart must not delete the `.new`
+    // the update is about to swap in.
+    self_update::sweep_leftovers();
 
     // Egress trace - wire-level append-only log next to the config.
     // Captures handshake details, sequence headers, every video tag,
@@ -166,44 +217,52 @@ fn main() -> std::io::Result<()> {
     // the conflict: a native "switch or quit" modal on Windows, an automatic
     // fall-forward to the next free port with a loud stderr line elsewhere
     // (see `resolve_port_conflict`).
-    {
-        // When relaunched by a restart / self-update, the outgoing instance
-        // may still be releasing its listening sockets (the OS can report the
-        // port as busy - even owned by the now-dead PID - for a brief window
-        // after exit). Poll through that window instead of popping the
-        // "switch port?" modal, which would otherwise block the relaunch.
-        let relaunched = raw_args.iter().any(|a| a == "--await-pid");
+    //
+    // Each port is reserved as it is settled and held until exit (see
+    // `instance_lock::reserve_port`), so two copies starting at the same
+    // moment can't both find a shared port free and take it.
+    let _port_reservations = {
         let host_ingest = if settings.ingest_bind_all {
             "0.0.0.0"
         } else {
             "127.0.0.1"
         };
-        if !port_free_with_grace(
-            &format!("{}:{}", host_ingest, settings.ingest_port),
+        let Some(ingest) = settle_port(
+            "RTMP port",
+            &mut settings.ingest_port,
+            host_ingest,
             relaunched,
-        ) {
-            match resolve_port_conflict("RTMP port", settings.ingest_port, host_ingest) {
-                Some(new_port) => settings.ingest_port = new_port,
-                None => return Ok(()),
-            }
-        }
+        ) else {
+            return Ok(());
+        };
         let host_web = if settings.web_bind_all {
             "0.0.0.0"
         } else {
             "127.0.0.1"
         };
-        if !port_free_with_grace(&format!("{}:{}", host_web, settings.web_port), relaunched) {
-            match resolve_port_conflict("Web port", settings.web_port, host_web) {
-                Some(new_port) => settings.web_port = new_port,
-                None => return Ok(()),
-            }
-        }
+        let Some(web) = settle_port("Web port", &mut settings.web_port, host_web, relaunched)
+        else {
+            return Ok(());
+        };
         // Persist any chosen replacement port so the user doesn't get
         // re-prompted on every launch. Not over a file we couldn't read.
         if may_save_at_startup {
             let _ = settings.save(&cfg_path);
         }
+        (ingest, web)
+    };
+
+    // After an update (in-app or by hand) the dashboard says what changed
+    // since the build the user last saw. A fresh install starts from this
+    // one, so its first run isn't announced as an update.
+    if may_save_at_startup && update_check::start_from_this_build(&mut settings) {
+        let _ = settings.save(&cfg_path);
     }
+
+    // The tray colour: the one picked in System settings, or for this run a
+    // free one when another running copy already shows it (see
+    // `show_tray_color`). A restart waits a moment for the outgoing copy's.
+    instance_lock::show_tray_color(settings.tray_color, lock_wait.min(Duration::from_secs(2)));
 
     // Create overlays/ directory and write the three built-in templates if
     // any are missing. Users can edit them or drop in their own .html files.
@@ -213,9 +272,14 @@ fn main() -> std::io::Result<()> {
         .enable_all()
         .build()?;
 
+    // The buffer lives beside this setup's settings, so two setups never
+    // share one (see `config::beside_config`). Resolved once: the cleanup at
+    // quit removes exactly the file created here.
+    let buffer_file = config::beside_config(&cfg_path, &settings.buffer_path);
+
     rt.block_on(async move {
-        let ring = match buffer::DiskRing::create(&settings.buffer_path, settings.buffer_bytes()) {
-            Ok(r) => Arc::new(r),
+        let (ring, buffer_file) = match open_buffer(&buffer_file, &settings) {
+            Ok(opened) => opened,
             Err(e) => {
                 // Cold-start showstopper. Under windows_subsystem=windows
                 // there's no console to print this to, so pop a native
@@ -226,13 +290,7 @@ fn main() -> std::io::Result<()> {
                 // Report where the path actually resolved to: the default
                 // is relative, and "./instantclone.buf" names no folder the
                 // user could go and check.
-                let shown = if settings.buffer_path.is_absolute() {
-                    settings.buffer_path.clone()
-                } else {
-                    std::env::current_dir()
-                        .map(|d| d.join(&settings.buffer_path))
-                        .unwrap_or_else(|_| settings.buffer_path.clone())
-                };
+                let shown = std::path::absolute(&buffer_file).unwrap_or_else(|_| buffer_file.clone());
                 let msg = format!(
                     "InstantClone couldn't open or create the delay buffer file.\n\n\
                      Path:  {}\n\
@@ -269,6 +327,23 @@ fn main() -> std::io::Result<()> {
 
         let (tx, rx) = watch::channel(settings.clone());
         let tx = Arc::new(tx);
+
+        // Crash log: release builds abort on a panic with no console, so
+        // leave a scrubbed report beside the settings, and say so once on
+        // the next start. The hook reads secrets from its own copy, kept
+        // current here, never from the settings channel (see diagnostics).
+        let crash_log = diagnostics::crash_log_path(&cfg_path);
+        diagnostics::remember_secrets(&settings);
+        diagnostics::install_panic_hook(ctrl.clone(), crash_log.clone());
+        diagnostics::announce_previous_crash(&crash_log, &ctrl);
+        {
+            let mut secrets_rx = rx.clone();
+            tokio::spawn(async move {
+                while secrets_rx.changed().await.is_ok() {
+                    diagnostics::remember_secrets(&secrets_rx.borrow());
+                }
+            });
+        }
 
         // Integrations run on their own thread, so nothing they do can
         // delay the stream. Their data file sits next to the config.
@@ -309,6 +384,19 @@ fn main() -> std::io::Result<()> {
                                 "[obs] the registered InstantClone service was out of date and \
                                  has been refreshed - it takes effect next time OBS starts",
                             );
+                            return;
+                        }
+                        Refresh::OtherInstance(port) => {
+                            let owner = if port == 0 {
+                                "another InstantClone that is running".to_string()
+                            } else {
+                                format!("the InstantClone running with dashboard :{port}")
+                            };
+                            ctrl.log(format!(
+                                "[obs] the InstantClone service in OBS belongs to {owner}, so it \
+                                 was left as it is. Register in the OBS tab points it at this \
+                                 copy instead."
+                            ));
                             return;
                         }
                         Refresh::Failed(e) => {
@@ -399,14 +487,16 @@ fn main() -> std::io::Result<()> {
             });
         }
 
-        // System-tray icon (Windows): hidden message-only window in its own
-        // OS thread. Its Quit calls straight into the controller's shutdown
-        // signal - the same path the web Quit route uses - so both converge on
-        // the one graceful-teardown epilogue below. The tray also reaches into
-        // the controller for status + Cut delay, and into settings for the
-        // RTMP URL clipboard action.
+        // System-tray icon (Windows): a hidden window in its own OS thread.
+        // Its Quit, and Windows ending the session (logoff, shutdown), call
+        // straight into the controller's shutdown signal - the same path the
+        // web Quit route uses - so all converge on the one graceful-teardown
+        // epilogue below. The tray also reaches into the controller for
+        // status + Cut delay, and into settings for its links and the RTMP
+        // URL clipboard action. Labelled with this setup's folder, so two
+        // copies side by side are told apart.
         #[cfg(windows)]
-        tray::spawn(rx.clone(), ctrl.clone());
+        tray::spawn(rx.clone(), ctrl.clone(), setup_label(&cfg_path));
 
         // MIDI listener: a background thread that maps a controller's pads /
         // knobs to the delay actions. No-op on platforms with no MIDI
@@ -437,6 +527,8 @@ fn main() -> std::io::Result<()> {
                 )
             };
             let (mut bound_hotkeys, mut bound_midi) = bindings(&hk_rx.borrow());
+            let mut shown_ports = (hk_rx.borrow().ingest_port, hk_rx.borrow().web_port);
+            let mut chosen_color = hk_rx.borrow().tray_color;
             tokio::spawn(async move {
                 while hk_rx.changed().await.is_ok() {
                     let (hotkeys, midi) = bindings(&hk_rx.borrow());
@@ -454,12 +546,29 @@ fn main() -> std::io::Result<()> {
                         tray::request_hotkey_reload();
                         bound_hotkeys = hotkeys;
                     }
+                    // The tooltip names the ports, which can move live.
+                    let ports = (hk_rx.borrow().ingest_port, hk_rx.borrow().web_port);
+                    if ports != shown_ports {
+                        tray::request_tooltip_refresh();
+                        shown_ports = ports;
+                    }
+                    // A colour picked in System settings shows at once.
+                    let color = hk_rx.borrow().tray_color;
+                    if color != chosen_color {
+                        instance_lock::show_tray_color(color, Duration::ZERO);
+                        tray::request_icon_refresh();
+                        chosen_color = color;
+                    }
                 }
             });
+        }
 
-            // Hotkey / MIDI actions live outside the web layer, so nothing
-            // would otherwise write the delay state they change. Persist on
-            // their behalf, event-driven so an idle session costs nothing.
+        // Hotkey, MIDI, tray and integration actions live outside the web
+        // layer, so nothing would otherwise write the delay state they
+        // change. Persist on their behalf, event-driven so an idle session
+        // costs nothing. On every platform: a Linux server has no hotkeys,
+        // but its chat `!setdelay` changes the delay all the same.
+        {
             let persist_ctrl = ctrl.clone();
             let persist_tx = tx.clone();
             let persist_path = cfg_path.clone();
@@ -482,6 +591,14 @@ fn main() -> std::io::Result<()> {
         // does not log everyone out. Inert until a password is set.
         let auth = Arc::new(auth::AuthState::new());
 
+        // Update checks shortly after start and then daily, for users who
+        // never open the dashboard (tray, autostart, headless).
+        tokio::spawn(update_check::watch_for_updates(
+            tx.clone(),
+            may_save_at_startup.then(|| cfg_path.clone()),
+            ctrl.clone(),
+        ));
+
         let ingest_sup = tokio::spawn(supervise_ingest(rx.clone(), ctrl.clone()));
         let egress_sup = tokio::spawn(supervise_egress(rx.clone(), ctrl.clone()));
         let web_sup = tokio::spawn(supervise_web(
@@ -499,7 +616,7 @@ fn main() -> std::io::Result<()> {
             _ = ingest_sup => { shutdown_reason = "ingest supervisor exited"; }
             _ = egress_sup => { shutdown_reason = "egress supervisor exited"; }
             _ = web_sup    => { shutdown_reason = "web supervisor exited"; }
-            _ = tokio::signal::ctrl_c() => { shutdown_reason = "ctrl-c"; }
+            signal = stop_signal() => { shutdown_reason = signal; }
             kind = ctrl.wait_shutdown() => {
                 exit_kind = kind;
                 shutdown_reason = match kind {
@@ -508,7 +625,7 @@ fn main() -> std::io::Result<()> {
                 };
             }
         }
-        eprintln!("\nShutting down ({shutdown_reason}) - closing active streams cleanly...");
+        log_line!("\nShutting down ({shutdown_reason}) - closing active streams cleanly...");
         // Flush the egress trace so the last few thousand events make
         // it to disk before the BufWriter is dropped on process exit.
         trace::flush();
@@ -531,20 +648,26 @@ fn main() -> std::io::Result<()> {
         // reused across runs (OBS reconnects → new publisher token, the
         // write cursor resets to 0 and overwrites everything), so leaving
         // a 300 MB file sitting on disk between sessions is just clutter.
-        // We only remove it if it looks like our own ring file (matches
-        // the configured `buffer_path` and the configured capacity).
-        let cleanup_path = settings.buffer_path.clone();
+        // We only remove it if it looks like our own ring file (the file
+        // this process created and still holds locked, at the configured
+        // capacity), never one a buffer_path edit points at since.
         let cleanup_cap = settings.buffer_bytes();
-        if let Ok(meta) = std::fs::metadata(&cleanup_path) {
+        if let Ok(meta) = std::fs::metadata(&buffer_file) {
             if meta.is_file() && meta.len() == cleanup_cap {
-                let _ = std::fs::remove_file(&cleanup_path);
+                let _ = std::fs::remove_file(&buffer_file);
             }
         }
+        // Windows ending the session waits on this before it lets the
+        // process go (see `tray`), so the teardown above gets to finish.
+        #[cfg(windows)]
+        tray::note_shutdown_done();
 
         // Restart request: now that egress has been torn down cleanly, relaunch
-        // a fresh process in place. `restart_now` spawns the relauncher (which
-        // waits for our PID to release the ports) and hard-exits, so this never
-        // returns on the restart path. A plain Quit just falls through.
+        // a fresh process in place. `restart_now` installs a staged update
+        // first (the one-click updater ends here too), spawns the relauncher
+        // (which waits for our PID to release the ports) and hard-exits, so
+        // this never returns on the restart path. A plain Quit just falls
+        // through.
         if let controller::ShutdownKind::Restart = exit_kind {
             self_update::restart_now();
         }
@@ -563,7 +686,7 @@ async fn supervise_ingest(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         if next == current {
             continue;
         }
-        eprintln!("[ingest] hot-restart {:?} -> {:?}", current, next);
+        log_line!("[ingest] hot-restart {:?} -> {:?}", current, next);
         ctrl.log(format!(
             "ingest: rebinding {} -> {}",
             current.join(", "),
@@ -623,7 +746,7 @@ async fn supervise_ingest_leg(addr: String, ctrl: Arc<controller::Controller>, r
         match rtmp::server::bind(&addr).await {
             Ok(listener) => {
                 if let Err(e) = rtmp::server::serve(listener, ctrl.clone()).await {
-                    eprintln!("[ingest] {} stopped serving: {}", addr, e);
+                    log_line!("[ingest] {} stopped serving: {}", addr, e);
                 }
                 // It bound once, so the family works here: a listener that
                 // stops serving gets a fresh window to reclaim the address.
@@ -633,14 +756,14 @@ async fn supervise_ingest_leg(addr: String, ctrl: Arc<controller::Controller>, r
                 let still_settling = e.kind() == std::io::ErrorKind::AddrInUse
                     && std::time::Instant::now() < deadline;
                 if !required && !still_settling {
-                    eprintln!("[ingest] optional listener {} unavailable: {}", addr, e);
+                    log_line!("[ingest] optional listener {} unavailable: {}", addr, e);
                     ctrl.log(format!(
                         "ingest: IPv6 listener {addr} unavailable ({e}). IPv4 ingest is \
                          unaffected; only an OBS set to IP Family = IPv6 needs this one."
                     ));
                     return;
                 }
-                eprintln!("[ingest] bind {} failed: {}", addr, e);
+                log_line!("[ingest] bind {} failed: {}", addr, e);
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -686,6 +809,22 @@ impl VerticalWaitLog {
     }
 }
 
+/// How long into an OBS session the armed delay is checked against the
+/// measured bitrate. The meter reads after a second, but the first seconds
+/// of a stream run light or heavy while the encoder settles.
+const CAPACITY_CHECK_AFTER: Duration = Duration::from_secs(10);
+
+/// Why no destination is sending, for the console. Destinations can be set
+/// up and switched on while OBS simply isn't streaming, so "add a
+/// destination" is only the answer when there is none.
+fn idle_reason(has_destinations: bool, obs_live: bool) -> &'static str {
+    match (has_destinations, obs_live) {
+        (false, _) => "no destination is switched on; add or enable one in the dashboard",
+        (true, false) => "waiting for OBS to start streaming",
+        (true, true) => "OBS is live but no destination could start yet (see the log)",
+    }
+}
+
 /// One egress pump per destination. Owns a map { dest_id → (url, JoinHandle) }
 /// and diffs it against the active-destinations list whenever settings
 /// change. Adds/removes/restarts as needed.
@@ -725,6 +864,14 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
     // on a fresh process start where ingest is already live from a
     // tight relaunch.
     let mut prev_ingest_alive = ctrl.ingest_alive();
+    // When the current OBS session started (None while OBS isn't sending),
+    // for the capacity check a few seconds in.
+    let mut live_since: Option<Instant> = prev_ingest_alive.then(Instant::now);
+    // The last short-delay report a tray notice went out for.
+    let mut noticed_short = ctrl.capacity_short_seq();
+    // What the console last said about having nothing to send, so it says
+    // it once per change instead of every tick.
+    let mut idle_said: Option<&'static str> = None;
 
     loop {
         // Snapshot the current desired destinations.
@@ -1010,8 +1157,14 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
             }
         }
 
-        if running.is_empty() {
-            eprintln!("[egress] idle - add a destination in the web UI");
+        let idle = running
+            .is_empty()
+            .then(|| idle_reason(!desired.is_empty(), ingest_alive));
+        if idle != idle_said {
+            if let Some(reason) = idle {
+                log_line!("[egress] idle - {reason}");
+            }
+            idle_said = idle;
         }
 
         // Wake at most every 2 s to re-check ingest_alive, finished
@@ -1070,15 +1223,14 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
         // slot stays true so the next tick retries.
         {
             let s = rx.borrow();
-            if ctrl.auto_activate_pending()
-                && s.auto_activate_when_ready
+            if ctrl.auto_activates(s.auto_activate_when_ready)
                 && ctrl.phase() == "ready"
                 && ctrl.target_delay_ms() == 0
             {
                 match ctrl.activate_delay() {
                     Ok(ms) => ctrl.log(format!(
                         "auto-activate: buffer ready -> live with {} s delay",
-                        ms / 1000
+                        ctrl.delay_runs_ms(ms) / 1000
                     )),
                     Err(_) => {
                         // Phase said "ready" but activate_delay's
@@ -1088,6 +1240,28 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                         // Ok arm) so the retry actually happens.
                     }
                 }
+            }
+        }
+        // ── Capacity: does the armed delay fit this stream? ────────────
+        //
+        // Auto-arm above, and the delay saved from last time, were armed
+        // before there was a bitrate to check them against. A few seconds
+        // in, the meter has settled; check then, and say so if it doesn't
+        // fit (log, /state, and a quiet tray notice).
+        if ingest_alive && !prev_ingest_alive {
+            live_since = Some(Instant::now());
+        } else if !ingest_alive {
+            live_since = None;
+        }
+        if live_since.is_some_and(|since| since.elapsed() >= CAPACITY_CHECK_AFTER) {
+            ctrl.check_armed_capacity();
+        }
+        let short_seq = ctrl.capacity_short_seq();
+        if short_seq != noticed_short {
+            noticed_short = short_seq;
+            #[cfg(windows)]
+            if let Some(short) = ctrl.capacity_short() {
+                tray::notify_notice(&short.message);
             }
         }
         prev_ingest_alive = ingest_alive;
@@ -1267,7 +1441,7 @@ async fn supervise_web(
     loop {
         tokio::select! {
             r = &mut handle => {
-                eprintln!("[web] task ended: {:?}", r);
+                log_line!("[web] task ended: {:?}", r);
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 handle = spawn_one(current_addr.clone());
             }
@@ -1275,7 +1449,7 @@ async fn supervise_web(
                 if ch.is_err() { return; }
                 let new_addr = rx.borrow().web_addr();
                 if new_addr != current_addr {
-                    eprintln!("[web] hot-restart {} → {}", current_addr, new_addr);
+                    log_line!("[web] hot-restart {} → {}", current_addr, new_addr);
                     handle.abort();
                     let _ = (&mut handle).await;
                     current_addr = new_addr;
@@ -1292,10 +1466,10 @@ async fn supervise_web(
 /// Windows pops a native "switch to the next free port or quit" modal, since
 /// the release build has no console to print to.
 #[cfg(windows)]
-fn resolve_port_conflict(label: &str, port: u16, host: &str) -> Option<u16> {
+fn resolve_port_conflict(label: &str, port: u16, host: &str, starting_copy: bool) -> Option<u16> {
     let owner = portcheck::find_process_on_port(port);
     let proposed = portcheck::find_free_port(host, port.saturating_add(1), 9);
-    match portcheck::ask_user(label, port, owner, proposed) {
+    match portcheck::ask_user(label, port, owner, proposed, starting_copy) {
         portcheck::ConflictChoice::SwitchPort(p) => Some(p),
         portcheck::ConflictChoice::Quit => None,
     }
@@ -1307,10 +1481,10 @@ fn resolve_port_conflict(label: &str, port: u16, host: &str) -> Option<u16> {
 /// persisted by the caller so OBS / the dashboard can be repointed once. If
 /// the whole window is busy, print an actionable error and exit.
 #[cfg(not(windows))]
-fn resolve_port_conflict(label: &str, port: u16, host: &str) -> Option<u16> {
+fn resolve_port_conflict(label: &str, port: u16, host: &str, _starting_copy: bool) -> Option<u16> {
     match portcheck::find_free_port(host, port.saturating_add(1), 9) {
         Some(new_port) => {
-            eprintln!(
+            log_line!(
                 "[preflight] {label} :{port} is already in use. Moved to :{new_port} - \
                  point OBS (and the dashboard URL) at the new port."
             );
@@ -1335,7 +1509,7 @@ fn resolve_port_conflict(label: &str, port: u16, host: &str) -> Option<u16> {
 /// has none either, so a bare stderr line would vanish. Always print, then add
 /// the platform's native surface on top.
 fn notify_fatal(title: &str, body: &str) {
-    eprintln!("{body}");
+    log_line!("{body}");
     #[cfg(windows)]
     portcheck::show_error(title, body);
     #[cfg(target_os = "linux")]
@@ -1349,6 +1523,41 @@ fn notify_fatal(title: &str, body: &str) {
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     let _ = title;
+}
+
+/// Settle the port this copy will listen on: reserved for it, and free on
+/// this PC. On a conflict the user picks another port (`resolve_port_conflict`,
+/// which writes it into `port`) and that one is settled the same way; None
+/// when they chose to quit.
+///
+/// When relaunched by a restart / self-update, the outgoing instance may
+/// still be releasing its port (the OS can report it busy, even owned by the
+/// now-dead PID, for a brief window after exit). Both checks wait through
+/// that window instead of popping the "switch port?" modal, which would
+/// otherwise block the relaunch.
+fn settle_port(
+    label: &str,
+    port: &mut u16,
+    host: &str,
+    relaunched: bool,
+) -> Option<instance_lock::SessionClaim> {
+    let wait = if relaunched {
+        Duration::from_secs(2)
+    } else {
+        Duration::ZERO
+    };
+    loop {
+        let reservation = instance_lock::reserve_port(*port, wait);
+        // Refused: another InstantClone starting right now claimed it,
+        // maybe before it has bound it, so no process shows on the port.
+        let starting_copy = reservation.is_none();
+        if let Some(reservation) = reservation {
+            if port_free_with_grace(&format!("{host}:{port}"), relaunched) {
+                return Some(reservation);
+            }
+        }
+        *port = resolve_port_conflict(label, *port, host, starting_copy)?;
+    }
 }
 
 /// Is `addr` bindable? When `grace` is set (we were relaunched by a restart /
@@ -1397,7 +1606,32 @@ fn anchor_working_dir_to_exe() {
         // Nothing is broken yet - we're simply still where we started, which
         // is the pre-fix behaviour. The buffer dialog reports the absolute
         // path if this turns into a real failure.
-        eprintln!("could not switch to {}: {e}", dir.display());
+        log_line!("could not switch to {}: {e}", dir.display());
+    }
+}
+
+/// Open the delay buffer at `preferred` (beside the settings), with the
+/// path it ended up at. A relative buffer path that can't be created there,
+/// such as a read-only settings folder named by CONFIG_PATH, falls back to
+/// the working directory, where it lived before it moved beside the
+/// settings. The first error is the one reported. A file another copy
+/// holds is not a folder problem: that copy is named, rather than a second
+/// buffer quietly opened somewhere else.
+fn open_buffer(
+    preferred: &std::path::Path,
+    settings: &Settings,
+) -> std::io::Result<(Arc<buffer::DiskRing>, PathBuf)> {
+    let bytes = settings.buffer_bytes();
+    let legacy = &settings.buffer_path;
+    match buffer::DiskRing::create(preferred, bytes) {
+        Ok(ring) => Ok((Arc::new(ring), preferred.to_path_buf())),
+        Err(e) if e.kind() == std::io::ErrorKind::ResourceBusy => Err(e),
+        Err(e) if legacy.is_relative() && preferred != legacy.as_path() => {
+            buffer::DiskRing::create(legacy, bytes)
+                .map(|ring| (Arc::new(ring), legacy.clone()))
+                .map_err(|_| e)
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -1462,9 +1696,6 @@ fn exe_dir_writable(_exe: Option<&std::path::Path>) -> Option<bool> {
     None
 }
 
-/// The directory `anchor_working_dir_to_exe` should move to, or None to stay
-/// put. Split out from the env + chdir so the rule is testable without
-/// mutating the process's working directory under other tests.
 /// The settings file name, as `cfg_path` below defaults to it.
 const CONFIG_FILE_NAME: &str = "instantclone.config.json";
 
@@ -1488,6 +1719,9 @@ fn has_config(dir: &std::path::Path) -> bool {
 ///   their real config sat untouched a few directories away.
 ///
 /// So: an existing settings file wins, and we stay where it is.
+/// The directory `anchor_working_dir_to_exe` should move to, or None to stay
+/// put. Split out from the env + chdir so the rule is testable without
+/// mutating the process's working directory under other tests.
 fn anchor_dir(
     exe: Option<&std::path::Path>,
     config_path_set: bool,
@@ -1512,9 +1746,79 @@ fn anchor_dir(
         .map(PathBuf::from)
 }
 
+/// A second copy of a running setup was launched: bring the user to the
+/// copy that is already running, and change nothing. Its dashboard port is
+/// read straight from the settings file it keeps current; nothing here
+/// writes that file. Autostart (`--no-browser`) stays silent, since a login
+/// item firing while the user already started InstantClone by hand is not a
+/// request to see anything.
+fn show_running_instance(cfg_path: &std::path::Path, suppress_browser: bool) {
+    let web_port =
+        Settings::load(cfg_path).map_or_else(|_| Settings::defaults().web_port, |s| s.web_port);
+    let url = format!("http://127.0.0.1:{web_port}/");
+    log_line!("InstantClone is already running with these settings: see {url}");
+    if suppress_browser {
+        return;
+    }
+    // The running copy may be stuck at a prompt or hung: a tab that can't
+    // connect, and nothing else, would leave the user guessing.
+    let dashboard = std::net::SocketAddr::from(([127, 0, 0, 1], web_port));
+    if std::net::TcpStream::connect_timeout(&dashboard, Duration::from_secs(2)).is_err() {
+        notify_fatal(
+            "InstantClone is already running",
+            "InstantClone is already running with these settings, but its dashboard \
+             isn't answering. It may be waiting on a question in another window. If it \
+             stays stuck, end it (on Windows, from Task Manager) and start it again.",
+        );
+        return;
+    }
+    open_browser(&url);
+}
+
+/// What tells this setup apart in the tray: the name of the folder its
+/// settings live in.
+#[cfg(windows)]
+fn setup_label(cfg_path: &std::path::Path) -> String {
+    std::path::absolute(cfg_path)
+        .ok()
+        .and_then(|p| {
+            p.parent()?
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "InstantClone".to_string())
+}
+
+/// Resolves when the OS asks us to stop, naming the signal. Ctrl-C
+/// everywhere; on unix also SIGTERM, which is how `systemctl stop`,
+/// `docker stop` and a shutdown end a service. Without it the process just
+/// died there: no goodbye to the platforms, the trace and the integration
+/// counters unflushed, the buffer file left on disk.
+async fn stop_signal() -> &'static str {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            return tokio::select! {
+                _ = tokio::signal::ctrl_c() => "ctrl-c",
+                _ = term.recv() => "SIGTERM",
+            };
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+    "ctrl-c"
+}
+
 fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
-    let _ = Command::new("cmd").args(["/c", "start", "", url]).spawn();
+    {
+        use std::os::windows::process::CommandExt as _;
+        // A release build has no console, so `cmd` would flash one open.
+        let _ = Command::new("cmd")
+            .args(["/c", "start", "", url])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .spawn();
+    }
     #[cfg(target_os = "macos")]
     let _ = Command::new("open").arg(url).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -1575,13 +1879,17 @@ mod tests {
         assert!(log.seen.is_empty(), "deleted destinations are forgotten");
     }
 
+    /// "Add a destination" is only the answer when there is none: with
+    /// destinations ready, the usual idle is OBS simply not streaming.
     #[test]
-    fn anchor_dir_picks_the_folder_holding_the_exe() {
-        let exe = PathBuf::from("C:/Users/me/Desktop/InstantClone/instantclone.exe");
+    fn the_idle_line_says_what_is_actually_missing() {
+        assert!(super::idle_reason(false, false).contains("no destination is switched on"));
+        assert!(super::idle_reason(false, true).contains("no destination is switched on"));
         assert_eq!(
-            anchor_dir(Some(&exe), false, Some(false), None),
-            Some(PathBuf::from("C:/Users/me/Desktop/InstantClone"))
+            super::idle_reason(true, false),
+            "waiting for OBS to start streaming"
         );
+        assert!(super::idle_reason(true, true).starts_with("OBS is live"));
     }
 
     #[test]

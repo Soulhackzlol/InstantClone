@@ -53,7 +53,7 @@ pub async fn bind(addr: &str) -> io::Result<TcpListener> {
     // Keep this listener out of a restart/self-update child (else the ingest
     // port stays bound after we exit and the new instance can't reclaim it).
     crate::self_update::dont_inherit(&listener);
-    eprintln!("[ingest] listening on {}", addr);
+    log_line!("[ingest] listening on {}", addr);
     Ok(listener)
 }
 
@@ -91,7 +91,7 @@ pub async fn serve(listener: TcpListener, ctrl: Arc<Controller>) -> io::Result<(
         let ctrl = ctrl.clone();
         tokio::spawn(async move {
             if let Err(e) = handle(sock, ctrl, peer).await {
-                eprintln!("[ingest] {} closed: {}", peer, e);
+                log_line!("[ingest] {} closed: {}", peer, e);
             }
         });
     }
@@ -635,7 +635,7 @@ mod tests {
         match bind("[::1]:0").await {
             Ok(l) => Some(l),
             Err(e) => {
-                eprintln!("skipping IPv6 test, [::1] is unbindable here: {e}");
+                log_line!("skipping IPv6 test, [::1] is unbindable here: {e}");
                 None
             }
         }
@@ -661,13 +661,12 @@ mod tests {
         assert!(v6.local_addr().unwrap().is_ipv6());
     }
 
-    /// The default layout, plus the property `Controller::begin_publish`
-    /// depends on: a v6-only socket reports a local peer as `::1`, which
-    /// `is_loopback` accepts. A dual-stack socket would hand us
-    /// `::ffff:127.0.0.1` instead, where `is_loopback` is false and a
-    /// publisher sitting at the machine would be rate-limited as remote.
+    /// The default `[::1]` listener binds and accepts a local publisher as
+    /// loopback. (Its sibling worry, a dual-stack socket handing us
+    /// `::ffff:127.0.0.1`, is what the wildcard test's `IPV6_V6ONLY` check
+    /// rules out: a client dialling `::1` can't show it.)
     #[tokio::test]
-    async fn ipv6_loopback_listener_accepts_and_reports_a_loopback_peer() {
+    async fn ipv6_loopback_listener_accepts_a_local_publisher() {
         let Some(v6) = ipv6_loopback_or_skip().await else {
             return;
         };

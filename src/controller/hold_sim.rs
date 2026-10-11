@@ -5,7 +5,7 @@
 //! the gap, nothing from before the hold is replayed, and timestamps never
 //! go back.
 
-use super::sim::{assert_strictly_increasing, wait, Frame, Sim};
+use super::sim::{assert_strictly_increasing, wait, Frame, Sim, TIMER_SLOP_MS};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -40,10 +40,7 @@ async fn crash_screen_then_obs_back_on_the_same_connection() {
         "rejoins at a keyframe"
     );
     assert_strictly_increasing(&frames, "crash and back");
-    assert!(
-        !sim.commands(0).contains(&"deleteStream".into()),
-        "never ended"
-    );
+    assert!(!sim.ended(0), "never ended");
     assert!(sim.received().iter().all(|m| m.conn == 0), "one connection");
     sim.assert_timestamps_monotonic(0);
 }
@@ -68,11 +65,7 @@ async fn a_crash_mid_delay_airs_the_tail_once_and_the_delay_survives_the_return(
     let crashed = Instant::now();
     wait(3_000).await;
 
-    let tail: Vec<Frame> = sim
-        .frames(0)
-        .into_iter()
-        .filter(|f| f.at > crashed)
-        .collect();
+    let tail = sim.frames_after(0, crashed);
     assert_strictly_increasing(&tail, "the tail");
     assert_eq!(
         tail.last().map(|f| f.number),
@@ -93,13 +86,13 @@ async fn a_crash_mid_delay_airs_the_tail_once_and_the_delay_survives_the_return(
     sim.obs_connects().await;
     let back = Instant::now();
     sim.obs_sends(3_000).await;
-    let after: Vec<Frame> = sim.frames(0).into_iter().filter(|f| f.at > back).collect();
+    let after = sim.frames_after(0, back);
     let rejoined = after.first().expect("the stream came back");
     assert!(rejoined.keyframe, "rejoins at a keyframe");
-    let delayed_by = rejoined.at.duration_since(sim.produced[&rejoined.number]);
+    let delayed_by = sim.delay_ms(rejoined);
     assert!(
-        delayed_by >= Duration::from_millis(1_000),
-        "still delayed after OBS came back, not live ({delayed_by:?})"
+        delayed_by + TIMER_SLOP_MS >= DELAY_MS,
+        "rejoined {delayed_by} ms behind, short of the {DELAY_MS} ms delay"
     );
     assert_strictly_increasing(&after, "after the return");
     sim.assert_timestamps_monotonic(0);
@@ -132,10 +125,10 @@ async fn obs_back_mid_tail_never_puts_viewers_on_live() {
         .find(|f| f.at > back && sim.produced[&f.number] > back)
         .expect("the stream came back");
     assert!(first_new.keyframe, "rejoins at a keyframe");
-    let delayed_by = first_new.at.duration_since(sim.produced[&first_new.number]);
+    let delayed_by = sim.delay_ms(&first_new);
     assert!(
-        delayed_by >= Duration::from_millis(2_000),
-        "OBS's new video must air delayed, not live ({delayed_by:?})"
+        delayed_by + TIMER_SLOP_MS >= DELAY_MS,
+        "OBS's new video aired {delayed_by} ms behind, short of the {DELAY_MS} ms delay"
     );
     sim.assert_timestamps_monotonic(0);
 }
@@ -154,7 +147,7 @@ async fn end_now_from_a_plain_thread_ends_the_destination_cleanly() {
     let hotkey = std::thread::spawn(move || ctrl.run_named_action("end_hold", 0, "hotkey"));
     assert_eq!(hotkey.join().expect("no panic off the runtime"), None);
     wait(800).await;
-    assert!(sim.commands(0).contains(&"deleteStream".into()));
+    assert!(sim.ended(0));
     assert!(sim.pumps[0].is_finished(), "the pump ended");
 }
 
@@ -209,7 +202,7 @@ async fn stopping_during_a_freeze_ends_the_destination() {
     sim.obs_stalls(500).await;
     sim.obs_stops();
     wait(800).await;
-    assert!(sim.commands(0).contains(&"deleteStream".into()));
+    assert!(sim.ended(0));
 }
 
 /// Crash protection off: OBS dropping ends the destination at once, as
@@ -223,7 +216,7 @@ async fn protection_off_ends_the_destination_when_obs_drops() {
     sim.obs_crashes();
     let crashed = Instant::now();
     wait(800).await;
-    assert!(sim.commands(0).contains(&"deleteStream".into()));
+    assert!(sim.ended(0));
     assert_eq!(sim.screen_tags(0, crashed, Instant::now()), 0, "no screen");
 }
 
@@ -253,10 +246,7 @@ async fn obs_stopping_while_the_delay_rebuilds_ends_the_destination() {
 
     let back_on_air = sim.frames(0).into_iter().filter(|f| f.at > back).count();
     assert_eq!(back_on_air, 0, "OBS's short new video never aired");
-    assert!(
-        sim.commands(0).contains(&"deleteStream".into()),
-        "the stream ended when OBS stopped"
-    );
+    assert!(sim.ended(0), "the stream ended when OBS stopped");
     assert!(sim.pumps[0].is_finished(), "the pump ended");
     sim.assert_timestamps_monotonic(0);
 }
@@ -296,21 +286,14 @@ async fn a_hold_that_runs_out_mid_tail_airs_the_tail_in_full_then_ends() {
     sim.ctrl.expire_hold();
     wait(3_000).await;
 
-    let tail: Vec<Frame> = sim
-        .frames(0)
-        .into_iter()
-        .filter(|f| f.at > crashed)
-        .collect();
+    let tail = sim.frames_after(0, crashed);
     assert_eq!(
         tail.last().map(|f| f.number),
         Some(last_live),
         "the whole tail aired"
     );
     assert_strictly_increasing(&tail, "the tail");
-    assert!(
-        sim.commands(0).contains(&"deleteStream".into()),
-        "then it ended"
-    );
+    assert!(sim.ended(0), "then it ended");
     assert!(sim.pumps[0].is_finished(), "the pump ended");
     sim.assert_timestamps_monotonic(0);
 }
@@ -344,10 +327,7 @@ async fn a_freeze_hold_that_runs_out_never_replays_the_tail() {
     let frames = sim.frames(0);
     let from = frames.iter().rposition(|f| f.at < froze).unwrap_or(0);
     assert_strictly_increasing(&frames[from..], "a frozen OBS past the hold");
-    assert!(
-        sim.commands(0).contains(&"deleteStream".into()),
-        "the destination ended"
-    );
+    assert!(sim.ended(0), "the destination ended");
     sim.assert_timestamps_monotonic(0);
 }
 
@@ -371,7 +351,7 @@ async fn end_now_mid_tail_ends_the_stream_at_once() {
     assert!(sim.ctrl.end_hold_now(), "a hold was on");
     wait(1_000).await;
 
-    assert!(sim.commands(0).contains(&"deleteStream".into()), "it ended");
+    assert!(sim.ended(0), "it ended");
     assert!(
         sim.frames(0).last().is_some_and(|f| f.number < last_live),
         "without airing the rest of the tail"
@@ -401,7 +381,7 @@ async fn obs_leaves_mid_delay(sim: &mut Sim, stopped: bool) -> (u32, Instant) {
 /// What viewers see once OBS left: everything it sent, over the delay's
 /// length, then a clean end with no reconnect screen.
 fn assert_tail_aired_then_ended(sim: &mut Sim, last_live: u32, left: Instant) {
-    let tail: Vec<Frame> = sim.frames(0).into_iter().filter(|f| f.at > left).collect();
+    let tail = sim.frames_after(0, left);
     assert_eq!(
         tail.last().map(|f| f.number),
         Some(last_live),
@@ -413,10 +393,7 @@ fn assert_tail_aired_then_ended(sim: &mut Sim, last_live: u32, left: Instant) {
         took >= 1_500,
         "the tail took the delay to air, not {took} ms"
     );
-    assert!(
-        sim.commands(0).contains(&"deleteStream".into()),
-        "then it ended"
-    );
+    assert!(sim.ended(0), "then it ended");
     assert_eq!(sim.screen_tags(0, left, Instant::now()), 0, "no screen");
     assert!(sim.pumps[0].is_finished(), "the pump ended");
     sim.assert_timestamps_monotonic(0);
@@ -471,7 +448,7 @@ async fn end_now_after_a_stop_cuts_the_rest_of_the_delay() {
     assert!(sim.ctrl.end_hold_now(), "the delay was airing");
     wait(1_000).await;
 
-    assert!(sim.commands(0).contains(&"deleteStream".into()), "it ended");
+    assert!(sim.ended(0), "it ended");
     assert!(
         sim.frames(0).last().is_some_and(|f| f.number < last_live),
         "without airing the rest of the delay"
@@ -508,12 +485,9 @@ async fn a_freeze_rejoin_lands_at_least_the_delay_back() {
         .find(|f| f.at > back && sim.produced[&f.number] > back)
         .expect("the stream came back");
     assert!(rejoined.keyframe, "rejoins at a keyframe");
-    let delayed_by = rejoined
-        .at
-        .duration_since(sim.produced[&rejoined.number])
-        .as_millis() as u32;
+    let delayed_by = sim.delay_ms(&rejoined);
     assert!(
-        delayed_by + 50 >= DELAY_MS,
+        delayed_by + TIMER_SLOP_MS >= DELAY_MS,
         "rejoined {delayed_by} ms behind, short of the {DELAY_MS} ms delay"
     );
     sim.assert_timestamps_monotonic(0);
@@ -552,12 +526,9 @@ async fn a_destination_after_an_ended_freeze_never_replays_what_already_aired() 
         frames.iter().all(|f| f.number > last_before_freeze),
         "nothing from before the freeze airs again"
     );
-    let delayed_by = first
-        .at
-        .duration_since(sim.produced[&first.number])
-        .as_millis() as u32;
+    let delayed_by = sim.delay_ms(first);
     assert!(
-        sim.produced[&first.number] > back && delayed_by + 50 >= DELAY_MS,
+        sim.produced[&first.number] > back && delayed_by + TIMER_SLOP_MS >= DELAY_MS,
         "joins OBS's new video {delayed_by} ms behind, at least the delay"
     );
     assert_strictly_increasing(&frames, "after an ended freeze");
@@ -597,12 +568,9 @@ async fn a_destination_after_a_short_freeze_joins_at_once() {
         "it waited {:?} to go live",
         first.at.duration_since(joined)
     );
-    let delayed_by = first
-        .at
-        .duration_since(sim.produced[&first.number])
-        .as_millis() as u32;
+    let delayed_by = sim.delay_ms(first);
     assert!(
-        delayed_by + 50 >= DELAY_MS,
+        delayed_by + TIMER_SLOP_MS >= DELAY_MS,
         "joined {delayed_by} ms behind, short of the {DELAY_MS} ms delay"
     );
 }

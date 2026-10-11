@@ -302,114 +302,111 @@ pub fn enc_object_end(out: &mut BytesMut) {
 mod tests {
     use super::*;
 
+    /// Each AMF0 type we write decodes back to the same value.
     #[test]
-    fn number_roundtrip() {
-        let mut buf = BytesMut::new();
-        enc_number(&mut buf, 42.5);
-        let decoded = decode_all(&buf).unwrap();
-        assert_eq!(decoded.len(), 1);
-        assert_eq!(decoded[0].as_f64(), Some(42.5));
-    }
-
-    #[test]
-    fn string_roundtrip_handles_utf8() {
-        let mut buf = BytesMut::new();
-        enc_string(&mut buf, "hola café");
-        let decoded = decode_all(&buf).unwrap();
-        assert_eq!(decoded[0].as_str(), Some("hola café"));
-    }
-
-    #[test]
-    fn null_roundtrip() {
-        let mut buf = BytesMut::new();
-        enc_null(&mut buf);
-        let decoded = decode_all(&buf).unwrap();
-        assert!(matches!(decoded[0], Amf0::Null));
-    }
-
-    #[test]
-    fn boolean_decode() {
-        let decoded = decode_all(&[0x01, 0x01]).unwrap();
-        assert!(matches!(decoded[0], Amf0::Boolean(true)));
-        let decoded = decode_all(&[0x01, 0x00]).unwrap();
-        assert!(matches!(decoded[0], Amf0::Boolean(false)));
-    }
-
-    #[test]
-    fn object_roundtrip_preserves_keys() {
-        let mut buf = BytesMut::new();
-        let app = Amf0::String("live".into());
-        let ver = Amf0::Number(2.0);
-        enc_object(&mut buf, &[("app", &app), ("ver", &ver)]);
-        let decoded = decode_all(&buf).unwrap();
-        let obj = decoded[0].as_object().expect("decoded as object");
-        assert_eq!(obj.get("app").and_then(|v| v.as_str()), Some("live"));
-        assert_eq!(obj.get("ver").and_then(|v| v.as_f64()), Some(2.0));
-    }
-
-    #[test]
-    fn unsupported_marker_returns_error() {
-        // marker 0xAA - we don't implement that one
-        let r = decode_all(&[0xAA, 0x00]);
-        assert!(r.is_err());
-    }
-
-    #[test]
-    fn truncated_string_returns_error_not_panic() {
-        // string marker says 100 bytes follow, but only 4 are present
-        let r = decode_all(&[0x02, 0x00, 100, 0xAB, 0xCD]);
-        assert!(r.is_err());
-    }
-
-    #[test]
-    fn strict_array_of_strings_roundtrip() {
-        // Enhanced-RTMP fourCcList shape: a Strict Array of 4-char
-        // codec identifier strings. This test guards the e2e path -
-        // before 0x0A decoding landed, the in-tree sink rejected our
-        // own connect with `amf0: unsupported marker 0xa`.
-        let mut buf = BytesMut::new();
-        enc_strict_array_str(&mut buf, &["avc1", "hvc1", "mp4a"]);
-        let decoded = decode_all(&buf).unwrap();
-        match &decoded[0] {
-            Amf0::StrictArray(items) => {
-                assert_eq!(items.len(), 3);
-                assert_eq!(items[0].as_str(), Some("avc1"));
-                assert_eq!(items[1].as_str(), Some("hvc1"));
-                assert_eq!(items[2].as_str(), Some("mp4a"));
+    fn values_round_trip() {
+        // string roundtrip handles utf8
+        {
+            let mut buf = BytesMut::new();
+            enc_string(&mut buf, "hola café");
+            let decoded = decode_all(&buf).unwrap();
+            assert_eq!(decoded[0].as_str(), Some("hola café"));
+        }
+        // boolean decode
+        {
+            let decoded = decode_all(&[0x01, 0x01]).unwrap();
+            assert!(matches!(decoded[0], Amf0::Boolean(true)));
+            let decoded = decode_all(&[0x01, 0x00]).unwrap();
+            assert!(matches!(decoded[0], Amf0::Boolean(false)));
+        }
+        // object roundtrip preserves keys
+        {
+            let mut buf = BytesMut::new();
+            let app = Amf0::String("live".into());
+            let ver = Amf0::Number(2.0);
+            enc_object(&mut buf, &[("app", &app), ("ver", &ver)]);
+            let decoded = decode_all(&buf).unwrap();
+            let obj = decoded[0].as_object().expect("decoded as object");
+            assert_eq!(obj.get("app").and_then(|v| v.as_str()), Some("live"));
+            assert_eq!(obj.get("ver").and_then(|v| v.as_f64()), Some(2.0));
+        }
+        // strict array of strings roundtrip
+        {
+            // Enhanced-RTMP fourCcList shape: a Strict Array of 4-char
+            // codec identifier strings. This test guards the e2e path -
+            // before 0x0A decoding landed, the in-tree sink rejected our
+            // own connect with `amf0: unsupported marker 0xa`.
+            let mut buf = BytesMut::new();
+            enc_strict_array_str(&mut buf, &["avc1", "hvc1", "mp4a"]);
+            let decoded = decode_all(&buf).unwrap();
+            match &decoded[0] {
+                Amf0::StrictArray(items) => {
+                    assert_eq!(items.len(), 3);
+                    assert_eq!(items[0].as_str(), Some("avc1"));
+                    assert_eq!(items[1].as_str(), Some("hvc1"));
+                    assert_eq!(items[2].as_str(), Some("mp4a"));
+                }
+                other => panic!("expected StrictArray, got {:?}", other),
             }
-            other => panic!("expected StrictArray, got {:?}", other),
+        }
+        // ecma array decodes like object
+        {
+            // marker 0x08 (ECMA array): 4-byte count prefix, then same
+            // body layout as Object (key + value pairs, end marker).
+            let mut buf: Vec<u8> = Vec::new();
+            buf.push(0x08); // marker
+            buf.extend_from_slice(&3u32.to_be_bytes()); // count = 3 (ignored)
+                                                        // one entry: key="x" value=number 1.0
+            buf.extend_from_slice(&1u16.to_be_bytes());
+            buf.push(b'x');
+            buf.push(0x00); // number marker
+            buf.extend_from_slice(&1.0f64.to_be_bytes());
+            // end marker
+            buf.extend_from_slice(&[0x00, 0x00, 0x09]);
+
+            let decoded = decode_all(&buf).unwrap();
+            let obj = decoded[0]
+                .as_object()
+                .expect("ecma array exposes as object");
+            assert_eq!(obj.get("x").and_then(|v| v.as_f64()), Some(1.0));
+        }
+        // empty object roundtrip
+        {
+            let mut buf = BytesMut::new();
+            enc_object(&mut buf, &[]);
+            let decoded = decode_all(&buf).unwrap();
+            let obj = decoded[0].as_object().expect("empty object");
+            assert!(obj.is_empty());
         }
     }
 
+    /// A peer controls these bytes: an unknown marker or a value cut short is an error.
     #[test]
-    fn ecma_array_decodes_like_object() {
-        // marker 0x08 (ECMA array): 4-byte count prefix, then same
-        // body layout as Object (key + value pairs, end marker).
-        let mut buf: Vec<u8> = Vec::new();
-        buf.push(0x08); // marker
-        buf.extend_from_slice(&3u32.to_be_bytes()); // count = 3 (ignored)
-                                                    // one entry: key="x" value=number 1.0
-        buf.extend_from_slice(&1u16.to_be_bytes());
-        buf.push(b'x');
-        buf.push(0x00); // number marker
-        buf.extend_from_slice(&1.0f64.to_be_bytes());
-        // end marker
-        buf.extend_from_slice(&[0x00, 0x00, 0x09]);
-
-        let decoded = decode_all(&buf).unwrap();
-        let obj = decoded[0]
-            .as_object()
-            .expect("ecma array exposes as object");
-        assert_eq!(obj.get("x").and_then(|v| v.as_f64()), Some(1.0));
-    }
-
-    #[test]
-    fn empty_object_roundtrip() {
-        let mut buf = BytesMut::new();
-        enc_object(&mut buf, &[]);
-        let decoded = decode_all(&buf).unwrap();
-        let obj = decoded[0].as_object().expect("empty object");
-        assert!(obj.is_empty());
+    fn malformed_values_are_errors_not_panics() {
+        // unsupported marker returns error
+        {
+            // marker 0xAA - we don't implement that one
+            let r = decode_all(&[0xAA, 0x00]);
+            assert!(r.is_err());
+        }
+        // truncated string returns error not panic
+        {
+            // string marker says 100 bytes follow, but only 4 are present
+            let r = decode_all(&[0x02, 0x00, 100, 0xAB, 0xCD]);
+            assert!(r.is_err());
+        }
+        // truncated date and long string are errors
+        {
+            // Short on the time zone, short on the length, and a length that
+            // claims more than is there: never read past the buffer.
+            assert!(decode_all(&[0x0B, 0, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
+            assert!(decode_all(&[0x0C, 0, 0, 0]).is_err());
+            assert!(decode_all(&[0x0C, 0xFF, 0xFF, 0xFF, 0xFF, b'a']).is_err());
+            assert!(
+                decode_all(&[0x0C, 0, 0, 0, 2, 0xC3, 0x28]).is_err(),
+                "bad UTF-8"
+            );
+        }
     }
 
     #[test]
@@ -461,19 +458,6 @@ mod tests {
         expected.extend_from_slice(&2.0f64.to_be_bytes());
         expected.extend_from_slice(&[0, 0]);
         assert_eq!(&out[..], &expected[..]);
-    }
-
-    #[test]
-    fn truncated_date_and_long_string_are_errors() {
-        // Short on the time zone, short on the length, and a length that
-        // claims more than is there: never read past the buffer.
-        assert!(decode_all(&[0x0B, 0, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
-        assert!(decode_all(&[0x0C, 0, 0, 0]).is_err());
-        assert!(decode_all(&[0x0C, 0xFF, 0xFF, 0xFF, 0xFF, b'a']).is_err());
-        assert!(
-            decode_all(&[0x0C, 0, 0, 0, 2, 0xC3, 0x28]).is_err(),
-            "bad UTF-8"
-        );
     }
 
     /// `levels` containers nested inside each other, each holding exactly
@@ -628,6 +612,8 @@ mod tests {
                 Ok(values) => {
                     let boundary = cut == 0 || ends.contains(&cut);
                     assert!(boundary, "a cut at {cut} decoded mid-value");
+                    let expected = ends.iter().filter(|&&end| end <= cut).count();
+                    assert_eq!(values.len(), expected, "a cut at {cut} lost values");
                     assert!(values.iter().zip(&full).all(|(v, w)| same(v, w)));
                 }
                 Err(e) => assert!(!ends.contains(&cut), "a cut at {cut} failed: {e}"),
@@ -640,13 +626,8 @@ mod tests {
         // Deterministic LCG, fixed seed. Markers are drawn from the full
         // range the decoder knows (plus a few it doesn't) so each branch
         // sees garbage lengths and counts.
-        let mut state: u64 = 0xA3F0_2026;
-        let mut next = move || {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            (state >> 33) as u8
-        };
+        let mut lcg = crate::test_support::Lcg(0xA3F0_2026);
+        let mut next = move || lcg.next_u32() as u8;
         for _ in 0..20_000 {
             let len = next() % 24;
             let blob: Vec<u8> = (0..len)

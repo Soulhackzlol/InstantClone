@@ -1344,6 +1344,7 @@ pub fn is_aac_seq_header(payload: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::Lcg;
 
     /// Builds a length-prefixed NAL unit (the format AVC video tags use
     /// after the 5-byte FLV/AVC header). `nal_type` is the 5-bit type
@@ -1367,76 +1368,162 @@ mod tests {
         out
     }
 
+    /// Legacy FLV AVC tags: keyframes are found by walking the NALs, not by
+    /// trusting the frame-type nibble, and damaged tags never panic.
     #[test]
-    fn avc_idr_detected_from_nal_walk() {
-        // packet_type 1 = NALU; contains NAL type 5 (IDR slice)
-        let tag = avc_tag(1, &[nal(5, 100)]);
-        let info = classify_video_tag(&tag);
-        assert!(info.is_idr, "single IDR NAL must be detected");
-        assert!(!info.is_seq_header);
-        assert_eq!(info.codec, VideoCodec::Avc);
+    fn legacy_avc_video_tags_are_classified() {
+        // avc idr detected from nal walk
+        {
+            // packet_type 1 = NALU; contains NAL type 5 (IDR slice)
+            let tag = avc_tag(1, &[nal(5, 100)]);
+            let info = classify_video_tag(&tag);
+            assert!(info.is_idr, "single IDR NAL must be detected");
+            assert!(!info.is_seq_header);
+            assert_eq!(info.codec, VideoCodec::Avc);
+        }
+        // avc non idr not flagged
+        {
+            // NAL type 1 = non-IDR slice; encoder MIGHT lie via the FrameType
+            // nibble - we trust the NAL walk and refuse to call it an IDR.
+            let tag = avc_tag(1, &[nal(1, 50)]);
+            let info = classify_video_tag(&tag);
+            assert!(!info.is_idr);
+        }
+        // avc seq header flagged not idr
+        {
+            // packet_type 0 = AVCDecoderConfigurationRecord (SPS/PPS)
+            let tag = avc_tag(0, &[]);
+            let info = classify_video_tag(&tag);
+            assert!(info.is_seq_header);
+            assert!(
+                !info.is_idr,
+                "seq headers carry SPS/PPS, never an IDR slice"
+            );
+        }
+        // avc multi nal payload detects idr anywhere
+        {
+            // A tag with [SEI, non-IDR slice, IDR slice]. The walk must
+            // keep going past the first non-IDR and still find the IDR.
+            let tag = avc_tag(1, &[nal(6, 20), nal(1, 30), nal(5, 50)]);
+            let info = classify_video_tag(&tag);
+            assert!(info.is_idr, "IDR in 3rd NAL must be detected");
+        }
+        // truncated nal does not panic or falsely signal idr
+        {
+            // Length prefix says 100 bytes follow, but only 4 are present.
+            // The walk must return cleanly (no IDR found) without panicking.
+            let truncated = avc_tag(1, &[vec![0x00, 0x00, 0x00, 100, 0x05]]);
+            let info = classify_video_tag(&truncated);
+            assert!(!info.is_idr);
+        }
+        // a zero length nal at the end of a tag is not an idr and does not panic
+        {
+            // A length prefix of 0 as the last 4 bytes passes the "does the NAL
+            // fit" check (4 + 0 <= 4) and the walk then read the NAL header one
+            // byte past the slice. That runs on every published video tag, and
+            // with `panic = "abort"` one malformed frame killed the process.
+            let bare = [0x17, 0x01, 0, 0, 0, 0, 0, 0, 0];
+            assert!(!classify_video_tag(&bare).is_idr);
+
+            let mut after_a_slice = avc_tag(1, &[nal(1, 10)]);
+            after_a_slice.extend_from_slice(&[0, 0, 0, 0]);
+            assert!(!classify_video_tag(&after_a_slice).is_idr);
+
+            // An empty NAL in the middle is skipped, so an IDR after it still counts.
+            let mut idr_after_empty = avc_tag(1, &[]);
+            idr_after_empty.extend_from_slice(&[0, 0, 0, 0]);
+            idr_after_empty.extend_from_slice(&nal(5, 8));
+            assert!(classify_video_tag(&idr_after_empty).is_idr);
+        }
+        // avc legacy with unknown codec id returns unknown
+        {
+            // codec_id != 7 (we only understand AVC in legacy mode)
+            let tag = vec![0x12, 1, 0, 0, 0, 0x05]; // codec_id = 2 (Sorenson)
+            let info = classify_video_tag(&tag);
+            assert_eq!(info.codec, VideoCodec::Unknown);
+            assert!(!info.is_idr);
+        }
+        // empty payload returns unknown
+        {
+            let info = classify_video_tag(&[]);
+            assert!(!info.is_idr);
+            assert!(!info.is_seq_header);
+            assert_eq!(info.codec, VideoCodec::Unknown);
+        }
     }
 
+    /// Enhanced RTMP tags, single-track and multitrack: keyframes, sequence
+    /// headers and metadata are each told apart.
     #[test]
-    fn avc_non_idr_not_flagged() {
-        // NAL type 1 = non-IDR slice; encoder MIGHT lie via the FrameType
-        // nibble - we trust the NAL walk and refuse to call it an IDR.
-        let tag = avc_tag(1, &[nal(1, 50)]);
-        let info = classify_video_tag(&tag);
-        assert!(!info.is_idr);
-    }
-
-    #[test]
-    fn avc_seq_header_flagged_not_idr() {
-        // packet_type 0 = AVCDecoderConfigurationRecord (SPS/PPS)
-        let tag = avc_tag(0, &[]);
-        let info = classify_video_tag(&tag);
-        assert!(info.is_seq_header);
-        assert!(
-            !info.is_idr,
-            "seq headers carry SPS/PPS, never an IDR slice"
-        );
-    }
-
-    #[test]
-    fn empty_payload_returns_unknown() {
-        let info = classify_video_tag(&[]);
-        assert!(!info.is_idr);
-        assert!(!info.is_seq_header);
-        assert_eq!(info.codec, VideoCodec::Unknown);
-    }
-
-    #[test]
-    fn truncated_nal_does_not_panic_or_falsely_signal_idr() {
-        // Length prefix says 100 bytes follow, but only 4 are present.
-        // The walk must return cleanly (no IDR found) without panicking.
-        let truncated = avc_tag(1, &[vec![0x00, 0x00, 0x00, 100, 0x05]]);
-        let info = classify_video_tag(&truncated);
-        assert!(!info.is_idr);
-    }
-
-    #[test]
-    fn enhanced_rtmp_keyframe_detected() {
-        // Enhanced RTMP: byte0 = IsEx(1) | FrameType(3, keyframe=1) | PacketType(4, CodedFrames=1)
-        let byte0 = 0x80 | (1u8 << 4) | 1;
-        let mut payload = vec![byte0];
-        payload.extend_from_slice(b"hvc1");
-        payload.extend_from_slice(&[0; 16]);
-        let info = classify_video_tag(&payload);
-        assert!(info.is_idr);
-        assert_eq!(info.codec, VideoCodec::Hevc);
-    }
-
-    #[test]
-    fn enhanced_rtmp_seq_header_not_idr() {
-        // PacketType=0 (SequenceStart) - must not be flagged as IDR
-        let byte0 = 0x80 | (1u8 << 4);
-        let mut payload = vec![byte0];
-        payload.extend_from_slice(b"av01");
-        let info = classify_video_tag(&payload);
-        assert!(info.is_seq_header);
-        assert!(!info.is_idr);
-        assert_eq!(info.codec, VideoCodec::Av1);
+    fn enhanced_rtmp_video_tags_are_classified() {
+        // enhanced rtmp keyframe detected
+        {
+            // Enhanced RTMP: byte0 = IsEx(1) | FrameType(3, keyframe=1) | PacketType(4, CodedFrames=1)
+            let byte0 = 0x80 | (1u8 << 4) | 1;
+            let mut payload = vec![byte0];
+            payload.extend_from_slice(b"hvc1");
+            payload.extend_from_slice(&[0; 16]);
+            let info = classify_video_tag(&payload);
+            assert!(info.is_idr);
+            assert_eq!(info.codec, VideoCodec::Hevc);
+        }
+        // enhanced rtmp seq header not idr
+        {
+            // PacketType=0 (SequenceStart) - must not be flagged as IDR
+            let byte0 = 0x80 | (1u8 << 4);
+            let mut payload = vec![byte0];
+            payload.extend_from_slice(b"av01");
+            let info = classify_video_tag(&payload);
+            assert!(info.is_seq_header);
+            assert!(!info.is_idr);
+            assert_eq!(info.codec, VideoCodec::Av1);
+        }
+        // enhanced rtmp metadata packettype 4 not idr
+        {
+            // packet_type 4 = Metadata (mid-stream HDR colorInfo etc.).
+            // Even if the encoder sets FrameType=1, this packet carries no
+            // slice data and must not be treated as an IDR cut point.
+            let byte0 = 0x80 | (1u8 << 4) | 4;
+            let mut payload = vec![byte0];
+            payload.extend_from_slice(b"hvc1");
+            payload.extend_from_slice(&[0; 8]);
+            let info = classify_video_tag(&payload);
+            assert!(info.is_metadata);
+            assert!(!info.is_idr, "Metadata packets must not be IDR cuts");
+            assert!(!info.is_seq_header);
+            assert_eq!(info.codec, VideoCodec::Hevc);
+        }
+        // enhanced rtmp multitrack codedframes is idr
+        {
+            // outer packet_type=6 (Multitrack), nested packet_type=1
+            // (CodedFrames). FrameType=1 → real keyframe.
+            let byte0 = 0x80 | (1u8 << 4) | 6;
+            let byte1 = 0x01; // nested CodedFrames
+            let payload = vec![byte0, byte1, 0, 0, 0, 0];
+            let info = classify_video_tag(&payload);
+            assert!(info.is_multitrack);
+            assert!(info.is_idr);
+            assert!(!info.is_seq_header);
+        }
+        // enhanced rtmp multitrack seqstart caches as seq header
+        {
+            // outer packet_type=6 (Multitrack), nested packet_type=0
+            // (SequenceStart). This is the decoder-config tag for an
+            // Enhanced Broadcasting stream - MUST be flagged as seq
+            // header or the controller never caches it and every cut
+            // emits a stale or empty config to the destination, which
+            // then fails to decode the post-cut frames.
+            let byte0 = 0x80 | (1u8 << 4) | 6; // FrameType=1, packet_type=Multitrack
+            let byte1 = 0x00; // nested SequenceStart
+            let payload = vec![byte0, byte1, 0, 0, 0, 0];
+            let info = classify_video_tag(&payload);
+            assert!(info.is_multitrack);
+            assert!(info.is_seq_header);
+            // FrameType=1 set on a seq header tag must NOT be flagged
+            // as IDR - seq headers carry decoder config, never slice
+            // data. Same rule as the single-track classifier.
+            assert!(!info.is_idr);
+        }
     }
 
     #[test]
@@ -1488,14 +1575,88 @@ mod tests {
         );
     }
 
+    /// The audio config tag must be recognised in legacy, Enhanced single-track
+    /// and multitrack framing, with the track it belongs to.
     #[test]
-    fn aac_seq_header_detected() {
-        // sound_format 10 (AAC), packet_type 0 (AudioSpecificConfig)
-        let payload = [0xA0, 0x00, 0x12, 0x10];
-        let info = classify_audio_tag(&payload);
-        assert!(info.is_seq_header);
-        assert_eq!(info.codec, AudioCodec::Aac);
-        assert!(is_aac_seq_header(&payload));
+    fn audio_sequence_headers_are_told_from_frames_in_every_framing() {
+        // aac seq header detected
+        {
+            // sound_format 10 (AAC), packet_type 0 (AudioSpecificConfig)
+            let payload = [0xA0, 0x00, 0x12, 0x10];
+            let info = classify_audio_tag(&payload);
+            assert!(info.is_seq_header);
+            assert_eq!(info.codec, AudioCodec::Aac);
+            assert!(is_aac_seq_header(&payload));
+        }
+        // enhanced single track seq header is detected
+        {
+            // The user-visible regression for issue #9 (post-v0.1.3 manual
+            // test): with VOD audio enabled, OBS sends the live track as
+            // Enhanced-RTMP single-track. v0.1.0..0.1.3 read PacketType
+            // from byte 1 (which is 'm' = 0x6D, low nibble 0x0D) and never
+            // matched the SequenceStart value - so the AudioSpecificConfig
+            // tag flowed into the ring like a normal frame and got
+            // evicted, leaving Twitch's decoder unconfigured.
+            let tag = enhanced_audio_single_track(0);
+            let info = classify_audio_tag(&tag);
+            assert!(
+                info.is_seq_header,
+                "Enhanced-RTMP single-track byte 0 = 0x90 must classify as seq header"
+            );
+            assert!(!info.is_multitrack);
+            assert_eq!(info.codec, AudioCodec::Aac);
+            // sink.rs asks through the shim, which must agree.
+            assert!(is_aac_seq_header(&tag));
+        }
+        // enhanced single track coded frame is not seq header
+        {
+            let tag = enhanced_audio_single_track(1);
+            let info = classify_audio_tag(&tag);
+            assert!(!info.is_seq_header);
+            assert!(!info.is_multitrack);
+            assert_eq!(info.codec, AudioCodec::Aac);
+        }
+        // multitrack audio seqstart detected as seq header
+        {
+            // Pre-Phase-A, this tag would have been treated as a regular
+            // runtime tag (is_seq_header=false) because the outer
+            // PacketType is 5 (Multitrack), not 0 (SequenceStart). With
+            // the nested-packet-type check it correctly reads as a seq
+            // header that needs caching for replay across cuts.
+            let tag = enhanced_audio_onetrack(0, 0);
+            let info = classify_audio_tag(&tag);
+            assert!(
+                info.is_seq_header,
+                "nested PT=0 must be flagged as seq header"
+            );
+            assert!(info.is_multitrack);
+            assert_eq!(info.codec, AudioCodec::Aac);
+        }
+        // multitrack audio codedframes is not seq header
+        {
+            let tag = enhanced_audio_onetrack(0, 1);
+            let info = classify_audio_tag(&tag);
+            assert!(!info.is_seq_header);
+            assert!(info.is_multitrack);
+        }
+        // audio seq header track id reads onetrack byte 6
+        {
+            // OBS writes TrackId at byte 6 of the audio tag payload
+            // (byte 0 = 0x95, byte 1 = mt|nested, bytes 2..6 = FourCC,
+            // byte 6 = TrackId). Our cache keys on this so a publisher
+            // reconnect can replay every track's config.
+            for track in 0u8..=3 {
+                let tag = enhanced_audio_onetrack(track, 0);
+                assert_eq!(audio_seq_header_track_id(&tag), track);
+            }
+        }
+        // audio seq header track id returns zero for legacy aac
+        {
+            // Legacy AAC seq header: sound_format=10, AACPacketType=0.
+            // No track-id field exists; helper must return 0.
+            let tag = vec![0xaf, 0x00, 0x12, 0x10, 0x56, 0xe5];
+            assert_eq!(audio_seq_header_track_id(&tag), 0);
+        }
     }
 
     #[test]
@@ -1510,64 +1671,6 @@ mod tests {
     }
 
     // ── Additional edge cases ──────────────────────────────────────
-
-    #[test]
-    fn avc_multi_nal_payload_detects_idr_anywhere() {
-        // A tag with [SEI, non-IDR slice, IDR slice]. The walk must
-        // keep going past the first non-IDR and still find the IDR.
-        let tag = avc_tag(1, &[nal(6, 20), nal(1, 30), nal(5, 50)]);
-        let info = classify_video_tag(&tag);
-        assert!(info.is_idr, "IDR in 3rd NAL must be detected");
-    }
-
-    #[test]
-    fn enhanced_rtmp_metadata_packettype_4_not_idr() {
-        // packet_type 4 = Metadata (mid-stream HDR colorInfo etc.).
-        // Even if the encoder sets FrameType=1, this packet carries no
-        // slice data and must not be treated as an IDR cut point.
-        let byte0 = 0x80 | (1u8 << 4) | 4;
-        let mut payload = vec![byte0];
-        payload.extend_from_slice(b"hvc1");
-        payload.extend_from_slice(&[0; 8]);
-        let info = classify_video_tag(&payload);
-        assert!(info.is_metadata);
-        assert!(!info.is_idr, "Metadata packets must not be IDR cuts");
-        assert!(!info.is_seq_header);
-        assert_eq!(info.codec, VideoCodec::Hevc);
-    }
-
-    #[test]
-    fn enhanced_rtmp_multitrack_codedframes_is_idr() {
-        // outer packet_type=6 (Multitrack), nested packet_type=1
-        // (CodedFrames). FrameType=1 → real keyframe.
-        let byte0 = 0x80 | (1u8 << 4) | 6;
-        let byte1 = 0x01; // nested CodedFrames
-        let payload = vec![byte0, byte1, 0, 0, 0, 0];
-        let info = classify_video_tag(&payload);
-        assert!(info.is_multitrack);
-        assert!(info.is_idr);
-        assert!(!info.is_seq_header);
-    }
-
-    #[test]
-    fn enhanced_rtmp_multitrack_seqstart_caches_as_seq_header() {
-        // outer packet_type=6 (Multitrack), nested packet_type=0
-        // (SequenceStart). This is the decoder-config tag for an
-        // Enhanced Broadcasting stream - MUST be flagged as seq
-        // header or the controller never caches it and every cut
-        // emits a stale or empty config to the destination, which
-        // then fails to decode the post-cut frames.
-        let byte0 = 0x80 | (1u8 << 4) | 6; // FrameType=1, packet_type=Multitrack
-        let byte1 = 0x00; // nested SequenceStart
-        let payload = vec![byte0, byte1, 0, 0, 0, 0];
-        let info = classify_video_tag(&payload);
-        assert!(info.is_multitrack);
-        assert!(info.is_seq_header);
-        // FrameType=1 set on a seq header tag must NOT be flagged
-        // as IDR - seq headers carry decoder config, never slice
-        // data. Same rule as the single-track classifier.
-        assert!(!info.is_idr);
-    }
 
     // ── select_video_bytes: per-destination flatten policy ───────────
     //
@@ -1601,51 +1704,86 @@ mod tests {
         payload
     }
 
+    /// Twitch gets multitrack video as it came; every other platform gets the
+    /// main track flattened, and nothing from the other tracks.
     #[test]
-    fn select_video_bytes_passes_single_track_through_unchanged_in_both_modes() {
-        // Invariant 1: single-track tags never get rewritten. The
-        // pass_through flag is meaningless when there's nothing to
-        // flatten - and the borrow path means no copy happens either.
-        let tag = avc_single_track_keyframe_bytes();
-        let twitch = select_video_bytes(&tag, VideoEgress::Passthrough)
-            .expect("single-track always forwards");
-        let youtube =
-            select_video_bytes(&tag, VideoEgress::Track(0)).expect("single-track always forwards");
-        assert_eq!(twitch.as_ref(), tag.as_slice());
-        assert_eq!(youtube.as_ref(), tag.as_slice());
-        assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
-        assert!(matches!(youtube, std::borrow::Cow::Borrowed(_)));
-    }
-
-    #[test]
-    fn select_video_bytes_passes_multitrack_through_for_twitch() {
-        // Invariant 2: Twitch destinations get the raw multi-track
-        // bytes verbatim - that's what unlocks the transcoded ladder.
-        // True for every TrackId, not just the primary. Twitch Dual Format
-        // rides on this too: the vertical canvas is just more TrackIds on
-        // the wire (`canvas_index` only exists in the config JSON).
-        for track in 0u8..=4 {
-            let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
+    fn each_destination_gets_the_video_bytes_it_can_take() {
+        // select video bytes passes single track through unchanged in both modes
+        {
+            // Invariant 1: single-track tags never get rewritten. The
+            // pass_through flag is meaningless when there's nothing to
+            // flatten - and the borrow path means no copy happens either.
+            let tag = avc_single_track_keyframe_bytes();
             let twitch = select_video_bytes(&tag, VideoEgress::Passthrough)
-                .unwrap_or_else(|| panic!("twitch must forward track {track}"));
+                .expect("single-track always forwards");
+            let youtube = select_video_bytes(&tag, VideoEgress::Track(0))
+                .expect("single-track always forwards");
             assert_eq!(twitch.as_ref(), tag.as_slice());
+            assert_eq!(youtube.as_ref(), tag.as_slice());
             assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
+            assert!(matches!(youtube, std::borrow::Cow::Borrowed(_)));
         }
-    }
-
-    #[test]
-    fn select_video_bytes_flattens_track0_multitrack_for_non_twitch() {
-        // Defensive path: an encoder that sends the *primary* as
-        // OneTrack-format TrackId 0 (rather than as a separate legacy
-        // AVC tag) still gets a flattened single-track tag for
-        // non-Twitch destinations. In the wild OBS sends the primary
-        // as legacy, so this path rarely fires - but we want a future
-        // encoder change not to silently blank YouTube.
-        let tag = enhanced_rtmp_onetrack_video_bytes_track(0);
-        let youtube =
-            select_video_bytes(&tag, VideoEgress::Track(0)).expect("track 0 must be forwarded");
-        assert_eq!(youtube.as_ref(), flat_hvc1_keyframe().as_slice());
-        assert!(matches!(youtube, std::borrow::Cow::Owned(_)));
+        // select video bytes passes multitrack through for twitch
+        {
+            // Invariant 2: Twitch destinations get the raw multi-track
+            // bytes verbatim - that's what unlocks the transcoded ladder.
+            // True for every TrackId, not just the primary. Twitch Dual Format
+            // rides on this too: the vertical canvas is just more TrackIds on
+            // the wire (`canvas_index` only exists in the config JSON).
+            for track in 0u8..=4 {
+                let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
+                let twitch = select_video_bytes(&tag, VideoEgress::Passthrough)
+                    .unwrap_or_else(|| panic!("twitch must forward track {track}"));
+                assert_eq!(twitch.as_ref(), tag.as_slice());
+                assert!(matches!(twitch, std::borrow::Cow::Borrowed(_)));
+            }
+        }
+        // select video bytes flattens track0 multitrack for non twitch
+        {
+            // Defensive path: an encoder that sends the *primary* as
+            // OneTrack-format TrackId 0 (rather than as a separate legacy
+            // AVC tag) still gets a flattened single-track tag for
+            // non-Twitch destinations. In the wild OBS sends the primary
+            // as legacy, so this path rarely fires - but we want a future
+            // encoder change not to silently blank YouTube.
+            let tag = enhanced_rtmp_onetrack_video_bytes_track(0);
+            let youtube =
+                select_video_bytes(&tag, VideoEgress::Track(0)).expect("track 0 must be forwarded");
+            assert_eq!(youtube.as_ref(), flat_hvc1_keyframe().as_slice());
+            assert!(matches!(youtube, std::borrow::Cow::Owned(_)));
+        }
+        // select video bytes drops nonzero track multitrack for non twitch
+        {
+            // The core fix: OBS sends the simulcast ladder as OneTrack
+            // tags with TrackId 1..N, one tag per resolution per frame.
+            // Forwarding every one to YouTube delivered N frames per PTS
+            // → decoder storm → reconnect cascade. These tags must be
+            // dropped; the primary arrives separately as a legacy /
+            // Enhanced single-track tag. With Dual Format, TrackId 1+ also
+            // carries the vertical canvas, which a horizontal dest never wants.
+            for track in 1u8..=4 {
+                let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
+                assert!(
+                    select_video_bytes(&tag, VideoEgress::Track(0)).is_none(),
+                    "TrackId {track} must be dropped for non-Twitch",
+                );
+            }
+        }
+        // select video bytes falls back to raw when flatten cannot parse
+        {
+            // Pathological multi-track tag (declares multi-track but the
+            // payload is too short to contain a valid inner structure).
+            // The pump must NOT crash and must NOT swallow the tag -
+            // letting it through unchanged matches the old ingest-side
+            // fallback so the destination gets a chance to surface the
+            // error properly. Truncated below the TrackId byte means we
+            // can't tell which track it is; treat that as "forward".
+            let truncated = vec![0x80 | (1u8 << 4) | 6, 0]; // 2 bytes total
+            let youtube = select_video_bytes(&truncated, VideoEgress::Track(0))
+                .expect("truncated tags must still forward");
+            assert_eq!(youtube.as_ref(), truncated.as_slice());
+            assert!(matches!(youtube, std::borrow::Cow::Borrowed(_)));
+        }
     }
 
     /// What `enhanced_rtmp_onetrack_video_bytes_track(_)` must flatten to,
@@ -1705,24 +1843,6 @@ mod tests {
             flatten_multitrack_video(&avc_single_track_keyframe_bytes()),
             None
         );
-    }
-
-    #[test]
-    fn select_video_bytes_drops_nonzero_track_multitrack_for_non_twitch() {
-        // The core fix: OBS sends the simulcast ladder as OneTrack
-        // tags with TrackId 1..N, one tag per resolution per frame.
-        // Forwarding every one to YouTube delivered N frames per PTS
-        // → decoder storm → reconnect cascade. These tags must be
-        // dropped; the primary arrives separately as a legacy /
-        // Enhanced single-track tag. With Dual Format, TrackId 1+ also
-        // carries the vertical canvas, which a horizontal dest never wants.
-        for track in 1u8..=4 {
-            let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
-            assert!(
-                select_video_bytes(&tag, VideoEgress::Track(0)).is_none(),
-                "TrackId {track} must be dropped for non-Twitch",
-            );
-        }
     }
 
     // ── Vertical-canvas selection: SPS orientation + Track(n) routing ──
@@ -1852,20 +1972,71 @@ mod tests {
         );
     }
 
+    /// A sequence header that can't be read, or lies about its size, yields nothing.
     #[test]
-    fn sps_dimensions_returns_none_on_unparseable_input() {
-        // Empty, truncated, and non-AVC inputs must all fail cleanly with
-        // no panic (this runs on hostile wire bytes).
-        assert_eq!(sps_dimensions(&[]), None);
-        assert_eq!(sps_dimensions(&[0x17, 0x00]), None);
-        let mut truncated = legacy_avc_seq_header(40, 30);
-        truncated.truncate(9); // cut into the SPS
-        assert_eq!(sps_dimensions(&truncated), None);
-        // HEVC single-track seq header (hvc1) is not AVC - unparseable.
-        let mut hevc = vec![0x90u8];
-        hevc.extend_from_slice(b"hvc1");
-        hevc.extend_from_slice(&[0u8; 16]);
-        assert_eq!(sps_dimensions(&hevc), None);
+    fn a_damaged_sps_gives_no_size_and_never_panics() {
+        // sps dimensions returns none on unparseable input
+        {
+            // Empty, truncated, and non-AVC inputs must all fail cleanly with
+            // no panic (this runs on hostile wire bytes).
+            assert_eq!(sps_dimensions(&[]), None);
+            assert_eq!(sps_dimensions(&[0x17, 0x00]), None);
+            let mut truncated = legacy_avc_seq_header(40, 30);
+            truncated.truncate(9); // cut into the SPS
+            assert_eq!(sps_dimensions(&truncated), None);
+            // HEVC single-track seq header (hvc1) is not AVC - unparseable.
+            let mut hevc = vec![0x90u8];
+            hevc.extend_from_slice(b"hvc1");
+            hevc.extend_from_slice(&[0u8; 16]);
+            assert_eq!(sps_dimensions(&hevc), None);
+        }
+        // sps dimensions rejects out of range scaling deltas without panicking
+        {
+            // delta_scale is -128..=127 by spec. A hostile SPS can carry up to
+            // +/-(2^31 - 1), and `last_scale + delta + 256` overflowed i32: a
+            // panic in debug, a silently wrong parse in release. Nonsense like
+            // that means the SPS is not one we can size, so the parse gives up.
+            for bad_delta in [128, -129, i32::MAX, -i32::MAX] {
+                let mut f = SpsFields::progressive(120, 68);
+                f.scaling_lists = vec![(0, vec![bad_delta, 0])];
+                assert_eq!(rich_sps_dimensions(&f), None, "delta {bad_delta}");
+            }
+        }
+        // sps dimensions huge crop returns none not panic
+        {
+            // A malformed SPS can carry near-u32::MAX frame-crop Exp-Golomb
+            // values; the crop math must stay checked so this returns None
+            // instead of overflow-panicking in debug builds.
+            let mut w = BitWriter::new();
+            w.put_bits(66, 8); // baseline profile (skips the high-profile block)
+            w.put_bits(0, 8);
+            w.put_bits(30, 8);
+            w.put_ue(0); // sps_id
+            w.put_ue(0); // log2_max_frame_num_minus4
+            w.put_ue(0); // pic_order_cnt_type
+            w.put_ue(0); // log2_max_pic_order_cnt_lsb_minus4
+            w.put_ue(0); // max_num_ref_frames
+            w.put_bit(0); // gaps_in_frame_num_value_allowed_flag
+            w.put_ue(39); // pic_width_in_mbs_minus1
+            w.put_ue(21); // pic_height_in_map_units_minus1
+            w.put_bit(1); // frame_mbs_only_flag
+            w.put_bit(0); // direct_8x8_inference_flag
+            w.put_bit(1); // frame_cropping_flag
+            w.put_ue(4_000_000_000); // crop_left
+            w.put_ue(4_000_000_000); // crop_right -> left + right overflows u32
+            w.put_ue(0);
+            w.put_ue(0);
+            w.put_bit(0); // vui_parameters_present_flag
+            let mut sps = vec![0x67u8];
+            sps.extend(w.finish());
+            let mut cfg = vec![1u8, 66, 0, 30, 0xFF, 0xE1];
+            cfg.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+            cfg.extend_from_slice(&sps);
+            cfg.push(0);
+            let mut tag = vec![0x17u8, 0x00, 0, 0, 0];
+            tag.extend(cfg);
+            assert_eq!(sps_dimensions(&tag), None);
+        }
     }
 
     /// Read back the size from the reconnect screen's own HEVC parameter
@@ -2047,19 +2218,6 @@ mod tests {
     }
 
     #[test]
-    fn sps_dimensions_rejects_out_of_range_scaling_deltas_without_panicking() {
-        // delta_scale is -128..=127 by spec. A hostile SPS can carry up to
-        // +/-(2^31 - 1), and `last_scale + delta + 256` overflowed i32: a
-        // panic in debug, a silently wrong parse in release. Nonsense like
-        // that means the SPS is not one we can size, so the parse gives up.
-        for bad_delta in [128, -129, i32::MAX, -i32::MAX] {
-            let mut f = SpsFields::progressive(120, 68);
-            f.scaling_lists = vec![(0, vec![bad_delta, 0])];
-            assert_eq!(rich_sps_dimensions(&f), None, "delta {bad_delta}");
-        }
-    }
-
-    #[test]
     fn sps_dimensions_applies_cropping_per_chroma_format() {
         // Portrait 1080x1920 is coded 1088 wide; crop_right 4 x 2 (4:2:0).
         let mut portrait = SpsFields::progressive(68, 120);
@@ -2116,100 +2274,6 @@ mod tests {
         // One zero is not enough to start an escape.
         assert_eq!(strip_emulation_prevention(&[0, 3, 1]), [0, 3, 1]);
         assert_eq!(strip_emulation_prevention(&[0x42, 3]), [0x42, 3]);
-    }
-
-    #[test]
-    fn sps_dimensions_huge_crop_returns_none_not_panic() {
-        // A malformed SPS can carry near-u32::MAX frame-crop Exp-Golomb
-        // values; the crop math must stay checked so this returns None
-        // instead of overflow-panicking in debug builds.
-        let mut w = BitWriter::new();
-        w.put_bits(66, 8); // baseline profile (skips the high-profile block)
-        w.put_bits(0, 8);
-        w.put_bits(30, 8);
-        w.put_ue(0); // sps_id
-        w.put_ue(0); // log2_max_frame_num_minus4
-        w.put_ue(0); // pic_order_cnt_type
-        w.put_ue(0); // log2_max_pic_order_cnt_lsb_minus4
-        w.put_ue(0); // max_num_ref_frames
-        w.put_bit(0); // gaps_in_frame_num_value_allowed_flag
-        w.put_ue(39); // pic_width_in_mbs_minus1
-        w.put_ue(21); // pic_height_in_map_units_minus1
-        w.put_bit(1); // frame_mbs_only_flag
-        w.put_bit(0); // direct_8x8_inference_flag
-        w.put_bit(1); // frame_cropping_flag
-        w.put_ue(4_000_000_000); // crop_left
-        w.put_ue(4_000_000_000); // crop_right -> left + right overflows u32
-        w.put_ue(0);
-        w.put_ue(0);
-        w.put_bit(0); // vui_parameters_present_flag
-        let mut sps = vec![0x67u8];
-        sps.extend(w.finish());
-        let mut cfg = vec![1u8, 66, 0, 30, 0xFF, 0xE1];
-        cfg.extend_from_slice(&(sps.len() as u16).to_be_bytes());
-        cfg.extend_from_slice(&sps);
-        cfg.push(0);
-        let mut tag = vec![0x17u8, 0x00, 0, 0, 0];
-        tag.extend(cfg);
-        assert_eq!(sps_dimensions(&tag), None);
-    }
-
-    #[test]
-    fn a_zero_length_nal_at_the_end_of_a_tag_is_not_an_idr_and_does_not_panic() {
-        // A length prefix of 0 as the last 4 bytes passes the "does the NAL
-        // fit" check (4 + 0 <= 4) and the walk then read the NAL header one
-        // byte past the slice. That runs on every published video tag, and
-        // with `panic = "abort"` one malformed frame killed the process.
-        let bare = [0x17, 0x01, 0, 0, 0, 0, 0, 0, 0];
-        assert!(!classify_video_tag(&bare).is_idr);
-
-        let mut after_a_slice = avc_tag(1, &[nal(1, 10)]);
-        after_a_slice.extend_from_slice(&[0, 0, 0, 0]);
-        assert!(!classify_video_tag(&after_a_slice).is_idr);
-
-        // An empty NAL in the middle is skipped, so an IDR after it still counts.
-        let mut idr_after_empty = avc_tag(1, &[]);
-        idr_after_empty.extend_from_slice(&[0, 0, 0, 0]);
-        idr_after_empty.extend_from_slice(&nal(5, 8));
-        assert!(classify_video_tag(&idr_after_empty).is_idr);
-    }
-
-    /// Deterministic LCG for the fuzz tests: fixed seed, no dependency, and a
-    /// failure reproduces from the iteration number alone.
-    struct Lcg(u64);
-
-    impl Lcg {
-        fn next_u32(&mut self) -> u32 {
-            self.0 = self
-                .0
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            (self.0 >> 33) as u32
-        }
-
-        fn below(&mut self, n: u32) -> u32 {
-            self.next_u32() % n
-        }
-
-        fn pick<T: Copy>(&mut self, items: &[T]) -> T {
-            items[self.below(items.len() as u32) as usize]
-        }
-
-        /// Zero- and 0xFF-heavy bytes. Uniform bytes almost never form a
-        /// zero length prefix or a long Exp-Golomb run, which are exactly the
-        /// shapes that break parsers.
-        fn byte(&mut self) -> u8 {
-            match self.below(8) {
-                0..=2 => 0x00,
-                3 => 0xFF,
-                _ => self.next_u32() as u8,
-            }
-        }
-
-        fn bytes(&mut self, max_len: u32) -> Vec<u8> {
-            let n = self.below(max_len + 1);
-            (0..n).map(|_| self.byte()).collect()
-        }
     }
 
     /// Length-prefixed NALs whose declared lengths are sometimes honest,
@@ -2474,101 +2538,107 @@ mod tests {
         assert_eq!(seq_header_codec(&[]), VideoCodec::Unknown);
     }
 
+    /// Which track a 9:16 destination follows.
     #[test]
-    fn detect_vertical_primary_track_picks_largest_portrait() {
-        let mut headers = std::collections::BTreeMap::new();
-        headers.insert(0u8, legacy_avc_seq_header(120, 68)); // 1920x1088 landscape
-        headers.insert(3u8, onetrack_avc_seq_header(3, 34, 60)); // 544x960 portrait
-        headers.insert(4u8, onetrack_avc_seq_header(4, 68, 120)); // 1088x1920 portrait (bigger)
-        assert_eq!(detect_vertical_primary_track(&headers), Some(4));
+    fn the_vertical_track_is_the_largest_portrait_one() {
+        // detect vertical primary track picks largest portrait
+        {
+            let mut headers = std::collections::BTreeMap::new();
+            headers.insert(0u8, legacy_avc_seq_header(120, 68)); // 1920x1088 landscape
+            headers.insert(3u8, onetrack_avc_seq_header(3, 34, 60)); // 544x960 portrait
+            headers.insert(4u8, onetrack_avc_seq_header(4, 68, 120)); // 1088x1920 portrait (bigger)
+            assert_eq!(detect_vertical_primary_track(&headers), Some(4));
+        }
+        // detect vertical primary track none when all landscape
+        {
+            let mut headers = std::collections::BTreeMap::new();
+            headers.insert(0u8, legacy_avc_seq_header(120, 68));
+            headers.insert(1u8, onetrack_avc_seq_header(1, 80, 45));
+            assert_eq!(detect_vertical_primary_track(&headers), None);
+        }
     }
 
+    /// A 9:16 destination is sent its canvas's track, rewritten so any platform reads it.
     #[test]
-    fn detect_vertical_primary_track_none_when_all_landscape() {
-        let mut headers = std::collections::BTreeMap::new();
-        headers.insert(0u8, legacy_avc_seq_header(120, 68));
-        headers.insert(1u8, onetrack_avc_seq_header(1, 80, 45));
-        assert_eq!(detect_vertical_primary_track(&headers), None);
-    }
+    fn a_vertical_destination_gets_only_its_own_canvas() {
+        // select video bytes vertical forwards only target track
+        {
+            // Track(1) keeps OneTrack TrackId 1 (flattened) and drops every
+            // other track plus the legacy horizontal primary.
+            let track1 = enhanced_rtmp_onetrack_video_bytes_track(1);
+            let track2 = enhanced_rtmp_onetrack_video_bytes_track(2);
+            let legacy_horizontal = avc_single_track_keyframe_bytes();
 
-    #[test]
-    fn select_video_bytes_vertical_forwards_only_target_track() {
-        // Track(1) keeps OneTrack TrackId 1 (flattened) and drops every
-        // other track plus the legacy horizontal primary.
-        let track1 = enhanced_rtmp_onetrack_video_bytes_track(1);
-        let track2 = enhanced_rtmp_onetrack_video_bytes_track(2);
-        let legacy_horizontal = avc_single_track_keyframe_bytes();
+            let kept = select_video_bytes(&track1, VideoEgress::Track(1))
+                .expect("vertical target track must forward");
+            assert_eq!(kept.as_ref(), flat_hvc1_keyframe().as_slice());
 
-        let kept = select_video_bytes(&track1, VideoEgress::Track(1))
-            .expect("vertical target track must forward");
-        assert_eq!(kept.as_ref(), flat_hvc1_keyframe().as_slice());
+            assert!(
+                select_video_bytes(&track2, VideoEgress::Track(1)).is_none(),
+                "non-target OneTrack rung must be dropped for vertical"
+            );
+            assert!(
+                select_video_bytes(&legacy_horizontal, VideoEgress::Track(1)).is_none(),
+                "legacy horizontal primary must be dropped for a vertical destination"
+            );
+        }
+        // select video bytes vertical avc rewrites to legacy
+        {
+            // A OneTrack avc1 vertical track must reach a non-Twitch dest as
+            // LEGACY AVC (0x17/0x27 ...), not Enhanced-RTMP - YouTube's vertical
+            // ingest is flaky with E-RTMP avc1 and aborts on a ~11 s cycle.
 
-        assert!(
-            select_video_bytes(&track2, VideoEgress::Track(1)).is_none(),
-            "non-target OneTrack rung must be dropped for vertical"
-        );
-        assert!(
-            select_video_bytes(&legacy_horizontal, VideoEgress::Track(1)).is_none(),
-            "legacy horizontal primary must be dropped for a vertical destination"
-        );
-    }
+            // Sequence header -> legacy AVC seq header, config record intact.
+            let seq = onetrack_avc_seq_header(1, 30, 40);
+            let out = select_video_bytes(&seq, VideoEgress::Track(1))
+                .expect("vertical avc seq header forwards");
+            assert_eq!(out[0], 0x17, "legacy AVC seq-header frame byte");
+            assert_eq!(out[1], 0x00, "AVCPacketType: sequence header");
+            assert_eq!(&out[2..5], &[0, 0, 0], "composition time zero");
+            assert_eq!(&out[5..], &build_avc_config(30, 40)[..]);
 
-    #[test]
-    fn select_video_bytes_vertical_avc_rewrites_to_legacy() {
-        // A OneTrack avc1 vertical track must reach a non-Twitch dest as
-        // LEGACY AVC (0x17/0x27 ...), not Enhanced-RTMP - YouTube's vertical
-        // ingest is flaky with E-RTMP avc1 and aborts on a ~11 s cycle.
+            // CodedFramesX keyframe (no composition time) -> legacy 0x17 NALU.
+            let mut kf = vec![0x96u8, 0x03]; // key|Multitrack, OneTrack|CodedFramesX
+            kf.extend_from_slice(b"avc1");
+            kf.push(1);
+            kf.extend_from_slice(&[0, 0, 0, 5, 0x65, 1, 2, 3, 4]); // len-prefixed IDR
+            let out = select_video_bytes(&kf, VideoEgress::Track(1)).expect("keyframe forwards");
+            assert_eq!(out[0], 0x17, "legacy keyframe head");
+            assert_eq!(out[1], 0x01, "AVCPacketType: NALU");
+            assert_eq!(
+                &out[2..5],
+                &[0, 0, 0],
+                "CodedFramesX carries composition time 0"
+            );
+            assert_eq!(&out[5..], &[0, 0, 0, 5, 0x65, 1, 2, 3, 4]);
 
-        // Sequence header -> legacy AVC seq header, config record intact.
-        let seq = onetrack_avc_seq_header(1, 30, 40);
-        let out = select_video_bytes(&seq, VideoEgress::Track(1))
-            .expect("vertical avc seq header forwards");
-        assert_eq!(out[0], 0x17, "legacy AVC seq-header frame byte");
-        assert_eq!(out[1], 0x00, "AVCPacketType: sequence header");
-        assert_eq!(&out[2..5], &[0, 0, 0], "composition time zero");
-        assert_eq!(&out[5..], &build_avc_config(30, 40)[..]);
+            // CodedFrames inter frame preserves the 3-byte composition time.
+            let mut inter = vec![0xA6u8, 0x01]; // inter|Multitrack, OneTrack|CodedFrames
+            inter.extend_from_slice(b"avc1");
+            inter.push(1);
+            inter.extend_from_slice(&[0x00, 0x00, 0x10]); // composition time
+            inter.extend_from_slice(&[0, 0, 0, 3, 0x41, 9, 9]); // len-prefixed P NAL
+            let out = select_video_bytes(&inter, VideoEgress::Track(1)).expect("inter forwards");
+            assert_eq!(out[0], 0x27, "legacy inter head");
+            assert_eq!(out[1], 0x01);
+            assert_eq!(
+                &out[2..5],
+                &[0x00, 0x00, 0x10],
+                "composition time preserved"
+            );
+            assert_eq!(&out[5..], &[0, 0, 0, 3, 0x41, 9, 9]);
 
-        // CodedFramesX keyframe (no composition time) -> legacy 0x17 NALU.
-        let mut kf = vec![0x96u8, 0x03]; // key|Multitrack, OneTrack|CodedFramesX
-        kf.extend_from_slice(b"avc1");
-        kf.push(1);
-        kf.extend_from_slice(&[0, 0, 0, 5, 0x65, 1, 2, 3, 4]); // len-prefixed IDR
-        let out = select_video_bytes(&kf, VideoEgress::Track(1)).expect("keyframe forwards");
-        assert_eq!(out[0], 0x17, "legacy keyframe head");
-        assert_eq!(out[1], 0x01, "AVCPacketType: NALU");
-        assert_eq!(
-            &out[2..5],
-            &[0, 0, 0],
-            "CodedFramesX carries composition time 0"
-        );
-        assert_eq!(&out[5..], &[0, 0, 0, 5, 0x65, 1, 2, 3, 4]);
-
-        // CodedFrames inter frame preserves the 3-byte composition time.
-        let mut inter = vec![0xA6u8, 0x01]; // inter|Multitrack, OneTrack|CodedFrames
-        inter.extend_from_slice(b"avc1");
-        inter.push(1);
-        inter.extend_from_slice(&[0x00, 0x00, 0x10]); // composition time
-        inter.extend_from_slice(&[0, 0, 0, 3, 0x41, 9, 9]); // len-prefixed P NAL
-        let out = select_video_bytes(&inter, VideoEgress::Track(1)).expect("inter forwards");
-        assert_eq!(out[0], 0x27, "legacy inter head");
-        assert_eq!(out[1], 0x01);
-        assert_eq!(
-            &out[2..5],
-            &[0x00, 0x00, 0x10],
-            "composition time preserved"
-        );
-        assert_eq!(&out[5..], &[0, 0, 0, 3, 0x41, 9, 9]);
-
-        // A OneTrack avc1 metadata/colour packet has no legacy equivalent
-        // and is dropped rather than mixing E-RTMP into a legacy stream.
-        let mut meta = vec![0x96u8, 0x04]; // OneTrack | Metadata(4)
-        meta.extend_from_slice(b"avc1");
-        meta.push(1);
-        meta.extend_from_slice(&[1, 2, 3, 4]);
-        assert!(
-            select_video_bytes(&meta, VideoEgress::Track(1)).is_none(),
-            "avc1 metadata packet must be dropped for a legacy vertical stream"
-        );
+            // A OneTrack avc1 metadata/colour packet has no legacy equivalent
+            // and is dropped rather than mixing E-RTMP into a legacy stream.
+            let mut meta = vec![0x96u8, 0x04]; // OneTrack | Metadata(4)
+            meta.extend_from_slice(b"avc1");
+            meta.push(1);
+            meta.extend_from_slice(&[1, 2, 3, 4]);
+            assert!(
+                select_video_bytes(&meta, VideoEgress::Track(1)).is_none(),
+                "avc1 metadata packet must be dropped for a legacy vertical stream"
+            );
+        }
     }
 
     // ── is_primary_video_idr: cut-target gate for EB ladder cuts ──
@@ -2580,86 +2650,60 @@ mod tests {
     // After: only primary-track IDRs are candidates, the legacy
     // decoder always has its anchor at the cut boundary.
 
+    /// A delay may only land on a keyframe of the main picture, in any framing.
     #[test]
-    fn is_primary_video_idr_accepts_legacy_avc_keyframe() {
-        let tag = avc_single_track_keyframe_bytes();
-        assert!(is_primary_video_idr(&tag));
-    }
-
-    #[test]
-    fn is_primary_video_idr_rejects_legacy_avc_inter_frame() {
-        // FrameType=2 (inter) + CodecID=7 (AVC) = 0x27. Same shape as
-        // the keyframe builder above, just with the leading byte flipped.
-        let mut tag = avc_single_track_keyframe_bytes();
-        tag[0] = 0x27;
-        assert!(!is_primary_video_idr(&tag));
-    }
-
-    #[test]
-    fn is_primary_video_idr_accepts_onetrack_multitrack_track_0() {
-        // EB ladder primary rung at TrackId=0 - the cut anchor we want.
-        let tag = enhanced_rtmp_onetrack_video_bytes_track(0);
-        assert!(is_primary_video_idr(&tag));
-    }
-
-    #[test]
-    fn is_primary_video_idr_rejects_onetrack_multitrack_nonzero_tracks() {
-        // EB ladder rungs 1..=4 each carry their own IDR cadence but
-        // must NOT be picked as a cut anchor - if the cut lands here
-        // the legacy decoder on the destination has no reference.
-        // Twitch Dual Format's vertical canvas is one of these TrackIds,
-        // so cuts are anchored to the horizontal canvas only; a vertical
-        // cut is clean because OBS aligns both canvases' keyframes. If
-        // cuts ever become canvas-aware, this is the guard that must flip.
-        for track in 1u8..=4 {
-            let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
-            assert!(
-                !is_primary_video_idr(&tag),
-                "TrackId {track} must not be a cut candidate"
-            );
+    fn only_the_main_tracks_keyframes_are_primary_idrs() {
+        // is primary video idr accepts legacy avc keyframe
+        {
+            let tag = avc_single_track_keyframe_bytes();
+            assert!(is_primary_video_idr(&tag));
         }
-    }
-
-    #[test]
-    fn is_primary_video_idr_rejects_enhanced_p_frame() {
-        // Enhanced-RTMP single-track inter-frame: IsEx | FrameType=2 |
-        // PacketType=CodedFrames(1) -> bits assembled as 0xA1.
-        let tag = vec![0x80 | (2u8 << 4) | 1, b'a', b'v', b'c', b'1', 0xAA, 0xBB];
-        assert!(!is_primary_video_idr(&tag));
-    }
-
-    #[test]
-    fn is_primary_video_idr_handles_truncated_multitrack_gracefully() {
-        // Multitrack header declared but payload too short to read the
-        // TrackId byte - safer to refuse cut-candidacy than to land on
-        // an unknown track.
-        let truncated = vec![0x80 | (1u8 << 4) | 6, 0x01, b'a', b'v', b'c', b'1'];
-        assert!(!is_primary_video_idr(&truncated));
-    }
-
-    #[test]
-    fn select_video_bytes_falls_back_to_raw_when_flatten_cannot_parse() {
-        // Pathological multi-track tag (declares multi-track but the
-        // payload is too short to contain a valid inner structure).
-        // The pump must NOT crash and must NOT swallow the tag -
-        // letting it through unchanged matches the old ingest-side
-        // fallback so the destination gets a chance to surface the
-        // error properly. Truncated below the TrackId byte means we
-        // can't tell which track it is; treat that as "forward".
-        let truncated = vec![0x80 | (1u8 << 4) | 6, 0]; // 2 bytes total
-        let youtube = select_video_bytes(&truncated, VideoEgress::Track(0))
-            .expect("truncated tags must still forward");
-        assert_eq!(youtube.as_ref(), truncated.as_slice());
-        assert!(matches!(youtube, std::borrow::Cow::Borrowed(_)));
-    }
-
-    #[test]
-    fn avc_legacy_with_unknown_codec_id_returns_unknown() {
-        // codec_id != 7 (we only understand AVC in legacy mode)
-        let tag = vec![0x12, 1, 0, 0, 0, 0x05]; // codec_id = 2 (Sorenson)
-        let info = classify_video_tag(&tag);
-        assert_eq!(info.codec, VideoCodec::Unknown);
-        assert!(!info.is_idr);
+        // is primary video idr rejects legacy avc inter frame
+        {
+            // FrameType=2 (inter) + CodecID=7 (AVC) = 0x27. Same shape as
+            // the keyframe builder above, just with the leading byte flipped.
+            let mut tag = avc_single_track_keyframe_bytes();
+            tag[0] = 0x27;
+            assert!(!is_primary_video_idr(&tag));
+        }
+        // is primary video idr accepts onetrack multitrack track 0
+        {
+            // EB ladder primary rung at TrackId=0 - the cut anchor we want.
+            let tag = enhanced_rtmp_onetrack_video_bytes_track(0);
+            assert!(is_primary_video_idr(&tag));
+        }
+        // is primary video idr rejects onetrack multitrack nonzero tracks
+        {
+            // EB ladder rungs 1..=4 each carry their own IDR cadence but
+            // must NOT be picked as a cut anchor - if the cut lands here
+            // the legacy decoder on the destination has no reference.
+            // Twitch Dual Format's vertical canvas is one of these TrackIds,
+            // so cuts are anchored to the horizontal canvas only; a vertical
+            // cut is clean because OBS aligns both canvases' keyframes. If
+            // cuts ever become canvas-aware, this is the guard that must flip.
+            for track in 1u8..=4 {
+                let tag = enhanced_rtmp_onetrack_video_bytes_track(track);
+                assert!(
+                    !is_primary_video_idr(&tag),
+                    "TrackId {track} must not be a cut candidate"
+                );
+            }
+        }
+        // is primary video idr rejects enhanced p frame
+        {
+            // Enhanced-RTMP single-track inter-frame: IsEx | FrameType=2 |
+            // PacketType=CodedFrames(1) -> bits assembled as 0xA1.
+            let tag = vec![0x80 | (2u8 << 4) | 1, b'a', b'v', b'c', b'1', 0xAA, 0xBB];
+            assert!(!is_primary_video_idr(&tag));
+        }
+        // is primary video idr handles truncated multitrack gracefully
+        {
+            // Multitrack header declared but payload too short to read the
+            // TrackId byte - safer to refuse cut-candidacy than to land on
+            // an unknown track.
+            let truncated = vec![0x80 | (1u8 << 4) | 6, 0x01, b'a', b'v', b'c', b'1'];
+            assert!(!is_primary_video_idr(&truncated));
+        }
     }
 
     // ── Enhanced-RTMP audio (VOD audio path) ───────────────────────
@@ -2719,108 +2763,70 @@ mod tests {
         payload
     }
 
+    /// The audio twin of the video rule: Twitch gets every track, others get
+    /// the one they asked for as plain AAC, or the live track when theirs isn't sent.
     #[test]
-    fn enhanced_single_track_seq_header_is_detected() {
-        // The user-visible regression for issue #9 (post-v0.1.3 manual
-        // test): with VOD audio enabled, OBS sends the live track as
-        // Enhanced-RTMP single-track. v0.1.0..0.1.3 read PacketType
-        // from byte 1 (which is 'm' = 0x6D, low nibble 0x0D) and never
-        // matched the SequenceStart value - so the AudioSpecificConfig
-        // tag flowed into the ring like a normal frame and got
-        // evicted, leaving Twitch's decoder unconfigured.
-        let tag = enhanced_audio_single_track(0);
-        let info = classify_audio_tag(&tag);
-        assert!(
-            info.is_seq_header,
-            "Enhanced-RTMP single-track byte 0 = 0x90 must classify as seq header"
-        );
-        assert!(!info.is_multitrack);
-        assert_eq!(info.codec, AudioCodec::Aac);
-        // sink.rs asks through the shim, which must agree.
-        assert!(is_aac_seq_header(&tag));
-    }
-
-    #[test]
-    fn enhanced_single_track_coded_frame_is_not_seq_header() {
-        let tag = enhanced_audio_single_track(1);
-        let info = classify_audio_tag(&tag);
-        assert!(!info.is_seq_header);
-        assert!(!info.is_multitrack);
-        assert_eq!(info.codec, AudioCodec::Aac);
-    }
-
-    #[test]
-    fn multitrack_audio_seqstart_detected_as_seq_header() {
-        // Pre-Phase-A, this tag would have been treated as a regular
-        // runtime tag (is_seq_header=false) because the outer
-        // PacketType is 5 (Multitrack), not 0 (SequenceStart). With
-        // the nested-packet-type check it correctly reads as a seq
-        // header that needs caching for replay across cuts.
-        let tag = enhanced_audio_onetrack(0, 0);
-        let info = classify_audio_tag(&tag);
-        assert!(
-            info.is_seq_header,
-            "nested PT=0 must be flagged as seq header"
-        );
-        assert!(info.is_multitrack);
-        assert_eq!(info.codec, AudioCodec::Aac);
-    }
-
-    #[test]
-    fn multitrack_audio_codedframes_is_not_seq_header() {
-        let tag = enhanced_audio_onetrack(0, 1);
-        let info = classify_audio_tag(&tag);
-        assert!(!info.is_seq_header);
-        assert!(info.is_multitrack);
-    }
-
-    #[test]
-    fn audio_seq_header_track_id_reads_onetrack_byte_6() {
-        // OBS writes TrackId at byte 6 of the audio tag payload
-        // (byte 0 = 0x95, byte 1 = mt|nested, bytes 2..6 = FourCC,
-        // byte 6 = TrackId). Our cache keys on this so a publisher
-        // reconnect can replay every track's config.
-        for track in 0u8..=3 {
-            let tag = enhanced_audio_onetrack(track, 0);
-            assert_eq!(audio_seq_header_track_id(&tag), track);
+    fn each_destination_gets_the_audio_track_it_asked_for() {
+        // select audio bytes single track always forwards
+        {
+            // Legacy AAC / Enhanced single-track is the only audio there is, so it
+            // forwards unchanged for EVERY policy - including Track(1): a live
+            // track beats a silent destination when the 2nd track never arrived.
+            let legacy_aac = vec![0xaf, 0x01, 0x12, 0x10, 0x56];
+            for egress in [
+                AudioEgress::Passthrough,
+                AudioEgress::Track(0),
+                AudioEgress::Track(1),
+            ] {
+                let out = select_audio_bytes(&legacy_aac, egress, false)
+                    .expect("single-track audio must forward");
+                assert_eq!(out.as_ref(), legacy_aac.as_slice());
+                assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+            }
         }
-    }
-
-    #[test]
-    fn audio_seq_header_track_id_returns_zero_for_legacy_aac() {
-        // Legacy AAC seq header: sound_format=10, AACPacketType=0.
-        // No track-id field exists; helper must return 0.
-        let tag = vec![0xaf, 0x00, 0x12, 0x10, 0x56, 0xe5];
-        assert_eq!(audio_seq_header_track_id(&tag), 0);
-    }
-
-    #[test]
-    fn select_audio_bytes_single_track_always_forwards() {
-        // Legacy AAC / Enhanced single-track is the only audio there is, so it
-        // forwards unchanged for EVERY policy - including Track(1): a live
-        // track beats a silent destination when the 2nd track never arrived.
-        let legacy_aac = vec![0xaf, 0x01, 0x12, 0x10, 0x56];
-        for egress in [
-            AudioEgress::Passthrough,
-            AudioEgress::Track(0),
-            AudioEgress::Track(1),
-        ] {
-            let out = select_audio_bytes(&legacy_aac, egress, false)
-                .expect("single-track audio must forward");
-            assert_eq!(out.as_ref(), legacy_aac.as_slice());
-            assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+        // select audio bytes falls back to live track when target absent
+        {
+            // A dest pinned to Track(1) but a stream that only carries the live
+            // track (OneTrack TrackId 0) still gets audio: the requested track is
+            // missing, so it falls back to the live track 0, flattened to legacy.
+            let live_only = enhanced_audio_onetrack(0, 1);
+            let out = select_audio_bytes(&live_only, AudioEgress::Track(1), false)
+                .expect("must fall back to the live track, not go silent");
+            assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
         }
-    }
-
-    #[test]
-    fn select_audio_bytes_falls_back_to_live_track_when_target_absent() {
-        // A dest pinned to Track(1) but a stream that only carries the live
-        // track (OneTrack TrackId 0) still gets audio: the requested track is
-        // missing, so it falls back to the live track 0, flattened to legacy.
-        let live_only = enhanced_audio_onetrack(0, 1);
-        let out = select_audio_bytes(&live_only, AudioEgress::Track(1), false)
-            .expect("must fall back to the live track, not go silent");
-        assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
+        // select audio bytes passes multitrack through for twitch
+        {
+            // Twitch destination (Passthrough): every track's bytes flow
+            // through bit-faithfully so Twitch's VOD-audio slot keeps its feed.
+            for track in 0u8..=3 {
+                let tag = enhanced_audio_onetrack(track, 1);
+                let out = select_audio_bytes(&tag, AudioEgress::Passthrough, true)
+                    .unwrap_or_else(|| panic!("twitch must forward track {track}"));
+                assert_eq!(out.as_ref(), tag.as_slice());
+            }
+        }
+        // select audio bytes drops untargeted track for single track dest
+        {
+            // A single-track destination pinned to Track(0) drops every other
+            // OneTrack rung (e.g. the VOD track), which is meaningless to
+            // YouTube / Kick.
+            for track in 1u8..=3 {
+                let tag = enhanced_audio_onetrack(track, 1);
+                assert!(
+                    select_audio_bytes(&tag, AudioEgress::Track(0), true).is_none(),
+                    "TrackId {track} must be dropped when the dest wants Track(0)",
+                );
+            }
+        }
+        // select audio bytes flattens target track to legacy aac
+        {
+            // The clean/second audio track routed to a single-track dest is
+            // flattened to legacy AAC (0xAF ...), the universally-accepted form.
+            let live = enhanced_audio_onetrack(0, 1);
+            let out = select_audio_bytes(&live, AudioEgress::Track(0), true)
+                .expect("track 0 must reach a Track(0) destination");
+            assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
+        }
     }
 
     /// OBS sends its live track as plain AAC and the VOD / clean track as a
@@ -2842,96 +2848,57 @@ mod tests {
         assert!(select_audio_bytes(&clean, AudioEgress::Track(0), true).is_none());
     }
 
+    /// One track out of a multitrack audio tag, in every layout, as legacy AAC.
     #[test]
-    fn select_audio_bytes_passes_multitrack_through_for_twitch() {
-        // Twitch destination (Passthrough): every track's bytes flow
-        // through bit-faithfully so Twitch's VOD-audio slot keeps its feed.
-        for track in 0u8..=3 {
-            let tag = enhanced_audio_onetrack(track, 1);
-            let out = select_audio_bytes(&tag, AudioEgress::Passthrough, true)
-                .unwrap_or_else(|| panic!("twitch must forward track {track}"));
-            assert_eq!(out.as_ref(), tag.as_slice());
-        }
-    }
-
-    #[test]
-    fn select_audio_bytes_drops_untargeted_track_for_single_track_dest() {
-        // A single-track destination pinned to Track(0) drops every other
-        // OneTrack rung (e.g. the VOD track), which is meaningless to
-        // YouTube / Kick.
-        for track in 1u8..=3 {
-            let tag = enhanced_audio_onetrack(track, 1);
-            assert!(
-                select_audio_bytes(&tag, AudioEgress::Track(0), true).is_none(),
-                "TrackId {track} must be dropped when the dest wants Track(0)",
+    fn multitrack_audio_flattens_to_plain_aac() {
+        // flatten multitrack audio maps seq and frame packet types
+        {
+            // SequenceStart (nested 0) -> AACPacketType 0; CodedFrames (1) -> 1.
+            let seq = enhanced_audio_onetrack(1, 0);
+            assert_eq!(
+                flatten_multitrack_audio(&seq, 1).unwrap(),
+                vec![0xAF, 0x00, 0x12, 0x10, 0x56, 0xe5],
+            );
+            let frame = enhanced_audio_onetrack(1, 1);
+            assert_eq!(
+                flatten_multitrack_audio(&frame, 1).unwrap(),
+                vec![0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5],
             );
         }
-    }
-
-    #[test]
-    fn select_audio_bytes_flattens_target_track_to_legacy_aac() {
-        // The clean/second audio track routed to a single-track dest is
-        // flattened to legacy AAC (0xAF ...), the universally-accepted form.
-        let live = enhanced_audio_onetrack(0, 1);
-        let out = select_audio_bytes(&live, AudioEgress::Track(0), true)
-            .expect("track 0 must reach a Track(0) destination");
-        assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
-
-        let clean = enhanced_audio_onetrack(1, 1);
-        let out = select_audio_bytes(&clean, AudioEgress::Track(1), true)
-            .expect("track 1 must reach a Track(1) destination");
-        assert_eq!(out.as_ref(), &[0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5]);
-    }
-
-    #[test]
-    fn flatten_multitrack_audio_maps_seq_and_frame_packet_types() {
-        // SequenceStart (nested 0) -> AACPacketType 0; CodedFrames (1) -> 1.
-        let seq = enhanced_audio_onetrack(1, 0);
-        assert_eq!(
-            flatten_multitrack_audio(&seq, 1).unwrap(),
-            vec![0xAF, 0x00, 0x12, 0x10, 0x56, 0xe5],
-        );
-        let frame = enhanced_audio_onetrack(1, 1);
-        assert_eq!(
-            flatten_multitrack_audio(&frame, 1).unwrap(),
-            vec![0xAF, 0x01, 0x12, 0x10, 0x56, 0xe5],
-        );
-    }
-
-    #[test]
-    fn flatten_multitrack_audio_missing_track_returns_none() {
-        let tag = enhanced_audio_onetrack(0, 1);
-        assert!(
-            flatten_multitrack_audio(&tag, 2).is_none(),
-            "a track not present in the tag must return None (drop)",
-        );
-    }
-
-    #[test]
-    fn flatten_multitrack_audio_many_tracks_layouts() {
-        // ManyTracks (mt_type 1): [0x95][0x1X][FourCC] then repeated
-        //   [TrackId][Size(3 BE)][payload]. Two AAC tracks; pick track 1.
-        let mut many = vec![0x95, 0x11, b'm', b'p', b'4', b'a'];
-        for (tid, data) in [(0u8, [0xAAu8, 0xBB]), (1u8, [0xCC, 0xDD])] {
-            many.push(tid);
-            many.extend_from_slice(&[0, 0, data.len() as u8]);
-            many.extend_from_slice(&data);
+        // flatten multitrack audio missing track returns none
+        {
+            let tag = enhanced_audio_onetrack(0, 1);
+            assert!(
+                flatten_multitrack_audio(&tag, 2).is_none(),
+                "a track not present in the tag must return None (drop)",
+            );
         }
-        assert_eq!(
-            flatten_multitrack_audio(&many, 1).unwrap(),
-            vec![0xAF, 0x01, 0xCC, 0xDD],
-        );
+        // flatten multitrack audio many tracks layouts
+        {
+            // ManyTracks (mt_type 1): [0x95][0x1X][FourCC] then repeated
+            //   [TrackId][Size(3 BE)][payload]. Two AAC tracks; pick track 1.
+            let mut many = vec![0x95, 0x11, b'm', b'p', b'4', b'a'];
+            for (tid, data) in [(0u8, [0xAAu8, 0xBB]), (1u8, [0xCC, 0xDD])] {
+                many.push(tid);
+                many.extend_from_slice(&[0, 0, data.len() as u8]);
+                many.extend_from_slice(&data);
+            }
+            assert_eq!(
+                flatten_multitrack_audio(&many, 1).unwrap(),
+                vec![0xAF, 0x01, 0xCC, 0xDD],
+            );
 
-        // ManyTracksManyCodecs (mt_type 2): repeated
-        //   [TrackId][FourCC][Size(3 BE)][payload]. Track 1 is Opus ->
-        //   Enhanced single-track output (0x90 | nested, FourCC, payload).
-        let mut mtmc = vec![0x95, 0x21];
-        mtmc.extend_from_slice(&[0, b'm', b'p', b'4', b'a', 0, 0, 2, 0x11, 0x22]);
-        mtmc.extend_from_slice(&[1, b'O', b'p', b'u', b's', 0, 0, 2, 0x33, 0x44]);
-        assert_eq!(
-            flatten_multitrack_audio(&mtmc, 1).unwrap(),
-            vec![0x91, b'O', b'p', b'u', b's', 0x33, 0x44],
-        );
+            // ManyTracksManyCodecs (mt_type 2): repeated
+            //   [TrackId][FourCC][Size(3 BE)][payload]. Track 1 is Opus ->
+            //   Enhanced single-track output (0x90 | nested, FourCC, payload).
+            let mut mtmc = vec![0x95, 0x21];
+            mtmc.extend_from_slice(&[0, b'm', b'p', b'4', b'a', 0, 0, 2, 0x11, 0x22]);
+            mtmc.extend_from_slice(&[1, b'O', b'p', b'u', b's', 0, 0, 2, 0x33, 0x44]);
+            assert_eq!(
+                flatten_multitrack_audio(&mtmc, 1).unwrap(),
+                vec![0x91, b'O', b'p', b'u', b's', 0x33, 0x44],
+            );
+        }
     }
 
     /// Enhanced RTMP: only coded frames carry a picture. A SequenceEnd

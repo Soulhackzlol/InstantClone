@@ -3,7 +3,7 @@
 
 use super::host::{
     ClipInfo, DiscordCard, DiscordMessage, DiscordPosted, Host, HttpRequest, HttpResponse,
-    LiveState,
+    LiveState, ProgramOutput,
 };
 use super::twitch::Twitch;
 use crate::controller::Controller;
@@ -28,6 +28,10 @@ const MAX_FILE_TEXT: usize = 1024 * 1024;
 /// they are reaped (no zombies on Unix) without a waiting thread each, and
 /// capped so a runaway trigger can't fork the machine to its knees.
 const MAX_RUNNING_PROGRAMS: usize = 16;
+/// How long a step waits for a program whose answer it keeps.
+pub const PROGRAM_WAIT: Duration = Duration::from_secs(10);
+/// What is kept of a program's answer.
+const MAX_PROGRAM_OUTPUT: usize = 64 * 1024;
 
 /// Marks every web request InstantClone makes. A step can name this PC's
 /// own dashboard as its address; arriving with this, the dashboard treats
@@ -241,6 +245,11 @@ impl Host for RealHost {
             destinations_total: total as usize,
             obs_live: self.ctrl.ingest_alive(),
             bitrate_kbps: self.ctrl.bitrate_kbps() as u64,
+            delay_max_s: self
+                .ctrl
+                .delay_capacity_ms()
+                .min(crate::config::MAX_DELAY_MS)
+                / 1000,
             channel: self.twitch.channel(),
         }
     }
@@ -317,15 +326,20 @@ impl Host for RealHost {
         };
         match action {
             // "Set the delay", not the hotkey's arm/disarm toggle.
-            "arm" => {
-                self.ctrl.set_delay_to(default_ms, "integration");
-                Ok(())
-            }
+            "arm" => match self.ctrl.set_delay_to(default_ms, "integration") {
+                None => Ok(()),
+                Some(problem) => Err(problem),
+            },
             "disarm" => {
                 self.ctrl.disarm("integration");
                 Ok(())
             }
-            "toggle" | "activate" | "cut" | "cut_after" | "end_hold" => {
+            // Never cancels a cut already waiting, unlike the hotkey.
+            "cut_after" => match self.ctrl.cut_after_airs("integration") {
+                None => Ok(()),
+                Some(problem) => Err(problem),
+            },
+            "toggle" | "activate" | "cut" | "end_hold" => {
                 match self
                     .ctrl
                     .run_named_action(action, default_ms, "integration")
@@ -361,6 +375,13 @@ impl Host for RealHost {
         Ok(())
     }
 
+    fn program_output(&self, path: &str, args: &[String]) -> Result<ProgramOutput, String> {
+        if path.is_empty() {
+            return Err("pick a program to run".to_string());
+        }
+        run_and_read(path, args)
+    }
+
     fn file(&self, path: &str, text: &str, append: bool) -> Result<(), String> {
         if path.is_empty() {
             return Err("pick a file".to_string());
@@ -384,11 +405,11 @@ impl Host for RealHost {
         result.map_err(|e| format!("couldn't write it: {e}"))
     }
 
-    fn overlay(&self, title: &str, text: &str, seconds: u64) {
-        self.alerts.show(title, text, seconds);
+    fn overlay(&self, card: super::alerts::Card) {
+        self.alerts.show(card);
     }
 
-    fn obs(&self, action: super::obsws::Action) -> Result<(), String> {
+    fn obs(&self, action: super::obsws::Action) -> Result<super::obsws::Answer, String> {
         let (reply, outcome) = std::sync::mpsc::channel();
         let wait = super::obsws::CALL_TIMEOUT + Duration::from_secs(1);
         let deadline = std::time::Instant::now() + wait;
@@ -403,6 +424,14 @@ impl Host for RealHost {
         outcome
             .recv_timeout(wait)
             .unwrap_or_else(|_| Err("OBS didn't answer in time".to_string()))
+    }
+
+    fn light(
+        &self,
+        device: &str,
+        command: super::lights::Command,
+    ) -> Result<Option<String>, String> {
+        super::lights::send(device, command)
     }
 }
 
@@ -440,6 +469,66 @@ fn webhook_message_url(url: &str, id: &str) -> String {
 
 /// The webhook's picture, so messages carry the InstantClone mark instead
 /// of Discord's default avatar. Discord fetches it; nothing is uploaded.
+/// Run a program with no window and keep what it prints, waiting
+/// `PROGRAM_WAIT` at most: one still running then is stopped. Its output
+/// is read on a thread of its own, so a program printing more than is kept
+/// never blocks on a full pipe.
+fn run_and_read(path: &str, args: &[String]) -> Result<ProgramOutput, String> {
+    use std::io::Read as _;
+    let mut command = std::process::Command::new(path);
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("couldn't start it: {e}"))?;
+    let mut stdout = child.stdout.take().ok_or("couldn't read its answer")?;
+    let (sent, read) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut chunk = [0u8; 8192];
+        while let Ok(n) = stdout.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            let room = MAX_PROGRAM_OUTPUT.saturating_sub(kept.len());
+            kept.extend_from_slice(&chunk[..n.min(room)]);
+        }
+        let _ = sent.send(kept);
+    });
+    let deadline = std::time::Instant::now() + PROGRAM_WAIT;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| format!("lost it: {e}"))? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "it was still running after {} s, so it was stopped",
+                PROGRAM_WAIT.as_secs()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    // Something it started may hold the output open: don't wait on that.
+    let kept = read
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap_or_default();
+    Ok(ProgramOutput {
+        code: status.code(),
+        output: String::from_utf8_lossy(&kept).trim().to_string(),
+    })
+}
+
 const AVATAR_URL: &str =
     "https://raw.githubusercontent.com/Soulhackzlol/InstantClone/main/docs/icon.png";
 
@@ -614,6 +703,24 @@ fn mention_rules(ping: &str) -> (String, Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A real program through the system shell: what it printed (trimmed)
+    /// and how it ended both come back.
+    #[test]
+    fn a_programs_answer_and_exit_code_come_back() {
+        #[cfg(windows)]
+        let (shell, script) = ("cmd", "/C echo  rank: Diamond & exit /b 3");
+        #[cfg(not(windows))]
+        let (shell, script) = ("sh", "-c|echo '  rank: Diamond'; exit 3");
+        #[cfg(windows)]
+        let args: Vec<String> = script.splitn(2, ' ').map(str::to_string).collect();
+        #[cfg(not(windows))]
+        let args: Vec<String> = script.split('|').map(str::to_string).collect();
+        let answer = run_and_read(shell, &args).unwrap();
+        assert_eq!(answer.output, "rank: Diamond");
+        assert_eq!(answer.code, Some(3));
+        assert!(run_and_read("no-such-program-ic", &[]).is_err());
+    }
 
     fn text(content: &str, ping: &str) -> String {
         discord_body(&DiscordMessage {

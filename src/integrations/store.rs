@@ -160,8 +160,8 @@ mod tests {
 
     #[test]
     fn saves_and_reloads_accounts_and_counters() {
-        let dir = std::env::temp_dir().join(format!("ic-store-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = crate::test_support::TestDir::new("ic-store");
+        let dir = scratch.path().to_path_buf();
         let store = Store::open(&dir);
         store.accounts.lock().main = Some(TwitchAccount {
             login: "texaz".into(),
@@ -179,13 +179,12 @@ mod tests {
         assert!(back.accounts.lock().bot.is_none());
         assert_eq!(back.counters.lock().get("crashes"), Some(&3));
         assert_eq!(back.uses.lock().get("i1"), Some(&41));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_broken_file_starts_empty_and_is_kept_aside() {
-        let dir = std::env::temp_dir().join(format!("ic-store-bad-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = crate::test_support::TestDir::new("ic-store-bad");
+        let dir = scratch.path().to_path_buf();
         std::fs::write(dir.join(FILE_NAME), "{not json").unwrap();
         let store = Store::open(&dir);
         assert!(store.accounts.lock().main.is_none());
@@ -193,6 +192,5 @@ mod tests {
         store.save().unwrap();
         let kept = dir.join(FILE_NAME).with_extension("json.bad");
         assert_eq!(std::fs::read_to_string(kept).unwrap(), "{not json");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

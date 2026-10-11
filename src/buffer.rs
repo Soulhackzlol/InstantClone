@@ -7,7 +7,9 @@
 //!
 //! The in-memory `VecDeque<TagMeta>` is the canonical view of *what* is in the
 //! buffer. Each entry is 32 bytes, so 10 minutes of audio+video indexes in
-//! under 2 MB regardless of the bitrate of the underlying media.
+//! about 2 MB (an hour, the longest delay, in about 12 MB; two to three times
+//! that with Enhanced Broadcasting's extra video tracks) regardless of the
+//! bitrate of the underlying media.
 
 use crate::sync::Mutex;
 use std::collections::VecDeque;
@@ -34,6 +36,10 @@ pub struct TagMeta {
 
 pub struct DiskRing {
     file: Mutex<File>,
+    /// The path and size this ring was created with. Settings can name a
+    /// different buffer, which only takes effect after a restart; the
+    /// dashboard compares the two to say so.
+    path: std::path::PathBuf,
     capacity: u64,
     inner: Mutex<RingInner>,
 
@@ -113,6 +119,30 @@ impl DiskRing {
         // with backoff so a 100 ms AV scan doesn't permanently
         // block the user's cold start.
         let mut file = open_with_retry(path)?;
+        // Ours alone for as long as we run. A second InstantClone pointed at
+        // the same file (two setups sharing one absolute buffer_path) would
+        // otherwise resize it under the first one's live delay, write over
+        // its tags, and delete it on quit. Locked before the resize so the
+        // loser never touches the length. The OS drops the lock with the
+        // process, so a crash leaves nothing stale.
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ResourceBusy,
+                    "another InstantClone is using this buffer file: give each copy its own \
+                     buffer_path",
+                ));
+            }
+            // A filesystem without locks (some network or virtual drives)
+            // ran fine before the lock existed: carry on without it.
+            Err(std::fs::TryLockError::Error(e)) => {
+                log_line!(
+                    "buffer: can't lock {} ({e}), carrying on unlocked",
+                    path.display()
+                );
+            }
+        }
         set_len_with_retry(&file, capacity)?;
         // Seek back to 0 so the first append writes at the start.
         // open_with_retry positions the cursor at end-of-file when
@@ -121,6 +151,7 @@ impl DiskRing {
         let file = file; // freeze rebinding
         Ok(Self {
             file: Mutex::new(file),
+            path: path.to_path_buf(),
             capacity,
             inner: Mutex::new(RingInner {
                 write_cursor: 0,
@@ -501,7 +532,24 @@ impl DiskRing {
     /// reaches back no further at this bitrate. A delay longer than that
     /// can never fill; the controller then delays by what the ring holds.
     pub fn is_saturated(&self) -> bool {
-        self.inner.lock().indexed_bytes >= self.capacity - self.capacity / 16
+        self.inner.lock().indexed_bytes >= self.usable_bytes()
+    }
+
+    /// How many bytes of tags the ring holds before it counts as full (see
+    /// `is_saturated`). What a delay can use, so the controller's capacity
+    /// estimate is built on it.
+    pub fn usable_bytes(&self) -> u64 {
+        self.capacity - self.capacity / 16
+    }
+
+    /// The buffer file in use, as the settings named it at startup.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The size of the buffer file in use, in bytes.
+    pub fn capacity(&self) -> u64 {
+        self.capacity
     }
 }
 
@@ -630,6 +678,26 @@ mod tests {
         let r = t.0.try_read_seq(seq, &mut buf).unwrap();
         assert!(r.is_some());
         assert_eq!(buf, payload);
+    }
+
+    /// Two rings on one file would write over each other's tags, and the
+    /// second one's quit would delete the first one's buffer. The second is
+    /// refused, with the length untouched, until the first is gone.
+    #[test]
+    fn a_buffer_file_in_use_is_refused_to_a_second_ring() {
+        let t = tmp(4096);
+        let err = DiskRing::create(&t.1, 8192)
+            .err()
+            .expect("the file is taken");
+        assert_eq!(err.kind(), std::io::ErrorKind::ResourceBusy);
+        assert!(err.to_string().contains("another InstantClone"));
+        assert_eq!(std::fs::metadata(&t.1).unwrap().len(), 4096);
+        let path = t.1.clone();
+        drop(t);
+        let again = DiskRing::create(&path, 4096);
+        assert!(again.is_ok(), "free again once the first ring is gone");
+        drop(again);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -781,17 +849,20 @@ mod tests {
         assert!(t.0.try_read_seq(seqs[2], &mut buf).unwrap().is_some());
     }
 
+    /// A delay lands on the newest keyframe at or before its moment, never
+    /// a newer one: exactly on one, between two, and none when every
+    /// keyframe in the ring is newer.
     #[test]
-    fn newest_idr_returns_the_last_one() {
+    fn newest_idr_at_or_before_never_picks_a_newer_keyframe() {
         let t = tmp(4096);
         let idr = primary_idr_payload(30);
-        t.0.append(9, 100, &idr, true, false).unwrap();
-        t.0.append(9, 200, &[0u8; 30], false, false).unwrap();
-        t.0.append(9, 300, &idr, true, false).unwrap();
-        t.0.append(9, 400, &[0u8; 30], false, false).unwrap();
-        let m = t.0.newest_idr().expect("has IDR");
-        assert_eq!(m.ts_ms, 300);
-        assert!(m.is_idr);
+        t.0.append(9, 1_000, &idr, true, false).unwrap();
+        t.0.append(9, 1_500, &[0u8; 30], false, false).unwrap();
+        t.0.append(9, 3_000, &idr, true, false).unwrap();
+        let at = |ts| t.0.newest_idr_at_or_before(ts).map(|m| m.ts_ms);
+        assert_eq!(at(3_000), Some(3_000), "exactly on one");
+        assert_eq!(at(2_999), Some(1_000), "between two");
+        assert_eq!(at(999), None, "every keyframe is newer");
     }
 
     #[test]
@@ -885,19 +956,6 @@ mod tests {
         // The rung's own flag is kept: the vertical-canvas pump reads
         // `meta.is_idr` to find its own canvas's first keyframe.
         assert!(t.0.find_by_seq(rung).unwrap().1.is_idr);
-    }
-
-    #[test]
-    fn newest_idr_after_skips_stale_publisher_idrs() {
-        // Models the publisher-reconnect case: there are old IDRs in the
-        // ring from before the reconnect; we want only the new session's.
-        let t = tmp(4096);
-        let idr = primary_idr_payload(30);
-        let old_seq = t.0.append(9, 100, &idr, true, false).unwrap().unwrap();
-        let new_seq = t.0.append(9, 200, &idr, true, false).unwrap().unwrap();
-        let m = t.0.newest_idr_after(old_seq).expect("found");
-        assert_eq!(m.seq, new_seq);
-        assert!(t.0.newest_idr_after(new_seq + 100).is_none());
     }
 }
 

@@ -115,29 +115,25 @@ mod tests {
     use super::hex;
 
     #[test]
-    fn empty_string() {
-        assert_eq!(
-            hex(b""),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-    }
-
-    #[test]
-    fn abc() {
-        assert_eq!(
-            hex(b"abc"),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-    }
-
-    #[test]
-    fn two_block_nist_vector() {
-        // The classic 448-bit NIST vector that straddles a block boundary,
-        // exercising the padding path.
-        assert_eq!(
-            hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
-            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
-        );
+    fn published_vectors() {
+        for (message, digest) in [
+            (
+                &b""[..],
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                b"abc",
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+            // The classic 448-bit NIST vector that straddles a block
+            // boundary, exercising the padding path.
+            (
+                b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+                "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+            ),
+        ] {
+            assert_eq!(hex(message), digest);
+        }
     }
 
     /// The padding boundaries. 55 bytes is the longest message whose 0x80 byte

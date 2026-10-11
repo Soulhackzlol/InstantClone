@@ -72,7 +72,7 @@ pub async fn run(
     // Don't let a restart/self-update child inherit this listener, or the port
     // stays bound after we exit and the new instance can't reclaim it.
     crate::self_update::dont_inherit(&listener);
-    eprintln!("[web] listening on http://{}", addr);
+    log_line!("[web] listening on http://{}", addr);
     // Single shared sampler: CPU% needs the previous sample to compute a
     // delta, so we cannot construct one per request.
     let sysstat = Arc::new(SysStat::new());
@@ -355,9 +355,18 @@ async fn serve(
     if method == "GET" && bare_path == "/overlay-events" {
         return handle_sse(sock, ctrl, settings, sysstat, Feed::Overlay).await;
     }
+    // A sound or picture uploaded for alerts.
+    if method == "GET" {
+        if let Some(name) = bare_path.strip_prefix("/alerts/media/") {
+            return serve_alert_media(&mut sock, &cfg_path, name).await;
+        }
+    }
     // The alerts browser source's feed: what "Show on stream" steps put up.
     if method == "GET" && bare_path == "/alerts-events" {
-        return handle_sse(sock, ctrl, settings, sysstat, Feed::Alerts).await;
+        let feed = Feed::Alerts {
+            in_obs: from_obs_browser(head_str),
+        };
+        return handle_sse(sock, ctrl, settings, sysstat, feed).await;
     }
 
     // Lifecycle controls (admin-gated by auth_gate above): acknowledge and
@@ -378,6 +387,47 @@ async fn serve(
             ctrl.request_restart();
         } else {
             ctrl.request_quit();
+        }
+        return Ok(());
+    }
+    // One-click update: download and verify first, so any failure is a clean
+    // JSON error and nothing changes. Then it is a restart like the one
+    // above: the update is installed at the end of main's clean shutdown
+    // (see `self_update::restart_now`), so destinations still get their
+    // deleteStream and nothing is lost to a hard exit.
+    if method == "POST" && bare_path == "/update/apply" {
+        // One at a time, from the click until the restart: a second click or
+        // tab while the first downloads would write the same staged file
+        // under it, and the first install's checksum would then refuse it.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static APPLYING: AtomicBool = AtomicBool::new(false);
+        let staged = if crate::self_update::is_staged() || APPLYING.swap(true, Ordering::SeqCst) {
+            Err("An update is already installing.".to_string())
+        } else {
+            let prepared = tokio::task::spawn_blocking(crate::self_update::prepare)
+                .await
+                .unwrap_or_else(|_| Err("the update task stopped unexpectedly".into()));
+            if prepared.is_err() {
+                APPLYING.store(false, Ordering::SeqCst);
+            }
+            prepared
+        };
+        let payload = match &staged {
+            Ok(s) => format!(
+                r#"{{"ok":true,"restarting":true,"version":{},"rebuild":{}}}"#,
+                crate::config::json_str(&s.version),
+                s.rebuild
+            ),
+            Err(msg) => format!(r#"{{"ok":false,"error":{}}}"#, crate::config::json_str(msg)),
+        };
+        // The update goes ahead even if the page that asked is gone by now:
+        // returning here would leave it unstaged with APPLYING still set, so
+        // every later click would read "already installing".
+        let _ = write_simple(&mut sock, "200 OK", "application/json", &payload, "").await;
+        let _ = sock.shutdown().await;
+        if let Ok(s) = staged {
+            crate::self_update::stage(s);
+            ctrl.request_restart();
         }
         return Ok(());
     }
@@ -531,9 +581,20 @@ async fn auth_gate(
             let s = settings.borrow();
             (s.dashboard_password_hash.clone(), s.dock_token.clone())
         };
+        let names = cookie_names(cfg_path);
         let cookies = parse_cookies(head_str);
-        let session_cookie = cookies.get("ic_session").cloned().unwrap_or_default();
-        let has_session = auth.validate_session(&session_cookie);
+        // This setup's cookie first. The old shared name only counts when it
+        // holds a session of ours (one from before the update); another
+        // copy's token in it is simply not valid here.
+        let ours = cookies
+            .get(&names.session)
+            .filter(|token| auth.validate_session(token));
+        let legacy = cookies
+            .get(LEGACY_SESSION_COOKIE)
+            .filter(|token| auth.validate_session(token));
+        let session_from_legacy = ours.is_none() && legacy.is_some();
+        let session_cookie = ours.or(legacy).cloned().unwrap_or_default();
+        let has_session = !session_cookie.is_empty();
         // Only a real session is admin; a dock token authorizes Control routes
         // but never confers admin, so it never sees a redacted-away secret.
         is_admin = has_session;
@@ -572,7 +633,8 @@ async fn auth_gate(
                 auth.record_success(peer_ip);
                 let token = auth.create_session();
                 let set = format!(
-                    "Set-Cookie: ic_session={}; HttpOnly; SameSite=Strict; Path=/{}\r\n",
+                    "Set-Cookie: {}={}; HttpOnly; SameSite=Strict; Path=/{}\r\n",
+                    names.session,
                     token,
                     secure_flag(head_str)
                 );
@@ -594,18 +656,30 @@ async fn auth_gate(
             if !session_cookie.is_empty() {
                 auth.revoke_session(&session_cookie);
             }
-            let clear = "Set-Cookie: ic_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0\r\n";
-            write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, clear).await?;
+            let mut clear = clear_cookie(&names.session);
+            if session_from_legacy {
+                clear.push_str(&clear_cookie(LEGACY_SESSION_COOKIE));
+            }
+            write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, &clear).await?;
             return Ok(AuthDecision::Handled);
         }
 
         // --- the gate for every other route ---
         let access = classify_access(method, bare_path);
-        let dock_supplied = query_param(path, "token")
-            .or_else(|| cookies.get("ic_dock").cloned())
-            .unwrap_or_default();
-        let has_dock = !dock_token.is_empty()
-            && crate::crypto::constant_time_eq(dock_supplied.as_bytes(), dock_token.as_bytes());
+        let is_dock_token = |supplied: &str| {
+            !dock_token.is_empty()
+                && crate::crypto::constant_time_eq(supplied.as_bytes(), dock_token.as_bytes())
+        };
+        let query_token = query_param(path, "token");
+        let dock_cookie = cookies.get(&names.dock).is_some_and(|t| is_dock_token(t));
+        let legacy_dock_cookie = cookies
+            .get(LEGACY_DOCK_COOKIE)
+            .is_some_and(|t| is_dock_token(t));
+        // A ?token in the URL decides on its own, as it always has.
+        let has_dock = match &query_token {
+            Some(token) => is_dock_token(token),
+            None => dock_cookie || legacy_dock_cookie,
+        };
         let allowed = match access {
             Access::Public => true,
             Access::Control => has_session || has_dock,
@@ -632,9 +706,15 @@ async fn auth_gate(
         }
         // Dock authenticated via ?token: hand it a cookie so its later
         // same-origin control calls (which won't carry the query) are allowed.
-        if bare_path == "/dock" && has_dock && query_param(path, "token").is_some() {
+        // Persistent (Max-Age), because OBS drops session cookies when it
+        // closes: a second dock opened by a link without the token would
+        // otherwise land on the login page after every OBS restart. Rotating
+        // the token still retires it, as the gate compares against the new one.
+        // A dock still on the old shared cookie moves to this setup's own.
+        if bare_path == "/dock" && has_dock && (query_token.is_some() || !dock_cookie) {
             dock_set_cookie = format!(
-                "Set-Cookie: ic_dock={}; HttpOnly; SameSite=Strict; Path=/{}\r\n",
+                "Set-Cookie: {}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={DOCK_COOKIE_MAX_AGE_SECS}{}\r\n",
+                names.dock,
                 dock_token,
                 secure_flag(head_str)
             );
@@ -731,7 +811,8 @@ async fn auth_gate(
         auth.revoke_all();
         let token = auth.create_session();
         let set = format!(
-            "Set-Cookie: ic_session={}; HttpOnly; SameSite=Strict; Path=/{}\r\n",
+            "Set-Cookie: {}={}; HttpOnly; SameSite=Strict; Path=/{}\r\n",
+            cookie_names(cfg_path).session,
             token,
             secure_flag(head_str)
         );
@@ -756,8 +837,8 @@ async fn auth_gate(
             let _ = settings.send(ns);
         }
         auth.revoke_all();
-        let clear = "Set-Cookie: ic_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0\r\n";
-        write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, clear).await?;
+        let clear = clear_cookie(&cookie_names(cfg_path).session);
+        write_simple(sock, "200 OK", "application/json", r#"{"ok":true}"#, &clear).await?;
         return Ok(AuthDecision::Handled);
     }
     if method == "POST" && bare_path == "/auth/regen-dock" {
@@ -837,17 +918,12 @@ async fn route(
     // /overlays/reset wipes the Studio overlays and clears that flag so the
     // dashboard re-seeds the defaults on its next load.
     if method == "POST" && bare_path.starts_with("/overlays/") {
-        let rest = &bare_path["/overlays/".len()..];
-        if rest == "seeded" {
-            return overlays_mark_seeded(settings, cfg_path);
-        }
-        if rest == "reset" {
-            return overlays_reset(settings, cfg_path);
-        }
-        if let Some(slug) = rest.strip_suffix("/delete") {
-            return overlay_delete(slug, settings);
-        }
-        return overlay_save(rest, body, settings);
+        return match overlay_post(&bare_path["/overlays/".len()..], body) {
+            OverlayPost::MarkSeeded => overlays_mark_seeded(settings, cfg_path),
+            OverlayPost::Reset => overlays_reset(settings, cfg_path),
+            OverlayPost::Delete(slug) => overlay_delete(slug, settings),
+            OverlayPost::Save(slug) => overlay_save(slug, body, settings),
+        };
     }
 
     // Dock layouts: GET /docks/<id> returns the saved layout JSON (or
@@ -894,7 +970,7 @@ async fn route(
         ("GET", "/alerts") => (
             "200 OK",
             "text/html; charset=utf-8",
-            ALERTS_HTML.to_string(),
+            crate::integrations::alerts::page_html(),
         ),
         ("GET", "/state") => (
             "200 OK",
@@ -944,12 +1020,22 @@ async fn route(
         ),
         ("GET", "/obs/register-status") => {
             let s = settings.borrow();
+            // Another InstantClone (another folder, its own ports) owns the
+            // entry in OBS and is running: Register here would move OBS off it.
+            let other =
+                crate::obs_register::registered_to_other_instance(s.web_port, s.ingest_port);
             (
                 "200 OK",
                 "application/json",
                 format!(
-                    r#"{{"registered":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"active_profile":{},"path":{}}}"#,
+                    r#"{{"registered":{},"registered_to_other_instance":{},"other_instance_web_port":{},"has_entry":{},"update_pending":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"active_profile":{},"path":{}}}"#,
                     crate::obs_register::is_registered(s.web_port, s.ingest_port),
+                    other.is_some(),
+                    other
+                        .filter(|&port| port != 0)
+                        .map_or("null".to_string(), |port| port.to_string()),
+                    crate::obs_register::has_entry(),
+                    crate::obs_register::refresh_waiting(),
                     crate::obs_register::is_obs_running(),
                     crate::obs_register::vod_audio_flag_set(),
                     crate::obs_register::vod_eb_injection_present(s.web_port),
@@ -969,13 +1055,19 @@ async fn route(
                 ),
             )
         }
+        ("POST", "/obs/register") if crate::obs_register::is_obs_running() => {
+            conflict(OBS_OPEN_REGISTER)
+        }
+        ("POST", "/obs/unregister") if crate::obs_register::is_obs_running() => {
+            conflict(OBS_OPEN_REGISTER)
+        }
         ("POST", "/obs/register") => {
             let s = settings.borrow();
             match crate::obs_register::register(s.web_port, s.ingest_port) {
                 Ok(()) => (
                     "200 OK",
                     "application/json",
-                    r#"{"ok":true,"message":"Registered with OBS - restart OBS to see the InstantClone service in the dropdown."}"#.to_string(),
+                    r#"{"ok":true,"message":"Registered. Open OBS and pick InstantClone in Settings → Stream → Service."}"#.to_string(),
                 ),
                 Err(e) => (
                     "500 Internal Server Error",
@@ -988,7 +1080,7 @@ async fn route(
             Ok(()) => (
                 "200 OK",
                 "application/json",
-                r#"{"ok":true,"message":"Unregistered. Restart OBS to refresh the service list."}"#
+                r#"{"ok":true,"message":"Unregistered. OBS no longer lists InstantClone."}"#
                     .to_string(),
             ),
             Err(e) => (
@@ -1000,6 +1092,17 @@ async fn route(
                 ),
             ),
         },
+        ("POST", "/obs/launch-with-eb") if crate::obs_register::is_obs_running() => {
+            conflict(OBS_OPEN_LAUNCH)
+        }
+        ("POST", "/obs/setup-vod-eb") if crate::obs_register::is_obs_running() => (
+            "409 Conflict",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{e}","steps":[{{"name":"Close OBS","ok":false,"msg":"{e}"}}]}}"#,
+                e = json_escape(OBS_OPEN_LAUNCH)
+            ),
+        ),
         ("POST", "/obs/launch-with-eb") => {
             let s = settings.borrow();
             match crate::obs_register::launch_obs_with_eb_config(s.web_port, &s.dock_token) {
@@ -1122,57 +1225,41 @@ async fn route(
             // freeze /destinations + /state for any open dashboard).
             let info = tokio::task::spawn_blocking(crate::update_check::check_update)
                 .await
-                .unwrap_or_else(|_| crate::update_check::UpdateInfo {
-                    current: crate::update_check::current_version().to_string(),
-                    latest: None,
-                    update_available: false,
-                    error: Some("update check task panicked".into()),
+                .unwrap_or_else(|_| {
+                    crate::update_check::UpdateInfo::failed("update check task panicked")
                 });
             ("200 OK", "application/json", info.to_json())
         }
-        ("POST", "/update/apply") => {
-            // Stage (download + verify) inline so any failure surfaces as a
-            // clean JSON error the About tab can show. The actual swap +
-            // relaunch + process exit is deferred to a detached thread so
-            // this 200 flushes to the browser FIRST - the browser then polls
-            // /config until we're back and reloads.
-            match tokio::task::spawn_blocking(crate::self_update::prepare).await {
-                Ok(Ok(staged)) => {
-                    let v = staged.version.replace('"', "'");
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(1200));
-                        crate::self_update::commit_and_relaunch(staged);
-                    });
-                    (
-                        "200 OK",
-                        "application/json",
-                        format!(r#"{{"ok":true,"restarting":true,"version":"{v}"}}"#),
-                    )
-                }
-                Ok(Err(msg)) => (
-                    "200 OK",
-                    "application/json",
-                    format!(
-                        r#"{{"ok":false,"error":"{}"}}"#,
-                        msg.replace('\\', "\\\\").replace('"', "'")
-                    ),
-                ),
-                Err(_) => (
-                    "200 OK",
-                    "application/json",
-                    r#"{"ok":false,"error":"update task panicked"}"#.to_string(),
-                ),
-            }
+        // What changed since the build the user last saw: after an update,
+        // in-app or by hand. Blocking, as it may ask GitHub for the commits.
+        ("GET", "/whats-new") => {
+            let saved = settings.borrow().clone();
+            let json =
+                tokio::task::spawn_blocking(move || crate::update_check::whats_new_json(&saved))
+                    .await
+                    .unwrap_or_else(|_| r#"{"show":false}"#.to_string());
+            ("200 OK", "application/json", json)
         }
-        // POST /app/restart and /app/quit are handled in `serve` (they must
-        // flush their 200 before the shutdown signal exits the process), so
-        // they never reach the router.
+        ("POST", "/whats-new/dismiss") => {
+            let _wl = settings_write_guard();
+            let mut ns = settings.borrow().clone();
+            crate::update_check::mark_seen(&mut ns);
+            let _ = ns.save(cfg_path);
+            let _ = settings.send(ns);
+            ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
+        }
+        // POST /app/restart, /app/quit and /update/apply are handled in
+        // `serve` (they must flush their 200 before the shutdown signal exits
+        // the process), so they never reach the router.
 
         // Reveal one of our known files in the OS file browser. The keyword
         // is fixed (not a client-supplied path), so this can only ever open
         // our own buffer / overlays / trace - never an arbitrary location.
         ("POST", "/reveal/buffer") => {
-            reveal_path(&settings.borrow().buffer_path.clone());
+            reveal_path(&crate::config::beside_config(
+                cfg_path,
+                &settings.borrow().buffer_path,
+            ));
             ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
         }
         ("POST", "/reveal/overlays") => {
@@ -1207,6 +1294,16 @@ async fn route(
         ("GET", "/twitch_ingests") => ("200 OK", "application/json", twitch_ingests_json()),
         ("GET", "/profiles") => ("200 OK", "application/json", profiles_json(settings)),
         ("GET", "/logs") => ("200 OK", "application/json", logs_json(ctrl)),
+        // The Logs tab's "Copy diagnostics": plain text for a bug report,
+        // scrubbed of every configured secret (see `diagnostics::report`).
+        ("GET", "/diagnostics") => {
+            let s = settings.borrow().clone();
+            (
+                "200 OK",
+                "text/plain; charset=utf-8",
+                crate::diagnostics::report(ctrl, &s, cfg_path),
+            )
+        }
         ("GET", "/overlays") => ("200 OK", "application/json", list_overlays(settings)),
         ("GET", "/destinations") => (
             "200 OK",
@@ -1217,6 +1314,8 @@ async fn route(
 
         ("POST", "/config") => post_config(body, ctrl, settings, cfg_path).await,
         ("POST", "/config/reset") => post_config_reset(query, ctrl, settings, cfg_path).await,
+        ("GET", "/dock/settings") => ("200 OK", "application/json", dock_settings_json(settings)),
+        ("POST", "/dock/settings") => post_dock_settings(body, settings, cfg_path),
         // Two-phase delay endpoints
         ("POST", "/arm") => post_arm(body, ctrl, settings, cfg_path, sysstat).await,
         ("POST", "/activate") => post_activate(ctrl, settings, cfg_path, sysstat).await,
@@ -1265,6 +1364,7 @@ async fn route(
         ("POST", "/destinations/delete") => {
             post_destination_delete(body, ctrl, settings, cfg_path).await
         }
+        ("POST", "/destinations/retry") => post_destination_retry(body, ctrl),
         _ => (
             "404 Not Found",
             "text/plain; charset=utf-8",
@@ -1294,8 +1394,11 @@ async fn route(
 enum Feed {
     Dashboard,
     Overlay,
-    /// The integrations' on-stream alerts: only the cards themselves.
-    Alerts,
+    /// The integrations' on-stream alerts: only the cards themselves, and
+    /// where they go. `in_obs` when OBS's browser source is the one asking.
+    Alerts {
+        in_obs: bool,
+    },
 }
 
 async fn handle_sse(
@@ -1318,6 +1421,16 @@ async fn handle_sse(
     // Initial retry hint - clients reconnect after 1 s if the socket drops.
     sock.write_all(b"retry: 1000\n\n").await?;
 
+    // An alerts page counts as open, for the dashboard, while its feed is.
+    let board = match feed {
+        Feed::Alerts { .. } => ctrl.integrations().map(|h| h.alerts.clone()),
+        _ => None,
+    };
+    let _page = match (feed, &board) {
+        (Feed::Alerts { in_obs }, Some(board)) => Some(board.page_opened(in_obs)),
+        _ => None,
+    };
+
     let mut last_payload = String::new();
     let mut last_send = std::time::Instant::now();
     let heartbeat = Duration::from_secs(10);
@@ -1327,9 +1440,9 @@ async fn handle_sse(
         let cur = match feed {
             Feed::Dashboard => state_json(&ctrl, &settings, &sysstat),
             Feed::Overlay => overlay_state_json(&ctrl, &settings),
-            Feed::Alerts => ctrl.integrations().map_or_else(
+            Feed::Alerts { .. } => board.as_ref().map_or_else(
                 || r#"{"boot":"","alerts":[]}"#.to_string(),
-                |h| h.alerts.to_json(),
+                |board| board.to_json(&settings.borrow().alerts_look),
             ),
         };
         let now = std::time::Instant::now();
@@ -1451,14 +1564,28 @@ fn hold_json(ctrl: &Controller) -> String {
     }
 }
 
+/// A saved buffer size or path that the running ring isn't using yet: the
+/// ring is created once at startup, so only a restart applies it. Read from
+/// the server on every tick, so the dashboard's notice survives a reload.
+fn buffer_restart_pending(ctrl: &Controller, s: &Settings) -> bool {
+    ctrl.ring.capacity() != s.buffer_bytes() || !is_buffer_in_use(ctrl.ring.path(), &s.buffer_path)
+}
+
+/// Whether the buffer setting names the file the ring runs on. A relative
+/// setting is resolved beside the settings file (or, as a fallback, in the
+/// working directory), so the running path only ends with it.
+fn is_buffer_in_use(running: &std::path::Path, setting: &std::path::Path) -> bool {
+    running == setting
+        || (setting.is_relative()
+            && running.ends_with(setting.strip_prefix(".").unwrap_or(setting)))
+}
+
 fn state_json(
     ctrl: &Controller,
     settings: &Arc<watch::Sender<Settings>>,
     sysstat: &Arc<SysStat>,
 ) -> String {
     let s = settings.borrow();
-    let kbps = ctrl.bitrate_kbps().max(2_000) as u64;
-    let max_buffer_ms = s.buffer_mb * 1024 * 1024 * 8 / kbps;
     let (alive_count, total_count) = ctrl.destination_alive_summary();
     let (cpu_pct, rss_bytes) = sysstat.sample();
     let consumer_lag = ctrl.max_consumer_lag();
@@ -1485,7 +1612,7 @@ fn state_json(
             .unwrap_or((false, 0u32, 0u64, 0u64, 0u32, 0u32));
         let v = dest_video(ctrl, d, &readouts);
         format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"reconnects":{rc},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"on_hold":{oh}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"reconnects":{rc},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"on_hold":{oh},"failure":{fl}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled, al = alive, br = kbps, ts = tags, bs = bytes, cu = cuts, rc = recon,
@@ -1494,6 +1621,7 @@ fn state_json(
             vres = json_escape_quoted(&v.res),
             vcod = json_escape_quoted(&v.codec),
             oh = holding && alive && crate::crash_hold::covers(ctrl, &ctrl.destination_state(&d.id)),
+            fl = dest_failure_json(ctrl, &d.id),
         )
     }).collect::<Vec<_>>().join(",");
 
@@ -1520,7 +1648,7 @@ fn state_json(
     let vertical_present = ctrl.ingest_alive() && ctrl.vertical_track_on_wire().is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
@@ -1554,7 +1682,25 @@ fn state_json(
         cd = ctrl.current_delay_ms(),
         bf = ctrl.buffer_fill_ms(),
         btm = ctrl.target_buffer_ms(),
-        bc = max_buffer_ms,
+        bc = ctrl.delay_capacity_ms(),
+        ck = ctrl.capacity_kbps(),
+        // False while capacity_kbps is the reference bitrate (nothing
+        // measured yet): the capacity is then a typical figure, not a limit.
+        cm = ctrl.measured_capacity_kbps().is_some(),
+        bmr = ctrl.ring.capacity() / (1024 * 1024),
+        rp = buffer_restart_pending(ctrl, &s),
+        // The armed delay is longer than the buffer holds at this bitrate, so
+        // it runs at `holds_ms` (see `Controller::capacity_short`). null when
+        // the armed delay fits or there is no verdict yet.
+        cs = ctrl.capacity_short().map_or_else(
+            || "null".to_string(),
+            |short| format!(
+                r#"{{"armed_ms":{},"holds_ms":{},"message":{}}}"#,
+                short.armed_ms,
+                short.holds_ms,
+                json_escape_quoted(&short.message)
+            )
+        ),
         ia = ctrl.ingest_alive(),
         ea = ctrl.egress_alive(),
         dla = alive_count,
@@ -2081,7 +2227,7 @@ fn apply_twitch_multitrack_config(
             let auths = if endpoint_auths.is_empty() {
                 vec![twitch_key.to_string()]
             } else {
-                endpoint_auths.clone()
+                endpoint_auths
             };
             ctrl.remember_eb_session(crate::controller::EbSession {
                 config: rewritten.clone(),
@@ -2825,6 +2971,8 @@ const SETTABLE_KEYS: &[&str] = &[
     "auto_activate_when_ready",
     "auto_arm_delay_ms",
     "update_check_enabled",
+    "update_tray_notify",
+    "tray_color",
     "open_dashboard_on_launch",
     "midi_device",
     "twitch_client_id",
@@ -2940,6 +3088,8 @@ async fn post_config(
     let old = settings.borrow().clone();
     let needs_restart =
         old.buffer_mb != new_settings.buffer_mb || old.buffer_path != new_settings.buffer_path;
+    let ports_changed =
+        old.web_port != new_settings.web_port || old.ingest_port != new_settings.ingest_port;
 
     // Mark as configured the moment we have at least one usable destination.
     if has_streamable_dest(&new_settings) {
@@ -2966,6 +3116,16 @@ async fn post_config(
     // takes effect this instant - no need to wait for a restart.
     crate::trace::set_enabled(new_settings.tracing_enabled);
     let _ = settings.send(new_settings.clone());
+    // Both ports rebind live, so a registered OBS service would point at the
+    // old ones. Refreshed now while OBS is shut (it only rewrites an entry
+    // that is already there); with OBS open the OBS tab says to close it.
+    // Never from a test: that would be the real OBS install.
+    if ports_changed && !cfg!(test) && !crate::obs_register::is_obs_running() {
+        let _ = crate::obs_register::refresh_stale_registration(
+            new_settings.web_port,
+            new_settings.ingest_port,
+        );
+    }
 
     let restart_msg = if needs_restart {
         ",\"restart_required\":true,\"restart_reason\":\"buffer size/path changed\""
@@ -3036,6 +3196,14 @@ async fn post_config_reset(
         .unwrap_or_else(|| "settings".to_string());
     let _wl = settings_write_guard();
     let mut next = Settings::defaults();
+    // What the user was already told about updates is not a setting: after
+    // any reset the running build must not be announced again as new.
+    {
+        let prev = settings.borrow();
+        next.update_notified = prev.update_notified.clone();
+        next.last_seen_version = prev.last_seen_version.clone();
+        next.last_seen_commit = prev.last_seen_commit.clone();
+    }
     if scope == "settings" {
         // Carry over the user's stream destinations and profiles -
         // a settings reset must not silently lose their stream keys.
@@ -3088,11 +3256,13 @@ async fn post_config_reset(
     }
     ctrl.log(format!("config reset (scope={})", scope));
     reconcile_obs_vod_files(&next, ctrl);
+    // The dashboard moves to the default port at once: the page follows it.
+    let web_port = next.web_port;
     let _ = settings.send(next);
     (
         "200 OK",
         "application/json",
-        format!(r#"{{"ok":true,"scope":"{}"}}"#, scope),
+        format!(r#"{{"ok":true,"scope":"{scope}","web_port":{web_port}}}"#),
     )
 }
 
@@ -3108,15 +3278,16 @@ async fn post_delay(
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let ms: u32 = form.get("ms").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let ms = ms.min(600_000);
-    if let Some(refusal) = arm_refusal(ctrl, settings, ms) {
+    let ms = ms.min(config::MAX_DELAY_MS);
+    if let Some(refusal) = arm_refusal(ctrl, ms) {
         return refusal;
     }
     ctrl.arm_delay(ms);
-    if ms > 0 {
-        // Force activate even if buffer hasn't built - controller will
-        // hold at live edge until it has, with buffer_building=true.
-        let _ = ctrl.activate_delay();
+    if ms > 0 && ctrl.activate_delay().is_err() {
+        // Not buffered yet. This endpoint is "arm, and go on as soon as it
+        // is ready" in one call, so the supervisor switches it on then,
+        // with "Activate when ready" off too.
+        ctrl.activate_once_ready();
     }
     persist_delay_state(ctrl, settings, cfg_path);
     (
@@ -3133,11 +3304,7 @@ async fn post_delay(
 /// and used to answer it twice.
 ///
 /// `ms == 0` is disarm and is always allowed.
-fn arm_refusal(
-    ctrl: &Arc<Controller>,
-    settings: &Arc<watch::Sender<Settings>>,
-    ms: u32,
-) -> Option<(&'static str, &'static str, String)> {
+fn arm_refusal(ctrl: &Arc<Controller>, ms: u32) -> Option<(&'static str, &'static str, String)> {
     if ms == 0 {
         return None;
     }
@@ -3149,26 +3316,21 @@ fn arm_refusal(
         return Some(conflict(crate::controller::NO_INGEST));
     }
     // Capacity guard. A delay bigger than the ring can hold at the current
-    // bitrate never fills - it stalls in "arming" forever, which looks like a
-    // hang. The dashboard and dock both gate this client-side, but a stale
-    // page, a second dock, or a scripted call could still ask for the
-    // impossible. Same estimate we publish as buffer_capacity_ms_est; bitrate
-    // is floored at 2 Mbps so a low-bitrate stream stays generous.
-    let cap_ms = {
-        let s = settings.borrow();
-        let kbps = ctrl.bitrate_kbps().max(2_000) as u64;
-        (s.buffer_mb * 1024 * 1024 * 8 / kbps) as u32
-    };
-    if cap_ms > 0 && ms > cap_ms {
-        return Some(conflict(&format!(
-            "Buffer too small for {}s - it holds about {}s at the current bitrate. \
-             Raise the buffer size in the dashboard.",
-            ms / 1000,
-            cap_ms / 1000
-        )));
-    }
-    None
+    // bitrate would only ever run at what the ring holds. The dashboard and
+    // dock gate this from the same estimate (buffer_capacity_ms_est), but a
+    // stale page, a second dock, or a scripted call could still ask for it.
+    ctrl.capacity_problem(ms).map(|problem| conflict(&problem))
 }
+
+/// OBS rewrites its service list from memory when it quits, so a change made
+/// while it runs is undone on exit.
+const OBS_OPEN_REGISTER: &str =
+    "Close OBS first. It rewrites its service list when it quits, so a change made now would be lost.";
+
+/// These launch a fresh OBS with a one-time flag; a second OBS next to an
+/// open one never gets it.
+const OBS_OPEN_LAUNCH: &str =
+    "OBS is already open. Close it, then launch it from here so it starts with Enhanced Broadcasting.";
 
 /// A 409 carrying one human-readable reason.
 fn conflict(error: &str) -> (&'static str, &'static str, String) {
@@ -3191,9 +3353,9 @@ async fn post_arm(
         .get("ms")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
-        .min(600_000);
+        .min(config::MAX_DELAY_MS);
 
-    if let Some(refusal) = arm_refusal(ctrl, settings, ms) {
+    if let Some(refusal) = arm_refusal(ctrl, ms) {
         return refusal;
     }
     ctrl.arm_delay(ms);
@@ -3471,10 +3633,6 @@ async fn post_profile_add(
 ) -> (&'static str, &'static str, String) {
     let form = config::parse_form(body);
     let name = form.get("name").cloned().unwrap_or_default();
-    let delay_ms: u32 = form
-        .get("delay_ms")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
     if name.trim().is_empty() {
         return (
             "400 Bad Request",
@@ -3482,6 +3640,19 @@ async fn post_profile_add(
             r#"{"ok":false,"error":"name required"}"#.into(),
         );
     }
+    // A missing or mistyped delay used to save a 0 s profile that arms
+    // nothing; past the hour, one no way of arming accepts.
+    let Some(delay_ms) = form
+        .get("delay_ms")
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|ms| (1..=config::MAX_DELAY_MS).contains(ms))
+    else {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"Set a delay between 1 second and 1 hour."}"#.into(),
+        );
+    };
     let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
     // Replace existing by name, else append.
@@ -3512,7 +3683,13 @@ async fn post_profile_del(
 
 // ---- Logs viewer ----
 
+/// The log, and when (Unix ms) the clock of its `[+s]` stamps started, so
+/// the dashboard can show each line's time of day.
 fn logs_json(ctrl: &Controller) -> String {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let started_ms = now_ms.saturating_sub(crate::controller::process_now_ms());
     let q = ctrl.logs.lock();
     let mut out = String::from(r#"{"lines":["#);
     for (i, line) in q.iter().enumerate() {
@@ -3523,7 +3700,7 @@ fn logs_json(ctrl: &Controller) -> String {
         out.push_str(&json_escape(line));
         out.push('"');
     }
-    out.push_str("]}");
+    out.push_str(&format!(r#"],"started_ms":{started_ms}}}"#));
     out
 }
 
@@ -3834,10 +4011,30 @@ async fn post_destination_delete(
     // already completed once, so we keep the user on the dashboard (empty
     // Destinations tab) rather than reopening the first-run wizard. Only an
     // explicit `scope=all` reset returns them to the wizard.
-    let _ = ns.save(cfg_path);
+    if let Err(e) = ns.save(cfg_path) {
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&e.to_string())
+            ),
+        );
+    }
     reconcile_obs_vod_files(&ns, ctrl);
     let _ = settings.send(ns);
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
+/// "Retry now" on a destination's card: skip the rest of its backoff wait.
+fn post_destination_retry(body: &str, ctrl: &Controller) -> (&'static str, &'static str, String) {
+    let form = config::parse_form(body);
+    let id = form.get("id").map(String::as_str).unwrap_or_default();
+    if ctrl.retry_destination_now(id) {
+        ("200 OK", "application/json", r#"{"ok":true}"#.into())
+    } else {
+        conflict("It isn't waiting to retry: it's connecting, live, or not set up.")
+    }
 }
 
 /// Restrict a dock slot id to a filesystem/config-safe charset so it can
@@ -3952,6 +4149,83 @@ async fn dock_layout_save(
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
 }
 
+/// The settings the OBS dock may change, through `POST /dock/settings`:
+/// on/off switches that steer the stream the dock already controls. Nothing
+/// here touches a port, a file, a key, a destination or the password, so the
+/// dock token can hold this without reaching `POST /config` (Admin).
+const DOCK_SETTABLE_KEYS: &[&str] = &[
+    "auto_arm_on_connect",
+    "auto_activate_when_ready",
+    "tracing_enabled",
+    "crash_protection.enabled",
+];
+
+/// The dock's switches, plus whether a password is set (the dock then knows
+/// a link it copies needs the access token).
+fn dock_settings_json(settings: &Arc<watch::Sender<Settings>>) -> String {
+    let s = settings.borrow();
+    format!(
+        r#"{{"auto_arm_on_connect":{},"auto_activate_when_ready":{},"tracing_enabled":{},"crash_protection.enabled":{},"auth_enabled":{}}}"#,
+        s.auto_arm_on_connect,
+        s.auto_activate_when_ready,
+        s.tracing_enabled,
+        s.crash_protection.enabled,
+        !s.dashboard_password_hash.is_empty(),
+    )
+}
+
+/// Flip dock switches (`DOCK_SETTABLE_KEYS`, values true/false). Any other
+/// key or value refuses the whole request, so a dock link can never be
+/// stretched into a settings write, not even partly.
+fn post_dock_settings(
+    body: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> (&'static str, &'static str, String) {
+    let refuse = |msg: String| {
+        (
+            "400 Bad Request",
+            "application/json",
+            format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&msg)),
+        )
+    };
+    let form = config::parse_form(body);
+    if form.is_empty() {
+        return refuse("nothing to change".into());
+    }
+    let mut changes = Vec::with_capacity(form.len());
+    for (k, v) in form.iter() {
+        if !DOCK_SETTABLE_KEYS.contains(&k.as_str()) {
+            return refuse(format!("the dock can't change {k}"));
+        }
+        let on = match v.as_str() {
+            "true" | "on" | "1" => true,
+            "false" | "off" | "0" => false,
+            _ => return refuse(format!("{k} takes true or false")),
+        };
+        changes.push((k.as_str(), on));
+    }
+    let _wl = settings_write_guard();
+    let mut ns = settings.borrow().clone();
+    for (k, on) in changes {
+        apply_field_str(&mut ns, k, if on { "true" } else { "false" });
+    }
+    if let Err(e) = ns.save(cfg_path) {
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"save failed: {}"}}"#,
+                json_escape(&e.to_string())
+            ),
+        );
+    }
+    // Same as POST /config: the trace switch takes effect this instant.
+    crate::trace::set_enabled(ns.tracing_enabled);
+    let _ = settings.send(ns);
+    ("200 OK", "application/json", dock_settings_json(settings))
+}
+
 /// Live per-destination snapshot: id, name, status, bitrate, frames, etc.
 /// Joins settings (the user's configured list) with the controller's
 /// runtime stats (only present for destinations that were spawned).
@@ -3992,7 +4266,7 @@ fn destinations_json(
             ""
         };
         out.push_str(&format!(
-            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"custom_egress_url_set":{cus},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"audio_track":{at},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc}}}"#,
+            r#"{{"id":{id},"name":{n},"enabled":{en},"platform":{p},"custom_egress_url":{cu},"custom_egress_url_set":{cus},"twitch_ingest":{ti},"youtube_ingest":{yi},"vod_audio":{va},"vod_audio_inject_eb":{vie},"stream_format":{sf},"audio_track":{at},"vertical_ready":{vr},"vertical_canvas_present":{vcp},"video_res":{vres},"video_codec":{vcod},"stream_key_set":{ks},"url_redacted":{ur},"alive":{al},"bitrate_kbps":{br},"tags_sent":{ts},"bytes_sent":{bs},"cuts":{ct},"reconnects":{rc},"failure":{fl}}}"#,
             id = json_escape_quoted(&d.id),
             n  = json_escape_quoted(&d.name),
             en = d.enabled,
@@ -4017,10 +4291,34 @@ fn destinations_json(
             bs = bytes,
             ct = cuts,
             rc = reconnects,
+            fl = dest_failure_json(ctrl, &d.id),
         ));
     }
     out.push(']');
     out
+}
+
+/// A destination's last failed attempt for its card, or `null`. The retry
+/// time is relative so a phone or a LAN browser with a wrong clock still
+/// counts down right. No age: it would change the state on every SSE tick
+/// for as long as the reason stays up. The detail was scrubbed of the
+/// stream key when it was recorded.
+fn dest_failure_json(ctrl: &Controller, id: &str) -> String {
+    let Some(f) = ctrl.destination_failure(id) else {
+        return "null".into();
+    };
+    let now = std::time::Instant::now();
+    let retry_in = f.retry_at.map_or_else(
+        || "null".to_string(),
+        |at| at.saturating_duration_since(now).as_millis().to_string(),
+    );
+    format!(
+        r#"{{"advice":{},"detail":{},"retries":{},"retry_in_ms":{}}}"#,
+        json_escape_quoted(f.advice),
+        json_escape_quoted(&f.detail),
+        f.retries,
+        retry_in,
+    )
 }
 
 fn redact_url(url: &str) -> String {
@@ -4152,7 +4450,7 @@ fn reveal_path(path: &Path) {
     // a default location), whereas a plain folder path - auto-quoted by
     // `arg` so spaces are safe - opens reliably.
     let dir = if abs.is_dir() {
-        abs.clone()
+        abs
     } else {
         abs.parent().map(|p| p.to_path_buf()).unwrap_or(abs.clone())
     };
@@ -4186,6 +4484,30 @@ fn valid_slug(slug: &str) -> bool {
 /// Save a Studio-baked overlay. The body is the full self-contained HTML
 /// the Studio produced (lean live overlay + the editable doc embedded as
 /// an `ic-doc` comment). Writes `overlays_dir/<slug>.html`.
+/// What a POST under `/overlays/` asks for.
+#[derive(Debug, PartialEq)]
+enum OverlayPost<'a> {
+    MarkSeeded,
+    Reset,
+    Delete(&'a str),
+    Save(&'a str),
+}
+
+/// `seeded` and `reset` are the dashboard's own calls and come without a
+/// body; a save always has one (the overlay's page). So an overlay the user
+/// names "Reset" or "Seeded" is saved under that name, where it used to wipe
+/// every overlay, or be dropped, and still answer "Saved".
+fn overlay_post<'a>(rest: &'a str, body: &str) -> OverlayPost<'a> {
+    match rest {
+        "seeded" if body.is_empty() => OverlayPost::MarkSeeded,
+        "reset" if body.is_empty() => OverlayPost::Reset,
+        _ => match rest.strip_suffix("/delete") {
+            Some(slug) => OverlayPost::Delete(slug),
+            None => OverlayPost::Save(rest),
+        },
+    }
+}
+
 fn overlay_save(
     slug: &str,
     body: &str,
@@ -4244,9 +4566,22 @@ fn overlay_delete(
         );
     }
     let dir = settings.borrow().overlays_dir.clone();
-    // Best-effort: removing a non-existent file is not an error worth
-    // surfacing - the end state (overlay gone) is what the caller wants.
-    let _ = std::fs::remove_file(dir.join(format!("{slug}.html")));
+    // Removing a non-existent file is not an error worth surfacing - the end
+    // state (overlay gone) is what the caller wants. A file that stays (in
+    // use, read-only) is: the dashboard would otherwise say "Deleted".
+    match std::fs::remove_file(dir.join(format!("{slug}.html"))) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => {
+            return (
+                "500 Internal Server Error",
+                "application/json",
+                format!(
+                    r#"{{"ok":false,"error":"{}"}}"#,
+                    json_escape(&e.to_string())
+                ),
+            );
+        }
+        _ => {}
+    }
     let _ = std::fs::remove_dir_all(dir.join(slug));
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
 }
@@ -4444,6 +4779,19 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         "update_check_enabled" => {
             s.update_check_enabled = !matches!(value, "" | "false" | "0" | "off");
         }
+        "update_tray_notify" => {
+            s.update_tray_notify = !matches!(value, "" | "false" | "0" | "off");
+        }
+        "tray_color" => {
+            let colors = crate::instance_lock::TRAY_COLORS.len();
+            if let Some(v) = value
+                .parse::<u8>()
+                .ok()
+                .filter(|v| usize::from(*v) < colors)
+            {
+                s.tray_color = v;
+            }
+        }
         "open_dashboard_on_launch" => {
             s.open_dashboard_on_launch = !matches!(value, "" | "false" | "0" | "off");
         }
@@ -4614,6 +4962,42 @@ fn allow_csrf(method: &str, origin: &str, host: &str) -> bool {
     !host.is_empty() && origin_host.eq_ignore_ascii_case(host)
 }
 
+/// An upload for the alerts page, with the type its extension names and
+/// `nosniff`, so a file can only ever be a sound or a picture. No
+/// `Access-Control-Allow-Origin`: the page plays it as a plain `<img>`,
+/// `<audio>` or `<video>`, which needs none, and other websites have no
+/// business reading the streamer's files.
+async fn serve_alert_media(sock: &mut TcpStream, cfg_path: &Path, name: &str) -> io::Result<()> {
+    let folder = crate::integrations::alert_media::folder(cfg_path);
+    let found = crate::integrations::alert_media::locate(&folder, name);
+    let data = match &found {
+        Some((path, _)) => tokio::fs::read(path).await.ok(),
+        None => None,
+    };
+    let (Some((_, ctype)), Some(data)) = (found, data) else {
+        return write_simple(sock, "404 Not Found", "text/plain", "no such file", "").await;
+    };
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n\
+         X-Content-Type-Options: nosniff\r\n\
+         Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
+        data.len()
+    );
+    sock.write_all(head.as_bytes()).await?;
+    sock.write_all(&data).await
+}
+
+/// OBS's browser sources name OBS in their User-Agent (`... OBS/32.2.2`).
+fn from_obs_browser(head: &str) -> bool {
+    head.split(
+        "
+",
+    )
+    .any(|line| {
+        strip_prefix_icase(line, "user-agent:").is_some_and(|agent| agent.contains(" OBS/"))
+    })
+}
+
 fn strip_prefix_icase<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     if s.len() < prefix.len() {
         return None;
@@ -4692,7 +5076,10 @@ fn classify_access(method: &str, path: &str) -> Access {
     // The alerts browser source, for the same reason, and safe for the same
     // reason: its feed is only the cards integrations chose to put on
     // stream. Nothing there identifies the streamer or controls anything.
-    if method == "GET" && (path == "/alerts" || path == "/alerts-events") {
+    // Its uploaded sounds and pictures too: they play on stream anyway.
+    if method == "GET"
+        && (path == "/alerts" || path == "/alerts-events" || path.starts_with("/alerts/media/"))
+    {
         return Access::Public;
     }
     match (method, path) {
@@ -4713,6 +5100,7 @@ fn classify_access(method: &str, path: &str) -> Access {
         | ("GET", "/destinations")
         | ("GET", "/overlays")
         | ("POST", "/destinations/toggle")
+        | ("POST", "/destinations/retry")
         | ("POST", "/arm")
         | ("POST", "/activate")
         | ("POST", "/stop")
@@ -4722,13 +5110,51 @@ fn classify_access(method: &str, path: &str) -> Access {
         | ("POST", "/cut-after")
         | ("POST", "/cut-after/cancel")
         // Ending a crash-protection hold is operational, like a cut.
-        | ("POST", "/crash-protection/end") => Access::Control,
+        | ("POST", "/crash-protection/end")
+        // The dock's own switches: a fixed allow-list of on/off settings
+        // (DOCK_SETTABLE_KEYS), refused as a whole if anything else is sent.
+        | ("GET", "/dock/settings")
+        | ("POST", "/dock/settings") => Access::Control,
         ("POST", p) if p.starts_with("/docks/") => Access::Control,
         // GET a saved dock layout (the dock loads its own persisted layout).
         ("GET", p) if p.starts_with("/docks/") => Access::Control,
         _ => Access::Admin,
     }
 }
+
+/// This setup's login cookie names. Browsers keep cookies per host, not per
+/// port, so with one fixed name two InstantClones on 127.0.0.1 shared it:
+/// logging in to one replaced the other's cookie, and the two kept logging
+/// each other out (docks too). The names carry a short id of this setup's
+/// settings file, which stays the same when its ports change.
+struct CookieNames {
+    session: String,
+    dock: String,
+}
+
+fn cookie_names(cfg_path: &Path) -> CookieNames {
+    let path = std::path::absolute(cfg_path).unwrap_or_else(|_| cfg_path.to_path_buf());
+    let digest = crate::sha256::hex(path.to_string_lossy().to_lowercase().as_bytes());
+    let id = &digest[..8];
+    CookieNames {
+        session: format!("ic_session_{id}"),
+        dock: format!("ic_dock_{id}"),
+    }
+}
+
+/// The shared names every earlier build used. Still read, so updating logs
+/// nobody out; a token in them only counts if this copy issued it.
+const LEGACY_SESSION_COOKIE: &str = "ic_session";
+const LEGACY_DOCK_COOKIE: &str = "ic_dock";
+
+/// A Set-Cookie line that deletes `name`.
+fn clear_cookie(name: &str) -> String {
+    format!("Set-Cookie: {name}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0\r\n")
+}
+
+/// How long the dock cookie lives: 400 days, the longest Chromium (and
+/// so OBS's browser) keeps any cookie.
+const DOCK_COOKIE_MAX_AGE_SECS: u32 = 400 * 24 * 60 * 60;
 
 /// Parse the Cookie header into name -> value (`a=b; c=d`).
 fn parse_cookies(head: &str) -> std::collections::HashMap<String, String> {
@@ -4954,9 +5380,6 @@ static DOCK_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js.gz"
 /// Main dashboard / first-run wizard. Source lives in `web/index.html`;
 /// build-time minified + gzipped (see `build.rs`).
 static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
-/// The alerts browser source (`/alerts`); see `integrations::alerts`.
-static ALERTS_HTML: &str = include_str!("../web/alerts.html");
-
 /// The dashboard's Integrations tab; source in `web/integrations.js`,
 /// build-time gzipped like the dock script.
 static INTEGRATIONS_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js.gz"));
@@ -5397,20 +5820,9 @@ start();
 mod tests {
     use super::*;
 
-    // ── Settings save: tracing_enabled regression test ──────────
-    //
-    // `post_config` whitelists which form keys get dispatched into
-    // `apply_field_str`. Any field that handles a save but isn't in
-    // the whitelist gets silently dropped - exactly what happened
-    // with `tracing_enabled` between 3f9db09 (toggle added) and
-    // 6a3990b (default flipped to off). Invisible until users
-    // actually tried to enable the toggle on a fresh install.
-
     /// A controller with a real ring, so `arm_refusal` can be asked the
     /// question the HTTP handlers ask it.
-    fn refusal_harness(
-        buffer_mb: u64,
-    ) -> (
+    fn refusal_harness() -> (
         Arc<Controller>,
         Arc<watch::Sender<Settings>>,
         std::path::PathBuf,
@@ -5424,9 +5836,7 @@ mod tests {
         let ring =
             Arc::new(crate::buffer::DiskRing::create(&path, 4 * 1024 * 1024).expect("ring create"));
         let ctrl = Arc::new(Controller::new(ring, 0));
-        let mut s = Settings::defaults();
-        s.buffer_mb = buffer_mb;
-        (ctrl, Arc::new(watch::channel(s).0), path)
+        (ctrl, Arc::new(watch::channel(Settings::defaults()).0), path)
     }
 
     /// An overlay is a picture, not a control surface.
@@ -5439,7 +5849,7 @@ mod tests {
     /// streamer, describes the machine, or authorises anything is.
     #[test]
     fn the_overlay_feed_carries_only_what_an_overlay_paints() {
-        let (ctrl, settings, path) = refusal_harness(1024);
+        let (ctrl, settings, path) = refusal_harness();
         {
             let mut s = settings.borrow().clone();
             s.destinations.push(crate::config::Destination {
@@ -5488,7 +5898,6 @@ mod tests {
             "destinations_total",
             "cuts",
             "bitrate_kbps",
-            "alive",
         ] {
             assert!(json.contains(field), "overlays render {field}: {json}");
         }
@@ -5535,6 +5944,24 @@ mod tests {
         assert_eq!(classify_access("POST", "/overlay-state"), Access::Admin);
         assert_eq!(classify_access("POST", "/overlay-events"), Access::Admin);
         assert_eq!(classify_access("GET", "/alerts-events"), Access::Public);
+        // Alert uploads play on stream; adding, deleting and the look are
+        // the dashboard's.
+        assert_eq!(
+            classify_access("GET", "/alerts/media/ding.mp3"),
+            Access::Public
+        );
+        assert_eq!(
+            classify_access("POST", "/alerts/media/ding.mp3"),
+            Access::Admin
+        );
+        for path in [
+            "/integrations/alerts/media/upload",
+            "/integrations/alerts/media/delete",
+            "/integrations/alerts/look",
+            "/integrations/alerts/add-to-obs",
+        ] {
+            assert_eq!(classify_access("POST", path), Access::Admin, "{path}");
+        }
         assert_eq!(classify_access("POST", "/alerts-events"), Access::Admin);
         // Putting a test card up is a dashboard action.
         assert_eq!(
@@ -5617,10 +6044,10 @@ mod tests {
     /// have to refuse it too, or the browser is a way around the rule.
     #[test]
     fn arm_refusal_matches_the_hotkey_rules() {
-        let (ctrl, settings, path) = refusal_harness(1024);
+        let (ctrl, _settings, path) = refusal_harness();
 
         // Nothing publishing: arming is refused, and says why.
-        let refused = arm_refusal(&ctrl, &settings, 5_000).expect("offline arm is refused");
+        let refused = arm_refusal(&ctrl, 5_000).expect("offline arm is refused");
         assert_eq!(refused.0, "409 Conflict");
         assert!(
             refused.2.contains(crate::controller::NO_INGEST),
@@ -5630,17 +6057,16 @@ mod tests {
 
         // Disarming is never refused - it frees the buffer, and OBS dying
         // mid-delay is exactly when someone reaches for it.
-        assert!(arm_refusal(&ctrl, &settings, 0).is_none(), "disarm offline");
+        assert!(arm_refusal(&ctrl, 0).is_none(), "disarm offline");
 
         // With a publisher, a sane delay goes through.
         ctrl.mark_ingest_alive_for_test();
-        assert!(arm_refusal(&ctrl, &settings, 5_000).is_none());
+        assert!(arm_refusal(&ctrl, 5_000).is_none());
 
-        // More delay than the buffer can hold never fills, so it is refused
-        // with the size it can actually manage.
-        let (small, small_settings, small_path) = refusal_harness(8);
-        small.mark_ingest_alive_for_test();
-        let too_big = arm_refusal(&small, &small_settings, 600_000).expect("over capacity");
+        // Once the bitrate is measured, more delay than the buffer holds is
+        // refused with the size it would need. 4 MB at 8 Mbps is under 4 s.
+        ctrl.note_inbound_kbps_for_test(8_000);
+        let too_big = arm_refusal(&ctrl, 600_000).expect("over capacity");
         assert_eq!(too_big.0, "409 Conflict");
         assert!(
             too_big.2.contains("Buffer too small") && too_big.2.contains("Raise the buffer size"),
@@ -5654,7 +6080,6 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(&small_path);
     }
 
     /// The whitelist and the applier have to agree, in both directions, for
@@ -5785,6 +6210,20 @@ mod tests {
     async fn every_settable_key_survives_post_config_save_and_load() {
         let rows: &[SettableRow] = &[
             SettableRow {
+                key: "crash_protection.enabled",
+                set: "on",
+                reads_as: "true",
+                reset: "off",
+                read: |s| s.crash_protection.enabled.to_string(),
+            },
+            SettableRow {
+                key: "crash_protection.hold_secs",
+                set: "45",
+                reads_as: "45",
+                reset: "120",
+                read: |s| s.crash_protection.hold_secs.to_string(),
+            },
+            SettableRow {
                 key: "ingest_port",
                 set: "19350",
                 reads_as: "19350",
@@ -5877,6 +6316,20 @@ mod tests {
                 read: |s| s.update_check_enabled.to_string(),
             },
             SettableRow {
+                key: "update_tray_notify",
+                set: "off",
+                reads_as: "false",
+                reset: "true",
+                read: |s| s.update_tray_notify.to_string(),
+            },
+            SettableRow {
+                key: "tray_color",
+                set: "2",
+                reads_as: "2",
+                reset: "0",
+                read: |s| s.tray_color.to_string(),
+            },
+            SettableRow {
                 key: "open_dashboard_on_launch",
                 set: "off",
                 reads_as: "false",
@@ -5923,13 +6376,13 @@ mod tests {
             );
         }
 
-        // Every binding, too: `hotkey.<action>` and `midi.<action>`.
-        let letters = ["A", "B", "C", "D", "E"];
+        // Every binding, too: `hotkey.<action>` and `midi.<action>`, each
+        // action on its own key and note.
         let bindings: Vec<(String, String, String)> = config::ACTIONS
             .iter()
-            .zip(letters)
             .enumerate()
-            .flat_map(|(i, (action, letter))| {
+            .flat_map(|(i, action)| {
+                let letter = char::from(b'A' + i as u8);
                 [
                     (
                         action.to_string(),
@@ -6068,7 +6521,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_field_str_persists_crash_protection_fields() {
+    fn apply_field_str_reads_crash_protection_fields() {
         let mut s = crate::config::Settings::defaults();
         assert!(is_settable_key("crash_protection.enabled"));
         apply_field_str(&mut s, "crash_protection.enabled", "on");
@@ -6082,17 +6535,25 @@ mod tests {
         assert_eq!(s.crash_protection.hold_secs, 45);
     }
 
+    /// A value that isn't a number leaves the field alone, so a hand-edited
+    /// form doesn't reset the delay to zero.
     #[test]
-    fn apply_field_str_parses_auto_arm_delay_ms() {
+    fn apply_field_str_ignores_a_garbage_number() {
         let mut s = crate::config::Settings::defaults();
-        // defaults() seeds at 15 s; replace via the form-key path.
-        assert_eq!(s.auto_arm_delay_ms, 15_000);
-        apply_field_str(&mut s, "auto_arm_delay_ms", "30000");
-        assert_eq!(s.auto_arm_delay_ms, 30_000);
-        // Garbage values are ignored (parse failure leaves the field
-        // alone) so a hand-edited form doesn't reset to zero.
+        let before = s.auto_arm_delay_ms;
         apply_field_str(&mut s, "auto_arm_delay_ms", "not-a-number");
-        assert_eq!(s.auto_arm_delay_ms, 30_000);
+        assert_eq!(s.auto_arm_delay_ms, before);
+    }
+
+    /// Only a colour the tray icon comes in can be picked.
+    #[test]
+    fn apply_field_str_ignores_a_tray_colour_outside_the_list() {
+        let mut s = crate::config::Settings::defaults();
+        apply_field_str(&mut s, "tray_color", "2");
+        assert_eq!(s.tray_color, 2);
+        apply_field_str(&mut s, "tray_color", "9");
+        apply_field_str(&mut s, "tray_color", "purple");
+        assert_eq!(s.tray_color, 2);
     }
 
     // ── OBS multitrack-config proxy helpers ──────────────────────
@@ -6261,47 +6722,44 @@ mod tests {
     }
 
     #[test]
-    fn accepts_gzip_when_listed() {
-        assert!(accepts_gzip(
-            "GET / HTTP/1.1\r\nAccept-Encoding: gzip, deflate, br\r\n"
-        ));
-        assert!(accepts_gzip("GET / HTTP/1.1\r\nAccept-Encoding: gzip\r\n"));
-        // case insensitive header name + token
-        assert!(accepts_gzip("GET / HTTP/1.1\r\naccept-encoding: GZIP\r\n"));
-    }
-
-    #[test]
-    fn accepts_gzip_via_wildcard() {
-        assert!(accepts_gzip("GET / HTTP/1.1\r\nAccept-Encoding: *\r\n"));
-    }
-
-    #[test]
-    fn refuses_when_header_missing_or_identity_only() {
-        assert!(!accepts_gzip("GET / HTTP/1.1\r\nHost: x\r\n"));
-        assert!(!accepts_gzip(
-            "GET / HTTP/1.1\r\nAccept-Encoding: identity\r\n"
-        ));
-        assert!(!accepts_gzip(
-            "GET / HTTP/1.1\r\nAccept-Encoding: deflate, br\r\n"
+    fn obs_browser_sources_are_told_apart() {
+        let obs = "GET /alerts-events HTTP/1.1
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)                    AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 OBS/32.2.2
+";
+        assert!(from_obs_browser(obs));
+        let chrome = "GET /alerts-events HTTP/1.1
+user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
+";
+        assert!(!from_obs_browser(chrome));
+        assert!(!from_obs_browser(
+            "GET /alerts-events HTTP/1.1
+"
         ));
     }
 
+    /// The compressed page goes only to a browser that asked for gzip.
     #[test]
-    fn refuses_gzip_when_q_zero() {
-        // RFC 7231: `q=0` explicitly forbids that coding.
-        assert!(!accepts_gzip(
-            "GET / HTTP/1.1\r\nAccept-Encoding: gzip;q=0\r\n"
-        ));
-        assert!(!accepts_gzip(
-            "GET / HTTP/1.1\r\nAccept-Encoding: *;q=0\r\n"
-        ));
-    }
-
-    #[test]
-    fn accepts_gzip_with_explicit_quality() {
-        assert!(accepts_gzip(
-            "GET / HTTP/1.1\r\nAccept-Encoding: gzip;q=0.5, deflate\r\n"
-        ));
+    fn gzip_is_sent_only_to_a_client_that_accepts_it() {
+        for (header, accepted, why) in [
+            ("Accept-Encoding: gzip, deflate, br", true, "listed"),
+            ("Accept-Encoding: gzip", true, "alone"),
+            ("accept-encoding: GZIP", true, "any letter case"),
+            ("Accept-Encoding: *", true, "the wildcard"),
+            (
+                "Accept-Encoding: gzip;q=0.5, deflate",
+                true,
+                "a quality above zero",
+            ),
+            ("Host: x", false, "no header"),
+            ("Accept-Encoding: identity", false, "identity only"),
+            ("Accept-Encoding: deflate, br", false, "other codings only"),
+            // RFC 7231: `q=0` explicitly forbids that coding.
+            ("Accept-Encoding: gzip;q=0", false, "gzip forbidden"),
+            ("Accept-Encoding: *;q=0", false, "everything forbidden"),
+        ] {
+            let head = format!("GET / HTTP/1.1\r\n{header}\r\n");
+            assert_eq!(accepts_gzip(&head), accepted, "{why}: {header}");
+        }
     }
 
     /// `/overlay` needs no auth, and its `lang` is written into the page's
@@ -6507,32 +6965,37 @@ mod tests {
         );
     }
 
+    /// A request that changes something must come from our own page, or
+    /// from a tool that sends no Origin at all.
     #[test]
-    fn csrf_allows_all_gets() {
-        // GETs are always read-only; never gated.
-        assert!(allow_csrf("GET", "", ""));
-        assert!(allow_csrf("GET", "https://evil.com", "127.0.0.1:7799"));
-    }
-
-    #[test]
-    fn csrf_allows_post_without_origin() {
-        // CLI tools and Stream Deck don't send Origin - must keep working.
-        assert!(allow_csrf("POST", "", "127.0.0.1:7799"));
-    }
-
-    #[test]
-    fn csrf_allows_same_origin_post() {
-        assert!(allow_csrf(
-            "POST",
-            "http://127.0.0.1:7799",
-            "127.0.0.1:7799"
-        ));
-    }
-
-    #[test]
-    fn csrf_blocks_cross_origin_post() {
-        // The real attack: a tab on evil.com fetching our local API.
-        assert!(!allow_csrf("POST", "https://evil.com", "127.0.0.1:7799"));
+    fn only_our_own_page_may_send_a_changing_request() {
+        const HOST: &str = "127.0.0.1:7799";
+        for (method, origin, allowed, why) in [
+            // GETs only read: never gated.
+            ("GET", "", true, "a GET"),
+            ("GET", "https://evil.com", true, "a GET from anywhere"),
+            // CLI tools and a Stream Deck send no Origin: they keep working.
+            ("POST", "", true, "a POST with no Origin"),
+            ("POST", "http://127.0.0.1:7799", true, "our own page"),
+            // The real attack: a tab on evil.com fetching our local API.
+            ("POST", "https://evil.com", false, "another site"),
+            ("POST", "null", false, "a sandboxed page"),
+            (
+                "POST",
+                "http://127.0.0.1:8080",
+                false,
+                "another app on this PC",
+            ),
+            (
+                "POST",
+                "http://127.0.0.1:7799.evil.com",
+                false,
+                "a host that only starts like ours",
+            ),
+        ] {
+            assert_eq!(allow_csrf(method, origin, HOST), allowed, "{why}");
+        }
+        assert!(allow_csrf("GET", "", ""), "a GET with no Host either");
     }
 
     // ── Misc helpers ─────────────────────────────────────────────────
@@ -6942,6 +7405,27 @@ mod tests {
         assert!(!valid_slug(&"x".repeat(65))); // over the 64-char cap
     }
 
+    /// An overlay named "Reset" used to be sent to the reset call, which
+    /// deleted every overlay and answered "Saved".
+    #[test]
+    fn an_overlay_named_like_an_app_call_is_saved_not_run() {
+        assert_eq!(overlay_post("reset", ""), OverlayPost::Reset);
+        assert_eq!(overlay_post("seeded", ""), OverlayPost::MarkSeeded);
+        assert_eq!(overlay_post("reset", "<html>"), OverlayPost::Save("reset"));
+        assert_eq!(
+            overlay_post("seeded", "<html>"),
+            OverlayPost::Save("seeded")
+        );
+        assert_eq!(
+            overlay_post("tourney", "<html>"),
+            OverlayPost::Save("tourney")
+        );
+        assert_eq!(
+            overlay_post("tourney/delete", ""),
+            OverlayPost::Delete("tourney")
+        );
+    }
+
     #[test]
     fn overlay_save_list_delete_round_trip() {
         let dir = unique_tmp_dir("crud");
@@ -7109,6 +7593,12 @@ mod tests {
         /// write half is closed after the request, so a body shorter than its
         /// Content-Length reaches EOF instead of waiting out the body deadline.
         async fn send_from(&self, peer_ip: &str, raw: &[u8]) -> Response {
+            Response::parse(&self.send_raw_from(peer_ip, raw).await)
+        }
+
+        /// The response bytes as they came, for a body that isn't text (the
+        /// gzipped dashboard and dock pages).
+        async fn send_raw_from(&self, peer_ip: &str, raw: &[u8]) -> Vec<u8> {
             let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
             let addr = listener.local_addr().expect("addr");
             let mut client = TcpStream::connect(addr).await.expect("connect");
@@ -7141,7 +7631,7 @@ mod tests {
                 }
             }
             server.await.expect("serve task").expect("serve");
-            Response::parse(&out)
+            out
         }
     }
 
@@ -7207,11 +7697,14 @@ mod tests {
                 .map(|(_, v)| v.as_str())
         }
 
-        /// The `ic_session` token a Set-Cookie on this response hands out.
+        /// The session token a Set-Cookie on this response hands out, under
+        /// this setup's own cookie name (`ic_session_<id>`).
         fn session_cookie(&self) -> String {
             self.header("set-cookie")
                 .and_then(|c| c.split(';').next())
-                .and_then(|c| c.strip_prefix("ic_session="))
+                .and_then(|c| c.strip_prefix("ic_session_"))
+                .and_then(|c| c.split_once('='))
+                .map(|(_, token)| token)
                 .expect("a session cookie")
                 .to_string()
         }
@@ -7346,6 +7839,7 @@ mod tests {
         ("GET", "/crash-protection/preview", Access::Admin),
         ("POST", "/app/restart", Access::Admin),
         ("POST", "/app/quit", Access::Admin),
+        ("POST", "/update/apply", Access::Admin),
         // Auth management in `auth_gate`, after the gate.
         ("POST", "/auth/set-password", Access::Admin),
         ("POST", "/auth/disable", Access::Admin),
@@ -7369,7 +7863,8 @@ mod tests {
         ("POST", "/obs/setup-vod-eb", Access::Admin),
         ("POST", "/shortcut/create-eb", Access::Admin),
         ("GET", "/update-check", Access::Admin),
-        ("POST", "/update/apply", Access::Admin),
+        ("GET", "/whats-new", Access::Admin),
+        ("POST", "/whats-new/dismiss", Access::Admin),
         ("POST", "/reveal/buffer", Access::Admin),
         ("POST", "/reveal/overlays", Access::Admin),
         ("POST", "/reveal/trace", Access::Admin),
@@ -7377,10 +7872,13 @@ mod tests {
         ("GET", "/twitch_ingests", Access::Admin),
         ("GET", "/profiles", Access::Control),
         ("GET", "/logs", Access::Admin),
+        ("GET", "/diagnostics", Access::Admin),
         ("GET", "/overlays", Access::Control),
         ("GET", "/destinations", Access::Control),
         ("POST", "/config", Access::Admin),
         ("POST", "/config/reset", Access::Admin),
+        ("GET", "/dock/settings", Access::Control),
+        ("POST", "/dock/settings", Access::Control),
         ("POST", "/arm", Access::Control),
         ("POST", "/activate", Access::Control),
         ("POST", "/stop", Access::Control),
@@ -7400,6 +7898,7 @@ mod tests {
         ("POST", "/destinations", Access::Admin),
         ("POST", "/destinations/toggle", Access::Control),
         ("POST", "/destinations/delete", Access::Admin),
+        ("POST", "/destinations/retry", Access::Control),
     ];
 
     /// Prefix routes in the router, checked with a sample path beneath each.
@@ -7624,8 +8123,132 @@ mod tests {
         Live::new(s)
     }
 
-    fn session_header(token: &str) -> String {
-        format!("Cookie: ic_session={token}\r\n")
+    impl Live {
+        /// A session cookie under this setup's own name, as a login sets it.
+        fn session_header(&self, token: &str) -> String {
+            let name = super::cookie_names(&self.cfg_path).session;
+            format!("Cookie: {name}={token}\r\n")
+        }
+    }
+
+    /// The right password opens a session under this setup's cookie, a
+    /// wrong one is refused, and logging out ends the session for good.
+    #[tokio::test]
+    async fn logging_in_and_out_opens_and_closes_a_session() {
+        let live = locked_live();
+        let wrong = live
+            .send(&request("POST", "/login", "", b"password=nope"))
+            .await;
+        assert_eq!(wrong.status, 401);
+        assert!(wrong.header("set-cookie").is_none());
+
+        let ok = live
+            .send(&request("POST", "/login", "", b"password=password"))
+            .await;
+        assert_eq!(ok.status, 200, "{}", ok.body);
+        let cookie = ok.header("set-cookie").expect("a session cookie");
+        assert!(
+            cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"),
+            "{cookie}"
+        );
+        let token = ok.session_cookie();
+        let admin = live
+            .send(&request("GET", "/logs", &live.session_header(&token), b""))
+            .await;
+        assert_eq!(admin.status, 200);
+
+        let out = live
+            .send(&request(
+                "POST",
+                "/logout",
+                &live.session_header(&token),
+                b"",
+            ))
+            .await;
+        assert_eq!(out.status, 200);
+        let after = live
+            .send(&request("GET", "/logs", &live.session_header(&token), b""))
+            .await;
+        assert_eq!(after.status, 401, "the session ended with the logout");
+    }
+
+    /// Five wrong passwords lock that client out before the hash runs, even
+    /// for the right one; another client is not affected.
+    #[tokio::test]
+    async fn guessing_the_password_locks_the_guesser_out() {
+        let live = locked_live();
+        let login = |password: &str| {
+            request(
+                "POST",
+                "/login",
+                "",
+                format!("password={password}").as_bytes(),
+            )
+        };
+        for _ in 0..5 {
+            let r = live.send_from("10.0.0.7", &login("nope")).await;
+            assert_eq!(r.status, 401);
+        }
+        let locked = live.send_from("10.0.0.7", &login("password")).await;
+        assert_eq!(locked.status, 429, "{}", locked.body);
+        let other = live.send_from("10.0.0.8", &login("password")).await;
+        assert_eq!(other.status, 200, "another client still logs in");
+    }
+
+    /// The server refuses a password shorter than 8 characters, whatever the
+    /// page checks, and the old one stays.
+    #[tokio::test]
+    async fn a_short_new_password_is_refused() {
+        let live = locked_live();
+        let session = live.auth.create_session();
+        let r = live
+            .send(&request(
+                "POST",
+                "/auth/set-password",
+                &live.session_header(&session),
+                b"password=1234567",
+            ))
+            .await;
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert_eq!(
+            live.settings.borrow().dashboard_password_hash,
+            TEST_PASSWORD_HASH
+        );
+    }
+
+    /// Two setups on one PC get their own cookie names (a browser shares
+    /// cookies across ports, so one name had them log each other out), and
+    /// a setup's names don't change from one request to the next.
+    #[test]
+    fn each_setup_names_its_own_login_cookies() {
+        let main = super::cookie_names(Path::new("C:/Streams/Main/instantclone.config.json"));
+        let second = super::cookie_names(Path::new("C:/Streams/Second/instantclone.config.json"));
+        assert!(main.session.starts_with("ic_session_") && main.session.len() == 19);
+        assert!(main.dock.starts_with("ic_dock_") && main.dock.len() == 16);
+        assert_ne!(main.session, second.session);
+        assert_ne!(main.dock, second.dock);
+        let again = super::cookie_names(Path::new("C:/Streams/Main/instantclone.config.json"));
+        assert_eq!(main.session, again.session);
+    }
+
+    /// A session opens the dashboard under this setup's cookie name, and
+    /// under the old shared name for a session from before the update. The
+    /// same token under another setup's name opens nothing, and a stale
+    /// cookie of ours doesn't hide a good one under the old name.
+    #[tokio::test]
+    async fn a_session_cookie_is_read_under_this_setups_name() {
+        let live = locked_live();
+        let token = live.auth.create_session();
+        let ours = super::cookie_names(&live.cfg_path).session;
+        for (header, status) in [
+            (format!("Cookie: {ours}={token}\r\n"), 200),
+            (format!("Cookie: ic_session={token}\r\n"), 200),
+            (format!("Cookie: ic_session_00000000={token}\r\n"), 401),
+            (format!("Cookie: {ours}=stale; ic_session={token}\r\n"), 200),
+        ] {
+            let r = live.send(&request("GET", "/state", &header, b"")).await;
+            assert_eq!(r.status, status, "{header}");
+        }
     }
 
     /// The dock token opens Control routes and nothing more. Only routes that
@@ -7660,6 +8283,7 @@ mod tests {
             ("POST", "/auth/regen-dock"),
             ("POST", "/app/quit"),
             ("POST", "/app/restart"),
+            ("POST", "/whats-new/dismiss"),
             ("POST", "/destinations"),
             ("POST", "/destinations/delete"),
             ("POST", "/logs/clear"),
@@ -7697,6 +8321,125 @@ mod tests {
         }
     }
 
+    /// The dock's switches are the only settings a dock link can change. A
+    /// request naming anything else, or a value that isn't on/off, changes
+    /// nothing at all, not even the allowed keys sent alongside it.
+    #[tokio::test]
+    async fn the_dock_token_flips_only_the_dock_switches() {
+        let live = locked_live();
+        let by_cookie = format!("Cookie: ic_dock={TEST_DOCK_TOKEN}\r\n");
+        let post =
+            |body: &'static str| request("POST", "/dock/settings", &by_cookie, body.as_bytes());
+
+        let r = live
+            .send(&post(
+                "auto_arm_on_connect=true&auto_activate_when_ready=on&crash_protection.enabled=1",
+            ))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(
+            r.body.contains(r#""crash_protection.enabled":true"#),
+            "{}",
+            r.body
+        );
+        {
+            let s = live.settings.borrow();
+            assert!(s.auto_arm_on_connect && s.auto_activate_when_ready);
+            assert!(s.crash_protection.enabled);
+        }
+        let saved = Settings::load(&live.cfg_path).expect("saved config");
+        assert!(saved.auto_arm_on_connect && saved.crash_protection.enabled);
+
+        let before = live.settings.borrow().to_json(false, true);
+        for body in [
+            "",
+            "ingest_port=1",
+            "buffer_mb=1",
+            "ingest_key=",
+            "dock_token=x",
+            "dashboard_password_hash=x",
+            "crash_protection.hold_secs=45",
+            "hotkey.arm=F1",
+            "auto_arm_on_connect=false&web_bind_all=true",
+            "auto_arm_on_connect=yes",
+        ] {
+            let r = live.send(&post(body)).await;
+            assert_eq!(r.status, 400, "{body:?}: {}", r.body);
+        }
+        assert_eq!(
+            live.settings.borrow().to_json(false, true),
+            before,
+            "nothing changed"
+        );
+
+        // No token, no switches.
+        let r = live
+            .send(&request(
+                "POST",
+                "/dock/settings",
+                "",
+                b"auto_arm_on_connect=false",
+            ))
+            .await;
+        assert_eq!(r.status, 401);
+        assert!(live.settings.borrow().auto_arm_on_connect);
+    }
+
+    /// The dock reads its switches and learns a password is on, and never
+    /// the token itself.
+    #[tokio::test]
+    async fn the_dock_reads_its_switches_without_the_token() {
+        let live = locked_live();
+        let r = live
+            .send(&request(
+                "GET",
+                &format!("/dock/settings?token={TEST_DOCK_TOKEN}"),
+                "",
+                b"",
+            ))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(r.body.contains(r#""auth_enabled":true"#), "{}", r.body);
+        assert!(
+            r.body.contains(r#""auto_arm_on_connect":false"#),
+            "{}",
+            r.body
+        );
+        assert!(!r.body.contains(TEST_DOCK_TOKEN), "{}", r.body);
+    }
+
+    /// Opening the dock by its token link leaves a cookie that outlives an
+    /// OBS restart, so a second dock opened without the token keeps working.
+    #[tokio::test]
+    async fn the_dock_cookie_outlives_the_browser_session() {
+        let live = locked_live();
+        let path = format!("/dock?token={TEST_DOCK_TOKEN}");
+        let raw = live
+            .send_raw_from(
+                "127.0.0.1",
+                &request("GET", &path, "Accept-Encoding: gzip\r\n", b""),
+            )
+            .await;
+        // The page itself is gzip, so only the head is read as text.
+        let head_end = find_subslice(&raw, b"\r\n\r\n").expect("a response head");
+        let head = std::str::from_utf8(&raw[..head_end]).expect("a text head");
+        assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
+        let cookie = head
+            .split("\r\n")
+            .find_map(|l| l.strip_prefix("Set-Cookie: "))
+            .expect("a dock cookie");
+        let ours = super::cookie_names(&live.cfg_path).dock;
+        assert!(
+            cookie.starts_with(&format!("{ours}={TEST_DOCK_TOKEN};")),
+            "{cookie}"
+        );
+        assert!(cookie.contains("Max-Age=34560000"), "{cookie}");
+        assert!(
+            cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"),
+            "{cookie}"
+        );
+    }
+
     /// Changing the password ends every earlier session, so a stolen cookie
     /// dies with the old password; whoever changed it gets a fresh one.
     #[tokio::test]
@@ -7704,7 +8447,7 @@ mod tests {
         let live = locked_live();
         let old = live.auth.create_session();
         let r = live
-            .send(&request("GET", "/logs", &session_header(&old), b""))
+            .send(&request("GET", "/logs", &live.session_header(&old), b""))
             .await;
         assert_eq!(r.status, 200, "precondition: the session is admin");
 
@@ -7712,7 +8455,7 @@ mod tests {
             .send(&request(
                 "POST",
                 "/auth/set-password",
-                &session_header(&old),
+                &live.session_header(&old),
                 b"password=a-new-password",
             ))
             .await;
@@ -7720,11 +8463,11 @@ mod tests {
         let fresh = r.session_cookie();
 
         let r = live
-            .send(&request("GET", "/logs", &session_header(&old), b""))
+            .send(&request("GET", "/logs", &live.session_header(&old), b""))
             .await;
         assert_eq!(r.status, 401, "the old session must be dead");
         let r = live
-            .send(&request("GET", "/logs", &session_header(&fresh), b""))
+            .send(&request("GET", "/logs", &live.session_header(&fresh), b""))
             .await;
         assert_eq!(r.status, 200, "the new session works");
         assert_ne!(
@@ -7743,7 +8486,7 @@ mod tests {
             .send(&request(
                 "POST",
                 "/auth/disable",
-                &session_header(&session),
+                &live.session_header(&session),
                 b"",
             ))
             .await;
@@ -7766,7 +8509,7 @@ mod tests {
             .send(&request(
                 "POST",
                 "/auth/regen-dock",
-                &session_header(&session),
+                &live.session_header(&session),
                 b"",
             ))
             .await;
@@ -7842,6 +8585,7 @@ mod tests {
             "/integrations",
             "/integrations/activity",
             "/logs",
+            "/diagnostics",
             "/docks",
         ] {
             assert!(!readable_cross_origin(path), "{path}");
@@ -7912,7 +8656,7 @@ mod tests {
             .send(&request(
                 "GET",
                 "/destinations",
-                &session_header(&session),
+                &live.session_header(&session),
                 b"",
             ))
             .await;
@@ -7936,6 +8680,117 @@ mod tests {
             name: format!("Twitch {id}"),
             ..twitch_dest(true, key)
         }
+    }
+
+    /// A buffer saved but not yet in use reads as a pending restart until the
+    /// running ring matches the settings again; /state carries both.
+    #[tokio::test]
+    async fn a_saved_buffer_change_is_pending_until_restart() {
+        let live = Live::new(Settings::defaults());
+        let mut s = live.settings.borrow().clone();
+        s.buffer_path = live.ctrl.ring.path().to_path_buf();
+        s.buffer_mb = live.ctrl.ring.capacity() / (1024 * 1024);
+        assert!(!buffer_restart_pending(&live.ctrl, &s));
+        s.buffer_mb += 100;
+        assert!(buffer_restart_pending(&live.ctrl, &s), "a bigger size");
+        s.buffer_mb -= 100;
+        s.buffer_path = s.buffer_path.with_file_name("elsewhere.buf");
+        assert!(buffer_restart_pending(&live.ctrl, &s), "another file");
+
+        let state = live.send(&request("GET", "/state", "", b"")).await;
+        assert!(
+            state.body.contains(r#""buffer_mb_running":4,"#),
+            "{}",
+            state.body
+        );
+        assert!(
+            state.body.contains(r#""restart_pending":true"#),
+            "{}",
+            state.body
+        );
+    }
+
+    /// A profile needs a delay that some way of arming accepts: a missing,
+    /// zero or over-the-hour one is refused, not saved as 0 s.
+    #[tokio::test]
+    async fn a_profile_needs_a_delay_between_a_second_and_an_hour() {
+        let live = Live::new(Settings::defaults());
+        for body in [
+            &b"name=A"[..],
+            b"name=A&delay_ms=0",
+            b"name=A&delay_ms=3600001",
+            b"name=A&delay_ms=x",
+        ] {
+            let r = live.send(&request("POST", "/profiles", "", body)).await;
+            assert_eq!(r.status, 400, "{body:?}: {}", r.body);
+            assert!(r.body.contains("between 1 second and 1 hour"), "{}", r.body);
+        }
+        let r = live
+            .send(&request(
+                "POST",
+                "/profiles",
+                "",
+                b"name=A&delay_ms=3600000",
+            ))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(
+            r.body.contains(r#""name":"A","delay_ms":3600000"#),
+            "{}",
+            r.body
+        );
+    }
+
+    /// The default relative setting resolves beside the settings file, so
+    /// the running ring sits in another folder: that's the same file, not a
+    /// change waiting for a restart.
+    #[test]
+    fn a_relative_buffer_setting_matches_where_it_resolved() {
+        let running = std::path::Path::new("D:/setups/a/instantclone.buf");
+        let in_use = |setting: &str| is_buffer_in_use(running, std::path::Path::new(setting));
+        assert!(in_use("./instantclone.buf"));
+        assert!(in_use("instantclone.buf"));
+        assert!(in_use("D:/setups/a/instantclone.buf"));
+        assert!(!in_use("./other.buf"), "another file");
+        assert!(!in_use("D:/elsewhere/instantclone.buf"), "another folder");
+    }
+
+    /// A failing destination's reason reaches the card through /state and
+    /// /destinations, and "Retry now" is only accepted while it waits.
+    #[tokio::test]
+    async fn a_destination_failure_reaches_the_card_and_can_be_retried() {
+        let live = Live::new(settings_with_dests(vec![twitch_dest_with(
+            "a",
+            "live_real_key_123",
+        )]));
+        let state = live.send(&request("GET", "/state", "", b"")).await;
+        assert!(state.body.contains(r#""failure":null"#), "{}", state.body);
+        let early = live
+            .send(&request("POST", "/destinations/retry", "", b"id=a"))
+            .await;
+        assert_eq!(early.status, 409, "nothing to retry yet");
+
+        let dest = live.ctrl.destination_state("a");
+        *dest.failure.lock() = Some(crate::egress_failure::EgressFailure::new(
+            crate::egress_failure::KEY_REJECTED,
+            "RTMP NetStream.Publish.BadName: denied",
+            Some(std::time::Duration::from_secs(30)),
+        ));
+        for path in ["/state", "/destinations"] {
+            let r = live.send(&request("GET", path, "", b"")).await;
+            assert!(
+                r.body.contains(r#""advice":"Stream key rejected."#),
+                "{path}: {}",
+                r.body
+            );
+            assert!(r.body.contains(r#""retry_in_ms":"#), "{path}: {}", r.body);
+            assert!(!r.body.contains("live_real_key_123"), "{path}: {}", r.body);
+        }
+        let retry = live
+            .send(&request("POST", "/destinations/retry", "", b"id=a"))
+            .await;
+        assert_eq!(retry.status, 200, "{}", retry.body);
+        assert!(dest.retry_now.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     /// During a crash-protection hold the kept config carries the live
@@ -7975,6 +8830,25 @@ mod tests {
         let right = r#"{"authentication":"right-key","client":{}}"#;
         let cfg = obs_multitrack_config_proxy(right, "", ctrl, &live.settings).await;
         assert_eq!(cfg, "{held-config}");
+    }
+
+    /// The dashboard turns each line's `[+s]` stamp into a time of day from
+    /// `started_ms`, which must be a real moment no later than now.
+    #[test]
+    fn the_log_says_when_its_clock_started() {
+        let live = Live::new(settings_with_dests(vec![]));
+        live.ctrl.log("hello");
+        let log = crate::json::parse(&logs_json(&live.ctrl)).expect("valid JSON");
+        let started = log
+            .path("started_ms")
+            .and_then(|v| v.as_f64())
+            .expect("started_ms");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as f64;
+        assert!(started > 1.7e12 && started <= now, "{started}");
+        assert!(log.path("lines").is_some());
     }
 
     /// The ingest key is the only thing standing between a stranger's OBS and
@@ -8139,8 +9013,8 @@ mod tests {
 
     /// The second line of defence: a clean name that is a symlink to a file
     /// outside the folder must not be served. Creating a symlink on Windows
-    /// needs Developer Mode or admin rights; without them the check is skipped
-    /// with a printed note rather than silently passing.
+    /// needs Developer Mode or admin rights; without them a desktop run skips
+    /// it with a note, while CI must run it.
     #[test]
     fn an_overlay_symlink_cannot_escape_the_folder() {
         let dir = unique_tmp_dir("symlink-in");
@@ -8153,7 +9027,11 @@ mod tests {
         #[cfg(unix)]
         let made = std::os::unix::fs::symlink(&secret, &link);
         match made {
-            Err(e) => eprintln!(
+            // CI can always make one: a skip there would hide a regression.
+            Err(e) if std::env::var_os("CI").is_some() => {
+                panic!("cannot create a symlink in CI: {e}")
+            }
+            Err(e) => log_line!(
                 "NOTE: skipped the overlay symlink-escape check: cannot create a symlink \
                  here ({e}). On Windows this needs Developer Mode or admin rights."
             ),

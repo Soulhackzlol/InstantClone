@@ -6,6 +6,9 @@
 const $ = id => document.getElementById(id);
 const PHASE_TO_STATE = { idle: 'off', preparing: 'arming', ready: 'armed', active: 'active' };
 const EASE = 'cubic-bezier(.32,.72,0,1)';
+// The longest delay anything can arm, config::MAX_DELAY_MS in the backend.
+const DELAY_MAX_S = 3600;
+const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 let s = null, lastVal = '0.0', pending = null, pendingTimer = 0;
 
 // Guarded writes. The state stream lands about 4 times a second and most
@@ -24,28 +27,78 @@ function fmtClock(ms) {
   const secs = Math.max(0, Math.ceil(ms / 1000));
   return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 }
+// A delay in the dock's one unit, seconds: the number, the field and every
+// label agree (Activate 900s under a 900), whatever the length.
+function fmtDelay(ms) {
+  return Math.round(ms / 1000) + 's';
+}
 
+// What a dock opened by a link without the access token sees once a
+// dashboard password is on: every call answers 401.
+const AUTH_MSG = "This dock link is missing its access token. Copy the dock URL again from the dashboard's OBS tab.";
+let authBlocked = false;
 async function fetchJ(u, o) {
   try {
     const r = await fetch(u, o);
-    const j = r.headers.get('content-type')?.includes('json') ? await r.json() : null;
+    const j = r.headers.get('content-type')?.includes('json') ? await r.json().catch(() => null) : null;
+    noteAuth(r.status === 401);
     return { ok: r.ok, status: r.status, j };
   } catch (_) { return { ok: false, status: 0, j: null }; }
 }
-function toast(msg, kind) {
-  const t = $('toast'); t.className = 'show ' + (kind || ''); t.textContent = msg;
-  clearTimeout(t._h); t._h = setTimeout(() => t.className = '', 1800);
+// The message for a failed call: the server's own reason when it gave one.
+function failText(r, fallback) {
+  if (r.status === 401) return AUTH_MSG;
+  if (r.status === 0) return "Can't reach InstantClone. Is it running?";
+  return r.j?.error || fallback;
 }
+function noteAuth(blocked) {
+  if (authBlocked === blocked) return;
+  authBlocked = blocked;
+  paintNote();
+}
+// One toast at a time. Errors stay long enough to read twice, and a hover
+// holds any toast until the pointer leaves.
+function toast(msg, kind) {
+  const t = $('toast'), k = kind || 'info';
+  t.className = 'show ' + k;
+  t.firstElementChild.textContent = { ok: '✓', err: '!' }[k] || 'i';
+  t.lastElementChild.textContent = msg;
+  t._ms = k === 'err' ? 4500 : 2200;
+  armToast(t);
+}
+function armToast(t) {
+  clearTimeout(t._h);
+  if (!t._hover) t._h = setTimeout(() => t.classList.remove('show'), t._ms);
+}
+$('toast').addEventListener('mouseenter', e => { e.currentTarget._hover = true; clearTimeout(e.currentTarget._h); });
+$('toast').addEventListener('mouseleave', e => { e.currentTarget._hover = false; armToast(e.currentTarget); });
+// Safe in text and in either kind of quoted attribute, as integrations.js's.
 function esc(v) {
-  return String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+// OBS's dock browser can refuse the async clipboard (no focus, no
+// permission); the older copy command still works there.
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (_) {}
+  ta.remove();
+  return ok;
 }
 
 // ---------------------------------------------------------------- config ----
 
+const params = new URLSearchParams(location.search);
 // The dock slot this page is (?dock=<id>). Sanitised to match the server's
 // allowed key charset so a hand-typed slot can round-trip to storage.
-const SLOT = ((new URLSearchParams(location.search).get('dock') || 'default')
-  .replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40)) || 'default';
+const SLOT = ((params.get('dock') || 'default').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40)) || 'default';
+// The access token this dock was opened with, carried into every dock link
+// it copies so a password-protected dashboard lets those docks in too.
+const TOKEN = (params.get('token') || '').replace(/[^a-zA-Z0-9]/g, '');
+const DOCKS_MAX = 64;   // config::MAX_DOCKS
 
 // Widget catalog: id -> label + default options (on + per-widget knobs).
 const WIDGETS = {
@@ -110,7 +163,8 @@ const OPTS = {
   ],
   profiles: [
     { k: 'view', label: 'Layout', modes: [['chips', 'Chips'], ['list', 'List']] },
-    { k: 'arm', label: 'Arm on tap' }, { k: 'value', label: 'Show seconds' },
+    // Off, a tap only picks the delay and the main button confirms it.
+    { k: 'arm', label: 'Apply on tap' }, { k: 'value', label: 'Show delay' },
   ],
   stats:  [
     { k: 'view', label: 'Layout', modes: [['row', 'Row'], ['tiles', 'Tiles']] },
@@ -126,7 +180,7 @@ const OPTS = {
 function defaultCfg() {
   const w = {};
   for (const id of ALL) w[id] = { ...WIDGETS[id].def };
-  return { v: 1, preset: 'full', density: 'comfy', accent: 'cyan', order: [...ROWS], w };
+  return { v: 1, name: '', preset: 'full', density: 'comfy', accent: 'cyan', order: [...ROWS], w };
 }
 // Accent presets: [--accent, --accent-ink]. Ink is the dark text drawn on
 // filled accent buttons, tuned per hue so it stays legible.
@@ -138,6 +192,9 @@ const ACCENTS = {
   pink:   ['#f472b6', '#24040f'],
   blue:   ['#6aa8ff', '#04101c'],
 };
+// A dock's display name: what the Docks list calls it. The slot id in its
+// URL never changes, so renaming can't strand the OBS dock that uses it.
+function cleanName(v) { return String(v || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 40); }
 // Keep only known row ids, drop dupes, and append any rows a newer version
 // added so an old saved order still renders every widget.
 function sanitizeOrder(raw) {
@@ -152,6 +209,7 @@ function sanitizeOrder(raw) {
 function mergeCfg(raw) {
   const base = defaultCfg();
   if (!raw || typeof raw !== 'object') return base;
+  base.name = cleanName(raw.name);
   if (raw.preset) base.preset = raw.preset;
   if (raw.density === 'compact' || raw.density === 'comfy') base.density = raw.density;
   if (ACCENTS[raw.accent]) base.accent = raw.accent;
@@ -167,55 +225,155 @@ let cfg = defaultCfg();
 
 // -------------------------------------------------------- capacity gate ----
 // The disk ring holds a finite amount of video. A delay bigger than it can
-// fill at the current bitrate silently stalls in "arming" forever, which
-// reads as a bug. Mirror the dashboard's estimate so the dock greys out (and
-// refuses to arm) delays the buffer can't hold. Soft estimate: ~160 kbps
-// audio, ~5% RTMP framing, a little headroom, and a peak-hold on bitrate so
-// the gate doesn't flicker a chip in/out on a momentary dip. The server
-// enforces the same wall on /arm, so this is UX, not the last line of defence.
-const BUF_AUDIO_KBPS = 160, BUF_OVERHEAD_PCT = 5, BUF_HEADROOM_PCT = 3, BUF_REF_KBPS = 10000;
-let bufferMB = 0;          // persisted buffer size, from /config
-let bitrateHoldKbps = 0;   // worst-case recent bitrate (peak-hold, slow decay)
-function updateBitrateHold() {
-  const m = s && s.stats && s.stats.bitrate_kbps;
-  if (!m || m <= 1000) return;                         // no signal - keep last hold
-  bitrateHoldKbps = Math.max(m, (bitrateHoldKbps || m) * 0.985);
-}
-function planningKbps() {
-  if (bitrateHoldKbps > 1000) return bitrateHoldKbps;
-  const m = s && s.stats && s.stats.bitrate_kbps;
-  return (m && m > 1000) ? m : BUF_REF_KBPS;           // plan for 10 Mbps before we know
-}
-function capMsFor(mb, kbps) {
-  if (!mb || mb <= 0) return 0;
-  const total = (Math.max(1, kbps) + BUF_AUDIO_KBPS) * (1 + BUF_OVERHEAD_PCT / 100);
-  return Math.floor((mb * 8192) / total * (1 - BUF_HEADROOM_PCT / 100)) * 1000;
-}
-function currentCapMs() { return bufferMB > 0 ? capMsFor(bufferMB, planningKbps()) : 0; }
+// fill at the current bitrate would only run at what the buffer holds. The
+// dock greys out (and refuses to arm) delays the buffer can't hold, from the
+// server's own estimate (state.buffer_capacity_ms_est, held at the recent
+// peak bitrate), so it greys out exactly what /arm would refuse.
+const BUF_SLACK_MS = 2000;   // kept on top of the delay (BUFFER_SLACK_MS)
+function currentCapMs() { return (s && s.buffer_capacity_ms_est) || 0; }
+// The buffer size, in MB, that holds a delay of `ms` at the bitrate the
+// server plans for, rounded up like the server's (buffer_mb_for).
 function requiredMB(ms) {
-  if (!ms || ms <= 0) return 0;
-  const total = (planningKbps() + BUF_AUDIO_KBPS) * (1 + BUF_OVERHEAD_PCT / 100);
-  return Math.ceil((ms / 1000) * total / (1 - BUF_HEADROOM_PCT / 100) / 8192);
+  if (!ms || ms <= 0 || !s || !s.capacity_kbps) return 0;
+  const bytes = Math.ceil((ms + BUF_SLACK_MS) * s.capacity_kbps / 8);
+  return Math.ceil(Math.ceil(bytes * 16 / 15) / 1048576);
 }
 function overCap(ms) { const c = currentCapMs(); return c > 0 && ms > c; }
-async function fetchBufferMB() {
-  const r = await fetchJ('/config');
-  if (r.ok && r.j && typeof r.j.buffer_mb === 'number') bufferMB = r.j.buffer_mb;
-  renderProfiles();   // re-gate chips now that capacity is known
+// Why a delay doesn't fit: firm once OBS's bitrate is measured, an
+// estimate at a typical rate before that.
+function capAdvice(ms) {
+  return s && s.capacity_measured
+    ? `Buffer too small for ${fmtDelay(ms)}. Raise the buffer size to at least ${requiredMB(ms)} MB in System, then restart.`
+    : `Likely too long: at a typical rate the buffer holds about ${fmtDelay(currentCapMs())}. Your real bitrate decides once OBS connects.`;
+}
+function capToast(ms) {
+  toast(capAdvice(ms), 'err');
+}
+// What the profile chips were last drawn for: which ones the buffer can't
+// hold, the phase and the running delay. Chips redraw only when it moves.
+let profileGate = '';
+function profileGateKey() {
+  const ds = s ? PHASE_TO_STATE[s.phase] || 'off' : 'off';
+  return ds + ':' + (s?.armed_delay_ms || 0) + ':' + profileCache.map(p => (overCap(p.delay_ms || 0) ? 1 : 0)).join('');
 }
 
 // ---------------------------------------------------------- delay controls --
 
+function phaseNow() { return s ? PHASE_TO_STATE[s.phase] || 'off' : 'off'; }
+function isEngaged(ds) { return ds === 'armed' || ds === 'active'; }
+// The delay in the field, in ms, held to what the server accepts so a label
+// never offers a value the click would not send.
+function inputMs() {
+  const sec = Math.round(+$('d').value || 0);
+  return Math.max(0, Math.min(DELAY_MAX_S, sec)) * 1000;
+}
+
+// While a delay is armed or running the number is a readout. A tap on it,
+// a +/- or a profile opens it for a new value, and the main button then
+// offers Adjust / Re-arm. Esc, "Keep" or leaving it unchanged closes it.
+let editing = false;
+function startEdit(focus) {
+  const ds = phaseNow();
+  if (!isEngaged(ds)) return;
+  if (!editing) {
+    editing = true;
+    $('d').value = Math.round((s.armed_delay_ms || 0) / 1000);
+    fitDelayInput();
+  }
+  setNumberMode(ds); renderCta();
+  if (focus) { $('d').focus(); $('d').select(); }
+}
+function endEdit() {
+  if (!editing) return;
+  editing = false;
+  if (!s) return;
+  const ds = phaseNow();
+  setNumberMode(ds); renderCta();
+  $('d').blur();
+}
+
 function bump(n) {
+  if (isEngaged(phaseNow())) startEdit(false);
   const step = cfg.w.number.step || 1;
   const i = $('d');
-  i.value = Math.max(0, Math.min(600, (+i.value || 0) + n * step));
+  setDelayField(Math.max(0, Math.min(DELAY_MAX_S, Math.round(+i.value || 0) + n * step)));
+}
+// Put a new number in the field, rolling its digits like the dashboard's
+// (not while someone is typing in it).
+function setDelayField(sec) {
+  const i = $('d'), was = i.value || '0', now = String(sec);
+  i.value = now;
   fitDelayInput(); renderCta();
+  if (was === now || !motionOK() || document.activeElement === i) return;
+  const cur = $('cur'), roll = $('d-roll');
+  cur.classList.add('d-rolling');
+  rollDigits(roll, was, now, () => cur.classList.remove('d-rolling'));
+}
+// Rolling digits, as on the dashboard: each changed digit rolls up (more)
+// or down (less), the right-most first like a counter, and a digit that
+// appears or goes away grows or shrinks its column instead of shoving the
+// number sideways. Plays in `el`; `done` hands back to the plain text.
+// Clicked again mid-roll, it runs at double speed so fast clicks keep up.
+function rollDigits(el, from, to, done) {
+  const quick = el.classList.contains('rolling');
+  const duration = quick ? 170 : 340, stagger = quick ? 20 : 40;
+  const n = Math.max(from.length, to.length);
+  const A = from.padStart(n, ' '), B = to.padStart(n, ' ');
+  const up = parseFloat(to) > parseFloat(from);
+  const glyph = ch => { const c = document.createElement('span'); c.textContent = ch === ' ' ? '\u00a0' : ch; return c; };
+  const cols = [], starts = [];
+  let longest = 0;
+  for (let i = 0; i < n; i++) {
+    const col = document.createElement('span');
+    cols.push(col);
+    if (A[i] === B[i]) { col.textContent = B[i]; continue; }
+    col.className = 'dg';
+    const strip = document.createElement('span');
+    strip.className = 'dg-strip';
+    if (up) strip.append(glyph(A[i]), glyph(B[i])); else strip.append(glyph(B[i]), glyph(A[i]));
+    col.append(strip);
+    const delay = (n - 1 - i) * stagger;
+    longest = Math.max(longest, delay + duration);
+    starts.push(() => {
+      strip.animate([{ transform: `translateY(${up ? '0%' : '-50%'})` }, { transform: `translateY(${up ? '-50%' : '0%'})` }],
+        { duration, delay, easing: 'cubic-bezier(.3,1.3,.5,1)', fill: 'both' });
+      if (A[i] === ' ') col.animate([{ width: '0px' }, { width: 'var(--dg-w)' }], { duration: duration * .7, delay, fill: 'both' });
+      if (B[i] === ' ') col.animate([{ width: 'var(--dg-w)' }, { width: '0px' }], { duration: duration * .7, delay, fill: 'both' });
+    });
+  }
+  el.replaceChildren(...cols);
+  el.classList.add('rolling');
+  starts.forEach(start => start());
+  clearTimeout(el._roll);
+  el._rollDone = done;
+  el._roll = setTimeout(() => endRoll(el), longest + 20);
+}
+// Finish a roll now: typing, a focus or a fill tick takes over at once.
+function endRoll(el) {
+  clearTimeout(el._roll);
+  if (!el.classList.contains('rolling')) return;
+  el.classList.remove('rolling');
+  const done = el._rollDone;
+  el._rollDone = null;
+  if (done) done();
 }
 // Size the idle setter to its digits so the unit sits right after them.
 function fitDelayInput() {
   const i = $('d'), w = Math.max(1, i.value.length) + 'ch';
   if (i.style.width !== w) i.style.width = w;
+}
+// A typed value past the range settles on the limit shortly after typing
+// stops, or at once on Enter or leaving the field (as on the dashboard).
+let settleTimer = 0;
+function settleDelayInput() {
+  clearTimeout(settleTimer);
+  const i = $('d');
+  if (i.value === '') return;
+  const settled = String(inputMs() / 1000);
+  if (settled === i.value) return;
+  i.value = settled;
+  fitDelayInput(); renderCta();
+  if (motionOK()) $('cur').animate([0, -5, 5, -3, 3, 0].map(x => ({ transform: `translateX(${x}px)` })), { duration: 320, easing: 'ease-out' });
 }
 // Show the requested state until the server confirms it. One timer, so a
 // quick second click can't have the first click's timer cut it short.
@@ -224,6 +382,7 @@ function setPending(p) {
   pendingTimer = setTimeout(() => { pending = null; renderCta(); }, 1500);
   tick();
 }
+function clearPending() { pending = null; clearTimeout(pendingTimer); }
 function fmtRate(k) { if (!k || k <= 0) return ''; return k >= 1000 ? (k / 1000).toFixed(2) + ' Mbps' : Math.round(k) + ' kbps'; }
 function fmt(ms) { if (ms < 100) return '0.0'; const x = Math.round(ms / 100) / 10; return x < 10 ? x.toFixed(1) : Math.round(x).toString(); }
 // Crossfade helper so the sub-tip swaps smoothly instead of snapping.
@@ -233,36 +392,62 @@ function setTip(text) {
   el._t = setTimeout(() => { el.textContent = text; el.classList.remove('fade'); }, 140);
 }
 
+function postArm(ms) { return fetchJ('/arm', { method: 'POST', headers: FORM, body: 'ms=' + ms }); }
 async function arm(ms) {
-  // Capacity guard, matched by the server's own /arm check. Skip for ms===0
-  // (disarm). The toast names the buffer size the delay actually needs.
-  if (ms > 0 && overCap(ms)) {
-    toast(`Buffer too small - ${(ms / 1000).toFixed(0)}s needs about ${requiredMB(ms)} MB. Raise it in the dashboard.`, 'err');
-    return;
-  }
+  // Capacity guard, matched by the server's own /arm check. The toast names
+  // the buffer size the delay actually needs.
+  if (overCap(ms)) { capToast(ms); return; }
   setPending('arming');
-  const r = await fetchJ('/arm', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'ms=' + ms });
-  if (!r.ok) { toast(r.j?.error || 'Failed to arm', 'err'); pending = null; }
-  else toast(`Arming ${(ms / 1000).toFixed(0)}s`, 'ok');
+  const r = await postArm(ms);
+  if (!r.ok) { clearPending(); toast(failText(r, "Couldn't arm the delay"), 'err'); }
+  else toast(`Arming ${fmtDelay(ms)}`, 'ok');
   tick();
+}
+// A new delay while one is engaged. /arm re-arms an armed delay, and moves
+// a running one: shorter at once, longer once the buffer has the footage.
+async function changeDelay(ms) {
+  if (overCap(ms)) { capToast(ms); return; }
+  const wasActive = phaseNow() === 'active';
+  const r = await postArm(ms);
+  if (!r.ok) { toast(failText(r, "Couldn't change the delay"), 'err'); tick(); return; }
+  editing = false;
+  toast(wasActive ? `Delay moving to ${fmtDelay(ms)}` : `Re-armed at ${fmtDelay(ms)}`, 'ok');
+  if (r.j && r.j.phase) applyState(r.j); else tick();
 }
 async function activate() {
   setPending('active');
   const r = await fetchJ('/activate', { method: 'POST' });
-  if (!r.ok) { toast(r.j?.error || 'Cannot activate yet', 'err'); pending = null; }
+  if (!r.ok) { clearPending(); toast(failText(r, "Can't activate yet"), 'err'); }
   else toast('Delay active', 'ok');
   tick();
 }
 // Cutting keeps the delay armed (the buffer keeps filling), so the dock
 // goes to Activate, not back to Arm.
-async function stop() { setPending('armed'); await fetchJ('/stop', { method: 'POST' }); toast('Back to live', 'ok'); tick(); }
-async function disarm() { setPending('off'); await fetchJ('/disarm', { method: 'POST' }); toast('Disarmed', 'ok'); tick(); }
+async function stop() {
+  setPending('armed');
+  const r = await fetchJ('/stop', { method: 'POST' });
+  if (!r.ok) { clearPending(); toast(failText(r, "Couldn't cut the delay. It is still running."), 'err'); }
+  else toast('Back to live', 'ok');
+  tick();
+}
+async function disarm() {
+  setPending('off');
+  const r = await fetchJ('/disarm', { method: 'POST' });
+  if (!r.ok) { clearPending(); toast(failText(r, "Couldn't disarm"), 'err'); }
+  else toast('Disarmed', 'ok');
+  tick();
+}
 
 function mainClick() {
-  const m = $('main'); if (m._busy || m.disabled) return;
+  const m = $('main'); if (m._busy || m.disabled || !s) return;
   m._busy = true; setTimeout(() => m._busy = false, 300);
-  if (!s) return;
+  settleDelayInput();
   const ds = PHASE_TO_STATE[s.phase] || 'off';
+  if (editing && isEngaged(ds)) {
+    const ms = inputMs();
+    if (ms > 0 && ms !== (s.armed_delay_ms || 0)) changeDelay(ms); else endEdit();
+    return;
+  }
   if (ds === 'active') {
     // Cutting a live delay drops you back to real time instantly - guard it
     // behind a two-tap confirm when the option is on.
@@ -275,16 +460,16 @@ function mainClick() {
   }
   if (ds === 'armed') return activate();
   if (ds === 'arming') return disarm();   // double-click safety: arming primary disarms too
-  const ms = (+$('d').value || 0) * 1000;
-  if (ms > 0) arm(ms); else toast('Enter a delay', 'err');
+  const ms = inputMs();
+  if (ms > 0) arm(ms); else toast('Enter a delay first', 'err');
 }
 // Scheduled safe cut ("cut after this airs"): mark now, keep forwarding the
 // buffered footage, auto-cut to live once the mark has aired everywhere.
 // Same endpoints as the dashboard's Cut-after; state carries the countdown.
 async function cutAfter() {
   const r = await fetchJ('/cut-after', { method: 'POST' });
-  if (!r.ok) toast(r.j?.error || 'Cannot schedule cut', 'err');
-  else toast('Mark set - cuts once this airs', 'ok');
+  if (!r.ok) toast(failText(r, "Couldn't schedule the cut"), 'err');
+  else toast('Mark set: cuts once this airs', 'ok');
   tick();
 }
 // Ending the hold ends the stream everywhere: the first click arms, a second
@@ -299,7 +484,8 @@ async function endHold() {
   disarmEndHold();
   const r = await fetchJ('/crash-protection/end', { method: 'POST' });
   if (r.status === 409) toast(r.j?.error || 'Nothing to end', 'info');
-  else toast(r.ok ? 'Stream ended on every destination' : 'Could not end the stream', r.ok ? 'ok' : 'err');
+  else if (r.ok) toast('Stream ended on every destination', 'ok');
+  else toast(failText(r, "Couldn't end the stream"), 'err');
   tick();
 }
 function disarmEndHold() {
@@ -308,8 +494,9 @@ function disarmEndHold() {
   clearTimeout(b._reset); b._armed = false; b.classList.remove('armed'); b.textContent = 'End now';
 }
 async function cutAfterCancel() {
-  await fetchJ('/cut-after/cancel', { method: 'POST' });
-  toast('Auto-cut cancelled', 'ok');
+  const r = await fetchJ('/cut-after/cancel', { method: 'POST' });
+  if (!r.ok) toast(failText(r, "Couldn't cancel the auto-cut. It will still cut."), 'err');
+  else toast('Auto-cut cancelled', 'ok');
   tick();
 }
 // The secondary button next to the main CTA: cancels arming while the buffer
@@ -323,14 +510,27 @@ function secondaryClick() {
 }
 
 // The big number is an editable setter while idle and a readout once a delay
-// is engaged - the +/- retire so the screen reads clean (the feedback ask).
+// is engaged, until a tap opens it for a new value (see startEdit).
 function setNumberMode(ds) {
-  const engaged = ds === 'arming' || ds === 'armed' || ds === 'active';
-  const controls = cfg.w.number.controls && !engaged;
-  setHidden($('d'), engaged);
-  setHidden($('v'), !engaged);
+  if (editing && !isEngaged(ds)) editing = false;
+  const readout = (ds === 'arming' || isEngaged(ds)) && !editing;
+  const controls = cfg.w.number.controls && ds !== 'arming';
+  setHidden($('d'), readout);
+  setHidden($('v'), !readout);
   setHidden($('minus'), !controls);
   setHidden($('plus'), !controls);
+  $('cur').classList.toggle('tap', readout && ds !== 'arming');
+  $('w-screen').classList.toggle('editing', editing);
+  const cap = $('edit-cap');
+  setHidden(cap, !editing);
+  // The label is set in capitals; the delay keeps its lowercase unit.
+  if (editing && cap._ms !== s.armed_delay_ms) {
+    cap._ms = s.armed_delay_ms;
+    const now = document.createElement('span');
+    now.className = 'edit-cap-num';
+    now.textContent = fmtDelay(s.armed_delay_ms || 0);
+    cap.replaceChildren('New delay · now ', now);
+  }
 }
 
 // ------------------------------------------------------------- state paint --
@@ -340,20 +540,40 @@ function setNumberMode(ds) {
 // counts (Ready in 0:23, Arm 30s) just updates its text.
 function mainLook(ds) {
   const m = $('main');
-  if (ds === 'active') return { key: 'cut', cls: 'danger', label: m._cutArm ? 'Tap again to cut' : 'Cut delay' };
-  if (ds === 'armed') return { key: 'armed', cls: 'go', icon: '▶', label: 'Activate' };
+  const ms = inputMs(), armedMs = s.armed_delay_ms || 0;
+  // Over the buffer's reach: the button says so instead of failing on click.
+  const capLook = { key: 'cap', label: `Buffer holds only ${fmtDelay(currentCapMs())}`, disabled: true };
+  if (editing && isEngaged(ds)) {
+    if (ms <= 0 || ms === armedMs) return { key: 'keep', cls: 'ghost', label: `Keep ${fmtDelay(armedMs)}` };
+    if (overCap(ms)) return capLook;
+    return ds === 'active'
+      ? { key: 'adjust', cls: 'primary', icon: '↻', label: `Adjust to ${fmtDelay(ms)}` }
+      : { key: 'rearm', cls: 'primary', icon: '↻', label: `Re-arm at ${fmtDelay(ms)}` };
+  }
+  if (ds === 'active') return { key: 'cut', cls: 'danger' + (m._cutArm ? ' armed' : ''), label: m._cutArm ? 'Tap again to cut' : 'Cut delay' };
+  if (ds === 'armed') {
+    // Nothing arriving from OBS: /activate would only refuse, so wait.
+    if (!s.ingest_alive) return { key: 'wait-armed', label: 'Waiting for OBS', disabled: true };
+    const runs = s.capacity_short ? Math.min(armedMs, s.capacity_short.holds_ms) : armedMs;
+    return { key: 'armed', cls: 'go', icon: '▶', label: `Activate ${fmtDelay(runs)}` };
+  }
   if (ds === 'arming') {
     // The buffer fills in real time, so the wait is exactly what's missing.
     // Right after a click the server may not report the target yet.
-    const target = s.armed_delay_ms || (+$('d').value || 0) * 1000;
+    const target = armedMs || ms;
     const fill = Math.min(s.buffer_fill_ms || 0, target);
     const label = s.ingest_alive ? `Ready in ${fmtClock(target - fill)}` : 'Waiting for OBS';
     return { key: 'arming', cls: 'filling', label, disabled: true, p: target > 0 ? fill / target : 0 };
   }
-  const sec = +$('d').value || 0;
+  // Too long for the buffer is said now, not first when OBS connects.
+  // Before a bitrate is measured the reach is a typical one: "about".
+  if (!s.ingest_alive && ms > 0 && overCap(ms)) {
+    return { key: 'wait-cap', label: `Buffer holds about ${fmtDelay(currentCapMs())}`, disabled: true };
+  }
   if (!s.ingest_alive) return { key: 'wait', label: 'Waiting for OBS', disabled: true };
-  if (sec <= 0) return { key: 'set', label: 'Set a delay first', disabled: true };
-  return { key: 'arm', cls: 'primary', icon: '⏱', label: `Arm ${sec.toFixed(0)}s` };
+  if (ms <= 0) return { key: 'set', label: 'Set a delay first', disabled: true };
+  if (overCap(ms)) return capLook;
+  return { key: 'arm', cls: 'primary', icon: '⏱', label: `Arm ${fmtDelay(ms)}` };
 }
 function paintMain(look) {
   const m = $('main');
@@ -369,7 +589,7 @@ function paintMain(look) {
   m._label = document.createElement('span');
   m._label.textContent = look.label;
   const parts = [m._label];
-  if (look.icon) { const i = document.createElement('span'); i.textContent = look.icon; parts.unshift(i); }
+  if (look.icon) { const i = document.createElement('span'); i.textContent = look.icon; i.setAttribute('aria-hidden', 'true'); parts.unshift(i); }
   m.replaceChildren(...parts);
   if (first || !motionOK()) return;
   for (const p of parts) p.animate([{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: EASE });
@@ -384,7 +604,7 @@ function secondaryLook(ds) {
   if (ds !== 'active') return null;
   if (s.safe_cut_pending) {
     const cd = Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000));
-    return { cls: 'btn ghost cutafter pending', text: `⏱ ~${cd}s ✕`, title: 'Auto-cut armed - tap to cancel' };
+    return { cls: 'btn ghost cutafter pending', text: `⏱ ~${fmtDelay(cd * 1000)} ✕`, title: 'Auto-cut armed. Tap to cancel.' };
   }
   if (cfg.w.activate.safecut) return { cls: 'btn ghost cutafter', text: '⏱ Cut after', title: 'Cut to live after everything buffered has aired' };
   return null;
@@ -403,12 +623,15 @@ function renderCta() {
   paintMain(mainLook(ds));
   const sec = secondaryLook(ds);
   setHidden(cancel, !sec);
-  if (sec) { setClass(cancel, sec.cls); setText(cancel, sec.text); setTitle(cancel, sec.title); }
-  if (ds === 'off') {
+  if (sec) {
+    setClass(cancel, sec.cls); setText(cancel, sec.text); setTitle(cancel, sec.title);
+    if (cancel.getAttribute('aria-label') !== sec.title) cancel.setAttribute('aria-label', sec.title);
+  }
+  if (ds !== 'arming') {
     // Dead-end nudges read as disabled: can't go below 0 or above the cap.
-    const v = +$('d').value || 0;
-    setDisabled($('minus'), v <= 0);
-    setDisabled($('plus'), v >= 600);
+    const v = inputMs() / 1000;
+    setDisabled($('minus'), (editing || ds === 'off') && v <= 0);
+    setDisabled($('plus'), (editing || ds === 'off') && v >= DELAY_MAX_S);
   }
 }
 
@@ -433,28 +656,45 @@ const PHASE_LOOK = { arming: ['arming', 'Buffering'], armed: ['armed', 'Armed'],
 function paintSource(alive) {
   setClass($('src'), 'pill ' + (alive ? 'on' : 'bad') + (cfg.w.source.style === 'dot' ? ' asdot' : ''));
   setText($('src-lbl'), alive ? 'Live' : 'Offline');
-  setTitle($('src'), alive ? 'Live' : 'Offline');
+  setTitle($('src'), alive ? 'OBS is sending' : 'Nothing from OBS');
 }
 
-// Readout: mirror the dashboard - show the armed target while engaged (or
+// How far the delay can reach: the armed one, or what the buffer holds of
+// it when it can't hold all of it (the server measured it: capacity_short).
+function reachMs() {
+  const tgt = s.armed_delay_ms || 0, short = s.capacity_short;
+  return short && short.armed_ms === tgt ? Math.min(tgt, short.holds_ms) : tgt;
+}
+
+// Readout: mirror the dashboard: show the armed target while engaged (or
 // the fill while arming) and 0 in passthrough. current_delay_ms includes
 // the pipeline's own ~1s transit, which would read as a phantom delay.
+// Always in seconds, like the dashboard's big number: 900, never 15m.
 function paintReadout(ds) {
-  const tgtSec = (s.armed_delay_ms || 0) / 1000, fillSec = (s.buffer_fill_ms || 0) / 1000;
-  const showSec = ds === 'arming' ? Math.min(fillSec, tgtSec) : (ds === 'armed' || ds === 'active') ? tgtSec : 0;
-  const nv = fmt(showSec * 1000);
+  const tgt = s.armed_delay_ms || 0, fill = s.buffer_fill_ms || 0;
+  // Running short (the buffer can't hold the armed delay): the readout
+  // shows what really runs, in amber, like the dashboard.
+  const short = isEngaged(ds) && s.capacity_short ? s.capacity_short : null;
+  $('cur').classList.toggle('short', !!short);
+  const show = ds === 'arming' ? Math.min(fill, reachMs())
+    : short ? Math.min(tgt, short.holds_ms)
+    : isEngaged(ds) ? tgt : 0;
+  const nv = fmt(show);
   if (nv === lastVal) return;
-  lastVal = nv; setText($('v'), nv);
-  // The pop marks a change you made (armed, activated, cut), not the
-  // buffer counting up while it fills.
-  if (ds === 'arming' || !motionOK()) return;
+  const was = lastVal;
+  lastVal = nv;
+  // The roll and the pop mark a change you made (armed, activated, cut),
+  // not the buffer counting up while it fills.
+  if (ds === 'arming' || !motionOK()) { endRoll($('v')); $('v').textContent = nv; return; }
+  rollDigits($('v'), was, nv, () => { $('v').textContent = lastVal; });
   const cur = $('cur');
   cur.classList.add('changing'); clearTimeout(cur._t);
   cur._t = setTimeout(() => cur.classList.remove('changing'), 350);
 }
 
 function paintBar(ds) {
-  const target = s.armed_delay_ms || s.buffer_target_ms || 0;
+  // Toward what the buffer can reach: a bar stuck halfway reads as broken.
+  const target = reachMs() || s.buffer_target_ms || 0;
   let pct = 0, cls = 'fill';
   if (ds === 'active') { pct = 100; cls += ' active'; }
   else if (target > 0) {
@@ -500,32 +740,88 @@ function paintHold(hold) {
     : 'Waiting for OBS');
 }
 
+// "4.2s" under a minute, whole seconds past it, for the live-behind hint.
+function fmtBehind(ms) { return ms < 60000 ? (ms / 1000).toFixed(1) + 's' : fmtDelay(ms); }
 // Hint text: full sentences, or errors-only (encoder offline) if opted.
 function paintTip(ds, hold) {
   const tip = hold ? (hold.reason === 'crash' ? 'Reopen OBS in Normal Mode and start streaming to resume.' : 'Start streaming in OBS to resume.')
     : s.tail_ms > 0 ? 'End now cuts it short.'
-    : !s.ingest_alive ? 'Point your encoder at rtmp://…/live'
-    : ds === 'active' && s.safe_cut_pending ? `Auto-cut in ~${Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000))}s - marked footage still airs.`
-    : ds === 'active' ? `Live ${(s.current_delay_ms / 1000).toFixed(1)}s behind real time.`
+    : !s.ingest_alive ? 'Start streaming in OBS to InstantClone.'
+    : editing ? 'Pick a new delay, then confirm it below.'
+    : ds === 'active' && s.safe_cut_pending ? `Auto-cut in ~${fmtDelay(s.safe_cut_remaining_ms || 0)}. Marked footage still airs.`
+    : ds === 'active' ? `Live ${fmtBehind(s.current_delay_ms || 0)} behind real time.`
+    : ds === 'armed' && s.capacity_short ? `The buffer holds only ${fmtDelay(s.capacity_short.holds_ms)}. Activate runs that much.`
     : ds === 'armed' ? 'Buffer full. Hit Activate to go live with delay.'
     : ds === 'arming' ? 'Filling buffer… you can cancel any time.'
-    : 'Passthrough - no delay applied.';
+    : 'Passthrough: no delay applied.';
   const show = cfg.w.tips.on && (!cfg.w.tips.errorsOnly || !s.ingest_alive);
   setHidden($('w-tip'), !show);
   if (show) setTip(tip);
 }
 
+// The notice line: a dock link the password turns away comes first, then
+// an armed delay the buffer can't hold, then an encoder setting a
+// destination won't take. The last two dismiss until they change.
+let dismissedNote = '';
+function currentNote() {
+  return (s && s.capacity_short && s.capacity_short.message) || (s && s.compat_warning) || '';
+}
+// Open or close the notice with a short height-and-fade, from wherever it
+// is on screen, so a dismiss folds it away instead of snapping.
+const NOTE_CLOSED = { height: '0px', opacity: 0, marginTop: '0px', marginBottom: '0px', paddingTop: '0px', paddingBottom: '0px' };
+function foldNote(box, hide) {
+  const goal = hide ? 'closed' : 'open';
+  if ((box._anim ? box._goal : (box.hidden ? 'closed' : 'open')) === goal) return;
+  const snap = () => { const cs = getComputedStyle(box); return Object.fromEntries(Object.keys(NOTE_CLOSED).map(p => [p, cs[p]])); };
+  const midway = box._anim ? snap() : null;
+  if (box._anim) box._anim.cancel();
+  box._anim = null;
+  if (!motionOK()) { box.hidden = hide; return; }
+  box.hidden = false;
+  const open = snap();
+  // The gap below it in the dock's column closes with it, so nothing snaps.
+  const ps = getComputedStyle(box.parentElement);
+  const gap = ps.display.includes('flex') || ps.display.includes('grid') ? parseFloat(ps.rowGap) || 0 : 0;
+  const closed = { ...NOTE_CLOSED, marginBottom: -gap + 'px' };
+  box.style.overflow = 'hidden';
+  box._goal = goal;
+  // Fade first, then close (open is the reverse).
+  const frames = midway ? [midway, hide ? closed : open]
+    : hide ? [open, { opacity: 0, offset: 0.45 }, closed]
+    : [closed, { opacity: 0, offset: 0.5 }, open];
+  const anim = box.animate(frames, { duration: hide ? 280 : 340, easing: 'cubic-bezier(.4,0,.2,1)' });
+  box._anim = anim;
+  anim.onfinish = () => {
+    if (box._anim !== anim) return;
+    box._anim = null;
+    box.style.overflow = '';
+    box.hidden = hide;
+  };
+}
+function paintNote() {
+  const box = $('w-note');
+  const note = currentNote();
+  const text = authBlocked ? AUTH_MSG : note !== dismissedNote ? note : '';
+  foldNote(box, !text);
+  if (!text) return;
+  setClass(box, 'note' + (authBlocked ? ' bad' : ''));
+  setText($('note-text'), text);
+  setHidden($('note-x'), authBlocked);
+}
+$('note-x').onclick = () => { dismissedNote = currentNote(); paintNote(); };
+
 function applyState(j) {
   s = j;
-  updateBitrateHold();   // feed the capacity peak-hold before anything reads it
+  if (profileGateKey() !== profileGate) renderProfiles();   // phase, delay or buffer reach moved
   const ds = PHASE_TO_STATE[s.phase] || 'off';
-  if (pending && pending === ds) { pending = null; clearTimeout(pendingTimer); }   // the server caught up
+  if (pending && pending === ds) clearPending();   // the server caught up
   setNumberMode(ds);
   const [cls, text] = s.hold ? ['holding', 'Holding']
     : s.tail_ms > 0 ? ['holding', 'Ending']
     : PHASE_LOOK[ds] || (s.ingest_alive ? ['live', 'Live'] : ['off', 'Idle']);
   setPhase(cls, text);
   paintSource(!!s.ingest_alive);
+  paintNote();
   paintReadout(ds);
   paintBar(ds);
   paintEgress();
@@ -612,6 +908,7 @@ function destRow() {
   row.innerHTML = '<span class="d-dot"></span><span class="d-name"></span><span class="d-plat"></span>';
   row._name = row.children[1]; row._meta = row.children[2];
   row._sw = document.createElement('button');
+  row._sw.setAttribute('role', 'switch');
   row._sw.onclick = () => onDestToggle(row);
   row.appendChild(row._sw);
   return row;
@@ -623,9 +920,16 @@ function patchDestRow(row, d) {
   setText(row._name, d.name || 'Destination');
   const rate = cfg.w.dest.stats && st === 'alive' ? fmtRate(d.bitrate_kbps) : '';
   setClass(row._meta, rate ? 'd-rate' : 'd-plat');
-  setText(row._meta, st === 'held' ? 'Holding' : st === 'wait' ? 'Connecting…' : rate || platform);
+  // A failing destination says so; why, and the next try, on hover. The
+  // last reason is kept while it connects again, never once it is live.
+  const fail = st === 'wait' ? d.failure : null;
+  setText(row._meta, st === 'held' ? 'Holding' : st === 'wait' ? (fail ? 'Can\'t connect' : 'Connecting…') : rate || platform);
+  setTitle(row, fail ? fail.advice + (fail.retry_in_ms != null ? ` Next try in ${Math.ceil(fail.retry_in_ms / 1000)}s.` : '') : '');
   setClass(row._sw, 'sw' + (d.enabled ? ' on' : ''));
   setTitle(row._sw, d.enabled ? 'Turn off' : 'Turn on');
+  const checked = String(!!d.enabled);
+  if (row._sw.getAttribute('aria-checked') !== checked) row._sw.setAttribute('aria-checked', checked);
+  if (row._sw.getAttribute('aria-label') !== (d.name || 'Destination')) row._sw.setAttribute('aria-label', d.name || 'Destination');
 }
 // Compact circular badge: platform initial, live-glow ring, hover shows the
 // name (native title). Tap arms it (confirm), tap again commits.
@@ -642,6 +946,7 @@ function patchDestIcon(b, d) {
   setClass(b, 'dico ' + (d.enabled ? 'on' : 'off') + look + destColor(b, d));
   setText(b, (destPlatforms[d.id] || d.name || '?').slice(0, 1).toUpperCase());
   setTitle(b, `${d.name || 'Destination'} · ${d.enabled ? 'on' : 'off'}`);
+  if (b.getAttribute('aria-label') !== b.title) b.setAttribute('aria-label', b.title);
 }
 function onDestIcon(b) {
   const d = b._d;
@@ -668,62 +973,79 @@ function onDestToggle(row) {
   const next = !d.enabled;
   const box = document.createElement('span'); box.className = 'confirm';
   box.innerHTML = `<span class="q">${next ? 'Turn on?' : 'Turn off?'}</span>`;
-  const yes = document.createElement('button'); yes.className = 'cbtn yes'; yes.innerHTML = '&#10003;';
-  const no = document.createElement('button'); no.className = 'cbtn no'; no.innerHTML = '&times;';
+  const yes = document.createElement('button'); yes.className = 'cbtn yes'; yes.innerHTML = '&#10003;'; yes.setAttribute('aria-label', 'Confirm');
+  const no = document.createElement('button'); no.className = 'cbtn no'; no.innerHTML = '&times;'; no.setAttribute('aria-label', 'Cancel');
   const cancel = () => { clearTimeout(row._ct); row._confirm = false; box.replaceWith(row._sw); };
   yes.onclick = () => { cancel(); commitDest(d, next); };
   no.onclick = cancel;
   box.append(yes, no);
   row._sw.replaceWith(box); row._confirm = true; row._ct = setTimeout(cancel, 3000);
+  yes.focus();
 }
 async function commitDest(d, enabled) {
   const r = await fetchJ('/destinations/toggle', {
-    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    method: 'POST', headers: FORM,
     body: `id=${encodeURIComponent(d.id)}&enabled=${enabled ? 'on' : 'off'}`,
   });
-  if (!r.ok) toast(r.j?.error || 'Toggle failed', 'err');
+  if (!r.ok) toast(failText(r, `Couldn't turn ${d.name || 'it'} ${enabled ? 'on' : 'off'}`), 'err');
   else toast(`${d.name || 'Destination'} ${enabled ? 'on' : 'off'}`, 'ok');
 }
 
 // --------------------------------------------------------- extra widgets ----
 
 // Delay profiles: one-tap chips from the user's saved profiles (same list as
-// the dashboard). Tapping fills the delay and optionally arms it.
+// the dashboard). Idle, a tap picks the delay (and arms it with "Apply on
+// tap"); armed or running, it moves to that delay the same way.
 let profileCache = [];
 async function fetchProfiles() {
   const r = await fetchJ('/profiles');
   if (r.ok && Array.isArray(r.j)) { profileCache = r.j; renderProfiles(); }
 }
+function profileTitle(name, ms, ds, isCur) {
+  if (isCur) return `${name}: running now`;
+  if (ds === 'arming') return 'Wait for the buffer to fill, or cancel arming';
+  const apply = cfg.w.profiles.arm;
+  if (ds === 'active') return apply ? `Adjust to ${fmtDelay(ms)}` : `Pick ${fmtDelay(ms)}, then Adjust`;
+  if (ds === 'armed') return apply ? `Re-arm at ${fmtDelay(ms)}` : `Pick ${fmtDelay(ms)}, then Re-arm`;
+  return apply ? `Arm ${fmtDelay(ms)}` : `Set ${fmtDelay(ms)}`;
+}
 function renderProfiles() {
+  profileGate = profileGateKey();
   const box = $('w-profiles'); if (box.hidden) return;
   const list = cfg.w.profiles.view === 'list';
   box.className = 'profiles' + (list ? ' plist' : '');
   if (!profileCache.length) { box.innerHTML = '<div class="empty">No profiles yet. Add them in the dashboard.</div>'; return; }
+  const ds = phaseNow(), target = s?.armed_delay_ms || 0;
   box.innerHTML = '';
   for (const p of profileCache) {
-    const ms = p.delay_ms || 0, sec = Math.round(ms / 1000);
+    const ms = p.delay_ms || 0, name = p.name || fmtDelay(ms);
     // Too big for the buffer at the current bitrate: greyed + disabled, with
     // a tooltip naming the size it needs. Same wall the arm path enforces.
     const tooBig = overCap(ms);
+    const isCur = ds !== 'off' && ms === target;
     const b = document.createElement('button');
-    b.className = (list ? 'prow' : 'pchip') + (tooBig ? ' toobig' : '');
-    b.disabled = tooBig;
-    b.title = tooBig ? `Buffer too small - needs about ${requiredMB(ms)} MB. Raise it in the dashboard.` : `Set ${sec}s delay`;
+    b.className = (list ? 'prow' : 'pchip') + (tooBig ? ' toobig' : '') + (isCur ? ' on' : '');
+    b.disabled = tooBig || isCur || ds === 'arming';
+    b.title = tooBig ? capAdvice(ms) : profileTitle(name, ms, ds, isCur);
+    if (isCur) b.setAttribute('aria-current', 'true');
     b.innerHTML = list
-      ? `<span>${esc(p.name || sec + 's')}</span><span class="pv">${sec}s</span>`
-      : esc(p.name || sec + 's') + (cfg.w.profiles.value ? `<span class="pv">${sec}s</span>` : '');
-    b.onclick = () => profileSet(sec);
+      ? `<span>${esc(name)}</span><span class="pv">${fmtDelay(ms)}</span>`
+      : esc(name) + (cfg.w.profiles.value ? `<span class="pv">${fmtDelay(ms)}</span>` : '');
+    b.onclick = () => profileSet(ms);
     box.appendChild(b);
   }
 }
-function profileSet(sec) {
-  if (overCap(sec * 1000)) {
-    toast(`Buffer too small for ${sec}s - raise it in the dashboard.`, 'err');
-    return;
+function profileSet(ms) {
+  if (overCap(ms)) { capToast(ms); return; }
+  const ds = phaseNow(), sec = Math.round(ms / 1000);
+  if (ds === 'arming') return;
+  if (isEngaged(ds)) {
+    if (ms === (s.armed_delay_ms || 0)) return;
+    if (cfg.w.profiles.arm) { changeDelay(ms); return; }
+    startEdit(false);
   }
-  $('d').value = sec; fitDelayInput(); renderCta();
-  const ds = s ? (PHASE_TO_STATE[s.phase] || 'off') : 'off';
-  if (cfg.w.profiles.arm && ds === 'off' && sec > 0) arm(sec * 1000);
+  setDelayField(sec);
+  if (ds === 'off' && cfg.w.profiles.arm && sec > 0) arm(ms);
 }
 
 // Health stats: CPU / RAM / reconnects, plus a backpressure warning. All read
@@ -745,49 +1067,60 @@ function renderStats() {
   setHtml(box, html || '<span class="st muted">no metrics selected</span>');
 }
 
-// Server settings mirrored on the dock (Auto behavior + Settings widgets).
-// Read from /config; each boolean flip is a safe partial POST /config.
-let srvCfg = { auto_arm_on_connect: false, auto_activate_when_ready: false, tracing_enabled: true };
+// The dock's own switches (Auto behavior + Settings widgets), read and
+// written through /dock/settings: a fixed set of on/off settings the dock
+// token may change even with a dashboard password on. auth_enabled tells
+// the dock whether the links it copies need the token.
+let srvCfg = { auto_arm_on_connect: false, auto_activate_when_ready: false, tracing_enabled: false, 'crash_protection.enabled': false, auth_enabled: false };
+let srvLoaded = false;
 async function fetchServerCfg() {
-  const r = await fetchJ('/config');
+  const r = await fetchJ('/dock/settings');
   if (!r.ok || !r.j) return;
-  srvCfg.auto_arm_on_connect = !!r.j.auto_arm_on_connect;
-  srvCfg.auto_activate_when_ready = !!r.j.auto_activate_when_ready;
-  srvCfg.tracing_enabled = !!r.j.tracing_enabled;
-  if (typeof r.j.buffer_mb === 'number') { bufferMB = r.j.buffer_mb; renderProfiles(); }
+  srvCfg = { ...srvCfg, ...r.j }; srvLoaded = true;
   renderBehavior(); renderSettings();
 }
-// A label + switch row bound to a boolean server-config key.
-function toggleRow(label, key) {
+function paintSwitch(sw, on) {
+  sw.className = 'sw sm' + (on ? ' on' : '');
+  sw.setAttribute('aria-checked', String(on));
+}
+// A label + switch row bound to one dock switch.
+function toggleRow(label, key, hint) {
   const row = document.createElement('div'); row.className = 'brow';
+  if (hint) row.title = hint;
   const lb = document.createElement('span'); lb.className = 'blbl'; lb.textContent = label;
-  const sw = document.createElement('button'); sw.type = 'button'; sw.className = 'sw sm' + (srvCfg[key] ? ' on' : '');
-  sw.onclick = () => setServer(key, !srvCfg[key], sw);
+  const sw = document.createElement('button'); sw.type = 'button'; sw.setAttribute('role', 'switch'); sw.setAttribute('aria-label', label);
+  paintSwitch(sw, !!srvCfg[key]);
+  sw.disabled = !srvLoaded;   // never flip a switch whose real state is unknown
+  sw.onclick = () => setServer(key, !srvCfg[key], sw, label);
   row.append(lb, sw);
   return row;
 }
-async function setServer(key, val, sw) {
-  srvCfg[key] = val; if (sw) sw.className = 'sw sm' + (val ? ' on' : '');
-  const r = await fetchJ('/config', {
-    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: `${key}=${val ? 'true' : 'false'}`,
-  });
-  if (!r.ok) { toast('Save failed', 'err'); fetchServerCfg(); }
-  else toast(val ? 'On' : 'Off', 'ok');
+async function setServer(key, val, sw, label) {
+  srvCfg[key] = val; paintSwitch(sw, val); sw.disabled = true;
+  const r = await fetchJ('/dock/settings', { method: 'POST', headers: FORM, body: `${encodeURIComponent(key)}=${val}` });
+  sw.disabled = false;
+  if (!r.ok) {
+    srvCfg[key] = !val; paintSwitch(sw, !val);
+    toast(failText(r, `Couldn't change ${label}`), 'err');
+    return;
+  }
+  if (r.j) srvCfg = { ...srvCfg, ...r.j };
+  toast(`${label} ${val ? 'on' : 'off'}`, 'ok');
 }
 function renderBehavior() {
   const box = $('w-behavior'); if (box.hidden) return;
-  box.innerHTML = '';
-  box.appendChild(toggleRow('Auto-arm on connect', 'auto_arm_on_connect'));
-  box.appendChild(toggleRow('Auto-activate when full', 'auto_activate_when_ready'));
+  box.replaceChildren(
+    toggleRow('Pre-arm on stream start', 'auto_arm_on_connect', 'Arms your Default delay (System › General) when OBS starts streaming'),
+    toggleRow('Auto-activate when ready', 'auto_activate_when_ready', 'Every arm goes on air once the buffer is full'));
 }
 
 // Settings: the live-safe knobs (things that don't need a restart). Buffer /
 // ports stay in the dashboard because changing them restarts the pipeline.
 function renderSettings() {
   const box = $('w-settings'); if (box.hidden) return;
-  box.innerHTML = '';
-  box.appendChild(toggleRow('Wire trace log', 'tracing_enabled'));
+  box.replaceChildren(
+    toggleRow('Crash protection', 'crash_protection.enabled', 'If OBS drops, viewers see a reconnect screen instead of the stream ending'),
+    toggleRow('Trace log', 'tracing_enabled', 'A detailed log for bug reports. Leave it off otherwise'));
   // Discord, chat and phone alerts are integrations, set up in the
   // dashboard: they take secret links, awkward to paste into a dock.
   const ig = document.createElement('div'); ig.className = 'brow';
@@ -800,11 +1133,12 @@ function renderSettings() {
 function confirmOpenDashboard(btns) {
   btns.innerHTML = '';
   const q = document.createElement('span'); q.className = 'cq'; q.textContent = 'Open dashboard?';
-  q.title = 'Opens the Integrations tab of the InstantClone dashboard in a new tab.';
+  q.title = 'Opens the Integrations tab of the InstantClone dashboard in a new tab. With a password on, sign in there first.';
   const yes = document.createElement('button'); yes.className = 'minibtn'; yes.textContent = 'Yes';
   yes.onclick = () => { window.open(location.origin + '/#integrations', '_blank'); toast('Opening dashboard…', 'ok'); renderSettings(); };
   const no = document.createElement('button'); no.className = 'minibtn'; no.textContent = 'No'; no.onclick = renderSettings;
   btns.append(q, yes, no);
+  yes.focus();
 }
 
 // Overlays: list the OBS browser-source overlays and copy their URLs, so a
@@ -823,6 +1157,7 @@ function renderOverlays() {
   // re-renders on keystroke, so the input keeps focus + caret.
   if (cfg.w.overlays.search) {
     const inp = document.createElement('input'); inp.className = 'osearch'; inp.placeholder = 'Search overlays…'; inp.value = overlayQuery;
+    inp.setAttribute('aria-label', 'Search overlays');
     inp.oninput = () => { overlayQuery = inp.value; renderOverlayList(); };
     box.appendChild(inp);
   }
@@ -852,7 +1187,8 @@ function overlayRow(o) {
   const row = document.createElement('div'); row.className = 'orow';
   const nm = document.createElement('span'); nm.className = 'o-name'; nm.textContent = o.name || o.slug;
   if (o.studio && !cfg.w.overlays.group) { const tag = document.createElement('span'); tag.className = 'o-tag'; tag.textContent = 'studio'; nm.appendChild(tag); }
-  const copy = document.createElement('button'); copy.className = 'minibtn'; copy.innerHTML = '&#128279;'; copy.title = 'Copy browser-source URL'; copy.onclick = () => copyOverlay(o.slug);
+  const copy = document.createElement('button'); copy.className = 'minibtn'; copy.textContent = 'Copy URL';
+  copy.title = 'Copy the browser-source URL'; copy.onclick = () => copyOverlay(o.slug);
   row.append(nm, copy);
   return row;
 }
@@ -864,9 +1200,9 @@ function overlayUrl(slug) {
   return `${location.origin}/overlay/${encodeURIComponent(slug)}.html${q}`;
 }
 async function copyOverlay(slug) {
+  // Overlay URLs carry no secret, so a failed copy can show the URL itself.
   const url = overlayUrl(slug);
-  try { await navigator.clipboard.writeText(url); toast('Overlay URL copied', 'ok'); }
-  catch (_) { toast(url, 'ok'); }
+  if (await copyText(url)) toast('Overlay URL copied', 'ok'); else toast(url, 'info');
 }
 
 // -------------------------------------------------------------- layout apply --
@@ -888,7 +1224,7 @@ function applyCfg(c) {
   // the number (its toggle lives under the Number row), so turning the number
   // off hides the whole screen, bar included.
   $('w-screen').hidden = !on('number');
-  $('w-screen').className = 'screen sz-' + (c.w.number.size || 'md');
+  $('w-screen').className = 'screen sz-' + (c.w.number.size || 'md') + (editing ? ' editing' : '');
   $('cur').classList.toggle('tint', !!c.w.number.tint);
   $('w-bar').hidden = !on('bar');
   $('w-bar').classList.toggle('thick', !!c.w.bar.thick);
@@ -900,25 +1236,37 @@ function applyCfg(c) {
   for (const id of c.order) { const el = $(WEL[id]); if (el) wrap.appendChild(el); }
   // The crash hold card takes the place of the delay controls it stands in
   // for. A dock without them (destinations only, overlays) shows it on top,
-  // so every dock can end the stream without losing its own purpose.
+  // so every dock can end the stream without losing its own purpose. The
+  // notice line sits right below it, above the controls it is about.
   const holdAnchor = on('number') ? $('w-screen') : on('activate') ? $('w-cta') : wrap.firstElementChild;
   if (holdAnchor !== $('w-hold')) wrap.insertBefore($('w-hold'), holdAnchor);
-  if (on('profiles')) { fetchProfiles(); if (!bufferMB) fetchBufferMB(); }   // capacity gate needs buffer size
+  wrap.insertBefore($('w-note'), $('w-hold').nextSibling);
+  if (on('profiles')) fetchProfiles();
   if (on('behavior') || on('settings')) { renderBehavior(); renderSettings(); fetchServerCfg(); }
   if (on('overlays')) fetchOverlays();
   if (s) applyState(s); else renderCta();   // re-render with the new options
 }
 
-function persist() {
+function dockKey(id) { return 'ic.dock.' + id; }
+function saveLayout(id, json) {
+  return fetchJ('/docks/' + encodeURIComponent(id), { method: 'POST', headers: { 'content-type': 'application/json' }, body: json });
+}
+// Mirror a layout into localStorage too: every OBS dock shares one browser
+// profile, so a dock showing that slot adopts it live (the storage event).
+function mirrorLayout(id, json) {
+  try { if (json) localStorage.setItem(dockKey(id), json); else localStorage.removeItem(dockKey(id)); } catch (_) {}
+}
+async function persist() {
   const json = JSON.stringify(cfg);
-  try { localStorage.setItem('ic.dock.' + SLOT, json); } catch (_) {}
-  fetchJ('/docks/' + encodeURIComponent(SLOT), { method: 'POST', headers: { 'content-type': 'application/json' }, body: json });
+  mirrorLayout(SLOT, json);
+  const r = await saveLayout(SLOT, json);
+  if (!r.ok) toast(failText(r, "Couldn't save this layout"), 'err');
 }
 function saveAndApply() { applyCfg(cfg); persist(); }
 
 async function loadCfg() {
   // 1) A ?cfg= blob (shared / imported URL) wins and is saved to this slot.
-  const p = new URLSearchParams(location.search).get('cfg');
+  const p = params.get('cfg');
   if (p) {
     try {
       cfg = mergeCfg(JSON.parse(decodeURIComponent(escape(atob(p)))));
@@ -928,12 +1276,12 @@ async function loadCfg() {
     } catch (_) {}
   }
   // 2) localStorage mirror: instant paint before the server answers.
-  try { const ls = localStorage.getItem('ic.dock.' + SLOT); if (ls) { cfg = mergeCfg(JSON.parse(ls)); applyCfg(cfg); } } catch (_) {}
+  try { const ls = localStorage.getItem(dockKey(SLOT)); if (ls) { cfg = mergeCfg(JSON.parse(ls)); applyCfg(cfg); } } catch (_) {}
   // 3) Server copy is the durable source of truth; reconcile when it lands.
   const r = await fetchJ('/docks/' + encodeURIComponent(SLOT));
   if (r.ok && r.j && typeof r.j === 'object') {
     cfg = mergeCfg(r.j); applyCfg(cfg);
-    try { localStorage.setItem('ic.dock.' + SLOT, JSON.stringify(cfg)); } catch (_) {}
+    mirrorLayout(SLOT, JSON.stringify(cfg));
   }
 }
 
@@ -943,18 +1291,12 @@ let dragId = null;
 // Which widget rows are expanded. Kept across the frequent buildEditor()
 // rebuilds so flipping an option doesn't snap its panel shut.
 const openRows = new Set();
-// Saved dock slots the server knows about (for the Docks switcher).
-let knownSlots = [];
-
-async function fetchSlots() {
-  const r = await fetchJ('/docks');
-  if (r.ok && Array.isArray(r.j)) { knownSlots = r.j; if (!$('editor').hidden) buildEditor(); }
-}
 
 function ensureEditorRoot() {
   let el = $('editor');
   if (!el) {
     el = document.createElement('div'); el.id = 'editor'; el.className = 'editor'; el.hidden = true;
+    el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', 'Customize dock');
     el.innerHTML = '<div class="sheet"><div class="grabber"></div><div class="sheet-body" id="sheet-body"></div></div>';
     el.onclick = e => { if (e.target === el) closeEditor(); };
     document.body.appendChild(el);
@@ -964,11 +1306,14 @@ function ensureEditorRoot() {
 function openEditor() {
   const root = ensureEditorRoot(); buildEditor(); root.hidden = false;
   requestAnimationFrame(() => root.classList.add('show'));
-  fetchSlots();   // populate the Docks switcher
+  fetchSlots();   // populate the Docks list
+  root.querySelector('.eclose').focus();
 }
 function closeEditor() {
   const root = ensureEditorRoot(); root.classList.remove('show');
+  dockUi = { open: '', form: null, confirm: '' };
   setTimeout(() => root.hidden = true, 220);   // let the slide-out finish
+  $('gear').focus();
 }
 
 // A row of segmented buttons (the "mode" control). `current` is the selected
@@ -977,7 +1322,9 @@ function segControl(current, items, onPick) {
   const seg = document.createElement('div'); seg.className = 'seg';
   for (const [val, lab] of items) {
     const b = document.createElement('button'); b.type = 'button';
-    b.className = 'segb' + (String(current) === String(val) ? ' sel' : ''); b.textContent = lab;
+    const sel = String(current) === String(val);
+    b.className = 'segb' + (sel ? ' sel' : ''); b.textContent = lab;
+    b.setAttribute('aria-pressed', String(sel));
     b.onclick = () => onPick(val);
     seg.appendChild(b);
   }
@@ -994,7 +1341,8 @@ function optionEls(id) {
       const items = sp.modes || sp.sel.map(v => [v, String(v)]);
       row.appendChild(segControl(cfg.w[t][sp.k], items, val => { cfg.w[t][sp.k] = val; cfg.preset = 'custom'; saveAndApply(); buildEditor(); }));
     } else {
-      const sw = document.createElement('button'); sw.type = 'button'; sw.className = 'sw sm' + (cfg.w[t][sp.k] ? ' on' : '');
+      const sw = document.createElement('button'); sw.type = 'button'; sw.setAttribute('role', 'switch'); sw.setAttribute('aria-label', sp.label);
+      paintSwitch(sw, !!cfg.w[t][sp.k]);
       sw.onclick = () => { cfg.w[t][sp.k] = !cfg.w[t][sp.k]; cfg.preset = 'custom'; saveAndApply(); buildEditor(); };
       row.appendChild(sw);
     }
@@ -1016,11 +1364,13 @@ function widgetRow(id) {
   row.ondrop = e => { e.preventDefault(); row.classList.remove('drop'); if (dragId) reorder(dragId, id); };
   const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = WIDGETS[id].label;
   const sw = document.createElement('button'); sw.type = 'button'; sw.className = 'sw' + (w.on ? ' on' : '');
+  sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(!!w.on)); sw.setAttribute('aria-label', WIDGETS[id].label);
   sw.onclick = e => { e.stopPropagation(); w.on = !w.on; cfg.preset = 'custom'; saveAndApply(); buildEditor(); };
   const opts = optionEls(id);
   head.append(grip, nm);
   if (opts) {
-    const cv = document.createElement('span'); cv.className = 'cv'; cv.innerHTML = '&#8250;'; head.appendChild(cv);
+    row.classList.add('has-opts');
+    const cv = document.createElement('span'); cv.className = 'cv'; cv.innerHTML = '&#8250;'; cv.setAttribute('aria-hidden', 'true'); head.appendChild(cv);
     if (openRows.has(id)) row.classList.add('open');
     head.onclick = e => {
       if (e.target === sw || e.target === grip) return;
@@ -1036,16 +1386,18 @@ function sectionLabel(text, inline) {
   const el = document.createElement('div'); el.className = 'lbl' + (inline ? ' inline' : ''); el.textContent = text; return el;
 }
 function buildEditor() {
-  const body = $('sheet-body'); body.innerHTML = '';
+  const body = $('sheet-body'); if (!body) return;
+  body.innerHTML = '';
   const head = document.createElement('div'); head.className = 'ehead';
-  head.innerHTML = `<h3>Customize dock</h3><span class="slot">${esc(SLOT)}</span>`;
-  const x = document.createElement('button'); x.className = 'eclose'; x.innerHTML = '&times;'; x.title = 'Done'; x.onclick = closeEditor;
+  head.innerHTML = `<h3>Customize dock</h3><span class="slot" title="?dock=${esc(SLOT)}">${esc(slotName(SLOT))}</span>`;
+  const x = document.createElement('button'); x.className = 'eclose'; x.innerHTML = '&times;'; x.title = 'Done'; x.setAttribute('aria-label', 'Close'); x.onclick = closeEditor;
   head.appendChild(x); body.appendChild(head);
 
   body.appendChild(sectionLabel('Preset'));
   const chips = document.createElement('div'); chips.className = 'chips';
   for (const [k, p] of Object.entries(PRESETS)) {
     const c = document.createElement('button'); c.type = 'button'; c.className = 'chip' + (cfg.preset === k ? ' sel' : ''); c.textContent = p.label;
+    c.setAttribute('aria-pressed', String(cfg.preset === k));
     c.onclick = () => applyPreset(k); chips.appendChild(c);
   }
   body.appendChild(chips);
@@ -1061,7 +1413,8 @@ function buildEditor() {
   const sw = document.createElement('div'); sw.className = 'swatches';
   for (const key of Object.keys(ACCENTS)) {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'swatch' + (cfg.accent === key ? ' sel' : '');
-    b.style.setProperty('--sw', ACCENTS[key][0]); b.title = key;
+    b.style.setProperty('--sw', ACCENTS[key][0]); b.title = key; b.setAttribute('aria-label', key + ' accent');
+    b.setAttribute('aria-pressed', String(cfg.accent === key));
     b.onclick = () => { cfg.accent = key; saveAndApply(); buildEditor(); };
     sw.appendChild(b);
   }
@@ -1072,27 +1425,14 @@ function buildEditor() {
   for (const id of cfg.order) list.appendChild(widgetRow(id));
   body.appendChild(list);
 
-  // Docks switcher: surface that multiple docks exist (?dock=<id>) and let
-  // the user copy a URL to paste into another OBS browser dock.
   body.appendChild(sectionLabel('Docks'));
-  const slots = document.createElement('div'); slots.className = 'chips';
-  for (const id of Array.from(new Set([SLOT, ...knownSlots]))) {
-    const c = document.createElement('button'); c.type = 'button';
-    c.className = 'chip' + (id === SLOT ? ' sel' : ''); c.textContent = id;
-    c.title = 'Copy this dock’s URL';
-    c.onclick = () => copySlotUrl(id);
-    slots.appendChild(c);
-  }
-  const add = document.createElement('button'); add.type = 'button'; add.className = 'chip add'; add.innerHTML = '&#43; New';
-  add.onclick = () => newDock(add);
-  slots.appendChild(add);
-  body.appendChild(slots);
-  const hint = document.createElement('div'); hint.className = 'hint';
-  hint.textContent = 'Each OBS browser dock loads a layout by URL. Copy one, then add a new browser dock in OBS to run a second.';
-  body.appendChild(hint);
+  const docks = document.createElement('div'); docks.id = 'docks-box';
+  body.appendChild(docks);
+  renderDocks();
 
   const act = document.createElement('div'); act.className = 'ed-actions';
-  // Escape hatch for a messed-up layout: two-tap reset back to defaults.
+  // Escape hatch for a messed-up layout: two-tap reset back to defaults. The
+  // dock keeps its name, which is not part of the look.
   const reset = document.createElement('button'); reset.className = 'btn ghost reset'; reset.textContent = 'Reset';
   reset.onclick = () => {
     if (!reset._arm) {
@@ -1100,9 +1440,10 @@ function buildEditor() {
       setTimeout(() => { reset._arm = false; reset.textContent = 'Reset'; reset.classList.remove('warn'); }, 3000);
       return;
     }
-    openRows.clear(); cfg = defaultCfg(); saveAndApply(); buildEditor(); toast('Dock reset to defaults', 'ok');
+    openRows.clear(); cfg = { ...defaultCfg(), name: cfg.name }; saveAndApply(); buildEditor(); toast('Dock reset to defaults', 'ok');
   };
-  const copy = document.createElement('button'); copy.className = 'btn ghost'; copy.innerHTML = '<span>&#128279;</span> Copy dock URL'; copy.onclick = copyDockUrl;
+  const copy = document.createElement('button'); copy.className = 'btn ghost'; copy.innerHTML = '<span aria-hidden="true">&#128279;</span><span>Copy link</span>';
+  copy.onclick = () => copyDockLink(SLOT);
   const done = document.createElement('button'); done.className = 'btn primary'; done.textContent = 'Done'; done.onclick = closeEditor;
   act.append(reset, copy, done); body.appendChild(act);
 }
@@ -1118,32 +1459,230 @@ function reorder(from, to) {
   o.splice(o.indexOf(to), 0, from);
   cfg.order = o; cfg.preset = 'custom'; saveAndApply(); buildEditor();
 }
-async function copyDockUrl() {
-  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(cfg))));
-  const url = `${location.origin}/dock?dock=${encodeURIComponent(SLOT)}&cfg=${b64}`;
-  try { await navigator.clipboard.writeText(url); toast('Dock URL copied', 'ok'); }
-  catch (_) { toast(url, 'ok'); }
+
+// ------------------------------------------------------------------ docks ----
+// Every saved layout is a dock: one OBS Custom Browser Dock loads one by its
+// link (?dock=<id>). The id in a link never changes once OBS has it, so a
+// rename only changes the display name stored in the layout.
+
+let knownSlots = [];            // saved slot ids, from the server
+let slotLayouts = new Map();    // other slot id -> its saved layout
+// What the Docks list shows: which row is open, the New / Rename form, and a
+// pending two-step confirm ("delete:<id>" or "replace:<id>").
+let dockUi = { open: '', form: null, confirm: '' };
+
+async function fetchSlots() {
+  const r = await fetchJ('/docks');
+  if (!r.ok || !Array.isArray(r.j)) return;
+  knownSlots = r.j;
+  const others = knownSlots.filter(id => id !== SLOT);
+  const got = await Promise.all(others.map(id => fetchJ('/docks/' + encodeURIComponent(id))));
+  slotLayouts = new Map(others.map((id, i) => [id, got[i].ok && got[i].j && typeof got[i].j === 'object' ? got[i].j : null]));
+  renderDocks();
 }
-// A slot's plain URL - it loads that slot's own saved layout on open.
-async function copySlotUrl(id) {
-  const url = `${location.origin}/dock?dock=${encodeURIComponent(id)}`;
-  try { await navigator.clipboard.writeText(url); toast(id === SLOT ? 'This dock URL copied' : `Dock "${id}" URL copied`, 'ok'); }
-  catch (_) { toast(url, 'ok'); }
+function slotName(id) {
+  const name = id === SLOT ? cfg.name : cleanName(slotLayouts.get(id)?.name);
+  return name || (id === 'default' ? 'Main dock' : id);
 }
-// Inline name entry (prompt() is unreliable inside OBS's browser dock).
-function newDock(addChip) {
-  const inp = document.createElement('input'); inp.className = 'newdock'; inp.placeholder = 'name…'; inp.maxLength = 40;
-  const commit = () => { const id = inp.value.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40); if (id) copySlotUrl(id); buildEditor(); };
-  inp.onkeydown = e => { if (e.key === 'Enter') commit(); else if (e.key === 'Escape') buildEditor(); };
-  inp.onblur = () => setTimeout(() => { if (!$('editor').hidden) buildEditor(); }, 150);
-  addChip.replaceWith(inp); inp.focus();
+function slotCfg(id) { return id === SLOT ? cfg : mergeCfg(slotLayouts.get(id)); }
+function dockUrl(id) {
+  return `${location.origin}/dock?dock=${encodeURIComponent(id)}${TOKEN ? '&token=' + TOKEN : ''}`;
+}
+// A dock's own link. It carries the access token when this dock has it; a
+// dock let in by its cookie alone hands out links that work in this OBS.
+async function copyDockLink(id, done) {
+  if (!(await copyText(dockUrl(id)))) { toast("Couldn't copy the link. Click into the dock and try again.", 'err'); return; }
+  const tail = srvCfg.auth_enabled && !TOKEN ? ' It works in this OBS.' : '';
+  toast((done || `Link to "${slotName(id)}" copied.`) + tail, 'ok');
+}
+// A fresh slot id from a name: readable in the link, unique among saved docks.
+function slotIdFor(name) {
+  const base = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').replace(/-+/g, '-')
+    .replace(/^-|-$/g, '').slice(0, 32) || 'dock';
+  const taken = new Set([SLOT, ...knownSlots]);
+  let id = base, n = 2;
+  while (taken.has(id)) id = `${base}-${n++}`;
+  return id;
+}
+async function createDock(name, layout) {
+  name = cleanName(name);
+  if (!name) { toast('Give the dock a name', 'err'); return false; }
+  const id = slotIdFor(name);
+  const copy = { ...JSON.parse(JSON.stringify(layout)), name };
+  const json = JSON.stringify(copy);
+  const r = await saveLayout(id, json);
+  if (!r.ok) { toast(failText(r, "Couldn't create the dock"), 'err'); return false; }
+  mirrorLayout(id, json);
+  knownSlots = [...knownSlots, id]; slotLayouts.set(id, copy);
+  dockUi = { open: id, form: null, confirm: '' };
+  renderDocks();
+  await copyDockLink(id, `"${name}" created, link copied. Add it in OBS: Docks > Custom Browser Docks.`);
+  return true;
+}
+async function renameDock(id, name) {
+  name = cleanName(name);
+  dockUi.form = null;
+  if (name === cleanName(slotCfg(id).name)) { renderDocks(); return; }
+  if (id === SLOT) { cfg.name = name; saveAndApply(); buildEditor(); toast(name ? `Renamed to "${name}"` : 'Name cleared', 'ok'); return; }
+  const next = { ...slotCfg(id), name }, json = JSON.stringify(next);
+  const r = await saveLayout(id, json);
+  if (!r.ok) { toast(failText(r, "Couldn't rename the dock"), 'err'); renderDocks(); return; }
+  mirrorLayout(id, json); slotLayouts.set(id, next);
+  renderDocks(); toast(name ? `Renamed to "${name}"` : 'Name cleared', 'ok');
+}
+// Give another dock this dock's look, keeping its own name.
+async function copyLayoutTo(id) {
+  const next = { ...JSON.parse(JSON.stringify(cfg)), name: cleanName(slotCfg(id).name) }, json = JSON.stringify(next);
+  const r = await saveLayout(id, json);
+  if (!r.ok) { toast(failText(r, "Couldn't copy the layout"), 'err'); return; }
+  mirrorLayout(id, json); slotLayouts.set(id, next);
+  renderDocks(); toast(`"${slotName(id)}" now uses this layout`, 'ok');
+}
+async function deleteDock(id) {
+  const name = slotName(id);
+  const r = await saveLayout(id, '');
+  if (!r.ok) { toast(failText(r, "Couldn't delete the dock"), 'err'); return; }
+  mirrorLayout(id, '');
+  knownSlots = knownSlots.filter(x => x !== id); slotLayouts.delete(id);
+  dockUi = { open: '', form: null, confirm: '' };
+  renderDocks(); toast(`Deleted "${name}". Remove its dock in OBS too.`, 'ok');
+}
+// Two-step for anything that overwrites or deletes (OBS docks can't show a
+// confirm dialog): the first tap turns the button red for 3 seconds.
+function confirmStep(btn, key, label, run) {
+  if (dockUi.confirm === key) { dockUi.confirm = ''; clearTimeout(btn._t); run(); return; }
+  dockUi.confirm = key;
+  btn.textContent = label; btn.classList.add('warn');
+  btn._t = setTimeout(() => { if (dockUi.confirm === key) { dockUi.confirm = ''; renderDocks(); } }, 3000);
+}
+function miniBtn(text, onClick, title) {
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'minibtn'; b.textContent = text;
+  if (title) b.title = title;
+  b.onclick = onClick;
+  return b;
+}
+// An inline text field (prompt() is unreliable inside OBS's browser dock).
+function nameField(value, placeholder, onEnter, onEscape) {
+  const inp = document.createElement('input'); inp.className = 'dfield'; inp.maxLength = 40;
+  inp.value = value; inp.placeholder = placeholder; inp.setAttribute('aria-label', placeholder);
+  inp.onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); onEnter(inp.value); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onEscape(); }
+  };
+  return inp;
+}
+function dockRow(id) {
+  const isThis = id === SLOT, open = dockUi.open === id;
+  const row = document.createElement('div'); row.className = 'drow' + (isThis ? ' this' : '');
+  const head = document.createElement('div'); head.className = 'dhead';
+  const renaming = dockUi.form?.kind === 'rename' && dockUi.form.id === id;
+  if (renaming) {
+    const cancel = () => { dockUi.form = null; renderDocks(); };
+    const inp = nameField(cleanName(slotCfg(id).name), slotName(id), v => renameDock(id, v), cancel);
+    head.append(inp, miniBtn('Save', () => renameDock(id, inp.value)), miniBtn('Cancel', cancel));
+    row.appendChild(head);
+    requestAnimationFrame(() => { inp.focus(); inp.select(); });
+    return row;
+  }
+  const nm = document.createElement('span'); nm.className = 'dname'; nm.title = `?dock=${id}`;
+  nm.innerHTML = `<span class="dn">${esc(slotName(id))}</span>${isThis ? '<span class="dtag">This dock</span>' : ''}`;
+  const more = document.createElement('button'); more.type = 'button'; more.className = 'dmore'; more.innerHTML = '&#8943;';
+  more.title = 'More'; more.setAttribute('aria-label', `More for ${slotName(id)}`); more.setAttribute('aria-expanded', String(open));
+  more.onclick = () => { dockUi = { open: open ? '' : id, form: null, confirm: '' }; renderDocks(); };
+  head.append(nm, miniBtn('Copy link', () => copyDockLink(id), 'Copy the link for an OBS Custom Browser Dock'), more);
+  row.appendChild(head);
+  if (!open) return row;
+  const acts = document.createElement('div'); acts.className = 'dacts';
+  const full = knownSlots.length >= DOCKS_MAX;
+  acts.appendChild(miniBtn('Rename', () => { dockUi.form = { kind: 'rename', id }; renderDocks(); }));
+  const dup = miniBtn('Duplicate', () => createDock(`${slotName(id)} copy`, slotCfg(id)), 'A new dock with the same layout');
+  dup.disabled = full;
+  acts.appendChild(dup);
+  if (!isThis) {
+    const use = miniBtn('Use this layout', null, `Give "${slotName(id)}" the layout of this dock`);
+    use.onclick = () => confirmStep(use, 'replace:' + id, 'Replace its layout?', () => copyLayoutTo(id));
+    const del = miniBtn('Delete', null);
+    del.onclick = () => confirmStep(del, 'delete:' + id, 'Tap again to delete', () => deleteDock(id));
+    acts.append(use, del);
+  }
+  row.appendChild(acts);
+  return row;
+}
+function newDockForm() {
+  const f = dockUi.form;
+  const box = document.createElement('div'); box.className = 'dform';
+  const cancel = () => { dockUi.form = null; renderDocks(); };
+  const create = async () => {
+    const btn = box.querySelector('.minibtn.ok'); btn.disabled = true;
+    const ok = await createDock(inp.value, f.from === 'this' ? cfg : defaultCfg());
+    if (!ok) btn.disabled = false;
+  };
+  const inp = nameField(f.name, 'Dock name, like Scenes', create, cancel);
+  inp.oninput = () => { f.name = inp.value; };
+  const r1 = document.createElement('div'); r1.className = 'frow'; r1.appendChild(inp);
+  const r2 = document.createElement('div'); r2.className = 'frow';
+  r2.append(segControl(f.from, [['this', 'This layout'], ['defaults', 'Defaults']], v => { f.from = v; f.name = inp.value; renderDocks(); }));
+  const btns = document.createElement('span'); btns.className = 'srow-btns';
+  const go = miniBtn('Create', create); go.classList.add('ok');
+  btns.append(miniBtn('Cancel', cancel), go);
+  r2.appendChild(btns);
+  box.append(r1, r2);
+  requestAnimationFrame(() => inp.focus());
+  return box;
+}
+function renderDocks() {
+  const box = $('docks-box'); if (!box) return;
+  const list = document.createElement('div'); list.className = 'dlist';
+  for (const id of [SLOT, ...knownSlots.filter(x => x !== SLOT)]) list.appendChild(dockRow(id));
+  const parts = [list];
+  if (dockUi.form?.kind === 'new') parts.push(newDockForm());
+  else {
+    const add = document.createElement('button'); add.type = 'button'; add.className = 'dnew'; add.textContent = '+ New dock';
+    add.disabled = knownSlots.length >= DOCKS_MAX;
+    if (add.disabled) add.title = `${DOCKS_MAX} docks is the most InstantClone keeps. Delete one first.`;
+    add.onclick = () => { dockUi = { open: '', form: { kind: 'new', name: '', from: 'this' }, confirm: '' }; renderDocks(); };
+    parts.push(add);
+  }
+  const hint = document.createElement('div'); hint.className = 'hint';
+  hint.textContent = 'Each OBS browser dock shows one layout. Make a new dock here, then paste its link into OBS under Docks > Custom Browser Docks.';
+  parts.push(hint);
+  box.replaceChildren(...parts);
 }
 
 // -------------------------------------------------------------------- boot --
 
-$('d').addEventListener('input', () => { fitDelayInput(); renderCta(); });
-// Enter in the delay field = press the main button (arm). Keyboard-first flow.
-$('d').addEventListener('keydown', e => { if (e.key === 'Enter') mainClick(); });
+// Typing or focusing the field ends a roll at once, so it never hides
+// what is being typed.
+$('d').addEventListener('focus', () => endRoll($('d-roll')));
+$('d').addEventListener('input', () => {
+  endRoll($('d-roll'));
+  fitDelayInput(); renderCta();
+  clearTimeout(settleTimer); settleTimer = setTimeout(settleDelayInput, 700);
+});
+// Enter in the delay field = press the main button. Esc puts back the
+// running delay. Keyboard-first flow.
+$('d').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { settleDelayInput(); mainClick(); }
+  else if (e.key === 'Escape' && editing) { e.preventDefault(); endEdit(); }
+});
+// Leaving the field unchanged while picking a new delay closes the picker,
+// unless focus went to the controls that finish the job.
+$('d').addEventListener('blur', () => {
+  settleDelayInput();
+  setTimeout(() => {
+    if (!editing || !s || inputMs() !== (s.armed_delay_ms || 0)) return;
+    const a = document.activeElement;
+    if (a && (a.id === 'minus' || a.id === 'plus' || a.id === 'main' || a.id === 'd')) return;
+    endEdit();
+  }, 150);
+});
+$('v').addEventListener('click', () => startEdit(true));
+$('v').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startEdit(true); } });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const ed = $('editor');
+  if (ed && !ed.hidden) closeEditor(); else endEdit();
+});
 // Staggered first paint (see body.boot CSS); the class comes off after one
 // pass so later saves/reorders never replay the entrance.
 document.body.classList.add('boot');
@@ -1151,6 +1690,7 @@ setTimeout(() => document.body.classList.remove('boot'), 800);
 fitDelayInput();
 applyCfg(cfg);   // paint defaults immediately
 loadCfg();       // then hydrate from url / localStorage / server
+fetchServerCfg();   // the switches, and whether a password is on
 
 // Prefer SSE for state; fall back to 500ms polling if it is missing or drops.
 let _pollTimer = null;
@@ -1171,20 +1711,20 @@ startSSE();
 // another instance of this slot saves (persist writes localStorage), the
 // storage event fires here and we adopt the new layout live - no reload.
 window.addEventListener('storage', e => {
-  if (e.key !== 'ic.dock.' + SLOT || !e.newValue) return;
+  if (e.key !== dockKey(SLOT) || !e.newValue) return;
   try {
     const next = mergeCfg(JSON.parse(e.newValue));
     if (JSON.stringify(next) !== JSON.stringify(cfg)) applyCfg(next);
   } catch (_) {}
 });
 
-// Aux data (profiles, overlays, server config, destinations) has no push
+// Aux data (profiles, overlays, server switches, destinations) has no push
 // channel, so refresh it whenever the dock regains focus or visibility -
 // e.g. after editing profiles in the dashboard and clicking back into OBS.
 function refreshAux() {
-  if (cfg.w.profiles.on) { fetchProfiles(); fetchBufferMB(); }   // buffer size may have changed in the dashboard
+  if (cfg.w.profiles.on) fetchProfiles();
   if (cfg.w.overlays.on) fetchOverlays();
-  if (cfg.w.behavior.on || cfg.w.settings.on) fetchServerCfg();
+  fetchServerCfg();
   if (cfg.w.dest.on) fetchDestPlatforms();
 }
 window.addEventListener('focus', () => { if (!_es) tick(); refreshAux(); });

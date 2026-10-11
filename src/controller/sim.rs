@@ -14,6 +14,9 @@ use tokio::sync::mpsc;
 
 /// OBS's frame interval (10 fps) and default keyframe cadence (every 500 ms).
 pub(super) const FRAME_MS: u32 = 100;
+/// Sleeps can wake a few ms early on a loaded test runner, so "at least the
+/// delay behind" is checked this much short of it.
+pub(super) const TIMER_SLOP_MS: u32 = 50;
 pub(super) const GOP_FRAMES: u32 = 5;
 /// The stream's resolution: small, so the screen encodes in no time.
 const WIDTH: usize = 64;
@@ -236,6 +239,27 @@ impl Sim {
             .filter(|m| m.conn == conn && m.kind == 9 && (from..to).contains(&m.at))
             .filter(|m| m.payload.get(1) == Some(&1) && frame_number(&m.payload).is_none())
             .count()
+    }
+
+    /// Connection `conn`'s frames that reached the platform after `at`.
+    pub(super) fn frames_after(&mut self, conn: usize, at: Instant) -> Vec<Frame> {
+        self.frames(conn)
+            .into_iter()
+            .filter(|f| f.at > at)
+            .collect()
+    }
+
+    /// How long after OBS made it `frame` reached the platform, in ms.
+    pub(super) fn delay_ms(&self, frame: &Frame) -> u32 {
+        frame
+            .at
+            .duration_since(self.produced[&frame.number])
+            .as_millis() as u32
+    }
+
+    /// Whether connection `conn`'s stream ended with its goodbye.
+    pub(super) fn ended(&mut self, conn: usize) -> bool {
+        self.commands(conn).contains(&"deleteStream".into())
     }
 
     pub(super) fn commands(&mut self, conn: usize) -> Vec<String> {
