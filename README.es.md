@@ -79,7 +79,7 @@ Esa es toda la instalación. En Windows un icono queda en la bandeja mientras co
 
 **2 · Apunta OBS aquí**
 
-Pulsa **Registrar con OBS** en el panel, reinicia OBS una vez y en **Ajustes → Emisión** elige:
+Cierra OBS, pulsa **Register with OBS** en la pestaña **OBS** del panel, abre OBS y en **Ajustes → Emisión** elige:
 
 ```text
 Servicio:  InstantClone
@@ -109,7 +109,7 @@ El modo multipista "Auto" funciona de fábrica. Tus claves reales van en la pest
 > [!IMPORTANT]
 > El Firewall de Windows preguntará al primer arranque porque el proxy escucha en <code>:1935</code> (RTMP) y <code>:7799</code> (web). Permítelo solo en **redes privadas**.
 
-> [!WARNING]
+> [!NOTE]
 > Windows 10/11 y Linux (x86-64) están soportados. En Linux funciona headless en un VPS o en un escritorio Ubuntu; el panel web del navegador es la superficie de control (no hay bandeja nativa). macOS todavía no está soportado.
 
 <br/>
@@ -213,14 +213,14 @@ Si OBS se cuelga o se congela, todos los destinos siguen en directo con una pant
 <td valign="top" colspan="2">
 
 **🧩 Integraciones (experimental)**
-InstantClone habla con Discord, el chat de Twitch, tu móvil y tus propias herramientas. Con un clic añades un aviso de crasheo, un comando `!delay`, controles para mods, un botón de highlight que clipea lo que los espectadores vieron de verdad, una tarjeta de Discord que escribe la línea de tiempo de tu stream, capítulos de YouTube, una luz de "en directo" y más, y un editor por pasos cubre el resto. Son nuevas y aún pueden cambiar: cuéntanos lo que falle o confunda con el enlace **Report it** de la pestaña.
+InstantClone habla con Discord, el chat de Twitch, tu móvil, OBS y tus propias herramientas. Puede arrancar con follows, subs, subs regaladas, bits, raids, recompensas de puntos de canal y pausas publicitarias, y con la grabación de OBS, las repeticiones o un micro silenciado. Con un clic añades un aviso de crasheo, alertas de Twitch en pantalla, un comando `!delay`, controles para mods, un botón de highlight que clipea lo que los espectadores vieron de verdad, una tarjeta de Discord que escribe la línea de tiempo de tu stream, capítulos de YouTube, una luz de "en directo" y más, y un editor por pasos cubre el resto, hasta las escenas, filtros, grabación y atajos de OBS, y luces y enchufes inteligentes de tu red (WiZ, LIFX, Govee, Yeelight, Kasa, Shelly, WLED) sin hub. Son nuevas y aún pueden cambiar: cuéntanos lo que falle o confunda con el enlace **Report it** de la pestaña.
 
 </td>
 </tr>
 </table>
 
 > [!TIP]
-> **Registro de OBS de un clic.** El asistente puede añadir una entrada "InstantClone" al desplegable de Servicio de OBS por ti (escribe `services.json` con un `.bak` antes, se refresca al cambiar el puerto y avisa "cierra OBS primero" cuando el archivo está bloqueado).
+> **Registro de OBS de un clic.** El asistente puede añadir una entrada "InstantClone" al desplegable de Servicio de OBS por ti (escribe `services.json` con un `.bak` antes). Solo escribe con OBS cerrado, porque OBS reescribe su lista de servicios al salir; tras un cambio de puerto, una entrada desactualizada se actualiza sola cuando OBS se cierra.
 
 <br/>
 
@@ -258,7 +258,7 @@ InstantClone habla con Discord, el chat de Twitch, tu móvil y tus propias herra
 
 | | Endpoint | Cuerpo | Qué hace |
 |:---|---|---|---|
-| <kbd>POST</kbd> | `/arm` | `ms=15000` | Empieza a llenar un buffer de 15 s. Aún no sale. |
+| <kbd>POST</kbd> | `/arm` | `ms=15000` | Empieza a llenar un buffer de 15 s, hasta 1 hora (`ms=3600000`). Aún no sale. <code>409</code> si OBS no está emitiendo o si el buffer no lo aguanta. |
 | <kbd>POST</kbd> | `/activate` | | Activa el delay armado. <code>409</code> si no está listo. |
 | <kbd>POST</kbd> | `/disarm` | | Cancela el armado, descarta el buffer sin salir. |
 | <kbd>POST</kbd> | `/stop` | | Vuelve a directo (igual que el botón **Cortar**). |
@@ -303,8 +303,7 @@ Armado de un botón. Añade `/activate` y `/stop` a otros dos botones para contr
   "egress_alive": true,
   "destinations_alive": 2,
   "destinations_total": 3,
-  "bitrate_kbps": 6020,
-  "stats": { "tags_sent": 184302, "bytes_sent": 1338294104, "cuts": 1 }
+  "stats": { "tags_sent": 184302, "bytes_sent": 1338294104, "cuts": 1, "bitrate_kbps": 6020 }
 }
 ```
 
@@ -335,12 +334,12 @@ Armado de un botón. Añade `/activate` y `/stop` a otros dos botones para contr
 <br/>
 
 <table>
-<tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td><td width="24"></td><td><b>Deps runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>392 / 392</code></td></tr>
+<tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td><td width="24"></td><td><b>Deps runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>900+</code></td></tr>
 </table>
 
-**Buffer.** En disco por defecto (`./instantclone.buf`, 500 MB ≈ 11 min a 6 Mbps, ≈ 6 min 50 s a 10 Mbps), fuera de la RAM porque puede llegar a cientos de MB. Lo único en RAM es el índice de IDR, ~1 MB para 10 minutos a 60 fps. El archivo se reinicia en cada apagado limpio, así que nada se acumula entre sesiones, y la interfaz se niega a armar un delay mayor del que cabe, con un motivo explícito "necesita ≥ N MB".
+**Buffer.** En disco por defecto (`./instantclone.buf`; una instalación nueva empieza con 300 MB, menos si el disco está casi lleno: unos 6 min 30 s a 6 Mbps, 3 min 50 s a 10 Mbps), fuera de la RAM porque puede llegar a cientos de MB. Lo único en RAM es el índice de IDR, ~1 MB para 10 minutos a 60 fps. El archivo se reinicia en cada apagado limpio, así que nada se acumula entre sesiones, y toda forma de armarlo (panel, dock, API, atajos, MIDI, chat) se niega a armar un delay que el buffer no aguanta en cuanto mide el bitrate de OBS, y dice qué tamaño necesita. El delay llega hasta 1 hora; el tamaño del buffer decide cuánto de eso puedes usar (un delay de 15 min a 6 Mbps necesita unos 690 MB).
 
-**Compilar.** Rust 1.74+ estable. Sin npm, sin submódulos, sin SDKs de plataforma.
+**Compilar.** Rust 1.89+ estable. Sin npm, sin submódulos, sin SDKs de plataforma.
 
 ```powershell
 git clone <repo>
@@ -353,7 +352,7 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 **E/S de disco síncrona en la ruta caliente de escritura al anillo, por elección.** La escritura con buffer aterriza en la caché de páginas del SO en microsegundos y el kernel vacía en segundo plano, así que la caché de páginas ya es el buffer asíncrono; el índice y los bytes avanzan bajo un solo lock para que un lector nunca vea una etiqueta cuyos bytes aún no están en disco.
 
-**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, la configuración de Enhanced Broadcasting construida a partir de los lienzos y codificadores GPU de OBS, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), la protección contra crasheos (distinguir crasheo, parada y congelado, el codificador sin pérdidas de la pantalla de reconexión comprobado con ffmpeg, el empaquetado por pista de Enhanced Broadcasting, el AAC en silencio), el motor de integraciones (pasos, plantillas, recetas, chat, tarjetas de Discord, la línea de tiempo del stream), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **843 tests, todos en verde.**
+**Tests.** `cargo test --release` cubre la máquina de estados (`arm → preparing → ready → active → cut`), detección de IDR de AVC + Enhanced-RTMP, AMF0 (incluido Strict Array + guardia de recursión), round-trip de settings, expulsión del buffer en anillo con protección de lecturas en vuelo, parseo HTTP, política CSRF, pre-flight de puerto, negociación de contenido, caché de cabeceras de secuencia por pista de Enhanced Broadcasting + selección de etiquetas por TrackId, audio multipista + ruteo por destino, parseo de orientación SPS para la selección vertical, la configuración de Enhanced Broadcasting construida a partir de los lienzos y codificadores GPU de OBS, el parcheador de `services.json`, el parser del check de actualizaciones, el SHA-256 hecho a mano (vectores NIST), el lector/escritor de chunk-stream RTMP, la máquina del corte programado, las tablas de atajos y de mapeos MIDI (incluido el dispositivo que distingue dos controladoras), la protección contra crasheos (distinguir crasheo, parada y congelado, el codificador sin pérdidas de la pantalla de reconexión comprobado con ffmpeg, el empaquetado por pista de Enhanced Broadcasting, el AAC en silencio), el motor de integraciones (pasos, plantillas, recetas, chat, tarjetas de Discord, alertas en el stream, la línea de tiempo del stream, acciones y eventos de OBS, Twitch EventSub), y la descarga de autoactualización + verificación de checksum + intercambio del exe. **873 tests, todos en verde.** Los scripts del dashboard, el dock y la página de alertas tienen 55 más: `node --test web/tests/*.test.mjs`, sin instalar nada.
 
 </details>
 
@@ -363,11 +362,11 @@ El HTML del panel se minifica + gzipea en tiempo de compilación con `build.rs` 
 
 ## Estado
 
-**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 843 tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
+**Listo para uso diario en Windows.** Lo uso en mis propios streams, y un grupo creciente de streamers lo corre a diario también. CI ejecuta fmt + clippy (`-D warnings`) + 900+ tests en cada push, y un commit etiquetado compila y publica una release con un `SHA256SUMS.txt` al lado (todavía sin certificado de firma de código, así que el SO puede avisar al primer arranque).
 
 **Lo áspero, con honestidad**
 
-- **Sin bandeja nativa en Linux.** En Windows hay un icono en la bandeja del sistema; en Linux la superficie de control es el panel web (Salir y Reiniciar están en su pestaña Sistema). macOS aún no está soportado.
+- **Sin bandeja nativa en Linux.** En Windows hay un icono en la bandeja del sistema; en Linux la superficie de control es el panel web (Salir y Reiniciar están en su pestaña System → About). macOS aún no está soportado.
 - **La escalera de transcodificado no está garantizada sin EB.** Solo los Twitch Partner tienen slot de transcodificado siempre; el resto se queda en Source-Only, donde algunos decodificadores por hardware fallan por encima de ~8 Mbps (es el comportamiento de asignación de Twitch, no del proxy). Para una escalera garantizada usa Enhanced Broadcasting; si no, mantén el bitrate cerca de ~6000 Kbps.
 - **Servidor HTTP hecho a mano.** Binario más pequeño que con `hyper`, pero soy dueño de toda la superficie HTTP. A revisar si crece.
 
@@ -403,7 +402,7 @@ Sí. El buffer está antes del reparto, así que cada destino reproduce desde la
 
 <br/>
 
-El que aguante el buffer. El archivo de 500 MB por defecto son unos 11 minutos a 6 Mbps (menos a bitrates más altos). Puedes hacerlo más grande; el panel rechaza un delay que el buffer no aguanta y te dice cuántos MB necesita, así que nunca se atasca en silencio.
+El que aguante el buffer, hasta 1 hora. El archivo de 300 MB de una instalación nueva son unos 6 minutos y medio a 6 Mbps (menos a bitrates más altos). Puedes hacerlo más grande; el panel rechaza un delay que el buffer no aguanta y te dice cuántos MB necesita, así que nunca se atasca en silencio.
 
 </details>
 
@@ -432,7 +431,7 @@ En la pestaña **Destinos** de InstantClone, nunca en OBS. OBS solo apunta a Ins
 
 <br/>
 
-Sí, ambas cosas. Seis acciones - delay on/off, armar, activar, cortar a directo, **cortar cuando esto salga** y terminar la protección contra crasheos - se asignan a un atajo de teclado global, a un pad o knob MIDI, o a los dos a la vez, en **Ajustes**. Los atajos funcionan con un juego en pantalla completa por delante, así no haces alt-tab a media partida, y toda combinación necesita un modificador (Ctrl, Alt, Shift o Win) para que una tecla suelta no dispare una acción de delay. Los mapeos MIDI se aprenden pulsando el control en vez de escribir un número de nota, y cada uno recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas. Por ahora solo en Windows.
+Sí, ambas cosas. Seis acciones se asignan a un atajo de teclado global, a un pad o knob MIDI, o a los dos, en **System → Controls**: delay on/off, armar, activar, cortar a directo, **cortar cuando esto salga** y terminar la protección contra crasheos. Los atajos funcionan con un juego en pantalla completa por delante, así no haces alt-tab a media partida, y toda combinación necesita un modificador (Ctrl, Alt, Shift o Win) para que una tecla suelta no dispare una acción de delay. Los mapeos MIDI se aprenden pulsando el control en vez de escribir un número de nota, y cada uno recuerda de qué dispositivo vino, así dos controladoras pueden mover acciones distintas. Por ahora solo en Windows.
 
 </details>
 
@@ -441,7 +440,7 @@ Sí, ambas cosas. Seis acciones - delay on/off, armar, activar, cortar a directo
 
 <br/>
 
-Windows 10/11 y **Linux (x86-64)** lo ejecutan. En Linux funciona headless en un VPS o en un escritorio Ubuntu, gobernado desde el panel web (no hay bandeja nativa, así que Salir y Reiniciar viven en la pestaña Sistema del panel). Para una instalación expuesta a la red, activa la contraseña opcional del panel y acompáñala de TLS mediante un proxy inverso. macOS aún no está soportado.
+Windows 10/11 y **Linux (x86-64)** lo ejecutan. En Linux funciona headless en un VPS o en un escritorio Ubuntu, gobernado desde el panel web (no hay bandeja nativa, así que Salir y Reiniciar viven en la pestaña System → About del panel). Para una instalación expuesta a la red, activa la contraseña opcional del panel y acompáñala de TLS mediante un proxy inverso. macOS aún no está soportado.
 
 </details>
 

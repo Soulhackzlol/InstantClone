@@ -4,6 +4,445 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - Delays up to 1 hour, Twitch events and alerts, smart lights, and two InstantClones side by side
+
+### Delays up to 1 hour
+
+The delay stopped at 10 minutes, however big the buffer was. It now goes up
+to 1 hour, and the buffer size is what decides how much of that you can use.
+
+- **The range above the delay field is your buffer's.** It read "0 - 600s"
+  for everyone. It now shows how much delay your buffer holds at your
+  bitrate (planned at 10 Mbps until a stream comes in), so a new install's
+  300 MB buffer reads about 3 minutes before you go live and about 6 at
+  6 Mbps.
+  Raise the buffer size in **System** for more: a 15-minute delay at 6 Mbps
+  needs about 690 MB, a full hour about 2.7 GB.
+- **One estimate everywhere.** How long the buffer holds is now worked out
+  once, by the app, from the real buffer file and the bitrate OBS sends
+  (averaged over 10 seconds so a keyframe's burst doesn't refuse a delay
+  that fits, and held at its recent peak so a short dip doesn't unlock one
+  that won't; each new stream is measured afresh). The dashboard and the
+  dock used their own guess, which
+  disagreed with the app's below 1 Mbps and read a new buffer size before
+  the restart that applies it.
+- **Every way in refuses a delay the buffer can't hold**, with the size it
+  would need: the dashboard, the OBS dock, the HTTP API, and now hotkeys,
+  MIDI and the integrations' "Set the delay" step too, which used to arm it
+  and run short. All of them take the new 1 hour top. The refusal starts
+  once OBS's bitrate is measured; before that, a longer delay is flagged
+  as likely too long and runs at what the buffer holds.
+- **`!setdelay` answers with the real limit.** A new `{delay_max}` variable
+  holds the longest delay the buffer holds right now, and the chat preset
+  replies "The buffer holds up to {delay_max}s right now" past it. Copies
+  added before are upgraded when the app starts, unless you edited that
+  check; the steps it runs when the delay fits stay as you left them.
+- **The big delay number fits its card.** On a narrow window it shrinks just
+  enough to keep "3599.9 s / 3600.0s" on one line. Before, the "/ target"
+  part was cut off below about 900 px wide, even at 10 minutes.
+
+### Updates spot a new build of the same version
+
+A fix republished under the version you already run was invisible: the
+update check only compared version numbers. Now, when GitHub's latest
+release is your version, the app also compares its own SHA-256 with the one
+in that release's `SHA256SUMS.txt`. If they differ, System -> About and the
+header offer "New v0.1.x build", and **Install the new build** downloads,
+verifies and swaps it like any other update. Only builds from the release
+workflow do this: a build you compile yourself never matches the published
+one, so it is never offered a replacement.
+
+### Updates you hear about, and what they bring
+
+- **Checks on their own.** With "Check for updates automatically" on, the
+  app checks shortly after it starts and once a day, even with no dashboard
+  open. On Windows a quiet tray balloon (no sound, held back during focus
+  assist) says so once per new version, and the tray menu gets an "Update
+  available" item. "Tell me in the tray" turns the balloon off.
+- **What it brings, before and after.** System -> About lists the changes an
+  update brings since your build. After updating (in the app or by replacing
+  the exe), an "Updated to v0.1.x" card says what changed, once.
+- **A self-update shuts down cleanly first**, like Restart and Quit:
+  platforms are told the stream ended, logs and integration counts are
+  saved, and the new exe's checksum is checked again just before the swap.
+- **Restart and Update come back with a dashboard password** (they used to
+  hang on "taking longer than expected"), and the page follows a Web UI
+  port change instead of polling the old address.
+
+### Destinations say why they fail
+
+A wrong stream key or a refused connection used to read "Connecting..."
+forever. The card now says what went wrong in plain words ("Stream key
+rejected. Check the key in Edit", "The server refused the connection"),
+counts down to the next try, and has **Retry now** and **Details**. The
+dock's destination list says "Can't connect", with the reason on hover.
+
+### Two InstantClones side by side
+
+- **Run two setups at once** from two folders (two channels, two PCs' worth
+  of scenes). Each keeps its own config, ports and buffer file; the tray
+  icon names its folder. When a port belongs to the other copy, the prompt
+  says so and offers the next free one.
+- **Opening the same setup twice is safe now.** The second launch opens the
+  running copy's dashboard and closes, instead of offering to move its
+  ports and saving them into the shared config. If the running copy isn't
+  answering (stuck on a question in another window, say), it says so
+  instead of opening a tab that can't connect.
+- **OBS stays pointed where you left it:** a copy never re-registers OBS
+  over the other copy's registration, and the OBS tab says which copy OBS
+  points at.
+- **Pick each copy's tray colour** in System -> Behavior: blue (the
+  default), purple, orange, green or pink. Its dashboard tab icon matches,
+  so each tab pairs with its tray icon at a glance. Two copies left on the
+  same colour still never match: the second shows the next free one while
+  both run.
+- **Logins no longer fight.** With a password on both copies, logging in to
+  one used to log you out of the other (browsers share cookies across
+  ports), and two docks in OBS did the same. Each copy now has its own
+  login, and docks in OBS stay signed in through the update.
+- **Start with Windows works for both.** Switching it on in the second copy
+  used to take over the first copy's startup entry, and switching it off
+  removed it. Each copy now has its own.
+- **Two copies starting together** (both set to start with Windows, say) no
+  longer both claim the same port: one gets it, and the other asks,
+  naming "another InstantClone that is starting up".
+- **Two copies never share a buffer file.** A copy whose buffer file the
+  other one holds says so at start, instead of quietly opening a second
+  buffer in the folder it was started from.
+
+### The OBS tab and the dock
+
+- **The OBS tab, redone.** Registration shows its real state: registered,
+  out of date (it updates by itself when OBS closes), not registered, or
+  "Close OBS first", because OBS rewrites its service list when it quits.
+  Register and the launch buttons are refused while OBS is open. The control
+  dock has its own card with setup steps, and the Enhanced Broadcasting
+  launch buttons moved to a collapsed "Legacy" section. Once registered, the
+  card is just the three steps to stream through it, with Unregister kept
+  quietly in its footer, away from the main action.
+- **The dock, polished** to match the dashboard. It can now change the delay
+  while armed ("Re-arm at 1800s") or on air ("Adjust to 1800s"), says
+  "Waiting for OBS" and "Buffer holds only X" like the dashboard, and
+  manages its slots: new from this layout, rename, duplicate, delete. Delays
+  are always in seconds, like the dashboard's big number, and its digits
+  roll when the delay changes.
+- **The dock works with a dashboard password.** Its switches (auto-arm,
+  auto-activate, trace log, crash protection) save through a dock-only
+  allow-list, and every dock link handed out carries its access token.
+
+### Look and feel
+
+- **Settings are switches.** Every checkbox in the dashboard is now drawn as
+  the same switch a destination uses for Enabled.
+- **Things open and close instead of snapping:** the buffer warning under
+  the delay, the "Updated" card and its header pill, a destination's
+  details, the restart banner and the dock's notice.
+- **About, reordered.** The version and this session's numbers come first,
+  then what an update brings as Added / Fixed / Faster badges, then the
+  update settings. "Tell me in the tray" only shows while automatic checks
+  are on.
+- **The big number shows what really runs.** When the buffer can't hold the
+  armed delay, the dashboard and the dock show the delay viewers really get,
+  in amber, and the line under it says how much of the armed delay fits.
+  While it fills it counts toward that, and Activate names it.
+- **A delay too long for the buffer is flagged before OBS connects.** The
+  warning says it's an estimate at a typical bitrate until OBS sends one.
+- **The app's own color picker.** Every color opens a picker that matches
+  the app instead of the browser's: drag for the shade, a hue bar, the hex
+  value, your recent colors and the app's palette, and a screen eyedropper
+  where the browser has one. On a phone it's a sheet along the bottom.
+- **A clearer Logs tab.** Each line shows your time of day (point at it for
+  the time since the app started), its source in its own color, and a dot
+  for how it went. New lines ease in one after another, lines fade out and
+  back in as you filter, Clear fades them away, "N new lines" appears while
+  you read further up, filter text is marked, and on a phone the message
+  gets the full width. Something being retried is a warning, not an error.
+- **Better on a phone.** The header is two rows (the name, then the live
+  pills in one line), the picked tab slides into view in the tab bars, and
+  an edge that hides more tabs fades out. The Integrations filters sit on
+  one row with search beside the view switch.
+- **Every fold-out animates,** like "Ways to write a value", and anything
+  that opens below the edge (an editor option, a connection, a fold-out)
+  glides into view instead of opening out of sight.
+- **Polish pass.** Links match the app instead of turning browser purple
+  once visited. "Experimental" is the same amber badge everywhere. The About
+  page's GitHub and license buttons look like buttons again. The setup
+  wizard lights one button at a time. The integration catalog's
+  Recommended count matches what it shows. On a phone, the Overlay tab, saved
+  delays and integration packs fit the screen. Copy reads cleaner throughout.
+
+### Twitch events and more of OBS in integrations
+
+- **Follows, subs, resubs, gifted subs, bits, raids, channel point rewards
+  and ad breaks** start integrations now, with their values (`{user}`,
+  `{tier}`, `{bits}`, `{viewers}`, `{reward}`...). Pick one reward with "Only
+  if". InstantClone listens on Twitch only while an integration uses one.
+- **Twitch alerts** in the catalog: follows, subs, gifted subs, bits and
+  raids thanked on stream, in the alerts page you add to OBS once. A chat
+  welcome for raiders is there to switch on.
+- **A login from before this asks once.** Raids work right away; the rest
+  need Twitch's OK to read them. The Integrations tab, the trigger and
+  Connections say which, with an **Allow** that logs in again as the same
+  account.
+- **OBS steps do much more:** start or stop recording, save the replay
+  buffer, take a screenshot, mute or unmute a source, switch a filter on
+  or off, play or stop a media source, and press any OBS hotkey. Sources,
+  filters and hotkeys are picked from OBS's own lists.
+- **OBS events start integrations:** recording starts or stops, a replay
+  is saved (with its file), a source is muted or unmuted.
+- The Webhook preset sends InstantClone's own events, as before: OBS and
+  Twitch events stay out of it, so it never asks Twitch for anything.
+- **Every Twitch event is listened for, even right after a long break.**
+  Started with a Twitch login that had run out, the first thing InstantClone
+  asked Twitch for was refused, and that one (usually follows) stayed off
+  until the next restart. A call refused for an old login now waits for the
+  refreshed one and tries again. VOD markers and clips made at that moment
+  are covered too.
+- **No gap when Twitch moves you to another server.** Twitch asks now and
+  then; the old connection keeps delivering until the new one is up, so no
+  follow or sub is missed in between.
+- **The OBS pill tells the truth.** It read "Check" whenever no integration
+  used OBS. The open dashboard now keeps OBS connected, so it says
+  "connected", or "Set up" when OBS's WebSocket server is off and nothing
+  needs it.
+
+### Alert themes, sounds and your own files
+
+- **Seven themes for the alerts page, each its own build:** its own
+  shape, font, sound, way in, life while up and way out.
+  - **Island:** a black capsule like a phone's live island. It grows out
+    of a dot, keeps a small equalizer going, and shrinks back into it.
+  - **Signal:** an esports HUD. A scan line draws the panel, corner
+    brackets snap out, the words decode from scrambled letters, and it
+    glitches away.
+  - **Banner:** a broadcast lower third. It wipes on, with the words
+    coming up from under the line.
+  - **Bubble:** a sticker speech bubble. It boings out with confetti,
+    each word pops, and it bobs while up.
+  - **Minimal:** just type. A line draws, the words ink in letter by
+    letter, and the line is the time left.
+  - **Paper:** a scrapbook clipping on torn paper. It slaps down, the
+    tape sticks, the title stamps on, a marker highlights each word, and
+    it peels off.
+  - **Cinema:** a film's title card. It opens like a shutter, gold lines
+    draw out, the words fade up in an italic serif under a little film
+    grain, and it shutters closed.
+
+  **Alerts look** shows them all on the real page. Point at a theme, or
+  at an entrance, to see it move; **Play it again** shows it come and go.
+  It changes any part: where cards sit (on a little screen: pick a spot
+  and the card slides there), size, the font (each one shown in itself),
+  text, background and accent colors, background opacity, corners, how
+  they come in, where a picture goes, the theme sound, and custom CSS for
+  the rest (down to each word and letter). OBS follows as you change it:
+  no new address to paste.
+- **Ten built-in sounds**, and your own: upload MP3, OGG, WAV, M4A or WEBM
+  sounds and PNG, JPG, GIF or WEBP pictures (up to 10 MB each), or link to
+  one. Uploads live in `alerts-media` next to your settings, and only
+  your own pages can read them, not other websites.
+- **Each alert is edited on the real page:** its small title, text,
+  accent, sound ("Theme sound" by default) with its volume, picture and
+  how long it stays up, with **Play it** to see its entrance. **Use on
+  every alert here** gives all of an integration's alerts the same one.
+- **Show it on stream** puts the alert you're editing on your alerts page
+  in OBS, with sample values, so you see and hear it for real.
+- **Add to OBS in one click.** The alerts page goes into the scene on air,
+  as big as the canvas, its sound going through OBS. One already in OBS is
+  reused, whatever it's called.
+- **Shared alerts look like the sharer's.** A recipe with alerts brings
+  their theme and the sounds and pictures they use (up to 4 MB). On import
+  you choose whether to use their look; their files join your uploads,
+  and anything too big to come along falls back to the theme sound, or no
+  picture. Their custom CSS comes along only if it loads nothing from the
+  web, and pictures or sounds they linked from the web stay behind too, so
+  a shared recipe can't reach another site from your stream.
+- **The raid alert can be edited.** Its editor showed the chat welcome,
+  which starts switched off, instead of the alert.
+- **The alerts page in OBS updates itself.** After InstantClone updates,
+  the page reloads on its own instead of drawing new looks with the old
+  page until the source is refreshed by hand.
+- **"1 viewer", not "1 viewers".** `{viewers#viewer#viewers}` writes the
+  count and the word that fits it, in any language; Twitch alerts use it
+  for raids, gifted subs, bits and resub months.
+
+### Connections on one screen
+
+- Discord, Twitch, Phone, OBS and the alerts page are one list, each
+  saying how it stands and opening in place, instead of five tabs. The
+  alerts page used to hide behind the other buttons; the Overlay tab
+  points to it too.
+
+### Smart lights and plugs, no hub needed
+
+- **A Smart light step** turns a light or plug on your network on or off,
+  colors it, or flashes it. **Find lights on my network** finds WiZ, LIFX,
+  Govee (LAN Control on), Yeelight (LAN Control on), older TP-Link Kasa,
+  Shelly and WLED in a few seconds, with no account or cloud; **Flash**
+  shows which device is which. Each brand is reached the way the
+  open-source library Home Assistant uses for it does.
+- Color and brightness can come from chat (`!light blue`); which light
+  never can.
+- A light that got a new address from the router is found again by its
+  id, without editing anything.
+- **The On-air light** now uses a light on your network. Home Assistant
+  and Philips Hue are still there, and On-air lights you already have keep
+  working as they are.
+- A device that never answers a command is given up on after a few
+  seconds, and Shelly and WLED are only ever asked directly: an answer
+  pointing somewhere else counts as a no.
+
+### Integrations
+
+- **Why a run failed:** the editor's "Last ran · failed" and every Recent
+  activity row open that run's steps, with Copy run log and Report it.
+- **Unfinished builds save as drafts**, switched off, instead of failing.
+- **Two integrations can't answer the same chat command:** a clash is caught
+  on save and switch-on, and a second copy of a command is added switched off.
+- **Mistyped variables are flagged as you type**, with "Did you mean...?".
+- **Check OBS:** a step that keeps what OBS is doing for the steps after
+  it: `{obs.scene}`, `{obs.streaming}`, `{obs.recording}`, and for a
+  source `{obs.muted}` and `{obs.visible}`. `!mic` can answer whether the
+  mic is muted, and an If step can act on it. Each check keeps its answer
+  under its own name (`obs`, `obs2`, or one you pick), so two checks never
+  overwrite each other; two steps sharing a name get a one-click fix.
+- **Yes or no in words:** `{obs.muted?muted:unmuted}` writes the first
+  text when the value is yes and the second otherwise, in any template.
+  Clicking a yes or no value writes it this way, ready to change, and
+  "Ways to write a value" under the values shows every form.
+- **One OBS step, several sources:** mute, unmute, show, hide or play
+  as many sources as you pick, and Check OBS reads them all: `{obs.muted}`
+  says whether all are, and each has its own, like `{obs.mic_aux.muted}`.
+  Scenes, sources, filters and hotkeys are picked from one list with a
+  find box, and a name OBS doesn't have yet can still be typed.
+- **A roomier, more visual builder:** it uses most of the screen; blocks
+  and steps wear their icon, each step says its kind above what it does,
+  the settings panel is wider, and the canvas keeps the steps in one
+  readable column.
+- **If / otherwise as two lanes:** Then and Otherwise sit side by side
+  under the check, green and amber, one over the other when there's no
+  room. One If holds up to four checks, all or any of them true, and a yes
+  or no value gets yes and no to click.
+- **Drag and drop in the builder, like building blocks:** drag a block
+  from the list into any place in the steps, or drag a step up, down, into
+  or out of an If's lanes. The step leaves the stack and shrinks into a
+  small card in your hand; a socket opens where it would land, pushing the
+  others aside, and it drops into place when let go. Near the top or bottom
+  the steps scroll; Escape cancels. A tap still adds or picks, on a touch
+  screen too.
+- **Discard, right next to Save:** it shows as soon as something changes
+  and puts the blocks back one by one, the added ones out, the moved ones
+  to their saved places, the removed ones back in, without closing the
+  editor; the toast has Undo. A new integration that was never saved is
+  thrown away.
+- **An If inside an If inside an If:** the builder now counts an If's own
+  lanes when nesting, so it no longer lets a fourth level be made that
+  then can't be saved.
+- **The page under the builder no longer scrolls** when a pane reaches its
+  end or the wheel is over the header.
+- **Values grouped by where they come from:** what started the run, each
+  earlier step under its answer's name, and the always-there ones folded
+  away.
+- **A program's answer:** Run a program can wait for it (10 s at most, no
+  window) and keep what it printed, `{program.output}`, with
+  `{program.code}` and `{program.ok}`, like a web request's answer.
+- **InstantClone restarting during an Enhanced Broadcasting stream** now
+  says what to do: Twitch won't take that session back, so the card and
+  the Restart and Update questions say to stop and start streaming in OBS
+  (it read as a wrong stream key).
+- **OBS connects when its settings file can't be found,** as with a
+  portable OBS: InstantClone tries OBS's own defaults (port 4455, no
+  password) instead of giving up.
+- OBS WebSocket status in Connections, Duplicate lands next to the original,
+  pasted recipes preview at once, tests default to a dry run, and copying
+  works when the dashboard is opened from another device.
+- **Scene delay keeps its cut:** going from the lobby to the menu used to run
+  "Back to live after this airs" twice, and the second run cancelled the
+  first. An integration now keeps a cut that is already waiting.
+- **`!delay` and `{delay}` say "off" with no delay on air.** They used to
+  read the stream's own second of lag and answer "1s".
+- **`!setdelay 0` answers "Delay turned off by ..."** instead of "Delay set
+  to 0s". Mod controls you already have learn it on the next start.
+- **Going back to 0.1.15?** It can't read an integration that uses
+  something new here (a Smart light step, the new OBS steps or triggers,
+  Twitch events): it leaves those out, and its next save removes them.
+  Export them as recipes first, to import them again on 0.1.16.
+
+### Smaller things
+
+- **Saving a destination no longer empties OBS's stream settings.** With
+  the registered InstantClone service picked, a cleanup for a setting
+  from v0.1.0 to 0.1.2 cut OBS's one-line service file down to nothing;
+  if OBS was closed at the time, it opened with no stream service. The
+  cleanup now only touches the old Custom-server leftover.
+- **An overlay can be called "Reset".** Saving one with that name wiped
+  every Studio overlay and still said "Saved" (and "Seeded" saved
+  nothing). A rename whose save failed also deleted the overlay; it now
+  keeps it. A second overlay with a name already in use gets its own
+  file, instead of writing over the first.
+- A step inside the third nested check in the builder saves again. It
+  was refused with "checks nest more than 4 deep", though the builder
+  allowed it.
+- **A delay switched on while the buffer fills now starts by itself.**
+  The "Toggle delay" hotkey or MIDI button said "the delay starts as
+  soon as it is ready", and then it only did with "Auto-activate when
+  buffer ready" on: otherwise it armed and the stream stayed live. It now
+  starts either way, and so does the HTTP API's one-step `POST /delay`.
+  A cut or a disarm before then still calls it off.
+- Deleting a destination that isn't on air, a saved delay or an
+  integration happens at once, with **Undo**, instead of asking first.
+  One that is on air still asks, as Undo can't give its viewers the
+  stream back.
+- **The Logs tab fits the window.** Its console fills the card below the
+  filters and is the only thing that scrolls. It used to be taller than the
+  card on most screens, so the card scrolled too, and the wheel over the
+  console never reached it.
+- **Switching tabs is smooth.** The card eases straight to the new tab's
+  height, including one whose list arrives a moment later, instead of
+  shrinking first and then jumping. The tab highlight stops on the tab
+  instead of sliding past it, and the card leaves room for the footer, so
+  the page itself no longer scrolls.
+- A destination whose address can't work says "Not connected" on its card
+  instead of "Connecting...": nothing tries again until it is edited.
+- Click a line in the Logs tab to copy it; **Copy problems** copies every
+  warning and error at once.
+- On a phone, a slim bar keeps the delay and its main button at the
+  bottom of the screen once the delay card scrolls away.
+- Every tab is titled after its name in the tab bar, and System has a
+  line saying what it holds.
+- Messages like "Back to live" and "Disarmed" only show when it really
+  happened; a failure says why. Error toasts stay longer, can be closed,
+  and are read out by screen readers.
+- An auto-armed delay longer than the buffer holds is now flagged on the
+  dashboard, the dock and in a quiet tray balloon, instead of only the log.
+- **Copy diagnostics** in the Logs tab copies version, settings, state and
+  logs with every secret removed, ready for a bug report. A crash now leaves
+  an `instantclone-crash.log` beside the config.
+- The tray's Copy RTMP URL gives the same `localhost` address as the
+  dashboard, its links follow a port change, and its Cut goes through the
+  normal path (logged and saved).
+- Windows: opening the dashboard (from the tray, or on first start) and
+  "Make a desktop shortcut" no longer flash a console window.
+- **Twitch VOD audio is no longer marked Experimental.**
+- Notices in the corner are as wide as their text and line up on the right,
+  with the close button at their end. The crash protection "Hold for"
+  slider and the alert look's colour dots are drawn like the rest.
+- Linux: `systemctl stop` shuts down cleanly, and delay changes from chat or
+  hotkeys are saved. Windows logoff or shutdown also shuts down cleanly.
+- Linux: closing the terminal InstantClone logs to (or a `| tee` that
+  exits) no longer stops it mid-stream. Its log lines are dropped instead.
+- "Show me" in the buffer warning opens the buffer setting with the size it
+  needs filled in, without saving anything. The restart banner survives a
+  page reload.
+- **Reset settings follows the dashboard** to its default port, instead of
+  reloading the old address that no longer answers.
+- New destinations get a name from their platform, Enter saves the form,
+  switching off a live destination asks first, and card buttons are
+  reachable on touch screens. A 15-minute profile is added to new installs.
+- Compatibility warnings name the exact OBS setting to change.
+- With a delay longer than the buffer holds, the tray's status and the log
+  name the delay that really runs. Copy diagnostics gives the buffer size
+  in use, and a size saved for after a restart apart.
+
 ## [0.1.15] - Crash protection, Integrations (experimental), vertical without Twitch, and Enhanced Broadcasting on your GPU
 
 ### Crash protection: OBS crashes, the stream stays up
