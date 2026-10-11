@@ -680,83 +680,85 @@ async fn await_command_status<R: tokio::io::AsyncReadExt + Unpin>(
 mod tests {
     use super::*;
 
+    /// rtmp on 1935, rtmps on 443 with TLS, an explicit port honoured, IPv6 hosts in brackets.
     #[test]
-    fn parse_plain_rtmp_defaults_to_1935_no_tls() {
-        let u = EgressUrl::parse("rtmp://live.twitch.tv/app/key123").unwrap();
-        assert_eq!(u.host, "live.twitch.tv");
-        assert_eq!(u.port, 1935);
-        assert_eq!(u.app, "app");
-        assert_eq!(u.stream_key, "key123");
-        assert!(!u.tls);
-        assert_eq!(u.tc_url, "rtmp://live.twitch.tv:1935/app");
-    }
+    fn egress_urls_parse_with_their_scheme_defaults() {
+        // parse plain rtmp defaults to 1935 no tls
+        {
+            let u = EgressUrl::parse("rtmp://live.twitch.tv/app/key123").unwrap();
+            assert_eq!(u.host, "live.twitch.tv");
+            assert_eq!(u.port, 1935);
+            assert_eq!(u.app, "app");
+            assert_eq!(u.stream_key, "key123");
+            assert!(!u.tls);
+            assert_eq!(u.tc_url, "rtmp://live.twitch.tv:1935/app");
+        }
+        // parse rtmps defaults to 443 with tls
+        {
+            // Kick's dashboard form: rtmps host on 443, /app path.
+            let u = EgressUrl::parse(
+                "rtmps://fa723fc1b171.global-contribute.live-video.net/app/sk_test_abc",
+            )
+            .unwrap();
+            assert_eq!(u.host, "fa723fc1b171.global-contribute.live-video.net");
+            assert_eq!(u.port, 443);
+            assert_eq!(u.app, "app");
+            assert_eq!(u.stream_key, "sk_test_abc");
+            assert!(u.tls);
+            assert_eq!(
+                u.tc_url,
+                "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
+            );
+        }
+        // parse rtmps honours explicit port
+        {
+            let u = EgressUrl::parse("rtmps://host.example:1936/app/k").unwrap();
+            assert_eq!(u.port, 1936);
+            assert!(u.tls);
+        }
+        // parse accepts bracketed ipv6 hosts
+        {
+            // An IPv6 literal has to be bracketed in a URL; splitting host and
+            // port on the first ':' cut it apart and failed on "bad port".
+            let u = EgressUrl::parse("rtmp://[::1]:1936/app/k").unwrap();
+            assert_eq!((u.host.as_str(), u.port), ("::1", 1936));
+            // The host is dialled bare, but tcUrl is a URL, so it keeps brackets.
+            assert_eq!(u.tc_url, "rtmp://[::1]:1936/app");
 
-    #[test]
-    fn parse_rtmps_defaults_to_443_with_tls() {
-        // Kick's dashboard form: rtmps host on 443, /app path.
-        let u = EgressUrl::parse(
-            "rtmps://fa723fc1b171.global-contribute.live-video.net/app/sk_test_abc",
-        )
-        .unwrap();
-        assert_eq!(u.host, "fa723fc1b171.global-contribute.live-video.net");
-        assert_eq!(u.port, 443);
-        assert_eq!(u.app, "app");
-        assert_eq!(u.stream_key, "sk_test_abc");
-        assert!(u.tls);
-        assert_eq!(
-            u.tc_url,
-            "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
-        );
-    }
+            let u = EgressUrl::parse("rtmps://[2001:db8::7]/app/k").unwrap();
+            assert_eq!((u.host.as_str(), u.port), ("2001:db8::7", 443));
+            assert_eq!(u.tc_url, "rtmps://[2001:db8::7]:443/app");
 
-    #[test]
-    fn parse_rtmps_honours_explicit_port() {
-        let u = EgressUrl::parse("rtmps://host.example/app/k").unwrap();
-        assert_eq!(u.port, 443);
-        let u = EgressUrl::parse("rtmps://host.example:1936/app/k").unwrap();
-        assert_eq!(u.port, 1936);
-        assert!(u.tls);
-    }
-
-    #[test]
-    fn parse_rejects_unknown_scheme() {
-        assert!(EgressUrl::parse("http://host/app/k").is_err());
-        assert!(EgressUrl::parse("host/app/k").is_err());
-    }
-
-    #[test]
-    fn parse_accepts_bracketed_ipv6_hosts() {
-        // An IPv6 literal has to be bracketed in a URL; splitting host and
-        // port on the first ':' cut it apart and failed on "bad port".
-        let u = EgressUrl::parse("rtmp://[::1]:1936/app/k").unwrap();
-        assert_eq!((u.host.as_str(), u.port), ("::1", 1936));
-        // The host is dialled bare, but tcUrl is a URL, so it keeps brackets.
-        assert_eq!(u.tc_url, "rtmp://[::1]:1936/app");
-
-        let u = EgressUrl::parse("rtmps://[2001:db8::7]/app/k").unwrap();
-        assert_eq!((u.host.as_str(), u.port), ("2001:db8::7", 443));
-        assert_eq!(u.tc_url, "rtmps://[2001:db8::7]:443/app");
-
-        for bad in [
-            "rtmp://[::1/app/k",     // no closing bracket
-            "rtmp://[::1]x/app/k",   // junk after it
-            "rtmp://[::1]:/app/k",   // empty port
-            "rtmp://::1:1935/app/k", // unbracketed
-        ] {
-            assert!(EgressUrl::parse(bad).is_err(), "{bad}");
+            for bad in [
+                "rtmp://[::1/app/k",     // no closing bracket
+                "rtmp://[::1]x/app/k",   // junk after it
+                "rtmp://[::1]:/app/k",   // empty port
+                "rtmp://::1:1935/app/k", // unbracketed
+            ] {
+                assert!(EgressUrl::parse(bad).is_err(), "{bad}");
+            }
         }
     }
 
+    /// Another scheme, or no stream key, is an error and not a guess.
     #[test]
-    fn parse_refuses_an_empty_stream_key() {
-        // A trailing slash left the key empty, and we published with "" -
-        // the platform then refuses with an auth error that doesn't say the
-        // key was missing. Saying so up front is the useful error.
-        let err = EgressUrl::parse("rtmp://live.twitch.tv/app/")
-            .err()
-            .unwrap();
-        assert!(err.to_string().contains("stream key"), "{err}");
-        assert!(EgressUrl::parse("rtmp://live.twitch.tv/app").is_err());
+    fn urls_that_cannot_be_streamed_to_are_refused() {
+        // parse rejects unknown scheme
+        {
+            assert!(EgressUrl::parse("http://host/app/k").is_err());
+            assert!(EgressUrl::parse("host/app/k").is_err());
+        }
+        // parse refuses an empty stream key
+        {
+            // A trailing slash left the key empty, and we published with "" -
+            // the platform then refuses with an auth error that doesn't say the
+            // key was missing. Saying so up front is the useful error.
+            let err = EgressUrl::parse("rtmp://live.twitch.tv/app/")
+                .err()
+                .unwrap();
+            assert!(err.to_string().contains("stream key"), "{err}");
+            assert!(EgressUrl::parse("rtmp://live.twitch.tv/app").is_err());
+        }
     }
 
     #[test]

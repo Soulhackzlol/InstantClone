@@ -39,30 +39,30 @@ pub fn run_cli(args: &[String]) -> io::Result<()> {
     let mut verbose = false;
     let mut max_mb: Option<u64> = None;
     let mut temp = false;
-    let mut it = args.iter().peekable();
+    let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--port" => {
                 port = it.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| {
-                    eprintln!("--port needs a number");
+                    log_line!("--port needs a number");
                     std::process::exit(2);
                 });
             }
             "--web-port" => {
                 web_port = it.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| {
-                    eprintln!("--web-port needs a number");
+                    log_line!("--web-port needs a number");
                     std::process::exit(2);
                 });
             }
             "--file" => {
                 file = it.next().cloned().or_else(|| {
-                    eprintln!("--file needs a path");
+                    log_line!("--file needs a path");
                     std::process::exit(2);
                 });
             }
             "--max-mb" => {
                 max_mb = it.next().and_then(|s| s.parse().ok()).or_else(|| {
-                    eprintln!("--max-mb needs a number");
+                    log_line!("--max-mb needs a number");
                     std::process::exit(2);
                 });
             }
@@ -73,7 +73,7 @@ pub fn run_cli(args: &[String]) -> io::Result<()> {
                 return Ok(());
             }
             other => {
-                eprintln!("unknown sink option: {}", other);
+                log_line!("unknown sink option: {}", other);
                 print_help();
                 std::process::exit(2);
             }
@@ -87,7 +87,7 @@ pub fn run_cli(args: &[String]) -> io::Result<()> {
 }
 
 fn print_help() {
-    eprintln!(
+    log_line!(
         "InstantClone - RTMP sink (for end-to-end local testing)
 
 USAGE:
@@ -171,8 +171,8 @@ async fn run_sink(
     println!();
 
     if out_path.is_some() && max_mb.is_none() && !temp {
-        eprintln!("[sink] WARNING: recording is uncapped. At 8 Mbps that's ~3.6 GB/hour.");
-        eprintln!("[sink]          Use `--max-mb 1000` to cap, or `--temp` to delete on exit.");
+        log_line!("[sink] WARNING: recording is uncapped. At 8 Mbps that's ~3.6 GB/hour.");
+        log_line!("[sink]          Use `--max-mb 1000` to cap, or `--temp` to delete on exit.");
     }
 
     // Spawn the live-preview HTTP server unless disabled.
@@ -180,7 +180,7 @@ async fn run_sink(
         let live2 = live.clone();
         tokio::spawn(async move {
             if let Err(e) = run_web(web_port, live2).await {
-                eprintln!("[sink-web] error: {}", e);
+                log_line!("[sink-web] error: {}", e);
             }
         });
     }
@@ -190,7 +190,7 @@ async fn run_sink(
             let (sock, peer) = match listener.accept().await {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("[sink] accept failed: {}", e);
+                    log_line!("[sink] accept failed: {}", e);
                     break;
                 }
             };
@@ -511,7 +511,7 @@ impl FlvWriter {
         if let Some(cap) = self.max_bytes {
             if self.bytes_written + tag_bytes > cap {
                 if !self.cap_warned {
-                    eprintln!(
+                    log_line!(
                         "[sink] recording capped at {} MB - further tags dropped from FLV",
                         cap / 1024 / 1024
                     );
@@ -1451,12 +1451,6 @@ pub(crate) async fn record(
 mod tests {
     use super::*;
 
-    /// The banner shortens `--file` to fit a fixed-width box. Measuring in
-    /// bytes cut inside a multi-byte character, and with `panic = "abort"`
-    /// that aborted the process rather than printing a wrong line: the sink
-    /// would refuse to start for any path whose accent happened to straddle
-    /// the cut. Same bug the config redactors and `scrub_secret` had; this
-    /// was the last copy of it.
     /// FLV splits the timestamp: the low 24 bits big-endian, then the top
     /// 8 bits in a separate "extended" byte. Past 2^24 ms (~4.6 hours) a
     /// writer that drops or misplaces that byte jumps the player's clock
@@ -1473,17 +1467,23 @@ mod tests {
         ];
         assert_eq!(flv_tag_bytes(9, 0x1234_5678, &[0xAA, 0xBB]), expected);
 
-        let path = std::env::temp_dir().join(format!("ic-test-sink-{}.flv", std::process::id()));
+        let scratch = crate::test_support::TestDir::new("ic-test-sink");
+        let path = scratch.join("recording.flv");
         {
             let mut w = FlvWriter::create(path.to_str().unwrap(), None).unwrap();
             w.write_tag(9, 0x1234_5678, &[0xAA, 0xBB]).unwrap();
         }
         let file = std::fs::read(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
         assert_eq!(&file[..13], b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00");
         assert_eq!(&file[13..], expected);
     }
 
+    /// The banner shortens `--file` to fit a fixed-width box. Measuring in
+    /// bytes cut inside a multi-byte character, and with `panic = "abort"`
+    /// that aborted the process rather than printing a wrong line: the sink
+    /// would refuse to start for any path whose accent happened to straddle
+    /// the cut. Same bug the config redactors and `scrub_secret` had; this
+    /// was the last copy of it.
     #[test]
     fn truncate_cuts_on_characters_not_bytes() {
         // The accent straddles byte 41, which is where the old code cut.

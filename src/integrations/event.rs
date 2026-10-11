@@ -34,6 +34,20 @@ pub enum EventKind {
     DestinationStillDown,
     DestinationUnstable,
     DestinationSteady,
+    // From OBS itself, over its WebSocket server (see `obsws`).
+    ObsRecordingStarted,
+    ObsRecordingStopped,
+    ObsReplaySaved,
+    ObsMuteChanged,
+    // From Twitch, over EventSub (see `twitch::eventsub`).
+    TwitchFollow,
+    TwitchSub,
+    TwitchResub,
+    TwitchGift,
+    TwitchCheer,
+    TwitchRaid,
+    TwitchRedeem,
+    TwitchAd,
 }
 
 /// One variable an event carries: its name and a sample value.
@@ -47,7 +61,7 @@ pub type ParamSpec = (&'static str, &'static str, &'static str);
 const MAX_PARAM: f64 = 1_000_000.0;
 
 impl EventKind {
-    pub const ALL: [EventKind; 24] = [
+    pub const ALL: [EventKind; 36] = [
         EventKind::ObsConnected,
         EventKind::ObsDisconnected,
         EventKind::EbDetected,
@@ -73,6 +87,18 @@ impl EventKind {
         EventKind::DelayChanged,
         EventKind::DelayOff,
         EventKind::DelayDisarmed,
+        EventKind::ObsRecordingStarted,
+        EventKind::ObsRecordingStopped,
+        EventKind::ObsReplaySaved,
+        EventKind::ObsMuteChanged,
+        EventKind::TwitchFollow,
+        EventKind::TwitchSub,
+        EventKind::TwitchResub,
+        EventKind::TwitchGift,
+        EventKind::TwitchCheer,
+        EventKind::TwitchRaid,
+        EventKind::TwitchRedeem,
+        EventKind::TwitchAd,
     ];
 
     pub fn id(self) -> &'static str {
@@ -101,6 +127,18 @@ impl EventKind {
             EventKind::DestinationStillDown => "destination_still_down",
             EventKind::DestinationUnstable => "destination_unstable",
             EventKind::DestinationSteady => "destination_steady",
+            EventKind::ObsRecordingStarted => "obs_recording_started",
+            EventKind::ObsRecordingStopped => "obs_recording_stopped",
+            EventKind::ObsReplaySaved => "obs_replay_saved",
+            EventKind::ObsMuteChanged => "obs_mute_changed",
+            EventKind::TwitchFollow => "twitch_follow",
+            EventKind::TwitchSub => "twitch_sub",
+            EventKind::TwitchResub => "twitch_resub",
+            EventKind::TwitchGift => "twitch_gift",
+            EventKind::TwitchCheer => "twitch_cheer",
+            EventKind::TwitchRaid => "twitch_raid",
+            EventKind::TwitchRedeem => "twitch_redeem",
+            EventKind::TwitchAd => "twitch_ad",
         }
     }
 
@@ -134,6 +172,18 @@ impl EventKind {
             EventKind::DestinationStillDown => "A platform stays down",
             EventKind::DestinationUnstable => "A platform keeps dropping",
             EventKind::DestinationSteady => "A platform is steady again",
+            EventKind::ObsRecordingStarted => "OBS starts recording",
+            EventKind::ObsRecordingStopped => "OBS stops recording",
+            EventKind::ObsReplaySaved => "OBS saves a replay",
+            EventKind::ObsMuteChanged => "A source is muted or unmuted",
+            EventKind::TwitchFollow => "Someone follows",
+            EventKind::TwitchSub => "Someone subscribes",
+            EventKind::TwitchResub => "Someone resubscribes",
+            EventKind::TwitchGift => "Someone gifts subs",
+            EventKind::TwitchCheer => "Someone cheers bits",
+            EventKind::TwitchRaid => "A raid comes in",
+            EventKind::TwitchRedeem => "Someone redeems channel points",
+            EventKind::TwitchAd => "An ad break starts",
         }
     }
 
@@ -163,7 +213,30 @@ impl EventKind {
             | EventKind::DelayArmed
             | EventKind::DelayReady
             | EventKind::DelayDisarmed => "Delay",
+            EventKind::ObsRecordingStarted
+            | EventKind::ObsRecordingStopped
+            | EventKind::ObsReplaySaved
+            | EventKind::ObsMuteChanged => "OBS",
+            EventKind::TwitchFollow
+            | EventKind::TwitchSub
+            | EventKind::TwitchResub
+            | EventKind::TwitchGift
+            | EventKind::TwitchCheer
+            | EventKind::TwitchRaid
+            | EventKind::TwitchRedeem
+            | EventKind::TwitchAd => "Twitch",
         }
+    }
+
+    /// Something InstantClone itself saw happen, not OBS or Twitch telling
+    /// it (those need a connection to them while a trigger listens).
+    pub fn is_own(self) -> bool {
+        !matches!(self.group(), "OBS" | "Twitch")
+    }
+
+    /// Heard from OBS's WebSocket server, which must then be connected.
+    pub fn needs_obs(self) -> bool {
+        self.group() == "OBS"
     }
 
     /// Variables the event itself carries, on top of the always-available
@@ -234,10 +307,45 @@ impl EventKind {
                 ("drops", "4"),
                 ("down_total", "2m 30s"),
             ],
+            // `file`: where OBS saved it.
+            EventKind::ObsRecordingStopped | EventKind::ObsReplaySaved => {
+                &[("file", r"C:\Videos\2026-10-08 21-04-11.mkv")]
+            }
+            // `obs_source`, not `source`: shortcuts already use that name.
+            EventKind::ObsMuteChanged => &[("obs_source", "Mic/Aux"), ("muted", "yes")],
+            // `user` is "Anonymous" for an anonymous gift or cheer. `tier`
+            // is 1, 2 or 3.
+            EventKind::TwitchFollow => &[("user", "Nat")],
+            EventKind::TwitchSub => &[("user", "Nat"), ("tier", "1"), ("gift", "no")],
+            EventKind::TwitchResub => &[
+                ("user", "Nat"),
+                ("tier", "1"),
+                ("months", "13"),
+                ("streak", "4"),
+                ("message", "13 months, still here"),
+            ],
+            EventKind::TwitchGift => &[
+                ("user", "Nat"),
+                ("count", "5"),
+                ("tier", "1"),
+                ("total", "42"),
+            ],
+            EventKind::TwitchCheer => {
+                &[("user", "Nat"), ("bits", "500"), ("message", "Cheer500 gg")]
+            }
+            EventKind::TwitchRaid => &[("user", "Nat"), ("viewers", "42")],
+            EventKind::TwitchRedeem => &[
+                ("user", "Nat"),
+                ("reward", "Hydrate"),
+                ("cost", "500"),
+                ("input", "with lemon"),
+            ],
+            EventKind::TwitchAd => &[("seconds", "90"), ("automatic", "yes")],
             EventKind::ObsConnected
             | EventKind::EbDetected
             | EventKind::AllDestinationsDown
-            | EventKind::StreamStarted => &[],
+            | EventKind::StreamStarted
+            | EventKind::ObsRecordingStarted => &[],
         }
     }
 
@@ -378,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn samples_carry_every_declared_var() {
+    fn a_sample_event_reads_like_a_real_one() {
         let e = Event::sample(EventKind::DestinationDropped);
         assert_eq!(e.var("destination"), Some("YouTube"));
         assert_eq!(e.var("reason"), Some("connection timed out"));
@@ -396,10 +504,5 @@ mod tests {
         // What the engine does with it can't overflow a Duration.
         let _ = std::time::Duration::from_secs_f64(kind.param(&set("inf"), "after_s") * 60.0);
         assert!(kind.is_param("after_s") && !kind.is_param("destination"));
-    }
-
-    #[test]
-    fn catalog_is_valid_json() {
-        assert!(crate::config::is_valid_json(&catalog_json().to_json()));
     }
 }

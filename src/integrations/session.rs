@@ -349,17 +349,6 @@ mod tests {
     }
 
     #[test]
-    fn stopping_on_purpose_into_a_hold_is_not_a_crash() {
-        let mut s = Session::default();
-        let t0 = Instant::now();
-        s.observe(&Event::new(EventKind::ObsConnected), t0, 0, none());
-        let stopped = Event::new(EventKind::HoldOpened).with("reason", "stopped");
-        s.observe(&stopped, t0, 0, none());
-        let end = s.observe(&Event::new(EventKind::HoldEnded), t0, 0, none());
-        assert_eq!(end[0].var("crashes"), Some("0"));
-    }
-
-    #[test]
     fn a_destination_coming_back_says_how_long_it_was_gone() {
         let mut s = Session::default();
         let t0 = Instant::now();

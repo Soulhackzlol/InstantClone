@@ -70,7 +70,7 @@ Linux:    chmod +x instantclone-*-linux-x64 → run it.
 Dashboard opens at http://127.0.0.1:7799
 ```
 
-That's the whole install. On Windows a tray icon sits in the systray while it runs; right-click for the dashboard, dock, one-click **Cut**, or **Quit**. Closing the tab doesn't kill the proxy, only Quit does. Linux has no tray, so the dashboard is the whole control surface and Quit and Restart live in its System tab.
+That's the whole install. On Windows a tray icon sits in the systray while it runs; right-click for the dashboard, dock, one-click **Cut**, or **Quit**. Closing the tab doesn't kill the proxy, only Quit does. Linux has no tray, so the dashboard is the whole control surface and Quit and Restart live in its System → About tab.
 
 <sub>First launch, Windows SmartScreen may say "unknown publisher" because the build isn't code-signed yet. Click **More info → Run anyway**, or check it against the `SHA256SUMS.txt` on the release.</sub>
 
@@ -79,7 +79,7 @@ That's the whole install. On Windows a tray icon sits in the systray while it ru
 
 **2 · Point OBS at it**
 
-Click **Register with OBS** in the dashboard, restart OBS once, then in **Settings → Stream** pick:
+Close OBS, click **Register with OBS** in the dashboard's **OBS** tab, then open OBS and in **Settings → Stream** pick:
 
 ```text
 Service:  InstantClone
@@ -213,14 +213,14 @@ If OBS crashes or freezes, every destination stays live on a reconnect screen (f
 <td valign="top" colspan="2">
 
 **🧩 Integrations (experimental)**
-InstantClone talks to Discord, Twitch chat, your phone and your own tools. One click adds a crash alert, a `!delay` command, mod controls, a highlight button that clips what viewers actually saw, a Discord card that writes your stream's timeline, YouTube chapters, an on-air light and more, and a step builder covers the rest. They're new and may still change: please report what breaks or confuses you with the tab's **Report it** link.
+InstantClone talks to Discord, Twitch chat, your phone, OBS and your own tools. It can start on follows, subs, gifted subs, bits, raids, channel point rewards and ad breaks, and on OBS recording, replays or a muted mic. One click adds a crash alert, on-stream Twitch alerts, a `!delay` command, mod controls, a highlight button that clips what viewers actually saw, a Discord card that writes your stream's timeline, YouTube chapters, an on-air light and more, and a step builder covers the rest, down to OBS scenes, filters, recording and hotkeys, and smart lights and plugs on your network (WiZ, LIFX, Govee, Yeelight, Kasa, Shelly, WLED) with no hub. They're new and may still change: please report what breaks or confuses you with the tab's **Report it** link.
 
 </td>
 </tr>
 </table>
 
 > [!TIP]
-> **One-click OBS registration.** The setup wizard can add an "InstantClone" entry to OBS's Service dropdown for you (writes `services.json` with a `.bak` first, refreshes on port change, and warns "close OBS first" when the file is locked).
+> **One-click OBS registration.** The setup wizard can add an "InstantClone" entry to OBS's Service dropdown for you (writes `services.json` with a `.bak` first). It only writes while OBS is closed, because OBS rewrites its service list when it quits; after a port change, an entry left out of date updates by itself once OBS closes.
 
 <br/>
 
@@ -258,7 +258,7 @@ InstantClone talks to Discord, Twitch chat, your phone and your own tools. One c
 
 | | Endpoint | Body | What it does |
 |:---|---|---|---|
-| <kbd>POST</kbd> | `/arm` | `ms=15000` | Start filling a 15 s buffer. Not live yet. |
+| <kbd>POST</kbd> | `/arm` | `ms=15000` | Start filling a 15 s buffer, up to 1 hour (`ms=3600000`). Not live yet. <code>409</code> while OBS isn't streaming or once the buffer can't hold it. |
 | <kbd>POST</kbd> | `/activate` | | Activate the armed delay. <code>409</code> if not ready. |
 | <kbd>POST</kbd> | `/disarm` | | Cancel arming, drop the buffer without going live. |
 | <kbd>POST</kbd> | `/stop` | | Cut back to live (same as the **Cut** button). |
@@ -303,8 +303,7 @@ One-button arming. Add `/activate` and `/stop` to two more buttons for full dela
   "egress_alive": true,
   "destinations_alive": 2,
   "destinations_total": 3,
-  "bitrate_kbps": 6020,
-  "stats": { "tags_sent": 184302, "bytes_sent": 1338294104, "cuts": 1 }
+  "stats": { "tags_sent": 184302, "bytes_sent": 1338294104, "cuts": 1, "bitrate_kbps": 6020 }
 }
 ```
 
@@ -335,12 +334,12 @@ One-button arming. Add `/activate` and `/stop` to two more buttons for full dela
 <br/>
 
 <table>
-<tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>392 / 392</code></td></tr>
+<tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>900+</code></td></tr>
 </table>
 
-**Buffer.** Disk-backed by default (`./instantclone.buf`, 500 MB ≈ 11 min at 6 Mbps, ≈ 6 min 50 s at 10 Mbps), kept off RAM because it can run to hundreds of MB. The only thing in RAM is the IDR index, ~1 MB for 10 minutes at 60 fps. The file resets on every clean shutdown, so nothing accumulates between sessions, and the UI refuses to arm a delay larger than the buffer can hold, with an explicit "needs ≥ N MB" reason.
+**Buffer.** Disk-backed by default (`./instantclone.buf`; a new install starts at 300 MB, less on a nearly full disk: about 6 min 30 s at 6 Mbps, 3 min 50 s at 10 Mbps), kept off RAM because it can run to hundreds of MB. The only thing in RAM is the IDR index, ~1 MB for 10 minutes at 60 fps. The file resets on every clean shutdown, so nothing accumulates between sessions, and every way of arming (dashboard, dock, API, hotkeys, MIDI, chat) refuses a delay the buffer can't hold once OBS's bitrate is measured, and says what size it needs. Delays go up to 1 hour; the buffer size decides how much of that you can use (a 15 min delay at 6 Mbps needs about 690 MB).
 
-**Build.** Rust 1.74+ stable. No npm, no submodules, no platform SDKs.
+**Build.** Rust 1.89+ stable. No npm, no submodules, no platform SDKs.
 
 ```powershell
 git clone <repo>
@@ -353,7 +352,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 **Sync disk I/O on the ring-append hot path, by choice.** The buffered write lands in the OS page cache in microseconds and the kernel flushes in the background, so the page cache is already the async buffer; the index and the bytes advance under one lock so a reader never sees a tag whose bytes aren't on disk yet.
 
-**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the Enhanced Broadcasting config built from OBS's canvases and GPU encoders, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), crash protection (crash vs. stop vs. freeze detection, the lossless reconnect-screen encoder checked against ffmpeg, per-track framing for Enhanced Broadcasting, silent AAC), the integrations engine (steps, templates, recipes, chat, Discord cards, the stream timeline), and the self-update download + checksum-verify + exe swap. **843 tests, all green.**
+**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the Enhanced Broadcasting config built from OBS's canvases and GPU encoders, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), crash protection (crash vs. stop vs. freeze detection, the lossless reconnect-screen encoder checked against ffmpeg, per-track framing for Enhanced Broadcasting, silent AAC), the integrations engine (steps, templates, recipes, chat, Discord cards, on-stream alerts, the stream timeline, OBS actions and events, Twitch EventSub), and the self-update download + checksum-verify + exe swap. **873 tests, all green.** The dashboard, dock and alerts page scripts have 55 more of their own: `node --test web/tests/*.test.mjs`, nothing to install.
 
 </details>
 
@@ -363,11 +362,11 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 843 tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
+**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 900+ tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's rough, honestly**
 
-- **No native tray on Linux.** Windows has a system-tray icon; on Linux the control surface is the web dashboard (Quit and Restart live in its System tab). macOS isn't supported yet.
+- **No native tray on Linux.** Windows has a system-tray icon; on Linux the control surface is the web dashboard (Quit and Restart live in its System → About tab). macOS isn't supported yet.
 - **Transcoded ladder isn't guaranteed without EB.** Only Twitch Partners get a transcode slot every time; everyone else stays Source-Only, where some hardware decoders fail above ~8 Mbps (Twitch's allocation behaviour, not the proxy). For a guaranteed ladder use Enhanced Broadcasting; otherwise keep bitrate near ~6000 Kbps.
 - **Hand-rolled HTTP server.** Smaller binary than `hyper`, but I own the entire HTTP surface. Worth re-evaluating if it grows.
 
@@ -403,7 +402,7 @@ Yes. The buffer sits before the fan-out, so every destination plays from the sam
 
 <br/>
 
-As much as the buffer holds. The default 500 MB file is about 11 minutes at 6 Mbps (less at higher bitrates). You can make it bigger; the dashboard refuses a delay the buffer can't hold and tells you exactly how many MB it needs, so it never stalls silently.
+As much as the buffer holds, up to 1 hour. A new install's 300 MB file is about 6 and a half minutes at 6 Mbps (less at higher bitrates). You can make it bigger; the dashboard refuses a delay the buffer can't hold and tells you exactly how many MB it needs, so it never stalls silently.
 
 </details>
 
@@ -432,7 +431,7 @@ In InstantClone's **Destinations** tab, never in OBS. OBS only ever points at In
 
 <br/>
 
-Yes, both. Six actions - delay on/off, arm, activate, cut to live, **cut after this airs**, and ending crash protection - bind to a global keyboard shortcut, a MIDI pad or knob, or both at once, in **Settings**. Hotkeys fire while a fullscreen game holds focus, so you never alt-tab mid-match, and every binding needs a modifier (Ctrl, Alt, Shift or Win) so a stray keypress can't trip a delay action. MIDI mappings are learned by pressing the control rather than typing a note number, and each one remembers which device it came from, so two controllers can drive different actions. Windows only for now.
+Yes, both. Six actions bind to a global keyboard shortcut, a MIDI pad or knob, or both, in **System → Controls**: delay on/off, arm, activate, cut to live, **cut after this airs**, and ending crash protection. Hotkeys fire while a fullscreen game holds focus, so you never alt-tab mid-match, and every binding needs a modifier (Ctrl, Alt, Shift or Win) so a stray keypress can't trip a delay action. MIDI mappings are learned by pressing the control rather than typing a note number, and each one remembers which device it came from, so two controllers can drive different actions. Windows only for now.
 
 </details>
 
@@ -441,7 +440,7 @@ Yes, both. Six actions - delay on/off, arm, activate, cut to live, **cut after t
 
 <br/>
 
-Windows 10/11 and **Linux (x86-64)** both run it. On Linux it works headless on a VPS or on an Ubuntu desktop, driven by the browser dashboard (there is no native tray, so Quit and Restart live in the dashboard's System tab). For a network-exposed setup, turn on the optional dashboard password and pair it with TLS via a reverse proxy. macOS isn't supported yet.
+Windows 10/11 and **Linux (x86-64)** both run it. On Linux it works headless on a VPS or on an Ubuntu desktop, driven by the browser dashboard (there is no native tray, so Quit and Restart live in the dashboard's System → About tab). For a network-exposed setup, turn on the optional dashboard password and pair it with TLS via a reverse proxy. macOS isn't supported yet.
 
 </details>
 

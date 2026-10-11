@@ -13,11 +13,13 @@
 //! what would have happened. A dry run sends nothing at all, messages
 //! included, and says what each would have been.
 
+use super::alerts;
 use super::clock;
 use super::event::{Event, EventKind};
 use super::host::{
     fmt_clock, fmt_delay, fmt_duration, DiscordCard, DiscordMessage, Host, HttpRequest, LiveState,
 };
+use super::lights;
 use super::model::{DiscordChannel, PhoneConnection, Step, StepKind};
 use super::obsws;
 use super::template::{self, Vars};
@@ -330,6 +332,7 @@ impl Runner {
             StepKind::EditText => self.edit_text(step),
             StepKind::Timeline => self.timeline(step),
             StepKind::Obs => self.obs(step).await,
+            StepKind::Light => self.light(step).await,
         }
         Flow::Continue
     }
@@ -361,20 +364,41 @@ impl Runner {
         true
     }
 
+    /// An If step: its checks, all of them true (or any, with `match` set
+    /// to `any`), pick the branch.
     async fn check(&mut self, step: &Step) -> Flow {
-        let left = self.fill(step, "left");
-        let right = self.fill(step, "right");
-        let op = step.param("op");
-        let passed = compare(&left, op, &right);
-        self.record(
-            "Check",
-            StepStatus::Ok,
-            format!(
+        let any = step.param("match") == "any";
+        let mut results = Vec::new();
+        let mut said = Vec::new();
+        for (n, (left, op, right)) in super::model::condition_names().enumerate() {
+            let op = step.param(&op);
+            if n > 0 && op.is_empty() {
+                continue;
+            }
+            let left = self.fill(step, &left);
+            let right = self.fill(step, &right);
+            let passed = compare(&left, op, &right);
+            said.push(format!(
                 "\"{left}\" {} \"{right}\": {}",
                 op.replace('_', " "),
-                if passed { "yes" } else { "no" }
+                yes_no(passed)
+            ));
+            results.push(passed);
+        }
+        let passed = match any {
+            true => results.iter().any(|passed| *passed),
+            false => results.iter().all(|passed| *passed),
+        };
+        let detail = match said.len() {
+            1 => said.remove(0),
+            _ => format!(
+                "{} ({}): {}",
+                said.join(", "),
+                if any { "any" } else { "all" },
+                yes_no(passed)
             ),
-        );
+        };
+        self.record("Check", StepStatus::Ok, detail);
         let branch = if passed { &step.then } else { &step.otherwise };
         self.steps(branch).await
     }
@@ -787,7 +811,7 @@ impl Runner {
                 );
                 return;
             }
-            // Too big for a number is past the 600 s top too.
+            // Too big for a number is past the top too.
             text if is_whole_number(text) => Some(text.parse::<u64>().unwrap_or(u64::MAX)),
             _ => None,
         };
@@ -795,7 +819,8 @@ impl Runner {
         if action == "arm" && seconds == Some(0) {
             action = "disarm".to_string();
         }
-        let ms = (seconds.unwrap_or(0).min(600) * 1000) as u32;
+        let top = u64::from(crate::config::MAX_DELAY_MS / 1000);
+        let ms = (seconds.unwrap_or(0).min(top) * 1000) as u32;
         let label = delay_action_label(&action, ms);
         if self.ctx.test {
             self.record(label, StepStatus::Skipped, "tests never touch the stream");
@@ -866,9 +891,43 @@ impl Runner {
             self.record(label, StepStatus::Skipped, "tests never run programs");
             return;
         }
-        match self.blocking(move |h| h.program(&path, &args)).await {
-            Ok(()) => self.record(label, StepStatus::Ok, ""),
-            Err(e) => self.record(label, StepStatus::Failed, e),
+        if step.param("wait") != "yes" {
+            match self.blocking(move |h| h.program(&path, &args)).await {
+                Ok(()) => self.record(label, StepStatus::Ok, ""),
+                Err(e) => self.record(label, StepStatus::Failed, e),
+            }
+            return;
+        }
+        // Waited for: what it printed and how it ended are kept, like a
+        // web request's answer.
+        let save_as = match step.param("save_as").trim() {
+            "" => "program".to_string(),
+            name => name.to_string(),
+        };
+        match self.blocking(move |h| h.program_output(&path, &args)).await {
+            Ok(answer) => {
+                let ok = answer.code == Some(0);
+                let code = answer.code.map_or(String::new(), |c| c.to_string());
+                let shown: String = answer.output.chars().take(120).collect();
+                self.set(format!("{save_as}.output"), answer.output);
+                self.set(format!("{save_as}.code"), code.clone());
+                self.set(format!("{save_as}.ok"), if ok { "yes" } else { "no" });
+                let status = if ok {
+                    StepStatus::Ok
+                } else {
+                    StepStatus::Failed
+                };
+                let detail = if ok {
+                    shown
+                } else {
+                    format!("ended with code {code}: {shown}")
+                };
+                self.record(label, status, detail);
+            }
+            Err(e) => {
+                self.set(format!("{save_as}.ok"), "no");
+                self.record(label, StepStatus::Failed, e);
+            }
         }
     }
 
@@ -913,46 +972,84 @@ impl Runner {
             );
             return;
         }
-        self.host.overlay(&title, &text, seconds);
+        // The look is the streamer's, fixed in the step: never filled in.
+        let card = alerts::Card {
+            title,
+            text: text.clone(),
+            seconds,
+            color: step.param("color").trim().to_string(),
+            sound: step.param("sound").trim().to_string(),
+            volume: step
+                .param("volume")
+                .trim()
+                .parse()
+                .unwrap_or(alerts::DEFAULT_VOLUME),
+            image: step.param("image").trim().to_string(),
+        };
+        self.host.overlay(card);
         self.record("On stream", StepStatus::Ok, text);
     }
 
     /// Ask OBS to switch a scene, show or hide a source, or set a text.
     async fn obs(&mut self, step: &Step) {
-        // Never templated: see `model::validate_steps`.
-        let scene = step.param("scene").trim().to_string();
-        let source = step.param("source").trim().to_string();
-        let action = match step.param("action") {
-            "scene" => obsws::Action::Scene(scene),
-            "show" | "hide" | "toggle" => obsws::Action::Source {
-                scene,
-                source,
-                visible: match step.param("action") {
-                    "show" => Some(true),
-                    "hide" => Some(false),
-                    _ => None,
-                },
-            },
-            "text" => obsws::Action::Text {
-                source,
-                text: self.fill(step, "text"),
-            },
-            other => {
-                self.record(
-                    "OBS",
-                    StepStatus::Failed,
-                    format!("unknown OBS action \"{other}\""),
-                );
-                return;
-            }
+        let text = match step.param("action") {
+            "text" => self.fill(step, "text"),
+            _ => String::new(),
         };
-        let label = obs_label(&action);
-        if self.ctx.test {
-            self.record(label, StepStatus::Skipped, "tests never touch OBS");
+        let actions = match obs_actions(step, text) {
+            Ok(actions) => actions,
+            Err(why) => return self.record("OBS", StepStatus::Failed, why),
+        };
+        let answer_name = match step.param("save_as").trim() {
+            "" => "obs",
+            name => name,
+        };
+        // One call per source: one OBS doesn't have fails alone.
+        for action in actions {
+            let label = obs_label(&action);
+            // Reading OBS changes nothing: a test may, and gets the real values.
+            let reads = matches!(action, obsws::Action::Check { .. });
+            if self.ctx.test && !reads {
+                self.record(label, StepStatus::Skipped, "tests never touch OBS");
+                continue;
+            }
+            match self.blocking(move |h| h.obs(action)).await {
+                Ok(answer) => {
+                    let said = answer
+                        .iter()
+                        .map(|(field, value)| format!("{field} {value}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    for (field, value) in answer {
+                        self.set(format!("{answer_name}.{field}"), value);
+                    }
+                    self.record(label, StepStatus::Ok, said);
+                }
+                Err(e) => self.record(label, StepStatus::Failed, e),
+            }
+        }
+    }
+
+    async fn light(&mut self, step: &Step) {
+        // Never templated: see `model::validate_steps`.
+        let device = step.param("device").trim().to_string();
+        let name = match step.param("name").trim() {
+            "" => "light".to_string(),
+            name => name.to_string(),
+        };
+        // Color and brightness may come from chat: checked here.
+        let color = self.fill(step, "color");
+        let brightness = self.fill(step, "brightness");
+        let label = light_label(&name, step.param("action"), color.trim());
+        let command = match light_command(step.param("action"), &color, &brightness) {
+            Ok(command) => command,
+            Err(why) => return self.record(label, StepStatus::Failed, why),
+        };
+        if self.dry(label.clone(), "") {
             return;
         }
-        match self.blocking(move |h| h.obs(action)).await {
-            Ok(()) => self.record(label, StepStatus::Ok, ""),
+        match self.blocking(move |h| h.light(&device, command)).await {
+            Ok(note) => self.record(label, StepStatus::Ok, note.unwrap_or_default()),
             Err(e) => self.record(label, StepStatus::Failed, e),
         }
     }
@@ -1104,10 +1201,10 @@ fn json_field(body: &str, path: &str) -> Option<String> {
 /// previews use. `arg4` to `arg9` exist too; they are left out here so the
 /// editor's list stays short.
 pub const CHAT_VARS: &[(&str, &str)] = &[
-    ("user", "Ana"),
-    ("user_login", "ana"),
+    ("user", "Nat"),
+    ("user_login", "nat"),
     ("user_role", "mod"),
-    ("target", "Ana"),
+    ("target", "Nat"),
     ("message", "!delay"),
     ("args", "30"),
     ("arg1", "30"),
@@ -1118,6 +1215,7 @@ pub const CHAT_VARS: &[(&str, &str)] = &[
 pub const GLOBAL_VARS: &[(&str, &str)] = &[
     ("delay", "30s"),
     ("delay_ms", "30000"),
+    ("delay_max", "742"),
     ("delay_state", "on"),
     ("phase", "active"),
     ("hold_active", "no"),
@@ -1138,12 +1236,24 @@ pub const GLOBAL_VARS: &[(&str, &str)] = &[
     ("uses", "42"),
 ];
 
+/// The delay viewers are on: what runs while one is on air, and none
+/// otherwise. Without a delay the measured lag is still the pipeline's
+/// own second or so, which `!delay` must not report as "1s".
+fn delay_on_air_ms(live: &LiveState) -> u32 {
+    if live.phase == "active" {
+        live.delay_ms
+    } else {
+        0
+    }
+}
+
 fn live_var(name: &str, live: &LiveState) -> Option<String> {
     let yes_no = |b: bool| if b { "yes" } else { "no" }.to_string();
     Some(match name {
-        "delay" => fmt_delay(live.delay_ms),
-        "delay_ms" => live.delay_ms.to_string(),
-        "delay_state" => if live.delay_ms > 0 { "on" } else { "off" }.to_string(),
+        "delay" => fmt_delay(delay_on_air_ms(live)),
+        "delay_ms" => delay_on_air_ms(live).to_string(),
+        "delay_max" => live.delay_max_s.to_string(),
+        "delay_state" => if live.phase == "active" { "on" } else { "off" }.to_string(),
         "phase" => live.phase.clone(),
         "hold_active" => yes_no(live.hold_active),
         "hold_left" => {
@@ -1370,6 +1480,78 @@ fn discord_shown(message: &DiscordMessage) -> String {
     }
 }
 
+/// The OBS calls an OBS step makes: one per source it lists, or one check
+/// that reads them all. `text` is a text source's filled-in text.
+fn obs_actions(step: &Step, text: String) -> Result<Vec<obsws::Action>, String> {
+    use obsws::Action;
+    // Never templated: see `model::validate_steps`.
+    let scene = step.param("scene").trim().to_string();
+    let filter = step.param("filter").trim().to_string();
+    let sources = obsws::listed_names(step.param("source"));
+    let action = step.param("action");
+    // A blank source still makes one call, for OBS to say what's missing.
+    let each = |make: &dyn Fn(String) -> Action| -> Vec<Action> {
+        match sources.is_empty() {
+            true => vec![make(String::new())],
+            false => sources.iter().cloned().map(make).collect(),
+        }
+    };
+    let switch = |on: &str, off: &str| match action {
+        a if a == on => Some(true),
+        a if a == off => Some(false),
+        _ => None,
+    };
+    Ok(match action {
+        "scene" => vec![Action::Scene(scene)],
+        "record_start" => vec![Action::Record(true)],
+        "record_stop" => vec![Action::Record(false)],
+        "replay_save" => vec![Action::SaveReplay],
+        "screenshot" => vec![Action::Hotkey(obsws::SCREENSHOT_HOTKEY.to_string())],
+        "hotkey" => vec![Action::Hotkey(step.param("hotkey").trim().to_string())],
+        "mute" | "unmute" | "mute_toggle" => {
+            let muted = switch("mute", "unmute");
+            each(&|source| Action::Mute { source, muted })
+        }
+        "filter_on" | "filter_off" | "filter_toggle" => {
+            let enabled = switch("filter_on", "filter_off");
+            each(&|source| Action::Filter {
+                source,
+                filter: filter.clone(),
+                enabled,
+            })
+        }
+        "media_play" | "media_stop" => {
+            let play = action == "media_play";
+            each(&|source| Action::Media { source, play })
+        }
+        "show" | "hide" | "toggle" => {
+            let visible = switch("show", "hide");
+            each(&|source| Action::Source {
+                scene: scene.clone(),
+                source,
+                visible,
+            })
+        }
+        "text" => each(&|source| Action::Text {
+            source,
+            text: text.clone(),
+        }),
+        "check" => vec![Action::Check {
+            scene,
+            sources: sources.clone(),
+        }],
+        other => return Err(format!("unknown OBS action \"{other}\"")),
+    })
+}
+
+fn yes_no(on: bool) -> &'static str {
+    if on {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
 fn obs_label(action: &obsws::Action) -> String {
     match action {
         obsws::Action::Scene(scene) => format!("OBS scene {scene}"),
@@ -1385,6 +1567,74 @@ fn obs_label(action: &obsws::Action) -> String {
         } => format!("Hide {source}"),
         obsws::Action::Source { source, .. } => format!("Show or hide {source}"),
         obsws::Action::Text { source, .. } => format!("Text of {source}"),
+        obsws::Action::Record(true) => "Start recording".to_string(),
+        obsws::Action::Record(false) => "Stop recording".to_string(),
+        obsws::Action::SaveReplay => "Save the replay".to_string(),
+        obsws::Action::Mute {
+            source,
+            muted: Some(true),
+        } => format!("Mute {source}"),
+        obsws::Action::Mute {
+            source,
+            muted: Some(false),
+        } => format!("Unmute {source}"),
+        obsws::Action::Mute { source, .. } => format!("Mute or unmute {source}"),
+        obsws::Action::Filter {
+            source,
+            filter,
+            enabled,
+        } => match enabled {
+            Some(true) => format!("Turn on {filter} on {source}"),
+            Some(false) => format!("Turn off {filter} on {source}"),
+            None => format!("Flip {filter} on {source}"),
+        },
+        obsws::Action::Media { source, play: true } => format!("Play {source}"),
+        obsws::Action::Media { source, .. } => format!("Stop {source}"),
+        obsws::Action::Hotkey(name) if name == obsws::SCREENSHOT_HOTKEY => "Screenshot".to_string(),
+        obsws::Action::Hotkey(name) => format!("Press {name}"),
+        obsws::Action::BrowserSource { name, .. } => format!("Add {name}"),
+        obsws::Action::Check { .. } => "Check OBS".to_string(),
+    }
+}
+
+/// What a light step's settings ask for, or why they can't be done.
+fn light_command(action: &str, color: &str, brightness: &str) -> Result<lights::Command, String> {
+    let brightness = match brightness.trim() {
+        "" => None,
+        b => match b.parse::<u8>() {
+            Ok(n) if (1..=100).contains(&n) => Some(n),
+            _ => return Err(format!("brightness is 1 to 100, not \"{b}\"")),
+        },
+    };
+    let rgb = || {
+        lights::parse_color(color).ok_or_else(|| {
+            format!(
+                "\"{}\" isn't a color: use one like #ff2020, or red",
+                color.trim()
+            )
+        })
+    };
+    Ok(match action {
+        "on" => lights::Command::On { brightness },
+        "off" => lights::Command::Off,
+        "color" => lights::Command::Color {
+            rgb: rgb()?,
+            brightness,
+        },
+        "flash" => lights::Command::Flash {
+            rgb: rgb()?,
+            brightness,
+        },
+        other => return Err(format!("unknown light action \"{other}\"")),
+    })
+}
+
+fn light_label(name: &str, action: &str, color: &str) -> String {
+    match action {
+        "on" => format!("Turn on {name}"),
+        "off" => format!("Turn off {name}"),
+        "flash" => format!("Flash {name} {color}"),
+        _ => format!("{name}: {color}"),
     }
 }
 
@@ -1404,7 +1654,7 @@ fn delay_action_label(action: &str, ms: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::host::{ClipInfo, DiscordPosted, HttpResponse};
+    use super::super::host::{ClipInfo, DiscordPosted, HttpResponse, ProgramOutput};
     use super::*;
     use crate::sync::Mutex;
 
@@ -1422,6 +1672,7 @@ mod tests {
             LiveState {
                 streaming: !self.offline,
                 delay_ms: self.delay_ms,
+                phase: if self.delay_ms > 0 { "active" } else { "idle" }.into(),
                 hold_active: true,
                 hold_left_ms: 102_000,
                 channel: "texaz".into(),
@@ -1500,20 +1751,42 @@ mod tests {
             self.calls.lock().push(format!("program {path} {args:?}"));
             Ok(())
         }
+        fn program_output(&self, path: &str, args: &[String]) -> Result<ProgramOutput, String> {
+            self.calls
+                .lock()
+                .push(format!("program_output {path} {args:?}"));
+            Ok(ProgramOutput {
+                code: Some(0),
+                output: "rank: Diamond".into(),
+            })
+        }
         fn file(&self, path: &str, text: &str, append: bool) -> Result<(), String> {
             self.calls
                 .lock()
                 .push(format!("file {path} {append} {text}"));
             Ok(())
         }
-        fn overlay(&self, title: &str, text: &str, seconds: u64) {
+        fn overlay(&self, card: alerts::Card) {
+            self.calls.lock().push(format!(
+                "overlay {}|{}|{}|{}|{}",
+                card.title, card.text, card.seconds, card.color, card.sound
+            ));
+        }
+        fn obs(&self, action: obsws::Action) -> Result<obsws::Answer, String> {
+            self.calls.lock().push(format!("obs {action:?}"));
+            Ok(match action {
+                obsws::Action::Check { .. } => vec![
+                    ("scene".to_string(), "Game".to_string()),
+                    ("muted".to_string(), "yes".to_string()),
+                ],
+                _ => Vec::new(),
+            })
+        }
+        fn light(&self, device: &str, command: lights::Command) -> Result<Option<String>, String> {
             self.calls
                 .lock()
-                .push(format!("overlay {title}|{text}|{seconds}"));
-        }
-        fn obs(&self, action: obsws::Action) -> Result<(), String> {
-            self.calls.lock().push(format!("obs {action:?}"));
-            Ok(())
+                .push(format!("light {device} {command:?}"));
+            Ok(None)
         }
     }
 
@@ -1760,8 +2033,94 @@ mod tests {
         assert_eq!(host.calls.lock().len(), 1);
     }
 
+    #[test]
+    fn light_settings_become_a_command_or_say_why_not() {
+        assert_eq!(
+            light_command("color", "#00ff00", "40"),
+            Ok(lights::Command::Color {
+                rgb: [0, 255, 0],
+                brightness: Some(40)
+            })
+        );
+        assert_eq!(light_command("off", "", ""), Ok(lights::Command::Off));
+        assert!(light_command("flash", "sparkly", "").is_err_and(|e| e.contains("isn't a color")));
+        assert!(light_command("on", "", "200").is_err_and(|e| e.contains("1 to 100")));
+    }
+
+    /// A color from chat reaches the light; a dry run leaves it alone.
     #[tokio::test]
-    async fn a_wait_chat_fills_in_is_kept_short() {
+    async fn a_light_takes_its_color_from_chat() {
+        let host = Arc::new(FakeHost::default());
+        let step = Step::new(
+            StepKind::Light,
+            &[
+                ("device", "wiz:192.168.1.20#ab"),
+                ("name", "Desk"),
+                ("action", "color"),
+                ("color", "{arg1}"),
+            ],
+        );
+        let (_, log) = go(
+            &host,
+            std::slice::from_ref(&step),
+            ctx(&[("arg1", "blue")], false),
+        )
+        .await;
+        assert_eq!(log[0].label, "Desk: blue");
+        assert!(
+            host.calls.lock()[0].contains("rgb: [30, 80, 255]"),
+            "{:?}",
+            host.calls.lock()
+        );
+        let mut dry = ctx(&[("arg1", "blue")], true);
+        dry.dry = true;
+        let (_, log) = go(&host, &[step], dry).await;
+        assert_eq!(log[0].status, StepStatus::Skipped);
+        assert_eq!(host.calls.lock().len(), 1);
+    }
+
+    /// Every action the editor offers reaches OBS as what it says.
+    #[tokio::test]
+    async fn every_obs_action_maps_to_its_request() {
+        let host = Arc::new(FakeHost::default());
+        let step = |action: &str| {
+            Step::new(
+                StepKind::Obs,
+                &[
+                    ("action", action),
+                    ("scene", "Game"),
+                    ("source", "Mic"),
+                    ("filter", "Blur"),
+                    ("hotkey", "OBSBasic.StartVirtualCam"),
+                ],
+            )
+        };
+        let steps: Vec<Step> = super::super::model::OBS_ACTIONS
+            .iter()
+            .map(|a| step(a))
+            .collect();
+        let (status, log) = go(&host, &steps, ctx(&[], false)).await;
+        assert_eq!(status, RunStatus::Ok, "{log:?}");
+        let calls = host.calls.lock();
+        assert_eq!(calls.len(), super::super::model::OBS_ACTIONS.len());
+        let has = |i: usize, text: &str| assert!(calls[i].contains(text), "{}", calls[i]);
+        let at = |action: &str| {
+            super::super::model::OBS_ACTIONS
+                .iter()
+                .position(|a| *a == action)
+                .unwrap()
+        };
+        has(at("record_stop"), "Record(false)");
+        has(at("unmute"), "muted: Some(false)");
+        has(at("filter_toggle"), "filter: \"Blur\", enabled: None");
+        has(at("media_play"), "play: true");
+        has(at("screenshot"), obsws::SCREENSHOT_HOTKEY);
+        has(at("hotkey"), "StartVirtualCam");
+        assert_eq!(log[at("filter_on")].label, "Turn on Blur on Mic");
+    }
+
+    #[test]
+    fn a_wait_chat_fills_in_is_kept_short() {
         let step = Step::new(StepKind::Wait, &[("ms", "{arg1}")]);
         assert_eq!(wait_cap(&step, "ms"), MAX_FILLED_WAIT);
         let fixed = Step::new(StepKind::Wait, &[("ms", "120000")]);
@@ -1811,6 +2170,20 @@ mod tests {
 
     async fn go(host: &Arc<FakeHost>, steps: &[Step], c: RunContext) -> (RunStatus, Vec<StepLog>) {
         run(steps, c, host.clone(), env()).await
+    }
+
+    /// With no delay on air the measured lag is the pipeline's own second
+    /// or so: `!delay` must say off, not "1s".
+    #[test]
+    fn without_a_delay_on_air_the_delay_reads_off() {
+        let live = LiveState {
+            delay_ms: 800,
+            phase: "idle".into(),
+            ..LiveState::default()
+        };
+        assert_eq!(live_var("delay", &live).as_deref(), Some(""));
+        assert_eq!(live_var("delay_ms", &live).as_deref(), Some("0"));
+        assert_eq!(live_var("delay_state", &live).as_deref(), Some("off"));
     }
 
     #[tokio::test]
@@ -1892,13 +2265,86 @@ mod tests {
         );
     }
 
+    /// A program waited for answers like a web request: what it printed,
+    /// its code, and whether it went well, for the steps after it.
+    #[tokio::test]
+    async fn a_waited_program_keeps_its_answer() {
+        let host = Arc::new(FakeHost::default());
+        let steps = [
+            Step::new(
+                StepKind::Program,
+                &[("path", "rank.exe"), ("wait", "yes"), ("save_as", "rank")],
+            ),
+            Step::new(
+                StepKind::Overlay,
+                &[("text", "{rank.output} ({rank.ok}, {rank.code})")],
+            ),
+        ];
+        let (status, log) = go(&host, &steps, ctx(&[], false)).await;
+        assert_eq!(status, RunStatus::Ok, "{log:?}");
+        let calls = host.calls.lock();
+        assert!(calls[0].starts_with("program_output rank.exe"));
+        assert!(calls[1].contains("rank: Diamond (yes, 0)"), "{}", calls[1]);
+    }
+
+    /// What "Check OBS" read is there for the steps after it, in a test
+    /// too: reading OBS changes nothing. Each check keeps it under its own
+    /// name, so two checks don't overwrite each other.
+    #[tokio::test]
+    async fn checking_obs_keeps_its_answer_for_later_steps() {
+        let host = Arc::new(FakeHost::default());
+        let steps = [
+            Step::new(StepKind::Obs, &[("action", "check"), ("source", "Mic")]),
+            Step::new(
+                StepKind::Obs,
+                &[("action", "check"), ("source", "Cam"), ("save_as", "cam")],
+            ),
+            Step::new(
+                StepKind::Overlay,
+                &[(
+                    "text",
+                    "{obs.scene}: mic muted {obs.muted}, cam {cam.muted}",
+                )],
+            ),
+        ];
+        let (status, log) = go(&host, &steps, ctx(&[], false)).await;
+        assert_eq!(status, RunStatus::Ok, "{log:?}");
+        assert_eq!(log[0].detail, "scene Game, muted yes");
+        assert!(host.calls.lock()[2].contains("Game: mic muted yes, cam yes"));
+        let tested = Arc::new(FakeHost::default());
+        let (_, log) = go(&tested, &steps, ctx(&[], true)).await;
+        assert_eq!(log[0].status, StepStatus::Ok);
+    }
+
+    /// One step can mute or show several sources: one call each.
+    #[tokio::test]
+    async fn one_obs_step_can_change_several_sources() {
+        let host = Arc::new(FakeHost::default());
+        let steps = [Step::new(
+            StepKind::Obs,
+            &[("action", "mute"), ("source", "Mic/Aux\nDesktop Audio")],
+        )];
+        let (status, log) = go(&host, &steps, ctx(&[], false)).await;
+        assert_eq!(status, RunStatus::Ok, "{log:?}");
+        let calls = host.calls.lock();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].contains("Mic/Aux") && calls[1].contains("Desktop Audio"));
+        assert_eq!(log[1].label, "Mute Desktop Audio");
+    }
+
     #[tokio::test]
     async fn overlay_shows_on_stream_except_in_tests() {
         let host = Arc::new(FakeHost::default());
         let steps = [
             Step::new(
                 StepKind::Overlay,
-                &[("title", "Clip"), ("text", "by {user}"), ("seconds", "8")],
+                &[
+                    ("title", "Clip"),
+                    ("text", "by {user}"),
+                    ("seconds", "8"),
+                    ("color", "#ff00aa"),
+                    ("sound", "{user}"),
+                ],
             ),
             Step::new(StepKind::Overlay, &[("text", "{nothing}")]),
         ];
@@ -1906,7 +2352,11 @@ mod tests {
         assert_eq!(log[1].status, StepStatus::Skipped);
         let (_, log) = go(&host, &steps, ctx(&[("user", "Ana")], true)).await;
         assert_eq!(log[0].status, StepStatus::Skipped);
-        assert_eq!(host.calls.lock().as_slice(), ["overlay Clip|by Ana|8"]);
+        // The sound is taken as written: chat never picks what plays.
+        assert_eq!(
+            host.calls.lock().as_slice(),
+            ["overlay Clip|by Ana|8|#ff00aa|{user}"]
+        );
     }
 
     #[tokio::test]
@@ -1933,6 +2383,36 @@ mod tests {
         )
         .await;
         assert!(host.calls.lock()[0].ends_with("Gold 2 / GOLD 2"));
+    }
+
+    #[tokio::test]
+    async fn an_if_can_hold_several_checks() {
+        let host = Arc::new(FakeHost::default());
+        let mut check = Step::new(
+            StepKind::If,
+            &[
+                ("left", "{user_role}"),
+                ("op", "is"),
+                ("right", "mod"),
+                ("left2", "{muted}"),
+                ("op2", "is"),
+                ("right2", "yes"),
+            ],
+        );
+        check
+            .then
+            .push(Step::new(StepKind::Marker, &[("description", "both")]));
+        let steps = [check.clone()];
+        let run = |role: &'static str| ctx(&[("user_role", role), ("muted", "yes")], false);
+        let (_, log) = go(&host, &steps, run("mod")).await;
+        assert_eq!(log.len(), 2, "{log:?}");
+        assert!(log[0].detail.ends_with("(all): yes"), "{}", log[0].detail);
+        let (_, log) = go(&host, &steps, run("viewer")).await;
+        assert_eq!(log.len(), 1);
+        let mut any = check;
+        any.params.insert("match".into(), "any".into());
+        let (_, log) = go(&host, &[any], run("viewer")).await;
+        assert_eq!(log.len(), 2);
     }
 
     #[tokio::test]
@@ -2067,7 +2547,7 @@ mod tests {
                 &[("action", "arm"), ("seconds", seconds)],
             )
         };
-        let steps = [set("{arg1}"), set(""), set("45"), set("9999")];
+        let steps = [set("{arg1}"), set(""), set("45"), set("99999")];
         let (status, log) = go(&host, &steps, ctx(&[("arg1", "0")], false)).await;
         assert_eq!(status, RunStatus::Ok);
         let calls = host.calls.lock();
@@ -2077,9 +2557,9 @@ mod tests {
                 "delay disarm 0",
                 "delay arm 0",
                 "delay arm 45000",
-                "delay arm 600000"
+                "delay arm 3600000"
             ],
-            "0 turns it off, blank means the default, the top is 600 s"
+            "0 turns it off, blank means the default, the top is an hour"
         );
         assert_eq!(log[0].label, "Turn the delay off");
         assert_eq!(log[1].label, "Set the delay to your default");
@@ -2111,7 +2591,10 @@ mod tests {
             Step::new(StepKind::Program, &[("path", "C:\\x.exe")]),
             Step::new(StepKind::Chat, &[("text", "hi")]),
         ];
-        let (status, log) = go(&host, &steps, ctx(&[], true)).await;
+        let run = go(&host, &steps, ctx(&[], true));
+        let (status, log) = tokio::time::timeout(Duration::from_secs(10), run)
+            .await
+            .expect("a test run skips its waits");
         assert_eq!(status, RunStatus::Ok);
         assert_eq!(log[0].status, StepStatus::Skipped);
         assert_eq!(log[1].status, StepStatus::Skipped);
@@ -2219,12 +2702,18 @@ mod tests {
             fn program(&self, _: &str, _: &[String]) -> Result<(), String> {
                 Ok(())
             }
+            fn program_output(&self, _: &str, _: &[String]) -> Result<ProgramOutput, String> {
+                Err("no".into())
+            }
             fn file(&self, _: &str, _: &str, _: bool) -> Result<(), String> {
                 Ok(())
             }
-            fn overlay(&self, _: &str, _: &str, _: u64) {}
-            fn obs(&self, _: obsws::Action) -> Result<(), String> {
-                Ok(())
+            fn overlay(&self, _: alerts::Card) {}
+            fn obs(&self, _: obsws::Action) -> Result<obsws::Answer, String> {
+                Ok(Vec::new())
+            }
+            fn light(&self, _: &str, _: lights::Command) -> Result<Option<String>, String> {
+                Ok(None)
             }
         }
         let steps = [Step::new(

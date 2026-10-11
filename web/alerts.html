@@ -8,76 +8,634 @@
   The alerts browser source: add http://127.0.0.1:<port>/alerts to OBS as a
   Browser source. "Show on stream" steps put a card here. Each new alert
   plays once, in order; ones already up when the page loads are skipped, so
-  switching scenes never replays old alerts. ?at=top puts cards at the top.
+  switching scenes never replays old alerts.
+
+  How cards look is the dashboard's theme (Integrations > Alerts page),
+  sent with every update: a ready-made theme (body.theme-*), then whatever
+  was changed in it as --*-user variables on <body>, then custom CSS last.
+  Each theme is its own build: its shape, extras (.fx), how it comes in,
+  what it does while up, and how it goes. "Comes in with" swaps only the
+  entrance. Each alert can bring its own accent (--card-color), sound and
+  picture. ?at=top in the address still wins, for setups made before.
+  ?demo is the dashboard's preview: no feed, it shows what it is sent.
 -->
 <style>
-  :root{
-    --bg:rgba(15,18,24,.9); --line:rgba(255,255,255,.09); --fg:#f4f6f8; --dim:#9aa4ae;
-    --accent:#5ac8fa; --ease:cubic-bezier(.16,1,.3,1);
-  }
+  :root{--ease:cubic-bezier(.16,1,.3,1);--k:1}
   html,body{margin:0;height:100%;background:transparent;overflow:hidden}
-  body{display:flex;justify-content:center;align-items:flex-end;padding:48px;box-sizing:border-box;
-    font:16px/1.35 "Inter","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
-    -webkit-font-smoothing:antialiased;color:var(--fg)}
+  /* --u is one pixel at the chosen size. */
+  body{--u:calc(var(--k)*1px);display:flex;justify-content:center;align-items:flex-end;padding:48px;box-sizing:border-box;
+    font-size:16px;line-height:1.35;-webkit-font-smoothing:antialiased}
   body.top{align-items:flex-start}
-  .card{position:relative;max-width:min(720px,100%);padding:18px 26px 20px 30px;border-radius:18px;
-    background:var(--bg);box-shadow:0 0 0 1px var(--line),0 18px 40px -12px rgba(0,0,0,.55),0 4px 12px rgba(0,0,0,.3);
-    overflow:hidden;opacity:0;transform:translateY(22px) scale(.96);filter:blur(6px);
-    transition:opacity .52s var(--ease),transform .52s var(--ease),filter .52s var(--ease)}
-  body.top .card{transform:translateY(-22px) scale(.96)}
-  .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--accent)}
-  .card.in{opacity:1;transform:none;filter:none}
-  .card.out{opacity:0;transform:translateY(8px) scale(.99);filter:blur(2px);
-    transition-duration:.28s;transition-timing-function:cubic-bezier(.4,0,1,1)}
-  .title,.text{opacity:0;transform:translateY(6px);transition:opacity .45s var(--ease),transform .45s var(--ease)}
-  .card.in .title{opacity:1;transform:none;transition-delay:.08s}
-  .card.in .text{opacity:1;transform:none;transition-delay:.15s}
-  .title{font-size:13px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin-bottom:4px}
+  body.middle{align-items:center}
+  body.left{justify-content:flex-start}
+  body.right{justify-content:flex-end}
+
+  /* ---- the parts every theme builds from: .card holds .fx (extras),
+     .pic, .words (.title, .text with its words .w and letters .c) and
+     .time, the bar that runs out while the alert is up. */
+  .card{--bg:color-mix(in srgb,var(--bg-base) calc(var(--op)*100%),transparent);
+    position:relative;display:flex;align-items:center;gap:calc(18*var(--u));
+    max-width:min(calc(var(--w,720px)*var(--k)),100%);box-sizing:border-box;
+    padding:calc(18*var(--u)) calc(28*var(--u)) calc(20*var(--u));
+    border-radius:calc(var(--r)*var(--k));background:var(--bg);color:var(--fg);font-family:var(--font);opacity:0}
+  .fx{position:absolute;inset:0;border-radius:inherit;pointer-events:none}
+  .fx i{position:absolute;display:block}
+  .pic{position:relative;flex:none;width:calc(84*var(--u));height:calc(84*var(--u));border-radius:calc(12*var(--u));object-fit:cover}
+  .words{position:relative;min-width:0}
+  .title{font-size:calc(13*var(--u));font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin-bottom:calc(4*var(--u))}
   .title:empty{display:none}
-  .text{font-size:26px;font-weight:650;letter-spacing:-.01em;text-wrap:balance;overflow-wrap:anywhere}
-  .time{position:absolute;left:5px;right:0;bottom:0;height:3px;background:rgba(255,255,255,.06)}
-  .time i{display:block;height:100%;background:var(--accent);opacity:.55;transform-origin:left;transform:scaleX(1)}
+  .text{font-size:calc(26*var(--u));font-weight:650;letter-spacing:-.01em;text-wrap:balance;overflow-wrap:anywhere}
+  .w{display:inline-block}
+  .time{position:absolute;left:0;right:0;bottom:0;height:calc(3*var(--u))}
+  .time i{display:block;height:100%;background:var(--accent);transform-origin:left}
+  body.pic-top .card{flex-direction:column;text-align:center}
+  body.pic-top .pic{width:calc(120*var(--u));height:calc(120*var(--u))}
+
+  /* ---- coming in and going out. The theme's own entrance unless one is
+     picked; its own exit always. A card's resting look is its finished
+     one, so the dashboard's still preview needs no motion at all. */
+  .card.in{opacity:1;animation:var(--in) .6s var(--ease) both}
+  body.anim-theme .card.in{animation:var(--theme-in)}
+  body .card.in.out{animation:var(--theme-out)}
+  body .card.in.still{animation:none}
+  .card.still::before,.card.still::after,.card.still *,.card.still *::before,.card.still *::after{animation:none !important}
+  body.top{--slide:slideDown}
+  body.anim-slide{--in:var(--slide,slideUp)}
+  body.anim-pop{--in:pop} body.anim-fade{--in:fade} body.anim-zoom{--in:zoom}
+  body.anim-bounce{--in:bounce} body.anim-drop{--in:drop}
+  @keyframes slideUp{from{opacity:0;transform:translateY(28px) scale(.97);filter:blur(6px)}}
+  @keyframes slideDown{from{opacity:0;transform:translateY(-28px) scale(.97);filter:blur(6px)}}
+  @keyframes pop{0%{opacity:0;transform:scale(.55)}60%{opacity:1;transform:scale(1.06)}100%{transform:none}}
+  @keyframes fade{from{opacity:0}}
+  @keyframes zoom{from{opacity:0;transform:scale(1.35);filter:blur(10px)}}
+  @keyframes bounce{0%{opacity:0;transform:translateY(-70px)}45%{opacity:1;transform:translateY(0)}65%{transform:translateY(-16px)}82%{transform:translateY(0)}92%{transform:translateY(-5px)}100%{transform:none}}
+  @keyframes drop{0%{opacity:0;transform:translateY(-120%) rotate(-3deg)}70%{opacity:1;transform:translateY(6%) rotate(1deg)}100%{transform:none}}
+  @keyframes fadeOut{to{opacity:0}}
+
+  /* ==== Island: a black capsule, like a phone's live island. It grows
+     out of a dot, keeps a small live equalizer going while up, and
+     shrinks back into the dot. */
+  body.theme-island{--theme-in:islandIn .8s cubic-bezier(.3,.7,.2,1) both;--theme-out:islandOut .6s cubic-bezier(.5,0,.6,1) forwards}
+  body.theme-island .card{--accent:var(--card-color,var(--accent-user,#5ac8fa));--bg-base:var(--bg-user,#000000);
+    --op:var(--op-user,.96);--fg:var(--fg-user,#ffffff);--r:var(--r-user,40px);
+    --font:var(--font-user,"Inter","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif);
+    gap:calc(14*var(--u));padding:calc(12*var(--u)) calc(70*var(--u)) calc(14*var(--u)) calc(12*var(--u));
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+  body.theme-island .words{padding-right:calc(4*var(--u))}
+  body.theme-island .title{font-size:calc(12.5*var(--u));font-weight:500;letter-spacing:0;text-transform:none;
+    color:color-mix(in srgb,var(--fg) 55%,transparent);margin-bottom:calc(1*var(--u))}
+  body.theme-island .text{font-size:calc(21*var(--u));font-weight:600;letter-spacing:-.015em}
+  body.theme-island .pic{width:calc(54*var(--u));height:calc(54*var(--u));border-radius:50%}
+  body.pic-top.theme-island .card{padding:calc(20*var(--u)) calc(34*var(--u)) calc(38*var(--u))}
+  body.pic-top.theme-island .pic{width:calc(76*var(--u));height:calc(76*var(--u))}
+  /* The equalizer: five bars, each its own height and pace. */
+  body.theme-island .fx i{top:50%;width:calc(3.5*var(--u));height:calc(20*var(--u));margin-top:calc(-10*var(--u));
+    border-radius:99px;background:var(--accent);scale:1 var(--h)}
+  body.theme-island .fx i:nth-child(1){right:calc(48*var(--u));--h:.45;--t:.9s}
+  body.theme-island .fx i:nth-child(2){right:calc(41*var(--u));--h:.9;--t:.7s;--d:.2s}
+  body.theme-island .fx i:nth-child(3){right:calc(34*var(--u));--h:.6;--t:.8s;--d:.1s}
+  body.theme-island .fx i:nth-child(4){right:calc(27*var(--u));--h:1;--t:.65s;--d:.3s}
+  body.theme-island .fx i:nth-child(5){right:calc(20*var(--u));--h:.5;--t:.85s;--d:.15s}
+  body.pic-top.theme-island .fx i{top:auto;bottom:calc(14*var(--u));margin:0}
+  body.pic-top.theme-island .fx i:nth-child(1){right:calc(50% + 10*var(--u))}
+  body.pic-top.theme-island .fx i:nth-child(2){right:calc(50% + 3*var(--u))}
+  body.pic-top.theme-island .fx i:nth-child(3){right:calc(50% - 4*var(--u))}
+  body.pic-top.theme-island .fx i:nth-child(4){right:calc(50% - 11*var(--u))}
+  body.pic-top.theme-island .fx i:nth-child(5){right:calc(50% - 18*var(--u))}
+  body.theme-island .fx i:nth-child(n+6){display:none}
+  body.theme-island .time{left:calc(30*var(--u));right:calc(30*var(--u));bottom:calc(5*var(--u));height:calc(2*var(--u));
+    border-radius:99px;background:rgba(255,255,255,.1)}
+  body.theme-island .time i{border-radius:inherit;opacity:.85}
+  body.theme-island .card.in .pic,body.theme-island .card.in .words{animation:islandContent .55s .32s var(--ease) both}
+  body.theme-island .card.in .fx i{animation:islandContent .4s .45s ease both,islandEq var(--t) calc(.45s + var(--d,0s)) ease-in-out infinite alternate}
+  body.theme-island .card.in.out .pic,body.theme-island .card.in.out .words,body.theme-island .card.in.out .fx,
+    body.theme-island .card.in.out .time{animation:fadeOut .18s ease forwards}
+  @keyframes islandIn{
+    0%{opacity:0;clip-path:inset(calc(50% - 9*var(--u)) calc(50% - 9*var(--u)) round 999px)}
+    12%{opacity:1}
+    38%{clip-path:inset(calc(50% - 17*var(--u)) calc(50% - 64*var(--u)) round 999px)}
+    72%{clip-path:inset(calc(-3*var(--u)) calc(-7*var(--u)) round calc(var(--r)*var(--k)))}
+    100%{clip-path:inset(0 round calc(var(--r)*var(--k)))}}
+  @keyframes islandOut{
+    0%,22%{clip-path:inset(0 round calc(var(--r)*var(--k)))}
+    62%{opacity:1;clip-path:inset(calc(50% - 17*var(--u)) calc(50% - 64*var(--u)) round 999px)}
+    100%{opacity:0;clip-path:inset(calc(50% - 5*var(--u)) calc(50% - 5*var(--u)) round 999px)}}
+  @keyframes islandContent{from{opacity:0;transform:scale(.9);filter:blur(6px)}}
+  @keyframes islandEq{from{scale:1 .22}to{scale:1 1}}
+
+  /* ==== Signal: an esports HUD. A scan line draws the panel, its corner
+     brackets snap out, the words decode from scrambled letters, and it
+     glitches away. */
+  body.theme-signal{--theme-in:fade .1s linear both;--theme-out:signalOut .5s linear forwards}
+  body.theme-signal .card{--accent:var(--card-color,var(--accent-user,#3ee0c5));--bg-base:var(--bg-user,#0b0f14);
+    --op:var(--op-user,.86);--fg:var(--fg-user,#eef4ff);--r:var(--r-user,0px);--font:var(--font-user,"Chakra Petch",system-ui,sans-serif);
+    --font2:"Roboto Mono",ui-monospace,monospace;--ch:calc(16*var(--u));
+    --shape:polygon(0 var(--ch),var(--ch) 0,100% 0,100% calc(100% - var(--ch)),calc(100% - var(--ch)) 100%,0 100%);
+    isolation:isolate;background:none;padding:calc(20*var(--u)) calc(34*var(--u)) calc(24*var(--u)) calc(22*var(--u))}
+  /* The panel: an accent edge (::before) under the face (::after), both cut. */
+  body.theme-signal .card::before,body.theme-signal .card::after{content:"";position:absolute;inset:0;z-index:-1;clip-path:var(--shape)}
+  body.theme-signal .card::before{background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 25%,transparent) 40%,
+    color-mix(in srgb,var(--accent) 15%,transparent) 70%,var(--accent))}
+  body.theme-signal .card::after{inset:1px;
+    background:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px),
+      linear-gradient(90deg,color-mix(in srgb,var(--accent) 16%,transparent),transparent 45%),var(--bg)}
+  body.theme-signal .fx i:nth-child(-n+4){width:calc(14*var(--u));height:calc(14*var(--u));border:0 solid var(--accent)}
+  body.theme-signal .fx i:nth-child(1){left:calc(-7*var(--u));top:calc(-7*var(--u));border-width:calc(2*var(--u)) 0 0 calc(2*var(--u));--x:1;--y:1}
+  body.theme-signal .fx i:nth-child(2){right:calc(-7*var(--u));top:calc(-7*var(--u));border-width:calc(2*var(--u)) calc(2*var(--u)) 0 0;--x:-1;--y:1}
+  body.theme-signal .fx i:nth-child(3){left:calc(-7*var(--u));bottom:calc(-7*var(--u));border-width:0 0 calc(2*var(--u)) calc(2*var(--u));--x:1;--y:-1}
+  body.theme-signal .fx i:nth-child(4){right:calc(-7*var(--u));bottom:calc(-7*var(--u));border-width:0 calc(2*var(--u)) calc(2*var(--u)) 0;--x:-1;--y:-1}
+  body.theme-signal .fx i:nth-child(5){top:calc(-10*var(--u));bottom:calc(-10*var(--u));left:100%;width:calc(2*var(--u));opacity:0;
+    background:var(--accent);box-shadow:0 0 calc(14*var(--u)) var(--accent),0 0 calc(3*var(--u)) #fff}
+  body.theme-signal .fx i:nth-child(6){top:calc(9*var(--u));right:calc(16*var(--u));width:calc(46*var(--u));height:calc(5*var(--u));opacity:.6;
+    background:repeating-linear-gradient(90deg,var(--accent) 0 calc(2*var(--u)),transparent calc(2*var(--u)) calc(5*var(--u)))}
+  body.theme-signal .title{display:flex;align-items:center;gap:calc(8*var(--u));font-family:var(--font2);font-size:calc(11.5*var(--u));
+    font-weight:600;letter-spacing:.18em;margin-bottom:calc(5*var(--u))}
+  body.theme-signal .title::before{content:"";flex:none;width:calc(7*var(--u));height:calc(7*var(--u));background:var(--accent)}
+  body.pic-top.theme-signal .title{justify-content:center}
+  body.theme-signal .text{font-weight:600;letter-spacing:.01em;line-height:1.2}
+  body.theme-signal .c{position:relative}
+  body.theme-signal .c[data-g]{color:transparent}
+  body.theme-signal .c[data-g]::after{content:attr(data-g);position:absolute;left:0;top:0;color:var(--accent)}
+  body.theme-signal .pic{border-radius:0;box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 70%,transparent),
+    0 0 0 calc(4*var(--u)) color-mix(in srgb,var(--accent) 12%,transparent)}
+  body.theme-signal .time{left:calc(22*var(--u));right:calc(34*var(--u));bottom:calc(9*var(--u));height:calc(2*var(--u));
+    background:color-mix(in srgb,var(--accent) 16%,transparent)}
+  body.theme-signal .card.in::before,body.theme-signal .card.in::after{animation:signalDraw .55s cubic-bezier(.65,0,.35,1) both}
+  body.theme-signal .card.in .fx i:nth-child(5){animation:signalScan .55s cubic-bezier(.65,0,.35,1) both}
+  body.theme-signal .card.in .fx i:nth-child(-n+4){animation:signalBracket .45s .35s cubic-bezier(.2,1.2,.3,1) both}
+  body.theme-signal .card.in .fx i:nth-child(6),body.theme-signal .card.in .pic{animation:signalBlink .45s .4s steps(1,end) both}
+  body.theme-signal .card.in .title{animation:signalBlink .4s .3s steps(1,end) both}
+  body.theme-signal .card.in .text{animation:signalSplit .7s .3s ease-out both}
+  body.theme-signal .card.in .time{animation:fade .3s .6s both}
+  @keyframes signalDraw{from{clip-path:polygon(0 var(--ch),0 0,0 0,0 calc(100% - var(--ch)),0 100%,0 100%)}to{clip-path:var(--shape)}}
+  @keyframes signalScan{0%{left:0;opacity:1}85%{opacity:1}100%{left:100%;opacity:0}}
+  @keyframes signalBracket{from{opacity:0;transform:translate(calc(var(--x)*18*var(--u)),calc(var(--y)*10*var(--u)))}}
+  @keyframes signalBlink{0%{opacity:0}25%{opacity:1}50%{opacity:.2}75%,100%{opacity:1}}
+  @keyframes signalSplit{from{opacity:0;text-shadow:calc(-4*var(--u)) 0 rgba(255,40,100,.85),calc(4*var(--u)) 0 rgba(40,220,255,.85)}
+    20%{opacity:1}to{text-shadow:0 0 transparent,0 0 transparent}}
+  @keyframes signalOut{
+    0%{transform:none;clip-path:inset(calc(-20*var(--u)))}
+    12%{transform:translateX(calc(-9*var(--u))) skewX(-8deg)}
+    20%{transform:translateX(calc(7*var(--u)));clip-path:inset(30% calc(-20*var(--u)) 20% calc(-20*var(--u)))}
+    28%{transform:none;clip-path:inset(calc(-20*var(--u)))}
+    60%{opacity:1;clip-path:inset(calc(50% - 1*var(--u)) calc(-20*var(--u)))}
+    100%{opacity:0;clip-path:inset(calc(50% - 1*var(--u)) 50%)}}
+
+  /* ==== Banner: a broadcast lower third. A dark edge wipes it on, the
+     words come up from under the line, and it wipes off the other way. */
+  body.theme-banner{--theme-in:bannerIn .7s cubic-bezier(.7,0,.2,1) both;--theme-out:bannerOut .55s cubic-bezier(.7,0,.3,1) forwards}
+  body.theme-banner .card{--accent:var(--card-color,var(--accent-user,#fcd34d));--bg-base:var(--bg-user,var(--accent));
+    --op:var(--op-user,1);--fg:var(--fg-user,#0b0d12);--r:var(--r-user,0px);--font:var(--font-user,"Bebas Neue","Oswald",system-ui,sans-serif);
+    --w:980px;--cut:calc(34*var(--u));
+    padding:calc(16*var(--u)) calc(30*var(--u) + var(--cut)) calc(18*var(--u)) calc(32*var(--u));
+    border-radius:calc(var(--r)*var(--k)) 0 0 calc(var(--r)*var(--k));
+    clip-path:polygon(0 0,100% 0,calc(100% - var(--cut)) 100%,0 100%);
+    background:repeating-linear-gradient(-60deg,transparent 0 calc(12*var(--u)),rgba(0,0,0,.045) calc(12*var(--u)) calc(24*var(--u))),var(--bg)}
+  body.theme-banner .fx i:nth-child(1){left:0;top:0;bottom:0;width:calc(8*var(--u));background:var(--fg)}
+  body.theme-banner .fx i:nth-child(2){top:0;bottom:0;left:105%;width:calc(70*var(--u));background:var(--fg);transform:skewX(-28deg)}
+  body.theme-banner .title{display:inline-block;padding:.3em .8em .2em;margin-bottom:calc(6*var(--u));transform:skewX(-10deg);
+    background:var(--fg);color:var(--bg-base);font-size:calc(16*var(--u));font-weight:400;letter-spacing:.14em}
+  body.theme-banner .text{overflow:hidden;font-size:calc(46*var(--u));font-weight:400;letter-spacing:.02em;text-transform:uppercase;line-height:1.02}
+  body.theme-banner .pic{border-radius:0;box-shadow:0 0 0 calc(3*var(--u)) var(--fg)}
+  body.theme-banner .time{height:calc(5*var(--u));background:rgba(0,0,0,.16)}
+  body.theme-banner .time i{background:var(--fg);opacity:.55}
+  body.theme-banner .card.in .fx i:nth-child(2){animation:bannerWipe .7s cubic-bezier(.7,0,.2,1) both}
+  body.theme-banner .card.in .title{animation:bannerTab .45s .4s cubic-bezier(.2,.9,.2,1) both}
+  body.theme-banner .card.in .pic{animation:bannerPunch .5s .35s cubic-bezier(.3,1.5,.5,1) both}
+  body.theme-banner .card.in .w{animation:bannerWord .55s calc(.45s + var(--wi)*var(--wstep)) cubic-bezier(.2,.9,.2,1) both}
+  body.theme-banner .card.in.out .w{animation:bannerWordOut .28s calc(var(--wi)*20ms) ease-in forwards}
+  @keyframes bannerIn{from{clip-path:polygon(0 0,var(--cut) 0,0 100%,0 100%)}}
+  @keyframes bannerOut{to{clip-path:polygon(100% 0,100% 0,calc(100% - var(--cut)) 100%,calc(100% - var(--cut)) 100%)}}
+  @keyframes bannerWipe{from{left:calc(-70*var(--u))}to{left:100%}}
+  @keyframes bannerTab{from{opacity:0;transform:translateX(calc(-24*var(--u))) skewX(-10deg)}}
+  @keyframes bannerPunch{from{transform:scale(0) rotate(-8deg)}}
+  @keyframes bannerWord{from{transform:translateY(105%)}}
+  @keyframes bannerWordOut{to{transform:translateY(-105%)}}
+
+  /* ==== Bubble: a sticker speech bubble. It boings out of its tail with
+     confetti, each word pops, it bobs while up and pops away. */
+  body.theme-bubble{--theme-in:bubbleIn .75s ease-in-out both,bubbleBob 3s .9s ease-in-out infinite;--theme-out:bubbleOut .4s ease-in forwards}
+  body.theme-bubble .card{--accent:var(--card-color,var(--accent-user,#a78bfa));--bg-base:var(--bg-user,#ffffff);
+    --op:var(--op-user,1);--fg:var(--fg-user,#1b1d24);--r:var(--r-user,30px);--font:var(--font-user,"Fredoka","Rubik",system-ui,sans-serif);
+    --ink:color-mix(in srgb,var(--accent) 55%,#000);
+    margin-bottom:calc(16*var(--u));padding:calc(18*var(--u)) calc(30*var(--u)) calc(28*var(--u)) calc(20*var(--u));
+    transform-origin:calc(46*var(--u)) calc(100% + 14*var(--u));
+    box-shadow:0 0 0 calc(4*var(--u)) var(--accent),calc(5*var(--u)) calc(7*var(--u)) 0 calc(4*var(--u)) var(--ink)}
+  body.theme-bubble .card::after{content:"";position:absolute;left:calc(34*var(--u));bottom:calc(-11*var(--u));
+    width:calc(22*var(--u));height:calc(22*var(--u));background:var(--bg);transform:rotate(45deg);
+    box-shadow:calc(4*var(--u)) calc(4*var(--u)) 0 0 var(--accent)}
+  body.pic-top.theme-bubble .card{transform-origin:50% calc(100% + 14*var(--u))}
+  body.pic-top.theme-bubble .card::after{left:calc(50% - 11*var(--u))}
+  body.theme-bubble .fx i{left:50%;top:50%;width:calc(11*var(--u));height:calc(11*var(--u));border-radius:50%;opacity:0;background:var(--accent)}
+  body.theme-bubble .fx i:nth-child(1){--x:calc(-190*var(--u));--y:calc(-60*var(--u))}
+  body.theme-bubble .fx i:nth-child(2){--x:calc(180*var(--u));--y:calc(-72*var(--u));background:#ffc94d;border-radius:2px}
+  body.theme-bubble .fx i:nth-child(3){--x:calc(-150*var(--u));--y:calc(56*var(--u));background:#ff7aa8}
+  body.theme-bubble .fx i:nth-child(4){--x:calc(170*var(--u));--y:calc(62*var(--u));background:var(--ink);border-radius:2px}
+  body.theme-bubble .fx i:nth-child(5){--x:calc(-50*var(--u));--y:calc(-84*var(--u));background:#4fd6a8}
+  body.theme-bubble .fx i:nth-child(6){--x:calc(70*var(--u));--y:calc(-90*var(--u));background:transparent;box-shadow:inset 0 0 0 calc(3*var(--u)) #ff7aa8}
+  body.theme-bubble .title{display:inline-block;padding:calc(3*var(--u)) calc(11*var(--u));margin-bottom:calc(7*var(--u));border-radius:99px;
+    transform:rotate(-3deg);background:var(--accent);color:var(--bg-base);font-size:calc(12*var(--u));font-weight:600;letter-spacing:.05em}
+  body.theme-bubble .text{font-weight:600;letter-spacing:0}
+  body.theme-bubble .w:nth-child(even){--tilt:9deg}
+  body.theme-bubble .pic{border-radius:50%;box-shadow:0 0 0 calc(3*var(--u)) var(--accent)}
+  body.theme-bubble .time{left:calc(22*var(--u));right:calc(22*var(--u));bottom:calc(10*var(--u));height:calc(6*var(--u));
+    border-radius:99px;overflow:hidden;background:color-mix(in srgb,var(--accent) 18%,transparent)}
+  body.theme-bubble .time i{border-radius:inherit}
+  body.theme-bubble .card.in .fx i{animation:bubbleConfetti .85s calc(.12s + var(--d,0s)) cubic-bezier(.2,.8,.3,1) both}
+  body.theme-bubble .fx i:nth-child(even){--d:.05s}
+  body.theme-bubble .card.in .pic{animation:bubblePic .6s .15s cubic-bezier(.3,1.6,.5,1) both}
+  body.theme-bubble .card.in .title{animation:bubblePic .5s .25s cubic-bezier(.3,1.6,.5,1) both}
+  body.theme-bubble .card.in .w{animation:bubbleWord .5s calc(.32s + var(--wi)*var(--wstep)) cubic-bezier(.3,1.6,.5,1) both}
+  @keyframes bubbleIn{0%{opacity:0;transform:scale(0)}35%{opacity:1;transform:scale(1.12,.88)}55%{transform:scale(.93,1.07)}
+    72%{transform:scale(1.04,.97)}86%{transform:scale(.99,1.01)}100%{transform:none}}
+  @keyframes bubbleBob{50%{transform:translateY(calc(-3*var(--u)))}}
+  @keyframes bubbleOut{30%{transform:scale(1.08,.94)}100%{opacity:0;transform:scale(0)}}
+  @keyframes bubbleConfetti{0%{opacity:1;transform:translate(-50%,-50%) scale(.2)}70%{opacity:1}
+    100%{opacity:0;transform:translate(calc(-50% + var(--x)),calc(-50% + var(--y))) scale(1) rotate(200deg)}}
+  @keyframes bubblePic{from{transform:scale(0) rotate(-20deg)}}
+  @keyframes bubbleWord{from{opacity:0;transform:scale(.3) rotate(var(--tilt,-9deg))}}
+
+  /* ==== Minimal: just type over the game. A line draws, the words ink
+     in letter by letter, and the line is the time left. */
+  body.theme-minimal{--theme-in:fade .2s linear both;--theme-out:minimalOut .5s ease-in forwards}
+  body.theme-minimal .card{--accent:var(--card-color,var(--accent-user,#5ac8fa));--bg-base:var(--bg-user,#000000);
+    --op:var(--op-user,0);--fg:var(--fg-user,#ffffff);--r:var(--r-user,0px);
+    --font:var(--font-user,"Inter","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif);
+    padding:calc(20*var(--u)) calc(4*var(--u)) calc(10*var(--u))}
+  body.theme-minimal .title,body.theme-minimal .text{text-shadow:0 1px 2px rgba(0,0,0,.6),0 4px 18px rgba(0,0,0,.55)}
+  body.theme-minimal .title{font-size:calc(12*var(--u));font-weight:600;letter-spacing:.32em;margin-bottom:calc(6*var(--u))}
+  body.theme-minimal .text{font-size:calc(34*var(--u));font-weight:600;letter-spacing:-.02em;line-height:1.15}
+  body.theme-minimal .pic{border-radius:50%;box-shadow:0 6px 20px rgba(0,0,0,.5)}
+  body.theme-minimal .time{top:0;bottom:auto;height:calc(2*var(--u));background:color-mix(in srgb,var(--fg) 22%,transparent);
+    transform-origin:left;box-shadow:0 1px 6px rgba(0,0,0,.4)}
+  body.theme-minimal .card.in .time{animation:minimalLine .7s cubic-bezier(.65,0,.35,1) both}
+  body.theme-minimal .card.in .pic{animation:fade .6s .3s ease both}
+  body.theme-minimal .card.in .title{animation:minimalSlide .6s .35s var(--ease) both}
+  body.theme-minimal .card.in .c{animation:fade .45s calc(.45s + var(--ci)*var(--cstep)*.6) ease both}
+  body.theme-minimal .card.in.out .time{animation:minimalLineOut .4s ease-in forwards}
+  @keyframes minimalLine{from{transform:scaleX(0)}}
+  @keyframes minimalLineOut{from,to{transform-origin:right}to{transform:scaleX(0)}}
+  @keyframes minimalSlide{from{opacity:0;transform:translateX(calc(-10*var(--u)))}}
+  @keyframes minimalOut{to{opacity:0;transform:translateY(calc(6*var(--u)))}}
+
+  /* ==== Paper: a scrapbook clipping. It slaps down, the tape sticks,
+     the stamp thunks, a marker highlights each word, and it peels off. */
+  body.theme-paper{--theme-in:paperIn .6s cubic-bezier(.3,1.25,.5,1) both;--theme-out:paperOut .55s cubic-bezier(.5,0,.75,.3) forwards}
+  body.theme-paper .card{--accent:var(--card-color,var(--accent-user,#e2553d));--bg-base:var(--bg-user,#f4efe4);
+    --op:var(--op-user,1);--fg:var(--fg-user,#1d1a16);--r:var(--r-user,3px);--font:var(--font-user,"Permanent Marker",cursive);
+    --font2:"Special Elite",ui-monospace,monospace;--tooth:calc(12*var(--u));
+    isolation:isolate;background:none;rotate:-1.5deg;padding:calc(24*var(--u)) calc(32*var(--u)) calc(30*var(--u)) calc(22*var(--u));
+    filter:drop-shadow(0 calc(10*var(--u)) calc(12*var(--u)) rgba(0,0,0,.3)) drop-shadow(0 1px 1px rgba(0,0,0,.25))}
+  /* The sheet: fibres over the paper color, torn along the bottom. */
+  body.theme-paper .card::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;
+    background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35  0 0 0 0 .28  0 0 0 0 .18  0 0 0 .28 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),var(--bg);
+    -webkit-mask:conic-gradient(from -45deg at bottom,#0000,#000 1deg 89deg,#0000 90deg) 50%/var(--tooth) 100%;
+    mask:conic-gradient(from -45deg at bottom,#0000,#000 1deg 89deg,#0000 90deg) 50%/var(--tooth) 100%}
+  body.theme-paper .fx i:nth-child(1){left:50%;top:calc(-13*var(--u));width:calc(104*var(--u));height:calc(28*var(--u));margin-left:calc(-52*var(--u));
+    rotate:-4deg;background:repeating-linear-gradient(90deg,rgba(255,255,255,.12) 0 calc(2*var(--u)),transparent calc(2*var(--u)) calc(6*var(--u))),
+      rgba(232,220,186,.7);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+  body.theme-paper .title{display:inline-block;rotate:-4deg;margin-bottom:calc(9*var(--u));padding:calc(3*var(--u)) calc(9*var(--u));
+    border:calc(2*var(--u)) solid var(--accent);border-radius:calc(4*var(--u));font-family:var(--font2);font-size:calc(13*var(--u));
+    font-weight:400;letter-spacing:.14em;opacity:.9}
+  body.theme-paper .text{font-size:calc(28*var(--u));font-weight:400;letter-spacing:.01em;line-height:1.3}
+  body.theme-paper .w{padding:0 .1em;margin:0 -.1em;
+    background:linear-gradient(color-mix(in srgb,var(--accent) 34%,transparent),color-mix(in srgb,var(--accent) 34%,transparent)) no-repeat 0 82%/100% 40%}
+  body.theme-paper .pic{border-radius:0;box-sizing:content-box;border:calc(5*var(--u)) solid #fff;border-bottom-width:calc(18*var(--u));
+    rotate:3deg;box-shadow:0 calc(3*var(--u)) calc(8*var(--u)) rgba(0,0,0,.25)}
+  body.theme-paper .time{left:calc(22*var(--u));right:calc(32*var(--u));bottom:calc(16*var(--u));height:calc(2*var(--u));background:none}
+  body.theme-paper .time i{background:var(--fg);opacity:.3;border-radius:99px}
+  body.theme-paper .card.in .fx i:nth-child(1){animation:paperStick .35s .32s cubic-bezier(.2,1.4,.4,1) both}
+  body.theme-paper .card.in .pic{animation:paperPic .5s .25s cubic-bezier(.2,1.3,.4,1) both}
+  body.theme-paper .card.in .title{animation:paperStamp .38s .45s cubic-bezier(.3,1.5,.5,1) both}
+  body.theme-paper .card.in .w{animation:paperMark .4s calc(.6s + var(--wi)*var(--wstep)) ease-out both}
+  @keyframes paperIn{0%{opacity:0;transform:translateY(calc(-14*var(--u))) scale(1.22) rotate(-7deg)}60%{opacity:1;transform:scale(.98)}100%{transform:none}}
+  @keyframes paperOut{0%{transform:none}25%{transform:rotate(-2deg) scale(1.02)}100%{opacity:0;transform:translate(calc(40*var(--u)),calc(-60*var(--u))) rotate(12deg) scale(.9)}}
+  @keyframes paperStick{from{opacity:0;scale:1.4;translate:0 calc(-8*var(--u))}}
+  @keyframes paperPic{from{opacity:0;scale:.6;translate:0 calc(-16*var(--u))}}
+  @keyframes paperStamp{from{opacity:0;scale:1.9}}
+  @keyframes paperMark{from{background-size:0% 40%}}
+
+  /* ==== Cinema: a film's title card. It opens like a shutter, gold
+     hairlines draw out, the title settles in from wide, the words fade up
+     in an italic serif under a little film grain, and it shutters closed. */
+  body.theme-cinema{--theme-in:cinemaIn 1s cubic-bezier(.7,0,.2,1) both;--theme-out:cinemaOut .8s cubic-bezier(.6,0,.4,1) forwards}
+  body.theme-cinema .card{--accent:var(--card-color,var(--accent-user,#d4b06a));--bg-base:var(--bg-user,#0a0908);
+    --op:var(--op-user,.9);--fg:var(--fg-user,#f4ede1);--r:var(--r-user,2px);--font:var(--font-user,"Playfair Display",Georgia,serif);
+    --font2:"Inter","Segoe UI",system-ui,sans-serif;--w:780px;
+    overflow:hidden;justify-content:center;text-align:center;padding:calc(34*var(--u)) calc(60*var(--u)) calc(36*var(--u));
+    background:radial-gradient(120% 90% at 50% 0%,color-mix(in srgb,var(--accent) 11%,transparent),transparent 60%),var(--bg);
+    box-shadow:0 30px 60px -24px rgba(0,0,0,.8)}
+  body.theme-cinema .fx i:nth-child(1),body.theme-cinema .fx i:nth-child(2){left:calc(26*var(--u));right:calc(26*var(--u));height:1px;
+    background:linear-gradient(90deg,transparent,var(--accent) 20% 80%,transparent);opacity:.75}
+  body.theme-cinema .fx i:nth-child(1){top:calc(13*var(--u))}
+  body.theme-cinema .fx i:nth-child(2){bottom:calc(13*var(--u))}
+  body.theme-cinema .fx i:nth-child(3){inset:-50%;opacity:.13;mix-blend-mode:screen;
+    background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E")}
+  body.theme-cinema .title{display:flex;align-items:center;justify-content:center;gap:calc(14*var(--u));font-family:var(--font2);
+    font-size:calc(11*var(--u));font-weight:600;letter-spacing:.42em;margin-bottom:calc(10*var(--u))}
+  body.theme-cinema .title::before,body.theme-cinema .title::after{content:"";flex:none;width:calc(26*var(--u));height:1px;background:var(--accent);opacity:.6}
+  body.theme-cinema .text{font-size:calc(40*var(--u));font-weight:400;font-style:italic;letter-spacing:-.01em;line-height:1.12}
+  body.theme-cinema .pic{border-radius:0;box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 70%,transparent),
+    0 0 0 calc(5*var(--u)) var(--bg),0 0 0 calc(6*var(--u)) color-mix(in srgb,var(--accent) 35%,transparent)}
+  body.pic-top.theme-cinema .pic{margin-bottom:calc(6*var(--u))}
+  body.theme-cinema .time{left:38%;right:38%;bottom:calc(13*var(--u));height:1px;background:none}
+  body.theme-cinema .time i{transform-origin:center;background:#fff;opacity:.6}
+  body.theme-cinema .card.in .fx i:nth-child(1),body.theme-cinema .card.in .fx i:nth-child(2){animation:cinemaLine 1.1s .45s cubic-bezier(.6,0,.2,1) both}
+  body.theme-cinema .card.in .fx i:nth-child(3){animation:cinemaGrain .5s steps(4,end) infinite}
+  body.theme-cinema .card.in .pic{animation:cinemaPush 1.4s .35s cubic-bezier(.2,.7,.2,1) both}
+  body.theme-cinema .card.in .title{animation:cinemaTitle 1.3s .45s cubic-bezier(.2,.7,.2,1) both}
+  body.theme-cinema .card.in .w{animation:cinemaWord 1s calc(.65s + var(--wi)*var(--wstep)*1.4) cubic-bezier(.2,.7,.2,1) both}
+  body.theme-cinema .card.in.out .pic,body.theme-cinema .card.in.out .words{animation:fadeOut .35s ease forwards}
+  @keyframes cinemaIn{from{clip-path:inset(50% calc(-60*var(--u)))}to{clip-path:inset(calc(-60*var(--u)))}}
+  @keyframes cinemaOut{0%,40%{clip-path:inset(calc(-60*var(--u)))}100%{clip-path:inset(50% calc(-60*var(--u)))}}
+  @keyframes cinemaLine{from{transform:scaleX(0)}}
+  @keyframes cinemaGrain{0%{transform:translate(0,0)}25%{transform:translate(-6%,4%)}50%{transform:translate(5%,-3%)}75%{transform:translate(-3%,-6%)}100%{transform:translate(4%,5%)}}
+  @keyframes cinemaPush{from{opacity:0;transform:scale(1.08)}}
+  @keyframes cinemaTitle{from{opacity:0;letter-spacing:.9em}}
+  @keyframes cinemaWord{from{opacity:0;transform:translateY(.22em);filter:blur(8px)}}
+
+  /* Less motion asked for: a plain fade in and out, nothing else moves. */
+  @media (prefers-reduced-motion: reduce){
+    .card::before,.card::after,.card *,.card *::before,.card *::after{animation:none !important}
+    body .card.in{animation:fade .25s ease both !important}
+    body .card.in.out{animation:fadeOut .25s ease forwards !important}
+    body .card.in.still{animation:none !important}
+  }
 </style>
+<style id="user-css"></style>
 </head>
-<body>
+<body class="theme-island anim-theme">
 <script>
 'use strict';
 (function(){
-  if (new URLSearchParams(location.search).get('at') === 'top') document.body.classList.add('top');
-  const GAP = 250, LEAVE = 300;
+  const params = new URLSearchParams(location.search);
+  const pinnedTop = params.get('at') === 'top';
+  const demo = params.has('demo');
+  // This page's own fingerprint, filled in when served (alerts::page_id).
+  const PAGE = '__ALERTS_PAGE_ID__';
+  // The pause between two alerts, and the longest a card waits for its
+  // theme's exit to end before it goes anyway.
+  const GAP = 250, LEAVE_MAX = 1200;
+  // How long the dashboard's full preview keeps a card up before it leaves.
+  const DEMO_HOLD = 2400;
+  // The extras (.fx) a theme can draw with.
+  const FX = 7;
+  // Each theme's own sound, font (and the second one some use for their
+  // titles), picture place, and whether its words decode from scrambled
+  // letters; its motion is in the CSS. The dashboard keeps the same table
+  // (THEMES in integrations.js).
+  const THEMES = {
+    island:{sound:'chime', font:'Inter', pic:'left'},
+    signal:{sound:'zap', font:'Chakra Petch', font2:'Roboto Mono', pic:'left', decode:true},
+    banner:{sound:'fanfare', font:'Bebas Neue', pic:'left'},
+    bubble:{sound:'pop', font:'Fredoka', pic:'left'},
+    minimal:{sound:'blip', font:'Inter', pic:'left'},
+    paper:{sound:'whoosh', font:'Permanent Marker', font2:'Special Elite', pic:'left'},
+    cinema:{sound:'bell', font:'Playfair Display', font2:'Inter', pic:'top'},
+  };
+  // The styles Google Fonts has for each; one-style fonts ask for none.
+  const AXES = {Inter:'wght@400;500;600;700;800', Poppins:'wght@400;600;700;800', Montserrat:'wght@400;600;700;800',
+    Fredoka:'wght@400;600;700', Rubik:'wght@400;600;700;800', Oswald:'wght@400;600;700', Orbitron:'wght@400;600;700;800',
+    'Roboto Mono':'wght@400;600;700', 'Chakra Petch':'wght@400;500;600;700', 'Playfair Display':'ital,wght@0,400;0,700;1,400;1,600'};
   const queue = [];
   let boot = null, seen = null, playing = false;
+  let look = {};
+
+  function themeOf(l){ return THEMES[l.theme] ? l.theme : 'island'; }
+
+  function loadFont(font){
+    if (!font || font === 'system' || document.querySelector(`link[data-font="${CSS.escape(font)}"]`)) return;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.dataset.font = font;
+    const axes = AXES[font] ? ':' + AXES[font] : '';
+    link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(font).replace(/%20/g, '+')}${axes}&display=swap`;
+    document.head.appendChild(link);
+  }
+
+  // The theme, then what was changed in it.
+  function applyLook(next){
+    look = next || {};
+    const theme = themeOf(look), own = THEMES[theme];
+    const body = document.body, cls = [];
+    cls.push('theme-' + theme);
+    const position = pinnedTop ? 'top' : look.position;
+    if (position === 'top' || position === 'middle') cls.push(position);
+    if (look.align === 'left' || look.align === 'right') cls.push(look.align);
+    cls.push('anim-' + (look.animation || 'theme'));
+    if ((look.picture || own.pic) === 'top') cls.push('pic-top');
+    body.className = cls.join(' ');
+    const set = (name, value) => value === '' || value == null ? body.style.removeProperty(name) : body.style.setProperty(name, value);
+    const hex = v => /^#[0-9a-f]{6}$/i.test(v || '') ? v : '';
+    set('--k', (Number(look.scale) || 100) / 100);
+    set('--accent-user', hex(look.accent));
+    set('--bg-user', hex(look.background));
+    set('--fg-user', hex(look.text));
+    set('--op-user', look.opacity == null ? '' : Math.max(0, Math.min(100, look.opacity)) / 100);
+    set('--r-user', look.radius == null ? '' : Math.max(0, Math.min(48, look.radius)) + 'px');
+    const font = look.font || own.font;
+    set('--font-user', look.font ? (look.font === 'system' ? 'system-ui,"Segoe UI",sans-serif' : `"${look.font}",system-ui,sans-serif`) : '');
+    loadFont(font);
+    loadFont(own.font2);
+    document.getElementById('user-css').textContent = look.css || '';
+  }
+
+  // `media:<name>` is an upload served next to this page.
+  function mediaSrc(ref){
+    if (/^media:[a-z0-9._-]+$/.test(ref || '')) return '/alerts/media/' + ref.slice(6);
+    return /^https?:\/\//.test(ref || '') ? ref : '';
+  }
+
+  // The text as words (.w) of letters (.c), each numbered, so a theme can
+  // bring them in one at a time. The steps shrink for a long text, so it
+  // never takes much longer to show than a short one.
+  const graphemes = typeof Intl.Segmenter === 'function'
+    ? (s => Array.from(new Intl.Segmenter(undefined, {granularity:'grapheme'}).segment(s), g => g.segment))
+    : (s => Array.from(s));
+  function spellOut(box, text){
+    let words = 0, letters = 0;
+    for (const part of text.split(/(\s+)/)){
+      if (!part) continue;
+      if (/^\s+$/.test(part)){ box.append(' '); continue; }
+      const word = document.createElement('span');
+      word.className = 'w';
+      word.style.setProperty('--wi', words++);
+      for (const g of graphemes(part)){
+        const letter = document.createElement('span');
+        letter.className = 'c';
+        letter.style.setProperty('--ci', letters++);
+        letter.textContent = g;
+        word.append(letter);
+      }
+      box.append(word);
+    }
+    box.style.setProperty('--cn', letters);
+    box.style.setProperty('--wstep', Math.min(70, 700 / Math.max(words, 1)) + 'ms');
+    box.style.setProperty('--cstep', Math.min(34, 1500 / Math.max(letters, 1)) + 'ms');
+  }
 
   function card(alert){
     const el = document.createElement('div');
     el.className = 'card';
-    el.innerHTML = '<div class="title"></div><div class="text"></div><div class="time"><i></i></div>';
+    el.innerHTML = `<span class="fx" aria-hidden="true">${'<i></i>'.repeat(FX)}</span>`
+      + '<div class="words"><div class="title"></div><div class="text"></div></div><div class="time"><i></i></div>';
     el.querySelector('.title').textContent = alert.title || '';
-    el.querySelector('.text').textContent = alert.text || '';
+    spellOut(el.querySelector('.text'), alert.text || '');
+    if (/^#[0-9a-f]{6}$/i.test(alert.color || '')) el.style.setProperty('--card-color', alert.color);
+    const src = mediaSrc(alert.image);
+    if (src){
+      const pic = document.createElement('img');
+      pic.className = 'pic';
+      pic.alt = '';
+      pic.src = src;
+      pic.onerror = () => pic.remove();
+      el.querySelector('.words').before(pic);
+    }
     return el;
+  }
+
+  // A theme that decodes shows each letter scrambled until its turn comes,
+  // left to right. The real letter keeps its place (alerts.html CSS), so
+  // nothing reflows while it settles.
+  const GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&*+<>/';
+  function decode(el){
+    if (!THEMES[themeOf(look)].decode || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const letters = [...el.querySelectorAll('.text .c')];
+    if (!letters.length) return;
+    const start = performance.now() + 300, step = Math.min(40, 900 / letters.length);
+    // New scrambled letters a little slower than the screen redraws, so
+    // they read as letters and not as noise.
+    let shuffled = 0;
+    const tick = now => {
+      const shuffle = now - shuffled >= 55;
+      if (shuffle) shuffled = now;
+      let waiting = 0;
+      letters.forEach((c, i) => {
+        if (now >= start + i * step){ c.removeAttribute('data-g'); return; }
+        waiting++;
+        if (shuffle) c.dataset.g = GLYPHS[Math.floor(Math.random() * GLYPHS.length)];
+      });
+      if (waiting && el.isConnected) requestAnimationFrame(tick);
+    };
+    tick(performance.now());
+  }
+
+  // The card leaves its theme's way, then `then` runs. If nothing
+  // animates (custom CSS can turn it off), it goes after LEAVE_MAX.
+  function leave(el, then){
+    let gone = false;
+    const done = () => {
+      if (gone) return;
+      gone = true;
+      el.remove();
+      then();
+    };
+    el.addEventListener('animationend', e => { if (e.target === el) done(); });
+    setTimeout(done, LEAVE_MAX);
+    el.classList.add('out');
+  }
+
+  // ---- sounds: ten made here, or a file (uploaded or linked).
+  let audio = null;
+  function tone(at, freq, endFreq, length, type, gain){
+    const osc = audio.createOscillator(), amp = audio.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, at);
+    if (endFreq !== freq) osc.frequency.exponentialRampToValueAtTime(endFreq, at + length);
+    amp.gain.setValueAtTime(0.0001, at);
+    amp.gain.exponentialRampToValueAtTime(gain, at + 0.012);
+    amp.gain.exponentialRampToValueAtTime(0.0001, at + length);
+    osc.connect(amp).connect(audio.destination);
+    osc.start(at);
+    osc.stop(at + length + 0.05);
+  }
+  function noise(at, length, from, to, gain){
+    const buffer = audio.createBuffer(1, Math.ceil(audio.sampleRate * length), audio.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const src = audio.createBufferSource(), band = audio.createBiquadFilter(), amp = audio.createGain();
+    src.buffer = buffer;
+    band.type = 'bandpass';
+    band.Q.value = 1.4;
+    band.frequency.setValueAtTime(from, at);
+    band.frequency.exponentialRampToValueAtTime(to, at + length);
+    amp.gain.setValueAtTime(0.0001, at);
+    amp.gain.exponentialRampToValueAtTime(gain, at + length * 0.4);
+    amp.gain.exponentialRampToValueAtTime(0.0001, at + length);
+    src.connect(band).connect(amp).connect(audio.destination);
+    src.start(at);
+  }
+  const SOUNDS = {
+    chime: (t, g) => { tone(t, 1318.5, 1318.5, 0.5, 'sine', g); tone(t + 0.11, 1975.5, 1975.5, 0.7, 'sine', g * 0.8); },
+    pop: (t, g) => tone(t, 620, 180, 0.14, 'sine', g),
+    bell: (t, g) => { tone(t, 880, 880, 1.4, 'triangle', g); tone(t, 1760, 1760, 0.9, 'sine', g * 0.35); tone(t, 2637, 2637, 0.5, 'sine', g * 0.15); },
+    rise: (t, g) => { tone(t, 392, 1175, 0.32, 'sine', g); tone(t + 0.3, 1568, 1568, 0.45, 'sine', g * 0.7); },
+    coin: (t, g) => { tone(t, 988, 988, 0.09, 'square', g * 0.35); tone(t + 0.08, 1319, 1319, 0.4, 'square', g * 0.35); },
+    sparkle: (t, g) => [2093, 2637, 3136, 3951, 3136].forEach((f, n) => tone(t + n * 0.06, f, f, 0.28, 'sine', g * 0.45)),
+    whoosh: (t, g) => noise(t, 0.5, 300, 3200, g * 1.6),
+    fanfare: (t, g) => {
+      [[523.3, 0], [659.3, 0.13], [784, 0.26]].forEach(([f, d]) => tone(t + d, f, f, 0.18, 'triangle', g * 0.7));
+      [1046.5, 1318.5, 1568].forEach(f => tone(t + 0.4, f, f, 0.8, 'triangle', g * 0.45));
+    },
+    zap: (t, g) => { tone(t, 1900, 110, 0.28, 'sawtooth', g * 0.35); tone(t + 0.05, 2400, 300, 0.2, 'square', g * 0.15); },
+    blip: (t, g) => { tone(t, 880, 880, 0.08, 'sine', g); tone(t + 0.09, 1320, 1320, 0.12, 'sine', g * 0.8); },
+  };
+  function play(alert){
+    let sound = alert.sound || '';
+    if (sound === 'theme') sound = look.sound || THEMES[themeOf(look)].sound;
+    const volume = Math.max(0, Math.min(100, Number(alert.volume == null || alert.volume === '' ? 70 : alert.volume))) / 100;
+    if (!sound || !volume) return;
+    try {
+      const src = mediaSrc(sound);
+      if (src){
+        const file = new Audio(src);
+        file.volume = volume;
+        file.play().catch(() => {});
+        return;
+      }
+      if (!SOUNDS[sound]) return;
+      audio = audio || new AudioContext();
+      if (audio.state === 'suspended') audio.resume();
+      SOUNDS[sound](audio.currentTime + 0.02, 0.6 * volume);
+    } catch (_){ /* no sound is better than no alert */ }
   }
 
   function next(){
     const alert = queue.shift();
     if (!alert){ playing = false; return; }
     playing = true;
-    const el = card(alert);
+    let el;
+    // One alert that can't be drawn is skipped: it never stops the queue.
+    try { el = card(alert); }
+    catch (e){ console.error('alert skipped:', e); next(); return; }
     document.body.appendChild(el);
     // Two frames: the start state has to be painted before it can animate.
     requestAnimationFrame(() => requestAnimationFrame(() => {
       el.classList.add('in');
+      decode(el);
+      play(alert);
       el.querySelector('.time i').animate([{transform:'scaleX(1)'}, {transform:'scaleX(0)'}],
         {duration:alert.ms, easing:'linear', fill:'forwards'});
     }));
-    setTimeout(() => {
-      el.classList.add('out');
-      setTimeout(() => { el.remove(); setTimeout(next, GAP); }, LEAVE);
-    }, alert.ms);
+    setTimeout(() => leave(el, () => setTimeout(next, GAP)), alert.ms);
+  }
+
+  // OBS keeps this page open through an app update: when the app serves a
+  // newer one, load it. At most once a minute, so nothing can loop.
+  function reloadForUpdate(){
+    try {
+      const last = Number(sessionStorage.getItem('ic-alerts-reload') || 0);
+      if (Date.now() - last < 60000) return;
+      sessionStorage.setItem('ic-alerts-reload', String(Date.now()));
+    } catch (_){ /* no storage: the fingerprint still settles it */ }
+    location.reload();
   }
 
   function take(board){
     const list = board && Array.isArray(board.alerts) ? board.alerts : null;
     if (!list) return;
+    if (board.page && board.page !== PAGE && !PAGE.startsWith('__')){ reloadForUpdate(); return; }
+    applyLook(board.look);
     const top = list.reduce((m, a) => Math.max(m, a.id), 0);
     // After an app restart the ids start over.
     if (board.boot !== boot){
@@ -92,6 +650,33 @@
     if (!playing) next();
   }
 
+  // The dashboard's preview: one card that stays, redrawn as it's edited.
+  // `replay` plays its entrance (and sound) again; `replay: 'full'` also
+  // lets it leave after a moment, then it comes back to stay.
+  let demoTurn = 0, demoTimer = 0;
+  function showDemo(data){
+    const turn = ++demoTurn;
+    clearTimeout(demoTimer);
+    applyLook(data.look);
+    document.querySelectorAll('.card').forEach(c => c.remove());
+    if (!data.card) return;
+    const el = card(data.card);
+    document.body.appendChild(el);
+    if (data.sound) play(data.card);
+    if (!data.replay){ el.classList.add('in', 'still'); return; }
+    requestAnimationFrame(() => requestAnimationFrame(() => { el.classList.add('in'); decode(el); }));
+    if (data.replay !== 'full') return;
+    demoTimer = setTimeout(() => leave(el, () => {
+      if (turn === demoTurn) showDemo({look:data.look, card:data.card});
+    }), DEMO_HOLD);
+  }
+
+  if (demo){
+    window.addEventListener('message', e => {
+      if (e.origin === location.origin && e.data && e.data.instantcloneAlert) showDemo(e.data.instantcloneAlert);
+    });
+    return;
+  }
   const feed = new EventSource('/alerts-events');
   feed.onmessage = e => { try { take(JSON.parse(e.data)); } catch(_){} };
 })();

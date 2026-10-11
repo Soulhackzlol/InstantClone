@@ -11,8 +11,13 @@
 
 use crate::json::{self, Value};
 
-/// Chat, VOD markers and clips for the streamer's account.
-pub const MAIN_SCOPES: &str = "chat:read chat:edit channel:manage:broadcast clips:edit";
+/// Chat, VOD markers and clips for the streamer's account, and reading
+/// the channel's follows, subs, bits, redemptions and ad breaks for
+/// Twitch event triggers (see `eventsub`). All read-only but chat,
+/// markers and clips.
+pub const MAIN_SCOPES: &str = "chat:read chat:edit channel:manage:broadcast clips:edit \
+     moderator:read:followers channel:read:subscriptions bits:read channel:read:redemptions \
+     channel:read:ads";
 /// A bot account only reads and posts chat.
 pub const BOT_SCOPES: &str = "chat:read chat:edit";
 

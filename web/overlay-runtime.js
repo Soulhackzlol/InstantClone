@@ -893,7 +893,6 @@
     const usedAnim = {};
     let widgetCssAll = '';
     let bodyHtml = '';
-    let customScripts = '';
 
     doc.widgets.forEach(function (w, idx) {
       if (!w.id) w.id = 'w' + idx;

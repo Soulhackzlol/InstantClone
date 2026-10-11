@@ -12,8 +12,8 @@ body:
     id: version
     attributes:
       label: InstantClone version
-      description: Top-right of the dashboard, or the `v0.1.15` in the .exe name.
-      placeholder: "v0.1.15"
+      description: Top-right of the dashboard, or the `v0.1.16` in the .exe name.
+      placeholder: "v0.1.16"
     validations:
       required: true
 

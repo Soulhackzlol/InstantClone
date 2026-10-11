@@ -4,7 +4,7 @@
 //! from a new OBS session airs undelayed, timestamps never go back, and a
 //! stream that ends sends its goodbye (`deleteStream`).
 
-use super::sim::{assert_strictly_increasing, wait, Frame, Sim};
+use super::sim::{assert_strictly_increasing, wait, Frame, Sim, TIMER_SLOP_MS};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
@@ -19,19 +19,6 @@ async fn delayed_stream(sim: &mut Sim, ms: u32) {
         .activate_delay()
         .expect("the buffer holds the delay");
     sim.obs_sends(ms).await;
-}
-
-fn frames_after(sim: &mut Sim, conn: usize, at: Instant) -> Vec<Frame> {
-    sim.frames(conn).into_iter().filter(|f| f.at > at).collect()
-}
-
-fn ended(sim: &mut Sim, conn: usize) -> bool {
-    sim.commands(conn).contains(&"deleteStream".into())
-}
-
-/// How long after OBS made it a frame reached viewers.
-fn delay_of(sim: &Sim, frame: &Frame) -> Duration {
-    frame.at.duration_since(sim.produced[&frame.number])
 }
 
 /// A multistreamer (Twitch and YouTube), no crash protection, stops in
@@ -54,14 +41,14 @@ async fn multistreamer_stop_airs_the_delay_on_every_platform() {
     wait(3_000).await;
 
     for conn in 0..2 {
-        let tail = frames_after(&mut sim, conn, stopped);
+        let tail = sim.frames_after(conn, stopped);
         assert_eq!(
             tail.last().map(|f| f.number),
             Some(last_live),
             "platform {conn} aired the whole delay"
         );
         assert_strictly_increasing(&tail, "the tail");
-        assert!(ended(&mut sim, conn), "platform {conn} ended");
+        assert!(sim.ended(conn), "platform {conn} ended");
         sim.assert_timestamps_monotonic(conn);
     }
     assert_eq!(sim.ctrl.tail_left(), None);
@@ -79,39 +66,25 @@ async fn armed_but_not_on_yet_a_stop_ends_at_once() {
     sim.obs_stops();
     wait(800).await;
 
-    assert!(ended(&mut sim, 0), "ended within the moment");
+    assert!(sim.ended(0), "ended within the moment");
     assert_eq!(sim.ctrl.tail_left(), None, "nothing to count down");
 }
 
-/// Stops, then starts OBS again a moment later while the delay of the
+/// OBS crashes (no crash protection) and comes back while the delay of the
 /// first stream is still airing: the new stream reaches viewers delayed,
-/// never live.
-#[tokio::test]
-async fn restarting_mid_tail_never_airs_the_new_stream_live() {
-    restart_mid_tail(true).await;
-}
-
-/// Same, when OBS crashed instead (no crash protection) and came back.
+/// never live. (A stop and restart is `obs_restarts_mid_delay`.)
 #[tokio::test]
 async fn coming_back_from_a_crash_mid_tail_never_airs_live() {
-    restart_mid_tail(false).await;
-}
-
-async fn restart_mid_tail(stopped: bool) {
     let mut sim = Sim::new(false).await;
     sim.destination_runs("platform");
     delayed_stream(&mut sim, 1_000).await;
-    if stopped {
-        sim.obs_stops();
-    } else {
-        sim.obs_crashes();
-    }
+    sim.obs_crashes();
     wait(600).await;
     sim.obs_connects().await;
     let first_new = sim.next_frame;
     sim.obs_sends(4_500).await;
 
-    assert!(ended(&mut sim, 0), "the first stream ended");
+    assert!(sim.ended(0), "the first stream ended");
     let new: Vec<Frame> = sim
         .frames(1)
         .into_iter()
@@ -119,10 +92,10 @@ async fn restart_mid_tail(stopped: bool) {
         .collect();
     let first = new.first().expect("the destination came back");
     assert!(first.keyframe, "starts on a keyframe");
-    let delayed_by = delay_of(&sim, first);
+    let delayed_by = sim.delay_ms(first);
     assert!(
-        delayed_by >= Duration::from_millis(1_500),
-        "the new stream airs delayed, not live ({delayed_by:?})"
+        delayed_by + TIMER_SLOP_MS >= DELAY_MS,
+        "the new stream airs {delayed_by} ms behind, short of the {DELAY_MS} ms delay"
     );
     sim.assert_timestamps_monotonic(1);
 }
@@ -140,7 +113,7 @@ async fn cut_to_live_during_the_tail_ends_the_stream() {
     sim.ctrl.stop_delay();
     wait(1_200).await;
 
-    assert!(ended(&mut sim, 0), "it ended");
+    assert!(sim.ended(0), "it ended");
     assert!(
         sim.frames(0).last().is_some_and(|f| f.number < last_live),
         "without airing the rest"
@@ -171,8 +144,8 @@ async fn cut_after_this_airs_then_a_stop() {
         frames.iter().any(|f| f.number == mark),
         "the marked moment aired"
     );
-    assert_strictly_increasing(&frames_after(&mut sim, 0, stopped), "after the stop");
-    assert!(ended(&mut sim, 0), "it ended");
+    assert_strictly_increasing(&sim.frames_after(0, stopped), "after the stop");
+    assert!(sim.ended(0), "it ended");
     sim.assert_timestamps_monotonic(0);
 }
 
@@ -187,7 +160,7 @@ async fn end_now_then_a_new_stream_starts_delayed() {
     wait(300).await;
     assert!(sim.ctrl.end_hold_now(), "the delay was airing");
     wait(500).await;
-    assert!(ended(&mut sim, 0), "ended at once");
+    assert!(sim.ended(0), "ended at once");
     sim.obs_connects().await;
     let first_new = sim.next_frame;
     sim.obs_sends(4_500).await;
@@ -197,10 +170,10 @@ async fn end_now_then_a_new_stream_starts_delayed() {
         .into_iter()
         .find(|f| f.number >= first_new)
         .expect("the new stream aired");
-    let delayed_by = delay_of(&sim, &first);
+    let delayed_by = sim.delay_ms(&first);
     assert!(
-        delayed_by >= Duration::from_millis(1_500),
-        "delayed, not live ({delayed_by:?})"
+        delayed_by + TIMER_SLOP_MS >= DELAY_MS,
+        "{delayed_by} ms behind, short of the {DELAY_MS} ms delay"
     );
 }
 
@@ -224,9 +197,9 @@ async fn the_countdown_goes_down_then_away() {
     assert_eq!(sim.ctrl.tail_left(), None, "gone once it aired");
 }
 
-/// A streamer who stops and starts three times in a row (scene setup,
-/// a crash of their own, a restart): every stream airs delayed and whole,
-/// and nothing airs twice across all of them.
+/// A streamer who stops and starts OBS three times in a row (setting up
+/// scenes, say): every stream airs whole, and nothing airs twice across
+/// all of them.
 #[tokio::test]
 async fn three_stops_and_starts_in_a_row() {
     const SHORT_DELAY_MS: u32 = 1_000;
@@ -242,8 +215,12 @@ async fn three_stops_and_starts_in_a_row() {
     // replays from then on.
     let activated = Instant::now();
     let mut last_lives = Vec::new();
+    // Each stream runs long enough for the destination to rejoin it: after
+    // a stop it airs the 1 s tail, then waits out a backoff that doubles
+    // per short session (2 s by the third), which left a 1.5 s stream only
+    // 0.3 s of slack on a busy machine.
     for round in 0..3 {
-        sim.obs_sends(1_500).await;
+        sim.obs_sends(2_500).await;
         last_lives.push(sim.next_frame - 1);
         sim.obs_stops();
         wait(1_800).await;
@@ -279,13 +256,15 @@ async fn a_delay_longer_than_the_buffer_then_a_stop() {
     sim.obs_connects().await;
     sim.destination_connects("platform").await;
     sim.obs_sends(4_000).await;
-    let _ = sim.ctrl.activate_delay();
+    sim.ctrl
+        .activate_delay()
+        .expect("activates at what the buffer holds");
     sim.obs_sends(2_000).await;
     sim.obs_stops();
     let stopped = Instant::now();
     wait(5_000).await;
 
-    assert_strictly_increasing(&frames_after(&mut sim, 0, stopped), "after the stop");
-    assert!(ended(&mut sim, 0), "it ended");
+    assert_strictly_increasing(&sim.frames_after(0, stopped), "after the stop");
+    assert!(sim.ended(0), "it ended");
     sim.assert_timestamps_monotonic(0);
 }

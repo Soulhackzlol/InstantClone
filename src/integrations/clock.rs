@@ -92,10 +92,15 @@ mod tests {
     }
 
     #[test]
-    fn formats_are_zero_padded_and_plausible() {
-        let t = super::now();
-        assert!(t.year >= 2024 && (1..=12).contains(&t.month) && (1..=31).contains(&t.day));
-        assert_eq!(t.hm().len(), 5);
-        assert_eq!(t.date().len(), 10);
+    fn formats_are_zero_padded() {
+        let t = super::LocalTime {
+            year: 2026,
+            month: 3,
+            day: 7,
+            hour: 9,
+            minute: 5,
+        };
+        assert_eq!(t.hm(), "09:05");
+        assert_eq!(t.date(), "2026-03-07");
     }
 }

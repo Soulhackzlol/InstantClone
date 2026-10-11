@@ -247,7 +247,7 @@ fn ffmpeg_is_available(check: &str) -> bool {
             !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
             "ffmpeg is required on Linux CI for {check}"
         );
-        eprintln!("NOTE: ffmpeg not found, so {check} did not run");
+        log_line!("NOTE: ffmpeg not found, so {check} did not run");
     }
     found
 }
@@ -494,6 +494,10 @@ mod tests {
         let frame_bytes = shape.width * shape.height * 3 / 2;
         for codec in CODECS {
             let Some(stream) = encode_stand_in_stream(codec, shape) else {
+                assert!(
+                    !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
+                    "the {codec:?} encoder is required on Linux CI"
+                );
                 continue;
             };
             let cut = second_keyframe_offset(&stream, codec);
@@ -590,7 +594,7 @@ mod tests {
             .unwrap();
         if !output.status.success() || output.stdout.is_empty() {
             let why = String::from_utf8_lossy(&output.stderr);
-            eprintln!(
+            log_line!(
                 "NOTE: ffmpeg couldn't run {encoder} ({}), so the {codec:?} cut check didn't run",
                 why.trim()
             );

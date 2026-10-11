@@ -186,69 +186,53 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
-    /// RFC 4231 HMAC-SHA256 test case 1: key = 0x0b x20, data = "Hi There".
+    /// Published HMAC-SHA256 vectors, picked for the branches they reach.
     #[test]
-    fn hmac_rfc4231_case1() {
-        let mac = hmac_sha256(&[0x0b; 20], b"Hi There");
-        assert_eq!(
-            sha256::hex_bytes(&mac),
-            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
-        );
-    }
-
-    /// RFC 4231 test case 2: key = "Jefe", data = "what do ya want for nothing?".
-    #[test]
-    fn hmac_rfc4231_case2() {
-        let mac = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
-        assert_eq!(
-            sha256::hex_bytes(&mac),
-            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
-        );
-    }
-
-    /// RFC 4231 test case 6: a 131-byte key, longer than the 64-byte block, so
-    /// it must be hashed down first. Cases 1 and 2 use short keys and never
-    /// reach that branch; a password longer than 64 bytes does.
-    #[test]
-    fn hmac_rfc4231_case6_hashes_an_oversized_key() {
-        let mac = hmac_sha256(
-            &[0xaa; 131],
-            b"Test Using Larger Than Block-Size Key - Hash Key First",
-        );
-        assert_eq!(
-            sha256::hex_bytes(&mac),
-            "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
-        );
-    }
-
-    /// RFC 4231 test case 7: an oversized key AND a message longer than one
-    /// block, so the inner hash spans several blocks.
-    #[test]
-    fn hmac_rfc4231_case7_oversized_key_and_message() {
-        let mac = hmac_sha256(
-            &[0xaa; 131],
-            b"This is a test using a larger than block-size key and a larger than \
-              block-size data. The key needs to be hashed before being used by the \
-              HMAC algorithm.",
-        );
-        assert_eq!(
-            sha256::hex_bytes(&mac),
-            "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2"
-        );
-    }
-
-    /// A key of exactly one block is used as-is, not hashed. This is the
-    /// boundary of the `>` in `hmac_sha256`: turning it into `>=` would hash a
-    /// 64-byte key and change every MAC made with one. Expected value is the
-    /// NIST HMAC-SHA256 "keylen=blocklen" example (key = bytes 0x00..0x3f).
-    #[test]
-    fn hmac_key_of_exactly_one_block_is_not_hashed() {
-        let key: Vec<u8> = (0u8..64).collect();
-        let mac = hmac_sha256(&key, b"Sample message for keylen=blocklen");
-        assert_eq!(
-            sha256::hex_bytes(&mac),
-            "8bb9a1db9806f20df7f77b82138c7914d174d59e13dc4d0169c9057b133e1d62"
-        );
+    fn hmac_matches_the_published_vectors() {
+        let one_block_key: Vec<u8> = (0u8..64).collect();
+        let cases: [(&str, &[u8], &[u8], &str); 5] = [
+            (
+                "RFC 4231 case 1: a short key",
+                &[0x0b; 20],
+                b"Hi There",
+                "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+            ),
+            (
+                "RFC 4231 case 2: a text key",
+                b"Jefe",
+                b"what do ya want for nothing?",
+                "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+            ),
+            // A 131-byte key is longer than the 64-byte block, so it is
+            // hashed down first: the branch a password over 64 bytes takes.
+            (
+                "RFC 4231 case 6: an oversized key",
+                &[0xaa; 131],
+                b"Test Using Larger Than Block-Size Key - Hash Key First",
+                "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54",
+            ),
+            // And a message longer than one block: the inner hash spans several.
+            (
+                "RFC 4231 case 7: an oversized key and message",
+                &[0xaa; 131],
+                b"This is a test using a larger than block-size key and a larger than \
+                  block-size data. The key needs to be hashed before being used by the \
+                  HMAC algorithm.",
+                "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2",
+            ),
+            // A key of exactly one block is used as-is, not hashed: the
+            // boundary of the `>` in `hmac_sha256`. With `>=` every MAC made
+            // with a 64-byte key would change. (NIST "keylen=blocklen".)
+            (
+                "NIST: a key of exactly one block",
+                &one_block_key,
+                b"Sample message for keylen=blocklen",
+                "8bb9a1db9806f20df7f77b82138c7914d174d59e13dc4d0169c9057b133e1d62",
+            ),
+        ];
+        for (case, key, message, mac) in cases {
+            assert_eq!(sha256::hex_bytes(&hmac_sha256(key, message)), mac, "{case}");
+        }
     }
 
     /// Published PBKDF2-HMAC-SHA256 vectors (password "password", salt "salt").
@@ -298,8 +282,6 @@ mod tests {
     fn verify_rejects_garbage() {
         assert!(!verify_password("x", ""));
         assert!(!verify_password("x", "not-a-hash"));
-        assert!(!verify_password("x", "pbkdf2-sha256$0$aa$bb"));
-        assert!(!verify_password("x", "pbkdf2-sha256$1$zz$bb")); // non-hex salt
     }
 
     /// Every malformed variant of a hash that is otherwise correct for this
@@ -335,6 +317,13 @@ mod tests {
                 "a non-numeric count",
             ),
             (STORED_VECTOR.replacen("$1$", "$-1$", 1), "a negative count"),
+            // Zero rounds would hand back the one-round digest: without the
+            // guard this very copy would verify.
+            (STORED_VECTOR.replacen("$1$", "$0$", 1), "a zero count"),
+            (
+                STORED_VECTOR.replacen("73616c74", "7361zz74", 1),
+                "a salt that isn't hex",
+            ),
         ] {
             assert!(!verify_password("password", &stored), "{why}: {stored}");
         }

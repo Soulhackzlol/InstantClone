@@ -284,10 +284,13 @@ pub enum StepKind {
     Timeline,
     /// Switch a scene, show or hide a source, or set a text source in OBS.
     Obs,
+    /// Turn a light or plug on the local network on or off, or color it
+    /// (see `lights`).
+    Light,
 }
 
 impl StepKind {
-    pub const ALL: [StepKind; 19] = [
+    pub const ALL: [StepKind; 20] = [
         StepKind::Discord,
         StepKind::Chat,
         StepKind::Phone,
@@ -307,6 +310,7 @@ impl StepKind {
         StepKind::EditText,
         StepKind::Timeline,
         StepKind::Obs,
+        StepKind::Light,
     ];
 
     pub fn id(self) -> &'static str {
@@ -330,6 +334,7 @@ impl StepKind {
             StepKind::EditText => "edit_text",
             StepKind::Timeline => "timeline",
             StepKind::Obs => "obs",
+            StepKind::Light => "light",
         }
     }
 
@@ -359,6 +364,10 @@ impl StepKind {
             StepKind::EditText => &[("op", "pick how to change the text")],
             StepKind::Timeline => &[("text", "write the timeline line")],
             StepKind::Obs => &[("action", "pick what to do in OBS")],
+            StepKind::Light => &[
+                ("device", "pick the light or plug"),
+                ("action", "pick what the light does"),
+            ],
             StepKind::WaitDelay | StepKind::Stop | StepKind::Marker | StepKind::Clip => &[],
         }
     }
@@ -684,6 +693,10 @@ fn validate_steps(
     errors: &mut Vec<String>,
     incomplete: &mut Vec<String>,
 ) {
+    // An empty branch is no level: only steps that are there count.
+    if steps.is_empty() {
+        return;
+    }
     if depth > MAX_DEPTH {
         errors.push(format!("checks nest more than {MAX_DEPTH} deep"));
         return;
@@ -707,6 +720,13 @@ fn validate_steps(
                 missing.push(ask.to_string());
             }
         }
+        if step.kind == StepKind::If
+            && condition_names().skip(1).any(|(left, op, _)| {
+                !step.param(&op).is_empty() && step.param(&left).trim().is_empty()
+            })
+        {
+            missing.push("say what each check looks at".to_string());
+        }
         let ms = step.param("ms").trim();
         if step.kind == StepKind::Wait
             && !ms.is_empty()
@@ -720,9 +740,15 @@ fn validate_steps(
                 missing.push(ask.to_string());
             }
             // Like a program's path: chat must never pick what OBS shows.
-            if step.param("scene").contains('{') || step.param("source").contains('{') {
-                errors.push("an OBS step's scene and source can't use variables".to_string());
+            if ["scene", "source", "filter", "hotkey"]
+                .iter()
+                .any(|name| step.param(name).contains('{'))
+            {
+                errors.push("an OBS step's names can't use variables".to_string());
             }
+        }
+        if step.kind == StepKind::Light {
+            light_step_problems(step, missing, errors);
         }
         // Where a program runs, a file is written or a request goes must be
         // fixed by the streamer, never filled in from chat or a web call:
@@ -749,10 +775,25 @@ fn validate_steps(
                 "a Discord card's link and images can't put variables in their site".to_string(),
             );
         }
+        // What an alert plays and shows comes from the streamer: a viewer
+        // must not pick a picture or a sound for the stream.
+        if step.kind == StepKind::Overlay {
+            let image = step.param("image").trim();
+            if !image.is_empty() && !super::alerts::is_picture(image) {
+                errors.push(
+                    "an alert's picture must be an upload or a web link (https://...)".to_string(),
+                );
+            }
+            if !super::alerts::is_sound(step.param("sound").trim()) {
+                errors.push(
+                    "an alert's sound must be a built-in one, an upload or a web link".to_string(),
+                );
+            }
+        }
         // The value's name is fixed: a viewer must not overwrite `{user}`.
         let named = match step.kind {
             StepKind::SetVar => step.param("name"),
-            StepKind::EditText => step.param("save_as"),
+            StepKind::EditText | StepKind::Program | StepKind::Obs => step.param("save_as"),
             _ => "",
         };
         if named.contains('{') {
@@ -787,16 +828,96 @@ fn discord_message_missing(step: &Step) -> Option<&'static str> {
 }
 
 /// The OBS actions a step can take, with what each needs.
-pub const OBS_ACTIONS: [&str; 5] = ["scene", "show", "hide", "toggle", "text"];
+pub const OBS_ACTIONS: [&str; 19] = [
+    "scene",
+    "show",
+    "hide",
+    "toggle",
+    "text",
+    "record_start",
+    "record_stop",
+    "replay_save",
+    "screenshot",
+    "mute",
+    "unmute",
+    "mute_toggle",
+    "filter_on",
+    "filter_off",
+    "filter_toggle",
+    "media_play",
+    "media_stop",
+    "hotkey",
+    "check",
+];
+
+/// How many checks one If step holds. The first is `left`, `op` and
+/// `right`; the others add their number (`left2`…), and exist once their
+/// `op` is set.
+pub const MAX_CONDITIONS: usize = 4;
+
+/// Each check's (left, op, right) param names, the first one first.
+pub fn condition_names() -> impl Iterator<Item = (String, String, String)> {
+    (1..=MAX_CONDITIONS).map(|n| {
+        let suffix = if n == 1 { String::new() } else { n.to_string() };
+        (
+            format!("left{suffix}"),
+            format!("op{suffix}"),
+            format!("right{suffix}"),
+        )
+    })
+}
 
 fn obs_step_missing(step: &Step) -> Option<&'static str> {
     let blank = |name: &str| step.param(name).trim().is_empty();
     match step.param("action") {
         "" => None, // `required` asks for it
         "scene" if blank("scene") => Some("pick the OBS scene to switch to"),
-        "show" | "hide" | "toggle" | "text" if blank("source") => Some("pick the OBS source"),
+        "show" | "hide" | "toggle" | "text" | "mute" | "unmute" | "mute_toggle" | "media_play"
+        | "media_stop"
+            if blank("source") =>
+        {
+            Some("pick the OBS source")
+        }
+        "filter_on" | "filter_off" | "filter_toggle" if blank("source") => {
+            Some("pick the source or scene with the filter")
+        }
+        "filter_on" | "filter_off" | "filter_toggle" if blank("filter") => Some("pick the filter"),
+        "hotkey" if blank("hotkey") => Some("pick the OBS hotkey"),
         action if !OBS_ACTIONS.contains(&action) => Some("pick what to do in OBS"),
         _ => None,
+    }
+}
+
+pub const LIGHT_ACTIONS: [&str; 4] = ["on", "off", "color", "flash"];
+
+/// What a light step lacks (`missing`) or gets wrong (`errors`). The
+/// device is fixed, like a program's path: chat never picks which light.
+/// A color or brightness from chat is checked when it runs.
+fn light_step_problems(step: &Step, missing: &mut Vec<String>, errors: &mut Vec<String>) {
+    let device = step.param("device");
+    if device.contains('{') {
+        errors.push("a light step's device can't use variables".to_string());
+    } else if !device.trim().is_empty() && super::lights::parse_ref(device).is_none() {
+        missing.push("pick the light or plug again".to_string());
+    }
+    let action = step.param("action");
+    if !action.is_empty() && !LIGHT_ACTIONS.contains(&action) {
+        missing.push("pick what the light does".to_string());
+    }
+    let color = step.param("color").trim();
+    if matches!(action, "color" | "flash") {
+        if color.is_empty() {
+            missing.push("pick a color".to_string());
+        } else if !color.contains('{') && super::lights::parse_color(color).is_none() {
+            errors.push(format!(
+                "\"{color}\" isn't a color: use one like #ff2020, or red"
+            ));
+        }
+    }
+    let brightness = step.param("brightness").trim();
+    let fits = |b: &str| b.parse::<u8>().is_ok_and(|n| (1..=100).contains(&n));
+    if !brightness.is_empty() && !brightness.contains('{') && !fits(brightness) {
+        errors.push("a light's brightness is 1 to 100".to_string());
     }
 }
 
@@ -1045,7 +1166,7 @@ fn handler_from_json(v: &Value) -> Result<Handler, String> {
     Ok(Handler {
         enabled: v.bool_or("enabled", true),
         trigger,
-        steps: steps_from_json(v.get("steps"), 0)?,
+        steps: steps_from_json(v.get("steps"), 1)?,
     })
 }
 
@@ -1072,13 +1193,13 @@ fn steps_json(steps: &[Step]) -> Value {
     )
 }
 
+/// `depth` counts like `validate_steps`: the handler's own steps are 1.
 fn steps_from_json(v: Option<&Value>, depth: usize) -> Result<Vec<Step>, String> {
-    if depth > MAX_DEPTH {
+    let list = v.and_then(Value::as_array).unwrap_or(&[]);
+    if !list.is_empty() && depth > MAX_DEPTH {
         return Err(format!("checks nest more than {MAX_DEPTH} deep"));
     }
-    v.and_then(Value::as_array)
-        .unwrap_or(&[])
-        .iter()
+    list.iter()
         .map(|s| {
             let id = s.str_or("type", "");
             let kind = StepKind::from_id(id).ok_or_else(|| format!("unknown step \"{id}\""))?;
@@ -1249,17 +1370,63 @@ mod tests {
         assert!(i.validate().is_empty(), "a switched-off step can wait");
     }
 
+    /// Chat can fill in an alert's words, never what it plays or shows.
     #[test]
-    fn nesting_is_capped() {
+    fn an_alerts_picture_and_sound_are_the_streamers() {
+        let alert = |image: &str, sound: &str| {
+            let mut i = sample();
+            i.handlers[0].steps = vec![Step::new(
+                StepKind::Overlay,
+                &[("text", "{user}"), ("image", image), ("sound", sound)],
+            )];
+            i.validate()
+        };
+        assert!(alert("https://media.example/party.gif", "chime").is_empty());
+        assert!(alert("", "https://cdn.example/ding.mp3").is_empty());
+        assert!(alert("https://media.example/{user}.gif", "")
+            .iter()
+            .any(|e| e.contains("picture")));
+        assert!(alert("", "{message}").iter().any(|e| e.contains("sound")));
+    }
+
+    /// Every shipped preset survives save and load unchanged: that covers
+    /// each trigger and step shape a user can start from.
+    #[test]
+    fn every_preset_round_trips() {
+        for p in crate::integrations::presets::PRESETS {
+            let i = crate::integrations::presets::build(p.id, "x".into(), "c").unwrap();
+            let back = Integration::from_json(&i.to_json())
+                .unwrap_or_else(|e| panic!("{} doesn't load back: {e}", p.id));
+            assert_eq!(back, i, "{}", p.id);
+        }
+    }
+
+    /// `ifs` checks nested in each other, with a step inside the last.
+    fn nested_checks(ifs: usize) -> Integration {
         let mut deepest = Step::new(StepKind::Stop, &[]);
-        for _ in 0..MAX_DEPTH + 1 {
+        for _ in 0..ifs {
             let mut wrap = Step::new(StepKind::If, &[("left", "a"), ("op", "is")]);
             wrap.then.push(deepest);
             deepest = wrap;
         }
         let mut i = sample();
         i.handlers[0].steps = vec![deepest];
-        assert!(i.validate().iter().any(|e| e.contains("nest")));
+        i
+    }
+
+    /// The handler's steps and three checks inside each other make
+    /// MAX_DEPTH levels, as deep as the builder lets a step go: that saves
+    /// and loads. One check more is refused, by both.
+    #[test]
+    fn nesting_is_capped_where_the_builder_stops() {
+        let fits = nested_checks(MAX_DEPTH - 1);
+        assert!(fits.validate().is_empty(), "{:?}", fits.validate());
+        let loaded = Integration::from_json(&fits.to_json()).expect("loads back");
+        assert_eq!(loaded, fits);
+
+        let too_deep = nested_checks(MAX_DEPTH);
+        assert!(too_deep.validate().iter().any(|e| e.contains("nest")));
+        assert!(Integration::from_json(&too_deep.to_json()).is_err());
     }
 
     #[test]
@@ -1452,7 +1619,7 @@ mod tests {
     }
 
     #[test]
-    fn only_live_shortcuts_are_listened_for() {
+    fn only_enabled_integrations_register_shortcuts() {
         let mut i = sample();
         let (keys, pads) = shortcuts(std::slice::from_ref(&i));
         assert_eq!(keys, ["Ctrl+Alt+K"]);

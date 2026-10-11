@@ -1028,14 +1028,19 @@ mod tests {
     #[test]
     fn cancel_learn_discards_a_capture_nobody_collected() {
         let (ctrl, path) = test_controller();
-        let state = MidiState::new();
-
-        state.start_learn("cut");
         let sig = signature_for(0x90, 36, 100).expect("a press edge");
-        state.on_signature(&ctrl, 15_000, &sig);
-        state.cancel_learn();
+        let captured = |cancel: bool| {
+            let state = MidiState::new();
+            state.start_learn("cut");
+            state.on_signature(&ctrl, 15_000, &sig);
+            if cancel {
+                state.cancel_learn();
+            }
+            state.take_captured_for(&crate::config::ACTIONS)
+        };
 
-        assert_eq!(state.take_captured_for(&crate::config::ACTIONS), None);
+        assert!(captured(false).is_some(), "the press was captured");
+        assert_eq!(captured(true), None, "and cancelling dropped it");
 
         let _ = std::fs::remove_file(&path);
     }

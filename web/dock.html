@@ -1,62 +1,104 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>InstantClone</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <style>
+/* The dashboard's design tokens, so the dock reads as the same product.
+   --panel / --panel-2 are the dock's two surfaces (rows, and the inset
+   number screen); the accent pair is overridden per dock (applyCfg). */
 :root{
-  --bg:#0b0d13;--panel:#141824;--panel-2:#0e111a;--line:#232838;--line-2:#333a4d;
-  --fg:#e9eaf0;--fg-2:#c3c6d4;--fg-3:#868a9a;--fg-4:#565b6b;
-  --accent:#5ac8fa;--accent-ink:#04121c;--live:#34d06a;--warn:#e0a33a;--danger:#ff5a4d;
+  --bg:#07080a;--bg-2:#0c0e12;--surface:#11141a;--surface-2:#171b22;--surface-3:#1f242d;
+  --panel:var(--surface-2);--panel-2:var(--bg-2);
+  --line:rgba(255,255,255,.10);--line-2:rgba(255,255,255,.18);--hl:rgba(255,255,255,.06);
+  --fg:oklch(0.97 0.005 230);--fg-2:oklch(0.80 0.012 230);--fg-3:oklch(0.62 0.015 230);--fg-4:oklch(0.50 0.018 230);
+  --accent:#5ac8fa;--accent-ink:#04121c;
+  --live:oklch(0.78 0.18 145);--warn:oklch(0.80 0.17 65);--danger:oklch(0.72 0.21 25);
+  --ease-out:cubic-bezier(.2,.7,.2,1);--ease-sheet:cubic-bezier(.32,.72,0,1);
+  --r:10px;--r-sm:8px;
 }
 *{box-sizing:border-box}
+html{color-scheme:dark}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
-  font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+  font-family:'Inter',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px;
   overflow-x:hidden;overflow-y:auto;
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+button,input{font-family:inherit}
 body::-webkit-scrollbar{width:6px}
 body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
-.wrap{display:flex;flex-direction:column;min-height:100vh;padding:10px;gap:6px}
+.wrap{display:flex;flex-direction:column;min-height:100vh;padding:10px;gap:8px}
 .top,.screen,.cta-row{flex:0 0 auto}
 /* Any widget can be switched off from the gear editor. */
 [hidden]{display:none!important}
 
-.top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+/* The right end stays clear for the gear, which fades in over this corner. */
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:24px;padding-right:26px}
 
 /* Phase chip */
-.phase{padding:3px 10px;border-radius:999px;font-size:10.5px;font-weight:700;
-  text-transform:uppercase;letter-spacing:1.2px;border:1px solid var(--line);
+.phase{padding:4px 10px;border-radius:999px;font-size:10px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.12em;border:1px solid var(--line);
   background:var(--panel);color:var(--fg-3);white-space:nowrap;overflow:hidden;
-  transition:color .25s,background-color .25s,border-color .25s,box-shadow .25s}
+  transition:color .25s var(--ease-out),background-color .25s var(--ease-out),border-color .25s var(--ease-out),box-shadow .25s var(--ease-out)}
 /* The word is its own box so it can rise in while the chip glides to its width. */
 .phase>span{display:inline-block}
-.phase.live  {color:var(--live);  border-color:color-mix(in srgb,var(--live) 40%,var(--line));  background:color-mix(in srgb,var(--live) 12%,var(--panel))}
-.phase.arming{color:var(--warn);  border-color:color-mix(in srgb,var(--warn) 40%,var(--line));  background:color-mix(in srgb,var(--warn) 12%,var(--panel))}
-.phase.armed {color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line));background:color-mix(in srgb,var(--accent) 12%,var(--panel))}
-.phase.active{color:var(--live);  border-color:color-mix(in srgb,var(--live) 50%,var(--line));  background:color-mix(in srgb,var(--live) 16%,var(--panel));box-shadow:0 0 0 1px color-mix(in srgb,var(--live) 30%,transparent)}
-.phase.holding{color:var(--warn); border-color:color-mix(in srgb,var(--warn) 55%,var(--line));  background:color-mix(in srgb,var(--warn) 14%,var(--panel))}
+.phase.live  {color:var(--live);  border-color:color-mix(in oklch,var(--live) 38%,transparent);  background:color-mix(in oklch,var(--live) 10%,var(--panel))}
+.phase.arming{color:var(--warn);  border-color:color-mix(in oklch,var(--warn) 38%,transparent);  background:color-mix(in oklch,var(--warn) 10%,var(--panel))}
+.phase.armed {color:var(--accent);border-color:color-mix(in oklch,var(--accent) 38%,transparent);background:color-mix(in oklch,var(--accent) 10%,var(--panel))}
+.phase.active{color:var(--live);  border-color:color-mix(in oklch,var(--live) 50%,transparent);  background:color-mix(in oklch,var(--live) 15%,var(--panel));box-shadow:0 0 14px -4px color-mix(in oklch,var(--live) 55%,transparent)}
+.phase.holding{color:var(--warn); border-color:color-mix(in oklch,var(--warn) 55%,transparent);  background:color-mix(in oklch,var(--warn) 13%,var(--panel))}
 
 /* Signal pill */
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
-  font-size:11px;font-weight:500;border:1px solid var(--line);background:var(--panel);color:var(--fg-3)}
+  font-size:11px;font-weight:600;border:1px solid var(--line);background:var(--panel);color:var(--fg-3);
+  transition:color .2s var(--ease-out),border-color .2s var(--ease-out)}
 .pill .dot{width:6px;height:6px;border-radius:50%;background:var(--fg-4);
   transition:background-color .2s,box-shadow .2s}
 .pill.on{color:var(--fg)}
 /* Gentle breathing on the live dot - the dock reads "alive" at a glance. */
 .pill.on .dot{background:var(--live);animation:breathe 2.4s ease-in-out infinite}
 @keyframes breathe{
-  0%,100%{box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 18%,transparent)}
-  50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--live) 7%,transparent)}}
+  0%,100%{box-shadow:0 0 0 3px color-mix(in oklch,var(--live) 18%,transparent)}
+  50%{box-shadow:0 0 0 5px color-mix(in oklch,var(--live) 6%,transparent)}}
 .pill.bad .dot{background:var(--fg-4)}
 /* Live-as-dot mode: collapse the pill to just its signal dot. */
-.pill.asdot{padding:4px;gap:0}
+.pill.asdot{padding:5px;gap:0}
 .pill.asdot #src-lbl{display:none}
-.pill.asdot .dot{width:9px;height:9px}
+.pill.asdot .dot{width:8px;height:8px}
+
+/* Quiet one-line notice: a stream setting a destination won't take
+   (amber), or a dock link the dashboard password turns away (red). */
+.note{display:flex;align-items:flex-start;gap:8px;padding:7px 8px 7px 10px;border-radius:var(--r);
+  border:1px solid color-mix(in oklch,var(--warn) 30%,transparent);
+  background:color-mix(in oklch,var(--warn) 7%,var(--panel-2));font-size:11px;line-height:1.4;color:var(--fg-2);
+  animation:rise .24s var(--ease-out)}
+.note .note-ic{flex:none;color:var(--warn);font-weight:800;line-height:1.4}
+.note .note-text{flex:1;min-width:0;text-wrap:pretty}
+.note .note-x{flex:none;width:20px;height:20px;margin:-2px -2px 0 0;border-radius:6px;border:0;background:transparent;
+  color:var(--fg-4);font-size:14px;line-height:1;cursor:pointer;position:relative;
+  transition:color .15s var(--ease-out),background-color .15s var(--ease-out)}
+.note .note-x::before{content:"";position:absolute;inset:-5px}
+.note .note-x:hover{color:var(--fg);background:var(--surface-3)}
+.note.bad{border-color:color-mix(in oklch,var(--danger) 35%,transparent);background:color-mix(in oklch,var(--danger) 8%,var(--panel-2))}
+.note.bad .note-ic{color:var(--danger)}
 
 /* Big delay readout / setter inside an inset "screen" */
-.screen{background:var(--panel-2);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);
-  border-radius:11px;padding:9px 11px;position:relative}
-.num-row{display:flex;align-items:center;justify-content:center;gap:6px}
-.cur{font-size:clamp(23px,11vw,34px);font-weight:800;letter-spacing:-1.5px;
-  font-variant-numeric:tabular-nums;line-height:1.08;
-  transition:color .25s,transform .25s cubic-bezier(.32,.72,0,1);
+.screen{background:linear-gradient(180deg,var(--bg-2),color-mix(in oklch,var(--bg-2) 60%,#000));
+  border:1px solid var(--line);border-top-color:rgba(255,255,255,.11);
+  border-radius:12px;padding:10px 11px 11px;position:relative;
+  box-shadow:inset 0 1px 0 var(--hl);transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out)}
+/* Picking a new delay while one runs: an accent rim says "not applied yet". */
+.screen.editing{border-color:color-mix(in oklch,var(--accent) 45%,transparent);
+  box-shadow:inset 0 1px 0 var(--hl),0 0 0 3px color-mix(in oklch,var(--accent) 12%,transparent)}
+/* The caption takes the buffer bar's 13px while picking, so nothing moves. */
+.edit-cap{display:block;height:13px;padding-top:4px;font-size:9.5px;line-height:9px;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--accent);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.edit-cap-num{text-transform:none}
+.screen.editing .bar{display:none}
+.num-row{display:flex;align-items:center;justify-content:center;gap:8px}
+.cur{font-size:clamp(24px,11vw,34px);font-weight:800;letter-spacing:-.04em;
+  font-variant-numeric:tabular-nums;line-height:1.1;
+  transition:color .25s var(--ease-out),transform .25s var(--ease-sheet);
   display:inline-flex;align-items:baseline;justify-content:center;min-width:2.4em}
 /* The idle setter shares the readout's exact type so nothing jumps when the
    dock crosses from passthrough into an armed delay. It is sized to its
@@ -64,36 +106,53 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
    fixed-width .cur keeps the +/- buttons from moving under the cursor. */
 .cur input{font:inherit;letter-spacing:inherit;color:inherit;background:transparent;border:0;
   outline:none;text-align:center;width:1ch;padding:0;font-variant-numeric:tabular-nums;
-  -moz-appearance:textfield}
+  -moz-appearance:textfield;border-radius:6px}
+.cur input:focus-visible{box-shadow:0 2px 0 color-mix(in oklch,var(--accent) 70%,transparent)}
 .cur input::-webkit-outer-spin-button,.cur input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .cur .u{font-size:.4em;color:var(--fg-3);font-weight:600;margin-left:2px;letter-spacing:0}
+/* Rolling digits (rollDigits): changed digits roll in their own columns.
+   While the field rolls, the roll stands in for it at the same size. */
+.cur{--dg-w:calc(1ch - .04em)}
+.dg{display:inline-block;width:var(--dg-w);height:1.15em;overflow:hidden;vertical-align:bottom;text-align:center}
+.dg-strip{display:flex;flex-direction:column}
+.dg-strip>span{height:1.15em;line-height:1.15em}
+#v,.roll{font-variant-numeric:tabular-nums}
+.cur .roll{display:none}
+.cur.d-rolling .roll{display:inline}
+.cur.d-rolling input{position:absolute;opacity:0;pointer-events:none}
 .cur.changing{color:var(--accent);transform:scale(1.04)}
 /* Accent-tinted readout: the number always wears the dock's accent hue. */
 .cur.tint{color:var(--accent)}
+/* Less delay on air than was armed: amber, whatever the tint. */
+.cur.short,.cur.short.tint{color:var(--warn)}
+/* An engaged readout opens for a new value on tap. */
+.cur.tap #v{cursor:pointer;border-radius:6px;transition:color .15s var(--ease-out)}
+.cur.tap #v:hover{color:color-mix(in oklch,var(--accent) 70%,var(--fg))}
 /* Number size modes */
 .sz-sm .cur{font-size:clamp(18px,7vw,24px)}
 .sz-lg .cur{font-size:clamp(30px,14vw,48px)}
-/* Round nudge buttons that flank the number; they retire once a delay is
-   engaged so the screen becomes a clean readout. */
+/* Round nudge buttons that flank the number. */
 .np{width:30px;height:30px;flex:0 0 auto;border-radius:50%;border:1px solid var(--line);
-  background:var(--panel);color:var(--fg-2);font-size:18px;line-height:1;cursor:pointer;
-  transition:border-color .15s,background-color .15s,color .15s,opacity .15s,
-    transform .15s cubic-bezier(.32,.72,0,1)}
-.np:hover:not(:disabled){border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line));color:var(--fg)}
-.np:active:not(:disabled){transform:scale(.96)}
+  background:var(--surface-3);color:var(--fg-2);font-size:17px;line-height:1;cursor:pointer;position:relative;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),color .15s var(--ease-out),opacity .15s,
+    transform .15s var(--ease-sheet)}
+.np::before{content:"";position:absolute;inset:-5px}
+.np:hover:not(:disabled){border-color:var(--line-2);color:var(--fg);
+  background:color-mix(in oklch,var(--accent) 8%,var(--surface-3))}
+.np:active:not(:disabled){transform:scale(.94)}
 .np:disabled{opacity:.3;cursor:default;pointer-events:none}
-.bar{position:relative;height:4px;background:var(--panel);border-radius:999px;overflow:hidden;margin-top:8px}
+.bar{position:relative;height:4px;background:var(--surface-3);border-radius:999px;overflow:hidden;margin-top:9px}
 .bar .fill{position:absolute;inset:0 auto 0 0;width:0;border-radius:999px;
-  background:linear-gradient(90deg,var(--warn),color-mix(in srgb,var(--warn) 60%,#fff));
-  transition:width .35s cubic-bezier(.32,.72,0,1)}
-.bar .fill.ready {background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 55%,#fff))}
-.bar .fill.active{background:linear-gradient(90deg,var(--live),color-mix(in srgb,var(--live) 55%,#fff))}
+  background:linear-gradient(90deg,var(--warn),color-mix(in oklch,var(--warn) 60%,#fff));
+  transition:width .35s var(--ease-sheet)}
+.bar .fill.ready {background:linear-gradient(90deg,var(--accent),color-mix(in oklch,var(--accent) 55%,#fff))}
+.bar .fill.active{background:linear-gradient(90deg,var(--live),color-mix(in oklch,var(--live) 55%,#fff))}
 .bar .pct{position:absolute;right:0;top:-14px;font-size:9.5px;color:var(--fg-3);font-variant-numeric:tabular-nums}
 .bar.thick{height:8px}
 /* Accent-only bar: one hue through fill/ready/active instead of the
    amber -> cyan -> green state ramp - for single-color themed docks. */
 .bar.mono .fill,.bar.mono .fill.ready,.bar.mono .fill.active{
-  background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 55%,#fff))}
+  background:linear-gradient(90deg,var(--accent),color-mix(in oklch,var(--accent) 55%,#fff))}
 
 /* Egress glance (destinations + bitrate) */
 .eg{display:flex;align-items:center;justify-content:center;gap:7px;font-size:11px;color:var(--fg-3);
@@ -104,35 +163,39 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 /* Crash protection hold: why, how long is left, who is on the reconnect
    screen, and End now (two-step). It takes the place of the delay controls
    (see applyCfg), which don't apply while OBS is gone. */
-.hold{display:flex;flex-direction:column;gap:6px;padding:9px 10px;border-radius:11px;
-  border:1px solid color-mix(in srgb,var(--warn) 55%,var(--line));
-  background:color-mix(in srgb,var(--warn) 8%,var(--panel-2))}
+.hold{display:flex;flex-direction:column;gap:7px;padding:10px 11px;border-radius:12px;
+  border:1px solid color-mix(in oklch,var(--warn) 50%,transparent);
+  background:color-mix(in oklch,var(--warn) 8%,var(--panel-2))}
 .hold-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.hold-why{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:700;
-  letter-spacing:1.2px;text-transform:uppercase;color:var(--warn)}
+.hold-why{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--warn)}
 .hold-why::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;
   animation:blink 1.4s ease-in-out infinite}
 @keyframes blink{50%{opacity:.35}}
-.hold-clock{font-size:24px;font-weight:800;letter-spacing:-1px;line-height:1;font-variant-numeric:tabular-nums}
+.hold-clock{font-size:24px;font-weight:800;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
 .hold-sub{font-size:11px;color:var(--fg-2)}
-.hold .hold-end{padding:8px;font-size:12px;color:var(--danger);
-  border-color:color-mix(in srgb,var(--danger) 45%,var(--line))}
+.hold .hold-end{padding:8px;font-size:12px;color:var(--danger);background:transparent;
+  border-color:color-mix(in oklch,var(--danger) 45%,transparent)}
 .hold .hold-end.armed,.hold .hold-end.armed:hover:not(:disabled){background:var(--danger);color:#fff;border-color:transparent}
 
 /* Sub-tip with crossfade */
-.tip{font-size:10.5px;color:var(--fg-3);text-align:center;min-height:0;line-height:1.3;
-  transition:opacity .15s,transform .15s}
+.tip{font-size:11px;color:var(--fg-3);text-align:center;min-height:0;line-height:1.35;text-wrap:balance;
+  transition:opacity .15s var(--ease-out),transform .15s var(--ease-out)}
 .tip.fade{opacity:0;transform:translateY(2px)}
 
+/* Shared row look: destinations, switches, overlays, profile rows. */
+.dest,.brow,.orow,.prow{border:1px solid var(--line);border-top-color:rgba(255,255,255,.11);border-radius:var(--r);
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));box-shadow:inset 0 1px 0 var(--hl)}
+
 /* Destination quick-toggle strip */
-.dests{display:flex;flex-direction:column;gap:4px}
-.dest{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);
-  border-radius:9px;background:var(--panel);font-size:11.5px}
+.dests{display:flex;flex-direction:column;gap:5px}
+.dest{display:flex;align-items:center;gap:8px;padding:7px 9px;font-size:12px}
 .dest .d-dot{width:7px;height:7px;border-radius:50%;background:var(--fg-4);flex:0 0 auto;
   transition:background-color .2s,box-shadow .2s}
-.dest.alive .d-dot{background:var(--live);box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 18%,transparent)}
-.dest .d-name{flex:1;font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dest .d-plat{color:var(--fg-3);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+.dest.alive .d-dot{background:var(--live);box-shadow:0 0 0 3px color-mix(in oklch,var(--live) 18%,transparent)}
+.dest .d-name{flex:1;min-width:0;font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dest.off .d-name{color:var(--fg-3)}
+.dest .d-plat{color:var(--fg-3);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
 .dest .d-rate{color:var(--live);font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums}
 /* Platform-coded rows: label, live dot, and the on-switch take the brand hue
    ("the little buttons colored" feedback). */
@@ -142,72 +205,77 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 /* On but not streaming yet (connecting, or waiting for the delay), and
    on the crash-protection reconnect screen: amber, so a failing platform
    never looks like one that is simply off. */
-.dest.wait .d-dot,.dest.held .d-dot{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 18%,transparent)}
+.dest.wait .d-dot,.dest.held .d-dot{background:var(--warn);box-shadow:0 0 0 3px color-mix(in oklch,var(--warn) 18%,transparent)}
 .dest.wait .d-dot{animation:blink 1.2s ease-in-out infinite}
 .dest.wait .d-plat,.dest.held .d-plat{color:var(--warn)}
 /* iOS-style switch */
-.sw{width:34px;height:20px;flex:0 0 auto;border-radius:999px;border:0;background:var(--line-2);
-  position:relative;cursor:pointer;transition:background-color .2s cubic-bezier(.32,.72,0,1)}
+.sw{width:34px;height:20px;flex:0 0 auto;border-radius:999px;border:0;background:var(--surface-3);
+  box-shadow:inset 0 0 0 1px var(--line-2);
+  position:relative;cursor:pointer;transition:background-color .2s var(--ease-sheet),box-shadow .2s var(--ease-sheet),opacity .15s}
 /* Invisible halo so the small switch is comfortable to hit. */
 .sw::before{content:"";position:absolute;inset:-6px -5px}
 .sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
-  background:#fff;transition:transform .2s cubic-bezier(.32,.72,0,1)}
+  background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.35);transition:transform .2s var(--ease-sheet)}
 .sw:active::after{transform:scale(.92)}
 .sw.on:active::after{transform:translateX(14px) scale(.92)}
-.sw.on{background:var(--live)}
+.sw.on{background:var(--live);box-shadow:none}
 .sw.on::after{transform:translateX(14px)}
+.sw:disabled{opacity:.45;cursor:default}
 /* Misclick guard: the row swaps to a Sure? / cancel pair for ~3s. */
 .dest .confirm{display:flex;align-items:center;gap:6px;flex:0 0 auto}
 .dest .confirm .q{color:var(--warn);font-weight:700;font-size:10.5px}
 .dest .cbtn{width:24px;height:22px;border-radius:6px;border:1px solid var(--line-2);
   background:var(--panel-2);cursor:pointer;font-size:12px;line-height:1;color:var(--fg-2);
-  position:relative;transition:transform .12s cubic-bezier(.32,.72,0,1)}
+  position:relative;transition:transform .12s var(--ease-sheet)}
 .dest .cbtn::before{content:"";position:absolute;inset:-5px}
-.dest .cbtn.yes{color:var(--live);border-color:color-mix(in srgb,var(--live) 45%,var(--line-2))}
+.dest .cbtn.yes{color:var(--live);border-color:color-mix(in oklch,var(--live) 45%,var(--line-2))}
 .dest .cbtn.no{color:var(--fg-3)}
 .dest .cbtn:active{transform:scale(.96)}
-.dests .empty{font-size:10.5px;color:var(--fg-3);text-align:center;padding:4px}
+.empty{font-size:11px;color:var(--fg-3);text-align:center;padding:6px;line-height:1.4}
 /* Icons layout: destinations as compact circular badges (hover for name). */
 .dests.icons{flex-direction:row;flex-wrap:wrap;gap:7px;justify-content:center}
 .dico{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:var(--panel);
   display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--fg-3);
-  cursor:pointer;transition:transform .12s cubic-bezier(.32,.72,0,1),border-color .15s,color .15s,box-shadow .2s,opacity .15s}
+  cursor:pointer;transition:transform .12s var(--ease-sheet),border-color .15s,color .15s,box-shadow .2s,opacity .15s}
 .dico:hover{border-color:var(--line-2);color:var(--fg);transform:translateY(-1px)}
 .dico:active{transform:scale(.94)}
 .dico.on{color:var(--fg);border-color:var(--line-2)}
 .dico.off{opacity:.4}
-.dico.alive{border-color:color-mix(in srgb,var(--live) 55%,var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 16%,transparent)}
+.dico.alive{border-color:color-mix(in oklch,var(--live) 55%,transparent);box-shadow:0 0 0 3px color-mix(in oklch,var(--live) 16%,transparent)}
 /* Platform-coded badges (--pc set per element): letter + ring take the
    platform's brand hue so a glance says WHICH service is live. */
 .dico.pc{color:color-mix(in srgb,var(--pc) 75%,var(--fg-3))}
 .dico.pc.on{color:var(--pc);border-color:color-mix(in srgb,var(--pc) 50%,var(--line))}
 .dico.pc.alive{border-color:color-mix(in srgb,var(--pc) 70%,var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--pc) 20%,transparent)}
-.dico.wait{border-color:color-mix(in srgb,var(--warn) 55%,var(--line))}
+.dico.wait{border-color:color-mix(in oklch,var(--warn) 55%,transparent)}
 .dico.arm,.dico.pc.arm{border-color:var(--warn);color:var(--warn);font-size:15px;animation:dico-pulse 1s ease-in-out infinite}
-@keyframes dico-pulse{0%,100%{box-shadow:0 0 0 2px color-mix(in srgb,var(--warn) 28%,transparent)}50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--warn) 8%,transparent)}}
+@keyframes dico-pulse{0%,100%{box-shadow:0 0 0 2px color-mix(in oklch,var(--warn) 28%,transparent)}50%{box-shadow:0 0 0 6px color-mix(in oklch,var(--warn) 8%,transparent)}}
 
 /* Delay profile chips */
 .profiles{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
-.pchip{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:9px;
-  border:1px solid var(--line);background:var(--panel);color:var(--fg);font-size:11.5px;font-weight:600;
-  cursor:pointer;transition:border-color .15s,color .15s,background .15s,transform .12s cubic-bezier(.32,.72,0,1)}
-.pchip:hover{border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line))}
-.pchip:active{transform:scale(.96)}
-.pchip .pv{font-size:10px;font-weight:700;color:var(--fg-3);font-variant-numeric:tabular-nums}
-/* Profiles list mode: full-width rows, name left / seconds right */
-.profiles.plist{flex-direction:column;flex-wrap:nowrap}
-.prow{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:7px 10px;
-  border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--fg);
-  font-size:11.5px;font-weight:600;cursor:pointer;font-family:inherit;
-  transition:border-color .15s,background .15s,transform .12s cubic-bezier(.32,.72,0,1)}
-.prow:hover{border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line))}
-.prow:active{transform:scale(.96)}
-.prow .pv{color:var(--fg-3);font-variant-numeric:tabular-nums;font-weight:700;font-size:10.5px}
+.pchip{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:999px;
+  border:1px solid var(--line);background:var(--panel);color:var(--fg);font-size:12px;font-weight:600;
+  cursor:pointer;transition:border-color .15s var(--ease-out),color .15s,background-color .15s,transform .12s var(--ease-sheet)}
+.pchip:hover:not(:disabled){border-color:var(--line-2);background:color-mix(in oklch,var(--accent) 6%,var(--surface-3))}
+.pchip:active:not(:disabled){transform:scale(.96)}
+.pchip .pv{font-size:10.5px;font-weight:600;color:var(--fg-3);font-variant-numeric:tabular-nums}
+/* Profiles list mode: full-width rows, name left / delay right */
+.profiles.plist{flex-direction:column;flex-wrap:nowrap;gap:5px}
+.prow{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:8px 10px;
+  color:var(--fg);font-size:12px;font-weight:600;cursor:pointer;
+  transition:border-color .15s var(--ease-out),background-color .15s,transform .12s var(--ease-sheet)}
+.prow:hover:not(:disabled){border-color:var(--line-2)}
+.prow:active:not(:disabled){transform:scale(.98)}
+.prow .pv{color:var(--fg-3);font-variant-numeric:tabular-nums;font-weight:600;font-size:11px}
+/* The delay running now. */
+.pchip.on,.prow.on{border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--accent);
+  background:color-mix(in oklch,var(--accent) 12%,var(--panel));cursor:default}
+.pchip.on .pv,.prow.on .pv{color:color-mix(in oklch,var(--accent) 70%,var(--fg-3))}
+.pchip:disabled:not(.on):not(.toobig),.prow:disabled:not(.on):not(.toobig){opacity:.5;cursor:default}
 /* Over buffer capacity: dimmed, struck, and inert (see currentCapMs). The
    tooltip explains how much buffer the delay would need. */
 .pchip.toobig,.prow.toobig{opacity:.4;cursor:not-allowed;text-decoration:line-through;
-  text-decoration-color:color-mix(in srgb,var(--warn) 70%,transparent)}
-.pchip.toobig:hover,.prow.toobig:hover{border-color:var(--line);background:var(--panel);transform:none}
+  text-decoration-color:color-mix(in oklch,var(--warn) 70%,transparent)}
 
 /* Health stats glance: inline row, or a tile grid for glanceability */
 .stats{display:flex;flex-wrap:wrap;gap:5px 10px;justify-content:center;font-size:11px;color:var(--fg-3);
@@ -217,73 +285,90 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .stats .st.muted{color:var(--fg-4)}
 .stats.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
 .stats.tiles .tile{display:flex;flex-direction:column;align-items:center;gap:1px;padding:7px 4px;
-  border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+  border:1px solid var(--line);border-radius:var(--r);background:var(--panel)}
 .stats.tiles .tile b{font-size:14px;color:var(--fg);font-weight:800;font-variant-numeric:tabular-nums}
-.stats.tiles .tile span{font-size:9px;text-transform:uppercase;letter-spacing:.6px;color:var(--fg-4)}
+.stats.tiles .tile span{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--fg-4)}
 .stats.tiles .st.bad{grid-column:1/-1;text-align:center;padding:4px}
 
 /* Auto behavior + settings toggle rows */
 .behavior,.settings{display:flex;flex-direction:column;gap:5px}
-.brow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;
-  border:1px solid var(--line);border-radius:9px;background:var(--panel);font-size:11.5px}
-.blbl{color:var(--fg-2);font-weight:600}
+.brow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;font-size:12px}
+.blbl{color:var(--fg-2);font-weight:600;min-width:0}
 .srow-btns{display:flex;gap:5px;flex:0 0 auto;align-items:center}
-.cq{font-size:10px;color:var(--warn);font-weight:600;margin-right:1px}
+.cq{font-size:10.5px;color:var(--warn);font-weight:600;margin-right:1px}
 
 /* Overlays list */
-.overlays{display:flex;flex-direction:column;gap:4px}
-.orow{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);
-  border-radius:9px;background:var(--panel);font-size:11.5px}
-.o-name{flex:1;display:flex;align-items:center;gap:6px;font-weight:600;color:var(--fg);
+.overlays{display:flex;flex-direction:column;gap:5px}
+.orow{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 10px;font-size:12px}
+.o-name{flex:1;min-width:0;display:flex;align-items:center;gap:6px;font-weight:600;color:var(--fg);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.o-tag{font-size:8.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--accent);
-  border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:999px;padding:1px 5px}
-.overlays .empty{font-size:10.5px;color:var(--fg-3);text-align:center;padding:4px}
-.osearch{width:100%;font:inherit;font-size:11.5px;color:var(--fg);background:var(--panel-2);
-  border:1px solid var(--line);border-radius:8px;padding:6px 9px;outline:none;margin-bottom:5px}
+.o-tag{font-size:8.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);
+  border:1px solid color-mix(in oklch,var(--accent) 40%,transparent);border-radius:999px;padding:1px 5px}
+.osearch{width:100%;font:inherit;font-size:12px;color:var(--fg);background:var(--panel-2);
+  border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 10px;outline:none;margin-bottom:3px;
+  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out)}
 .osearch::placeholder{color:var(--fg-4)}
-.osearch:focus{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
-.olist{display:flex;flex-direction:column;gap:4px}
-.ogroup{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--fg-4);font-weight:700;margin:6px 2px 1px}
+.osearch:focus{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
+  box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 15%,transparent)}
+.olist{display:flex;flex-direction:column;gap:5px}
+.ogroup{font-size:9.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--fg-4);font-weight:700;margin:6px 2px 1px}
 
-/* Mini action buttons (settings + overlays) */
-.minibtn{flex:0 0 auto;padding:5px 9px;border-radius:7px;border:1px solid var(--line);background:var(--panel-2);
-  color:var(--fg-2);font-size:10.5px;font-weight:600;cursor:pointer;font-family:inherit;
-  transition:border-color .15s,color .15s,transform .12s}
+/* Mini action buttons (settings, overlays, docks) */
+.minibtn{flex:0 0 auto;padding:5px 9px;border-radius:7px;border:1px solid var(--line);background:var(--surface-3);
+  color:var(--fg-2);font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;
+  transition:border-color .15s var(--ease-out),color .15s,background-color .15s,transform .12s var(--ease-sheet)}
 .minibtn:hover:not(:disabled){border-color:var(--line-2);color:var(--fg)}
 .minibtn:active:not(:disabled){transform:scale(.96)}
 .minibtn:disabled{opacity:.4;cursor:not-allowed}
+.minibtn.warn{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,transparent);
+  background:color-mix(in oklch,var(--danger) 10%,var(--surface-3))}
+.minibtn.ok{color:var(--live);border-color:color-mix(in oklch,var(--live) 40%,transparent)}
 
-/* Buttons */
-.btn{padding:9px 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--fg);
-  font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
-  transition:border-color .15s,background-color .15s,color .15s,box-shadow .2s,opacity .15s,
-    transform .15s cubic-bezier(.32,.72,0,1);
+/* Buttons: the dashboard's ic-btn family at dock scale. */
+.btn{padding:10px 12px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface-3);color:var(--fg);
+  font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;min-width:0;
+  transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),color .15s,box-shadow .2s var(--ease-out),opacity .15s,
+    transform .15s var(--ease-sheet);
   display:flex;align-items:center;justify-content:center;gap:7px}
-.btn:hover:not(:disabled){border-color:var(--line-2);background:color-mix(in srgb,var(--panel) 70%,var(--line))}
-.btn:active:not(:disabled){transform:scale(.96)}
-.btn.primary{background:linear-gradient(180deg,var(--accent),color-mix(in srgb,var(--accent) 82%,#000));color:var(--accent-ink);border-color:transparent}
-.btn.primary:hover:not(:disabled){box-shadow:0 6px 18px -6px color-mix(in srgb,var(--accent) 70%,transparent)}
-.btn.go{background:linear-gradient(180deg,var(--live),color-mix(in srgb,var(--live) 82%,#000));color:#04140a;border-color:transparent;
-  animation:readyglow 1.8s ease-in-out infinite}
-.btn.go:hover:not(:disabled){box-shadow:0 6px 18px -6px color-mix(in srgb,var(--live) 70%,transparent)}
+.btn>span:last-child{overflow:hidden;text-overflow:ellipsis}
+.btn:hover:not(:disabled){border-color:color-mix(in oklch,var(--accent) 30%,var(--line-2));
+  background:color-mix(in oklch,var(--accent) 6%,var(--surface-3))}
+.btn:active:not(:disabled){transform:scale(.97)}
+.btn.primary{background:linear-gradient(180deg,color-mix(in oklch,#fff 14%,var(--accent)),var(--accent));
+  color:var(--accent-ink);border-color:transparent;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 0 0 1px color-mix(in oklch,var(--accent) 60%,transparent),
+    0 8px 22px -8px color-mix(in oklch,var(--accent) 45%,transparent)}
+.btn.primary:hover:not(:disabled){border-color:transparent;
+  background:linear-gradient(180deg,color-mix(in oklch,#fff 22%,var(--accent)),color-mix(in oklch,#fff 6%,var(--accent)));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 0 0 1px color-mix(in oklch,var(--accent) 70%,transparent),
+    0 10px 26px -8px color-mix(in oklch,var(--accent) 55%,transparent)}
+.btn.go{background:linear-gradient(180deg,color-mix(in oklch,#fff 12%,var(--live)),var(--live));color:#04140a;border-color:transparent;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.35);animation:readyglow 1.8s ease-in-out infinite}
+.btn.go:hover:not(:disabled){border-color:transparent;background:linear-gradient(180deg,color-mix(in oklch,#fff 20%,var(--live)),var(--live))}
 /* Buffer is full and waiting on the streamer - breathe so the eye lands here. */
 @keyframes readyglow{
-  0%,100%{box-shadow:0 2px 8px -4px color-mix(in srgb,var(--live) 30%,transparent)}
-  50%{box-shadow:0 6px 22px -6px color-mix(in srgb,var(--live) 60%,transparent)}}
-.btn.danger{background:linear-gradient(180deg,var(--danger),color-mix(in srgb,var(--danger) 82%,#000));color:#fff;border-color:transparent}
-.btn.danger:hover:not(:disabled){box-shadow:0 6px 18px -6px color-mix(in srgb,var(--danger) 70%,transparent)}
+  0%,100%{box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 2px 8px -4px color-mix(in oklch,var(--live) 30%,transparent)}
+  50%{box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 6px 22px -6px color-mix(in oklch,var(--live) 60%,transparent)}}
+.btn.danger{background:color-mix(in oklch,var(--danger) 18%,var(--bg-2));color:var(--danger);
+  border-color:color-mix(in oklch,var(--danger) 50%,transparent)}
+.btn.danger:hover:not(:disabled){background:color-mix(in oklch,var(--danger) 26%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--danger) 60%,transparent);
+  box-shadow:0 8px 22px -12px color-mix(in oklch,var(--danger) 80%,transparent)}
+/* The second tap of a guarded cut: solid, so it can't be mistaken. */
+.btn.danger.armed,.btn.danger.armed:hover:not(:disabled){background:var(--danger);color:#fff;border-color:transparent}
 .btn.ghost{background:transparent;border-color:var(--line);color:var(--fg-2)}
-.btn.ghost:hover:not(:disabled){background:var(--panel);color:var(--fg)}
-.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn.ghost:hover:not(:disabled){background:var(--surface-3);color:var(--fg)}
+/* Inert, but still a button: the dashboard's disabled look, not a ghost. */
+.btn:disabled{cursor:not-allowed;transform:none;box-shadow:none;animation:none;
+  background:var(--surface-3);color:var(--fg-3);border-color:var(--line-2)}
 .btn.full{width:100%}
 /* Buffering: the main button fills toward Activate (--p is 0..1) and counts
    down the wait. Disabled, but at full strength so the countdown reads. */
 .btn.filling{position:relative;overflow:hidden;color:var(--fg);font-variant-numeric:tabular-nums;
-  border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
-.btn.filling:disabled{opacity:1;cursor:default}
+  border-color:color-mix(in oklch,var(--warn) 40%,transparent)}
+.btn.filling:disabled{color:var(--fg);border-color:color-mix(in oklch,var(--warn) 40%,transparent);cursor:default}
 .btn.filling::before{content:"";position:absolute;inset:0;transform-origin:left;transform:scaleX(var(--p,0));
-  background:color-mix(in srgb,var(--warn) 20%,transparent);transition:transform .35s cubic-bezier(.32,.72,0,1)}
+  background:color-mix(in oklch,var(--warn) 20%,transparent);transition:transform .35s var(--ease-sheet)}
 .btn.filling>span{position:relative}
 .cta-row{display:flex;gap:6px}
 .cta-row .btn{flex:1}
@@ -291,78 +376,77 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 /* Safe cut ("cut after airs") secondary: text button; pending state counts
    down in warn amber with a soft pulse so the armed auto-cut is unmissable. */
 .cta-row .btn.cutafter{flex:0 0 auto;padding:10px 11px;font-size:11.5px;white-space:nowrap}
-.cta-row .btn.cutafter.pending{border-color:color-mix(in srgb,var(--warn) 55%,var(--line));color:var(--warn);
+.cta-row .btn.cutafter.pending{border-color:color-mix(in oklch,var(--warn) 55%,transparent);color:var(--warn);
   font-variant-numeric:tabular-nums;animation:cutpulse 1.6s ease-in-out infinite}
 @keyframes cutpulse{
-  0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--warn) 22%,transparent)}
-  50%{box-shadow:0 0 0 4px color-mix(in srgb,var(--warn) 10%,transparent)}}
+  0%,100%{box-shadow:0 0 0 0 color-mix(in oklch,var(--warn) 22%,transparent)}
+  50%{box-shadow:0 0 0 4px color-mix(in oklch,var(--warn) 10%,transparent)}}
 
 /* Status-as-dot mode: collapse the chip to a colored dot of the state hue. */
 .phase.asdot{width:14px;height:14px;min-width:14px;padding:0;font-size:0;border-radius:50%;
   background:currentColor;box-shadow:none}
 
 /* Compact density: tighten spacing + type for gamers who want minimal chrome. */
-body.compact .wrap{padding:7px;gap:4px}
-body.compact .screen{padding:6px 9px}
+body.compact .wrap{padding:7px;gap:5px}
+body.compact .screen{padding:7px 9px 8px}
 body.compact .cur{font-size:clamp(20px,9vw,28px)}
-body.compact .btn{padding:7px 9px;font-size:12px}
-body.compact .dest{padding:5px 7px}
-body.compact .eg,body.compact .tip{font-size:10px}
+body.compact .btn{padding:8px 10px;font-size:12px}
+body.compact .dest,body.compact .brow{padding:6px 8px}
+body.compact .eg,body.compact .tip{font-size:10.5px}
 
 /* Gear button - hidden until you mouse over the dock, so a live dock stays
    clean and the control only surfaces when you go to configure it. */
 .gear{position:fixed;top:5px;right:5px;width:26px;height:26px;border-radius:8px;border:0;
   background:transparent;color:var(--fg-3);cursor:pointer;font-size:15px;line-height:1;z-index:5;
-  opacity:0;transition:opacity .18s,color .15s,background-color .15s,transform .15s}
+  opacity:0;transition:opacity .18s var(--ease-out),color .15s,background-color .15s,transform .15s var(--ease-sheet)}
 /* Invisible halo: the gear is the dock's main entry point, keep it easy to hit. */
 .gear::before{content:"";position:absolute;inset:-8px}
-body:hover .gear{opacity:.5}
-.gear:hover{opacity:1;color:var(--fg);background:var(--panel)}
+body:hover .gear,.gear:focus-visible{opacity:.55}
+.gear:hover{opacity:1;color:var(--fg);background:var(--surface-3)}
 .gear:active{transform:scale(.96) rotate(30deg)}
 
 /* Editor: a bottom sheet that slides up over the dock */
 .editor{position:fixed;inset:0;z-index:10;display:flex;align-items:flex-end;justify-content:center;
   background:color-mix(in srgb,#000 55%,transparent);backdrop-filter:blur(3px);
-  opacity:0;transition:opacity .22s cubic-bezier(.32,.72,0,1)}
+  opacity:0;transition:opacity .22s var(--ease-sheet)}
 .editor.show{opacity:1}
-.sheet{width:100%;max-height:92vh;overflow-y:auto;background:var(--panel);
-  border:1px solid var(--line);border-bottom:0;border-radius:20px 20px 0 0;padding:8px 12px 14px;
-  box-shadow:0 -8px 40px -12px rgba(0,0,0,.6),0 -1px 0 color-mix(in srgb,#fff 6%,transparent) inset;
-  transform:translateY(16px);transition:transform .24s cubic-bezier(.32,.72,0,1)}
+.sheet{width:100%;max-height:92vh;overflow-y:auto;background:var(--surface);
+  border:1px solid var(--line);border-bottom:0;border-radius:18px 18px 0 0;padding:8px 12px 14px;
+  box-shadow:0 -8px 40px -12px rgba(0,0,0,.6),0 1px 0 var(--hl) inset;
+  transform:translateY(16px);transition:transform .24s var(--ease-sheet)}
 .editor.show .sheet{transform:translateY(0)}
+.sheet::-webkit-scrollbar{width:6px}
+.sheet::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .grabber{width:34px;height:4px;border-radius:999px;background:var(--line-2);margin:2px auto 10px}
-.ehead{display:flex;align-items:center;gap:8px;margin-bottom:2px}
-.ehead h3{margin:0;font-size:13px;font-weight:700;color:var(--fg);letter-spacing:.2px}
-.ehead .slot{font-size:10px;font-weight:600;color:var(--fg-3);background:var(--panel-2);
-  border:1px solid var(--line);border-radius:999px;padding:2px 7px}
-.eclose{margin-left:auto;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
+.ehead{display:flex;align-items:center;gap:8px;margin-bottom:2px;min-width:0}
+.ehead h3{margin:0;font-size:13.5px;font-weight:700;color:var(--fg);letter-spacing:-.005em;white-space:nowrap}
+.ehead .slot{font-size:10.5px;font-weight:600;color:var(--fg-3);background:var(--panel-2);min-width:0;
+  border:1px solid var(--line);border-radius:999px;padding:2px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.eclose{margin-left:auto;flex:0 0 auto;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
   background:var(--panel-2);color:var(--fg-3);font-size:16px;line-height:1;cursor:pointer;
-  transition:color .15s,border-color .15s,transform .15s}
+  transition:color .15s,border-color .15s,transform .15s var(--ease-sheet)}
 .eclose:hover{color:var(--fg);border-color:var(--line-2)}
 .eclose:active{transform:scale(.96)}
-.lbl{font-size:9.5px;text-transform:uppercase;letter-spacing:1px;color:var(--fg-4);font-weight:700;margin:13px 2px 6px}
+.lbl{font-size:10px;text-transform:uppercase;letter-spacing:.1em;
+  color:color-mix(in oklch,var(--fg-2) 45%,var(--fg-3));font-weight:600;margin:14px 2px 7px}
 .lbl.inline{margin:0}
 
 /* Preset chips */
 .chips{display:flex;flex-wrap:wrap;gap:6px}
-.chip{padding:7px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);
+.chip{padding:7px 12px;border-radius:999px;border:1px solid var(--line);background:var(--panel-2);
   color:var(--fg-2);font-size:12px;font-weight:600;cursor:pointer;
-  transition:border-color .15s,color .15s,background .15s,transform .12s}
+  transition:border-color .15s var(--ease-out),color .15s,background-color .15s,transform .12s var(--ease-sheet)}
 .chip:hover{border-color:var(--line-2);color:var(--fg)}
 .chip:active{transform:scale(.96)}
-.chip.sel{background:color-mix(in srgb,var(--accent) 18%,var(--panel));
-  border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-.chip.add{color:var(--fg-3);border-style:dashed}
-.chip.add:hover{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
-.newdock{font:inherit;font-size:12px;font-weight:600;color:var(--fg);background:var(--panel-2);
-  border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));border-radius:10px;padding:6px 10px;outline:none;width:96px}
-.hint{font-size:10px;color:var(--fg-4);line-height:1.4;margin:7px 2px 0}
+.chip.sel{background:color-mix(in oklch,var(--accent) 14%,var(--panel));
+  border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--accent)}
+.hint{font-size:10.5px;color:var(--fg-4);line-height:1.45;margin:8px 2px 0;text-wrap:pretty}
 
 /* Appearance rows: label + control on one line */
 .densrow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:9px 2px 2px}
-.swatches{display:flex;gap:7px}
+.swatches{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
 .swatch{width:22px;height:22px;border-radius:50%;border:2px solid transparent;background:var(--sw);
-  cursor:pointer;padding:0;box-shadow:0 0 0 1px var(--line) inset;transition:transform .12s cubic-bezier(.32,.72,0,1),border-color .15s}
+  cursor:pointer;padding:0;box-shadow:0 0 0 1px var(--line) inset;transition:transform .12s var(--ease-sheet),border-color .15s}
 .swatch:hover{transform:scale(1.12)}
 .swatch:active{transform:scale(.96)}
 .swatch.sel{border-color:var(--fg)}
@@ -371,25 +455,26 @@ body:hover .gear{opacity:.5}
 .seg{display:inline-flex;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:2px;gap:2px}
 .segb{border:0;background:transparent;color:var(--fg-3);font:inherit;font-size:11.5px;font-weight:600;
   padding:5px 11px;border-radius:8px;cursor:pointer;font-variant-numeric:tabular-nums;
-  transition:color .15s,background .15s,box-shadow .15s,transform .12s}
+  transition:color .15s,background-color .15s,box-shadow .15s,transform .12s var(--ease-sheet)}
 .segb:hover{color:var(--fg-2)}
 .segb:active{transform:scale(.96)}
-.segb.sel{background:var(--panel);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25),0 0 0 1px var(--line)}
+.segb.sel{background:var(--surface-3);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25),0 0 0 1px var(--line)}
 
 /* Widget rows */
 .wlist{display:flex;flex-direction:column;gap:6px}
-.wrow{border:1px solid var(--line);border-radius:10px;background:var(--panel-2);
+.wrow{border:1px solid var(--line);border-radius:var(--r);background:var(--panel-2);
   transition:border-color .15s,opacity .15s,box-shadow .15s}
 .wrow.off{opacity:.62}
-.wrow.dragging{opacity:.5;border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.wrow.dragging{opacity:.5;border-color:color-mix(in oklch,var(--accent) 50%,transparent)}
 .wrow.drop{border-color:var(--accent);box-shadow:0 -2px 0 var(--accent)}
-.wrow .head{display:flex;align-items:center;gap:9px;padding:9px 10px}
+.wrow .head{display:flex;align-items:center;gap:9px;padding:9px 10px;cursor:default}
+.wrow.has-opts .head{cursor:pointer}
 .grip{color:var(--fg-4);font-size:14px;line-height:1;letter-spacing:1px;cursor:grab;padding:6px 3px;user-select:none}
 .grip:hover{color:var(--fg-2)}
 .grip:active{cursor:grabbing}
-.wrow .nm{flex:1;font-size:12.5px;font-weight:600;color:var(--fg)}
+.wrow .nm{flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--fg)}
 .wrow.off .nm{color:var(--fg-4)}
-.wrow .cv{color:var(--fg-4);font-size:16px;line-height:1;transition:transform .2s cubic-bezier(.32,.72,0,1)}
+.wrow .cv{color:var(--fg-4);font-size:16px;line-height:1;transition:transform .2s var(--ease-sheet)}
 .wrow.open .cv{transform:rotate(90deg)}
 .wrow .opts{display:none;flex-direction:column;gap:0;padding:0 10px 6px}
 .wrow.open .opts{display:flex}
@@ -403,24 +488,63 @@ body:hover .gear{opacity:.5}
 .sw.sm.on::after{transform:translateX(12px)}
 .sw.sm.on:active::after{transform:translateX(12px) scale(.92)}
 
+/* Docks: every saved layout, with copy / rename / duplicate / delete. */
+.dlist{display:flex;flex-direction:column;gap:6px}
+.drow{border:1px solid var(--line);border-radius:var(--r);background:var(--panel-2);transition:border-color .15s}
+.drow.this{border-color:color-mix(in oklch,var(--accent) 35%,transparent)}
+.dhead{display:flex;align-items:center;gap:6px;padding:7px 7px 7px 10px;min-width:0}
+.dname{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-size:12.5px;font-weight:600;color:var(--fg);
+  white-space:nowrap;overflow:hidden}
+.dname .dn{overflow:hidden;text-overflow:ellipsis}
+.dtag{flex:0 0 auto;font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.dmore{flex:0 0 auto;width:26px;height:26px;border-radius:7px;border:1px solid transparent;background:transparent;
+  color:var(--fg-3);font-size:15px;line-height:1;cursor:pointer;position:relative;
+  transition:color .15s,background-color .15s,border-color .15s,transform .12s var(--ease-sheet)}
+.dmore::before{content:"";position:absolute;inset:-4px}
+.dmore:hover,.dmore[aria-expanded="true"]{color:var(--fg);background:var(--surface-3);border-color:var(--line)}
+.dmore:active{transform:scale(.94)}
+.dacts{display:flex;flex-wrap:wrap;gap:5px;padding:0 8px 8px;animation:rise .2s var(--ease-out)}
+.dfield{flex:1;min-width:0;font:inherit;font-size:12px;font-weight:600;color:var(--fg);background:var(--bg);
+  border:1px solid color-mix(in oklch,var(--accent) 50%,transparent);border-radius:7px;padding:5px 8px;outline:none;
+  box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 14%,transparent)}
+.dfield::placeholder{color:var(--fg-4);font-weight:500}
+.dform{display:flex;flex-direction:column;gap:8px;padding:9px 10px;border:1px dashed color-mix(in oklch,var(--accent) 40%,transparent);
+  border-radius:var(--r);background:var(--panel-2);margin-top:6px;animation:rise .2s var(--ease-out)}
+.dform .frow{display:flex;align-items:center;gap:6px;justify-content:space-between;flex-wrap:wrap}
+.dnew{margin-top:6px;width:100%;padding:8px;border-radius:var(--r);border:1px dashed var(--line-2);background:transparent;
+  color:var(--fg-3);font-size:12px;font-weight:600;cursor:pointer;
+  transition:color .15s,border-color .15s,background-color .15s,transform .12s var(--ease-sheet)}
+.dnew:hover:not(:disabled){color:var(--accent);border-color:color-mix(in oklch,var(--accent) 45%,transparent);
+  background:color-mix(in oklch,var(--accent) 5%,transparent)}
+.dnew:active:not(:disabled){transform:scale(.98)}
+.dnew:disabled{opacity:.45;cursor:not-allowed}
+
 .ed-actions{display:flex;gap:8px;margin-top:14px}
-.ed-actions .btn{font-size:12px;padding:10px;border-radius:10px}
+.ed-actions .btn{font-size:12px;padding:10px}
 .ed-actions .btn.ghost{flex:1}
 .ed-actions .btn.reset{flex:0 0 auto;padding:10px 13px}
-.ed-actions .btn.reset.warn{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,var(--line))}
+.ed-actions .btn.reset.warn{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,transparent)}
 .ed-actions .btn.primary{flex:0 0 auto;padding:10px 18px}
 
-#toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%) translateY(40px);
-  background:var(--panel);border:1px solid var(--line-2);color:var(--fg);font-size:11px;padding:6px 12px;
-  border-radius:9px;pointer-events:none;opacity:0;white-space:nowrap;max-width:90%;z-index:20;
-  transition:transform .25s cubic-bezier(.32,.72,0,1),opacity .25s,border-color .25s,color .25s}
-#toast.show{transform:translateX(-50%) translateY(0);opacity:1}
-#toast.err{border-color:var(--danger);color:color-mix(in srgb,var(--danger) 60%,#fff)}
-#toast.ok{border-color:var(--live);color:color-mix(in srgb,var(--live) 55%,#fff)}
+/* Toast: wraps to two lines, errors stay longer, hovering keeps it up. */
+#toast{position:fixed;left:50%;bottom:12px;transform:translateX(-50%) translateY(14px);
+  display:flex;align-items:flex-start;gap:8px;width:max-content;max-width:calc(100% - 20px);
+  background:var(--surface-2);border:1px solid var(--line-2);color:var(--fg);font-size:11.5px;line-height:1.4;
+  padding:8px 12px 8px 9px;border-radius:var(--r);box-shadow:0 10px 30px rgba(0,0,0,.45);
+  pointer-events:none;opacity:0;z-index:20;
+  transition:transform .25s var(--ease-sheet),opacity .2s var(--ease-out),border-color .25s}
+#toast.show{transform:translateX(-50%) translateY(0);opacity:1;pointer-events:auto}
+#toast .t-ic{flex:none;width:17px;height:17px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:800;margin-top:-.5px;
+  background:color-mix(in oklch,var(--accent) 22%,transparent);color:var(--accent)}
+#toast .t-msg{min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;text-wrap:pretty}
+#toast.err{border-color:color-mix(in oklch,var(--danger) 50%,transparent)}
+#toast.err .t-ic{background:color-mix(in oklch,var(--danger) 22%,transparent);color:var(--danger)}
+#toast.ok .t-ic{background:color-mix(in oklch,var(--live) 22%,transparent);color:var(--live)}
 
 /* First-paint entrance: widgets rise in with a small stagger. The `boot`
    class comes off after one pass so saves/reorders never replay it. */
-body.boot .wrap>*{animation:rise .38s cubic-bezier(.32,.72,0,1) both}
+body.boot .wrap>*{animation:rise .38s var(--ease-sheet) both}
 body.boot .wrap>*:nth-child(2){animation-delay:.04s}
 body.boot .wrap>*:nth-child(3){animation-delay:.08s}
 body.boot .wrap>*:nth-child(4){animation-delay:.12s}
@@ -431,11 +555,12 @@ body.boot .wrap>*:nth-child(n+8){animation-delay:.28s}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}}
 
 /* Keyboard focus ring, only for keyboard (not mouse) focus. */
-:where(button,input):focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 70%,transparent);outline-offset:1px}
+:where(button,input,[tabindex]):focus-visible{outline:2px solid color-mix(in oklch,var(--accent) 60%,transparent);outline-offset:2px}
+.cur input:focus-visible{outline:0}
 
 /* Very narrow dock: shave the chrome so content keeps breathing room. */
 @media (max-width:220px){
-  .wrap{padding:7px;gap:5px}
+  .wrap{padding:7px;gap:6px}
   .top,.eg{flex-wrap:wrap}
   .btn{font-size:12px;padding:8px}
 }
@@ -451,25 +576,31 @@ body.boot .wrap>*:nth-child(n+8){animation-delay:.28s}
 /* Higher contrast: brighter borders and faint ink, token-level so it lands
    on every chip, pill, row and switch at once. */
 @media (prefers-contrast:more){
-  :root{--line:#454b60;--line-2:#5b6178;--fg-4:#7a8091;--fg-3:#9ca1b2}
+  :root{--line:rgba(255,255,255,.26);--line-2:rgba(255,255,255,.36);--fg-4:oklch(0.62 0.018 230);--fg-3:oklch(0.72 0.015 230)}
 }
 </style></head><body>
-<button class="gear" id="gear" title="Customize dock" onclick="openEditor()">&#9881;</button>
+<button class="gear" id="gear" title="Customize dock" aria-label="Customize dock" onclick="openEditor()">&#9881;</button>
 <div class="wrap">
   <div class="top" id="w-top">
     <span class="phase" id="ph">Idle</span>
     <span class="pill bad" id="src"><span class="dot"></span><span id="src-lbl">Offline</span></span>
   </div>
+  <div class="note" id="w-note" role="status" hidden>
+    <span class="note-ic" aria-hidden="true">!</span><span class="note-text" id="note-text"></span>
+    <button class="note-x" id="note-x" type="button" title="Dismiss until this changes" aria-label="Dismiss notice">&times;</button>
+  </div>
   <div class="screen" id="w-screen">
     <div class="num-row">
-      <button class="np" id="minus" onclick="bump(-1)" title="less delay">&minus;</button>
+      <button class="np" id="minus" onclick="bump(-1)" title="Less delay" aria-label="Less delay">&minus;</button>
       <span class="cur" id="cur">
-        <input id="d" type="number" min="0" max="600" value="0" inputmode="numeric">
-        <span id="v" hidden>0.0</span><span class="u">s</span>
+        <span class="roll" id="d-roll" aria-hidden="true"></span>
+        <input id="d" type="number" min="0" max="3600" value="0" inputmode="numeric" aria-label="Delay in seconds">
+        <span id="v" hidden role="button" tabindex="0" aria-label="Change the delay" title="Tap to change the delay">0.0</span><span class="u">s</span>
       </span>
-      <button class="np" id="plus" onclick="bump(1)" title="more delay">+</button>
+      <button class="np" id="plus" onclick="bump(1)" title="More delay" aria-label="More delay">+</button>
     </div>
     <div class="bar" id="w-bar"><span class="pct" id="pct" hidden></span><div class="fill" id="bar"></div></div>
+    <span class="edit-cap" id="edit-cap" hidden></span>
   </div>
   <div class="hold" id="w-hold" role="status" hidden>
     <div class="hold-top"><span class="hold-why" id="hold-why">OBS dropped</span><span class="hold-clock" id="hold-clock" aria-live="off"></span></div>
@@ -477,7 +608,7 @@ body.boot .wrap>*:nth-child(n+8){animation-delay:.28s}
     <button class="btn full hold-end" id="hold-end" onclick="endHold()">End now</button>
   </div>
   <div class="eg" id="w-eg" hidden></div>
-  <div class="tip" id="w-tip">Waiting for your encoder&hellip;</div>
+  <div class="tip" id="w-tip">Start streaming in OBS to InstantClone.</div>
   <div class="dests" id="w-dests" hidden></div>
   <div class="profiles" id="w-profiles" hidden></div>
   <div class="stats" id="w-stats" hidden></div>
@@ -486,9 +617,9 @@ body.boot .wrap>*:nth-child(n+8){animation-delay:.28s}
   <div class="overlays" id="w-overlays" hidden></div>
   <div class="cta-row" id="w-cta">
     <button class="btn full" id="main" onclick="mainClick()" disabled>-</button>
-    <button class="btn ghost disarm" id="cancel" onclick="secondaryClick()" hidden title="Cancel arming">&times;</button>
+    <button class="btn ghost disarm" id="cancel" onclick="secondaryClick()" hidden title="Cancel arming" aria-label="Cancel arming">&times;</button>
   </div>
 </div>
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"><span class="t-ic" aria-hidden="true"></span><span class="t-msg"></span></div>
 <script src="/dock.js"></script>
 </body></html>

@@ -1,6 +1,6 @@
-//! Windows system-tray icon. Hidden message-only window receives clicks
-//! on the tray icon, pops a context menu, and signals shutdown back to
-//! the tokio runtime via a oneshot when the user picks Quit.
+//! Windows system-tray icon. A hidden window receives clicks on the tray
+//! icon, pops a context menu, and signals shutdown back to the tokio
+//! runtime when the user picks Quit or Windows ends the session.
 //!
 //! Runs on its own OS thread (Windows GUI requires a message loop on the
 //! thread that created the window), so it stays out of tokio's
@@ -20,7 +20,7 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::watch;
@@ -39,19 +39,21 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, MOD_NOREPEAT,
 };
 use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_WARNING, NIM_ADD, NIM_DELETE,
-    NIM_MODIFY, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIIF_NOSOUND,
+    NIIF_RESPECT_QUIET_TIME, NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIN_BALLOONUSERCLICK,
+    NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics,
-    GetWindowLongPtrW, KillTimer, LoadIconW, LookupIconIdFromDirectoryEx, MessageBoxW,
-    PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow,
-    SetTimer, SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, GWLP_USERDATA, HMENU,
-    IDI_APPLICATION, IDYES, LR_DEFAULTCOLOR, MB_ICONWARNING, MB_YESNO, MF_DISABLED, MF_GRAYED,
-    MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-    TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_RBUTTONUP,
-    WM_TIMER, WNDCLASSW,
+    DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
+    GetSystemMetrics, GetWindowLongPtrW, KillTimer, LoadIconW, LookupIconIdFromDirectoryEx,
+    MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
+    SetForegroundWindow, SetTimer, SetWindowLongPtrW, TrackPopupMenu, TranslateMessage,
+    GWLP_USERDATA, HMENU, IDI_APPLICATION, IDYES, LR_DEFAULTCOLOR, MB_ICONWARNING, MB_YESNO,
+    MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_ENDSESSION,
+    WM_HOTKEY, WM_LBUTTONUP, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const TRAY_MSG: u32 = WM_APP + 1;
@@ -65,13 +67,48 @@ const HOTKEY_RELOAD_MSG: u32 = WM_APP + 2;
 // tray icon.
 const BALLOON_MSG: u32 = WM_APP + 3;
 
+// Posted (from any thread) when the ports the tooltip names have changed.
+const TOOLTIP_MSG: u32 = WM_APP + 4;
+
+// Posted (from any thread) when the icon's colour has changed.
+const ICON_MSG: u32 = WM_APP + 5;
+
+/// How long Windows ending the session waits for the clean teardown. The
+/// teardown takes about a second; Windows itself gives up on a window that
+/// has not answered WM_ENDSESSION after about five.
+const END_SESSION_WAIT: std::time::Duration = std::time::Duration::from_millis(4_500);
+
+/// Set by the runtime once its shutdown epilogue has run, so a session
+/// ending can hold the process until the platforms got their goodbye.
+static SHUTDOWN_DONE: (std::sync::Mutex<bool>, std::sync::Condvar) =
+    (std::sync::Mutex::new(false), std::sync::Condvar::new());
+
 // Fires when a capture suspension runs out, so hotkeys come back even if the
 // dashboard that asked for it never says it is done.
 const RESUME_TIMER_ID: usize = 1;
 
-/// Text for the next balloon. A single slot: if two problems land back to
+/// What a tray balloon is about, which sets its icon, sound and title.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum BalloonKind {
+    /// An action the user just took could not run (a hotkey, a menu item).
+    #[default]
+    Problem,
+    /// Something to know that the user didn't just ask for, like an armed
+    /// delay the buffer can't hold: no sound.
+    Notice,
+    /// An update: no sound, held back while Windows is set to quiet, and a
+    /// click opens System > About.
+    Update,
+}
+
+/// Text and kind of the next balloon. A single slot: if two land back to
 /// back, the newer one is the one worth showing.
-static PENDING_BALLOON: crate::sync::Mutex<String> = crate::sync::Mutex::new(String::new());
+static PENDING_BALLOON: crate::sync::Mutex<(String, BalloonKind)> =
+    crate::sync::Mutex::new((String::new(), BalloonKind::Problem));
+
+/// The balloon on screen announces an update, so clicking it opens
+/// System > About.
+static BALLOON_IS_UPDATE: AtomicBool = AtomicBool::new(false);
 
 /// Integration shortcuts register from this id up, one per combo, in the
 /// order of `INTEGRATION_KEYS`. Far above the delay actions' ids.
@@ -120,6 +157,7 @@ const ID_OPEN_DOCK: usize = 0x102;
 const ID_CUT_DELAY: usize = 0x103;
 const ID_COPY_URL: usize = 0x104;
 const ID_END_HOLD: usize = 0x106;
+const ID_UPDATE: usize = 0x107;
 // 0x105 was "Launch OBS (VOD + EB)", a launcher from before the InstantClone
 // service existed. It passed OBS `--config-url` to switch Enhanced
 // Broadcasting on for a custom RTMP server, and wrote OBS's VOD-track flag on
@@ -133,36 +171,80 @@ const ID_QUIT: usize = 0x1FF;
 /// The icon bytes are generated by build.rs (cyan rounded square + white
 /// pause bars at 16/32/48 px). We embed the whole multi-resolution ICO
 /// and let `LookupIconIdFromDirectoryEx` pick the right size at runtime.
-static ICON_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon.ico"));
+pub(crate) static ICON_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon.ico"));
+
+/// The ICO in the colour this copy shows (see
+/// `instance_lock::show_tray_color`): the embedded one for the brand blue.
+fn icon_data() -> std::borrow::Cow<'static, [u8]> {
+    let color = crate::instance_lock::shown_tray_color() as usize;
+    match crate::instance_lock::TRAY_COLORS
+        .get(color)
+        .filter(|_| color != 0)
+    {
+        Some(&(_, rgb)) => std::borrow::Cow::Owned(recolor_icon(ICON_DATA, rgb)),
+        None => std::borrow::Cow::Borrowed(ICON_DATA),
+    }
+}
+
+/// The square's colour as build.rs draws it, BGRA.
+const ICON_CYAN_BGRA: [u8; 4] = [0xfa, 0xc8, 0x5a, 0xff];
+
+/// `ico` with its cyan square repainted `rgb`; the white bars and the
+/// transparent corners stay. build.rs draws the square in that one exact
+/// colour with no anti-aliasing, so matching it finds every pixel of it.
+pub(crate) fn recolor_icon(ico: &[u8], [r, g, b]: [u8; 3]) -> Vec<u8> {
+    let mut out = ico.to_vec();
+    let count = ico
+        .get(4..6)
+        .map_or(0, |n| u16::from_le_bytes([n[0], n[1]]));
+    for entry in 0..count as usize {
+        let at = 6 + 16 * entry;
+        let Some(dir) = ico.get(at..at + 16) else {
+            break;
+        };
+        // 0 means 256 in an ICONDIRENTRY.
+        let side = if dir[0] == 0 { 256 } else { dir[0] as usize };
+        let image = u32::from_le_bytes([dir[12], dir[13], dir[14], dir[15]]) as usize;
+        // The pixels follow the 40-byte BITMAPINFOHEADER.
+        let start = image + 40;
+        let end = (start + side * side * 4).min(out.len());
+        let Some(pixels) = out.get_mut(start..end) else {
+            continue;
+        };
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            if *pixel == ICON_CYAN_BGRA {
+                *pixel = [b, g, r, 0xff];
+            }
+        }
+    }
+    out
+}
 
 /// Per-tray-window state, parked behind GWLP_USERDATA on the hidden
 /// window so the WNDPROC can find it on every message.
 struct TrayState {
-    web_url: String,
-    dock_url: String,
+    /// The folder this setup lives in: what tells two copies' icons apart.
+    label: String,
     ctrl: Arc<Controller>,
     settings: watch::Receiver<Settings>,
 }
 
 /// Spawn the tray on its own OS thread. Returns immediately; the thread
 /// runs the message loop until the user picks Quit (or the process dies).
-pub fn spawn(settings: watch::Receiver<Settings>, ctrl: Arc<Controller>) {
-    let s = settings.borrow().clone();
-    let web_url = format!("http://127.0.0.1:{}/", s.web_port);
-    let dock_url = format!("http://127.0.0.1:{}/dock", s.web_port);
+/// `label` names this setup (its folder) in the tooltip and the menu.
+pub fn spawn(settings: watch::Receiver<Settings>, ctrl: Arc<Controller>, label: String) {
     std::thread::Builder::new()
         .name("instantclone-tray".into())
         .spawn(move || {
-            if let Err(e) = run(web_url, dock_url, ctrl, settings) {
-                eprintln!("[tray] init failed: {e}");
+            if let Err(e) = run(label, ctrl, settings) {
+                log_line!("[tray] init failed: {e}");
             }
         })
         .ok();
 }
 
 fn run(
-    web_url: String,
-    dock_url: String,
+    label: String,
     ctrl: Arc<Controller>,
     settings: watch::Receiver<Settings>,
 ) -> Result<(), String> {
@@ -187,18 +269,23 @@ fn run(
         }
 
         let title = wide("InstantClone");
-        // HWND_MESSAGE = -3 cast to ptr - message-only window, never visible.
-        let parent: HWND = -3isize as HWND;
+        // A top-level window that is never shown, not a message-only one
+        // (HWND_MESSAGE). Message-only windows get no broadcasts, and the
+        // two that matter here are broadcasts: WM_QUERYENDSESSION /
+        // WM_ENDSESSION at logoff and shutdown, without which Windows just
+        // killed the process mid-stream, and TaskbarCreated after explorer
+        // restarts. WS_EX_TOOLWINDOW keeps it out of Alt-Tab and the taskbar
+        // should anything ever show it.
         let hwnd = CreateWindowExW(
-            0,
+            WS_EX_TOOLWINDOW,
             class_name.as_ptr(),
             title.as_ptr(),
+            WS_POPUP,
             0,
             0,
             0,
             0,
-            0,
-            parent,
+            ptr::null_mut(),
             ptr::null_mut(),
             h_instance as _,
             ptr::null(),
@@ -211,9 +298,9 @@ fn run(
         // to the controller first: the state is moved in, and the icon path
         // below still needs somewhere to report to.
         let log_ctrl = ctrl.clone();
+        let tip = tooltip_text(&label, &settings.borrow());
         let state = Box::new(TrayState {
-            web_url,
-            dock_url,
+            label,
             ctrl,
             settings,
         });
@@ -232,7 +319,7 @@ fn run(
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = TRAY_MSG;
         nid.hIcon = h_icon;
-        write_wide(&mut nid.szTip, "InstantClone - click for menu");
+        write_wide(&mut nid.szTip, &tip);
 
         // Publish the handle and bind the hotkeys BEFORE touching the shell,
         // and never let the icon decide whether the rest of this thread runs.
@@ -292,17 +379,18 @@ unsafe fn load_embedded_icon() -> Option<windows_sys::Win32::UI::WindowsAndMessa
     let cx = GetSystemMetrics(SM_CXSMICON);
     let cy = GetSystemMetrics(SM_CYSMICON);
     // `1` = looking for an icon (not a cursor).
-    let offset = LookupIconIdFromDirectoryEx(ICON_DATA.as_ptr(), 1, cx, cy, LR_DEFAULTCOLOR);
+    let icon = icon_data();
+    let offset = LookupIconIdFromDirectoryEx(icon.as_ptr(), 1, cx, cy, LR_DEFAULTCOLOR);
     if offset <= 0 {
         return None;
     }
     let off = offset as usize;
-    if off >= ICON_DATA.len() {
+    if off >= icon.len() {
         return None;
     }
     let h = CreateIconFromResourceEx(
-        ICON_DATA.as_ptr().add(off),
-        (ICON_DATA.len() - off) as u32,
+        icon.as_ptr().add(off),
+        (icon.len() - off) as u32,
         1,          // fIcon = true
         0x00030000, // version
         cx,
@@ -323,6 +411,14 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             let ev = lp as u32;
             if ev == WM_LBUTTONUP || ev == WM_RBUTTONUP {
                 show_menu(hwnd);
+            } else if ev == NIN_BALLOONUSERCLICK && BALLOON_IS_UPDATE.load(Ordering::Acquire) {
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
+                if !state_ptr.is_null() {
+                    crate::open_browser(&about_url(&dashboard_url(
+                        &(*state_ptr).settings.borrow(),
+                        "",
+                    )));
+                }
             }
             0
         }
@@ -347,6 +443,32 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
         // A hotkey or MIDI action was refused; say so where the user is.
         BALLOON_MSG => {
             show_balloon(hwnd);
+            0
+        }
+        TOOLTIP_MSG => {
+            refresh_tooltip(hwnd);
+            0
+        }
+        ICON_MSG => {
+            refresh_icon(hwnd);
+            0
+        }
+        // Logoff or shutdown is asking. Never object: the user is leaving.
+        WM_QUERYENDSESSION => 1,
+        // The session is ending for real. Run the same clean teardown as
+        // Quit (every destination gets its goodbye, the trace and counters
+        // are flushed, the buffer file removed) and hold Windows here until
+        // it is done, because the process may be killed the moment this
+        // returns.
+        WM_ENDSESSION => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
+            if wp != 0 && !state_ptr.is_null() {
+                (*state_ptr)
+                    .ctrl
+                    .log("[tray] Windows is ending the session - shutting down cleanly");
+                (*state_ptr).ctrl.request_quit();
+                wait_for_shutdown(END_SESSION_WAIT);
+            }
             0
         }
         // Live re-apply: the user edited a binding, or started / finished
@@ -376,22 +498,25 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             }
             let state = &*state_ptr;
             match id {
+                // Built from the settings at the click, not at startup: the
+                // dashboard port can move live.
                 ID_OPEN_DASH => {
-                    let _ = open_url(&state.web_url);
+                    crate::open_browser(&dashboard_url(&state.settings.borrow(), ""));
                 }
                 ID_OPEN_DOCK => {
-                    let _ = open_url(&state.dock_url);
+                    crate::open_browser(&dashboard_url(&state.settings.borrow(), "dock"));
                 }
-                ID_CUT_DELAY => {
-                    // Direct sync call - Controller methods are atomic stores,
-                    // no runtime needed.
-                    state.ctrl.stop_delay();
+                ID_UPDATE => {
+                    crate::open_browser(&about_url(&dashboard_url(&state.settings.borrow(), "")));
                 }
-                ID_END_HOLD => {
-                    state.ctrl.end_hold_now();
-                }
+                // The same path as a hotkey: logged, shown on the dashboard,
+                // and saved, so a cut from here survives a restart too.
+                ID_CUT_DELAY => run_action(state, "cut"),
+                ID_END_HOLD => run_action(state, "end_hold"),
+                // The address the dashboard shows, `localhost` included: an
+                // IP literal fails in OBS under one of its IP Family settings.
                 ID_COPY_URL => {
-                    let url = obs_rtmp_url(&state.settings.borrow());
+                    let url = state.settings.borrow().obs_url();
                     let _ = set_clipboard_text(hwnd, &url);
                 }
                 ID_QUIT => {
@@ -473,7 +598,8 @@ unsafe fn register_hotkeys(hwnd: HWND) {
             // moves a combo rather than sharing it), so a refusal here can
             // only be another app holding the combo.
             state.ctrl.log(format!(
-                "[hotkey] {combo} is already in use by another app - {action} not bound"
+                "[hotkey] {combo} is already in use by another app (or another InstantClone) - \
+                 {action} not bound"
             ));
             conflicts.push(action.to_string());
         }
@@ -577,25 +703,55 @@ fn dispatch_hotkey(state: &TrayState, id: i32) {
     }
 }
 
+/// Run a delay action picked from the menu, through the same path as a
+/// hotkey, and say so if it couldn't run.
+fn run_action(state: &TrayState, action: &str) {
+    let default_ms = state.settings.borrow().auto_arm_delay_ms;
+    if let Some(problem) = state.ctrl.run_named_action(action, default_ms, "tray") {
+        notify_problem(&problem);
+    }
+}
+
 /// Raise a tray balloon about an action that could not run. Callable from
 /// any thread: the text is parked and the tray thread does the drawing.
 pub fn notify_problem(text: &str) {
+    post_balloon(text, BalloonKind::Problem);
+}
+
+/// Announce an update with a quiet balloon that opens System > About when
+/// clicked. False when there is no tray to show it (not up yet, or the post
+/// failed), so the caller can try again later.
+pub fn notify_update(text: &str) -> bool {
+    post_balloon(text, BalloonKind::Update)
+}
+
+/// Raise a quiet balloon (no sound, info icon) about something the user
+/// should know but didn't just ask for, like an armed delay the buffer
+/// can't hold. Callable from any thread.
+pub fn notify_notice(text: &str) {
+    post_balloon(text, BalloonKind::Notice);
+}
+
+pub(crate) fn post_balloon(text: &str, kind: BalloonKind) -> bool {
     let hwnd = TRAY_HWND.load(Ordering::Acquire);
     if hwnd == 0 {
-        return;
+        return false;
     }
-    *PENDING_BALLOON.lock() = text.to_string();
+    *PENDING_BALLOON.lock() = (text.to_string(), kind);
     // SAFETY: same contract as `request_hotkey_reload` - PostMessageW is
     // thread-safe and a stale handle just fails the post.
-    unsafe {
-        PostMessageW(hwnd as HWND, BALLOON_MSG, 0, 0);
-    }
+    unsafe { PostMessageW(hwnd as HWND, BALLOON_MSG, 0, 0) != 0 }
+}
+
+/// The dashboard opened on System > About, where updates are installed.
+fn about_url(web_url: &str) -> String {
+    format!("{web_url}#about")
 }
 
 /// Show the parked message as a tray balloon. Reuses the icon we already
 /// own (uID 1), so this is a modify rather than a second icon.
 unsafe fn show_balloon(hwnd: HWND) {
-    let text = std::mem::take(&mut *PENDING_BALLOON.lock());
+    let (text, kind) = std::mem::take(&mut *PENDING_BALLOON.lock());
     if text.is_empty() {
         return;
     }
@@ -604,10 +760,33 @@ unsafe fn show_balloon(hwnd: HWND) {
     nid.hWnd = hwnd;
     nid.uID = 1;
     nid.uFlags = NIF_INFO;
-    nid.dwInfoFlags = NIIF_WARNING;
-    write_wide(&mut nid.szInfoTitle, "InstantClone");
+    // A notice or an update is news, not a problem: no sound. An update is
+    // also held back while the user has asked Windows for quiet (focus
+    // assist, a game in full screen).
+    let (flags, title) = match kind {
+        BalloonKind::Problem => (NIIF_WARNING, "InstantClone"),
+        BalloonKind::Notice => (NIIF_INFO | NIIF_NOSOUND, "InstantClone"),
+        BalloonKind::Update => (
+            NIIF_INFO | NIIF_NOSOUND | NIIF_RESPECT_QUIET_TIME,
+            "InstantClone update",
+        ),
+    };
+    BALLOON_IS_UPDATE.store(kind == BalloonKind::Update, Ordering::Release);
+    nid.dwInfoFlags = flags;
+    write_wide(&mut nid.szInfoTitle, title);
     write_wide(&mut nid.szInfo, &text);
-    Shell_NotifyIconW(NIM_MODIFY, &nid);
+    // Refused when the icon isn't in the notification area (explorer not
+    // ready yet, or it restarted and the re-add is still pending). Said in
+    // the log, so a notification that never showed can be told apart from
+    // one Windows kept quiet (Do not disturb, notifications off for apps).
+    if Shell_NotifyIconW(NIM_MODIFY, &nid) == 0 {
+        let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
+        if !state_ptr.is_null() {
+            (*state_ptr)
+                .ctrl
+                .log(format!("[tray] Windows refused a notification: {text}"));
+        }
+    }
 }
 
 /// Modal Yes/No shown when the user hits Quit while OBS is publishing.
@@ -639,7 +818,16 @@ unsafe fn show_menu(hwnd: HWND) {
         return;
     }
 
-    // Top: live status header. Disabled item, no action - just a glance.
+    // Top: which setup this is, then its live status. Disabled items, no
+    // action - just a glance. With two copies running, the first line is
+    // what says which icon is which.
+    let header = wide(&menu_header(&state.label, &state.settings.borrow()));
+    AppendMenuW(
+        menu,
+        MF_STRING | MF_DISABLED | MF_GRAYED,
+        0,
+        header.as_ptr(),
+    );
     let status = wide(&status_label(&state.ctrl));
     AppendMenuW(
         menu,
@@ -664,6 +852,16 @@ unsafe fn show_menu(hwnd: HWND) {
         AppendMenuW(menu, MF_STRING, ID_END_HOLD, end_hold_label.as_ptr());
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+
+    // An update a check found, one click from the updater. Gone once the
+    // user turns the checks off.
+    let update = crate::update_check::available_label()
+        .filter(|_| state.settings.borrow().update_check_enabled)
+        .map(|label| wide(&label));
+    if let Some(label) = &update {
+        AppendMenuW(menu, MF_STRING, ID_UPDATE, label.as_ptr());
+        AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+    }
 
     let open = wide("Open dashboard");
     let dock = wide("Open OBS dock");
@@ -703,6 +901,10 @@ unsafe fn show_menu(hwnd: HWND) {
 /// matter are the window, the id and the callback message, and re-deriving
 /// them is cheaper than keeping a `NOTIFYICONDATAW` alive across threads.
 unsafe fn readd_tray_icon(hwnd: HWND) {
+    let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
+    if state_ptr.is_null() {
+        return;
+    }
     let h_icon =
         load_embedded_icon().unwrap_or_else(|| LoadIconW(ptr::null_mut(), IDI_APPLICATION));
     let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
@@ -712,8 +914,107 @@ unsafe fn readd_tray_icon(hwnd: HWND) {
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = TRAY_MSG;
     nid.hIcon = h_icon;
-    write_wide(&mut nid.szTip, "InstantClone - click for menu");
+    let state = &*state_ptr;
+    write_wide(
+        &mut nid.szTip,
+        &tooltip_text(&state.label, &state.settings.borrow()),
+    );
     Shell_NotifyIconW(NIM_ADD, &nid);
+}
+
+/// Rewrite the tooltip after the ports it names have moved.
+unsafe fn refresh_tooltip(hwnd: HWND) {
+    let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TrayState;
+    if state_ptr.is_null() {
+        return;
+    }
+    let state = &*state_ptr;
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_TIP;
+    write_wide(
+        &mut nid.szTip,
+        &tooltip_text(&state.label, &state.settings.borrow()),
+    );
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+/// Ask the tray to rewrite its tooltip. Safe no-op before the tray exists.
+pub fn request_tooltip_refresh() {
+    let hwnd = TRAY_HWND.load(Ordering::Acquire);
+    if hwnd != 0 {
+        // SAFETY: same contract as `request_hotkey_reload`.
+        unsafe {
+            PostMessageW(hwnd as HWND, TOOLTIP_MSG, 0, 0);
+        }
+    }
+}
+
+/// Redraw the icon in the colour this copy now shows.
+unsafe fn refresh_icon(hwnd: HWND) {
+    let Some(h_icon) = load_embedded_icon() else {
+        return;
+    };
+    let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_ICON;
+    nid.hIcon = h_icon;
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+    // The shell keeps a copy of its own.
+    DestroyIcon(h_icon);
+}
+
+/// Ask the tray to redraw its icon. Safe no-op before the tray exists.
+pub fn request_icon_refresh() {
+    let hwnd = TRAY_HWND.load(Ordering::Acquire);
+    if hwnd != 0 {
+        // SAFETY: same contract as `request_hotkey_reload`.
+        unsafe {
+            PostMessageW(hwnd as HWND, ICON_MSG, 0, 0);
+        }
+    }
+}
+
+/// Called by the runtime when its shutdown epilogue has finished.
+pub fn note_shutdown_done() {
+    let (done, wake) = &SHUTDOWN_DONE;
+    if let Ok(mut done) = done.lock() {
+        *done = true;
+    }
+    wake.notify_all();
+}
+
+/// Block until `note_shutdown_done`, or `timeout`. Runs on the tray thread
+/// while Windows waits on WM_ENDSESSION; the runtime's teardown is on
+/// another thread, so it never waits on this one.
+fn wait_for_shutdown(timeout: std::time::Duration) {
+    let (done, wake) = &SHUTDOWN_DONE;
+    if let Ok(guard) = done.lock() {
+        let _ = wake.wait_timeout_while(guard, timeout, |done| !*done);
+    }
+}
+
+/// The tooltip: which setup (its folder) and the ports it listens on, so
+/// two copies side by side are told apart at a hover.
+fn tooltip_text(label: &str, s: &Settings) -> String {
+    format!(
+        "InstantClone - {label}\nRTMP :{}, dashboard :{}",
+        s.ingest_port, s.web_port
+    )
+}
+
+/// First line of the menu: which setup this icon belongs to.
+fn menu_header(label: &str, s: &Settings) -> String {
+    format!("InstantClone - {label} (RTMP :{})", s.ingest_port)
+}
+
+/// The dashboard (`""`) or the dock (`"dock"`) at the current web port.
+fn dashboard_url(s: &Settings, page: &str) -> String {
+    format!("http://127.0.0.1:{}/{page}", s.web_port)
 }
 
 /// One-line summary of the controller's current state. Read on every
@@ -732,13 +1033,22 @@ fn status_label(ctrl: &Controller) -> String {
             format!("Status: ACTIVE - {s}s delay")
         }
         "ready" => {
-            let s = (ctrl.armed_delay_ms() + 500) / 1000;
-            format!("Status: ARMED - {s}s ready to activate")
+            let armed = ctrl.armed_delay_ms();
+            let runs = ctrl.delay_runs_ms(armed);
+            let s = (runs + 500) / 1000;
+            if runs < armed {
+                let armed_s = (armed + 500) / 1000;
+                format!("Status: ARMED - {s}s ready (the buffer can't hold {armed_s}s)")
+            } else {
+                format!("Status: ARMED - {s}s ready to activate")
+            }
         }
         "preparing" => {
-            let armed = ctrl.armed_delay_ms().max(1) as f32;
+            // Toward what will run: a delay the buffer can't hold fills
+            // to what it holds, never to what was armed.
+            let goal = ctrl.delay_runs_ms(ctrl.armed_delay_ms()).max(1) as f32;
             let fill = ctrl.buffer_fill_ms() as f32;
-            let pct = ((fill / armed) * 100.0).min(99.0) as u32;
+            let pct = ((fill / goal) * 100.0).min(99.0) as u32;
             format!("Status: BUFFERING - {pct}%")
         }
         _ => {
@@ -749,16 +1059,6 @@ fn status_label(ctrl: &Controller) -> String {
             }
         }
     }
-}
-
-/// Reconstruct the same rtmp URL the dashboard shows in the OBS tab.
-fn obs_rtmp_url(s: &Settings) -> String {
-    let host = if s.ingest_bind_all {
-        "0.0.0.0"
-    } else {
-        "127.0.0.1"
-    };
-    format!("rtmp://{}:{}/live", host, s.ingest_port)
 }
 
 /// RAII wrapper around an HGLOBAL. Frees on Drop unless ownership is
@@ -847,12 +1147,6 @@ unsafe fn set_clipboard_text(hwnd: HWND, text: &str) -> Result<(), ()> {
     Ok(())
 }
 
-fn open_url(url: &str) -> std::io::Result<std::process::Child> {
-    std::process::Command::new("cmd")
-        .args(["/c", "start", "", url])
-        .spawn()
-}
-
 fn wide(s: &str) -> Vec<u16> {
     OsStr::new(s)
         .encode_wide()
@@ -877,8 +1171,69 @@ fn write_wide(dst: &mut [u16], s: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{hotkey_action, hotkey_id};
+    use super::{dashboard_url, hotkey_action, hotkey_id, menu_header, tooltip_text};
+    use super::{recolor_icon, ICON_CYAN_BGRA, ICON_DATA};
     use crate::config;
+
+    /// A second copy's icon swaps the cyan square for its colour at every
+    /// size, and leaves the bars, the corners and the ICO's layout alone.
+    /// (The pixels sit at an offset that isn't a multiple of 4 in the file,
+    /// so they are counted at every byte.)
+    #[test]
+    fn a_coloured_icon_repaints_only_the_square() {
+        let (_, purple) = crate::instance_lock::TRAY_COLORS[1];
+        let colored = recolor_icon(ICON_DATA, purple);
+        assert_eq!(colored.len(), ICON_DATA.len());
+        let cyan = ICON_DATA
+            .windows(4)
+            .filter(|p| *p == ICON_CYAN_BGRA)
+            .count();
+        assert!(
+            cyan > 16 * 16 / 2,
+            "the embedded icon is drawn in brand cyan"
+        );
+        let purple_bgra = [purple[2], purple[1], purple[0], 0xff];
+        assert_eq!(
+            colored.windows(4).filter(|p| *p == purple_bgra).count(),
+            cyan,
+            "every cyan pixel, and only those, is repainted"
+        );
+        assert!(!colored.windows(4).any(|p| p == ICON_CYAN_BGRA));
+        let changed = ICON_DATA
+            .iter()
+            .zip(&colored)
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(changed <= cyan * 3, "nothing outside the square moved");
+    }
+
+    /// The menu's links follow the settings in force, so a live port change
+    /// never leaves them pointing at the old port, and two copies' icons
+    /// say which setup and ports each one is.
+    #[test]
+    fn links_and_labels_follow_the_current_settings() {
+        let mut s = config::Settings::defaults();
+        s.web_port = 8080;
+        s.ingest_port = 1935;
+        assert_eq!(dashboard_url(&s, ""), "http://127.0.0.1:8080/");
+        s.web_port = 8181;
+        assert_eq!(dashboard_url(&s, "dock"), "http://127.0.0.1:8181/dock");
+        assert_eq!(
+            s.obs_url(),
+            "rtmp://localhost:1935/live",
+            "what Copy RTMP URL copies"
+        );
+        let tip = tooltip_text("Second channel", &s);
+        assert_eq!(
+            tip,
+            "InstantClone - Second channel\nRTMP :1935, dashboard :8181"
+        );
+        assert!(tip.encode_utf16().count() < 128, "fits the tooltip field");
+        assert_eq!(
+            menu_header("Second channel", &s),
+            "InstantClone - Second channel (RTMP :1935)"
+        );
+    }
 
     /// The id a hotkey is registered under and the action a fired WM_HOTKEY
     /// runs come from the same list, so this is really asking that the two

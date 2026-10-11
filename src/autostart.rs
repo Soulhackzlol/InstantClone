@@ -1,4 +1,4 @@
-//! "Start with Windows" - one value under the per-user Run key.
+//! "Start with Windows" - one value per copy under the per-user Run key.
 //!
 //! The registry is the source of truth here, deliberately: it is not
 //! mirrored into `Settings`. Windows gives users their own switches for
@@ -14,7 +14,9 @@
 use std::io;
 
 /// Value name under the Run key. Stable - renaming it would strand the old
-/// entry and silently start InstantClone twice.
+/// entry and silently start InstantClone twice. It stays the first name a
+/// copy takes (see `value_names`), so a single copy keeps the entry every
+/// earlier build wrote.
 #[cfg(windows)]
 const VALUE_NAME: &str = "InstantClone";
 
@@ -36,7 +38,131 @@ fn run_command() -> io::Result<String> {
     Ok(format!("\"{}\" --no-browser", exe.display()))
 }
 
-/// Whether InstantClone is currently registered to start at login.
+/// The Run values a copy may use, in the order it takes them. Two copies
+/// from two folders each need their own: with one shared name, switching
+/// it on in the second copy repointed the first copy's entry, and
+/// switching it off there deleted it. The second name is readable in
+/// regedit ("InstantClone (Second channel)"); the third only breaks a tie
+/// between two folders of the same name.
+#[cfg(windows)]
+fn value_names(exe: &std::path::Path) -> [String; 3] {
+    let folder = exe
+        .parent()
+        .and_then(|dir| dir.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let path = exe.to_string_lossy().to_lowercase();
+    let id = &crate::sha256::hex(path.as_bytes())[..8];
+    [
+        VALUE_NAME.to_string(),
+        format!("{VALUE_NAME} ({folder})"),
+        format!("{VALUE_NAME} ({folder} {id})"),
+    ]
+}
+
+/// Who a Run value belongs to, judged by the exe its command starts.
+#[cfg(windows)]
+#[derive(Debug, PartialEq, Eq)]
+enum Owner {
+    /// No such value.
+    Nobody,
+    /// It starts this exe.
+    Us,
+    /// It starts an exe that no longer exists: left by a copy that was moved
+    /// or deleted, free to take over.
+    Gone,
+    /// It starts another copy that is still there. Never touched.
+    OtherCopy,
+}
+
+/// The exe a Run command starts: the quoted path we write, or the first
+/// word of a hand-written unquoted one.
+#[cfg(windows)]
+fn command_exe(command: &str) -> &str {
+    let command = command.trim();
+    match command.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(rest),
+        None => command.split_whitespace().next().unwrap_or(command),
+    }
+}
+
+/// Pure apart from `exists`, so the rules are testable without a registry.
+#[cfg(windows)]
+fn owner_of(
+    command: Option<&str>,
+    exe: &std::path::Path,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> Owner {
+    let Some(command) = command else {
+        return Owner::Nobody;
+    };
+    let target = std::path::Path::new(command_exe(command));
+    // Windows paths compare without case.
+    if target.to_string_lossy().to_lowercase() == exe.to_string_lossy().to_lowercase() {
+        Owner::Us
+    } else if exists(target) {
+        Owner::OtherCopy
+    } else {
+        Owner::Gone
+    }
+}
+
+/// A string value under an HKCU subkey, or None when it is missing.
+#[cfg(windows)]
+fn read_value(subkey: &str, name: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+    let subkey = wide(subkey);
+    let name = wide(name);
+    // First ask the size, then read into a buffer of it.
+    let mut bytes: u32 = 0;
+    let rc = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut bytes,
+        )
+    };
+    if rc != 0 || bytes == 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; (bytes as usize).div_ceil(2)];
+    let rc = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut bytes,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    Some(String::from_utf16_lossy(&buf[..len]))
+}
+
+/// Each of this copy's candidate value names with its current owner.
+#[cfg(windows)]
+fn candidates(subkey: &str) -> io::Result<Vec<(String, Owner)>> {
+    let exe = std::env::current_exe()?;
+    Ok(value_names(&exe)
+        .into_iter()
+        .map(|name| {
+            let owner = owner_of(read_value(subkey, &name).as_deref(), &exe, |p| p.exists());
+            (name, owner)
+        })
+        .collect())
+}
+
+/// Whether this copy is registered to start at login. Another copy's entry
+/// doesn't count: each dashboard shows its own switch.
 ///
 /// Any failure reads as "not enabled": the value being absent is itself
 /// the common failure, and a missing Run key on an exotic Windows install
@@ -50,30 +176,15 @@ pub fn is_enabled() -> bool {
 /// can use a private key instead of the developer's real Run key.
 #[cfg(windows)]
 fn is_enabled_under(subkey: &str) -> bool {
-    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
-    let subkey = wide(subkey);
-    let name = wide(VALUE_NAME);
-    // Null output buffer + null size: asks only "does this value exist,
-    // and is it a string?" without reading the data back.
-    let rc = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            subkey.as_ptr(),
-            name.as_ptr(),
-            RRF_RT_REG_SZ,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    rc == 0
+    candidates(subkey).is_ok_and(|names| names.iter().any(|(_, owner)| *owner == Owner::Us))
 }
 
-/// Add or remove the Run-key entry.
+/// Add or remove this copy's Run entry.
 ///
 /// Enabling always rewrites the command rather than checking first, so an
 /// entry left behind by a previous install location is corrected instead
-/// of pointing at an executable that no longer exists.
+/// of pointing at an executable that no longer exists. Another copy's
+/// entry is never rewritten or removed.
 #[cfg(windows)]
 pub fn set(enabled: bool) -> io::Result<()> {
     set_under(RUN_KEY, enabled)
@@ -83,39 +194,62 @@ pub fn set(enabled: bool) -> io::Result<()> {
 /// a private key instead of the developer's real Run key.
 #[cfg(windows)]
 fn set_under(subkey: &str, enabled: bool) -> io::Result<()> {
-    use windows_sys::Win32::System::Registry::{
-        RegDeleteKeyValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
-    };
+    let names = candidates(subkey)?;
+    if !enabled {
+        for (name, _) in names.iter().filter(|(_, owner)| *owner == Owner::Us) {
+            delete_value(subkey, name)?;
+        }
+        return Ok(());
+    }
+    // Ours if we have one, otherwise the first that is free.
+    let name = names
+        .iter()
+        .find(|(_, owner)| *owner == Owner::Us)
+        .or_else(|| {
+            names
+                .iter()
+                .find(|(_, owner)| matches!(owner, Owner::Nobody | Owner::Gone))
+        })
+        .map(|(name, _)| name)
+        .ok_or_else(|| io::Error::other("every startup entry name is taken by another copy"))?;
+    write_value(subkey, name, &run_command()?)
+}
+
+#[cfg(windows)]
+fn write_value(subkey: &str, name: &str, command: &str) -> io::Result<()> {
+    use windows_sys::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
     let subkey = wide(subkey);
-    let name = wide(VALUE_NAME);
-
-    let rc = if enabled {
-        let value = wide(&run_command()?);
-        // Length is in BYTES and must include the terminating null.
-        let bytes = (value.len() * std::mem::size_of::<u16>()) as u32;
-        unsafe {
-            RegSetKeyValueW(
-                HKEY_CURRENT_USER,
-                subkey.as_ptr(),
-                name.as_ptr(),
-                REG_SZ,
-                value.as_ptr() as *const std::ffi::c_void,
-                bytes,
-            )
-        }
-    } else {
-        let rc = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, subkey.as_ptr(), name.as_ptr()) };
-        // ERROR_FILE_NOT_FOUND - already absent, which is the state the
-        // caller asked for. Disabling twice is not an error.
-        const ERROR_FILE_NOT_FOUND: u32 = 2;
-        if rc == ERROR_FILE_NOT_FOUND {
-            0
-        } else {
-            rc
-        }
+    let name = wide(name);
+    let value = wide(command);
+    // Length is in BYTES and must include the terminating null.
+    let bytes = (value.len() * std::mem::size_of::<u16>()) as u32;
+    let rc = unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            name.as_ptr(),
+            REG_SZ,
+            value.as_ptr() as *const std::ffi::c_void,
+            bytes,
+        )
     };
-
     if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(rc as i32))
+    }
+}
+
+#[cfg(windows)]
+fn delete_value(subkey: &str, name: &str) -> io::Result<()> {
+    use windows_sys::Win32::System::Registry::{RegDeleteKeyValueW, HKEY_CURRENT_USER};
+    let subkey = wide(subkey);
+    let name = wide(name);
+    let rc = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, subkey.as_ptr(), name.as_ptr()) };
+    // ERROR_FILE_NOT_FOUND - already absent, which is the state the caller
+    // asked for. Disabling twice is not an error.
+    const ERROR_FILE_NOT_FOUND: u32 = 2;
+    if rc == 0 || rc == ERROR_FILE_NOT_FOUND {
         Ok(())
     } else {
         Err(io::Error::from_raw_os_error(rc as i32))
@@ -315,15 +449,21 @@ mod tests {
     /// deleting it leaves nothing behind, and never the real Run key: a test
     /// that touched that could rewrite or drop the developer's own startup
     /// entry, and a panic midway would leave it that way.
-    const TEST_KEY: &str = r"Software\InstantCloneAutostartTest";
+    /// A private key per test process, so two runs at once never share one.
+    fn test_key(name: &str) -> String {
+        format!(
+            r"Software\InstantCloneAutostartTest{name}{}",
+            std::process::id()
+        )
+    }
 
-    /// Deletes `TEST_KEY` on drop, so a failed assertion still cleans up.
-    struct TestKeyGuard;
+    /// Deletes its key on drop, so a failed assertion still cleans up.
+    struct TestKeyGuard(String);
 
     impl Drop for TestKeyGuard {
         fn drop(&mut self) {
             use windows_sys::Win32::System::Registry::{RegDeleteTreeW, HKEY_CURRENT_USER};
-            let subkey = wide(TEST_KEY);
+            let subkey = wide(&self.0);
             unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, subkey.as_ptr()) };
         }
     }
@@ -333,25 +473,86 @@ mod tests {
     /// developer's own startup.
     #[test]
     fn enable_disable_round_trip() {
-        let _cleanup = TestKeyGuard;
+        let key = test_key("");
+        let _cleanup = TestKeyGuard(key.clone());
         assert!(
-            !is_enabled_under(TEST_KEY),
+            !is_enabled_under(&key),
             "stale test key from an earlier run"
         );
 
-        set_under(TEST_KEY, true).expect("enable");
-        assert!(
-            is_enabled_under(TEST_KEY),
-            "value must exist after enabling"
-        );
+        set_under(&key, true).expect("enable");
+        assert!(is_enabled_under(&key), "value must exist after enabling");
 
-        set_under(TEST_KEY, false).expect("disable");
+        set_under(&key, false).expect("disable");
         assert!(
-            !is_enabled_under(TEST_KEY),
+            !is_enabled_under(&key),
             "value must be gone after disabling"
         );
 
         // Disabling an already-absent value is a no-op, not an error.
-        set_under(TEST_KEY, false).expect("disable twice");
+        set_under(&key, false).expect("disable twice");
+    }
+
+    /// A second copy (another folder) switching autostart on or off
+    /// leaves the first copy's entry exactly as it was, and an entry left
+    /// by a copy that no longer exists is taken over.
+    #[test]
+    fn each_copy_has_its_own_startup_entry() {
+        let key = test_key("Copies");
+        let _cleanup = TestKeyGuard(key.clone());
+        let key = key.as_str();
+        // A file that exists and isn't this exe stands in for the other copy.
+        let other_exe =
+            std::env::temp_dir().join(format!("ic-other-copy-{}.exe", std::process::id()));
+        std::fs::write(&other_exe, b"").unwrap();
+        let other = format!(r#""{}" --no-browser"#, other_exe.display());
+        let other = other.as_str();
+        write_value(key, VALUE_NAME, other).unwrap();
+        assert!(!is_enabled_under(key), "the other copy's entry isn't ours");
+
+        set_under(key, true).expect("enable");
+        assert!(is_enabled_under(key));
+        assert_eq!(
+            read_value(key, VALUE_NAME).as_deref(),
+            Some(other),
+            "left alone"
+        );
+
+        set_under(key, false).expect("disable");
+        assert!(!is_enabled_under(key));
+        assert_eq!(
+            read_value(key, VALUE_NAME).as_deref(),
+            Some(other),
+            "still there"
+        );
+
+        let gone = r#""C:\InstantCloneMovedAway\InstantClone.exe" --no-browser"#;
+        write_value(key, VALUE_NAME, gone).unwrap();
+        set_under(key, true).expect("enable over a gone copy");
+        assert_eq!(read_value(key, VALUE_NAME), Some(run_command().unwrap()));
+        let _ = std::fs::remove_file(&other_exe);
+    }
+
+    #[test]
+    fn run_commands_are_read_for_their_exe_owner_and_value_name() {
+        let exe = std::path::Path::new(r"C:\Streams\Main\InstantClone.exe");
+        let ours = r#""c:\streams\main\instantclone.exe" --no-browser"#;
+        assert_eq!(
+            owner_of(Some(ours), exe, |_| true),
+            Owner::Us,
+            "case-insensitive"
+        );
+        let theirs = r#""C:\Streams\Second\InstantClone.exe" --no-browser"#;
+        assert_eq!(owner_of(Some(theirs), exe, |_| true), Owner::OtherCopy);
+        assert_eq!(owner_of(Some(theirs), exe, |_| false), Owner::Gone);
+        assert_eq!(owner_of(None, exe, |_| true), Owner::Nobody);
+        assert_eq!(
+            command_exe(r"C:\Tools\ic.exe --no-browser"),
+            r"C:\Tools\ic.exe"
+        );
+        let names = value_names(exe);
+        assert_eq!(names[0], "InstantClone");
+        assert_eq!(names[1], "InstantClone (Main)");
+        assert!(names[2].starts_with("InstantClone (Main ") && names[2].len() == 28);
     }
 }

@@ -7,7 +7,9 @@
 //! runs, that nothing airs more often than the delay itself explains, and
 //! that timestamps never go back.
 
-use super::sim::{assert_strictly_increasing, wait, Frame, Sim, FRAME_MS, GOP_FRAMES};
+use super::sim::{
+    assert_strictly_increasing, wait, Frame, Sim, FRAME_MS, GOP_FRAMES, TIMER_SLOP_MS,
+};
 use super::*;
 use std::collections::HashSet;
 
@@ -27,20 +29,9 @@ async fn delay_sim() -> Sim {
     sim
 }
 
-/// How long after OBS made it `frame` reached the platform.
-fn delay_ms(sim: &Sim, frame: &Frame) -> u32 {
-    frame
-        .at
-        .duration_since(sim.produced[&frame.number])
-        .as_millis() as u32
-}
-
 /// Every frame in `frames` ran between `min_ms` and `max_ms` behind OBS.
 fn assert_delays(sim: &Sim, frames: &[Frame], min_ms: u32, max_ms: u32, what: &str) {
-    let delays: Vec<(u32, u32)> = frames
-        .iter()
-        .map(|f| (f.number, delay_ms(sim, f)))
-        .collect();
+    let delays: Vec<(u32, u32)> = frames.iter().map(|f| (f.number, sim.delay_ms(f))).collect();
     let off = delays
         .iter()
         .find(|(_, ms)| !(min_ms..=max_ms).contains(ms));
@@ -49,9 +40,6 @@ fn assert_delays(sim: &Sim, frames: &[Frame], min_ms: u32, max_ms: u32, what: &s
         "{what}: a frame ran outside {min_ms}..={max_ms} ms behind OBS: {delays:?}"
     );
 }
-
-/// Sleeps can wake a few ms early on a loaded test runner.
-const TIMER_SLOP_MS: u32 = 50;
 
 /// A delay is honored: every frame in `frames` ran at least `delay_ms`
 /// behind OBS (never closer to live than asked) and at most one keyframe
@@ -344,7 +332,7 @@ async fn raising_the_delay_on_air_jumps_back_exactly_once() {
         again.is_none(),
         "{again:?} aired twice after raising the delay"
     );
-    let reached = delay_ms(&sim, after.last().unwrap());
+    let reached = sim.delay_ms(after.last().unwrap());
     assert!(
         reached + TIMER_SLOP_MS >= raised,
         "ran {reached} ms behind, asked for {raised}"
@@ -412,6 +400,12 @@ async fn destination_added_mid_delay_on_a_long_gop(sim: &mut Sim) {
 /// The added destination joins on a keyframe and plays on from there,
 /// without the jump back a live start followed by a cut to the delay would
 /// show, at least the delay behind and within a keyframe interval of it.
+///
+/// The keyframe nearest the delay when it is added is OBS's first one, 4.3 s
+/// back, but the buffer keeps only the armed delay plus 2 s, so it was
+/// trimmed as soon as the first destination played past it. The seed used
+/// to fall back to OBS's next keyframe, at the live edge: the added
+/// destination's viewers watched live while everyone else was delayed.
 #[tokio::test]
 async fn a_destination_added_mid_delay_joins_without_a_jump_on_a_long_gop() {
     let mut sim = delay_sim().await;
@@ -424,26 +418,6 @@ async fn a_destination_added_mid_delay_joins_without_a_jump_on_a_long_gop() {
     assert_strictly_increasing(&frames, "the added destination");
     assert_eq!(cuts(&sim, "added"), 0, "no jump after joining");
     sim.assert_timestamps_monotonic(1);
-}
-
-/// The keyframe nearest the delay when the destination is added is OBS's
-/// first one, 4.3 s back, but the buffer keeps only the armed delay plus
-/// 2 s, so it was trimmed as soon as the first destination played past it.
-/// With no keyframe left to join on, the seed waits for OBS's next one and
-/// starts there, at the live edge: the added destination's viewers watch
-/// live while the other destination and the dashboard are on the delay.
-#[tokio::test]
-async fn a_destination_added_mid_delay_on_a_long_gop_never_airs_live() {
-    let mut sim = delay_sim().await;
-    destination_added_mid_delay_on_a_long_gop(&mut sim).await;
-
-    let frames = sim.frames(1);
-    let first = frames.first().expect("the added destination is on air");
-    let joined = delay_ms(&sim, first);
-    assert!(
-        joined + TIMER_SLOP_MS >= DELAY_MS,
-        "joined {joined} ms behind OBS with a {DELAY_MS} ms delay on"
-    );
 }
 
 /// Going delayed with a 4 s keyframe interval: a 2 s delay can only land
@@ -710,7 +684,7 @@ async fn obs_restarting_mid_delay_never_puts_viewers_on_live() {
 
     let frames = sim.frames(1);
     let first = frames.first().expect("the destination came back");
-    let joined = delay_ms(&sim, first);
+    let joined = sim.delay_ms(first);
     assert!(
         joined + TIMER_SLOP_MS >= DELAY_MS,
         "came back {joined} ms behind OBS with a {DELAY_MS} ms delay on"
@@ -787,7 +761,7 @@ async fn a_delay_longer_than_the_buffer_runs_at_what_it_holds() {
         frames.len()
     );
     assert_strictly_increasing(&frames, "a delay capped by the buffer");
-    let behind = delay_ms(&sim, frames.last().unwrap());
+    let behind = sim.delay_ms(frames.last().unwrap());
     assert!(
         (2_500..=7_500).contains(&behind),
         "delayed by about what the buffer holds, not {behind} ms"
@@ -807,6 +781,20 @@ async fn a_delay_longer_than_the_buffer_runs_at_what_it_holds() {
             .iter()
             .any(|line| line.contains("the buffer is full")),
         "the log says the delay is capped"
+    );
+    // And the dashboard and tray hear it too, once, with what really runs.
+    let short = sim.ctrl.capacity_short().expect("reported as short");
+    assert_eq!(short.armed_ms, 30_000);
+    assert!(
+        (2_500..=7_500).contains(&short.holds_ms),
+        "{}",
+        short.holds_ms
+    );
+    assert!(short.message.starts_with("Buffer too small for 30 s"));
+    assert_eq!(
+        sim.ctrl.capacity_short_seq(),
+        1,
+        "one notice, not one a tag"
     );
     sim.assert_timestamps_monotonic(0);
 }
@@ -835,9 +823,8 @@ async fn a_longer_keyframe_interval_than_measured_never_replays() {
     sim.destination_connects("platform").await;
     sim.obs_sends(10_000).await;
 
-    let frames = sim.frames(0);
-    let back = backward_jumps(&frames);
-    assert!(back.is_empty(), "the picture jumped back at {back:?}");
-    assert_airs_at_most_twice(&frames);
+    // Already delayed when the destination joins: nothing may jump back,
+    // and nothing may air twice even in a row.
+    assert_strictly_increasing(&sim.frames(0), "after the join");
     sim.assert_timestamps_monotonic(0);
 }

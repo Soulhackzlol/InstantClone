@@ -21,6 +21,9 @@ pub struct LiveState {
     /// Whether OBS is streaming to InstantClone right now.
     pub obs_live: bool,
     pub bitrate_kbps: u64,
+    /// The longest delay the buffer holds right now, in whole seconds,
+    /// never past the top (`config::MAX_DELAY_MS`).
+    pub delay_max_s: u32,
     /// The connected Twitch channel's login, or empty.
     pub channel: String,
     /// Whether a stream is on (see `session::Session`): between streams
@@ -47,6 +50,14 @@ pub struct HttpResponse {
 pub struct ClipInfo {
     pub id: String,
     pub url: String,
+}
+
+/// What a program a step waited for answered.
+pub struct ProgramOutput {
+    /// Its exit code; `None` when it ended without one.
+    pub code: Option<i32>,
+    /// What it printed, trimmed.
+    pub output: String,
 }
 
 /// A Discord message to post: plain `content`, a card, or both (the
@@ -112,11 +123,22 @@ pub trait Host: Send + Sync {
     /// delay for `arm`.
     fn delay_action(&self, action: &str, ms: u32) -> Result<(), String>;
     fn program(&self, path: &str, args: &[String]) -> Result<(), String>;
+    /// Run a program and wait for it (a short while at most), keeping what
+    /// it printed.
+    fn program_output(&self, path: &str, args: &[String]) -> Result<ProgramOutput, String>;
     fn file(&self, path: &str, text: &str, append: bool) -> Result<(), String>;
-    /// Put a card on the alerts browser source for `seconds`.
-    fn overlay(&self, title: &str, text: &str, seconds: u64);
-    /// Ask OBS to do something, through its WebSocket server.
-    fn obs(&self, action: super::obsws::Action) -> Result<(), String>;
+    /// Put a card on the alerts browser source.
+    fn overlay(&self, card: super::alerts::Card);
+    /// Ask OBS to do something, or what it's doing, through its WebSocket
+    /// server. A check answers with values; an action with none.
+    fn obs(&self, action: super::obsws::Action) -> Result<super::obsws::Answer, String>;
+    /// Drive a light or plug on the network (`device` is a reference from
+    /// `lights`). Says where it found the device when it had moved.
+    fn light(
+        &self,
+        device: &str,
+        command: super::lights::Command,
+    ) -> Result<Option<String>, String>;
 }
 
 /// `30s`, `1m 30s`, or empty for no delay, so `{delay|off}` reads naturally.
@@ -125,11 +147,14 @@ pub fn fmt_delay(ms: u32) -> String {
         return String::new();
     }
     let total = (ms + 500) / 1000;
-    match (total / 60, total % 60) {
-        (0, s) => format!("{s}s"),
-        (m, 0) => format!("{m}m"),
-        (m, s) => format!("{m}m {s}s"),
-    }
+    let (h, m, s) = (total / 3600, total % 3600 / 60, total % 60);
+    let parts = [(h, "h"), (m, "m"), (s, "s")];
+    let shown: Vec<String> = parts
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, unit)| format!("{n}{unit}"))
+        .collect();
+    shown.join(" ")
 }
 
 /// A stream position, the way YouTube chapters and VOD players write it:
@@ -175,6 +200,8 @@ mod tests {
         assert_eq!(fmt_delay(90_000), "1m 30s");
         assert_eq!(fmt_delay(120_000), "2m");
         assert_eq!(fmt_delay(29_600), "30s");
+        assert_eq!(fmt_delay(3_600_000), "1h");
+        assert_eq!(fmt_delay(3_930_000), "1h 5m 30s");
     }
 
     #[test]

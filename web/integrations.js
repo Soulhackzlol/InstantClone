@@ -27,7 +27,7 @@ async function api(path, body){
     const r = await fetch(path, opts);
     return await r.json();
   } catch(_){
-    return {ok:false, error:'The app did not answer - is InstantClone still running?'};
+    return {ok:false, error:'The app did not answer. Is InstantClone still running?'};
   }
 }
 
@@ -44,6 +44,8 @@ const PATHS = {
   steps:'M4 6h16M4 12h10M4 18h7',
   plus:'M12 5v14M5 12h14',
   check:'M20 6L9 17l-5-5',
+  search:'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3',
+  rewind:'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5',
   chev:'M6 9l6 6 6-6',
   code:'M8 7l-5 5 5 5M16 7l5 5-5 5',
   up:'M18 15l-6-6-6 6',
@@ -78,6 +80,13 @@ const PATHS = {
   columns:'M4 5h6v14H4zM14 5h6v14h-6z',
   rows:'M4 5h16v14H4z',
   refresh:'M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5',
+  mic:'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v3',
+  rec:'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+  heart:'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21.2l8.8-8.8a5.5 5.5 0 0 0 0-7.8z',
+  gift:'M20 12v10H4V12M2 7h20v5H2zM12 22V7M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z',
+  gem:'M6 3h12l4 6-10 12L2 9zM2 9h20M12 21L8 9l4-6 4 6z',
+  users:'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8',
+  tv:'M2 7h20v13H2zM17 2l-5 5-5-5',
 };
 const svg = (name, extra) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra||''}><path d="${PATHS[name]}"/></svg>`;
@@ -102,7 +111,8 @@ const KINDS = {
   overlay:      {label:'Show on stream', tag:'STREAM', c:'#5ac8fa', icon:'screen',  text:'text', hint:'Shows a card on your stream, through the alerts browser source.'},
   edit_text:    {label:'Edit text',     tag:'VALUE',  c:'#93c5fd', icon:'type', hint:'Reshapes text: a line, a part, a rounded number, a random pick.'},
   timeline:     {label:'Timeline',      tag:'LOG',    c:'#5ac8fa', icon:'list', text:'text', hint:'Adds a line, a chapter or a highlight to this stream\'s timeline, at its place in the VOD.'},
-  obs:          {label:'OBS',           tag:'OBS',    c:'#86efac', icon:'layers', hint:'Switches a scene, shows or hides a source, or changes what a text source says.'},
+  light:        {label:'Smart light',   tag:'LIGHT',  c:'#fde68a', icon:'bulb', hint:'Turns a light or plug on your network on or off, or colors it. Found by a scan: no hub or account.'},
+  obs:          {label:'OBS',           tag:'OBS',    c:'#86efac', icon:'layers', hint:'Switches a scene, shows or hides a source, records, saves a replay, mutes, switches a filter, plays media or presses an OBS hotkey.'},
 };
 // The icon a catalog module wears: what it is about, not how it sends.
 const PRESET_ICON = {
@@ -110,10 +120,10 @@ const PRESET_ICON = {
   tell_chat:'bubble', delay_command:'hash', delay_notice:'clock', mod_controls:'cut', socials:'hash',
   vod_markers:'bookmark', webhook:'link', crash_counter:'file', stream_alerts:'bell', api_command:'globe',
   clip_button:'film', delay_status:'clock', smart_alerts:'pulse', stream_timeline:'list', chapters:'bookmark',
-  highlight:'star', hype_clip:'flame', on_air_light:'bulb', scene_delay:'layers',
+  highlight:'star', hype_clip:'flame', on_air_light:'bulb', scene_delay:'layers', twitch_alerts:'heart',
 };
 // Which step a card previews: the first one that says something.
-const PREVIEW_ORDER = ['discord','chat','phone','overlay','marker','http','file','timeline','clip','delay_action','program'];
+const PREVIEW_ORDER = ['discord','chat','phone','overlay','marker','http','light','file','timeline','clip','delay_action','program'];
 // A Discord card's colors: the dashboard's palette, readable on Discord.
 const CARD_COLORS = [['#5ac8fa', 'Blue'], ['#3fcf8e', 'Green'], ['#f0a53a', 'Amber'], ['#f2665a', 'Red'],
   ['#fcd34d', 'Gold'], ['#a78bfa', 'Purple'], ['#ff7eb6', 'Pink'], ['#8b949e', 'Grey']];
@@ -126,20 +136,65 @@ const RULES = {
 };
 const TIMELINE_KINDS = {note:'A line', chapter:'A chapter', highlight:'A highlight'};
 const DELAY_ACTIONS = {
-  arm:'Turn the delay on', cut_after:'Back to live, viewers miss nothing', cut:'Back to live now, viewers skip ahead',
+  arm:'Set the delay', cut_after:'Back to live, viewers miss nothing', cut:'Back to live now, viewers skip ahead',
   activate:'Turn on the delay that\'s ready', toggle:'Turn the delay on or off', disarm:'Turn the delay off',
   end_hold:'End the reconnect screen',
 };
-// What an OBS step can do, and what each needs.
+// What an OBS step can do: [label, what it needs picked, group]. Mirrors
+// model::OBS_ACTIONS.
 const OBS_ACTIONS = {
-  scene:['Switch to a scene', 'scene'], show:['Show a source', 'source'], hide:['Hide a source', 'source'],
-  toggle:['Show or hide a source (flip)', 'source'], text:['Change a text source', 'source'],
+  scene:['Switch to a scene', 'scene', 'Scenes and sources'], show:['Show a source', 'source', 'Scenes and sources'],
+  hide:['Hide a source', 'source', 'Scenes and sources'], toggle:['Show or hide a source (flip)', 'source', 'Scenes and sources'],
+  text:['Change a text source', 'source', 'Scenes and sources'],
+  mute:['Mute a source', 'source', 'Audio'], unmute:['Unmute a source', 'source', 'Audio'],
+  mute_toggle:['Mute or unmute a source (flip)', 'source', 'Audio'],
+  filter_on:['Turn a filter on', 'filter', 'Filters'], filter_off:['Turn a filter off', 'filter', 'Filters'],
+  filter_toggle:['Turn a filter on or off (flip)', 'filter', 'Filters'],
+  media_play:['Play a media source from the start', 'source', 'Media'], media_stop:['Stop a media source', 'source', 'Media'],
+  record_start:['Start recording', '', 'Recording'], record_stop:['Stop recording', '', 'Recording'],
+  replay_save:['Save the replay buffer', '', 'Recording'], screenshot:['Take a screenshot', '', 'Recording'],
+  hotkey:['Press an OBS hotkey', 'hotkey', 'Hotkeys'],
+  check:['Check OBS: keep what it\'s doing', '', 'Ask OBS'],
 };
+// What each OBS action does, said under the picker.
+const OBS_NOTES = {
+  replay_save:'The replay buffer must be running in OBS (Start Replay Buffer). The file lands in your recording folder.',
+  screenshot:'OBS saves a picture of what\'s on air to your recording folder, like its own Screenshot hotkey.',
+  record_start:'Saves to OBS\'s recording folder, with OBS\'s recording settings.',
+  hotkey:'Any OBS hotkey, set to keys or not: start the virtual camera, a transition, a plugin\'s action.',
+  media_play:'Restarts a video or sound you added as a Media Source.',
+};
+// An OBS hotkey's name, readable: OBSBasic.StartVirtualCam is "Start Virtual Cam".
+const hotkeyLabel = name => name.replace(/^OBSBasic\./, '').replace(/[._]/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2');
 const OPS = {
   is:'is', is_not:'is not', contains:'contains', not_contains:'does not contain', starts_with:'starts with',
   greater:'is more than', less:'is less than', empty:'is empty', not_empty:'is not empty',
   whole_number:'is a whole number',
 };
+// Comparisons that need no value to compare with.
+const OPS_ALONE = ['empty', 'not_empty', 'whole_number'];
+// An If holds up to this many checks: left, op, right, then left2…
+// Mirrors model::MAX_CONDITIONS.
+const MAX_CONDITIONS = 4;
+const condSuffix = n => n ? String(n + 1) : '';
+// An If's checks in order: the first always, the others once their op is set.
+function conditionRows(s){
+  const p = s.params || {}, rows = [];
+  for (let n = 0; n < MAX_CONDITIONS; n++){
+    const x = condSuffix(n);
+    if (n && !p['op' + x]) continue;
+    rows.push({sfx:x, left:p['left' + x] || '', op:p['op' + x] || '', right:p['right' + x] || ''});
+  }
+  return rows;
+}
+// Write `rows` back numbered 1, 2, 3 with no gaps.
+function setConditions(s, rows){
+  for (let n = 0; n < MAX_CONDITIONS; n++){
+    const x = condSuffix(n), r = rows[n];
+    ['left', 'op', 'right'].forEach(k => { if (r) s.params[k + x] = r[k]; else delete s.params[k + x]; });
+  }
+  if (rows.length < 2) delete s.params.match;
+}
 // What an "Edit text" step can do: [label, what `a` is, what `b` is].
 // Mirrors template::edit_text.
 const EDIT_OPS = {
@@ -159,7 +214,8 @@ const EDIT_OPS = {
 function filterChoices(event, name){
   if (name === 'reason') return event === 'hold_opened' ? ['crash', 'freeze', 'stopped'] : null;
   return {stopped:['yes', 'no'], protected:['yes', 'no'], state:['live', 'delay', 'crash', 'off'],
-    kind:['note', 'chapter', 'highlight']}[name] || null;
+    kind:['note', 'chapter', 'highlight'], muted:['yes', 'no'], gift:['yes', 'no'], automatic:['yes', 'no'],
+    tier:['1', '2', '3']}[name] || null;
 }
 
 function walk(steps, fn, path){
@@ -178,9 +234,14 @@ function allSteps(integration){
 function primaryStep(handler){
   const found = [];
   walk(handler && handler.steps, s => found.push(s));
-  for (const kind of PREVIEW_ORDER){
-    const s = found.find(x => x.type === kind);
-    if (s) return s;
+  // A step that's switched on says more than one waiting to be (the raid
+  // alert, not its optional welcome in chat).
+  const on = found.filter(x => x.enabled !== false);
+  for (const list of [on, found]){
+    for (const kind of PREVIEW_ORDER){
+      const s = list.find(x => x.type === kind);
+      if (s) return s;
+    }
   }
   return null;
 }
@@ -263,18 +324,22 @@ function lowerFirst(s){
 const VAR_LABEL = {
   reason:'why', hold:'hold length', hold_ends_at:'hold ends at', down_for:'how long it was down',
   destination:'platform name', platform:'platform', previous:'before', delay:'delay', delay_state:'delay on/off',
-  delay_ms:'delay (ms)', phase:'delay phase', hold_active:'reconnect screen on?', hold_left:'time left on hold',
+  delay_ms:'delay (ms)', delay_max:'longest delay now', phase:'delay phase', hold_active:'reconnect screen on?', hold_left:'time left on hold',
   destinations_live:'platforms live', destinations_total:'platforms on', obs_live:'OBS streaming?',
   bitrate:'bitrate', channel:'your channel', time:'time now', date:'date', user:'viewer\'s name',
   user_login:'viewer\'s login', user_role:'viewer\'s role', message:'their message', args:'text after the command',
   target:'who it\'s about', arg1:'1st word', arg2:'2nd word', arg3:'3rd word', body:'what was sent',
-  query:'address query', source:'pressed from', 'clip.url':'clip link', 'clip.ok':'clip made?', 'clip.error':'why no clip',
+  query:'address query', source:'pressed from', 'obs.scene':'OBS scene', 'obs.streaming':'streaming now?',
+  'obs.recording':'recording now?', 'obs.muted':'muted?', 'obs.visible':'showing?', 'clip.url':'clip link', 'clip.ok':'clip made?', 'clip.error':'why no clip',
   uptime:'stream time', vod_time:'VOD time', onair:'on-air state', timeline:'timeline', chapters:'chapter list',
   previous_chapter:'chapter before', duration:'stream length', crashes:'crashes', drops:'drops',
   highlights:'highlights', report:'health report', state:'on-air state', line:'timeline line', kind:'line kind',
   down_s:'seconds down', within:'counted over', down_total:'total time down', messages:'messages',
   normal:'normal pace', busier:'times busier', chatters:'people talking', word_share:'% saying the words',
   top_word:'top word', scene:'scene', previous_scene:'scene before', uses:'times run', text:'edited text',
+  obs_source:'OBS source', muted:'muted?', file:'saved file', tier:'sub tier', gift:'gifted?', months:'months subbed',
+  streak:'month streak', count:'subs gifted', total:'gifted in total', bits:'bits', viewers:'raiders', reward:'reward',
+  cost:'reward cost', input:'what they typed', seconds:'ad length (s)', automatic:'automatic?',
   stopped:'stopped on purpose?', protected:'crash protection took over?',
 };
 function varLabel(name){
@@ -282,7 +347,7 @@ function varLabel(name){
   let m;
   if ((m = /^counter\.(.+)$/.exec(name))) return `${m[1]} count`;
   if ((m = /^(.+)\.json\.(.+)$/.exec(name))) return m[2].split('.').pop().replace(/_/g, ' ');
-  if ((m = /^(.+)\.(status|ok|body)$/.exec(name))) return `${m[1]} ${{status:'status', ok:'worked?', body:'answer'}[m[2]]}`;
+  if ((m = /^(.+)\.(status|ok|body|output|code)$/.exec(name))) return `${m[1]} ${{status:'status', ok:'worked?', body:'answer', output:'answer', code:'exit code'}[m[2]]}`;
   return name.replace(/[._]/g, ' ');
 }
 
@@ -301,6 +366,7 @@ const VAR_HELP = {
   protected:'yes when crash protection kept your destinations up.',
   delay:'The delay, written for people. On delay events, the new one.',
   delay_ms:'The delay in milliseconds, for maths and comparisons.',
+  delay_max:'The longest delay the buffer holds right now, in seconds (an hour at most). !setdelay checks against it.',
   delay_state:'on or off.',
   phase:'What the delay is doing: idle, preparing, ready or active.',
   hold_active:'yes while the reconnect screen is on air.',
@@ -360,7 +426,14 @@ function varHelp(name){
   let m;
   if ((m = /^(.+)\.json\.(.+)$/.exec(name))) return `The value at ${m[2].split('.').join(' › ')} in the "${m[1]}" web answer.`;
   if ((m = /^(.+)\.status$/.exec(name))) return `The status the "${m[1]}" web request got back, like 200.`;
-  if ((m = /^(.+)\.ok$/.exec(name))) return `yes when the "${m[1]}" web request worked, otherwise no.`;
+  if ((m = /^(.+)\.ok$/.exec(name))) return `yes when the "${m[1]}" step worked, otherwise no.`;
+  if ((m = /^(.+)\.output$/.exec(name))) return `What the "${m[1]}" program printed.`;
+  if ((m = /^(.+)\.code$/.exec(name))) return `How the "${m[1]}" program ended: 0 when it went well.`;
+  if ((m = /^([^.]+)\.[^.]+\.(muted|visible)$/.exec(name))) return `yes when this source was ${m[2] === 'muted' ? 'muted' : 'showing'} as "${m[1]}" checked.`;
+  if ((m = /^(.+)\.(scene|streaming|recording|muted|visible)$/.exec(name))) return {
+    scene:`The scene on air when "${m[1]}" checked OBS.`, streaming:`yes when OBS was streaming as "${m[1]}" checked.`,
+    recording:`yes when OBS was recording as "${m[1]}" checked.`, muted:`yes when the source "${m[1]}" checked was muted.`,
+    visible:`yes when the source "${m[1]}" checked was showing.`}[m[2]];
   if ((m = /^(.+)\.body$/.exec(name))) return `Everything the "${m[1]}" web request got back.`;
   if ((m = /^counter\.(.+)$/.exec(name))) return `The "${m[1]}" counter, kept between runs.`;
   if ((m = /^arg([4-9])$/.exec(name))) return `Word number ${m[1]} after the command.`;
@@ -456,6 +529,18 @@ function varsFor(handler, upto){
     }
     // A name made from a value ({user}) is no variable anyone can write.
     const fixed = name => name && !name.includes('{');
+    if (s.type === 'obs' && s.params.action === 'check' && fixed(answerName(s))){
+      const n = answerName(s);
+      made.push({name:n + '.scene', sample:(S.data.obs && S.data.obs.current) || 'Gaming'}, {name:n + '.streaming', sample:'yes'}, {name:n + '.recording', sample:'no'});
+      const names = listedNames(s.params.source), several = names.length > 1;
+      if (names.length) made.push({name:n + '.muted', sample:'no', label:several ? 'all muted?' : ''}, {name:n + '.visible', sample:'yes', label:several ? 'all showing?' : ''});
+      if (several) sourceKeys(names).forEach((key, i) => made.push({name:`${n}.${key}.muted`, sample:'no', label:`${names[i]} muted?`},
+        {name:`${n}.${key}.visible`, sample:'yes', label:`${names[i]} showing?`}));
+    }
+    if (s.type === 'program' && s.params.wait === 'yes' && fixed((s.params.save_as || '').trim() || 'program')){
+      const n = (s.params.save_as || '').trim() || 'program';
+      made.push({name:n + '.output', sample:'Diamond II'}, {name:n + '.code', sample:'0'}, {name:n + '.ok', sample:'yes'});
+    }
     if (s.type === 'clip') made.push({name:'clip.url', sample:'https://clips.twitch.tv/BraveSnipe'},
       {name:'clip.id', sample:'BraveSnipe'}, {name:'clip.ok', sample:'yes'}, {name:'clip.error', sample:''});
     if (s.type === 'counter' && fixed(s.params.name)) made.push({name:'counter.' + s.params.name, sample:'2'});
@@ -476,7 +561,9 @@ function varsFor(handler, upto){
         visit(s.else);
         continue;
       }
+      const before = made.length;
       outputs(s);
+      made.slice(before).forEach(v => { v.step = s; });
     }
     return false;
   };
@@ -491,15 +578,82 @@ function sampleMap(handler){
   varsFor(handler).forEach(v => { m[v.name] = v.sample; });
   return m;
 }
+// Variables a step's fields use that nothing fills there: most likely a
+// typo ({usr}), which would send as nothing. Like api::unknown_vars, but in
+// run order like the insert chips, since a value a later step makes is
+// still empty here. Each with the closest real name, when one is close.
+function unknownVars(handler, step){
+  const used = new Set();
+  Object.values(step.params || {}).forEach(v => {
+    for (const m of String(v || '').matchAll(/\{\{[A-Za-z0-9_.]+\}\}|\{([A-Za-z0-9_.]{1,64})(?:[|#?][^}]*)?\}/g)) if (m[1]) used.add(m[1]);
+  });
+  if (!used.size) return [];
+  const names = varsFor(handler, step).map(v => v.name);
+  const t = (handler && handler.trigger) || {};
+  // Families no list can hold: any counter (counters outlive a run), any
+  // field of a web answer or of what a web call sent, any word of a command.
+  const prefixes = ['counter.'].concat(names.filter(n => n.endsWith('.status')).map(n => n.slice(0, -6)));
+  if (t.type === 'webhook' || t.type === 'shortcut') prefixes.push('body.', 'query.');
+  const chat = t.type === 'chat_command' || t.type === 'chat_message';
+  return [...used].filter(n => !names.includes(n) && !prefixes.some(p => n.startsWith(p)) && !(chat && /^arg[1-9]$/.test(n)))
+    .map(name => ({name, hint:closestName(name, names)}));
+}
+// The name `typed` was most likely meant to be: two edits away at most.
+function closestName(typed, names){
+  let best = '', score = 3;
+  for (const n of names){
+    const d = editDistance(typed.toLowerCase(), n.toLowerCase());
+    if (d < score){ score = d; best = n; }
+  }
+  return best;
+}
+function editDistance(a, b){
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  let prev = Array.from({length:b.length + 1}, (_, j) => j);
+  for (let i = 1; i <= a.length; i++){
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = row;
+  }
+  return prev[b.length];
+}
+// A calm note under the fields for each unknown name, with a one-click
+// fix when a real name is close.
+function unknownVarsHtml(list){
+  if (!list.length) return '';
+  return `<div class="ig-unknown" role="status">${list.slice(0, 3).map(u => `<div>${svg('warn')}<span>Nothing fills <code>{${esc(u.name)}}</code>, so it sends as nothing.${u.hint
+    ? ` Did you mean <button type="button" class="ig-fixvar" data-act="fix-var" data-from="${esc(u.name)}" data-to="${esc(u.hint)}">{${esc(u.hint)}}</button>?` : ''}</span></div>`).join('')}</div>`;
+}
+// Rename a variable in every field of every step of `handler`.
+function renameVar(handler, from, to){
+  // Not inside {{…}}: that is text written out as is.
+  const re = new RegExp(`(?<!\\{)\\{${from.replace(/\./g, '\\.')}([|#?][^}]*)?\\}`, 'g');
+  walk(handler.steps, s => Object.keys(s.params || {}).forEach(k => {
+    if (typeof s.params[k] === 'string') s.params[k] = s.params[k].replace(re, (all, fallback) => `{${to}${fallback || ''}}`);
+  }));
+}
 // Mirrors src/integrations/template.rs, for previews.
 // `escape`, when given, is applied to inserted values only, like the
 // server does for web requests (see template::render_escaped).
 function renderSample(text, vars, escape){
-  return String(text || '').replace(/\{\{([A-Za-z0-9_.]+)\}\}|\{([A-Za-z0-9_.]{1,64})(?:\|([^}]*))?\}/g,
-    (all, escaped, name, fallback) => {
+  return String(text || '').replace(/\{\{([A-Za-z0-9_.]+)\}\}|\{([A-Za-z0-9_.]{1,64})([|#?][^}]*)?\}/g,
+    (all, escaped, name, tail) => {
       if (escaped) return '{' + escaped + '}';
       const v = vars[name] == null ? '' : String(vars[name]);
-      if (fallback !== undefined && (v === '' || v === '0')) return fallback;
+      // {name#one#many}: the count, then the word that fits it.
+      if (tail && tail[0] === '#'){
+        const forms = tail.slice(1).split('#');
+        if (forms.length !== 2) return all;
+        const count = v.trim() || '0';
+        return (escape ? escape(count) : count) + ' ' + (count === '1' ? forms[0] : forms[1]);
+      }
+      // {name?yes:no}: one text or the other, by whether the value is yes.
+      if (tail && tail[0] === '?'){
+        const cut = tail.indexOf(':');
+        if (cut < 0) return all;
+        return /^(yes|true|on|1)$/i.test(v.trim()) ? tail.slice(1, cut) : tail.slice(cut + 1);
+      }
+      if (tail && (v === '' || v === '0')) return tail.slice(1);
       return escape ? escape(v) : v;
     });
 }
@@ -686,7 +840,7 @@ function maskUrl(url){
 // variable, or (in Discord) Markdown, a link or a countdown.
 function needsRender(raw, discord){
   const text = String(raw || '');
-  return /\{[A-Za-z0-9_.]{1,64}(?:\|[^}]*)?\}/.test(text)
+  return /\{[A-Za-z0-9_.]{1,64}(?:[|#?][^}]*)?\}/.test(text)
     || (!!discord && /\[[^\]\n]+\]\(|\*\*|`|<t:\d|https?:\/\//.test(text));
 }
 // A field that shows what it will say until it's being edited, then what
@@ -699,19 +853,112 @@ function tplHtml(control, raw, vars, cls, discord){
   const tag = cls === 'line' ? '' : '<span class="ig-tpl-hint">sample</span>';
   return `<div class="ig-tpl has-vars">${control}<div class="ig-tpl-out ${cls}" data-act="tpl-edit" aria-hidden="true" title="Click to edit. Shown with sample values.">${tag}${shown}</div></div>`;
 }
-// Insert chips for a field: the values in words, grouped. `act` is the
-// editor's insert action.
-function tokensHtml(vars, act, extra){
-  const group = {trigger:'From what happened', steps:'From earlier steps', live:'Always there'};
-  let last = '';
-  return vars.map(v => {
-    const head = v.group && v.group !== last ? `<span class="ig-tokens-group">${group[v.group]}</span>` : '';
-    last = v.group || last;
-    return `${head}<button class="ig-token" data-act="${act}" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}" aria-label="Insert ${esc(varLabel(v.name))}">+ ${esc(varLabel(v.name))}</button>`;
-  }).join('') + (extra || '');
+// A yes or no reads better as words in a message, so its chip writes
+// both, ready to change. An If step compares the plain yes, so `plain`.
+// By the value's own name, or by the field of a step's answer ({cam.muted}).
+const YES_NO_WORDS = {
+  muted:['muted', 'unmuted'], visible:['showing', 'hidden'], streaming:['live', 'offline'],
+  recording:['recording', 'not recording'], ok:['worked', 'failed'], obs_live:['live', 'offline'],
+};
+function tokenText(name, plain){
+  const parts = name.split('.');
+  const words = YES_NO_WORDS[parts[parts.length - 1]];
+  return plain || !words ? `{${name}}` : `{${name}?${words[0]}:${words[1]}}`;
+}
+// Every way to write a value, each with what it gives.
+const FORMS_HELP = `<details class="ig-more-fields ig-forms"><summary>Ways to write a value</summary><dl>
+  <dt>{viewers}</dt><dd>the value<b>42</b></dd>
+  <dt>{game|nothing yet}</dt><dd>this text when it's empty or 0<b>nothing yet</b></dd>
+  <dt>{viewers#viewer#viewers}</dt><dd>the number and the word that fits it<b>1 viewer, 42 viewers</b></dd>
+  <dt>{obs.muted?muted:unmuted}</dt><dd>the first text for yes, the second for no<b>muted</b></dd>
+  <dt>{{user}}</dt><dd>written as it is<b>{user}</b></dd></dl></details>`;
+// The fields a step's answer has, said under that step's name.
+const FIELD_LABEL = {
+  scene:'scene on air', streaming:'streaming?', recording:'recording?', muted:'muted?', visible:'showing?',
+  status:'status', ok:'worked?', body:'whole answer', output:'what it printed', code:'exit code',
+};
+// Insert chips for a field, grouped by where each value comes from: what
+// started the run, each earlier step (under its answer's name), and the
+// values that are always there, folded away when `foldLive`. `act` is the
+// editor's insert action; `extra` goes after the last chip.
+function tokensHtml(vars, act, extra, foldLive){
+  const groups = [];
+  vars.forEach(v => {
+    const key = v.step || v.group;
+    let g = groups.find(x => x.key === key);
+    if (!g) groups.push(g = {key, v, list:[]});
+    g.list.push(v);
+  });
+  const label = v => {
+    const field = v.step && answerName(v.step) && v.name.split('.').length === 2 ? FIELD_LABEL[v.name.split('.')[1]] : '';
+    return v.label || field || varLabel(v.name);
+  };
+  const chip = v => `<button class="ig-token" data-act="${act}" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}" aria-label="Insert ${esc(label(v))}">+ ${esc(label(v))}</button>`;
+  const head = v => {
+    if (!v.step) return {trigger:'From what happened', live:'Always there'}[v.group] || '';
+    const name = answerName(v.step);
+    return `${esc(stepSource(v.step))}${name ? `<code>${esc(name)}</code>` : ''}`;
+  };
+  return groups.map((g, n) => {
+    const chips = g.list.map(chip).join('') + (n === groups.length - 1 ? extra || '' : '');
+    if (g.key === 'live' && foldLive){
+      return `<details class="ig-vgroup ig-vfold"><summary>${svg('chev')}${head(g.v)}<span class="ig-vcount">${g.list.length}</span></summary><div class="ig-tokens">${chips}</div></details>`;
+    }
+    return `<div class="ig-vgroup"><div class="ig-vgroup-h">${head(g.v)}</div><div class="ig-tokens">${chips}</div></div>`;
+  }).join('') || (extra || '');
+}
+// The name later steps reach a step's answer by, for the steps whose
+// answer has several fields; '' for any other step.
+function answerName(s){
+  const base = s.type === 'http' ? 'response' : s.type === 'program' && s.params.wait === 'yes' ? 'program'
+    : s.type === 'obs' && s.params.action === 'check' ? 'obs' : '';
+  return base && ((s.params.save_as || '').trim() || base);
+}
+// Who made a group of values, in words.
+function stepSource(s){
+  if (s.type === 'obs' && s.params.action === 'check'){
+    const names = listedNames(s.params.source);
+    return 'Check OBS' + (!names.length ? '' : ' · ' + (names.length > 2 ? `${names[0]} +${names.length - 1}` : names.join(', ')));
+  }
+  return (KINDS[s.type] || {label:s.type}).label;
+}
+// The names an OBS step lists, one per line: one mute or show can take
+// several sources. Mirrors obsws::listed_names.
+function listedNames(text){
+  const names = [];
+  String(text || '').split('\n').map(x => x.trim()).forEach(x => { if (x && !names.includes(x)) names.push(x); });
+  return names;
+}
+// What a check that reads several sources names each one's values by:
+// {obs.mic_aux.muted}. Mirrors obsws::source_keys.
+function sourceKeys(names){
+  const keys = [];
+  names.forEach(name => {
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+/, '').slice(0, 24).replace(/_+$/, '') || 'source';
+    let key = base;
+    for (let n = 2; keys.includes(key); n++) key = base + n;
+    keys.push(key);
+  });
+  return keys;
+}
+// Whether another step in `handler` keeps its answer under `step`'s name.
+function answerClash(handler, step){
+  const name = answerName(step);
+  let clash = false;
+  if (name) walk(handler.steps, s => { clash = clash || (s !== step && answerName(s) === name); });
+  return clash;
+}
+// Give `step` an answer name no other step uses: obs, obs2, obs3.
+function nameAnswer(handler, step){
+  if (!answerClash(handler, step)) return;
+  const base = answerName(step).replace(/\d+$/, '');
+  for (let n = 2; ; n++){
+    step.params.save_as = base + n;
+    if (!answerClash(handler, step)) return;
+  }
 }
 function highlightVars(text){
-  return esc(text).replace(/\{[A-Za-z0-9_.]{1,64}(?:\|[^}]*)?\}/g, m => `<span class="v">${m}</span>`);
+  return esc(text).replace(/\{[A-Za-z0-9_.]{1,64}(?:[|#?][^}]*)?\}/g, m => `<span class="v">${m}</span>`);
 }
 function fmtAgo(ms){
   if (!ms) return 'never';
@@ -809,6 +1056,7 @@ function morph(root, html){
     && !focused.closest('[data-leaving]')) focused.focus({preventScroll:true});
   if (motion) animateMorph(ctx);
   placeIndicators(root);
+  fillRanges(root);
 }
 
 function measure(root){
@@ -994,6 +1242,13 @@ function enterStagger(root){
 // under the active tab after every redraw, and glides when that changes.
 // Its row too: a narrow window wraps a control onto two lines.
 const SEG_IND = '<span class="sub-tab-ind" data-keep-style aria-hidden="true"></span>';
+
+// A slider's track fills up to its thumb (--p, read by index.html's CSS).
+function fillRange(el){
+  const min = +el.min || 0, max = +el.max || 100;
+  el.style.setProperty('--p', ((+el.value - min) / (max - min || 1)) * 100 + '%');
+}
+function fillRanges(root){ root.querySelectorAll('input[type=range]').forEach(fillRange); }
 function placeIndicators(root){
   root.querySelectorAll('.ig-seg').forEach(seg => {
     const ind = seg.querySelector(':scope > .sub-tab-ind');
@@ -1139,14 +1394,17 @@ function q(sel){
 }
 
 // A toast with Undo, for actions that are easy to regret.
-function undoToast(text, undo){
+function undoToast(text, undo){ actionToast(text, 'Undo', undo); }
+// A toast with one button: Undo, or the obvious next step ("Edit copy").
+function actionToast(text, label, act){
   const rail = $('toast-rail');
   if (!rail){ toast(text, 'ok'); return; }
   const el = document.createElement('div');
   el.className = 'ic-toast ok ig-undo';
-  el.innerHTML = `<span class="ic-toast-icon">✓</span><span class="ig-undo-text"></span><button type="button" class="ig-undo-btn">Undo</button>
+  el.innerHTML = `<span class="ic-toast-icon">✓</span><span class="ig-undo-text"></span><button type="button" class="ig-undo-btn"></button>
     <i class="ig-undo-bar" style="animation-duration:${UNDO_MS}ms"></i>`;
   el.querySelector('.ig-undo-text').textContent = text;
+  el.querySelector('.ig-undo-btn').textContent = label;
   let used = false;
   const leave = () => {
     if (!el.isConnected || el.classList.contains('leaving')) return;
@@ -1157,7 +1415,7 @@ function undoToast(text, undo){
     if (used) return;
     used = true;
     leave();
-    await undo();
+    await act();
   });
   rail.appendChild(el);
   // Pointing at it holds the countdown (the bar pauses in CSS too).
@@ -1248,7 +1506,7 @@ function tryEntry(s){
 function tryHtml(s, handler, useLabel){
   const t = tryEntry(s);
   const used = [...new Set(['url', 'headers', 'body'].flatMap(f =>
-    [...String(s.params[f] || '').matchAll(/\{([A-Za-z0-9_.]{1,64})(?:\|[^}]*)?\}/g)].map(m => m[1])))];
+    [...String(s.params[f] || '').matchAll(/\{([A-Za-z0-9_.]{1,64})(?:[|#?][^}]*)?\}/g)].map(m => m[1])))];
   const samples = sampleMap(handler);
   const inputs = used.map(n => `<div class="dff"><label class="mono">${esc(n)}</label><input class="ic-input" data-bind="try" data-name="${esc(n)}"
     value="${esc(n in t.inputs ? t.inputs[n] : (samples[n] || ''))}" placeholder="a value to try"></div>`).join('');
@@ -1312,6 +1570,12 @@ const Menu = {
     if (this.id === id){ this.close(); return; }
     this.open(btn, id);
   },
+  // The issue form's fields for one integration: its name, and its last
+  // run when that failed.
+  reportFields(i){
+    const r = lastRunOf(i.id);
+    return {integration:i.name, run:r && r.status === 'failed' ? reportLog(r) : ''};
+  },
   open(btn, id){
     this.close();
     const i = find(id);
@@ -1322,10 +1586,13 @@ const Menu = {
     el.innerHTML = `<button role="menuitem" data-act="edit" data-id="${esc(id)}" style="--i:0">${svg('pencil')}Edit</button>
       <button role="menuitem" data-act="duplicate" data-id="${esc(id)}" style="--i:1">${svg('copy')}Duplicate</button>
       <button role="menuitem" data-act="share-one" data-id="${esc(id)}" style="--i:2">${svg('link')}Share as a recipe</button>
+      <a role="menuitem" href="${esc(reportUrl(this.reportFields(i)))}" target="_blank" rel="noreferrer" style="--i:3">${svg('warn')}Report a problem</a>
       <div class="ig-menu-sep" role="separator"></div>
-      <button role="menuitem" class="danger" data-act="menu-delete" data-id="${esc(id)}" style="--i:3">${svg('x')}Delete</button>`;
+      <button role="menuitem" class="danger" data-act="menu-delete" data-id="${esc(id)}" style="--i:4">${svg('x')}Delete</button>`;
     document.body.appendChild(el);
     el.addEventListener('click', onClick);
+    // The report opens in a new tab; the menu has done its job.
+    el.addEventListener('click', e => { if (e.target.closest('a[role="menuitem"]')) this.close(); });
     el.addEventListener('keydown', e => this.keys(e));
     const r = btn.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight;
     el.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
@@ -1366,11 +1633,32 @@ const Menu = {
   dismiss: e => { if (Menu.el && !(e && e.target instanceof Node && Menu.el.contains(e.target))) Menu.close(); },
 };
 
-function copyText(btn){
-  const text = btn.dataset.text || '';
-  navigator.clipboard.writeText(text).then(
-    () => { if (typeof flashCopied === 'function' && btn.classList.contains('ic-btn')) flashCopied(btn); else toast('Copied', 'ok'); },
-    () => toast('Could not copy: select it and copy it by hand', 'err'));
+// The clipboard API only exists on https or this PC; a phone on the LAN
+// reaches the dashboard over plain http, where the old copy command still
+// works. True when it was copied.
+async function writeClipboard(text){
+  if (navigator.clipboard && window.isSecureContext){
+    try { await navigator.clipboard.writeText(text); return true; } catch(_){}
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0';
+  // Inside the modal when one is open: its focus trap would pull focus
+  // straight back otherwise.
+  (Modal.form || document.body).appendChild(area);
+  const had = document.activeElement;
+  area.select();
+  let done = false;
+  try { done = document.execCommand('copy'); } catch(_){}
+  area.remove();
+  if (had && had.isConnected && typeof had.focus === 'function') had.focus({preventScroll:true});
+  return done;
+}
+const COPY_FAILED = 'Could not copy: select it and copy it by hand';
+async function copyText(btn){
+  if (!await writeClipboard(btn.dataset.text || '')){ toast(COPY_FAILED, 'err'); return; }
+  if (typeof flashCopied === 'function' && btn.classList.contains('ic-btn')) flashCopied(btn); else toast('Copied', 'ok');
 }
 
 // ---------------------------------------------------------------- previews
@@ -1430,6 +1718,11 @@ function previewHtml(step, handler, big){
       return `<div class="${cls} ig-pv-action"><span>${svg('film')}</span>Clips the last moments, and hands you the link</div>`;
     case 'delay_action':
       return `<div class="${cls} ig-pv-action"><span>${svg('cut')}</span>${esc(delayActionLabel(step.params, vars))}</div>`;
+    case 'light': {
+      const rgb = lightRgb(step.params.color);
+      const off = step.params.action === 'off';
+      return `<div class="${cls} ig-pv-action"><span class="ig-bulb${off ? ' off' : ''}${step.params.action === 'flash' ? ' flash' : ''}" style="--bulb:${off ? 'transparent' : rgb}">${svg('bulb')}</span>${esc(lightSummary(step.params))}</div>`;
+    }
     case 'program':
       return `<div class="${cls} ig-pv-action"><span>${svg('terminal')}</span>${esc('Runs ' + ((step.params.path || '').split(/[\\/]/).pop() || 'a program'))}</div>`;
   }
@@ -1446,6 +1739,9 @@ const S = {
   data:null, visible:false, filter:'all', search:'', peek:null,
   view: store.get('ig-view') === 'list' ? 'list' : 'grid',
   pollTimer:null, activityOpen:false,
+  // The Recent activity row showing its steps (its data-key), and whether
+  // an editor shows its last run's steps.
+  actOpen:null, lastRunOpen:false,
   // Secret fields the user chose to show (by field id). Hidden by default:
   // a dashboard is often on a stream.
   revealed:new Set(),
@@ -1462,7 +1758,10 @@ async function load(){
     return false;
   }
   S.data = d;
-  render();
+  // The answer redraws the tab: the card around it eases to its new height.
+  if (typeof easeCardHeight === 'function') easeCardHeight(render); else render();
+  // Opening the dashboard connects OBS: show it soon, not at the next poll.
+  if ((d.obs || {}).state === 'connecting') setTimeout(poll, 1200);
   return true;
 }
 
@@ -1475,10 +1774,19 @@ async function poll(){
   S.data.activity = a.activity;
   S.data.stats = a.stats;
   S.data.twitch = a.twitch;
+  S.data.obs = a.obs;
+  const alerts = Object.assign({}, a.alerts, {look:lookOf()});
+  const alertsChanged = JSON.stringify(alerts) !== JSON.stringify(S.data.alerts);
+  S.data.alerts = alerts;
   if (fastBefore !== !!a.twitch.login) schedulePoll();
   if (S.visible) render();
-  // Only the Twitch page shows live state.
-  if (Modal.kind === 'connections' && Conn.tab === 'twitch' && twitchChanged) Conn.render();
+  // Pages that show live state.
+  if (Modal.kind === 'connections' && ((Conn.tab === 'twitch' && twitchChanged) || (Conn.tab === 'stream' && alertsChanged))) Conn.render();
+  if (Modal.kind === 'editor' && alertsChanged && (primaryStep(Editor.handler()) || {}).type === 'overlay') Editor.render();
+  if (Modal.kind === 'alerts' && alertsChanged){
+    const status = q('.ig-look-body [data-key="alerts-status"]');
+    if (status) status.outerHTML = alertsStatusHtml(false);
+  }
 }
 
 function schedulePoll(){
@@ -1601,7 +1909,7 @@ function render(){
   morph(root, `<div class="ig-pane" data-flip>
       <div class="tab-head" data-key="head">
         <div><div class="tab-title">Integrations <span class="ig-exp">Experimental</span></div><div class="tab-sub ig-sub">${sub}</div>
-          <div class="ig-exp-note">New in 0.1.15 and experimental: they work, but how they look and how you set them up may still change. Found a bug or have an idea? <a href="https://github.com/Soulhackzlol/InstantClone/issues/new?template=integrations.yml" target="_blank" rel="noreferrer">Report it</a></div></div>
+          <div class="ig-exp-note">Still experimental: they work, but how they look and how you set them up may still change. Found a bug or have an idea? <a href="${esc(reportUrl())}" target="_blank" rel="noreferrer">Report it</a></div></div>
         <div class="ig-head-actions">
           ${empty ? '' : '<button class="ic-btn ic-btn-ghost" data-act="share">Share</button>'}
           <button class="ic-btn ic-btn-ghost" data-act="import">Import recipe</button>
@@ -1624,6 +1932,12 @@ function noticesHtml(failing){
       <span class="ig-notice-text">${esc(d.twitch.notice)}</span>
       <button class="ic-btn ic-btn-ghost ig-small" data-act="conn" data-tab="twitch">Reconnect</button></div>`);
   }
+  const consent = twitchEventsIn('needs_consent');
+  if (consent.length && d.twitch.main.login){
+    out.push(`<div class="lan-warn ig-notice" data-key="n-twitch-consent"><span class="lw-ic">⚠</span>
+      <span class="ig-notice-text">Twitch needs your OK before InstantClone hears <b>${esc(twitchNouns(consent))}</b>: your login is from before these events.</span>
+      <button class="ic-btn ic-btn-ghost ig-small" data-act="conn" data-tab="twitch">Allow</button></div>`);
+  }
   failing.slice(0, 2).forEach(i => {
     const rec = (d.activity || []).find(r => r.integration_id === i.id && r.status === 'failed');
     const step = rec && rec.steps.find(s => s.status === 'failed');
@@ -1635,18 +1949,25 @@ function noticesHtml(failing){
 }
 
 function connectionsHtml(){
-  const c = S.data.connections, t = S.data.twitch;
-  const discord = c.discord.length;
-  const twitchOn = !!t.main.login;
-  const twitchLive = t.main.chat === 'connected';
-  const phoneOn = !!c.phone.topic;
-  const pill = (tab, cls, k, v) =>
-    `<button class="ic-pill ${cls}" data-act="conn" data-tab="${tab}"><span class="dot"></span><span class="ic-pill-k">${k}</span><span class="ic-pill-v">${esc(v)}</span></button>`;
-  return `<div class="ig-conns" data-key="conns"><span class="ic-label">Connections</span>
-    ${pill('discord', discord ? 'ok' : '', 'Discord', discord ? plural(discord, 'channel') : 'Add')}
-    ${pill('twitch', twitchOn ? (twitchLive ? 'ok' : 'warn') : '', 'Twitch', twitchOn ? (twitchLive ? 'connected' : 'chat ' + t.main.chat) : (t.available ? 'Connect' : 'Set up'))}
-    ${pill('phone', phoneOn ? 'ok' : '', 'Phone', phoneOn ? 'connected' : 'Connect')}
-  </div>`;
+  const pills = CONNECTIONS.map(([id, , name]) => {
+    const [cls, words] = connState(id);
+    return `<button class="ic-pill ${cls}" data-act="conn" data-tab="${id}"><span class="dot"></span><span class="ic-pill-k">${name}</span><span class="ic-pill-v">${esc(words)}</span></button>`;
+  }).join('');
+  return `<div class="ig-conns" data-key="conns"><span class="ic-label">Connections</span>${pills}</div>`;
+}
+// Whether an integration talks to OBS: a scene trigger or an OBS step,
+// switched on. Mirrors Engine::update_obs_want.
+function usesObs(i){
+  return (i.handlers || []).some(h => h.enabled && (h.trigger.type === 'scene' || isObsEvent(h.trigger) || hasStepOn(h, 'obs')));
+}
+// A trigger on something OBS reports itself (recording, a replay, mute).
+function isObsEvent(t){
+  return t.type === 'event' && (eventOf(t.event) || {}).group === 'OBS';
+}
+function hasStepOn(h, type){
+  let found = false;
+  walk(h.steps, s => { found = found || (s.type === type && s.enabled !== false); });
+  return found;
 }
 
 function toolbarHtml(){
@@ -1763,11 +2084,13 @@ function activityHtml(){
       : r.status === 'busy' ? 'skipped: too many runs at once'
       : r.status === 'cooldown' ? 'skipped: pressed again too soon (Repeat at most)'
       : r.steps.filter(s => s.status === 'ok').map(s => s.label).join(' · ') || r.trigger;
-    const open = find(r.integration_id)
-      ? ` data-act="edit" data-id="${esc(r.integration_id)}" role="button" tabindex="0" title="Open ${esc(r.name)}"` : '';
-    return `<div class="ig-act-row${open ? ' link' : ''}" data-key="a-${esc(key)}"${open}><span class="t">${esc(fmtClock(r.at_ms))}</span>
+    // A row opens onto its steps, to read, copy or report.
+    const open = S.actOpen === key;
+    return `<div class="ig-act-item${open ? ' open' : ''}" data-key="a-${esc(key)}" data-autoh>
+      <div class="ig-act-row link" data-act="act-row" data-k="${esc(key)}" role="button" tabindex="0" aria-expanded="${open}"><span class="t">${esc(fmtClock(r.at_ms))}</span>
       <span class="n">${esc(r.name)}${r.test ? ' <span class="muted">(test)</span>' : ''}</span>
-      <span class="d" title="${esc(detail)}">${esc(r.trigger)} → ${esc(detail)}</span><span class="s ${esc(r.status)}">${esc(r.status === 'cooldown' ? 'skipped' : r.status)}</span></div>`;
+      <span class="d">${esc(r.trigger)} → ${esc(detail)}</span><span class="s ${esc(r.status)}">${esc(r.status === 'cooldown' ? 'skipped' : r.status)}</span>${svg('chev', ' class="c"')}</div>
+      ${open ? `<div class="ig-act-more">${runPanelHtml(r, true)}</div>` : ''}</div>`;
   }).join('') : '<div class="ig-act-empty" data-key="a-none">Runs show up here, with every step and what it answered.</div>';
   return `<details class="sys-section ig-activity-box" id="ig-activity-box" data-key="activity" ${S.activityOpen ? 'open' : ''}>
     <summary><span class="ig-act-title">Recent activity</span><span class="muted">${rows.length ? 'last run ' + esc(fmtAgo(rows[0].at_ms)) : 'nothing has run yet'}</span>${svg('chev')}</summary>
@@ -1849,18 +2172,41 @@ async function finishDrafts(ids){
     if (!i || !pickNewChannel(i)) continue;
     const draft = clone(i);
     const r = await api('/integrations/save', Object.assign(clone(draft), {enabled:true}));
-    if (r.ok) on++;
-    else await api('/integrations/save', draft);
+    // Kept as a draft by the app (something is still missing) is not on.
+    if (r.ok && !r.drafted) on++;
+    else if (!r.ok) await api('/integrations/save', draft);
   }
   await load();
   if (on) toast(`${plural(on, 'integration')} from the pack switched on`, 'ok', 4500);
 }
 
+// The copy lands right after the original, switched off; it glows so the
+// eye finds it, and the toast opens it.
 async function duplicate(id){
   const r = await api('/integrations/duplicate', {id});
   if (!r.ok){ toast(r.error || 'Could not duplicate it', 'err'); return; }
   await load();
-  toast('Duplicated', 'ok');
+  const copy = find(r.id);
+  if (!copy){ toast('Duplicated', 'ok'); return; }
+  reveal(copy.id);
+  actionToast(`Duplicated as ${copy.name}, switched off`, 'Edit copy', () => {
+    const now = find(copy.id);
+    if (now) openEditor(now);
+  });
+}
+// Bring a card or row into view and glow it. A search or a category
+// filter that hides it steps aside first.
+function reveal(id){
+  const i = find(id);
+  if (!i) return;
+  if (!visibleIntegrations().includes(i)){ S.search = ''; S.filter = 'all'; render(); }
+  // After the morph has placed it.
+  requestAnimationFrame(() => {
+    const card = document.querySelector(`[data-key="c-${CSS.escape(id)}"], [data-key="r-${CSS.escape(id)}"]`);
+    if (!card) return;
+    card.scrollIntoView({block:'nearest', behavior:reduced() ? 'auto' : 'smooth'});
+    glow(id);
+  });
 }
 
 async function remove(id){
@@ -1891,6 +2237,16 @@ async function deleteIds(ids){
 function openEditor(i, switchOn, opts){
   if (i.preset) Editor.open(i, switchOn, opts);
   else Builder.open(i, Object.assign({switchOn}, opts));
+  // A failing card says "open it to see why": opened, it shows why.
+  const st = stat(i);
+  if (i.enabled && st && st.failing > 0 && lastRunOf(i.id)) setLastRun(true);
+}
+// The last run's steps over an editor's footer: shown or hidden.
+function setLastRun(open){
+  if (S.lastRunOpen === open) return;
+  S.lastRunOpen = open;
+  const o = OWNERS[Modal.kind];
+  if (o && o.render && (Modal.kind === 'editor' || Modal.kind === 'builder')) o.render();
 }
 
 // ---------------------------------------------------------------- modal shell
@@ -1921,6 +2277,10 @@ const Modal = {
       wrap.addEventListener('input', onInput);
       wrap.addEventListener('keydown', onActivateKey);
       wrap.addEventListener('focusout', onFieldLeave);
+      // The last run's steps fold away at a click anywhere else.
+      wrap.addEventListener('pointerdown', e => {
+        if (S.lastRunOpen && !e.target.closest('.ig-lastrun, [data-act="last-run"]')) setLastRun(false);
+      });
       wrap.addEventListener('toggle', e => {
         const key = e.target.dataset && e.target.dataset.fold;
         if (key) e.target.open ? Recipes.folds.add(key) : Recipes.folds.delete(key);
@@ -1935,6 +2295,7 @@ const Modal = {
     this.after = null;
     this.back = null;
     this.pending = null;
+    S.lastRunOpen = false;
     // As variables, not inline sizes, so the phone layout can override them.
     this.form.style.setProperty('--ig-w', `min(${width || 820}px,100%)`);
     this.form.style.setProperty('--ig-h', height || 'auto');
@@ -1949,6 +2310,7 @@ const Modal = {
     this.form.innerHTML = html;
     this.form.focus({preventScroll:true});
     placeIndicators(this.form);
+    fillRanges(this.form);
     if (reduced()) return;
     const to = this.form.getBoundingClientRect();
     this.form.animate([{width:from.width + 'px', height:from.height + 'px'}, {width:to.width + 'px', height:to.height + 'px'}],
@@ -2033,6 +2395,7 @@ function onModalKey(e){
     e.preventDefault();
     // One layer at a time: the guard, then an open chip, then the modal.
     if (Modal.form.querySelector('.ig-guard')) Modal.hideGuard();
+    else if (S.lastRunOpen) setLastRun(false);
     else if (Modal.kind === 'editor' && Editor.closeChip()) return;
     else Modal.close();
     return;
@@ -2073,29 +2436,174 @@ function titleInput(value){
 function enableSwitch(bind, on, label){
   return `<label class="dest-form-enable"><input type="checkbox" data-bind="${bind}" ${on ? 'checked' : ''}><span class="dfe-track"><span></span></span><span data-tick>${label || (on ? 'On' : 'Off (draft)')}</span></label>`;
 }
+// "Last ran 3 min ago · failed". With that run still in Recent activity,
+// a button that opens its steps (see lastRunPanelHtml).
 function lastRunHtml(d){
   const st = stat(d);
   if (!st || !st.last_ms) return '<span class="ig-last">Hasn\'t run yet</span>';
   const how = {ok:'worked', failed:'failed', stopped:'stopped early'}[st.last_status] || st.last_status;
-  return `<span class="ig-last ${st.last_status === 'failed' ? 'bad' : 'ok'}"><i></i>Last ran ${esc(fmtAgo(st.last_ms))} · ${esc(how)}</span>`;
+  const cls = `ig-last ${st.last_status === 'failed' ? 'bad' : 'ok'}`;
+  const text = `<i></i>Last ran ${esc(fmtAgo(st.last_ms))} · ${esc(how)}`;
+  if (!lastRunOf(d.id)) return `<span class="${cls}">${text}</span>`;
+  return `<button type="button" class="${cls} ig-last-btn" data-act="last-run" aria-expanded="${S.lastRunOpen}"
+    title="${S.lastRunOpen ? 'Hide' : 'See'} what each step did">${text}${svg('chev')}</button>`;
+}
+// The newest real run of an integration in Recent activity: tests and
+// skipped presses aren't runs, and the footer counts neither.
+function lastRunOf(id){
+  return (S.data.activity || []).find(r => r.integration_id === id && !r.test && r.status !== 'busy' && r.status !== 'cooldown') || null;
+}
+// The last run's steps, over the footer of the editor it belongs to.
+function lastRunPanelHtml(d){
+  const r = S.lastRunOpen && d.id ? lastRunOf(d.id) : null;
+  if (!r) return '';
+  return `<div class="ig-lastrun" role="region" aria-label="Last run">
+    <div class="ig-lastrun-head"><b>Last run</b><span class="muted">${esc(fmtClock(r.at_ms))} · ${esc(r.trigger)}</span>
+      <button type="button" class="ic-btn-tiny" data-act="last-run" aria-label="Close">${svg('x')}</button></div>
+    ${runPanelHtml(r, false)}</div>`;
+}
+// A run as text, for "Copy run log" and the issue form's run log.
+function runLogText(r){
+  const lines = r.steps.map(s => `${((s.at_ms || 0) / 1000).toFixed(2).padStart(7)} s  ${s.status.padEnd(7)} ${s.label}${s.detail ? ': ' + s.detail : ''}`);
+  return [`${r.name} · ${new Date(r.at_ms).toLocaleString()} · ${r.status}${r.test ? ' (test)' : ''}`, `When: ${r.trigger}`]
+    .concat(lines.length ? lines : ['No steps ran.']).join('\n');
+}
+// A run log for the issue form, cut to what a link can carry.
+function reportLog(r){
+  const log = runLogText(r);
+  return log.length > 1500 ? log.slice(0, 1500) + '\n…' : log;
+}
+// A run's steps with Copy, Report it and, from Recent activity, a way to
+// the integration.
+function runPanelHtml(r, withOpen){
+  const log = runLogText(r);
+  const report = reportUrl({integration:r.name, run:reportLog(r)});
+  return `${runLogHtml(r.steps)}<div class="ig-run-actions">
+    <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(log)}">${svg('copy', ' class="ig-btn-ic"')}Copy run log</button>
+    ${withOpen && find(r.integration_id) ? `<button class="ic-btn ic-btn-ghost ig-small" data-act="edit" data-id="${esc(r.integration_id)}">${svg('pencil', ' class="ig-btn-ic"')}Open integration</button>` : ''}
+    <a class="ig-run-report" href="${esc(report)}" target="_blank" rel="noreferrer">Report it</a></div>`;
+}
+// The integrations issue form with what is known filled in, by the form's
+// own field ids (.github/ISSUE_TEMPLATE/integrations.yml).
+function reportUrl(fields){
+  const p = new URLSearchParams({template:'integrations.yml'});
+  if (S.data && S.data.version) p.set('version', 'v' + S.data.version);
+  Object.entries(fields || {}).forEach(([k, v]) => { if (v) p.set(k, v); });
+  return 'https://github.com/Soulhackzlol/InstantClone/issues/new?' + p;
 }
 // The editors' footer: Delete away from Save, Save lit only with changes.
 function footHtml(d, dirty, extra, canSave){
   const locked = localLocked() && runsLocally(d);
-  return `<div class="dest-form-foot">
+  return `<div class="dest-form-foot">${lastRunPanelHtml(d)}
     ${d.id ? '<button class="ic-btn ic-btn-ghost ig-del" data-act="delete">Delete</button>' : ''}
     <div class="dest-form-msg muted ig-foot-msg">${d.id ? lastRunHtml(d) : '<span class="ig-last">New integration</span>'}${locked ? `<button type="button" class="ig-foot-need ig-foot-why" data-act="lock-why">Needs a dashboard password: why?</button>`
       : dirty ? '<span class="ig-unsaved">Unsaved</span>'
-      : d.id && issuesOf(d).length ? `<span class="ig-foot-need">To switch it on: ${esc(issuesOf(d)[0])}</span>` : ''}</div>
+      : d.id && issuesOf(d).length ? `<span class="ig-foot-need">${d.enabled ? 'Before it can run' : 'To switch it on'}: ${esc(issuesOf(d)[0])}</span>` : ''}</div>
     ${extra || ''}
+    ${dirty ? `<button class="ic-btn ic-btn-ghost ig-discard" data-act="discard" title="${d.id ? 'Back to the last saved version' : 'Throw this new one away'}">Discard</button>` : ''}
     <button class="ic-btn ic-btn-primary" data-act="save" ${!locked && (dirty || canSave || !d.id) ? '' : 'disabled'} title="${locked ? esc(LOCAL_LOCK_TEXT) : 'Save (Ctrl+S)'}">Save</button>
   </div>`;
+}
+// Discard: back to the last saved version, staying in the editor (`ed`,
+// the simple one or the builder), with Undo for the edits. A new one has
+// no saved version, so it closes.
+function discardEdits(ed){
+  const saved = ed.d.id && find(ed.d.id);
+  if (!saved){ Modal.close(true); return; }
+  if (document.querySelector('.ig-rewind-badge')) return;
+  const kind = Modal.kind, edits = ed.d;
+  let fresh = null;
+  rewind(true, () => {
+    ed.d = fresh = withHandler(clone(saved));
+    ed.dirty = false;
+    ed.reset();
+    ed.render();
+  });
+  undoToast('Changes discarded', () => {
+    if (Modal.kind !== kind || !fresh || ed.d !== fresh) return;
+    rewind(false, () => {
+      ed.d = edits;
+      ed.dirty = true;
+      ed.reset();
+      ed.render();
+    });
+  });
+}
+// Discard puts the blocks back one by one: the ones the edits added slide
+// out, the ones that stay travel to where the saved version has them, and
+// the ones the edits took away slide back in. Undo (`back` false) plays
+// the same moves the other way. `swap` changes what is shown. A block is
+// known in both versions by its kind and what it says.
+function rewind(back, swap){
+  const host = q('.ig-canvas');
+  if (reduced() || !host){ swap(); return; }
+  const sig = el => el.classList.contains('ig-when') ? 'when'
+    : `${(el.querySelector('.ig-step-kind') || {}).textContent}|${(el.querySelector('.ig-step-text') || {}).textContent}`;
+  const was = new Map();
+  host.querySelectorAll('.ig-step').forEach(el => {
+    const list = was.get(sig(el)) || [];
+    list.push({rect:el.getBoundingClientRect(), copy:el.cloneNode(true)});
+    was.set(sig(el), list);
+  });
+  const badge = document.createElement('div');
+  badge.className = 'ig-rewind-badge' + (back ? '' : ' fwd');
+  badge.setAttribute('aria-hidden', 'true');
+  badge.innerHTML = `${svg('rewind')}<span>${back ? 'Back to saved' : 'Edits back'}</span>`;
+  const box = host.getBoundingClientRect();
+  Object.assign(badge.style, {left:(box.left + box.width / 2) + 'px', top:(box.top + 22) + 'px'});
+  document.body.appendChild(badge);
+  swap();
+  host.querySelectorAll('[data-leaving]').forEach(n => n.remove());
+  const plan = [...host.querySelectorAll('.ig-step')].map(el => {
+    const list = was.get(sig(el));
+    return {el, from:list && list.shift()};
+  });
+  let turn = 0;
+  const next = () => Math.min(turn++, 16) * 75;
+  // First out: what the other version doesn't have.
+  was.forEach(list => list.forEach(({rect, copy}) => {
+    copy.querySelectorAll('[data-act],[data-key],[id]').forEach(n => ['data-act', 'data-key', 'id'].forEach(a => n.removeAttribute(a)));
+    ['data-act', 'data-key', 'data-path'].forEach(a => copy.removeAttribute(a));
+    copy.setAttribute('aria-hidden', 'true');
+    Object.assign(copy.style, {position:'fixed', left:rect.left + 'px', top:rect.top + 'px', width:rect.width + 'px', height:rect.height + 'px',
+      margin:'0', zIndex:'1500', pointerEvents:'none'});
+    document.body.appendChild(copy);
+    copy.animate([{transform:'none', opacity:1},
+      {transform:`translate(${back ? 70 : -70}px,-6px) rotate(${back ? 5 : -5}deg) scale(.9)`, opacity:0}],
+      {duration:340, delay:next(), easing:'cubic-bezier(.4,0,1,1)', fill:'both'}).onfinish = () => copy.remove();
+  }));
+  // Then, top first, each block that moved is picked up and set down.
+  plan.forEach(({el, from}) => {
+    el.getAnimations().forEach(a => a.cancel());
+    const to = el.getBoundingClientRect();
+    if (!from){
+      el.animate([{transform:`translateX(${back ? -50 : 50}px) scale(.92)`, opacity:0}, {transform:'none', opacity:1}],
+        {duration:380, delay:next(), easing:'cubic-bezier(.2,.9,.3,1.2)', fill:'backwards'});
+      return;
+    }
+    const dx = from.rect.left - to.left, dy = from.rect.top - to.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+    el.animate([
+      {transform:`translate(${dx}px,${dy}px)`, zIndex:5},
+      {transform:`translate(${dx * 0.85}px,${dy * 0.85 - 8}px) scale(1.03)`, zIndex:5, offset:.18},
+      {transform:'translateY(-4px) scale(1.02)', zIndex:5, offset:.8},
+      {transform:'none', zIndex:5},
+    ], {duration:520, delay:next(), easing:'cubic-bezier(.3,.7,.2,1)', fill:'backwards'});
+  });
+  // Lanes fade back in under their steps.
+  host.querySelectorAll('.ig-branch').forEach(b => {
+    b.getAnimations().forEach(a => a.cancel());
+    b.animate([{opacity:.25}, {opacity:1}], {duration:420, delay:120, easing:'ease-out', fill:'backwards'});
+  });
+  setTimeout(() => {
+    badge.animate([{opacity:1}, {opacity:0, transform:'translate(-50%,-6px)'}], {duration:220, fill:'forwards'}).onfinish = () => badge.remove();
+  }, 650 + turn * 75);
 }
 function runLogHtml(steps){
   if (!steps || !steps.length) return '<div class="muted">No steps ran.</div>';
   return `<div class="ig-run">${steps.map((s, i) => `<div style="--i:${i}"><span class="t">${(s.at_ms / 1000).toFixed(2)} s</span>
     <span class="${esc(s.status)}">${s.status === 'ok' ? '✓' : s.status === 'failed' ? '✕' : '○'} ${esc(s.label)}</span>
-    <span class="d" title="${esc(s.detail)}">${esc(s.detail)}</span></div>`).join('')}</div>`;
+    <span class="d">${esc(s.detail)}</span></div>`).join('')}</div>`;
 }
 function warnHtml(text){
   return `<div class="lan-warn ig-inline-warn"><span class="lw-ic">⚠</span><span>${text}</span></div>`;
@@ -2119,15 +2627,24 @@ async function saveIntegration(d, onSaved, opts){
   const r = await api('/integrations/save', d);
   if (!r.ok){ toast(r.error || 'Could not save', 'err', 6000); return false; }
   if (r.id) d.id = r.id;
+  // Unfinished work is kept as a draft, switched off: the switch says so.
+  if (r.drafted) d.enabled = false;
   if (onSaved) onSaved();
-  if (r.missing && r.missing.length){
-    toast(`Saved as a draft. Still to do: ${r.missing.join('; ')}`, 'info', 7000);
-  } else if (r.warnings && r.warnings.length){
-    toast(`Saved. Check these names, nothing fills them: ${r.warnings.map(w => '{' + w + '}').join(', ')}`, 'info', 7000);
-  } else toast('Saved', 'ok');
+  const missing = r.missing || [], unknown = r.warnings || [];
+  const names = unknown.length ? `Nothing fills ${unknown.map(w => '{' + w + '}').join(', ')}: check the spelling.` : '';
+  if (missing.length){
+    toast(`Saved as a draft${r.drafted ? ', switched off' : ''}. Still to do: ${missing.join('; ')}.${names ? ' ' + names : ''}`, 'info', 8000);
+  } else if (names) toast(`Saved. ${names}`, 'info', 7000);
+  else toast('Saved', 'ok');
   if (Modal.kind === kind){
     await savedBeat();
-    if (Modal.kind === kind && !(opts && opts.stay)) Modal.close(true);
+    // Something typed while it saved stays on screen, unsaved, instead of
+    // closing with the editor.
+    const owner = OWNERS[kind];
+    if (Modal.kind === kind && !(opts && opts.stay)){
+      if (owner && owner.dirty) owner.render();
+      else Modal.close(true);
+    }
   }
   await load();
   if (opts && opts.stay && Modal.kind === kind && OWNERS[kind]) OWNERS[kind].render();
@@ -2150,8 +2667,7 @@ const Catalog = {
   },
   render(){
     const cat = S.data.catalog;
-    const counts = id => id === 'packs' ? cat.packs.length
-      : cat.presets.filter(p => id === 'rec' ? p.recommended : p.category === id).length;
+    const counts = id => id === 'packs' ? cat.packs.length : this.presetsIn(id).length;
     const nav = [['rec', 'Recommended'], ['alerts', 'Alerts'], ['chat', 'Chat'], ['auto', 'Automation'], ['packs', 'Packs']]
       .map(([id, label]) => `<button class="${this.cat === id ? 'on' : ''}" data-act="cat" data-cat="${id}" aria-current="${this.cat === id}">${label}<small data-tick>${counts(id)}</small></button>`).join('');
     const tiles = this.cat === 'packs' ? this.packsHtml() : this.presetsHtml();
@@ -2170,11 +2686,17 @@ const Catalog = {
       <button class="ic-btn ic-btn-primary ig-small" data-act="pack" data-pack="${esc(p.id)}" aria-label="Add the ${esc(p.name)} pack">Add pack</button>
     </div>`).join('');
   },
+  // Without a Twitch app in this copy, what needs Twitch isn't a good
+  // first pick: it stays in its own category, out of Recommended.
+  usable(p){
+    return S.data.twitch.available || !(p.needs || []).includes('twitch');
+  },
+  // The presets a category shows, so its count always matches its tiles.
+  presetsIn(id){
+    return S.data.catalog.presets.filter(p => id === 'rec' ? p.recommended && this.usable(p) : p.category === id);
+  },
   presetsHtml(){
-    // Without a Twitch app in this copy, what needs Twitch isn't a good
-    // first pick: it stays in its own category, out of Recommended.
-    const usable = p => S.data.twitch.available || !(p.needs || []).includes('twitch');
-    const list = S.data.catalog.presets.filter(p => this.cat === 'rec' ? p.recommended && usable(p) : p.category === this.cat);
+    const list = this.presetsIn(this.cat);
     const have = id => S.data.integrations.filter(i => i.preset === id).length;
     // Last: a beginner meets the ready-made ones first.
     const build = `<button class="dest-add ig-cat-build" data-act="build" data-key="build" style="--i:${list.length + 1}">
@@ -2185,7 +2707,7 @@ const Catalog = {
     return list.map((p, n) => {
       const fake = fakeStep(p);
       const added = this.added === p.id;
-      const blocked = !usable(p);
+      const blocked = !this.usable(p);
       const button = added
         ? `<button class="ic-btn ic-btn-ghost ig-small ig-added" data-act="add-preset" data-preset="${esc(p.id)}">${svg('check')}Added</button>`
         : `<button class="ic-btn ${have(p.id) || blocked ? 'ic-btn-ghost' : 'ig-cat-add'} ig-small" data-act="add-preset" data-preset="${esc(p.id)}"
@@ -2259,14 +2781,20 @@ function needsHtml(needs){
         : ['miss', 'Twitch (set up first)', 'This copy has no Twitch login app yet: System › Twitch login app'];
       case 'phone': return c.phone.topic ? ['ok', 'Phone'] : ['miss', 'Phone', 'Connect it in Connections'];
       case 'web': return ['', 'An address', 'You paste the address it sends to'];
+      case 'light': return ['', 'A light on your network', 'You pick it after adding: WiZ, LIFX, Govee, Yeelight, Kasa, Shelly or WLED'];
       case 'file': return ['', 'A file', 'You pick the file it writes'];
-      case 'obs': return ['', 'OBS WebSocket', 'Switch it on in OBS: Tools › WebSocket Server Settings'];
+      case 'obs': {
+        const o = S.data.obs || {};
+        return o.state === 'connected' ? ['ok', 'OBS WebSocket']
+          : o.state === 'error' ? ['miss', 'OBS WebSocket', o.problem || 'Switch it on in OBS: Tools › WebSocket Server Settings']
+          : ['', 'OBS WebSocket', 'Switch it on in OBS: Tools › WebSocket Server Settings'];
+      }
     }
     return null;
   }).filter(Boolean);
   if (!pills.length) return '';
-  return `<div class="ig-cat-needs"><span class="muted">Needs</span>${pills.map(([cls, label, tip]) =>
-    `<span class="ig-need ${cls}"${tip ? ` title="${esc(tip)}"` : ''}>${cls === 'ok' ? svg('check', ' stroke-width="3"') : cls === 'miss' ? svg('warn') : ''}<span class="sr-only">${cls === 'ok' ? 'connected: ' : cls === 'miss' ? 'not connected yet: ' : ''}</span>${esc(label)}</span>`).join('')}</div>`;
+  return `<div class="ig-cat-needs"><span class="muted">Needs</span><span class="ig-cat-needs-list">${pills.map(([cls, label, tip]) =>
+    `<span class="ig-need ${cls}"${tip ? ` title="${esc(tip)}"` : ''}>${cls === 'ok' ? svg('check', ' stroke-width="3"') : cls === 'miss' ? svg('warn') : ''}<span class="sr-only">${cls === 'ok' ? 'connected: ' : cls === 'miss' ? 'not connected yet: ' : ''}</span>${esc(label)}</span>`).join('')}</span></div>`;
 }
 
 // ---------------------------------------------------------------- module editor
@@ -2284,7 +2812,8 @@ const Editor = {
     this.back = opts.back || null;
     this.justAdded = !!opts.justAdded;
     this.testValues = {};
-    this.testDry = false;
+    // Tests start as a dry run: sending for real is a choice, every time.
+    this.testDry = true;
     // Waiting for one detail: shown switched on, so saving once it is
     // complete also turns it on.
     this.dirty = !!switchOn && !this.d.enabled && !this.justAdded;
@@ -2297,13 +2826,21 @@ const Editor = {
     const keyless = this.d.handlers.some(h => h.trigger.type === 'shortcut' && !h.trigger.hotkey && !h.trigger.midi && !h.trigger.token);
     this.chip = steps.some(s => s.type === 'discord' && !known(s.params.connection)) ? 'where'
       : steps.some(s => s.type === 'http' && !s.params.url) ? 'url' : keyless ? 'key'
-      : sel.type === 'scene' && !sel.scene ? 'scene' : null;
+      : sel.type === 'scene' && !sel.scene ? 'scene' : commandClash(this.d) ? 'cmd' : null;
     this.lastField = null;
     this.run = null;
     this.moreVars = false;
     this.converted = null;
     TRIES.clear();
     this.show();
+  },
+  // After `d` is swapped for another version of it (Discard, Undo).
+  reset(){
+    this.d.handlers.forEach(h => sampleArgsFrom(h, presetOf(this.d)));
+    this.sel = Math.min(this.sel, this.d.handlers.length - 1);
+    this.chip = null;
+    this.lastField = null;
+    this.run = null;
   },
   resume(){
     if (pickNewChannel(this.d)){
@@ -2427,6 +2964,7 @@ const Editor = {
     Modal.body(`${head}
       <div class="dest-form-body ig-ed-body">
         ${this.momentsHtml()}
+        ${twitchEventStatusHtml(h.trigger)}
         <div class="ig-ed-preview" data-flip data-autoh><div class="ig-ed-pv" data-key="pv-${this.sel}">${this.previewBoxHtml(step, h)}</div></div>
         <div class="ig-ed-options">
           <div class="ig-chips" data-flip>${chips}</div>
@@ -2435,10 +2973,13 @@ const Editor = {
         </div>
       </div>
       ${footHtml(d, this.dirty, `<button class="ic-btn ic-btn-ghost" data-act="ed-builder">Open in builder</button>
-        <button class="ic-btn ic-btn-ghost" data-act="ed-test">${svg('play', ' class="ig-btn-ic"')}Send a test</button>`, this.justAdded)}`);
+        ${step && step.type === 'overlay'
+          ? `<button class="ic-btn ic-btn-ghost" data-act="alert-show">${svg('play', ' class="ig-btn-ic"')}Show it on stream</button>`
+          : `<button class="ic-btn ic-btn-ghost" data-act="ed-test">${svg('play', ' class="ig-btn-ic"')}Send a test</button>`}`, this.justAdded)}`);
     Modal.form.querySelectorAll('.ig-msg').forEach(autosize);
     if (this.chip === 'detect') Meter.watch();
     if (this.chip === 'scene') ObsLive.watch();
+    if (step && step.type === 'overlay') this.syncStage(step, h, false);
   },
   // The moments it acts on, each with its switch. A moment that still
   // misses something says so in its colour and its tooltip.
@@ -2454,15 +2995,23 @@ const Editor = {
       return `<button class="${cls}${n === this.sel ? ' on' : ''}${warn ? ' warn' : ''}"${n === this.sel ? ' aria-current="true"' : ''}
         data-act="moment" data-n="${n}"${warn ? ` title="${esc(capFirst(warn))}"` : ''}>${esc(labels[n])}</button>`;
     };
+    const alert = (primaryStep(hs[this.sel]) || {}).type === 'overlay';
+    const hint = `<div class="ig-mhint">Each one has its own ${alert ? 'alert' : 'settings'}: click a name to edit it below. The tick turns it on or off.</div>`;
     // Too many for a timeline: chips that wrap, each keeping its switch.
     if (hs.length > 5){
       return `<div class="ig-mchips" role="group" aria-label="Moments">${hs.map((h, n) => `<div class="ig-mchip${n === this.sel ? ' on' : ''}">
-        ${dot(h, n)}${name(n, 'ig-mchip-name')}</div>`).join('')}</div>`;
+        ${dot(h, n)}${name(n, 'ig-mchip-name')}</div>`).join('')}</div>${hint}`;
     }
     return `<div class="ig-moments" role="group" aria-label="Moments" style="--n:${hs.length}">${hs.map((h, n) => `<div class="ig-moment">
-      ${dot(h, n)}${name(n, 'ig-moment-name')}</div>`).join('')}</div>`;
+      ${dot(h, n)}${name(n, 'ig-moment-name')}</div>`).join('')}</div>${hint}`;
   },
   previewBoxHtml(step, h){
+    if (step && step.type === 'light'){
+      const state = this.d.preset === 'on_air_light' && (h.trigger.filters || {}).state;
+      return `<div class="dcard-screen ig-live-plain">
+        <div class="ic-label">${state ? 'When it turns ' + esc({live:'live', delay:'delayed', crash:'crashed', off:'off'}[state] || state) : 'The light'}</div>
+        ${previewHtml(step, h, true)}${lightControlsHtml(step.params, name => `data-bind="l-${name}"`)}</div>`;
+    }
     if (!step || !(KINDS[step.type] || {}).text){
       const hint = step && step.type === 'delay_action' ? 'Pick what it does with <b>Does</b> below, or' : 'Nothing to write here.';
       return `<div class="dcard-screen ig-live-plain">${previewHtml(step, h, true)}
@@ -2511,6 +3060,17 @@ const Editor = {
         <div class="ig-live-tag">STREAM CHAT · LIVE PREVIEW</div>
         ${ask ? `<div><b class="u1">viewer</b>: ${esc(ask)}</div>` : ''}
         <div><b class="u2">${esc(chatAuthor(step))}</b>:</div>${editor}</div>`;
+    } else if (step.type === 'overlay'){
+      const p = step.params;
+      box = `<div class="ig-live ig-live-alert">
+        <div class="ig-live-row"><span class="ig-live-tag">ON STREAM · LIVE PREVIEW</span>
+          <span class="ig-live-theme"><button class="ig-link" data-act="alert-replay">${svg('play', ' class="ig-btn-ic"')}Play it</button>
+          <span>${esc(THEMES[themeOf(lookOf())].name)} theme</span><button class="ig-link" data-act="alerts-open">Change the look</button></span></div>
+        <div class="ig-ed-stage"><iframe class="ig-stage-frame" src="/alerts?demo" title="Alert preview" tabindex="-1" aria-hidden="true"></iframe></div>
+        <div class="ig-alert-fields">
+          <div class="dff"><label>Small title</label>${tplHtml(`<input class="ic-input ig-tpl-in" data-bind="title" value="${esc(p.title || '')}" placeholder="Optional, like New follower" aria-label="Small title" spellcheck="false">`, p.title, vars, 'line')}</div>
+          <div class="dff"><label>Text</label>${editor}</div>
+        </div></div>${alertsStatusHtml(true)}`;
     } else if (step.type === 'phone'){
       box = `<div class="ig-live ig-live-phone">
         <div class="ig-live-tag">INSTANTCLONE · now</div>
@@ -2527,7 +3087,10 @@ const Editor = {
       box = `<div class="dcard-screen ig-live-plain">
         <div class="ic-label">${esc(k.label)}${step.type === 'http' ? ' · what it sends' : ''}</div>${editor}</div>`;
     }
-    return `${box}<div class="ig-tokens"><span>Insert</span>${tokens}</div>`;
+    // Every step counts: the simple editor edits more than the message.
+    const unknown = [];
+    walk(h.steps, s => unknownVars(h, s).forEach(u => { if (!unknown.some(x => x.name === u.name)) unknown.push(u); }));
+    return `${box}${unknownVarsHtml(unknown)}<div class="ig-vals"><div class="ig-vals-h">Insert a value</div>${tokens}</div>${FORMS_HELP}`;
   },
   // A Discord card you write on: the text above it, then the card itself
   // (title, body, fields, footer) in its color, then the color swatches.
@@ -2587,6 +3150,14 @@ const Editor = {
         if (edit !== 'close') out.push({id:'ping', k:'Ping', v:ping === 'here' ? '@here' : ping === 'everyone' ? '@everyone' : 'nobody'});
       }
     }
+    if (step && step.type === 'overlay'){
+      const p = step.params;
+      out.push({id:'acolor', k:'Accent', v:alertColorName(p.color)});
+      out.push({id:'asound', k:'Sound', v:soundLabel(p.sound)});
+      out.push({id:'apic', k:'Picture', v:p.image ? (MEDIA_REF.test(p.image) ? p.image.slice(6) : 'a link') : 'none',
+        warn:!!p.image && !MEDIA_REF.test(p.image) && !WEB_LINK.test(p.image)});
+      out.push({id:'atime', k:'On screen for', v:(p.seconds || '6') + ' s'});
+    }
     if (t.type === 'shortcut') out.push({id:'key', k:'Starts with', v:shortcutLabel(t) || 'set a key, pad or Stream Deck', warn:!t.hotkey && !t.midi && !t.token});
     const action = firstStep(h, 'delay_action');
     if (action) out.push({id:'action', k:'Does', v:lowerFirst(delayActionLabel(action.params, {}))});
@@ -2600,11 +3171,13 @@ const Editor = {
       out.push({id:'only', k:'Only if', v:set.length ? set.map(([k, v]) => `${filterName(k)}: ${v}`).join(', ') : 'no conditions'});
     }
     if (t.type === 'chat_command'){
-      out.push({id:'cmd', k:'Command', v:[t.command].concat(t.aliases || []).join(' ')});
+      out.push({id:'cmd', k:'Command', v:[t.command].concat(t.aliases || []).join(' '), warn:!!commandClash(d)});
       out.push({id:'who', k:'Who can use it', v:rolesLabel(t.roles)});
     }
     if (step && step.type === 'chat') out.push({id:'reply', k:'Reply as', v:step.params.as === 'bot' ? 'bot account' : 'your account'});
     if (step && step.type === 'phone') out.push({id:'priority', k:'Priority', v:step.params.priority || 'normal'});
+    const light = firstStep(h, 'light');
+    if (light) out.push({id:'light', k:'Light', v:light.params.name || 'pick your light', warn:!light.params.device});
     const http = firstStep(h, 'http');
     if (http && d.preset === 'on_air_light') out.push({id:'url', k:'Light', v:lightOf(http, t) || maskUrl(http.params.url) || 'pick your light', warn:!http.params.url});
     else if (http) out.push({id:'url', k:t.type.startsWith('chat') ? 'Answer from' : 'Send to', v:maskUrl(http.params.url) || 'set the address', warn:!http.params.url});
@@ -2613,12 +3186,30 @@ const Editor = {
     out.push({id:'quiet', k:'Quiet hours', v:d.quiet ? `${d.quiet.from} to ${d.quiet.to}` : 'off'});
     return out;
   },
+  // The alert on the real page, in the page's look but in the middle of
+  // the box, so the short stage shows it whole. `replay` 'full' plays it
+  // coming in and going out (alerts.html showDemo).
+  syncStage(step, h, replay){
+    const frame = q('.ig-ed-stage .ig-stage-frame');
+    if (!frame) return;
+    const look = Object.assign({}, lookOf(), {position:'middle', align:'center'});
+    stageShow(frame, frame.parentElement.clientWidth / 0.72, {look, card:alertCardOf(step, h), replay, sound:!!replay});
+  },
+  // The other alerts in this integration: one click gives them all this
+  // option, as each moment has its own.
+  everyAlertHtml(names){
+    const others = this.d.handlers.filter(h => h !== this.handler() && (primaryStep(h) || {}).type === 'overlay');
+    if (!others.length) return '';
+    return `<button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="alert-all" data-names="${names.join(' ')}">Use on every alert here (${others.length + 1})</button>`;
+  },
   // Values worth narrowing on ("only YouTube", "only crashes"); counts,
   // durations and reports change every time.
   filterVars(t){
     const e = eventOf(t.event);
     const skip = new Set(['hold', 'hold_ends_at', 'down_for', 'down_s', 'down_total', 'previous', 'drops', 'within',
-      'duration', 'crashes', 'highlights', 'report', 'chapters', 'line']);
+      'duration', 'crashes', 'highlights', 'report', 'chapters', 'line', 'file',
+      // Twitch: amounts and free text are for If steps, not filters.
+      'months', 'streak', 'message', 'count', 'total', 'bits', 'viewers', 'cost', 'input', 'seconds']);
     return e ? e.vars.filter(v => !skip.has(v.name)) : [];
   },
   sendValue(h){
@@ -2643,6 +3234,33 @@ const Editor = {
             <span class="dest-starter-name">#${esc(c.name)}</span><span class="dest-starter-note mono">${esc(c.hint)}</span></button>`).join('')}
           <button class="dest-add ig-pick-add" data-act="conn" data-tab="discord">${svg('plus')}Add a Discord channel</button></div>`;
       }
+      case 'acolor': {
+        const mine = /^#[0-9a-f]{6}$/i.test(step.params.color || '') ? step.params.color.toLowerCase() : '';
+        const shown = alertColor(mine, lookOf());
+        const known = !mine || CARD_COLORS.some(([c]) => c === mine);
+        const swatch = (c, label, style) => `<button class="ig-swatch${c === mine ? ' on' : ''}" style="--sw:${style}" data-act="set-color" data-v="${c}"
+          role="radio" aria-checked="${c === mine}" aria-label="${label}" title="${label}"></button>`;
+        const swatches = [swatch('', 'The theme\'s', alertColor('', lookOf()))].concat(CARD_COLORS.map(([c, label]) => swatch(c, label, c))).join('');
+        return `<div class="ic-label">Accent</div>
+          <div class="ig-swatches"><span class="ig-swatch-set" role="radiogroup" aria-label="Alert accent">${swatches}</span>
+            <label class="ig-swatch custom${known ? '' : ' on'}" title="Any color"><input type="color" data-bind="color" value="${esc(shown)}" aria-label="Any color (now ${esc(shown)})"></label></div>
+          <div class="muted">The first one is the theme's. Everything else about the look is the theme's: <button class="ig-link" data-act="alerts-open">change the look</button>.</div>${this.everyAlertHtml(['color'])}`;
+      }
+      case 'asound': {
+        const sound = step.params.sound || '';
+        const volume = step.params.volume === undefined || step.params.volume === '' ? 70 : +step.params.volume;
+        return `<div class="ic-label">Sound</div>${soundPickerHtml(sound, 'pick-sound', true)}
+          <div class="ig-volume"><label for="ig-vol">Volume</label><input id="ig-vol" type="range" min="0" max="100" step="5" data-bind="volume" value="${volume}">
+            <span class="mono">${volume}%</span>
+            <button class="ic-btn ic-btn-ghost ig-small" data-act="sound-play" ${sound ? '' : 'disabled'}>${svg('play', ' class="ig-btn-ic"')}Play</button></div>
+          <div class="muted">Plays with the alert, through OBS, so viewers hear it too.</div>${this.everyAlertHtml(['sound', 'volume'])}`;
+      }
+      case 'apic':
+        return `<div class="ic-label">Picture</div>${picturePickerHtml(step.params.image || '', 'pick-picture')}
+          <div class="muted">A PNG, JPG or GIF (it plays). Where it goes is the theme's.</div>${this.everyAlertHtml(['image'])}`;
+      case 'atime':
+        return `<div class="ic-label">On screen for</div>${seg(ALERT_SECONDS.map(n => [n, n + ' s']), step.params.seconds || '6', 'set-seconds')}
+          <div class="muted">Alerts that come in together wait their turn, so none cuts another short.</div>${this.everyAlertHtml(['seconds'])}`;
       case 'look':
         return `<div class="ic-label">Look</div>${seg([['', 'Plain message'], ['card', 'Card']], step.params.style || '', 'set-style')}
           <div class="muted">A card has a colored edge, a title, fields side by side and a timestamp. Write on it right in the preview.</div>`;
@@ -2672,8 +3290,8 @@ const Editor = {
         return `<div class="ic-label">Does</div>${seg(['arm', 'cut_after', 'cut', 'activate', 'disarm'].map(x => [x, DELAY_ACTIONS[x]]), a.params.action, 'set-action')}
           ${a.params.action === 'arm' ? `<div class="dff ig-narrow"><label>Delay</label>${field}</div>` : ''}
           <div class="muted">${{
-            arm:'Starts this delay, or changes it while one is on air.',
-            cut_after:'Goes back to live once viewers have caught up with you, so they miss nothing. It takes as long as the delay.',
+            arm:'Arms this delay, or changes it while one is armed or on air. It goes on air once the buffer is full if Auto-activate is on; otherwise press Activate.',
+            cut_after:'Goes back to live once viewers have caught up with you, so they miss nothing. It takes as long as the delay. If a cut is already waiting, it keeps that one.',
             cut:'Goes back to live right away. Viewers skip what was still in the delay.',
             activate:'Puts on air the delay that finished getting ready.',
             disarm:'No delay at all, and none getting ready.',
@@ -2706,7 +3324,7 @@ const Editor = {
         }).join('')}</div>
         <div class="muted">Several at once: YouTube, Kick. A * matches anything: *timed out*. Capitals don't matter.</div>`;
       case 'cmd':
-        return `<div class="dfg"><div class="dff"><label>Command</label><input class="ic-input mono" data-bind="command" value="${esc(t.command)}" spellcheck="false"></div>
+        return `${commandClashHtml(d)}<div class="dfg"><div class="dff"><label>Command</label><input class="ic-input mono" data-bind="command" value="${esc(t.command)}" spellcheck="false"></div>
           <div class="dff"><label>Also answers to</label><input class="ic-input mono" data-bind="aliases" value="${esc((t.aliases || []).join(' '))}" placeholder="!retraso !d" spellcheck="false"></div></div>
           <div class="dff"><label>Each viewer, at most once every</label>${seg([['0', 'no limit'], ['10000', '10 s'], ['30000', '30 s'], ['60000', '1 min']], String(t.user_cooldown_ms || 0), 'set-ucd')}</div>`;
       case 'who':
@@ -2715,11 +3333,18 @@ const Editor = {
         return `<div class="ic-label">Reply as</div>${seg([['', 'Your account'], ['bot', 'Bot account']], step.params.as || '', 'set-as')}
           ${t.type.startsWith('chat') ? `<label class="crash-check"><input type="checkbox" data-bind="reply" ${step.params.reply === 'yes' ? 'checked' : ''}><span><span class="crash-check-title">Reply in the viewer's thread</span><span class="muted">Twitch shows it as an answer to their message</span></span></label>` : ''}
           ${S.data.twitch.bot.login ? '' : '<div class="muted">No bot account yet: <a href="#" data-act="conn" data-tab="twitch">connect one</a>, or messages go out as you.</div>'}`;
+      case 'light': {
+        const light = firstStep(h, 'light');
+        const web = d.preset === 'on_air_light' ? `<details class="ig-more-fields"><summary>Home Assistant or Philips Hue instead</summary>
+          <div class="muted">They take a web request rather than a scan.</div>
+          <div class="ig-starts">${(S.data.catalog.light_starts || []).filter(x => x.id !== 'wled').map(x => `<button class="ig-start" data-act="light-to-web" data-v="${esc(x.id)}">${esc(x.label)}</button>`).join('')}</div></details>` : '';
+        return lightPickerHtml(light ? light.params : {}) + web;
+      }
       case 'priority':
         return `<div class="ic-label">Priority</div>${seg([['', 'Normal'], ['high', 'High'], ['urgent', 'Urgent']], step.params.priority || '', 'set-priority')}`;
       case 'url': {
         const http = firstStep(h, 'http'), chatty = t.type.startsWith('chat');
-        if (d.preset === 'on_air_light') return this.lightHtml(http, t);
+        if (d.preset === 'on_air_light') return `<button class="ic-btn ic-btn-ghost ig-small" data-act="light-to-net">${svg('bulb', ' class="ig-btn-ic"')}Use a light on my network instead (no hub)</button>` + this.lightHtml(http, t);
         return `${chatty && d.preset === 'api_command' ? this.startsHtml(http) : ''}<div class="dfg">${secretField('e-url', `<input class="ic-input mono ig-secret" data-bind="url" value="${esc(http.params.url || '')}" placeholder="${chatty ? 'https://… or $(urlfetch https://…)' : 'https://…'}" spellcheck="false" autocomplete="off">`,
             chatty ? 'Address, or a bot command to convert' : 'Address')}
           <div class="dff"><label>Method</label><select class="ic-input" data-bind="method">${['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => `<option ${m === (http.params.method || 'POST') ? 'selected' : ''}>${m}</option>`).join('')}</select></div></div>
@@ -2754,7 +3379,7 @@ const Editor = {
         `<button class="ig-start${device && device.id === x.id ? ' on' : ''}" data-act="light-start" data-v="${esc(x.id)}" aria-pressed="${!!device && device.id === x.id}">${esc(x.label)}</button>`).join('')}</div>
       ${secretField('e-light-url', `<input class="ic-input mono ig-secret" data-bind="url" value="${esc(http.params.url || '')}"
         placeholder="${esc(device ? example[device.id] || '' : 'Pick your light first')}" spellcheck="false" autocomplete="off">`, 'Its address')}
-      <div class="muted">${device ? help[device.id] || '' : 'Pick your light: InstantClone fills in what each state sends it.'} Then <b>Send a test</b> lights it up for the moment picked above.</div>
+      <div class="muted">${device ? help[device.id] || '' : 'Pick your light: InstantClone fills in what each state sends it.'} Then <b>Send a test</b>, set to <b>Send it for real</b>, lights it up for the moment picked above.</div>
       <details class="ig-more-fields"><summary>Advanced: method</summary><div class="dff ig-narrow"><select class="ic-input" data-bind="method" aria-label="Method">
         ${['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => `<option ${m === (http.params.method || 'POST') ? 'selected' : ''}>${m}</option>`).join('')}</select></div>
         <div class="muted">What each state sends is in the preview: pick a moment (live, delayed…) and open "What it sends".</div></details>`;
@@ -2788,8 +3413,12 @@ const Editor = {
     }
     else if (b === 'test-value'){ (this.testValues = this.testValues || {})[el.dataset.name] = el.value; return; }
     else if ((b === 'path' || b === 'mode') && step) step.params[b] = el.value;
+    else if (/^l-(action|color|brightness)$/.test(b) && step) step.params[b.slice(2)] = el.value.trim();
     else if ((b === 'above' || b === 'footer' || b === 'key' || b === 'color') && step) step.params[b] = el.value;
     else if (b === 'key-split' && step) splitKey(step, el.checked);
+    else if (b === 'volume' && step) step.params.volume = el.value.trim();
+    else if (b === 'image-link' && step) step.params.image = el.value.trim();
+    else if (b === 'sound-link' && step) step.params.sound = el.value.trim();
     else if ((b === 'f-name' || b === 'f-value') && step){
       this.fields(step, list => {
         const f = list[+el.dataset.n];
@@ -2799,7 +3428,8 @@ const Editor = {
     else if (b === 'param'){ if (!paramInput(t, el)) return; }
     else if (b === 'seconds' && firstStep(h, 'delay_action')) firstStep(h, 'delay_action').params.seconds = el.value.trim();
     else if (b === 'seconds-dur' && firstStep(h, 'delay_action')){
-      const ms = durValue(el, 1000, 600000);
+      // Up to an hour, the backend's config::MAX_DELAY_MS.
+      const ms = durValue(el, 1000, 3600000);
       if (ms == null) return;
       firstStep(h, 'delay_action').params.seconds = String(ms / 1000);
     }
@@ -2840,6 +3470,39 @@ const Editor = {
       case 'set-style': if (step) step.params.style = v; this.changed(); return true;
       case 'set-color': if (step) step.params.color = v; this.changed(); return true;
       case 'set-ts': if (step) step.params.timestamp = step.params.timestamp === 'yes' ? '' : 'yes'; this.changed(); return true;
+      case 'pick-sound':
+        if (!step) return true;
+        step.params.sound = v;
+        this.changed();
+        if (v){ playAlertSound(alertCardOf(step, h)); showPlaying('pick-sound', v); }
+        return true;
+      case 'pick-picture': if (step) step.params.image = v; this.changed(); return true;
+      case 'media-upload':
+        uploadMedia(el.dataset.kind).then(ref => {
+          if (!ref || Modal.kind !== 'editor' || primaryStep(this.handler()) !== step) return;
+          step.params[el.dataset.kind === 'sound' ? 'sound' : 'image'] = ref;
+          this.changed();
+          if (el.dataset.kind === 'sound') playAlertSound(alertCardOf(step, h));
+        });
+        return true;
+      case 'alert-replay': if (step) this.syncStage(step, h, 'full'); return true;
+      case 'set-seconds': if (step) step.params.seconds = v; this.changed(); return true;
+      case 'alert-all': {
+        if (!step) return true;
+        const names = el.dataset.names.split(' ');
+        let n = 0;
+        this.d.handlers.forEach(x => {
+          const s = primaryStep(x);
+          if (!s || s === step || s.type !== 'overlay') return;
+          names.forEach(name => { s.params[name] = step.params[name] || ''; });
+          n++;
+        });
+        this.changed();
+        toast(`Done for ${plural(n, 'other alert')}. Save to keep it.`, 'ok');
+        return true;
+      }
+      case 'sound-play': if (step) playAlertSound(alertCardOf(step, h)); return true;
+      case 'alert-show': if (step) showAlertNow(step, h, el); return true;
       case 'f-add': {
         if (!step) return true;
         this.fields(step, list => list.push({name:'', value:'', inline:true}));
@@ -2854,6 +3517,11 @@ const Editor = {
         this.changed();
         return true;
       case 'light-start': this.useLight(v); return true;
+      // One light for every state: the on-air light is one device.
+      case 'light-use': allSteps(this.d).filter(s => s.type === 'light').forEach(s => useDevice(s, el)); this.changed(); return true;
+      case 'l-swatch': if (step) step.params.color = v; this.changed(); return true;
+      case 'light-to-net': onAirToNetwork(this.d); this.chip = 'light'; this.changed(); return true;
+      case 'light-to-web': onAirToWeb(this.d, v); this.chip = 'url'; this.changed(); return true;
       case 'set-action': {
         const a = firstStep(h, 'delay_action');
         if (a){
@@ -2871,11 +3539,15 @@ const Editor = {
         this.render();
         return true;
       case 'moment-toggle': { const x = this.d.handlers[+el.dataset.n]; x.enabled = !x.enabled; this.changed(); return true; }
-      case 'chip': this.chip = this.chip === el.dataset.chip ? null : el.dataset.chip; this.render(); return true;
+      case 'chip':
+        this.chip = this.chip === el.dataset.chip ? null : el.dataset.chip;
+        this.render();
+        if (this.chip) revealOpened(q('.ig-ed-options'));
+        return true;
       case 'token': {
         // Into the card field last written in, or the message itself.
         const field = this.lastField && this.lastField.isConnected ? this.lastField : q('.ig-msg');
-        insertAtCursor(field, '{' + el.dataset.token + '}');
+        insertAtCursor(field, tokenText(el.dataset.token));
         return true;
       }
       case 'more-vars': this.moreVars = true; this.render(); return true;
@@ -2895,7 +3567,8 @@ const Editor = {
       case 'ed-test': this.chip = '__test'; this.render(); focusAct('test-run'); return true;
       case 'test-run': busy(el, () => this.test()); return true;
       case 'test-mode': this.testDry = v === 'dry'; this.render(); return true;
-      case 'delete': if (armConfirm(el, 'Delete for good?')) busy(el, () => remove(this.d.id)); return true;
+      // Undo brings it back, so no "are you sure" first.
+      case 'delete': busy(el, () => remove(this.d.id)); return true;
       case 'save': {
         const at = this.edits;
         busy(el, () => saveIntegration(this.d, () => { if (this.edits === at) this.dirty = false; }));
@@ -2931,7 +3604,7 @@ function testPanelHtml(o){
   const h = o.handler();
   const own = varsFor(h).filter(v => v.group === 'trigger');
   const values = o.testValues || {};
-  const mode = `<div class="sub-tabs ig-seg">${[['', 'Send it for real'], ['dry', 'Dry run']].map(([id, label]) => {
+  const mode = `<div class="sub-tabs ig-seg">${[['dry', 'Dry run'], ['', 'Send it for real']].map(([id, label]) => {
     const on = (id === 'dry') === !!o.testDry;
     return `<button class="sub-tab${on ? ' on' : ''}" data-act="test-mode" data-v="${id}" aria-pressed="${on}">${label}</button>`;
   }).join('')}${SEG_IND}</div>`;
@@ -2958,6 +3631,26 @@ function testValues(o){
   return Object.assign(values, o.testValues || {});
 }
 
+// Another switched-on integration answering one of this one's chat
+// commands, as {word, name}, or null: both would reply. Mirrors
+// api::command_taken.
+function commandClash(d){
+  const words = i => (i.handlers || []).filter(h => h.enabled && h.trigger.type === 'chat_command')
+    .flatMap(h => [h.trigger.command].concat(h.trigger.aliases || []));
+  const mine = words(d);
+  if (!mine.length) return null;
+  for (const other of S.data.integrations){
+    if (!other.enabled || other.id === d.id) continue;
+    const word = mine.find(w => words(other).includes(w));
+    if (word) return {word, name:other.name};
+  }
+  return null;
+}
+function commandClashHtml(d){
+  const c = commandClash(d);
+  return c ? warnHtml(`<b>${esc(c.name)}</b> already answers ${esc(c.word)}. This one stays off until you pick another command or switch that one off.`) : '';
+}
+
 // What a moment still misses before it can run, or ''.
 function handlerMissing(h){
   const t = h.trigger;
@@ -2981,15 +3674,21 @@ function stepMissing(s){
   if (s.type === 'http' && /BRIDGE-IP|USERNAME/.test(p.url || '')) return 'replace BRIDGE-IP and USERNAME with your bridge\'s';
   if (s.type === 'phone' && !S.data.connections.phone.topic) return 'connect your phone';
   if (s.type === 'discord' && p.style === 'card' && !['title', 'text', 'fields', 'image', 'above'].some(k => (p[k] || '').trim())) return 'give the card a title or some text';
-  if (s.type === 'if' && !(p.left || '').trim()) return 'say what it checks';
+  if (s.type === 'if' && conditionRows(s).some(r => !r.left.trim())) return 'say what it checks';
   if ((s.type === 'set_var' || s.type === 'counter') && !(p.name || '').trim()) return 'name the value';
   if (s.type === 'wait' && !/\{|^\d+$/.test((p.ms || '').trim())) return 'set how long to wait';
-  if ([p.scene, p.source, s.type === 'program' || s.type === 'file' ? p.path : ''].some(v => /\{/.test(v || ''))) return 'names here can\'t use values';
+  if ([p.scene, p.source, p.filter, p.hotkey, s.type === 'light' ? p.device : '', s.type === 'program' || s.type === 'file' ? p.path : ''].some(v => /\{/.test(v || ''))) return 'names here can\'t use values';
+  if (s.type === 'light'){
+    if (!(p.device || '').trim()) return 'pick the light or plug';
+    if (['color', 'flash'].includes(p.action) && !(p.color || '').trim()) return 'pick a color';
+  }
   if ((s.type === 'program' || s.type === 'file') && !(p.path || '').trim()) return s.type === 'file' ? 'pick the file' : 'pick the program';
   if (s.type === 'obs'){
-    const need = (OBS_ACTIONS[p.action] || [])[1];
-    if (!need) return 'pick what to do in OBS';
-    if (!(p[need] || '').trim()) return need === 'scene' ? 'pick the scene' : 'pick the source';
+    const action = OBS_ACTIONS[p.action];
+    if (!action) return 'pick what to do in OBS';
+    const need = action[1];
+    if (need === 'filter' && !(p.source || '').trim()) return 'pick the source or scene';
+    if (need && !(p[need] || '').trim()) return {scene:'pick the scene', source:'pick the source', filter:'pick the filter', hotkey:'pick the hotkey'}[need];
   }
   if ((s.type === 'chat' || s.type === 'phone' || s.type === 'overlay' || s.type === 'timeline') && !(p.text || '').trim()) return 'write what it says';
   if (s.type === 'discord' && p.style !== 'card' && !(p.text || '').trim()) return 'write the message';
@@ -3015,6 +3714,96 @@ function syncSceneRules(d){
   if (!arm) return;
   d.handlers.forEach(h => {
     if (h !== arm && h.trigger.type === 'scene' && h.trigger.scene === '*') h.trigger.except = arm.trigger.scene || '';
+  });
+}
+
+// ---------------------------------------------------------------- lights
+// Lights and plugs a scan found, shared by every editor this session.
+const LightScan = {devices:null};
+const LIGHT_SWATCHES = [['red', '#ff2020'], ['amber', '#ffa000'], ['green', '#00dc46'], ['cyan', '#00d2ff'], ['blue', '#1e50ff'], ['purple', '#963cff'], ['pink', '#ff46aa'], ['white', '#ffffff']];
+const LIGHT_ACTIONS = {color:'Turn on in a color', flash:'Flash a color, then stay on', on:'Turn on', off:'Turn off'};
+// A light step's color as CSS, for previews: a name, a hex, or a value
+// that only becomes a color when it runs.
+function lightRgb(color){
+  const c = (color || '').trim().toLowerCase();
+  const named = LIGHT_SWATCHES.find(([n]) => n === c);
+  if (named) return named[1];
+  if (c === 'orange') return '#ff6e00';
+  if (c === 'yellow') return '#ffdc00';
+  if (/^warm( white)?$/.test(c)) return '#ffbe78';
+  return /^#?([0-9a-f]{3}|[0-9a-f]{6})$/.test(c) ? (c[0] === '#' ? c : '#' + c) : '#9ca3af';
+}
+function lightSummary(p){
+  const color = (p.color || '').trim(), bright = (p.brightness || '').trim();
+  const at = bright ? ` at ${bright}${/\{/.test(bright) ? '' : '%'}` : '';
+  if (p.action === 'off') return 'Turn off';
+  if (p.action === 'on') return 'Turn on' + at;
+  return (p.action === 'flash' ? 'Flash ' : 'Turn on, ') + (color || 'pick a color') + at;
+}
+// The device a step drives, and the scan to pick another.
+function lightPickerHtml(p){
+  const ref = p.device || '';
+  const where = ref ? (ref.split(':')[1] || '').split('#')[0] : '';
+  const current = ref
+    ? `<div class="ig-meter"><span class="ig-meter-dot ok"></span><b>${esc(p.name || 'Your light')}</b><span class="muted">${esc(where)}</span>
+        <button class="ic-btn ic-btn-ghost ig-small" data-act="light-try" data-ref="${esc(ref)}" data-color="${esc(p.color || '')}">Flash it</button></div>`
+    : '<div class="muted">No light picked yet.</div>';
+  const list = LightScan.devices;
+  const found = !list ? '' : list.length ? `<div class="ig-light-list">${list.map(x => `<div class="ig-light-row${x.ref === ref ? ' on' : ''}">
+        <span class="ig-bulb" style="--bulb:${x.plug ? 'transparent' : '#fde68a'}">${svg(x.plug ? 'bolt' : 'bulb')}</span>
+        <span class="ig-light-id"><b>${esc(x.name)}</b><small>${esc(x.brand)}${x.plug ? ' plug' : ''} · ${esc(x.address)}</small></span>
+        <button class="ic-btn ic-btn-ghost ig-small" data-act="light-try" data-ref="${esc(x.ref)}" data-color="${esc(p.color || '')}" title="Flash it, to see which one it is">Flash</button>
+        <button class="ic-btn ${x.ref === ref ? 'ic-btn-ghost' : 'ic-btn-primary'} ig-small" data-act="light-use" data-ref="${esc(x.ref)}" data-name="${esc(x.name)}" data-plug="${x.plug ? 'yes' : ''}" ${x.ref === ref ? 'disabled' : ''}>${x.ref === ref ? 'In use' : 'Use'}</button></div>`).join('')}</div>`
+    : '<div class="muted">Nothing found on this network.</div>';
+  return `<div class="dff ig-light-pick"><label>Light or plug</label>${current}
+    <button class="ic-btn ic-btn-ghost ig-small" data-act="light-scan">${svg('refresh', ' class="ig-btn-ic"')}${list ? 'Look again' : 'Find lights on my network'}</button>
+    ${found}
+    <details class="ig-more-fields"><summary>Not found?</summary><div class="muted">It must be on the same network as this PC.
+      <b>Govee</b>: turn on LAN Control for it in the Govee Home app, and let InstantClone through the Windows firewall if it asks.
+      <b>Yeelight</b>: turn on LAN Control in the Yeelight app. <b>TP-Link</b>: older Kasa models only; Tapo and newer Kasa firmware need a login this can't do.
+      <b>Shelly</b> and <b>WLED</b>: a password on the device keeps it from being used here.
+      Brands that only work through their own cloud (Lepro's AI series, Tuya and Smart Life devices) aren't on the network this way.</div></details></div>`;
+}
+// What the light does: on, off, a color or a flash, and how bright.
+// `bind(name)` gives each field its data-bind, per editor.
+function lightControlsHtml(p, bind){
+  const plug = p.plug === 'yes';
+  const actions = Object.entries(LIGHT_ACTIONS).filter(([id]) => !plug || id === 'on' || id === 'off');
+  const action = actions.some(([id]) => id === p.action) ? p.action : actions[0][0];
+  let out = `<div class="dff"><label>Does</label><select class="ic-input" ${bind('action')}>${actions.map(([id, l]) =>
+    `<option value="${id}" ${id === action ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>`;
+  if (plug) return out + '<div class="muted">A plug only turns on or off.</div>';
+  if (action === 'color' || action === 'flash'){
+    const color = p.color || '';
+    out += `<div class="dff"><label>Color</label><div class="ig-swatches">${LIGHT_SWATCHES.map(([n, hex]) =>
+        `<button class="ig-swatch${color.toLowerCase() === n ? ' on' : ''}" style="--sw:${hex}" data-act="l-swatch" data-v="${n}" aria-label="${n}" aria-pressed="${color.toLowerCase() === n}" title="${n}"></button>`).join('')}
+        <input type="color" class="ig-swatch-pick" value="${esc(/^#[0-9a-f]{6}$/i.test(lightRgb(color)) ? lightRgb(color) : '#ffffff')}" ${bind('color')} aria-label="Any color"></div>
+      <input class="ic-input mono" ${bind('color')} value="${esc(color)}" placeholder="red, #ff2020, or {arg1}" spellcheck="false"></div>`;
+  }
+  if (action !== 'off') out += `<div class="dff ig-narrow"><label>Brightness, %</label><input class="ic-input" ${bind('brightness')} value="${esc(p.brightness || '')}" placeholder="as it is" inputmode="numeric"></div>`;
+  return out;
+}
+function useDevice(step, el){
+  step.params.device = el.dataset.ref;
+  step.params.name = el.dataset.name || '';
+  step.params.plug = el.dataset.plug || '';
+  if (step.params.plug === 'yes' && !['on', 'off'].includes(step.params.action)) step.params.action = 'on';
+}
+// The on-air light, from a web request (Home Assistant, Hue...) to a
+// light on the network, and back. Each state keeps its moment.
+const ON_AIR_LIGHT = {live:['color', 'red'], delay:['color', 'amber'], crash:['flash', 'red'], off:['off', '']};
+function onAirToNetwork(d){
+  d.handlers.forEach(h => {
+    const [action, color] = ON_AIR_LIGHT[(h.trigger.filters || {}).state] || ON_AIR_LIGHT.live;
+    h.steps = h.steps.map(s => s.type === 'http' ? {type:'light', params:{device:'', name:'', plug:'', action, color, brightness:''}, then:[], else:[]} : s);
+  });
+}
+function onAirToWeb(d, id){
+  const start = (S.data.catalog.light_starts || []).find(x => x.id === id);
+  if (!start) return;
+  d.handlers.forEach(h => {
+    const state = (h.trigger.filters || {}).state || 'live';
+    h.steps = h.steps.map(s => s.type === 'light' ? {type:'http', params:{method:start.method, url:start.url, body:start.bodies[state] || ''}, then:[], else:[]} : s);
   });
 }
 
@@ -3087,7 +3876,7 @@ function delayRole(p){
 function delayActionLabel(p, vars){
   const seconds = renderSample(p.seconds || '', vars).trim();
   if (p.action === 'arm' && seconds && Number(seconds) <= 0) return 'Turn the delay off';
-  return p.action === 'arm' && seconds ? `Turn on a ${seconds} s delay` : (DELAY_ACTIONS[p.action] || 'Delay action');
+  return p.action === 'arm' && seconds ? `Set a ${seconds} s delay` : (DELAY_ACTIONS[p.action] || 'Delay action');
 }
 
 // How a message with variables will read, or nothing when it has none.
@@ -3156,7 +3945,7 @@ const Keys = {
     const combo = mods.concat(key).join('+');
     Keys.stopRecording();
     if ((S.data.shortcuts.taken || []).includes(combo)){
-      toast(`${combo} already runs a delay action (Controls tab). Pick another.`, 'err', 5000);
+      toast(`${combo} already runs a delay action (System › Controls). Pick another.`, 'err', 5000);
       Keys.owner().render();
       return;
     }
@@ -3178,7 +3967,7 @@ const Keys = {
     if (r.captured){
       this.stopPad();
       if ((S.data.shortcuts.taken || []).some(sig => sig === r.captured || sig === r.captured.split('@')[0])){
-        toast('That pad already runs a delay action (Controls tab). Pick another.', 'err', 5000);
+        toast('That pad already runs a delay action (System › Controls). Pick another.', 'err', 5000);
         this.owner().render();
         return;
       }
@@ -3239,7 +4028,7 @@ function shortcutHtml(t){
         ? '<span class="hk-cue">Press a pad or button…</span>' : t.midi ? `<span class="hk-chip">${esc(padLabel(t.midi))}</span>` : '<span class="hk-cue">Click, then press a pad</span>'}</button>
       ${t.midi ? `<button class="ic-btn-tiny" data-act="pad-clear" aria-label="Remove the pad">${svg('x')}</button>` : ''}</div></div>
   </div>
-  ${refused}<div class="muted">Works while you're in a game. Use any of them, or all. Keys and pads that run the delay (Controls tab) stay theirs.</div>
+  ${refused}<div class="muted">Works while you're in a game. Use any of them, or all. Keys and pads that run the delay (System › Controls) stay theirs.</div>
   ${buttonAddressHtml(t)}
   ${onlyLiveHtml(t, '', 'Only while streaming', 'Presses while OBS isn\'t streaming do nothing.')}`;
 }
@@ -3557,11 +4346,16 @@ const PALETTE = [
   ['Send', [['discord', 'Discord'], ['chat', 'Twitch chat'], ['phone', 'Phone'], ['http', 'Web request']]],
   ['Flow', [['if', 'If / otherwise'], ['wait', 'Wait'], ['wait_delay', 'Wait for the delay'], ['stop', 'Stop']]],
   ['Stream', [['overlay', 'Show on stream'], ['delay_action', 'Delay action'], ['obs', 'OBS'], ['marker', 'VOD marker'], ['clip', 'Clip'], ['timeline', 'Timeline']]],
+  ['Home', [['light', 'Smart light']]],
   ['Anything', [['edit_text', 'Edit text'], ['set_var', 'Remember a value'], ['counter', 'Counter'], ['program', 'Run a program'], ['file', 'Write a file']]],
 ];
+// The kind of start a trigger is, for its icon.
+function triggerKind(t){
+  return TRIGGERS.find(k => k.id === (t && t.type)) || TRIGGERS[0];
+}
 // What can start an integration, shown as tiles so every kind is in sight.
 const TRIGGERS = [
-  {id:'event', icon:'bolt', label:'Something happens', hint:'OBS crashes, a platform drops, the delay changes…',
+  {id:'event', icon:'bolt', label:'Something happens', hint:'OBS crashes, a platform drops, a raid comes in, recording stops…',
     eg:'OBS crashes: tell the mods on Discord'},
   {id:'chat_command', icon:'hash', label:'A chat command', hint:'!rank, !delay, anything', chat:true,
     eg:'!rank answers with your rank'},
@@ -3605,7 +4399,47 @@ const EVENT_INFO = {
   destination_still_down:{icon:'warn', desc:'Still down after a while: not a blip.'},
   destination_unstable:{icon:'pulse', desc:'It drops again and again.'},
   destination_steady:{icon:'check', desc:'After dropping, it has held for a while.'},
+  obs_recording_started:{icon:'rec', desc:'Recording starts in OBS, by you or a step.'},
+  obs_recording_stopped:{icon:'rec', desc:'Recording stops, with where OBS saved the file.'},
+  obs_replay_saved:{icon:'film', desc:'The replay buffer saves a clip, with where the file is.'},
+  obs_mute_changed:{icon:'mic', desc:'A mic or any audio source is muted or unmuted.'},
+  twitch_follow:{icon:'heart', desc:'Someone new follows your channel.'},
+  twitch_sub:{icon:'star', desc:'A new sub, bought or gifted (gift: yes or no).'},
+  twitch_resub:{icon:'star', desc:'A sub shares their resub, with their months and message.'},
+  twitch_gift:{icon:'gift', desc:'Someone gifts subs to your community.'},
+  twitch_cheer:{icon:'gem', desc:'Bits in chat, with the message.'},
+  twitch_raid:{icon:'users', desc:'Another channel raids you, with its viewers.'},
+  twitch_redeem:{icon:'bolt', desc:'A channel point reward is redeemed. Pick one in "Only if".'},
+  twitch_ad:{icon:'tv', desc:'An ad break starts, run by you or by Twitch.'},
 };
+// Whether an event comes from Twitch's event feed (follows, subs, raids...).
+const isTwitchEvent = id => (eventOf(id) || {}).group === 'Twitch';
+// The state of the trigger's Twitch event: what to show and do about it.
+function twitchEventStatusHtml(t){
+  if (t.type !== 'event' || !isTwitchEvent(t.event)) return '';
+  const tw = S.data.twitch, ev = tw.events || {}, sub = (ev.subs || {})[t.event] || '';
+  const line = (dot, text, button) => `<div class="ig-meter"><span class="ig-meter-dot ${dot}"></span><span>${text}</span>${button || ''}</div>`;
+  const toConn = label => `<button class="ic-btn ic-btn-ghost ig-small" data-act="conn" data-tab="twitch">${label}</button>`;
+  if (!tw.main.login) return line('off', 'Connect your Twitch account first.', toConn('Connect'));
+  if (sub === 'listening') return line('ok', '<b>Listening on Twitch</b>');
+  if (sub === 'needs_consent') return line('off', 'Twitch needs your OK for this one: your login is from before it existed.', toConn('Allow'));
+  if (/^error/.test(sub)) return line('off', esc(sub.replace(/^error: /, '')));
+  if (ev.state === 'error') return line('off', esc(ev.problem || 'Can\'t reach Twitch right now.'));
+  if (sub === 'pending' || ev.state === 'connecting') return line('wait', 'Connecting to Twitch…');
+  return line('wait', 'Listens once this integration is on and saved.');
+}
+// A Twitch event in a list: "follows, subs and raids".
+const TWITCH_NOUNS = {twitch_follow:'follows', twitch_sub:'subs', twitch_resub:'resubs', twitch_gift:'gifted subs',
+  twitch_cheer:'bits', twitch_raid:'raids', twitch_redeem:'channel point rewards', twitch_ad:'ad breaks'};
+function twitchNouns(ids){
+  const words = ids.map(id => TWITCH_NOUNS[id] || id);
+  return words.length > 1 ? words.slice(0, -1).join(', ') + ' and ' + words[words.length - 1] : words.join('');
+}
+// The Twitch events, by id, in this state.
+function twitchEventsIn(state){
+  const subs = ((S.data.twitch.events || {}).subs) || {};
+  return Object.keys(subs).filter(id => subs[id] === state);
+}
 // Every event as a tile, grouped; `big` for the canvas chooser.
 function eventTilesHtml(selected, big){
   const groups = {};
@@ -3621,10 +4455,20 @@ function eventTilesHtml(selected, big){
     }).join('')}</div></div>`).join('');
 }
 const pathKey = p => p.join('.');
+// Checks nest 4 deep at most, the top level counting as the first.
+// Mirrors model::MAX_DEPTH: an If needs room for its own lanes too.
+const MAX_NEST = 4;
+const branchDepth = path => path.filter(x => x === 'then' || x === 'else').length;
+// How many levels of lanes a step opens below itself.
+function nestLevels(s){
+  return s && s.type === 'if' ? 1 + Math.max(0, ...(s.then || []).concat(s.else || []).map(nestLevels)) : 0;
+}
+// Whether a step opening `levels` levels fits in the list at `listPath`.
+const nestFits = (listPath, levels) => branchDepth(listPath) + levels <= MAX_NEST - 1;
 
 const Builder = {
   d:null, h:0, sel:'trigger', target:[], after:null, run:null, dirty:false, lastField:null, back:null,
-  testValues:{}, testDry:false, testOpen:false,
+  testValues:{}, testDry:true, testOpen:false,
   // opts: {dirty} carries the editor's unsaved state over, {switchOn} as in
   // Editor.open, {back} as in Modal.back (default: the catalog, if open).
   open(i, opts){
@@ -3647,6 +4491,7 @@ const Builder = {
     this.target = [];
     this.after = null;
     this.lastField = null;
+    this.testDry = true;
     this.resetTest();
     this.show();
   },
@@ -3659,8 +4504,20 @@ const Builder = {
     if (pickNewChannel(this.d)) this.dirty = true;
     this.show();
   },
+  // After `d` is swapped for another version of it (Discard, Undo).
+  reset(){
+    this.h = Math.min(this.h, this.d.handlers.length - 1);
+    this.sel = 'trigger';
+    this.target = [];
+    this.after = null;
+    this.choosing = null;
+    this.unpicked = new WeakSet();
+    this.lastField = null;
+    this.resetTest();
+    TRIES.clear();
+  },
   show(){
-    Modal.open('builder', 1240, 'min(92vh,900px)');
+    Modal.open('builder', 1680, 'min(94vh,1120px)');
     Modal.back = this.back;
     Modal.onClose = () => !this.dirty || (Modal.guard(), false);
     this.render();
@@ -3677,18 +4534,17 @@ const Builder = {
       `<button class="ic-btn ig-head-btn" data-act="b-test">${svg('play', ' class="ig-btn-ic"')}Send a test</button>${enableSwitch('enabled', d.enabled)}`)}
       <div class="ig-bld${this.choosing ? ' picking' : ''}">
         <aside class="ig-palette" aria-label="Blocks">
-          <div class="muted ig-palette-hint">Click a block to add it where the dashed box is lit.</div>
           ${PALETTE.map(([group, items]) => `<div class="ic-label">${group}</div>${items.map(([k, label]) =>
             `<button data-act="b-add" data-kind="${k}" style="--c:${KINDS[k].c}"${LOCAL_KINDS.includes(k) && localLocked()
-              ? ` class="ig-pal-locked" aria-disabled="true" title="${esc(LOCAL_LOCK_TEXT)}"` : ` title="${esc(KINDS[k].hint)}"`}><i></i>${esc(label)}</button>`).join('')}`).join('')}
+              ? ` class="ig-pal-locked" aria-disabled="true" title="${esc(LOCAL_LOCK_TEXT)}"` : ` title="${esc(KINDS[k].hint)}"`}><span class="ig-pal-ic">${svg(KINDS[k].icon)}</span>${esc(label)}</button>`).join('')}`).join('')}
         </aside>
         <section class="ig-canvas" aria-label="Steps">
           <div class="ig-triggers" data-flip>${this.triggerTabs().map((label, i) => `<button class="ig-trig${i === this.h ? ' on' : ''}${d.handlers[i].enabled ? '' : ' ig-dim'}" data-act="b-handler" data-n="${i}" data-key="h-${uidOf(d.handlers[i])}"${d.handlers[i].enabled ? '' : ' title="Switched off"'}${i === this.h ? ' aria-current="true"' : ''}>
             ${esc(label)}</button>`).join('')}
             <button class="ig-trig add" data-act="b-add-handler" data-key="h-add">${svg('plus')}Another trigger</button></div>
-          ${this.choosing ? this.chooserHtml(h) : `<div class="ig-steps" data-flip>
+          ${this.choosing ? this.chooserHtml(h) : `<div class="ig-steps" data-flip data-list="">
             <button class="ig-step ig-when${this.sel === 'trigger' ? ' on' : ''}" data-act="b-sel" data-path="trigger" data-key="when">
-              <span class="ig-step-kind">WHEN</span><span class="ig-step-text">${esc(triggerSentence(h.trigger))}</span></button>
+              <span class="ig-step-ic">${svg(triggerKind(h.trigger).icon)}</span><span class="ig-step-body"><span class="ig-step-kind">When</span><span class="ig-step-text">${esc(triggerSentence(h.trigger))}</span></span></button>
             ${this.stepsHtml(h.steps, [], 'root')}
           </div>
           ${this.selectedHttp() ? `<div class="ig-try-wrap" data-key="try-${uidOf(this.selectedHttp())}">${tryHtml(this.selectedHttp(), h, 'Reply in chat with it')}</div>` : ''}
@@ -3747,11 +4603,14 @@ const Builder = {
       const off = s.enabled === false;
       // Inside a switched-off check, nothing runs: nothing is missing.
       const missing = off || this.insideOff(path) ? '' : stepMissing(s);
+      // A mistyped name is quieter than what's missing, and waits for it.
+      const unknown = missing || off ? [] : unknownVars(this.handler(), s);
       let html = `<div class="ig-step${selKey === pk ? ' on' : ''}${off ? ' off' : ''}${missing ? ' warn' : ''}" data-path="${pk}" style="--c:${k.c}" data-key="s-${id}">
         <button type="button" class="ig-step-main" data-act="b-sel" data-path="${pk}"${selKey === pk ? ' aria-current="true"' : ''}
           title="Alt+Up or Alt+Down moves it, Ctrl+D duplicates it, Delete removes it">
-          <span class="ig-step-kind">${k.tag}</span><span class="ig-step-text">${stepSentence(s)}${off ? '<span class="sr-only">, switched off</span>' : ''}</span></button>
-        ${missing ? `<span class="ig-step-warn">${esc(missing)}</span>` : ''}
+          <span class="ig-step-ic">${svg(k.icon || 'steps')}</span><span class="ig-step-body"><span class="ig-step-kind">${esc(k.label)}</span><span class="ig-step-text">${cardSentence(s)}${off ? '<span class="sr-only">, switched off</span>' : ''}</span></span></button>
+        ${missing ? `<span class="ig-step-warn">${esc(missing)}</span>`
+          : unknown.length ? `<span class="ig-step-warn soft">${unknown.map(u => `{${esc(u.name)}}`).join(' ')}: nothing fills ${unknown.length > 1 ? 'these' : 'it'}</span>` : ''}
         <span class="ig-step-tools">
           ${tool('b-move', pk, 'up', 'Move up', ` data-dir="-1"${this.moveTarget(path, -1) ? '' : ' disabled'}`)}
           ${tool('b-move', pk, 'down', 'Move down', ` data-dir="1"${this.moveTarget(path, 1) ? '' : ' disabled'}`)}
@@ -3760,13 +4619,13 @@ const Builder = {
           ${tool('b-del', pk, 'x', 'Remove')}
         </span></div>`;
       if (s.type === 'if'){
-        html += `<div class="ig-branch" data-key="br-${id}">
-          <div class="ig-branch-label">Then</div><div class="ig-branch-list" data-flip>${this.stepsHtml(s.then, path.concat('then'), id + 't')}</div>
-          <div class="ig-branch-label else">Otherwise</div><div class="ig-branch-list" data-flip>${this.stepsHtml(s.else, path.concat('else'), id + 'e')}</div>
-        </div>`;
+        html += `<div class="ig-branch" data-key="br-${id}"><div class="ig-lanes">
+          <div class="ig-lane yes"><div class="ig-branch-label">${svg('check')}Then</div><div class="ig-branch-list" data-flip data-list="${pathKey(path.concat('then'))}">${this.stepsHtml(s.then, path.concat('then'), id + 't')}</div></div>
+          <div class="ig-lane no"><div class="ig-branch-label else">${svg('x')}Otherwise</div><div class="ig-branch-list" data-flip data-list="${pathKey(path.concat('else'))}">${this.stepsHtml(s.else, path.concat('else'), id + 'e')}</div></div>
+        </div></div>`;
       }
       if (afterKey === pk){
-        html += `<button class="ig-drop after on" data-act="b-target" data-path="${here}" data-key="after-${id}">New blocks land here · click to add at the end instead</button>`;
+        html += `<button class="ig-drop after on" data-act="b-target" data-path="${here}" data-key="after-${id}" title="Click to add at the end instead">Next block goes here</button>`;
       }
       return html;
     }).join('');
@@ -3794,11 +4653,40 @@ const Builder = {
   },
   // Whether `count` more steps fit (64 in all) at a list `base` (checks
   // nest 4 deep at most). Says why when they don't.
-  roomFor(base, count){
+  // Whether `count` more steps, opening `levels` levels of lanes, fit in
+  // the list at `base`.
+  roomFor(base, count, levels){
     let total = 0;
     this.d.handlers.forEach(h => walk(h.steps, () => { total++; }));
     if (total + count > 64){ toast('That\'s the most steps one integration can have (64)', 'info'); return false; }
-    if (base.filter(x => x === 'then' || x === 'else').length >= 4){ toast('Checks go 4 deep at most: add it a level up', 'info'); return false; }
+    if (!nestFits(base, levels || 0)){ toast('Checks go 4 deep at most: add it a level up', 'info'); return false; }
+    return true;
+  },
+  // Put a dragged block, or a dragged step, at place `at` of the list at
+  // path `listKey` (counted without the step), and say whether it went.
+  // The list is held before the step leaves its old place, which can
+  // renumber the path to it.
+  dropAt(drag, listKey, at){
+    const listPath = this.resolve(listKey), list = this.listAt(listPath);
+    if (drag.kind){
+      const step = newStep(drag.kind, this.handler().trigger);
+      if (!this.roomFor(listPath, 1, nestLevels(step))) return false;
+      list.splice(at, 0, step);
+      nameAnswer(this.handler(), step);
+      this.sel = listPath.concat(at);
+      // Like a click: a new check's blocks go inside it.
+      if (step.type === 'if'){ this.target = this.sel.concat('then'); this.after = null; }
+      else { this.after = this.sel; this.target = []; }
+    } else {
+      const {list:from, index} = this.locate(this.resolve(drag.path));
+      const step = from[index];
+      from.splice(index, 1);
+      list.splice(at, 0, step);
+      walk(this.handler().steps, (s, here) => { if (s === step) this.sel = here; });
+      this.after = null;
+      this.target = [];
+    }
+    this.changed();
     return true;
   },
   // Whether a step sits inside a switched-off check.
@@ -3833,10 +4721,7 @@ const Builder = {
       else target = {list:outer, at:at + 1, path:parentPath.slice(0, -1).concat(at + 1)};
     }
     if (!target) return null;
-    // Checks nest at most 4 deep, counting the step's own checks.
-    const height = s => 1 + Math.max(0, ...(s.then || []).concat(s.else || []).map(height));
-    const depth = target.path.filter(x => x === 'then' || x === 'else').length + height(list[index]);
-    return depth <= 4 ? target : null;
+    return nestFits(target.path.slice(0, -1), nestLevels(list[index])) ? target : null;
   },
   inspectorHtml(){
     const h = this.handler();
@@ -3845,19 +4730,23 @@ const Builder = {
     // before it made, and the live ones.
     const upto = selected || (h.steps || [])[0];
     const varsBox = `<div class="ig-insp-vars"><div class="ic-label">Values it can use</div>
-      <div class="ig-tokens">${tokensHtml(varsFor(h, upto), 'b-token')}</div><div class="muted">Click a text field, then a value to put it there. <span class="mono">{name|text}</span> uses the text when the value is empty or 0.</div></div>`;
+      <div class="muted">Click a text field, then a value to put it there.</div>
+      <div class="ig-vals">${tokensHtml(varsFor(h, upto), 'b-token', '', true)}</div>${FORMS_HELP}</div>`;
     if (this.choosing){
-      return `<div class="ig-insp-title" style="--c:#5ac8fa"><small>WHEN</small><b>${this.choosing === 'event' ? 'What happens?' : 'How does it start?'}</b></div>
+      return `<div class="ig-insp-title" style="--c:#5ac8fa"><span class="ig-insp-ic">${svg('bolt')}</span><span><small>WHEN</small><b>${this.choosing === 'event' ? 'What happens?' : 'How does it start?'}</b></span></div>
         <p class="ig-insp-p">Pick it in the middle. Then add steps from the list on the left: each one runs in order.</p>`;
     }
-    if (this.sel === 'trigger') return this.triggerInspector(h) + varsBox;
+    // Only shown stacked, where the steps are a long way up.
+    const back = `<button type="button" class="ig-insp-back" data-act="b-back-steps">${svg('up')}Back to steps</button>`;
+    if (this.sel === 'trigger') return back + this.triggerInspector(h) + varsBox;
     if (!selected) return varsBox;
     const k = KINDS[selected.type];
     const off = selected.enabled === false;
-    return `<div class="ig-insp-title" style="--c:${k.c}"><small>${k.tag}</small><b>${esc(k.label)}</b></div>
+    return `${back}<div class="ig-insp-title" style="--c:${k.c}"><span class="ig-insp-ic">${svg(k.icon || 'steps')}</span><span>${k.tag.toLowerCase() === k.label.toLowerCase() ? '' : `<small>${k.tag}</small>`}<b>${esc(k.label)}</b></span></div>
       <div class="muted ig-insp-hint">${esc(k.hint)}</div>
       ${off ? warnHtml('This step is switched off: runs skip it. <a href="#" data-act="b-toggle-step" data-path="' + pathKey(this.sel) + '">Switch it on</a>') : ''}
-      ${this.stepFields(selected)}${varsBox}`;
+      ${answerClash(h, selected) ? warnHtml(`Another step also keeps its answer as <b>${esc(answerName(selected))}</b>, so later steps get whichever ran last. <a href="#" data-act="b-name-answer">Give this one its own name</a>`) : ''}
+      ${unknownVarsHtml(unknownVars(h, selected))}${this.stepFields(selected)}${varsBox}`;
   },
   // A card's fields as rows: name, value, side by side or full width.
   fieldsHtml(s){
@@ -3939,25 +4828,33 @@ const Builder = {
       case 'wait': return duration('ms', 'Wait', 's', 10000) + note('Like 20s or 2m. Up to an hour.');
       case 'wait_delay': return '<p class="ig-insp-p">Waits until the moment this started has reached your viewers. Only InstantClone can do this: it knows your delay.</p>'
         + duration('extra_ms', 'Then wait a bit more', 's', 0) + field('follow', 'If the delay changes meanwhile', {select:[['', 'Follow it'], ['no', 'Keep the delay from the start']]});
-      case 'if': return field('left', 'Check', {mono:true, ph:'{user_role}'}) + field('op', 'Is', {select:Object.entries(OPS)}) + field('right', 'Value', {mono:true, ph:'mod'})
-        + note('Text compares ignoring case; "is more than" compares numbers.');
+      case 'if': return this.ifFields(s, note);
       case 'stop': return note('Ends this run here.');
       case 'delay_action': return field('action', 'Does', {select:Object.entries(DELAY_ACTIONS)})
-        + (s.params.action === 'arm' ? field('seconds', 'Delay in whole seconds (0 turns it off), or a value like {arg1}', {mono:true, ph:'30'})
-          + note('Starts this delay, or changes it while one is on air. Never cancels it.') : '')
+        + (s.params.action === 'arm' ? field('seconds', 'Delay in whole seconds (0 turns it off, blank uses your Default delay), or a value like {arg1}', {mono:true, ph:'30'})
+          + note('Starts or changes the delay. A delay the buffer can\'t hold fails this step.') : '')
         + warnHtml('This changes your stream. Tests never run it.');
       case 'marker': return field('description', 'Label', {ph:'Crash'}) + note('Only works while you are live on Twitch.');
       case 'clip': return note('Clips the last moments of your stream. Later steps can use <span class="mono">{clip.url}</span>, <span class="mono">{clip.ok}</span> and, when it failed, <span class="mono">{clip.error}</span>.');
       case 'program': return (localLocked() ? warnHtml(esc(LOCAL_LOCK_TEXT)) : '')
         + field('path', 'Program (a fixed path, no variables)', {mono:true, fixed:true, ph:'C:\\Tools\\thing.exe'}) + field('args', 'Arguments', {mono:true, ph:'--scene "Replay"'})
         + note('Values like <span class="mono">{arg1}</span> keep only plain letters, numbers, spaces and <span class="mono">_ . , + = / -</span>, so chat can\'t sneak in a command or an option of its own.')
+        + field('wait', 'Its answer', {select:[['', 'Don\'t wait for it'], ['yes', 'Wait for it and keep what it prints (10 s at most)']]})
+        + (s.params.wait === 'yes' ? field('save_as', 'Save the answer as', {mono:true, fixed:true, ph:'program'})
+          + note(`Later steps can use <span class="mono">{${esc((s.params.save_as || '').trim() || 'program')}.output}</span> (what it printed), <span class="mono">.code</span> (how it ended) and <span class="mono">.ok</span> (yes when the code is 0). It runs with no window; one still running after 10 s is stopped.`) : '')
         + warnHtml('Runs on your PC. Recipes you import can never add this without asking you first.');
       case 'file': return (localLocked() ? warnHtml(esc(LOCAL_LOCK_TEXT)) : '') + field('path', 'File (a fixed path, no variables)', {mono:true, fixed:true, ph:'C:\\Stream\\status.txt'}) + field('text', 'Text', {area:true}) + field('mode', 'Each time', {select:[['', 'Replace the text'], ['append', 'Add a line']]});
       case 'set_var': return field('name', 'Name', {mono:true, fixed:true, ph:'winner'}) + field('value', 'Value', {ph:'{user}'}) + note('Later steps use it as <span class="mono">{name}</span>. Lasts for this run.');
       case 'overlay': return field('title', 'Small title', {ph:'Clip'}) + field('text', 'Text', {area:true, ph:'{user} just clipped that'})
         + field('seconds', 'On screen for', {select:[['3', '3 s'], ['6', '6 s'], ['10', '10 s'], ['15', '15 s'], ['30', '30 s']]
           .concat(['', '3', '6', '10', '15', '30'].includes(s.params.seconds || '') ? [] : [[s.params.seconds, s.params.seconds + ' s']])})
-        + alertsSetupHtml() + note('Tests never put anything on stream: use "Show a test alert" above.');
+        + field('color', 'Accent, like #ff7eb6 (empty: the theme\'s)', {mono:true, fixed:true, ph:'the theme\'s'})
+        + field('sound', 'Sound: theme, chime, pop, bell, rise, coin, sparkle, whoosh, fanfare, zap, blip, an upload (media:name) or a link', {mono:true, fixed:true, ph:'none'})
+        + field('volume', 'Volume, 0 to 100', {mono:true, fixed:true, ph:'70'})
+        + field('image', 'Picture: an upload (media:name) or a link to a PNG, JPG or GIF', {mono:true, fixed:true, ph:'https://…/party.gif'})
+        + alertsStatusHtml(true)
+        + `<button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="alert-show">${svg('play', ' class="ig-btn-ic"')}Show it on stream</button>`
+        + note('Tests never put anything on stream: "Show it on stream" does, with sample values.');
       case 'edit_text': {
         const op = EDIT_OPS[s.params.op] || EDIT_OPS.first_line;
         const got = editTextSample(s, sampleMap(this.handler()));
@@ -3971,28 +4868,105 @@ const Builder = {
       case 'counter': return field('name', 'Name', {mono:true, ph:'crashes'}) + field('op', 'Do', {select:[['', 'Add'], ['subtract', 'Subtract'], ['set', 'Set to'], ['reset', 'Reset to 0']]})
         + field('by', 'By', {mono:true, ph:'1'}) + note(`Kept between runs. Use it anywhere as <span class="mono">{counter.${esc(s.params.name || 'name')}}</span>.`);
       case 'obs': return this.obsFields(s, field, note);
+      case 'light': return lightPickerHtml(s.params) + lightControlsHtml(s.params, name => `data-bind="p" data-name="${name}"`)
+        + note('The device is fixed here, so chat can never pick it. Color and brightness may use values: {arg1} turns "!light blue" blue. A dry test never touches your lights.');
     }
     return '';
   },
-  // An OBS step: what it does, and the scene or source, picked from OBS's
-  // own lists while it's connected.
+  // An If's checks: what each looks at, how it compares, and with what.
+  // A yes or no value gets yes and no to click. Several checks are joined
+  // by "and" or "or", set once for all of them.
+  ifFields(s, note){
+    const rows = conditionRows(s), any = s.params.match === 'any';
+    const samples = {};
+    varsFor(this.handler(), s).forEach(v => { samples[v.name] = v.sample; });
+    const isYesNo = left => {
+      const m = /^\{([A-Za-z0-9_.]{1,64})\}$/.exec(left.trim());
+      return !!m && /^(yes|no)$/.test(samples[m[1]] || '');
+    };
+    const row = (r, n) => {
+      const alone = OPS_ALONE.includes(r.op);
+      const quick = !alone && isYesNo(r.left) ? `<div class="ig-cond-quick">${['yes', 'no'].map(v =>
+        `<button type="button" class="ig-start${r.right.trim() === v ? ' on' : ''}" data-act="b-cond-val" data-name="right${r.sfx}" data-v="${v}" aria-pressed="${r.right.trim() === v}">${v}</button>`).join('')}</div>` : '';
+      return `${n ? `<div class="ig-cond-join">${any ? 'or' : 'and'}</div>` : ''}<div class="ig-cond">
+        <div class="ig-cond-top"><input class="ic-input mono" data-bind="p" data-name="left${r.sfx}" value="${esc(r.left)}" placeholder="{user_role}" spellcheck="false" aria-label="What it checks">
+        ${rows.length > 1 ? `<button type="button" class="ic-btn-tiny" data-act="b-cond-del" data-n="${n}" aria-label="Remove this check" title="Remove this check">${svg('x')}</button>` : ''}</div>
+        <div class="ig-cond-cmp${alone ? ' alone' : ''}"><select class="ic-input" data-bind="p" data-name="op${r.sfx}" aria-label="How it compares">${Object.entries(OPS).map(([id, label]) =>
+          `<option value="${id}" ${id === r.op ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>
+        ${alone ? '' : `<input class="ic-input mono" data-bind="p" data-name="right${r.sfx}" value="${esc(r.right)}" placeholder="mod" spellcheck="false" aria-label="Value">`}</div>${quick}</div>`;
+    };
+    const match = rows.length < 2 ? '' : `<div class="dff"><label>Then runs when</label><div class="sub-tabs ig-seg">${[['all', 'all are true'], ['any', 'any one is true']].map(([id, label]) =>
+      `<button class="sub-tab${(id === 'any') === any ? ' on' : ''}" data-act="b-cond-match" data-v="${id}" aria-pressed="${(id === 'any') === any}">${label}</button>`).join('')}${SEG_IND}</div></div>`;
+    return `<div class="dff"><label>${rows.length > 1 ? 'Checks' : 'Check'}</label><div class="ig-conds">${rows.map(row).join('')}</div>
+      ${rows.length < MAX_CONDITIONS ? `<button type="button" class="ig-cond-add" data-act="b-cond-add">${svg('plus')}Add a check</button>` : ''}</div>${match}`
+      + note('Text compares ignoring case; "is more than" compares numbers. Click a value below to put it in the field you last clicked.');
+  },
+  // Pick names from OBS's own list: a find box over it, one line each.
+  // A typed name is kept too, as OBS may be closed or the source not made
+  // yet. `multi`: several names, one per line in the field. `items` are
+  // names, or [name, label].
+  pickHtml(s, name, label, items, opts){
+    const multi = !!opts.multi;
+    const picked = multi ? listedNames(s.params[name]) : [(s.params[name] || '').trim()].filter(Boolean);
+    const key = uidOf(s) + ':' + name, find = (this.pickFind || {})[key] || '', typed = find.trim();
+    const all = items.map(x => Array.isArray(x) ? x : [x, x]);
+    picked.filter(v => !all.some(([x]) => x === v)).forEach(v => all.unshift([v, v]));
+    const shown = typed ? all.filter(([v, l]) => (v + ' ' + l).toLowerCase().includes(typed.toLowerCase())) : all;
+    const row = ([v, l], isNew) => {
+      const on = picked.includes(v);
+      return `<button type="button" class="ig-pick-row${on ? ' on' : ''}${isNew ? ' new' : ''}" role="option" aria-selected="${on}" data-act="b-obs-pick" data-name="${name}" data-v="${esc(v)}"${multi ? ' data-multi="1"' : ''}${isNew ? ' data-new="1"' : ''} title="${esc(v)}"><span class="ig-pick-mark${multi ? ' box' : ''}">${svg('check', ' stroke-width="3"')}</span><span class="ig-pick-t">${isNew ? `Use “${esc(l)}”` : esc(l)}</span></button>`;
+    };
+    const rows = shown.map(x => row(x)).join('') + (typed && !all.some(([v]) => v === typed) ? row([typed, typed], true) : '');
+    const empty = all.length ? 'Nothing matches.' : opts.offline;
+    const head = picked.length ? `<span class="ig-pick-sum" title="${esc(picked.join(', '))}">${multi ? `${picked.length} picked` : esc(picked[0])}</span><button type="button" class="ig-pick-clear" data-act="b-obs-clear" data-name="${name}">Clear</button>` : '';
+    return `<div class="dff ig-pick"><div class="ig-pick-h"><span class="ig-pick-l">${label}</span>${head}</div>
+      <div class="ig-pick-box"><div class="ig-pick-find">${svg('search')}<input data-bind="pick-find" data-name="${esc(key)}" value="${esc(find)}" placeholder="${esc(opts.ph)}" spellcheck="false" aria-label="Find or type a name"></div>
+      <div class="ig-pick-list" role="listbox"${multi ? ' aria-multiselectable="true"' : ''} aria-label="${esc(label)}">${rows || `<div class="ig-pick-none">${esc(empty)}</div>`}</div></div></div>`;
+  },
+  // An OBS step: what it does, and the scenes or sources, picked from
+  // OBS's own lists while it's connected.
   obsFields(s, field, note){
     const action = s.params.action || 'scene';
     const o = ObsLive.status;
-    const pick = (items, name) => items.length ? `<div class="ig-obs-pick">${items.map(x =>
-      `<button class="ig-start${x === s.params[name] ? ' on' : ''}" data-act="b-obs-pick" data-name="${name}" data-v="${esc(x)}" aria-pressed="${x === s.params[name]}">${esc(x)}</button>`).join('')}</div>` : '';
-    const named = (name, label, ph, items) => `<div class="dff"><label>${label}</label>${pick(items, name)}
-      <input class="ic-input" data-bind="p" data-name="${name}" data-fixed value="${esc(s.params[name] || '')}" placeholder="${esc(ph)}" spellcheck="false"></div>`;
+    const offline = 'OBS isn\'t connected: type the name above.';
+    const named = (name, label, ph, items, multi) => this.pickHtml(s, name, label, items, {ph, multi, offline});
     const scenes = (o && o.scenes) || [], sources = (o && o.sources) || [];
-    let body = field('action', 'Does', {select:Object.entries(OBS_ACTIONS).map(([id, [label]]) => [id, label])});
-    if (action === 'scene') body += named('scene', 'Scene', 'Scene name', scenes);
-    else {
-      body += named('source', action === 'text' ? 'Text source' : 'Source', 'Source name', sources);
-      body += action === 'text' ? field('text', 'Text', {area:true, ph:'Crashes today: {counter.crashes}'})
-        : named('scene', 'In the scene (blank: the one on air)', 'the scene on air', scenes);
+    const filters = (o && o.filters) || {}, hotkeys = (o && o.hotkeys) || [];
+    // The actions in groups, as OBS's own menus split them.
+    const groups = {};
+    Object.entries(OBS_ACTIONS).forEach(([id, [label, , group]]) => { (groups[group] = groups[group] || []).push([id, label]); });
+    let body = `<div class="dff"><label>Does</label><select class="ic-input" data-bind="p" data-name="action">${Object.entries(groups).map(([group, list]) =>
+      `<optgroup label="${esc(group)}">${list.map(([id, label]) => `<option value="${id}" ${id === action ? 'selected' : ''}>${esc(label)}</option>`).join('')}</optgroup>`).join('')}</select></div>`;
+    const need = (OBS_ACTIONS[action] || [])[1];
+    if (action === 'scene') body += named('scene', 'Scene', 'Find or type a scene', scenes);
+    else if (action === 'check'){
+      const picked = listedNames(s.params.source);
+      body += named('source', 'Sources to check too (optional)', 'Find or type a source', sources, true);
+      if (picked.length) body += named('scene', 'Showing in the scene (none: the one on air)', 'Find or type a scene', scenes);
+      const n = esc(answerName(s)), v = f => `<span class="mono">{${n}.${f}}</span>`;
+      body += field('save_as', 'Keep the answer as', {mono:true, fixed:true, ph:'obs'})
+        + note(`Later steps find it under "Values it can use" as ${v('scene')}, ${v('streaming')}, ${v('recording')}${!picked.length ? ''
+          : `, ${v('muted')} and ${v('visible')}${picked.length > 1 ? ' (yes when all of them are), and each source\'s own' : ''}`}. Each check keeps its own name.`);
     }
+    else if (need === 'filter'){
+      // Only sources and scenes that have a filter, then that one's filters.
+      const owners = Object.keys(filters).filter(name => filters[name].length);
+      body += named('source', 'Source or scene', 'Find or type a source or scene', owners);
+      body += named('filter', 'Filter', 'Find or type a filter', filters[s.params.source] || []);
+      if (o && o.state === 'connected' && !owners.length) body += note('None of your sources or scenes has a filter yet. In OBS: right-click a source, Filters.');
+    } else if (need === 'hotkey'){
+      body += named('hotkey', 'Hotkey', 'Find a hotkey, or type one like OBSBasic.StartVirtualCam', hotkeys.map(x => [x, hotkeyLabel(x)]));
+    } else if (need === 'source'){
+      // A text source takes one text; anything else can take several.
+      const one = action === 'text';
+      body += named('source', one ? 'Text source' : 'Sources', 'Find or type a source', sources, !one);
+      if (one) body += field('text', 'Text', {area:true, ph:'Crashes today: {counter.crashes}'});
+      else if (['show', 'hide', 'toggle'].includes(action)) body += named('scene', 'In the scene (none: the one on air)', 'Find or type a scene', scenes);
+    }
+    if (OBS_NOTES[action]) body += note(OBS_NOTES[action]);
     return `<div data-obs-live>${obsStatusHtml()}</div>${body}`
-      + note('Scene and source names are fixed here, so chat can never pick them. Tests never touch OBS.');
+      + note(action === 'check' ? 'Changes nothing in OBS, so tests run it too. Names are fixed here, so chat can never pick them.'
+        : need ? 'Names are fixed here, so chat can never pick them. Tests never touch OBS.' : 'Tests never touch OBS.');
   },
   triggerInspector(h){
     const t = h.trigger;
@@ -4006,6 +4980,8 @@ const Builder = {
       body = `<div class="dff"><label>What happens</label><button type="button" class="ig-evcurrent" data-act="b-change-event">
         <span class="ig-ev-ic">${svg(info.icon)}</span><span class="ig-ev-t"><b>${esc(current ? current.label : t.event)}</b><small>${esc(info.desc)}</small></span>
         <span class="ig-evchange">Change</span></button></div>`;
+      body += twitchEventStatusHtml(t);
+      if (isObsEvent(t)) body += '<div class="muted">Heard from OBS through its WebSocket server: switch it on once in OBS, Tools › WebSocket Server Settings.</div>';
       body += paramsHtml(t, 't-');
       const filters = Editor.filterVars(t);
       if (filters.length){
@@ -4023,7 +4999,7 @@ const Builder = {
     } else if (t.type === 'scene'){
       body = sceneHtml(t, 't-', this.d);
     } else if (t.type === 'chat_command'){
-      body = `<div class="dff"><label>Command</label><input class="ic-input mono" data-bind="t-command" value="${esc(t.command || '')}" placeholder="!clip" spellcheck="false"></div>
+      body = `${commandClashHtml(this.d)}<div class="dff"><label>Command</label><input class="ic-input mono" data-bind="t-command" value="${esc(t.command || '')}" placeholder="!clip" spellcheck="false"></div>
         <div class="dff"><label>Also answers to</label><input class="ic-input mono" data-bind="t-aliases" value="${esc((t.aliases || []).join(' '))}" spellcheck="false"></div>
         <div class="dff"><label>Who can use it</label>${rolesHtml(t, 't-role')}</div>
         <div class="dff"><label>Each viewer, at most once every</label>${durInput('t-ucd-dur', t.user_cooldown_ms || 0, 's')}</div>`;
@@ -4049,7 +5025,7 @@ const Builder = {
     const manage = this.d.handlers.length > 1
       ? `<div class="ig-trig-manage">${enableSwitch('h-enabled', h.enabled, h.enabled ? 'This trigger is on' : 'This trigger is off')}
          <button class="ic-btn ic-btn-ghost ig-small ig-trig-del" data-act="b-del-handler" aria-label="Remove this trigger">${svg('x')}Remove</button></div>` : '';
-    return `<div class="ig-insp-title" style="--c:#5ac8fa"><small>WHEN</small><b>${esc(triggerLabel(t))}</b></div>
+    return `<div class="ig-insp-title" style="--c:#5ac8fa"><span class="ig-insp-ic">${svg(triggerKind(t).icon)}</span><span><small>WHEN</small><b>${esc(triggerLabel(t))}</b></span></div>
       ${manage}${typeSel}${body}
       <div class="ig-insp-group"><div class="ic-label">Every trigger here</div>
         <div class="dff"><label>Repeat at most once every</label>${durInput('b-cooldown-dur', this.d.cooldown_ms || 0, 's')}</div>
@@ -4074,13 +5050,19 @@ const Builder = {
     else if (b === 't-live') t.only_live = el.checked;
     else if (b === 't-param'){ if (!paramInput(t, el)) return; }
     else if (rulesInput(t, el, 't-') || sceneInput(t, el, 't-') || onlyLiveInput(t, el, 't-') || onlyLiveInput(t, el, '')){ /* changed below */ }
-    else if (b === 'p') this.stepAt(this.sel).params[el.dataset.name] = el.value;
+    else if (b === 'p'){
+      const s = this.stepAt(this.sel);
+      s.params[el.dataset.name] = el.value;
+      if (el.dataset.name === 'action' || el.dataset.name === 'wait') nameAnswer(h, s);
+    }
     else if (b === 'p-dur'){ const ms = durationOf(0, 3600000); if (ms == null) return; this.stepAt(this.sel).params[el.dataset.name] = String(ms); }
     else if (b === 'bf-name' || b === 'bf-value'){
       const s = this.stepAt(this.sel);
       Editor.fields(s, list => { const f = list[+el.dataset.n]; if (f) f[b === 'bf-name' ? 'name' : 'value'] = el.value; });
     }
     else if (b === 'test-value'){ this.testValues[el.dataset.name] = el.value; return; }
+    // Finding in a list narrows it; nothing in the integration changes.
+    else if (b === 'pick-find'){ this.pickFind = Object.assign({}, this.pickFind, {[el.dataset.name]:el.value}); this.render(); return; }
     else if (b === 'try'){
       // Values to try the request with; not part of the integration.
       tryEntry(this.stepAt(this.sel)).inputs[el.dataset.name] = el.value;
@@ -4101,7 +5083,43 @@ const Builder = {
     const selected = () => Array.isArray(this.sel) ? this.stepAt(this.sel) : null;
     switch (a){
       case 'b-color': { const s = selected(); if (s) s.params.color = el.dataset.v; this.changed(); return true; }
-      case 'b-obs-pick': { const s = selected(); if (s) s.params[el.dataset.name] = el.dataset.v; this.changed(); return true; }
+      case 'alert-show': { const s = selected(); if (s) showAlertNow(s, this.handler(), el); return true; }
+      case 'b-obs-pick': {
+        const s = selected();
+        if (!s) return true;
+        const name = el.dataset.name, v = el.dataset.v;
+        if (el.dataset.multi){
+          const list = listedNames(s.params[name]), at = list.indexOf(v);
+          if (at < 0) list.push(v); else list.splice(at, 1);
+          s.params[name] = list.join('\n');
+        } else s.params[name] = (s.params[name] || '').trim() === v ? '' : v;
+        // A typed name, now picked, leaves the find box for the next one.
+        if (el.dataset.new && this.pickFind) delete this.pickFind[uidOf(s) + ':' + name];
+        this.changed();
+        return true;
+      }
+      case 'b-cond-add': {
+        const s = selected();
+        if (s){ const rows = conditionRows(s); if (rows.length < MAX_CONDITIONS) setConditions(s, rows.concat({left:'', op:'is', right:''})); }
+        this.changed();
+        return true;
+      }
+      case 'b-cond-del': {
+        const s = selected();
+        if (s){ const rows = conditionRows(s); rows.splice(+el.dataset.n, 1); setConditions(s, rows); }
+        this.changed();
+        return true;
+      }
+      case 'b-cond-val': { const s = selected(); if (s) s.params[el.dataset.name] = el.dataset.v; this.changed(); return true; }
+      case 'b-cond-match': {
+        const s = selected();
+        if (s){ if (el.dataset.v === 'any') s.params.match = 'any'; else delete s.params.match; }
+        this.changed();
+        return true;
+      }
+      case 'b-obs-clear': { const s = selected(); if (s) s.params[el.dataset.name] = ''; this.changed(); return true; }
+      case 'light-use': { const s = selected(); if (s) useDevice(s, el); this.changed(); return true; }
+      case 'l-swatch': { const s = selected(); if (s) s.params.color = el.dataset.v; this.changed(); return true; }
       case 'bf-add': { const s = selected(); if (s) Editor.fields(s, list => list.push({name:'', value:'', inline:true})); this.changed(); return true; }
       case 'bf-del': { const s = selected(); if (s) Editor.fields(s, list => list.splice(+el.dataset.n, 1)); this.changed(); return true; }
       case 'bf-inline': {
@@ -4115,6 +5133,14 @@ const Builder = {
         // New blocks land right after the step picked.
         this.after = Array.isArray(this.sel) ? this.sel : null;
         this.render();
+        this.showInspector();
+        return true;
+      }
+      case 'b-back-steps': {
+        const step = q('.ig-step.on') || q('.ig-when.on') || q('.ig-canvas');
+        if (step) step.scrollIntoView({block:'center', behavior:reduced() ? 'auto' : 'smooth'});
+        const main = step && (step.matches('button') ? step : step.querySelector('.ig-step-main'));
+        if (main) main.focus({preventScroll:true});
         return true;
       }
       case 'b-target': this.target = this.resolve(el.dataset.path); this.after = null; this.render(); return true;
@@ -4134,15 +5160,16 @@ const Builder = {
           at = list.length;
           base = this.target;
         }
-        if (!this.roomFor(base, 1)) return true;
+        if (!this.roomFor(base, 1, nestLevels(step))) return true;
         list.splice(at, 0, step);
+        nameAnswer(this.handler(), step);
         this.sel = base.concat(at);
         // A check's blocks go inside it; anything else, right after it.
         if (kind === 'if'){ this.target = this.sel.concat('then'); this.after = null; }
         else this.after = this.sel;
         this.changed();
-        const added = q('.ig-step.on');
-        if (added) added.scrollIntoView({block:'nearest', behavior:reduced() ? 'auto' : 'smooth'});
+        if (this.narrow()) this.showInspector();
+        else this.reveal('.ig-step.on');
         return true;
       }
       case 'b-move': {
@@ -4173,6 +5200,7 @@ const Builder = {
         walk([list[index]], () => { size++; });
         if (!this.roomFor([], size)) return true;
         list.splice(index + 1, 0, clone(list[index]));
+        walk([list[index + 1]], s => nameAnswer(this.handler(), s));
         this.sel = path.slice(0, -1).concat(index + 1);
         this.after = this.sel;
         this.target = [];
@@ -4218,12 +5246,23 @@ const Builder = {
         this.changed();
         return true;
       }
-      case 'b-del-handler':
+      case 'b-del-handler': {
         if (d.handlers.length < 2 || !armConfirm(el, 'Click again: removes it and its steps')) return true;
-        d.handlers.splice(this.h, 1);
+        const at = this.h, label = this.triggerTabs()[at];
+        const [gone] = d.handlers.splice(at, 1);
         this.h = 0; this.sel = 'trigger'; this.target = []; this.after = null; this.resetTest();
+        this.choosing = this.unpicked.has(this.handler()) ? 'kind' : null;
         this.changed();
+        undoToast(`Removed the trigger "${label}"`, () => {
+          if (Modal.kind !== 'builder' || this.d !== d) return;
+          d.handlers.splice(Math.min(at, d.handlers.length), 0, gone);
+          this.h = d.handlers.indexOf(gone);
+          this.sel = 'trigger'; this.target = []; this.after = null; this.resetTest();
+          this.choosing = this.unpicked.has(gone) ? 'kind' : null;
+          this.changed();
+        });
         return true;
+      }
       case 'b-change-kind':
         this.cancelTrigger = clone(this.handler().trigger);
         this.choosing = 'kind';
@@ -4281,10 +5320,20 @@ const Builder = {
         return true;
       }
       case 'b-new-token': this.handler().trigger.token = randomToken(); this.changed(); return true;
-      case 'b-token':
-        if (!this.lastField || !this.lastField.isConnected){ toast('Click a text field first, then the value to put in it', 'info'); return true; }
-        insertAtCursor(this.lastField, '{' + el.dataset.token + '}');
+      case 'b-name-answer': { const s = selected(); if (s) nameAnswer(this.handler(), s); this.changed(); return true; }
+      case 'b-token': {
+        // Into the field last written in, or the selected step's text.
+        const s = selected(), main = s && (KINDS[s.type] || {}).text;
+        let field = this.lastField && this.lastField.isConnected ? this.lastField : null;
+        if (!field && main){
+          // Never written in: the value goes at the end, not before it all.
+          field = q(`.ig-inspector [data-bind="p"][data-name="${main}"]`);
+          if (field) field.setSelectionRange(field.value.length, field.value.length);
+        }
+        if (!field){ toast('Click a text field first, then the value to put in it', 'info'); return true; }
+        insertAtCursor(field, tokenText(el.dataset.token, s && s.type === 'if'));
         return true;
+      }
       case 'b-test': this.leaveChooser(); this.testOpen = true; this.render(); this.reveal('.ig-run-box'); focusAct('test-run'); return true;
       case 'test-run': if (this.askToPick()) busy(el, () => this.test()); return true;
       case 'test-mode': this.testDry = el.dataset.v === 'dry'; this.render(); return true;
@@ -4302,7 +5351,7 @@ const Builder = {
         this.reveal('.ig-picked');
         return true;
       case 'b-use-reply': this.replyWithPick(); return true;
-      case 'delete': if (armConfirm(el, 'Delete for good?')) busy(el, () => remove(d.id)); return true;
+      case 'delete': busy(el, () => remove(d.id)); return true;
       // The builder stays open after saving: building is trying things.
       case 'save': {
         this.leaveChooser();
@@ -4365,6 +5414,16 @@ const Builder = {
     const el = q(selector);
     if (el) el.scrollIntoView({block:'nearest', behavior:reduced() ? 'auto' : 'smooth'});
   },
+  // Stacked (a phone, a narrow window), the blocks, the steps and the
+  // settings are one page; see index.html's max-width:760px.
+  narrow(){ return matchMedia('(max-width:760px)').matches; },
+  // There, the settings sit under every step: bring them up when a step
+  // is picked or added. "Back to steps" goes the other way.
+  showInspector(){
+    if (!this.narrow()) return;
+    const insp = q('.ig-inspector');
+    if (insp) insp.scrollIntoView({block:'start', behavior:reduced() ? 'auto' : 'smooth'});
+  },
   async test(){
     this.testOpen = true;
     this.run = {running:true};
@@ -4404,7 +5463,8 @@ function newStep(kind, trigger){
     delay_action:{action:'cut'}, marker:{description:'Highlight'}, clip:{}, program:{path:'', args:''},
     file:{path:'', text:'', mode:''}, set_var:{name:'', value:''}, counter:{name:'count', op:'', by:'1'},
     overlay:{title:'', text:'', seconds:'6'}, edit_text:{input:'', op:'first_line', a:'', b:'', save_as:'text'},
-    obs:{action:'scene', scene:'', source:'', text:''},
+    obs:{action:'scene', scene:'', source:'', text:'', filter:'', hotkey:''},
+    light:{device:'', name:'', plug:'', action:'color', color:'red', brightness:''},
   }[kind] || {};
   return {type:kind, params:clone(p), then:[], else:[]};
 }
@@ -4427,6 +5487,290 @@ function triggerSentence(t){
   }
   return t.type;
 }
+// Dragging: a block from the list on the left into the steps, or a step
+// to another place, in or out of an If's lanes. Mouse and pen only: on a
+// touch screen the canvas scrolls, and a tap adds or picks as before.
+const StepDrag = {
+  start:null,   // where a press began, until it moves far enough to drag
+  live:null,    // the drag under way
+  down(e){
+    if (Modal.kind !== 'builder' || e.button !== 0 || e.pointerType === 'touch' || this.live) return;
+    const main = e.target.closest('.ig-step-main');
+    const block = !main && e.target.closest('.ig-palette button[data-act="b-add"]:not(.ig-pal-locked)');
+    if (!main && !block) return;
+    const card = main ? main.closest('.ig-step') : block;
+    if (main && !card.dataset.path) return;
+    this.start = {x:e.clientX, y:e.clientY, id:e.pointerId, card,
+      kind:block ? block.dataset.kind : '', path:main ? card.dataset.path : null};
+  },
+  move(e){
+    if (this.live){ this.live.x = e.clientX; this.live.y = e.clientY; return; }
+    const s = this.start;
+    if (!s || e.pointerId !== s.id) return;
+    if (Math.hypot(e.clientX - s.x, e.clientY - s.y) >= 6) this.begin(e);
+  },
+  // A small tilted pill under the pointer: the block's icon, its kind and
+  // what it does, and how many steps an If carries along.
+  ghostHtml(s){
+    if (s.kind){
+      const k = KINDS[s.kind];
+      return {c:k.c, html:`<span class="ig-pal-ic">${svg(k.icon)}</span><span class="ig-ghost-t"><small>New step</small><b>${esc(k.label)}</b></span>`};
+    }
+    const step = Builder.stepAt(Builder.resolve(s.path)), k = KINDS[step.type] || {label:step.type, c:'#888', icon:'steps'};
+    const text = (s.card.querySelector('.ig-step-text') || {}).textContent || '';
+    let inside = -1;
+    walk([step], () => { inside++; });
+    return {c:k.c, html:`<span class="ig-pal-ic">${svg(k.icon || 'steps')}</span><span class="ig-ghost-t"><small>${esc(k.label)}</small><b>${esc(text)}</b></span>${inside > 0 ? `<span class="ig-ghost-n">+${inside}</span>` : ''}`};
+  },
+  // The block leaves its place: a copy of it shrinks into the pointer
+  // while the pill grows there.
+  lift(s, x, y){
+    if (reduced()) return;
+    const src = s.kind ? s.card.querySelector('.ig-pal-ic') : s.card;
+    if (!src) return;
+    const r = src.getBoundingClientRect(), copy = src.cloneNode(true);
+    ['data-act', 'data-key', 'data-path', 'id'].forEach(a => copy.removeAttribute(a));
+    copy.querySelectorAll('[data-act],[data-key],[id]').forEach(n => ['data-act', 'data-key', 'id'].forEach(a => n.removeAttribute(a)));
+    copy.classList.remove('on', 'ig-in-hand');
+    copy.setAttribute('aria-hidden', 'true');
+    if (s.kind) copy.style.setProperty('--c', KINDS[s.kind].c);
+    Object.assign(copy.style, {position:'fixed', left:r.left + 'px', top:r.top + 'px', width:r.width + 'px', height:r.height + 'px',
+      margin:'0', zIndex:'2998', pointerEvents:'none', transformOrigin:'0 0'});
+    document.body.appendChild(copy);
+    const k = s.kind ? 0.6 : 0.22;
+    copy.animate([{transform:'none', opacity:1},
+      {transform:`translate(${x - r.left - r.width * k / 2}px,${y - r.top - r.height * k / 2}px) scale(${k})`, opacity:0}],
+      {duration:260, easing:'cubic-bezier(.4,0,.2,1)', fill:'forwards'}).onfinish = () => copy.remove();
+  },
+  begin(e){
+    const s = this.start, look = this.ghostHtml(s);
+    const ghost = document.createElement('div');
+    ghost.className = 'ig-ghost';
+    ghost.style.setProperty('--c', look.c);
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.innerHTML = `<div class="ig-ghost-in">${look.html}</div>`;
+    document.body.append(ghost);
+    const getSel = window.getSelection && window.getSelection();
+    if (getSel) getSel.removeAllRanges();
+    document.documentElement.classList.add('ig-dragging-on');
+    // The socket is as tall as the block in hand.
+    const h = s.kind ? 56 : Math.round(s.card.getBoundingClientRect().height);
+    // The pointer holds the pill by its icon.
+    this.live = {ghost, x:e.clientX, y:e.clientY, dx:18, dy:20, drop:null, raf:0, slot:null, slotAt:'', h};
+    this.lift(s, e.clientX, e.clientY);
+    // The step is in hand: out of the stack, its socket where it was.
+    this.shift(() => {
+      this.held().forEach(n => n.classList.add('ig-in-hand'));
+      this.live.drop = this.place(e.clientX, e.clientY);
+      this.setSlot(this.live.drop, true);
+    });
+    this.frame();
+  },
+  // The step being carried, with its lanes and its "next block" marker.
+  held(){
+    const s = this.start;
+    const card = s && s.path != null && q(`.ig-step[data-path="${s.path}"]`);
+    if (!card) return [];
+    const out = [card];
+    for (let n = card.nextElementSibling; n && !n.classList.contains('ig-step') && !n.matches('.ig-drop:not(.after)'); n = n.nextElementSibling){
+      if (n.matches('.ig-branch, .ig-drop.after')) out.push(n);
+    }
+    return out;
+  },
+  // Each frame: follow the pointer, scroll near an edge, find the drop.
+  frame(){
+    const L = this.live;
+    if (!L) return;
+    L.ghost.style.transform = `translate(${L.x - L.dx}px,${L.y - L.dy}px)`;
+    const canvas = q('.ig-canvas');
+    if (canvas){
+      const r = canvas.getBoundingClientRect(), edge = 56;
+      const over = L.x >= r.left && L.x <= r.right;
+      const push = L.y < r.top + edge ? L.y - (r.top + edge) : L.y > r.bottom - edge ? L.y - (r.bottom - edge) : 0;
+      if (over && push) canvas.scrollTop += Math.max(-16, Math.min(16, push / 3));
+    }
+    // A redraw may have put the step in hand back: take it out again.
+    this.held().forEach(n => n.classList.add('ig-in-hand'));
+    L.drop = this.place(L.x, L.y);
+    L.ghost.classList.toggle('no', !!L.drop && L.drop.ok === false);
+    const key = L.drop && L.drop.ok ? `${L.drop.list}:${L.drop.at}` : '';
+    if (key !== L.slotAt || (L.slot && !L.slot.isConnected)) this.shift(() => this.setSlot(L.drop, false));
+    L.raf = requestAnimationFrame(() => this.frame());
+  },
+  // Where an element sits in the layout, ignoring the slides under way,
+  // so a sliding step never moves the drop it slides for.
+  layoutTop(el, root){
+    let y = 0;
+    for (let n = el; n && n !== root; n = n.offsetParent) y += n.offsetTop;
+    return root.getBoundingClientRect().top + y;
+  },
+  // The list under the pointer (the deepest lane) and the place in it,
+  // counted without the step in hand.
+  place(x, y){
+    const canvas = q('.ig-canvas'), root = q('.ig-steps');
+    if (!canvas || !root) return null;
+    const box = canvas.getBoundingClientRect();
+    if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
+    const hit = document.elementFromPoint(x, y);
+    const holder = hit && canvas.contains(hit) ? hit.closest('.ig-lane, .ig-steps') : null;
+    const listEl = holder ? (holder.matches('.ig-steps') ? holder : holder.querySelector(':scope > [data-list]')) : root;
+    if (!listEl) return null;
+    const cards = [...listEl.querySelectorAll(':scope > .ig-step:not(.ig-when):not(.ig-in-hand)')];
+    // A step and its lanes are one block: past its middle is after it.
+    const mids = cards.map(c => {
+      const next = c.nextElementSibling, top = this.layoutTop(c, root);
+      const bottom = next && next.classList.contains('ig-branch') ? this.layoutTop(next, root) + next.offsetHeight : top + c.offsetHeight;
+      return (top + bottom) / 2;
+    });
+    let at = mids.findIndex(mid => y < mid);
+    if (at < 0) at = cards.length;
+    return {list:listEl.dataset.list, at, el:listEl, cards, ok:this.allowed(listEl.dataset.list, at)};
+  },
+  // true, false (not here), or 'same' (back where it came from).
+  allowed(listKey, at){
+    const s = this.start;
+    const levels = s.kind ? (s.kind === 'if' ? 1 : 0) : nestLevels(Builder.stepAt(Builder.resolve(s.path)));
+    if (!nestFits(Builder.resolve(listKey), levels)) return false;
+    if (s.path == null) return true;
+    // Never into its own lanes.
+    if (listKey === s.path || listKey.startsWith(s.path + '.')) return false;
+    const from = Builder.resolve(s.path);
+    return pathKey(from.slice(0, -1)) === listKey && at === from[from.length - 1] ? 'same' : true;
+  },
+  // The socket: a gap the size of the block, where it would land.
+  setSlot(drop, still){
+    const L = this.live;
+    if (L.slot) L.slot.remove();
+    L.slot = null;
+    L.slotAt = '';
+    if (!drop || !drop.ok) return;
+    const slot = document.createElement('div');
+    slot.className = 'ig-slot' + (still ? ' still' : '');
+    slot.setAttribute('aria-hidden', 'true');
+    slot.style.setProperty('--h', L.h + 'px');
+    const end = [...drop.el.children].reverse().find(c => c.matches('.ig-drop:not(.after)')) || null;
+    drop.el.insertBefore(slot, drop.at < drop.cards.length ? drop.cards[drop.at] : end);
+    L.slot = slot;
+    L.slotAt = `${drop.list}:${drop.at}`;
+  },
+  // Runs `change` (the socket moves, the step leaves or comes back), then
+  // slides what it pushed aside from where it was seen to where it is.
+  // Steps inside lanes move with their lanes, so only their own part.
+  shift(change){
+    const canvas = q('.ig-canvas');
+    if (!canvas || reduced()){ change(); return; }
+    const els = [...canvas.querySelectorAll('.ig-step, .ig-branch, .ig-drop')];
+    const seen = new Map(els.map(el => [el, el.getBoundingClientRect().top]));
+    change();
+    els.forEach(el => el.getAnimations().forEach(a => { if (a.id === 'shift') a.cancel(); }));
+    const moved = new Map();
+    els.forEach(el => { if (el.isConnected && !el.classList.contains('ig-in-hand')) moved.set(el, seen.get(el) - el.getBoundingClientRect().top); });
+    moved.forEach((dy, el) => {
+      const lane = el.parentElement && el.parentElement.closest('.ig-branch');
+      const own = dy - (lane && moved.has(lane) ? moved.get(lane) : 0);
+      if (Math.abs(own) >= 1) el.animate([{transform:`translateY(${own}px)`}, {transform:'none'}], {id:'shift', duration:220, easing:'cubic-bezier(.2,.9,.3,1)'});
+    });
+  },
+  up(e){
+    const s = this.start, L = this.live;
+    this.start = null;
+    if (!L || (s && e.pointerId !== s.id)) return;
+    const d = L.drop, pill = L.ghost.firstElementChild.getBoundingClientRect();
+    const ghost = this.stop();
+    // The click a drag ends with is not a click.
+    const eat = ev => { ev.stopPropagation(); ev.preventDefault(); };
+    window.addEventListener('click', eat, true);
+    setTimeout(() => window.removeEventListener('click', eat, true), 0);
+    // The redraw puts the step where its socket is: nothing jumps.
+    if (d && d.ok === true && Builder.dropAt(s, d.list, d.at)){
+      ghost.remove();
+      this.clear(L, false);
+      this.land(pill, Array.isArray(Builder.sel) && q(`.ig-step[data-path="${pathKey(Builder.sel)}"]`));
+      return;
+    }
+    this.clear(L, true);
+    if (d && d.ok === 'same'){
+      ghost.remove();
+      this.land(pill, q(`.ig-step[data-path="${s.path}"]`));
+    } else this.home(ghost, s);
+  },
+  cancel(){
+    const s = this.start, L = this.live;
+    this.start = null;
+    if (!L) return;
+    const ghost = this.stop();
+    this.clear(L, true);
+    this.home(ghost, s);
+  },
+  // Ends the drag; the pill is handed back, still on screen.
+  stop(){
+    const L = this.live;
+    this.live = null;
+    cancelAnimationFrame(L.raf);
+    document.documentElement.classList.remove('ig-dragging-on');
+    return L.ghost;
+  },
+  // Takes the socket away and puts the step in hand back, sliding the rest
+  // into place when `slide`.
+  clear(L, slide){
+    const undo = () => {
+      if (L.slot) L.slot.remove();
+      document.querySelectorAll('.ig-in-hand').forEach(x => x.classList.remove('ig-in-hand'));
+    };
+    if (slide) this.shift(undo); else undo();
+  },
+  // Dropped: the step falls from where the pill was into its place and
+  // settles; what an If carries follows it in, one by one.
+  land(from, card){
+    if (reduced() || !card) return;
+    const to = card.getBoundingClientRect(), k = Math.min(1, from.width / to.width);
+    card.getAnimations().forEach(a => a.cancel());
+    card.animate([
+      {transformOrigin:'0 0', transform:`translate(${from.left - to.left}px,${from.top - to.top}px) scale(${k}) rotate(-2.5deg)`, opacity:.7},
+      {transformOrigin:'0 0', transform:'translateY(2px) scale(1.01)', opacity:1, offset:.7},
+      {transformOrigin:'0 0', transform:'none', opacity:1},
+    ], {duration:440, easing:'cubic-bezier(.2,.8,.2,1)'});
+    card.animate([{boxShadow:'0 0 0 0 color-mix(in oklch,var(--accent) 50%,transparent)'}, {boxShadow:'0 0 0 12px transparent'}],
+      {duration:560, delay:280, easing:'ease-out'});
+    const branch = card.nextElementSibling;
+    if (!branch || !branch.classList.contains('ig-branch')) return;
+    branch.getAnimations().forEach(a => a.cancel());
+    branch.animate([{opacity:0, transform:'translateY(-8px)'}, {opacity:1, transform:'none'}],
+      {duration:300, delay:200, easing:'cubic-bezier(.2,.8,.2,1)', fill:'backwards'});
+    [...branch.querySelectorAll('.ig-step')].slice(0, 16).forEach((c, i) => {
+      c.getAnimations().forEach(a => a.cancel());
+      c.animate([{opacity:0, transform:'translateY(-12px) scale(.96)'}, {opacity:1, transform:'none'}],
+        {duration:300, delay:260 + i * 55, easing:'cubic-bezier(.2,.9,.3,1.15)', fill:'backwards'});
+    });
+  },
+  // Not dropped: the pill flies back to where the block came from.
+  home(ghost, s){
+    const card = s && (s.path != null ? q(`.ig-step[data-path="${s.path}"]`) : s.card);
+    if (reduced() || !card || !card.isConnected){ ghost.remove(); return; }
+    const p = ghost.firstElementChild.getBoundingClientRect(), r = card.getBoundingClientRect();
+    ghost.animate([{opacity:1}, {transform:`translate(${r.left + 12}px,${r.top + (r.height - p.height) / 2}px)`, opacity:0}],
+      {duration:240, easing:'cubic-bezier(.4,0,.2,1)', fill:'forwards'}).onfinish = () => ghost.remove();
+  },
+};
+document.addEventListener('pointerdown', e => StepDrag.down(e));
+document.addEventListener('pointermove', e => StepDrag.move(e));
+document.addEventListener('pointerup', e => StepDrag.up(e));
+document.addEventListener('pointercancel', () => StepDrag.cancel());
+window.addEventListener('blur', () => StepDrag.cancel());
+// Escape drops the drag, not the builder.
+window.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !StepDrag.live) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  StepDrag.cancel();
+}, true);
+
+// A step's sentence on its card, under its kind: "OBS" already says what
+// "OBS: mute…" would.
+function cardSentence(s){
+  const text = stepSentence(s);
+  return s.type === 'obs' ? text.replace(/^OBS: ([a-z])/, (all, c) => c.toUpperCase()) : text;
+}
 function stepSentence(s){
   const p = s.params || {};
   const q = v => `“${highlightVars(v || '')}”`;
@@ -4438,23 +5782,33 @@ function stepSentence(s){
     case 'http': return `${esc(p.method || 'POST')} ${esc(maskUrl(p.url) || '(address)')}${p.save_as ? ' → ' + esc(p.save_as) : ''}`;
     case 'wait': return `Wait ${/\{/.test(p.ms || '') ? highlightVars(p.ms) + ' ms' : esc(fmtDur(p.ms))}`;
     case 'wait_delay': return 'Wait until it has aired for viewers <span class="v">{delay}</span>' + (+p.extra_ms ? ' + ' + esc(fmtDur(p.extra_ms)) : '');
-    case 'if': return `If ${highlightVars(p.left || '…')} ${esc(OPS[p.op] || p.op || '')} ${highlightVars(p.right || '')}`;
+    case 'if': {
+      const one = r => `${highlightVars(r.left || '…')} ${esc(OPS[r.op] || r.op || '')}${OPS_ALONE.includes(r.op) ? '' : ' ' + highlightVars(r.right || '')}`;
+      return 'If ' + conditionRows(s).map(one).join(p.match === 'any' ? ' or ' : ' and ');
+    }
     case 'stop': return 'Stop here';
     case 'delay_action': return p.action === 'arm' && p.seconds && Number(p.seconds) <= 0 ? 'Turn the delay off'
-      : p.action === 'arm' && p.seconds ? `Turn on a ${highlightVars(p.seconds)} s delay` : esc(DELAY_ACTIONS[p.action] || 'Delay action');
+      : p.action === 'arm' && p.seconds ? `Set a ${highlightVars(p.seconds)} s delay` : esc(DELAY_ACTIONS[p.action] || 'Delay action');
     case 'marker': return `VOD marker ${q(p.description)}`;
     case 'clip': return 'Create a clip';
-    case 'program': return `Run ${p.path ? esc(p.path.split(/[\\/]/).pop()) : 'a program you pick'} ${highlightVars(p.args || '')}`;
+    case 'program': return `Run ${p.path ? esc(p.path.split(/[\\/]/).pop()) : 'a program you pick'} ${highlightVars(p.args || '')}${p.wait === 'yes' ? ', and keep its answer' : ''}`;
     case 'file': return `${p.mode === 'append' ? 'Add to' : 'Write'} ${p.path ? esc(p.path.split(/[\\/]/).pop()) : 'a file you pick'} ${q(p.text)}`;
     case 'set_var': return `Remember ${esc(p.name || '…')} = ${highlightVars(p.value || '')}`;
     case 'overlay': return `On stream ${q(p.text)}`;
     case 'edit_text': return `${esc((EDIT_OPS[p.op] || EDIT_OPS.first_line)[0])}: ${highlightVars(p.input || '…')} → <span class="v">{${esc((p.save_as || '').trim() || 'text')}}</span>`;
     case 'counter': return `Counter ${esc(p.name || '…')} ${p.op === 'reset' ? 'reset' : p.op === 'set' ? '= ' + esc(p.by || '0') : (p.op === 'subtract' ? '-' : '+') + esc(p.by || '1')}`;
+    case 'light': return `${esc(p.name || 'Light')}: ${esc(lightSummary(p).toLowerCase())}`;
     case 'obs': {
       const what = (OBS_ACTIONS[p.action] || ['OBS'])[0];
       if (p.action === 'scene') return `OBS: switch to ${q(p.scene)}`;
       if (p.action === 'text') return `OBS: ${esc(p.source || '(source)')} says ${q(p.text)}`;
-      return `OBS: ${esc(what.replace(/ a source.*$/, '').toLowerCase())} ${q(p.source)}${p.scene ? ' in ' + esc(p.scene) : ''}`;
+      const sources = listedNames(p.source).map(x => q(x)).join(', ');
+      if (p.action === 'check') return `OBS: check ${sources || "what it's doing"} → ${esc(answerName(s))}`;
+      if (p.action === 'hotkey') return `OBS: press ${esc(p.hotkey ? hotkeyLabel(p.hotkey) : '(hotkey)')}`;
+      if (/^filter_/.test(p.action)) return `OBS: ${esc(what.replace(/ a filter/, '').toLowerCase())} ${q(p.filter)} on ${esc(p.source || '(source)')}`;
+      const need = (OBS_ACTIONS[p.action] || [])[1];
+      if (!need) return `OBS: ${esc(what.toLowerCase())}`;
+      return `OBS: ${esc(what.replace(/ a (media )?source.*$/, '').toLowerCase())} ${sources || q('')}${p.scene && ['show', 'hide', 'toggle'].includes(p.action) ? ' in ' + esc(p.scene) : ''}`;
     }
   }
   return esc(s.type);
@@ -4462,30 +5816,98 @@ function stepSentence(s){
 
 // ---------------------------------------------------------------- connections
 
+// Where integrations post and listen: one card each, with how it stands.
+// [id, icon, name, what it's for].
+const CONNECTIONS = [
+  ['discord', 'bubble', 'Discord', 'Messages and live-updating cards in your server.'],
+  ['twitch', 'tv', 'Twitch', 'Chat, VOD markers, clips, and follows, subs and raids.'],
+  ['phone', 'phone', 'Phone', 'Pushes to your phone, through the free ntfy app.'],
+  ['obs', 'rec', 'OBS', 'Scenes, sources and recording, through OBS\'s WebSocket.'],
+  ['stream', 'screen', 'Alerts page', 'Where alerts show up on stream, and how they look.'],
+];
+
+// How a connection stands: [pill class, words]. The strip and the cards
+// say the same.
+function connState(id){
+  const c = S.data.connections, t = S.data.twitch;
+  switch (id){
+    case 'discord': return c.discord.length ? ['ok', plural(c.discord.length, 'channel')] : ['', 'Add'];
+    case 'twitch':
+      if (!t.main.login) return ['', t.available ? 'Connect' : 'Set up'];
+      return t.main.chat === 'connected' ? ['ok', 'connected'] : ['warn', 'chat ' + t.main.chat];
+    case 'phone': return c.phone.topic ? ['ok', 'connected'] : ['', 'Connect'];
+    // The open dashboard keeps OBS connected. Out of reach only warns when
+    // an integration needs it: otherwise it just has to be set up.
+    case 'obs': {
+      const o = S.data.obs || {};
+      if (o.state === 'connected') return ['ok', 'connected'];
+      if (o.state === 'error') return o.used ? ['warn', 'can\'t reach'] : ['', 'Set up'];
+      return ['', 'connecting…'];
+    }
+    case 'stream': return alertsPill();
+  }
+  return ['', ''];
+}
+
 const Conn = {
   tab:'discord', editing:null,
+  // `tab`: the card to open (none: all closed).
   open(tab){
     // Opened from an editor or an import: go back to it, work intact.
     const from = {editor:Editor, builder:Builder, import:Recipes}[Modal.kind] || null;
-    this.tab = tab || 'discord';
+    this.tab = tab || null;
     this.editing = null;
     Modal.open('connections', 760);
     Modal.onClose = () => { if (S.data.twitch.login) api('/twitch/cancel', {}); return true; };
     if (from) Modal.after = () => from.resume();
     this.render();
   },
+  resume(){ this.open(this.tab); },
   render(){
     // A slow reply can land after the user left this page.
     if (Modal.kind !== 'connections') return;
-    const tabs = [['discord', 'Discord'], ['twitch', 'Twitch'], ['phone', 'Phone'], ['stream', 'On stream']].map(([id, l]) =>
-      `<button class="sub-tab${this.tab === id ? ' on' : ''}" role="tab" aria-selected="${this.tab === id}" data-act="conn-tab" data-tab="${id}">${l}</button>`).join('');
-    const pane = {discord:() => this.discordHtml(), twitch:() => this.twitchHtml(), phone:() => this.phoneHtml(),
-      stream:() => `<div class="sys-section ig-form">${alertsSetupHtml()}</div>`}[this.tab]();
-    Modal.body(`${modalHead('link', 'var(--accent)', 'Connections', 'Where integrations post. Set each one up once.')}
-      <div class="dest-form-body ig-conn-body">
-        <div class="sub-tabs ig-seg" role="tablist">${tabs}${SEG_IND}</div>
-        <div class="ig-conn-pane" data-flip data-autoh><div class="ig-conn-in" data-key="tab-${this.tab}">${pane}</div></div>
-      </div>`);
+    const panes = {discord:() => this.discordHtml(), twitch:() => this.twitchHtml(), phone:() => this.phoneHtml(),
+      obs:() => this.obsHtml(), stream:() => this.alertsHtml()};
+    const cards = CONNECTIONS.map(([id, icon, name, blurb]) => {
+      const open = this.tab === id, [cls, words] = connState(id);
+      return `<section class="ig-cx${open ? ' open' : ''}" data-key="cx-${id}">
+        <button class="ig-cx-head" data-act="conn-tab" data-tab="${id}" aria-expanded="${open}">
+          <span class="dcard-icon ig-ic-${id}">${svg(icon)}</span>
+          <span class="ig-cx-id"><b>${name}</b><span>${blurb}</span></span>
+          <span class="ic-pill ${cls}"><span class="dot"></span><span class="ic-pill-v">${esc(words)}</span></span>
+          <span class="ig-cx-chev">${svg('chev')}</span>
+        </button>
+        <div class="ig-cx-body" data-flip data-autoh>${open ? `<div class="ig-cx-in" data-key="cxb-${id}">${panes[id]()}</div>` : ''}</div>
+      </section>`;
+    }).join('');
+    Modal.body(`${modalHead('link', 'var(--accent)', 'Connections', 'Where integrations post and what they listen to. Set each one up once.')}
+      <div class="dest-form-body ig-conn-body"><div class="ig-cxs">${cards}</div></div>`);
+    if (this.tab === 'obs') ObsLive.watch();
+  },
+  // The alerts page: in OBS or not, its look in a line, and the designer.
+  alertsHtml(){
+    const a = S.data.alerts || {}, look = lookOf(), own = THEMES[themeOf(look)];
+    const url = a.url || `${location.origin}/alerts`;
+    const font = look.font ? (look.font === 'system' ? 'this PC\'s font' : look.font) : own.font;
+    return `<div class="sys-section ig-form ig-setup">${alertsStatusHtml(false)}
+      <div class="ig-look-sum"><span class="ig-look-dot" style="--sw:${alertColor('', look)}"></span>
+        <span class="ig-look-sum-t"><b>${esc(own.name)}</b> · ${esc(font)} · ${esc(soundLabel(look.sound || own.sound))}${look.css ? ' · custom CSS' : ''}</span>
+        <button class="ic-btn ic-btn-primary ig-small" data-act="alerts-open">Change the look</button></div>
+      <button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="alert-test">${svg('play', ' class="ig-btn-ic"')}Show a test alert</button>
+      <details class="ig-more-fields"><summary>Add it to OBS by hand</summary>
+        <div class="ig-insp-p">In OBS: <b>+</b> under Sources › <b>Browser</b>, paste this address, and make it as big as your canvas. Tick <b>Control audio via OBS</b> so alert sounds reach the stream.</div>
+        <div class="ig-copy-row"><input class="ic-input mono" readonly value="${esc(url)}" aria-label="Alerts address">
+          <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(url)}">Copy</button></div></details>
+    </div>`;
+  },
+  // OBS's WebSocket: how it is connected, with Try again, and what it's
+  // for. Looking here connects it for a minute, like picking a scene.
+  obsHtml(){
+    const users = S.data.integrations.filter(i => i.enabled && usesObs(i)).map(i => i.name);
+    return `<div class="sys-section ig-form" data-obs-live>${obsStatusHtml()}
+      <div class="ig-insp-p">Scene triggers and OBS steps talk to OBS through its WebSocket server, built into OBS 28 and later. Switch it on once in OBS: <b>Tools › WebSocket Server Settings › Enable WebSocket server</b>, then OK. InstantClone reads the port and password from OBS itself.</div>
+      <div class="muted">${users.length ? `Kept connected for ${esc(users.slice(0, 3).join(', '))}${users.length > 3 ? ` and ${users.length - 3} more` : ''}.`
+        : 'Nothing uses OBS yet, so InstantClone only stays connected while the dashboard is open.'}</div></div>`;
   },
   discordHtml(){
     const e = this.editing;
@@ -4515,13 +5937,30 @@ const Conn = {
         + 'To use them on the channel you stream to, disconnect and log in with that account.')
       : '';
     return (t.notice ? warnHtml(esc(t.notice)) : '') + other
-      + this.accountHtml('main', t.main, 'Your Twitch account', 'Chat, VOD markers and clips. Log in once: InstantClone keeps it fresh.')
+      + this.accountHtml('main', t.main, 'Your Twitch account', 'Log in once: InstantClone keeps it fresh.')
+      + this.twitchEventsHtml(t)
       + this.accountHtml('bot', t.bot, 'Bot account (optional)', 'A second account that posts in chat instead of you.')
       + `<label class="crash-check"><input type="checkbox" data-act="t-shared" ${S.data.twitch_shared_chat ? 'checked' : ''}>
         <span><span class="crash-check-title">Shared Chat: listen to partner channels too</span>
         <span class="muted">When you share chat with other streamers, their viewers can use your commands and count toward "chat gets busy". Off: only your own chat does.</span></span></label>`
       + '<div class="muted">No password ever goes through InstantClone: you approve it on twitch.tv, and can revoke it there any time.'
       + (t.app === 'custom' ? ' Logging in through your own Twitch app (<a href="#" data-act="twitch-app">change</a>).' : '') + '</div>';
+  },
+  // What Twitch events integrations hear, and an Allow when the login
+  // predates them. Logging in again asks Twitch for the new permissions.
+  twitchEventsHtml(t){
+    const ev = t.events || {}, subs = ev.subs || {};
+    if (!t.main.login || !Object.keys(subs).length) return '';
+    const hearing = twitchEventsIn('listening'), consent = twitchEventsIn('needs_consent');
+    const flow = S.data.twitch.login, logging = flow && flow.which === 'main';
+    return `<div class="sys-section ig-form" data-key="t-events">
+      <div class="ic-label">Twitch events</div>
+      ${hearing.length ? `<div class="ig-meter"><span class="ig-meter-dot ok"></span><span>Listening for ${esc(twitchNouns(hearing))}</span></div>` : ''}
+      ${ev.state === 'error' ? `<div class="ig-meter"><span class="ig-meter-dot off"></span><span>${esc(ev.problem)}</span></div>` : ''}
+      ${consent.length ? `<div class="lan-warn ig-notice"><span class="lw-ic">⚠</span>
+        <span class="ig-notice-text">Twitch needs your OK for <b>${esc(twitchNouns(consent))}</b>. Your login is from before these events: Allow logs you in again with the same account, asking Twitch only to read them.</span>
+        ${logging ? '' : '<button class="ic-btn ic-btn-primary ig-small" data-act="t-login" data-which="main">Allow on Twitch</button>'}</div>` : ''}
+    </div>`;
   },
   accountHtml(which, a, title, blurb){
     const flow = S.data.twitch.login;
@@ -4569,7 +6008,12 @@ const Conn = {
   },
   async act(a, el){
     switch (a){
-      case 'conn-tab': this.tab = el.dataset.tab; this.editing = null; this.render(); return true;
+      case 'conn-tab':
+        this.tab = this.tab === el.dataset.tab ? null : el.dataset.tab;
+        this.editing = null;
+        this.render();
+        if (this.tab) revealOpened(q(`[data-key="cx-${this.tab}"]`));
+        return true;
       case 'd-new': this.editing = {id:'', name:''}; this.render(); focusField('d-name'); return true;
       case 'd-edit': {
         const c = S.data.connections.discord.find(x => x.id === el.dataset.id);
@@ -4657,16 +6101,498 @@ const Conn = {
   },
 };
 
-// The alerts browser source: where "Show on stream" cards appear.
-function alertsSetupHtml(){
-  const url = `${location.origin}/alerts`;
-  return `<div class="ig-setup">
-    <div class="ig-insp-p"><b>Once, in OBS:</b> add a <b>Browser source</b> with this address, as big as your canvas. Cards appear at the bottom; add <span class="mono">?at=top</span> to put them at the top.</div>
-    <div class="ig-copy-row"><input class="ic-input mono" readonly value="${esc(url)}" aria-label="Alerts address">
-      <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(url)}">Copy</button></div>
-    <button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="alert-test">${svg('play', ' class="ig-btn-ic"')}Show a test alert</button>
-  </div>`;
+// ---------------------------------------------------------------- alerts page
+
+// The alerts browser source: where "Show on stream" cards appear. How
+// every card looks is the page's theme (S.data.alerts.look, edited in
+// AlertsLook); each alert can bring its own accent, sound and picture.
+// Every preview here is the real page (/alerts?demo) drawing a sample, so
+// what you see is what OBS shows.
+
+// Each theme as web/alerts.html draws it: its name, colors, opacity (%),
+// corners (px), font, sound, its own entrance and where a picture goes.
+const THEMES = {
+  island:{name:'Island', fg:'#ffffff', bg:'#000000', accent:'#5ac8fa', op:96, r:40, font:'Inter', sound:'chime', motion:'Grows from a dot', pic:'left'},
+  signal:{name:'Signal', fg:'#eef4ff', bg:'#0b0f14', accent:'#3ee0c5', op:86, r:0, font:'Chakra Petch', sound:'zap', motion:'Decodes', pic:'left'},
+  banner:{name:'Banner', fg:'#0b0d12', bg:'#fcd34d', accent:'#fcd34d', op:100, r:0, font:'Bebas Neue', sound:'fanfare', motion:'Wipes on', pic:'left'},
+  bubble:{name:'Bubble', fg:'#1b1d24', bg:'#ffffff', accent:'#a78bfa', op:100, r:30, font:'Fredoka', sound:'pop', motion:'Boings out', pic:'left'},
+  minimal:{name:'Minimal', fg:'#ffffff', bg:'#000000', accent:'#5ac8fa', op:0, r:0, font:'Inter', sound:'blip', motion:'Inks in', pic:'left'},
+  paper:{name:'Paper', fg:'#1d1a16', bg:'#f4efe4', accent:'#e2553d', op:100, r:3, font:'Permanent Marker', sound:'whoosh', motion:'Slaps on', pic:'left'},
+  cinema:{name:'Cinema', fg:'#f4ede1', bg:'#0a0908', accent:'#d4b06a', op:90, r:2, font:'Playfair Display', sound:'bell', motion:'Opens like a shutter', pic:'top'},
+};
+// alerts::FONTS, ANIMATIONS and SOUNDS.
+const ALERT_FONTS = ['Inter', 'Poppins', 'Montserrat', 'Fredoka', 'Rubik', 'Bebas Neue', 'Oswald', 'Bangers', 'Orbitron',
+  'Press Start 2P', 'Permanent Marker', 'Roboto Mono', 'Chakra Petch', 'Playfair Display', 'Special Elite'];
+const ALERT_ANIMS = [['slide', 'Slide'], ['pop', 'Pop'], ['fade', 'Fade'], ['zoom', 'Zoom'], ['bounce', 'Bounce'], ['drop', 'Drop']];
+const ALERT_SOUNDS = [['chime', 'Chime'], ['pop', 'Pop'], ['bell', 'Bell'], ['rise', 'Rise'], ['coin', 'Coin'],
+  ['sparkle', 'Sparkle'], ['whoosh', 'Whoosh'], ['fanfare', 'Fanfare'], ['zap', 'Zap'], ['blip', 'Blip']];
+const ALERT_SECONDS = ['3', '6', '10', '15', '30'];
+// What the theme designer's "Back to ... as it comes" clears.
+const LOOK_STYLE = ['font', 'text', 'background', 'accent', 'opacity', 'radius', 'animation', 'picture'];
+// A link the alerts page can load as it is (alerts::is_web_link), and an
+// upload (alert_media's `media:<name>`).
+const WEB_LINK = /^https?:\/\/[^\s"'<>\\`{}]+$/;
+const MEDIA_REF = /^media:[a-z0-9._-]+$/;
+
+function lookOf(){ return (S.data.alerts || {}).look || {}; }
+function themeOf(look){ return THEMES[look.theme] ? look.theme : 'island'; }
+function mediaSrc(ref){ return MEDIA_REF.test(ref || '') ? '/alerts/media/' + ref.slice(6) : WEB_LINK.test(ref || '') ? ref : ''; }
+function mediaOf(kind){ return ((S.data.alerts || {}).media || []).filter(m => m.kind === kind); }
+
+function soundLabel(sound){
+  if (!sound) return 'none';
+  if (sound === 'theme') return 'theme sound';
+  const found = ALERT_SOUNDS.find(([id]) => id === sound);
+  if (found) return found[1].toLowerCase();
+  return MEDIA_REF.test(sound) ? sound.slice(6) : 'a link';
 }
+// The accent an alert shows: its own, the page's, or the theme's.
+function alertColor(value, look){
+  if (/^#[0-9a-f]{6}$/i.test(value || '')) return value.toLowerCase();
+  return /^#[0-9a-f]{6}$/i.test(look.accent || '') ? look.accent : THEMES[themeOf(look)].accent;
+}
+function alertColorName(value){
+  if (!value) return 'theme\'s';
+  const found = CARD_COLORS.find(([c]) => c === value.toLowerCase());
+  return found ? found[1].toLowerCase() : value.toLowerCase();
+}
+
+// The Connections pill: [class, words].
+function alertsPill(){
+  const a = S.data.alerts || {};
+  if (a.in_obs) return ['ok', 'in OBS'];
+  if (a.elsewhere) return ['warn', 'not in OBS'];
+  return ['', 'Add to OBS'];
+}
+
+// Is the alerts page in OBS, with one click to put it there. `compact`
+// is the editor's line under an alert's preview.
+function alertsStatusHtml(compact){
+  const a = S.data.alerts || {};
+  const inObs = a.in_obs > 0;
+  const line = inObs ? 'Your alerts page is open in OBS.'
+    : a.elsewhere ? 'Your alerts page is open in a browser, but not in OBS: viewers won\'t see alerts.'
+    : 'Your alerts page isn\'t in OBS yet: viewers won\'t see alerts.';
+  const action = !inObs
+    ? `<button class="ic-btn ic-btn-primary ig-small" data-act="alerts-add">${svg('plus', ' class="ig-btn-ic"')}Add to OBS</button>`
+    : compact ? '' : '<button class="ic-btn ic-btn-ghost ig-small" data-act="alerts-add">Add to the scene on air</button>';
+  return `<div class="ig-alerts-status${inObs ? ' ok' : ''}" data-key="alerts-status">
+    <span class="ig-meter-dot ${inObs ? 'ok' : 'off'}"></span><span class="ig-alerts-line">${line}</span>${action}</div>`;
+}
+
+// The first alert set up, with sample values: what previews show.
+function sampleAlert(){
+  for (const i of S.data.integrations){
+    for (const h of i.handlers || []){
+      const step = (h.steps || []).find(s => s.type === 'overlay' && s.enabled !== false);
+      if (step) return alertCardOf(step, h);
+    }
+  }
+  return {title:'New follower', text:'Nat', sound:'theme', image:''};
+}
+
+// An alert step as the page shows it, filled in with sample values.
+function alertCardOf(step, h){
+  const p = step.params, vars = sampleMap(h);
+  return {title:renderSample(p.title || '', vars), text:renderSample(p.text || '', vars), seconds:p.seconds || '6',
+    color:p.color || '', sound:p.sound || '', volume:p.volume || '', image:p.image || ''};
+}
+
+// Fit a real alerts page (`/alerts?demo`, laid out `canvas` px wide) into
+// its box and show it `payload` ({look, card, replay, sound}); a frame
+// still loading gets it once it has. Kept as properties, not attributes:
+// a redraw resets attributes, and calls this again.
+function stageShow(frame, canvas, payload){
+  if (!frame) return;
+  frame.icCanvas = canvas;
+  frame.icPayload = payload;
+  stageFit(frame);
+  if (!frame.icWired){
+    frame.icWired = true;
+    frame.addEventListener('load', () => { frame.icReady = true; stagePost(frame, frame.icPayload); });
+    // A box that grows or settles (the modal opening) is fitted again.
+    new ResizeObserver(() => stageFit(frame)).observe(frame.parentElement);
+  }
+  if (frame.icReady) stagePost(frame, payload);
+}
+function stageFit(frame){
+  const box = frame.parentElement, s = box && box.clientWidth / frame.icCanvas;
+  if (!s) return;
+  frame.style.width = frame.icCanvas + 'px';
+  frame.style.height = Math.ceil(box.clientHeight / s) + 'px';
+  frame.style.transform = `scale(${s})`;
+}
+function stagePost(frame, payload){
+  if (frame.contentWindow && payload) frame.contentWindow.postMessage({instantcloneAlert:payload}, location.origin);
+}
+
+// The sound button just pressed shows it playing for a moment.
+function showPlaying(act, v){
+  const b = Modal.form && [...Modal.form.querySelectorAll(`[data-act="${act}"]`)].find(x => x.dataset.v === v);
+  if (!b) return;
+  b.classList.remove('ig-playing');
+  void b.offsetWidth;
+  b.classList.add('ig-playing');
+  clearTimeout(b.icPlaying);
+  b.icPlaying = setTimeout(() => b.classList.remove('ig-playing'), 1200);
+}
+
+// The font picker's samples: just "Aa" in each font, one small request.
+function loadFontSamples(){
+  if (document.getElementById('ig-font-samples')) return;
+  const link = document.createElement('link');
+  link.id = 'ig-font-samples';
+  link.rel = 'stylesheet';
+  const families = ALERT_FONTS.map(f => 'family=' + encodeURIComponent(f).replace(/%20/g, '+')).join('&');
+  link.href = `https://fonts.googleapis.com/css2?${families}&text=Aa&display=swap`;
+  document.head.appendChild(link);
+}
+
+// Play a sound as the alerts page would, from a hidden page of its own.
+function playAlertSound(card, look){
+  let frame = document.getElementById('ig-sound-frame');
+  if (!frame){
+    frame = document.createElement('iframe');
+    frame.id = 'ig-sound-frame';
+    frame.src = '/alerts?demo';
+    frame.allow = 'autoplay';
+    frame.hidden = true;
+    document.body.appendChild(frame);
+  }
+  if (!frame.icWired){
+    frame.icWired = true;
+    frame.addEventListener('load', () => { frame.icReady = true; stagePost(frame, frame.icPayload); }, {once:true});
+  }
+  frame.icPayload = {look:look || lookOf(), card, sound:true};
+  if (frame.icReady) stagePost(frame, frame.icPayload);
+}
+
+// A sound to pick: for an alert, none or the theme's; for the theme, its
+// own. Then the built-in ones, the uploads (each with its delete), one
+// more upload, and a link. Picking one plays it.
+function soundPickerHtml(current, act, forAlert){
+  const look = lookOf(), own = THEMES[themeOf(look)];
+  const opt = (id, label) => `<button class="ig-sound${id === current ? ' on' : ''}" data-act="${act}" data-v="${esc(id)}" aria-pressed="${id === current}">
+    ${id ? svg('play', ' class="ig-btn-ic"') : ''}${esc(label)}</button>`;
+  const items = forAlert
+    ? [opt('', 'None'), opt('theme', `Theme sound (${soundLabel(look.sound || own.sound)})`)]
+    : [opt('', `${own.name}'s own (${soundLabel(own.sound)})`)];
+  ALERT_SOUNDS.forEach(([id, label]) => items.push(opt(id, label)));
+  mediaOf('sound').forEach(m => items.push(`<span class="ig-media-item">${opt('media:' + m.name, m.name)}${mediaDelHtml(m.name)}</span>`));
+  const link = WEB_LINK.test(current) ? current : '';
+  return `<div class="ig-sounds">${items.join('')}
+      <button class="ig-sound ig-upload" data-act="media-upload" data-kind="sound">${svg('plus', ' class="ig-btn-ic"')}Upload a sound</button></div>
+    <details class="ig-more-fields"${link ? ' open' : ''}><summary>Or a link to a sound file</summary>
+      <input class="ic-input mono" data-bind="sound-link" value="${esc(link)}" placeholder="https://…/ding.mp3" spellcheck="false" aria-label="Link to a sound file"></details>`;
+}
+
+// A picture to pick: none, the uploads, one more upload, or a link.
+function picturePickerHtml(current, act){
+  const tile = (ref, inner, label) => `<button class="ig-pic${ref === current ? ' on' : ''}" data-act="${act}" data-v="${esc(ref)}"
+    aria-pressed="${ref === current}" aria-label="${esc(label)}" title="${esc(label)}">${inner}</button>`;
+  const items = [tile('', '<span>None</span>', 'No picture')];
+  mediaOf('picture').forEach(m => items.push(`<span class="ig-media-item">${tile('media:' + m.name,
+    `<img src="${esc(mediaSrc('media:' + m.name))}" alt="" loading="lazy">`, m.name)}${mediaDelHtml(m.name)}</span>`));
+  const link = WEB_LINK.test(current) ? current : '';
+  return `<div class="ig-pics">${items.join('')}
+      <button class="ig-pic ig-upload" data-act="media-upload" data-kind="picture">${svg('plus')}<span>Upload</span></button></div>
+    <details class="ig-more-fields"${link || (current && !MEDIA_REF.test(current)) ? ' open' : ''}><summary>Or a link to a picture or GIF</summary>
+      <input class="ic-input mono" data-bind="image-link" value="${esc(MEDIA_REF.test(current) ? '' : current)}" placeholder="https://…/party.gif" spellcheck="false" aria-label="Link to a picture"></details>
+    ${current && !MEDIA_REF.test(current) && !WEB_LINK.test(current) ? warnHtml('This isn\'t a web link: it has to start with https://') : ''}`;
+}
+
+function mediaDelHtml(name){
+  return `<button class="ig-media-x" data-act="media-del" data-name="${esc(name)}" aria-label="Delete ${esc(name)}" title="Delete ${esc(name)}">${svg('x')}</button>`;
+}
+
+// The newest uploads and where the page is open, without touching the
+// look being edited.
+async function refreshAlerts(){
+  const a = await api('/integrations/activity');
+  if (a && a.alerts) S.data.alerts = Object.assign({}, a.alerts, {look:lookOf()});
+}
+
+// Pick a file and upload it. Resolves to its `media:` name, or null. A
+// closed file dialog never resolves, which is fine: nothing waits on it.
+function uploadMedia(kind){
+  return new Promise(resolve => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = kind === 'sound' ? '.mp3,.ogg,.wav,.m4a,.webm' : '.png,.jpg,.jpeg,.gif,.webp';
+    input.onchange = async () => {
+      const file = input.files[0];
+      if (!file) return resolve(null);
+      if (file.size > 10 * 1024 * 1024){ toast('That file is over 10 MB', 'err'); return resolve(null); }
+      const data = await new Promise(done => {
+        const reader = new FileReader();
+        reader.onload = () => done(String(reader.result).split(',')[1] || '');
+        reader.onerror = () => done('');
+        reader.readAsDataURL(file);
+      });
+      // base64url: the alphabet recipes use too.
+      const r = await api('/integrations/alerts/media/upload', {name:file.name, data:data.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')});
+      if (!r.ok){ toast(r.error || 'The upload didn\'t work', 'err', 6000); return resolve(null); }
+      await refreshAlerts();
+      toast(`Uploaded ${r.name}`, 'ok');
+      resolve('media:' + r.name);
+    };
+    input.click();
+  });
+}
+
+async function deleteMedia(el){
+  if (!armConfirm(el, 'Delete?')) return;
+  const name = el.dataset.name;
+  const r = await api('/integrations/alerts/media/delete', {name});
+  if (!r.ok){ toast(r.error || 'Couldn\'t delete it', 'err'); return; }
+  await refreshAlerts();
+  toast(`Deleted ${name}. Alerts that used it go without until you pick another.`, 'info', 5000);
+  const o = OWNERS[Modal.kind];
+  if (o && o.render) o.render();
+}
+
+// Put this alert on the alerts page for real, with sample values.
+async function showAlertNow(step, h, btn){
+  await busy(btn, async () => {
+    const r = await api('/integrations/alerts/test', alertCardOf(step, h));
+    if (!r.ok){ toast(r.error || 'Could not show it', 'err'); return; }
+    const a = S.data.alerts || {};
+    toast(a.in_obs ? 'It\'s on your alerts page in OBS now' : 'Sent, but your alerts page isn\'t in OBS: add it to OBS to see it',
+      a.in_obs ? 'ok' : 'info', 5000);
+  });
+}
+
+async function addAlertsToObs(btn){
+  await busy(btn, async () => {
+    const r = await api('/integrations/alerts/add-to-obs', {});
+    if (!r.ok){ toast(r.error || 'OBS didn\'t add it', 'err', 7000); return; }
+    toast('Added to the scene on air in OBS', 'ok');
+    // OBS opens the page a moment later: the pill catches up then.
+    setTimeout(() => poll(), 1500);
+  });
+}
+
+// ---------------------------------------------------------------- alerts look
+
+// The theme designer: the real page on a stage, the themes to start from,
+// and every part of the look. Changes save on their own a moment later
+// and OBS follows at once.
+const AlertsLook = {
+  saveTimer:null, saving:false,
+  open(){
+    const from = {editor:Editor, builder:Builder, connections:Conn}[Modal.kind] || null;
+    Modal.open('alerts', 1060);
+    Modal.onClose = () => { this.flush(); return true; };
+    if (from) Modal.after = () => from.resume();
+    this.render();
+  },
+  resume(){ this.open(); },
+  look(){ return S.data.alerts.look; },
+  render(){
+    if (Modal.kind !== 'alerts') return;
+    const look = this.look(), theme = themeOf(look), own = THEMES[theme];
+    const styled = LOOK_STYLE.some(k => look[k] !== '' && look[k] != null) || look.sound || look.css;
+    const section = (title, body) => `<section class="ig-look-sec"><div class="ic-label">${title}</div>${body}</section>`;
+    Modal.body(`${modalHead('screen', 'var(--accent)', 'Alerts look', 'How every alert looks and sounds on stream. OBS follows as you change it.')}
+      <div class="dest-form-body ig-look-body">
+        <div class="ig-look-stagecol">
+          <div class="ig-stage" data-key="stage"><iframe class="ig-stage-frame" src="/alerts?demo" title="Alerts preview" tabindex="-1" aria-hidden="true"></iframe></div>
+          <div class="ig-look-acts">
+            <button class="ic-btn ic-btn-ghost ig-small" data-act="look-replay">${svg('play', ' class="ig-btn-ic"')}Play it again</button>
+            <button class="ic-btn ic-btn-ghost ig-small" data-act="alert-test">Show a test alert in OBS</button>
+          </div>
+          ${alertsStatusHtml(false)}
+        </div>
+        <div class="ig-look-controls">
+          ${section('Theme', this.themesHtml(theme))}
+          ${section('Place', this.placeHtml(look))}
+          ${section('Font', this.fontsHtml(look, own))}
+          ${section('Colors', this.colorsHtml(look, own))}
+          ${section('Motion and picture', this.motionHtml(look, own))}
+          ${section('Theme sound', `<div class="muted">Alerts set to "Theme sound" play this.</div>${soundPickerHtml(look.sound || '', 'look-sound', false)}`)}
+          <details class="ig-more-fields"${look.css ? ' open' : ''}><summary>Custom CSS (advanced)</summary>
+            <textarea class="ic-input ig-textarea-code ig-look-css" data-bind="look-css" spellcheck="false" placeholder=".card { letter-spacing: 1px }" aria-label="Custom CSS">${esc(look.css || '')}</textarea>
+            <div class="muted">Comes after the theme, so it wins. Parts: <span class="mono">.card</span> <span class="mono">.pic</span> <span class="mono">.title</span> <span class="mono">.text</span> (its words <span class="mono">.w</span>, letters <span class="mono">.c</span>) <span class="mono">.time</span> <span class="mono">.fx</span>; this theme is <span class="mono">body.theme-${theme}</span>.</div></details>
+          <button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="look-reset" ${styled ? '' : 'disabled'}>Back to ${esc(own.name)} as it comes</button>
+        </div>
+      </div>
+      <div class="dest-form-foot"><div class="dest-form-msg muted ig-saved${this.saving ? ' busy' : ''}" data-look-saved>
+        <span class="ig-saved-dot" aria-hidden="true"></span><span data-look-msg>${this.saving ? 'Saving…' : 'Saved: OBS shows it now.'}</span></div>
+        <button class="ic-btn ic-btn-primary" data-act="modal-close">Done</button></div>`);
+    this.sync(true);
+  },
+  themesHtml(theme){
+    return `<div class="ig-themes" role="radiogroup" aria-label="Theme">${Object.entries(THEMES).map(([id, t]) =>
+      `<button class="ig-theme${id === theme ? ' on' : ''}" data-act="look-theme" data-v="${id}" role="radio" aria-checked="${id === theme}">
+        <span class="ig-theme-stage"><iframe class="ig-theme-frame" src="/alerts?demo" tabindex="-1" aria-hidden="true" data-theme="${id}"></iframe></span>
+        <span class="ig-theme-name">${t.name}</span><span class="ig-theme-sub">${esc(t.motion)} · ${soundLabel(t.sound)}</span></button>`).join('')}</div>`;
+  },
+  seg(name, items, cur){
+    return `<div class="sub-tabs ig-seg">${items.map(([id, label]) =>
+      `<button class="sub-tab${id === cur ? ' on' : ''}" data-act="look-set" data-name="${name}" data-v="${id}" aria-pressed="${id === cur}">${esc(label)}</button>`).join('')}${SEG_IND}</div>`;
+  },
+  range(name, label, value, min, max, unit, set){
+    return `<div class="dff"><label>${label}${set ? ` <button class="ig-reset" data-act="look-clear" data-name="${name}">theme's</button>` : ''}</label>
+      <div class="ig-range"><input type="range" min="${min}" max="${max}" step="1" data-bind="look-${name}" value="${value}" aria-label="${label}">
+      <span class="mono" data-out="${name}">${value}${unit}</span></div></div>`;
+  },
+  // Where alerts sit, picked on a little screen: nine spots, and the card
+  // slides to the one picked (index.html places it from data-x/data-y).
+  placeHtml(look){
+    const y = look.position || 'bottom', x = look.align || 'center';
+    const name = (py, px) => py === 'middle' && px === 'center' ? 'Middle' : `${py[0].toUpperCase()}${py.slice(1)} ${px}`;
+    const spots = ['top', 'middle', 'bottom'].flatMap(py => ['left', 'center', 'right'].map(px => {
+      const on = py === y && px === x;
+      return `<button class="ig-spot${on ? ' on' : ''}" data-act="look-place" data-y="${py}" data-x="${px}" role="radio" aria-checked="${on}" aria-label="${name(py, px)}" title="${name(py, px)}"></button>`;
+    })).join('');
+    return `<div class="ig-place-row">
+      <div class="ig-place" data-y="${y}" data-x="${x}" role="radiogroup" aria-label="Where alerts show">${spots}
+        <span class="ig-place-card" style="--sw:${alertColor('', look)}" aria-hidden="true"><i></i><i></i></span></div>
+      <div class="ig-place-side"><div class="ig-place-now"><b>${name(y, x)}</b><span class="muted">of the screen</span></div>
+        ${this.range('scale', 'Size', look.scale || 100, 50, 200, '%', false)}</div></div>`;
+  },
+  // Each font as a tile written in itself (only "Aa", fetched by
+  // loadFontSamples), the theme's own first.
+  fontsHtml(look, own){
+    loadFontSamples();
+    const cur = look.font || '';
+    const tile = (id, family, name, sub) => `<button class="ig-font${id === cur ? ' on' : ''}" data-act="look-set" data-name="font" data-v="${esc(id)}" aria-pressed="${id === cur}" title="${esc(sub || name)}">
+      <span class="ig-font-aa" style="font-family:${family}">Aa</span><span class="ig-font-n">${esc(name)}</span></button>`;
+    const family = f => `'${f}',system-ui,sans-serif`;
+    return `<div class="ig-fonts">${tile('', family(own.font), 'Theme\'s', `${own.name}'s own: ${own.font}`)}
+      ${ALERT_FONTS.map(f => tile(f, family(f), f)).join('')}${tile('system', 'system-ui,sans-serif', 'This PC\'s', 'The font this PC uses')}</div>`;
+  },
+  colorsHtml(look, own){
+    const color = (name, label, fallback) => {
+      const value = look[name] || fallback;
+      return `<div class="ig-colorf${look[name] ? ' set' : ''}" style="--sw:${esc(value)}">
+        <label class="ig-swatch"><input type="color" data-bind="look-color" data-name="${name}" value="${esc(value)}" aria-label="${label} color"></label>
+        <span class="ig-colorf-t"><b>${label}</b><span class="mono" data-out="c-${name}">${look[name] ? esc(value) : 'theme\'s'}</span></span>
+        ${look[name] ? `<button class="ig-reset" data-act="look-clear" data-name="${name}" title="Back to the theme's" aria-label="Back to the theme's ${label.toLowerCase()} color">${svg('rewind')}</button>` : ''}</div>`;
+    };
+    return `<div class="ig-colors">${color('text', 'Text', own.fg)}${color('background', 'Background', own.bg)}${color('accent', 'Accent', own.accent)}</div>
+      <div class="ig-look-grid">${this.range('opacity', 'Background opacity', look.opacity == null ? own.op : look.opacity, 0, 100, '%', look.opacity != null)}
+        ${this.range('radius', 'Corners', look.radius == null ? own.r : look.radius, 0, 48, 'px', look.radius != null)}</div>`;
+  },
+  motionHtml(look, own){
+    const cur = look.animation || '';
+    const anims = [['', `Theme's (${own.motion.toLowerCase()})`]].concat(ALERT_ANIMS).map(([id, label]) =>
+      `<button class="ig-sound${id === cur ? ' on' : ''}" data-act="look-set" data-name="animation" data-v="${id}" aria-pressed="${id === cur}">${esc(label)}</button>`).join('');
+    return `<div class="dff"><label>Comes in with <span class="muted">· point at one to see it</span></label><div class="ig-sounds">${anims}</div></div>
+      <div class="dff"><label>Picture</label>${this.seg('picture', [['', `Theme's (${own.pic === 'top' ? 'above' : 'left'})`], ['left', 'Left'], ['top', 'Above']], look.picture || '')}</div>`;
+  },
+  // Show the look on the stage, and each theme on its tile (`tiles`: only
+  // when redrawn; a slider moving changes none of them). Pointing at a
+  // tile plays that theme's entrance.
+  sync(tiles){
+    const card = sampleAlert(), stage = q('.ig-look-body .ig-stage-frame');
+    stageShow(stage, 1280, {look:this.look(), card});
+    if (!tiles) return;
+    Modal.form.querySelectorAll('.ig-theme-frame').forEach(f => {
+      stageShow(f, 760, {look:{theme:f.dataset.theme, position:'middle', align:'center', scale:170}, card});
+      f.closest('.ig-theme').onpointerenter = () => stagePost(f, {...f.icPayload, replay:true});
+    });
+    // Pointing at an entrance plays it on the stage, nothing saved.
+    Modal.form.querySelectorAll('[data-act="look-set"][data-name="animation"]').forEach(b => {
+      b.onpointerenter = () => stagePost(stage, {look:{...this.look(), animation:b.dataset.v}, card, replay:true});
+    });
+  },
+  input(el){
+    const look = this.look(), b = el.dataset.bind;
+    const out = (name, text) => { const o = q(`[data-out="${name}"]`); if (o) o.textContent = text; };
+    if (b === 'look-scale'){ look.scale = +el.value; out('scale', el.value + '%'); }
+    else if (b === 'look-opacity'){ look.opacity = +el.value; out('opacity', el.value + '%'); }
+    else if (b === 'look-radius'){ look.radius = +el.value; out('radius', el.value + 'px'); }
+    else if (b === 'look-color'){
+      const name = el.dataset.name, first = !look[name];
+      look[name] = el.value;
+      el.closest('.ig-colorf').style.setProperty('--sw', el.value);
+      out('c-' + name, el.value);
+      // The first change brings the chip its way back to the theme's.
+      if (first){ this.changed(true); return; }
+    }
+    else if (b === 'look-css') look.css = el.value;
+    else if (b === 'sound-link'){
+      const link = el.value.trim();
+      if (link && !WEB_LINK.test(link)) return;
+      look.sound = link;
+    }
+    else return;
+    this.changed(false);
+  },
+  changed(redraw){
+    this.saving = true;
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => this.flush(), 400);
+    this.savedLine();
+    if (redraw) this.render(); else this.sync(false);
+  },
+  savedLine(){
+    const box = q('[data-look-saved]');
+    if (!box) return;
+    box.classList.toggle('busy', this.saving);
+    box.querySelector('[data-look-msg]').textContent = this.saving ? 'Saving…' : 'Saved: OBS shows it now.';
+  },
+  async flush(){
+    if (!this.saveTimer) return;
+    clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    const r = await api('/integrations/alerts/look', this.look());
+    this.saving = false;
+    if (!r.ok){ toast(r.error || 'Couldn\'t save the look', 'err'); return; }
+    this.savedLine();
+  },
+  playSound(sound){ playAlertSound({sound:sound || 'theme', volume:70}, this.look()); },
+  async act(a, el){
+    const look = this.look(), v = el.dataset.v;
+    switch (a){
+      case 'look-theme':
+        // A theme as it comes: the last one's colors and font would clash.
+        look.theme = v;
+        LOOK_STYLE.forEach(k => { look[k] = k === 'opacity' || k === 'radius' ? null : ''; });
+        this.changed(true);
+        stagePost(q('.ig-look-body .ig-stage-frame'), {look, card:sampleAlert(), replay:'full', sound:true});
+        return true;
+      case 'look-place':
+        look.position = el.dataset.y;
+        look.align = el.dataset.x;
+        this.changed(true);
+        return true;
+      case 'look-set':
+        look[el.dataset.name] = v;
+        this.changed(true);
+        // A new entrance is seen by playing it.
+        if (el.dataset.name === 'animation') stagePost(q('.ig-look-body .ig-stage-frame'), {look, card:sampleAlert(), replay:true});
+        return true;
+      case 'look-clear': {
+        const name = el.dataset.name;
+        look[name] = name === 'opacity' || name === 'radius' ? null : '';
+        this.changed(true);
+        return true;
+      }
+      case 'look-sound': look.sound = v; this.changed(true); this.playSound(v); showPlaying('look-sound', v); return true;
+      case 'look-replay':
+        stagePost(q('.ig-look-body .ig-stage-frame'), {look, card:sampleAlert(), replay:'full', sound:true});
+        return true;
+      case 'look-reset':
+        if (!armConfirm(el, 'Clears your changes, CSS too. Sure?')) return true;
+        LOOK_STYLE.forEach(k => { look[k] = k === 'opacity' || k === 'radius' ? null : ''; });
+        look.sound = '';
+        look.css = '';
+        this.changed(true);
+        return true;
+      case 'media-upload':
+        uploadMedia('sound').then(ref => {
+          if (!ref || Modal.kind !== 'alerts') return;
+          look.sound = ref;
+          this.changed(true);
+          this.playSound(ref);
+        });
+        return true;
+    }
+    return false;
+  },
+};
 
 // System > Twitch & OBS, with the Twitch login app section open.
 function openTwitchAppSettings(){
@@ -4743,9 +6669,11 @@ function jsonColored(text){
 // scene or source (recipe::strip_private). Say so where that step is, so
 // nobody wonders which program it would run.
 const RECIPE_FILLS = {program:[['path'], 'program and its arguments'], file:[['path'], 'file'],
-  http:[['url'], 'address'], obs:[['scene', 'source'], 'scene or source']};
+  http:[['url'], 'address'], obs:[['scene', 'source'], 'scene or source'], light:[['device'], 'light']};
 function recipeFillNote(s){
   const fill = RECIPE_FILLS[s.type], p = s.params || {};
+  // Recording, the replay buffer, screenshots and hotkeys pick no name.
+  if (s.type === 'obs' && ['', 'hotkey'].includes((OBS_ACTIONS[p.action] || [])[1] || '')) return '';
   if (!fill || fill[0].some(name => p[name])) return '';
   return ` <span class="ig-rnote">· a recipe can't choose the ${fill[1]}: you pick ${s.type === 'program' ? 'them' : 'it'} after adding</span>`;
 }
@@ -4801,6 +6729,7 @@ const Recipes = {
             ${p.items.map((it, n) => recipeItemHtml(it, n)).join('')}
           </div>
           ${recipeWarningHtml(p)}
+          ${p.alerts ? this.alertsHtml(p) : ''}
           ${p.uses_discord ? (channels.length ? `<div class="dff"><label>Post its Discord messages in</label><select class="ic-input" data-bind="r-discord">${channels.map(c => `<option value="${esc(c.id)}">#${esc(c.name)}</option>`).join('')}</select></div>`
             : warnHtml('It posts to Discord: <a href="#" data-act="conn" data-tab="discord">add a Discord channel</a> first.')) : ''}
           ${p.local_effects && !localLocked() ? `<label class="crash-check lan-warn"><input type="checkbox" data-bind="r-local"><span><span class="crash-check-title">I trust this recipe to run programs or write files on this PC</span><span class="muted">Only tick this if you know who made it.</span></span></label>` : ''}
@@ -4811,6 +6740,36 @@ const Recipes = {
         <button class="ic-btn ic-btn-ghost" data-act="modal-close">Cancel</button>
         ${p ? `<button class="ic-btn ic-btn-primary" data-act="r-apply" ${p.local_effects && localLocked() ? 'disabled' : ''}>Add ${p.items.length}</button>` : '<button class="ic-btn ic-btn-primary" data-act="r-preview">Preview</button>'}
       </div>`);
+    this.syncAlerts();
+  },
+  // A recipe's alerts bring their theme (shown on the real page) and
+  // their uploads: taking the theme is a choice, ticked to start only
+  // while this alerts page still has the plain default one.
+  alertsHtml(p){
+    const al = p.alerts, own = THEMES[themeOf(al.look)];
+    const names = list => list.map(m => `<b>${esc(m.name)}</b>`).join(', ');
+    return `<div class="sys-section ig-recipe-alerts" data-key="r-alerts">
+      <div class="ic-label">Their alerts look</div>
+      <div class="ig-stage ig-stage-short"><iframe class="ig-stage-frame" src="/alerts?demo" title="Their alerts look" tabindex="-1" aria-hidden="true"></iframe></div>
+      <label class="crash-check"><input type="checkbox" data-bind="r-theme" ${al.mine_is_default ? 'checked' : ''}>
+        <span><span class="crash-check-title">Use their alerts look (${esc(own.name)}${al.look.css ? ', with custom CSS' : ''})</span>
+        <span class="muted">Every alert on your alerts page takes it, and the theme sound. You can change it any time in Alerts page.</span></span></label>
+      ${al.media.length ? `<div class="muted">Comes with ${names(al.media)}: saved with your uploads.</div>` : ''}
+      ${al.left_out.length ? warnHtml(`Too big to come along: ${names(al.left_out)}. Those alerts play the theme sound, or show no picture, until you pick another.`) : ''}
+    </div>`;
+  },
+  // Their look on the stage, with their first alert.
+  syncAlerts(){
+    const p = this.preview;
+    if (!p || !p.alerts) return;
+    let card = {title:'New follower', text:'Nat', sound:'theme'};
+    for (const it of p.items){
+      const h = (it.integration.handlers || []).find(x => (x.steps || []).some(s => s.type === 'overlay'));
+      if (h){ card = alertCardOf(h.steps.find(s => s.type === 'overlay'), h); break; }
+    }
+    // Their uploads aren't saved here yet: the stage shows the look alone.
+    card.image = MEDIA_REF.test(card.image) ? '' : card.image;
+    stageShow(q('.ig-recipe-alerts .ig-stage-frame'), 1280, {look:Object.assign({}, p.alerts.look, {position:'middle', align:'center'}), card});
   },
   async act(a, el){
     if (a === 'r-preview'){
@@ -4826,47 +6785,79 @@ const Recipes = {
     }
     if (a === 'r-apply'){
       await busy(el, async () => {
-        const sel = q('[data-bind="r-discord"]'), local = q('[data-bind="r-local"]');
-        const r = await api('/integrations/import', {recipe:this.text, apply:true, discord:sel ? sel.value : '', allow_local:!!(local && local.checked)});
+        const sel = q('[data-bind="r-discord"]'), local = q('[data-bind="r-local"]'), theme = q('[data-bind="r-theme"]');
+        const r = await api('/integrations/import', {recipe:this.text, apply:true, discord:sel ? sel.value : '', allow_local:!!(local && local.checked),
+          use_theme:!!(theme && theme.checked)});
         if (!r.ok){ toast(r.error, 'err', 6000); return; }
         if (Modal.kind === 'import') Modal.close(true);
         await load();
-        toast(`Added ${r.added}. They're off until you switch them on.`, 'ok', 4500);
+        this.landed((r.ids || []).map(find).filter(Boolean), r.added);
       });
       return true;
     }
     if (a === 's-make'){ await busy(el, () => this.share()); return true; }
     return false;
   },
+  // What an import added: the first that still needs a detail opens on it
+  // (a recipe never carries addresses or channels); otherwise they glow
+  // where they landed.
+  landed(added, count){
+    const n = plural(count || added.length, 'integration');
+    const unfinished = added.find(i => issuesOf(i).length);
+    if (unfinished){
+      toast(`Added ${n}, switched off. ${unfinished.name} needs one more detail first.`, 'info', 5000);
+      openEditor(unfinished);
+      return;
+    }
+    added.forEach(i => reveal(i.id));
+    toast(`Added ${n}. They're off until you switch them on.`, 'ok', 4500);
+  },
+  // A pasted recipe previews at once: there is nothing else to do with it.
+  pasted(el){
+    const text = el.value.trim();
+    if (!text.startsWith('ic-recipe:1:') || text === this.text.trim()) return;
+    this.act('r-preview', q('.dest-form-foot .ic-btn-primary'));
+  },
+  // `only`: shared from one integration's menu, the recipe is made (and
+  // copied) at once; ticking more remakes it with "Make recipe".
   openShare(only){
+    const one = only ? find(only) : null;
     Modal.open('share', 700);
     Modal.body(`${modalHead('copy', 'var(--accent)', 'Share as a recipe', 'Pick what to share. Your connections, keys and secret links are never included.')}
       <div class="dest-form-body ig-conn-body">
-        <div class="dff"><label>Recipe name</label><input class="ic-input" data-bind="s-name" placeholder="My crash kit"></div>
+        <div class="dff"><label>Recipe name</label><input class="ic-input" data-bind="s-name" placeholder="My crash kit" value="${one ? esc(one.name) : ''}"></div>
         <div class="ig-share-list">${S.data.integrations.map(i =>
           `<label class="crash-check"><input type="checkbox" data-bind="s-pick" value="${esc(i.id)}" ${i.id === only ? 'checked' : ''}><span><span class="crash-check-title">${esc(i.name)}</span></span></label>`).join('')}</div>
+        <label class="crash-check"><input type="checkbox" data-bind="s-theme" checked><span><span class="crash-check-title">Alerts bring my alerts look</span>
+          <span class="muted">The theme, its changes and custom CSS, and the sounds and pictures they use (up to 4 MB in all). They choose whether to use it.</span></span></label>
         <textarea class="ic-input ig-textarea-code" data-bind="s-out" readonly hidden></textarea>
       </div>
       <div class="dest-form-foot"><div class="dest-form-msg"></div>
         <button class="ic-btn ic-btn-ghost" data-act="modal-close">Close</button><button class="ic-btn ic-btn-primary" data-act="s-make">Make recipe</button></div>`);
-    focusField('s-name');
+    if (one) busy(q('[data-act="s-make"]'), () => this.share());
+    else focusField('s-name');
   },
   async share(){
     const ids = [...Modal.el.querySelectorAll('[data-bind="s-pick"]:checked')].map(x => x.value);
     if (!ids.length){ toast('Tick at least one integration to share', 'info'); return; }
-    const r = await api('/integrations/export', {ids, name:Conn.value('s-name')});
+    const theme = q('[data-bind="s-theme"]');
+    const r = await api('/integrations/export', {ids, name:Conn.value('s-name'), with_theme:!theme || theme.checked});
     if (!r.ok){ toast(r.error, 'err'); return; }
+    if (Modal.kind !== 'share') return;
     const out = q('[data-bind="s-out"]');
     out.hidden = false;
     out.value = r.recipe;
+    // Selected too, so a copy that fails is one Ctrl+C away.
+    if (await writeClipboard(r.recipe)) toast('Recipe copied: paste it anywhere', 'ok', 3500);
+    else toast(COPY_FAILED, 'err');
+    out.focus({preventScroll:true});
     out.select();
-    navigator.clipboard.writeText(r.recipe).then(() => toast('Recipe copied: paste it anywhere', 'ok', 3500), () => {});
   },
 };
 
 // ---------------------------------------------------------------- events
 
-const OWNERS = {editor:Editor, builder:Builder, connections:Conn, import:Recipes, share:Recipes, catalog:Catalog};
+const OWNERS = {editor:Editor, builder:Builder, connections:Conn, alerts:AlertsLook, import:Recipes, share:Recipes, catalog:Catalog};
 
 async function onClick(e){
   const el = e.target.closest('[data-act]');
@@ -4880,12 +6871,14 @@ async function onClick(e){
     case 'modal-close': Modal.close(); break;
     case 'modal-back': Modal.goBack(); break;
     case 'guard-keep': Modal.hideGuard(); break;
+    case 'discard': discardEdits(Modal.kind === 'builder' ? Builder : Editor); break;
     case 'guard-discard':
       if (Modal.pending === 'back' && Modal.back) Modal.leaveBack(); else Modal.close(true);
       break;
     case 'menu': Menu.toggle(el, el.dataset.id); break;
     case 'menu-delete':
-      if (armConfirm(el, 'Click again to delete')){ Menu.close(); remove(el.dataset.id); }
+      Menu.close();
+      remove(el.dataset.id);
       break;
     case 'share-one': Recipes.openShare(el.dataset.id); break;
     case 'reveal': {
@@ -4897,6 +6890,13 @@ async function onClick(e){
       break;
     }
     case 'lock-why': toast(LOCAL_LOCK_TEXT, 'info', 8000); break;
+    case 'last-run': {
+      setLastRun(!S.lastRunOpen);
+      const back = q('.ig-last-btn');
+      if (!S.lastRunOpen && back) back.focus({preventScroll:true});
+      break;
+    }
+    case 'act-row': S.actOpen = S.actOpen === el.dataset.k ? null : el.dataset.k; render(); break;
     case 'guard-save': {
       const save = q('.dest-form-foot [data-act="save"]');
       Modal.hideGuard();
@@ -4907,6 +6907,13 @@ async function onClick(e){
       // A field showing what it will say: back to what was written.
       const field = el.parentElement && el.parentElement.querySelector('.ig-tpl-in');
       if (field){ field.focus(); const end = field.value.length; field.setSelectionRange(end, end); }
+      break;
+    }
+    case 'fix-var': {
+      const o = OWNERS[Modal.kind];
+      if (!o || !o.handler) break;
+      renameVar(o.handler(), el.dataset.from, el.dataset.to);
+      o.changed();
       break;
     }
     case 'obs-retry': busy(el, () => ObsLive.tick()); break;
@@ -4924,6 +6931,25 @@ async function onClick(e){
     case 'view': S.view = el.dataset.v; store.set('ig-view', S.view); render(); break;
     case 'copy': copyText(el); break;
     case 'twitch-app': openTwitchAppSettings(); break;
+    case 'light-scan':
+      busy(el, async () => {
+        const r = await api('/integrations/lights/scan', {});
+        if (!r || r.ok === false){ toast((r && r.error) || 'The scan didn\'t work', 'err'); return; }
+        LightScan.devices = r.devices || [];
+        const o = OWNERS[Modal.kind];
+        if (o && o.render) o.render();
+      });
+      break;
+    case 'light-try':
+      busy(el, async () => {
+        const r = await api('/integrations/lights/try', {device:el.dataset.ref, color:el.dataset.color || ''});
+        if (r && r.ok !== false) toast(r.note ? 'Flashed it: ' + r.note : 'Flashed it', 'ok');
+        else toast((r && r.error) || 'It didn\'t answer', 'err');
+      });
+      break;
+    case 'alerts-add': addAlertsToObs(el); break;
+    case 'alerts-open': AlertsLook.open(); break;
+    case 'media-del': deleteMedia(el); break;
     case 'alert-test':
       busy(el, async () => {
         const r = await api('/integrations/alerts/test', {});
@@ -4963,6 +6989,7 @@ async function onClick(e){
 
 function onInput(e){
   const el = e.target;
+  if (el.type === 'range') fillRange(el);
   if (el.id === 'ig-search'){
     S.search = el.value;
     render();
@@ -4971,6 +6998,9 @@ function onInput(e){
   if (!el.dataset || !el.dataset.bind || !Modal.el || !Modal.el.contains(el)) return;
   if (Modal.kind === 'editor') Editor.input(el);
   else if (Modal.kind === 'builder') Builder.input(el);
+  else if (Modal.kind === 'alerts') AlertsLook.input(el);
+  // Pasted or dropped, not typed: typing would preview half a recipe.
+  else if (Modal.kind === 'import' && el.dataset.bind === 'r-text' && /^insertFrom(Paste|Drop)$/.test(e.inputType || '')) Recipes.pasted(el);
 }
 
 // Editors normalise some fields (commands lowercased, numbers clamped)
@@ -4988,6 +7018,13 @@ function onFieldLeave(e){
 // Enter or Space on a clickable card acts like a click; arrow keys move
 // through a group of radio buttons (the card colors) and pick.
 function onActivateKey(e){
+  // Enter in a list's find box picks the first match, or the typed name.
+  if (e.key === 'Enter' && e.target.matches('[data-bind="pick-find"]')){
+    e.preventDefault();
+    const first = e.target.closest('.ig-pick').querySelector('.ig-pick-row');
+    if (first) first.click();
+    return;
+  }
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"][data-act]')){
     e.preventDefault();
     e.target.click();
@@ -5065,6 +7102,11 @@ window.Integrations = {
   hide(){
     S.visible = false;
     if (!modalOpen()) clearInterval(S.pollTimer);
+  },
+  // From the Overlay tab: where alerts go on stream.
+  async openAlertsPage(){
+    if (!S.data && !(await load())) return;
+    Conn.open('stream');
   },
 };
 

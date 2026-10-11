@@ -10,6 +10,8 @@
 
 use crate::buffer::{DiskRing, TagMeta};
 use crate::compat::StreamParams;
+use crate::config::MAX_DELAY_MS;
+use crate::egress_failure::EgressFailure;
 use crate::h264::{AudioCodec, VideoCodec};
 use crate::integrations::host::fmt_duration;
 use crate::integrations::{Event, EventKind};
@@ -28,19 +30,19 @@ use tokio::sync::{Mutex, Notify};
 /// audio / video tag (~150-300 per second per destination); switching
 /// to `Instant::now()` is a vDSO call (~10ns) and immune to clock
 /// adjustments.
-fn process_now_ms() -> u64 {
+pub(crate) fn process_now_ms() -> u64 {
     static ANCHOR: OnceLock<Instant> = OnceLock::new();
     let start = ANCHOR.get_or_init(Instant::now);
     Instant::now().saturating_duration_since(*start).as_millis() as u64
 }
 
 /// Rolling bitrate, lock-free: bytes are summed over windows of at least
-/// `RATE_WINDOW_MS` and the rate is the last full window. A window that
-/// hasn't rolled for `RATE_STALE_MS` means nothing has arrived since (the
-/// stream stopped or froze), so the rate reads 0 rather than holding the
-/// last second's value forever.
+/// `WINDOW_MS` and the rate is the last full window. A window that hasn't
+/// rolled for `RATE_STALE_SLACK_MS` past its length means nothing has
+/// arrived since (the stream stopped or froze), so the rate reads 0 rather
+/// than holding the last window's value forever.
 #[derive(Default)]
-pub struct RateMeter {
+pub struct RateMeter<const WINDOW_MS: u64 = RATE_WINDOW_MS> {
     window_bytes: AtomicU64,
     /// 0 = no window yet.
     window_start_ms: AtomicU64,
@@ -48,9 +50,16 @@ pub struct RateMeter {
 }
 
 const RATE_WINDOW_MS: u64 = 1_000;
-const RATE_STALE_MS: u64 = 2_500;
+const RATE_STALE_SLACK_MS: u64 = 1_500;
+/// The window capacity estimates plan on: five 2 s keyframe intervals, so a
+/// keyframe's burst averages out. A 1 s window reads well above a CBR
+/// stream's real rate whenever it holds a keyframe, which would refuse
+/// delays the buffer really holds.
+const CAPACITY_WINDOW_MS: u64 = 10_000;
 
-impl RateMeter {
+impl<const WINDOW_MS: u64> RateMeter<WINDOW_MS> {
+    const STALE_MS: u64 = WINDOW_MS + RATE_STALE_SLACK_MS;
+
     pub fn note(&self, bytes: usize) {
         self.note_at(bytes, process_now_ms());
     }
@@ -60,15 +69,18 @@ impl RateMeter {
         let start = self.window_start_ms.load(Ordering::Relaxed);
         // First bytes, or the first after a gap: they mark the start of a
         // fresh window (so they count toward the time before it), instead
-        // of the silence being averaged into the rate.
-        if start == 0 || now_ms.saturating_sub(start) > RATE_STALE_MS {
+        // of the silence being averaged into the rate. The rate before the
+        // gap is forgotten: until this window fills, there is none, rather
+        // than the last stream's (which the capacity estimate would plan by).
+        if start == 0 || now_ms.saturating_sub(start) > Self::STALE_MS {
             self.window_bytes.store(0, Ordering::Relaxed);
             self.window_start_ms.store(now_ms, Ordering::Relaxed);
+            self.kbps.store(0, Ordering::Relaxed);
             return;
         }
         let total = self.window_bytes.fetch_add(bytes as u64, Ordering::Relaxed) + bytes as u64;
         let elapsed = now_ms.saturating_sub(start);
-        if elapsed >= RATE_WINDOW_MS {
+        if elapsed >= WINDOW_MS {
             // bytes * 8 / ms = kbps
             self.kbps
                 .store(((total * 8) / elapsed) as u32, Ordering::Relaxed);
@@ -81,9 +93,17 @@ impl RateMeter {
         self.kbps_at(process_now_ms())
     }
 
+    /// Start over, as if nothing had been measured: for a new stream, whose
+    /// first window must not hold the tail of the one before it.
+    fn reset(&self) {
+        self.window_bytes.store(0, Ordering::Relaxed);
+        self.window_start_ms.store(0, Ordering::Relaxed);
+        self.kbps.store(0, Ordering::Relaxed);
+    }
+
     fn kbps_at(&self, now_ms: u64) -> u32 {
         let start = self.window_start_ms.load(Ordering::Relaxed);
-        if start == 0 || now_ms.saturating_sub(start) > RATE_STALE_MS {
+        if start == 0 || now_ms.saturating_sub(start) > Self::STALE_MS {
             return 0;
         }
         self.kbps.load(Ordering::Relaxed)
@@ -155,7 +175,7 @@ impl ActivateError {
             ActivateError::NoIngest => NO_INGEST.to_string(),
             ActivateError::BufferShort { remaining_ms } => {
                 let secs = ((*remaining_ms + 500) / 1000).max(1);
-                format!("buffer is still building - wait ~{}s", secs)
+                format!("buffer is still building, wait ~{}s", secs)
             }
         }
     }
@@ -172,7 +192,7 @@ const LOG_LINES_MAX: usize = 1_500;
 /// a crash-protection hold before a missing picture counts as a freeze.
 const FIRST_VIDEO_GRACE: Duration = Duration::from_secs(10);
 
-pub const NO_INGEST: &str = "OBS isn't sending anything yet - start streaming first";
+pub const NO_INGEST: &str = "OBS isn't sending anything yet. Start streaming first";
 
 /// One hotkey / MIDI press, as the dashboard renders it: which action ran,
 /// where it came from, whether it was refused, and a sequence number so a
@@ -185,10 +205,73 @@ pub struct FiredAction {
     pub problem: Option<String>,
 }
 
+/// The armed delay is longer than the buffer holds at this stream's
+/// bitrate, so it runs at what the buffer holds. Arming refuses such a
+/// delay once a bitrate is measured; this is the case it couldn't refuse:
+/// a delay armed before there was one (auto-arm at connect, the one saved
+/// from last time), or a stream that got heavier after arming.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapacityShort {
+    /// The delay that was armed.
+    pub armed_ms: u32,
+    /// About how long a delay the buffer holds: what actually runs.
+    pub holds_ms: u32,
+    /// "Buffer too small for ...", ready to show the user.
+    pub message: String,
+}
+
 /// Hidden slack beyond what the user sees as the target. Equal to the
 /// IDR-search tolerance, so a "5s armed" cut can always land on a real
 /// IDR even if the nearest one happens to be slightly past the boundary.
 const BUFFER_SLACK_MS: u32 = 2_000;
+
+/// Bitrate a capacity estimate plans for before a stream has been measured:
+/// 10 Mbps, so a guess made before going live errs on the short side.
+const CAPACITY_REFERENCE_KBPS: u32 = 10_000;
+/// Below this the meter is still warming up after a connect (or nothing is
+/// arriving), so the estimate plans for the reference instead.
+const CAPACITY_MIN_MEASURED_KBPS: f64 = 500.0;
+/// How fast the planning bitrate lets go of a peak, per second. A real drop
+/// shows within about half a minute; a short dip doesn't unlock a delay the
+/// buffer can't hold at the stream's normal bitrate.
+const CAPACITY_HOLD_DECAY_PER_S: f64 = 0.94;
+
+/// The longest delay `usable_bytes` of ring holds at `kbps`: the time they
+/// take to fill, less the slack trimming keeps on top of the delay.
+fn delay_capacity_ms(usable_bytes: u64, kbps: u32) -> u32 {
+    // bytes * 8 = bits, and kbps is bits per millisecond.
+    let fill_ms = usable_bytes * 8 / u64::from(kbps.max(1));
+    fill_ms
+        .saturating_sub(u64::from(BUFFER_SLACK_MS))
+        .min(u64::from(u32::MAX)) as u32
+}
+
+/// The buffer size, in MB, that holds a delay of `ms` at `kbps`: the
+/// inverse of `delay_capacity_ms`, with the ring's unusable sixteenth.
+/// Rounded up at every step, so the size it names always holds the delay.
+fn buffer_mb_for(ms: u32, kbps: u32) -> u64 {
+    let bytes = (u64::from(ms.saturating_add(BUFFER_SLACK_MS)) * u64::from(kbps)).div_ceil(8);
+    (bytes * 16).div_ceil(15).div_ceil(1024 * 1024)
+}
+
+/// What every surface says when a delay of `ms` doesn't fit: the buffer
+/// holds `capacity` ms at `kbps`, and the size that would hold it.
+fn buffer_too_small(ms: u32, capacity: u32, kbps: u32) -> String {
+    format!(
+        "Buffer too small for {}: it holds about {} at {:.1} Mbps. \
+         Raise the buffer size to at least {} MB in System, then restart.",
+        fmt_duration(u64::from(ms)),
+        fmt_duration(u64::from(capacity)),
+        f64::from(kbps) / 1000.0,
+        buffer_mb_for(ms, kbps)
+    )
+}
+
+/// A held peak bitrate `elapsed_s` seconds on, given what the meter reads
+/// now: it rises at once and lets go slowly.
+fn hold_peak(held: f64, elapsed_s: f64, measured: f64) -> f64 {
+    (held * CAPACITY_HOLD_DECAY_PER_S.powf(elapsed_s)).max(measured)
+}
 
 /// How many IDR-to-IDR gaps to average before freezing the keyframe-interval
 /// measurement. Five gaps is ~10 s of a normally-configured stream: long
@@ -308,6 +391,13 @@ pub struct DestinationState {
     /// still matches - both reads happen under the override mutex so the
     /// check can't race the disconnect's clear+bump.
     pub session_epoch: AtomicU64,
+    /// Why the last attempt to stream here failed, and when the next one
+    /// starts, for the dashboard card. Cleared when a pump starts and once a
+    /// session proves the endpoint works.
+    pub failure: crate::sync::Mutex<Option<EgressFailure>>,
+    /// "Retry now" from the dashboard: cuts the current backoff wait short.
+    /// Checked by the same 200 ms poll as `shutdown_requested`.
+    pub retry_now: AtomicBool,
 }
 
 /// The Enhanced Broadcasting config last handed to OBS, and the Twitch
@@ -372,6 +462,30 @@ impl DestinationState {
             vertical_primary_track: AtomicU8::new(0xFF),
             vod_fetch_pending: AtomicBool::new(false),
             session_epoch: AtomicU64::new(0),
+            failure: crate::sync::Mutex::new(None),
+            retry_now: AtomicBool::new(false),
+        }
+    }
+
+    /// Ask a destination waiting out its backoff to try again now. False
+    /// when it isn't waiting (connecting, streaming, or nothing to retry).
+    pub fn request_retry(&self) -> bool {
+        let waiting = self
+            .failure
+            .lock()
+            .as_ref()
+            .is_some_and(|f| f.retry_at.is_some());
+        if waiting {
+            self.retry_now.store(true, Ordering::Relaxed);
+        }
+        waiting
+    }
+
+    /// The backoff wait is over: the card says "connecting" again, keeping
+    /// the reason until the attempt succeeds or fails anew.
+    fn mark_retrying(&self) {
+        if let Some(f) = self.failure.lock().as_mut() {
+            f.retry_at = None;
         }
     }
 
@@ -540,6 +654,12 @@ pub struct Controller {
     /// streamer is already in the active state and a subsequent cut
     /// shouldn't snap back to "active" via auto-activate.
     auto_activate_pending: AtomicBool,
+    /// The pending arm was promised to go on by itself once the buffer
+    /// holds it (`POST /delay`, "Delay on/off" pressed while it fills), so
+    /// it does even with "Activate when ready" off. Only read while
+    /// `auto_activate_pending` is set, and reset by every fresh arm, so it
+    /// never outlives the arm it was asked for.
+    activate_once_ready: AtomicBool,
     /// Input-timeline timestamp (u64, expand_ts domain) of a scheduled
     /// "cut after this airs" mark. 0 = none pending. Set by
     /// `schedule_safe_cut` to the live-edge ts at the moment the
@@ -584,6 +704,15 @@ pub struct Controller {
     /// "The buffer holds only N s" was logged for the armed delay; cleared
     /// on the next arm so each new value is checked once.
     capacity_capped_logged: AtomicBool,
+    /// The armed delay `check_armed_capacity` has already checked against
+    /// this stream's measured bitrate (0: none yet). Reset per publisher.
+    capacity_checked_ms: AtomicU32,
+    /// The armed delay is longer than the buffer holds, so it runs short.
+    /// See `capacity_short`.
+    capacity_short: crate::sync::Mutex<Option<CapacityShort>>,
+    /// Bumped each time a new `capacity_short` is reported, so the runtime
+    /// raises one tray notice per report.
+    capacity_short_seq: AtomicU64,
     /// Process ms of the last "rejected publisher" log line (see
     /// `log_rejected_publish`).
     last_rejection_log_ms: AtomicU64,
@@ -632,6 +761,9 @@ pub struct Controller {
     // Ingest-side stats
     ingest_disconnects: AtomicU32,
     rate_in: RateMeter, // inbound (from OBS)
+    /// The inbound rate averaged over `CAPACITY_WINDOW_MS`: what capacity
+    /// estimates plan on.
+    rate_in_mean: RateMeter<CAPACITY_WINDOW_MS>,
     // Video tags only. Viewers decode the video track, so the Twitch
     // mobile-decoder check compares this, not the total with audio.
     rate_video_in: RateMeter,
@@ -779,6 +911,9 @@ pub struct Controller {
     // so a dashboard that goes away mid-capture cannot leave them off.
     #[cfg_attr(not(windows), allow(dead_code))]
     hotkey_capture_until_ms: AtomicU64,
+    /// Peak-held inbound kbps and when it was last updated (process ms), for
+    /// `capacity_kbps`.
+    capacity_kbps_hold: crate::sync::Mutex<(f64, u64)>,
 
     // Actions whose hotkey the OS refused to register, because another app
     // already owns the combo. Written by the tray on every (re)bind, read by
@@ -786,26 +921,24 @@ pub struct Controller {
     // line alone is somewhere nobody setting a hotkey is looking.
     hotkey_conflicts: crate::sync::Mutex<Vec<String>>,
 
-    // Raised when a hotkey or MIDI action moves the delay state. Those two
-    // paths run outside the web layer, which is where every other state
-    // change gets written to the config file, so the runtime watches this
-    // and persists on their behalf.
-    #[cfg_attr(not(windows), allow(dead_code))]
+    // Raised when a hotkey, MIDI, tray or integration action moves the delay
+    // state. Those paths run outside the web layer, which is where every
+    // other state change gets written to the config file, so the runtime
+    // watches this and persists on their behalf.
     state_dirty: Notify,
 }
 
 impl Controller {
     pub fn new(ring: Arc<DiskRing>, initial_armed_delay_ms: u32) -> Self {
-        // Match arm_delay's clamp. A persisted (or hand-edited) config
-        // value larger than the cap would otherwise wedge the egress
-        // pump in `preparing` forever because the buffer can never grow
-        // to a delay we don't actually allow.
-        let initial_armed_delay_ms = initial_armed_delay_ms.min(600_000);
+        // Match arm_delay's clamp, so a hand-edited config can't arm past
+        // the ceiling at startup either.
+        let initial_armed_delay_ms = initial_armed_delay_ms.min(MAX_DELAY_MS);
         Self {
             ring,
             armed_delay_ms: AtomicU32::new(initial_armed_delay_ms),
             target_delay_ms: AtomicU32::new(0),
             auto_activate_pending: AtomicBool::new(false),
+            activate_once_ready: AtomicBool::new(false),
             safe_cut_input_ts: AtomicU64::new(0),
             ingest_alive: AtomicBool::new(false),
             buffer_building: AtomicBool::new(false),
@@ -817,6 +950,9 @@ impl Controller {
             hold_tail_end_seq: AtomicU64::new(NO_SEQ),
             tail_plays_out: AtomicBool::new(false),
             capacity_capped_logged: AtomicBool::new(false),
+            capacity_checked_ms: AtomicU32::new(0),
+            capacity_short: crate::sync::Mutex::new(None),
+            capacity_short_seq: AtomicU64::new(0),
             last_rejection_log_ms: AtomicU64::new(0),
             resumed_after_seq: AtomicU64::new(NO_SEQ),
             replay_floor_seq: AtomicU64::new(NO_SEQ),
@@ -828,6 +964,7 @@ impl Controller {
             destinations: crate::sync::RwLock::new(HashMap::new()),
             ingest_disconnects: AtomicU32::new(0),
             rate_in: RateMeter::default(),
+            rate_in_mean: RateMeter::default(),
             rate_video_in: RateMeter::default(),
             publisher_local: AtomicBool::new(false),
             integrations: std::sync::OnceLock::new(),
@@ -872,6 +1009,7 @@ impl Controller {
             last_action: crate::sync::Mutex::new(None),
             last_action_seq: AtomicU64::new(0),
             hotkey_capture_until_ms: AtomicU64::new(0),
+            capacity_kbps_hold: crate::sync::Mutex::new((0.0, 0)),
             hotkey_conflicts: crate::sync::Mutex::new(Vec::new()),
             state_dirty: Notify::new(),
         }
@@ -949,6 +1087,12 @@ impl Controller {
     /// single (often misclassified) tag; this version auto-clears as
     /// soon as multi-track stops, and is always off when ingest is
     /// not alive.
+    /// OBS is publishing Enhanced Broadcasting, but no session was handed
+    /// to it in this run: it is continuing one from before a restart.
+    pub fn publishing_unbrokered_eb(&self) -> bool {
+        self.ingest_alive() && self.multitrack_video() && self.eb_session.lock().is_none()
+    }
+
     pub fn multitrack_video(&self) -> bool {
         if !self.ingest_alive.load(Ordering::Relaxed) {
             return false;
@@ -1059,8 +1203,9 @@ impl Controller {
     /// sticky bool used to live on `multitrack_video` itself; we keep it
     /// here just to throttle the log to once.
     pub fn note_multitrack_video(&self) {
+        // 0 means "never": a tag in the process's first millisecond isn't.
         self.last_multitrack_video_ms
-            .store(process_now_ms(), Ordering::Relaxed);
+            .store(process_now_ms().max(1), Ordering::Relaxed);
         if !self.multitrack_video.swap(true, Ordering::Relaxed) {
             // Twitch destinations pass the multi-track tag through
             // bit-faithfully (Enhanced Broadcasting → transcoded
@@ -1219,6 +1364,20 @@ impl Controller {
         self.destinations.write().remove(id);
     }
 
+    /// Why a destination's last attempt failed, if it did. Read-only: unlike
+    /// `destination_state` it never registers a destination that has no pump.
+    pub fn destination_failure(&self, id: &str) -> Option<EgressFailure> {
+        self.destinations.read().get(id)?.failure.lock().clone()
+    }
+
+    /// "Retry now" for one destination. False when it isn't waiting to retry.
+    pub fn retry_destination_now(&self, id: &str) -> bool {
+        self.destinations
+            .read()
+            .get(id)
+            .is_some_and(|d| d.request_retry())
+    }
+
     /// Snapshot of every (id → state) pair. Used by graceful-shutdown
     /// paths that need to flip flags on every pump in one pass.
     pub fn all_destination_states(&self) -> Vec<(String, Arc<DestinationState>)> {
@@ -1282,16 +1441,24 @@ impl Controller {
     /// jump back to it (there is no gradual rewind - see
     /// `compute_delay_cut`'s build-buffer-first branch).
     pub fn arm_delay(&self, ms: u32) {
-        let ms = ms.min(600_000);
+        let ms = ms.min(MAX_DELAY_MS);
         let previous_target = self.target_delay_ms.load(Ordering::Relaxed);
-        self.capacity_capped_logged.store(false, Ordering::Relaxed);
-        self.armed_delay_ms.store(ms, Ordering::Relaxed);
+        // A delay armed anew (another value, or after a disarm) is judged
+        // afresh, against the bitrate as it is now. Arming the value that is
+        // already armed (a toggle after a cut) keeps its verdict: clearing it
+        // would hide a short delay for seconds and repeat its notices.
+        if self.armed_delay_ms.swap(ms, Ordering::Relaxed) != ms {
+            self.capacity_capped_logged.store(false, Ordering::Relaxed);
+            self.capacity_checked_ms.store(0, Ordering::Relaxed);
+            *self.capacity_short.lock() = None;
+        }
         if ms == 0 {
             // Disarm wipes target as well.
             self.target_delay_ms.store(0, Ordering::Relaxed);
             // Disarm clears any pending auto-activate too - there's
             // nothing to auto-activate into anymore.
             self.auto_activate_pending.store(false, Ordering::Relaxed);
+            self.activate_once_ready.store(false, Ordering::Relaxed);
             // A pending "cut after this airs" mark dies with the delay
             // it was going to cut.
             self.safe_cut_input_ts.store(0, Ordering::Relaxed);
@@ -1305,9 +1472,27 @@ impl Controller {
         } else {
             // Fresh arm: target was 0 (we were disarmed, in cut-hold,
             // or in passthrough). Mark the auto-activate slot eligible
-            // - one shot when the buffer hits ready.
+            // - one shot when the buffer hits ready. A plain arm makes no
+            // promise to go on by itself; the callers that do say so after.
             self.auto_activate_pending.store(true, Ordering::Relaxed);
+            self.activate_once_ready.store(false, Ordering::Relaxed);
         }
+    }
+
+    /// Switch the armed delay on as soon as the buffer holds it, this once,
+    /// whatever "Activate when ready" is set to. For the callers that tell
+    /// the streamer it will: without it they would arm, say "starts as soon
+    /// as it is ready", and leave the stream live for good.
+    pub fn activate_once_ready(&self) {
+        self.activate_once_ready.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the supervisor should switch the delay on when the buffer is
+    /// ready: an arm is waiting, and either the "Activate when ready"
+    /// setting (`setting_on`) or the arm's own caller asked for it.
+    pub fn auto_activates(&self, setting_on: bool) -> bool {
+        self.auto_activate_pending()
+            && (setting_on || self.activate_once_ready.load(Ordering::Relaxed))
     }
 
     /// Switch the armed delay on. Caller-side check: only acts if the
@@ -1382,7 +1567,7 @@ impl Controller {
     /// on some future activate.
     pub fn schedule_safe_cut(&self) -> Result<u32, &'static str> {
         if self.target_delay_ms.load(Ordering::Relaxed) == 0 {
-            return Err("no delay is active - nothing to schedule");
+            return Err("no delay is active, so there is nothing to schedule");
         }
         let Some(latest) = self.ring.latest_ts() else {
             return Err("no stream data yet");
@@ -1406,6 +1591,22 @@ impl Controller {
     #[cfg(test)]
     pub fn mark_ingest_alive_for_test(&self) {
         self.ingest_alive.store(true, Ordering::Relaxed);
+    }
+
+    /// Make the inbound meters read `kbps`, as a stream at that bitrate
+    /// would after its first ten seconds, without waiting them.
+    #[cfg(test)]
+    pub fn note_inbound_kbps_for_test(&self, kbps: u32) {
+        self.ingest_alive.store(true, Ordering::Relaxed);
+        let now = process_now_ms().max(1);
+        self.rate_in.note_at(0, now);
+        self.rate_in
+            .note_at(kbps as usize * 1000 / 8, now + RATE_WINDOW_MS);
+        self.rate_in_mean.note_at(0, now);
+        self.rate_in_mean.note_at(
+            kbps as usize * CAPACITY_WINDOW_MS as usize / 8,
+            now + CAPACITY_WINDOW_MS,
+        );
     }
 
     /// The most recent hotkey / MIDI action, if there has been one this run.
@@ -1508,7 +1709,7 @@ impl Controller {
         };
         match self.slowest_live_consumer_ts() {
             // Clamp to u32: a u64 delta can't realistically exceed
-            // 600_000 ms (our hard armed-delay ceiling) but we cap to
+            // MAX_DELAY_MS (our armed-delay ceiling) but we cap to
             // be safe - the UI consumes a u32 number anyway.
             Some(ts) => latest.saturating_sub(ts).min(u32::MAX as u64) as u32,
             None => 0,
@@ -1598,6 +1799,148 @@ impl Controller {
     pub fn bitrate_kbps(&self) -> u32 {
         self.rate_in.kbps()
     }
+
+    /// The highest recent 10 s mean inbound rate, let go of slowly: what
+    /// capacity estimates plan for. None until a stream has been measured
+    /// for ten seconds (or once it has faded after one). Every tag OBS
+    /// sends lands in the ring, so the inbound rate is exactly how fast the
+    /// buffer fills.
+    pub fn measured_capacity_kbps(&self) -> Option<u32> {
+        // No stream, no measurement: the last one's fading peak must not
+        // decide what fits the next (a chat `!setdelay` right after going
+        // offline). A crash-protection hold is the same stream, waiting.
+        if !self.ingest_alive() && !self.hold_active() {
+            return None;
+        }
+        let now = process_now_ms();
+        let measured = f64::from(self.rate_in_mean.kbps());
+        let mut hold = self.capacity_kbps_hold.lock();
+        let elapsed_s = now.saturating_sub(hold.1) as f64 / 1000.0;
+        // No reading (a crash-protection hold, and the first window after
+        // it) is silence, not a lighter stream: the peak stands as it was.
+        // Decayed through a 30 s hold, it let a delay that doesn't fit pass.
+        let held = if measured == 0.0 {
+            hold.0
+        } else {
+            hold_peak(hold.0, elapsed_s, measured)
+        };
+        *hold = (held, now);
+        (held >= CAPACITY_MIN_MEASURED_KBPS).then_some(held as u32)
+    }
+
+    /// The bitrate capacity estimates plan for: the measured one, or the
+    /// 10 Mbps reference before there is one.
+    pub fn capacity_kbps(&self) -> u32 {
+        self.measured_capacity_kbps()
+            .unwrap_or(CAPACITY_REFERENCE_KBPS)
+    }
+
+    /// The longest delay the buffer holds at `capacity_kbps`. The one
+    /// estimate every surface uses: the dashboard and the dock read it from
+    /// the state, and every way of arming checks it (`capacity_problem`).
+    pub fn delay_capacity_ms(&self) -> u32 {
+        delay_capacity_ms(self.ring.usable_bytes(), self.capacity_kbps())
+    }
+
+    /// Why the buffer can't hold a delay of `ms`, ready to show the user, or
+    /// None when it can. Only a measured bitrate refuses: before there is
+    /// one the estimate is a guess, and a delay that turns out longer than
+    /// the buffer still runs, at what the buffer holds.
+    pub fn capacity_problem(&self, ms: u32) -> Option<String> {
+        let (capacity, kbps) = self.measured_fit(ms)?.err()?;
+        Some(buffer_too_small(ms, capacity, kbps))
+    }
+
+    /// Whether a delay of `ms` fits at the measured bitrate: None before
+    /// there is a measurement, otherwise Ok, or Err with what the buffer
+    /// holds instead and the bitrate that decided it.
+    fn measured_fit(&self, ms: u32) -> Option<Result<(), (u32, u32)>> {
+        let kbps = self.measured_capacity_kbps()?;
+        let capacity = delay_capacity_ms(self.ring.usable_bytes(), kbps);
+        Some(if ms <= capacity {
+            Ok(())
+        } else {
+            Err((capacity, kbps))
+        })
+    }
+
+    /// Check the armed delay against this stream's bitrate, once per armed
+    /// value per stream, as soon as there is a measurement. Every way of
+    /// arming refuses a delay the buffer can't hold, but only once a bitrate
+    /// is measured, and the delay armed at connect never had one: auto-arm
+    /// fires the moment OBS connects, and the delay saved from last time is
+    /// armed before OBS connects at all. One `!setdelay 3600` becomes the
+    /// next stream's auto-arm, so this is the only place that ever says it
+    /// doesn't fit. Called by the egress supervisor a few seconds into a
+    /// stream, when the meter has settled.
+    pub fn check_armed_capacity(&self) {
+        let armed = self.armed_delay_ms();
+        if armed == 0 || self.capacity_checked_ms.load(Ordering::Relaxed) == armed {
+            return;
+        }
+        let Some(fit) = self.measured_fit(armed) else {
+            return;
+        };
+        self.capacity_checked_ms.store(armed, Ordering::Relaxed);
+        match fit {
+            // It fits by the measured bitrate. A short the full buffer
+            // itself reported stands: that one is what really happened.
+            Ok(()) => {
+                if !self.capacity_capped_logged.load(Ordering::Relaxed) {
+                    *self.capacity_short.lock() = None;
+                }
+            }
+            Err((holds_ms, kbps)) => {
+                // The buffer filled before this check and already said so,
+                // with the exact figure: one notice is enough.
+                let told = self.capacity_short.lock().as_ref().map(|s| s.armed_ms);
+                if told == Some(armed) {
+                    return;
+                }
+                let message = buffer_too_small(armed, holds_ms, kbps);
+                self.log(format!(
+                    "delay: the {} armed doesn't fit. {message}",
+                    fmt_duration(u64::from(armed))
+                ));
+                self.report_capacity_short(CapacityShort {
+                    armed_ms: armed,
+                    holds_ms,
+                    message,
+                });
+            }
+        }
+    }
+
+    /// Publish a short delay for the dashboard and the tray notice.
+    fn report_capacity_short(&self, short: CapacityShort) {
+        *self.capacity_short.lock() = Some(short);
+        self.capacity_short_seq.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The armed delay runs short of what was armed, if it does: for the
+    /// dashboard (`capacity_short` in /state). A report about a delay that
+    /// is no longer the armed one is over.
+    pub fn capacity_short(&self) -> Option<CapacityShort> {
+        let armed = self.armed_delay_ms();
+        self.capacity_short
+            .lock()
+            .clone()
+            .filter(|short| armed > 0 && short.armed_ms == armed)
+    }
+
+    /// The delay that runs for `armed_ms`: what the buffer holds when it
+    /// can't hold all of it (see `capacity_short`), else `armed_ms`.
+    pub fn delay_runs_ms(&self, armed_ms: u32) -> u32 {
+        self.capacity_short()
+            .filter(|short| short.armed_ms == armed_ms)
+            .map_or(armed_ms, |short| short.holds_ms.min(armed_ms))
+    }
+
+    /// Bumped on every new short-delay report; see `capacity_short`.
+    pub fn capacity_short_seq(&self) -> u64 {
+        self.capacity_short_seq.load(Ordering::Relaxed)
+    }
+
     /// Inbound video bitrate alone (no audio tracks, no sequence headers).
     pub fn video_bitrate_kbps(&self) -> u32 {
         self.rate_video_in.kbps()
@@ -1612,6 +1955,7 @@ impl Controller {
     /// Called from the ingest path on every audio/video tag.
     pub fn note_inbound_bytes(&self, n: usize) {
         self.rate_in.note(n);
+        self.rate_in_mean.note(n);
     }
 
     pub fn note_ingest_disconnect(&self) {
@@ -1624,12 +1968,18 @@ impl Controller {
     /// other - invaluable for diagnosing "the bouncing happened around
     /// 30 seconds in".
     pub fn log(&self, line: impl Into<String>) {
+        let line = line.into();
+        // A Linux server's only window on the app is its journal (or the
+        // terminal it runs in), and the dashboard log lives in memory. The
+        // journal stamps its own time, so the line goes out bare.
+        #[cfg(not(windows))]
+        log_line!("{line}");
         let mut q = self.logs.lock();
         if q.len() >= LOG_LINES_MAX {
             q.pop_front();
         }
         let ts_s = process_now_ms() as f64 / 1000.0;
-        q.push_back(format!("[+{:>8.3}s] {}", ts_s, line.into()));
+        q.push_back(format!("[+{:>8.3}s] {}", ts_s, line));
     }
 
     pub fn clear_logs(&self) {
@@ -1756,7 +2106,6 @@ impl Controller {
         // restarts near ts 0, so the mark would sit unreachable and
         // fire hours later (or never) - clear it with the session.
         self.safe_cut_input_ts.store(0, Ordering::Relaxed);
-
         // A goodbye from an earlier connection must not mark this session's
         // end as a clean stop.
         self.unpublish_received.store(false, Ordering::Relaxed);
@@ -1771,6 +2120,17 @@ impl Controller {
         let resuming = self.hold_active();
         if resuming {
             self.forget_unclaimed_eb_session();
+        } else {
+            // A new stream is measured on its own. The last one's held peak
+            // (a 20 Mbps stream before a 6 Mbps one) would refuse delays that
+            // fit for half a minute, and the armed delay gets checked against
+            // this one's bitrate once it is measured. A resume is the same
+            // stream: it keeps all of it, so its notice isn't given twice.
+            self.rate_in_mean.reset();
+            *self.capacity_kbps_hold.lock() = (0.0, 0);
+            self.capacity_checked_ms.store(0, Ordering::Relaxed);
+            self.capacity_capped_logged.store(false, Ordering::Relaxed);
+            *self.capacity_short.lock() = None;
         }
         // Bump token so any prior egress reader knows it's stale.
         let token = self.publisher_token.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1886,11 +2246,32 @@ impl Controller {
         }
         self.capacity_capped_logged.store(true, Ordering::Relaxed);
         self.log(format!(
-            "delay: the buffer is full at {} s at this bitrate, short of the {} s armed, so the              delay runs at {} s. Raise the buffer size in System for the full delay.",
+            "delay: the buffer is full at {} s at this bitrate, short of the {} s armed, so the \
+             delay runs at {} s. Raise the buffer size in System for the full delay.",
             fill / 1000,
             armed / 1000,
             fill / 1000
         ));
+        // The same news the dashboard and tray get from the check after
+        // connect. Raised as a new notice only when that check didn't
+        // already say so (the stream got heavier since); either way the
+        // dashboard gets what the full buffer actually holds.
+        // A full buffer spans `fill` ms: the rate that filled it is exact,
+        // where the planning one falls back to 10 Mbps on a quiet stream.
+        let filled_kbps = (self.ring.usable_bytes() * 8 / u64::from(fill.max(1)))
+            .clamp(1, u64::from(u32::MAX)) as u32;
+        let short = CapacityShort {
+            armed_ms: armed,
+            holds_ms: fill,
+            message: buffer_too_small(armed, fill, filled_kbps),
+        };
+        let mut current = self.capacity_short.lock();
+        if current.as_ref().is_some_and(|c| c.armed_ms == armed) {
+            *current = Some(short);
+        } else {
+            drop(current);
+            self.report_capacity_short(short);
+        }
     }
 
     /// Slowest consumer across all destinations. Used by trim to ensure
@@ -2655,16 +3036,38 @@ impl Controller {
         problem
     }
 
+    /// Go back to live once what's airing now has aired (an integration's
+    /// "Back to live after this airs"). Unlike the hotkey, whose second
+    /// press cancels a waiting cut, this keeps one that is already
+    /// waiting: a scene rule that fires twice (lobby, then menu) still cuts.
+    pub fn cut_after_airs(&self, source: &str) -> Option<String> {
+        if self.safe_cut_pending() {
+            self.log(format!("[{source}] cut after this airs - already waiting"));
+            return None;
+        }
+        self.run_named_action("cut_after", 0, source)
+    }
+
     /// Set the delay to `ms` (an integration's "set the delay"): arms it
     /// when nothing is armed, and changes it in place when a delay is armed
     /// or on air. Unlike the `arm` hotkey action, which toggles, this never
     /// disarms, so `!setdelay 30` twice leaves a 30 s delay.
-    pub fn set_delay_to(&self, ms: u32, source: &str) {
-        let ms = ms.clamp(1000, 600_000);
-        self.arm_delay(ms);
-        self.log(format!("[{source}] delay set to {} s", ms / 1000));
-        self.record_fired_action("arm", source, None);
+    ///
+    /// Returns why it couldn't, like `run_named_action`: a delay the buffer
+    /// can't hold is refused rather than armed short.
+    pub fn set_delay_to(&self, ms: u32, source: &str) -> Option<String> {
+        let ms = ms.clamp(1000, MAX_DELAY_MS);
+        let problem = self.capacity_problem(ms);
+        match &problem {
+            Some(why) => self.log(format!("[{source}] delay not set - {why}")),
+            None => {
+                self.arm_delay(ms);
+                self.log(format!("[{source}] delay set to {} s", ms / 1000));
+            }
+        }
+        self.record_fired_action("arm", source, problem.clone());
         self.state_dirty.notify_one();
+        problem
     }
 
     /// Back to no delay at all (an integration's "Disarm"): live, and
@@ -2715,12 +3118,21 @@ impl Controller {
         let ms = if self.armed_delay_ms() > 0 {
             self.armed_delay_ms()
         } else {
+            // A new delay: the buffer has to hold it. One already armed was
+            // checked when it was armed.
+            if let Some(problem) = self.capacity_problem(default_ms) {
+                self.log(format!("[{source}] delay on ignored - {problem}"));
+                return Some(problem);
+            }
             default_ms
         };
         self.arm_delay(ms);
         match self.activate_delay() {
             Ok(d) => {
-                self.log(format!("[{source}] delay on - {} s", d / 1000));
+                self.log(format!(
+                    "[{source}] delay on - {} s",
+                    self.delay_runs_ms(d) / 1000
+                ));
                 None
             }
             Err(e) => {
@@ -2733,10 +3145,13 @@ impl Controller {
                 // case resolves on its own - with nothing publishing, "still
                 // filling" would be a wait that never ends.
                 Some(match e {
-                    ActivateError::BufferShort { .. } => format!(
-                        "Buffer still filling - the {} s delay starts as soon as it is ready.",
-                        ms / 1000
-                    ),
+                    ActivateError::BufferShort { .. } => {
+                        self.activate_once_ready();
+                        format!(
+                            "Buffer still filling. The {} s delay starts as soon as it is ready.",
+                            ms / 1000
+                        )
+                    }
                     other => other.message(),
                 })
             }
@@ -2763,6 +3178,10 @@ impl Controller {
             self.log(format!("[{source}] arm ignored - {NO_INGEST}"));
             return Some(NO_INGEST.to_string());
         }
+        if let Some(problem) = self.capacity_problem(default_ms) {
+            self.log(format!("[{source}] arm ignored - {problem}"));
+            return Some(problem);
+        }
         self.arm_delay(default_ms);
         self.log(format!("[{source}] armed {} s", default_ms / 1000));
         None
@@ -2771,7 +3190,8 @@ impl Controller {
     fn action_activate(&self, source: &str) -> Option<String> {
         match self.activate_delay() {
             Ok(d) => {
-                self.log(format!("[{source}] activated - {} s delay", d / 1000));
+                let runs = self.delay_runs_ms(d);
+                self.log(format!("[{source}] activated - {} s delay", runs / 1000));
                 None
             }
             Err(e) => {
@@ -2832,12 +3252,20 @@ pub async fn run_egress(
     url: String,
     dest: Arc<DestinationState>,
 ) -> io::Result<()> {
+    // A fresh pump (a new key, a changed URL, switched back on) starts
+    // without the reason the previous one failed.
+    *dest.failure.lock() = None;
     let parsed = match EgressUrl::parse(&url) {
         Ok(p) => p,
         Err(e) => {
             ctrl.log(format!(
-                "[{}] invalid URL ({}) - fix it in Settings",
+                "[{}] invalid URL ({}) - fix it with Edit in Destinations",
                 label, e
+            ));
+            *dest.failure.lock() = Some(EgressFailure::new(
+                crate::egress_failure::BAD_URL,
+                &e.to_string(),
+                None,
             ));
             tokio::time::sleep(Duration::from_secs(3600)).await;
             return Ok(());
@@ -2893,9 +3321,12 @@ pub async fn run_egress(
             continue;
         }
         waiting_for_delay = false;
-        eprintln!(
+        log_line!(
             "[egress {}] connecting to {}:{}/{}",
-            label, parsed.host, parsed.port, parsed.app
+            label,
+            parsed.host,
+            parsed.port,
+            parsed.app
         );
         ctrl.log(format!(
             "[{}] connecting to {}:{}",
@@ -2904,6 +3335,8 @@ pub async fn run_egress(
         // Bounded: an edge that accepts TCP and then stalls in the TLS or
         // RTMP handshake would otherwise hold this destination on
         // "connecting" forever, never retrying.
+        // Why this attempt failed, for the card: (advice, scrubbed reason).
+        let mut failed: Option<(&'static str, String)> = None;
         let connected = tokio::time::timeout(CONNECT_TIMEOUT, EgressClient::connect(&parsed))
             .await
             .unwrap_or_else(|_| {
@@ -2924,7 +3357,18 @@ pub async fn run_egress(
                     );
                 }
                 let sink = client.spawn_reader_drain();
-                let pump_result = pump_dest(&ctrl, &dest, sink).await;
+                let pump = pump_dest(&ctrl, &dest, sink);
+                tokio::pin!(pump);
+                let pump_result = tokio::select! {
+                    ended = &mut pump => ended,
+                    // Up this long, the endpoint works: the reason the last
+                    // try failed is history, and must not sit on a live
+                    // destination until this session ends.
+                    _ = tokio::time::sleep(STABLE_SESSION) => {
+                        *dest.failure.lock() = None;
+                        pump.await
+                    }
+                };
                 dest.egress_alive.store(false, Ordering::Relaxed);
                 // Not reading any more: its position must not hold back the
                 // buffer's trim while it reconnects or waits.
@@ -2943,6 +3387,7 @@ pub async fn run_egress(
                 let lasted = connected_at.elapsed();
                 if (!dropped && lasted >= MIN_CLEAN_SESSION) || lasted >= STABLE_SESSION {
                     backoff = Duration::from_secs(1);
+                    *dest.failure.lock() = None;
                 }
                 if let Err(e) = pump_result {
                     // Twitch/etc. sometimes echo the stream key in error
@@ -2951,7 +3396,7 @@ pub async fn run_egress(
                     // key shows up in /logs (screen-shareable) and in
                     // the Discord webhook payload.
                     let safe = scrub_secret(&e.to_string(), &parsed.stream_key);
-                    eprintln!("[egress {}] pump error: {}", label, safe);
+                    log_line!("[egress {}] pump error: {}", label, safe);
                     ctrl.log(format!("[{}] disconnected ({})", label, safe));
                     ctrl.emit(
                         Event::new(EventKind::DestinationDropped)
@@ -2962,6 +3407,16 @@ pub async fn run_egress(
                     if ctrl.destination_alive_summary().0 == 0 {
                         ctrl.emit(Event::new(EventKind::AllDestinationsDown));
                     }
+                    let quick = lasted < crate::egress_failure::QUICK_DROP;
+                    // The lost session is Twitch's: only a Twitch destination
+                    // (the one taking multi-track video) is told so.
+                    let twitch = dest.pass_through_multitrack_video.load(Ordering::Relaxed);
+                    let advice = if quick && twitch && ctrl.publishing_unbrokered_eb() {
+                        crate::egress_failure::EB_SESSION_LOST
+                    } else {
+                        crate::egress_failure::advice_for(&e, quick)
+                    };
+                    failed = Some((advice, safe));
                 }
                 // Counted here (instead of at the loop tail) so a fresh
                 // connect or a connect failure never bumps it: "Egress
@@ -2973,9 +3428,11 @@ pub async fn run_egress(
             }
             Err(e) => {
                 let safe = scrub_secret(&e.to_string(), &parsed.stream_key);
-                eprintln!(
+                log_line!(
                     "[egress {}] connect failed: {} (next try in {:?})",
-                    label, safe, backoff
+                    label,
+                    safe,
+                    backoff
                 );
                 ctrl.log(format!(
                     "[{}] connect failed ({}), retrying in {}s",
@@ -2983,11 +3440,18 @@ pub async fn run_egress(
                     safe,
                     backoff.as_secs()
                 ));
+                failed = Some((crate::egress_failure::advice_for(&e, false), safe));
             }
+        }
+        if let Some((advice, detail)) = failed {
+            // Reset before the retry time is published, so a "Retry now"
+            // can only land on this wait, never skip the next one.
+            dest.retry_now.store(false, Ordering::Relaxed);
+            *dest.failure.lock() = Some(EgressFailure::new(advice, &detail, Some(backoff)));
         }
         // Cancellable backoff sleep - wake every 200 ms to check the
         // shutdown flag so a disable doesn't have to wait the full
-        // 30 s backoff window before stopping.
+        // 30 s backoff window before stopping, and for "Retry now".
         let deadline = tokio::time::Instant::now() + backoff;
         loop {
             if dest.shutdown_requested.load(Ordering::Relaxed) {
@@ -2997,11 +3461,16 @@ pub async fn run_egress(
                 ));
                 return Ok(());
             }
+            if dest.retry_now.swap(false, Ordering::Relaxed) {
+                ctrl.log(format!("[{label}] retrying now"));
+                break;
+            }
             if tokio::time::Instant::now() >= deadline {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
+        dest.mark_retrying();
         backoff = (backoff * 2).min(max_backoff);
     }
 }
@@ -3025,8 +3494,10 @@ fn scrub_secret(text: &str, secret: &str) -> String {
     // so it goes entirely. Platform-issued keys are never this short, but a
     // custom RTMP destination takes whatever the user pasted - and passing
     // that through unredacted put it straight into /logs and the Discord
-    // payload, which is the one thing this function exists to prevent.
-    if chars.len() < 6 {
+    // payload, which is the one thing this function exists to prevent. The
+    // six characters shown must be at most half of it: a 6-character key
+    // used to come back whole, and an 8-character one minus two.
+    if chars.len() < 12 {
         return text.replace(secret, "…");
     }
     let head: String = chars[..3].iter().collect();
@@ -4246,7 +4717,7 @@ mod tests {
     /// instead of averaging the silence in.
     #[test]
     fn a_bitrate_drops_to_zero_when_bytes_stop() {
-        let meter = RateMeter::default();
+        let meter: RateMeter = RateMeter::default();
         for ms in (0..=3_000).step_by(100) {
             meter.note_at(100_000, 10_000 + ms);
         }
@@ -4257,6 +4728,44 @@ mod tests {
             meter.note_at(50_000, 30_000 + ms);
         }
         assert_eq!(meter.kbps_at(31_000), 4_000, "no silence averaged in");
+    }
+
+    /// A 6 Mbps CBR stream with a keyframe every 2 s, 20 times a P frame:
+    /// the 1 s meter reads well above the real rate whenever a window holds
+    /// the keyframe, while the 10 s planning meter stays near it. Planning
+    /// on the 1 s peaks refused delays the buffer really held.
+    #[test]
+    fn the_planning_meter_averages_out_keyframe_bursts() {
+        let fast: RateMeter = RateMeter::default();
+        let mean: RateMeter<CAPACITY_WINDOW_MS> = RateMeter::default();
+        // 1.5 MB per 60-frame GOP: 59 P frames and one keyframe of 20.
+        let p_frame = 1_500_000 / 79;
+        let (mut fast_max, mut mean_lo, mut mean_hi) = (0, u32::MAX, 0);
+        for frame in 0..(30 * 40) {
+            let at = 1_000 + frame * 33;
+            let bytes = if frame % 60 == 0 {
+                p_frame * 20
+            } else {
+                p_frame
+            };
+            fast.note_at(bytes, at as u64);
+            mean.note_at(bytes, at as u64);
+            if at > 12_000 {
+                fast_max = fast_max.max(fast.kbps_at(at as u64));
+                let m = mean.kbps_at(at as u64);
+                mean_lo = mean_lo.min(m);
+                mean_hi = mean_hi.max(m);
+            }
+        }
+        // 1.5 MB per 1.98 s is about 6060 kbps.
+        assert!(
+            fast_max > 7_000,
+            "the 1 s meter sees the bursts: {fast_max}"
+        );
+        assert!(
+            (5_800..=6_400).contains(&mean_lo) && (5_800..=6_400).contains(&mean_hi),
+            "the planning meter stays near 6 Mbps: {mean_lo}..{mean_hi}"
+        );
     }
     use std::env;
     use std::sync::atomic::{AtomicU32 as TestUniq, Ordering as TestOrd};
@@ -4333,20 +4842,23 @@ mod tests {
 
     // ── Shutdown signal (web Quit/Restart + tray Quit converge here) ──
 
+    /// The main loop is told which one was asked for.
     #[tokio::test]
-    async fn shutdown_signal_reports_restart() {
-        let h = harness(0);
-        // notify_one stores a permit, so wait_shutdown resolves immediately
-        // even though the request fires before we await - no lost wakeup.
-        h.ctrl.request_restart();
-        assert_eq!(h.ctrl.wait_shutdown().await, ShutdownKind::Restart);
-    }
-
-    #[tokio::test]
-    async fn shutdown_signal_reports_quit() {
-        let h = harness(0);
-        h.ctrl.request_quit();
-        assert_eq!(h.ctrl.wait_shutdown().await, ShutdownKind::Quit);
+    async fn shutdown_says_restart_or_quit() {
+        // shutdown signal reports restart
+        {
+            let h = harness(0);
+            // notify_one stores a permit, so wait_shutdown resolves immediately
+            // even though the request fires before we await - no lost wakeup.
+            h.ctrl.request_restart();
+            assert_eq!(h.ctrl.wait_shutdown().await, ShutdownKind::Restart);
+        }
+        // shutdown signal reports quit
+        {
+            let h = harness(0);
+            h.ctrl.request_quit();
+            assert_eq!(h.ctrl.wait_shutdown().await, ShutdownKind::Quit);
+        }
     }
 
     // ── Ingest key (optional publisher auth, off by default) ─────────
@@ -4639,6 +5151,65 @@ mod tests {
         );
     }
 
+    /// "Delay on/off" pressed while the buffer fills tells the streamer the
+    /// delay starts as soon as it is ready. It has to, with "Activate when
+    /// ready" off too: that is the default, and the press used to arm,
+    /// make the promise, and leave the stream live for good.
+    #[test]
+    fn a_delay_switched_on_while_the_buffer_fills_goes_on_once_ready() {
+        let h = harness(0);
+        h.ctrl.mark_ingest_alive_for_test();
+        h.ctrl.arm_delay(5_000);
+        assert!(
+            !h.ctrl.auto_activates(false),
+            "a plain arm waits for Activate when the setting is off"
+        );
+        assert!(h.ctrl.auto_activates(true), "and goes on with it on");
+
+        let said = h.ctrl.run_named_action("toggle", 5_000, "hotkey");
+        assert!(
+            said.is_some_and(|s| s.contains("starts as soon as it is ready")),
+            "the press says the delay will start by itself"
+        );
+        assert!(
+            h.ctrl.auto_activates(false),
+            "so it does, with the setting off"
+        );
+
+        // The buffer fills and the supervisor's activate succeeds: used up.
+        feed_seconds(&h.ctrl, 0, 6, 30);
+        assert!(h.ctrl.activate_delay().is_ok(), "the buffer holds it now");
+        assert!(!h.ctrl.auto_activates(false), "one shot");
+
+        // Cut, then a plain arm: the old promise must not ride along.
+        h.ctrl.stop_delay();
+        h.ctrl.arm_delay(5_000);
+        assert!(
+            !h.ctrl.auto_activates(false),
+            "a later plain arm makes no promise"
+        );
+    }
+
+    /// Anything that calls the promise off does: cutting to live while it
+    /// fills, and disarming.
+    #[test]
+    fn a_promised_delay_is_called_off_by_a_cut_or_a_disarm() {
+        let h = harness(0);
+        h.ctrl.mark_ingest_alive_for_test();
+        let _ = h.ctrl.run_named_action("toggle", 5_000, "hotkey");
+        assert!(h.ctrl.auto_activates(false));
+        h.ctrl.stop_delay();
+        assert!(!h.ctrl.auto_activates(false), "a cut keeps the stream live");
+
+        let _ = h.ctrl.run_named_action("toggle", 5_000, "hotkey");
+        assert!(h.ctrl.auto_activates(false));
+        h.ctrl.arm_delay(0);
+        assert!(
+            !h.ctrl.auto_activates(false),
+            "a disarm leaves nothing to start"
+        );
+    }
+
     #[test]
     fn cut_consumes_auto_activate_pending_so_it_sticks() {
         // The bug-of-record: without this clear, the supervisor sees
@@ -4737,11 +5308,251 @@ mod tests {
 
     #[test]
     fn arm_clamps_to_max() {
-        // Hard ceiling at 600 s. A persisted-or-hand-edited 999 s must
-        // be clamped so the buffer can actually catch up.
+        // Ceiling at 1 hour, so a typo can't arm a delay of days.
         let h = harness(0);
-        h.ctrl.arm_delay(9_999_999);
-        assert_eq!(h.ctrl.armed_delay_ms(), 600_000);
+        h.ctrl.arm_delay(99_999_999);
+        assert_eq!(h.ctrl.armed_delay_ms(), MAX_DELAY_MS);
+    }
+
+    #[test]
+    fn arm_takes_delays_past_ten_minutes() {
+        // The old 600 s ceiling is gone: 15 minutes arms as asked, and so
+        // does the ceiling itself. Whether the buffer holds it is checked
+        // where the request comes in, from its size and the bitrate.
+        let h = harness(0);
+        h.ctrl.arm_delay(900_000);
+        assert_eq!(h.ctrl.armed_delay_ms(), 900_000);
+        h.ctrl.set_delay_to(MAX_DELAY_MS, "integration");
+        assert_eq!(h.ctrl.armed_delay_ms(), MAX_DELAY_MS);
+    }
+
+    #[test]
+    fn the_size_a_refusal_asks_for_holds_the_delay() {
+        for (ms, kbps) in [
+            (900_000, 6_000),
+            (MAX_DELAY_MS, 20_000),
+            (15_000, 2_500),
+            (1_000, 501),
+        ] {
+            let capacity = buffer_mb_for(ms, kbps) * 1024 * 1024;
+            let usable = capacity - capacity / 16; // as DiskRing::usable_bytes
+            assert!(
+                delay_capacity_ms(usable, kbps) >= ms,
+                "{} MB at {kbps} kbps holds {ms} ms",
+                buffer_mb_for(ms, kbps)
+            );
+        }
+        // 15 minutes at 6 Mbps, the README's example.
+        assert_eq!(buffer_mb_for(900_000, 6_000), 689);
+    }
+
+    #[test]
+    fn the_planning_bitrate_rises_at_once_and_lets_go_slowly() {
+        assert_eq!(
+            hold_peak(3_000.0, 1.0, 8_000.0),
+            8_000.0,
+            "a rise counts at once"
+        );
+        assert!(
+            hold_peak(8_000.0, 0.25, 3_000.0) > 7_800.0,
+            "a dip doesn't unlock more"
+        );
+        assert_eq!(
+            hold_peak(8_000.0, 30.0, 3_000.0),
+            3_000.0,
+            "a real drop shows in 30 s"
+        );
+    }
+
+    #[test]
+    fn capacity_plans_for_the_reference_until_a_bitrate_is_measured() {
+        let h = harness(0);
+        assert_eq!(h.ctrl.capacity_kbps(), CAPACITY_REFERENCE_KBPS);
+        assert!(
+            h.ctrl.capacity_problem(600_000).is_none(),
+            "a guess never refuses"
+        );
+
+        h.ctrl.note_inbound_kbps_for_test(8_000);
+        assert_eq!(h.ctrl.capacity_kbps(), 8_000);
+        // The harness ring is 4 MB: under 4 s at 8 Mbps.
+        assert!(h.ctrl.delay_capacity_ms() < 4_000);
+        let why = h
+            .ctrl
+            .capacity_problem(30_000)
+            .expect("30 s is too long for 4 MB");
+        assert!(
+            why.starts_with("Buffer too small for 30 s") && why.contains("at least 33 MB"),
+            "{why}"
+        );
+        assert!(h.ctrl.capacity_problem(1_000).is_none());
+    }
+
+    /// Arming the value that is already armed (a toggle after a cut) keeps
+    /// its "doesn't fit" report; a disarm in between has it judged again.
+    #[test]
+    fn a_short_delays_report_lasts_until_the_delay_is_armed_anew() {
+        let h = harness(0);
+        h.ctrl.note_inbound_kbps_for_test(8_000);
+        h.ctrl.arm_delay(30_000);
+        h.ctrl.check_armed_capacity();
+        assert!(h.ctrl.capacity_short().is_some(), "4 MB at 8 Mbps");
+        h.ctrl.arm_delay(30_000);
+        assert!(h.ctrl.capacity_short().is_some(), "the same value: kept");
+        h.ctrl.arm_delay(0);
+        h.ctrl.arm_delay(30_000);
+        assert!(
+            h.ctrl.capacity_short().is_none(),
+            "armed anew: not yet judged"
+        );
+        h.ctrl.check_armed_capacity();
+        assert!(h.ctrl.capacity_short().is_some(), "and judged again");
+    }
+
+    /// Silence is not a lighter stream: through a crash-protection hold (and
+    /// the first window after it) the peak stands, where its decay used to
+    /// let a delay that doesn't fit pass right after the resume.
+    #[test]
+    fn the_peak_bitrate_is_not_decayed_by_silence() {
+        let h = harness(0);
+        h.ctrl.mark_ingest_alive_for_test();
+        // A peak from long ago by the clock, and no reading since.
+        *h.ctrl.capacity_kbps_hold.lock() = (8_000.0, 0);
+        assert_eq!(h.ctrl.measured_capacity_kbps(), Some(8_000));
+        assert!(
+            h.ctrl.capacity_problem(30_000).is_some(),
+            "still doesn't fit"
+        );
+    }
+
+    /// The buffer filling before the 10 s check has already said the delay
+    /// runs short: the check doesn't say it a second time.
+    #[test]
+    fn a_short_delay_the_full_buffer_reported_is_not_reported_again() {
+        let h = harness(0);
+        h.ctrl.note_inbound_kbps_for_test(8_000);
+        h.ctrl.arm_delay(30_000);
+        h.ctrl.report_capacity_short(CapacityShort {
+            armed_ms: 30_000,
+            holds_ms: 4_000,
+            message: "the buffer is full".into(),
+        });
+        let told = h.ctrl.capacity_short_seq();
+        h.ctrl.check_armed_capacity();
+        assert_eq!(h.ctrl.capacity_short_seq(), told, "no second notice");
+        assert_eq!(
+            h.ctrl.capacity_short().unwrap().holds_ms,
+            4_000,
+            "the exact figure stays"
+        );
+    }
+
+    /// Offline, nothing is measured: the stream that just ended must not
+    /// refuse a delay set for the next one. Back on, its peak still holds.
+    #[test]
+    fn with_no_stream_there_is_no_measured_bitrate() {
+        let h = harness(0);
+        h.ctrl.note_inbound_kbps_for_test(8_000);
+        assert!(h.ctrl.capacity_problem(30_000).is_some(), "4 MB at 8 Mbps");
+        h.ctrl.ingest_alive.store(false, Ordering::Relaxed);
+        assert_eq!(h.ctrl.measured_capacity_kbps(), None);
+        assert!(
+            h.ctrl.capacity_problem(30_000).is_none(),
+            "a guess never refuses"
+        );
+        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        assert_eq!(h.ctrl.measured_capacity_kbps(), Some(8_000));
+    }
+
+    /// After a gap the meter knows no rate until a new window fills. It used
+    /// to report the last stream's until then, which the capacity estimate
+    /// planned by (and held as its peak) for the new stream's first 10 s.
+    #[test]
+    fn a_rate_meter_forgets_the_rate_from_before_a_gap() {
+        let meter = RateMeter::<CAPACITY_WINDOW_MS>::default();
+        let start = 1_000;
+        meter.note_at(0, start);
+        meter.note_at(25_000_000, start + CAPACITY_WINDOW_MS);
+        assert_eq!(meter.kbps_at(start + CAPACITY_WINDOW_MS), 20_000);
+        let back = start + CAPACITY_WINDOW_MS + 60_000;
+        meter.note_at(10_000, back);
+        assert_eq!(meter.kbps_at(back), 0, "nothing measured since the gap");
+        meter.note_at(7_500_000, back + CAPACITY_WINDOW_MS);
+        assert_eq!(meter.kbps_at(back + CAPACITY_WINDOW_MS), 6_000);
+    }
+
+    /// A new stream doesn't inherit the last one's peak bitrate, which used
+    /// to refuse delays that fit until it decayed.
+    #[tokio::test]
+    async fn a_new_stream_drops_the_last_ones_peak_bitrate() {
+        let h = harness(0);
+        h.ctrl.note_inbound_kbps_for_test(20_000);
+        assert_eq!(h.ctrl.measured_capacity_kbps(), Some(20_000));
+        // That stream ends, and OBS starts another.
+        h.ctrl.ingest_alive.store(false, Ordering::Relaxed);
+        h.ctrl
+            .begin_publish("literally-anything", "127.0.0.1")
+            .await
+            .expect("publishes");
+        assert_eq!(h.ctrl.capacity_kbps_hold.lock().0, 0.0);
+        // Neither the held peak nor the meter's last window carries over:
+        // OBS restarting within seconds used to mix both streams into one.
+        assert_eq!(h.ctrl.measured_capacity_kbps(), None);
+    }
+
+    #[test]
+    fn hotkeys_and_integrations_refuse_a_delay_the_buffer_cant_hold() {
+        let h = harness(0);
+        h.ctrl.mark_ingest_alive_for_test();
+        h.ctrl.note_inbound_kbps_for_test(8_000);
+        let refused = |why: Option<String>| why.is_some_and(|w| w.starts_with("Buffer too small"));
+        assert!(refused(h.ctrl.run_named_action("arm", 30_000, "hotkey")));
+        assert!(refused(h.ctrl.run_named_action("toggle", 30_000, "midi")));
+        assert!(refused(h.ctrl.set_delay_to(30_000, "integration")));
+        assert_eq!(h.ctrl.armed_delay_ms(), 0, "nothing was armed short");
+
+        assert!(h.ctrl.set_delay_to(1_000, "integration").is_none());
+        assert_eq!(h.ctrl.armed_delay_ms(), 1_000);
+    }
+
+    /// A delay armed before there was a bitrate (auto-arm at connect, or
+    /// the one saved from last time) is checked once one is measured, and
+    /// a short one is reported once: in the state, the log, and a notice.
+    #[test]
+    fn a_delay_armed_before_a_measurement_is_checked_once_one_arrives() {
+        let h = harness(0);
+        h.ctrl.mark_ingest_alive_for_test();
+        h.ctrl.arm_delay(30_000);
+
+        h.ctrl.check_armed_capacity();
+        assert_eq!(h.ctrl.capacity_short(), None, "no measurement, no verdict");
+        assert_eq!(h.ctrl.capacity_short_seq(), 0);
+
+        h.ctrl.note_inbound_kbps_for_test(8_000);
+        h.ctrl.check_armed_capacity();
+        let short = h.ctrl.capacity_short().expect("30 s doesn't fit 4 MB");
+        assert_eq!(short.armed_ms, 30_000);
+        assert!(short.holds_ms < 4_000, "{short:?}");
+        assert!(short.message.starts_with("Buffer too small for 30 s"));
+        assert_eq!(h.ctrl.capacity_short_seq(), 1);
+        assert_eq!(h.ctrl.delay_runs_ms(30_000), short.holds_ms, "what runs");
+        assert_eq!(h.ctrl.delay_runs_ms(20_000), 20_000, "about another delay");
+        assert!(h
+            .ctrl
+            .logs
+            .lock()
+            .iter()
+            .any(|l| l.contains("the 30 s armed doesn't fit")));
+
+        h.ctrl.check_armed_capacity();
+        assert_eq!(h.ctrl.capacity_short_seq(), 1, "once per armed value");
+
+        // A delay that fits clears it, and so does disarming.
+        h.ctrl.arm_delay(1_000);
+        assert_eq!(h.ctrl.capacity_short(), None, "about another delay");
+        h.ctrl.check_armed_capacity();
+        assert_eq!(h.ctrl.capacity_short(), None);
+        assert_eq!(h.ctrl.capacity_short_seq(), 1);
     }
 
     // ── Named action (Hotkey & MIDI) test suite ──────────────────────
@@ -4838,6 +5649,7 @@ mod tests {
         assert_eq!(h.ctrl.run_named_action("arm", 5_000, "hotkey"), None);
         assert_eq!(h.ctrl.run_named_action("arm", 5_000, "hotkey"), None);
         assert_eq!(h.ctrl.run_named_action("cut", 0, "hotkey"), None);
+        // An unknown name is ignored, as `run_named_action` documents.
         assert_eq!(h.ctrl.run_named_action("nonsense", 0, "hotkey"), None);
 
         // Activating with nothing armed cannot work, and says so.
@@ -5009,6 +5821,18 @@ mod tests {
     }
 
     #[test]
+    fn an_integration_cut_keeps_one_already_waiting() {
+        let h = harness(0);
+        h.ctrl.arm_delay(3_000);
+        feed_seconds(&h.ctrl, 0, 5, 30);
+        h.ctrl.activate_delay().unwrap();
+
+        h.ctrl.cut_after_airs("integration");
+        h.ctrl.cut_after_airs("integration");
+        assert!(h.ctrl.safe_cut_pending(), "a second run must not cancel it");
+    }
+
+    #[test]
     fn named_action_toggle_clears_pending_safe_cut() {
         let h = harness(0);
         h.ctrl.arm_delay(3_000);
@@ -5025,105 +5849,106 @@ mod tests {
         assert!(!h.ctrl.safe_cut_pending());
     }
 
-    /// A wrap does not arrive as one tidy crossing. Audio buffering means
-    /// several tags can still be in flight when video crosses, and every one
-    /// of them has to read back into the epoch it was stamped in.
+    /// Late, repeated or early timestamps around the 32-bit rollover stay where they belong.
     #[test]
-    fn several_late_tags_in_a_row_all_land_in_the_old_epoch() {
-        let h = harness(0);
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
-        let v = [0x27u8; 64];
+    fn the_timeline_moves_to_a_new_epoch_only_on_a_real_wrap() {
+        // several late tags in a row all land in the old epoch
+        // A wrap does not arrive as one tidy crossing. Audio buffering means
+        // several tags can still be in flight when video crosses, and every one
+        // of them has to read back into the epoch it was stamped in.
+        {
+            let h = harness(0);
+            h.ctrl.mark_ingest_alive_for_test();
+            let v = [0x27u8; 64];
 
-        h.ctrl.on_tag(9, 0xFFFF_FF00, &v, false, false);
-        h.ctrl.on_tag(9, 0x0000_0020, &v, false, false); // video crosses
-        assert_eq!(h.ctrl.ring.latest_ts(), Some((1u64 << 32) | 0x20));
+            h.ctrl.on_tag(9, 0xFFFF_FF00, &v, false, false);
+            h.ctrl.on_tag(9, 0x0000_0020, &v, false, false); // video crosses
+            assert_eq!(h.ctrl.ring.latest_ts(), Some((1u64 << 32) | 0x20));
 
-        // Three stragglers, each later than the one before but all still on
-        // the old side of the counter.
-        for wire in [0xFFFF_FFA0u32, 0xFFFF_FFC0, 0xFFFF_FFE0] {
-            h.ctrl.on_tag(8, wire, &v, false, false);
+            // Three stragglers, each later than the one before but all still on
+            // the old side of the counter.
+            for wire in [0xFFFF_FFA0u32, 0xFFFF_FFC0, 0xFFFF_FFE0] {
+                h.ctrl.on_tag(8, wire, &v, false, false);
+                assert_eq!(
+                    h.ctrl.ring.latest_ts(),
+                    Some(wire as u64),
+                    "straggler {wire:#x} left its epoch"
+                );
+            }
+
+            // And the counter is still able to cross forward afterwards.
+            h.ctrl.on_tag(9, 0x0000_0040, &v, false, false);
+            assert_eq!(h.ctrl.ring.latest_ts(), Some((1u64 << 32) | 0x40));
+        }
+        // tags sharing a timestamp do not move the epoch
+        // Audio and video routinely carry the same timestamp. Equal is neither
+        // ahead nor behind, and must not be read as either.
+        {
+            let h = harness(0);
+            h.ctrl.mark_ingest_alive_for_test();
+            let v = [0x27u8; 64];
+
+            h.ctrl.on_tag(9, 5_000, &v, false, false);
+            h.ctrl.on_tag(8, 5_000, &v, false, false);
+            h.ctrl.on_tag(9, 5_000, &v, false, false);
+            assert_eq!(h.ctrl.ring.latest_ts(), Some(5_000));
+
+            // Same, but sitting exactly on the wrap boundary.
+            let h2 = harness(0);
+            h2.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+            h2.ctrl.on_tag(9, 0xFFFF_FFFF, &v, false, false);
+            h2.ctrl.on_tag(8, 0xFFFF_FFFF, &v, false, false);
+            assert_eq!(h2.ctrl.ring.latest_ts(), Some(0xFFFF_FFFF));
+            h2.ctrl.on_tag(9, 0, &v, false, false);
             assert_eq!(
-                h.ctrl.ring.latest_ts(),
-                Some(wire as u64),
-                "straggler {wire:#x} left its epoch"
+                h2.ctrl.ring.latest_ts(),
+                Some(1u64 << 32),
+                "the very next millisecond is the next epoch"
             );
         }
+        // a jump of exactly half the counter does not move the epoch
+        // Half the counter apart is the point where "ahead" and "behind" stop
+        // being distinguishable. Whichever way it is read, one tag must not
+        // move the timeline by 49.7 days.
+        {
+            let h = harness(0);
+            h.ctrl.mark_ingest_alive_for_test();
+            let v = [0x27u8; 64];
 
-        // And the counter is still able to cross forward afterwards.
-        h.ctrl.on_tag(9, 0x0000_0040, &v, false, false);
-        assert_eq!(h.ctrl.ring.latest_ts(), Some((1u64 << 32) | 0x40));
-    }
+            h.ctrl.on_tag(9, 0, &v, false, false);
+            h.ctrl.on_tag(9, 1u32 << 31, &v, false, false);
+            assert_eq!(
+                h.ctrl.ring.latest_ts(),
+                Some(1u64 << 31),
+                "exactly half the counter ahead is still this epoch"
+            );
+        }
+        // a tag from before the first one cannot jump the timeline
+        // A publisher session starts at epoch 0, and there is no epoch below it.
+        // A tag stamped before the first one we saw cannot be read as "the
+        // previous cycle", and must not be read as 49.7 days into the future
+        // either - that value reaches `trim_older_than` and empties the ring.
+        {
+            let h = harness(0);
+            h.ctrl.mark_ingest_alive_for_test();
+            let v = [0x27u8; 64];
 
-    /// Audio and video routinely carry the same timestamp. Equal is neither
-    /// ahead nor behind, and must not be read as either.
-    #[test]
-    fn tags_sharing_a_timestamp_do_not_move_the_epoch() {
-        let h = harness(0);
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
-        let v = [0x27u8; 64];
+            // A short, ordinary session.
+            h.ctrl.on_tag(9, 0, &v, true, false);
+            h.ctrl.on_tag(9, 1_000, &v, false, false);
+            h.ctrl.on_tag(9, 2_000, &v, false, false);
+            let before = h.ctrl.ring.latest_ts().expect("a populated ring");
 
-        h.ctrl.on_tag(9, 5_000, &v, false, false);
-        h.ctrl.on_tag(8, 5_000, &v, false, false);
-        h.ctrl.on_tag(9, 5_000, &v, false, false);
-        assert_eq!(h.ctrl.ring.latest_ts(), Some(5_000));
+            // Now a tag stamped "60 ms before zero", which is what an audio
+            // track lagging the video would carry if the session began at 0.
+            h.ctrl.on_tag(8, 0u32.wrapping_sub(60), &v, false, false);
+            let after = h.ctrl.ring.latest_ts().expect("a populated ring");
 
-        // Same, but sitting exactly on the wrap boundary.
-        let h2 = harness(0);
-        h2.ctrl.ingest_alive.store(true, Ordering::Relaxed);
-        h2.ctrl.on_tag(9, 0xFFFF_FFFF, &v, false, false);
-        h2.ctrl.on_tag(8, 0xFFFF_FFFF, &v, false, false);
-        assert_eq!(h2.ctrl.ring.latest_ts(), Some(0xFFFF_FFFF));
-        h2.ctrl.on_tag(9, 0, &v, false, false);
-        assert_eq!(
-            h2.ctrl.ring.latest_ts(),
-            Some(1u64 << 32),
-            "the very next millisecond is the next epoch"
-        );
-    }
-
-    /// Half the counter apart is the point where "ahead" and "behind" stop
-    /// being distinguishable. Whichever way it is read, one tag must not
-    /// move the timeline by 49.7 days.
-    #[test]
-    fn a_jump_of_exactly_half_the_counter_does_not_move_the_epoch() {
-        let h = harness(0);
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
-        let v = [0x27u8; 64];
-
-        h.ctrl.on_tag(9, 0, &v, false, false);
-        h.ctrl.on_tag(9, 1u32 << 31, &v, false, false);
-        assert_eq!(
-            h.ctrl.ring.latest_ts(),
-            Some(1u64 << 31),
-            "exactly half the counter ahead is still this epoch"
-        );
-    }
-
-    /// A publisher session starts at epoch 0, and there is no epoch below it.
-    /// A tag stamped before the first one we saw cannot be read as "the
-    /// previous cycle", and must not be read as 49.7 days into the future
-    /// either - that value reaches `trim_older_than` and empties the ring.
-    #[test]
-    fn a_tag_from_before_the_first_one_cannot_jump_the_timeline() {
-        let h = harness(0);
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
-        let v = [0x27u8; 64];
-
-        // A short, ordinary session.
-        h.ctrl.on_tag(9, 0, &v, true, false);
-        h.ctrl.on_tag(9, 1_000, &v, false, false);
-        h.ctrl.on_tag(9, 2_000, &v, false, false);
-        let before = h.ctrl.ring.latest_ts().expect("a populated ring");
-
-        // Now a tag stamped "60 ms before zero", which is what an audio
-        // track lagging the video would carry if the session began at 0.
-        h.ctrl.on_tag(8, 0u32.wrapping_sub(60), &v, false, false);
-        let after = h.ctrl.ring.latest_ts().expect("a populated ring");
-
-        assert!(
-            after <= before + 60_000,
-            "a stray early tag moved the timeline to {after} from {before}"
-        );
+            assert!(
+                after <= before + 60_000,
+                "a stray early tag moved the timeline to {after} from {before}"
+            );
+        }
     }
 
     /// A pump that reaches the IDR wait has already opened and authenticated
@@ -5207,21 +6032,26 @@ mod tests {
         // Under the floor there is no safe head/tail, so the whole key goes
         // rather than passing through into the log line untouched.
         assert_eq!(scrub_secret("failed for abc12", "abc12"), "failed for …");
+        // A head and a tail of three would be all of a 6-character key, and
+        // most of an 8-character one.
+        assert_eq!(scrub_secret("failed for abc123", "abc123"), "failed for …");
+        assert_eq!(
+            scrub_secret("failed for abcd1234", "abcd1234"),
+            "failed for …"
+        );
+        assert_eq!(
+            scrub_secret("failed for abcdef123456", "abcdef123456"),
+            "failed for abc…456"
+        );
     }
 
-    /// Audio and video cross each other by a few milliseconds all the time,
-    /// so at the moment the u32 wire clock rolls over, one track is past it
-    /// and the other is not. The straggler must be read in the epoch it was
-    /// actually stamped in: promoting it puts one tag 49.7 days ahead, and
-    /// `on_tag` feeds that to the trim, which then measures the whole ring
-    /// against a cutoff past every frame in it and evicts the lot.
     /// OBS stops an Enhanced Broadcasting stream with SequenceEnd tags
     /// stamped 0. They must not rewind the timeline: the buffer's newest
     /// moment is what the delay still to air is measured against.
     #[test]
     fn an_end_of_stream_tag_stamped_zero_does_not_rewind_the_timeline() {
         let h = harness(0);
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_alive_for_test();
         let v = [0x27u8; 64];
         h.ctrl.on_tag(9, 200_000, &v, false, false);
         h.ctrl.on_tag(9, 200_033, &v, false, false);
@@ -5247,10 +6077,16 @@ mod tests {
         );
     }
 
+    /// Audio and video cross each other by a few milliseconds all the time,
+    /// so at the moment the u32 wire clock rolls over, one track is past it
+    /// and the other is not. The straggler must be read in the epoch it was
+    /// actually stamped in: promoting it puts one tag 49.7 days ahead, and
+    /// `on_tag` feeds that to the trim, which then measures the whole ring
+    /// against a cutoff past every frame in it and evicts the lot.
     #[test]
     fn a_late_tag_at_the_wrap_stays_in_the_epoch_it_came_from() {
         let h = harness(0);
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_alive_for_test();
         let v = [0x27u8; 64];
         let a = [0xafu8; 64];
 
@@ -5377,7 +6213,7 @@ mod tests {
     /// duration passes through the same u32 truncation OBS puts on the wire.
     fn soak(hours: u64, reconnect_every_ms: u64, interleave_audio: bool) -> SoakStats {
         let h = harness(0);
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_alive_for_test();
         h.ctrl.arm_delay(SOAK_ARMED_MS);
 
         // Small payloads: a run this long rewrites the ring's whole capacity
@@ -5397,11 +6233,19 @@ mod tests {
             reconnect_every_ms
         };
         let (mut tags, mut wraps, mut reconnects) = (0u64, 0u64, 0u64);
+        // A keyframe every 2 s of the session's clock, counted from the last
+        // one. Read off the clock's phase instead (`session_ms % 2_000`), the
+        // coarse stretch after a wrap steps past every keyframe, and the trim
+        // rightly keeps everything since the last one a delay could join on.
+        let mut next_idr_ms: u64 = 0;
         let started = std::time::Instant::now();
 
         while stream_ms < total_ms {
             let session_ms = stream_ms - session_start;
-            let is_idr = session_ms % 2_000 < FRAME_MS;
+            let is_idr = session_ms >= next_idr_ms;
+            if is_idr {
+                next_idr_ms = session_ms + 2_000;
+            }
             let payload: &[u8] = if is_idr { &idr } else { &pframe };
 
             // Video, then the audio tag that was already in flight when the
@@ -5430,6 +6274,7 @@ mod tests {
             if stream_ms >= next_reconnect {
                 soak_restart(&h.ctrl);
                 session_start = stream_ms;
+                next_idr_ms = 0;
                 prev_seq = None;
                 next_reconnect += reconnect_every_ms;
                 reconnects += 1;
@@ -5685,9 +6530,9 @@ mod tests {
         assert!(h.ctrl.end_hold_now());
         h.ctrl.check_ingest_freeze_at(last + 60_000);
         assert!(!h.ctrl.hold_active(), "still the same freeze");
-        // Video comes back, then OBS freezes again: that one is protected.
-        let last = freeze(&h);
-        assert!(last > 0);
+        // Video comes back, then OBS freezes again: that one is protected
+        // (`freeze` checks that its hold opens).
+        freeze(&h);
     }
 
     /// With a delay armed, the screen stays up after OBS is back until its
@@ -6088,7 +6933,7 @@ mod tests {
             let s = h.ctrl.destination_state(id);
             *s.eb_override_url.lock() = Some(format!("rtmps://ivs/{id}"));
         }
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_alive_for_test();
         h.ctrl.mark_ingest_dead();
         for (id, s) in h.ctrl.all_destination_states() {
             assert!(
@@ -6098,14 +6943,6 @@ mod tests {
         }
     }
 
-    /// `try_claim_vod_fetch` is single-flight: exactly one caller wins
-    /// while a fetch is in flight. The supervisor fires every ~2 s; before
-    /// this guard every tick spawned a fresh Twitch API call, each
-    /// allocating a distinct IVS session and forcing an extra egress
-    /// restart - the multi-session, wrong-broadcast-type symptom seen in
-    /// Twitch Inspector. The latch is released by the fetch task on
-    /// completion (modelled here by the explicit store), after which the
-    /// next tick may claim again (e.g. to retry a failed fetch).
     /// A hold keeps a destination's Twitch session only when it keeps that
     /// destination on air: live, and coverable by the screen. One that is
     /// down, or a vertical one whose canvas isn't known yet (the screen
@@ -6144,65 +6981,75 @@ mod tests {
         }
     }
 
+    /// The latch that stops every supervisor tick from asking Twitch for another session.
     #[test]
-    fn try_claim_vod_fetch_admits_one_claimant() {
-        let s = DestinationState::new("main".into());
-        assert!(s.try_claim_vod_fetch(), "first caller must win the claim");
-        for tick in 0..5 {
+    fn one_vod_session_fetch_at_a_time_and_only_when_needed() {
+        // try claim vod fetch admits one claimant
+        // `try_claim_vod_fetch` is single-flight: exactly one caller wins
+        // while a fetch is in flight. The supervisor fires every ~2 s; before
+        // this guard every tick spawned a fresh Twitch API call, each
+        // allocating a distinct IVS session and forcing an extra egress
+        // restart - the multi-session, wrong-broadcast-type symptom seen in
+        // Twitch Inspector. The latch is released by the fetch task on
+        // completion (modelled here by the explicit store), after which the
+        // next tick may claim again (e.g. to retry a failed fetch).
+        {
+            let s = DestinationState::new("main".into());
+            assert!(s.try_claim_vod_fetch(), "first caller must win the claim");
+            for tick in 0..5 {
+                assert!(
+                    !s.try_claim_vod_fetch(),
+                    "tick {tick} must see a fetch already in flight"
+                );
+            }
+            // Fetch task finished (success or failure) - latch released.
+            s.vod_fetch_pending.store(false, Ordering::Relaxed);
             assert!(
-                !s.try_claim_vod_fetch(),
-                "tick {tick} must see a fetch already in flight"
+                s.try_claim_vod_fetch(),
+                "after the fetch ends the next tick must be able to claim"
             );
         }
-        // Fetch task finished (success or failure) - latch released.
-        s.vod_fetch_pending.store(false, Ordering::Relaxed);
-        assert!(
-            s.try_claim_vod_fetch(),
-            "after the fetch ends the next tick must be able to claim"
-        );
-    }
-
-    /// The claim re-checks `eb_override_url` under its mutex before
-    /// committing: a fetch that completed on an earlier tick (setting the
-    /// override) must abort a redundant claim AND leave the latch clear,
-    /// so the destination isn't left falsely "fetching" forever.
-    #[test]
-    fn try_claim_vod_fetch_skips_when_session_already_allocated() {
-        let s = DestinationState::new("main".into());
-        *s.eb_override_url.lock() = Some("rtmps://ivs/session".into());
-        assert!(
-            !s.try_claim_vod_fetch(),
-            "must not claim when a session already exists"
-        );
-        assert!(
-            !s.vod_fetch_pending.load(Ordering::Relaxed),
-            "a skipped claim must release the latch, not leave it stuck"
-        );
-    }
-
-    /// Regression guard for the lockout hole: the latch is decoupled from
-    /// the override's lifecycle. The multitrack-config proxy (web.rs) and
-    /// publisher disconnect both clear `eb_override_url` without touching
-    /// the latch. After a successful fetch (override set, latch clear),
-    /// clearing the override - as those paths do - must let the next tick
-    /// re-claim and fetch a fresh session, not lock the destination into
-    /// the legacy Source-Only ingest forever.
-    #[test]
-    fn try_claim_vod_fetch_reclaims_after_override_cleared() {
-        let s = DestinationState::new("main".into());
-        // Post-success state: session allocated, latch released by the task.
-        *s.eb_override_url.lock() = Some("rtmps://ivs/session".into());
-        s.vod_fetch_pending.store(false, Ordering::Relaxed);
-        assert!(
-            !s.try_claim_vod_fetch(),
-            "a live session must block a re-fetch"
-        );
-        // Override cleared elsewhere (proxy cleanup / disconnect).
-        *s.eb_override_url.lock() = None;
-        assert!(
-            s.try_claim_vod_fetch(),
-            "cleared override must allow a fresh fetch - no permanent lockout"
-        );
+        // try claim vod fetch skips when session already allocated
+        // The claim re-checks `eb_override_url` under its mutex before
+        // committing: a fetch that completed on an earlier tick (setting the
+        // override) must abort a redundant claim AND leave the latch clear,
+        // so the destination isn't left falsely "fetching" forever.
+        {
+            let s = DestinationState::new("main".into());
+            *s.eb_override_url.lock() = Some("rtmps://ivs/session".into());
+            assert!(
+                !s.try_claim_vod_fetch(),
+                "must not claim when a session already exists"
+            );
+            assert!(
+                !s.vod_fetch_pending.load(Ordering::Relaxed),
+                "a skipped claim must release the latch, not leave it stuck"
+            );
+        }
+        // try claim vod fetch reclaims after override cleared
+        // Regression guard for the lockout hole: the latch is decoupled from
+        // the override's lifecycle. The multitrack-config proxy (web.rs) and
+        // publisher disconnect both clear `eb_override_url` without touching
+        // the latch. After a successful fetch (override set, latch clear),
+        // clearing the override - as those paths do - must let the next tick
+        // re-claim and fetch a fresh session, not lock the destination into
+        // the legacy Source-Only ingest forever.
+        {
+            let s = DestinationState::new("main".into());
+            // Post-success state: session allocated, latch released by the task.
+            *s.eb_override_url.lock() = Some("rtmps://ivs/session".into());
+            s.vod_fetch_pending.store(false, Ordering::Relaxed);
+            assert!(
+                !s.try_claim_vod_fetch(),
+                "a live session must block a re-fetch"
+            );
+            // Override cleared elsewhere (proxy cleanup / disconnect).
+            *s.eb_override_url.lock() = None;
+            assert!(
+                s.try_claim_vod_fetch(),
+                "cleared override must allow a fresh fetch - no permanent lockout"
+            );
+        }
     }
 
     /// The single-flight guarantee under real thread contention: when a
@@ -6232,122 +7079,114 @@ mod tests {
         );
     }
 
-    /// A fetch that returns while still in its own session applies normally.
+    /// A disconnect bumps the epoch: an answer from before it is dropped, one after it applies.
     #[test]
-    fn apply_vod_session_if_current_writes_when_session_unchanged() {
-        let s = DestinationState::new("main".into());
-        let epoch = s.session_epoch();
-        assert!(
-            s.apply_vod_session_if_current("rtmps://ivs/live".into(), epoch),
-            "same-session fetch must apply"
-        );
-        assert_eq!(*s.eb_override_url.lock(), Some("rtmps://ivs/live".into()));
+    fn a_vod_session_belongs_to_the_publisher_session_that_asked() {
+        // apply vod session if current discards after disconnect
+        // Regression guard for the late-completion race: a VOD-session fetch
+        // spawned in one publisher session must NOT write its IVS URL if OBS
+        // disconnected (and bumped the epoch) while the request was in flight.
+        // Writing it would point the next stream at a dead session - the
+        // Source-Only failure this whole path exists to avoid.
+        {
+            let s = DestinationState::new("main".into());
+            let epoch = s.session_epoch(); // captured when the fetch is spawned
+            s.invalidate_session_override(); // OBS disconnects mid-fetch
+            assert!(
+                !s.apply_vod_session_if_current("rtmps://ivs/stale".into(), epoch),
+                "a fetch outliving its session must be discarded"
+            );
+            assert!(
+                s.eb_override_url.lock().is_none(),
+                "the stale URL must not leak into the next session"
+            );
+        }
+        // invalidate session override clears url and bumps epoch
+        // `invalidate_session_override` clears the URL and advances the epoch
+        // together, so the disconnect both forgets the old session and trips
+        // any in-flight fetch's apply-time guard.
+        {
+            let s = DestinationState::new("main".into());
+            *s.eb_override_url.lock() = Some("rtmps://ivs/old".into());
+            let before = s.session_epoch();
+            s.invalidate_session_override();
+            assert!(s.eb_override_url.lock().is_none(), "url must clear");
+            assert_eq!(s.session_epoch(), before + 1, "epoch must advance");
+        }
+        // apply vod session if current applies for fresh session after reconnect
+        // Across a full disconnect/reconnect, a fetch from the NEW session
+        // still applies: the epoch the supervisor captures after reconnect
+        // matches the current one, so only the pre-disconnect fetch is stale.
+        {
+            let s = DestinationState::new("main".into());
+            s.invalidate_session_override(); // disconnect bumps epoch
+            let fresh_epoch = s.session_epoch(); // supervisor re-captures post-reconnect
+            assert!(
+                s.apply_vod_session_if_current("rtmps://ivs/new".into(), fresh_epoch),
+                "a fetch from the new session must apply"
+            );
+            assert_eq!(*s.eb_override_url.lock(), Some("rtmps://ivs/new".into()));
+        }
     }
 
-    /// Regression guard for the late-completion race: a VOD-session fetch
-    /// spawned in one publisher session must NOT write its IVS URL if OBS
-    /// disconnected (and bumped the epoch) while the request was in flight.
-    /// Writing it would point the next stream at a dead session - the
-    /// Source-Only failure this whole path exists to avoid.
+    /// Success, a stale answer and a failure each release the latch.
     #[test]
-    fn apply_vod_session_if_current_discards_after_disconnect() {
-        let s = DestinationState::new("main".into());
-        let epoch = s.session_epoch(); // captured when the fetch is spawned
-        s.invalidate_session_override(); // OBS disconnects mid-fetch
-        assert!(
-            !s.apply_vod_session_if_current("rtmps://ivs/stale".into(), epoch),
-            "a fetch outliving its session must be discarded"
-        );
-        assert!(
-            s.eb_override_url.lock().is_none(),
-            "the stale URL must not leak into the next session"
-        );
-    }
-
-    /// `invalidate_session_override` clears the URL and advances the epoch
-    /// together, so the disconnect both forgets the old session and trips
-    /// any in-flight fetch's apply-time guard.
-    #[test]
-    fn invalidate_session_override_clears_url_and_bumps_epoch() {
-        let s = DestinationState::new("main".into());
-        *s.eb_override_url.lock() = Some("rtmps://ivs/old".into());
-        let before = s.session_epoch();
-        s.invalidate_session_override();
-        assert!(s.eb_override_url.lock().is_none(), "url must clear");
-        assert_eq!(s.session_epoch(), before + 1, "epoch must advance");
-    }
-
-    /// Across a full disconnect/reconnect, a fetch from the NEW session
-    /// still applies: the epoch the supervisor captures after reconnect
-    /// matches the current one, so only the pre-disconnect fetch is stale.
-    #[test]
-    fn apply_vod_session_if_current_applies_for_fresh_session_after_reconnect() {
-        let s = DestinationState::new("main".into());
-        s.invalidate_session_override(); // disconnect bumps epoch
-        let fresh_epoch = s.session_epoch(); // supervisor re-captures post-reconnect
-        assert!(
-            s.apply_vod_session_if_current("rtmps://ivs/new".into(), fresh_epoch),
-            "a fetch from the new session must apply"
-        );
-        assert_eq!(*s.eb_override_url.lock(), Some("rtmps://ivs/new".into()));
-    }
-
-    /// `complete_vod_fetch` on success applies the URL, reports Applied,
-    /// and releases the latch so the override (now Some) is what blocks
-    /// any re-fetch.
-    #[test]
-    fn complete_vod_fetch_applies_and_releases_on_success() {
-        let s = DestinationState::new("main".into());
-        assert!(s.try_claim_vod_fetch(), "latch held, as in production");
-        let epoch = s.session_epoch();
-        assert_eq!(
-            s.complete_vod_fetch(Some("rtmps://ivs/live".into()), epoch),
-            VodFetchOutcome::Applied
-        );
-        assert_eq!(*s.eb_override_url.lock(), Some("rtmps://ivs/live".into()));
-        assert!(
-            !s.vod_fetch_pending.load(Ordering::Relaxed),
-            "latch must be released after a successful completion"
-        );
-    }
-
-    /// A result that outlived its session reports DiscardedStale, writes
-    /// nothing, and STILL releases the latch (the previously untested
-    /// release-on-every-path invariant).
-    #[test]
-    fn complete_vod_fetch_discards_stale_and_releases() {
-        let s = DestinationState::new("main".into());
-        assert!(s.try_claim_vod_fetch());
-        let epoch = s.session_epoch();
-        s.invalidate_session_override(); // disconnect mid-fetch
-        assert_eq!(
-            s.complete_vod_fetch(Some("rtmps://ivs/stale".into()), epoch),
-            VodFetchOutcome::DiscardedStale
-        );
-        assert!(s.eb_override_url.lock().is_none());
-        assert!(
-            !s.vod_fetch_pending.load(Ordering::Relaxed),
-            "latch must be released even when the result is discarded"
-        );
-    }
-
-    /// A failed fetch reports Failed, leaves no override, and releases the
-    /// latch so the next supervisor tick can retry.
-    #[test]
-    fn complete_vod_fetch_releases_latch_on_failure() {
-        let s = DestinationState::new("main".into());
-        assert!(s.try_claim_vod_fetch());
-        let epoch = s.session_epoch();
-        assert_eq!(s.complete_vod_fetch(None, epoch), VodFetchOutcome::Failed);
-        assert!(s.eb_override_url.lock().is_none());
-        assert!(
-            !s.vod_fetch_pending.load(Ordering::Relaxed),
-            "latch must be released on failure"
-        );
-        assert!(
-            s.try_claim_vod_fetch(),
-            "a released latch lets the next tick retry"
-        );
+    fn a_finished_vod_fetch_applies_only_to_its_own_session_and_always_releases() {
+        // complete vod fetch applies and releases on success
+        // `complete_vod_fetch` on success applies the URL, reports Applied,
+        // and releases the latch so the override (now Some) is what blocks
+        // any re-fetch.
+        {
+            let s = DestinationState::new("main".into());
+            assert!(s.try_claim_vod_fetch(), "latch held, as in production");
+            let epoch = s.session_epoch();
+            assert_eq!(
+                s.complete_vod_fetch(Some("rtmps://ivs/live".into()), epoch),
+                VodFetchOutcome::Applied
+            );
+            assert_eq!(*s.eb_override_url.lock(), Some("rtmps://ivs/live".into()));
+            assert!(
+                !s.vod_fetch_pending.load(Ordering::Relaxed),
+                "latch must be released after a successful completion"
+            );
+        }
+        // complete vod fetch discards stale and releases
+        // A result that outlived its session reports DiscardedStale, writes
+        // nothing, and STILL releases the latch (the previously untested
+        // release-on-every-path invariant).
+        {
+            let s = DestinationState::new("main".into());
+            assert!(s.try_claim_vod_fetch());
+            let epoch = s.session_epoch();
+            s.invalidate_session_override(); // disconnect mid-fetch
+            assert_eq!(
+                s.complete_vod_fetch(Some("rtmps://ivs/stale".into()), epoch),
+                VodFetchOutcome::DiscardedStale
+            );
+            assert!(s.eb_override_url.lock().is_none());
+            assert!(
+                !s.vod_fetch_pending.load(Ordering::Relaxed),
+                "latch must be released even when the result is discarded"
+            );
+        }
+        // complete vod fetch releases latch on failure
+        // A failed fetch reports Failed, leaves no override, and releases the
+        // latch so the next supervisor tick can retry.
+        {
+            let s = DestinationState::new("main".into());
+            assert!(s.try_claim_vod_fetch());
+            let epoch = s.session_epoch();
+            assert_eq!(s.complete_vod_fetch(None, epoch), VodFetchOutcome::Failed);
+            assert!(s.eb_override_url.lock().is_none());
+            assert!(
+                !s.vod_fetch_pending.load(Ordering::Relaxed),
+                "latch must be released on failure"
+            );
+            assert!(
+                s.try_claim_vod_fetch(),
+                "a released latch lets the next tick retry"
+            );
+        }
     }
 
     /// Stress the apply-vs-disconnect race: a late fetch's apply and the
@@ -6382,22 +7221,13 @@ mod tests {
         }
     }
 
-    /// `note_multitrack_video` is sticky-with-decay: once set, the
-    /// chip stays lit for a short window after the last multi-track
-    /// tag arrived (so a momentary pause between IDRs doesn't drop
-    /// the chip), and decays to false once stale. `reset_codec_state`
-    /// must wipe it immediately so a fresh non-EB publisher session
-    /// doesn't inherit the previous session's EB flag.
+    /// `reset_codec_state` wipes the Enhanced Broadcasting chip at once, so
+    /// a fresh non-EB publisher session doesn't inherit the last one's.
     #[test]
     fn eb_chip_clears_on_publisher_reset() {
         let h = harness(0);
-        // `multitrack_video()` returns false when ingest is dead, so
-        // simulate an active publisher session first. Also sleep
-        // briefly so `process_now_ms()` advances past 0 - the chip
-        // uses 0 as a sentinel for "never set" and would otherwise
-        // race the process anchor on a freshly-started test binary.
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        // `multitrack_video()` reads false while ingest is dead.
+        h.ctrl.mark_ingest_alive_for_test();
         h.ctrl.note_multitrack_video();
         assert!(h.ctrl.multitrack_video(), "chip must light on first tag");
         h.ctrl.reset_codec_state();
@@ -6466,7 +7296,7 @@ mod tests {
         // 3. Simulate a clean stream teardown or crash. The supervisor invokes
         //    `mark_ingest_dead`, which updates atomic states but leaves headers
         //    intact by design to allow ongoing egress readers to recover.
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_alive_for_test();
         h.ctrl.mark_ingest_dead();
 
         {
@@ -6539,7 +7369,7 @@ mod tests {
         // standing in for a real prior stream. Three tags is enough to
         // populate the index front - the bug is purely about the ts
         // values at the front vs back, not tag count.
-        h.ctrl.ingest_alive.store(true, Ordering::Relaxed);
+        h.ctrl.mark_ingest_alive_for_test();
         for offset in 0u64..3 {
             h.ctrl
                 .ring
@@ -6604,27 +7434,93 @@ mod tests {
         }
     }
 
+    /// Nothing before the first gap; then the mean, counting only keyframes that move time on.
     #[test]
-    fn keyframe_interval_is_zero_before_any_gap_is_measured() {
-        let h = harness(0);
-        assert_eq!(h.ctrl.keyframe_interval_ms(), 0);
-        // One IDR opens the window but is not itself a gap.
-        feed_idrs(&h.ctrl, 0, 2_000, 1);
-        assert_eq!(h.ctrl.keyframe_interval_ms(), 0);
+    fn the_keyframe_interval_is_the_mean_gap_between_real_keyframes() {
+        // keyframe interval is zero before any gap is measured
+        {
+            let h = harness(0);
+            assert_eq!(h.ctrl.keyframe_interval_ms(), 0);
+            // One IDR opens the window but is not itself a gap.
+            feed_idrs(&h.ctrl, 0, 2_000, 1);
+            assert_eq!(h.ctrl.keyframe_interval_ms(), 0);
+        }
+        // keyframe interval measures mean spacing
+        // Gaps of 2, 4 and 3 s read as their mean, 3 s: not the last gap, the
+        // first one or the smallest.
+        {
+            let h = harness(0);
+            let mut payload = [0u8; 50];
+            payload[0] = 0x17;
+            for at in [0, 2_000, 6_000, 9_000] {
+                h.ctrl.on_tag(9, at, &payload, true, false);
+            }
+            assert_eq!(h.ctrl.keyframe_interval_ms(), 3_000);
+        }
+        // non advancing timestamps do not pollute the mean
+        // A repeated or backwards timestamp would otherwise register as a
+        // zero-width gap and drag the mean toward 0, silencing a real warning.
+        {
+            let h = harness(0);
+            let mut payload = [0u8; 50];
+            payload[0] = 0x17;
+            h.ctrl.on_tag(9, 0, &payload, true, false);
+            h.ctrl.on_tag(9, 4_000, &payload, true, false);
+            // Same timestamp three times over - a duplicated tag.
+            for _ in 0..3 {
+                h.ctrl.on_tag(9, 4_000, &payload, true, false);
+            }
+            assert_eq!(h.ctrl.keyframe_interval_ms(), 4_000);
+        }
+        // only idr video tags are sampled
+        // Non-IDR video and audio tags must not be counted as keyframes.
+        {
+            let h = harness(0);
+            let mut idr = [0u8; 50];
+            idr[0] = 0x17;
+            let mut p = [0u8; 50];
+            p[0] = 0x27;
+            h.ctrl.on_tag(9, 0, &idr, true, false);
+            // P-frames and audio in between must be ignored entirely.
+            for i in 1..10 {
+                h.ctrl.on_tag(9, i * 100, &p, false, false);
+                h.ctrl.on_tag(8, i * 100, &[0xaf, 0x01, 0x21], false, false);
+            }
+            h.ctrl.on_tag(9, 2_000, &idr, true, false);
+            assert_eq!(h.ctrl.keyframe_interval_ms(), 2_000);
+        }
     }
 
+    /// What each destination is sent: a Twitch one passes multi-track video
+    /// through; a vertical one sends its canvas, or nothing until that
+    /// canvas is known; everyone else gets the main picture.
     #[test]
-    fn keyframe_interval_measures_mean_spacing() {
-        let h = harness(0);
-        feed_idrs(&h.ctrl, 0, 2_000, 4);
-        assert_eq!(h.ctrl.keyframe_interval_ms(), 2_000);
+    fn each_destination_gets_the_video_it_asked_for() {
+        use crate::h264::VideoEgress;
+        let s = DestinationState::new("d".into());
+        assert_eq!(s.video_egress(), Some(VideoEgress::Track(0)));
+        s.egress_vertical.store(true, Ordering::Relaxed);
+        s.vertical_primary_track.store(0xFF, Ordering::Relaxed);
+        assert_eq!(s.video_egress(), None, "no 9:16 canvas yet: wait");
+        s.vertical_primary_track.store(1, Ordering::Relaxed);
+        assert_eq!(s.video_egress(), Some(VideoEgress::Track(1)));
+        s.pass_through_multitrack_video
+            .store(true, Ordering::Relaxed);
+        assert_eq!(s.video_egress(), Some(VideoEgress::Passthrough));
     }
 
+    /// The second audio track (copyright-safe audio) counts as there only
+    /// once OBS sends it; the live track always is, a higher one never is.
     #[test]
-    fn keyframe_interval_measures_a_four_second_gop() {
+    fn an_audio_track_is_on_the_wire_only_once_obs_sends_it() {
+        use crate::h264::AudioEgress;
         let h = harness(0);
-        feed_idrs(&h.ctrl, 0, 4_000, 4);
-        assert_eq!(h.ctrl.keyframe_interval_ms(), 4_000);
+        assert!(h.ctrl.audio_target_on_wire(AudioEgress::Track(0)));
+        assert!(h.ctrl.audio_target_on_wire(AudioEgress::Passthrough));
+        assert!(!h.ctrl.audio_target_on_wire(AudioEgress::Track(1)));
+        h.ctrl.second_audio_track.store(true, Ordering::Relaxed);
+        assert!(h.ctrl.audio_target_on_wire(AudioEgress::Track(1)));
+        assert!(!h.ctrl.audio_target_on_wire(AudioEgress::Track(2)));
     }
 
     /// The measurement must FREEZE once the sample budget is spent.
@@ -6647,40 +7543,6 @@ mod tests {
         );
     }
 
-    /// A repeated or backwards timestamp would otherwise register as a
-    /// zero-width gap and drag the mean toward 0, silencing a real warning.
-    #[test]
-    fn non_advancing_timestamps_do_not_pollute_the_mean() {
-        let h = harness(0);
-        let mut payload = [0u8; 50];
-        payload[0] = 0x17;
-        h.ctrl.on_tag(9, 0, &payload, true, false);
-        h.ctrl.on_tag(9, 4_000, &payload, true, false);
-        // Same timestamp three times over - a duplicated tag.
-        for _ in 0..3 {
-            h.ctrl.on_tag(9, 4_000, &payload, true, false);
-        }
-        assert_eq!(h.ctrl.keyframe_interval_ms(), 4_000);
-    }
-
-    /// Non-IDR video and audio tags must not be counted as keyframes.
-    #[test]
-    fn only_idr_video_tags_are_sampled() {
-        let h = harness(0);
-        let mut idr = [0u8; 50];
-        idr[0] = 0x17;
-        let mut p = [0u8; 50];
-        p[0] = 0x27;
-        h.ctrl.on_tag(9, 0, &idr, true, false);
-        // P-frames and audio in between must be ignored entirely.
-        for i in 1..10 {
-            h.ctrl.on_tag(9, i * 100, &p, false, false);
-            h.ctrl.on_tag(8, i * 100, &[0xaf, 0x01, 0x21], false, false);
-        }
-        h.ctrl.on_tag(9, 2_000, &idr, true, false);
-        assert_eq!(h.ctrl.keyframe_interval_ms(), 2_000);
-    }
-
     /// A reconnect may bring a completely different OBS profile, so the
     /// previous session's measurements must not leak into the new one.
     #[test]
@@ -6698,18 +7560,6 @@ mod tests {
         assert_eq!((after.width, after.height), (0, 0));
     }
 
-    /// OBS's sequence header decodes to the resolution the compatibility
-    /// check sees, width and height each in their own place.
-    #[test]
-    fn stream_params_reports_the_resolution_obs_sends() {
-        let h = harness(0);
-        assert_eq!(h.ctrl.stream_params().width, 0, "nothing sent yet");
-        let header = crate::slate::test_sequence_header(64, 36);
-        h.ctrl.on_tag(9, 0, &header, false, true);
-        let p = h.ctrl.stream_params();
-        assert_eq!((p.width, p.height), (64, 36));
-    }
-
     /// Dead band stays at the tuned 1500 ms for a 2 s GOP (and while
     /// unmeasured), and widens past half a GOP for long-keyframe encoders so
     /// the same-IDR re-cut bounce can't reappear at 3-4 s cadences.
@@ -6717,8 +7567,7 @@ mod tests {
     fn recut_dead_band_tracks_keyframe_interval() {
         assert_eq!(recut_dead_band_ms(0), 1_500, "unmeasured keeps the floor");
         assert_eq!(recut_dead_band_ms(2_000), 1_500, "2 s GOP is unchanged");
-        assert!(recut_dead_band_ms(4_000) > 2_000, "4 s GOP widens the band");
-        assert_eq!(recut_dead_band_ms(4_000), 2_500);
+        assert_eq!(recut_dead_band_ms(4_000), 2_500, "4 s GOP widens the band");
         // Must always clear half a GOP, or the bounce returns.
         for kf in [1_000u32, 2_000, 3_000, 4_000, 6_000] {
             assert!(
@@ -6817,5 +7666,73 @@ mod tests {
             .filter(|line| line.contains("slot in use"))
             .count();
         assert_eq!(refusals, 1);
+    }
+
+    /// A destination whose server refuses the connection says why on its
+    /// card (never with the key), when it retries, and "Retry now" skips
+    /// the wait instead of sitting out the backoff.
+    #[tokio::test]
+    async fn a_refused_destination_reports_why_and_retries_on_request() {
+        let mut sim = sim::Sim::new(false).await;
+        // A port nothing listens on: bound once, then released.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let dest = sim.ctrl.destination_state("refused");
+        let url = format!("rtmp://127.0.0.1:{port}/app/secret_key_123");
+        sim.pumps.push(tokio::spawn(run_egress(
+            sim.ctrl.clone(),
+            "refused".into(),
+            url,
+            dest.clone(),
+        )));
+        sim.obs_connects().await;
+
+        // The first failure backs off 1 s, the second 2 s: wait for that one.
+        let mut second = None;
+        for _ in 0..40 {
+            sim.obs_sends(200).await;
+            let f = dest.failure.lock().clone();
+            if let Some(f) = f.filter(|f| {
+                f.retry_at
+                    .is_some_and(|at| at - f.at >= Duration::from_secs(2))
+            }) {
+                second = Some(f);
+                break;
+            }
+        }
+        let second = second.expect("two failed attempts recorded");
+        assert_eq!(second.advice, crate::egress_failure::REFUSED);
+        assert!(
+            !second.detail.contains("secret_key_123"),
+            "{}",
+            second.detail
+        );
+
+        // The wait ends when the card stops counting down: connecting again,
+        // long before the 2 s backoff is up. (Windows takes ~2 s to report a
+        // refused port, so the next failure itself would come too late.)
+        assert!(sim.ctrl.retry_destination_now("refused"));
+        let asked = Instant::now();
+        let mut retried = false;
+        for _ in 0..8 {
+            sim.obs_sends(100).await;
+            if dest
+                .failure
+                .lock()
+                .as_ref()
+                .is_some_and(|f| f.retry_at.is_none() || f.at > second.at)
+            {
+                retried = true;
+                break;
+            }
+        }
+        assert!(retried, "Retry now started a new attempt");
+        assert!(asked.elapsed() < Duration::from_millis(1_000));
+        assert!(!sim.ctrl.retry_destination_now("unknown"));
+
+        dest.shutdown_requested.store(true, Ordering::Relaxed);
     }
 }

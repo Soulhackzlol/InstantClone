@@ -47,7 +47,7 @@ struct MibTcpTableOwnerPid {
     table: [MIB_TCPROW_OWNER_PID; 1],
 }
 
-/// Pid + executable filename of the process owning a given listening
+/// Pid + full executable path of the process owning a given listening
 /// TCP port. Returns `None` if no listener is on that port, or if the
 /// OS-level lookup failed entirely.
 #[cfg(windows)]
@@ -97,7 +97,7 @@ pub fn find_process_on_port(port: u16) -> Option<(u32, Option<String>)> {
     }
 }
 
-/// Best-effort executable basename for a PID. `None` if the OS denies
+/// Best-effort full executable path for a PID. `None` if the OS denies
 /// us access (e.g. PID belongs to an elevated process) - the caller
 /// still has the PID to show.
 #[cfg(windows)]
@@ -114,9 +114,46 @@ fn process_name(pid: u32) -> Option<String> {
         if ok == 0 {
             return None;
         }
-        let full = String::from_utf16_lossy(&buf[..size as usize]);
-        // Trim to the basename - full path is noise in a user dialog.
-        Some(full.rsplit(['\\', '/']).next().unwrap_or(&full).to_string())
+        // The full path: for another InstantClone, its folder is the one
+        // detail that tells the user which copy it is.
+        Some(String::from_utf16_lossy(&buf[..size as usize]))
+    }
+}
+
+/// The file name part of an executable path, for showing in a dialog.
+#[cfg(windows)]
+fn exe_basename(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
+/// Whether `path` is an InstantClone exe. By file name, since a portable
+/// copy can sit in any folder: `instantclone.exe`, or a renamed download
+/// such as `InstantClone-0.1.16.exe`.
+#[cfg(windows)]
+fn is_instantclone_exe(path: &str) -> bool {
+    exe_basename(path)
+        .to_ascii_lowercase()
+        .starts_with("instantclone")
+}
+
+/// Whether another running InstantClone (not this process) listens on
+/// `port`. Used to leave OBS's registration alone when it points at a copy
+/// that is running right now.
+///
+/// Windows names the owner, so this is exact there. Elsewhere there is no
+/// cheap way to ask, so anything listening counts: the caller only uses the
+/// answer to decide NOT to rewrite something, which is the safe direction to
+/// be wrong in.
+pub fn port_held_by_other_instance(port: u16) -> bool {
+    #[cfg(windows)]
+    {
+        find_process_on_port(port).is_some_and(|(pid, exe)| {
+            pid != std::process::id() && exe.as_deref().is_some_and(is_instantclone_exe)
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        !is_port_free(&format!("127.0.0.1:{port}"))
     }
 }
 
@@ -167,49 +204,78 @@ pub enum ConflictChoice {
 
 /// Pop a native modal asking the user what to do about a port conflict.
 /// `label` is shown to the user as "RTMP port" / "web port".
+/// `starting_copy`: another InstantClone that is starting has claimed the
+/// port (see `instance_lock::reserve_port`), whoever listens on it yet.
 #[cfg(windows)]
 pub fn ask_user(
     label: &str,
     port: u16,
     owner: Option<(u32, Option<String>)>,
     proposed_port: Option<u16>,
+    starting_copy: bool,
 ) -> ConflictChoice {
-    let owner_text = match owner {
-        Some((pid, Some(name))) => format!("{} (PID {})", name, pid),
-        Some((pid, None)) => format!("PID {} (process name unavailable)", pid),
-        None => "another process".to_string(),
+    let body_text = conflict_message(label, port, owner.as_ref(), proposed_port, starting_copy);
+    let flags = if proposed_port.is_some() {
+        MB_YESNO | MB_ICONWARNING
+    } else {
+        MB_OK | MB_ICONWARNING
     };
-
-    let (body_text, flags, accept) = match proposed_port {
-        Some(new_port) => (
-            format!(
-                "{label} :{port} is already being used by {owner_text}.\n\n\
-                 Switch to :{new_port} and continue?\n\
-                 You'll need to update OBS (and the dashboard URL) \
-                 to use the new port."
-            ),
-            MB_YESNO | MB_ICONWARNING,
-            Some(new_port),
-        ),
-        None => (
-            format!(
-                "{label} :{port} is already being used by {owner_text}.\n\n\
-                 No free port found in the range :{port} to :{}.\n\
-                 Free a port (close that program) or change \
-                 the configured port in instantclone.config.json, then restart.",
-                port.saturating_add(9),
-            ),
-            MB_OK | MB_ICONWARNING,
-            None,
-        ),
-    };
-
     let title = wide("InstantClone");
     let body = wide(&body_text);
     let r = unsafe { MessageBoxW(ptr::null_mut(), body.as_ptr(), title.as_ptr(), flags) };
-    match (r, accept) {
+    match (r, proposed_port) {
         (IDYES, Some(p)) => ConflictChoice::SwitchPort(p),
         _ => ConflictChoice::Quit,
+    }
+}
+
+/// The text of the port-conflict dialog.
+///
+/// Another InstantClone gets its own wording. The same setup can't get here
+/// (a second copy of it never starts, see `instance_lock`), so this is a copy
+/// from a different folder, and moving this one to a free port is the normal
+/// way to run two side by side. Its folder is what tells the user which copy
+/// it is, so that is what the dialog names.
+#[cfg(windows)]
+fn conflict_message(
+    label: &str,
+    port: u16,
+    owner: Option<&(u32, Option<String>)>,
+    proposed_port: Option<u16>,
+    starting_copy: bool,
+) -> String {
+    let other_copy = owner.and_then(|(_, exe)| exe.as_deref().filter(|e| is_instantclone_exe(e)));
+    let is_copy = other_copy.is_some() || (owner.is_none() && starting_copy);
+    let owner_text = match (owner, other_copy) {
+        (Some((pid, _)), Some(exe)) => {
+            let folder = exe.rsplit_once(['\\', '/']).map_or(exe, |(dir, _)| dir);
+            format!("another InstantClone (PID {pid}), running from:\n{folder}")
+        }
+        (Some((pid, Some(exe))), None) => format!("{} (PID {pid})", exe_basename(exe)),
+        (Some((pid, None)), None) => format!("PID {pid} (process name unavailable)"),
+        (None, _) if starting_copy => "another InstantClone that is starting up".to_string(),
+        (None, _) => "another process".to_string(),
+    };
+    match proposed_port {
+        Some(new_port) if is_copy => format!(
+            "{label} :{port} is already used by {owner_text}\n\n\
+             Use :{new_port} for this copy and continue? It is saved in this copy's \
+             settings, so OBS and the dashboard address for this copy use :{new_port} from now on."
+        ),
+        Some(new_port) => format!(
+            "{label} :{port} is already being used by {owner_text}.\n\n\
+             Switch to :{new_port} and continue?\n\
+             You'll need to update OBS (and the dashboard URL) \
+             to use the new port."
+        ),
+        None => format!(
+            "{label} :{port} is already being used by {owner_text}.\n\n\
+             No free port found from :{} to :{}.\n\
+             Free a port (close that program) or change \
+             the configured port in instantclone.config.json, then restart.",
+            port.saturating_add(1),
+            port.saturating_add(9),
+        ),
     }
 }
 
@@ -316,6 +382,50 @@ mod tests {
         assert_ne!(found, port, "must skip the held port");
         assert!(found > port && found <= port + WINDOW);
         drop(held);
+    }
+
+    /// A port held by another InstantClone says so, names its folder, and
+    /// offers the next port as the normal way to run two copies.
+    #[cfg(windows)]
+    #[test]
+    fn a_port_held_by_another_instantclone_names_its_folder() {
+        let owner = (
+            4242,
+            Some(r"C:\Streams\Second\InstantClone.exe".to_string()),
+        );
+        let text = conflict_message("RTMP port", 1935, Some(&owner), Some(1936), false);
+        assert!(text.contains("another InstantClone (PID 4242)"), "{text}");
+        assert!(text.contains(r"C:\Streams\Second"), "{text}");
+        assert!(
+            !text.contains("InstantClone.exe"),
+            "the folder, not the exe: {text}"
+        );
+        assert!(text.contains("Use :1936 for this copy"), "{text}");
+
+        let other = (77, Some(r"C:\Tools\nginx.exe".to_string()));
+        let text = conflict_message("RTMP port", 1935, Some(&other), Some(1936), false);
+        assert!(text.contains("nginx.exe (PID 77)"), "{text}");
+        assert!(text.contains("Switch to :1936"), "{text}");
+
+        // Claimed by a copy that is starting and hasn't bound it yet.
+        let text = conflict_message("RTMP port", 1935, None, Some(1936), true);
+        assert!(
+            text.contains("another InstantClone that is starting up"),
+            "{text}"
+        );
+        assert!(text.contains("Use :1936 for this copy"), "{text}");
+        assert!(!text.contains('\u{2014}'), "no em dashes in dialog copy");
+
+        assert!(is_instantclone_exe(r"D:\x\instantclone-0.1.16.exe"));
+        assert!(!is_instantclone_exe(r"D:\instantclone\obs64.exe"));
+    }
+
+    /// This process listening is never "another" InstantClone.
+    #[cfg(windows)]
+    #[test]
+    fn our_own_port_is_not_another_instance() {
+        let (_held, port) = bind_eph();
+        assert!(!port_held_by_other_instance(port));
     }
 
     #[cfg(windows)]

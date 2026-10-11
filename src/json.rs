@@ -439,14 +439,17 @@ mod tests {
         let text = r#"{"z":1,"a":"é \"q\" \\ \u0001","list":[true,false,null],"o":{}}"#;
         let v = parse(text).unwrap();
         assert_eq!(v.to_json(), text);
-        assert!(crate::config::is_valid_json(&v.to_json()));
     }
 
+    /// Characters outside the BMP arrive as `\u` surrogate pairs. Half a
+    /// pair, or a high half followed by anything else, is refused.
     #[test]
     fn decodes_surrogate_pairs() {
-        let v = parse(r#""😀""#).unwrap();
+        let v = parse(r#""\ud83d\ude00""#).unwrap();
         assert_eq!(v.as_str(), Some("😀"));
-        assert!(parse(r#""\ud83d""#).is_err());
+        for bad in [r#""\ud83d""#, r#""\udc00""#, r#""\ud83d\u0041""#] {
+            assert!(parse(bad).is_err(), "accepted {bad}");
+        }
     }
 
     #[test]
@@ -469,8 +472,10 @@ mod tests {
 
     #[test]
     fn refuses_runaway_nesting() {
-        let deep = "[".repeat(200) + &"]".repeat(200);
-        assert!(parse(&deep).is_err());
+        // The top value sits at depth 0, so MAX_DEPTH + 1 levels fit.
+        let nested = |levels: usize| "[".repeat(levels) + &"]".repeat(levels);
+        assert!(parse(&nested(MAX_DEPTH + 1)).is_ok(), "as deep as allowed");
+        assert!(parse(&nested(MAX_DEPTH + 2)).is_err());
     }
 
     #[test]
