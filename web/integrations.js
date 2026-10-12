@@ -7023,14 +7023,25 @@ function recipeWarningHtml(p){
 
 // Your values: things set once ({my.name}) that any message or step reads,
 // so a coin's name or a game's odds change in one place; and, on its own
-// tab, what viewers hold. Each row shows what the value is for and one
-// field to change it; its name and label hide behind the pencil, since
-// renaming is rare and changing the value is the point.
+// tab, what viewers hold. Values are listed under the integration that
+// reads them. Each row shows what the value is for and one field to change
+// it; its name and label hide behind the pencil, since renaming is rare and
+// changing the value is the point.
+// Where a value added in this window sits until it is saved. "+" can't be
+// an integration's id.
+const NEW_VALUE_HOME = {id:'+', title:'New', others:0};
+const VALUES_SHOWN_AT_ONCE = 8;
 const Values = {
-  list:[], tab:'values', find:'', more:null, saved:'',
+  list:[], tab:'values', find:'', more:null, saved:'', unfolded:new Set(),
   open(){
-    this.list = clone(S.data.values || []);
+    // A row's kind and home are read once, here: decided again on every
+    // key, a row would jump to another group, or swap its field, under the
+    // typing.
+    this.list = clone(S.data.values || []).map(v => ({...v, kind:this.kindOf(v), home:this.homeOf(v.name)}));
     this.saved = JSON.stringify(this.clean());
+    // A few values show at once. Many open as a list of their integrations,
+    // each one click away: thirty rows in a row is a wall to scroll.
+    this.unfolded = new Set(this.list.length <= VALUES_SHOWN_AT_ONCE ? this.list.map(v => v.home.id) : []);
     this.tab = 'values';
     this.find = '';
     this.more = null;
@@ -7047,19 +7058,30 @@ const Values = {
   dirty(){ return JSON.stringify(this.clean()) !== this.saved; },
   // How a value is best edited, read off what it holds and what it is for.
   kindOf(v){
-    if (/\n/.test(v.value) || v.value.length > 60 || / \| /.test(v.value)) return 'list';
+    if (/\n/.test(v.value) || / \| /.test(v.value)) return 'list';
+    // A sentence, like what a command answers: room to read it, but no list.
+    if (v.value.length > 60) return 'long';
     if (!/^-?\d+(\.\d+)?$/.test(v.value.trim())) return 'text';
     return /chance|percent|%/i.test(v.name + ' ' + v.label) ? 'chance' : 'number';
   },
-  // How many integrations read {my.<name>} somewhere.
-  usedIn(name){
-    if (!name) return 0;
+  // The integrations that read {my.<name>} somewhere.
+  readers(name){
+    if (!name) return [];
     const reads = new RegExp(`[{$]my\\.${name}(?![A-Za-z0-9_])`);
-    return S.data.integrations.filter(i => reads.test(JSON.stringify(i))).length;
+    return S.data.integrations.filter(i => reads.test(JSON.stringify(i)));
+  },
+  usedIn(name){ return this.readers(name).length; },
+  // Where a value is listed: under the first integration that reads it,
+  // which is what a streamer looks for ("the coins game"), not under what
+  // sort of text it holds. `others`: how many more read it too.
+  homeOf(name){
+    const [first, ...rest] = this.readers(name);
+    return first ? {id:first.id, title:first.name, others:rest.length} : {id:'', title:'Not used yet', others:0};
   },
   editorHtml(v, n){
     const at = `data-n="${n}"`;
-    switch (this.kindOf(v)){
+    switch (v.kind){
+      case 'long': return `<textarea class="ic-input" data-bind="v-value" ${at} rows="3" aria-label="${esc(v.label || v.name)}">${esc(v.value)}</textarea>`;
       case 'chance': return `<span class="ig-val-chance"><input type="range" min="0" max="100" step="0.5" value="${esc(v.value)}" data-bind="v-value" ${at} aria-label="${esc(v.label || v.name)}, as a slider">
         <span class="ig-val-unit"><input class="ic-input mono" data-bind="v-value" ${at} value="${esc(v.value)}" inputmode="decimal" aria-label="${esc(v.label || v.name)}"><span class="muted">%</span></span></span>`;
       case 'number': return `<input class="ic-input mono ig-val-num" data-bind="v-value" ${at} value="${esc(v.value)}" inputmode="decimal" aria-label="${esc(v.label || v.name)}">`;
@@ -7069,12 +7091,12 @@ const Values = {
           <div class="muted">${/\n/.test(v.value) ? `${plural(lines, 'line')}: one is picked each time.` : 'One per line, or separated by |.'}</div>`;
       }
     }
-    return `<input class="ic-input" data-bind="v-value" ${at} value="${esc(v.value)}" aria-label="${esc(v.label || v.name)}">`;
+    return `<input class="ic-input" data-bind="v-value" ${at} value="${esc(v.value)}" placeholder="Its value" aria-label="${esc(v.label || v.name)}">`;
   },
   rowHtml(v, n){
-    const kind = this.kindOf(v), open = this.more === n, used = this.usedIn(v.name.trim());
-    const meta = !v.name ? 'Give it a name to use it' : `<code class="mono">{my.${esc(v.name)}}</code> · ${used ? 'used in ' + plural(used, 'integration') : 'not used yet'}`;
-    return `<div class="ig-val${kind === 'list' ? ' wide' : ''}${open ? ' open' : ''}" data-key="val-${n}">
+    const wide = ['list', 'long'].includes(v.kind), open = this.more === n, used = this.usedIn(v.name.trim());
+    const meta = !v.name ? 'Give it a name to use it' : `<code class="mono">{my.${esc(v.name)}}</code>${v.home.others ? ' · also in ' + plural(v.home.others, 'other integration') : ''}`;
+    return `<div class="ig-val${wide ? ' wide' : ''}${open ? ' open' : ''}" data-key="val-${n}">
       <div class="ig-val-main"><div class="ig-val-what"><b>${esc(v.label || v.name || 'New value')}</b><span class="ig-val-meta">${meta}</span></div>
         <div class="ig-val-edit">${this.editorHtml(v, n)}</div>
         <button type="button" class="ic-btn-tiny${open ? ' on' : ''}" data-act="v-more" data-n="${n}" aria-expanded="${open}" aria-label="Name and label of ${esc(v.label || v.name || 'this value')}" title="Name and label">${svg('pencil')}</button></div>
@@ -7086,10 +7108,21 @@ const Values = {
   valuesHtml(){
     const find = this.find.trim().toLowerCase();
     const shown = this.list.map((v, n) => ({v, n})).filter(({v, n}) => n === this.more || !find || [v.name, v.label, v.value].some(x => x.toLowerCase().includes(find)));
-    const groups = [['text', 'Words'], ['number', 'Amounts'], ['chance', 'Chances'], ['list', 'Lists a step picks from']]
-      .map(([kind, title]) => ({title, rows:shown.filter(({v}) => this.kindOf(v) === kind)})).filter(g => g.rows.length);
+    // One group per integration, in the order of the list behind this
+    // window; then what nothing reads yet, then what was just added. Inside
+    // a group short fields come first and lists last.
+    const kinds = ['text', 'long', 'number', 'chance', 'list'];
+    const groups = S.data.integrations.map(i => i.id).concat('', NEW_VALUE_HOME.id)
+      .map(id => shown.filter(({v}) => v.home.id === id)).filter(rows => rows.length)
+      .map(rows => ({home:rows[0].v.home, rows:rows.sort((a, b) => kinds.indexOf(a.v.kind) - kinds.indexOf(b.v.kind) || a.n - b.n)}));
     return `${this.list.length > 6 ? `<input class="ic-input ig-val-find" data-bind="v-find" value="${esc(this.find)}" placeholder="Find a value" aria-label="Find a value">` : ''}
-      ${groups.map(g => `<div class="ig-val-group" data-key="g-${g.title}"><div class="ic-label">${g.title}</div>${g.rows.map(({v, n}) => this.rowHtml(v, n)).join('')}</div>`).join('')}
+      ${groups.map(g => {
+        // What is being looked for, or being renamed, is never folded away.
+        const open = !!find || this.unfolded.has(g.home.id) || g.rows.some(({n}) => n === this.more);
+        return `<div class="ig-val-group${open ? ' open' : ''}" data-key="g-${esc(g.home.id)}">
+          <button type="button" class="ig-val-head" data-act="v-group" data-v="${esc(g.home.id)}" aria-expanded="${open}">${svg('chev')}<span class="ig-val-head-t">${esc(g.home.title)}</span><span class="ig-val-head-n">${plural(g.rows.length, 'value')}</span></button>
+          ${open ? g.rows.map(({v, n}) => this.rowHtml(v, n)).join('') : ''}</div>`;
+      }).join('')}
       ${!this.list.length ? '<div class="muted ig-val-empty">Nothing yet. A recipe you import brings its own values; or add one and write it as <span class="mono">{my.name}</span> wherever a value fits.</div>'
         : !shown.length ? '<div class="muted ig-val-empty">Nothing matches.</div>' : ''}
       <button type="button" class="ig-cond-add" data-act="v-add">${svg('plus')}Add a value</button>
@@ -7140,9 +7173,20 @@ const Values = {
     const n = +el.dataset.n;
     if (a === 'v-tab'){ this.tab = el.dataset.v; this.render(); return true; }
     if (a === 'v-more'){ this.more = this.more === n ? null : n; this.render(); return true; }
+    if (a === 'v-group'){
+      const id = el.dataset.v, folding = el.getAttribute('aria-expanded') === 'true';
+      if (folding){
+        this.unfolded.delete(id);
+        // Its open pencil would hold the group open.
+        if (this.more !== null && this.list[this.more].home.id === id) this.more = null;
+      } else this.unfolded.add(id);
+      this.render();
+      return true;
+    }
     if (a === 'v-add'){
-      this.list.push({name:'', label:'', value:''});
+      this.list.push({name:'', label:'', value:'', kind:'text', home:NEW_VALUE_HOME});
       this.more = this.list.length - 1;
+      this.unfolded.add(NEW_VALUE_HOME.id);
       this.find = '';
       this.render();
       focusField('v-label');

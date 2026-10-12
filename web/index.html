@@ -3344,8 +3344,16 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-val-body{gap:0}
 .ig-val-tabs{margin-bottom:14px}
 .ig-val-find{margin-bottom:6px}
-.ig-val-group{margin-top:14px}
-.ig-val-group > .ic-label{margin-bottom:2px}
+.ig-val-group{margin-top:6px}
+.ig-val-head{display:flex;align-items:center;gap:8px;width:100%;padding:9px 10px;border:0;border-radius:10px;background:var(--bg-2);color:var(--fg);font:inherit;font-size:13px;font-weight:600;text-align:left;cursor:pointer}
+.ig-val-head:hover,.ig-val-head:focus-visible{background:var(--surface-3);outline:0}
+.ig-val-head svg{width:14px;height:14px;flex:none;color:var(--fg-4);transform:rotate(-90deg);transition:transform .25s var(--ease-out)}
+.ig-val-group.open .ig-val-head svg{transform:none}
+.ig-val-head-t{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ig-val-head-n{flex:none;font-size:12px;font-weight:400;color:var(--fg-3)}
+.ig-val-group.open{margin-bottom:14px}
+.ig-val-group.open .ig-val{padding:0 10px}
+@media (prefers-reduced-motion: reduce){.ig-val-head svg{transition:none}}
 .ig-val{border-bottom:1px solid var(--line)}
 .ig-val-main{display:flex;align-items:center;gap:12px;padding:10px 0;min-height:56px}
 .ig-val.wide .ig-val-main{flex-wrap:wrap;align-items:flex-start}
