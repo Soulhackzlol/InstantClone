@@ -323,10 +323,14 @@ What a chat economy needs, as steps you can build anything else with too.
 - **Your values** (a button on the Integrations tab): things you set once
   and any message or step reads as `{my.name}`, like what a point is
   called, how often a game is won or a list to pick from. Change one there
-  and everything that uses it follows. Each value shows what it is for,
-  where it is used, and one field made for it: a slider for a chance, a
-  box with one entry per line for a list. Its name and label sit behind
-  the pencil. A second tab shows what your viewers hold, where you can set
+  and everything that uses it follows. Values are listed under the
+  integration that reads them ("Spike Roulette", "Chat Coins: wallet"), and
+  with more than a few the window opens as that list of integrations, each
+  one click away, with a box to find a value by name. Each value shows what
+  it is for and one field made for it: a slider for a chance, a box with
+  one entry per line for a list, a roomy box for a sentence. Nothing moves
+  while you type. Its name and label sit behind the pencil. A second tab
+  shows what your viewers hold, where you can set
   one viewer's amount or start everyone over. In a counting word, write a
   value with a `$`: `{viewer.coins#$my.coin#$my.coins}` says "1 gem" or
   "5 gems" in your words. A recipe brings the values it uses; one you
