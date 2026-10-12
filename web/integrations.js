@@ -4445,12 +4445,12 @@ function rewardPickHtml(t){
   if (c.any) return `<div class="dff"><label>Which rewards start this</label>${scope}<div class="muted">Every redemption on your channel runs these steps.</div></div>`;
   const rows = made.map(r => {
     const on = c.picked.includes(r.id);
-    return `<button type="button" class="ig-pick${on ? ' on' : ''}" role="checkbox" aria-checked="${on}" data-act="b-reward-pick" data-id="${esc(r.id)}">
-      <span class="ig-pick-box">${on ? svg('check') : ''}</span><span class="ig-pick-t">${esc(r.title)}</span><span class="muted">${esc(String(r.cost))} pts${r.enabled ? '' : ' · off'}</span></button>`;
+    return `<button type="button" class="ig-reward-pick${on ? ' on' : ''}" role="checkbox" aria-checked="${on}" data-act="b-reward-pick" data-id="${esc(r.id)}">
+      <span class="ig-reward-pick-box">${on ? svg('check') : ''}</span><span class="ig-reward-pick-t">${esc(r.title)}</span><span class="muted">${esc(String(r.cost))} pts${r.enabled ? '' : ' · off'}</span></button>`;
   }).join('');
   const nothing = !c.picked.length && !c.other.length;
   return `<div class="dff"><label>Which rewards start this</label>${scope}
-    <div class="ig-picks">${rows || (Rewards.list ? '<div class="muted">You have made no rewards here yet. Make one below, or name one you made on Twitch.</div>' : '')}</div>
+    <div class="ig-reward-picks">${rows || (Rewards.list ? '<div class="muted">You have made no rewards here yet. Make one below, or name one you made on Twitch.</div>' : '')}</div>
     <input class="ic-input" data-bind="t-reward-other" value="${esc(c.other.join(', '))}" placeholder="Rewards made on Twitch, by name: Hydrate, Stretch*" aria-label="Other rewards, by name">
     <div class="muted">${nothing ? '<b>Nothing picked yet:</b> until you pick one, every reward starts this.' : 'Names you type match ignoring case. A * stands for anything.'}</div></div>`;
 }
