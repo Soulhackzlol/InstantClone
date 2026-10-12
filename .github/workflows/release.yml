@@ -149,10 +149,13 @@ jobs:
           "$luaHash  optional-vod-unlocker.lua" | Out-File -FilePath "artifacts\SHA256SUMS.txt" -Encoding ascii -Append
           Get-ChildItem artifacts
 
+      # No generated notes: they add a "What's Changed" list of pull request
+      # titles, once more every time a tag is moved to republish a build. The
+      # release's notes are written by hand.
       - name: publish release
         uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: true
+          generate_release_notes: false
           # SemVer convention: anything with a `-` suffix (e.g. v0.1.0-beta.1,
           # v0.1.0-rc.2) is a pre-release. Stable tags (v0.1.0) ship as full.
           prerelease: ${{ contains(github.ref_name, '-') }}
