@@ -118,6 +118,8 @@ pub trait Host: Send + Sync {
     /// message being answered, when there is one.
     fn chat(&self, text: &str, as_bot: bool, reply_to: Option<&str>) -> Result<(), String>;
     fn marker(&self, description: &str) -> Result<(), String>;
+    /// Switch a channel points reward made here on or off, by its title.
+    fn reward(&self, title: &str, enabled: bool) -> Result<(), String>;
     fn clip(&self) -> Result<ClipInfo, String>;
     /// Run one of the named delay actions (`arm`, `cut`, ...). `ms` is the
     /// delay for `arm`.

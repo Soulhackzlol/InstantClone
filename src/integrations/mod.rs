@@ -27,6 +27,7 @@ pub mod alert_media;
 pub mod alerts;
 pub mod api;
 pub mod botcmd;
+pub mod chat_room;
 pub mod clock;
 pub mod effects;
 pub mod engine;
@@ -43,6 +44,7 @@ pub mod store;
 pub mod template;
 pub mod timeline;
 pub mod twitch;
+pub mod viewers;
 pub mod ws;
 
 pub use engine::Handle;

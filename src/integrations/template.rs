@@ -1,6 +1,8 @@
 //! Message templates: `{name}` inserts a value, `{name|text}` inserts
 //! `text` instead when the value is empty or 0, `{name#one#many}` inserts
-//! the value and the word that fits its count ("1 viewer", "42 viewers"),
+//! the value and the word that fits its count ("1 viewer", "42 viewers"; a
+//! word written `$name` is that variable's value, so `{n#$my.coin#$my.coins}`
+//! counts in whatever the streamer calls a coin),
 //! `{name?yes:no}` writes `yes` when the value is yes and `no` otherwise,
 //! and `{{name}}` writes a literal `{name}`.
 //!
@@ -57,7 +59,12 @@ pub fn render_escaped(template: &str, vars: &dyn Vars, escape: &dyn Fn(&str) -> 
                         let word = if count == "1" { one } else { many };
                         out.push_str(&escape(count));
                         out.push(' ');
-                        out.push_str(word);
+                        match word.strip_prefix('$') {
+                            Some(name) => {
+                                out.push_str(&escape(&vars.lookup(name).unwrap_or_default()))
+                            }
+                            None => out.push_str(word),
+                        }
                     }
                     Form::Choice(yes, no) => out.push_str(if is_yes(&value) { yes } else { no }),
                     _ => out.push_str(&escape(&value)),

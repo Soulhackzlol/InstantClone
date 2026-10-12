@@ -324,6 +324,7 @@ fn command(command: &str, roles: Roles, user_cooldown_ms: u64, steps: Vec<Step>)
             aliases: Vec::new(),
             roles,
             user_cooldown_ms,
+            cooldown_reply: String::new(),
         },
         steps,
     }

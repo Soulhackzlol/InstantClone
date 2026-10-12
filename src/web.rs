@@ -3213,6 +3213,7 @@ async fn post_config_reset(
         next.configured = prev.configured;
         // Integrations and their connections are the user's own work too.
         next.integrations = prev.integrations;
+        next.user_values = prev.user_values;
         next.discord_channels = prev.discord_channels;
         next.phone = prev.phone;
         next.integrations_migrated = prev.integrations_migrated;

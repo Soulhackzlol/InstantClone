@@ -170,6 +170,8 @@ pub struct Settings {
     /// Integrations (alerts, chat commands, automations). Each is saved as
     /// one `integration.<id>=<json>` line. See `crate::integrations`.
     pub integrations: Vec<Integration>,
+    /// Values the streamer sets once for every integration (`{my.name}`).
+    pub user_values: Vec<crate::integrations::model::UserValue>,
     /// Discord webhooks the integrations can post to.
     pub discord_channels: Vec<DiscordChannel>,
     /// Phone pushes (ntfy).
@@ -801,6 +803,18 @@ impl Settings {
             let look = self.alerts_look.to_json().to_json();
             writeln!(f, "alerts.look={}", one_line(&look))?;
         }
+        for v in &self.user_values {
+            let kept = json::obj([
+                ("label", json::str(&v.label)),
+                ("value", json::str(&v.value)),
+            ]);
+            writeln!(
+                f,
+                "integration_value.{}={}",
+                one_line(&v.name),
+                one_line(&kept.to_json())
+            )?;
+        }
         for i in &self.integrations {
             writeln!(
                 f,
@@ -815,6 +829,25 @@ impl Settings {
     /// Load one integration line. A line that no longer parses (a hand edit,
     /// a newer version's step type) is skipped rather than failing the
     /// whole config: the other integrations and settings still load.
+    /// One `integration_value.<name>=<json>` line. A broken or repeated
+    /// one is skipped, like a broken integration.
+    fn load_user_value(&mut self, name: &str, value: &str) {
+        use crate::integrations::model::{UserValue, MAX_USER_VALUES};
+        let Ok(mut parsed) = json::parse(value) else {
+            return;
+        };
+        if let json::Value::Obj(fields) = &mut parsed {
+            fields.push(("name".to_string(), json::str(name)));
+        }
+        let Some(kept) = UserValue::from_json(&parsed) else {
+            return;
+        };
+        let known = self.user_values.iter().any(|v| v.name == kept.name);
+        if !known && self.user_values.len() < MAX_USER_VALUES {
+            self.user_values.push(kept);
+        }
+    }
+
     fn load_integration(&mut self, value: &str) {
         if self.integrations.len() >= MAX_INTEGRATIONS {
             return;
@@ -963,6 +996,7 @@ impl Settings {
             midi_device: String::new(),
             crash_protection: CrashProtection::default(),
             integrations: Vec::new(),
+            user_values: Vec::new(),
             discord_channels: Vec::new(),
             phone: PhoneConnection::default(),
             alerts_look: Default::default(),
@@ -1475,6 +1509,9 @@ impl Settings {
             }
             "integrations_migrated" => self.integrations_migrated = value == "true",
             k if k.starts_with("integration.") => self.load_integration(value),
+            k if k.starts_with("integration_value.") => {
+                self.load_user_value(&k["integration_value.".len()..], value)
+            }
             k if k.starts_with("connection.discord.") => {
                 self.load_discord_channel(&k["connection.discord.".len()..], value)
             }
@@ -3978,6 +4015,11 @@ Name@x"
                     .unwrap(),
                 crate::integrations::presets::build("mod_controls", "mods2".into(), "").unwrap(),
             ],
+            user_values: vec![crate::integrations::model::UserValue {
+                name: "coins".into(),
+                label: "What coins = called".into(),
+                value: "gems | \"shiny\"".into(),
+            }],
             discord_channels: vec![DiscordChannel {
                 id: "mods".into(),
                 name: "Mods = team".into(),

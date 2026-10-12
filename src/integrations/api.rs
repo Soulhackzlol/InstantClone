@@ -9,8 +9,9 @@
 use super::event;
 use super::model::{
     valid_discord_webhook, valid_id, DiscordChannel, Integration, PhoneConnection, Roles, Trigger,
-    MAX_INTEGRATIONS,
+    UserValue, MAX_INTEGRATIONS, MAX_USER_VALUES,
 };
+use super::twitch::helix::{RewardEdit, MAX_REWARD_PROMPT, MAX_REWARD_TITLE};
 use super::{alert_media, alerts, engine, lights, obsws, presets, recipe, runner, twitch::Which};
 use crate::config::Settings;
 use crate::controller::Controller;
@@ -99,6 +100,14 @@ pub async fn route(
         }
         ("POST", "/integrations/duplicate") => duplicate(&req(), settings, cfg_path),
         ("POST", "/integrations/test") => test(&req(), &handle).await,
+        // The streamer's own values (`{my.name}`), all at once.
+        ("POST", "/integrations/values") => save_user_values(&req(), settings, cfg_path),
+        // What viewers hold (coins, points): the dashboard lists and edits it.
+        ("GET", "/integrations/viewers") => ok(handle.viewers_json()),
+        ("POST", "/integrations/viewers") => match handle.change_viewers(&req()) {
+            Ok(()) => ok(handle.viewers_json()),
+            Err(why) => fail(why),
+        },
         // The live meter of a chat activity trigger being tuned.
         ("POST", "/integrations/meter") => match req().get("trigger").map(meter_rules) {
             Some(Ok(rules)) => ok(handle.chat_meter(&rules)),
@@ -107,6 +116,9 @@ pub async fn route(
         },
         ("GET", "/integrations/obs") => ok(handle.obs_status()),
         ("POST", "/integrations/lights/scan") => scan_lights().await,
+        // Channel points rewards made here: list, make, switch, delete.
+        ("GET", "/integrations/rewards") => rewards(&handle, RewardCall::List).await,
+        ("POST", "/integrations/rewards") => rewards(&handle, RewardCall::from(&req())).await,
         ("POST", "/integrations/lights/try") => try_light(&req()).await,
         ("POST", "/integrations/fetch") => fetch(&req()).await,
         ("POST", "/integrations/convert") => convert(&req()),
@@ -434,6 +446,10 @@ fn overview(
         // For the "Report it" links, which fill in the issue form's version.
         ("version", json::str(env!("CARGO_PKG_VERSION"))),
         ("twitch_shared_chat", Value::Bool(s.twitch_shared_chat)),
+        (
+            "values",
+            Value::Arr(s.user_values.iter().map(UserValue::to_json).collect()),
+        ),
         // Markers, clips and chat act on the logged-in channel; say so when
         // the Twitch destinations stream somewhere else.
         (
@@ -592,12 +608,19 @@ pub fn unknown_vars(integration: &Integration) -> Vec<String> {
             .iter()
             .map(|(n, _)| n.to_string())
             .collect();
-        let mut prefixes = vec!["counter.".to_string(), "clip.".to_string()];
+        // What is kept between runs is read by name; nothing lists the names.
+        let mut prefixes: Vec<String> = [
+            "counter.", "clip.", "viewer.", "target.", "top.", "saved.", "my.",
+        ]
+        .map(String::from)
+        .to_vec();
+        known.push("active.count".to_string());
         match &h.trigger {
             Trigger::Event { kind, .. } => {
                 known.extend(kind.vars().iter().map(|(n, _)| n.to_string()))
             }
-            Trigger::ChatCommand { .. } | Trigger::ChatMessage { .. } => {
+            // A block runs inside whatever started it: most often a command.
+            Trigger::ChatCommand { .. } | Trigger::ChatMessage { .. } | Trigger::Block { .. } => {
                 for n in 1..=9 {
                     known.push(format!("arg{n}"));
                 }
@@ -624,6 +647,18 @@ pub fn unknown_vars(integration: &Integration) -> Vec<String> {
                 name => format!("{name}."),
             }),
             StepKind::SetVar => known.push(s.param("name").trim().to_string()),
+            StepKind::Counter if !s.param("save_as").trim().is_empty() => {
+                known.push(s.param("save_as").trim().to_string())
+            }
+            StepKind::Viewer if s.param("op") == "spend" => known.push("paid".to_string()),
+            StepKind::Math => known.push(match s.param("save_as").trim() {
+                "" => "result".to_string(),
+                name => name.to_string(),
+            }),
+            StepKind::WaitChat => prefixes.push(match s.param("save_as").trim() {
+                "" => "reply.".to_string(),
+                name => format!("{name}."),
+            }),
             StepKind::EditText => known.push(match s.param("save_as").trim() {
                 "" => "text".to_string(),
                 name => name.to_string(),
@@ -1003,6 +1038,106 @@ async fn scan_lights() -> Reply {
     )]))
 }
 
+/// What the dashboard asks of the channel's rewards.
+enum RewardCall {
+    List,
+    Create(RewardEdit),
+    Update { id: String, edit: RewardEdit },
+    Delete { id: String },
+    Invalid(String),
+}
+
+impl RewardCall {
+    /// With an `id`: `delete` removes it, anything else changes the parts
+    /// that are given (`enabled` alone switches it). Without: makes one,
+    /// which needs a `title` and a `cost`.
+    fn from(req: &Value) -> RewardCall {
+        let id = req.str_or("id", "").to_string();
+        if !id.is_empty() && req.bool_or("delete", false) {
+            return RewardCall::Delete { id };
+        }
+        let text = |name: &str| {
+            req.get(name)
+                .and_then(Value::as_str)
+                .map(|t| t.trim().to_string())
+        };
+        let edit = RewardEdit {
+            title: text("title"),
+            cost: req.get("cost").and_then(Value::as_f64).map(|c| c as u64),
+            prompt: text("prompt"),
+            wants_input: req.get("wants_input").and_then(Value::as_bool),
+            enabled: req.get("enabled").and_then(Value::as_bool),
+        };
+        let making = id.is_empty();
+        let title_fits = |t: &String| !t.is_empty() && t.chars().count() <= MAX_REWARD_TITLE;
+        let problem = if making && (edit.title.is_none() || edit.cost.is_none()) {
+            Some("a reward needs a name and a cost".to_string())
+        } else if !edit.title.as_ref().is_none_or(title_fits) {
+            Some(format!(
+                "a reward's name is 1 to {MAX_REWARD_TITLE} characters"
+            ))
+        } else if !edit
+            .cost
+            .is_none_or(|cost| (1..=1_000_000_000).contains(&cost))
+        {
+            Some("a reward costs at least 1 point".to_string())
+        } else if edit
+            .prompt
+            .as_ref()
+            .is_some_and(|p| p.chars().count() > MAX_REWARD_PROMPT)
+        {
+            Some(format!(
+                "a description is {MAX_REWARD_PROMPT} characters at most"
+            ))
+        } else {
+            None
+        };
+        match (problem, making) {
+            (Some(why), _) => RewardCall::Invalid(why),
+            (None, true) => RewardCall::Create(RewardEdit {
+                enabled: Some(true),
+                ..edit
+            }),
+            (None, false) => RewardCall::Update { id, edit },
+        }
+    }
+}
+
+/// Do `call` on Twitch, then answer with the rewards as they are now.
+async fn rewards(handle: &Arc<super::Handle>, call: RewardCall) -> Reply {
+    let twitch = handle.twitch.clone();
+    let listed = tokio::task::spawn_blocking(move || {
+        match call {
+            RewardCall::List => {}
+            RewardCall::Create(spec) => {
+                twitch.create_reward(&spec)?;
+            }
+            RewardCall::Update { id, edit } => twitch.update_reward(&id, &edit)?,
+            RewardCall::Delete { id } => twitch.delete_reward(&id)?,
+            RewardCall::Invalid(why) => return Err(why),
+        }
+        twitch.rewards()
+    })
+    .await
+    .unwrap_or_else(|_| Err("the call to Twitch crashed".to_string()));
+    match listed {
+        Ok(list) => {
+            let rewards = list.iter().map(|r| {
+                json::obj([
+                    ("id", json::str(&r.id)),
+                    ("title", json::str(&r.title)),
+                    ("cost", Value::Num(r.cost as f64)),
+                    ("enabled", Value::Bool(r.enabled)),
+                    ("prompt", json::str(&r.prompt)),
+                    ("wants_input", Value::Bool(r.wants_input)),
+                ])
+            });
+            ok(json::obj([("rewards", Value::Arr(rewards.collect()))]))
+        }
+        Err(why) => fail(why),
+    }
+}
+
 /// Flash a device so the user sees which one it is.
 async fn try_light(req: &Value) -> Reply {
     let device = req.str_or("device", "").to_string();
@@ -1088,7 +1223,12 @@ fn export(req: &Value, s: &Settings, cfg_path: &Path) -> Reply {
         ("ok", Value::Bool(true)),
         (
             "recipe",
-            json::str(recipe::export(&name, &chosen, look, &folder)),
+            json::str(recipe::export(
+                &name,
+                &chosen,
+                (look, &folder),
+                &s.user_values,
+            )),
         ),
     ]))
 }
@@ -1126,6 +1266,7 @@ fn import(
             ("items", Value::Arr(items)),
             ("uses_discord", Value::Bool(parsed.uses_discord())),
             ("local_effects", Value::Bool(parsed.has_local_effects())),
+            ("values", shared_values_review(&parsed, &settings.borrow())),
             (
                 "alerts",
                 shared_alerts_review(&parsed, &settings.borrow().alerts_look),
@@ -1173,6 +1314,13 @@ fn import(
             ));
         }
         s.integrations.extend(parsed.integrations);
+        // A value the importer already set stays theirs.
+        for value in parsed.values {
+            let known = s.user_values.iter().any(|v| v.name == value.name);
+            if !known && s.user_values.len() < MAX_USER_VALUES {
+                s.user_values.push(value);
+            }
+        }
         if let Some(theme) = theme {
             s.alerts_look = theme;
         }
@@ -1226,6 +1374,50 @@ fn shared_alerts_review(parsed: &recipe::Recipe, mine: &alerts::Look) -> Value {
             Value::Bool(*mine == alerts::Look::default()),
         ),
     ])
+}
+
+/// The values a recipe brings, for the import preview: each with whether
+/// the importer already has one under that name (theirs is then kept).
+fn shared_values_review(parsed: &recipe::Recipe, s: &Settings) -> Value {
+    let review = |value: &UserValue| {
+        let mine = s.user_values.iter().find(|v| v.name == value.name);
+        json::obj([
+            ("name", json::str(&value.name)),
+            ("label", json::str(&value.label)),
+            ("value", json::str(&value.value)),
+            ("mine", mine.map_or(Value::Null, |v| json::str(&v.value))),
+        ])
+    };
+    Value::Arr(parsed.values.iter().map(review).collect())
+}
+
+/// Replace the streamer's own values with the list the dashboard sent.
+fn save_user_values(
+    req: &Value,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> Reply {
+    let sent = req.get("values").and_then(Value::as_array).unwrap_or(&[]);
+    let mut values: Vec<UserValue> = Vec::new();
+    for value in sent {
+        let Some(value) = UserValue::from_json(value) else {
+            return fail(format!(
+                "\"{}\" can't be saved: a name is letters, digits and _, and a value has a length limit",
+                value.str_or("name", "")
+            ));
+        };
+        if values.iter().any(|v| v.name == value.name) {
+            return fail(format!("two values are named \"{}\"", value.name));
+        }
+        values.push(value);
+    }
+    if values.len() > MAX_USER_VALUES {
+        return fail(format!("at most {MAX_USER_VALUES} values"));
+    }
+    update(settings, cfg_path, |s| {
+        s.user_values = values;
+        Ok(())
+    })
 }
 
 /// Save the uploads a recipe brought and point its alerts at them.
@@ -1303,6 +1495,7 @@ fn trigger_review(i: &Integration) -> Vec<Value> {
                     (format!("{command} in chat"), who_can(*roles))
                 }
                 Trigger::ChatMessage { roles, .. } => ("a chat message".into(), who_can(*roles)),
+                Trigger::Block { name } => (format!("the block \"{name}\""), "its other triggers"),
                 Trigger::ChatActivity(a) => ("chat gets busy".into(), who_can(a.roles)),
                 Trigger::Webhook { .. } => ("a web call".into(), "apps with its secret link"),
                 Trigger::Shortcut { .. } => ("a button".into(), "you"),
@@ -1377,6 +1570,7 @@ fn summary(i: &Integration) -> String {
             Trigger::Event { kind, .. } => kind.label().to_string(),
             Trigger::ChatCommand { command, .. } => format!("{command} in chat"),
             Trigger::ChatMessage { .. } => "a chat message".to_string(),
+            Trigger::Block { name } => format!("the block \"{name}\" is run"),
             Trigger::Timer { every_ms, .. } => {
                 format!("every {} min", every_ms / 60_000)
             }
@@ -1706,8 +1900,8 @@ mod tests {
                 json::str(recipe::export(
                     "kit",
                     std::slice::from_ref(&i),
-                    None,
-                    Path::new(""),
+                    (None, Path::new("")),
+                    &[],
                 )),
             ),
             ("apply", Value::Bool(true)),
@@ -1760,6 +1954,7 @@ mod tests {
         let mut parsed = recipe::Recipe {
             name: "shared".into(),
             integrations: Vec::new(),
+            values: Vec::new(),
             alerts: Some(recipe::SharedAlerts {
                 look: alerts::Look::default(),
                 media: vec![
@@ -1796,6 +1991,7 @@ mod tests {
             name: "shared".into(),
             integrations: vec![integration],
             alerts: None,
+            values: Vec::new(),
         };
         keep_shared_alerts(&mut parsed, false, &cfg).unwrap();
         let step = &parsed.integrations[0].handlers[0].steps[0];

@@ -1,5 +1,7 @@
 //! What integrations keep between runs, in its own file next to the config:
-//! the Twitch logins, the counters and how often each integration ran.
+//! the Twitch logins, the counters, what each viewer holds, saved texts,
+//! when viewers last used a command with a long cooldown, and how often
+//! each integration ran.
 //!
 //! Kept apart from the settings on purpose. Tokens change on their own
 //! every few hours and counters on every crash; routing those through the
@@ -7,6 +9,7 @@
 //! saves. This file has one writer (the integrations engine), is written
 //! atomically, and never leaves the machine.
 
+use super::viewers::ViewerValues;
 use crate::json::{self, Value};
 use crate::sync::Mutex;
 use std::collections::BTreeMap;
@@ -58,8 +61,17 @@ pub struct Store {
     path: PathBuf,
     pub accounts: Mutex<Accounts>,
     pub counters: Arc<Mutex<BTreeMap<String, i64>>>,
-    /// A counter changed since the file was last written.
-    pub counters_dirty: std::sync::atomic::AtomicBool,
+    /// A number per viewer under each name (`coins`): see `viewers`.
+    pub viewers: Arc<Mutex<ViewerValues>>,
+    /// Texts a "Remember a value" step was told to keep (`{saved.name}`).
+    pub saved: Arc<Mutex<BTreeMap<String, String>>>,
+    /// When each viewer last used each chat command, in Unix milliseconds,
+    /// by `engine::viewer_key`. Saved so a daily bonus stays daily across a
+    /// restart.
+    pub cooldowns: Mutex<BTreeMap<String, u64>>,
+    /// A counter, viewer value, saved text or cooldown worth keeping
+    /// changed since the file was last written.
+    pub dirty: Arc<std::sync::atomic::AtomicBool>,
     /// Runs per integration id, for `{uses}`.
     pub uses: Mutex<BTreeMap<String, u64>>,
     /// Serialises writes so two savers never interleave.
@@ -87,10 +99,17 @@ impl Store {
                 .collect(),
             _ => BTreeMap::new(),
         };
-        let uses = match doc.get("uses") {
+        let whole_numbers = |key: &str| match doc.get(key) {
             Some(Value::Obj(fields)) => fields
                 .iter()
                 .filter_map(|(k, v)| Some((k.clone(), v.as_f64()? as u64)))
+                .collect(),
+            _ => BTreeMap::new(),
+        };
+        let saved = match doc.get("saved") {
+            Some(Value::Obj(fields)) => fields
+                .iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
                 .collect(),
             _ => BTreeMap::new(),
         };
@@ -101,8 +120,11 @@ impl Store {
                 bot: account("twitch.bot"),
             }),
             counters: Arc::new(Mutex::new(counters)),
-            counters_dirty: Default::default(),
-            uses: Mutex::new(uses),
+            viewers: Arc::new(Mutex::new(ViewerValues::from_json(doc.get("viewers")))),
+            saved: Arc::new(Mutex::new(saved)),
+            cooldowns: Mutex::new(whole_numbers("cooldowns")),
+            dirty: Default::default(),
+            uses: Mutex::new(whole_numbers("uses")),
             write_lock: Mutex::new(()),
         }
     }
@@ -134,14 +156,28 @@ impl Store {
                     .map(|(k, v)| (k.clone(), Value::Num(*v as f64)))
                     .collect(),
             );
-            let uses = Value::Obj(
-                self.uses
+            let whole_numbers = |map: &BTreeMap<String, u64>| {
+                Value::Obj(
+                    map.iter()
+                        .map(|(k, v)| (k.clone(), Value::Num(*v as f64)))
+                        .collect(),
+                )
+            };
+            let saved = Value::Obj(
+                self.saved
                     .lock()
                     .iter()
-                    .map(|(k, v)| (k.clone(), Value::Num(*v as f64)))
+                    .map(|(k, v)| (k.clone(), json::str(v)))
                     .collect(),
             );
-            json::obj([("twitch", twitch), ("counters", counters), ("uses", uses)])
+            json::obj([
+                ("twitch", twitch),
+                ("counters", counters),
+                ("viewers", self.viewers.lock().to_json()),
+                ("saved", saved),
+                ("cooldowns", whole_numbers(&self.cooldowns.lock())),
+                ("uses", whole_numbers(&self.uses.lock())),
+            ])
         };
         // On disk before the rename: after a power cut the file is the old
         // one or the new one, never a truncated one.
@@ -172,6 +208,10 @@ mod tests {
         });
         store.counters.lock().insert("crashes".into(), 3);
         store.uses.lock().insert("i1".into(), 41);
+        let paid = super::super::viewers::Change::Add(250);
+        store.viewers.lock().apply("coins", "ana", paid).unwrap();
+        store.saved.lock().insert("winner".into(), "Ana".into());
+        store.cooldowns.lock().insert("i1#0#ana".into(), 99);
         store.save().unwrap();
 
         let back = Store::open(&dir);
@@ -179,6 +219,9 @@ mod tests {
         assert!(back.accounts.lock().bot.is_none());
         assert_eq!(back.counters.lock().get("crashes"), Some(&3));
         assert_eq!(back.uses.lock().get("i1"), Some(&41));
+        assert_eq!(back.viewers.lock().get("coins", "ana"), 250);
+        assert_eq!(back.saved.lock().get("winner").unwrap(), "Ana");
+        assert_eq!(back.cooldowns.lock().get("i1#0#ana"), Some(&99));
     }
 
     #[test]

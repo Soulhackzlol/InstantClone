@@ -20,11 +20,12 @@
 
 use super::activity::ChatWindow;
 use super::alerts::Board;
+use super::chat_room::{ChatRoom, Heard};
 use super::effects::RealHost;
 use super::event::{Event, EventKind};
 use super::model::{
-    pad_matches, ChatActivity, DiscordChannel, Integration, MatchMode, PhoneConnection, Roles,
-    Trigger,
+    self, pad_matches, ChatActivity, DiscordChannel, Integration, MatchMode, PhoneConnection,
+    Roles, Step, StepKind, Trigger,
 };
 use super::obsws::{self, ObsNews};
 use super::runner::{self, RunContext, RunEnv, RunStatus, StepLog};
@@ -76,9 +77,26 @@ fn held_back(
     too_soon.then_some(HeldBack::Cooldown)
 }
 
-/// Whether a viewer used a chat command too recently to use it again.
-fn viewer_cooling_down(last: Option<Instant>, user_cooldown_ms: u64, now: Instant) -> bool {
-    last.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_millis(user_cooldown_ms))
+/// How long a viewer still has to wait before using a chat command again,
+/// in milliseconds; None when they may. Times are Unix milliseconds, so a
+/// cooldown outlives a restart.
+fn cooldown_left(last: Option<u64>, user_cooldown_ms: u64, now_ms: u64) -> Option<u64> {
+    let waited = now_ms.saturating_sub(last?);
+    (waited < user_cooldown_ms).then(|| user_cooldown_ms - waited)
+}
+
+/// A cooldown this long or longer is saved to the data file: a daily bonus
+/// must stay daily across a restart, and a 3 second one isn't worth a write.
+const LASTING_COOLDOWN_MS: u64 = 10 * 60_000;
+
+/// `5h 12m`, `4m 10s` or `8s`: how long is left, as chat would say it.
+fn cooldown_left_text(ms: u64) -> String {
+    let seconds = ms.div_ceil(1000);
+    match seconds {
+        3600.. => format!("{}h {}m", seconds / 3600, seconds % 3600 / 60),
+        60.. => format!("{}m {}s", seconds / 60, seconds % 60),
+        _ => format!("{seconds}s"),
+    }
 }
 
 /// Each viewer waits out a command's cooldown on their own.
@@ -230,7 +248,55 @@ pub struct Handle {
     activity_held: Mutex<&'static str>,
 }
 
+/// Viewers the dashboard lists per value: the ones holding the most.
+const VIEWERS_LISTED: usize = 100;
+
 impl Handle {
+    /// Every viewer value with how many viewers hold some, and who holds
+    /// the most.
+    pub fn viewers_json(&self) -> Value {
+        let viewers = self.store.viewers.lock();
+        let values = viewers.names().into_iter().map(|(name, holders)| {
+            let top = viewers
+                .top(&name, VIEWERS_LISTED)
+                .into_iter()
+                .map(|(login, amount)| {
+                    json::obj([
+                        ("login", json::str(login)),
+                        ("amount", Value::Num(amount as f64)),
+                    ])
+                });
+            json::obj([
+                ("name", json::str(&name)),
+                ("holders", Value::Num(holders as f64)),
+                ("top", Value::Arr(top.collect())),
+            ])
+        });
+        json::obj([("values", Value::Arr(values.collect()))])
+    }
+
+    /// The dashboard setting what one viewer holds (`value`, `login`,
+    /// `amount`), or forgetting a whole value (`value`, `clear`).
+    pub fn change_viewers(&self, req: &Value) -> Result<(), String> {
+        let value = req.str_or("value", "").trim();
+        if !super::viewers::valid_name(value) {
+            return Err("that isn't a viewer value's name".to_string());
+        }
+        let mut viewers = self.store.viewers.lock();
+        if req.bool_or("clear", false) {
+            viewers.clear(value);
+        } else {
+            let login = super::viewers::login_key(req.str_or("login", ""));
+            let amount = req.get("amount").and_then(Value::as_f64);
+            let (false, Some(amount)) = (login.is_empty(), amount) else {
+                return Err("name the viewer and the amount".to_string());
+            };
+            viewers.apply(value, &login, super::viewers::Change::Set(amount as i64))?;
+        }
+        self.store.dirty.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
     /// Report something that happened. Never blocks; safe from any thread.
     pub fn emit(&self, event: Event) {
         if self.tx.try_send(Input::Event(event)).is_err() {
@@ -599,7 +665,13 @@ struct Engine {
     /// Messages from Shared Chat partners count too (`twitch_shared_chat`).
     shared_chat: bool,
     last_run: HashMap<String, Instant>,
-    viewer_last: HashMap<String, Instant>,
+    /// When each viewer last used each chat command (`viewer_key`), in
+    /// Unix milliseconds. The long ones are in the store too.
+    viewer_last: HashMap<String, u64>,
+    /// The viewers already told they are on cooldown, so each hears it
+    /// once per wait.
+    cooldown_told: HashMap<String, u64>,
+    chat_room: Arc<ChatRoom>,
     timers: HashMap<String, Instant>,
     /// Per integration: (started, doing something). See the module comment.
     limits: HashMap<String, (Arc<Semaphore>, Arc<Semaphore>)>,
@@ -664,13 +736,15 @@ impl Engine {
         let discord_messages = Arc::new(Mutex::new(HashMap::new()));
         let discord_turns = Arc::new(runner::DiscordTurns::default());
         let timeline = Arc::new(Mutex::new(Timeline::default()));
+        let chat_room = Arc::new(ChatRoom::default());
         let env = Arc::new(make_env(
-            Vec::new(),
+            (Vec::new(), Vec::new()),
             PhoneConnection::default(),
-            &store,
+            (&store, &chat_room),
             (&discord_messages, &discord_turns),
             (&timeline, &handle),
         ));
+        let viewer_last = store.cooldowns.lock().clone().into_iter().collect();
         Engine {
             handle,
             host,
@@ -680,7 +754,9 @@ impl Engine {
             env,
             shared_chat: false,
             last_run: HashMap::new(),
-            viewer_last: HashMap::new(),
+            viewer_last,
+            cooldown_told: HashMap::new(),
+            chat_room,
             timers: HashMap::new(),
             limits: HashMap::new(),
             global: (
@@ -765,9 +841,9 @@ impl Engine {
     fn apply_settings(&mut self, s: &Settings) {
         self.integrations = s.integrations.iter().cloned().map(Arc::new).collect();
         self.env = Arc::new(make_env(
-            s.discord_channels.clone(),
+            (s.discord_channels.clone(), s.user_values.clone()),
             s.phone.clone(),
-            &self.store,
+            (&self.store, &self.chat_room),
             (&self.discord_messages, &self.discord_turns),
             (&self.timeline, &self.handle),
         ));
@@ -781,6 +857,7 @@ impl Engine {
         let keep = |key: &String| alive.iter().any(|id| key.starts_with(&format!("{id}#")));
         self.last_run.retain(|k, _| keep(k));
         self.viewer_last.retain(|k, _| keep(k));
+        self.cooldown_told.retain(|k, _| keep(k));
         self.timers.retain(|k, _| keep(k));
         self.still_down_fired.retain(|k, _| keep(k));
         self.steady_fired.retain(|k, _| keep(k));
@@ -806,7 +883,17 @@ impl Engine {
                 }
             }
         }
-        self.viewer_last.retain(|_, t| t.elapsed() < longest_viewer);
+        let (now, longest) = (unix_ms(), longest_viewer.as_millis() as u64);
+        let waiting = |at: &u64| now.saturating_sub(*at) < longest;
+        self.viewer_last.retain(|_, at| waiting(at));
+        self.cooldown_told.retain(|_, at| waiting(at));
+        {
+            let mut saved = self.store.cooldowns.lock();
+            let before = saved.len();
+            saved.retain(|key, _| self.viewer_last.contains_key(key));
+            self.uses_dirty |= saved.len() != before;
+        }
+        self.chat_room.prune(Instant::now());
         self.last_run.retain(|_, t| t.elapsed() < longest_run);
         self.flap.prune(Instant::now());
         // Here rather than on every settings change: a delete undone within
@@ -830,7 +917,7 @@ impl Engine {
     }
 
     fn save_uses_if_due(&mut self) {
-        self.uses_dirty |= self.store.counters_dirty.swap(false, Ordering::Relaxed);
+        self.uses_dirty |= self.store.dirty.swap(false, Ordering::Relaxed);
         if self.uses_dirty && self.uses_saved.elapsed() >= USES_SAVE_EVERY {
             self.uses_saved = Instant::now();
             // A failed write stays due, for the next round.
@@ -1190,12 +1277,23 @@ impl Engine {
             return;
         }
         self.handle.chat.lock().push(&msg, Instant::now());
+        self.chat_room.heard(
+            &Heard {
+                user: msg.display_name.clone(),
+                user_login: msg.user_login.clone(),
+                message: msg.text.clone(),
+            },
+            Instant::now(),
+        );
         self.check_activity(&msg);
         let text = msg.text.trim();
         let mut words = text.split_whitespace();
         let first = words.next().unwrap_or("").to_lowercase();
         let args: Vec<&str> = words.collect();
-        let candidates: Vec<(Arc<Integration>, usize, String)> = self
+        let now = unix_ms();
+        // (integration, trigger, label, the viewer's cooldown, how much of it is left)
+        type Candidate = (Arc<Integration>, usize, String, u64, Option<u64>);
+        let candidates: Vec<Candidate> = self
             .enabled_handlers()
             .filter_map(|(i, idx, h)| match &h.trigger {
                 Trigger::ChatCommand {
@@ -1203,27 +1301,31 @@ impl Engine {
                     aliases,
                     roles,
                     user_cooldown_ms,
+                    ..
                 } if (*command == first || aliases.contains(&first)) && allowed(*roles, &msg) => {
                     let last = self
                         .viewer_last
                         .get(&viewer_key(&i.id, idx, &msg.user_login));
-                    let cooling =
-                        viewer_cooling_down(last.copied(), *user_cooldown_ms, Instant::now());
-                    (!cooling).then(|| (i.clone(), idx, first.clone()))
+                    let left = cooldown_left(last.copied(), *user_cooldown_ms, now);
+                    Some((i.clone(), idx, first.clone(), *user_cooldown_ms, left))
                 }
                 Trigger::ChatMessage {
                     pattern,
                     mode,
                     roles,
                 } if allowed(*roles, &msg) && text_matches(text, pattern, *mode) => {
-                    Some((i, idx, "chat".to_string()))
+                    Some((i, idx, "chat".to_string(), 0, None))
                 }
                 _ => None,
             })
             .collect();
-        for (integration, idx, label) in candidates {
+        for (integration, idx, label, cooldown_ms, left) in candidates {
             let key = viewer_key(&integration.id, idx, &msg.user_login);
             let vars = chat_vars(&msg, &args);
+            if let Some(left) = left {
+                self.tell_cooldown(&integration, idx, (&msg, vars), left);
+                continue;
+            }
             let trigger = if label == "chat" {
                 "Chat message".to_string()
             } else {
@@ -1232,9 +1334,56 @@ impl Engine {
             // A command that didn't run (quiet hours, busy) doesn't make the
             // viewer wait before trying again.
             if self.start_run(integration, idx, vars, Some(msg.id.clone()), trigger) {
-                self.viewer_last.insert(key, Instant::now());
+                self.cooldown_told.remove(&key);
+                if cooldown_ms >= LASTING_COOLDOWN_MS {
+                    self.store.cooldowns.lock().insert(key.clone(), now);
+                    self.uses_dirty = true;
+                }
+                self.viewer_last.insert(key, now);
             }
         }
+    }
+
+    /// Answer a viewer who used a command before their cooldown was over,
+    /// when the command has such an answer: once per wait, and never in
+    /// the integration's quiet hours.
+    fn tell_cooldown(
+        &mut self,
+        integration: &Integration,
+        idx: usize,
+        (msg, mut vars): (&ChatMessage, BTreeMap<String, String>),
+        left_ms: u64,
+    ) {
+        let Trigger::ChatCommand { cooldown_reply, .. } = &integration.handlers[idx].trigger else {
+            return;
+        };
+        let clock = super::clock::now();
+        let minute_of_day = (clock.hour * 60 + clock.minute) as u16;
+        let quiet = integration.quiet.is_some_and(|q| q.contains(minute_of_day));
+        let key = viewer_key(&integration.id, idx, &msg.user_login);
+        if cooldown_reply.is_empty() || quiet || self.cooldown_told.contains_key(&key) {
+            return;
+        }
+        self.cooldown_told.insert(key, unix_ms());
+        vars.insert("cooldown_left".to_string(), cooldown_left_text(left_ms));
+        let steps = [Step::new(
+            StepKind::Chat,
+            &[("text", cooldown_reply), ("reply", "yes")],
+        )];
+        let ctx = RunContext {
+            integration_id: integration.id.clone(),
+            vars,
+            reply_to: Some(msg.id.clone()),
+            test: false,
+            dry: false,
+            gate: None,
+            blocks: Default::default(),
+        };
+        let host: Arc<dyn super::host::Host> = self.host.clone();
+        let env = self.env.clone();
+        tokio::spawn(async move {
+            runner::run(&steps, ctx, host, env).await;
+        });
     }
 
     /// Why chat activity triggers that only run while streaming can't fire
@@ -1686,6 +1835,7 @@ impl Engine {
             test: false,
             dry: false,
             gate: Some(runner::Gate::new(places, vec![active, active_all])),
+            blocks: Arc::new(model::blocks(&integration)),
         };
         let handle = self.handle.clone();
         let ctrl = self.ctrl.clone();
@@ -1696,6 +1846,9 @@ impl Engine {
             let at_ms = unix_ms();
             let (status, steps) =
                 runner::run(&integration.handlers[idx].steps, ctx, host, env).await;
+            if status == RunStatus::StoppedQuietly {
+                return;
+            }
             let status = status_id(&status);
             if status == "failed" {
                 if let Some(step) = steps
@@ -1769,6 +1922,7 @@ impl Engine {
             test: true,
             dry: run.dry,
             gate: None,
+            blocks: Arc::new(model::blocks(&integration)),
         };
         let host: Arc<dyn super::host::Host> = self.host.clone();
         let env = self.env.clone();
@@ -1896,7 +2050,7 @@ impl FlapGuard {
 fn status_id(status: &RunStatus) -> &'static str {
     match status {
         RunStatus::Ok => "ok",
-        RunStatus::Stopped => "stopped",
+        RunStatus::Stopped | RunStatus::StoppedQuietly => "stopped",
         RunStatus::Failed => "failed",
     }
 }
@@ -1910,25 +2064,27 @@ fn forget_subject_messages(messages: &mut HashMap<String, String>) {
 }
 
 fn make_env(
-    discord: Vec<DiscordChannel>,
+    (discord, user_values): (Vec<DiscordChannel>, Vec<model::UserValue>),
     phone: PhoneConnection,
-    store: &Arc<Store>,
+    (store, chat_room): (&Arc<Store>, &Arc<ChatRoom>),
     (discord_messages, discord_turns): (&DiscordMessages, &Arc<runner::DiscordTurns>),
     (timeline, handle): (&Arc<Mutex<Timeline>>, &Arc<Handle>),
 ) -> RunEnv {
-    let saver = store.clone();
+    let dirty = store.dirty.clone();
     // Weak: the env lives inside the engine the handle owns a channel to.
     let events = Arc::downgrade(handle);
     RunEnv {
         discord,
         phone,
         counters: store.counters.clone(),
+        viewers: store.viewers.clone(),
+        saved: store.saved.clone(),
         // Written with the run counts a moment later (`save_uses_if_due`):
         // a chat command counting every message must not rewrite the file
         // each time, on the engine's own thread.
-        counters_changed: Box::new(move || {
-            saver.counters_dirty.store(true, Ordering::Relaxed);
-        }),
+        data_changed: Box::new(move || dirty.store(true, Ordering::Relaxed)),
+        chat_room: chat_room.clone(),
+        user_values: user_values.into_iter().map(|v| (v.name, v.value)).collect(),
         discord_messages: discord_messages.clone(),
         discord_turns: discord_turns.clone(),
         timeline: timeline.clone(),
@@ -2017,6 +2173,14 @@ fn chat_vars(msg: &ChatMessage, args: &[&str]) -> BTreeMap<String, String> {
                 .filter(|a| !a.is_empty())
                 .unwrap_or_else(|| msg.display_name.clone()),
         ),
+        // The same viewer as Twitch knows them: what viewer values go by.
+        (
+            "target_login".to_string(),
+            args.first()
+                .map(|a| super::viewers::login_key(a))
+                .filter(|a| !a.is_empty())
+                .unwrap_or_else(|| msg.user_login.clone()),
+        ),
     ]);
     for (i, arg) in args.iter().take(9).enumerate() {
         vars.insert(format!("arg{}", i + 1), arg.to_string());
@@ -2052,12 +2216,15 @@ fn sample_vars(trigger: &Trigger) -> (BTreeMap<String, String>, String) {
                 ("user_login", "testviewer"),
                 ("user_role", "mod"),
                 ("target", "TestViewer"),
+                ("target_login", "testviewer"),
                 ("message", &format!("{command} 30")),
                 ("args", "30"),
                 ("arg1", "30"),
             ]),
             format!("Test: {command}"),
         ),
+        // A block runs inside whatever started it: most often a command.
+        Trigger::Block { name } => (owned(runner::CHAT_VARS), format!("Test: block {name}")),
         Trigger::ChatMessage { pattern, .. } => (
             owned(&[
                 ("user", "TestViewer"),
@@ -2114,11 +2281,24 @@ pub fn text_matches(text: &str, pattern: &str, mode: MatchMode) -> bool {
         return false;
     }
     match mode {
+        MatchMode::Word => has_words(&text, &pattern),
         MatchMode::Contains => text.contains(&pattern),
         MatchMode::StartsWith => text.starts_with(&pattern),
         MatchMode::Exact => text.trim() == pattern,
         MatchMode::Wildcard => wildcard(text.trim(), &pattern),
     }
+}
+
+/// Whether `pattern` is in `text` as whole words: with no letter or digit
+/// right before or after it. An apostrophe ends a word, so "nt" is not in
+/// "don't".
+fn has_words(text: &str, pattern: &str) -> bool {
+    let inside_a_word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+    text.match_indices(pattern).any(|(at, found)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + found.len()..].chars().next();
+        !inside_a_word(before) && !inside_a_word(after)
+    })
 }
 
 /// `*` = any run of characters, `?` = one character. Iterative, so a
@@ -2321,20 +2501,46 @@ mod tests {
             viewer_key("i", 1, "ana"),
             "per trigger too"
         );
-        let now = Instant::now() + Duration::from_secs(60);
-        let used = Some(now - Duration::from_millis(5_000));
-        assert!(viewer_cooling_down(used, 30_000, now));
-        assert!(
-            !viewer_cooling_down(used, 5_000, now),
-            "over once it has passed"
+        let now = 1_000_000;
+        let used = Some(now - 5_000);
+        assert_eq!(cooldown_left(used, 30_000, now), Some(25_000));
+        assert_eq!(cooldown_left(used, 5_000, now), None, "over once it passed");
+        assert_eq!(cooldown_left(None, 30_000, now), None, "first time");
+        assert_eq!(
+            cooldown_left(Some(now + 500), 30_000, now),
+            Some(30_000),
+            "clock set back"
         );
-        assert!(!viewer_cooling_down(None, 30_000, now), "first time");
+    }
+
+    #[test]
+    fn a_cooldown_left_reads_like_chat_would_say_it() {
+        assert_eq!(cooldown_left_text(7_200), "8s");
+        assert_eq!(cooldown_left_text(250_000), "4m 10s");
+        assert_eq!(cooldown_left_text(18_720_000), "5h 12m");
     }
 
     #[test]
     fn matching_ignores_case() {
         assert!(text_matches("POG champ", "pog", MatchMode::StartsWith));
         assert!(text_matches(" GG ", "gg", MatchMode::Exact));
+    }
+
+    #[test]
+    fn a_word_match_never_fires_inside_another_word() {
+        for said in ["nt", "NT!", "wow, nt.", "(nt)", "that was nt though"] {
+            assert!(text_matches(said, "nt", MatchMode::Word), "{said}");
+        }
+        for said in ["want", "don't", "isnt", "ntf", "front", "n t"] {
+            assert!(!text_matches(said, "nt", MatchMode::Word), "{said}");
+        }
+        assert!(text_matches("NICE TRY lol", "nice try", MatchMode::Word));
+        assert!(!text_matches("nice tryhard", "nice try", MatchMode::Word));
+        assert!(text_matches("ñam ñam", "ñam", MatchMode::Word));
+        assert!(
+            text_matches("want", "nt", MatchMode::Contains),
+            "anywhere still is"
+        );
     }
 
     #[test]
@@ -2358,6 +2564,14 @@ mod tests {
         let v = chat_vars(&msg("!setdelay 45 now"), &["45", "now"]);
         assert_eq!(v["arg1"], "45");
         assert_eq!(v["target"], "45");
+        assert_eq!(
+            chat_vars(&msg("!give @Ana 5"), &["@Ana", "5"])["target_login"],
+            "ana"
+        );
+        assert_eq!(
+            chat_vars(&msg("!coins"), &[])["target_login"],
+            msg("!coins").user_login
+        );
         assert_eq!(v["arg2"], "now");
         assert_eq!(v["args"], "45 now");
         assert_eq!(v["user_role"], "viewer");

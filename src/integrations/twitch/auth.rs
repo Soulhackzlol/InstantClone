@@ -11,13 +11,15 @@
 
 use crate::json::{self, Value};
 
-/// Chat, VOD markers and clips for the streamer's account, and reading
-/// the channel's follows, subs, bits, redemptions and ad breaks for
-/// Twitch event triggers (see `eventsub`). All read-only but chat,
-/// markers and clips.
+/// Chat, VOD markers and clips for the streamer's account, reading the
+/// channel's follows, subs, bits and ad breaks for Twitch event triggers
+/// (see `eventsub`), and channel points: hearing redemptions, and making
+/// and switching the rewards the streamer sets up here. A login from
+/// before rewards could be managed still hears redemptions; managing
+/// them asks for a new login.
 pub const MAIN_SCOPES: &str = "chat:read chat:edit channel:manage:broadcast clips:edit \
-     moderator:read:followers channel:read:subscriptions bits:read channel:read:redemptions \
-     channel:read:ads";
+     moderator:read:followers channel:read:subscriptions bits:read \
+     channel:read:redemptions channel:manage:redemptions channel:read:ads";
 /// A bot account only reads and posts chat.
 pub const BOT_SCOPES: &str = "chat:read chat:edit";
 

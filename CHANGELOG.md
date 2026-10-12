@@ -4,7 +4,7 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.16] - Delays up to 1 hour, Twitch events and alerts, smart lights, and two InstantClones side by side
+## [0.1.16] - Delays up to 1 hour, Twitch events and alerts, smart lights, chat games and points, and two InstantClones side by side
 
 ### Delays up to 1 hour
 
@@ -290,6 +290,74 @@ dock's destination list says "Can't connect", with the reason on hover.
 - A device that never answers a command is given up on after a few
   seconds, and Shelly and WLED are only ever asked directly: an answer
   pointing somewhere else counts as a no.
+
+### Chat games and points
+
+What a chat economy needs, as steps you can build anything else with too.
+
+- **Viewer value** keeps a number per viewer under a name you pick (coins,
+  points), between streams. It gives, takes, sets, or **spends**: taken only
+  when the viewer has enough, with `{paid}` saying yes or no. It can also pay
+  **everyone who chatted lately**, or a viewer the step names. Read it
+  anywhere as `{viewer.coins}` or `{target.coins}`, add `.rank` for their
+  place, and `{top.coins}` lists the five who hold the most. The step's
+  editor shows who holds the most and lets you fix a viewer by hand.
+- **Maths** adds, subtracts, multiplies, divides, takes a percent, the
+  smaller or bigger of two numbers, or a random number between them.
+- **A "% chance" check** in If: `25` passes one time in four, `0.1` one in
+  a thousand.
+- **Wait for chat** pauses a run until someone types something (anyone, the
+  viewer, or who they named), up to 5 minutes, and hands on who answered.
+  Duels, "first to type !grab" and turn-based games need nothing else.
+- **Blocks**: a new kind of trigger that never starts on its own. A **Run a
+  block** step runs its steps by name with the run's values, so a check
+  written once serves every command. A block can run itself (a turn that
+  repeats), 8 deep at most.
+- **Remember a value** can keep its text between runs and streams, read
+  back as `{saved.name}`.
+- **A chat command can answer a viewer who is too early**, with
+  `{cooldown_left}`, once per wait. Cooldowns of 10 minutes or more now
+  survive a restart, so a daily bonus stays daily.
+- **Stop** can leave its run out of the history, for a timer that rolls for
+  a rare drop every minute.
+- **Your values** (a button on the Integrations tab): things you set once
+  and any message or step reads as `{my.name}`, like what a point is
+  called, how often a game is won or a list to pick from. Change one there
+  and everything that uses it follows. Each value shows what it is for,
+  where it is used, and one field made for it: a slider for a chance, a
+  box with one entry per line for a list. Its name and label sit behind
+  the pencil. A second tab shows what your viewers hold, where you can set
+  one viewer's amount or start everyone over. In a counting word, write a
+  value with a `$`: `{viewer.coins#$my.coin#$my.coins}` says "1 gem" or
+  "5 gems" in your words. A recipe brings the values it uses; one you
+  already set stays as you set it, and the import preview says so.
+- **Channel points rewards, made and managed here.** A "Someone redeems
+  channel points" trigger now has a list to tick which rewards start it
+  (or any reward), and under it your rewards: a switch for each, edit
+  (name, cost, description, whether the viewer types a message) and
+  delete, plus **New reward**, all live on your channel without opening
+  Twitch. Renaming a reward there updates the integration you are editing.
+  A **Channel points reward** step switches one on or off during a run, so
+  a reward is only there when it makes sense. Twitch only lets an app
+  change rewards it made itself, and channel points need an Affiliate or
+  Partner channel. If you logged in to Twitch before this build, log out
+  and in again once under Connections to allow it; hearing redemptions
+  keeps working either way.
+- **A chat message trigger can match whole words.** "Has the word" with
+  `nt` fires on "nt!" but not on "want" or "don't". New triggers start with
+  it; ones you already have keep "Contains these letters". Under the
+  choice, the editor says what it means and marks a few messages made from
+  your own text as firing or not, and **Try a message** tells you for any
+  message you type.
+- **A test run starts from the values you give it**: `counter.wins`,
+  `viewer.coins` and `target.coins` set what the test reads, and what it
+  counts or pays stays in the test. Nothing saved changes.
+- A counter is now read as it is at that moment, not as an earlier step of
+  the same run left it, so a run that waited sees what changed meanwhile.
+  The Counter step can also save its value under a fixed name.
+- Twitch events (follow, sub, cheer, raid, channel points) bring
+  `{user_login}`, and chat commands `{target_login}`, so viewer values work
+  from them.
 
 ### Integrations
 

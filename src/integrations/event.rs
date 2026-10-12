@@ -315,10 +315,18 @@ impl EventKind {
             EventKind::ObsMuteChanged => &[("obs_source", "Mic/Aux"), ("muted", "yes")],
             // `user` is "Anonymous" for an anonymous gift or cheer. `tier`
             // is 1, 2 or 3.
-            EventKind::TwitchFollow => &[("user", "Nat")],
-            EventKind::TwitchSub => &[("user", "Nat"), ("tier", "1"), ("gift", "no")],
+            // `user_login` is the same viewer as Twitch knows them: what
+            // viewer values go by. Blank for an anonymous gift or cheer.
+            EventKind::TwitchFollow => &[("user", "Nat"), ("user_login", "nat")],
+            EventKind::TwitchSub => &[
+                ("user", "Nat"),
+                ("user_login", "nat"),
+                ("tier", "1"),
+                ("gift", "no"),
+            ],
             EventKind::TwitchResub => &[
                 ("user", "Nat"),
+                ("user_login", "nat"),
                 ("tier", "1"),
                 ("months", "13"),
                 ("streak", "4"),
@@ -326,16 +334,21 @@ impl EventKind {
             ],
             EventKind::TwitchGift => &[
                 ("user", "Nat"),
+                ("user_login", "nat"),
                 ("count", "5"),
                 ("tier", "1"),
                 ("total", "42"),
             ],
-            EventKind::TwitchCheer => {
-                &[("user", "Nat"), ("bits", "500"), ("message", "Cheer500 gg")]
-            }
-            EventKind::TwitchRaid => &[("user", "Nat"), ("viewers", "42")],
+            EventKind::TwitchCheer => &[
+                ("user", "Nat"),
+                ("user_login", "nat"),
+                ("bits", "500"),
+                ("message", "Cheer500 gg"),
+            ],
+            EventKind::TwitchRaid => &[("user", "Nat"), ("user_login", "nat"), ("viewers", "42")],
             EventKind::TwitchRedeem => &[
                 ("user", "Nat"),
+                ("user_login", "nat"),
                 ("reward", "Hydrate"),
                 ("cost", "500"),
                 ("input", "with lemon"),

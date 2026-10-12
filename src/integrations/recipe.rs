@@ -15,12 +15,18 @@
 //!   chooses whether to use the theme; an upload that didn't come along
 //!   falls back to the theme sound, or no picture.
 //!
+//! - The sharer's own values (`{my.name}`) that the recipe's integrations
+//!   use come along. A value the importer already has under that name is
+//!   left as they set it.
+//!
 //! Import cleans exactly what export does, so a recipe written by hand
 //! can't bring in a web address, a program or a hotkey the user never set.
 
 use super::alert_media::{self, Kind, REF_PREFIX};
 use super::alerts::{is_web_link, Look, THEME_SOUND};
-use super::model::{visit_steps, Integration, Step, StepKind, Trigger};
+use super::model::{
+    user_values_used, visit_steps, Integration, Step, StepKind, Trigger, UserValue, MAX_USER_VALUES,
+};
 use crate::json::{self, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -40,6 +46,8 @@ pub struct Recipe {
     pub name: String,
     pub integrations: Vec<Integration>,
     pub alerts: Option<SharedAlerts>,
+    /// The `{my.name}` values its integrations read, as the sharer set them.
+    pub values: Vec<UserValue>,
 }
 
 /// What alerts in a recipe bring: the sharer's theme and their uploads.
@@ -68,12 +76,13 @@ impl Recipe {
 }
 
 /// The recipe text. With `look`, alerts among `integrations` bring that
-/// theme and the uploads (from `media_folder`) they play or show.
+/// theme and the uploads (from `media_folder`) they play or show. Of
+/// `values`, the ones `integrations` read come along.
 pub fn export(
     name: &str,
     integrations: &[Integration],
-    look: Option<&Look>,
-    media_folder: &Path,
+    (look, media_folder): (Option<&Look>, &Path),
+    values: &[UserValue],
 ) -> String {
     let cleaned: Vec<Value> = integrations
         .iter()
@@ -87,6 +96,15 @@ pub fn export(
         ("name".to_string(), json::str(name)),
         ("integrations".to_string(), Value::Arr(cleaned)),
     ];
+    let used = user_values_used(integrations);
+    let shared: Vec<Value> = values
+        .iter()
+        .filter(|v| used.contains(&v.name))
+        .map(UserValue::to_json)
+        .collect();
+    if !shared.is_empty() {
+        doc.push(("values".to_string(), Value::Arr(shared)));
+    }
     if let Some(look) = look.filter(|_| integrations.iter().any(shows_alerts)) {
         doc.push((
             "alerts".to_string(),
@@ -301,7 +319,22 @@ pub fn parse(text: &str, mut new_id: impl FnMut() -> String) -> Result<Recipe, S
             .collect(),
         integrations,
         alerts: doc.get("alerts").map(parse_alerts).transpose()?,
+        values: parse_values(doc.get("values")),
     })
+}
+
+/// The values a recipe brings: each name once, and none that wouldn't save.
+fn parse_values(v: Option<&Value>) -> Vec<UserValue> {
+    let mut values: Vec<UserValue> = Vec::new();
+    for value in v.and_then(Value::as_array).unwrap_or(&[]) {
+        let Some(value) = UserValue::from_json(value) else {
+            continue;
+        };
+        if values.len() < MAX_USER_VALUES && !values.iter().any(|v| v.name == value.name) {
+            values.push(value);
+        }
+    }
+    values
 }
 
 /// The theme and uploads a recipe brings. Every upload must be a sound or
@@ -491,6 +524,28 @@ mod tests {
     /// An alert's picture or sound linked from the web would load from that
     /// site on the importer's stream: it falls back as a missing upload does.
     #[test]
+    fn a_recipe_brings_the_values_its_integrations_read() {
+        let value = |name: &str, value: &str| UserValue {
+            name: name.into(),
+            label: format!("What {name} is"),
+            value: value.into(),
+        };
+        let mut i = presets::build("socials", "i1".into(), "").unwrap();
+        i.handlers[0].steps = vec![Step::new(
+            StepKind::Chat,
+            &[("text", "You have {n#$my.coin#$my.coins}")],
+        )];
+        let mine = [
+            value("coin", "gem"),
+            value("coins", "gems"),
+            value("unused", "x"),
+        ];
+        let text = export("x", &[i], (None, Path::new("")), &mine);
+        let recipe = parse(&text, || "fresh".to_string()).unwrap();
+        assert_eq!(recipe.values, mine[..2]);
+    }
+
+    #[test]
     fn alerts_linked_from_the_web_stay_behind() {
         let mut steps = vec![Step::new(
             StepKind::Overlay,
@@ -581,7 +636,7 @@ mod tests {
             css: ".card{letter-spacing:1px}".into(),
             ..Look::default()
         };
-        let text = export("Alerts", &[alert], Some(&look), &theirs.0);
+        let text = export("Alerts", &[alert], (Some(&look), &theirs.0), &[]);
         let mut recipe = parse(&text, || "fresh1234567890ab".into()).unwrap();
         let shared = recipe.alerts.take().unwrap();
         assert_eq!(shared.look, look);
@@ -615,7 +670,7 @@ mod tests {
         )]);
         assert!(parse_alerts(&forged).is_err());
         let chat = presets::build("delay_command", "c1".into(), "").unwrap();
-        let text = export("x", &[chat], Some(&Look::default()), Path::new(""));
+        let text = export("x", &[chat], (Some(&Look::default()), Path::new("")), &[]);
         assert!(parse(&text, || "fresh1234567890ab".into())
             .unwrap()
             .alerts
@@ -634,7 +689,7 @@ mod tests {
     #[test]
     fn export_hides_connections_and_import_starts_off() {
         let alert = presets::build("crash_alert", "a1".into(), "my-private-channel").unwrap();
-        let text = export("Crash kit", &[alert], None, Path::new(""));
+        let text = export("Crash kit", &[alert], (None, Path::new("")), &[]);
         assert!(text.starts_with(PREFIX));
         let decoded = String::from_utf8(base64url_decode(&text[PREFIX.len()..]).unwrap()).unwrap();
         assert!(!decoded.contains("my-private-channel"));
@@ -675,7 +730,7 @@ mod tests {
                 &[("path", r"C:\Users\oriol\stream.txt"), ("text", "x")],
             ),
         ];
-        let text = export("x", &[i], None, Path::new(""));
+        let text = export("x", &[i], (None, Path::new("")), &[]);
         let decoded = String::from_utf8(base64url_decode(&text[PREFIX.len()..]).unwrap()).unwrap();
         for secret in ["secret-key", "s3cret", "oriol"] {
             assert!(!decoded.contains(secret), "{secret} leaked");
@@ -688,7 +743,7 @@ mod tests {
         i.handlers[0].trigger = Trigger::Webhook {
             token: "secret-token-1234567890".into(),
         };
-        let text = export("x", &[i], None, Path::new(""));
+        let text = export("x", &[i], (None, Path::new("")), &[]);
         let decoded = String::from_utf8(base64url_decode(&text[PREFIX.len()..]).unwrap()).unwrap();
         assert!(!decoded.contains("secret-token"));
         let recipe = parse(&text, || "fresh1234567890ab".into()).unwrap();
@@ -707,7 +762,7 @@ mod tests {
             token: String::new(),
             only_live: false,
         };
-        let text = export("x", &[i], None, Path::new(""));
+        let text = export("x", &[i], (None, Path::new("")), &[]);
         let decoded = String::from_utf8(base64url_decode(&text[PREFIX.len()..]).unwrap()).unwrap();
         assert!(!decoded.contains("Launchpad") && !decoded.contains("Ctrl+Alt+K"));
         assert!(
@@ -720,7 +775,7 @@ mod tests {
     fn a_shared_light_keeps_what_each_state_sends_and_buttons_get_an_address() {
         let light = presets::build("on_air_light", "l".into(), "").unwrap();
         let highlight = presets::build("highlight", "h".into(), "").unwrap();
-        let text = export("studio", &[light, highlight], None, Path::new(""));
+        let text = export("studio", &[light, highlight], (None, Path::new("")), &[]);
         let mut n = 0;
         let recipe = parse(&text, || {
             n += 1;
@@ -750,7 +805,7 @@ mod tests {
                 &[("url", "https://x.example/"), ("body", "key=secret")],
             ),
         ];
-        let recipe = parse(&export("x", &[i], None, Path::new("")), || {
+        let recipe = parse(&export("x", &[i], (None, Path::new("")), &[]), || {
             "fresh1234567890ab".into()
         })
         .unwrap();
