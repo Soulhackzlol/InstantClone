@@ -149,25 +149,13 @@ jobs:
           "$luaHash  optional-vod-unlocker.lua" | Out-File -FilePath "artifacts\SHA256SUMS.txt" -Encoding ascii -Append
           Get-ChildItem artifacts
 
-      # A tag moved to republish a build already has its release, with its
-      # notes. Generating them again adds a second "What's Changed" list
-      # under the first, so they are generated only for a new release.
-      - name: is this release new
-        id: release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" *> $null
-          $new = if ($LASTEXITCODE -eq 0) { 'false' } else { 'true' }
-          "new=$new" >> $env:GITHUB_OUTPUT
-          # The lookup failing is an answer, not an error for this step.
-          exit 0
-
+      # No generated notes: they add a "What's Changed" list of pull request
+      # titles, once more every time a tag is moved to republish a build. The
+      # release's notes are written by hand.
       - name: publish release
         uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: ${{ steps.release.outputs.new == 'true' }}
+          generate_release_notes: false
           # SemVer convention: anything with a `-` suffix (e.g. v0.1.0-beta.1,
           # v0.1.0-rc.2) is a pre-release. Stable tags (v0.1.0) ship as full.
           prerelease: ${{ contains(github.ref_name, '-') }}
