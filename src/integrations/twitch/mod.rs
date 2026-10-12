@@ -662,6 +662,43 @@ impl Twitch {
         self.helix_call(helix::create_clip)
     }
 
+    /// The channel points rewards this app made on the channel.
+    pub fn rewards(&self) -> Result<Vec<helix::Reward>, String> {
+        self.helix_call(helix::rewards)
+    }
+
+    pub fn create_reward(&self, spec: &helix::RewardEdit) -> Result<helix::Reward, String> {
+        self.helix_call(|a| helix::create_reward(a, spec))
+    }
+
+    pub fn update_reward(&self, id: &str, edit: &helix::RewardEdit) -> Result<(), String> {
+        self.helix_call(|a| helix::update_reward(a, id, edit))
+    }
+
+    pub fn delete_reward(&self, id: &str) -> Result<(), String> {
+        self.helix_call(|a| helix::delete_reward(a, id))
+    }
+
+    /// Switch the reward called `title` (any case) on or off.
+    pub fn set_reward_named(&self, title: &str, enabled: bool) -> Result<(), String> {
+        let wanted = title.trim().to_lowercase();
+        let rewards = self.rewards()?;
+        let found = rewards.iter().find(|r| r.title.to_lowercase() == wanted);
+        match found {
+            Some(reward) => {
+                let switch = helix::RewardEdit {
+                    enabled: Some(enabled),
+                    ..helix::RewardEdit::default()
+                };
+                self.update_reward(&reward.id, &switch)
+            }
+            None => Err(format!(
+                "no reward called \"{}\" was made here: make it under Channel points first",
+                title.trim()
+            )),
+        }
+    }
+
     pub fn status_json(&self) -> Value {
         let conn_json = |which: Which| {
             let account = self.account(which);

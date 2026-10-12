@@ -14,6 +14,7 @@
 //! included, and says what each would have been.
 
 use super::alerts;
+use super::chat_room::{self, ChatRoom};
 use super::clock;
 use super::event::{Event, EventKind};
 use super::host::{
@@ -24,6 +25,7 @@ use super::model::{DiscordChannel, PhoneConnection, Step, StepKind};
 use super::obsws;
 use super::template::{self, Vars};
 use super::timeline::{self as tl, Timeline};
+use super::viewers::{self, Change, ViewerValues};
 use crate::json;
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -48,6 +50,18 @@ const MAX_CHAT_LEN: usize = 500;
 /// Counters are all saved in one file, rewritten on every change.
 const MAX_COUNTERS: usize = 5000;
 const MAX_COUNTER_NAME: usize = 100;
+/// Texts kept between runs (`{saved.name}`), and how long each may be.
+const MAX_SAVED: usize = 200;
+const MAX_SAVED_LEN: usize = 500;
+/// How long a "Wait for chat" step waits when it names no time, and at most.
+const WAIT_CHAT_SECONDS: u64 = 30;
+const MAX_WAIT_CHAT_SECONDS: u64 = 300;
+/// How far back "everyone who chatted lately" looks when a step names no
+/// time, in minutes.
+const ACTIVE_MINUTES: u64 = 10;
+/// Blocks running blocks: deep enough for any real use, and an end to two
+/// blocks that run each other.
+const MAX_CALL_DEPTH: usize = 8;
 /// How long a "Show on stream" card stays up when the step names no time.
 const OVERLAY_SECONDS: u64 = 6;
 /// A card's color when none (or a broken one) is set: the InstantClone blue.
@@ -60,8 +74,16 @@ pub struct RunEnv {
     pub discord: Vec<DiscordChannel>,
     pub phone: PhoneConnection,
     pub counters: Arc<crate::sync::Mutex<BTreeMap<String, i64>>>,
-    /// Called after a counter changes, to save it.
-    pub counters_changed: Box<dyn Fn() + Send + Sync>,
+    /// What each viewer holds (`{viewer.coins}`).
+    pub viewers: Arc<crate::sync::Mutex<ViewerValues>>,
+    /// Texts kept between runs (`{saved.name}`).
+    pub saved: Arc<crate::sync::Mutex<BTreeMap<String, String>>>,
+    /// Called after any of those three changes, to save it.
+    pub data_changed: Box<dyn Fn() + Send + Sync>,
+    /// Who chatted lately, and the messages steps are waiting for.
+    pub chat_room: Arc<ChatRoom>,
+    /// The streamer's own values (`{my.name}`), by name.
+    pub user_values: BTreeMap<String, String>,
     /// The last Discord message each integration posted per channel (key
     /// `integration:channel`), so a later step can edit it. In memory only:
     /// after a restart the next update simply posts a new message.
@@ -87,6 +109,8 @@ pub struct RunContext {
     pub dry: bool,
     /// The run's place in the engine's run limits; None for tests.
     pub gate: Option<Gate>,
+    /// The integration's blocks by name, for "Run a block" steps.
+    pub blocks: Arc<BTreeMap<String, Vec<Step>>>,
 }
 
 /// A run's place in the engine's limits on runs going at once. A run that
@@ -187,6 +211,9 @@ pub enum RunStatus {
     Ok,
     /// A `stop` step ended it on purpose.
     Stopped,
+    /// A `stop` step that asked to leave no trace ended it: a timer that
+    /// rolls a die every minute shouldn't fill the history with misses.
+    StoppedQuietly,
     /// At least one step failed; the rest still ran.
     Failed,
 }
@@ -203,14 +230,89 @@ struct Runner {
     started: Instant,
     log: Vec<StepLog>,
     failed: bool,
+    /// What lasts between runs. A test works on its own copies, so it can
+    /// count, pay and read back without changing anything real.
+    kept: Kept,
+    /// A `stop` step asked for the run to stay out of the history.
+    quiet: bool,
+    call_depth: usize,
+}
+
+/// The values that last between runs: counters, what viewers hold, and
+/// kept texts.
+#[derive(Clone)]
+struct Kept {
+    counters: Arc<crate::sync::Mutex<BTreeMap<String, i64>>>,
+    viewers: Arc<crate::sync::Mutex<ViewerValues>>,
+    saved: Arc<crate::sync::Mutex<BTreeMap<String, String>>>,
+}
+
+impl Kept {
+    fn real(env: &RunEnv) -> Kept {
+        Kept {
+            counters: env.counters.clone(),
+            viewers: env.viewers.clone(),
+            saved: env.saved.clone(),
+        }
+    }
+
+    /// A test's own copies, with the values it was given to start from:
+    /// `counter.wins`, `viewer.coins` and `target.coins` among a test's
+    /// values set those, instead of being plain variables.
+    fn for_test(env: &RunEnv, vars: &mut BTreeMap<String, String>) -> Kept {
+        let mut counters = env.counters.lock().clone();
+        let mut viewers = env.viewers.lock().clone();
+        let given: Vec<String> = vars.keys().filter(|n| n.contains('.')).cloned().collect();
+        for name in given {
+            let Ok(amount) = vars[&name].trim().parse::<i64>() else {
+                continue;
+            };
+            match name.split_once('.') {
+                Some(("counter", counter)) => {
+                    counters.insert(counter.to_string(), amount);
+                }
+                Some((who @ ("viewer" | "target"), value)) if viewers::valid_name(value) => {
+                    let Some(login) = login_of(vars, who) else {
+                        continue;
+                    };
+                    let _ = viewers.apply(value, &login, Change::Set(amount));
+                }
+                _ => continue,
+            }
+            vars.remove(&name);
+        }
+        let shared_saved = env.saved.lock().clone();
+        Kept {
+            counters: Arc::new(crate::sync::Mutex::new(counters)),
+            viewers: Arc::new(crate::sync::Mutex::new(viewers)),
+            saved: Arc::new(crate::sync::Mutex::new(shared_saved)),
+        }
+    }
+}
+
+/// The login a step means by "the viewer" (who started the run) or "the
+/// target" (who their command named). Twitch events name the viewer too.
+fn login_of(vars: &BTreeMap<String, String>, who: &str) -> Option<String> {
+    let (login, shown) = match who {
+        "target" => ("target_login", "target"),
+        _ => ("user_login", "user"),
+    };
+    vars.get(login)
+        .or_else(|| vars.get(shown))
+        .map(|name| viewers::login_key(name))
+        .filter(|login| !login.is_empty())
 }
 
 pub async fn run(
     steps: &[Step],
-    ctx: RunContext,
+    mut ctx: RunContext,
     host: Arc<dyn Host>,
     env: Arc<RunEnv>,
 ) -> (RunStatus, Vec<StepLog>) {
+    let kept = match ctx.test {
+        true => Kept::for_test(&env, &mut ctx.vars),
+        false => Kept::real(&env),
+    };
     let mut runner = Runner {
         host,
         env,
@@ -218,10 +320,14 @@ pub async fn run(
         started: Instant::now(),
         log: Vec::new(),
         failed: false,
+        kept,
+        quiet: false,
+        call_depth: 0,
     };
     let flow = runner.steps(steps).await;
     let status = match (flow, runner.failed) {
         (_, true) => RunStatus::Failed,
+        (Flow::Stop, false) if runner.quiet => RunStatus::StoppedQuietly,
         (Flow::Stop, false) => RunStatus::Stopped,
         (Flow::Continue, false) => RunStatus::Ok,
     };
@@ -282,7 +388,8 @@ impl Runner {
     fn lookup<'a>(&'a self, live: &'a LiveState) -> Lookup<'a> {
         Lookup {
             vars: &self.ctx.vars,
-            counters: &self.env.counters,
+            kept: &self.kept,
+            user_values: &self.env.user_values,
             timeline: &self.env.timeline,
             live,
         }
@@ -290,6 +397,13 @@ impl Runner {
 
     fn set(&mut self, name: impl Into<String>, value: impl Into<String>) {
         self.ctx.vars.insert(name.into(), value.into());
+    }
+
+    /// A kept value changed: have it saved. A test's copies never are.
+    fn data_changed(&self) {
+        if !self.ctx.test {
+            (self.env.data_changed)();
+        }
     }
 
     /// Run a blocking effect off the async thread.
@@ -306,7 +420,9 @@ impl Runner {
     async fn step(&mut self, step: &Step) -> Flow {
         match step.kind {
             StepKind::If => return self.check(step).await,
+            StepKind::Call => return self.call(step).await,
             StepKind::Stop => {
+                self.quiet = step.param("quiet") == "yes";
                 self.record("Stop", StepStatus::Ok, "");
                 return Flow::Stop;
             }
@@ -324,10 +440,18 @@ impl Runner {
             StepKind::SetVar => {
                 let name = self.fill(step, "name");
                 let value = self.fill(step, "value");
-                self.record(format!("Remember {name}"), StepStatus::Ok, value.clone());
+                if step.param("keep") == "yes" {
+                    self.keep(&name, &value);
+                } else {
+                    self.record(format!("Remember {name}"), StepStatus::Ok, value.clone());
+                }
                 self.set(name, value);
             }
             StepKind::Counter => self.counter(step),
+            StepKind::Viewer => self.viewer(step),
+            StepKind::Math => self.math(step),
+            StepKind::WaitChat => self.wait_chat(step).await,
+            StepKind::Reward => self.reward(step).await,
             StepKind::Overlay => self.overlay(step),
             StepKind::EditText => self.edit_text(step),
             StepKind::Timeline => self.timeline(step),
@@ -1077,7 +1201,7 @@ impl Runner {
         let by = self.fill(step, "by").trim().parse::<i64>().unwrap_or(1);
         let op = step.param("op");
         let value = {
-            let mut counters = self.env.counters.lock();
+            let mut counters = self.kept.counters.lock();
             if counters.len() >= MAX_COUNTERS && !counters.contains_key(&name) {
                 drop(counters);
                 self.record(
@@ -1094,26 +1218,355 @@ impl Runner {
                 "reset" => 0,
                 _ => current.saturating_add(by),
             };
-            if !self.ctx.test {
-                counters.insert(name.clone(), next);
-            }
+            counters.insert(name.clone(), next);
             next
         };
-        if !self.ctx.test {
-            (self.env.counters_changed)();
+        self.data_changed();
+        // A name filled in from chat (`wins_{user_login}`) can't be written
+        // into a later step: `save_as` gives its value a fixed name.
+        let save_as = step.param("save_as").trim();
+        if !save_as.is_empty() {
+            self.set(save_as, value.to_string());
         }
-        self.set(format!("counter.{name}"), value.to_string());
         self.record(format!("Counter {name}"), StepStatus::Ok, value.to_string());
+    }
+
+    /// "Remember a value" told to keep it: saved for later runs and streams
+    /// as `{saved.name}`.
+    fn keep(&mut self, name: &str, value: &str) {
+        let label = format!("Keep {name}");
+        let value: String = value.chars().take(MAX_SAVED_LEN).collect();
+        {
+            let mut saved = self.kept.saved.lock();
+            if saved.len() >= MAX_SAVED && !saved.contains_key(name) {
+                drop(saved);
+                let why = format!("there are already {MAX_SAVED} kept values");
+                return self.record(label, StepStatus::Failed, why);
+            }
+            saved.insert(name.to_string(), value.clone());
+        }
+        self.data_changed();
+        self.record(label, StepStatus::Ok, value);
+    }
+
+    /// Change what a viewer holds, or pay everyone who chatted lately.
+    fn viewer(&mut self, step: &Step) {
+        let value = step.param("value").trim().to_string();
+        let typed = self.fill(step, "by");
+        let typed = typed.trim();
+        let amount = match typed {
+            "" => Some(1),
+            text => text.parse::<i64>().ok(),
+        };
+        let op = step.param("op");
+        if step.param("who") == "active" {
+            return self.pay_active(step, &value, amount);
+        }
+        // "named": a viewer the step itself names, like whoever answered a
+        // "Wait for chat" step (`{reply.user_login}`).
+        let login = match step.param("who") {
+            "named" => {
+                Some(viewers::login_key(&self.fill(step, "login"))).filter(|l| !l.is_empty())
+            }
+            who => login_of(&self.ctx.vars, who),
+        };
+        let Some(login) = login else {
+            let why = "there is no viewer to change it for";
+            return self.record(format!("Viewer {value}"), StepStatus::Failed, why);
+        };
+        let label = format!("{login}'s {value}");
+        let change = match (op, amount) {
+            ("reset", _) => Change::Set(0),
+            // A bet typed as "banana" just isn't paid: the next check says so.
+            ("spend", amount) => Change::Spend(amount.unwrap_or(0)),
+            (_, None) => {
+                let why = format!("\"{typed}\" isn't a whole number");
+                return self.record(label, StepStatus::Failed, why);
+            }
+            ("subtract", Some(by)) => Change::Subtract(by),
+            ("set", Some(to)) => Change::Set(to),
+            (_, Some(by)) => Change::Add(by),
+        };
+        let done = self.kept.viewers.lock().apply(&value, &login, change);
+        match done {
+            Ok((now, applied)) => {
+                if op == "spend" {
+                    self.set("paid", if applied { "yes" } else { "no" });
+                }
+                self.data_changed();
+                let detail = match applied {
+                    true => now.to_string(),
+                    false => format!("{now}: not enough to pay \"{typed}\""),
+                };
+                self.record(label, StepStatus::Ok, detail);
+            }
+            Err(why) => self.record(label, StepStatus::Failed, why),
+        }
+    }
+
+    /// Add to everyone who chatted in the last `minutes`: the viewers who
+    /// are there.
+    fn pay_active(&mut self, step: &Step, value: &str, amount: Option<i64>) {
+        let label = format!("Active viewers' {value}");
+        let Some(amount) = amount else {
+            let why = "the amount isn't a whole number";
+            return self.record(label, StepStatus::Failed, why);
+        };
+        let minutes = self
+            .fill(step, "minutes")
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(ACTIVE_MINUTES)
+            .clamp(1, chat_room::MAX_ACTIVE.as_secs() / 60);
+        let within = Duration::from_secs(minutes * 60);
+        let logins = self.env.chat_room.active(within, Instant::now());
+        let failed = {
+            let mut viewers = self.kept.viewers.lock();
+            logins
+                .iter()
+                .find_map(|login| viewers.apply(value, login, Change::Add(amount)).err())
+        };
+        self.set("active.count", logins.len().to_string());
+        if !logins.is_empty() {
+            self.data_changed();
+        }
+        match failed {
+            Some(why) => self.record(label, StepStatus::Failed, why),
+            None => {
+                let detail = format!("{amount:+} to {} who chatted", logins.len());
+                self.record(label, StepStatus::Ok, detail);
+            }
+        }
+    }
+
+    fn math(&mut self, step: &Step) {
+        let name = save_name(step, "result");
+        let label = format!("Maths → {name}");
+        let (a, b) = (self.fill(step, "a"), self.fill(step, "b"));
+        let answer = match (whole(&a), whole(&b)) {
+            (Some(a), Some(b)) => sum(step.param("op"), a, b),
+            _ => Err(format!(
+                "\"{}\" and \"{}\" must be whole numbers",
+                a.trim(),
+                b.trim()
+            )),
+        };
+        match answer {
+            Ok(answer) => {
+                self.record(label, StepStatus::Ok, answer.to_string());
+                self.set(name, answer.to_string());
+            }
+            Err(why) => {
+                self.set(name, "0");
+                self.record(label, StepStatus::Failed, why);
+            }
+        }
+    }
+
+    /// Wait for the next chat message that starts with the step's text,
+    /// from anyone or from one viewer. The run gives its place back
+    /// meanwhile, like any wait.
+    async fn wait_chat(&mut self, step: &Step) {
+        const LABEL: &str = "Wait for chat";
+        let name = save_name(step, "reply");
+        let text = self.fill(step, "text").trim().to_string();
+        let seconds = self
+            .fill(step, "seconds")
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(WAIT_CHAT_SECONDS)
+            .clamp(1, MAX_WAIT_CHAT_SECONDS);
+        let from = match step.param("from") {
+            "" => None,
+            who => login_of(&self.ctx.vars, who),
+        };
+        if !step.param("from").is_empty() && from.is_none() {
+            self.set(format!("{name}.ok"), "no");
+            let why = "this trigger names nobody to wait for";
+            return self.record(LABEL, StepStatus::Failed, why);
+        }
+        if self.ctx.test {
+            let login = from.unwrap_or_else(|| "testviewer".to_string());
+            self.heard(&name, &login, &login, &text);
+            let detail =
+                format!("would wait up to {seconds}s for \"{text}\" (a test is answered at once)");
+            return self.record(LABEL, StepStatus::Skipped, detail);
+        }
+        let answer = match self.env.chat_room.wait(&text, from) {
+            Ok(answer) => answer,
+            Err(why) => {
+                self.set(format!("{name}.ok"), "no");
+                return self.record(LABEL, StepStatus::Failed, why);
+            }
+        };
+        if let Some(gate) = &mut self.ctx.gate {
+            gate.give_back();
+        }
+        let heard = tokio::time::timeout(Duration::from_secs(seconds), answer).await;
+        if let Some(gate) = &mut self.ctx.gate {
+            gate.take_again().await;
+        }
+        match heard {
+            Ok(Ok(heard)) => {
+                self.heard(&name, &heard.user, &heard.user_login, &heard.message);
+                let detail = format!("{}: {}", heard.user, heard.message);
+                self.record(LABEL, StepStatus::Ok, detail);
+            }
+            _ => {
+                self.set(format!("{name}.ok"), "no");
+                let detail = format!("nobody answered in {seconds}s");
+                self.record(LABEL, StepStatus::Ok, detail);
+            }
+        }
+    }
+
+    /// Switch a channel points reward on or off, so viewers can only
+    /// redeem it when it makes sense (not while a round is already running).
+    async fn reward(&mut self, step: &Step) {
+        let title = step.param("title").trim().to_string();
+        let enabled = step.param("action") != "off";
+        let label = format!("Reward {title} {}", if enabled { "on" } else { "off" });
+        if self.ctx.test {
+            return self.record(
+                label,
+                StepStatus::Skipped,
+                "tests never change your Twitch rewards",
+            );
+        }
+        match self.blocking(move |h| h.reward(&title, enabled)).await {
+            Ok(()) => self.record(label, StepStatus::Ok, ""),
+            Err(e) => self.record(label, StepStatus::Failed, e),
+        }
+    }
+
+    /// What a "Wait for chat" step hands the next steps.
+    fn heard(&mut self, name: &str, user: &str, login: &str, message: &str) {
+        self.set(format!("{name}.ok"), "yes");
+        self.set(format!("{name}.user"), user);
+        self.set(format!("{name}.user_login"), login);
+        self.set(format!("{name}.message"), message);
+        let arg1 = message.split_whitespace().nth(1).unwrap_or("");
+        self.set(format!("{name}.arg1"), arg1);
+    }
+
+    /// Run one of the integration's blocks here, with this run's values. A
+    /// Stop inside it stops the whole run.
+    async fn call(&mut self, step: &Step) -> Flow {
+        let name = step.param("block").trim().to_string();
+        let label = format!("Block {name}");
+        let blocks = self.ctx.blocks.clone();
+        let Some(steps) = blocks.get(&name) else {
+            let why = "that block doesn't exist, or is switched off";
+            self.record(label, StepStatus::Failed, why);
+            return Flow::Continue;
+        };
+        if self.call_depth >= MAX_CALL_DEPTH {
+            self.record(label, StepStatus::Failed, "blocks run each other too deep");
+            return Flow::Continue;
+        }
+        self.record(label, StepStatus::Ok, "");
+        self.call_depth += 1;
+        let flow = self.steps(steps).await;
+        self.call_depth -= 1;
+        flow
     }
 }
 
+/// The name a step saves its answer under: its own, or `default`.
+fn save_name(step: &Step, default: &str) -> String {
+    match step.param("save_as").trim() {
+        "" => default.to_string(),
+        name => name.to_string(),
+    }
+}
+
+/// A whole number as typed; blank is 0.
+fn whole(text: &str) -> Option<i64> {
+    match text.trim() {
+        "" => Some(0),
+        text => text.parse().ok(),
+    }
+}
+
+/// What a Maths step works out. Whole numbers only, and never past what
+/// one holds: a sum too big stops at the biggest number instead.
+pub fn sum(op: &str, a: i64, b: i64) -> Result<i64, String> {
+    let fit = |n: i128| n.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+    Ok(match op {
+        "subtract" => a.saturating_sub(b),
+        "multiply" => a.saturating_mul(b),
+        "divide" if b == 0 => return Err("can't divide by 0".to_string()),
+        "divide" => fit(i128::from(a) / i128::from(b)),
+        // `a` percent of `b`.
+        "percent" => fit(i128::from(a) * i128::from(b) / 100),
+        "min" => a.min(b),
+        "max" => a.max(b),
+        "random" => random_between(a.min(b), a.max(b)),
+        _ => a.saturating_add(b),
+    })
+}
+
+/// A whole number from `low` to `high`, both included.
+fn random_between(low: i64, high: i64) -> i64 {
+    let span = (i128::from(high) - i128::from(low) + 1) as u128;
+    let mut bytes = [0u8; 16];
+    crate::crypto::os_random(&mut bytes);
+    (i128::from(low) + (u128::from_le_bytes(bytes) % span) as i128) as i64
+}
+
+/// True `percent` times in a hundred: 0.1 is one time in a thousand.
+fn chance(percent: &str) -> bool {
+    let Ok(percent) = percent.trim().trim_end_matches('%').parse::<f64>() else {
+        return false;
+    };
+    let mut bytes = [0u8; 4];
+    crate::crypto::os_random(&mut bytes);
+    f64::from(u32::from_le_bytes(bytes)) / (f64::from(u32::MAX) + 1.0) * 100.0 < percent
+}
+
 /// Where template values come from during a run, in priority order: the
-/// run's own variables, saved counters, then the live stream state.
+/// run's own variables, what is kept between runs (counters, viewer
+/// values, kept texts), then the live stream state.
 struct Lookup<'a> {
     vars: &'a BTreeMap<String, String>,
-    counters: &'a crate::sync::Mutex<BTreeMap<String, i64>>,
+    kept: &'a Kept,
+    user_values: &'a BTreeMap<String, String>,
     timeline: &'a crate::sync::Mutex<Timeline>,
     live: &'a LiveState,
+}
+
+impl Lookup<'_> {
+    /// `{viewer.coins}` and `{target.coins}`: what that viewer holds.
+    /// `.rank` after it is their place (0 with nothing). `{top.coins}` is
+    /// the leaderboard, on one line.
+    fn viewer_value(&self, name: &str) -> Option<String> {
+        let (who, rest) = name.split_once('.')?;
+        if !matches!(who, "viewer" | "target" | "top") {
+            return None;
+        }
+        let (value, rank) = match rest.strip_suffix(".rank") {
+            Some(value) => (value, true),
+            None => (rest, false),
+        };
+        if !viewers::valid_name(value) {
+            return None;
+        }
+        let viewers = self.kept.viewers.lock();
+        if who == "top" {
+            let places: Vec<String> = viewers
+                .top(value, viewers::TOP)
+                .iter()
+                .enumerate()
+                .map(|(i, (login, amount))| format!("{}. {login} ({amount})", i + 1))
+                .collect();
+            return (!rank).then(|| places.join(", "));
+        }
+        let login = login_of(self.vars, who).unwrap_or_default();
+        Some(match rank {
+            true => viewers.rank(value, &login).to_string(),
+            false => viewers.get(value, &login).to_string(),
+        })
+    }
 }
 
 impl Vars for Lookup<'_> {
@@ -1129,12 +1582,29 @@ impl Vars for Lookup<'_> {
         }
         if let Some(counter) = name.strip_prefix("counter.") {
             return Some(
-                self.counters
+                self.kept
+                    .counters
                     .lock()
                     .get(counter)
                     .copied()
                     .unwrap_or(0)
                     .to_string(),
+            );
+        }
+        if let Some(found) = self.viewer_value(name) {
+            return Some(found);
+        }
+        if let Some(mine) = name.strip_prefix("my.") {
+            return Some(self.user_values.get(mine).cloned().unwrap_or_default());
+        }
+        if let Some(saved) = name.strip_prefix("saved.") {
+            return Some(
+                self.kept
+                    .saved
+                    .lock()
+                    .get(saved)
+                    .cloned()
+                    .unwrap_or_default(),
             );
         }
         // `{response.json.user.name}` reads a field of a saved JSON body;
@@ -1205,6 +1675,7 @@ pub const CHAT_VARS: &[(&str, &str)] = &[
     ("user_login", "nat"),
     ("user_role", "mod"),
     ("target", "Nat"),
+    ("target_login", "nat"),
     ("message", "!delay"),
     ("args", "30"),
     ("arg1", "30"),
@@ -1342,6 +1813,7 @@ pub fn compare(left: &str, op: &str, right: &str) -> bool {
         "greater" => numbers().is_some_and(|(a, b)| a > b),
         "less" => numbers().is_some_and(|(a, b)| a < b),
         "whole_number" => is_whole_number(&l),
+        "chance" => chance(&l),
         _ => false,
     }
 }
@@ -1788,6 +2260,10 @@ mod tests {
                 .push(format!("light {device} {command:?}"));
             Ok(None)
         }
+        fn reward(&self, title: &str, enabled: bool) -> Result<(), String> {
+            self.calls.lock().push(format!("reward {title} {enabled}"));
+            Ok(())
+        }
     }
 
     fn env() -> Arc<RunEnv> {
@@ -1802,7 +2278,15 @@ mod tests {
                 topic: "my-topic".into(),
             },
             counters: Arc::new(Mutex::new(BTreeMap::new())),
-            counters_changed: Box::new(|| {}),
+            viewers: Default::default(),
+            saved: Default::default(),
+            data_changed: Box::new(|| {}),
+            chat_room: Default::default(),
+            user_values: BTreeMap::from([
+                ("coin".to_string(), "gem".to_string()),
+                ("coins".to_string(), "gems".to_string()),
+                ("flip_chance".to_string(), "100".to_string()),
+            ]),
             discord_messages: Arc::new(Mutex::new(HashMap::new())),
             discord_turns: Arc::new(DiscordTurns::default()),
             timeline: Arc::new(Mutex::new(Timeline::default())),
@@ -2165,6 +2649,7 @@ mod tests {
             test,
             dry: false,
             gate: None,
+            blocks: Default::default(),
         }
     }
 
@@ -2619,6 +3104,331 @@ mod tests {
         assert!(host.calls.lock()[1].ends_with("Crashes: 2"));
     }
 
+    fn viewer_step(params: &[(&str, &str)]) -> Step {
+        let mut all = vec![("value", "coins")];
+        all.extend_from_slice(params);
+        Step::new(StepKind::Viewer, &all)
+    }
+
+    /// Runs `steps` as ana, who named bo; returns what the File step wrote.
+    async fn as_ana(env: &Arc<RunEnv>, steps: &[Step], test: bool) -> String {
+        let host = Arc::new(FakeHost::default());
+        let who = [
+            ("user", "Ana"),
+            ("user_login", "ana"),
+            ("target_login", "bo"),
+        ];
+        run(steps, ctx(&who, test), host.clone(), env.clone()).await;
+        let calls = host.calls.lock();
+        calls.last().cloned().unwrap_or_default()
+    }
+
+    fn says(text: &str) -> Step {
+        Step::new(StepKind::File, &[("path", "c.txt"), ("text", text)])
+    }
+
+    #[tokio::test]
+    async fn a_spend_pays_only_what_the_viewer_has() {
+        let env = env();
+        let steps = [
+            viewer_step(&[("by", "100")]),
+            viewer_step(&[("op", "spend"), ("by", "30")]),
+            says("{paid} {viewer.coins}"),
+            viewer_step(&[("op", "spend"), ("by", "500")]),
+            says("{paid} {viewer.coins}"),
+            viewer_step(&[("op", "spend"), ("by", "banana")]),
+            says("{paid} {viewer.coins} rank {viewer.coins.rank}"),
+        ];
+        let host = Arc::new(FakeHost::default());
+        let who = ctx(&[("user_login", "ana")], false);
+        let (status, _) = run(&steps, who, host.clone(), env.clone()).await;
+        assert_eq!(
+            status,
+            RunStatus::Ok,
+            "a bet that can't be paid is no failure"
+        );
+        let wrote: Vec<String> = host.calls.lock().iter().map(|c| c.to_string()).collect();
+        assert!(wrote[0].ends_with("yes 70"), "{wrote:?}");
+        assert!(wrote[1].ends_with("no 70"), "{wrote:?}");
+        assert!(wrote[2].ends_with("no 70 rank 1"), "{wrote:?}");
+        assert_eq!(env.viewers.lock().get("coins", "ana"), 70);
+    }
+
+    #[tokio::test]
+    async fn the_target_and_the_leaderboard_are_read_by_name() {
+        let env = env();
+        let steps = [
+            viewer_step(&[("op", "set"), ("by", "40")]),
+            viewer_step(&[("who", "target"), ("by", "90")]),
+            says("{target.coins} | {top.coins} | {viewer.coins.rank}"),
+        ];
+        let wrote = as_ana(&env, &steps, false).await;
+        assert!(
+            wrote.ends_with("90 | 1. bo (90), 2. ana (40) | 2"),
+            "{wrote}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reward_step_switches_it_and_a_test_leaves_twitch_alone() {
+        let steps = [
+            Step::new(StepKind::Reward, &[("title", "Hydrate"), ("action", "off")]),
+            Step::new(StepKind::Reward, &[("title", "Hydrate")]),
+        ];
+        let host = Arc::new(FakeHost::default());
+        go(&host, &steps, ctx(&[], false)).await;
+        let calls: Vec<String> = host.calls.lock().iter().map(|c| c.to_string()).collect();
+        assert_eq!(calls, ["reward Hydrate false", "reward Hydrate true"]);
+        let host = Arc::new(FakeHost::default());
+        let (_, log) = go(&host, &steps, ctx(&[], true)).await;
+        assert!(host.calls.lock().is_empty());
+        assert_eq!(log[0].status, StepStatus::Skipped);
+    }
+
+    #[tokio::test]
+    async fn a_step_can_name_the_viewer_itself() {
+        let env = env();
+        let steps = [
+            viewer_step(&[("who", "named"), ("login", "@{winner}"), ("by", "25")]),
+            viewer_step(&[("who", "named"), ("login", "{nobody}"), ("by", "25")]),
+        ];
+        let host = Arc::new(FakeHost::default());
+        let (status, _) = run(&steps, ctx(&[("winner", "Cy")], false), host, env.clone()).await;
+        assert_eq!(env.viewers.lock().get("coins", "cy"), 25);
+        assert_eq!(status, RunStatus::Failed, "a blank name is nobody");
+    }
+
+    #[tokio::test]
+    async fn everyone_who_chatted_lately_is_paid() {
+        let env = env();
+        for login in ["ana", "bo"] {
+            let heard = chat_room::Heard {
+                user: login.to_string(),
+                user_login: login.to_string(),
+                message: "hi".to_string(),
+            };
+            env.chat_room.heard(&heard, Instant::now());
+        }
+        let steps = [
+            viewer_step(&[("who", "active"), ("by", "10")]),
+            says("{active.count}"),
+        ];
+        let wrote = as_ana(&env, &steps, false).await;
+        assert!(wrote.ends_with('2'), "{wrote}");
+        assert_eq!(env.viewers.lock().get("coins", "bo"), 10);
+    }
+
+    #[tokio::test]
+    async fn a_test_run_starts_from_given_values_and_saves_nothing() {
+        let env = env();
+        env.counters.lock().insert("pot".to_string(), 5);
+        let steps = [
+            viewer_step(&[("op", "spend"), ("by", "50")]),
+            Step::new(StepKind::Counter, &[("name", "pot"), ("by", "50")]),
+            Step::new(
+                StepKind::SetVar,
+                &[("name", "winner"), ("value", "Ana"), ("keep", "yes")],
+            ),
+            says("{paid} {viewer.coins} {counter.pot} {saved.winner}"),
+        ];
+        let given = [
+            ("user_login", "ana"),
+            ("viewer.coins", "200"),
+            ("counter.pot", "100"),
+        ];
+        let host = Arc::new(FakeHost::default());
+        let (_, log) = run(&steps, ctx(&given, true), host, env.clone()).await;
+        let said = &log.last().unwrap().detail;
+        assert!(said.contains("yes 150 150 Ana"), "{said}");
+        assert_eq!(env.viewers.lock().get("coins", "ana"), 0);
+        assert_eq!(env.counters.lock().get("pot"), Some(&5));
+        assert!(env.saved.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_streamers_own_values_fill_messages_checks_and_counts() {
+        let env = env();
+        let steps = [
+            viewer_step(&[("by", "1")]),
+            says("{viewer.coins#$my.coin#$my.coins} / {my.coins} / [{my.nothing}]"),
+            Step {
+                then: vec![viewer_step(&[("by", "4")])],
+                ..Step::new(
+                    StepKind::If,
+                    &[("left", "{my.flip_chance}"), ("op", "chance")],
+                )
+            },
+            says("{viewer.coins#$my.coin#$my.coins}"),
+        ];
+        let host = Arc::new(FakeHost::default());
+        run(
+            &steps,
+            ctx(&[("user_login", "ana")], false),
+            host.clone(),
+            env,
+        )
+        .await;
+        let wrote = host.calls.lock();
+        assert!(wrote[0].ends_with("1 gem / gems / []"), "{wrote:?}");
+        assert!(wrote[1].ends_with("5 gems"), "{wrote:?}");
+    }
+
+    #[tokio::test]
+    async fn a_kept_value_is_there_on_the_next_run() {
+        let env = env();
+        let keep = [Step::new(
+            StepKind::SetVar,
+            &[("name", "winner"), ("value", "{user}"), ("keep", "yes")],
+        )];
+        as_ana(&env, &keep, false).await;
+        let wrote = as_ana(&env, &[says("Last: {saved.winner}")], false).await;
+        assert!(wrote.ends_with("Last: Ana"), "{wrote}");
+    }
+
+    #[test]
+    fn maths_stays_whole_and_in_range() {
+        assert_eq!(sum("", 2, 3), Ok(5));
+        assert_eq!(sum("subtract", 2, 3), Ok(-1));
+        assert_eq!(sum("multiply", 50, 3), Ok(150));
+        assert_eq!(sum("multiply", i64::MAX, 2), Ok(i64::MAX));
+        assert_eq!(sum("divide", 7, 2), Ok(3));
+        assert_eq!(sum("divide", i64::MIN, -1), Ok(i64::MAX));
+        assert!(sum("divide", 7, 0).is_err());
+        assert_eq!(sum("percent", 15, 200), Ok(30));
+        assert_eq!(sum("min", 4, 9), Ok(4));
+        assert_eq!(sum("max", 4, 9), Ok(9));
+        for _ in 0..200 {
+            let roll = sum("random", 6, 1).unwrap();
+            assert!((1..=6).contains(&roll), "{roll}");
+        }
+        assert_eq!(sum("random", i64::MIN, i64::MIN), Ok(i64::MIN));
+    }
+
+    #[test]
+    fn a_chance_check_passes_about_that_often() {
+        assert!(!compare("0", "chance", ""));
+        assert!(compare("100", "chance", ""));
+        assert!(!compare("often", "chance", ""));
+        let hits = (0..4000).filter(|_| compare("25%", "chance", "")).count();
+        assert!((800..1200).contains(&hits), "{hits} of 4000 at 25%");
+    }
+
+    #[tokio::test]
+    async fn a_maths_step_saves_its_answer() {
+        let steps = [
+            Step::new(
+                StepKind::Math,
+                &[
+                    ("a", "{arg1}"),
+                    ("op", "multiply"),
+                    ("b", "3"),
+                    ("save_as", "prize"),
+                ],
+            ),
+            says("{prize}"),
+            Step::new(StepKind::Math, &[("a", "ten"), ("b", "3")]),
+        ];
+        let host = Arc::new(FakeHost::default());
+        let (status, _) = go(&host, &steps, ctx(&[("arg1", "50")], false)).await;
+        assert!(host.calls.lock()[0].ends_with("150"));
+        assert_eq!(status, RunStatus::Failed, "\"ten\" is no number");
+    }
+
+    #[tokio::test]
+    async fn a_wait_for_chat_gets_the_answer_or_gives_up() {
+        let env = env();
+        let wait = |seconds| {
+            Step::new(
+                StepKind::WaitChat,
+                &[
+                    ("text", "!accept"),
+                    ("from", "target"),
+                    ("seconds", seconds),
+                ],
+            )
+        };
+        let steps = [wait("30"), says("{reply.ok} {reply.user} {reply.arg1}")];
+        let room = env.chat_room.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let said = |login: &str, message: &str| chat_room::Heard {
+                user: login.to_uppercase(),
+                user_login: login.to_string(),
+                message: message.to_string(),
+            };
+            room.heard(&said("cy", "!accept"), Instant::now());
+            room.heard(&said("bo", "!accept now"), Instant::now());
+        });
+        let wrote = as_ana(&env, &steps, false).await;
+        assert!(wrote.ends_with("yes BO now"), "{wrote}");
+        let steps = [wait("1"), says("{reply.ok}")];
+        let wrote = as_ana(&env, &steps, false).await;
+        assert!(wrote.ends_with("no"), "{wrote}");
+    }
+
+    #[tokio::test]
+    async fn a_block_runs_in_place_and_its_stop_ends_the_run() {
+        let call = |block| Step::new(StepKind::Call, &[("block", block)]);
+        let blocks = BTreeMap::from([
+            (
+                "greet".to_string(),
+                vec![Step::new(
+                    StepKind::SetVar,
+                    &[("name", "hello"), ("value", "hi {user}")],
+                )],
+            ),
+            (
+                "leave".to_string(),
+                vec![Step::new(StepKind::Stop, &[("quiet", "yes")])],
+            ),
+            ("loop".to_string(), vec![call("loop")]),
+        ]);
+        let with_blocks = || RunContext {
+            blocks: Arc::new(blocks.clone()),
+            ..ctx(&[("user", "Ana")], false)
+        };
+        let host = Arc::new(FakeHost::default());
+        let steps = [call("greet"), says("{hello}"), call("leave"), says("never")];
+        let (status, _) = go(&host, &steps, with_blocks()).await;
+        assert_eq!(status, RunStatus::StoppedQuietly);
+        assert_eq!(host.calls.lock().len(), 1);
+        assert!(host.calls.lock()[0].ends_with("hi Ana"));
+        let (status, _) = go(&host, &[call("loop")], with_blocks()).await;
+        assert_eq!(status, RunStatus::Failed, "a block that runs itself ends");
+        let (status, _) = go(&host, &[call("gone")], with_blocks()).await;
+        assert_eq!(status, RunStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn a_counter_named_from_chat_is_read_under_a_fixed_name() {
+        let host = Arc::new(FakeHost::default());
+        let env = env();
+        env.counters.lock().insert("coins_ana".to_string(), 40);
+        let steps = [
+            Step::new(
+                StepKind::Counter,
+                &[
+                    ("name", "coins_{user_login}"),
+                    ("by", "0"),
+                    ("save_as", "coins"),
+                ],
+            ),
+            Step::new(
+                StepKind::File,
+                &[("path", "c.txt"), ("text", "Has {coins}")],
+            ),
+        ];
+        run(
+            &steps,
+            ctx(&[("user_login", "ana")], false),
+            host.clone(),
+            env.clone(),
+        )
+        .await;
+        assert_eq!(env.counters.lock().get("coins_ana"), Some(&40));
+        assert!(host.calls.lock()[0].ends_with("Has 40"));
+    }
+
     #[tokio::test]
     async fn waiting_for_the_delay_follows_it() {
         let host = Arc::new(FakeHost {
@@ -2714,6 +3524,9 @@ mod tests {
             }
             fn light(&self, _: &str, _: lights::Command) -> Result<Option<String>, String> {
                 Ok(None)
+            }
+            fn reward(&self, _: &str, _: bool) -> Result<(), String> {
+                Ok(())
             }
         }
         let steps = [Step::new(

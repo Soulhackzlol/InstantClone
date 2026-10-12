@@ -112,6 +112,11 @@ const KINDS = {
   edit_text:    {label:'Edit text',     tag:'VALUE',  c:'#93c5fd', icon:'type', hint:'Reshapes text: a line, a part, a rounded number, a random pick.'},
   timeline:     {label:'Timeline',      tag:'LOG',    c:'#5ac8fa', icon:'list', text:'text', hint:'Adds a line, a chapter or a highlight to this stream\'s timeline, at its place in the VOD.'},
   light:        {label:'Smart light',   tag:'LIGHT',  c:'#fde68a', icon:'bulb', hint:'Turns a light or plug on your network on or off, or colors it. Found by a scan: no hub or account.'},
+  viewer:       {label:'Viewer value',  tag:'VALUE',  c:'#fbbf24', icon:'gem', hint:'Gives, takes or spends what a viewer holds: coins, points. Kept between streams.'},
+  math:         {label:'Maths',         tag:'VALUE',  c:'#93c5fd', icon:'hash', hint:'Works out a number: a sum, a share, a random one.'},
+  wait_chat:    {label:'Wait for chat', tag:'WAIT',   c:'#c3cad1', icon:'bubble', hint:'Waits for someone to type something, up to a time limit.'},
+  call:         {label:'Run a block',   tag:'FLOW',   c:'#f0a53a', icon:'layers', hint:'Runs a block of steps this integration keeps under a name.'},
+  reward:       {label:'Channel points reward', tag:'TWITCH', c:'#a78bfa', icon:'gift', hint:'Switches a channel points reward on or off, so viewers can only redeem it when it makes sense.'},
   obs:          {label:'OBS',           tag:'OBS',    c:'#86efac', icon:'layers', hint:'Switches a scene, shows or hides a source, records, saves a replay, mutes, switches a filter, plays media or presses an OBS hotkey.'},
 };
 // The icon a catalog module wears: what it is about, not how it sends.
@@ -169,10 +174,10 @@ const hotkeyLabel = name => name.replace(/^OBSBasic\./, '').replace(/[._]/g, ' '
 const OPS = {
   is:'is', is_not:'is not', contains:'contains', not_contains:'does not contain', starts_with:'starts with',
   greater:'is more than', less:'is less than', empty:'is empty', not_empty:'is not empty',
-  whole_number:'is a whole number',
+  whole_number:'is a whole number', chance:'% chance (0.1 is one in a thousand)',
 };
 // Comparisons that need no value to compare with.
-const OPS_ALONE = ['empty', 'not_empty', 'whole_number'];
+const OPS_ALONE = ['empty', 'not_empty', 'whole_number', 'chance'];
 // An If holds up to this many checks: left, op, right, then left2…
 // Mirrors model::MAX_CONDITIONS.
 const MAX_CONDITIONS = 4;
@@ -271,6 +276,7 @@ function triggerLabel(t){
     }
     case 'chat_command': return t.command || '!command';
     case 'chat_message': return 'Chat message';
+    case 'block': return `Block: ${t.name || 'not named'}`;
     case 'timer': return `Every ${Math.round((t.every_ms||0)/60000)} min`;
     case 'webhook': return 'Web call';
     case 'shortcut': return shortcutLabel(t) || 'A button';
@@ -503,7 +509,8 @@ function varsFor(handler, upto){
     // A countdown sample should count down from now.
     if (e) own.push(...e.vars.map(v => v.name === 'hold_ends_at' ? {name:v.name, sample:String(Math.floor(Date.now() / 1000) + 120)} : v));
   }
-  if (t && (t.type === 'chat_command' || t.type === 'chat_message')){
+  // A block runs inside whatever started it: most often a command.
+  if (t && (t.type === 'chat_command' || t.type === 'chat_message' || t.type === 'block')){
     const args = SAMPLE_ARGS.get(handler);
     own.push(...d.vars.chat.map(v => args == null ? v : {name:v.name,
       sample:{args, arg1:args.split(' ')[0], target:args.split(' ')[0], message:`${t.command || ''} ${args}`.trim()}[v.name] ?? v.sample}));
@@ -512,7 +519,7 @@ function varsFor(handler, upto){
   if (t && t.type === 'chat_activity') own.push(...d.vars.activity);
   if (t && t.type === 'scene') own.push(...d.vars.scene);
   const made = [];
-  const known = () => { const m = {}; own.concat(made, d.vars.global).forEach(v => { if (!(v.name in m)) m[v.name] = v.sample; }); return m; };
+  const known = () => { const m = {}; own.concat(made, d.vars.global, myValues()).forEach(v => { if (!(v.name in m)) m[v.name] = v.sample; }); return m; };
   const outputs = s => {
     if (s.type === 'http'){
       const n = (s.params.save_as || '').trim() || 'response';
@@ -544,7 +551,16 @@ function varsFor(handler, upto){
     if (s.type === 'clip') made.push({name:'clip.url', sample:'https://clips.twitch.tv/BraveSnipe'},
       {name:'clip.id', sample:'BraveSnipe'}, {name:'clip.ok', sample:'yes'}, {name:'clip.error', sample:''});
     if (s.type === 'counter' && fixed(s.params.name)) made.push({name:'counter.' + s.params.name, sample:'2'});
+    if (s.type === 'counter' && (s.params.save_as || '').trim() && fixed(s.params.save_as.trim())) made.push({name:s.params.save_as.trim(), sample:'2'});
     if (s.type === 'set_var' && fixed(s.params.name)) made.push({name:s.params.name, sample:s.params.value || ''});
+    if (s.type === 'viewer' && s.params.op === 'spend') made.push({name:'paid', sample:'yes'});
+    if (s.type === 'viewer' && s.params.who === 'active') made.push({name:'active.count', sample:'12'});
+    if (s.type === 'math' && fixed((s.params.save_as || '').trim() || 'result')) made.push({name:(s.params.save_as || '').trim() || 'result', sample:'100'});
+    if (s.type === 'wait_chat' && fixed((s.params.save_as || '').trim() || 'reply')){
+      const n = (s.params.save_as || '').trim() || 'reply';
+      made.push({name:n + '.ok', sample:'yes'}, {name:n + '.user', sample:'Nat'}, {name:n + '.user_login', sample:'nat'},
+        {name:n + '.message', sample:s.params.text || '!accept'}, {name:n + '.arg1', sample:''});
+    }
     if (s.type === 'edit_text' && fixed((s.params.save_as || '').trim() || 'text')) made.push({name:(s.params.save_as || '').trim() || 'text', sample:editTextSample(s, known())});
   };
   // Steps in run order up to `upto`: switched-off ones never run, and a
@@ -570,8 +586,13 @@ function varsFor(handler, upto){
   visit(handler && handler.steps);
   const seen = new Set();
   return own.map(v => Object.assign({group:'trigger'}, v))
-    .concat(made.map(v => Object.assign({group:'steps'}, v)), d.vars.global.map(v => Object.assign({group:'live'}, v)))
+    .concat(made.map(v => Object.assign({group:'steps'}, v)), myValues().map(v => Object.assign({group:'mine'}, v)),
+      d.vars.global.map(v => Object.assign({group:'live'}, v)))
     .filter(v => !seen.has(v.name) && seen.add(v.name));
+}
+// The streamer's own values as variables: {my.<name>}, each with what it holds now.
+function myValues(){
+  return (S.data.values || []).map(v => ({name:'my.' + v.name, sample:v.value}));
 }
 function sampleMap(handler){
   const m = {};
@@ -592,9 +613,10 @@ function unknownVars(handler, step){
   const t = (handler && handler.trigger) || {};
   // Families no list can hold: any counter (counters outlive a run), any
   // field of a web answer or of what a web call sent, any word of a command.
-  const prefixes = ['counter.'].concat(names.filter(n => n.endsWith('.status')).map(n => n.slice(0, -6)));
+  // Viewer values, the leaderboard and kept texts are read by name too.
+  const prefixes = ['counter.', 'viewer.', 'target.', 'top.', 'saved.'].concat(names.filter(n => n.endsWith('.status')).map(n => n.slice(0, -6)));
   if (t.type === 'webhook' || t.type === 'shortcut') prefixes.push('body.', 'query.');
-  const chat = t.type === 'chat_command' || t.type === 'chat_message';
+  const chat = t.type === 'chat_command' || t.type === 'chat_message' || t.type === 'block';
   return [...used].filter(n => !names.includes(n) && !prefixes.some(p => n.startsWith(p)) && !(chat && /^arg[1-9]$/.test(n)))
     .map(name => ({name, hint:closestName(name, names)}));
 }
@@ -645,7 +667,10 @@ function renderSample(text, vars, escape){
         const forms = tail.slice(1).split('#');
         if (forms.length !== 2) return all;
         const count = v.trim() || '0';
-        return (escape ? escape(count) : count) + ' ' + (count === '1' ? forms[0] : forms[1]);
+        // A word written $name is that variable's value: {n#$my.coin#$my.coins}.
+        const word = count === '1' ? forms[0] : forms[1];
+        const filled = word[0] === '$' ? (vars[word.slice(1)] == null ? '' : String(vars[word.slice(1)])) : word;
+        return (escape ? escape(count) : count) + ' ' + (word[0] === '$' && escape ? escape(filled) : filled);
       }
       // {name?yes:no}: one text or the other, by whether the value is yes.
       if (tail && tail[0] === '?'){
@@ -685,6 +710,39 @@ function editText(op, input, a, b){
   return input;
 }
 // Mirrors runner::compare, so previews follow checks like a run does.
+// How a chat message trigger can match, each with what it means in a line.
+const MATCH_MODES = {
+  word:{label:'Has the word', means:'Fires when the message has it as its own word or phrase. Not when it is only part of a longer word.'},
+  contains:{label:'Contains these letters', means:'Fires whenever these letters appear, in the middle of another word too.'},
+  starts_with:{label:'Starts with', means:'Fires when the message begins with it.'},
+  exact:{label:'Is exactly', means:'Fires when the whole message is just this.'},
+  wildcard:{label:'Wildcard (* and ?)', means:'* stands for anything, ? for one character, and the whole message has to fit: gg* is any message starting with gg.'},
+};
+// Whether a chat message fires a trigger. Mirrors engine::text_matches.
+function textMatches(text, pattern, mode){
+  const said = String(text).toLowerCase(), want = String(pattern).trim().toLowerCase();
+  if (!want) return false;
+  const literal = want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  switch (mode){
+    // No letter or digit right before or after it: an apostrophe ends a word.
+    case 'word': return new RegExp(`(?<![\\p{Alphabetic}\\p{N}])${literal}(?![\\p{Alphabetic}\\p{N}])`, 'u').test(said);
+    case 'starts_with': return said.startsWith(want);
+    case 'exact': return said.trim() === want;
+    case 'wildcard': return new RegExp('^' + want.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 's').test(said.trim());
+  }
+  return said.includes(want);
+}
+// A few messages made from the pattern itself, each marked by whether it
+// would fire: the difference between the ways to match, shown, not told.
+function matchExamplesHtml(pattern, mode){
+  const p = pattern.trim().replace(/[*?]/g, '');
+  if (!p) return '';
+  const tries = [p, p.toUpperCase() + '!', `oh ${p} yes`, `${p}ing`, `re${p}`, `${p} and more`];
+  return `<div class="ig-fires-row">${tries.map(said => {
+    const fires = textMatches(said, pattern, mode);
+    return `<span class="ig-fires ${fires ? 'yes' : 'no'}" title="${fires ? 'Fires it' : 'Does not fire it'}">${fires ? '✓' : '✗'} ${esc(said)}</span>`;
+  }).join('')}</div>`;
+}
 function compareSample(left, op, right){
   const l = String(left).trim().toLowerCase(), r = String(right).trim().toLowerCase();
   const blank = l === '' || l === '0' || l === 'no';
@@ -700,6 +758,8 @@ function compareSample(left, op, right){
     case 'greater': return nums && +l > +r;
     case 'less': return nums && +l < +r;
     case 'whole_number': return /^[0-9]+$/.test(l);
+    // A preview can't roll: it shows the branch that runs most often.
+    case 'chance': return parseFloat(l) >= 50;
   }
   return false;
 }
@@ -895,7 +955,7 @@ function tokensHtml(vars, act, extra, foldLive){
   };
   const chip = v => `<button class="ig-token" data-act="${act}" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}" aria-label="Insert ${esc(label(v))}">+ ${esc(label(v))}</button>`;
   const head = v => {
-    if (!v.step) return {trigger:'From what happened', live:'Always there'}[v.group] || '';
+    if (!v.step) return {trigger:'From what happened', mine:'Your values', live:'Always there'}[v.group] || '';
     const name = answerName(v.step);
     return `${esc(stepSource(v.step))}${name ? `<code>${esc(name)}</code>` : ''}`;
   };
@@ -1912,6 +1972,7 @@ function render(){
           <div class="ig-exp-note">Still experimental: they work, but how they look and how you set them up may still change. Found a bug or have an idea? <a href="${esc(reportUrl())}" target="_blank" rel="noreferrer">Report it</a></div></div>
         <div class="ig-head-actions">
           ${empty ? '' : '<button class="ic-btn ic-btn-ghost" data-act="share">Share</button>'}
+          <button class="ic-btn ic-btn-ghost" data-act="values">Your values</button>
           <button class="ic-btn ic-btn-ghost" data-act="import">Import recipe</button>
           <button class="ic-btn dest-add-btn" data-act="catalog">${svg('plus')}<span>Add</span></button>
         </div>
@@ -3676,6 +3737,9 @@ function stepMissing(s){
   if (s.type === 'discord' && p.style === 'card' && !['title', 'text', 'fields', 'image', 'above'].some(k => (p[k] || '').trim())) return 'give the card a title or some text';
   if (s.type === 'if' && conditionRows(s).some(r => !r.left.trim())) return 'say what it checks';
   if ((s.type === 'set_var' || s.type === 'counter') && !(p.name || '').trim()) return 'name the value';
+  if (s.type === 'viewer' && !/^[A-Za-z0-9_]{1,32}$/.test((p.value || '').trim())) return 'name the value: letters, digits and _';
+  if (s.type === 'call' && !(p.block || '').trim()) return 'pick the block';
+  if (s.type === 'reward' && !(p.title || '').trim()) return 'pick the reward';
   if (s.type === 'wait' && !/\{|^\d+$/.test((p.ms || '').trim())) return 'set how long to wait';
   if ([p.scene, p.source, p.filter, p.hotkey, s.type === 'light' ? p.device : '', s.type === 'program' || s.type === 'file' ? p.path : ''].some(v => /\{/.test(v || ''))) return 'names here can\'t use values';
   if (s.type === 'light'){
@@ -4340,12 +4404,153 @@ function insertAtCursor(field, text){
 
 // ---------------------------------------------------------------- builder
 
+// Opens a value's name in a note, as the notes write them.
+const MONO = '<span class="mono">';
+// What a Maths step can do with its two numbers. Mirrors runner::sum.
+const MATH_OPS = {'':'Plus', subtract:'Minus', multiply:'Times', divide:'Divided by', percent:'Percent of',
+  min:'Or, if smaller,', max:'Or, if bigger,', random:'To (a random number between them)'};
+// The channel points rewards InstantClone made on the channel:
+// [{id, title, cost, enabled, prompt, wants_input}], null until read.
+// `error` is why Twitch said no; `editing` is the reward whose form is
+// open (its id, or 'new').
+const Rewards = {list:null, error:'', loading:false, editing:null};
+// Redeem triggers set to "only the ones I pick" with nothing picked yet:
+// an empty filter means any reward, so the choice is remembered here.
+const REWARD_ONLY = new WeakSet();
+// A reward's title as a filter pattern. A comma would split the list of
+// patterns, so ? (any one character) stands in for it.
+const rewardPattern = title => title.replace(/,/g, '?');
+const samePattern = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+// A redeem trigger's reward filter: which of the rewards made here it
+// names, and whatever else was typed (rewards made on Twitch itself).
+function rewardChoice(t){
+  const parts = ((t.filters || {}).reward || '').split(',').map(x => x.trim()).filter(Boolean);
+  const made = Rewards.list || [];
+  return {
+    any:!parts.length && !REWARD_ONLY.has(t),
+    picked:made.filter(r => parts.some(x => samePattern(x, rewardPattern(r.title)))).map(r => r.id),
+    other:parts.filter(x => !made.some(r => samePattern(x, rewardPattern(r.title)))),
+  };
+}
+function setRewardChoice(t, ids, other){
+  const titles = (Rewards.list || []).filter(r => ids.includes(r.id)).map(r => rewardPattern(r.title));
+  t.filters = t.filters || {};
+  t.filters.reward = titles.concat(other).join(', ');
+}
+// Which rewards start a redeem trigger: any, or the ones ticked.
+function rewardPickHtml(t){
+  const c = rewardChoice(t), made = Rewards.list || [];
+  const scope = `<div class="sub-tabs ig-seg">${[['any', 'Any reward'], ['only', 'Only the ones I pick']].map(([id, label]) =>
+    `<button class="sub-tab${(id === 'any') === c.any ? ' on' : ''}" data-act="b-reward-scope" data-v="${id}" aria-pressed="${(id === 'any') === c.any}">${label}</button>`).join('')}${SEG_IND}</div>`;
+  if (c.any) return `<div class="dff"><label>Which rewards start this</label>${scope}<div class="muted">Every redemption on your channel runs these steps.</div></div>`;
+  const rows = made.map(r => {
+    const on = c.picked.includes(r.id);
+    return `<button type="button" class="ig-pick${on ? ' on' : ''}" role="checkbox" aria-checked="${on}" data-act="b-reward-pick" data-id="${esc(r.id)}">
+      <span class="ig-pick-box">${on ? svg('check') : ''}</span><span class="ig-pick-t">${esc(r.title)}</span><span class="muted">${esc(String(r.cost))} pts${r.enabled ? '' : ' · off'}</span></button>`;
+  }).join('');
+  const nothing = !c.picked.length && !c.other.length;
+  return `<div class="dff"><label>Which rewards start this</label>${scope}
+    <div class="ig-picks">${rows || (Rewards.list ? '<div class="muted">You have made no rewards here yet. Make one below, or name one you made on Twitch.</div>' : '')}</div>
+    <input class="ic-input" data-bind="t-reward-other" value="${esc(c.other.join(', '))}" placeholder="Rewards made on Twitch, by name: Hydrate, Stretch*" aria-label="Other rewards, by name">
+    <div class="muted">${nothing ? '<b>Nothing picked yet:</b> until you pick one, every reward starts this.' : 'Names you type match ignoring case. A * stands for anything.'}</div></div>`;
+}
+// One reward's form, to make it or change it.
+function rewardFormHtml(r){
+  return `<div class="ig-reward-form" data-id="${esc(r.id || '')}" data-was="${esc(r.title || '')}">
+    <div class="ig-reward-form-row"><input class="ic-input" data-r="title" value="${esc(r.title || '')}" placeholder="Name viewers see" maxlength="45" aria-label="Name">
+      <span class="ig-reward-cost"><input class="ic-input mono" data-r="cost" value="${esc(r.cost ? String(r.cost) : '')}" placeholder="500" inputmode="numeric" aria-label="Cost in points"><span class="muted">pts</span></span></div>
+    <input class="ic-input" data-r="prompt" value="${esc(r.prompt || '')}" placeholder="Description (optional)" maxlength="200" aria-label="Description">
+    <label class="crash-check"><input type="checkbox" data-r="wants_input" ${r.wants_input ? 'checked' : ''}><span><span class="crash-check-title">The viewer types a message with it</span>
+      <span class="muted">Steps read it as <span class="mono">{input}</span>.</span></span></label>
+    <div class="ig-reward-form-foot"><button type="button" class="ic-btn ic-btn-ghost ig-small" data-act="rewards-cancel">Cancel</button>
+      <button type="button" class="ic-btn ic-btn-primary ig-small" data-act="rewards-save">${r.id ? 'Save' : 'Make it'}</button></div></div>`;
+}
+// The rewards made here: a switch, an edit and a delete each, and a way to
+// make one. Read from Twitch the first time it is shown.
+function rewardsHtml(){
+  if (!Rewards.list && !Rewards.error && !Rewards.loading){
+    Rewards.loading = true;
+    queueMicrotask(() => loadRewards());
+  }
+  const row = r => Rewards.editing === r.id ? rewardFormHtml(r) : `<div class="ig-reward${r.enabled ? '' : ' off'}" data-id="${esc(r.id)}">
+      <button type="button" class="ig-switch${r.enabled ? ' on' : ''}" role="switch" aria-checked="${r.enabled}" data-act="rewards-switch" data-on="${r.enabled ? '' : '1'}"
+        aria-label="${r.enabled ? 'On: viewers can redeem it' : 'Off: viewers do not see it'}" title="${r.enabled ? 'On: viewers can redeem it' : 'Off: viewers do not see it'}"><span></span></button>
+      <span class="ig-reward-t"><b>${esc(r.title)}</b><span class="muted">${esc(String(r.cost))} pts${r.wants_input ? ' · asks for a message' : ''}${r.prompt ? ' · ' + esc(r.prompt) : ''}</span></span>
+      <button type="button" class="ic-btn-tiny" data-act="rewards-edit" aria-label="Edit ${esc(r.title)}" title="Edit">${svg('pencil')}</button>
+      <button type="button" class="ic-btn-tiny" data-act="rewards-delete" aria-label="Delete ${esc(r.title)}" title="Delete">${svg('x')}</button></div>`;
+  const relogin = /log out of Twitch/.test(Rewards.error);
+  const body = Rewards.error ? `<div class="ig-unknown" role="status"><div>${svg('warn')}<span>${esc(Rewards.error)}</span></div></div>
+      <div class="ig-holders-row">${relogin ? '<button type="button" class="ic-btn ic-btn-ghost ig-small" data-act="conn" data-tab="twitch">Open Connections</button>' : ''}
+        <button type="button" class="ic-btn ic-btn-ghost ig-small" data-act="rewards-load">Try again</button></div>`
+    : !Rewards.list ? '<div class="ig-reward ig-reward-wait"><span class="muted">Asking Twitch for your rewards…</span></div>'
+    : `${Rewards.list.map(row).join('') || '<div class="muted">None yet. Make one and it is on your channel right away.</div>'}
+      ${Rewards.editing === 'new' ? rewardFormHtml({}) : `<button type="button" class="ig-cond-add" data-act="rewards-new">${svg('plus')}New reward</button>`}`;
+  return `<div class="dff ig-rewards"><label>Your rewards</label>${body}
+    <div class="muted">Made and changed here, live on your channel at once. Twitch only lets an app change rewards it made, so ones you made on Twitch itself are not listed.</div></div>`;
+}
+// Ask the app for the rewards (with `change`: after making that change),
+// then redraw. True when Twitch took it.
+async function loadRewards(change){
+  const r = await api('/integrations/rewards', change);
+  Rewards.loading = false;
+  const refused = !r || r.ok === false;
+  // A change Twitch refused leaves the list as it was, with a word why.
+  if (refused && change && Rewards.list) toast((r && r.error) || 'Twitch did not answer', 'err', 7000);
+  else Rewards.error = refused ? ((r && r.error) || 'Twitch did not answer') : '';
+  if (!refused) Rewards.list = r.rewards || [];
+  const o = OWNERS[Modal.kind];
+  if (o && o.render) o.render();
+  return !refused;
+}
+// A reward's new name, wherever the integration being built names the old
+// one: its redeem triggers and its reward steps.
+function renameReward(d, was, now){
+  const follow = steps => (steps || []).forEach(s => {
+    if (s.type === 'reward' && s.params.title === was) s.params.title = now;
+    follow(s.then); follow(s.else);
+  });
+  d.handlers.forEach(h => {
+    follow(h.steps);
+    const f = h.trigger.filters;
+    if (h.trigger.event === 'twitch_redeem' && f && f.reward){
+      f.reward = f.reward.split(',').map(x => samePattern(x, rewardPattern(was)) ? rewardPattern(now) : x.trim()).join(', ');
+    }
+  });
+}
+// The names of an integration's blocks, for "Run a block" steps.
+const blockNames = d => (d.handlers || []).filter(h => h.trigger.type === 'block' && h.trigger.name).map(h => h.trigger.name);
+// Who holds each viewer value, once asked for: [{name, holders, top:[{login, amount}]}].
+const Holders = {values:null};
+// A viewer value's holders in its step's editor: the ones with the most,
+// and a way to fix one viewer by hand or start everyone over.
+function holdersHtml(value){
+  if (!/^[A-Za-z0-9_]{1,32}$/.test(value)) return '';
+  const mine = (Holders.values || []).find(v => v.name === value);
+  const list = !Holders.values ? '' : !mine ? '<div class="muted">Nobody holds any yet.</div>'
+    : `<div class="muted">${plural(mine.holders, 'viewer')} hold some. The most:</div>
+      <ol class="ig-holders-list">${mine.top.slice(0, 10).map(h => `<li><span class="mono">${esc(h.login)}</span><b>${esc(String(h.amount))}</b></li>`).join('')}</ol>`;
+  return `<div class="dff ig-holders" data-value="${esc(value)}"><label>Who holds ${esc(value)}</label>${list}
+    <div class="ig-holders-row"><input class="ic-input mono" data-h="login" placeholder="viewer" spellcheck="false" aria-label="Viewer">
+      <input class="ic-input mono" data-h="amount" placeholder="0" inputmode="numeric" aria-label="Amount">
+      <button type="button" class="ic-btn ic-btn-ghost" data-act="holders-set">Set</button></div>
+    <div class="ig-holders-row"><button type="button" class="ic-btn ic-btn-ghost" data-act="holders-load">${Holders.values ? 'Refresh' : 'Show who holds it'}</button>
+      ${mine ? '<button type="button" class="ic-btn ic-btn-ghost" data-act="holders-clear">Reset everyone to 0</button>' : ''}</div></div>`;
+}
+// Ask the app for the holders (with `change`: after making that change), then redraw.
+async function loadHolders(change){
+  const r = await api('/integrations/viewers', change);
+  if (!r || r.ok === false){ toast((r && r.error) || 'That didn\'t work', 'err'); return; }
+  Holders.values = r.values || [];
+  const o = OWNERS[Modal.kind];
+  if (o && o.render) o.render();
+}
 // The step editor: any trigger, any steps, checks with then/otherwise.
 // Selection and insertion points are paths like [2,'then',0].
 const PALETTE = [
   ['Send', [['discord', 'Discord'], ['chat', 'Twitch chat'], ['phone', 'Phone'], ['http', 'Web request']]],
-  ['Flow', [['if', 'If / otherwise'], ['wait', 'Wait'], ['wait_delay', 'Wait for the delay'], ['stop', 'Stop']]],
-  ['Stream', [['overlay', 'Show on stream'], ['delay_action', 'Delay action'], ['obs', 'OBS'], ['marker', 'VOD marker'], ['clip', 'Clip'], ['timeline', 'Timeline']]],
+  ['Flow', [['if', 'If / otherwise'], ['wait', 'Wait'], ['wait_delay', 'Wait for the delay'], ['wait_chat', 'Wait for chat'], ['call', 'Run a block'], ['stop', 'Stop']]],
+  ['Viewers', [['viewer', 'Viewer value'], ['math', 'Maths']]],
+  ['Stream', [['overlay', 'Show on stream'], ['reward', 'Channel points reward'], ['delay_action', 'Delay action'], ['obs', 'OBS'], ['marker', 'VOD marker'], ['clip', 'Clip'], ['timeline', 'Timeline']]],
   ['Home', [['light', 'Smart light']]],
   ['Anything', [['edit_text', 'Edit text'], ['set_var', 'Remember a value'], ['counter', 'Counter'], ['program', 'Run a program'], ['file', 'Write a file']]],
 ];
@@ -4368,6 +4573,8 @@ const TRIGGERS = [
     eg:'Ctrl+Alt+C clips and posts the link'},
   {id:'scene', icon:'layers', label:'An OBS scene', hint:'When OBS switches scene', eg:'The game scene turns the delay on'},
   {id:'webhook', icon:'link', label:'A web call', hint:'Scripts and apps that send data', eg:'n8n sends a message to post'},
+  {id:'block', icon:'layers', label:'A block of steps', hint:'Steps your other triggers run by name',
+    eg:'Check the bet once, use it in every game'},
 ];
 // Why a trigger tile can't be picked right now, or ''.
 function triggerBlocked(k){
@@ -4409,7 +4616,7 @@ const EVENT_INFO = {
   twitch_gift:{icon:'gift', desc:'Someone gifts subs to your community.'},
   twitch_cheer:{icon:'gem', desc:'Bits in chat, with the message.'},
   twitch_raid:{icon:'users', desc:'Another channel raids you, with its viewers.'},
-  twitch_redeem:{icon:'bolt', desc:'A channel point reward is redeemed. Pick one in "Only if".'},
+  twitch_redeem:{icon:'bolt', desc:'A viewer redeems a channel points reward: any, or the ones you pick.'},
   twitch_ad:{icon:'tv', desc:'An ad break starts, run by you or by Twitch.'},
 };
 // Whether an event comes from Twitch's event feed (follows, subs, raids...).
@@ -4642,6 +4849,12 @@ const Builder = {
     for (let n = 0; n < path.length - 1; n += 2) list = list[path[n]][path[n + 1]];
     return {list, index:path[path.length - 1]};
   },
+  // Whether `path` leads to a step of this trigger.
+  has(path){
+    let list = this.handler().steps;
+    for (let n = 0; list && n < path.length - 1; n += 2) list = (list[path[n]] || {})[path[n + 1]];
+    return !!(list && list[path[path.length - 1]]);
+  },
   listAt(path){
     if (!path.length) return this.handler().steps;
     const s = this.stepAt(path.slice(0, -1));
@@ -4829,7 +5042,49 @@ const Builder = {
       case 'wait_delay': return '<p class="ig-insp-p">Waits until the moment this started has reached your viewers. Only InstantClone can do this: it knows your delay.</p>'
         + duration('extra_ms', 'Then wait a bit more', 's', 0) + field('follow', 'If the delay changes meanwhile', {select:[['', 'Follow it'], ['no', 'Keep the delay from the start']]});
       case 'if': return this.ifFields(s, note);
-      case 'stop': return note('Ends this run here.');
+      case 'stop': return field('quiet', 'In the history', {select:[['', 'This run shows'], ['yes', 'This run is left out']]})
+        + note('Ends this run here. Leave it out of the history when it stops most of the time, like a timer that rolls for a rare drop.');
+      case 'viewer': {
+        const everyone = s.params.who === 'active';
+        return field('value', 'Value (letters, digits and _)', {mono:true, fixed:true, ph:'coins'})
+          + field('who', 'Whose', {select:[['', 'The viewer who started this'], ['target', 'Who they named (@name)'], ['named', 'A viewer this step names'], ['active', 'Everyone who chatted lately']]})
+          + (s.params.who === 'named' ? field('login', 'Viewer', {mono:true, ph:'{reply.user_login}'}) : '')
+          + (everyone ? field('minutes', 'Chatted in the last (minutes)', {mono:true, ph:'10'})
+            : field('op', 'Do', {select:[['', 'Give'], ['spend', 'Spend: only if they have enough'], ['subtract', 'Take: never below 0'], ['set', 'Set to'], ['reset', 'Reset to 0']]}))
+          + (s.params.op === 'reset' && !everyone ? '' : field('by', 'Amount', {mono:true, ph:'1'}))
+          + note(s.params.op === 'spend' && !everyone ? `Follow it with an If on ${MONO}{paid}</span>: yes when it was taken, no when they hold too little (or the amount isn't a whole number from 1 up).`
+            : `One number per viewer, kept between streams. Read it as ${MONO}{viewer.${esc(s.params.value || 'coins')}}</span> or ${MONO}{target.${esc(s.params.value || 'coins')}}</span>, add ${MONO}.rank</span> for their place, and ${MONO}{top.${esc(s.params.value || 'coins')}}</span> for the five who hold the most.`)
+          + holdersHtml((s.params.value || '').trim());
+      }
+      case 'math': return field('a', 'Number', {mono:true, ph:'{arg1}'})
+        + field('op', 'Do', {select:Object.entries(MATH_OPS)})
+        + field('b', 'And', {mono:true, ph:'2'})
+        + field('save_as', 'Save it as', {mono:true, fixed:true, ph:'result'})
+        + note(`Whole numbers only. Later steps use it as ${MONO}{${esc((s.params.save_as || '').trim() || 'result')}}</span>.`);
+      case 'wait_chat': {
+        const n = esc((s.params.save_as || '').trim() || 'reply');
+        return field('text', 'A message that starts with (empty: any message)', {mono:true, ph:'!accept'})
+          + field('from', 'From', {select:[['', 'Anyone'], ['viewer', 'The viewer who started this'], ['target', 'Who they named (@name)']]})
+          + field('seconds', 'Wait up to (seconds, 300 at most)', {mono:true, ph:'30'})
+          + field('save_as', 'Save the answer as', {mono:true, fixed:true, ph:'reply'})
+          + note(`${MONO}{${n}.ok}</span> is yes when someone answered in time, no otherwise. Then ${MONO}{${n}.user}</span>, ${MONO}{${n}.user_login}</span>, ${MONO}{${n}.message}</span> and ${MONO}{${n}.arg1}</span> (its second word) say who and what.`);
+      }
+      case 'reward': {
+        const made = (Rewards.list || []).map(r => r.title);
+        // A reward typed before the list was read, or made elsewhere since, still shows.
+        const titles = made.includes(s.params.title) || !s.params.title ? made : [s.params.title].concat(made);
+        return (titles.length ? field('title', 'Reward', {select:[['', 'Pick a reward']].concat(titles.map(t => [t, t]))})
+            : field('title', 'Reward (its exact name)', {fixed:true, ph:'Hydrate'}))
+          + field('action', 'Switch it', {select:[['off', 'Off: viewers no longer see it'], ['', 'On: viewers can redeem it']]})
+          + note('For a reward that should only be there some of the time: off while a round is running, on again when it is over.')
+          + rewardsHtml();
+      }
+      case 'call': {
+        const blocks = blockNames(this.d);
+        return (blocks.length ? field('block', 'Block', {select:[['', 'Pick a block']].concat(blocks.map(b => [b, b]))})
+          : note('No block yet. Add a trigger of the kind "A block of steps", name it and give it steps.'))
+          + note('Its steps run here with this run\'s values, and what they save stays for the next steps. A Stop inside the block stops this run too.');
+      }
       case 'delay_action': return field('action', 'Does', {select:Object.entries(DELAY_ACTIONS)})
         + (s.params.action === 'arm' ? field('seconds', 'Delay in whole seconds (0 turns it off, blank uses your Default delay), or a value like {arg1}', {mono:true, ph:'30'})
           + note('Starts or changes the delay. A delay the buffer can\'t hold fails this step.') : '')
@@ -4844,7 +5099,10 @@ const Builder = {
           + note(`Later steps can use <span class="mono">{${esc((s.params.save_as || '').trim() || 'program')}.output}</span> (what it printed), <span class="mono">.code</span> (how it ended) and <span class="mono">.ok</span> (yes when the code is 0). It runs with no window; one still running after 10 s is stopped.`) : '')
         + warnHtml('Runs on your PC. Recipes you import can never add this without asking you first.');
       case 'file': return (localLocked() ? warnHtml(esc(LOCAL_LOCK_TEXT)) : '') + field('path', 'File (a fixed path, no variables)', {mono:true, fixed:true, ph:'C:\\Stream\\status.txt'}) + field('text', 'Text', {area:true}) + field('mode', 'Each time', {select:[['', 'Replace the text'], ['append', 'Add a line']]});
-      case 'set_var': return field('name', 'Name', {mono:true, fixed:true, ph:'winner'}) + field('value', 'Value', {ph:'{user}'}) + note('Later steps use it as <span class="mono">{name}</span>. Lasts for this run.');
+      case 'set_var': return field('name', 'Name', {mono:true, fixed:true, ph:'winner'}) + field('value', 'Value', {ph:'{user}'})
+        + field('keep', 'Keep it', {select:[['', 'For this run'], ['yes', 'Between runs and streams']]})
+        + note(s.params.keep === 'yes' ? `Later steps use it as ${MONO}{${esc(s.params.name || 'name')}}</span>; any other run reads it as ${MONO}{saved.${esc(s.params.name || 'name')}}</span>.`
+          : 'Later steps use it as <span class="mono">{name}</span>. Lasts for this run.');
       case 'overlay': return field('title', 'Small title', {ph:'Clip'}) + field('text', 'Text', {area:true, ph:'{user} just clipped that'})
         + field('seconds', 'On screen for', {select:[['3', '3 s'], ['6', '6 s'], ['10', '10 s'], ['15', '15 s'], ['30', '30 s']]
           .concat(['', '3', '6', '10', '15', '30'].includes(s.params.seconds || '') ? [] : [[s.params.seconds, s.params.seconds + ' s']])})
@@ -4866,7 +5124,8 @@ const Builder = {
           + note(`Later steps use it as <span class="mono">{${esc((s.params.save_as || '').trim() || 'text')}}</span>.`);
       }
       case 'counter': return field('name', 'Name', {mono:true, ph:'crashes'}) + field('op', 'Do', {select:[['', 'Add'], ['subtract', 'Subtract'], ['set', 'Set to'], ['reset', 'Reset to 0']]})
-        + field('by', 'By', {mono:true, ph:'1'}) + note(`Kept between runs. Use it anywhere as <span class="mono">{counter.${esc(s.params.name || 'name')}}</span>.`);
+        + field('by', 'By', {mono:true, ph:'1'}) + field('save_as', 'Also save it as (optional)', {mono:true, fixed:true, ph:'coins'})
+        + note(`Kept between runs. Use it anywhere as <span class="mono">{counter.${esc(s.params.name || 'name')}}</span>. When the name holds a value like <span class="mono">{user_login}</span>, save it under a fixed name to use it in later steps.`);
       case 'obs': return this.obsFields(s, field, note);
       case 'light': return lightPickerHtml(s.params) + lightControlsHtml(s.params, name => `data-bind="p" data-name="${name}"`)
         + note('The device is fixed here, so chat can never pick it. Color and brightness may use values: {arg1} turns "!light blue" blue. A dry test never touches your lights.');
@@ -4981,9 +5240,12 @@ const Builder = {
         <span class="ig-ev-ic">${svg(info.icon)}</span><span class="ig-ev-t"><b>${esc(current ? current.label : t.event)}</b><small>${esc(info.desc)}</small></span>
         <span class="ig-evchange">Change</span></button></div>`;
       body += twitchEventStatusHtml(t);
+      // Channel points: the rewards made here are managed where they are used.
+      if (t.event === 'twitch_redeem') body += rewardPickHtml(t) + rewardsHtml();
       if (isObsEvent(t)) body += '<div class="muted">Heard from OBS through its WebSocket server: switch it on once in OBS, Tools › WebSocket Server Settings.</div>';
       body += paramsHtml(t, 't-');
-      const filters = Editor.filterVars(t);
+      // Which reward is picked above, from a list: not typed here.
+      const filters = Editor.filterVars(t).filter(v => !(t.event === 'twitch_redeem' && v.name === 'reward'));
       if (filters.length){
         body += `<div class="ig-insp-group"><div class="ic-label">Only if</div>${filters.map(v => {
           const cur = (t.filters || {})[v.name] || '';
@@ -5002,10 +5264,19 @@ const Builder = {
       body = `${commandClashHtml(this.d)}<div class="dff"><label>Command</label><input class="ic-input mono" data-bind="t-command" value="${esc(t.command || '')}" placeholder="!clip" spellcheck="false"></div>
         <div class="dff"><label>Also answers to</label><input class="ic-input mono" data-bind="t-aliases" value="${esc((t.aliases || []).join(' '))}" spellcheck="false"></div>
         <div class="dff"><label>Who can use it</label>${rolesHtml(t, 't-role')}</div>
-        <div class="dff"><label>Each viewer, at most once every</label>${durInput('t-ucd-dur', t.user_cooldown_ms || 0, 's')}</div>`;
+        <div class="dff"><label>Each viewer, at most once every</label>${durInput('t-ucd-dur', t.user_cooldown_ms || 0, 's')}</div>
+        ${t.user_cooldown_ms ? `<div class="dff"><label>Tell a viewer who is too early (optional)</label><input class="ic-input" data-bind="t-cd-reply" value="${esc(t.cooldown_reply || '')}" placeholder="Come back in {cooldown_left}."></div>
+        <div class="muted">Each viewer hears it once per wait. Waits of 10 minutes or more are remembered when the app restarts.</div>` : ''}`;
+    } else if (t.type === 'block'){
+      body = `<div class="dff"><label>Name</label><input class="ic-input" data-bind="t-block-name" value="${esc(t.name || '')}" placeholder="check the bet" maxlength="40" spellcheck="false"></div>
+        <div class="muted">It never starts on its own: a "Run a block" step in another trigger runs it, with that run's values. A Stop inside it stops that run.</div>`;
     } else if (t.type === 'chat_message'){
-      body = `<div class="dff"><label>Matches</label><input class="ic-input" data-bind="t-pattern" value="${esc(t.pattern || '')}" placeholder="gg*"></div>
-        <div class="dff"><label>How</label><select class="ic-input" data-bind="t-mode">${[['contains', 'Contains'], ['starts_with', 'Starts with'], ['exact', 'Is exactly'], ['wildcard', 'Wildcard (* and ?)']].map(([id, l]) => `<option value="${id}" ${id === (t.mode || 'contains') ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      const mode = t.mode || 'contains';
+      body = `<div class="dff"><label>Matches</label><input class="ic-input" data-bind="t-pattern" value="${esc(t.pattern || '')}" placeholder="gg"></div>
+        <div class="dff"><label>How</label><select class="ic-input" data-bind="t-mode">${Object.entries(MATCH_MODES).map(([id, m]) => `<option value="${id}" ${id === mode ? 'selected' : ''}>${m.label}</option>`).join('')}</select>
+          <div class="muted">${MATCH_MODES[mode].means}</div>${matchExamplesHtml(t.pattern || '', mode)}</div>
+        <div class="dff"><label>Try a message</label><input class="ic-input" data-bind="t-try" value="${esc(this.tryText || '')}" placeholder="Type what a viewer might say">
+          ${(this.tryText || '').trim() && (t.pattern || '').trim() ? `<div class="ig-fires-row"><span class="ig-fires ${textMatches(this.tryText, t.pattern, mode) ? 'yes' : 'no'}">${textMatches(this.tryText, t.pattern, mode) ? 'This message fires it' : 'This message does not fire it'}</span></div>` : ''}</div>
         <div class="dff"><label>Who</label>${rolesHtml(t, 't-role')}</div>`;
     } else if (t.type === 'timer'){
       body = `<div class="dff"><label>Every</label>${durInput('t-every-dur', t.every_ms || 600000, 'm')}</div>
@@ -5040,12 +5311,22 @@ const Builder = {
     else if (b === 'b-cooldown-dur'){ const ms = durationOf(0, 86400000); if (ms == null) return; this.d.cooldown_ms = ms; }
     else if (b === 'h-enabled') h.enabled = el.checked;
     else if (b === 't-filter'){ t.filters = t.filters || {}; t.filters[el.dataset.name] = el.value.trim(); }
+    else if (b === 't-reward-other'){
+      setRewardChoice(t, rewardChoice(t).picked, el.value.split(',').map(x => x.trim()).filter(Boolean));
+      // Typing a name must not redraw the field under the caret.
+      this.dirty = true;
+      return;
+    }
     else if (b === 't-command') t.command = el.value.trim().toLowerCase();
     else if (b === 't-aliases') t.aliases = el.value.split(/[\s,]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
     else if (b === 't-role'){ t.roles = t.roles || {}; t.roles[el.dataset.name] = el.checked; }
     else if (b === 't-ucd-dur'){ const ms = durationOf(0, 86400000); if (ms == null) return; t.user_cooldown_ms = ms; }
     else if (b === 't-pattern') t.pattern = el.value;
+    else if (b === 't-cd-reply') t.cooldown_reply = el.value.trim();
+    else if (b === 't-block-name') this.renameBlock(t, el.value.trim());
     else if (b === 't-mode') t.mode = el.value;
+    // Trying a message changes nothing that is saved.
+    else if (b === 't-try'){ this.tryText = el.value; this.render(); return; }
     else if (b === 't-every-dur'){ const ms = durationOf(60000, 7 * 86400000); if (ms == null) return; t.every_ms = ms; }
     else if (b === 't-live') t.only_live = el.checked;
     else if (b === 't-param'){ if (!paramInput(t, el)) return; }
@@ -5071,6 +5352,16 @@ const Builder = {
     else if (!quietInput(this.d, el)) return;
     this.changed();
   },
+  // A block's new name, in the block and in every step that runs it.
+  renameBlock(t, name){
+    const was = t.name;
+    const follow = steps => (steps || []).forEach(s => {
+      if (s.type === 'call' && was && s.params.block === was) s.params.block = name;
+      follow(s.then); follow(s.else);
+    });
+    this.d.handlers.forEach(h => follow(h.steps));
+    t.name = name;
+  },
   changed(){
     this.dirty = true;
     this.edits = (this.edits || 0) + 1;
@@ -5095,6 +5386,19 @@ const Builder = {
         } else s.params[name] = (s.params[name] || '').trim() === v ? '' : v;
         // A typed name, now picked, leaves the find box for the next one.
         if (el.dataset.new && this.pickFind) delete this.pickFind[uidOf(s) + ':' + name];
+        this.changed();
+        return true;
+      }
+      case 'b-reward-scope': {
+        const t = this.handler().trigger;
+        if (el.dataset.v === 'any'){ REWARD_ONLY.delete(t); setRewardChoice(t, [], []); }
+        else REWARD_ONLY.add(t);
+        this.changed();
+        return true;
+      }
+      case 'b-reward-pick': {
+        const t = this.handler().trigger, c = rewardChoice(t), id = el.dataset.id;
+        setRewardChoice(t, c.picked.includes(id) ? c.picked.filter(x => x !== id) : c.picked.concat(id), c.other);
         this.changed();
         return true;
       }
@@ -5129,7 +5433,10 @@ const Builder = {
         return true;
       }
       case 'b-sel': {
-        this.sel = el.dataset.path === 'trigger' ? 'trigger' : this.resolve(el.dataset.path);
+        const picked = el.dataset.path === 'trigger' ? 'trigger' : this.resolve(el.dataset.path);
+        // A step still fading out after a switch of trigger isn't this trigger's.
+        if (Array.isArray(picked) && !this.has(picked)) return true;
+        this.sel = picked;
         // New blocks land right after the step picked.
         this.after = Array.isArray(this.sel) ? this.sel : null;
         this.render();
@@ -5437,8 +5744,9 @@ const Builder = {
 
 function newTrigger(type){
   switch (type){
-    case 'chat_command': return {type, command:'!command', aliases:[], roles:{everyone:true, subs:true, vips:true, mods:true}, user_cooldown_ms:30000};
-    case 'chat_message': return {type, pattern:'', mode:'contains', roles:{everyone:true, subs:true, vips:true, mods:true}};
+    case 'chat_command': return {type, command:'!command', aliases:[], roles:{everyone:true, subs:true, vips:true, mods:true}, user_cooldown_ms:30000, cooldown_reply:''};
+    case 'block': return {type, name:''};
+    case 'chat_message': return {type, pattern:'', mode:'word', roles:{everyone:true, subs:true, vips:true, mods:true}};
     case 'timer': return {type, every_ms:600000, only_live:true};
     case 'webhook': return {type, token:randomToken()};
     case 'shortcut': return {type, hotkey:'', midi:'', token:'', only_live:false};
@@ -5465,6 +5773,8 @@ function newStep(kind, trigger){
     overlay:{title:'', text:'', seconds:'6'}, edit_text:{input:'', op:'first_line', a:'', b:'', save_as:'text'},
     obs:{action:'scene', scene:'', source:'', text:'', filter:'', hotkey:''},
     light:{device:'', name:'', plug:'', action:'color', color:'red', brightness:''},
+    viewer:{value:'coins', who:'', op:'', by:'10'}, math:{a:'', op:'multiply', b:'2', save_as:'result'},
+    wait_chat:{text:'', from:'', seconds:'30', save_as:'reply'}, call:{block:''}, reward:{title:'', action:'off'},
   }[kind] || {};
   return {type:kind, params:clone(p), then:[], else:[]};
 }
@@ -5476,7 +5786,8 @@ function triggerSentence(t){
       return triggerLabel(t) + (tune ? ` · ${tune.k.toLowerCase()} ${tune.v}` : '') + (f.length ? ' · only if ' + f.join(', ') : '');
     }
     case 'chat_command': return `Someone types ${t.command || '!command'} · ${rolesLabel(t.roles)}`;
-    case 'chat_message': return `A chat message ${t.mode === 'exact' ? 'is' : t.mode === 'starts_with' ? 'starts with' : 'matches'} "${t.pattern || ''}"`;
+    case 'chat_message': return `A chat message ${{exact:'is', starts_with:'starts with', word:'has the word', contains:'contains the letters'}[t.mode] || 'matches'} "${t.pattern || ''}"`;
+    case 'block': return t.name ? `A "Run a block" step runs ${t.name}` : 'A block of steps (not named yet)';
     case 'timer': return `Every ${fmtDur(t.every_ms || 0)}${t.only_live !== false ? ' while streaming' : ''}`;
     case 'webhook': return 'Something calls its secret address';
     case 'shortcut': return (shortcutLabel(t) ? `You press ${shortcutLabel(t)}` : 'You press a button (not set yet)') + (t.only_live ? ' while streaming' : '');
@@ -5786,14 +6097,25 @@ function stepSentence(s){
       const one = r => `${highlightVars(r.left || '…')} ${esc(OPS[r.op] || r.op || '')}${OPS_ALONE.includes(r.op) ? '' : ' ' + highlightVars(r.right || '')}`;
       return 'If ' + conditionRows(s).map(one).join(p.match === 'any' ? ' or ' : ' and ');
     }
-    case 'stop': return 'Stop here';
+    case 'stop': return p.quiet === 'yes' ? 'Stop here, out of the history' : 'Stop here';
     case 'delay_action': return p.action === 'arm' && p.seconds && Number(p.seconds) <= 0 ? 'Turn the delay off'
       : p.action === 'arm' && p.seconds ? `Set a ${highlightVars(p.seconds)} s delay` : esc(DELAY_ACTIONS[p.action] || 'Delay action');
     case 'marker': return `VOD marker ${q(p.description)}`;
     case 'clip': return 'Create a clip';
     case 'program': return `Run ${p.path ? esc(p.path.split(/[\\/]/).pop()) : 'a program you pick'} ${highlightVars(p.args || '')}${p.wait === 'yes' ? ', and keep its answer' : ''}`;
     case 'file': return `${p.mode === 'append' ? 'Add to' : 'Write'} ${p.path ? esc(p.path.split(/[\\/]/).pop()) : 'a file you pick'} ${q(p.text)}`;
-    case 'set_var': return `Remember ${esc(p.name || '…')} = ${highlightVars(p.value || '')}`;
+    case 'set_var': return `${p.keep === 'yes' ? 'Keep' : 'Remember'} ${esc(p.name || '…')} = ${highlightVars(p.value || '')}`;
+    case 'viewer': {
+      const whose = {target:'who they named', active:'everyone who chatted', named:highlightVars(p.login || '…')}[p.who] || 'the viewer';
+      const amount = highlightVars(p.by || '1'), value = esc(p.value || '…');
+      if (p.who === 'active') return `Give ${amount} ${value} to ${whose}`;
+      return {spend:`Spend ${amount} ${value} of ${whose}, if they have it`, subtract:`Take ${amount} ${value} from ${whose}`,
+        set:`Set ${value} of ${whose} to ${amount}`, reset:`Reset ${value} of ${whose}`}[p.op] || `Give ${amount} ${value} to ${whose}`;
+    }
+    case 'math': return `${highlightVars(p.a || '0')} ${esc((MATH_OPS[p.op || ''] || '').toLowerCase())} ${highlightVars(p.b || '0')} → <span class="v">{${esc((p.save_as || '').trim() || 'result')}}</span>`;
+    case 'wait_chat': return `Wait up to ${highlightVars(p.seconds || '30')} s for ${p.text ? q(p.text) : 'a message'} from ${{viewer:'the viewer', target:'who they named'}[p.from] || 'anyone'}`;
+    case 'call': return `Run the block ${esc(p.block || '…')}`;
+    case 'reward': return `Switch the reward ${q(p.title || '…')} ${p.action === 'off' ? 'off' : 'on'}`;
     case 'overlay': return `On stream ${q(p.text)}`;
     case 'edit_text': return `${esc((EDIT_OPS[p.op] || EDIT_OPS.first_line)[0])}: ${highlightVars(p.input || '…')} → <span class="v">{${esc((p.save_as || '').trim() || 'text')}}</span>`;
     case 'counter': return `Counter ${esc(p.name || '…')} ${p.op === 'reset' ? 'reset' : p.op === 'set' ? '= ' + esc(p.by || '0') : (p.op === 'subtract' ? '-' : '+') + esc(p.by || '1')}`;
@@ -6699,6 +7021,157 @@ function recipeWarningHtml(p){
   return warnHtml('Read the red lines before adding it. Recipes arrive switched off: nothing runs until you open one and switch it on.');
 }
 
+// Your values: things set once ({my.name}) that any message or step reads,
+// so a coin's name or a game's odds change in one place; and, on its own
+// tab, what viewers hold. Each row shows what the value is for and one
+// field to change it; its name and label hide behind the pencil, since
+// renaming is rare and changing the value is the point.
+const Values = {
+  list:[], tab:'values', find:'', more:null, saved:'',
+  open(){
+    this.list = clone(S.data.values || []);
+    this.saved = JSON.stringify(this.clean());
+    this.tab = 'values';
+    this.find = '';
+    this.more = null;
+    Modal.open('values', 860);
+    Modal.onClose = () => !this.dirty() || (Modal.guard(), false);
+    this.render();
+    // Who holds what, without being asked: this is where it is managed.
+    loadHolders();
+  },
+  // What Save would send: rows left wholly empty were never meant to be one.
+  clean(){
+    return this.list.filter(v => v.name || v.label || v.value).map(v => ({name:v.name.trim(), label:v.label.trim(), value:v.value}));
+  },
+  dirty(){ return JSON.stringify(this.clean()) !== this.saved; },
+  // How a value is best edited, read off what it holds and what it is for.
+  kindOf(v){
+    if (/\n/.test(v.value) || v.value.length > 60 || / \| /.test(v.value)) return 'list';
+    if (!/^-?\d+(\.\d+)?$/.test(v.value.trim())) return 'text';
+    return /chance|percent|%/i.test(v.name + ' ' + v.label) ? 'chance' : 'number';
+  },
+  // How many integrations read {my.<name>} somewhere.
+  usedIn(name){
+    if (!name) return 0;
+    const reads = new RegExp(`[{$]my\\.${name}(?![A-Za-z0-9_])`);
+    return S.data.integrations.filter(i => reads.test(JSON.stringify(i))).length;
+  },
+  editorHtml(v, n){
+    const at = `data-n="${n}"`;
+    switch (this.kindOf(v)){
+      case 'chance': return `<span class="ig-val-chance"><input type="range" min="0" max="100" step="0.5" value="${esc(v.value)}" data-bind="v-value" ${at} aria-label="${esc(v.label || v.name)}, as a slider">
+        <span class="ig-val-unit"><input class="ic-input mono" data-bind="v-value" ${at} value="${esc(v.value)}" inputmode="decimal" aria-label="${esc(v.label || v.name)}"><span class="muted">%</span></span></span>`;
+      case 'number': return `<input class="ic-input mono ig-val-num" data-bind="v-value" ${at} value="${esc(v.value)}" inputmode="decimal" aria-label="${esc(v.label || v.name)}">`;
+      case 'list': {
+        const lines = v.value.split('\n').filter(x => x.trim()).length;
+        return `<textarea class="ic-input" data-bind="v-value" ${at} rows="${Math.min(8, Math.max(3, v.value.split('\n').length))}" aria-label="${esc(v.label || v.name)}">${esc(v.value)}</textarea>
+          <div class="muted">${/\n/.test(v.value) ? `${plural(lines, 'line')}: one is picked each time.` : 'One per line, or separated by |.'}</div>`;
+      }
+    }
+    return `<input class="ic-input" data-bind="v-value" ${at} value="${esc(v.value)}" aria-label="${esc(v.label || v.name)}">`;
+  },
+  rowHtml(v, n){
+    const kind = this.kindOf(v), open = this.more === n, used = this.usedIn(v.name.trim());
+    const meta = !v.name ? 'Give it a name to use it' : `<code class="mono">{my.${esc(v.name)}}</code> · ${used ? 'used in ' + plural(used, 'integration') : 'not used yet'}`;
+    return `<div class="ig-val${kind === 'list' ? ' wide' : ''}${open ? ' open' : ''}" data-key="val-${n}">
+      <div class="ig-val-main"><div class="ig-val-what"><b>${esc(v.label || v.name || 'New value')}</b><span class="ig-val-meta">${meta}</span></div>
+        <div class="ig-val-edit">${this.editorHtml(v, n)}</div>
+        <button type="button" class="ic-btn-tiny${open ? ' on' : ''}" data-act="v-more" data-n="${n}" aria-expanded="${open}" aria-label="Name and label of ${esc(v.label || v.name || 'this value')}" title="Name and label">${svg('pencil')}</button></div>
+      ${open ? `<div class="ig-val-more"><div class="dff"><label>What it is for</label><input class="ic-input" data-bind="v-label" data-n="${n}" value="${esc(v.label)}" placeholder="!daily gives"></div>
+        <div class="dff"><label>Name in steps</label><span class="ig-val-name mono">{my.<input class="ic-input mono" data-bind="v-name" data-n="${n}" value="${esc(v.name)}" placeholder="daily" maxlength="32" spellcheck="false">}</span>
+          ${used ? `<div class="muted">${plural(used, 'integration')} read${used === 1 ? 's' : ''} it by this name: renaming it here leaves them reading nothing.</div>` : ''}</div>
+        <button type="button" class="ic-btn ic-btn-ghost ig-small" data-act="v-del" data-n="${n}">Delete this value</button></div>` : ''}</div>`;
+  },
+  valuesHtml(){
+    const find = this.find.trim().toLowerCase();
+    const shown = this.list.map((v, n) => ({v, n})).filter(({v, n}) => n === this.more || !find || [v.name, v.label, v.value].some(x => x.toLowerCase().includes(find)));
+    const groups = [['text', 'Words'], ['number', 'Amounts'], ['chance', 'Chances'], ['list', 'Lists a step picks from']]
+      .map(([kind, title]) => ({title, rows:shown.filter(({v}) => this.kindOf(v) === kind)})).filter(g => g.rows.length);
+    return `${this.list.length > 6 ? `<input class="ic-input ig-val-find" data-bind="v-find" value="${esc(this.find)}" placeholder="Find a value" aria-label="Find a value">` : ''}
+      ${groups.map(g => `<div class="ig-val-group" data-key="g-${g.title}"><div class="ic-label">${g.title}</div>${g.rows.map(({v, n}) => this.rowHtml(v, n)).join('')}</div>`).join('')}
+      ${!this.list.length ? '<div class="muted ig-val-empty">Nothing yet. A recipe you import brings its own values; or add one and write it as <span class="mono">{my.name}</span> wherever a value fits.</div>'
+        : !shown.length ? '<div class="muted ig-val-empty">Nothing matches.</div>' : ''}
+      <button type="button" class="ig-cond-add" data-act="v-add">${svg('plus')}Add a value</button>
+      <div class="muted">Use one in any message or step as <span class="mono">{my.name}</span>. In a counting word, write it with a $: <span class="mono">{viewer.coins#$my.coin#$my.coins}</span> says "1 coin" or "5 coins" in your words.</div>`;
+  },
+  heldHtml(){
+    const held = (Holders.values || []).map(v => holdersHtml(v.name)).join('');
+    return !Holders.values ? '<div class="muted ig-val-empty">Asking the app who holds what…</div>'
+      : held || '<div class="muted ig-val-empty">Nothing yet. A "Viewer value" step gives viewers coins or points, and they show up here.</div>';
+  },
+  render(){
+    if (Modal.kind !== 'values') return;
+    const dirty = this.dirty(), holders = (Holders.values || []).reduce((sum, v) => sum + v.holders, 0);
+    const tabs = [['values', `Values · ${this.clean().length}`], ['held', `What viewers hold${holders ? ' · ' + holders : ''}`]];
+    Modal.body(`${modalHead('steps', 'var(--accent)', 'Your values', 'Set something once and use it in any message or step. Change it here and everything that uses it follows.')}
+      <div class="dest-form-body ig-conn-body ig-val-body">
+        <div class="sub-tabs ig-seg ig-val-tabs">${tabs.map(([id, label]) => `<button class="sub-tab${id === this.tab ? ' on' : ''}" data-act="v-tab" data-v="${id}" aria-pressed="${id === this.tab}">${label}</button>`).join('')}${SEG_IND}</div>
+        ${this.tab === 'held' ? this.heldHtml() : this.valuesHtml()}
+      </div>
+      <div class="dest-form-foot"><div class="dest-form-msg">${dirty ? 'Changes not saved yet' : ''}</div>
+        <button class="ic-btn ic-btn-ghost" data-act="modal-close">Close</button><button class="ic-btn ic-btn-primary" data-act="v-save" ${dirty ? '' : 'disabled'}>Save</button></div>`);
+  },
+  input(el){
+    const b = el.dataset.bind, v = this.list[+el.dataset.n];
+    if (b === 'v-find') this.find = el.value;
+    else if (!v) return;
+    else if (b === 'v-value') v.value = el.value;
+    else if (b === 'v-name'){ v.name = el.value.trim(); v.named = true; }
+    else if (b === 'v-label'){
+      v.label = el.value;
+      // Until a name is typed, it follows the label: "!daily gives" is daily_gives.
+      if (!v.named && !this.usedIn(v.name)) v.name = el.value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32);
+    }
+    this.render();
+  },
+  // Why the list can't be saved as it is, with the row to look at; or null.
+  problem(){
+    const names = new Set();
+    for (const [n, v] of this.list.entries()){
+      if (!v.name && !v.label && !v.value) continue;
+      if (!/^[A-Za-z0-9_]{1,32}$/.test(v.name.trim())) return {n, why:`"${v.label || v.name || 'A value'}" needs a name: letters, digits and _`};
+      if (names.has(v.name.trim())) return {n, why:`Two values are named ${v.name.trim()}`};
+      names.add(v.name.trim());
+    }
+    return null;
+  },
+  async act(a, el){
+    const n = +el.dataset.n;
+    if (a === 'v-tab'){ this.tab = el.dataset.v; this.render(); return true; }
+    if (a === 'v-more'){ this.more = this.more === n ? null : n; this.render(); return true; }
+    if (a === 'v-add'){
+      this.list.push({name:'', label:'', value:''});
+      this.more = this.list.length - 1;
+      this.find = '';
+      this.render();
+      focusField('v-label');
+      return true;
+    }
+    if (a === 'v-del'){
+      if (this.usedIn(this.list[n].name) && !armConfirm(el, 'Still in use. Delete?')) return true;
+      this.list.splice(n, 1);
+      this.more = null;
+      this.render();
+      return true;
+    }
+    if (a === 'v-save'){
+      const wrong = this.problem();
+      if (wrong){ this.more = wrong.n; this.find = ''; this.render(); toast(wrong.why, 'err', 6000); return true; }
+      await busy(el, async () => {
+        const values = this.clean();
+        const r = await api('/integrations/values', {values});
+        if (!r || r.ok === false){ toast((r && r.error) || 'That didn\'t save', 'err', 6000); return; }
+        this.saved = JSON.stringify(values);
+        if (Modal.kind === 'values') Modal.close(true);
+        await load();
+        toast('Saved', 'ok');
+      });
+      return true;
+    }
+    return false;
+  },
+};
 const Recipes = {
   preview:null, text:'', back:null,
   // Which "See every step" and "Raw settings" rows are open.
@@ -6730,6 +7203,9 @@ const Recipes = {
           </div>
           ${recipeWarningHtml(p)}
           ${p.alerts ? this.alertsHtml(p) : ''}
+          ${(p.values || []).length ? `<div class="sys-section" data-key="r-values"><div class="ic-label">Values it brings</div>
+            <div class="muted">You change these later under <b>Your values</b>. One you already set stays as you set it.</div>
+            <ul class="ig-value-list">${p.values.map(v => `<li><b>${esc(v.label || v.name)}</b> <span class="mono">${esc(v.mine == null ? v.value : v.mine)}</span>${v.mine == null ? '' : ' <span class="muted">(yours, kept)</span>'}</li>`).join('')}</ul></div>` : ''}
           ${p.uses_discord ? (channels.length ? `<div class="dff"><label>Post its Discord messages in</label><select class="ic-input" data-bind="r-discord">${channels.map(c => `<option value="${esc(c.id)}">#${esc(c.name)}</option>`).join('')}</select></div>`
             : warnHtml('It posts to Discord: <a href="#" data-act="conn" data-tab="discord">add a Discord channel</a> first.')) : ''}
           ${p.local_effects && !localLocked() ? `<label class="crash-check lan-warn"><input type="checkbox" data-bind="r-local"><span><span class="crash-check-title">I trust this recipe to run programs or write files on this PC</span><span class="muted">Only tick this if you know who made it.</span></span></label>` : ''}
@@ -6857,7 +7333,7 @@ const Recipes = {
 
 // ---------------------------------------------------------------- events
 
-const OWNERS = {editor:Editor, builder:Builder, connections:Conn, alerts:AlertsLook, import:Recipes, share:Recipes, catalog:Catalog};
+const OWNERS = {editor:Editor, builder:Builder, connections:Conn, alerts:AlertsLook, import:Recipes, share:Recipes, catalog:Catalog, values:Values};
 
 async function onClick(e){
   const el = e.target.closest('[data-act]');
@@ -6920,6 +7396,7 @@ async function onClick(e){
     case 'catalog': Catalog.open(); break;
     case 'build': Builder.open(null); break;
     case 'import': Recipes.openImport(); break;
+    case 'values': Values.open(); break;
     case 'share': Recipes.openShare(); break;
     case 'conn': Conn.open(el.dataset.tab); break;
     case 'retry': busy(el, load); break;
@@ -6931,6 +7408,47 @@ async function onClick(e){
     case 'view': S.view = el.dataset.v; store.set('ig-view', S.view); render(); break;
     case 'copy': copyText(el); break;
     case 'twitch-app': openTwitchAppSettings(); break;
+    case 'rewards-load': Rewards.error = ''; busy(el, () => loadRewards()); break;
+    case 'rewards-new': case 'rewards-edit': case 'rewards-cancel': {
+      const row = el.closest('.ig-reward');
+      Rewards.editing = a === 'rewards-new' ? 'new' : a === 'rewards-edit' ? row.dataset.id : null;
+      if (OWNERS[Modal.kind] && OWNERS[Modal.kind].render) OWNERS[Modal.kind].render();
+      const first = q('.ig-reward-form [data-r="title"]');
+      if (first && a !== 'rewards-cancel') first.focus();
+      break;
+    }
+    case 'rewards-save': {
+      const form = el.closest('.ig-reward-form'), typed = name => form.querySelector(`[data-r="${name}"]`);
+      const title = typed('title').value.trim(), cost = typed('cost').value.trim();
+      if (!title || !/^[1-9]\d*$/.test(cost)){ toast('Give it a name and a cost in points', 'err'); break; }
+      const change = {title, cost:+cost, prompt:typed('prompt').value.trim(), wants_input:typed('wants_input').checked};
+      if (form.dataset.id) change.id = form.dataset.id;
+      const was = form.dataset.was;
+      busy(el, async () => {
+        if (!await loadRewards(change)) return;
+        Rewards.editing = null;
+        // What this integration said about the old name follows the new one.
+        if (was && was !== title && Modal.kind === 'builder'){ renameReward(Builder.d, was, title); Builder.changed(); }
+        else if (OWNERS[Modal.kind] && OWNERS[Modal.kind].render) OWNERS[Modal.kind].render();
+      });
+      break;
+    }
+    case 'rewards-switch': busy(el, () => loadRewards({id:el.closest('.ig-reward').dataset.id, enabled:!!el.dataset.on})); break;
+    case 'rewards-delete':
+      if (!armConfirm(el, 'Delete?')) break;
+      busy(el, () => loadRewards({id:el.closest('.ig-reward').dataset.id, delete:true}));
+      break;
+    case 'holders-load': busy(el, () => loadHolders()); break;
+    case 'holders-set': {
+      const box = el.closest('.ig-holders'), field = name => box.querySelector(`[data-h="${name}"]`).value.trim();
+      if (!field('login') || !/^-?\d+$/.test(field('amount'))){ toast('Type a viewer and a whole number', 'err'); break; }
+      busy(el, () => loadHolders({value:box.dataset.value, login:field('login'), amount:+field('amount')}));
+      break;
+    }
+    case 'holders-clear':
+      if (!armConfirm(el, 'Everyone back to 0. Sure?')) break;
+      busy(el, () => loadHolders({value:el.closest('.ig-holders').dataset.value, clear:true}));
+      break;
     case 'light-scan':
       busy(el, async () => {
         const r = await api('/integrations/lights/scan', {});
@@ -6999,6 +7517,7 @@ function onInput(e){
   if (Modal.kind === 'editor') Editor.input(el);
   else if (Modal.kind === 'builder') Builder.input(el);
   else if (Modal.kind === 'alerts') AlertsLook.input(el);
+  else if (Modal.kind === 'values') Values.input(el);
   // Pasted or dropped, not typed: typing would preview half a recipe.
   else if (Modal.kind === 'import' && el.dataset.bind === 'r-text' && /^insertFrom(Paste|Drop)$/.test(e.inputType || '')) Recipes.pasted(el);
 }

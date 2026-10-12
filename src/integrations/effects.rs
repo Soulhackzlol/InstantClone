@@ -310,6 +310,10 @@ impl Host for RealHost {
         self.twitch.marker(description)
     }
 
+    fn reward(&self, title: &str, enabled: bool) -> Result<(), String> {
+        self.twitch.set_reward_named(title, enabled)
+    }
+
     fn clip(&self) -> Result<ClipInfo, String> {
         let id = self.twitch.clip()?;
         Ok(ClipInfo {

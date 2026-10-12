@@ -519,13 +519,17 @@ pub fn to_event(kind_type: &str, e: &Value) -> Option<Event> {
     };
     let yes_no = |b: bool| if b { "yes" } else { "no" };
     Some(match kind_type {
-        "channel.follow" => Event::new(EventKind::TwitchFollow).with("user", user("user_name")),
+        "channel.follow" => Event::new(EventKind::TwitchFollow)
+            .with("user", user("user_name"))
+            .with("user_login", e.str_or("user_login", "")),
         "channel.subscribe" => Event::new(EventKind::TwitchSub)
             .with("user", user("user_name"))
+            .with("user_login", e.str_or("user_login", ""))
             .with("tier", tier())
             .with("gift", yes_no(e.bool_or("is_gift", false))),
         "channel.subscription.message" => Event::new(EventKind::TwitchResub)
             .with("user", user("user_name"))
+            .with("user_login", e.str_or("user_login", ""))
             .with("tier", tier())
             .with("months", number("cumulative_months"))
             .with("streak", number("streak_months"))
@@ -535,19 +539,23 @@ pub fn to_event(kind_type: &str, e: &Value) -> Option<Event> {
             ),
         "channel.subscription.gift" => Event::new(EventKind::TwitchGift)
             .with("user", user("user_name"))
+            .with("user_login", e.str_or("user_login", ""))
             .with("count", number("total"))
             .with("tier", tier())
             .with("total", number("cumulative_total")),
         "channel.cheer" => Event::new(EventKind::TwitchCheer)
             .with("user", user("user_name"))
+            .with("user_login", e.str_or("user_login", ""))
             .with("bits", number("bits"))
             .with("message", e.str_or("message", "")),
         "channel.raid" => Event::new(EventKind::TwitchRaid)
             .with("user", user("from_broadcaster_user_name"))
+            .with("user_login", e.str_or("from_broadcaster_user_login", ""))
             .with("viewers", number("viewers")),
         "channel.channel_points_custom_reward_redemption.add" => {
             Event::new(EventKind::TwitchRedeem)
                 .with("user", user("user_name"))
+                .with("user_login", e.str_or("user_login", ""))
                 .with(
                     "reward",
                     e.path("reward.title").and_then(Value::as_str).unwrap_or(""),

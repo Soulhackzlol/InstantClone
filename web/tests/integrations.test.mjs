@@ -407,3 +407,63 @@ test('an alert card takes its color, or the app\'s blue', () => {
     assert.equal(call('cardColor', value, vars), color, String(value));
   }
 });
+
+test('viewer values, maths, chat answers and blocks read like what they do', () => {
+  const sentence = (type, params) => call('stepSentence', { type, params }).replace(/<[^>]+>/g, '');
+  assert.equal(sentence('viewer', { value: 'coins', op: 'spend', by: '{bet}' }), 'Spend {bet} coins of the viewer, if they have it');
+  assert.equal(sentence('viewer', { value: 'coins', who: 'target', by: '50' }), 'Give 50 coins to who they named');
+  assert.equal(sentence('viewer', { value: 'coins', who: 'active', by: '10' }), 'Give 10 coins to everyone who chatted');
+  assert.equal(sentence('math', { a: '{bet}', op: 'multiply', b: '2', save_as: 'prize' }), '{bet} times 2 → {prize}');
+  assert.equal(sentence('wait_chat', { text: '!accept', from: 'target', seconds: '30' }), 'Wait up to 30 s for “!accept” from who they named');
+  assert.equal(sentence('call', { block: 'take the bet' }), 'Run the block take the bet');
+  assert.equal(sentence('stop', { quiet: 'yes' }), 'Stop here, out of the history');
+  assert.equal(sentence('set_var', { name: 'winner', value: 'x', keep: 'yes' }), 'Keep winner = x');
+  assert.deepEqual(plain(call('blockNames', { handlers: [{ trigger: { type: 'block', name: 'take the bet' } }, { trigger: { type: 'timer' } }] })), ['take the bet']);
+});
+
+test('what the new steps hand on is known, and kept values are read by name', () => {
+  given();
+  const spend = { type: 'viewer', params: { value: 'coins', op: 'spend', by: '{arg1}' } };
+  const double = { type: 'math', params: { a: '{arg1}', op: 'multiply', b: '2', save_as: 'prize' } };
+  const wait = { type: 'wait_chat', params: { text: '!accept', save_as: 'answer' } };
+  const reply = { type: 'chat', params: { text: '{paid} {prize} {answer.ok} {answer.user} {viewer.coins} {target.coins.rank} {top.coins} {saved.winner} {reply.ok}' } };
+  const handler = { trigger: { type: 'chat_command', command: '!bet' }, steps: [spend, double, wait, reply] };
+  assert.deepEqual(plain(call('unknownVars', handler, reply)), [{ name: 'reply.ok', hint: '' }], 'only the answer nothing saved under that name');
+  // A block is run from a command: it reads what the command brought.
+  const block = { trigger: { type: 'block', name: 'take the bet' }, steps: [spend] };
+  assert.deepEqual(plain(call('unknownVars', block, { type: 'chat', params: { text: '{user} {arg1}' } })), []);
+});
+
+test('a chance check previews its likelier side', () => {
+  assert.equal(call('compareSample', '75', 'chance', ''), true);
+  assert.equal(call('compareSample', '3.3', 'chance', ''), false);
+});
+
+test('your own values fill previews, counting words included', () => {
+  given({ values: [{ name: 'coin', label: 'One coin', value: 'gem' }, { name: 'coins', label: 'Several coins', value: 'gems' }] });
+  const vars = { 'viewer.coins': '1', 'my.coin': 'gem', 'my.coins': 'gems' };
+  assert.equal(call('renderSample', '{viewer.coins#$my.coin#$my.coins} / {my.coins}', vars), '1 gem / gems');
+  assert.equal(call('renderSample', '{viewer.coins#$my.coin#$my.coins}', { ...vars, 'viewer.coins': '7' }), '7 gems');
+  assert.equal(call('renderSample', '{n#$nothing#coins}', { n: '1' }), '1 ', 'a name nothing fills counts in nothing');
+  const reply = { type: 'chat', params: { text: '{my.coins} {my.cions}' } };
+  const handler = { trigger: { type: 'timer' }, steps: [reply] };
+  assert.deepEqual(plain(call('unknownVars', handler, reply)), [{ name: 'my.cions', hint: 'my.coins' }], 'a typo in a value name is caught');
+});
+
+test('a chat message matches the way the app will match it', () => {
+  // The cases of engine.rs: a_word_match_never_fires_inside_another_word, wildcards_match_like_file_globs, matching_ignores_case.
+  for (const said of ['nt', 'NT!', 'wow, nt.', '(nt)', 'that was nt though']) assert.equal(call('textMatches', said, 'nt', 'word'), true, said);
+  for (const said of ['want', "don't", 'isnt', 'ntf', 'front', 'n t']) assert.equal(call('textMatches', said, 'nt', 'word'), false, said);
+  assert.equal(call('textMatches', 'NICE TRY lol', 'nice try', 'word'), true);
+  assert.equal(call('textMatches', 'nice tryhard', 'nice try', 'word'), false);
+  assert.equal(call('textMatches', 'ñam ñam', 'ñam', 'word'), true);
+  assert.equal(call('textMatches', 'want', 'nt', 'contains'), true);
+  assert.equal(call('textMatches', 'POG champ', 'pog', 'starts_with'), true);
+  assert.equal(call('textMatches', ' GG ', 'gg', 'exact'), true);
+  assert.equal(call('textMatches', 'gg', '', 'contains'), false);
+  for (const [said, pattern, fits] of [['gg wp everyone', 'gg*', true], ['clip it', 'clip ??', true], ['abc', '*b*', true], ['abc', 'a?', false], ['a.c', 'a.c', true], ['abc', 'a.c', false]]) {
+    assert.equal(call('textMatches', said, pattern, 'wildcard'), fits, `${said} / ${pattern}`);
+  }
+  const examples = call('matchExamplesHtml', 'nt', 'word').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  assert.equal(examples, '✓ nt ✓ NT! ✓ oh nt yes ✗ nting ✗ rent ✓ nt and more');
+});

@@ -109,7 +109,13 @@ pub enum Trigger {
         aliases: Vec<String>,
         roles: Roles,
         user_cooldown_ms: u64,
+        /// What to answer a viewer who is still waiting that cooldown out
+        /// (`{cooldown_left}` says how long). Blank: say nothing.
+        cooldown_reply: String,
     },
+    /// Steps other triggers of the same integration run by name, with a
+    /// "Run a block" step. Never starts on its own.
+    Block { name: String },
     /// Any chat message that matches.
     ChatMessage {
         pattern: String,
@@ -231,6 +237,10 @@ impl Roles {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MatchMode {
+    /// The pattern as whole words: "nt" is in "nt!" but not in "want" or
+    /// "don't". What a new trigger uses.
+    Word,
+    /// Anywhere, inside a word too.
     Contains,
     StartsWith,
     Exact,
@@ -241,6 +251,7 @@ pub enum MatchMode {
 impl MatchMode {
     fn id(self) -> &'static str {
         match self {
+            MatchMode::Word => "word",
             MatchMode::Contains => "contains",
             MatchMode::StartsWith => "starts_with",
             MatchMode::Exact => "exact",
@@ -250,6 +261,7 @@ impl MatchMode {
 
     fn from_id(id: &str) -> MatchMode {
         match id {
+            "word" => MatchMode::Word,
             "starts_with" => MatchMode::StartsWith,
             "exact" => MatchMode::Exact,
             "wildcard" => MatchMode::Wildcard,
@@ -287,10 +299,21 @@ pub enum StepKind {
     /// Turn a light or plug on the local network on or off, or color it
     /// (see `lights`).
     Light,
+    /// Change the number a viewer holds (coins, points), or pay everyone
+    /// who chatted lately (see `viewers`).
+    Viewer,
+    /// Work out a number: a sum, a share, a random one.
+    Math,
+    /// Wait for the next chat message that fits, up to a time limit.
+    WaitChat,
+    /// Run one of this integration's blocks (`Trigger::Block`).
+    Call,
+    /// Switch a channel points reward made here on or off.
+    Reward,
 }
 
 impl StepKind {
-    pub const ALL: [StepKind; 20] = [
+    pub const ALL: [StepKind; 25] = [
         StepKind::Discord,
         StepKind::Chat,
         StepKind::Phone,
@@ -311,6 +334,11 @@ impl StepKind {
         StepKind::Timeline,
         StepKind::Obs,
         StepKind::Light,
+        StepKind::Viewer,
+        StepKind::Math,
+        StepKind::WaitChat,
+        StepKind::Call,
+        StepKind::Reward,
     ];
 
     pub fn id(self) -> &'static str {
@@ -335,6 +363,11 @@ impl StepKind {
             StepKind::Timeline => "timeline",
             StepKind::Obs => "obs",
             StepKind::Light => "light",
+            StepKind::Viewer => "viewer",
+            StepKind::Math => "math",
+            StepKind::WaitChat => "wait_chat",
+            StepKind::Call => "call",
+            StepKind::Reward => "reward",
         }
     }
 
@@ -368,7 +401,15 @@ impl StepKind {
                 ("device", "pick the light or plug"),
                 ("action", "pick what the light does"),
             ],
-            StepKind::WaitDelay | StepKind::Stop | StepKind::Marker | StepKind::Clip => &[],
+            StepKind::Viewer => &[("value", "name the viewer value, like coins")],
+            StepKind::Call => &[("block", "pick the block to run")],
+            StepKind::Reward => &[("title", "pick the channel points reward")],
+            StepKind::WaitDelay
+            | StepKind::Stop
+            | StepKind::Marker
+            | StepKind::Clip
+            | StepKind::Math
+            | StepKind::WaitChat => &[],
         }
     }
 
@@ -473,11 +514,40 @@ impl Integration {
             validate_trigger(&handler.trigger, missing);
             validate_steps(&handler.steps, 1, &mut errors, missing);
         }
+        self.block_problems(&mut errors, &mut incomplete);
         errors.dedup();
         incomplete.dedup();
         Problems {
             invalid: errors,
             incomplete,
+        }
+    }
+
+    /// Blocks must be told apart, and a "Run a block" step must name one
+    /// that is there and on.
+    fn block_problems(&self, errors: &mut Vec<String>, incomplete: &mut Vec<String>) {
+        let names: Vec<&str> = self
+            .handlers
+            .iter()
+            .filter_map(|h| match &h.trigger {
+                Trigger::Block { name } => Some(name.trim()),
+                _ => None,
+            })
+            .collect();
+        if (1..names.len()).any(|i| names[..i].contains(&names[i])) {
+            errors.push("two blocks have the same name".to_string());
+        }
+        let on = blocks(self);
+        for handler in self.handlers.iter().filter(|h| h.enabled) {
+            visit_steps(&handler.steps, &mut |step| {
+                let wanted = step.param("block").trim();
+                let runs = step.kind == StepKind::Call && step.enabled && !wanted.is_empty();
+                if runs && !on.contains_key(wanted) {
+                    incomplete.push(format!(
+                        "the block \"{wanted}\" doesn't exist, or is switched off"
+                    ));
+                }
+            });
         }
     }
 
@@ -608,6 +678,9 @@ fn validate_trigger(trigger: &Trigger, errors: &mut Vec<String>) {
                 }
             }
         }
+        Trigger::Block { name } if !valid_block_name(name) => {
+            errors.push("name the block: letters, digits, spaces, - and _".to_string());
+        }
         Trigger::ChatMessage { pattern, .. } if pattern.trim().is_empty() => {
             errors.push("the chat message trigger needs something to match".to_string());
         }
@@ -680,6 +753,25 @@ fn validate_activity(activity: &ChatActivity, errors: &mut Vec<String>) {
     }
 }
 
+/// A block's name: what "Run a block" steps pick it by.
+fn valid_block_name(name: &str) -> bool {
+    let fits = |c: char| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_');
+    !name.trim().is_empty() && name.len() <= MAX_ID_LEN && name.chars().all(fits)
+}
+
+/// The steps of each switched-on block of `integration`, by name.
+pub fn blocks(integration: &Integration) -> BTreeMap<String, Vec<Step>> {
+    integration
+        .handlers
+        .iter()
+        .filter(|h| h.enabled)
+        .filter_map(|h| match &h.trigger {
+            Trigger::Block { name } => Some((name.trim().to_string(), h.steps.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn valid_command(c: &str) -> bool {
     c.len() >= 2
         && c.len() <= 32
@@ -750,6 +842,19 @@ fn validate_steps(
         if step.kind == StepKind::Light {
             light_step_problems(step, missing, errors);
         }
+        // The value's name is part of `{viewer.<name>}`: fixed, and plain.
+        let value = step.param("value").trim();
+        if step.kind == StepKind::Viewer && !value.is_empty() && !super::viewers::valid_name(value)
+        {
+            errors.push("a viewer value's name is letters, digits and _, like coins".to_string());
+        }
+        // Like an OBS source: chat never picks which reward is switched.
+        if step.kind == StepKind::Reward && step.param("title").contains('{') {
+            errors.push("a reward's name can't use variables".to_string());
+        }
+        if step.kind == StepKind::Call && step.param("block").contains('{') {
+            errors.push("a block's name can't use variables".to_string());
+        }
         // Where a program runs, a file is written or a request goes must be
         // fixed by the streamer, never filled in from chat or a web call:
         // otherwise a viewer's message could pick the program or the host.
@@ -793,7 +898,12 @@ fn validate_steps(
         // The value's name is fixed: a viewer must not overwrite `{user}`.
         let named = match step.kind {
             StepKind::SetVar => step.param("name"),
-            StepKind::EditText | StepKind::Program | StepKind::Obs => step.param("save_as"),
+            StepKind::EditText
+            | StepKind::Program
+            | StepKind::Obs
+            | StepKind::Counter
+            | StepKind::Math
+            | StepKind::WaitChat => step.param("save_as"),
             _ => "",
         };
         if named.contains('{') {
@@ -983,8 +1093,10 @@ fn trigger_json(t: &Trigger) -> Value {
             aliases,
             roles,
             user_cooldown_ms,
+            cooldown_reply,
         } => json::obj([
             ("type", json::str("chat_command")),
+            ("cooldown_reply", json::str(cooldown_reply)),
             ("command", json::str(command)),
             (
                 "aliases",
@@ -993,6 +1105,9 @@ fn trigger_json(t: &Trigger) -> Value {
             ("roles", roles_json(*roles)),
             ("user_cooldown_ms", Value::Num(*user_cooldown_ms as f64)),
         ]),
+        Trigger::Block { name } => {
+            json::obj([("type", json::str("block")), ("name", json::str(name))])
+        }
         Trigger::ChatMessage {
             pattern,
             mode,
@@ -1112,6 +1227,10 @@ fn trigger_from_json(v: &Value) -> Result<Trigger, String> {
                 .collect(),
             roles: roles_from_json(v.get("roles")),
             user_cooldown_ms: v.u64_or("user_cooldown_ms", 0),
+            cooldown_reply: v.str_or("cooldown_reply", "").trim().to_string(),
+        }),
+        "block" => Ok(Trigger::Block {
+            name: v.str_or("name", "").trim().to_string(),
         }),
         "chat_message" => Ok(Trigger::ChatMessage {
             pattern: v.str_or("pattern", "").to_string(),
@@ -1214,6 +1333,76 @@ fn steps_from_json(v: Option<&Value>, depth: usize) -> Result<Vec<Step>, String>
         .collect()
 }
 
+/// A value the streamer sets once and every integration reads as
+/// `{my.<name>}`: what a point is called, how often a game is won, a list
+/// to pick from. Changing it changes every message and step that uses it, and
+/// a recipe brings the ones it uses along.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UserValue {
+    pub name: String,
+    /// What it is for, in the streamer's words: shown where it is edited.
+    pub label: String,
+    pub value: String,
+}
+
+pub const MAX_USER_VALUES: usize = 100;
+const MAX_USER_VALUE_LABEL: usize = 80;
+
+impl UserValue {
+    pub fn to_json(&self) -> Value {
+        json::obj([
+            ("name", json::str(&self.name)),
+            ("label", json::str(&self.label)),
+            ("value", json::str(&self.value)),
+        ])
+    }
+
+    /// None when the name isn't one `{my.<name>}` can hold, or the value
+    /// is too long to save.
+    pub fn from_json(v: &Value) -> Option<UserValue> {
+        let name = v.str_or("name", "").trim();
+        let value = v.str_or("value", "");
+        let fits = super::viewers::valid_name(name) && value.len() <= MAX_PARAM_LEN;
+        fits.then(|| UserValue {
+            name: name.to_string(),
+            label: v
+                .str_or("label", "")
+                .trim()
+                .chars()
+                .take(MAX_USER_VALUE_LABEL)
+                .collect(),
+            value: value.to_string(),
+        })
+    }
+}
+
+/// The `{my.<name>}` names `integrations` use anywhere: in a step, or in
+/// what a command answers during its cooldown.
+pub fn user_values_used(integrations: &[Integration]) -> Vec<String> {
+    let mut used: Vec<String> = Vec::new();
+    let mut note = |text: &str| {
+        // `$my.name` is how a counting word (`{n#$my.coin#$my.coins}`) reads one.
+        let after = |marker| text.split(marker).skip(1).collect::<Vec<&str>>();
+        for name in after("{my.").into_iter().chain(after("$my.")) {
+            let end = name
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(name.len());
+            if end > 0 && !used.iter().any(|known| known == &name[..end]) {
+                used.push(name[..end].to_string());
+            }
+        }
+    };
+    for handler in integrations.iter().flat_map(|i| &i.handlers) {
+        if let Trigger::ChatCommand { cooldown_reply, .. } = &handler.trigger {
+            note(cooldown_reply);
+        }
+        visit_steps(&handler.steps, &mut |step| {
+            step.params.values().for_each(|value| note(value));
+        });
+    }
+    used
+}
+
 /// A saved Discord webhook the integrations can post to.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DiscordChannel {
@@ -1296,6 +1485,7 @@ mod tests {
                         aliases: vec!["!c".into()],
                         roles: Roles::MODS,
                         user_cooldown_ms: 30_000,
+                        cooldown_reply: "Wait {cooldown_left}.".into(),
                     },
                     steps: vec![Step::new(StepKind::Clip, &[])],
                 },
@@ -1311,6 +1501,88 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn blocks_are_named_apart_and_must_exist_to_be_run() {
+        let block = |name: &str| Handler {
+            enabled: true,
+            trigger: Trigger::Block { name: name.into() },
+            steps: vec![Step::new(StepKind::Stop, &[])],
+        };
+        let runs = |name: &str| Handler {
+            enabled: true,
+            trigger: Trigger::Timer {
+                every_ms: 60_000,
+                only_live: true,
+            },
+            steps: vec![Step::new(StepKind::Call, &[("block", name)])],
+        };
+        let with = |handlers: Vec<Handler>| Integration {
+            handlers,
+            ..sample()
+        };
+        assert!(with(vec![block("check bet"), runs("check bet")])
+            .validate()
+            .is_empty());
+        let missing = with(vec![block("check bet"), runs("pay out")]).problems();
+        assert!(missing.invalid.is_empty());
+        assert!(
+            missing.incomplete[0].contains("pay out"),
+            "{:?}",
+            missing.incomplete
+        );
+        let twice = with(vec![block("a"), block("a")]).problems();
+        assert_eq!(twice.invalid, ["two blocks have the same name"]);
+        assert!(!with(vec![block("{user}")]).problems().incomplete.is_empty());
+        let back = Integration::from_json(&with(vec![block("a")]).to_json()).unwrap();
+        assert_eq!(
+            back.handlers[0].trigger,
+            Trigger::Block { name: "a".into() }
+        );
+    }
+
+    #[test]
+    fn the_values_integrations_read_are_found_wherever_they_are() {
+        let mut i = sample();
+        i.handlers[0].steps = vec![Step {
+            then: vec![Step::new(
+                StepKind::Chat,
+                &[("text", "{n#$my.coin#$my.coins}")],
+            )],
+            ..Step::new(
+                StepKind::If,
+                &[("left", "{my.flip_chance}"), ("op", "chance")],
+            )
+        }];
+        i.handlers[1].trigger = Trigger::ChatCommand {
+            command: "!daily".into(),
+            aliases: vec![],
+            roles: Roles::EVERYONE,
+            user_cooldown_ms: 60_000,
+            cooldown_reply: "No more {my.coins} for {cooldown_left}. {army.size}".into(),
+        };
+        assert_eq!(user_values_used(&[i]), ["flip_chance", "coin", "coins"]);
+        let kept = UserValue::from_json(&json::obj([
+            ("name", json::str("coins")),
+            ("label", json::str("What coins are called")),
+            ("value", json::str("gems")),
+        ]));
+        assert_eq!(kept.unwrap().value, "gems");
+        assert!(UserValue::from_json(&json::obj([("name", json::str("my coins"))])).is_none());
+    }
+
+    #[test]
+    fn a_viewer_value_needs_a_plain_fixed_name() {
+        let with = |value: &str| {
+            let mut i = sample();
+            i.handlers[0].steps = vec![Step::new(StepKind::Viewer, &[("value", value)])];
+            i.problems()
+        };
+        assert!(with("coins").invalid.is_empty());
+        assert!(!with("coins_{user}").invalid.is_empty());
+        assert!(!with("my coins").invalid.is_empty());
+        assert!(!with("").incomplete.is_empty());
     }
 
     #[test]
@@ -1339,6 +1611,7 @@ mod tests {
             aliases: vec![],
             roles: Roles::EVERYONE,
             user_cooldown_ms: 0,
+            cooldown_reply: String::new(),
         };
         bad.handlers[1].enabled = true;
         let errors = bad.validate();
