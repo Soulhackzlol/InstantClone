@@ -132,6 +132,14 @@ dock's destination list says "Can't connect", with the reason on hover.
 
 ### Look and feel
 
+- **The dashboard stays smooth next to OBS and a game.** It counts its own
+  frames, and while the browser can't keep 30 a second its looping
+  animations (pulsing dots, sweeps, the light behind the delay) rest; they
+  come back when frames are fast again. That light now moves in small
+  steps instead of asking for a frame at every screen refresh. And with
+  many integrations the page is much cheaper to draw: each card's status
+  badge carried a blur that showed nothing, and the Integrations tab was
+  redrawn every two seconds whether anything had changed or not.
 - **Settings are switches.** Every checkbox in the dashboard is now drawn as
   the same switch a destination uses for Enabled.
 - **Things open and close instead of snapping:** the buffer warning under
@@ -365,6 +373,15 @@ What a chat economy needs, as steps you can build anything else with too.
 
 ### Integrations
 
+- **A step that sets your stream's title and category.** "Stream title and
+  category" changes one, the other or both on Twitch, so mods can have
+  `!settitle` and `!setgame`, a channel points reward can rename the
+  stream, or a category can set itself when you go live. A category can be
+  typed loosely: "valo" finds VALORANT, and `{stream.category}` gives later
+  steps the name Twitch has for it. Your Twitch login already allows it.
+- **An integration holds up to 256 steps,** up from 64. A chat game with
+  every path spelled out (a slot machine with a pay table, streaks and a
+  jackpot) fills 64 by itself.
 - **Why a run failed:** the editor's "Last ran · failed" and every Recent
   activity row open that run's steps, with Copy run log and Report it.
 - **Unfinished builds save as drafts**, switched off, instead of failing.

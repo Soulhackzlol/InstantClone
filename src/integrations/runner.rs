@@ -452,6 +452,7 @@ impl Runner {
             StepKind::Math => self.math(step),
             StepKind::WaitChat => self.wait_chat(step).await,
             StepKind::Reward => self.reward(step).await,
+            StepKind::Channel => self.channel(step).await,
             StepKind::Overlay => self.overlay(step),
             StepKind::EditText => self.edit_text(step),
             StepKind::Timeline => self.timeline(step),
@@ -1439,6 +1440,52 @@ impl Runner {
         }
     }
 
+    /// Set the stream's title, its category, or both. A part that comes
+    /// out blank (`!settitle` with nothing after it) is left as it is. The
+    /// next steps get `{stream.ok}`, the category as Twitch names it in
+    /// `{stream.category}`, and `{stream.error}` when Twitch said no.
+    async fn channel(&mut self, step: &Step) {
+        let title = self.fill(step, "title").trim().to_string();
+        let category = self.fill(step, "category").trim().to_string();
+        let given = |text: &String| (!text.is_empty()).then(|| text.clone());
+        let (title, category) = (given(&title), given(&category));
+        let label = "Twitch channel";
+        if title.is_none() && category.is_none() {
+            self.set("stream.ok", "no");
+            let why = "the title and the category both came out empty";
+            return self.record(label, StepStatus::Failed, why);
+        }
+        let wanted = [
+            title.as_ref().map(|t| format!("title \"{t}\"")),
+            category.as_ref().map(|c| format!("category \"{c}\"")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
+        if self.ctx.test {
+            self.set("stream.ok", "yes");
+            self.set("stream.category", category.unwrap_or_default());
+            let detail = format!("would set {wanted} (tests never change your channel)");
+            return self.record(label, StepStatus::Skipped, detail);
+        }
+        let done = self
+            .blocking(move |h| h.channel(title.as_deref(), category.as_deref()))
+            .await;
+        match done {
+            Ok(found) => {
+                self.set("stream.ok", "yes");
+                self.set("stream.category", found.unwrap_or_default());
+                self.record(label, StepStatus::Ok, format!("set {wanted}"));
+            }
+            Err(e) => {
+                self.set("stream.ok", "no");
+                self.set("stream.error", redact_urls(&e));
+                self.record(label, StepStatus::Failed, e);
+            }
+        }
+    }
+
     /// What a "Wait for chat" step hands the next steps.
     fn heard(&mut self, name: &str, user: &str, login: &str, message: &str) {
         self.set(format!("{name}.ok"), "yes");
@@ -2263,6 +2310,17 @@ mod tests {
         fn reward(&self, title: &str, enabled: bool) -> Result<(), String> {
             self.calls.lock().push(format!("reward {title} {enabled}"));
             Ok(())
+        }
+        fn channel(
+            &self,
+            title: Option<&str>,
+            category: Option<&str>,
+        ) -> Result<Option<String>, String> {
+            self.calls
+                .lock()
+                .push(format!("channel {title:?} {category:?}"));
+            // Twitch answers with its own name for the category.
+            Ok(category.map(str::to_uppercase))
         }
     }
 
@@ -3186,6 +3244,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_channel_step_sets_what_it_is_given_and_a_test_leaves_twitch_alone() {
+        let steps = [
+            Step::new(StepKind::Channel, &[("title", "{args}")]),
+            Step::new(StepKind::Channel, &[("category", "{args}")]),
+        ];
+        let host = Arc::new(FakeHost::default());
+        go(&host, &steps, ctx(&[("args", "valo")], false)).await;
+        let calls: Vec<String> = host.calls.lock().iter().map(|c| c.to_string()).collect();
+        assert_eq!(
+            calls,
+            [
+                r#"channel Some("valo") None"#,
+                r#"channel None Some("valo")"#
+            ]
+        );
+        // `!settitle` with nothing after it: nothing to set, and Twitch isn't asked.
+        let host = Arc::new(FakeHost::default());
+        let (_, log) = go(&host, &steps, ctx(&[("args", " ")], false)).await;
+        assert!(host.calls.lock().is_empty());
+        assert_eq!(log[0].status, StepStatus::Failed);
+        let host = Arc::new(FakeHost::default());
+        let (_, log) = go(&host, &steps, ctx(&[("args", "valo")], true)).await;
+        assert!(host.calls.lock().is_empty());
+        assert_eq!(log[0].status, StepStatus::Skipped);
+    }
+
+    #[tokio::test]
     async fn a_step_can_name_the_viewer_itself() {
         let env = env();
         let steps = [
@@ -3527,6 +3612,9 @@ mod tests {
             }
             fn reward(&self, _: &str, _: bool) -> Result<(), String> {
                 Ok(())
+            }
+            fn channel(&self, _: Option<&str>, _: Option<&str>) -> Result<Option<String>, String> {
+                Ok(None)
             }
         }
         let steps = [Step::new(

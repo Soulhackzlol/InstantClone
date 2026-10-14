@@ -310,6 +310,14 @@ impl Host for RealHost {
         self.twitch.marker(description)
     }
 
+    fn channel(
+        &self,
+        title: Option<&str>,
+        category: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        self.twitch.set_channel(title, category)
+    }
+
     fn reward(&self, title: &str, enabled: bool) -> Result<(), String> {
         self.twitch.set_reward_named(title, enabled)
     }

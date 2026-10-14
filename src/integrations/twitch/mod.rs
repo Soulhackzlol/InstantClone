@@ -662,6 +662,26 @@ impl Twitch {
         self.helix_call(helix::create_clip)
     }
 
+    /// Set the stream's title, its category, or both. `category` is a name
+    /// as someone types it ("valo"); the answer is the name Twitch has for
+    /// the category it found, when one was asked for.
+    pub fn set_channel(
+        &self,
+        title: Option<&str>,
+        category: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        let found = match category {
+            Some(name) => Some(self.helix_call(|a| helix::find_category(a, name))?),
+            None => None,
+        };
+        let edit = helix::ChannelEdit {
+            title: title.map(str::to_string),
+            category_id: found.as_ref().map(|c| c.id.clone()),
+        };
+        self.helix_call(|a| helix::update_channel(a, &edit))?;
+        Ok(found.map(|c| c.name))
+    }
+
     /// The channel points rewards this app made on the channel.
     pub fn rewards(&self) -> Result<Vec<helix::Reward>, String> {
         self.helix_call(helix::rewards)

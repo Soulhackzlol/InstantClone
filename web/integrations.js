@@ -117,6 +117,7 @@ const KINDS = {
   wait_chat:    {label:'Wait for chat', tag:'WAIT',   c:'#c3cad1', icon:'bubble', hint:'Waits for someone to type something, up to a time limit.'},
   call:         {label:'Run a block',   tag:'FLOW',   c:'#f0a53a', icon:'layers', hint:'Runs a block of steps this integration keeps under a name.'},
   reward:       {label:'Channel points reward', tag:'TWITCH', c:'#a78bfa', icon:'gift', hint:'Switches a channel points reward on or off, so viewers can only redeem it when it makes sense.'},
+  channel:      {label:'Stream title and category', tag:'TWITCH', c:'#a78bfa', icon:'tv', hint:'Sets your stream\'s title, its category, or both, on Twitch.'},
   obs:          {label:'OBS',           tag:'OBS',    c:'#86efac', icon:'layers', hint:'Switches a scene, shows or hides a source, records, saves a replay, mutes, switches a filter, plays media or presses an OBS hotkey.'},
 };
 // The icon a catalog module wears: what it is about, not how it sends.
@@ -337,6 +338,7 @@ const VAR_LABEL = {
   target:'who it\'s about', arg1:'1st word', arg2:'2nd word', arg3:'3rd word', body:'what was sent',
   query:'address query', source:'pressed from', 'obs.scene':'OBS scene', 'obs.streaming':'streaming now?',
   'obs.recording':'recording now?', 'obs.muted':'muted?', 'obs.visible':'showing?', 'clip.url':'clip link', 'clip.ok':'clip made?', 'clip.error':'why no clip',
+  'stream.ok':'title or category set?', 'stream.category':'category on Twitch', 'stream.error':'why it wasn\'t set',
   uptime:'stream time', vod_time:'VOD time', onair:'on-air state', timeline:'timeline', chapters:'chapter list',
   previous_chapter:'chapter before', duration:'stream length', crashes:'crashes', drops:'drops',
   highlights:'highlights', report:'health report', state:'on-air state', line:'timeline line', kind:'line kind',
@@ -398,6 +400,9 @@ const VAR_HELP = {
   'clip.url':'The link to the clip the Clip step made.',
   'clip.ok':'yes when the Clip step made a clip.',
   'clip.error':'Why the Clip step made no clip, like "connect Twitch first". Empty when it worked.',
+  'stream.ok':'yes when the Stream title and category step set what it was given.',
+  'stream.category':'The category as Twitch names it: a mod types "valo", this says VALORANT.',
+  'stream.error':'Why the title or category was not set, like no category by that name. Empty when it worked.',
   source:'What pressed it: hotkey, midi, stream_deck (its address) or web.',
   previous_chapter:'The chapter before the latest one: what the stream goes back to after a "Technical difficulties" chapter.',
   uptime:'How long this stream has been on air, like 1:02:14. Empty between streams.',
@@ -550,6 +555,7 @@ function varsFor(handler, upto){
     }
     if (s.type === 'clip') made.push({name:'clip.url', sample:'https://clips.twitch.tv/BraveSnipe'},
       {name:'clip.id', sample:'BraveSnipe'}, {name:'clip.ok', sample:'yes'}, {name:'clip.error', sample:''});
+    if (s.type === 'channel') made.push({name:'stream.ok', sample:'yes'}, {name:'stream.category', sample:'VALORANT'}, {name:'stream.error', sample:''});
     if (s.type === 'counter' && fixed(s.params.name)) made.push({name:'counter.' + s.params.name, sample:'2'});
     if (s.type === 'counter' && (s.params.save_as || '').trim() && fixed(s.params.save_as.trim())) made.push({name:s.params.save_as.trim(), sample:'2'});
     if (s.type === 'set_var' && fixed(s.params.name)) made.push({name:s.params.name, sample:s.params.value || ''});
@@ -1799,6 +1805,8 @@ const S = {
   data:null, visible:false, filter:'all', search:'', peek:null,
   view: store.get('ig-view') === 'list' ? 'list' : 'grid',
   pollTimer:null, activityOpen:false,
+  // What the last poll that redrew the tab brought, and when that was.
+  heard:'', drawnAt:0,
   // The Recent activity row showing its steps (its data-key), and whether
   // an editor shows its last run's steps.
   actOpen:null, lastRunOpen:false,
@@ -1825,6 +1833,11 @@ async function load(){
   return true;
 }
 
+// The most steps one integration holds: the app's own limit (model.rs).
+const MAX_STEPS = 256;
+// How long the tab may go without a redraw while nothing changes.
+const IDLE_REDRAW_MS = 30000;
+
 async function poll(){
   if (document.hidden || !S.data || (!S.visible && !modalOpen())) return;
   const a = await api('/integrations/activity');
@@ -1839,7 +1852,17 @@ async function poll(){
   const alertsChanged = JSON.stringify(alerts) !== JSON.stringify(S.data.alerts);
   S.data.alerts = alerts;
   if (fastBefore !== !!a.twitch.login) schedulePoll();
-  if (S.visible) render();
+  // Most polls bring nothing new. Redrawing every card for each one made
+  // the whole dashboard crawl once a setup had a few hundred steps, so the
+  // tab is redrawn when something changed, and now and then for its
+  // "2 min ago" lines.
+  const heard = JSON.stringify([a.activity, a.stats, a.twitch, a.obs, alerts]);
+  const stale = Date.now() - S.drawnAt > IDLE_REDRAW_MS;
+  if (S.visible && (heard !== S.heard || stale)){
+    S.heard = heard;
+    S.drawnAt = Date.now();
+    render();
+  }
   // Pages that show live state.
   if (Modal.kind === 'connections' && ((Conn.tab === 'twitch' && twitchChanged) || (Conn.tab === 'stream' && alertsChanged))) Conn.render();
   if (Modal.kind === 'editor' && alertsChanged && (primaryStep(Editor.handler()) || {}).type === 'overlay') Editor.render();
@@ -1871,7 +1894,7 @@ function find(id){ return S.data.integrations.find(i => i.id === id); }
 function needsTwitch(i){
   if (S.data.twitch.main.login) return false;
   return (i.handlers || []).some(h => h.trigger && h.trigger.type.startsWith('chat'))
-    || allSteps(i).some(s => s.type === 'chat' || s.type === 'marker' || s.type === 'clip');
+    || allSteps(i).some(s => ['chat', 'marker', 'clip', 'channel'].includes(s.type));
 }
 
 // Run a program and Write a file. With no dashboard password, only the
@@ -3740,6 +3763,7 @@ function stepMissing(s){
   if (s.type === 'viewer' && !/^[A-Za-z0-9_]{1,32}$/.test((p.value || '').trim())) return 'name the value: letters, digits and _';
   if (s.type === 'call' && !(p.block || '').trim()) return 'pick the block';
   if (s.type === 'reward' && !(p.title || '').trim()) return 'pick the reward';
+  if (s.type === 'channel' && !(p.title || '').trim() && !(p.category || '').trim()) return 'write the new title or category';
   if (s.type === 'wait' && !/\{|^\d+$/.test((p.ms || '').trim())) return 'set how long to wait';
   if ([p.scene, p.source, p.filter, p.hotkey, s.type === 'light' ? p.device : '', s.type === 'program' || s.type === 'file' ? p.path : ''].some(v => /\{/.test(v || ''))) return 'names here can\'t use values';
   if (s.type === 'light'){
@@ -4550,7 +4574,7 @@ const PALETTE = [
   ['Send', [['discord', 'Discord'], ['chat', 'Twitch chat'], ['phone', 'Phone'], ['http', 'Web request']]],
   ['Flow', [['if', 'If / otherwise'], ['wait', 'Wait'], ['wait_delay', 'Wait for the delay'], ['wait_chat', 'Wait for chat'], ['call', 'Run a block'], ['stop', 'Stop']]],
   ['Viewers', [['viewer', 'Viewer value'], ['math', 'Maths']]],
-  ['Stream', [['overlay', 'Show on stream'], ['reward', 'Channel points reward'], ['delay_action', 'Delay action'], ['obs', 'OBS'], ['marker', 'VOD marker'], ['clip', 'Clip'], ['timeline', 'Timeline']]],
+  ['Stream', [['overlay', 'Show on stream'], ['reward', 'Channel points reward'], ['channel', 'Stream title and category'], ['delay_action', 'Delay action'], ['obs', 'OBS'], ['marker', 'VOD marker'], ['clip', 'Clip'], ['timeline', 'Timeline']]],
   ['Home', [['light', 'Smart light']]],
   ['Anything', [['edit_text', 'Edit text'], ['set_var', 'Remember a value'], ['counter', 'Counter'], ['program', 'Run a program'], ['file', 'Write a file']]],
 ];
@@ -4864,14 +4888,13 @@ const Builder = {
     const {list, index} = this.locate(path);
     return list[index];
   },
-  // Whether `count` more steps fit (64 in all) at a list `base` (checks
-  // nest 4 deep at most). Says why when they don't.
   // Whether `count` more steps, opening `levels` levels of lanes, fit in
-  // the list at `base`.
+  // the list at `base`: MAX_STEPS in all, checks 4 deep at most. Says why
+  // when they don't.
   roomFor(base, count, levels){
     let total = 0;
     this.d.handlers.forEach(h => walk(h.steps, () => { total++; }));
-    if (total + count > 64){ toast('That\'s the most steps one integration can have (64)', 'info'); return false; }
+    if (total + count > MAX_STEPS){ toast(`That's the most steps one integration can have (${MAX_STEPS})`, 'info'); return false; }
     if (!nestFits(base, levels || 0)){ toast('Checks go 4 deep at most: add it a level up', 'info'); return false; }
     return true;
   },
@@ -5090,6 +5113,9 @@ const Builder = {
           + note('Starts or changes the delay. A delay the buffer can\'t hold fails this step.') : '')
         + warnHtml('This changes your stream. Tests never run it.');
       case 'marker': return field('description', 'Label', {ph:'Crash'}) + note('Only works while you are live on Twitch.');
+      case 'channel': return field('title', 'New title (blank: leave it as it is)', {ph:'{args}'})
+        + field('category', 'New category (blank: leave it as it is)', {ph:'{args}, or VALORANT'})
+        + note('A category can be typed loosely: "valo" finds VALORANT. Later steps can use <span class="mono">{stream.category}</span> (its name on Twitch), <span class="mono">{stream.ok}</span> and, when it failed, <span class="mono">{stream.error}</span>.');
       case 'clip': return note('Clips the last moments of your stream. Later steps can use <span class="mono">{clip.url}</span>, <span class="mono">{clip.ok}</span> and, when it failed, <span class="mono">{clip.error}</span>.');
       case 'program': return (localLocked() ? warnHtml(esc(LOCAL_LOCK_TEXT)) : '')
         + field('path', 'Program (a fixed path, no variables)', {mono:true, fixed:true, ph:'C:\\Tools\\thing.exe'}) + field('args', 'Arguments', {mono:true, ph:'--scene "Replay"'})
@@ -5774,7 +5800,7 @@ function newStep(kind, trigger){
     obs:{action:'scene', scene:'', source:'', text:'', filter:'', hotkey:''},
     light:{device:'', name:'', plug:'', action:'color', color:'red', brightness:''},
     viewer:{value:'coins', who:'', op:'', by:'10'}, math:{a:'', op:'multiply', b:'2', save_as:'result'},
-    wait_chat:{text:'', from:'', seconds:'30', save_as:'reply'}, call:{block:''}, reward:{title:'', action:'off'},
+    wait_chat:{text:'', from:'', seconds:'30', save_as:'reply'}, call:{block:''}, reward:{title:'', action:'off'}, channel:{title:'', category:''},
   }[kind] || {};
   return {type:kind, params:clone(p), then:[], else:[]};
 }
@@ -6116,6 +6142,7 @@ function stepSentence(s){
     case 'wait_chat': return `Wait up to ${highlightVars(p.seconds || '30')} s for ${p.text ? q(p.text) : 'a message'} from ${{viewer:'the viewer', target:'who they named'}[p.from] || 'anyone'}`;
     case 'call': return `Run the block ${esc(p.block || '…')}`;
     case 'reward': return `Switch the reward ${q(p.title || '…')} ${p.action === 'off' ? 'off' : 'on'}`;
+    case 'channel': return [p.title && `Set the title to ${q(p.title)}`, p.category && `${p.title ? 'the' : 'Set the'} category to ${q(p.category)}`].filter(Boolean).join(', ') || 'Set the title or category';
     case 'overlay': return `On stream ${q(p.text)}`;
     case 'edit_text': return `${esc((EDIT_OPS[p.op] || EDIT_OPS.first_line)[0])}: ${highlightVars(p.input || '…')} → <span class="v">{${esc((p.save_as || '').trim() || 'text')}}</span>`;
     case 'counter': return `Counter ${esc(p.name || '…')} ${p.op === 'reset' ? 'reset' : p.op === 'set' ? '= ' + esc(p.by || '0') : (p.op === 'subtract' ? '-' : '+') + esc(p.by || '1')}`;

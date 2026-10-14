@@ -16,7 +16,11 @@ use std::collections::BTreeMap;
 pub const MAX_INTEGRATIONS: usize = 100;
 /// Room for the "every event" webhook, one trigger per event.
 pub const MAX_HANDLERS: usize = 32;
-pub const MAX_STEPS: usize = 64;
+/// Enough for a chat game with its paths spelled out (a slot machine with
+/// a pay table, streaks and a jackpot takes about 64), and still a bound
+/// on what one imported recipe can bring. `web/integrations.js` has the
+/// same number.
+pub const MAX_STEPS: usize = 256;
 pub const MAX_DEPTH: usize = 4;
 const MAX_NAME_LEN: usize = 80;
 const MAX_PARAM_LEN: usize = 4000;
@@ -310,10 +314,12 @@ pub enum StepKind {
     Call,
     /// Switch a channel points reward made here on or off.
     Reward,
+    /// Set the stream's title, its category, or both, on Twitch.
+    Channel,
 }
 
 impl StepKind {
-    pub const ALL: [StepKind; 25] = [
+    pub const ALL: [StepKind; 26] = [
         StepKind::Discord,
         StepKind::Chat,
         StepKind::Phone,
@@ -339,6 +345,7 @@ impl StepKind {
         StepKind::WaitChat,
         StepKind::Call,
         StepKind::Reward,
+        StepKind::Channel,
     ];
 
     pub fn id(self) -> &'static str {
@@ -368,6 +375,7 @@ impl StepKind {
             StepKind::WaitChat => "wait_chat",
             StepKind::Call => "call",
             StepKind::Reward => "reward",
+            StepKind::Channel => "channel",
         }
     }
 
@@ -409,7 +417,9 @@ impl StepKind {
             | StepKind::Marker
             | StepKind::Clip
             | StepKind::Math
-            | StepKind::WaitChat => &[],
+            | StepKind::WaitChat
+            // A title or a category: either is enough (see `validate_steps`).
+            | StepKind::Channel => &[],
         }
     }
 
@@ -841,6 +851,13 @@ fn validate_steps(
         }
         if step.kind == StepKind::Light {
             light_step_problems(step, missing, errors);
+        }
+        // Either is enough: `!settitle` sets one, `!setgame` the other.
+        if step.kind == StepKind::Channel
+            && step.param("title").trim().is_empty()
+            && step.param("category").trim().is_empty()
+        {
+            missing.push("write the stream's new title or category".to_string());
         }
         // The value's name is part of `{viewer.<name>}`: fixed, and plain.
         let value = step.param("value").trim();

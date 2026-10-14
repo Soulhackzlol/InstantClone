@@ -203,6 +203,89 @@ fn parse_rewards(body: &str) -> Vec<Reward> {
         .collect()
 }
 
+/// The longest title Twitch takes for a stream.
+pub const MAX_STREAM_TITLE: usize = 140;
+
+/// A category on Twitch: a game, or something like "Just Chatting".
+#[derive(Clone, Debug, PartialEq)]
+pub struct Category {
+    pub id: String,
+    pub name: String,
+}
+
+/// What to change on the channel: each part that is given.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ChannelEdit {
+    pub title: Option<String>,
+    pub category_id: Option<String>,
+}
+
+impl ChannelEdit {
+    fn to_json(&self) -> String {
+        let mut fields = Vec::new();
+        if let Some(title) = &self.title {
+            let title: String = title.chars().take(MAX_STREAM_TITLE).collect();
+            fields.push(("title".to_string(), json::str(title)));
+        }
+        if let Some(id) = &self.category_id {
+            fields.push(("game_id".to_string(), json::str(id)));
+        }
+        Value::Obj(fields).to_json()
+    }
+}
+
+/// Set the stream's title, its category, or both.
+pub fn update_channel(auth: &Auth, edit: &ChannelEdit) -> Result<(), String> {
+    let url = format!(
+        "{API}/channels?broadcaster_id={}",
+        super::auth::url_encode(auth.user_id)
+    );
+    let (status, text) = send(auth, "PATCH", &url, &edit.to_json())?;
+    match status {
+        204 | 200 => Ok(()),
+        _ => Err(explain(
+            status,
+            &text,
+            "change the stream's title or category",
+        )),
+    }
+}
+
+/// The category a streamer means by `name`. A mod types "valo", not
+/// "VALORANT": the one called exactly `name` if there is one, otherwise
+/// the first Twitch's own search finds.
+pub fn find_category(auth: &Auth, name: &str) -> Result<Category, String> {
+    let name = super::auth::url_encode(name.trim());
+    let lookups = [
+        format!("{API}/games?name={name}"),
+        format!("{API}/search/categories?query={name}&first=1"),
+    ];
+    for url in lookups {
+        let (status, text) = send(auth, "GET", &url, "")?;
+        if status != 200 {
+            return Err(explain(status, &text, "look up the category"));
+        }
+        if let Some(found) = parse_categories(&text).into_iter().next() {
+            return Ok(found);
+        }
+    }
+    Err("Twitch has no category by that name".to_string())
+}
+
+/// The categories in a Twitch answer; one missing a field is skipped.
+fn parse_categories(body: &str) -> Vec<Category> {
+    let doc = json::parse(body).unwrap_or(Value::Null);
+    let list = doc.get("data").and_then(Value::as_array).unwrap_or(&[]);
+    list.iter()
+        .filter_map(|c| {
+            Some(Category {
+                id: c.get("id")?.as_str()?.to_string(),
+                name: c.get("name")?.as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Why Twitch said no to a rewards call, in the streamer's terms. A login
 /// from before this app managed rewards lacks the permission (401), and a
 /// channel that isn't Affiliate or Partner has no channel points (403).
@@ -292,6 +375,43 @@ mod reward_tests {
             ("", false)
         );
         assert!(parse_rewards("not json").is_empty());
+    }
+
+    #[test]
+    fn a_channel_edit_sends_only_what_is_given() {
+        let title_only = ChannelEdit {
+            title: Some("Rankeds hasta Ascendente".into()),
+            category_id: None,
+        };
+        assert_eq!(
+            title_only.to_json(),
+            r#"{"title":"Rankeds hasta Ascendente"}"#
+        );
+        let both = ChannelEdit {
+            title: Some("x".repeat(MAX_STREAM_TITLE + 20)),
+            category_id: Some("516575".into()),
+        };
+        let sent = json::parse(&both.to_json()).unwrap();
+        assert_eq!(sent.str_or("title", "").chars().count(), MAX_STREAM_TITLE);
+        assert_eq!(sent.str_or("game_id", ""), "516575");
+        assert_eq!(ChannelEdit::default().to_json(), "{}");
+    }
+
+    #[test]
+    fn categories_are_read_from_both_of_twitchs_answers() {
+        // `games` and `search/categories` name the same two fields.
+        let games =
+            r#"{"data":[{"id":"516575","name":"VALORANT","box_art_url":"x","igdb_id":"126459"}]}"#;
+        let search = r#"{"data":[{"broadcaster_language":"","id":"509658","name":"Just Chatting"},{"name":"no id"}]}"#;
+        let valorant = Category {
+            id: "516575".into(),
+            name: "VALORANT".into(),
+        };
+        assert_eq!(parse_categories(games), vec![valorant]);
+        let found = parse_categories(search);
+        assert_eq!((found.len(), found[0].name.as_str()), (1, "Just Chatting"));
+        assert!(parse_categories(r#"{"data":[]}"#).is_empty());
+        assert!(parse_categories("not json").is_empty());
     }
 
     #[test]

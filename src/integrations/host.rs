@@ -118,6 +118,14 @@ pub trait Host: Send + Sync {
     /// message being answered, when there is one.
     fn chat(&self, text: &str, as_bot: bool, reply_to: Option<&str>) -> Result<(), String>;
     fn marker(&self, description: &str) -> Result<(), String>;
+    /// Set the stream's title, its category (by a name as someone types
+    /// it), or both. Answers with the category's name on Twitch, when one
+    /// was asked for.
+    fn channel(
+        &self,
+        title: Option<&str>,
+        category: Option<&str>,
+    ) -> Result<Option<String>, String>;
     /// Switch a channel points reward made here on or off, by its title.
     fn reward(&self, title: &str, enabled: bool) -> Result<(), String>;
     fn clip(&self) -> Result<ClipInfo, String>;

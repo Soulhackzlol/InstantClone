@@ -743,25 +743,38 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
    Everything that moves animates transform alone, so the loop costs the
    compositor, not layout or paint. While buffering, the brightness follows
    the buffer fill (--fill, set by renderHero): the light grows as the delay
-   gets ready. */
+   gets ready.
+   The pools move in steps, six a second and all on the same beat (--n and
+   --m are each pool's time times six, and a third of that). A smooth loop
+   asks for a new frame at every screen refresh, 165 a second on a fast
+   monitor, each one blending five blurred layers: with OBS and a game
+   holding the GPU, the browser could not keep up and the whole dashboard
+   stuttered. At this size and blur a step moves a pool about 2px, which
+   nobody can see. */
 .hero-aurora{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;--fill:1}
 .aurora-flow{position:absolute;inset:0;opacity:calc(var(--aurora-glow) * 1.3 * (.35 + var(--fill) * .65));
   transition:opacity .45s linear}
 .aurora-flow b{position:absolute;left:var(--x);top:var(--y);width:0;height:0;mix-blend-mode:screen;will-change:transform;
-  animation:aurora-orbit var(--t) linear infinite;animation-direction:var(--dir,normal)}
+  animation:aurora-orbit var(--t) steps(var(--n)) infinite;animation-direction:var(--dir,normal)}
 .aurora-flow i{position:absolute;left:var(--r);width:var(--s);height:var(--s);margin:calc(var(--s) / -2) 0 0 calc(var(--s) / -2);
   border-radius:50%;filter:blur(var(--blur));background:radial-gradient(circle,var(--c),transparent 70%);will-change:transform;
-  animation:aurora-swell calc(var(--t) / 3) ease-in-out infinite alternate}
-.aurora-flow b:nth-child(1){--x:18%;--y:30%;--t:34s;--r:70px;--s:520px;--blur:70px;--c:var(--aurora-a)}
-.aurora-flow b:nth-child(2){--x:40%;--y:85%;--t:46s;--r:120px;--s:460px;--blur:64px;--c:var(--aurora-b);--dir:reverse}
-.aurora-flow b:nth-child(3){--x:8%;--y:80%;--t:28s;--r:50px;--s:300px;--blur:44px;
+  animation:aurora-swell calc(var(--t) / 3) steps(var(--m)) infinite alternate}
+.aurora-flow b:nth-child(1){--n:204;--m:68;--x:18%;--y:30%;--t:34s;--r:70px;--s:520px;--blur:70px;--c:var(--aurora-a)}
+.aurora-flow b:nth-child(2){--n:276;--m:92;--x:40%;--y:85%;--t:46s;--r:120px;--s:460px;--blur:64px;--c:var(--aurora-b);--dir:reverse}
+.aurora-flow b:nth-child(3){--n:168;--m:56;--x:8%;--y:80%;--t:28s;--r:50px;--s:300px;--blur:44px;
   --c:color-mix(in oklch,var(--aurora-a) 55%,var(--accent))}
-.aurora-flow b:nth-child(4){--x:78%;--y:15%;--t:52s;--r:90px;--s:420px;--blur:66px;--dir:reverse;
+.aurora-flow b:nth-child(4){--n:312;--m:104;--x:78%;--y:15%;--t:52s;--r:90px;--s:420px;--blur:66px;--dir:reverse;
   --c:color-mix(in oklch,var(--aurora-a) 50%,var(--aurora-b))}
-.aurora-flow b:nth-child(5){--x:32%;--y:45%;--t:24s;--r:40px;--s:240px;--blur:40px;--c:var(--aurora-a)}
+.aurora-flow b:nth-child(5){--n:144;--m:48;--x:32%;--y:45%;--t:24s;--r:40px;--s:240px;--blur:40px;--c:var(--aurora-a)}
 @keyframes aurora-orbit{to{transform:rotate(360deg)}}
 @keyframes aurora-swell{0%{transform:scale(.88)}100%{transform:scale(1.12)}}
 @media (prefers-reduced-motion: reduce){.aurora-flow b,.aurora-flow i{animation:none}}
+/* Calm mode (countFrames sets it while the browser can't keep up): every
+   looping animation plays once and rests, so nothing asks for frames while
+   nothing happens. One-shot animations already play once and are left as
+   they are. Spinners keep turning: a still one reads as a hang. */
+html.calm *,html.calm *::before,html.calm *::after{animation-iteration-count:1 !important}
+html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-iteration-count:infinite !important}
 /* Film grain over the lights: big blurred gradients band into visible
    steps on 8-bit screens; a faint noise dithers them smooth. */
 .hero-aurora::after{content:'';position:absolute;inset:0;opacity:.05;mix-blend-mode:overlay;
@@ -2615,7 +2628,11 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-card .dcard-name{font-size:13px}
 .ig-card .dcard-host{font-size:10.5px;font-family:inherit;font-variant-numeric:tabular-nums}
 .ig-flag{min-width:0;max-width:none}
-.ig-card .ig-flag{position:absolute;right:6px;top:6px;backdrop-filter:blur(6px)}
+/* No backdrop blur here: the badge's background is solid, so a blur behind
+   it shows nothing, and it made each card a blurred layer of its own for
+   the browser to redo on every frame. Twenty-odd integrations were enough
+   to make a browser with a weak or limited GPU path crawl on every tab. */
+.ig-card .ig-flag{position:absolute;right:6px;top:6px}
 .ig-flag.warn{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 35%,var(--line));
   background:color-mix(in oklch,var(--warn) 10%,var(--surface-3))}
 .ig-flag.warn .d-dot{background:var(--warn)}
@@ -6006,6 +6023,33 @@ function fitHeroNumber(){
   big.style.fontSize = Math.max(40, Math.floor(full * (width - overflow) / width)) + 'px';
 }
 window.addEventListener('resize', fitHeroNumber);
+
+// - Calm mode --------------------------------
+// A dashboard often shares the GPU with OBS and a game. Every looping
+// animation (a pulsing dot, a sweep, the hero's light) asks for a new frame
+// at each screen refresh, and when the browser can't draw them that fast
+// the whole page stutters: clicks, scrolling, tabs. So the page counts its
+// own frames now and then, and while it gets fewer than CALM.slowFps the
+// loops rest (`html.calm` in the styles). They come back once frames have
+// been fast for a few counts in a row, so it doesn't flicker on and off.
+const CALM = {countMs:1000, everyMs:8000, firstMs:2500, slowFps:30, fineFps:50, fineCounts:3};
+let fineCounts = 0;
+function countFrames(){
+  // A hidden tab draws no frames at all: that says nothing about the GPU.
+  if (document.hidden) return;
+  const start = performance.now();
+  let frames = 0;
+  requestAnimationFrame(function count(now){
+    frames++;
+    if (now - start < CALM.countMs){ requestAnimationFrame(count); return; }
+    const fps = frames * 1000 / (now - start);
+    const page = document.documentElement.classList;
+    if (fps < CALM.slowFps){ fineCounts = 0; page.add('calm'); }
+    else if (fps >= CALM.fineFps && ++fineCounts >= CALM.fineCounts) page.remove('calm');
+  });
+}
+setTimeout(countFrames, CALM.firstMs);
+setInterval(countFrames, CALM.everyMs);
 
 // - Sparkline ----------------------------─
 // Catmull-Rom -> cubic-bezier smoothing so the trace reads as a smooth

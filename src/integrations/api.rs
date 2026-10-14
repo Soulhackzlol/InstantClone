@@ -610,7 +610,7 @@ pub fn unknown_vars(integration: &Integration) -> Vec<String> {
             .collect();
         // What is kept between runs is read by name; nothing lists the names.
         let mut prefixes: Vec<String> = [
-            "counter.", "clip.", "viewer.", "target.", "top.", "saved.", "my.",
+            "counter.", "clip.", "stream.", "viewer.", "target.", "top.", "saved.", "my.",
         ]
         .map(String::from)
         .to_vec();
