@@ -1,8 +1,9 @@
 //! The Helix API calls integrations use: VOD markers, clips, subscribing
-//! to Twitch events, and the channel points rewards made here.
-//! Blocking; run off the async thread.
+//! to Twitch events, the channel points rewards made here, and the chat
+//! commands a chat step runs. Blocking; run off the async thread.
 
-use super::auth::read_body;
+use super::auth::{read_body, url_encode};
+use crate::integrations::host::ChatCommand;
 use crate::json::{self, Value};
 
 const API: &str = "https://api.twitch.tv/helix";
@@ -243,10 +244,11 @@ pub fn update_channel(auth: &Auth, edit: &ChannelEdit) -> Result<(), String> {
     let (status, text) = send(auth, "PATCH", &url, &edit.to_json())?;
     match status {
         204 | 200 => Ok(()),
-        _ => Err(explain(
+        _ => Err(explain_scope(
             status,
             &text,
             "change the stream's title or category",
+            "change them",
         )),
     }
 }
@@ -286,19 +288,106 @@ fn parse_categories(body: &str) -> Vec<Category> {
         .collect()
 }
 
+/// The id of the Twitch user called `login`.
+fn user_id(auth: &Auth, login: &str) -> Result<String, String> {
+    let url = format!("{API}/users?login={}", url_encode(login));
+    let (status, text) = send(auth, "GET", &url, "")?;
+    if status != 200 {
+        return Err(explain(status, &text, "look up the viewer"));
+    }
+    json::parse(&text)
+        .ok()
+        .as_ref()
+        .and_then(|v| v.path("data.0.id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("Twitch has no user called {login}"))
+}
+
+/// A ban, or a timeout of `seconds`, as Twitch takes it.
+fn ban_body(user_id: &str, seconds: Option<u32>, reason: &str) -> String {
+    let mut data = vec![("user_id".to_string(), json::str(user_id))];
+    if let Some(seconds) = seconds {
+        data.push(("duration".to_string(), Value::Num(f64::from(seconds))));
+    }
+    if !reason.is_empty() {
+        data.push(("reason".to_string(), json::str(reason)));
+    }
+    Value::Obj(vec![("data".to_string(), Value::Obj(data))]).to_json()
+}
+
+/// Run a chat step's command in the channel, as its broadcaster (who
+/// moderates their own chat).
+pub fn run_command(auth: &Auth, command: &ChatCommand) -> Result<(), String> {
+    let me = url_encode(auth.user_id);
+    let bans = format!("{API}/moderation/bans?broadcaster_id={me}&moderator_id={me}");
+    let (what, method, url, body) = match command {
+        ChatCommand::Timeout {
+            login,
+            seconds,
+            reason,
+        } => {
+            let id = user_id(auth, login)?;
+            (
+                "time them out",
+                "POST",
+                bans,
+                ban_body(&id, Some(*seconds), reason),
+            )
+        }
+        ChatCommand::Ban { login, reason } => {
+            let id = user_id(auth, login)?;
+            ("ban them", "POST", bans, ban_body(&id, None, reason))
+        }
+        ChatCommand::Unban { login } => {
+            let id = user_id(auth, login)?;
+            let url = format!("{bans}&user_id={}", url_encode(&id));
+            ("lift their ban or timeout", "DELETE", url, String::new())
+        }
+        ChatCommand::Shoutout { login } => {
+            let id = user_id(auth, login)?;
+            let url = format!(
+                "{API}/chat/shoutouts?from_broadcaster_id={me}&to_broadcaster_id={}&moderator_id={me}",
+                url_encode(&id)
+            );
+            ("shout them out", "POST", url, String::new())
+        }
+        ChatCommand::Announce { text } => {
+            let url = format!("{API}/chat/announcements?broadcaster_id={me}&moderator_id={me}");
+            let body = json::obj([("message", json::str(text.as_str()))]).to_json();
+            ("post the announcement", "POST", url, body)
+        }
+    };
+    let (status, text) = send(auth, method, &url, &body)?;
+    match status {
+        200 | 204 => Ok(()),
+        _ => Err(explain_scope(status, &text, what, "run chat commands")),
+    }
+}
+
 /// Why Twitch said no to a rewards call, in the streamer's terms. A login
 /// from before this app managed rewards lacks the permission (401), and a
 /// channel that isn't Affiliate or Partner has no channel points (403).
 fn explain_rewards(status: u16, body: &str, what: &str) -> String {
     match status {
-        401 => format!(
-            "Twitch refused to {what}: log out of Twitch here and in again, so InstantClone may manage rewards"
-        ),
         403 => format!(
             "Twitch refused to {what}: channel points need an Affiliate or Partner channel, and an app can only change rewards it made"
         ),
-        _ => explain(status, body, what),
+        _ => explain_scope(status, body, what, "manage rewards"),
     }
+}
+
+/// A 401 from a login made before InstantClone asked for what `needs` (Twitch
+/// says "Missing scope") is fixed by logging in again. Any other 401 is a
+/// token that ran out, which `explain` words so the call is renewed and
+/// tried again.
+fn explain_scope(status: u16, body: &str, what: &str, needs: &str) -> String {
+    if status == 401 && body.to_ascii_lowercase().contains("missing scope") {
+        return format!(
+            "Twitch refused to {what}: log out of Twitch here and in again, so InstantClone may {needs}"
+        );
+    }
+    explain(status, body, what)
 }
 
 fn post(auth: &Auth, url: &str, body: &str) -> Result<(u16, String), String> {
@@ -355,6 +444,15 @@ fn explain(status: u16, body: &str, what: &str) -> String {
 #[cfg(test)]
 mod reward_tests {
     use super::*;
+
+    #[test]
+    fn a_timeout_says_how_long_and_a_ban_does_not() {
+        assert_eq!(
+            ban_body("42", Some(600), "spam"),
+            r#"{"data":{"user_id":"42","duration":600,"reason":"spam"}}"#
+        );
+        assert_eq!(ban_body("42", None, ""), r#"{"data":{"user_id":"42"}}"#);
+    }
 
     #[test]
     fn rewards_are_read_from_what_twitch_answers() {
@@ -441,6 +539,14 @@ mod reward_tests {
             old_login.contains("log out of Twitch here and in again"),
             "{old_login}"
         );
+        // A token that ran out reads as the words a renewal answers to.
+        let expired = r#"{"status":401,"message":"Invalid OAuth token"}"#;
+        for refused in [
+            explain_rewards(401, expired, "make the reward"),
+            explain_scope(401, expired, "post the announcement", "run chat commands"),
+        ] {
+            assert!(refused.ends_with("log in to Twitch again"), "{refused}");
+        }
         let no_points = explain_rewards(403, "{}", "make the reward");
         assert!(no_points.contains("Affiliate or Partner"), "{no_points}");
         let twice = explain_rewards(

@@ -117,6 +117,10 @@ const RECENT_KEEP: usize = 12;
 /// accepts, then refuses) would otherwise alert on every round. Each
 /// destination gets at most one "live" and one "dropped" per window.
 const FLAP_WINDOW: Duration = Duration::from_secs(300);
+/// Someone who unfollows and follows again, over and over, would otherwise
+/// set off the follow alert each time. A follow from the same person counts
+/// once in this long.
+const FOLLOW_AGAIN: Duration = Duration::from_secs(24 * 3600);
 /// A chat activity trigger stays quiet this long after a stream starts:
 /// the first seconds of chat ("hi!", "hello") are a burst by nature.
 pub const ACTIVITY_WARMUP: Duration = Duration::from_secs(30);
@@ -226,6 +230,10 @@ pub struct Handle {
     pub twitch: Arc<Twitch>,
     /// What "Show on stream" steps put on the alerts browser source.
     pub alerts: Arc<Board>,
+    /// The OBS dock's events list.
+    pub feed: Arc<super::feed::Feed>,
+    /// Goals and timers: where each stands, and what moves them.
+    pub goals: Arc<super::goals::Tracker>,
     store: Arc<Store>,
     /// Integration hotkeys Windows wouldn't register (another app holds
     /// them, or there are too many), for the dashboard to point out.
@@ -583,6 +591,7 @@ pub fn start(
         &settings.borrow().twitch_client_id,
     ));
     let alerts = Arc::new(Board::new());
+    let feed = Arc::new(super::feed::Feed::new());
     let obs = Arc::new(Mutex::new(obsws::Status::default()));
     let (obs_tx, obs_commands) = mpsc::channel(16);
     let handle = Arc::new(Handle {
@@ -591,6 +600,8 @@ pub fn start(
         stats: Mutex::new(HashMap::new()),
         twitch: twitch.clone(),
         alerts: alerts.clone(),
+        feed: feed.clone(),
+        goals: store.goals.clone(),
         store: store.clone(),
         refused_keys: Mutex::new(Vec::new()),
         dropped: AtomicU64::new(0),
@@ -623,6 +634,7 @@ pub fn start(
                     default_delay_ms: Default::default(),
                     programs: Default::default(),
                     alerts,
+                    feed,
                     stream_started_ms: AtomicU64::new(0),
                     onair: Mutex::new("off"),
                     obs: obs_tx,
@@ -680,6 +692,7 @@ struct Engine {
     /// The delay's phase and armed delay at the last tick: see `watch_phase`.
     phase_seen: Option<(&'static str, u32)>,
     flap: FlapGuard,
+    follows: FollowGuard,
     discord_messages: DiscordMessages,
     discord_turns: Arc<runner::DiscordTurns>,
     /// `{uses}` changed since the data file was last written.
@@ -766,6 +779,7 @@ impl Engine {
             delay_seen: None,
             phase_seen: None,
             flap: FlapGuard::default(),
+            follows: FollowGuard::default(),
             discord_messages,
             discord_turns,
             uses_dirty: false,
@@ -822,6 +836,7 @@ impl Engine {
                     self.watch_delay();
                     self.watch_onair();
                     self.watch_session();
+                    self.watch_goals();
                     self.watch_destinations();
                     self.update_activity_gate();
                     self.settle_scenes();
@@ -839,7 +854,11 @@ impl Engine {
     }
 
     fn apply_settings(&mut self, s: &Settings) {
-        self.integrations = s.integrations.iter().cloned().map(Arc::new).collect();
+        self.integrations = s
+            .integrations
+            .iter()
+            .map(|i| Arc::new(i.runnable()))
+            .collect();
         self.env = Arc::new(make_env(
             (s.discord_channels.clone(), s.user_values.clone()),
             s.phone.clone(),
@@ -852,6 +871,7 @@ impl Engine {
             .store(s.auto_arm_delay_ms.max(1000), Ordering::Relaxed);
         self.host.twitch.use_client_id(&s.twitch_client_id);
         self.shared_chat = s.twitch_shared_chat;
+        self.handle.goals.configure(&s.goals, &s.timers);
         // Forget per-trigger state for integrations that are gone.
         let alive: Vec<&str> = self.integrations.iter().map(|i| i.id.as_str()).collect();
         let keep = |key: &String| alive.iter().any(|id| key.starts_with(&format!("{id}#")));
@@ -896,6 +916,7 @@ impl Engine {
         self.chat_room.prune(Instant::now());
         self.last_run.retain(|_, t| t.elapsed() < longest_run);
         self.flap.prune(Instant::now());
+        self.follows.prune(Instant::now());
         // Here rather than on every settings change: a delete undone within
         // the minute keeps its count and its Discord message.
         let alive: Vec<&str> = self.integrations.iter().map(|i| i.id.as_str()).collect();
@@ -945,6 +966,11 @@ impl Engine {
     }
 
     fn event(&mut self, event: Event) {
+        // Dropped before the session counts it: a repeat is no new follower.
+        if self.follows.repeated(&event, Instant::now()) {
+            return;
+        }
+        self.handle.goals.observe(&event, unix_ms());
         // The session sees every event, flapping or not: smart destination
         // alerts are built on the drops the flap guard holds back.
         let made = self.observe(&event);
@@ -1015,6 +1041,7 @@ impl Engine {
             match e.kind {
                 EventKind::StreamStarted => {
                     self.timeline.lock().clear();
+                    self.handle.goals.stream_started(unix_ms());
                     self.still_down_fired.clear();
                     self.steady_fired.clear();
                     self.drops_seen.clear();
@@ -1027,7 +1054,10 @@ impl Engine {
                         self.scene_entered(&scene, "", true);
                     }
                 }
-                EventKind::StreamEnded => self.host.stream_started_ms.store(0, Ordering::Relaxed),
+                EventKind::StreamEnded => {
+                    self.host.stream_started_ms.store(0, Ordering::Relaxed);
+                    self.handle.goals.stream_ended();
+                }
                 _ => {}
             }
         }
@@ -1043,6 +1073,18 @@ impl Engine {
         let made = self.session.expire(Instant::now(), timeline);
         self.follow_session(&made);
         for event in made {
+            self.event(event);
+        }
+    }
+
+    /// Each tick: a goal reached or a timer run out is an event, whatever
+    /// moved it (Twitch, a step or the dashboard).
+    fn watch_goals(&mut self) {
+        let now = unix_ms();
+        if self.session.is_on() {
+            self.handle.goals.still_live(now);
+        }
+        for event in self.handle.goals.take_news(now) {
             self.event(event);
         }
     }
@@ -1581,9 +1623,10 @@ impl Engine {
         self.scene_pending.retain(|_, p| p.scene == now_scene);
     }
 
-    /// Listen on Twitch for the events enabled integrations start on.
+    /// Listen on Twitch for the events enabled integrations start on, and
+    /// the ones goals and timers count.
     fn update_twitch_events(&mut self) {
-        let mut wanted: Vec<EventKind> = Vec::new();
+        let mut wanted: Vec<EventKind> = self.handle.goals.wanted_events();
         for (_, _, h) in self.enabled_handlers() {
             if let Trigger::Event { kind, .. } = &h.trigger {
                 if super::twitch::eventsub::subscription(*kind).is_some() && !wanted.contains(kind)
@@ -1969,6 +2012,39 @@ fn phase_events(before: (&str, u32), now: (&str, u32)) -> Vec<Event> {
     events
 }
 
+/// See `FOLLOW_AGAIN`.
+#[derive(Default)]
+struct FollowGuard {
+    /// When each person's follow last counted, by login.
+    counted: HashMap<String, Instant>,
+}
+
+impl FollowGuard {
+    fn prune(&mut self, now: Instant) {
+        self.counted
+            .retain(|_, t| now.duration_since(*t) < FOLLOW_AGAIN);
+    }
+
+    /// True for a follow from someone whose follow already counted.
+    fn repeated(&mut self, event: &Event, now: Instant) -> bool {
+        if event.kind != EventKind::TwitchFollow {
+            return false;
+        }
+        let login = event.var("user_login").unwrap_or("");
+        // A follow with no name can't be told apart from another.
+        if login.is_empty() {
+            return false;
+        }
+        match self.counted.get(login) {
+            Some(at) if now.duration_since(*at) < FOLLOW_AGAIN => true,
+            _ => {
+                self.counted.insert(login.to_string(), now);
+                false
+            }
+        }
+    }
+}
+
 /// See `FLAP_WINDOW`. What it holds back isn't lost: a destination whose
 /// last held event differs from what was last said about it gets that event
 /// once the window ends, so "live" is never the final word on a dead one.
@@ -2079,6 +2155,7 @@ fn make_env(
         counters: store.counters.clone(),
         viewers: store.viewers.clone(),
         saved: store.saved.clone(),
+        goals: store.goals.clone(),
         // Written with the run counts a moment later (`save_uses_if_due`):
         // a chat command counting every message must not rewrite the file
         // each time, on the engine's own thread.
@@ -2109,11 +2186,12 @@ fn event_vars(event: &Event) -> BTreeMap<String, String> {
 /// filter can list several values (`YouTube, Kick`) and use wildcards
 /// (`*timed out*`); case doesn't matter.
 fn filters_match(filters: &BTreeMap<String, String>, event: &Event) -> bool {
-    filters.iter().all(|(name, want)| {
-        want.trim().is_empty()
-            || event.kind.is_param(name)
-            || event.var(name).is_some_and(|have| matches_any(have, want))
-    })
+    event.kind.at_least(filters, event)
+        && filters.iter().all(|(name, want)| {
+            want.trim().is_empty()
+                || event.kind.is_param(name)
+                || event.var(name).is_some_and(|have| matches_any(have, want))
+        })
 }
 
 /// Whether `text` matches any of the comma separated `patterns`, each
@@ -2129,6 +2207,21 @@ pub fn matches_any(text: &str, patterns: &str) -> bool {
 fn filter_samples(filters: &BTreeMap<String, String>, vars: &mut BTreeMap<String, String>) {
     for (name, want) in filters {
         let want = want.trim();
+        // A minimum (`min_bits`): the sample amount is at least that.
+        if let Some(var) = name.strip_prefix("min_") {
+            let least = want
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite())
+                .unwrap_or(0.0)
+                .min(1e6);
+            if let Some(have) = vars.get_mut(var) {
+                if have.parse::<f64>().is_ok_and(|n| n < least) {
+                    *have = format!("{least:.0}");
+                }
+            }
+            continue;
+        }
         let plain = !want.is_empty() && !want.contains([',', '*', '?']);
         if plain && vars.contains_key(name) {
             vars.insert(name.clone(), want.to_string());
@@ -2340,6 +2433,23 @@ mod tests {
             display_name: "Ana".into(),
             ..ChatMessage::default()
         }
+    }
+
+    #[test]
+    fn a_follow_from_the_same_person_counts_once_a_day() {
+        let mut guard = FollowGuard::default();
+        let follow = |login: &str| Event::new(EventKind::TwitchFollow).with("user_login", login);
+        let t0 = Instant::now();
+        assert!(!guard.repeated(&follow("nat"), t0));
+        assert!(guard.repeated(&follow("nat"), t0 + Duration::from_secs(5)));
+        assert!(!guard.repeated(&follow("sam"), t0 + Duration::from_secs(5)));
+        assert!(!guard.repeated(&follow(""), t0));
+        assert!(!guard.repeated(&follow(""), t0));
+        let sub = Event::new(EventKind::TwitchSub).with("user_login", "nat");
+        assert!(!guard.repeated(&sub, t0));
+        let next_day = t0 + FOLLOW_AGAIN;
+        guard.prune(next_day);
+        assert!(!guard.repeated(&follow("nat"), next_day));
     }
 
     #[test]
@@ -2607,6 +2717,20 @@ mod tests {
             vars["reason"], "connection timed out",
             "a pattern isn't a value"
         );
+    }
+
+    /// "From 1000 bits" runs on 1000 bits and up, and its test reads so.
+    #[test]
+    fn a_minimum_narrows_the_trigger_and_its_sample() {
+        let least = BTreeMap::from([("min_bits".to_string(), "1000".to_string())]);
+        let cheer = |bits: &str| Event::new(EventKind::TwitchCheer).with("bits", bits);
+        assert!(filters_match(&least, &cheer("1000")));
+        assert!(!filters_match(&least, &cheer("500")));
+        let trigger = Trigger::Event {
+            kind: EventKind::TwitchCheer,
+            filters: least,
+        };
+        assert_eq!(sample_vars(&trigger).0["bits"], "1000");
     }
 
     #[test]

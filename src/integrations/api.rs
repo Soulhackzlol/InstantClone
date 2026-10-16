@@ -55,6 +55,40 @@ pub fn new_id() -> String {
     format!("i{}", &crate::crypto::random_token()[..12])
 }
 
+/// The OBS dock's events list: read it, play an event's alert again, or end
+/// the alert on stream now. A dock reaches these with its own token (web.rs
+/// `classify_access`): none changes a setting.
+pub fn dock(method: &str, path: &str, body: &str, ctrl: &Arc<Controller>) -> Option<Reply> {
+    let handle = ctrl.integrations()?;
+    let reply = match (method, path) {
+        ("GET", "/dock/events") => ok(handle.feed.to_json()),
+        ("POST", "/dock/events/replay") => {
+            match form_id(body).and_then(|id| handle.feed.card(id)) {
+                Some(card) => {
+                    handle.alerts.show(card);
+                    done()
+                }
+                None => fail("that event has no alert to play again"),
+            }
+        }
+        ("POST", "/dock/alerts/skip") => {
+            handle.alerts.skip();
+            done()
+        }
+        _ => return None,
+    };
+    Some(reply)
+}
+
+/// `id=7` from a dock's form body.
+fn form_id(body: &str) -> Option<u64> {
+    body.split('&')
+        .find_map(|pair| pair.strip_prefix("id="))?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// Handle `/integrations*`, `/connections/*`, `/twitch/*`. `None` when the
 /// path is not ours.
 ///
@@ -87,10 +121,12 @@ pub async fn route(
             ("twitch", handle.twitch.status_json()),
             ("obs", handle.obs_status()),
             ("alerts", alerts_json(&handle, &settings.borrow(), cfg_path)),
+            ("tracking", handle.goals.to_json()),
         ])),
         ("POST", "/integrations/save") => save(&req(), settings, cfg_path, local_steps_allowed),
         ("POST", "/integrations/add") => add(&req(), settings, cfg_path, local_steps_allowed),
         ("POST", "/integrations/toggle") => toggle(&req(), settings, cfg_path, local_steps_allowed),
+        ("POST", "/integrations/folder") => move_to_folder(&req(), settings, cfg_path),
         ("POST", "/integrations/delete") => {
             let id = req().str_or("id", "").to_string();
             update(settings, cfg_path, |s| {
@@ -106,6 +142,12 @@ pub async fn route(
         ("GET", "/integrations/viewers") => ok(handle.viewers_json()),
         ("POST", "/integrations/viewers") => match handle.change_viewers(&req()) {
             Ok(()) => ok(handle.viewers_json()),
+            Err(why) => fail(why),
+        },
+        // Goals and timers: what they are, and moving one by hand.
+        ("POST", "/integrations/goals") => save_goals(&req(), &handle, settings, cfg_path),
+        ("POST", "/integrations/goals/change") => match change_goal(&req(), &handle) {
+            Ok(()) => goals_reply(&handle),
             Err(why) => fail(why),
         },
         // The live meter of a chat activity trigger being tuned.
@@ -145,6 +187,35 @@ pub async fn route(
             let action = obsws::Action::BrowserSource {
                 name: ALERTS_SOURCE.to_string(),
                 url: alerts_url(settings.borrow().web_port),
+            };
+            match handle.obs_now(action).await {
+                Ok(()) => done(),
+                Err(e) => fail(e),
+            }
+        }
+        // An overlay from the overlays folder (hand-written ones too) as a
+        // browser source in the scene on air. Only ever one of InstantClone's
+        // own pages: its name goes in the address escaped.
+        ("POST", "/integrations/overlays/add-to-obs") => {
+            let asked = req();
+            let slug = asked.str_or("slug", "");
+            let odd = |c: char| c.is_control() || matches!(c, '/' | '\\' | ':');
+            if slug.is_empty() || slug.len() > 128 || slug.contains("..") || slug.chars().any(odd) {
+                return Some(fail("that isn't one of your overlays"));
+            }
+            let label: String = asked
+                .str_or("name", slug)
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(60)
+                .collect();
+            let port = settings.borrow().web_port;
+            let action = obsws::Action::BrowserSource {
+                name: format!("InstantClone {}", label.trim()),
+                url: format!(
+                    "http://127.0.0.1:{port}/overlay/{}.html",
+                    super::twitch::auth::url_encode(slug)
+                ),
             };
             match handle.obs_now(action).await {
                 Ok(()) => done(),
@@ -341,6 +412,7 @@ fn test_card(req: &Value) -> alerts::Card {
     alerts::Card {
         title: req.str_or("title", "").to_string(),
         text: text.to_string(),
+        message: req.str_or("message", "").trim().to_string(),
         seconds: req.str_or("seconds", "6").trim().parse().unwrap_or(6),
         color: req.str_or("color", "").trim().to_string(),
         sound: req.str_or("sound", "").trim().to_string(),
@@ -350,6 +422,7 @@ fn test_card(req: &Value) -> alerts::Card {
             .parse()
             .unwrap_or(alerts::DEFAULT_VOLUME),
         image: req.str_or("image", "").trim().to_string(),
+        design: req.str_or("design", "").trim().to_string(),
     }
 }
 
@@ -443,6 +516,7 @@ fn overview(
         ("twitch", handle.twitch.status_json()),
         ("obs", handle.obs_status()),
         ("alerts", alerts_json(handle, s, cfg_path)),
+        ("tracking", handle.goals.to_json()),
         // For the "Report it" links, which fill in the issue form's version.
         ("version", json::str(env!("CARGO_PKG_VERSION"))),
         ("twitch_shared_chat", Value::Bool(s.twitch_shared_chat)),
@@ -610,7 +684,8 @@ pub fn unknown_vars(integration: &Integration) -> Vec<String> {
             .collect();
         // What is kept between runs is read by name; nothing lists the names.
         let mut prefixes: Vec<String> = [
-            "counter.", "clip.", "stream.", "viewer.", "target.", "top.", "saved.", "my.",
+            "counter.", "clip.", "stream.", "viewer.", "target.", "top.", "saved.", "my.", "goal.",
+            "timer.",
         ]
         .map(String::from)
         .to_vec();
@@ -909,6 +984,41 @@ fn toggle(
             }
         }
         s.integrations[at].enabled = enabled;
+        Ok(())
+    })
+}
+
+/// Put integrations (`ids`) in a folder (`folder`, empty for none), in one
+/// save: renaming a folder moves everything in it at once. Nothing else
+/// about them changes, so nothing is checked again.
+fn move_to_folder(req: &Value, settings: &Arc<watch::Sender<Settings>>, cfg_path: &Path) -> Reply {
+    let ids: Vec<&str> = req
+        .get("ids")
+        .and_then(Value::as_array)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let folder = super::model::folder_name(req.str_or("folder", ""));
+    if folder.chars().count() > super::model::MAX_FOLDER_LEN {
+        return fail(format!(
+            "a folder's name is {} characters at most",
+            super::model::MAX_FOLDER_LEN
+        ));
+    }
+    update(settings, cfg_path, |s| {
+        let mut moved = 0;
+        for i in s
+            .integrations
+            .iter_mut()
+            .filter(|i| ids.contains(&i.id.as_str()))
+        {
+            i.folder = folder.clone();
+            moved += 1;
+        }
+        if moved == 0 {
+            return Err("those integrations no longer exist".to_string());
+        }
         Ok(())
     })
 }
@@ -1391,6 +1501,67 @@ fn shared_values_review(parsed: &recipe::Recipe, s: &Settings) -> Value {
     Value::Arr(parsed.values.iter().map(review).collect())
 }
 
+/// Where every goal and timer stands, as an answer.
+fn goals_reply(handle: &super::Handle) -> Reply {
+    ok(json::obj([
+        ("ok", Value::Bool(true)),
+        ("tracking", handle.goals.to_json()),
+    ]))
+}
+
+/// Replace the goals and timers with the lists the dashboard sent.
+fn save_goals(
+    req: &Value,
+    handle: &super::Handle,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> Reply {
+    let (goals, timers) = match super::goals::parse_setup(req) {
+        Ok(setup) => setup,
+        Err(why) => return fail(why),
+    };
+    let saved = update(settings, cfg_path, |s| {
+        s.goals = goals.clone();
+        s.timers = timers.clone();
+        Ok(())
+    });
+    if saved.0 != "200 OK" {
+        return saved;
+    }
+    // The engine hears of it a moment later; the answer shows it now.
+    handle.goals.configure(&goals, &timers);
+    goals_reply(handle)
+}
+
+/// The dashboard moving a goal or driving a timer by hand (`what`, `id`,
+/// `action`, and an `amount`: a count, or seconds for a timer).
+fn change_goal(req: &Value, handle: &super::Handle) -> Result<(), String> {
+    use super::goals::{GoalChange, TimerChange};
+    let id = req.str_or("id", "");
+    let amount = req.get("amount").and_then(Value::as_f64).unwrap_or(0.0) as i64;
+    let exact = amount.max(0).unsigned_abs();
+    let unknown = || "that isn't something a goal or timer does".to_string();
+    if req.str_or("what", "") == "timer" {
+        let change = match req.str_or("action", "") {
+            "start" => TimerChange::Start,
+            "pause" => TimerChange::Pause,
+            "reset" => TimerChange::Reset,
+            "add" => TimerChange::Add(amount),
+            "set" => TimerChange::Set(exact),
+            _ => return Err(unknown()),
+        };
+        let now = super::twitch::unix_ms();
+        return handle.goals.change_timer(id, change, now).map(drop);
+    }
+    let change = match req.str_or("action", "") {
+        "add" => GoalChange::Add(amount),
+        "set" => GoalChange::Set(exact),
+        "reset" => GoalChange::Reset,
+        _ => return Err(unknown()),
+    };
+    handle.goals.change_goal(id, change).map(drop)
+}
+
 /// Replace the streamer's own values with the list the dashboard sent.
 fn save_user_values(
     req: &Value,
@@ -1546,6 +1717,7 @@ fn effect_review(i: &Integration) -> Vec<Value> {
             StepKind::Chat => add("info", "Writes in your Twitch chat"),
             StepKind::Phone => add("info", "Sends a push to your phone"),
             StepKind::Overlay => add("info", "Shows an alert on stream"),
+            StepKind::Dock => add("info", "Lists events in your OBS dock"),
             _ => {}
         });
     }
@@ -2162,6 +2334,44 @@ mod tests {
         assert_eq!(order[0], "a");
         assert!(reply.2.contains(&order[1]), "the copy is second: {order:?}");
         assert_eq!(order[2], "b");
+        let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
+    }
+
+    /// Moving to a folder moves only the ones named, in one save, and
+    /// changes nothing else about them.
+    #[test]
+    fn integrations_move_to_a_folder_together() {
+        let (settings, cfg) = scratch("folder");
+        for id in ["a", "b", "c"] {
+            let i = presets::build("delay_notice", id.into(), "").unwrap();
+            assert_eq!(save(&i.to_json(), &settings, &cfg, true).0, "200 OK");
+        }
+        let before = stored(&settings, "a").unwrap();
+        let move_them = |ids: &[&str], folder: &str| {
+            let ids = Value::Arr(ids.iter().map(|id| json::str(*id)).collect());
+            move_to_folder(
+                &json::obj([("ids", ids), ("folder", json::str(folder))]),
+                &settings,
+                &cfg,
+            )
+        };
+        assert_eq!(move_them(&["a", "b"], " Chat\n").0, "200 OK");
+        let folders: Vec<String> = settings
+            .borrow()
+            .integrations
+            .iter()
+            .map(|i| i.folder.clone())
+            .collect();
+        assert_eq!(folders, ["Chat", "Chat", ""]);
+        assert_eq!(
+            stored(&settings, "a").unwrap(),
+            Integration {
+                folder: "Chat".into(),
+                ..before
+            }
+        );
+        assert_ne!(move_them(&["gone"], "Chat").0, "200 OK");
+        assert_ne!(move_them(&["c"], &"x".repeat(41)).0, "200 OK");
         let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
     }
 }

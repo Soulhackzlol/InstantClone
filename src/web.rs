@@ -908,19 +908,16 @@ async fn route(
     };
     // Pluggable overlays: any GET /overlay/<filename> reads from disk.
     if method == "GET" && bare_path.starts_with("/overlay/") {
-        let name = &bare_path["/overlay/".len()..];
-        return serve_overlay_file(name, settings);
+        let name = overlay_file_name(&bare_path["/overlay/".len()..]);
+        return serve_overlay_file(&name, settings);
     }
     // Overlay Studio writes: POST /overlays/<slug> saves a baked overlay,
     // POST /overlays/<slug>/delete removes it. The slug is restricted to a
     // safe charset (no separators) so no path can escape overlays_dir.
-    // POST /overlays/seeded marks the built-in presets as installed; POST
-    // /overlays/reset wipes the Studio overlays and clears that flag so the
-    // dashboard re-seeds the defaults on its next load.
+    // POST /overlays/seeded marks the built-in presets as installed.
     if method == "POST" && bare_path.starts_with("/overlays/") {
         return match overlay_post(&bare_path["/overlays/".len()..], body) {
             OverlayPost::MarkSeeded => overlays_mark_seeded(settings, cfg_path),
-            OverlayPost::Reset => overlays_reset(settings, cfg_path),
             OverlayPost::Delete(slug) => overlay_delete(slug, settings),
             OverlayPost::Save(slug) => overlay_save(slug, body, settings),
         };
@@ -1316,6 +1313,18 @@ async fn route(
         ("POST", "/config/reset") => post_config_reset(query, ctrl, settings, cfg_path).await,
         ("GET", "/dock/settings") => ("200 OK", "application/json", dock_settings_json(settings)),
         ("POST", "/dock/settings") => post_dock_settings(body, settings, cfg_path),
+        // The OBS dock's events list (see `integrations::api::dock`).
+        ("GET", "/dock/events")
+        | ("POST", "/dock/events/replay")
+        | ("POST", "/dock/alerts/skip") => {
+            crate::integrations::api::dock(method, bare_path, body, ctrl).unwrap_or_else(|| {
+                (
+                    "503 Service Unavailable",
+                    "application/json",
+                    r#"{"ok":false,"error":"Integrations aren't running"}"#.to_string(),
+                )
+            })
+        }
         // Two-phase delay endpoints
         ("POST", "/arm") => post_arm(body, ctrl, settings, cfg_path, sysstat).await,
         ("POST", "/activate") => post_activate(ctrl, settings, cfg_path, sysstat).await,
@@ -1648,8 +1657,10 @@ fn state_json(
     let vertical_present = ctrl.ingest_alive() && ctrl.vertical_track_on_wire().is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
+        // The dock's events list changed: it fetches the list again.
+        fd = ctrl.integrations().map_or(0, |h| h.feed.changes()),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
         hold = hold_json(ctrl),
@@ -1812,9 +1823,14 @@ fn overlay_state_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>
         })
         .collect::<Vec<_>>()
         .join(",");
+    // Goals and timers: names and numbers the streamer made to be shown.
+    let (goals, timers) = ctrl.integrations().map_or_else(
+        || ("[]".to_string(), "[]".to_string()),
+        |handle| handle.goals.overlay_json(),
+    );
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"ingest_alive":{ia},"destinations_alive":{dla},"destinations_total":{dlt},"stats":{{"cuts":{cu},"bitrate_kbps":{br}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"ingest_alive":{ia},"destinations_alive":{dla},"destinations_total":{dlt},"stats":{{"cuts":{cu},"bitrate_kbps":{br}}},"destinations":[{dl}],"goals":{gl},"timers":{tm},"saved":{sv}}}"#,
         ph = ctrl.phase(),
         ad = ctrl.armed_delay_ms(),
         td = ctrl.target_delay_ms(),
@@ -1827,6 +1843,9 @@ fn overlay_state_json(ctrl: &Controller, settings: &Arc<watch::Sender<Settings>>
         cu = ctrl.cuts_performed(),
         br = ctrl.bitrate_kbps(),
         dl = dots,
+        gl = goals,
+        tm = timers,
+        sv = overlay_saves_json(),
     )
 }
 
@@ -3214,6 +3233,8 @@ async fn post_config_reset(
         // Integrations and their connections are the user's own work too.
         next.integrations = prev.integrations;
         next.user_values = prev.user_values;
+        next.goals = prev.goals;
+        next.timers = prev.timers;
         next.discord_channels = prev.discord_channels;
         next.phone = prev.phone;
         next.integrations_migrated = prev.integrations_migrated;
@@ -4371,10 +4392,11 @@ fn normalize_audio_track(raw: Option<&str>) -> String {
 /// which the baker sets to the doc name), and `studio` - whether the file
 /// is a Studio-authored overlay (carries an `ic-doc` comment) versus a
 /// legacy hand-dropped `.html`. Studio overlays can be re-edited; legacy
-/// ones are still listed and usable as browser sources.
+/// ones are still listed and usable as browser sources. `kind` is the page
+/// of the Overlay tab it is on (see `overlay_kind`).
 fn list_overlays(settings: &Arc<watch::Sender<Settings>>) -> String {
     let dir = settings.borrow().overlays_dir.clone();
-    let mut items: Vec<(String, String, bool, bool)> = Vec::new();
+    let mut items: Vec<(String, String, bool, bool, &'static str, String)> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.flatten() {
             let fname = match e.file_name().into_string() {
@@ -4396,25 +4418,71 @@ fn list_overlays(settings: &Arc<watch::Sender<Settings>>) -> String {
             // quick toggle (it appends ?autohide=off to the copied URL).
             let autohide = content.contains("data-ah-");
             let name = extract_title(&content).unwrap_or_else(|| slug.clone());
-            items.push((slug, name, studio, autohide));
+            let kind = overlay_kind(&content, &slug);
+            let build = overlay_build(&content).to_string();
+            items.push((slug, name, studio, autohide, kind, build));
         }
     }
     items.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = String::from("[");
-    for (i, (slug, name, studio, autohide)) in items.iter().enumerate() {
+    for (i, (slug, name, studio, autohide, kind, build)) in items.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
         out.push_str(&format!(
-            r#"{{"slug":{},"name":{},"studio":{},"autohide":{}}}"#,
+            r#"{{"slug":{},"name":{},"studio":{},"autohide":{},"kind":"{}","build":"{}"}}"#,
             json_escape_quoted(slug),
             json_escape_quoted(name),
             studio,
-            autohide
+            autohide,
+            kind,
+            build
         ));
     }
     out.push(']');
     out
+}
+
+/// The page of the Overlay tab an overlay is on: "delay" (it shows the
+/// delay), "goals" (a goal's or a timer's own, on its card) or "custom"
+/// (anything else). This is the one place that decides: the dashboard takes
+/// it as given. A goal's or a timer's own overlay is the file its card
+/// makes, `goal-<id>` or `timer-<id>`; anything else marked as one (a copy)
+/// is custom. Otherwise the Studio writes the page into the file as
+/// `<meta name="ic-kind">`; a file from before that is a delay overlay if
+/// the Studio made it, and a hand-written one is custom.
+fn overlay_kind(content: &str, slug: &str) -> &'static str {
+    let studio = content.contains("<!--ic-doc:");
+    if studio && (slug.starts_with("goal-") || slug.starts_with("timer-")) {
+        return "goals";
+    }
+    const MARK: &str = r#"<meta name="ic-kind" content=""#;
+    if let Some(at) = content.find(MARK) {
+        let rest = &content[at + MARK.len()..];
+        for kind in ["delay", "custom", "alerts"] {
+            if rest.starts_with(kind) && rest[kind.len()..].starts_with('"') {
+                return kind;
+            }
+        }
+    }
+    if studio && !content.contains(r#"<meta name="ic-kind" content="goals""#) {
+        "delay"
+    } else {
+        "custom"
+    }
+}
+
+/// The Studio build that baked an overlay (`<meta name="ic-build">`, a
+/// fingerprint of overlay-runtime.js), or empty for a file from before
+/// builds were written down. Only hex digits: it goes in the list as is.
+fn overlay_build(content: &str) -> &str {
+    const MARK: &str = r#"<meta name="ic-build" content=""#;
+    content
+        .find(MARK)
+        .map(|at| &content[at + MARK.len()..])
+        .and_then(|rest| rest.find('"').map(|end| &rest[..end]))
+        .filter(|b| b.len() <= 16 && b.bytes().all(|c| c.is_ascii_hexdigit()))
+        .unwrap_or("")
 }
 
 /// Pull the text between the first `<title>` and `</title>`. Used by the
@@ -4489,24 +4557,50 @@ fn valid_slug(slug: &str) -> bool {
 #[derive(Debug, PartialEq)]
 enum OverlayPost<'a> {
     MarkSeeded,
-    Reset,
     Delete(&'a str),
     Save(&'a str),
 }
 
-/// `seeded` and `reset` are the dashboard's own calls and come without a
-/// body; a save always has one (the overlay's page). So an overlay the user
-/// names "Reset" or "Seeded" is saved under that name, where it used to wipe
-/// every overlay, or be dropped, and still answer "Saved".
+/// `seeded` is the dashboard's own call and comes without a body; a save
+/// always has one (the overlay's page). So an overlay the user names
+/// "Seeded" is saved under that name, where it used to be dropped and still
+/// answer "Saved".
 fn overlay_post<'a>(rest: &'a str, body: &str) -> OverlayPost<'a> {
     match rest {
         "seeded" if body.is_empty() => OverlayPost::MarkSeeded,
-        "reset" if body.is_empty() => OverlayPost::Reset,
         _ => match rest.strip_suffix("/delete") {
             Some(slug) => OverlayPost::Delete(slug),
             None => OverlayPost::Save(rest),
         },
     }
+}
+
+/// Saves of each overlay since the app started, by `overlay_key`. An overlay
+/// open in OBS sees its own count change in the feed and reloads itself, so
+/// a Studio save shows at once instead of after a manual refresh.
+static OVERLAY_SAVES: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// A short key for an overlay's file name: FNV-1a 32, as hex. The page works
+/// out the same from its own address (overlay-runtime.js `SELF`), and the
+/// public feed carries no names.
+fn overlay_key(slug: &str) -> String {
+    let hash = slug.bytes().fold(0x811c_9dc5_u32, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+    });
+    format!("{hash:08x}")
+}
+
+fn overlay_saved(slug: &str) {
+    let mut saves = OVERLAY_SAVES.lock().unwrap_or_else(|e| e.into_inner());
+    *saves.entry(overlay_key(slug)).or_insert(0) += 1;
+}
+
+/// The save counts as a JSON object, for the overlay feed.
+fn overlay_saves_json() -> String {
+    let saves = OVERLAY_SAVES.lock().unwrap_or_else(|e| e.into_inner());
+    let fields: Vec<String> = saves.iter().map(|(k, n)| format!(r#""{k}":{n}"#)).collect();
+    format!("{{{}}}", fields.join(","))
 }
 
 fn overlay_save(
@@ -4522,6 +4616,15 @@ fn overlay_save(
                 .into(),
         );
     }
+    // Nothing to show is no overlay. (A dashboard from before the reset
+    // call went away still sends /overlays/reset with no body.)
+    if body.trim().is_empty() {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"an overlay needs its HTML"}"#.into(),
+        );
+    }
     let dir = settings.borrow().overlays_dir.clone();
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return (
@@ -4535,14 +4638,17 @@ fn overlay_save(
     }
     let path = dir.join(format!("{slug}.html"));
     match std::fs::write(&path, body.as_bytes()) {
-        Ok(()) => (
-            "200 OK",
-            "application/json",
-            format!(
-                r#"{{"ok":true,"slug":"{}","url":"/overlay/{}.html"}}"#,
-                slug, slug
-            ),
-        ),
+        Ok(()) => {
+            overlay_saved(slug);
+            (
+                "200 OK",
+                "application/json",
+                format!(
+                    r#"{{"ok":true,"slug":"{}","url":"/overlay/{}.html"}}"#,
+                    slug, slug
+                ),
+            )
+        }
         Err(e) => (
             "500 Internal Server Error",
             "application/json",
@@ -4642,28 +4748,11 @@ fn overlays_mark_seeded(
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
 }
 
-/// Restore the default overlays: wipe the Studio overlays and clear the seeded
-/// flag so the dashboard re-bakes the built-in presets on its next load.
-fn overlays_reset(
-    settings: &Arc<watch::Sender<Settings>>,
-    cfg_path: &Path,
-) -> (&'static str, &'static str, String) {
-    let _wl = settings_write_guard();
-    let mut next = settings.borrow().clone();
-    wipe_studio_overlays(&next.overlays_dir);
-    next.overlays_seeded = false;
-    if let Err(e) = next.save(cfg_path) {
-        return (
-            "500 Internal Server Error",
-            "application/json",
-            format!(
-                r#"{{"ok":false,"error":"{}"}}"#,
-                json_escape(&e.to_string())
-            ),
-        );
-    }
-    let _ = settings.send(next);
-    ("200 OK", "application/json", r#"{"ok":true}"#.into())
+/// The file an `/overlay/<name>` address asks for: a hand-written
+/// "My Overlay.html" is asked for as "My%20Overlay.html". A `+` stays one, as
+/// in any path.
+fn overlay_file_name(asked: &str) -> String {
+    crate::config::url_decode(&asked.replace('+', "%2B"))
 }
 
 fn serve_overlay_file(
@@ -4693,13 +4782,15 @@ fn serve_overlay_file(
     // pointing at C:\Users\…\.ssh\id_rsa would be served as text. The
     // name-only check above can't catch that - the path string is clean,
     // the filesystem does the redirect.
+    // Neither 404 names the folder: any web page can read this one, and the
+    // folder's path has the Windows user's name in it.
     let canon_path = match path.canonicalize() {
         Ok(p) => p,
         Err(_) => {
             return (
                 "404 Not Found",
                 "text/plain; charset=utf-8",
-                format!("overlay '{}' not found in {}", name, dir.display()),
+                format!("overlay '{name}' not found"),
             )
         }
     };
@@ -4728,7 +4819,7 @@ fn serve_overlay_file(
         Err(_) => (
             "404 Not Found",
             "text/plain; charset=utf-8",
-            format!("overlay '{}' not found in {}", name, dir.display()),
+            format!("overlay '{name}' not found"),
         ),
     }
 }
@@ -5115,7 +5206,12 @@ fn classify_access(method: &str, path: &str) -> Access {
         // The dock's own switches: a fixed allow-list of on/off settings
         // (DOCK_SETTABLE_KEYS), refused as a whole if anything else is sent.
         | ("GET", "/dock/settings")
-        | ("POST", "/dock/settings") => Access::Control,
+        | ("POST", "/dock/settings")
+        // The dock's events list: reading it, replaying an alert that was
+        // on stream already, and skipping the one on now.
+        | ("GET", "/dock/events")
+        | ("POST", "/dock/events/replay")
+        | ("POST", "/dock/alerts/skip") => Access::Control,
         ("POST", p) if p.starts_with("/docks/") => Access::Control,
         // GET a saved dock layout (the dock loads its own persisted layout).
         ("GET", p) if p.starts_with("/docks/") => Access::Control,
@@ -5899,6 +5995,9 @@ mod tests {
             "destinations_total",
             "cuts",
             "bitrate_kbps",
+            "goals",
+            "timers",
+            "saved",
         ] {
             assert!(json.contains(field), "overlays render {field}: {json}");
         }
@@ -5928,6 +6027,20 @@ mod tests {
             );
         }
         let _ = std::fs::remove_file(path);
+    }
+
+    /// The page and the server key an overlay the same way, or a save would
+    /// never reach it (overlay-runtime.js computes this same FNV-1a 32).
+    #[test]
+    fn an_overlay_save_is_counted_under_the_key_its_page_computes() {
+        assert_eq!(overlay_key(""), "811c9dc5");
+        assert_eq!(overlay_key("goal-subs"), "ed61e276");
+        let before = overlay_saves_json();
+        overlay_saved("goal-subs");
+        let after = overlay_saves_json();
+        assert_ne!(before, after);
+        assert!(after.contains(&format!(r#""{}":"#, overlay_key("goal-subs"))));
+        assert!(!after.contains("goal-subs"), "the feed carries no names");
     }
 
     /// Reading the overlay feed must never imply being able to drive the
@@ -7406,11 +7519,9 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         assert!(!valid_slug(&"x".repeat(65))); // over the 64-char cap
     }
 
-    /// An overlay named "Reset" used to be sent to the reset call, which
-    /// deleted every overlay and answered "Saved".
+    /// An overlay named like the app's own call is saved, not run.
     #[test]
     fn an_overlay_named_like_an_app_call_is_saved_not_run() {
-        assert_eq!(overlay_post("reset", ""), OverlayPost::Reset);
         assert_eq!(overlay_post("seeded", ""), OverlayPost::MarkSeeded);
         assert_eq!(overlay_post("reset", "<html>"), OverlayPost::Save("reset"));
         assert_eq!(
@@ -7461,6 +7572,32 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
     }
 
     #[test]
+    fn an_overlay_named_with_spaces_is_found_and_an_escape_is_not() {
+        assert_eq!(overlay_file_name("My%20Overlay.html"), "My Overlay.html");
+        assert_eq!(overlay_file_name("C++.html"), "C++.html");
+        let dir = unique_tmp_dir("spaced");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("My Overlay.html"), "<p>hi</p>").unwrap();
+        let settings = settings_with_overlays_dir(&dir);
+        let (status, _, _) = serve_overlay_file(&overlay_file_name("My%20Overlay.html"), &settings);
+        assert_eq!(status, "200 OK");
+        let (status, _, _) = serve_overlay_file(&overlay_file_name("..%2Fsecret.html"), &settings);
+        assert_eq!(status, "400 Bad Request");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_overlay_with_nothing_in_it_is_not_saved() {
+        let dir = unique_tmp_dir("empty");
+        let settings = settings_with_overlays_dir(&dir);
+        let (status, _, body) = overlay_save("reset", "", &settings);
+        assert_eq!(status, "400 Bad Request");
+        assert!(body.contains("needs its HTML"));
+        assert!(!dir.join("reset.html").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn overlay_save_rejects_bad_slug_and_writes_nothing() {
         let dir = unique_tmp_dir("badslug");
         let settings = settings_with_overlays_dir(&dir);
@@ -7486,7 +7623,19 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         assert!(listed.contains(r#""slug":"classic""#));
         assert!(listed.contains(r#""name":"Classic""#));
         assert!(listed.contains(r#""studio":false"#));
+        assert!(listed.contains(r#""build":"""#));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The dashboard bakes again what an older Studio baked: the list says
+    /// which build made each file, and nothing that could break out of it.
+    #[test]
+    fn an_overlay_says_which_build_baked_it() {
+        let meta = |b: &str| format!(r#"<meta name="ic-build" content="{b}"><title>x</title>"#);
+        assert_eq!(overlay_build(&meta("0a1b2c3d")), "0a1b2c3d");
+        assert_eq!(overlay_build("<title>old</title>"), "");
+        assert_eq!(overlay_build(&meta(r#"x","studio":false,"#)), "");
+        assert_eq!(overlay_build(&meta("0123456789abcdef0")), "", "too long");
     }
 
     #[test]
@@ -7506,18 +7655,44 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         )
         .unwrap();
 
-        // The list reports studio + autohide per file.
+        // The list reports studio, autohide and the page per file.
         let settings = settings_with_overlays_dir(&dir);
         let listed = list_overlays(&settings);
-        assert!(listed.contains(r#""slug":"studio","name":"S","studio":true,"autohide":true"#));
-        assert!(listed.contains(r#""slug":"legacy","name":"L","studio":false,"autohide":false"#));
+        assert!(listed.contains(
+            r#""slug":"studio","name":"S","studio":true,"autohide":true,"kind":"delay""#
+        ));
+        assert!(listed.contains(
+            r#""slug":"legacy","name":"L","studio":false,"autohide":false,"kind":"custom""#
+        ));
 
-        // Restore-defaults wipes only the Studio (ic-doc) file; legacy stays.
+        // A factory reset wipes only the Studio (ic-doc) file; legacy stays.
         wipe_studio_overlays(&dir);
         assert!(!dir.join("studio.html").exists());
         assert!(dir.join("legacy.html").is_file());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The page an overlay is on: what the Studio wrote in it, or for a file
+    /// from before that, what it must be.
+    #[test]
+    fn an_overlay_is_listed_on_the_page_it_belongs_to() {
+        let studio = |meta: &str| format!("<!--ic-doc:%7B%7D--><html><head>{meta}</head></html>");
+        let marked = |kind: &str| studio(&format!(r#"<meta name="ic-kind" content="{kind}">"#));
+        assert_eq!(overlay_kind(&marked("custom"), "badge"), "custom");
+        assert_eq!(overlay_kind(&marked("delay"), "badge"), "delay");
+        assert_eq!(overlay_kind(&marked("alerts"), "follow-alert"), "alerts");
+        // A card's own file is its card's, whatever it says; a copy of one
+        // under another name is an overlay of its own.
+        assert_eq!(overlay_kind(&marked("goals"), "goal-subs"), "goals");
+        assert_eq!(overlay_kind(&marked("delay"), "timer-subathon"), "goals");
+        assert_eq!(overlay_kind(&marked("goals"), "sub-goal-copy"), "custom");
+        // Unknown words are not taken at their word.
+        assert_eq!(overlay_kind(&marked("delayed"), "badge"), "delay");
+        // From before the mark.
+        assert_eq!(overlay_kind(&studio(""), "badge"), "delay");
+        assert_eq!(overlay_kind(&studio(""), "goal-subs"), "goals");
+        assert_eq!(overlay_kind("<html>my own</html>", "goal-mine"), "custom");
     }
 
     #[test]
@@ -7880,6 +8055,9 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         ("POST", "/config/reset", Access::Admin),
         ("GET", "/dock/settings", Access::Control),
         ("POST", "/dock/settings", Access::Control),
+        ("GET", "/dock/events", Access::Control),
+        ("POST", "/dock/events/replay", Access::Control),
+        ("POST", "/dock/alerts/skip", Access::Control),
         ("POST", "/arm", Access::Control),
         ("POST", "/activate", Access::Control),
         ("POST", "/stop", Access::Control),
@@ -8075,11 +8253,7 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
                 "{m} {prefix}*"
             );
         }
-        for p in [
-            "/overlays/seeded",
-            "/overlays/reset",
-            "/overlays/sample/delete",
-        ] {
+        for p in ["/overlays/seeded", "/overlays/sample/delete"] {
             assert_eq!(classify_access("POST", p), Access::Admin, "POST {p}");
         }
         // Fail closed: whatever nobody listed needs a session.

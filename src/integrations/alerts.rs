@@ -72,6 +72,8 @@ pub const ANIMATIONS: &[&str] = &["slide", "pop", "fade", "zoom", "bounce", "dro
 pub struct Card {
     pub title: String,
     pub text: String,
+    /// The viewer's own words (a cheer's, a resub's), or empty.
+    pub message: String,
     pub seconds: u64,
     /// `#rrggbb`, or empty for the theme's accent.
     pub color: String,
@@ -82,6 +84,9 @@ pub struct Card {
     pub volume: u8,
     /// An upload (`media:...`) or a web link to a picture or GIF, or empty.
     pub image: String,
+    /// The alert design (an overlay made in the Studio) that shows it, by
+    /// its file name; empty for the alerts page's theme.
+    pub design: String,
 }
 
 impl Card {
@@ -90,11 +95,13 @@ impl Card {
         Card {
             title: title.to_string(),
             text: text.to_string(),
+            message: String::new(),
             seconds,
             color: String::new(),
             sound: String::new(),
             volume: DEFAULT_VOLUME,
             image: String::new(),
+            design: String::new(),
         }
     }
 
@@ -104,6 +111,7 @@ impl Card {
         Card {
             title: one_line(&self.title, MAX_TITLE),
             text: one_line(&self.text, MAX_TEXT),
+            message: one_line(&self.message, MAX_TEXT),
             seconds: self.seconds.clamp(MIN_SECONDS, MAX_SECONDS),
             color: color_or_empty(&self.color),
             sound: if is_sound(&self.sound) {
@@ -114,6 +122,11 @@ impl Card {
             volume: self.volume.min(100),
             image: if is_picture(&self.image) {
                 self.image
+            } else {
+                String::new()
+            },
+            design: if is_design(&self.design) {
+                self.design
             } else {
                 String::new()
             },
@@ -142,6 +155,23 @@ pub fn page_html() -> String {
 }
 
 /// `#rrggbb`.
+/// An overlay's file name, as the alerts page asks for it: letters,
+/// numbers, `-` and `_` only.
+pub fn is_design(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// One of the ready-made designs (`alert-island`...), which every install
+/// can make from its theme, unlike one a streamer made.
+pub fn is_ready_design(name: &str) -> bool {
+    name.strip_prefix("alert-")
+        .is_some_and(|theme| THEMES.contains(&theme))
+}
+
 pub fn is_color(text: &str) -> bool {
     text.len() == 7 && text.starts_with('#') && text[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -209,11 +239,15 @@ pub struct Look {
     pub animation: String,
     /// Where an alert's picture goes: `left`, `top`, or empty.
     pub picture: String,
-    /// The sound alerts set to "Theme sound" play: one of `SOUNDS`, an
-    /// upload, a link, or empty for the theme's own.
+    /// The sound alerts set to "The design's sound" play when their design
+    /// has no theme of its own: one of `SOUNDS`, an upload, a link, or
+    /// empty for the theme's own.
     pub sound: String,
     /// Extra CSS, put in the page as it is.
     pub css: String,
+    /// The design (an overlay made in the Studio) an alert that names none
+    /// plays, by its file name; empty for the theme's card.
+    pub design: String,
 }
 
 impl Default for Look {
@@ -233,6 +267,7 @@ impl Default for Look {
             picture: String::new(),
             sound: String::new(),
             css: String::new(),
+            design: String::new(),
         }
     }
 }
@@ -269,13 +304,17 @@ impl Look {
             radius: number("radius", 48.0).map(|n| n as u8),
             animation: pick("animation", ANIMATIONS, d.animation),
             picture: pick("picture", &["left", "top"], d.picture),
-            // "Theme sound" here would point back at itself.
+            // "The design's sound" here would point back at itself.
             sound: if sound != THEME_SOUND && is_sound(sound) {
                 sound.to_string()
             } else {
                 String::new()
             },
             css: v.str_or("css", "").chars().take(MAX_CSS).collect(),
+            design: Some(v.str_or("design", ""))
+                .filter(|d| is_design(d))
+                .unwrap_or_default()
+                .to_string(),
         }
     }
 
@@ -296,6 +335,7 @@ impl Look {
             ("picture", json::str(&self.picture)),
             ("sound", json::str(&self.sound)),
             ("css", json::str(&self.css)),
+            ("design", json::str(&self.design)),
         ])
     }
 }
@@ -319,6 +359,8 @@ pub struct Board {
 struct Inner {
     last_id: u64,
     alerts: VecDeque<Alert>,
+    /// Bumped by the dock's Skip: the page ends the alert it is playing.
+    skips: u64,
 }
 
 /// Counts one open alerts page for as long as it lives.
@@ -362,6 +404,11 @@ impl Board {
         inner.alerts.push_back(alert);
     }
 
+    /// End the alert the pages are playing now (the next one comes on).
+    pub fn skip(&self) {
+        self.inner.lock().skips += 1;
+    }
+
     /// An alerts page connected; it counts until the guard is dropped.
     pub fn page_opened(&self, in_obs: bool) -> PageOpen<'_> {
         let mut pages = self.pages.lock();
@@ -393,6 +440,7 @@ impl Board {
             ("page", json::str(page_id())),
             ("look", look.to_json()),
             ("alerts", alerts),
+            ("skips", Value::Num(inner.skips as f64)),
         ])
         .to_json()
     }
@@ -404,15 +452,19 @@ fn alert_json(a: &Alert) -> Value {
         ("id", Value::Num(a.id as f64)),
         ("title", json::str(&c.title)),
         ("text", json::str(&c.text)),
+        ("message", json::str(&c.message)),
         ("ms", Value::Num((c.seconds * 1000) as f64)),
         ("color", json::str(&c.color)),
         ("sound", json::str(&c.sound)),
         ("volume", Value::Num(f64::from(c.volume))),
         ("image", json::str(&c.image)),
+        ("design", json::str(&c.design)),
     ])
 }
 
-fn one_line(text: &str, max: usize) -> String {
+/// `text` on one line (control characters as spaces), at most `max`
+/// characters, trimmed.
+pub(super) fn one_line(text: &str, max: usize) -> String {
     let flat: String = text
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -469,17 +521,21 @@ mod tests {
         good.color = "#FF00AA".to_string();
         good.sound = "media:ding.mp3".to_string();
         good.image = "media:party.gif".to_string();
+        good.design = "follow_alert-2".to_string();
         board.show(good);
         let mut bad = Card::plain("", "Ana", 6);
         bad.color = "red;background:url(x)".to_string();
         bad.sound = "javascript:alert(1)".to_string();
         bad.image = "https://x.example/a.gif\" onerror=\"x".to_string();
         bad.volume = 250;
+        bad.design = "../dashboard".to_string();
         board.show(bad);
         let list = alerts_of(&board);
         assert_eq!(list[0].str_or("color", ""), "#ff00aa");
         assert_eq!(list[0].str_or("sound", ""), "media:ding.mp3");
         assert_eq!(list[0].str_or("image", ""), "media:party.gif");
+        assert_eq!(list[0].str_or("design", ""), "follow_alert-2");
+        assert_eq!(list[1].str_or("design", "x"), "");
         assert_eq!(
             (list[1].str_or("color", "x"), list[1].str_or("sound", "x")),
             ("", "")

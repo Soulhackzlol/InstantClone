@@ -19,6 +19,11 @@ const store = {
   set(k, v){ try { localStorage.setItem(k, v); } catch(_){} },
 };
 
+// Stored JSON, or `fallback` when there is none or it doesn't read.
+function readJson(text, fallback){
+  try { return text ? JSON.parse(text) : fallback; } catch(_){ return fallback; }
+}
+
 async function api(path, body){
   try {
     const opts = body === undefined ? {} : {
@@ -44,6 +49,7 @@ const PATHS = {
   steps:'M4 6h16M4 12h10M4 18h7',
   plus:'M12 5v14M5 12h14',
   check:'M20 6L9 17l-5-5',
+  folder:'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
   search:'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3',
   rewind:'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5',
   chev:'M6 9l6 6 6-6',
@@ -87,6 +93,8 @@ const PATHS = {
   gem:'M6 3h12l4 6-10 12L2 9zM2 9h20M12 21L8 9l4-6 4 6z',
   users:'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8',
   tv:'M2 7h20v13H2zM17 2l-5 5-5-5',
+  target:'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
+  pause:'M8 5v14M16 5v14',
 };
 const svg = (name, extra) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra||''}><path d="${PATHS[name]}"/></svg>`;
@@ -110,6 +118,7 @@ const KINDS = {
   counter:      {label:'Counter',       tag:'VALUE',  c:'#93c5fd', icon:'steps', hint:'Counts up or down, and keeps the count between runs.'},
   overlay:      {label:'Show on stream', tag:'STREAM', c:'#5ac8fa', icon:'screen',  text:'text', hint:'Shows a card on your stream, through the alerts browser source.'},
   edit_text:    {label:'Edit text',     tag:'VALUE',  c:'#93c5fd', icon:'type', hint:'Reshapes text: a line, a part, a rounded number, a random pick.'},
+  dock:         {label:'Dock event',    tag:'DOCK',   c:'#5ac8fa', icon:'list', text:'text', hint:"Lists it in your OBS dock's Events, to filter, and to replay the alert this run showed."},
   timeline:     {label:'Timeline',      tag:'LOG',    c:'#5ac8fa', icon:'list', text:'text', hint:'Adds a line, a chapter or a highlight to this stream\'s timeline, at its place in the VOD.'},
   light:        {label:'Smart light',   tag:'LIGHT',  c:'#fde68a', icon:'bulb', hint:'Turns a light or plug on your network on or off, or colors it. Found by a scan: no hub or account.'},
   viewer:       {label:'Viewer value',  tag:'VALUE',  c:'#fbbf24', icon:'gem', hint:'Gives, takes or spends what a viewer holds: coins, points. Kept between streams.'},
@@ -118,6 +127,7 @@ const KINDS = {
   call:         {label:'Run a block',   tag:'FLOW',   c:'#f0a53a', icon:'layers', hint:'Runs a block of steps this integration keeps under a name.'},
   reward:       {label:'Channel points reward', tag:'TWITCH', c:'#a78bfa', icon:'gift', hint:'Switches a channel points reward on or off, so viewers can only redeem it when it makes sense.'},
   channel:      {label:'Stream title and category', tag:'TWITCH', c:'#a78bfa', icon:'tv', hint:'Sets your stream\'s title, its category, or both, on Twitch.'},
+  goal:         {label:'Goal or timer', tag:'STREAM', c:'#86efac', icon:'target', hint:'Adds to a goal, or starts, pauses or adds time to a timer.'},
   obs:          {label:'OBS',           tag:'OBS',    c:'#86efac', icon:'layers', hint:'Switches a scene, shows or hides a source, records, saves a replay, mutes, switches a filter, plays media or presses an OBS hotkey.'},
 };
 // The icon a catalog module wears: what it is about, not how it sends.
@@ -127,9 +137,10 @@ const PRESET_ICON = {
   vod_markers:'bookmark', webhook:'link', crash_counter:'file', stream_alerts:'bell', api_command:'globe',
   clip_button:'film', delay_status:'clock', smart_alerts:'pulse', stream_timeline:'list', chapters:'bookmark',
   highlight:'star', hype_clip:'flame', on_air_light:'bulb', scene_delay:'layers', twitch_alerts:'heart',
+  hype_alerts:'flame', stream_log:'list',
 };
 // Which step a card previews: the first one that says something.
-const PREVIEW_ORDER = ['discord','chat','phone','overlay','marker','http','light','file','timeline','clip','delay_action','program'];
+const PREVIEW_ORDER = ['discord','chat','phone','overlay','marker','http','light','file','timeline','dock','clip','delay_action','program'];
 // A Discord card's colors: the dashboard's palette, readable on Discord.
 const CARD_COLORS = [['#5ac8fa', 'Blue'], ['#3fcf8e', 'Green'], ['#f0a53a', 'Amber'], ['#f2665a', 'Red'],
   ['#fcd34d', 'Gold'], ['#a78bfa', 'Purple'], ['#ff7eb6', 'Pink'], ['#8b949e', 'Grey']];
@@ -251,6 +262,60 @@ function primaryStep(handler){
   }
   return null;
 }
+// ---- An alert's bigger ones
+// From an amount up, a moment's alert can play a bigger one instead (its
+// own design, sound and words). Kept as If steps in the moment's own
+// steps, "if {bits} is less than 1000: the alert, otherwise: the bigger
+// one", each inside the last, so the builder shows them as they are.
+const TIER_VARS = {twitch_cheer:'bits', twitch_raid:'viewers', twitch_gift:'count', twitch_resub:'months'};
+const TIER_UNITS = {bits:'bits', viewers:'viewers', count:'subs', months:'months'};
+const TIER_FIRST = {bits:1000, viewers:50, count:5, months:12};
+// The alert and three bigger ones: three checks inside each other, as deep
+// as steps go (model::MAX_DEPTH).
+const MAX_TIERS = 4;
+function tierVar(h){ return h && h.trigger.type === 'event' ? TIER_VARS[h.trigger.event] || '' : ''; }
+// A link of the chain: a check on the amount with an alert on its yes side.
+function isTierCheck(s, name){
+  const p = s.params || {};
+  return s.type === 'if' && s.enabled !== false && p.left === `{${name}}` && p.op === 'less' && +p.right > 0 && !p.match
+    && (s.then || []).length === 1 && s.then[0].type === 'overlay' && (s.else || []).length === 1;
+}
+// The moment's alert and its bigger ones, smallest first ({from, step}),
+// where the chain is in its steps, and the amount it goes by. Null for a
+// moment with no amount, or whose alert is somewhere else (in a check of
+// its own, built by hand).
+function alertTiers(h){
+  const name = tierVar(h);
+  if (!name) return null;
+  const at = h.steps.findIndex(s => s.type === 'overlay' || isTierCheck(s, name));
+  if (at < 0) return null;
+  const tiers = [];
+  let s = h.steps[at], from = 0;
+  while (isTierCheck(s, name)){
+    tiers.push({from, step:s.then[0]});
+    from = +s.params.right;
+    s = s.else[0];
+  }
+  if (s.type !== 'overlay') return null;
+  tiers.push({from, step:s});
+  return {at, name, tiers};
+}
+// Write a chain back into the moment's steps.
+function setTiers(h, chain){
+  const t = chain.tiers;
+  let s = t[t.length - 1].step;
+  for (let n = t.length - 2; n >= 0; n--){
+    s = {type:'if', params:{left:`{${chain.name}}`, op:'less', right:String(t[n + 1].from)}, then:[t[n].step], else:[s]};
+  }
+  h.steps[chain.at] = s;
+}
+// "From 1000 bits", or what the first one covers.
+function tierLabel(chain, n){
+  const unit = TIER_UNITS[chain.name];
+  if (n) return `From ${chain.tiers[n].from} ${unit}`;
+  return chain.tiers.length > 1 ? `Below ${chain.tiers[1].from} ${unit}` : 'Every one';
+}
+
 function presetOf(i){
   const cat = S.data && S.data.catalog;
   return cat ? cat.presets.find(p => p.id === i.preset) : null;
@@ -334,7 +399,7 @@ const VAR_LABEL = {
   delay_ms:'delay (ms)', delay_max:'longest delay now', phase:'delay phase', hold_active:'reconnect screen on?', hold_left:'time left on hold',
   destinations_live:'platforms live', destinations_total:'platforms on', obs_live:'OBS streaming?',
   bitrate:'bitrate', channel:'your channel', time:'time now', date:'date', user:'viewer\'s name',
-  user_login:'viewer\'s login', user_role:'viewer\'s role', message:'their message', args:'text after the command',
+  user_login:'viewer\'s login', user_role:'viewer\'s role', message:'their message', words:'their words (no cheers)', args:'text after the command',
   target:'who it\'s about', arg1:'1st word', arg2:'2nd word', arg3:'3rd word', body:'what was sent',
   query:'address query', source:'pressed from', 'obs.scene':'OBS scene', 'obs.streaming':'streaming now?',
   'obs.recording':'recording now?', 'obs.muted':'muted?', 'obs.visible':'showing?', 'clip.url':'clip link', 'clip.ok':'clip made?', 'clip.error':'why no clip',
@@ -354,6 +419,7 @@ function varLabel(name){
   if (VAR_LABEL[name]) return VAR_LABEL[name];
   let m;
   if ((m = /^counter\.(.+)$/.exec(name))) return `${m[1]} count`;
+  if ((m = /^(goal|timer)\.([a-z0-9_]+)(?:\.(\w+))?$/.exec(name))) return `${m[2]} ${m[1]}${m[3] ? ' ' + m[3] : ''}`;
   if ((m = /^(.+)\.json\.(.+)$/.exec(name))) return m[2].split('.').pop().replace(/_/g, ' ');
   if ((m = /^(.+)\.(status|ok|body|output|code)$/.exec(name))) return `${m[1]} ${{status:'status', ok:'worked?', body:'answer', output:'answer', code:'exit code'}[m[2]]}`;
   return name.replace(/[._]/g, ' ');
@@ -447,6 +513,9 @@ function varHelp(name){
     visible:`yes when the source "${m[1]}" checked was showing.`}[m[2]];
   if ((m = /^(.+)\.body$/.exec(name))) return `Everything the "${m[1]}" web request got back.`;
   if ((m = /^counter\.(.+)$/.exec(name))) return `The "${m[1]}" counter, kept between runs.`;
+  if ((m = /^goal\.([a-z0-9_]+)$/.exec(name))) return `Where your "${m[1]}" goal stands. Add .target, .left, .percent or .name for the rest.`;
+  if ((m = /^goal\.([a-z0-9_]+)\.target$/.exec(name))) return `What your "${m[1]}" goal counts to.`;
+  if ((m = /^timer\.([a-z0-9_]+)$/.exec(name))) return `The time left on your "${m[1]}" timer, as a clock. Add .seconds, .running or .name for the rest.`;
   if ((m = /^arg([4-9])$/.exec(name))) return `Word number ${m[1]} after the command.`;
   if ((m = /^body\.(.+)$/.exec(name))) return `The ${m[1].split('.').join(' › ')} field of what the caller sent.`;
   if ((m = /^query\.(.+)$/.exec(name))) return `The "${m[1]}" value in the address, like ?${m[1]}=red.`;
@@ -501,6 +570,9 @@ window.addEventListener('scroll', () => VarTip.hide(), true);
 // What a chat command's previews use as the words after it: a catalog
 // entry's own example ("!chapter Boss fight"), set when it opens.
 const SAMPLE_ARGS = new WeakMap();
+// The amount a moment's samples show while one of its bigger alerts is
+// edited ({name, value}): the least that plays it.
+const TIER_SAMPLE = new WeakMap();
 
 // Sample values for previews: the variables this handler can use, each
 // with its `group` (trigger, steps, live). With `upto`, only what a step
@@ -511,8 +583,15 @@ function varsFor(handler, upto){
   const t = handler && handler.trigger;
   if (t && t.type === 'event'){
     const e = eventOf(t.event);
-    // A countdown sample should count down from now.
-    if (e) own.push(...e.vars.map(v => v.name === 'hold_ends_at' ? {name:v.name, sample:String(Math.floor(Date.now() / 1000) + 120)} : v));
+    // A countdown sample should count down from now; an amount is at least
+    // the trigger's minimum (from 1000 bits up previews 1000).
+    const tier = TIER_SAMPLE.get(handler);
+    if (e) own.push(...e.vars.map(v => {
+      if (v.name === 'hold_ends_at') return {name:v.name, sample:String(Math.floor(Date.now() / 1000) + 120)};
+      if (tier && tier.name === v.name) return {name:v.name, sample:tier.value};
+      const least = +(t.filters || {})['min_' + v.name] || 0;
+      return least > +v.sample ? {name:v.name, sample:String(least)} : v;
+    }));
   }
   // A block runs inside whatever started it: most often a command.
   if (t && (t.type === 'chat_command' || t.type === 'chat_message' || t.type === 'block')){
@@ -597,8 +676,9 @@ function varsFor(handler, upto){
     .filter(v => !seen.has(v.name) && seen.add(v.name));
 }
 // The streamer's own values as variables: {my.<name>}, each with what it holds now.
+// Goals and timers ride along: {goal.<id>} and {timer.<id>} are the streamer's too.
 function myValues(){
-  return (S.data.values || []).map(v => ({name:'my.' + v.name, sample:v.value}));
+  return (S.data.values || []).map(v => ({name:'my.' + v.name, sample:v.value})).concat(trackerValues());
 }
 function sampleMap(handler){
   const m = {};
@@ -620,7 +700,7 @@ function unknownVars(handler, step){
   // Families no list can hold: any counter (counters outlive a run), any
   // field of a web answer or of what a web call sent, any word of a command.
   // Viewer values, the leaderboard and kept texts are read by name too.
-  const prefixes = ['counter.', 'viewer.', 'target.', 'top.', 'saved.'].concat(names.filter(n => n.endsWith('.status')).map(n => n.slice(0, -6)));
+  const prefixes = ['counter.', 'viewer.', 'target.', 'top.', 'saved.', 'goal.', 'timer.'].concat(names.filter(n => n.endsWith('.status')).map(n => n.slice(0, -6)));
   if (t.type === 'webhook' || t.type === 'shortcut') prefixes.push('body.', 'query.');
   const chat = t.type === 'chat_command' || t.type === 'chat_message' || t.type === 'block';
   return [...used].filter(n => !names.includes(n) && !prefixes.some(p => n.startsWith(p)) && !(chat && /^arg[1-9]$/.test(n)))
@@ -655,7 +735,8 @@ function unknownVarsHtml(list){
 // Rename a variable in every field of every step of `handler`.
 function renameVar(handler, from, to){
   // Not inside {{…}}: that is text written out as is.
-  const re = new RegExp(`(?<!\\{)\\{${from.replace(/\./g, '\\.')}([|#?][^}]*)?\\}`, 'g');
+  const name = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(?<!\\{)\\{${name}([|#?][^}]*)?\\}`, 'g');
   walk(handler.steps, s => Object.keys(s.params || {}).forEach(k => {
     if (typeof s.params[k] === 'string') s.params[k] = s.params[k].replace(re, (all, fallback) => `{${to}${fallback || ''}}`);
   }));
@@ -997,10 +1078,14 @@ function listedNames(text){
 }
 // What a check that reads several sources names each one's values by:
 // {obs.mic_aux.muted}. Mirrors obsws::source_keys.
+// "Daily gives!" as a name a template can say: daily_gives, at most `max`.
+function snakeName(text, max){
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+/, '').slice(0, max).replace(/_+$/, '');
+}
 function sourceKeys(names){
   const keys = [];
   names.forEach(name => {
-    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+/, '').slice(0, 24).replace(/_+$/, '') || 'source';
+    const base = snakeName(name, 24) || 'source';
     let key = base;
     for (let n = 2; keys.includes(key); n++) key = base + n;
     keys.push(key);
@@ -1310,10 +1395,6 @@ function enterStagger(root){
 const SEG_IND = '<span class="sub-tab-ind" data-keep-style aria-hidden="true"></span>';
 
 // A slider's track fills up to its thumb (--p, read by index.html's CSS).
-function fillRange(el){
-  const min = +el.min || 0, max = +el.max || 100;
-  el.style.setProperty('--p', ((+el.value - min) / (max - min || 1)) * 100 + '%');
-}
 function fillRanges(root){ root.querySelectorAll('input[type=range]').forEach(fillRange); }
 function placeIndicators(root){
   root.querySelectorAll('.ig-seg').forEach(seg => {
@@ -1460,13 +1541,14 @@ function q(sel){
 }
 
 // A toast with Undo, for actions that are easy to regret.
-function undoToast(text, undo){ actionToast(text, 'Undo', undo); }
+// `adds`: the Undo takes away integrations just added (see dropAddUndos).
+function undoToast(text, undo, adds){ actionToast(text, 'Undo', undo, adds); }
 // A toast with one button: Undo, or the obvious next step ("Edit copy").
-function actionToast(text, label, act){
+function actionToast(text, label, act, adds){
   const rail = $('toast-rail');
   if (!rail){ toast(text, 'ok'); return; }
   const el = document.createElement('div');
-  el.className = 'ic-toast ok ig-undo';
+  el.className = 'ic-toast ok ig-undo' + (adds ? ' ig-undo-adds' : '');
   el.innerHTML = `<span class="ic-toast-icon">✓</span><span class="ig-undo-text"></span><button type="button" class="ig-undo-btn"></button>
     <i class="ig-undo-bar" style="animation-duration:${UNDO_MS}ms"></i>`;
   el.querySelector('.ig-undo-text').textContent = text;
@@ -1477,6 +1559,7 @@ function actionToast(text, label, act){
     el.classList.add('leaving');
     setTimeout(() => el.remove(), 350);
   };
+  el.icLeave = leave;
   el.querySelector('button').addEventListener('click', async () => {
     if (used) return;
     used = true;
@@ -1490,6 +1573,11 @@ function actionToast(text, label, act){
   el.addEventListener('pointerleave', () => { since = Date.now(); timer = setTimeout(leave, Math.max(left, 600)); });
 }
 const UNDO_MS = 8000;
+// An integration's editor opening: an Undo of an add still up could take
+// away what it edits, so it goes.
+function dropAddUndos(){
+  document.querySelectorAll('#toast-rail .ig-undo-adds').forEach(el => { if (el.icLeave) el.icLeave(); });
+}
 
 // A secret field (topic, webhook link, headers, secret address): hidden
 // like a password until the user asks to see it.
@@ -1651,6 +1739,7 @@ const Menu = {
     el.setAttribute('role', 'menu');
     el.innerHTML = `<button role="menuitem" data-act="edit" data-id="${esc(id)}" style="--i:0">${svg('pencil')}Edit</button>
       <button role="menuitem" data-act="duplicate" data-id="${esc(id)}" style="--i:1">${svg('copy')}Duplicate</button>
+      <button role="menuitem" data-act="menu-folder" data-id="${esc(id)}" style="--i:1">${svg('folder')}Move to folder</button>
       <button role="menuitem" data-act="share-one" data-id="${esc(id)}" style="--i:2">${svg('link')}Share as a recipe</button>
       <a role="menuitem" href="${esc(reportUrl(this.reportFields(i)))}" target="_blank" rel="noreferrer" style="--i:3">${svg('warn')}Report a problem</a>
       <div class="ig-menu-sep" role="separator"></div>
@@ -1660,9 +1749,7 @@ const Menu = {
     // The report opens in a new tab; the menu has done its job.
     el.addEventListener('click', e => { if (e.target.closest('a[role="menuitem"]')) this.close(); });
     el.addEventListener('keydown', e => this.keys(e));
-    const r = btn.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight;
-    el.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
-    el.style.top = (r.bottom + 6 + h > innerHeight - 8 ? r.top - h - 6 : r.bottom + 6) + 'px';
+    this.place(el, btn);
     this.el = el;
     this.id = id;
     this.btn = btn;
@@ -1671,6 +1758,35 @@ const Menu = {
     document.addEventListener('pointerdown', this.outside, true);
     window.addEventListener('scroll', this.dismiss, true);
     window.addEventListener('resize', this.dismiss);
+  },
+  // Beside its button, inside the window.
+  place(el, btn){
+    const r = btn.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight;
+    el.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
+    el.style.top = (r.bottom + 6 + h > innerHeight - 8 ? r.top - h - 6 : r.bottom + 6) + 'px';
+  },
+  // The folders it can go to, in place of the menu: the one it's in ticked,
+  // out of any, and a new one typed in (Enter).
+  folders(id){
+    const i = find(id);
+    if (!i || !this.el) return;
+    const cur = i.folder || '';
+    const item = (v, label, n) => `<button role="menuitem" data-act="set-folder" data-id="${esc(id)}" data-v="${esc(v)}" style="--i:${n}"
+      ${v === cur ? 'aria-current="true"' : ''}>${svg(v === cur ? 'check' : 'folder')}${esc(label)}</button>`;
+    const names = folderNames();
+    this.el.innerHTML = `<div class="ig-menu-label">Move to</div>${names.map((f, n) => item(f, f, n)).join('')}
+      ${cur ? item('', 'Out of its folder', names.length) : ''}
+      ${names.length || cur ? '<div class="ig-menu-sep" role="separator"></div>' : ''}
+      <input class="ic-input ig-menu-new" data-id="${esc(id)}" placeholder="New folder" maxlength="40" aria-label="New folder" spellcheck="false" autocomplete="off">`;
+    this.place(this.el, this.btn);
+    const typed = this.el.querySelector('.ig-menu-new');
+    typed.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || !typed.value.trim()) return;
+      e.preventDefault();
+      this.close();
+      moveToFolder([id], typed.value);
+    });
+    (names.length ? this.el.querySelector('[role="menuitem"]') : typed).focus({preventScroll:true});
   },
   close(){
     if (!this.el) return;
@@ -1687,16 +1803,25 @@ const Menu = {
     }
   },
   keys(e){
+    // A new folder's Enter closed it already.
+    if (!this.el) return;
     const items = [...this.el.querySelectorAll('[role="menuitem"]')];
     const at = items.indexOf(document.activeElement);
+    const step = {ArrowDown:1, ArrowUp:-1}[e.key];
     if (e.key === 'Escape'){ e.preventDefault(); this.close(); }
-    else if (e.key === 'ArrowDown'){ e.preventDefault(); items[(at + 1) % items.length].focus(); }
-    else if (e.key === 'ArrowUp'){ e.preventDefault(); items[(at - 1 + items.length) % items.length].focus(); }
+    else if (step && items.length){ e.preventDefault(); items[(at + step + items.length) % items.length].focus(); }
     else if (e.key === 'Tab') this.close();
   },
   outside: e => { if (Menu.el && !Menu.el.contains(e.target) && !e.target.closest('[data-act="menu"]')) Menu.close(); },
+  // Scrolling or resizing closes it, unless a new folder's name is being
+  // typed: a phone's keyboard opening does both, and the menu moves to fit.
   // Resize events target the window, which isn't a Node.
-  dismiss: e => { if (Menu.el && !(e && e.target instanceof Node && Menu.el.contains(e.target))) Menu.close(); },
+  dismiss: e => {
+    if (!Menu.el || (e && e.target instanceof Node && Menu.el.contains(e.target))) return;
+    const typing = document.activeElement && document.activeElement.matches('.ig-menu-new');
+    if (typing && Menu.el.contains(document.activeElement)) Menu.place(Menu.el, Menu.btn);
+    else Menu.close();
+  },
 };
 
 // The clipboard API only exists on https or this PC; a phone on the LAN
@@ -1754,6 +1879,9 @@ function previewHtml(step, handler, big){
       return `<div class="${cls} ig-pv-discord"><span class="ig-av">${svg('shield')}</span><span class="ig-pv-col">
         <b>InstantClone</b><span class="ig-app">APP</span><div class="ig-txt">${discordTimes(esc(ping + text))}</div></span></div>`;
     }
+    case 'dock':
+      return `<div class="${cls} ig-pv-timeline">${step.params.group ? `<span class="ig-pv-tl-kind note">${esc(renderSample(step.params.group, vars))}</span>` : ''}
+        <div>${esc(text || 'An event')}</div></div>`;
     case 'timeline': {
       const live = step.params.at !== 'aired';
       const at = vars[live ? 'vod_time' : 'uptime'] || '1:02:14';
@@ -1805,6 +1933,9 @@ const S = {
   data:null, visible:false, filter:'all', search:'', peek:null,
   view: store.get('ig-view') === 'list' ? 'list' : 'grid',
   pollTimer:null, activityOpen:false,
+  // The page of the Overlay tab that is showing ('alerts' or 'goals'), and
+  // what its last redraw was drawn from.
+  stage:null, staged:'',
   // What the last poll that redrew the tab brought, and when that was.
   heard:'', drawnAt:0,
   // The Recent activity row showing its steps (its data-key), and whether
@@ -1813,6 +1944,14 @@ const S = {
   // Secret fields the user chose to show (by field id). Hidden by default:
   // a dashboard is often on a stream.
   revealed:new Set(),
+  // Folders shown folded, kept between visits; the one being renamed;
+  // folders made with New folder that nothing is in yet (this visit only).
+  // Whatever the browser kept, a list or not, never stops the page.
+  folded:new Set([].concat(readJson(store.get('ig-folded'), []))),
+  renaming:null, pending:[],
+  // The integration being dragged to a folder, and a redraw that waits for
+  // the drop (a redraw mid-drag would drop the dragged card).
+  dragging:null, redraw:false,
 };
 
 async function load(){
@@ -1826,6 +1965,9 @@ async function load(){
     return false;
   }
   S.data = d;
+  // The alert designs, by name, for the alerts' Design chip (read quietly:
+  // the Studio may have saved or renamed one since).
+  Stage.loadDesigns().catch(() => {});
   // The answer redraws the tab: the card around it eases to its new height.
   if (typeof easeCardHeight === 'function') easeCardHeight(render); else render();
   // Opening the dashboard connects OBS: show it soon, not at the next poll.
@@ -1835,11 +1977,19 @@ async function load(){
 
 // The most steps one integration holds: the app's own limit (model.rs).
 const MAX_STEPS = 256;
+// Whether `count` more steps fit in integration `d`; says why when not.
+function stepsFit(d, count){
+  let total = 0;
+  d.handlers.forEach(h => walk(h.steps, () => { total++; }));
+  if (total + count <= MAX_STEPS) return true;
+  toast(`That's the most steps one integration can have (${MAX_STEPS})`, 'info');
+  return false;
+}
 // How long the tab may go without a redraw while nothing changes.
 const IDLE_REDRAW_MS = 30000;
 
 async function poll(){
-  if (document.hidden || !S.data || (!S.visible && !modalOpen())) return;
+  if (document.hidden || !S.data || (!S.visible && !S.stage && !modalOpen())) return;
   const a = await api('/integrations/activity');
   if (!S.data || !a || !a.activity) return;
   const fastBefore = !!S.data.twitch.login;
@@ -1851,7 +2001,14 @@ async function poll(){
   const alerts = Object.assign({}, a.alerts, {look:lookOf()});
   const alertsChanged = JSON.stringify(alerts) !== JSON.stringify(S.data.alerts);
   S.data.alerts = alerts;
+  S.data.tracking = a.tracking || S.data.tracking;
   if (fastBefore !== !!a.twitch.login) schedulePoll();
+  // The Overlay tab's pages show less than this tab, and redraw for less.
+  const staged = JSON.stringify([a.tracking, alerts, a.twitch.main.login]);
+  if (S.stage && staged !== S.staged){
+    S.staged = staged;
+    Stage.render();
+  }
   // Most polls bring nothing new. Redrawing every card for each one made
   // the whole dashboard crawl once a setup had a few hundred steps, so the
   // tab is redrawn when something changed, and now and then for its
@@ -1866,10 +2023,6 @@ async function poll(){
   // Pages that show live state.
   if (Modal.kind === 'connections' && ((Conn.tab === 'twitch' && twitchChanged) || (Conn.tab === 'stream' && alertsChanged))) Conn.render();
   if (Modal.kind === 'editor' && alertsChanged && (primaryStep(Editor.handler()) || {}).type === 'overlay') Editor.render();
-  if (Modal.kind === 'alerts' && alertsChanged){
-    const status = q('.ig-look-body [data-key="alerts-status"]');
-    if (status) status.outerHTML = alertsStatusHtml(false);
-  }
 }
 
 function schedulePoll(){
@@ -1971,7 +2124,8 @@ function visibleIntegrations(){
   const q = S.search.trim().toLowerCase();
   return S.data.integrations.filter(i =>
     (S.filter === 'all' || categoryOf(i) === S.filter)
-    && (!q || i.name.toLowerCase().includes(q) || JSON.stringify(i.handlers).toLowerCase().includes(q)));
+    && (!q || i.name.toLowerCase().includes(q) || (i.folder || '').toLowerCase().includes(q)
+      || JSON.stringify(i.handlers).toLowerCase().includes(q)));
 }
 
 function skeletonHtml(){
@@ -1981,8 +2135,15 @@ function skeletonHtml(){
 }
 
 function render(){
+  // The Overlay tab's page follows the same data. While it shows, this tab
+  // is hidden and is drawn when it is opened instead.
+  if (S.stage){
+    Stage.render();
+    if (!S.visible) return;
+  }
   const root = $('ig-root');
   if (!root || !S.data) return;
+  if (S.dragging){ S.redraw = true; return; }
   const d = S.data;
   const on = d.integrations.filter(i => i.enabled).length;
   const failing = d.integrations.filter(i => cardInfo(i).failing);
@@ -2002,7 +2163,7 @@ function render(){
       </div>
       <div class="ig-notices" data-key="notices" data-flip>${noticesHtml(failing)}</div>
       ${connectionsHtml()}
-      ${empty ? emptyHtml() : toolbarHtml() + `<div class="ig-items" data-key="items-${S.view}">${itemsHtml()}</div>`}
+      ${empty ? emptyHtml() : toolbarHtml() + `<div class="ig-items" data-key="items-${S.view}" data-flip>${itemsHtml()}</div>`}
       ${activityHtml()}
     </div>`);
   if (typeof fitPaneCard === 'function') fitPaneCard();
@@ -2017,7 +2178,11 @@ function noticesHtml(failing){
       <button class="ic-btn ic-btn-ghost ig-small" data-act="conn" data-tab="twitch">Reconnect</button></div>`);
   }
   const consent = twitchEventsIn('needs_consent');
-  if (consent.length && d.twitch.main.login){
+  if (twitchMissing()){
+    out.push(`<div class="lan-warn ig-notice" data-key="n-twitch-missing"><span class="lw-ic">⚠</span>
+      <span class="ig-notice-text">Log in to Twitch again once to allow <b>${esc(twitchMissing())}</b>: your login is from before InstantClone asked for that.</span>
+      <button class="ic-btn ic-btn-ghost ig-small" data-act="conn" data-tab="twitch">Log in again</button></div>`);
+  } else if (consent.length && d.twitch.main.login){
     out.push(`<div class="lan-warn ig-notice" data-key="n-twitch-consent"><span class="lw-ic">⚠</span>
       <span class="ig-notice-text">Twitch needs your OK before InstantClone hears <b>${esc(twitchNouns(consent))}</b>: your login is from before these events.</span>
       <button class="ic-btn ic-btn-ghost ig-small" data-act="conn" data-tab="twitch">Allow</button></div>`);
@@ -2066,6 +2231,7 @@ function toolbarHtml(){
       ${tab('all', 'All')}${tab('alerts', 'Alerts')}${tab('chat', 'Chat')}${tab('auto', 'Automation')}${tab('own', 'Your own')}${SEG_IND}
     </div>
     <input class="ic-input ig-search" id="ig-search" type="search" placeholder="Search" aria-label="Search integrations" value="${esc(S.search)}" autocomplete="off">
+    <button class="ic-btn ic-btn-ghost ig-small ig-new-folder" data-act="folder-new" aria-label="New folder" title="New folder, then drag integrations into it">${svg('folder', ' class="ig-btn-ic"')}<span>New folder</span></button>
     <div class="sub-tabs ig-seg ig-views">
       ${view('grid', 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z', 'Grid')}${view('list', 'M4 6h16M4 12h16M4 18h16', 'List')}${SEG_IND}
     </div>
@@ -2075,7 +2241,87 @@ function toolbarHtml(){
 function itemsHtml(){
   const items = visibleIntegrations();
   const none = items.length ? '' : `<div class="ig-none" data-key="none">Nothing here${S.search ? ' matches "' + esc(S.search) + '"' : ' yet'}.</div>`;
-  return S.view === 'grid' ? gridHtml(items, none) : listHtml(items, none);
+  const draw = S.view === 'grid' ? gridHtml : listHtml;
+  const folders = folderNames();
+  // Shown while a card is dragged: drop it here for a folder of its own.
+  const fresh = `<div class="ig-drop-new" data-drop-folder="" data-drop-new data-key="drop-new">${svg('folder')}Drop here for a new folder</div>`;
+  if (!folders.length || !items.length) return fresh + draw(items, none, true, '');
+  // In folders, A to Z, then the rest. A search shows every match, and
+  // only folders with one.
+  const groups = folders.map(f => [f, items.filter(i => i.folder === f)]).concat([['', items.filter(i => !i.folder)]])
+    .filter(([f, list]) => list.length || (f && !S.search && S.pending.includes(f)));
+  const last = groups[groups.length - 1][0];
+  return fresh + groups.map(([f, list], n) => {
+    const folded = !S.search && S.folded.has(f);
+    const body = !list.length ? `<div class="ig-folder-empty" data-drop-folder="${esc(f)}" data-key="ge:${esc(f)}">Drag integrations here</div>`
+      : draw(list, '', n === groups.length - 1, f);
+    return folderHeadHtml(f, list, folded) + (folded ? '' : body);
+  }).join('') + (!S.search && (S.folded.has(last) || !groups[groups.length - 1][1].length) ? draw([], '', true, last) : '');
+}
+
+// ---- Folders: a name an integration can carry. A folder is there while
+// something is in it.
+function folderNames(){
+  return [...new Set(S.data.integrations.map(i => i.folder || '').concat(S.pending).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+// "New folder", or "New folder 2" when that one is there.
+function newFolderName(){
+  const names = folderNames();
+  let name = 'New folder';
+  for (let n = 2; names.includes(name); n++) name = 'New folder ' + n;
+  return name;
+}
+// Rename a folder now, its name picked.
+function renameNow(folder){
+  S.renaming = folder;
+  render();
+  // On the tab itself (q looks in the open window only).
+  const field = [...$('ig-root').querySelectorAll('.ig-folder-in')].find(el => !el.closest('[data-leaving]'));
+  if (field){ field.focus({preventScroll:true}); field.select(); field.scrollIntoView({block:'nearest', behavior:reduced() ? 'auto' : 'smooth'}); }
+}
+// A folder's heading: fold it, how many it holds and how many are on, and
+// rename it (in place). The rest are "Not in a folder", with no rename.
+function folderHeadHtml(folder, list, folded){
+  const on = list.filter(i => i.enabled).length;
+  const key = 'fh-' + (folder || '~none');
+  if (folder && S.renaming === folder){
+    return `<div class="ig-folder" data-key="${esc(key)}">${svg('folder', ' class="ig-folder-ic"')}
+      <input class="ic-input ig-folder-in" data-folder="${esc(folder)}" value="${esc(folder)}" maxlength="40" aria-label="Folder name" spellcheck="false" autocomplete="off"></div>`;
+  }
+  return `<div class="ig-folder${folded ? ' folded' : ''}" data-key="${esc(key)}" data-drop-folder="${esc(folder)}">
+    <button class="ig-folder-head" data-act="fold" data-folder="${esc(folder)}" aria-expanded="${!folded}">
+      ${svg('chev', ' class="ig-folder-chev"')}${svg('folder', ' class="ig-folder-ic"')}<b>${esc(folder || 'Not in a folder')}</b>
+      <span class="ig-count" data-tick>${list.length}</span><span class="muted">${on} on</span></button>
+    ${folder ? `<button class="ic-btn-tiny" data-act="folder-rename" data-folder="${esc(folder)}" aria-label="Rename ${esc(folder)}" title="Rename">${svg('pencil')}</button>
+      <button class="ic-btn-tiny" data-act="folder-remove" data-folder="${esc(folder)}" aria-label="Remove the folder ${esc(folder)}" title="Remove the folder: what's in it stays, out of any folder">${svg('x')}</button>` : ''}</div>`;
+}
+// Put integrations in a folder ('' for none), in one save.
+async function moveToFolder(ids, folder){
+  const r = await api('/integrations/folder', {ids, folder});
+  if (!r || r.ok === false){ toast((r && r.error) || 'That didn\'t save', 'err', 6000); return false; }
+  const kept = oneLine(folder).trim();
+  ids.forEach(id => { const i = find(id); if (i) i.folder = kept; });
+  render();
+  return true;
+}
+// A folder renamed: everything in it moves, folded or not as it was.
+async function renameFolder(was, name){
+  S.renaming = null;
+  name = oneLine(name).trim().slice(0, 40);
+  const ids = S.data.integrations.filter(i => i.folder === was).map(i => i.id);
+  // A new folder with nothing in it yet is only here: renamed (or, left
+  // blank, gone) here.
+  if (!ids.length){
+    const others = S.pending.filter(f => f !== was);
+    S.pending = others.concat(name && !others.includes(name) ? [name] : []);
+    render();
+    return;
+  }
+  if (!name || name === was){ render(); return; }
+  if (await moveToFolder(ids, name) && S.folded.delete(was)){
+    S.folded.add(name);
+    store.set('ig-folded', JSON.stringify([...S.folded]));
+  }
 }
 
 function switchHtml(i){
@@ -2091,10 +2337,10 @@ function flagHtml(flag){
   return `<span class="dcard-status ig-flag ${flag.cls}" title="${esc(flag.tip)}"><span class="d-dot"></span><span class="dcard-status-l">${flag.label}</span></span>`;
 }
 
-function gridHtml(items, none){
-  return `<div class="ig-grid" data-flip>${none}${items.map(i => {
+function gridHtml(items, none, withAdd, folder){
+  return `<div class="ig-grid" data-flip data-drop-folder="${esc(folder)}" data-key="g:${esc(folder)}${items.length ? '' : '|add'}">${none}${items.map(i => {
     const c = cardInfo(i);
-    return `<div class="dcard ig-card ${i.enabled ? 'alive' : 'off'}" style="--dc:${c.dc}" data-key="c-${esc(i.id)}">
+    return `<div class="dcard ig-card ${i.enabled ? 'alive' : 'off'}" style="--dc:${c.dc}" data-key="c-${esc(i.id)}" draggable="true" data-drag-id="${esc(i.id)}">
       <div class="dcard-screen" data-act="edit" data-id="${esc(i.id)}" role="button" tabindex="0" aria-label="Edit ${esc(i.name)}">
         ${previewHtml(c.step, c.h, false)}${flagHtml(c.flag)}${c.hist}
       </div>
@@ -2107,14 +2353,14 @@ function gridHtml(items, none){
       </div>
     </div>`;
   }).join('')}
-  <button class="dest-add ig-add-tile" data-act="catalog" data-key="add"><span class="dest-add-icon">${svg('plus')}</span>Add or build your own</button></div>`;
+  ${withAdd ? `<button class="dest-add ig-add-tile" data-act="catalog" data-key="add"><span class="dest-add-icon">${svg('plus')}</span>Add or build your own</button>` : ''}</div>`;
 }
 
-function listHtml(items, none){
-  return `<div class="ig-list" data-flip>${none}${items.map(i => {
+function listHtml(items, none, withAdd, folder){
+  return `<div class="ig-list" data-flip data-drop-folder="${esc(folder)}" data-key="g:${esc(folder)}${items.length ? '' : '|add'}">${none}${items.map(i => {
     const c = cardInfo(i);
     const open = S.peek === i.id;
-    return `<div class="dcard ig-row ${i.enabled ? 'alive' : 'off'}${open ? ' open' : ''}" style="--dc:${c.dc}" data-key="r-${esc(i.id)}" data-autoh>
+    return `<div class="dcard ig-row ${i.enabled ? 'alive' : 'off'}${open ? ' open' : ''}" style="--dc:${c.dc}" data-key="r-${esc(i.id)}" data-autoh draggable="true" data-drag-id="${esc(i.id)}">
       <div class="ig-row-main">
         <span class="dcard-icon">${svg(c.icon)}</span>
         <button class="ig-row-name" data-act="peek" data-id="${esc(i.id)}" aria-expanded="${open}">
@@ -2132,7 +2378,7 @@ function listHtml(items, none){
         </div></div>` : ''}
     </div>`;
   }).join('')}
-  <button class="dest-add ig-add-row" data-act="catalog" data-key="add"><span class="dest-add-icon">${svg('plus')}</span>Add an integration, or build your own</button></div>`;
+  ${withAdd ? `<button class="dest-add ig-add-row" data-act="catalog" data-key="add"><span class="dest-add-icon">${svg('plus')}</span>Add an integration, or build your own</button>` : ''}</div>`;
 }
 
 function emptyHtml(){
@@ -2219,6 +2465,14 @@ function glow(id){
 }
 
 // Add from the catalog. The integrations added, or none.
+// The designs `added` integrations' alerts name, saved now: a ready-made
+// one only becomes a file the first time it is used, and the alerts page
+// needs the file.
+async function saveNamedDesigns(added){
+  const named = new Set();
+  added.forEach(i => allSteps(i).forEach(s => { if (s.type === 'overlay' && s.params.design) named.add(s.params.design); }));
+  for (const slug of named) await Stage.ensureDesign(slug);
+}
 async function addFrom(body, openAfter){
   const fromCatalog = Modal.kind === 'catalog';
   const r = await api('/integrations/add', body);
@@ -2227,20 +2481,28 @@ async function addFrom(body, openAfter){
   const added = (r.ids || []).map(find).filter(Boolean);
   if (!added.length){ toast('You already have everything in this pack', 'info'); return []; }
   const ids = added.map(i => i.id);
+  await saveNamedDesigns(added);
+  // Both sets of Twitch alerts on: every follow, sub or cheer plays twice.
+  const RIVAL = {twitch_alerts:'hype_alerts', hype_alerts:'twitch_alerts'};
+  const rivalOn = i => S.data.integrations.find(x => x.enabled && x.preset === RIVAL[i.preset]);
+  const twice = added.find(i => RIVAL[i.preset] && rivalOn(i));
+  if (twice) toast(`${rivalOn(twice).name} is on too: switch one off, or every Twitch event plays two alerts`, 'info', 8000);
   const unfinished = added.find(i => !i.enabled);
-  if (openAfter && unfinished){
-    // Going back from here means "not this one": the draft goes again.
+  // One added opens, to see it or finish it (a pack's waiting draft too).
+  const opened = openAfter && (unfinished || (added.length === 1 ? added[0] : null));
+  if (opened){
+    // Going back from here means "not this one": it goes again.
     const back = fromCatalog ? {title:'Back to the catalog, without adding it', go:async () => {
-      await deleteIds([unfinished.id]);
+      await deleteIds([opened.id]);
       Catalog.reopen();
     }} : null;
-    openEditor(unfinished, true, {justAdded:true, back});
+    openEditor(opened, true, {justAdded:true, back});
     return added;
   }
   undoToast(added.length > 1 ? `Added ${added.length} integrations` : `Added ${added[0] ? added[0].name : ''}`, async () => {
     await deleteIds(ids);
     if (Modal.kind === 'catalog') Catalog.render();
-  });
+  }, true);
   if (unfinished) toast(`${unfinished.name} needs one more detail before it can switch on`, 'info', 4500);
   if (Modal.kind === 'catalog' && body.preset) Catalog.flashAdded(body.preset);
   return added;
@@ -2431,7 +2693,7 @@ const Modal = {
     el.inert = true;
     setTimeout(() => el.remove(), reduced() ? 0 : 180);
     if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus({preventScroll:true});
-    if (!S.visible) clearInterval(S.pollTimer);
+    if (!S.visible && !S.stage) clearInterval(S.pollTimer);
   },
   // Back to the view this one was opened from. Edits that travel back
   // with it skip the unsaved-changes question; with nowhere to go back to,
@@ -2867,6 +3129,7 @@ function needsHtml(needs){
       case 'web': return ['', 'An address', 'You paste the address it sends to'];
       case 'light': return ['', 'A light on your network', 'You pick it after adding: WiZ, LIFX, Govee, Yeelight, Kasa, Shelly or WLED'];
       case 'file': return ['', 'A file', 'You pick the file it writes'];
+      case 'dock': return ['', 'The OBS dock', "Switch on Events in your dock's layout to see them"];
       case 'obs': {
         const o = S.data.obs || {};
         return o.state === 'connected' ? ['ok', 'OBS WebSocket']
@@ -2891,6 +3154,7 @@ const Editor = {
   // it as a draft, which closing keeps and Back removes again.
   open(i, switchOn, opts){
     opts = opts || {};
+    dropAddUndos();
     this.d = withHandler(clone(i));
     this.d.handlers.forEach(h => sampleArgsFrom(h, presetOf(this.d)));
     this.back = opts.back || null;
@@ -2903,6 +3167,7 @@ const Editor = {
     this.dirty = !!switchOn && !this.d.enabled && !this.justAdded;
     if (switchOn) this.d.enabled = true;
     this.sel = Math.max(0, this.d.handlers.findIndex(h => h.enabled));
+    this.tier = 0;
     // Missing a detail: open straight on the chip that fixes it.
     const known = id => S.data.connections.discord.some(c => c.id === id);
     const steps = allSteps(this.d);
@@ -2946,7 +3211,7 @@ const Editor = {
   // The picked value takes the whole answer's place in the reply, or
   // joins the end of it.
   useInReply(){
-    const h = this.handler(), http = firstStep(h, 'http'), step = primaryStep(h);
+    const h = this.handler(), http = firstStep(h, 'http'), step = this.stepOf(h);
     const t = http && tryEntry(http), field = step && (KINDS[step.type] || {}).text;
     if (!t || !t.picked || !field) return;
     const token = '{' + t.picked.token + '}';
@@ -2968,7 +3233,7 @@ const Editor = {
       this.render();
       return;
     }
-    const h = this.handler(), step = primaryStep(h), field = step && (KINDS[step.type] || {}).text;
+    const h = this.handler(), step = this.stepOf(h), field = step && (KINDS[step.type] || {}).text;
     allSteps(this.d).filter(s => s.type === 'http').forEach(s => { s.params.url = r.url; });
     if (r.reply && field) step.params[field] = r.reply;
     if (r.command && h.trigger.type === 'chat_command') h.trigger.command = r.command;
@@ -3035,9 +3300,32 @@ const Editor = {
     if (btn) btn.focus({preventScroll:true});
     return true;
   },
+  // The step it edits: the moment's main one, or the bigger alert picked
+  // under Bigger ones.
+  stepOf(h){
+    const chain = alertTiers(h);
+    return chain ? (chain.tiers[this.tier] || chain.tiers[0]).step : primaryStep(h);
+  },
+  // A bigger alert's amount, typed: a whole number between its neighbours'.
+  // False while it isn't (the field says so).
+  tierFrom(h, el){
+    const chain = alertTiers(h), n = +el.dataset.n, v = +el.value.trim();
+    if (!chain || !(n >= 1) || !chain.tiers[n]) return false;
+    const below = chain.tiers[n - 1].from, above = (chain.tiers[n + 1] || {}).from;
+    const ok = Number.isInteger(v) && v > below && (above === undefined || v < above);
+    el.setAttribute('aria-invalid', ok ? 'false' : 'true');
+    el.title = ok ? '' : `A whole number above ${below}${above === undefined ? '' : ` and below ${above}`}`;
+    if (!ok) return false;
+    chain.tiers[n].from = v;
+    setTiers(h, chain);
+    return true;
+  },
   render(){
     const d = this.d, h = this.handler();
-    const step = primaryStep(h);
+    const chain = alertTiers(h);
+    if (chain && this.tier) TIER_SAMPLE.set(h, {name:chain.name, value:String(chain.tiers[this.tier].from)});
+    else TIER_SAMPLE.delete(h);
+    const step = this.stepOf(h);
     const k = step ? KINDS[step.type] : null;
     const p = presetOf(d);
     const head = modalHead(PRESET_ICON[d.preset] || (k ? k.icon : 'steps'), k ? k.c : 'var(--accent)', titleInput(d.name),
@@ -3063,7 +3351,7 @@ const Editor = {
     Modal.form.querySelectorAll('.ig-msg').forEach(autosize);
     if (this.chip === 'detect') Meter.watch();
     if (this.chip === 'scene') ObsLive.watch();
-    if (step && step.type === 'overlay') this.syncStage(step, h, false);
+    if (step && step.type === 'overlay') alertStage(step, h, false);
   },
   // The moments it acts on, each with its switch. A moment that still
   // misses something says so in its colour and its tooltip.
@@ -3149,11 +3437,12 @@ const Editor = {
       box = `<div class="ig-live ig-live-alert">
         <div class="ig-live-row"><span class="ig-live-tag">ON STREAM · LIVE PREVIEW</span>
           <span class="ig-live-theme"><button class="ig-link" data-act="alert-replay">${svg('play', ' class="ig-btn-ic"')}Play it</button>
-          <span>${esc(THEMES[themeOf(lookOf())].name)} theme</span><button class="ig-link" data-act="alerts-open">Change the look</button></span></div>
+          <span>Looks like ${esc(designLabel(p.design))}</span><button class="ig-link" data-act="chip" data-chip="adesign">Change</button></span></div>
         <div class="ig-ed-stage"><iframe class="ig-stage-frame" src="/alerts?demo" title="Alert preview" tabindex="-1" aria-hidden="true"></iframe></div>
         <div class="ig-alert-fields">
           <div class="dff"><label>Small title</label>${tplHtml(`<input class="ic-input ig-tpl-in" data-bind="title" value="${esc(p.title || '')}" placeholder="Optional, like New follower" aria-label="Small title" spellcheck="false">`, p.title, vars, 'line')}</div>
           <div class="dff"><label>Text</label>${editor}</div>
+          ${this.messageFieldHtml(step, h, vars)}
         </div></div>${alertsStatusHtml(true)}`;
     } else if (step.type === 'phone'){
       box = `<div class="ig-live ig-live-phone">
@@ -3217,6 +3506,17 @@ const Editor = {
     change(list);
     step.params.fields = fieldsText(list);
   },
+  // The viewer's own words under the alert, where the moment brings some
+  // (a cheer, a resub, a redeem's input), or one already set.
+  messageFieldHtml(step, h, vars){
+    const p = step.params;
+    // A cheer's words without its Cheer100s first.
+    const known = varsFor(h);
+    const said = ['words', 'message', 'input'].find(name => known.some(v => v.name === name));
+    if (!said && !p.message) return '';
+    return `<div class="dff"><label>Viewer's message</label>${tplHtml(`<input class="ic-input ig-tpl-in" data-bind="message" value="${esc(p.message || '')}"
+      placeholder="Optional, like {${said || 'message'}}" aria-label="Viewer's message" spellcheck="false">`, p.message, vars, 'line')}</div>`;
+  },
   // The chips shown for this moment, with their current value.
   chips(step, h){
     const d = this.d, out = [];
@@ -3235,7 +3535,13 @@ const Editor = {
       }
     }
     if (step && step.type === 'overlay'){
-      const p = step.params;
+      const p = step.params, chain = alertTiers(h);
+      if (chain){
+        const bigger = chain.tiers.length - 1;
+        out.push({id:'tiers', k:'Bigger ones', v:this.tier ? 'editing ' + lowerFirst(tierLabel(chain, this.tier))
+          : bigger ? tierLabel(chain, 1).toLowerCase() + (bigger > 1 ? ` +${bigger - 1}` : '') : 'none'});
+      }
+      out.push({id:'adesign', k:'Design', v:designLabel(p.design)});
       out.push({id:'acolor', k:'Accent', v:alertColorName(p.color)});
       out.push({id:'asound', k:'Sound', v:soundLabel(p.sound)});
       out.push({id:'apic', k:'Picture', v:p.image ? (MEDIA_REF.test(p.image) ? p.image.slice(6) : 'a link') : 'none',
@@ -3260,6 +3566,7 @@ const Editor = {
     }
     if (step && step.type === 'chat') out.push({id:'reply', k:'Reply as', v:step.params.as === 'bot' ? 'bot account' : 'your account'});
     if (step && step.type === 'phone') out.push({id:'priority', k:'Priority', v:step.params.priority || 'normal'});
+    if (step && step.type === 'dock') out.push({id:'dgroup', k:'Group', v:step.params.group || 'none'});
     const light = firstStep(h, 'light');
     if (light) out.push({id:'light', k:'Light', v:light.params.name || 'pick your light', warn:!light.params.device});
     const http = firstStep(h, 'http');
@@ -3269,15 +3576,6 @@ const Editor = {
     out.push({id:'cooldown', k:'Repeat at most', v:d.cooldown_ms ? 'once every ' + fmtDur(d.cooldown_ms) : 'anytime'});
     out.push({id:'quiet', k:'Quiet hours', v:d.quiet ? `${d.quiet.from} to ${d.quiet.to}` : 'off'});
     return out;
-  },
-  // The alert on the real page, in the page's look but in the middle of
-  // the box, so the short stage shows it whole. `replay` 'full' plays it
-  // coming in and going out (alerts.html showDemo).
-  syncStage(step, h, replay){
-    const frame = q('.ig-ed-stage .ig-stage-frame');
-    if (!frame) return;
-    const look = Object.assign({}, lookOf(), {position:'middle', align:'center'});
-    stageShow(frame, frame.parentElement.clientWidth / 0.72, {look, card:alertCardOf(step, h), replay, sound:!!replay});
   },
   // The other alerts in this integration: one click gives them all this
   // option, as each moment has its own.
@@ -3308,8 +3606,6 @@ const Editor = {
   popHtml(step, h){
     if (this.chip === '__test') return testPanelHtml(this);
     const d = this.d, t = h.trigger;
-    const seg = (items, cur, act) => `<div class="sub-tabs ig-seg">${items.map(([id, label]) =>
-      `<button class="sub-tab${id === cur ? ' on' : ''}" data-act="${act}" data-v="${esc(id)}" aria-pressed="${id === cur}">${esc(label)}</button>`).join('')}${SEG_IND}</div>`;
     switch (this.chip){
       case 'where': {
         const cur = (allSteps(d).find(s => s.type === 'discord') || {params:{}}).params.connection;
@@ -3318,42 +3614,49 @@ const Editor = {
             <span class="dest-starter-name">#${esc(c.name)}</span><span class="dest-starter-note mono">${esc(c.hint)}</span></button>`).join('')}
           <button class="dest-add ig-pick-add" data-act="conn" data-tab="discord">${svg('plus')}Add a Discord channel</button></div>`;
       }
+      case 'tiers': {
+        const chain = alertTiers(h);
+        if (!chain) return '';
+        const unit = TIER_UNITS[chain.name];
+        const rows = chain.tiers.map((t, n) => {
+          const on = n === this.tier;
+          const what = n ? `<span>From</span><input class="ic-input mono ig-tier-from" data-bind="tier-from" data-n="${n}" inputmode="numeric"
+              value="${t.from}" aria-label="From how many ${unit}"><span>${unit}</span>` : `<span>${esc(tierLabel(chain, 0))}</span>`;
+          return `<div class="ig-tier${on ? ' on' : ''}" data-key="tier-${n}"><span class="ig-tier-what">${what}</span>
+            <span class="ig-tier-look muted">${esc(designLabel(t.step.params.design))}</span>
+            <button class="ic-btn ${on ? 'ic-btn-primary' : 'ic-btn-ghost'} ig-small" data-act="tier-pick" data-n="${n}" aria-pressed="${on}">${on ? 'Editing' : 'Edit'}</button>
+            ${n ? `<button class="ic-btn-tiny" data-act="tier-del" data-n="${n}" aria-label="Remove the one ${esc(lowerFirst(tierLabel(chain, n)))}">${svg('x')}</button>` : ''}</div>`;
+        }).join('');
+        const add = chain.tiers.length < MAX_TIERS
+          ? `<button class="dest-add ig-add-row" data-act="tier-add" data-key="tier-add"><span class="dest-add-icon">${svg('plus')}</span>A bigger one</button>` : '';
+        return `<div class="ic-label">Bigger ones</div><div class="ig-tiers" data-flip>${rows}${add}</div>
+          <div class="muted">From that many ${unit} up, its own alert plays instead: its design, sound and words. <b>Edit</b> picks the one the preview and the options above change.</div>`;
+      }
+      case 'adesign': return `<div class="ic-label">Design</div>${designTilesHtml(step.params.design)}
+          <div class="muted">Made and changed in the Studio, on the Overlay tab's <button class="ig-link" data-act="alerts-open">Alerts page</button>.</div>${this.everyAlertHtml(['design'])}`;
       case 'acolor': {
-        const mine = /^#[0-9a-f]{6}$/i.test(step.params.color || '') ? step.params.color.toLowerCase() : '';
-        const shown = alertColor(mine, lookOf());
-        const known = !mine || CARD_COLORS.some(([c]) => c === mine);
-        const swatch = (c, label, style) => `<button class="ig-swatch${c === mine ? ' on' : ''}" style="--sw:${style}" data-act="set-color" data-v="${c}"
-          role="radio" aria-checked="${c === mine}" aria-label="${label}" title="${label}"></button>`;
-        const swatches = [swatch('', 'The theme\'s', alertColor('', lookOf()))].concat(CARD_COLORS.map(([c, label]) => swatch(c, label, c))).join('');
-        return `<div class="ic-label">Accent</div>
-          <div class="ig-swatches"><span class="ig-swatch-set" role="radiogroup" aria-label="Alert accent">${swatches}</span>
-            <label class="ig-swatch custom${known ? '' : ' on'}" title="Any color"><input type="color" data-bind="color" value="${esc(shown)}" aria-label="Any color (now ${esc(shown)})"></label></div>
-          <div class="muted">The first one is the theme's. Everything else about the look is the theme's: <button class="ig-link" data-act="alerts-open">change the look</button>.</div>${this.everyAlertHtml(['color'])}`;
+        return `<div class="ic-label">Accent</div>${accentPickerHtml(step)}
+          <div class="muted">The first one is the design's. Everything else about the look is its design's: <button class="ig-link" data-act="chip" data-chip="adesign">${esc(designLabel(step.params.design))}</button>.</div>${this.everyAlertHtml(['color'])}`;
       }
       case 'asound': {
-        const sound = step.params.sound || '';
-        const volume = step.params.volume === undefined || step.params.volume === '' ? 70 : +step.params.volume;
-        return `<div class="ic-label">Sound</div>${soundPickerHtml(sound, 'pick-sound', true)}
-          <div class="ig-volume"><label for="ig-vol">Volume</label><input id="ig-vol" type="range" min="0" max="100" step="5" data-bind="volume" value="${volume}">
-            <span class="mono">${volume}%</span>
-            <button class="ic-btn ic-btn-ghost ig-small" data-act="sound-play" ${sound ? '' : 'disabled'}>${svg('play', ' class="ig-btn-ic"')}Play</button></div>
+        return `<div class="ic-label">Sound</div>${soundControlsHtml(step)}
           <div class="muted">Plays with the alert, through OBS, so viewers hear it too.</div>${this.everyAlertHtml(['sound', 'volume'])}`;
       }
       case 'apic':
         return `<div class="ic-label">Picture</div>${picturePickerHtml(step.params.image || '', 'pick-picture')}
-          <div class="muted">A PNG, JPG or GIF (it plays). Where it goes is the theme's.</div>${this.everyAlertHtml(['image'])}`;
+          <div class="muted">A PNG, JPG or GIF (it plays). Where it goes is its design's.</div>${this.everyAlertHtml(['image'])}`;
       case 'atime':
-        return `<div class="ic-label">On screen for</div>${seg(ALERT_SECONDS.map(n => [n, n + ' s']), step.params.seconds || '6', 'set-seconds')}
+        return `<div class="ic-label">On screen for</div>${segHtml(ALERT_SECONDS.map(n => [n, n + ' s']), step.params.seconds || '6', 'set-seconds')}
           <div class="muted">Alerts that come in together wait their turn, so none cuts another short.</div>${this.everyAlertHtml(['seconds'])}`;
       case 'look':
-        return `<div class="ic-label">Look</div>${seg([['', 'Plain message'], ['card', 'Card']], step.params.style || '', 'set-style')}
+        return `<div class="ic-label">Look</div>${segHtml([['', 'Plain message'], ['card', 'Card']], step.params.style || '', 'set-style')}
           <div class="muted">A card has a colored edge, a title, fields side by side and a timestamp. Write on it right in the preview.</div>`;
       case 'msg': {
         const edit = step.params.edit || '';
         const key = step.params.key || '';
         const perPlatform = /\{destination\}/.test(key);
         const canSplit = varsFor(h).some(v => v.name === 'destination');
-        return `<div class="ic-label">Each time it runs</div>${seg([['', 'Post a new message'], ['last', 'Update the same message'], ['close', 'Update it, then start fresh']], edit, 'set-edit')}
+        return `<div class="ic-label">Each time it runs</div>${segHtml([['', 'Post a new message'], ['last', 'Update the same message'], ['close', 'Update it, then start fresh']], edit, 'set-edit')}
           <div class="muted">${{
             last:'Edits the message it posted there before, so one alert goes from "down" to "back" instead of piling up. If someone deleted it, a new one goes out.',
             close:'Edits the message it posted before into its final state, then lets it go: the next alert starts a new message. With nothing to finish (a short blip never got a message), it stays quiet.',
@@ -3371,7 +3674,7 @@ const Editor = {
         const field = /\{/.test(secs)
           ? `<input class="ic-input mono" data-bind="seconds" value="${esc(secs)}" placeholder="30">`
           : durInput('seconds-dur', (parseFloat(secs) || 30) * 1000, 's');
-        return `<div class="ic-label">Does</div>${seg(['arm', 'cut_after', 'cut', 'activate', 'disarm'].map(x => [x, DELAY_ACTIONS[x]]), a.params.action, 'set-action')}
+        return `<div class="ic-label">Does</div>${segHtml(['arm', 'cut_after', 'cut', 'activate', 'disarm'].map(x => [x, DELAY_ACTIONS[x]]), a.params.action, 'set-action')}
           ${a.params.action === 'arm' ? `<div class="dff ig-narrow"><label>Delay</label>${field}</div>` : ''}
           <div class="muted">${{
             arm:'Arms this delay, or changes it while one is armed or on air. It goes on air once the buffer is full if Auto-activate is on; otherwise press Activate.',
@@ -3385,15 +3688,18 @@ const Editor = {
       case 'scene': return sceneHtml(t, '', this.d);
       case 'tune': {
         const tune = tuneSummary(t);
-        return `<div class="ic-label">${esc(tune.k)}</div>${paramsHtml(t, '')}<div class="muted">Each moment keeps its own numbers: a phone push can wait longer than the Discord card.</div>`;
+        const amount = (eventOf(t.event).params || []).some(p => p.name.startsWith('min_'));
+        return `<div class="ic-label">${esc(tune.k)}</div>${paramsHtml(t, '')}<div class="muted">${amount
+          ? 'Smaller ones skip this moment. 1 is any amount.'
+          : 'Each moment keeps its own numbers: a phone push can wait longer than the Discord card.'}</div>`;
       }
       case 'key': return shortcutHtml(t);
       case 'quiet': return quietHtml(d);
       case 'ping':
-        return `<div class="ic-label">Ping</div>${seg([['', 'Nobody'], ['here', '@here'], ['everyone', '@everyone']], step.params.ping || '', 'set-ping')}
+        return `<div class="ic-label">Ping</div>${segHtml([['', 'Nobody'], ['here', '@here'], ['everyone', '@everyone']], step.params.ping || '', 'set-ping')}
           <div class="muted">${step.params.edit === 'last' ? 'Only when it posts a new message: an update never pings. ' : ''}Text from chat or a web service can never ping anyone: only this option can.</div>`;
       case 'send':
-        return `<div class="ic-label">When to send</div>${seg([['now', 'Right away'], ['w10000', '10 s'], ['w20000', '20 s'], ['w30000', '30 s'], ['w60000', '1 min'], ['aired', 'Once viewers see it']],
+        return `<div class="ic-label">When to send</div>${segHtml([['now', 'Right away'], ['w10000', '10 s'], ['w20000', '20 s'], ['w30000', '30 s'], ['w60000', '1 min'], ['aired', 'Once viewers see it']],
           this.sendValue(h).id, 'set-send')}
           <div class="muted">${t.type === 'event' && t.event === 'hold_opened' ? 'Waiting a bit means a 3-second blip never reaches anyone.' : '"Once viewers see it" waits out your delay, so the moment has reached them.'}</div>`;
       case 'only':
@@ -3410,11 +3716,11 @@ const Editor = {
       case 'cmd':
         return `${commandClashHtml(d)}<div class="dfg"><div class="dff"><label>Command</label><input class="ic-input mono" data-bind="command" value="${esc(t.command)}" spellcheck="false"></div>
           <div class="dff"><label>Also answers to</label><input class="ic-input mono" data-bind="aliases" value="${esc((t.aliases || []).join(' '))}" placeholder="!retraso !d" spellcheck="false"></div></div>
-          <div class="dff"><label>Each viewer, at most once every</label>${seg([['0', 'no limit'], ['10000', '10 s'], ['30000', '30 s'], ['60000', '1 min']], String(t.user_cooldown_ms || 0), 'set-ucd')}</div>`;
+          <div class="dff"><label>Each viewer, at most once every</label>${segHtml([['0', 'no limit'], ['10000', '10 s'], ['30000', '30 s'], ['60000', '1 min']], String(t.user_cooldown_ms || 0), 'set-ucd')}</div>`;
       case 'who':
         return `<div class="ic-label">Who can use it</div>${rolesHtml(t, 'role')}<div class="muted">You can always use your own commands.</div>`;
       case 'reply':
-        return `<div class="ic-label">Reply as</div>${seg([['', 'Your account'], ['bot', 'Bot account']], step.params.as || '', 'set-as')}
+        return `<div class="ic-label">Reply as</div>${segHtml([['', 'Your account'], ['bot', 'Bot account']], step.params.as || '', 'set-as')}
           ${t.type.startsWith('chat') ? `<label class="crash-check"><input type="checkbox" data-bind="reply" ${step.params.reply === 'yes' ? 'checked' : ''}><span><span class="crash-check-title">Reply in the viewer's thread</span><span class="muted">Twitch shows it as an answer to their message</span></span></label>` : ''}
           ${S.data.twitch.bot.login ? '' : '<div class="muted">No bot account yet: <a href="#" data-act="conn" data-tab="twitch">connect one</a>, or messages go out as you.</div>'}`;
       case 'light': {
@@ -3424,8 +3730,11 @@ const Editor = {
           <div class="ig-starts">${(S.data.catalog.light_starts || []).filter(x => x.id !== 'wled').map(x => `<button class="ig-start" data-act="light-to-web" data-v="${esc(x.id)}">${esc(x.label)}</button>`).join('')}</div></details>` : '';
         return lightPickerHtml(light ? light.params : {}) + web;
       }
+      case 'dgroup':
+        return `<div class="dff ig-narrow"><label>Group</label><input class="ic-input" data-bind="dgroup" value="${esc(step.params.group || '')}" placeholder="Crashes" spellcheck="false"></div>
+          <div class="muted">The dock's Events show one group at a time: lines with the same group go together.</div>`;
       case 'priority':
-        return `<div class="ic-label">Priority</div>${seg([['', 'Normal'], ['high', 'High'], ['urgent', 'Urgent']], step.params.priority || '', 'set-priority')}`;
+        return `<div class="ic-label">Priority</div>${segHtml([['', 'Normal'], ['high', 'High'], ['urgent', 'Urgent']], step.params.priority || '', 'set-priority')}`;
       case 'url': {
         const http = firstStep(h, 'http'), chatty = t.type.startsWith('chat');
         if (d.preset === 'on_air_light') return `<button class="ic-btn ic-btn-ghost ig-small" data-act="light-to-net">${svg('bulb', ' class="ig-btn-ic"')}Use a light on my network instead (no hub)</button>` + this.lightHtml(http, t);
@@ -3441,7 +3750,7 @@ const Editor = {
           <div class="dff"><label>Each time</label><select class="ic-input" data-bind="mode"><option value="" ${step.params.mode !== 'append' ? 'selected' : ''}>Replace the text</option><option value="append" ${step.params.mode === 'append' ? 'selected' : ''}>Add a line</option></select></div></div>
           <div class="muted">Point an OBS text source at this file to show it on stream.</div>`;
       case 'cooldown':
-        return `<div class="ic-label">Repeat at most</div>${seg([['0', 'Anytime'], ['10000', 'Every 10 s'], ['30000', '30 s'], ['60000', '1 min'], ['300000', '5 min'], ['600000', '10 min']], String(d.cooldown_ms || 0), 'set-cooldown')}
+        return `<div class="ic-label">Repeat at most</div>${segHtml([['0', 'Anytime'], ['10000', 'Every 10 s'], ['30000', '30 s'], ['60000', '1 min'], ['300000', '5 min'], ['600000', '10 min']], String(d.cooldown_ms || 0), 'set-cooldown')}
           <div class="dff ig-narrow"><label>Or once every</label>${durInput('cooldown-dur', d.cooldown_ms, 's')}</div>
           <div class="muted">For every moment here, each counting on its own. A button pressed too soon shows as skipped in Recent activity.</div>`;
     }
@@ -3469,12 +3778,15 @@ const Editor = {
         <div class="muted">What each state sends is in the preview: pick a moment (live, delayed…) and open "What it sends".</div></details>`;
   },
   input(el){
-    const h = this.handler(), step = primaryStep(h), t = h.trigger;
+    const h = this.handler(), step = this.stepOf(h), t = h.trigger;
     const b = el.dataset.bind;
     if (b === 'name') this.d.name = el.value;
     else if (b === 'enabled') this.d.enabled = el.checked;
     else if (b === 'text' && step){ step.params[KINDS[step.type].text] = el.value; autosize(el); }
     else if (b === 'title' && step) step.params.title = el.value;
+    else if (b === 'message' && step) step.params.message = el.value;
+    else if (b === 'dgroup' && step) step.params.group = el.value;
+    else if (b === 'tier-from'){ if (!this.tierFrom(h, el)) return; }
     else if (b === 'filter'){ t.filters = t.filters || {}; t.filters[el.dataset.name] = el.value.trim(); }
     else if (b === 'command') t.command = el.value.trim().toLowerCase();
     else if (b === 'aliases') t.aliases = el.value.split(/[\s,]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
@@ -3547,30 +3859,42 @@ const Editor = {
     });
     this.changed();
   },
+  // Whether it still shows `step`: an upload or a design picked a moment
+  // ago lands only there.
+  editing(step){ return Modal.kind === 'editor' && this.stepOf(this.handler()) === step; },
   act(a, el){
-    const h = this.handler(), step = primaryStep(h), v = el.dataset.v;
+    const h = this.handler(), step = this.stepOf(h), v = el.dataset.v;
     if (rulesAct(h.trigger, a, el) || sceneAct(h.trigger, a, el)){ this.changed(); return true; }
+    if (step && alertAct(a, el, step, h, this)) return true;
     switch (a){
       case 'set-style': if (step) step.params.style = v; this.changed(); return true;
-      case 'set-color': if (step) step.params.color = v; this.changed(); return true;
       case 'set-ts': if (step) step.params.timestamp = step.params.timestamp === 'yes' ? '' : 'yes'; this.changed(); return true;
-      case 'pick-sound':
-        if (!step) return true;
-        step.params.sound = v;
+      case 'tier-pick':
+        this.tier = +el.dataset.n;
+        this.render();
+        return true;
+      case 'tier-add': {
+        const chain = alertTiers(h);
+        // One more is a check on the amount and its own alert.
+        if (!chain || chain.tiers.length >= MAX_TIERS || !stepsFit(this.d, 2)) return true;
+        const last = chain.tiers[chain.tiers.length - 1];
+        // A copy of the biggest so far, from a bigger amount: then its own
+        // design, sound and words.
+        chain.tiers.push({from:last.from ? last.from * 5 : TIER_FIRST[chain.name], step:clone(last.step)});
+        setTiers(h, chain);
+        this.tier = chain.tiers.length - 1;
         this.changed();
-        if (v){ playAlertSound(alertCardOf(step, h)); showPlaying('pick-sound', v); }
         return true;
-      case 'pick-picture': if (step) step.params.image = v; this.changed(); return true;
-      case 'media-upload':
-        uploadMedia(el.dataset.kind).then(ref => {
-          if (!ref || Modal.kind !== 'editor' || primaryStep(this.handler()) !== step) return;
-          step.params[el.dataset.kind === 'sound' ? 'sound' : 'image'] = ref;
-          this.changed();
-          if (el.dataset.kind === 'sound') playAlertSound(alertCardOf(step, h));
-        });
+      }
+      case 'tier-del': {
+        const chain = alertTiers(h), n = +el.dataset.n;
+        if (!chain || !n) return true;
+        chain.tiers.splice(n, 1);
+        setTiers(h, chain);
+        if (this.tier >= n) this.tier = Math.max(0, this.tier - 1);
+        this.changed();
         return true;
-      case 'alert-replay': if (step) this.syncStage(step, h, 'full'); return true;
-      case 'set-seconds': if (step) step.params.seconds = v; this.changed(); return true;
+      }
       case 'alert-all': {
         if (!step) return true;
         const names = el.dataset.names.split(' ');
@@ -3585,8 +3909,7 @@ const Editor = {
         toast(`Done for ${plural(n, 'other alert')}. Save to keep it.`, 'ok');
         return true;
       }
-      case 'sound-play': if (step) playAlertSound(alertCardOf(step, h)); return true;
-      case 'alert-show': if (step) showAlertNow(step, h, el); return true;
+
       case 'f-add': {
         if (!step) return true;
         this.fields(step, list => list.push({name:'', value:'', inline:true}));
@@ -3617,6 +3940,7 @@ const Editor = {
       }
       case 'moment':
         this.sel = +el.dataset.n;
+        this.tier = 0;
         this.testValues = {};
         this.run = null;
         if (this.chip === '__test') this.chip = null;
@@ -3763,6 +4087,7 @@ function stepMissing(s){
   if (s.type === 'viewer' && !/^[A-Za-z0-9_]{1,32}$/.test((p.value || '').trim())) return 'name the value: letters, digits and _';
   if (s.type === 'call' && !(p.block || '').trim()) return 'pick the block';
   if (s.type === 'reward' && !(p.title || '').trim()) return 'pick the reward';
+  if (s.type === 'goal' && !(p.id || '').trim()) return `pick the ${p.what === 'timer' ? 'timer' : 'goal'}`;
   if (s.type === 'channel' && !(p.title || '').trim() && !(p.category || '').trim()) return 'write the new title or category';
   if (s.type === 'wait' && !/\{|^\d+$/.test((p.ms || '').trim())) return 'set how long to wait';
   if ([p.scene, p.source, p.filter, p.hotkey, s.type === 'light' ? p.device : '', s.type === 'program' || s.type === 'file' ? p.path : ''].some(v => /\{/.test(v || ''))) return 'names here can\'t use values';
@@ -3778,7 +4103,7 @@ function stepMissing(s){
     if (need === 'filter' && !(p.source || '').trim()) return 'pick the source or scene';
     if (need && !(p[need] || '').trim()) return {scene:'pick the scene', source:'pick the source', filter:'pick the filter', hotkey:'pick the hotkey'}[need];
   }
-  if ((s.type === 'chat' || s.type === 'phone' || s.type === 'overlay' || s.type === 'timeline') && !(p.text || '').trim()) return 'write what it says';
+  if ((s.type === 'chat' || s.type === 'phone' || s.type === 'overlay' || s.type === 'timeline' || s.type === 'dock') && !(p.text || '').trim()) return 'write what it says';
   if (s.type === 'discord' && p.style !== 'card' && !(p.text || '').trim()) return 'write the message';
   return '';
 }
@@ -3925,6 +4250,12 @@ function tuneSummary(t){
   const f = t.filters || {};
   const val = name => { const p = params.find(x => x.name === name); return f[name] || (p ? p.default : ''); };
   const bad = params.some(p => f[p.name] !== undefined && f[p.name] !== '' && !(+f[p.name] > 0));
+  // A Twitch amount's minimum: 1 is any amount.
+  const least = params.find(p => p.name.startsWith('min_'));
+  if (least){
+    const n = +val(least.name);
+    return {k:'Only from', v:n > 1 ? `${n} ${paramUnit(least)}` : 'any amount', bad};
+  }
   switch (t.event){
     case 'destination_still_down': return {k:'Fires after', v:`${val('after_s')} s down`, bad};
     case 'destination_unstable': return {k:'Fires at', v:`${val('drops')} drops in ${val('within_min')} min`, bad};
@@ -4194,8 +4525,6 @@ function meterHtml(t, r){
     <span class="muted">${plural(r.messages, 'message')} · normal ${r.ready ? r.normal : '?'} · ${plural(r.chatters, 'person').replace('persons', 'people')}${r.top_word ? ` · top word "${esc(r.top_word)}"` : ''}</span>`;
 }
 function rulesHtml(t, bind){
-  const seg = (items, cur, act) => `<div class="sub-tabs ig-seg">${items.map(([id, label]) =>
-    `<button class="sub-tab${id === cur ? ' on' : ''}" data-act="${act}" data-v="${esc(id)}" aria-pressed="${id === cur}">${esc(label)}</button>`).join('')}${SEG_IND}</div>`;
   const win = Math.round((t.window_ms || 10000) / 1000);
   const wins = [5, 10, 15, 20, 30, 45, 60, 90, 120];
   if (!wins.includes(win)) wins.push(win);
@@ -4214,7 +4543,7 @@ function rulesHtml(t, bind){
     </div>`;
   }).join('');
   return `<div class="ig-rules">
-    <div class="ig-rules-head"><span>Fires when</span>${seg([['all', 'all'], ['any', 'any']], t.match === 'any' ? 'any' : 'all', 'r-match')}<span>of these are true, over the last</span>
+    <div class="ig-rules-head"><span>Fires when</span>${segHtml([['all', 'all'], ['any', 'any']], t.match === 'any' ? 'any' : 'all', 'r-match')}<span>of these are true, over the last</span>
       <select class="ic-input ig-rule-win" data-bind="${bind}r-window" aria-label="Window">${wins.sort((x, y) => x - y).map(s => `<option value="${s}" ${s === win ? 'selected' : ''}>${s} s</option>`).join('')}</select></div>
     <div class="ig-rule-list" data-flip>${rows || '<div class="muted">No rules yet: add one.</div>'}</div>
     <button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="r-add">${svg('plus')}Add a rule</button>
@@ -4345,11 +4674,18 @@ function paramsHtml(t, bind){
   const params = (e && e.params) || [];
   if (!params.length) return '';
   return `<div class="dfg ig-params">${params.map(p => {
-    const unit = /second/i.test(p.label) ? 's' : /minute/i.test(p.label) ? 'min' : '';
+    const unit = paramUnit(p);
     const label = p.label.replace(/\s*\(.*\)/, '');
     return `<div class="dff"><label>${esc(label)}${unit ? ` <span class="muted">(${unit})</span>` : ''}</label>
       <input class="ic-input mono ig-param" data-bind="${bind}param" data-name="${esc(p.name)}" inputmode="decimal" value="${esc((t.filters || {})[p.name] || p.default)}"></div>`;
   }).join('')}</div>`;
+}
+// What a setting counts in, from its label: "Still down after (seconds)"
+// is in s, "At least (bits)" in bits.
+function paramUnit(p){
+  if (/second/i.test(p.label)) return 's';
+  if (/minute/i.test(p.label)) return 'min';
+  return (p.label.match(/\(([^)]*)\)/) || [])[1] || '';
 }
 // Keep a threshold typed in a params field. False when it isn't a number
 // above 0 (the field says so).
@@ -4574,7 +4910,7 @@ const PALETTE = [
   ['Send', [['discord', 'Discord'], ['chat', 'Twitch chat'], ['phone', 'Phone'], ['http', 'Web request']]],
   ['Flow', [['if', 'If / otherwise'], ['wait', 'Wait'], ['wait_delay', 'Wait for the delay'], ['wait_chat', 'Wait for chat'], ['call', 'Run a block'], ['stop', 'Stop']]],
   ['Viewers', [['viewer', 'Viewer value'], ['math', 'Maths']]],
-  ['Stream', [['overlay', 'Show on stream'], ['reward', 'Channel points reward'], ['channel', 'Stream title and category'], ['delay_action', 'Delay action'], ['obs', 'OBS'], ['marker', 'VOD marker'], ['clip', 'Clip'], ['timeline', 'Timeline']]],
+  ['Stream', [['overlay', 'Show on stream'], ['dock', 'Dock event'], ['reward', 'Channel points reward'], ['channel', 'Stream title and category'], ['goal', 'Goal or timer'], ['delay_action', 'Delay action'], ['obs', 'OBS'], ['marker', 'VOD marker'], ['clip', 'Clip'], ['timeline', 'Timeline']]],
   ['Home', [['light', 'Smart light']]],
   ['Anything', [['edit_text', 'Edit text'], ['set_var', 'Remember a value'], ['counter', 'Counter'], ['program', 'Run a program'], ['file', 'Write a file']]],
 ];
@@ -4663,8 +4999,16 @@ function twitchEventStatusHtml(t){
 const TWITCH_NOUNS = {twitch_follow:'follows', twitch_sub:'subs', twitch_resub:'resubs', twitch_gift:'gifted subs',
   twitch_cheer:'bits', twitch_raid:'raids', twitch_redeem:'channel point rewards', twitch_ad:'ad breaks'};
 function twitchNouns(ids){
-  const words = ids.map(id => TWITCH_NOUNS[id] || id);
+  return andList(ids.map(id => TWITCH_NOUNS[id] || id));
+}
+// "a, b and c".
+function andList(words){
   return words.length > 1 ? words.slice(0, -1).join(', ') + ' and ' + words[words.length - 1] : words.join('');
+}
+// What the Twitch login can't do until it logs in again (a login from
+// before InstantClone asked for it), in words.
+function twitchMissing(){
+  return andList(S.data.twitch.main.missing || []);
 }
 // The Twitch events, by id, in this state.
 function twitchEventsIn(state){
@@ -4704,6 +5048,7 @@ const Builder = {
   // Editor.open, {back} as in Modal.back (default: the catalog, if open).
   open(i, opts){
     opts = opts || {};
+    dropAddUndos();
     this.back = opts.back !== undefined ? opts.back
       : Modal.kind === 'catalog' ? {title:'Back to the catalog', go:() => Catalog.reopen()} : null;
     TRIES.clear();
@@ -4789,7 +5134,11 @@ const Builder = {
       if (h.trigger.type === 'scene') ObsLive.watch();
     }
     if (selected && selected.type === 'obs') ObsLive.watch();
+    if (selected && selected.type === 'overlay') alertStage(selected, h, false);
   },
+  // Whether it still shows `step`: an upload or a design picked a moment
+  // ago lands only there.
+  editing(step){ return Modal.kind === 'builder' && Array.isArray(this.sel) && this.has(this.sel) && this.stepAt(this.sel) === step; },
   // Each trigger's tab label. Two alike get a number, so no two tabs read
   // the same and the one being edited is never in doubt.
   triggerTabs(){
@@ -4828,9 +5177,13 @@ const Builder = {
     const afterKey = this.after ? pathKey(this.after) : null;
     const tool = (act, path, icon, label, extra) =>
       `<button class="ic-btn-tiny" data-act="${act}" data-path="${path}" aria-label="${label}" title="${label}"${extra || ''}>${svg(icon)}</button>`;
+    // A check on the alert's amount is one of its bigger ones (Bigger ones
+    // in the editor): it reads as amounts, not as Then and Otherwise.
+    const amount = tierVar(this.handler());
     const out = (steps || []).map((s, n) => {
       const path = base.concat(n), pk = pathKey(path), id = uidOf(s);
-      const k = KINDS[s.type] || {label:s.type, tag:'?', c:'#888'};
+      const tier = s.type === 'if' && amount && isTierCheck(s, amount) ? `${s.params.right} ${TIER_UNITS[amount]}` : '';
+      const k = tier ? Object.assign({}, KINDS.if, {label:'Bigger alerts'}) : KINDS[s.type] || {label:s.type, tag:'?', c:'#888'};
       const off = s.enabled === false;
       // Inside a switched-off check, nothing runs: nothing is missing.
       const missing = off || this.insideOff(path) ? '' : stepMissing(s);
@@ -4839,7 +5192,7 @@ const Builder = {
       let html = `<div class="ig-step${selKey === pk ? ' on' : ''}${off ? ' off' : ''}${missing ? ' warn' : ''}" data-path="${pk}" style="--c:${k.c}" data-key="s-${id}">
         <button type="button" class="ig-step-main" data-act="b-sel" data-path="${pk}"${selKey === pk ? ' aria-current="true"' : ''}
           title="Alt+Up or Alt+Down moves it, Ctrl+D duplicates it, Delete removes it">
-          <span class="ig-step-ic">${svg(k.icon || 'steps')}</span><span class="ig-step-body"><span class="ig-step-kind">${esc(k.label)}</span><span class="ig-step-text">${cardSentence(s)}${off ? '<span class="sr-only">, switched off</span>' : ''}</span></span></button>
+          <span class="ig-step-ic">${svg(k.icon || 'steps')}</span><span class="ig-step-body"><span class="ig-step-kind">${esc(k.label)}</span><span class="ig-step-text">${tier ? `From ${esc(tier)} up, a bigger one plays` : cardSentence(s)}${off ? '<span class="sr-only">, switched off</span>' : ''}</span>${s.type === 'overlay' ? alertMetaHtml(s) : ''}</span></button>
         ${missing ? `<span class="ig-step-warn">${esc(missing)}</span>`
           : unknown.length ? `<span class="ig-step-warn soft">${unknown.map(u => `{${esc(u.name)}}`).join(' ')}: nothing fills ${unknown.length > 1 ? 'these' : 'it'}</span>` : ''}
         <span class="ig-step-tools">
@@ -4851,8 +5204,8 @@ const Builder = {
         </span></div>`;
       if (s.type === 'if'){
         html += `<div class="ig-branch" data-key="br-${id}"><div class="ig-lanes">
-          <div class="ig-lane yes"><div class="ig-branch-label">${svg('check')}Then</div><div class="ig-branch-list" data-flip data-list="${pathKey(path.concat('then'))}">${this.stepsHtml(s.then, path.concat('then'), id + 't')}</div></div>
-          <div class="ig-lane no"><div class="ig-branch-label else">${svg('x')}Otherwise</div><div class="ig-branch-list" data-flip data-list="${pathKey(path.concat('else'))}">${this.stepsHtml(s.else, path.concat('else'), id + 'e')}</div></div>
+          <div class="ig-lane yes"><div class="ig-branch-label">${svg('check')}${tier ? 'Below ' + esc(tier) : 'Then'}</div><div class="ig-branch-list" data-flip data-list="${pathKey(path.concat('then'))}">${this.stepsHtml(s.then, path.concat('then'), id + 't')}</div></div>
+          <div class="ig-lane no"><div class="ig-branch-label else">${svg(tier ? 'up' : 'x')}${tier ? 'From ' + esc(tier) : 'Otherwise'}</div><div class="ig-branch-list" data-flip data-list="${pathKey(path.concat('else'))}">${this.stepsHtml(s.else, path.concat('else'), id + 'e')}</div></div>
         </div></div>`;
       }
       if (afterKey === pk){
@@ -4892,9 +5245,7 @@ const Builder = {
   // the list at `base`: MAX_STEPS in all, checks 4 deep at most. Says why
   // when they don't.
   roomFor(base, count, levels){
-    let total = 0;
-    this.d.handlers.forEach(h => walk(h.steps, () => { total++; }));
-    if (total + count > MAX_STEPS){ toast(`That's the most steps one integration can have (${MAX_STEPS})`, 'info'); return false; }
+    if (!stepsFit(this.d, count)) return false;
     if (!nestFits(base, levels || 0)){ toast('Checks go 4 deep at most: add it a level up', 'info'); return false; }
     return true;
   },
@@ -5045,13 +5396,18 @@ const Builder = {
             + (edit === 'last' && s.params.ping ? note('Only when it posts a new message: an update never pings.') : '') : '')
           + note('<span class="mono">&lt;t:{hold_ends_at}:R&gt;</span> shows a live countdown in Discord.');
       }
+      case 'dock': return field('text', 'Line', {ph:'{user} cheered {bits} bits'})
+        + field('group', "Group, for the dock's filter", {ph:'Bits'})
+        + field('replay', 'Replay', {select:[['', 'Plays the alert this run showed before it'], ['no', 'None']]})
+        + note("Shows in every OBS dock with the Events widget on, newest first. It lasts until InstantClone restarts.");
       case 'timeline': return field('text', 'Line', {area:true, ph:'⭐ Highlight · [clip]({clip.url})'})
         + field('kind', 'It is', {select:Object.entries(TIMELINE_KINDS)})
         + field('at', 'It marks', {select:[['live', 'What you do now (lands after the delay)'], ['aired', 'What viewers see now']]})
         + note('The timeline is this stream\'s, shared by every integration: <span class="mono">{timeline}</span> shows it, <span class="mono">{chapters}</span> lists the chapters for YouTube. A new stream starts a new one.')
         + note('A button or a scene is pressed live: "what you do now". A mod\'s chat command is about what they saw: "what viewers see now".');
       case 'chat': return field('text', 'Message', {area:true}) + field('as', 'Send as', {select:[['', 'Your account'], ['bot', 'Bot account']]})
-        + field('reply', 'Reply to the viewer', {select:[['', 'No'], ['yes', 'Yes, in their thread']]});
+        + field('reply', 'Reply to the viewer', {select:[['', 'No'], ['yes', 'Yes, in their thread']]})
+        + note('Start it with a Twitch command to run one: <span class="mono">/timeout {user} 10m</span>, <span class="mono">/ban</span>, <span class="mono">/unban</span>, <span class="mono">/shoutout</span>, <span class="mono">/announce</span> or <span class="mono">/me</span>. Your account runs it. What a viewer types can fill it in, never start one.');
       case 'phone': return field('title', 'Title') + field('text', 'Message', {area:true}) + field('priority', 'Priority', {select:[['', 'Normal'], ['high', 'High'], ['urgent', 'Urgent']]});
       case 'http': return field('method', 'Method', {select:['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => [m, m])})
         + field('url', 'Address', {mono:true, secret:true, ph:'https://api.example/rank/{arg1}'})
@@ -5116,6 +5472,21 @@ const Builder = {
       case 'channel': return field('title', 'New title (blank: leave it as it is)', {ph:'{args}'})
         + field('category', 'New category (blank: leave it as it is)', {ph:'{args}, or VALORANT'})
         + note('A category can be typed loosely: "valo" finds VALORANT. Later steps can use <span class="mono">{stream.category}</span> (its name on Twitch), <span class="mono">{stream.ok}</span> and, when it failed, <span class="mono">{stream.error}</span>.');
+      case 'goal': {
+        const timer = s.params.what === 'timer', word = timer ? 'timer' : 'goal';
+        const made = trackersOf(word).map(x => [x.id, x.name]);
+        // One that was deleted since still shows, so the step says what it lost.
+        const options = !s.params.id || made.some(([id]) => id === s.params.id) ? made : [[s.params.id, s.params.id + ' (deleted)']].concat(made);
+        const does = timer ? [['start', 'Start it'], ['pause', 'Pause it'], ['add', 'Add time'], ['subtract', 'Take time off'], ['set', 'Set the time left'], ['reset', 'Back to its start, stopped']]
+          : [['add', 'Add'], ['subtract', 'Subtract'], ['set', 'Set to'], ['reset', 'Reset to 0']];
+        const takesAmount = ['add', 'subtract', 'set'].includes(s.params.action);
+        return field('what', 'Change', {select:[['', 'A goal'], ['timer', 'A timer']]})
+          + (options.length ? field('id', timer ? 'Timer' : 'Goal', {select:[['', `Pick a ${word}`]].concat(options)})
+            : note(`No ${word} yet. Make one in <b>Overlay › Goals and timers</b>.`))
+          + field('action', 'Do', {select:does})
+          + (takesAmount ? field('amount', timer ? 'Seconds, or a value like {arg1}' : 'How much, or a value like {arg1}', {mono:true, ph:timer ? '60' : '1'}) : '')
+          + note(`Any message can say where it stands: <span class="mono">{${word}.${esc(s.params.id || 'name')}}</span>${timer ? '' : `, and <span class="mono">{goal.${esc(s.params.id || 'name')}.target}</span>`}. Tests never change your goals and timers.`);
+      }
       case 'clip': return note('Clips the last moments of your stream. Later steps can use <span class="mono">{clip.url}</span>, <span class="mono">{clip.ok}</span> and, when it failed, <span class="mono">{clip.error}</span>.');
       case 'program': return (localLocked() ? warnHtml(esc(LOCAL_LOCK_TEXT)) : '')
         + field('path', 'Program (a fixed path, no variables)', {mono:true, fixed:true, ph:'C:\\Tools\\thing.exe'}) + field('args', 'Arguments', {mono:true, ph:'--scene "Replay"'})
@@ -5129,16 +5500,24 @@ const Builder = {
         + field('keep', 'Keep it', {select:[['', 'For this run'], ['yes', 'Between runs and streams']]})
         + note(s.params.keep === 'yes' ? `Later steps use it as ${MONO}{${esc(s.params.name || 'name')}}</span>; any other run reads it as ${MONO}{saved.${esc(s.params.name || 'name')}}</span>.`
           : 'Later steps use it as <span class="mono">{name}</span>. Lasts for this run.');
-      case 'overlay': return field('title', 'Small title', {ph:'Clip'}) + field('text', 'Text', {area:true, ph:'{user} just clipped that'})
-        + field('seconds', 'On screen for', {select:[['3', '3 s'], ['6', '6 s'], ['10', '10 s'], ['15', '15 s'], ['30', '30 s']]
-          .concat(['', '3', '6', '10', '15', '30'].includes(s.params.seconds || '') ? [] : [[s.params.seconds, s.params.seconds + ' s']])})
-        + field('color', 'Accent, like #ff7eb6 (empty: the theme\'s)', {mono:true, fixed:true, ph:'the theme\'s'})
-        + field('sound', 'Sound: theme, chime, pop, bell, rise, coin, sparkle, whoosh, fanfare, zap, blip, an upload (media:name) or a link', {mono:true, fixed:true, ph:'none'})
-        + field('volume', 'Volume, 0 to 100', {mono:true, fixed:true, ph:'70'})
-        + field('image', 'Picture: an upload (media:name) or a link to a PNG, JPG or GIF', {mono:true, fixed:true, ph:'https://…/party.gif'})
-        + alertsStatusHtml(true)
-        + `<button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="alert-show">${svg('play', ' class="ig-btn-ic"')}Show it on stream</button>`
-        + note('Tests never put anything on stream: "Show it on stream" does, with sample values.');
+      case 'overlay': {
+        const p = s.params;
+        const seconds = ALERT_SECONDS.includes(p.seconds || '6') ? ALERT_SECONDS : ALERT_SECONDS.concat(p.seconds);
+        return `<div class="ig-live ig-live-alert ig-bld-alert">
+            <div class="ig-live-row"><span class="ig-live-tag">ON STREAM · LIVE PREVIEW</span>
+              <button class="ig-link" data-act="alert-replay">${svg('play', ' class="ig-btn-ic"')}Play it</button></div>
+            <div class="ig-ed-stage"><iframe class="ig-stage-frame" src="/alerts?demo" title="Alert preview" tabindex="-1" aria-hidden="true"></iframe></div></div>`
+          + field('title', 'Small title', {ph:'Clip'}) + field('text', 'Text', {area:true, ph:'{user} just clipped that'})
+          + field('message', 'Viewer\'s message (optional)', {ph:'{message}'})
+          + `<div class="ic-label">Design</div>${designTilesHtml(p.design)}
+            <div class="ic-label">Accent</div>${accentPickerHtml(s)}
+            <div class="ic-label">Sound</div>${soundControlsHtml(s)}
+            <div class="ic-label">Picture</div>${picturePickerHtml(p.image || '', 'pick-picture')}
+            <div class="ic-label">On screen for</div>${segHtml(seconds.map(n => [n, n + ' s']), p.seconds || '6', 'set-seconds')}`
+          + alertsStatusHtml(true)
+          + `<button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="alert-show">${svg('play', ' class="ig-btn-ic"')}Show it on stream</button>`
+          + note('Tests never put anything on stream: "Show it on stream" does, with sample values.');
+      }
       case 'edit_text': {
         const op = EDIT_OPS[s.params.op] || EDIT_OPS.first_line;
         const got = editTextSample(s, sampleMap(this.handler()));
@@ -5357,10 +5736,14 @@ const Builder = {
     else if (b === 't-live') t.only_live = el.checked;
     else if (b === 't-param'){ if (!paramInput(t, el)) return; }
     else if (rulesInput(t, el, 't-') || sceneInput(t, el, 't-') || onlyLiveInput(t, el, 't-') || onlyLiveInput(t, el, '')){ /* changed below */ }
+    // An alert's volume slider and any-colour swatch.
+    else if ((b === 'volume' || b === 'color') && Array.isArray(this.sel)) this.stepAt(this.sel).params[b] = el.value.trim();
     else if (b === 'p'){
       const s = this.stepAt(this.sel);
       s.params[el.dataset.name] = el.value;
       if (el.dataset.name === 'action' || el.dataset.name === 'wait') nameAnswer(h, s);
+      // A goal and a timer don't share names or what can be done to them.
+      if (s.type === 'goal' && el.dataset.name === 'what') Object.assign(s.params, {id:'', action:'add', amount:el.value === 'timer' ? '60' : '1'});
     }
     else if (b === 'p-dur'){ const ms = durationOf(0, 3600000); if (ms == null) return; this.stepAt(this.sel).params[el.dataset.name] = String(ms); }
     else if (b === 'bf-name' || b === 'bf-value'){
@@ -5398,9 +5781,10 @@ const Builder = {
     const d = this.d;
     if (rulesAct(this.handler().trigger, a, el) || sceneAct(this.handler().trigger, a, el)){ this.changed(); return true; }
     const selected = () => Array.isArray(this.sel) ? this.stepAt(this.sel) : null;
+    const alert = selected();
+    if (alert && alert.type === 'overlay' && alertAct(a, el, alert, this.handler(), this)) return true;
     switch (a){
       case 'b-color': { const s = selected(); if (s) s.params.color = el.dataset.v; this.changed(); return true; }
-      case 'alert-show': { const s = selected(); if (s) showAlertNow(s, this.handler(), el); return true; }
       case 'b-obs-pick': {
         const s = selected();
         if (!s) return true;
@@ -5796,11 +6180,12 @@ function newStep(kind, trigger){
     wait:{ms:'10000'}, wait_delay:{}, if:{left:'', op:'is', right:''}, stop:{},
     delay_action:{action:'cut'}, marker:{description:'Highlight'}, clip:{}, program:{path:'', args:''},
     file:{path:'', text:'', mode:''}, set_var:{name:'', value:''}, counter:{name:'count', op:'', by:'1'},
-    overlay:{title:'', text:'', seconds:'6'}, edit_text:{input:'', op:'first_line', a:'', b:'', save_as:'text'},
+    overlay:{title:'', text:'', seconds:'6'}, dock:{text:'', group:''}, edit_text:{input:'', op:'first_line', a:'', b:'', save_as:'text'},
     obs:{action:'scene', scene:'', source:'', text:'', filter:'', hotkey:''},
     light:{device:'', name:'', plug:'', action:'color', color:'red', brightness:''},
     viewer:{value:'coins', who:'', op:'', by:'10'}, math:{a:'', op:'multiply', b:'2', save_as:'result'},
     wait_chat:{text:'', from:'', seconds:'30', save_as:'reply'}, call:{block:''}, reward:{title:'', action:'off'}, channel:{title:'', category:''},
+    goal:{what:'', id:(tracking().goals[0] || {}).id || '', action:'add', amount:'1'},
   }[kind] || {};
   return {type:kind, params:clone(p), then:[], else:[]};
 }
@@ -6113,6 +6498,7 @@ function stepSentence(s){
   const q = v => `“${highlightVars(v || '')}”`;
   switch (s.type){
     case 'discord': return `Discord ${p.style === 'card' ? 'card ' : ''}${esc(channelName(p.connection))} ${q(p.style === 'card' ? p.title || p.text : p.text)}${p.edit === 'last' ? ' · updates the same message' : p.edit === 'close' ? ' · updates it, then starts fresh' : p.ping ? ' · @' + esc(p.ping) : ''}`;
+    case 'dock': return `Dock ${p.group ? esc(p.group) + ' ' : ''}${q(p.text)}`;
     case 'timeline': return `Timeline ${esc((TIMELINE_KINDS[p.kind] || TIMELINE_KINDS.note).toLowerCase())} ${q(p.text)}`;
     case 'chat': return `Chat ${q(p.text)}${p.as === 'bot' ? ' · as bot' : ''}${p.reply === 'yes' ? ' · as a reply' : ''}`;
     case 'phone': return `Phone ${q(p.text)}`;
@@ -6141,6 +6527,13 @@ function stepSentence(s){
     case 'math': return `${highlightVars(p.a || '0')} ${esc((MATH_OPS[p.op || ''] || '').toLowerCase())} ${highlightVars(p.b || '0')} → <span class="v">{${esc((p.save_as || '').trim() || 'result')}}</span>`;
     case 'wait_chat': return `Wait up to ${highlightVars(p.seconds || '30')} s for ${p.text ? q(p.text) : 'a message'} from ${{viewer:'the viewer', target:'who they named'}[p.from] || 'anyone'}`;
     case 'call': return `Run the block ${esc(p.block || '…')}`;
+    case 'goal': {
+      const timer = p.what === 'timer', found = trackersOf(timer ? 'timer' : 'goal').find(x => x.id === p.id);
+      const name = q(found ? found.name : p.id || '…'), n = q(p.amount || '1');
+      if (timer) return {start:`Start the timer ${name}`, pause:`Pause the timer ${name}`, reset:`Reset the timer ${name}`,
+        subtract:`Take ${n} s off the timer ${name}`, set:`Set the timer ${name} to ${n} s`}[p.action] || `Add ${n} s to the timer ${name}`;
+      return {subtract:`Take ${n} from the goal ${name}`, set:`Set the goal ${name} to ${n}`, reset:`Reset the goal ${name}`}[p.action] || `Add ${n} to the goal ${name}`;
+    }
     case 'reward': return `Switch the reward ${q(p.title || '…')} ${p.action === 'off' ? 'off' : 'on'}`;
     case 'channel': return [p.title && `Set the title to ${q(p.title)}`, p.category && `${p.title ? 'the' : 'Set the'} category to ${q(p.category)}`].filter(Boolean).join(', ') || 'Set the title or category';
     case 'overlay': return `On stream ${q(p.text)}`;
@@ -6233,14 +6626,14 @@ const Conn = {
       <div class="dest-form-body ig-conn-body"><div class="ig-cxs">${cards}</div></div>`);
     if (this.tab === 'obs') ObsLive.watch();
   },
-  // The alerts page: in OBS or not, its look in a line, and the designer.
+  // The alerts page: in OBS or not, the design alerts play by default, and
+  // the way to the Alerts page, where every alert's look is.
   alertsHtml(){
-    const a = S.data.alerts || {}, look = lookOf(), own = THEMES[themeOf(look)];
+    const a = S.data.alerts || {}, look = lookOf();
     const url = a.url || `${location.origin}/alerts`;
-    const font = look.font ? (look.font === 'system' ? 'this PC\'s font' : look.font) : own.font;
     return `<div class="sys-section ig-form ig-setup">${alertsStatusHtml(false)}
       <div class="ig-look-sum"><span class="ig-look-dot" style="--sw:${alertColor('', look)}"></span>
-        <span class="ig-look-sum-t"><b>${esc(own.name)}</b> · ${esc(font)} · ${esc(soundLabel(look.sound || own.sound))}${look.css ? ' · custom CSS' : ''}</span>
+        <span class="ig-look-sum-t">Alerts play <b>${esc(designLabel(''))}</b> unless they have a design of their own</span>
         <button class="ic-btn ic-btn-primary ig-small" data-act="alerts-open">Change the look</button></div>
       <button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="alert-test">${svg('play', ' class="ig-btn-ic"')}Show a test alert</button>
       <details class="ig-more-fields"><summary>Add it to OBS by hand</summary>
@@ -6285,7 +6678,11 @@ const Conn = {
         + `VOD markers and clips go to ${esc(t.main.login)}'s channel, and fail while it's offline. `
         + 'To use them on the channel you stream to, disconnect and log in with that account.')
       : '';
-    return (t.notice ? warnHtml(esc(t.notice)) : '') + other
+    const flow = t.login, logging = flow && flow.which === 'main';
+    const missing = twitchMissing() ? `<div class="lan-warn ig-notice" data-key="t-missing"><span class="lw-ic">⚠</span>
+        <span class="ig-notice-text">Your login is from before InstantClone asked for <b>${esc(twitchMissing())}</b>: until you log in again, those fail. Same account; everything else keeps working.</span>
+        ${logging ? '' : '<button class="ic-btn ic-btn-primary ig-small" data-act="t-login" data-which="main">Log in again</button>'}</div>` : '';
+    return (t.notice ? warnHtml(esc(t.notice)) : '') + other + missing
       + this.accountHtml('main', t.main, 'Your Twitch account', 'Log in once: InstantClone keeps it fresh.')
       + this.twitchEventsHtml(t)
       + this.accountHtml('bot', t.bot, 'Bot account (optional)', 'A second account that posts in chat instead of you.')
@@ -6306,8 +6703,8 @@ const Conn = {
       <div class="ic-label">Twitch events</div>
       ${hearing.length ? `<div class="ig-meter"><span class="ig-meter-dot ok"></span><span>Listening for ${esc(twitchNouns(hearing))}</span></div>` : ''}
       ${ev.state === 'error' ? `<div class="ig-meter"><span class="ig-meter-dot off"></span><span>${esc(ev.problem)}</span></div>` : ''}
-      ${consent.length ? `<div class="lan-warn ig-notice"><span class="lw-ic">⚠</span>
-        <span class="ig-notice-text">Twitch needs your OK for <b>${esc(twitchNouns(consent))}</b>. Your login is from before these events: Allow logs you in again with the same account, asking Twitch only to read them.</span>
+      ${consent.length && !twitchMissing() ? `<div class="lan-warn ig-notice"><span class="lw-ic">⚠</span>
+        <span class="ig-notice-text">Twitch needs your OK for <b>${esc(twitchNouns(consent))}</b>. Your login is from before these events: Allow logs you in again with the same account.</span>
         ${logging ? '' : '<button class="ic-btn ic-btn-primary ig-small" data-act="t-login" data-which="main">Allow on Twitch</button>'}</div>` : ''}
     </div>`;
   },
@@ -6452,11 +6849,46 @@ const Conn = {
 
 // ---------------------------------------------------------------- alerts page
 
-// The alerts browser source: where "Show on stream" cards appear. How
-// every card looks is the page's theme (S.data.alerts.look, edited in
-// AlertsLook); each alert can bring its own accent, sound and picture.
-// Every preview here is the real page (/alerts?demo) drawing a sample, so
-// what you see is what OBS shows.
+// The alerts browser source: where "Show on stream" cards appear. Each
+// alert plays a design (an overlay made in the Studio): its own, or the
+// default (S.data.alerts.look.design). The built-in designs are the
+// themes' cards, as layers. Every preview here is the real page
+// (/alerts?demo) drawing a sample, so what you see is what OBS shows.
+
+// The name of the design an alert plays: its own (`slug`), or the default
+// when it has none or its own is gone.
+function designLabel(slug){
+  const d = Stage.designNamed(slug || '') || Stage.designNamed(lookOf().design || '');
+  return d ? d.name : slug || lookOf().design || 'the default';
+}
+// The designs an alert can play, as tiles: yours, then the ready-made ones
+// in their card's colours. The one it plays (`slug`, or the default) is lit.
+function designTilesHtml(slug){
+  const cur = Stage.designNamed(slug || '') || Stage.designNamed(lookOf().design || '');
+  const tile = d => {
+    const t = THEMES[d.theme], on = !!cur && cur.slug === d.slug;
+    return `<button class="ovg-tile${on ? ' sel' : ''}" data-act="pick-design" data-slug="${esc(d.slug)}" aria-pressed="${on}" style="--tc:var(--accent)">
+      ${designIconHtml(d.theme)}<span class="ovg-tile-txt"><span class="ovg-tile-name">${esc(d.name)}</span>
+      <span class="ovg-tile-path">${esc(t ? t.motion : '')}</span></span></button>`;
+  };
+  const list = Stage.allDesigns(), mine = list.filter(d => !d.theme), ready = list.filter(d => d.theme);
+  return (mine.length ? `<div class="ovg-group">Yours</div><div class="og-dgrid">${mine.map(tile).join('')}</div>` : '')
+    + `<div class="ovg-group">Ready-made</div><div class="og-dgrid">${ready.map(tile).join('')}</div>`;
+}
+// A design's icon: a ready-made one's card colours (its words on its
+// background, under a line of its accent), or layers for one of yours.
+function designIconHtml(theme){
+  const t = THEMES[theme];
+  return t ? `<span class="og-dswatch" style="--sb:${t.bg};--sf:${t.fg};--sa:${t.accent}">Aa</span>`
+    : `<span class="ovg-tile-ic">${svg('layers')}</span>`;
+}
+// How alerts look is the Overlay tab's Alerts page: there from anywhere,
+// leaving an editor only if it can be left.
+function openAlertsPage(){
+  if (modalOpen()){ Modal.close(); if (modalOpen()) return; }
+  showTab('overlay');
+  showSubTab('overlay', 'alerts');
+}
 
 // Each theme as web/alerts.html draws it: its name, colors, opacity (%),
 // corners (px), font, sound, its own entrance and where a picture goes.
@@ -6476,8 +6908,6 @@ const ALERT_ANIMS = [['slide', 'Slide'], ['pop', 'Pop'], ['fade', 'Fade'], ['zoo
 const ALERT_SOUNDS = [['chime', 'Chime'], ['pop', 'Pop'], ['bell', 'Bell'], ['rise', 'Rise'], ['coin', 'Coin'],
   ['sparkle', 'Sparkle'], ['whoosh', 'Whoosh'], ['fanfare', 'Fanfare'], ['zap', 'Zap'], ['blip', 'Blip']];
 const ALERT_SECONDS = ['3', '6', '10', '15', '30'];
-// What the theme designer's "Back to ... as it comes" clears.
-const LOOK_STYLE = ['font', 'text', 'background', 'accent', 'opacity', 'radius', 'animation', 'picture'];
 // A link the alerts page can load as it is (alerts::is_web_link), and an
 // upload (alert_media's `media:<name>`).
 const WEB_LINK = /^https?:\/\/[^\s"'<>\\`{}]+$/;
@@ -6490,7 +6920,7 @@ function mediaOf(kind){ return ((S.data.alerts || {}).media || []).filter(m => m
 
 function soundLabel(sound){
   if (!sound) return 'none';
-  if (sound === 'theme') return 'theme sound';
+  if (sound === 'theme') return 'the design\'s';
   const found = ALERT_SOUNDS.find(([id]) => id === sound);
   if (found) return found[1].toLowerCase();
   return MEDIA_REF.test(sound) ? sound.slice(6) : 'a link';
@@ -6501,7 +6931,7 @@ function alertColor(value, look){
   return /^#[0-9a-f]{6}$/i.test(look.accent || '') ? look.accent : THEMES[themeOf(look)].accent;
 }
 function alertColorName(value){
-  if (!value) return 'theme\'s';
+  if (!value) return 'design\'s';
   const found = CARD_COLORS.find(([c]) => c === value.toLowerCase());
   return found ? found[1].toLowerCase() : value.toLowerCase();
 }
@@ -6515,8 +6945,8 @@ function alertsPill(){
 }
 
 // Is the alerts page in OBS, with one click to put it there. `compact`
-// is the editor's line under an alert's preview.
-function alertsStatusHtml(compact){
+// is the editor's line under an alert's preview; `after` ends the line.
+function alertsStatusHtml(compact, after = ''){
   const a = S.data.alerts || {};
   const inObs = a.in_obs > 0;
   const line = inObs ? 'Your alerts page is open in OBS.'
@@ -6526,27 +6956,101 @@ function alertsStatusHtml(compact){
     ? `<button class="ic-btn ic-btn-primary ig-small" data-act="alerts-add">${svg('plus', ' class="ig-btn-ic"')}Add to OBS</button>`
     : compact ? '' : '<button class="ic-btn ic-btn-ghost ig-small" data-act="alerts-add">Add to the scene on air</button>';
   return `<div class="ig-alerts-status${inObs ? ' ok' : ''}" data-key="alerts-status">
-    <span class="ig-meter-dot ${inObs ? 'ok' : 'off'}"></span><span class="ig-alerts-line">${line}</span>${action}</div>`;
-}
-
-// The first alert set up, with sample values: what previews show.
-function sampleAlert(){
-  for (const i of S.data.integrations){
-    for (const h of i.handlers || []){
-      const step = (h.steps || []).find(s => s.type === 'overlay' && s.enabled !== false);
-      if (step) return alertCardOf(step, h);
-    }
-  }
-  return {title:'New follower', text:'Nat', sound:'theme', image:''};
+    <span class="ig-meter-dot ${inObs ? 'ok' : 'off'}"></span><span class="ig-alerts-line">${line}</span>${action}${after}</div>`;
 }
 
 // An alert step as the page shows it, filled in with sample values.
-function alertCardOf(step, h){
-  const p = step.params, vars = sampleMap(h);
-  return {title:renderSample(p.title || '', vars), text:renderSample(p.text || '', vars), seconds:p.seconds || '6',
-    color:p.color || '', sound:p.sound || '', volume:p.volume || '', image:p.image || ''};
+// ---- An alert's look, picked: the editor's chips and the builder share
+// these. A row of segments (one picked), as the editor's options use.
+function segHtml(items, cur, act){
+  return `<div class="sub-tabs ig-seg">${items.map(([id, label]) =>
+    `<button class="sub-tab${id === cur ? ' on' : ''}" data-act="${act}" data-v="${esc(id)}" aria-pressed="${id === cur}">${esc(label)}</button>`).join('')}${SEG_IND}</div>`;
+}
+// The accent swatches: the design's own first, then the palette and any
+// colour.
+function accentPickerHtml(step){
+  const mine = /^#[0-9a-f]{6}$/i.test(step.params.color || '') ? step.params.color.toLowerCase() : '';
+  const shown = alertColor(mine, lookOf());
+  const known = !mine || CARD_COLORS.some(([c]) => c === mine);
+  const swatch = (c, label, style) => `<button class="ig-swatch${c === mine ? ' on' : ''}" style="--sw:${style}" data-act="set-color" data-v="${c}"
+    role="radio" aria-checked="${c === mine}" aria-label="${label}" title="${label}"></button>`;
+  const swatches = [swatch('', "The design's", alertColor('', lookOf()))].concat(CARD_COLORS.map(([c, label]) => swatch(c, label, c))).join('');
+  return `<div class="ig-swatches"><span class="ig-swatch-set" role="radiogroup" aria-label="Alert accent">${swatches}</span>
+    <label class="ig-swatch custom${known ? '' : ' on'}" title="Any color"><input type="color" data-bind="color" value="${esc(shown)}" aria-label="Any color (now ${esc(shown)})"></label></div>`;
+}
+// The sounds to pick from, its volume, and Play.
+function soundControlsHtml(step){
+  const sound = step.params.sound || '';
+  const volume = step.params.volume === undefined || step.params.volume === '' ? 70 : +step.params.volume;
+  return `${soundPickerHtml(sound, 'pick-sound', true)}
+    <div class="ig-volume"><label for="ig-vol">Volume</label><input id="ig-vol" type="range" min="0" max="100" step="5" data-bind="volume" value="${volume}">
+      <span class="mono">${volume}%</span>
+      <button class="ic-btn ic-btn-ghost ig-small" data-act="sound-play" ${sound ? '' : 'disabled'}>${svg('play', ' class="ig-btn-ic"')}Play</button></div>`;
+}
+// The alert on the real page, in the page's look but in the middle of
+// the box, so a short stage shows it whole. `replay` 'full' plays it
+// coming in and going out (alerts.html showDemo).
+function alertStage(step, h, replay){
+  const frame = q('.ig-ed-stage .ig-stage-frame');
+  if (!frame) return;
+  const look = Object.assign({}, lookOf(), {position:'middle', align:'center'});
+  stageShow(frame, frame.parentElement.clientWidth / 0.72, {look, card:alertCardOf(step, h), replay, sound:!!replay});
+}
+// A click on those pieces, for the editor and the builder alike: `step` is
+// the alert it changes; `owner` redraws (changed) and says whether it
+// still shows that step (editing), as an upload or a design takes a moment.
+function alertAct(a, el, step, h, owner){
+  const v = el.dataset.v;
+  switch (a){
+    case 'set-color': step.params.color = v; owner.changed(); return true;
+    case 'pick-sound':
+      step.params.sound = v;
+      owner.changed();
+      if (v){ playAlertSound(alertCardOf(step, h)); showPlaying('pick-sound', v); }
+      return true;
+    case 'pick-picture': step.params.image = v; owner.changed(); return true;
+    // A ready-made design is saved first; it plays in as it is picked.
+    case 'pick-design':
+      Stage.ensureDesign(el.dataset.slug).then(ok => {
+        if (!ok || !owner.editing(step)) return;
+        step.params.design = el.dataset.slug;
+        owner.changed();
+        alertStage(step, h, 'full');
+      });
+      return true;
+    case 'media-upload':
+      uploadMedia(el.dataset.kind).then(ref => {
+        if (!ref || !owner.editing(step)) return;
+        step.params[el.dataset.kind === 'sound' ? 'sound' : 'image'] = ref;
+        owner.changed();
+        if (el.dataset.kind === 'sound') playAlertSound(alertCardOf(step, h));
+      });
+      return true;
+    case 'set-seconds': step.params.seconds = v; owner.changed(); return true;
+    case 'sound-play': playAlertSound(alertCardOf(step, h)); return true;
+    case 'alert-replay': alertStage(step, h, 'full'); return true;
+    case 'alert-show': showAlertNow(step, h, el); return true;
+  }
+  return false;
 }
 
+// What an alert step's card says under its words: its design, its own
+// accent (the design's needs no dot) and its sound.
+function alertMetaHtml(step){
+  const p = step.params;
+  const dot = /^#[0-9a-f]{6}$/i.test(p.color || '') ? `<i style="--sw:${esc(p.color)}" aria-hidden="true"></i>` : '';
+  return `<span class="ig-step-meta">${dot}${esc(designLabel(p.design))} · ${esc(soundLabel(p.sound))}</span>`;
+}
+
+function alertCardOf(step, h){
+  const p = step.params, vars = sampleMap(h);
+  return {title:renderSample(p.title || '', vars), text:renderSample(p.text || '', vars), message:renderSample(p.message || '', vars), seconds:p.seconds || '6',
+    color:p.color || '', sound:p.sound || '', volume:p.volume || '', image:p.image || '', design:p.design || ''};
+}
+
+// The canvas overlays are laid out for: the Overlay tab shows each one at
+// this size, scaled into its preview, as OBS does.
+const OVERLAY_CANVAS = 1920;
 // Fit a real alerts page (`/alerts?demo`, laid out `canvas` px wide) into
 // its box and show it `payload` ({look, card, replay, sound}); a frame
 // still loading gets it once it has. Kept as properties, not attributes:
@@ -6586,17 +7090,6 @@ function showPlaying(act, v){
   b.icPlaying = setTimeout(() => b.classList.remove('ig-playing'), 1200);
 }
 
-// The font picker's samples: just "Aa" in each font, one small request.
-function loadFontSamples(){
-  if (document.getElementById('ig-font-samples')) return;
-  const link = document.createElement('link');
-  link.id = 'ig-font-samples';
-  link.rel = 'stylesheet';
-  const families = ALERT_FONTS.map(f => 'family=' + encodeURIComponent(f).replace(/%20/g, '+')).join('&');
-  link.href = `https://fonts.googleapis.com/css2?${families}&text=Aa&display=swap`;
-  document.head.appendChild(link);
-}
-
 // Play a sound as the alerts page would, from a hidden page of its own.
 function playAlertSound(card, look){
   let frame = document.getElementById('ig-sound-frame');
@@ -6616,7 +7109,7 @@ function playAlertSound(card, look){
   if (frame.icReady) stagePost(frame, frame.icPayload);
 }
 
-// A sound to pick: for an alert, none or the theme's; for the theme, its
+// A sound to pick: for an alert, none or its design's; for the theme, its
 // own. Then the built-in ones, the uploads (each with its delete), one
 // more upload, and a link. Picking one plays it.
 function soundPickerHtml(current, act, forAlert){
@@ -6624,7 +7117,7 @@ function soundPickerHtml(current, act, forAlert){
   const opt = (id, label) => `<button class="ig-sound${id === current ? ' on' : ''}" data-act="${act}" data-v="${esc(id)}" aria-pressed="${id === current}">
     ${id ? svg('play', ' class="ig-btn-ic"') : ''}${esc(label)}</button>`;
   const items = forAlert
-    ? [opt('', 'None'), opt('theme', `Theme sound (${soundLabel(look.sound || own.sound)})`)]
+    ? [opt('', 'None'), opt('theme', 'The design\'s sound')]
     : [opt('', `${own.name}'s own (${soundLabel(own.sound)})`)];
   ALERT_SOUNDS.forEach(([id, label]) => items.push(opt(id, label)));
   mediaOf('sound').forEach(m => items.push(`<span class="ig-media-item">${opt('media:' + m.name, m.name)}${mediaDelHtml(m.name)}</span>`));
@@ -6711,6 +7204,14 @@ async function showAlertNow(step, h, btn){
   });
 }
 
+// A browser source for an overlay, in the scene on air, in one click.
+async function addOverlayToObs(btn, slug, name){
+  await busy(btn, async () => {
+    const r = await api('/integrations/overlays/add-to-obs', {slug, name});
+    const ok = r && r.ok !== false;
+    toast(ok ? 'Added to the scene on air in OBS' : (r && r.error) || 'OBS didn\'t add it', ok ? 'ok' : 'err', 6000);
+  });
+}
 async function addAlertsToObs(btn){
   await busy(btn, async () => {
     const r = await api('/integrations/alerts/add-to-obs', {});
@@ -6720,228 +7221,6 @@ async function addAlertsToObs(btn){
     setTimeout(() => poll(), 1500);
   });
 }
-
-// ---------------------------------------------------------------- alerts look
-
-// The theme designer: the real page on a stage, the themes to start from,
-// and every part of the look. Changes save on their own a moment later
-// and OBS follows at once.
-const AlertsLook = {
-  saveTimer:null, saving:false,
-  open(){
-    const from = {editor:Editor, builder:Builder, connections:Conn}[Modal.kind] || null;
-    Modal.open('alerts', 1060);
-    Modal.onClose = () => { this.flush(); return true; };
-    if (from) Modal.after = () => from.resume();
-    this.render();
-  },
-  resume(){ this.open(); },
-  look(){ return S.data.alerts.look; },
-  render(){
-    if (Modal.kind !== 'alerts') return;
-    const look = this.look(), theme = themeOf(look), own = THEMES[theme];
-    const styled = LOOK_STYLE.some(k => look[k] !== '' && look[k] != null) || look.sound || look.css;
-    const section = (title, body) => `<section class="ig-look-sec"><div class="ic-label">${title}</div>${body}</section>`;
-    Modal.body(`${modalHead('screen', 'var(--accent)', 'Alerts look', 'How every alert looks and sounds on stream. OBS follows as you change it.')}
-      <div class="dest-form-body ig-look-body">
-        <div class="ig-look-stagecol">
-          <div class="ig-stage" data-key="stage"><iframe class="ig-stage-frame" src="/alerts?demo" title="Alerts preview" tabindex="-1" aria-hidden="true"></iframe></div>
-          <div class="ig-look-acts">
-            <button class="ic-btn ic-btn-ghost ig-small" data-act="look-replay">${svg('play', ' class="ig-btn-ic"')}Play it again</button>
-            <button class="ic-btn ic-btn-ghost ig-small" data-act="alert-test">Show a test alert in OBS</button>
-          </div>
-          ${alertsStatusHtml(false)}
-        </div>
-        <div class="ig-look-controls">
-          ${section('Theme', this.themesHtml(theme))}
-          ${section('Place', this.placeHtml(look))}
-          ${section('Font', this.fontsHtml(look, own))}
-          ${section('Colors', this.colorsHtml(look, own))}
-          ${section('Motion and picture', this.motionHtml(look, own))}
-          ${section('Theme sound', `<div class="muted">Alerts set to "Theme sound" play this.</div>${soundPickerHtml(look.sound || '', 'look-sound', false)}`)}
-          <details class="ig-more-fields"${look.css ? ' open' : ''}><summary>Custom CSS (advanced)</summary>
-            <textarea class="ic-input ig-textarea-code ig-look-css" data-bind="look-css" spellcheck="false" placeholder=".card { letter-spacing: 1px }" aria-label="Custom CSS">${esc(look.css || '')}</textarea>
-            <div class="muted">Comes after the theme, so it wins. Parts: <span class="mono">.card</span> <span class="mono">.pic</span> <span class="mono">.title</span> <span class="mono">.text</span> (its words <span class="mono">.w</span>, letters <span class="mono">.c</span>) <span class="mono">.time</span> <span class="mono">.fx</span>; this theme is <span class="mono">body.theme-${theme}</span>.</div></details>
-          <button class="ic-btn ic-btn-ghost ig-small ig-self-start" data-act="look-reset" ${styled ? '' : 'disabled'}>Back to ${esc(own.name)} as it comes</button>
-        </div>
-      </div>
-      <div class="dest-form-foot"><div class="dest-form-msg muted ig-saved${this.saving ? ' busy' : ''}" data-look-saved>
-        <span class="ig-saved-dot" aria-hidden="true"></span><span data-look-msg>${this.saving ? 'Saving…' : 'Saved: OBS shows it now.'}</span></div>
-        <button class="ic-btn ic-btn-primary" data-act="modal-close">Done</button></div>`);
-    this.sync(true);
-  },
-  themesHtml(theme){
-    return `<div class="ig-themes" role="radiogroup" aria-label="Theme">${Object.entries(THEMES).map(([id, t]) =>
-      `<button class="ig-theme${id === theme ? ' on' : ''}" data-act="look-theme" data-v="${id}" role="radio" aria-checked="${id === theme}">
-        <span class="ig-theme-stage"><iframe class="ig-theme-frame" src="/alerts?demo" tabindex="-1" aria-hidden="true" data-theme="${id}"></iframe></span>
-        <span class="ig-theme-name">${t.name}</span><span class="ig-theme-sub">${esc(t.motion)} · ${soundLabel(t.sound)}</span></button>`).join('')}</div>`;
-  },
-  seg(name, items, cur){
-    return `<div class="sub-tabs ig-seg">${items.map(([id, label]) =>
-      `<button class="sub-tab${id === cur ? ' on' : ''}" data-act="look-set" data-name="${name}" data-v="${id}" aria-pressed="${id === cur}">${esc(label)}</button>`).join('')}${SEG_IND}</div>`;
-  },
-  range(name, label, value, min, max, unit, set){
-    return `<div class="dff"><label>${label}${set ? ` <button class="ig-reset" data-act="look-clear" data-name="${name}">theme's</button>` : ''}</label>
-      <div class="ig-range"><input type="range" min="${min}" max="${max}" step="1" data-bind="look-${name}" value="${value}" aria-label="${label}">
-      <span class="mono" data-out="${name}">${value}${unit}</span></div></div>`;
-  },
-  // Where alerts sit, picked on a little screen: nine spots, and the card
-  // slides to the one picked (index.html places it from data-x/data-y).
-  placeHtml(look){
-    const y = look.position || 'bottom', x = look.align || 'center';
-    const name = (py, px) => py === 'middle' && px === 'center' ? 'Middle' : `${py[0].toUpperCase()}${py.slice(1)} ${px}`;
-    const spots = ['top', 'middle', 'bottom'].flatMap(py => ['left', 'center', 'right'].map(px => {
-      const on = py === y && px === x;
-      return `<button class="ig-spot${on ? ' on' : ''}" data-act="look-place" data-y="${py}" data-x="${px}" role="radio" aria-checked="${on}" aria-label="${name(py, px)}" title="${name(py, px)}"></button>`;
-    })).join('');
-    return `<div class="ig-place-row">
-      <div class="ig-place" data-y="${y}" data-x="${x}" role="radiogroup" aria-label="Where alerts show">${spots}
-        <span class="ig-place-card" style="--sw:${alertColor('', look)}" aria-hidden="true"><i></i><i></i></span></div>
-      <div class="ig-place-side"><div class="ig-place-now"><b>${name(y, x)}</b><span class="muted">of the screen</span></div>
-        ${this.range('scale', 'Size', look.scale || 100, 50, 200, '%', false)}</div></div>`;
-  },
-  // Each font as a tile written in itself (only "Aa", fetched by
-  // loadFontSamples), the theme's own first.
-  fontsHtml(look, own){
-    loadFontSamples();
-    const cur = look.font || '';
-    const tile = (id, family, name, sub) => `<button class="ig-font${id === cur ? ' on' : ''}" data-act="look-set" data-name="font" data-v="${esc(id)}" aria-pressed="${id === cur}" title="${esc(sub || name)}">
-      <span class="ig-font-aa" style="font-family:${family}">Aa</span><span class="ig-font-n">${esc(name)}</span></button>`;
-    const family = f => `'${f}',system-ui,sans-serif`;
-    return `<div class="ig-fonts">${tile('', family(own.font), 'Theme\'s', `${own.name}'s own: ${own.font}`)}
-      ${ALERT_FONTS.map(f => tile(f, family(f), f)).join('')}${tile('system', 'system-ui,sans-serif', 'This PC\'s', 'The font this PC uses')}</div>`;
-  },
-  colorsHtml(look, own){
-    const color = (name, label, fallback) => {
-      const value = look[name] || fallback;
-      return `<div class="ig-colorf${look[name] ? ' set' : ''}" style="--sw:${esc(value)}">
-        <label class="ig-swatch"><input type="color" data-bind="look-color" data-name="${name}" value="${esc(value)}" aria-label="${label} color"></label>
-        <span class="ig-colorf-t"><b>${label}</b><span class="mono" data-out="c-${name}">${look[name] ? esc(value) : 'theme\'s'}</span></span>
-        ${look[name] ? `<button class="ig-reset" data-act="look-clear" data-name="${name}" title="Back to the theme's" aria-label="Back to the theme's ${label.toLowerCase()} color">${svg('rewind')}</button>` : ''}</div>`;
-    };
-    return `<div class="ig-colors">${color('text', 'Text', own.fg)}${color('background', 'Background', own.bg)}${color('accent', 'Accent', own.accent)}</div>
-      <div class="ig-look-grid">${this.range('opacity', 'Background opacity', look.opacity == null ? own.op : look.opacity, 0, 100, '%', look.opacity != null)}
-        ${this.range('radius', 'Corners', look.radius == null ? own.r : look.radius, 0, 48, 'px', look.radius != null)}</div>`;
-  },
-  motionHtml(look, own){
-    const cur = look.animation || '';
-    const anims = [['', `Theme's (${own.motion.toLowerCase()})`]].concat(ALERT_ANIMS).map(([id, label]) =>
-      `<button class="ig-sound${id === cur ? ' on' : ''}" data-act="look-set" data-name="animation" data-v="${id}" aria-pressed="${id === cur}">${esc(label)}</button>`).join('');
-    return `<div class="dff"><label>Comes in with <span class="muted">· point at one to see it</span></label><div class="ig-sounds">${anims}</div></div>
-      <div class="dff"><label>Picture</label>${this.seg('picture', [['', `Theme's (${own.pic === 'top' ? 'above' : 'left'})`], ['left', 'Left'], ['top', 'Above']], look.picture || '')}</div>`;
-  },
-  // Show the look on the stage, and each theme on its tile (`tiles`: only
-  // when redrawn; a slider moving changes none of them). Pointing at a
-  // tile plays that theme's entrance.
-  sync(tiles){
-    const card = sampleAlert(), stage = q('.ig-look-body .ig-stage-frame');
-    stageShow(stage, 1280, {look:this.look(), card});
-    if (!tiles) return;
-    Modal.form.querySelectorAll('.ig-theme-frame').forEach(f => {
-      stageShow(f, 760, {look:{theme:f.dataset.theme, position:'middle', align:'center', scale:170}, card});
-      f.closest('.ig-theme').onpointerenter = () => stagePost(f, {...f.icPayload, replay:true});
-    });
-    // Pointing at an entrance plays it on the stage, nothing saved.
-    Modal.form.querySelectorAll('[data-act="look-set"][data-name="animation"]').forEach(b => {
-      b.onpointerenter = () => stagePost(stage, {look:{...this.look(), animation:b.dataset.v}, card, replay:true});
-    });
-  },
-  input(el){
-    const look = this.look(), b = el.dataset.bind;
-    const out = (name, text) => { const o = q(`[data-out="${name}"]`); if (o) o.textContent = text; };
-    if (b === 'look-scale'){ look.scale = +el.value; out('scale', el.value + '%'); }
-    else if (b === 'look-opacity'){ look.opacity = +el.value; out('opacity', el.value + '%'); }
-    else if (b === 'look-radius'){ look.radius = +el.value; out('radius', el.value + 'px'); }
-    else if (b === 'look-color'){
-      const name = el.dataset.name, first = !look[name];
-      look[name] = el.value;
-      el.closest('.ig-colorf').style.setProperty('--sw', el.value);
-      out('c-' + name, el.value);
-      // The first change brings the chip its way back to the theme's.
-      if (first){ this.changed(true); return; }
-    }
-    else if (b === 'look-css') look.css = el.value;
-    else if (b === 'sound-link'){
-      const link = el.value.trim();
-      if (link && !WEB_LINK.test(link)) return;
-      look.sound = link;
-    }
-    else return;
-    this.changed(false);
-  },
-  changed(redraw){
-    this.saving = true;
-    clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => this.flush(), 400);
-    this.savedLine();
-    if (redraw) this.render(); else this.sync(false);
-  },
-  savedLine(){
-    const box = q('[data-look-saved]');
-    if (!box) return;
-    box.classList.toggle('busy', this.saving);
-    box.querySelector('[data-look-msg]').textContent = this.saving ? 'Saving…' : 'Saved: OBS shows it now.';
-  },
-  async flush(){
-    if (!this.saveTimer) return;
-    clearTimeout(this.saveTimer);
-    this.saveTimer = null;
-    const r = await api('/integrations/alerts/look', this.look());
-    this.saving = false;
-    if (!r.ok){ toast(r.error || 'Couldn\'t save the look', 'err'); return; }
-    this.savedLine();
-  },
-  playSound(sound){ playAlertSound({sound:sound || 'theme', volume:70}, this.look()); },
-  async act(a, el){
-    const look = this.look(), v = el.dataset.v;
-    switch (a){
-      case 'look-theme':
-        // A theme as it comes: the last one's colors and font would clash.
-        look.theme = v;
-        LOOK_STYLE.forEach(k => { look[k] = k === 'opacity' || k === 'radius' ? null : ''; });
-        this.changed(true);
-        stagePost(q('.ig-look-body .ig-stage-frame'), {look, card:sampleAlert(), replay:'full', sound:true});
-        return true;
-      case 'look-place':
-        look.position = el.dataset.y;
-        look.align = el.dataset.x;
-        this.changed(true);
-        return true;
-      case 'look-set':
-        look[el.dataset.name] = v;
-        this.changed(true);
-        // A new entrance is seen by playing it.
-        if (el.dataset.name === 'animation') stagePost(q('.ig-look-body .ig-stage-frame'), {look, card:sampleAlert(), replay:true});
-        return true;
-      case 'look-clear': {
-        const name = el.dataset.name;
-        look[name] = name === 'opacity' || name === 'radius' ? null : '';
-        this.changed(true);
-        return true;
-      }
-      case 'look-sound': look.sound = v; this.changed(true); this.playSound(v); showPlaying('look-sound', v); return true;
-      case 'look-replay':
-        stagePost(q('.ig-look-body .ig-stage-frame'), {look, card:sampleAlert(), replay:'full', sound:true});
-        return true;
-      case 'look-reset':
-        if (!armConfirm(el, 'Clears your changes, CSS too. Sure?')) return true;
-        LOOK_STYLE.forEach(k => { look[k] = k === 'opacity' || k === 'radius' ? null : ''; });
-        look.sound = '';
-        look.css = '';
-        this.changed(true);
-        return true;
-      case 'media-upload':
-        uploadMedia('sound').then(ref => {
-          if (!ref || Modal.kind !== 'alerts') return;
-          look.sound = ref;
-          this.changed(true);
-          this.playSound(ref);
-        });
-        return true;
-    }
-    return false;
-  },
-};
 
 // System > Twitch & OBS, with the Twitch login app section open.
 function openTwitchAppSettings(){
@@ -7181,7 +7460,7 @@ const Values = {
     else if (b === 'v-label'){
       v.label = el.value;
       // Until a name is typed, it follows the label: "!daily gives" is daily_gives.
-      if (!v.named && !this.usedIn(v.name)) v.name = el.value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32);
+      if (!v.named && !this.usedIn(v.name)) v.name = snakeName(el.value, 32);
     }
     this.render();
   },
@@ -7300,9 +7579,9 @@ const Recipes = {
       <div class="ig-stage ig-stage-short"><iframe class="ig-stage-frame" src="/alerts?demo" title="Their alerts look" tabindex="-1" aria-hidden="true"></iframe></div>
       <label class="crash-check"><input type="checkbox" data-bind="r-theme" ${al.mine_is_default ? 'checked' : ''}>
         <span><span class="crash-check-title">Use their alerts look (${esc(own.name)}${al.look.css ? ', with custom CSS' : ''})</span>
-        <span class="muted">Every alert on your alerts page takes it, and the theme sound. You can change it any time in Alerts page.</span></span></label>
+        <span class="muted">It becomes an alert design, played by every alert not given another. You can change it any time on the Alerts page.</span></span></label>
       ${al.media.length ? `<div class="muted">Comes with ${names(al.media)}: saved with your uploads.</div>` : ''}
-      ${al.left_out.length ? warnHtml(`Too big to come along: ${names(al.left_out)}. Those alerts play the theme sound, or show no picture, until you pick another.`) : ''}
+      ${al.left_out.length ? warnHtml(`Too big to come along: ${names(al.left_out)}. Those alerts play their design's sound, or show no picture, until you pick another.`) : ''}
     </div>`;
   },
   // Their look on the stage, with their first alert.
@@ -7338,7 +7617,9 @@ const Recipes = {
         if (!r.ok){ toast(r.error, 'err', 6000); return; }
         if (Modal.kind === 'import') Modal.close(true);
         await load();
-        this.landed((r.ids || []).map(find).filter(Boolean), r.added);
+        const added = (r.ids || []).map(find).filter(Boolean);
+        await saveNamedDesigns(added);
+        this.landed(added, r.added);
       });
       return true;
     }
@@ -7404,16 +7685,597 @@ const Recipes = {
 
 // ---------------------------------------------------------------- events
 
-const OWNERS = {editor:Editor, builder:Builder, connections:Conn, alerts:AlertsLook, import:Recipes, share:Recipes, catalog:Catalog, values:Values};
+// ---------------------------------------------------------------- on stream
+
+// The Overlay tab's Alerts and Goals pages. That tab is where everything
+// viewers see is managed, but what these two show is integrations data, so
+// they are drawn here and share this file's editors, modal and polling.
+
+// What a goal counts by itself (goals.rs `Counts`): how it reads and looks.
+const COUNTS = {
+  subs:    {label:'Subs',     icon:'star',   c:'#a78bfa', what:'Counts new subs, resubs and gifted subs'},
+  follows: {label:'Follows',  icon:'heart',  c:'#5ac8fa', what:'Counts follows'},
+  bits:    {label:'Bits',     icon:'gem',    c:'#fcd34d', what:'Counts the bits viewers cheer'},
+  own:     {label:'Your own', icon:'target', c:'#86efac', what:'Moves only when a step or you change it'},
+};
+const TIMER_COLOR = '#fda4af';
+// The longest a timer holds (goals.rs `MAX_TIMER_S`), in ms.
+const MAX_TIMER_MS = 30 * 24 * 3600 * 1000;
+// How many of each there can be (goals.rs `MAX_GOALS`, `MAX_TIMERS`).
+const TRACKER_MAX = {goal:16, timer:8};
+// What a new goal or timer can start from: [kind, name, what it is, fields].
+const TRACKER_STARTERS = [
+  ['goal', 'Sub goal', 'A bar that fills with every sub.', {counts:'subs', target:50}],
+  ['goal', 'Follower goal', 'Counts follows toward a number.', {counts:'follows', target:100}],
+  ['goal', 'Bit goal', 'Fills with the bits viewers cheer.', {counts:'bits', target:5000}],
+  ['goal', 'Your own goal', 'Anything else: wins, deaths, a prize pot.', {counts:'own', target:10}],
+  ['timer', 'Subathon', 'A countdown that subs and bits make longer.', {start_s:3600, per_sub_s:300, per_100_bits_s:60}],
+  ['timer', 'Countdown', 'Starting soon, a break, a challenge.', {start_s:300}],
+];
+
+function tracking(){ return (S.data && S.data.tracking) || {goals:[], timers:[]}; }
+function trackersOf(what){ return what === 'goal' ? tracking().goals : tracking().timers; }
+function timerLeft(t){ return t.running ? Math.max(0, t.ends_at_ms - Date.now()) : t.left_ms; }
+// How full a goal is, 0 to 1.
+function goalShare(g){ return Math.min(1, g.value / (g.target || 1)); }
+// A countdown as a clock: 4:05, or 1:02:09 from an hour up. Rounded up, so
+// it reads 0:00 only once it is over (goals.rs `clock_text`).
+function clockText(ms){
+  const total = Math.ceil(ms / 1000), h = Math.floor(total / 3600), m = Math.floor(total / 60) % 60, sec = total % 60;
+  return `${h ? h + ':' + String(m).padStart(2, '0') : m}:${String(sec).padStart(2, '0')}`;
+}
+function countText(n){ return Number(n || 0).toLocaleString('en-US'); }
+function showsAlerts(i){ return allSteps(i).some(s => s.type === 'overlay'); }
+// The overlay a goal or timer gets when it is first put on stream.
+function trackerSlug(what, id){ return `${what}-${id}`; }
+// Goals and timers as variables, each with where it stands now.
+function trackerValues(){
+  const t = tracking();
+  return t.goals.flatMap(g => [{name:`goal.${g.id}`, sample:String(g.value)}, {name:`goal.${g.id}.target`, sample:String(g.target)}])
+    .concat(t.timers.map(x => ({name:`timer.${x.id}`, sample:clockText(timerLeft(x))})));
+}
+
+const Stage = {
+  // The saved overlays' slugs, to know which goals have their own.
+  slugs:null,
+  clockT:0,
+  // The goal or timer being edited: {what, isNew, d, was, value}.
+  form:null,
+
+  // The Studio's list, which it fetches: one list for both.
+  async loadSlugs(){
+    const list = typeof Studio !== 'undefined' ? await Studio.loadSaved() : [];
+    this.slugs = new Set(list.map(o => o.slug));
+  },
+  render(){
+    const root = $(S.stage === 'alerts' ? 'ov-alerts' : 'ov-goals');
+    if (!root || !S.data) return;
+    if (S.stage === 'alerts') morph(root, this.sourceHtml());
+    else {
+      morph(root, this.goalsHtml());
+      const frame = root.querySelector('.og-tframe');
+      if (frame) stageShow(frame, OVERLAY_CANVAS, null);
+      this.tick();
+    }
+    if (typeof fitPaneCard === 'function') fitPaneCard();
+  },
+
+  // ---- the pages' shared parts
+  // The details panel's head: an icon in its colour, a name, what it is,
+  // and anything after (a button).
+  detailHeadHtml(icon, color, title, kind, after = ''){
+    return `<div class="ovg-detail-head"><span class="ovg-ic" style="--tc:${color}">${svg(icon)}</span>
+      <div class="ovg-detail-id"><div class="ovg-title">${esc(title)}</div><div class="ovg-kind">${esc(kind)}</div></div>${after}</div>`;
+  },
+  // Where OBS finds it: the path (it fits), and Copy URL for the address.
+  urlBoxHtml(url, hint = ''){
+    const path = url.replace(/^https?:\/\/[^/]+/, '');
+    return `<div class="ovg-urlbox"><div class="ic-label">Browser source</div>
+      <div class="copy-block"><code class="mono" title="${esc(url)}">${esc(path).replace('/overlay/', '/overlay/<wbr>')}</code>
+        <button class="ic-btn ic-btn-ghost" data-act="copy" data-text="${esc(url)}">Copy URL</button></div>${hint}</div>`;
+  },
+
+  // ---- alerts
+  // The Overlay tab's Alerts page is the Studio's gallery of alert designs
+  // (index.html); this draws the bar above it: the one browser source in
+  // OBS that plays every alert. Which design an alert plays is its step's
+  // (the Design chip). The designs are kept here for both.
+  designs:[], saved:[],
+  async loadDesigns(){
+    const list = typeof Studio !== 'undefined' ? await Studio.loadSaved() : [];
+    this.saved = list;
+    this.designs = list.filter(o => o.kind === 'alerts');
+    await this.ensureDefault();
+  },
+  // Every design an alert can take: the ones saved, then the built-in ones
+  // (the themes' cards) not saved yet, which are made when first taken.
+  // A built-in one keeps its theme once saved, to be shown as ready-made.
+  allDesigns(){
+    const themes = window.ICOverlay ? window.ICOverlay.ALERT_THEMES : [];
+    const saved = this.designs.map(d => ({slug:d.slug, name:d.name || d.slug, theme:themes.find(t => d.slug === 'alert-' + t) || ''}));
+    const built = themes.map(t => ({slug:'alert-' + t, name:THEMES[t].name, theme:t, builtin:true}));
+    return saved.concat(built.filter(b => !saved.some(d => d.slug === b.slug)));
+  },
+  designNamed(slug){ return this.allDesigns().find(d => d.slug === slug) || null; },
+  // A built-in design is written to the overlays folder the first time it
+  // is taken: from then on it is a file like any other, to edit.
+  async ensureDesign(slug){
+    // The folder as it is now: one saved since (and changed) is never
+    // written over.
+    await this.loadDesigns();
+    const d = this.designNamed(slug);
+    if (!d || !d.builtin) return true;
+    const doc = window.ICOverlay.alertPreset(d.theme);
+    return this.writeDesign(slug, doc);
+  },
+  async writeDesign(slug, doc){
+    let r = null;
+    try {
+      const sent = await fetch('/overlays/' + encodeURIComponent(slug), {method:'POST', headers:{'Content-Type':'text/html'}, body:window.ICOverlay.bake(doc)});
+      r = await sent.json();
+    } catch(_){}
+    if (!r || !r.ok){ toast((r && r.error) || 'Could not make that design', 'err', 6000); return false; }
+    await this.loadDesigns();
+    return true;
+  },
+  async setDefault(slug){
+    const look = Object.assign({}, lookOf(), {design:slug});
+    const r = await api('/integrations/alerts/look', look);
+    if (!r || r.ok === false){ toast((r && r.error) || 'That didn\'t save', 'err', 6000); return false; }
+    S.data.alerts = Object.assign({}, S.data.alerts, {look});
+    return true;
+  },
+  // Alerts from before designs had the alerts page's look: the first visit
+  // makes that look a design ("My alerts"), the default that every alert
+  // without one of its own plays. A look never changed is the built-in
+  // Island's.
+  async ensureDefault(){
+    if (!S.data || this.defaulting || !window.ICOverlay) return;
+    const look = lookOf();
+    if (look.design) return;
+    this.defaulting = true;
+    try {
+      const kept = ['font', 'text', 'background', 'accent', 'opacity', 'radius', 'animation', 'picture', 'css', 'scale', 'position', 'align'];
+      const changed = themeOf(look) !== 'island' || !!look.sound || kept.some(k => look[k] != null && look[k] !== ''
+        && !(k === 'scale' && +look[k] === 100) && !(k === 'position' && look[k] === 'bottom') && !(k === 'align' && look[k] === 'center'));
+      // Anyone with alerts keeps the look they had, in its theme's layers;
+      // a new install starts from the ready-made Island.
+      const mine = changed || this.alerts().length > 0;
+      let slug = 'alert-island';
+      if (mine){
+        slug = 'my-alerts';
+        for (let n = 2; this.saved.some(o => o.slug === slug); n++) slug = 'my-alerts-' + n;
+        const was = {theme:themeOf(look), sound:look.sound};
+        kept.forEach(k => { if (look[k] != null && look[k] !== '') was[k] = look[k]; });
+        const doc = window.ICOverlay.alertLookDoc(was) || this.cardDoc(was);
+        doc.name = 'My alerts';
+        if (!(await this.writeDesign(slug, doc))) return;
+      } else if (!(await this.ensureDesign(slug))) return;
+      if (await this.setDefault(slug) && mine) toast('Your alerts look is now a design, "My alerts": edit it like any overlay', 'ok', 7000);
+    } finally { this.defaulting = false; }
+  },
+  // A look with custom CSS, written for the old card's markup: that card,
+  // as one Alert card layer where the page put it.
+  cardDoc(look){
+    const doc = window.ICOverlay.alertCardDoc(look.theme), card = doc.widgets[0];
+    if (look.sound) doc.sound = look.sound;
+    card.card = Object.assign({}, look);
+    delete card.card.sound;
+    const v = look.position === 'top' ? 'top' : look.position === 'middle' ? 'center' : 'bottom';
+    const side = look.align === 'left' || look.align === 'right' ? look.align : '';
+    card.anchor = v === 'center' ? side || 'center' : side ? v + '-' + side : v;
+    card.offset = {x:side ? 36 : -560, y:v === 'center' ? -180 : 36};
+    return doc;
+  },
+  alerts(){
+    const out = [];
+    S.data.integrations.filter(showsAlerts).forEach(i => (i.handlers || []).forEach((h, n) => {
+      let step = null;
+      walk(h.steps, s => { if (!step && s.type === 'overlay') step = s; });
+      if (step) out.push({i, h, step, key:`${i.id}:${n}`});
+    }));
+    return out;
+  },
+  // The design an alert plays: its own, or the default when it has none or
+  // its own is gone (as the alerts page does).
+  designOf(x){ return this.designNamed(x.step.params.design || '') || this.designNamed(lookOf().design || ''); },
+  // The alerts that play a design (`names`, what starts each), of how many;
+  // whether it is the default (the one alerts added later get), every
+  // alert's too; and the default's name.
+  designUse(slug){
+    if (!S.data) return null;
+    const all = this.alerts(), mine = all.filter(x => (this.designOf(x) || {}).slug === slug);
+    const isDefault = lookOf().design === slug;
+    // `own`: alerts given another design of their own in Integrations.
+    const own = all.filter(x => x.step.params.design && x.step.params.design !== slug).length;
+    return {names:mine.map(x => triggerSentence(x.h.trigger)), total:all.length, isDefault, own,
+      everywhere:isDefault && mine.length === all.length, defaultName:designLabel('')};
+  },
+  // A deleted design: the default, gone, is the ready-made Island again (its
+  // alerts play the default already).
+  async designGone(slug){
+    await this.loadDesigns();
+    if (lookOf().design === slug && await this.ensureDesign('alert-island')) await this.setDefault('alert-island');
+  },
+  // The one browser source that plays every alert: in OBS or not, and its
+  // address to copy.
+  sourceHtml(){
+    const a = S.data.alerts || {}, url = a.url || `${location.origin}/alerts`;
+    return alertsStatusHtml(true, `<span class="og-asource-url"><button class="ic-btn ic-btn-ghost ig-small" data-act="alert-test" title="A test alert on your alerts page, in OBS too">${svg('play', ' class="ig-btn-ic"')}Send a test</button>
+      <code class="mono" title="${esc(url)}">${esc(url.replace(/^https?:\/\/[^/]+/, ''))}</code>
+      <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(url)}"
+        title="One browser source plays every alert. Added by hand: the size of your canvas, with Control audio via OBS ticked so their sounds reach the stream">Copy URL</button></span>`);
+  },
+  // One design for every alert: the default (what alerts added later play)
+  // becomes it, and the alerts' own designs are let go.
+  async useEverywhere(slug){
+    if (!(await this.ensureDesign(slug)) || !(await this.setDefault(slug))) return false;
+    // Each integration's own designs go, kept if its save fails.
+    const own = new Map();
+    this.alerts().forEach(a => { if (a.step.params.design) own.set(a.i, (own.get(a.i) || []).concat(a.step)); });
+    for (const [i, steps] of own){
+      const was = steps.map(s => s.params.design);
+      steps.forEach(s => { delete s.params.design; });
+      const r = await api('/integrations/save', i);
+      if (!r || r.ok === false){
+        steps.forEach((s, n) => { s.params.design = was[n]; });
+        toast((r && r.error) || 'That didn\'t save', 'err', 6000);
+        return false;
+      }
+    }
+    toast('Every alert plays it now, and alerts you add later too', 'ok');
+    return true;
+  },
+
+  // ---- goals and timers
+  // Laid out as the other pages are: every goal and timer on the left, each
+  // still saying where it stands; the chosen one's own overlay, live, in the
+  // middle; and on the right, what moves it and what puts it on stream.
+  sel:null,
+  // [what, item] for each one, goals first.
+  trackers(){
+    const t = tracking();
+    return t.goals.map(g => ['goal', g]).concat(t.timers.map(x => ['timer', x]));
+  },
+  // What it is: its icon, colour, and what it counts or gains time from.
+  trackerLook(what, x){
+    if (what === 'goal'){
+      const c = COUNTS[x.counts] || COUNTS.own;
+      return {icon:c.icon, color:c.c, line:c.what + (x.each_stream ? ', from 0 each stream' : '')};
+    }
+    const adds = [[x.per_sub_s, 'a sub'], [x.per_100_bits_s, '100 bits'], [x.per_follow_s, 'a follow']].filter(([s]) => s > 0)
+      .map(([s, from]) => `${from} +${fmtDur(s * 1000)}`);
+    return {icon:'clock', color:TIMER_COLOR, line:adds.length ? capFirst(adds.join(' · ')) : 'From ' + fmtDur(x.start_s * 1000)};
+  },
+  // A timer's state: [status class, word].
+  timerWord(x){
+    const left = timerLeft(x);
+    return left <= 0 ? ['s-wait', 'Over'] : x.running ? ['s-live', 'Running'] : ['', 'Paused'];
+  },
+  tileHtml(what, x, on){
+    const look = this.trackerLook(what, x);
+    const meta = what === 'goal'
+      ? `<span class="ovg-tile-path ig-num">${countText(x.value)} of ${countText(x.target)}</span>
+         <span class="og-tbar"><i style="transform:translateX(${(goalShare(x) * 100 - 100).toFixed(2)}%)"></i></span>`
+      : `<span class="ovg-tile-path"><b class="og-clock ig-num" data-id="${esc(x.id)}">${clockText(timerLeft(x))}</b> · ${this.timerWord(x)[1]}</span>`;
+    return `<button class="ovg-tile${on ? ' sel' : ''}" data-key="tile-${what}-${esc(x.id)}" data-act="tr-pick" data-what="${what}" data-id="${esc(x.id)}" style="--tc:${look.color}">
+      <span class="ovg-tile-ic">${svg(look.icon)}</span><span class="ovg-tile-txt"><span class="ovg-tile-name">${esc(x.name)}</span>${meta}</span></button>`;
+  },
+  // Its own overlay as viewers see it (it reads the real numbers), or what
+  // putting it on stream will make.
+  viewHtml(what, x){
+    const slug = trackerSlug(what, x.id), live = this.onStream(what, x);
+    const stage = live
+      ? `<div class="ovg-stage" data-key="tv-${esc(slug)}"><iframe class="ig-stage-frame og-tframe" src="/overlay/${encodeURIComponent(slug)}.html" title="${esc(x.name)} on stream" tabindex="-1" aria-hidden="true"></iframe></div>`
+      : `<div class="ovg-stage og-tnone" data-key="tv-none"><b>Not on stream yet</b>
+          <span>Put it on stream to make its overlay: ${what === 'goal' ? 'its bar, name and numbers' : 'its name and clock'}, as layers you can restyle. It shows here as viewers will see it.</span></div>`;
+    return `<section class="overlay-section ovg-view" data-key="tr-view">
+      <div class="ovg-viewbar"><span class="ic-label">Preview</span>${live ? '<span class="ph-cap"><span class="ph-dot" style="background:var(--ok)"></span>Live: real numbers</span>' : ''}</div>
+      <div class="ovg-fit" data-key="fit">${stage}</div></section>`;
+  },
+  onStream(what, x){ return !!this.slugs && this.slugs.has(trackerSlug(what, x.id)); },
+  // A button that adds `n` (or takes it away), saying `label`; and Reset.
+  nudgeHtml(n, label, aria, at){
+    return `<button class="ic-btn ic-btn-ghost ig-small og-nudge" data-act="tr-change" data-do="add" data-n="${n}" ${at}
+      aria-label="${aria}">${n < 0 ? '−' : '+'}${label}</button>`;
+  },
+  resetHtml(at){ return `<button class="ic-btn ic-btn-ghost ig-small og-push" data-act="tr-change" data-do="reset" ${at}>Reset</button>`; },
+  goalMeterHtml(g, at){
+    const done = g.value >= g.target, share = goalShare(g);
+    const step = n => this.nudgeHtml(n, Math.abs(n), `${n < 0 ? 'Take' : 'Add'} ${Math.abs(n)} ${n < 0 ? 'from' : 'to'} ${esc(g.name)}`, at);
+    return `<div class="og-meter${done ? ' done' : ''}">
+      <div class="og-figure"><b class="og-value ig-num" data-tick>${countText(g.value)}</b><span class="og-of ig-num">of ${countText(g.target)}</span>
+        <span class="og-pct ig-num">${done ? 'Reached' : Math.floor(share * 100) + '%'}</span></div>
+      <div class="og-bar" role="progressbar" aria-label="${esc(g.name)}" aria-valuemin="0" aria-valuemax="${g.target}" aria-valuenow="${Math.min(g.value, g.target)}">
+        <i style="transform:translateX(${(share * 100 - 100).toFixed(2)}%)"></i></div>
+      <div class="og-row">${step(-1)}${step(1)}${g.counts === 'bits' ? step(100) : ''}${this.resetHtml(at)}</div></div>`;
+  },
+  timerMeterHtml(x, at){
+    const over = timerLeft(x) <= 0, running = x.running && !over, word = this.timerWord(x);
+    const minute = n => this.nudgeHtml(n * 60, '1 min', `${n < 0 ? 'Take a minute from' : 'Add a minute to'} ${esc(x.name)}`, at);
+    return `<div class="og-meter">
+      <div class="og-figure"><b class="og-value og-clock ig-num" data-id="${esc(x.id)}">${clockText(timerLeft(x))}</b>
+        <span class="dcard-status ${word[0]} og-state"><span class="d-dot"></span><span class="dcard-status-l">${word[1]}</span></span></div>
+      <div class="og-row">
+        <button class="ic-btn ${running ? 'ic-btn-ghost' : 'ic-btn-primary'} ig-small" data-act="tr-change" data-do="${running ? 'pause' : 'start'}" ${at}>${svg(running ? 'pause' : 'play', ' class="ig-btn-ic"')}${running ? 'Pause' : over ? 'Start again' : 'Start'}</button>
+        ${minute(-1)}${minute(1)}${this.resetHtml(at)}</div></div>`;
+  },
+  detailHtml(what, x){
+    const look = this.trackerLook(what, x), at = `data-what="${what}" data-id="${esc(x.id)}"`;
+    const slug = trackerSlug(what, x.id), url = `${location.origin}/overlay/${encodeURIComponent(slug)}.html`;
+    const stream = this.onStream(what, x)
+      ? `<div class="ovg-primary">
+          <button class="ic-btn ic-btn-primary" data-act="tr-obs" data-slug="${esc(slug)}" data-name="${esc(x.name)}">${svg('plus', ' class="ig-btn-ic"')}Add to OBS</button>
+          <button class="ic-btn ic-btn-ghost" data-act="tr-look" data-slug="${esc(slug)}">${svg('pencil', ' class="ig-btn-ic"')}Edit its look</button></div>
+        ${this.urlBoxHtml(url)}`
+      : `<div class="ovg-primary"><button class="ic-btn ic-btn-primary" data-act="tr-show" ${at}>${svg('screen', ' class="ig-btn-ic"')}Put it on stream</button></div>`;
+    const hears = what === 'goal' ? x.counts !== 'own' : !!(x.per_sub_s || x.per_100_bits_s || x.per_follow_s);
+    const deaf = hears && !S.data.twitch.main.login
+      ? `<div class="ig-alerts-status" data-key="tr-twitch"><span class="ig-meter-dot off"></span>
+          <span class="ig-alerts-line">Follows, subs and bits come from Twitch, and no Twitch account is connected: it won't move by itself yet.</span>
+          <button class="ic-btn ic-btn-ghost ig-small" data-act="conn" data-tab="twitch">Connect Twitch</button></div>` : '';
+    return `<aside class="overlay-section ovg-detail og-detail" data-key="tr-detail-${what}-${esc(x.id)}" style="--dc:${look.color}">
+      ${this.detailHeadHtml(look.icon, look.color, x.name, look.line,
+        `<button class="ic-btn-tiny og-push" data-act="tr-edit" ${at} aria-label="Edit ${esc(x.name)}" title="Edit">${svg('pencil')}</button>`)}
+      ${deaf}
+      ${what === 'goal' ? this.goalMeterHtml(x, at) : this.timerMeterHtml(x, at)}
+      ${stream}</aside>`;
+  },
+  startersHtml(){
+    return TRACKER_STARTERS.map(([what, name, note, fields], n) => {
+      const look = this.trackerLook(what, fields);
+      return `<button class="dest-starter" data-act="tr-new" data-n="${n}" style="--dc:${look.color}">
+        <span class="dest-starter-icon">${svg(look.icon)}</span><span class="dest-starter-name">${name}</span><span class="dest-starter-note">${note}</span></button>`;
+    }).join('');
+  },
+  goalsHtml(){
+    const t = tracking();
+    if (!t.goals.length && !t.timers.length){
+      return `<div class="dest-empty" data-key="empty">
+        <div class="dest-empty-title">What is the stream working toward?</div>
+        <div class="dest-empty-sub">A goal fills up as viewers follow, sub or cheer. A timer counts down, and can gain time with every sub. Pick one to start from: you can change everything about it.</div>
+        <div class="dest-empty-grid">${this.startersHtml()}</div></div>`;
+    }
+    const all = this.trackers();
+    const [what, cur] = all.find(([w, x]) => `${w}:${x.id}` === this.sel) || all[0];
+    this.sel = `${what}:${cur.id}`;
+    const group = (kind, label) => {
+      const list = all.filter(([w]) => w === kind);
+      return list.length ? `<div class="ovg-group" data-key="g-${kind}">${label}</div>` + list.map(([w, x]) => this.tileHtml(w, x, x === cur)).join('') : '';
+    };
+    return `<div class="ovg-page" data-flip>
+      <div class="ovg-top" data-key="tr-top">
+        <section class="overlay-section ovg-shelf" data-key="tr-list">
+          <div class="ovg-shelf-head"><span class="ic-label">Goals and timers</span><span class="ovg-count">${all.length}</span></div>
+          <div class="ovg-list">${group('goal', 'Goals')}${group('timer', 'Timers')}</div></section>
+        ${this.viewHtml(what, cur)}
+        ${this.detailHtml(what, cur)}
+      </div>
+      <div class="muted og-note" data-key="note">Each one gets an overlay of its own when you put it on stream, made of layers you can restyle in the Studio. Any overlay can show them too (a <b>Goal bar</b>, a <b>Timer</b>, or <span class="mono">{{goal.name}}</span>), and integrations move them with a <b>Goal or timer</b> step.</div></div>`;
+  },
+  // Running clocks count down by themselves: one wake-up a second, just
+  // after the second shown ends, and none while no clock runs.
+  tick(){
+    clearTimeout(this.clockT);
+    if (S.stage !== 'goals' || document.hidden) return;
+    let next = 0;
+    document.querySelectorAll('#ov-goals .og-clock').forEach(el => {
+      const t = tracking().timers.find(x => x.id === el.dataset.id);
+      if (!t) return;
+      const left = timerLeft(t), text = clockText(left);
+      if (el.textContent !== text) el.textContent = text;
+      if (t.running && left > 0) next = Math.min(next || Infinity, left % 1000 + 25);
+    });
+    if (next) this.clockT = setTimeout(() => this.tick(), next);
+  },
+
+  // ---- the editor
+  // A short name for `name` that no other goal (or timer) has.
+  freeId(what, name, mine){
+    const base = snakeName(name, 28) || what;
+    const taken = id => id !== mine && trackersOf(what).some(x => x.id === id);
+    if (!taken(base)) return base;
+    for (let n = 2; ; n++) if (!taken(`${base}_${n}`)) return `${base}_${n}`;
+  },
+  edit(what, id, starter){
+    const found = trackersOf(what).find(x => x.id === id);
+    const fresh = what === 'goal' ? {id:'', name:'', counts:'subs', target:50, each_stream:false}
+      : {id:'', name:'', start_s:3600, per_sub_s:0, per_100_bits_s:0, per_follow_s:0, tiers:true, max_s:0};
+    const d = found ? clone(found) : Object.assign(fresh, starter || {});
+    if (!found) d.id = this.freeId(what, d.name);
+    this.form = {what, isNew:!found, d, was:JSON.stringify(d), value:found && what === 'goal' ? found.value : 0};
+    this.form.valueWas = this.form.value;
+    Modal.open('tracker', 580);
+    Modal.onClose = () => !this.dirty() || (Modal.guard(), false);
+    this.renderForm();
+    focusField('tr-name');
+  },
+  dirty(){
+    const f = this.form;
+    return !!f && (JSON.stringify(f.d) !== f.was || f.value !== f.valueWas);
+  },
+  goalFormHtml(d){
+    const c = COUNTS[d.counts] || COUNTS.own;
+    return `<div class="dff"><label>It counts</label>
+        <div class="sub-tabs ig-seg og-seg" role="radiogroup" aria-label="What it counts">${Object.entries(COUNTS).map(([id, k]) =>
+          `<button type="button" class="sub-tab${id === d.counts ? ' on' : ''}" role="radio" aria-checked="${id === d.counts}" data-act="tr-counts" data-v="${id}">${svg(k.icon)}<span>${k.label}</span></button>`).join('')}${SEG_IND}</div>
+        <div class="muted">${c.what}.${d.counts === 'own' ? ' Add a "Goal or timer" step to any integration to move it.' : ''}</div></div>
+      <div class="dfg">
+        <div class="dff"><label>Target</label><input class="ic-input mono" data-bind="tr-target" value="${esc(d.target)}" inputmode="numeric" maxlength="10" autocomplete="off"></div>
+        <div class="dff"><label>It stands at</label><input class="ic-input mono" data-bind="tr-value" value="${esc(this.form.value)}" inputmode="numeric" maxlength="10" autocomplete="off"></div>
+      </div>
+      <label class="crash-check"><input type="checkbox" data-bind="tr-each" ${d.each_stream ? 'checked' : ''}>
+        <span><span class="crash-check-title">Start from 0 with every stream</span>
+        <span class="muted">Off: it keeps counting from stream to stream until you reset it.</span></span></label>`;
+  },
+  timerFormHtml(d){
+    const dur = (name, label, unit) => `<div class="dff"><label>${label}</label>${durInput('tr-dur', d[name] * 1000, unit, ` data-name="${name}"`)}</div>`;
+    return `<div class="dfg">${dur('start_s', 'Starts at', 'm')}${dur('max_s', 'Never holds more than', 'm')}</div>
+      <div class="muted">Write a length like 5m, 1h or 1h 30m. For no limit, leave the second one at 0s.</div>
+      <div class="ic-label og-form-label">Viewers add time</div>
+      <div class="dfg og-dfg3">${dur('per_sub_s', 'Each sub adds', 's')}${dur('per_100_bits_s', 'Every 100 bits add', 's')}${dur('per_follow_s', 'Each follow adds', 's')}</div>
+      <div class="muted">0s adds nothing. A timer that ran out stays over until you start it again.</div>
+      <label class="crash-check"><input type="checkbox" data-bind="tr-tiers" ${d.tiers ? 'checked' : ''}>
+        <span><span class="crash-check-title">Bigger subs add more</span>
+        <span class="muted">A tier 2 sub adds twice as much, a tier 3 five times.</span></span></label>`;
+  },
+  renderForm(){
+    if (Modal.kind !== 'tracker') return;
+    const f = this.form, d = f.d, goal = f.what === 'goal';
+    const look = this.trackerLook(f.what, d);
+    const title = f.isNew ? (goal ? 'New goal' : 'New timer') : (goal ? 'Goal' : 'Timer');
+    const hint = goal ? 'A number your stream works toward. A Goal bar widget draws it.' : 'A clock that counts down. A Timer widget draws it.';
+    Modal.body(`${modalHead(look.icon, look.color, title, hint)}
+      <div class="dest-form-body ig-conn-body og-form">
+        <div class="dff"><label>Name</label><input class="ic-input" data-bind="tr-name" value="${esc(d.name)}" placeholder="${goal ? 'Sub goal' : 'Subathon'}" maxlength="40" autocomplete="off">
+          <div class="muted">Shown on stream. In messages and steps it is <code class="mono og-id">{${f.what}.${esc(d.id)}}</code>${f.isNew ? '' : ', which stays as it is'}.</div></div>
+        ${goal ? this.goalFormHtml(d) : this.timerFormHtml(d)}
+      </div>
+      <div class="dest-form-foot">${f.isNew ? '' : '<button class="ic-btn ic-btn-ghost og-del" data-act="tr-del">Delete</button>'}<div class="dest-form-msg"></div>
+        <button class="ic-btn ic-btn-ghost" data-act="modal-close">Cancel</button>
+        <button class="ic-btn ic-btn-primary" data-act="save">${f.isNew ? (goal ? 'Add the goal' : 'Add the timer') : 'Save'}</button></div>`);
+  },
+  // Typing never redraws the form: a field keeps its caret, and marks
+  // itself when what it holds can't be used.
+  input(el){
+    const f = this.form, b = el.dataset.bind;
+    if (!f) return;
+    const d = f.d, mark = ok => { el.setAttribute('aria-invalid', ok ? 'false' : 'true'); return ok; };
+    if (b === 'tr-name'){
+      d.name = el.value;
+      // Until it is saved once, its short name follows what it is called.
+      if (f.isNew) d.id = this.freeId(f.what, d.name);
+      const id = q('.og-id');
+      if (id) id.textContent = `{${f.what}.${d.id}}`;
+    } else if (b === 'tr-target'){
+      if (mark(/^[1-9]\d{0,8}$/.test(el.value.trim()))) d.target = +el.value;
+    } else if (b === 'tr-value'){
+      if (mark(/^\d{1,9}$/.test(el.value.trim()))) f.value = +el.value;
+    } else if (b === 'tr-each') d.each_stream = el.checked;
+    else if (b === 'tr-tiers') d.tiers = el.checked;
+    else if (b === 'tr-dur'){
+      const ms = durValue(el, el.dataset.name === 'start_s' ? 1000 : 0, MAX_TIMER_MS);
+      if (ms != null) d[el.dataset.name] = Math.round(ms / 1000);
+    }
+  },
+  async save(remove){
+    const f = this.form, key = f.what === 'goal' ? 'goals' : 'timers';
+    // A redraw keeps what a number field holds, not its mark: each is read again.
+    if (!remove) Modal.form.querySelectorAll('[data-bind="tr-target"],[data-bind="tr-value"],[data-bind="tr-dur"]').forEach(el => this.input(el));
+    const d = Object.assign({}, f.d, {name:f.d.name.trim()});
+    if (!remove){
+      if (!d.name){ toast('Give it a name', 'err'); focusField('tr-name'); return; }
+      if (Modal.form.querySelector('[aria-invalid="true"]')){ toast('One of the numbers isn\'t right yet', 'err'); return; }
+    }
+    const next = clone(tracking()), at = next[key].findIndex(x => x.id === d.id);
+    if (remove){ if (at >= 0) next[key].splice(at, 1); }
+    else if (at >= 0) next[key][at] = d;
+    else next[key].push(d);
+    let r = await api('/integrations/goals', {goals:next.goals, timers:next.timers});
+    if (!r || r.ok === false){ toast((r && r.error) || 'That didn\'t save', 'err', 6000); return; }
+    if (!remove && f.what === 'goal' && f.value !== f.valueWas){
+      r = await api('/integrations/goals/change', {what:'goal', id:d.id, action:'set', amount:f.value});
+      if (!r || r.ok === false){ toast((r && r.error) || 'Saved, but its count didn\'t change', 'err', 6000); return; }
+    }
+    S.data.tracking = r.tracking;
+    if (!remove) this.sel = `${f.what}:${d.id}`;
+    // Its own overlay goes with it: there is nothing left for it to show.
+    const slug = trackerSlug(f.what, d.id);
+    if (remove && this.slugs && this.slugs.has(slug)){
+      await api(`/overlays/${encodeURIComponent(slug)}/delete`, {});
+      await this.loadSlugs();
+    }
+    this.form = null;
+    Modal.close(true);
+    this.render();
+    toast(remove ? `Deleted ${d.name}` : f.isNew ? `${d.name} is ready: put it on stream when you like` : 'Saved', 'ok', 4500);
+  },
+  async change(body){
+    const r = await api('/integrations/goals/change', body);
+    if (!r || r.ok === false){ toast((r && r.error) || 'That didn\'t work', 'err'); return; }
+    S.data.tracking = r.tracking;
+    this.render();
+  },
+  // Make the overlay that shows this one goal or timer: a file like any
+  // other in the gallery, with a link for OBS, restyled in the Studio.
+  async putOnStream(what, id){
+    const IC = window.ICOverlay, item = trackersOf(what).find(x => x.id === id);
+    if (!IC || !item) return;
+    // Made already (the list wasn't in yet): it keeps the look it was given.
+    const slug = trackerSlug(what, id);
+    await this.loadSlugs();
+    if (this.slugs.has(slug)){ this.render(); return; }
+    const page = IC.bake(IC.trackerDoc(what === 'goal' ? 'Goal' : 'Timer', id, item.name));
+    let r = null;
+    try {
+      const sent = await fetch('/overlays/' + encodeURIComponent(slug), {method:'POST', headers:{'Content-Type':'text/html'}, body:page});
+      r = await sent.json();
+    } catch(_){}
+    if (!r || !r.ok){ toast((r && r.error) || 'Could not make its overlay', 'err', 6000); return; }
+    await this.loadSlugs();
+    this.render();
+    toast(`${item.name} has its overlay: add it to OBS, or copy its link`, 'ok', 5000);
+  },
+  async act(a, el){
+    const what = el.dataset.what, id = el.dataset.id;
+    switch (a){
+      case 'tr-new': {
+        const [kind, name, , fields] = TRACKER_STARTERS[+el.dataset.n];
+        // Said before the form, not after it was filled in.
+        if (trackersOf(kind).length >= TRACKER_MAX[kind]){
+          toast(`That's the most ${kind}s there can be (${TRACKER_MAX[kind]}): delete one first`, 'info', 5000);
+          return true;
+        }
+        this.edit(kind, '', Object.assign({name}, fields));
+        return true;
+      }
+      case 'tr-edit': this.edit(what, id); return true;
+      case 'tr-pick': this.sel = `${what}:${id}`; this.render(); return true;
+      case 'tr-counts': this.form.d.counts = el.dataset.v; this.renderForm(); return true;
+      case 'tr-change':
+        if (el.dataset.do === 'reset' && !armConfirm(el, what === 'goal' ? 'Back to 0?' : 'Start over?')) return true;
+        await busy(el, () => this.change({what, id, action:el.dataset.do, amount:+el.dataset.n || 0}));
+        return true;
+      case 'tr-show': await busy(el, () => this.putOnStream(what, id)); return true;
+      case 'tr-obs': await addOverlayToObs(el, el.dataset.slug, el.dataset.name); return true;
+      // The Studio opens over this page, and goes back to it.
+      case 'tr-look':
+        if (typeof Studio !== 'undefined') Studio.openStudio(el.dataset.slug, 'goals');
+        return true;
+      case 'tr-del': {
+        const has = this.slugs && this.slugs.has(trackerSlug(this.form.what, this.form.d.id));
+        if (!armConfirm(el, has ? 'Delete it and its overlay?' : 'Delete it?')) return true;
+        await busy(el, () => this.save(true));
+        return true;
+      }
+      case 'save': await busy(el, () => this.save(false)); return true;
+    }
+    return false;
+  },
+};
+
+function wireStage(){
+  ['ov-alerts', 'ov-goals'].forEach(id => {
+    const root = $(id);
+    if (!root || root.dataset.wired) return;
+    root.dataset.wired = '1';
+    root.addEventListener('click', onClick);
+    root.addEventListener('keydown', onActivateKey);
+    root.addEventListener('input', e => { if (e.target.type === 'range') fillRange(e.target); });
+  });
+}
+
+const OWNERS = {editor:Editor, builder:Builder, connections:Conn, import:Recipes, share:Recipes, catalog:Catalog, values:Values, tracker:Stage};
 
 async function onClick(e){
   const el = e.target.closest('[data-act]');
   if (!el || el.disabled) return;
   const a = el.dataset.act;
   if (el.tagName === 'A') e.preventDefault();
-  if (el.closest('.ig-menu') && a !== 'menu-delete') Menu.close();
+  if (el.closest('.ig-menu') && a !== 'menu-delete' && a !== 'menu-folder') Menu.close();
   const owner = el.closest('.ig-modal') && OWNERS[Modal.kind];
   if (owner && await owner.act(a, el)) return;
+  if (el.closest('.ov-stage') && await Stage.act(a, el)) return;
   switch (a){
     case 'modal-close': Modal.close(); break;
     case 'modal-back': Modal.goBack(); break;
@@ -7428,6 +8290,32 @@ async function onClick(e){
       remove(el.dataset.id);
       break;
     case 'share-one': Recipes.openShare(el.dataset.id); break;
+    case 'menu-folder': Menu.folders(el.dataset.id); break;
+    case 'set-folder': moveToFolder([el.dataset.id], el.dataset.v); break;
+    case 'fold': {
+      const f = el.dataset.folder;
+      if (!S.folded.delete(f)) S.folded.add(f);
+      store.set('ig-folded', JSON.stringify([...S.folded]));
+      render();
+      break;
+    }
+    case 'folder-rename': renameNow(el.dataset.folder); break;
+    case 'folder-new': {
+      const name = newFolderName();
+      S.pending.push(name);
+      renameNow(name);
+      break;
+    }
+    // Its integrations stay, out of any folder.
+    case 'folder-remove': {
+      const f = el.dataset.folder;
+      const ids = S.data.integrations.filter(i => i.folder === f).map(i => i.id);
+      S.pending = S.pending.filter(x => x !== f);
+      if (S.folded.delete(f)) store.set('ig-folded', JSON.stringify([...S.folded]));
+      if (!ids.length || await moveToFolder(ids, '')) toast(ids.length ? `Removed ${f}: what was in it stays` : `Removed ${f}`, 'ok');
+      render();
+      break;
+    }
     case 'reveal': {
       const id = el.dataset.field, show = !S.revealed.has(id);
       if (show) S.revealed.add(id); else S.revealed.delete(id);
@@ -7537,7 +8425,7 @@ async function onClick(e){
       });
       break;
     case 'alerts-add': addAlertsToObs(el); break;
-    case 'alerts-open': AlertsLook.open(); break;
+    case 'alerts-open': openAlertsPage(); break;
     case 'media-del': deleteMedia(el); break;
     case 'alert-test':
       busy(el, async () => {
@@ -7587,10 +8475,54 @@ function onInput(e){
   if (!el.dataset || !el.dataset.bind || !Modal.el || !Modal.el.contains(el)) return;
   if (Modal.kind === 'editor') Editor.input(el);
   else if (Modal.kind === 'builder') Builder.input(el);
-  else if (Modal.kind === 'alerts') AlertsLook.input(el);
   else if (Modal.kind === 'values') Values.input(el);
+  else if (Modal.kind === 'tracker') Stage.input(el);
   // Pasted or dropped, not typed: typing would preview half a recipe.
   else if (Modal.kind === 'import' && el.dataset.bind === 'r-text' && /^insertFrom(Paste|Drop)$/.test(e.inputType || '')) Recipes.pasted(el);
+}
+
+// ---- Dragging an integration to a folder: onto a folder's heading or its
+// group, onto "Not in a folder", or onto the new folder zone that shows
+// while dragging.
+function onDragStart(e){
+  const card = e.target.closest && e.target.closest('[data-drag-id]');
+  if (!card) return;
+  S.dragging = card.dataset.dragId;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', S.dragging);
+  card.classList.add('ig-dragged');
+  // After the browser took its picture of the card.
+  requestAnimationFrame(() => { const root = $('ig-root'); if (root && S.dragging) root.classList.add('ig-dragging'); });
+}
+// The folder under the pointer, lit, when the card can go there.
+function dropTarget(e){
+  const at = e.target.closest && e.target.closest('[data-drop-folder]');
+  const i = S.dragging && find(S.dragging);
+  return at && i && (at.hasAttribute('data-drop-new') || at.dataset.dropFolder !== (i.folder || '')) ? at : null;
+}
+function onDragOver(e){
+  const at = dropTarget(e);
+  document.querySelectorAll('#ig-root .drop-on').forEach(x => { if (x !== at) x.classList.remove('drop-on'); });
+  if (!at) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  at.classList.add('drop-on');
+}
+async function onDrop(e){
+  const at = dropTarget(e), id = S.dragging;
+  if (!at) return;
+  e.preventDefault();
+  onDragEnd();
+  if (!at.hasAttribute('data-drop-new')){ moveToFolder([id], at.dataset.dropFolder); return; }
+  const name = newFolderName();
+  if (await moveToFolder([id], name)) renameNow(name);
+}
+function onDragEnd(){
+  S.dragging = null;
+  const root = $('ig-root');
+  if (root) root.classList.remove('ig-dragging');
+  document.querySelectorAll('#ig-root .drop-on, #ig-root .ig-dragged').forEach(x => x.classList.remove('drop-on', 'ig-dragged'));
+  if (S.redraw){ S.redraw = false; render(); }
 }
 
 // Editors normalise some fields (commands lowercased, numbers clamped)
@@ -7608,6 +8540,12 @@ function onFieldLeave(e){
 // Enter or Space on a clickable card acts like a click; arrow keys move
 // through a group of radio buttons (the card colors) and pick.
 function onActivateKey(e){
+  if (e.target.matches('.ig-folder-in') && (e.key === 'Enter' || e.key === 'Escape')){
+    e.preventDefault();
+    if (e.key === 'Enter') renameFolder(e.target.dataset.folder, e.target.value);
+    else { S.renaming = null; render(); }
+    return;
+  }
   // Enter in a list's find box picks the first match, or the typed name.
   if (e.key === 'Enter' && e.target.matches('[data-bind="pick-find"]')){
     e.preventDefault();
@@ -7659,7 +8597,8 @@ document.addEventListener('focusin', e => {
 });
 // A hidden page has nobody to show activity to; catch up when it's back.
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && (S.visible || modalOpen())) poll();
+  if (!document.hidden && (S.visible || S.stage || modalOpen())) poll();
+  if (!document.hidden) Stage.tick();
 });
 
 function wireRoot(){
@@ -7669,6 +8608,14 @@ function wireRoot(){
   root.addEventListener('click', onClick);
   root.addEventListener('input', onInput);
   root.addEventListener('keydown', onActivateKey);
+  root.addEventListener('dragstart', onDragStart);
+  root.addEventListener('dragover', onDragOver);
+  root.addEventListener('drop', onDrop);
+  root.addEventListener('dragend', onDragEnd);
+  // A folder's new name is kept once its field is left, as with Enter.
+  root.addEventListener('focusout', e => {
+    if (e.target.matches('.ig-folder-in') && S.renaming === e.target.dataset.folder) renameFolder(S.renaming, e.target.value);
+  });
   root.addEventListener('toggle', e => { if (e.target.id === 'ig-activity-box') S.activityOpen = e.target.open; }, true);
 }
 
@@ -7691,16 +8638,74 @@ window.Integrations = {
   },
   hide(){
     S.visible = false;
-    if (!modalOpen()) clearInterval(S.pollTimer);
+    if (!modalOpen() && !S.stage) clearInterval(S.pollTimer);
   },
-  // From the Overlay tab: where alerts go on stream.
-  async openAlertsPage(){
+  // The Overlay tab showing its Alerts or its Goals page (`sub`), or
+  // neither any more.
+  async stage(sub){
+    S.stage = sub === 'alerts' || sub === 'goals' ? sub : null;
+    if (!S.stage){
+      clearTimeout(Stage.clockT);
+      if (!S.visible && !modalOpen()) clearInterval(S.pollTimer);
+      return;
+    }
+    wireStage();
+    // Which goals have an overlay is the gallery's to say: ask each visit.
+    if (S.stage === 'goals') Stage.loadSlugs().then(() => { if (S.stage === 'goals') Stage.render(); });
+    if (S.data) Stage.render();
+    else if (!(await load())){
+      const root = $(S.stage === 'alerts' ? 'ov-alerts' : 'ov-goals');
+      if (root) root.innerHTML = '<div class="lan-warn"><span class="lw-ic">⚠</span><span>The app did not answer. Is InstantClone still running?</span></div>';
+    }
+    // (Once the data is in: the default design is part of the alerts' look,
+    // and the gallery says which alerts play each design.)
+    if (S.stage === 'alerts' && S.data) Stage.loadDesigns().then(() => {
+      if (S.stage !== 'alerts') return;
+      Stage.render();
+      if (typeof Studio !== 'undefined') Studio.alertsChanged();
+    });
+    if (S.stage) schedulePoll();
+  },
+  // A new goal or timer, from the Overlay tab's own button.
+  async newTracker(what){
     if (!S.data && !(await load())) return;
-    Conn.open('stream');
+    Stage.edit(what, '');
+  },
+  // For the Studio's pickers: your goals and timers, read once if need be.
+  async tracking(){
+    if (!S.data) await load();
+    return tracking();
+  },
+  addOverlayToObs,
+  // The Studio's Alert card layer: the themes, fonts and entrances it has.
+  alertKit:{themes:THEMES, fonts:ALERT_FONTS, anims:ALERT_ANIMS, sounds:ALERT_SOUNDS},
+  // The Overlay tab's Alerts page, the Studio's gallery of alert designs:
+  // which alerts play one, one for every alert, a ready-made one made a
+  // file, a deleted one let go, and a design's icon.
+  designUse:slug => Stage.designUse(slug),
+  useDesignEverywhere:slug => Stage.useEverywhere(slug),
+  ensureDesign:slug => Stage.ensureDesign(slug),
+  designGone:slug => Stage.designGone(slug),
+  designIcon:designIconHtml,
+  // The Studio's sound for a design: your uploads, one more, heard first.
+  soundUploads:() => S.data ? mediaOf('sound').map(m => ['media:' + m.name, m.name]) : [],
+  uploadSound:() => uploadMedia('sound'),
+  playSound:sound => playAlertSound({title:'', text:'', sound, volume:'70'}),
+  // The Alerts page with no alerts yet: Twitch alerts, opened to look at.
+  async addTwitchAlerts(){
+    if (!S.data && !(await load())) return;
+    showTab('integrations');
+    await addFrom({preset:'twitch_alerts'}, true);
   },
 };
 
 // A reload or a restored tab can land straight on Integrations.
 const pane = document.querySelector('.tab-pane[data-pane="integrations"]');
 if (pane && !pane.hidden) window.Integrations.show();
+// Or on the Overlay tab, with one of this file's pages open.
+const overlayPane = document.querySelector('.tab-pane[data-pane="overlay"]');
+if (overlayPane && !overlayPane.hidden){
+  const open = overlayPane.querySelector('.sub-tab.on');
+  window.Integrations.stage(open ? open.dataset.subtab : null);
+}
 })();

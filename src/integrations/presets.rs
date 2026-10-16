@@ -37,6 +37,15 @@ pub const PRESETS: &[Preset] = &[
         preview: ("overlay", "Nat is raiding with 42 viewers", ""),
     },
     Preset {
+        id: "hype_alerts",
+        name: "Hype Twitch alerts",
+        category: "alerts",
+        description: "Twitch alerts with bigger ones built in: cheers from 1,000 and 10,000 bits, raids from 50 viewers and gift bombs from 10 and 50 subs play a bigger design for longer. Use it instead of Twitch alerts.",
+        needs: &["twitch", "dock"],
+        recommended: false,
+        preview: ("overlay", "Nat cheered 10000 bits", ""),
+    },
+    Preset {
         id: "crash_alert",
         name: "OBS crash alert",
         category: "alerts",
@@ -236,6 +245,15 @@ pub const PRESETS: &[Preset] = &[
         needs: &["web"],
         recommended: false,
         preview: ("json", "", ""),
+    },
+    Preset {
+        id: "stream_log",
+        name: "Stream log in the dock",
+        category: "auto",
+        description: "Your stream's moments in the OBS dock's Events, each in a group to filter: crashes and recoveries, platforms dropping and coming back, delay changes, highlights and chapters.",
+        needs: &["dock"],
+        recommended: false,
+        preview: ("dock", "YouTube dropped: connection timed out", ""),
     },
     Preset {
         id: "crash_counter",
@@ -738,6 +756,8 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
             })
             .collect(),
         "twitch_alerts" => twitch_alerts(),
+        "hype_alerts" => hype_alerts(),
+        "stream_log" => stream_log(),
         "crash_counter" => vec![on(
             EventKind::HoldOpened,
             vec![
@@ -757,6 +777,7 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
         preset: p.id.to_string(),
         cooldown_ms,
         quiet: None,
+        folder: String::new(),
         handlers,
     };
     // Something still to fill in (a webhook address, a Discord channel):
@@ -1222,54 +1243,290 @@ fn hype_clip(d: &str) -> Vec<Handler> {
     }]
 }
 
-/// One "Show on stream" alert per Twitch event, each playing the alerts
-/// page's theme sound. A gifted sub reaches each viewer as a sub too:
-/// those are left to the one gift alert.
+/// Each Twitch alert: its event, the alert's small title and words, the
+/// viewer's own words it shows (a resub's message, a cheer's without the
+/// cheers), and its line in the OBS dock's events with the group the dock
+/// filters by.
+const TWITCH_ALERTS: &[(EventKind, &str, &str, &str, &str, &str)] = &[
+    (
+        EventKind::TwitchFollow,
+        "New follower",
+        "{user}",
+        "",
+        "Follows",
+        "{user} followed",
+    ),
+    (
+        EventKind::TwitchSub,
+        "New sub",
+        "{user} just subscribed",
+        "",
+        "Subs",
+        "{user} subscribed (tier {tier})",
+    ),
+    (
+        EventKind::TwitchResub,
+        "Resub",
+        "{user}: {months#month#months}",
+        "{message}",
+        "Subs",
+        "{user} resubscribed: {months#month#months}",
+    ),
+    (
+        EventKind::TwitchGift,
+        "Gifted subs",
+        "{user} gifted {count#sub#subs}",
+        "",
+        "Subs",
+        "{user} gifted {count#sub#subs}",
+    ),
+    (
+        EventKind::TwitchCheer,
+        "Bits",
+        "{user} cheered {bits#bit#bits}",
+        "{words}",
+        "Bits",
+        "{user} cheered {bits#bit#bits}",
+    ),
+    (
+        EventKind::TwitchRaid,
+        "Raid",
+        "{user} is raiding with {viewers#viewer#viewers}",
+        "",
+        "Raids",
+        "{user} raided with {viewers#viewer#viewers}",
+    ),
+];
+
+/// One "Show on stream" alert per Twitch event, each playing its design's
+/// sound and listed in the OBS dock. A gifted sub reaches each viewer as a
+/// sub too: those are left to the one gift alert.
 fn twitch_alerts() -> Vec<Handler> {
-    let alert = |title: &str, text: &str| {
-        Step::new(
-            StepKind::Overlay,
-            &[
-                ("title", title),
-                ("text", text),
-                ("seconds", "6"),
-                ("sound", super::alerts::THEME_SOUND),
-            ],
-        )
-    };
-    // Welcoming raiders in chat is the streamer's call: off to start.
-    let mut welcome = chat("Welcome, raiders from {user}!");
-    welcome.enabled = false;
-    vec![
-        on(
-            EventKind::TwitchFollow,
-            vec![alert("New follower", "{user}")],
+    TWITCH_ALERTS
+        .iter()
+        .map(|&(kind, title, text, message, group, line)| {
+            let alert = Step::new(
+                StepKind::Overlay,
+                &[
+                    ("title", title),
+                    ("text", text),
+                    ("message", message),
+                    ("seconds", "6"),
+                    ("sound", super::alerts::THEME_SOUND),
+                ],
+            );
+            let mut steps = vec![alert, dock_line(group, line)];
+            if kind == EventKind::TwitchRaid {
+                // Welcoming raiders in chat is the streamer's call: off to start.
+                let mut welcome = chat("Welcome, raiders from {user}!");
+                welcome.enabled = false;
+                steps.push(welcome);
+            }
+            match kind {
+                EventKind::TwitchSub => on_filtered(kind, &[("gift", "no")], steps),
+                _ => on(kind, steps),
+            }
+        })
+        .collect()
+}
+
+/// Hype alerts' bigger ones: (event, the amount it goes by, from how much,
+/// the small title, the design, seconds on screen). Smallest first per
+/// event. Each plays its design's sound, louder.
+const HYPE_TIERS: &[(EventKind, &str, u32, &str, &str, &str)] = &[
+    (
+        EventKind::TwitchCheer,
+        "bits",
+        1_000,
+        "Big cheer!",
+        "alert-banner",
+        "8",
+    ),
+    (
+        EventKind::TwitchCheer,
+        "bits",
+        10_000,
+        "Huge cheer!",
+        "alert-cinema",
+        "10",
+    ),
+    (
+        EventKind::TwitchRaid,
+        "viewers",
+        50,
+        "Big raid!",
+        "alert-cinema",
+        "10",
+    ),
+    (
+        EventKind::TwitchGift,
+        "count",
+        10,
+        "Gift bomb!",
+        "alert-banner",
+        "8",
+    ),
+    (
+        EventKind::TwitchGift,
+        "count",
+        50,
+        "Huge gift bomb!",
+        "alert-cinema",
+        "10",
+    ),
+];
+const HYPE_VOLUME: &str = "90";
+
+/// Twitch alerts with bigger ones: from an amount up, the alert is another
+/// one (`HYPE_TIERS`). Kept as the editor's "Bigger ones" keeps them: "if
+/// {bits} is less than 1000, the alert; otherwise the next", each check
+/// inside the last, so the editor and the builder both show them.
+fn hype_alerts() -> Vec<Handler> {
+    let mut handlers = twitch_alerts();
+    for handler in &mut handlers {
+        let Trigger::Event { kind, .. } = &handler.trigger else {
+            continue;
+        };
+        let tiers: Vec<_> = HYPE_TIERS.iter().filter(|t| t.0 == *kind).collect();
+        let Some(&&(_, amount, ..)) = tiers.first() else {
+            continue;
+        };
+        let alert = handler.steps.remove(0);
+        let bigger = tiers.iter().map(|&&(_, _, _, title, design, seconds)| {
+            with(
+                alert.clone(),
+                &[
+                    ("title", title),
+                    ("design", design),
+                    ("seconds", seconds),
+                    ("volume", HYPE_VOLUME),
+                ],
+            )
+        });
+        let alerts: Vec<Step> = std::iter::once(alert.clone()).chain(bigger).collect();
+        // From the biggest in: each check sends anything smaller to its
+        // own alert, the rest on to the next.
+        let mut chain = alerts[alerts.len() - 1].clone();
+        for n in (0..tiers.len()).rev() {
+            let mut check = Step::new(
+                StepKind::If,
+                &[
+                    ("left", &format!("{{{amount}}}")),
+                    ("op", "less"),
+                    ("right", &tiers[n].2.to_string()),
+                ],
+            );
+            check.then = vec![alerts[n].clone()];
+            check.otherwise = vec![chain];
+            chain = check;
+        }
+        handler.steps.insert(0, chain);
+    }
+    handlers
+}
+
+/// InstantClone's own moments listed in the OBS dock's Events, each in a
+/// group the dock filters by.
+fn stream_log() -> Vec<Handler> {
+    [
+        (EventKind::StreamStarted, "Stream", "Stream started"),
+        (
+            EventKind::StreamEnded,
+            "Stream",
+            "Stream ended after {duration}: {crashes#crash#crashes}, {drops#drop#drops}",
         ),
-        on_filtered(
-            EventKind::TwitchSub,
-            &[("gift", "no")],
-            vec![alert("New sub", "{user} just subscribed")],
+        (
+            EventKind::HoldOpened,
+            "Crashes",
+            "OBS dropped ({reason}): holding for {hold}",
         ),
-        on(
-            EventKind::TwitchResub,
-            vec![alert("Resub", "{user}: {months#month#months}")],
+        (
+            EventKind::ObsBack,
+            "Crashes",
+            "OBS is back after {down_for}",
         ),
-        on(
-            EventKind::TwitchGift,
-            vec![alert("Gifted subs", "{user} gifted {count#sub#subs}")],
+        (EventKind::HoldExpired, "Crashes", "The {hold} hold ran out"),
+        (
+            EventKind::DestinationDropped,
+            "Platforms",
+            "{destination} dropped: {reason}",
         ),
-        on(
-            EventKind::TwitchCheer,
-            vec![alert("Bits", "{user} cheered {bits#bit#bits}")],
+        (
+            EventKind::DestinationRecovered,
+            "Platforms",
+            "{destination} is back after {down_for}",
         ),
-        on(
-            EventKind::TwitchRaid,
-            vec![
-                alert("Raid", "{user} is raiding with {viewers#viewer#viewers}"),
-                welcome,
-            ],
+        (
+            EventKind::DestinationUnstable,
+            "Platforms",
+            "{destination} dropped {drops} times in {within}",
         ),
+        (EventKind::DelayOn, "Delay", "Delay on: {delay}"),
+        (
+            EventKind::DelayChanged,
+            "Delay",
+            "Delay changed from {previous} to {delay}",
+        ),
+        (EventKind::DelayOff, "Delay", "Delay off"),
     ]
+    .iter()
+    .map(|&(kind, group, text)| on(kind, vec![dock_line(group, text)]))
+    .chain(std::iter::once(on_filtered(
+        EventKind::TimelineUpdated,
+        &[("kind", "highlight, chapter")],
+        vec![dock_line("Moments", "{line}")],
+    )))
+    .collect()
+}
+
+fn dock_line(group: &str, line: &str) -> Step {
+    Step::new(StepKind::Dock, &[("group", group), ("text", line)])
+}
+
+/// Bring Twitch alerts from before 0.1.17 up to date, once: a resub and a
+/// cheer show the viewer's words, and each alert is listed in the OBS
+/// dock's events, right after it. One that has either already (a step
+/// listing it in the dock, or an alert that says what to do with the
+/// viewer's words, even nothing) is left as it is. Returns whether
+/// anything changed.
+pub fn upgrade_twitch_alerts(integration: &mut Integration) -> bool {
+    if integration.preset != "twitch_alerts" {
+        return false;
+    }
+    let mut seen_new = false;
+    for handler in &integration.handlers {
+        super::model::visit_steps(&handler.steps, &mut |s| {
+            seen_new |= s.kind == StepKind::Dock
+                || (s.kind == StepKind::Overlay && s.params.contains_key("message"));
+        });
+    }
+    if seen_new {
+        return false;
+    }
+    let mut changed = false;
+    for handler in &mut integration.handlers {
+        let Trigger::Event { kind, .. } = &handler.trigger else {
+            continue;
+        };
+        let Some(&(_, _, _, message, group, line)) =
+            TWITCH_ALERTS.iter().find(|row| row.0 == *kind)
+        else {
+            continue;
+        };
+        let Some(at) = handler
+            .steps
+            .iter()
+            .position(|s| s.kind == StepKind::Overlay)
+        else {
+            continue;
+        };
+        handler.steps[at]
+            .params
+            .insert("message".into(), message.into());
+        handler.steps.insert(at + 1, dock_line(group, line));
+        changed = true;
+    }
+    changed
 }
 
 /// The on-air state as a light on the network, picked in the editor.
@@ -1472,6 +1729,7 @@ pub fn legacy_alerts(id: String, channel: &str) -> Integration {
         preset: "stream_alerts".to_string(),
         cooldown_ms: 0,
         quiet: None,
+        folder: String::new(),
         // Ordered by the life of a stream; the card previews the first.
         handlers: vec![
             on(
@@ -1903,8 +2161,66 @@ mod tests {
         }
     }
 
+    /// Hype alerts' bigger ones are the editor's "Bigger ones": checks on
+    /// the amount, smallest first, the alert as it was below them all.
+    #[test]
+    fn hype_alerts_go_bigger_from_an_amount_up() {
+        let i = build("hype_alerts", "h".into(), "").unwrap();
+        let cheer = i
+            .handlers
+            .iter()
+            .find(|h| {
+                matches!(
+                    h.trigger,
+                    Trigger::Event {
+                        kind: EventKind::TwitchCheer,
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let check = &cheer.steps[0];
+        assert_eq!(
+            (check.param("left"), check.param("op"), check.param("right")),
+            ("{bits}", "less", "1000")
+        );
+        assert_eq!(check.then[0].param("title"), "Bits");
+        assert_eq!(check.then[0].param("design"), "");
+        let next = &check.otherwise[0];
+        assert_eq!(next.param("right"), "10000");
+        assert_eq!(next.then[0].param("design"), "alert-banner");
+        assert_eq!(next.otherwise[0].param("title"), "Huge cheer!");
+        assert_eq!(next.otherwise[0].param("message"), "{words}");
+        assert_eq!(cheer.steps[1].kind, StepKind::Dock, "listed after it");
+        assert!(i.validate().is_empty(), "{:?}", i.validate());
+    }
+
     #[test]
     fn legacy_alerts_validate() {
         assert!(legacy_alerts("legacy".into(), "chan").validate().is_empty());
+    }
+
+    /// Twitch alerts as 0.1.16 made them catch up once: the viewer's words
+    /// and the dock's events, as a new copy has them. Changed since, or
+    /// caught up already, they stay as they are.
+    #[test]
+    fn twitch_alerts_from_before_catch_up_once() {
+        let fresh = build("twitch_alerts", "t".into(), "").unwrap();
+        let mut old = fresh.clone();
+        for handler in &mut old.handlers {
+            handler.steps.retain(|s| s.kind != StepKind::Dock);
+            handler.steps[0].params.remove("message");
+        }
+        assert!(upgrade_twitch_alerts(&mut old));
+        assert_eq!(old, fresh);
+        assert!(!upgrade_twitch_alerts(&mut old), "only once");
+
+        // A dock line taken out later stays out.
+        let mut trimmed = fresh.clone();
+        trimmed.handlers[0]
+            .steps
+            .retain(|s| s.kind != StepKind::Dock);
+        assert!(!upgrade_twitch_alerts(&mut trimmed));
+        assert!(fresh.validate().is_empty());
     }
 }

@@ -178,6 +178,8 @@ fn alerts_json(integrations: &[Integration], look: &Look, media_folder: &Path) -
 /// call tokens and the hotkey, pad or Stream Deck address a button starts
 /// from.
 fn make_private(i: &mut Integration) {
+    // Where the sharer keeps it is theirs: the importer's lists stay theirs.
+    i.folder.clear();
     for h in &mut i.handlers {
         strip_private(&mut h.steps);
         match &mut h.trigger {
@@ -252,6 +254,12 @@ fn strip_private(steps: &mut [super::model::Step]) {
                 }
                 if is_web_link(s.param("sound")) {
                     s.params.insert("sound".into(), THEME_SOUND.into());
+                }
+                // A design the sharer made is a file on their PC: the
+                // importer's alerts play their own default. A ready-made
+                // one comes along, as every install can make it.
+                if !super::alerts::is_ready_design(s.param("design")) {
+                    s.params.remove("design");
                 }
             }
             // A light on someone's own network: the color stays.
@@ -365,6 +373,9 @@ fn parse_alerts(v: &Value) -> Result<SharedAlerts, String> {
         .collect();
     let mut look = Look::from_json(v.get("look").unwrap_or(&Value::Null));
     look.css = css_that_stays_here(&look.css);
+    // Its design is a file on the sharer's PC: taken, the look becomes a
+    // design of the importer's own (the dashboard makes it).
+    look.design = String::new();
     // A theme sound linked from the web: as for an alert's own, see
     // `strip_private`.
     if is_web_link(&look.sound) {
@@ -546,6 +557,14 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_look_leaves_its_design_behind() {
+        let shared = json::parse(r#"{"look":{"theme":"signal","design":"my-alerts"}}"#).unwrap();
+        let alerts = parse_alerts(&shared).unwrap();
+        assert_eq!(alerts.look.design, "");
+        assert_eq!(alerts.look.theme, "signal");
+    }
+
+    #[test]
     fn alerts_linked_from_the_web_stay_behind() {
         let mut steps = vec![Step::new(
             StepKind::Overlay,
@@ -553,10 +572,12 @@ mod tests {
                 ("image", "https://x.example/y.gif"),
                 ("sound", "https://x.example/s.mp3"),
                 ("text", "{user} followed"),
+                ("design", "my-alerts"),
             ],
         )];
         strip_private(&mut steps);
         assert_eq!(steps[0].param("image"), "");
+        assert_eq!(steps[0].param("design"), "", "a design stays home");
         assert_eq!(steps[0].param("sound"), THEME_SOUND);
         assert_eq!(steps[0].param("text"), "{user} followed");
         let mut upload = vec![Step::new(StepKind::Overlay, &[("sound", "media:ding.mp3")])];
@@ -565,6 +586,13 @@ mod tests {
             upload[0].param("sound"),
             "media:ding.mp3",
             "an upload stays"
+        );
+        let mut ready = vec![Step::new(StepKind::Overlay, &[("design", "alert-banner")])];
+        strip_private(&mut ready);
+        assert_eq!(
+            ready[0].param("design"),
+            "alert-banner",
+            "every install has it"
         );
     }
 

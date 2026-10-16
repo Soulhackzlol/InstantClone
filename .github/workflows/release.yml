@@ -2,8 +2,8 @@ name: release
 
 # Trigger: pushing a tag like v0.1.0 or v0.2.3.
 # What it does: builds the release binary, computes its SHA-256, and
-# creates a GitHub Release with the .exe + a checksum file attached.
-# Auto-generated release notes come from the commit log between tags.
+# creates a GitHub Release with the .exe + a checksum file attached. The
+# release's notes are written by hand (see "publish release").
 on:
   push:
     tags: ["v*"]
@@ -33,6 +33,18 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
+      # The tag must be the app's own version (Cargo.toml). A build that
+      # says it is another version than its release would see that release
+      # as newer than itself, and offer it as an update over and over.
+      - name: tag matches the app version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match the app version $version in Cargo.toml. Bump Cargo.toml, or tag v$version."
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME matches the app version."
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt

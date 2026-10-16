@@ -4,6 +4,345 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - Alerts you design, goals and timers, events in the dock, and folders for integrations
+
+### Alerts you design
+
+- **Alerts you design.** Every alert plays a design made in the Overlay
+  Studio: layers (its picture, its title, its words, shapes, anything) that
+  wait hidden, come in with their own animations when the alert plays, and
+  leave when it ends. One browser source still plays them all: the alerts
+  page shows the alert's design for as long as it lasts, with its sound.
+  Each alert can play its own, or one design can play them all. A new
+  design starts from a ready one, the picture beside the title and words
+  on a dark card, to change as you like.
+- **Seven ready-made designs, built from layers.** Island, Signal, Banner,
+  Bubble, Minimal, Paper and Cinema each come as their parts: the card
+  (and its tail, tape, tag or gold lines), the picture, the title and the
+  words, each a named layer with its own way in, to move, restyle or
+  delete. Their accent and words colours are the design's (Theme tab), so
+  one change recolours it all. A ready-made design is saved to your
+  overlays the first time it is edited, copied or picked, as a file like
+  any other.
+- **Your look from before is a design.** The first time you open
+  Integrations or the Alerts page, the look your alerts had becomes "My
+  alerts", in its theme's layers, with its place, size, font, colors and
+  sound, and every alert plays it, coming in as its card did. A look with
+  custom CSS keeps its card, as the CSS was written for it, and so does
+  one with the picture on top. An alerts source with `?at=top` in its
+  address (as 0.1.15 set it up) still shows them at the top. The Alerts
+  look window is gone: alerts look like their design.
+- **Saved overlays catch up by themselves.** Each overlay says which
+  version of the Studio made it, and the dashboard makes again those an
+  older one made (never while you're live), so a fix to how layers draw
+  reaches them without saving each one. Alert designs that were one Alert
+  card ("My alerts", ready-made ones saved before) become layers on the
+  way.
+- **The viewer's words on stream.** An alert can show a message under its
+  words (**Viewer's message** in the editor, `{{alert.message}}` in a
+  design). Every ready-made design has a Message layer over its card, up
+  to three lines, there only when the alert brings one.
+- **The Alerts page is your designs.** Overlay → Alerts is laid out like
+  Delay and Custom: your alert designs, then the ready-made ones, each
+  saying how many alerts play it. The chosen one plays the same sample
+  alert the Studio does, and beside it are **Edit in Studio**, **Use for
+  every alert** (alerts added later play it too), **Duplicate**, and
+  **Delete** (for a ready-made one you changed, **Reset**). Across the top
+  is the one browser source that plays every alert: in OBS or not, **Add
+  to OBS**, **Send a test**, and its address. With no alerts yet, **Set up
+  Twitch alerts** is right there. **Use for every alert** asks first when
+  some alerts have a design of their own.
+- **An alert picks its design in Integrations.** An alert's "Show on
+  stream" step has a **Design** chip beside Accent, Sound, Picture and On
+  screen for: the designs as tiles, one click to pick (and **Use on every
+  alert here**); the builder's step has it too. What it says, its accent,
+  picture, sound and how long it stays are the alert's own, as before: its
+  accent recolours what the design paints in its accent. The editor's
+  live preview shows the design up close.
+- **A design has its own sound**, in the Studio's Theme tab: a built-in
+  one or your own upload, heard with **Play**. Alerts whose sound is "The
+  design's sound" play it. The ready-made designs come with their theme's,
+  and the look from before keeps the sound it had.
+- **The Studio knows what it's editing.** Only a delay overlay gets the
+  delay's states. An alert design gets **Play the alert**; a goal's overlay
+  gets -1, +1 and **Count up and down**, so its bar fills and its "+1" pops;
+  anything else says it looks the same whatever the delay does. The Add
+  list leads with what fits, and an alert's own parts (its picture, its
+  title, its words) are one click each.
+- **New motions for every layer:** wipe on, shutter, grow from a dot,
+  stamp and boing, the themes' own ways in. Words can also decode from
+  scrambled letters or type themselves in.
+- **Layers made for cards.** A Shape takes its own corners, a border and a
+  drop shadow. A picture can fill its box (a circle or a rounded square,
+  whatever size the GIF is), with corners and a border too. Words can keep
+  to a width, so a long name shrinks to fit the card instead of running
+  off it, or wrap onto up to three lines, and lose their shadow on a light
+  card. Any layer can have a name
+  of its own in the layer list. An alert design's layers don't offer the
+  delay's states: they wait hidden and show while an alert plays. An
+  alert with no picture moves the words into its place (each layer's
+  **With no picture, move left**), any layer can show only when the alert
+  has a message, and a text layer has the alert's title, words and
+  message one click away.
+- **The Alert card layer draws the seven themes as whole cards**, the ones
+  alerts had before (the ready-made designs above are their look-alikes in
+  layers). One click in the Studio's Add list; each card is its own
+  build, with its own shape, font, sound, way in, life while up and way
+  out:
+  - **Island:** a black capsule like a phone's live island. It grows out
+    of a dot, keeps a small equalizer going, and shrinks back into it.
+  - **Signal:** an esports HUD. A scan line draws the panel, corner
+    brackets snap out, the words decode from scrambled letters, and it
+    glitches away.
+  - **Banner:** a broadcast lower third. It wipes on, with the words
+    coming up from under the line.
+  - **Bubble:** a sticker speech bubble. It boings out with confetti,
+    each word pops, and it bobs while up.
+  - **Minimal:** just type. A line draws, the words ink in letter by
+    letter, and the line is the time left.
+  - **Paper:** a scrapbook clipping on torn paper. It slaps down, the
+    tape sticks, the title stamps on, a marker highlights each word, and
+    it peels off.
+  - **Cinema:** a film's title card. It opens like a shutter, gold lines
+    draw out, the words fade up in an italic serif under a little film
+    grain, and it shutters closed.
+- **A shared look becomes a design of your own.** Using the look of a
+  recipe with alerts makes it a design your alerts play; a recipe never
+  brings a design's name along.
+
+### Goals, timers, and everything on stream in one tab
+
+- **The Overlay tab holds everything viewers see, by what it shows.** Four
+  pages: **Delay** (the overlays that tell viewers you're on a delay, the
+  built-in ones and yours), **Alerts**, **Goals and timers**, and
+  **Custom** (anything else: a starting-soon screen, your socials, your own
+  HTML, and the .html files you drop in the overlays folder). Each overlay
+  is on one page: a goal's or a timer's own overlay is on its card, an
+  overlay stays on the page it was made on, and the Studio's menu moves one
+  between Delay and Custom. Alerts are still integrations (an alert can go
+  to chat or Discord with no overlay at all).
+- **Laid out like the Studio.** The Delay and Custom pages list their
+  overlays on the left (yours before the built-in ones), the chosen one's
+  preview in the middle, and on the right **Add to OBS** (one click puts it
+  in the scene on air), **Edit in Studio**, its browser source link, and
+  duplicate and delete. The **Alerts** page is laid out the same way, with
+  alert designs (see "The Alerts page is your designs"). So is **Goals and
+  timers**: every goal and timer on the
+  left, each still showing its count and bar or its running clock, its own
+  overlay live in the middle (press +1 and watch the bar fill), and on the
+  right the big number with what moves it, **Add to OBS**, **Edit its
+  look** and its link. Every page's preview looks the same: the overlay at
+  its real size on a 1920 × 1080 canvas, over the same see-through
+  backdrop, under one bar saying what it plays (the delay state, a sample
+  alert, or live numbers) with its controls at the end. Each page fits on
+  one screen and grows with the window: the list shows more, and the
+  preview is the largest that fits.
+- **Restore built-ins restores only those.** It used to delete every
+  overlay you had made, goals' and timers' too, to put the built-in ones
+  back. Now it resets the built-in delay overlays and brings back any you
+  deleted, and leaves everything else alone.
+- **A goal's or a timer's overlay stays on its card.** Renaming it in the
+  Studio used to give it a new file, which its card no longer found; it
+  keeps its file now, and **Save as new** makes a copy of your own, on the
+  Custom page.
+- **Goals.** A goal counts subs (new, resubs and gifted), follows, bits, or
+  only what you and your integrations add, toward a target. It can start
+  from 0 with every stream or keep counting (InstantClone restarting
+  mid-stream isn't a new stream). Set where it stands by hand
+  ("Road to 1,000" starting at 874), and nudge it with +1 and -1.
+- **Timers, and subathons.** A timer counts down from a length you pick.
+  Subs, every 100 bits and follows can each add time (tier 2 and 3 subs add
+  2 and 5 times as much, if you like), with an optional limit. Start, pause,
+  add or take a minute, and reset from the dashboard. A timer that ran out
+  stays over until you start it again; one that ran out while InstantClone
+  was closed ends quietly, instead of "ending" as it starts.
+- **On stream in one click.** "Put it on stream" makes the goal's or the
+  timer's own overlay, then **Add to OBS** puts it in the scene on air, or
+  **Copy link** gives you the browser source address. The bar fills
+  smoothly, plays a small pop when the goal is reached, and a timer shows
+  the time someone just added beside the clock.
+- **Every part is a layer.** That overlay is a normal one in the Studio,
+  and each part of it is its own layer to move, restyle or delete: a goal's
+  bar, its name and its numbers; a timer's name and its clock. Any overlay
+  can show them: the new **Goal bar** and **Timer** widgets, and any **Text**
+  layer saying `{{goal.subs}}`, `{{goal.subs.target}}`, `.left`,
+  `.percent`, `.name` or `{{timer.subathon}}` (the Studio lists them as
+  chips under the text, and a clock in words ticks too). The bar has its own
+  track colour, see-through and roundness; every layer has the per-state
+  colour, gradient, glow, opacity and animations, and text layers a weight,
+  spacing and one of 15 fonts. The Studio's **Theme** tab also takes CSS of
+  your own, last in the page, for anything the controls don't reach.
+  Alerts are designs made in the same Studio (see "Alerts you design").
+- **Overlays update in OBS as you save.** An overlay open in OBS (or in the
+  gallery's preview) reloads itself when the Studio saves it, so there is no
+  more refreshing the browser source by hand.
+- **The Studio, redone in the dashboard's own style.** Drawn icons
+  throughout (layers, the Add tab, undo and redo, alignment), layers named
+  by what they show ("33 / 50", "Sub goal bar") instead of their raw text,
+  the Add tab as a grid of tiles, sliders with their value beside them,
+  labelled animation settings, and sections that fold away and stay folded.
+  The settings panel no longer jumps to the top when you tick something.
+- **Same look in every delay state.** One switch on any layer: its colour,
+  gradient, glow and animations are set once instead of per delay state.
+  On by default for goal bars, timers and their words, which are on stream
+  whatever the delay does.
+- **Gradients that move three ways.** Flow, Wave (back and forth) or Shine
+  (a light sweeping across), with their own speed and angle, and a glow
+  that follows the gradient's colours as they move. A gradient's motion is
+  no longer cut off by the widget's own animations, and theme colours
+  (@live and the rest) now work for a goal bar's track.
+- **Goal and timer overlays that look finished.** Made on a dark glass card,
+  each part arriving in turn when the scene opens, with a shine passing
+  over the bar. A goal shows "+1" rising from the end of the bar as it
+  grows, and a timer's last minute turns orange with a beat each second.
+- **Integrations can use them.** A new **Goal or timer** step adds to a goal
+  or drives a timer (the amount can come from chat, like `{arg1}`). New
+  triggers **A goal is reached** and **A timer runs out**. Messages can say
+  `{goal.subs}`, `{goal.subs.target}`, `.left` and `.percent`, and
+  `{timer.subathon}` as a clock. Tests never change your goals and timers.
+- **Light on the stream PC.** A running timer is sent once, as the moment
+  it ends: the overlay counts down by itself, waking once a second, and an
+  overlay without a goal bar or timer does no extra work. Where each goal
+  and timer stands is saved with your other integration data, so a restart
+  mid-subathon loses nothing.
+- **Leaner overlays.** A saved overlay is up to a third smaller: a layer
+  with one look writes one style rule instead of one per delay state, and
+  the script every overlay carries goes without its comments. Widgets no
+  longer each hold a layer of graphics memory for as long as OBS shows
+  them, and the buffer bar fills the way the goal bar does, by sliding.
+- **Widgets, refreshed.** The graph meter has a soft fill under its line,
+  the divider fades out at its ends, the pulsing dot sends out a ring like
+  a live light, and a destination dot that drops beats in the theme's error
+  colour. A lower-third left blank says "ON A DELAY" instead of showing an
+  empty strip, and a new goal bar starts with the gradient and shine.
+- **Studio fixes.** A widget's selection box no longer sits where its
+  entrance animation started, and a widget that has played its entrance
+  follows the mouse while you drag it. A new widget never lands exactly on
+  another one, a dark layer's icon stays readable in Layers, and the
+  settings panel shows what to do when nothing is selected.
+- **An overlay file someone shares can't run code in the dashboard.** Its
+  theme colours and numbers (positions, timings) were put into the
+  Studio's settings as they were written, so a crafted file could break
+  out of them when opened. They're escaped now, as its names already were.
+
+### Twitch alerts and integrations
+
+- **Twitch alerts show what viewers wrote.** A resub shows the viewer's
+  message and a cheer what they wrote, without the Cheer100s (the new
+  `{words}`). Each alert is listed in the dock's Events too. Twitch alerts
+  added before this catch up by themselves, once.
+- **Only from an amount, and bigger alerts for bigger ones.** A cheer, a
+  raid, a gift or a resub can run only from an amount up (**Only from**:
+  500 bits, 10 viewers...). **Bigger ones**, on an alert in the editor,
+  plays another alert from an amount up, with its own design, sound and
+  words: up to three, each kept as an If step on the amount, so the
+  builder shows them as they are. Its preview and tests read that amount.
+- **Two new catalog entries.** **Hype Twitch alerts** is Twitch alerts
+  with bigger ones built in: cheers from 1,000 and 10,000 bits, raids from
+  50 viewers and gift bombs from 10 and 50 subs play the Banner or Cinema
+  design, louder and longer. It's meant instead of Twitch alerts: with
+  both on, the dashboard says each event would play twice. **Stream log in
+  the dock** lists your stream's own moments in the dock's Events, in
+  groups: the stream starting and ending, crashes and recoveries,
+  platforms dropping and coming back, delay changes, highlights and
+  chapters. A dock line's group is a chip in the editor.
+- **An older Twitch login asks before a command fails.** A login from
+  before chat steps could moderate (timeouts, bans, shoutouts,
+  announcements) is asked to log in again as soon as Twitch says what it
+  allows: the Integrations tab and Connections have **Log in again**.
+- **Chat steps run Twitch commands.** One that starts with
+  `/timeout {user} 10m`, `/ban`, `/unban`, `/shoutout`, `/announce` or
+  `/me` runs it. Twitch chat stopped running commands sent as messages, so
+  InstantClone asks Twitch's API instead. What a viewer types only fills it
+  in, never starts one, and a test only says what it would do. A ban or
+  timeout of anyone but the viewer themself (`{user}`) or a name written
+  into the step only saves on a command just mods can use, as a viewer
+  could pick who it is (`{target}`, `{arg1}`, a cheer's words, a reply);
+  one saved before this release stays off until it does. An anonymous
+  gift or cheer has no account to name. A Twitch login from before this
+  logs in again once, which the Integrations tab and Connections ask for.
+- **A Twitch login that just ran out renews itself.** A chat command,
+  channel points or stream title step that Twitch refused because the
+  login ran out a moment ago (after the PC slept, say) gets a fresh one
+  and runs again, instead of asking you to log out and in.
+- **A step that sets your stream's title and category.** "Stream title and
+  category" changes one, the other or both on Twitch, so mods can have
+  `!settitle` and `!setgame`, a channel points reward can rename the
+  stream, or a category can set itself when you go live. A category can be
+  typed loosely: "valo" finds VALORANT, and `{stream.category}` gives later
+  steps the name Twitch has for it. Your Twitch login already allows it.
+- **A follow counts once a day per person.** Someone following, unfollowing
+  and following again set off the follow alert every time. Now the repeats
+  are ignored for 24 hours, and the end-of-stream report doesn't count them
+  either.
+- **An integration holds up to 256 steps,** up from 64. A chat game with
+  every path spelled out (a slot machine with a pay table, streaks and a
+  jackpot) fills 64 by itself.
+- **Folders for integrations.** Drag an integration onto a folder (folded
+  ones too), into another folder's group, onto "Not in a folder", or onto
+  the "new folder" place that opens while you drag, which makes one and
+  lets you name it. **New folder** makes an empty one to drag into, and
+  **Move to folder** in an integration's menu does the same without
+  dragging. The tab lists them by folder, A to Z, each with how many are
+  on; a folder folds (it remembers), renames in place (everything in it
+  moves along) and can be removed, which keeps what was in it. Moving,
+  folding and new folders slide and fade into place. Search finds a
+  folder's name too. Shared recipes leave folders behind.
+- **The builder shows alerts as they look.** A "Show on stream" step has
+  the editor's live preview, design tiles, accent swatches, sounds with
+  Play and volume, pictures and On screen for, instead of typed names. Its
+  card says its design and sound, and an alert's bigger ones read as
+  "Below 1000 bits" and "From 1000 bits" instead of Then and Otherwise.
+- **Adding an integration opens it**, to see it or finish it, with **Back
+  to the catalog** taking it away again. An "Added · Undo" never stays up
+  while you edit what it would take away.
+
+### The OBS tab and the dock
+
+- **Events in the dock.** A new **Events** widget (and an Events preset)
+  lists what your integrations put there, newest first, with the time:
+  show one group at a time (Follows, Subs, Bits, Raids...), **Replay** an
+  alert on stream, or **Skip alert** to end the one on now, its sound
+  too, and bring on the next. Twitch alerts list every follow, sub, cheer
+  and raid; a new **Dock event** step lists anything else, in a group you
+  name. The list lasts until InstantClone restarts.
+- **The dock's destinations show their platform.** Each row has its
+  platform's mark (Twitch, YouTube, Kick...) with the state's dot on its
+  corner, and the icon view shows the marks instead of letters.
+- **AV1 and HEVC from OBS.** The InstantClone service in OBS took H.264
+  only, so OBS switched an AV1 encoder back to H.264. It now offers HEVC and
+  AV1 too, and an entry from before updates itself when OBS closes. YouTube
+  plays both and Restream plays HEVC; a destination that can't play what OBS
+  sends (Kick, or Twitch without Enhanced Broadcasting) is named in the
+  warning, with what to change.
+- **An overlay that isn't there only says so.** Its "not found" named the
+  overlays folder, and with it your Windows user name, to any page that
+  asked.
+
+### Look and feel
+
+- **A compact delay panel.** The button beside Help in the top bar folds
+  the delay panel into one row, for when you're working on overlays or
+  integrations and want the room. What runs the stream stays in that row:
+  its state, the delay (with the arming bar along its edge), the delay
+  field, your profiles and the main button, with Disarm and Cut after
+  sliding in beside it while a delay runs (in the full panel too), and the
+  main button keeps one width so a
+  state change never slides the row. Folding and unfolding is one motion:
+  every part of the panel slides to its new place and really resizes on the
+  way (the delay field, the main button, the delay figure's text), together
+  with the panel's height, so nothing stretches, blurs or jumps. The
+  dashboard remembers which size you left it in. Every tab's card now
+  reaches the same bottom edge, so switching tabs never moves it.
+- **The dashboard stays smooth next to OBS and a game.** It counts its own
+  frames, and while the browser can't keep 30 a second its looping
+  animations (pulsing dots, sweeps, the light behind the delay) rest; they
+  come back when frames are fast again. That light now moves in small
+  steps instead of asking for a frame at every screen refresh. And with
+  many integrations the page is much cheaper to draw: each card's status
+  badge carried a blur that showed nothing, and the Integrations tab was
+  redrawn every two seconds whether anything had changed or not.
+
 ## [0.1.16] - Delays up to 1 hour, Twitch events and alerts, smart lights, chat games and points, and two InstantClones side by side
 
 ### Delays up to 1 hour
@@ -132,14 +471,6 @@ dock's destination list says "Can't connect", with the reason on hover.
 
 ### Look and feel
 
-- **The dashboard stays smooth next to OBS and a game.** It counts its own
-  frames, and while the browser can't keep 30 a second its looping
-  animations (pulsing dots, sweeps, the light behind the delay) rest; they
-  come back when frames are fast again. That light now moves in small
-  steps instead of asking for a frame at every screen refresh. And with
-  many integrations the page is much cheaper to draw: each card's status
-  badge carried a blur that showed nothing, and the Integrations tab was
-  redrawn every two seconds whether anything had changed or not.
 - **Settings are switches.** Every checkbox in the dashboard is now drawn as
   the same switch a destination uses for Enabled.
 - **Things open and close instead of snapping:** the buffer warning under
@@ -373,15 +704,6 @@ What a chat economy needs, as steps you can build anything else with too.
 
 ### Integrations
 
-- **A step that sets your stream's title and category.** "Stream title and
-  category" changes one, the other or both on Twitch, so mods can have
-  `!settitle` and `!setgame`, a channel points reward can rename the
-  stream, or a category can set itself when you go live. A category can be
-  typed loosely: "valo" finds VALORANT, and `{stream.category}` gives later
-  steps the name Twitch has for it. Your Twitch login already allows it.
-- **An integration holds up to 256 steps,** up from 64. A chat game with
-  every path spelled out (a slot machine with a pay table, streaks and a
-  jackpot) fills 64 by itself.
 - **Why a run failed:** the editor's "Last ran · failed" and every Recent
   activity row open that run's steps, with Copy run log and Report it.
 - **Unfinished builds save as drafts**, switched off, instead of failing.

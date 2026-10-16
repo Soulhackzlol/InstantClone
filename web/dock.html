@@ -184,14 +184,21 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .tip.fade{opacity:0;transform:translateY(2px)}
 
 /* Shared row look: destinations, switches, overlays, profile rows. */
-.dest,.brow,.orow,.prow{border:1px solid var(--line);border-top-color:rgba(255,255,255,.11);border-radius:var(--r);
+.dest,.brow,.orow,.prow,.erow{border:1px solid var(--line);border-top-color:rgba(255,255,255,.11);border-radius:var(--r);
   background:linear-gradient(180deg,var(--surface-2),var(--surface));box-shadow:inset 0 1px 0 var(--hl)}
 
 /* Destination quick-toggle strip */
 .dests{display:flex;flex-direction:column;gap:5px}
 .dest{display:flex;align-items:center;gap:8px;padding:7px 9px;font-size:12px}
-.dest .d-dot{width:7px;height:7px;border-radius:50%;background:var(--fg-4);flex:0 0 auto;
-  transition:background-color .2s,box-shadow .2s}
+/* The platform's mark, with the state's dot on its corner. */
+.dest .d-mark{position:relative;width:20px;height:20px;flex:0 0 auto;display:grid;place-items:center;color:var(--fg-2);
+  transition:color .2s,opacity .2s}
+.dest.pc .d-mark{color:var(--pc)}
+.dest.off .d-mark{opacity:.5}
+.dest .d-glyph{display:grid;place-items:center;font-size:11px;font-weight:700;line-height:1}
+.dest .d-glyph svg,.dico svg{width:16px;height:16px;display:block}
+.dest .d-dot{position:absolute;right:-3px;bottom:-3px;width:7px;height:7px;border-radius:50%;background:var(--fg-4);
+  outline:2px solid var(--surface);transition:background-color .2s,box-shadow .2s}
 .dest.alive .d-dot{background:var(--live);box-shadow:0 0 0 3px color-mix(in oklch,var(--live) 18%,transparent)}
 .dest .d-name{flex:1;min-width:0;font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dest.off .d-name{color:var(--fg-3)}
@@ -312,6 +319,20 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
   box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 15%,transparent)}
 .olist{display:flex;flex-direction:column;gap:5px}
 .ogroup{font-size:9.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--fg-4);font-weight:700;margin:6px 2px 1px}
+
+/* Events list */
+.events{display:flex;flex-direction:column;gap:5px}
+.ehead{display:flex;align-items:center;gap:6px}
+.echips{display:flex;gap:4px;flex-wrap:wrap;flex:1;min-width:0}
+.echip{padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);color:var(--fg-3);
+  font:inherit;font-size:10.5px;font-weight:600;cursor:pointer;transition:border-color .15s var(--ease-out),color .15s}
+.echip:hover{border-color:var(--line-2);color:var(--fg)}
+.echip.on{border-color:color-mix(in oklch,var(--accent) 55%,transparent);color:var(--accent)}
+.ehead .minibtn{margin-left:auto}
+.elist{display:flex;flex-direction:column;gap:5px;max-height:320px;overflow-y:auto}
+.erow{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 10px;font-size:12px}
+.e-time{flex:none;font-size:10.5px;color:var(--fg-4);font-variant-numeric:tabular-nums}
+.e-text{flex:1;min-width:0;color:var(--fg);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* Mini action buttons (settings, overlays, docks) */
 .minibtn{flex:0 0 auto;padding:5px 9px;border-radius:7px;border:1px solid var(--line);background:var(--surface-3);
@@ -615,6 +636,7 @@ body.boot .wrap>*:nth-child(n+8){animation-delay:.28s}
   <div class="behavior" id="w-behavior" hidden></div>
   <div class="settings" id="w-settings" hidden></div>
   <div class="overlays" id="w-overlays" hidden></div>
+  <div class="events" id="w-events" hidden></div>
   <div class="cta-row" id="w-cta">
     <button class="btn full" id="main" onclick="mainClick()" disabled>-</button>
     <button class="btn ghost disarm" id="cancel" onclick="secondaryClick()" hidden title="Cancel arming" aria-label="Cancel arming">&times;</button>

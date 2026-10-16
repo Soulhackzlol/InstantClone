@@ -2,6 +2,7 @@
 // server can report. Run with `node --test "web/tests/*.test.mjs"`.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { element, loadPage, plain, rustConst } from './page.mjs';
 
 // Opened the way OBS opens a named dock on a password-protected dashboard.
@@ -21,6 +22,16 @@ function given(state, { field = 0, editing = false } = {}) {
   page.run(`s = ${JSON.stringify({ ...STREAMING, ...state })}; editing = ${editing}`);
   page.window.document.getElementById('d').value = String(field);
 }
+
+test("the dock's platform marks are the dashboard's", () => {
+  const table = file => {
+    const text = fs.readFileSync(new URL('../' + file, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const at = text.indexOf('const PLATFORM_MARK = {');
+    return text.slice(at, text.indexOf('};', at));
+  };
+  assert.ok(table('dock.js').length > 100);
+  assert.equal(table('dock.js'), table('index.html'));
+});
 
 test("the limits the dock repeats are the app's", () => {
   assert.equal(page.run('DELAY_MAX_S') * 1000, rustConst('src/config.rs', 'MAX_DELAY_MS'));
@@ -243,7 +254,7 @@ test('a profile chip says what a tap will do', () => {
 
 /** A destination row as `destRow()` builds it, without the page. */
 function row() {
-  return Object.assign(element(), { _name: element(), _meta: element(), _sw: element('button') });
+  return Object.assign(element(), { _glyph: element(), _name: element(), _meta: element(), _sw: element('button') });
 }
 const REFUSED = { advice: 'Stream key rejected. Check the key in Edit.', retries: true, retry_in_ms: 4_200 };
 
@@ -264,11 +275,13 @@ test('a destination row says how it stands', () => {
     assert.equal(drawn._meta.textContent, meta, why);
     assert.equal(drawn._sw.getAttribute('aria-checked'), String(!!dest.enabled), why);
   }
-  // With "Show bitrate" off (the default) a live row names its platform.
+  // With "Show bitrate" off (the default) a live row names its platform,
+  // beside the platform's mark.
   page.run('cfg.w.dest.stats = false');
   const quiet = row();
   call('patchDestRow', quiet, { id: 'main', name: 'Main', enabled: true, alive: true, bitrate_kbps: 6000 });
   assert.equal(quiet._meta.textContent, 'twitch');
+  assert.equal(quiet._glyph.innerHTML, page.run('PLATFORM_MARK.twitch'));
 });
 
 test('why a destination failed is on its row only while it is failing', () => {

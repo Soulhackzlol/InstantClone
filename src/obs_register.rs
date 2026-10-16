@@ -263,7 +263,8 @@ pub fn is_registered(web_port: u16, ingest_port: u16) -> bool {
 ///
 /// Leftover literal servers inside OUR entry also count as stale: they
 /// would sit in the dropdown as options that fail under one IP Family
-/// setting each.
+/// setting each. So does an entry from before HEVC and AV1 were offered:
+/// OBS would switch an AV1 encoder to H.264 for it.
 ///
 /// Every check runs against `entry_span` and not the whole file. Scanning
 /// the file would let anything InstantClone-shaped elsewhere in
@@ -282,6 +283,7 @@ fn registration_is_current(file: &str, web_port: u16, ingest_port: u16) -> bool 
     ];
     entry.contains(&server_url(ingest_port))
         && entry.contains(&multitrack_url(web_port))
+        && entry.contains(r#""av1""#)
         && !stale_literals.iter().any(|u| entry.contains(u.as_str()))
 }
 
@@ -342,7 +344,7 @@ fn entry_json(web_port: u16, ingest_port: u16) -> String {
                 "max video bitrate": 50000,
                 "max audio bitrate": 320
             }},
-            "supported video codecs": ["h264"]
+            "supported video codecs": ["h264", "hevc", "av1"]
         }}"#,
         web = web_port,
         mtv = multitrack_url(web_port),
@@ -1966,6 +1968,12 @@ mod tests {
             !registration_is_current(&with_leftovers, 7799, 1935),
             "a superset of our entry is still out of date"
         );
+
+        // One from before HEVC and AV1 were offered: OBS would swap an AV1
+        // encoder for H.264 under it.
+        let h264_only = current.replace(r#"["h264", "hevc", "av1"]"#, r#"["h264"]"#);
+        assert_ne!(h264_only, current);
+        assert!(!registration_is_current(&h264_only, 7799, 1935));
     }
 
     /// Found on a real install: a leftover `InstantClone (local proxy)`
