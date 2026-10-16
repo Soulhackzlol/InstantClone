@@ -11,6 +11,8 @@
 //!   converted into a "command from a website".
 //! - `runner`: runs one handler's steps against a `host::Host`.
 //! - `alerts`: what "Show on stream" steps put on the alerts page in OBS.
+//! - `feed`: the OBS dock's events list, which "Dock event" steps add to.
+//! - `goals`: goals and timers, counted from events and drawn by overlays.
 //! - `host` / `effects`: the live state and I/O a run needs, and the real
 //!   implementation of both.
 //! - `engine`: the isolated thread that matches events to integrations.
@@ -32,6 +34,8 @@ pub mod clock;
 pub mod effects;
 pub mod engine;
 pub mod event;
+pub mod feed;
+pub mod goals;
 pub mod host;
 pub mod lights;
 pub mod model;

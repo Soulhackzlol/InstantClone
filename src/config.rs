@@ -178,6 +178,9 @@ pub struct Settings {
     pub phone: PhoneConnection,
     /// Where the alerts page puts its cards and how big they are.
     pub alerts_look: crate::integrations::alerts::Look,
+    /// Goals and timers overlays draw (see `crate::integrations::goals`).
+    pub goals: Vec<crate::integrations::goals::Goal>,
+    pub timers: Vec<crate::integrations::goals::Timer>,
     /// Whether the old single `discord_webhook_url` has been turned into a
     /// Discord connection plus a "Stream alerts" integration. False only in
     /// configs written before integrations existed.
@@ -803,6 +806,14 @@ impl Settings {
             let look = self.alerts_look.to_json().to_json();
             writeln!(f, "alerts.look={}", one_line(&look))?;
         }
+        for g in &self.goals {
+            let kept = g.to_json().to_json();
+            writeln!(f, "goal.{}={}", one_line(&g.id), one_line(&kept))?;
+        }
+        for t in &self.timers {
+            let kept = t.to_json().to_json();
+            writeln!(f, "timer.{}={}", one_line(&t.id), one_line(&kept))?;
+        }
         for v in &self.user_values {
             let kept = json::obj([
                 ("label", json::str(&v.label)),
@@ -831,6 +842,30 @@ impl Settings {
     /// whole config: the other integrations and settings still load.
     /// One `integration_value.<name>=<json>` line. A broken or repeated
     /// one is skipped, like a broken integration.
+    /// A `goal.<id>=<json>` line. One that doesn't read, or repeats an
+    /// id, is left out.
+    fn load_goal(&mut self, value: &str) {
+        use crate::integrations::goals::{Goal, MAX_GOALS};
+        let read = json::parse(value).ok().and_then(|v| Goal::from_json(&v));
+        let Some(goal) = read else {
+            return;
+        };
+        if self.goals.len() < MAX_GOALS && !self.goals.iter().any(|g| g.id == goal.id) {
+            self.goals.push(goal);
+        }
+    }
+
+    fn load_timer(&mut self, value: &str) {
+        use crate::integrations::goals::{Timer, MAX_TIMERS};
+        let read = json::parse(value).ok().and_then(|v| Timer::from_json(&v));
+        let Some(timer) = read else {
+            return;
+        };
+        if self.timers.len() < MAX_TIMERS && !self.timers.iter().any(|t| t.id == timer.id) {
+            self.timers.push(timer);
+        }
+    }
+
     fn load_user_value(&mut self, name: &str, value: &str) {
         use crate::integrations::model::{UserValue, MAX_USER_VALUES};
         let Ok(mut parsed) = json::parse(value) else {
@@ -1000,6 +1035,8 @@ impl Settings {
             discord_channels: Vec::new(),
             phone: PhoneConnection::default(),
             alerts_look: Default::default(),
+            goals: Vec::new(),
+            timers: Vec::new(),
             // A fresh install has no old webhook to migrate; `load` sets
             // this after its one-time pass either way.
             integrations_migrated: false,
@@ -1057,9 +1094,12 @@ impl Settings {
         }
         s.migrate_discord_webhook();
         // `!setdelay` copies from up to 0.1.15 (a 10 minute limit, and
-        // "Delay set to 0s"). The file catches up on the next save.
+        // "Delay set to 0s"), and Twitch alerts from before 0.1.17 (the
+        // viewer's words, the dock's events). The file catches up on the
+        // next save.
         for integration in &mut s.integrations {
             crate::integrations::presets::upgrade_setdelay(integration);
+            crate::integrations::presets::upgrade_twitch_alerts(integration);
         }
         // Clamp / sanitize on load - hand-edited values can otherwise
         // hit divide-by-zero (buffer_mb=0 → `% capacity` in DiskRing) or
@@ -1520,6 +1560,8 @@ impl Settings {
                     self.alerts_look = crate::integrations::alerts::Look::from_json(&v);
                 }
             }
+            k if k.starts_with("goal.") => self.load_goal(value),
+            k if k.starts_with("timer.") => self.load_timer(value),
             "connection.phone" => {
                 if let Ok(v) = json::parse(value) {
                     self.phone = PhoneConnection {
@@ -2500,7 +2542,7 @@ pub fn parse_form(body: &str) -> std::collections::HashMap<String, String> {
     out
 }
 
-fn url_decode(s: &str) -> String {
+pub(crate) fn url_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -4040,8 +4082,26 @@ Name@x"
                 radius: Some(0),
                 sound: "media:ding.mp3".into(),
                 css: ".card .text { letter-spacing: 1px }".into(),
+                design: "my-alerts".into(),
                 ..Default::default()
             },
+            goals: vec![crate::integrations::goals::Goal {
+                id: "subs".into(),
+                name: "Sub goal = 50".into(),
+                counts: crate::integrations::goals::Counts::Subs,
+                target: 50,
+                each_stream: true,
+            }],
+            timers: vec![crate::integrations::goals::Timer {
+                id: "subathon".into(),
+                name: "Subathon".into(),
+                start_s: 3600,
+                per_sub_s: 300,
+                per_100_bits_s: 60,
+                per_follow_s: 0,
+                tiers: false,
+                max_s: 86400,
+            }],
             integrations_migrated: true,
             twitch_client_id: "abcdefghij0123456789klmnopqrst".into(),
             twitch_shared_chat: true,

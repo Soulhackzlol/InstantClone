@@ -47,6 +47,48 @@ pub struct HttpResponse {
     pub body: String,
 }
 
+/// A Twitch command a chat step's own words start with (`/timeout {user}
+/// 10m`). Twitch chat stopped running these in 2023; the API runs them.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ChatCommand {
+    Timeout {
+        login: String,
+        seconds: u32,
+        reason: String,
+    },
+    Ban {
+        login: String,
+        reason: String,
+    },
+    Unban {
+        login: String,
+    },
+    Shoutout {
+        login: String,
+    },
+    Announce {
+        text: String,
+    },
+}
+
+impl ChatCommand {
+    /// What it does, for the run's log: "time out ana for 10m".
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Timeout { login, seconds, .. } => {
+                format!(
+                    "time out {login} for {}",
+                    fmt_delay(seconds.saturating_mul(1000))
+                )
+            }
+            Self::Ban { login, .. } => format!("ban {login}"),
+            Self::Unban { login } => format!("lift {login}'s ban or timeout"),
+            Self::Shoutout { login } => format!("shout out {login}"),
+            Self::Announce { text } => format!("announce \"{text}\""),
+        }
+    }
+}
+
 pub struct ClipInfo {
     pub id: String,
     pub url: String,
@@ -117,7 +159,17 @@ pub trait Host: Send + Sync {
     /// Post in the connected channel's chat. `reply_to` is the id of the
     /// message being answered, when there is one.
     fn chat(&self, text: &str, as_bot: bool, reply_to: Option<&str>) -> Result<(), String>;
+    /// Run a Twitch command in the connected channel, as its broadcaster.
+    fn chat_command(&self, command: &ChatCommand) -> Result<(), String>;
     fn marker(&self, description: &str) -> Result<(), String>;
+    /// Set the stream's title, its category (by a name as someone types
+    /// it), or both. Answers with the category's name on Twitch, when one
+    /// was asked for.
+    fn channel(
+        &self,
+        title: Option<&str>,
+        category: Option<&str>,
+    ) -> Result<Option<String>, String>;
     /// Switch a channel points reward made here on or off, by its title.
     fn reward(&self, title: &str, enabled: bool) -> Result<(), String>;
     fn clip(&self) -> Result<ClipInfo, String>;
@@ -131,6 +183,8 @@ pub trait Host: Send + Sync {
     fn file(&self, path: &str, text: &str, append: bool) -> Result<(), String>;
     /// Put a card on the alerts browser source.
     fn overlay(&self, card: super::alerts::Card);
+    /// Add an event to the OBS dock's list, with the alert to replay.
+    fn dock_event(&self, group: &str, text: &str, card: Option<super::alerts::Card>);
     /// Ask OBS to do something, or what it's doing, through its WebSocket
     /// server. A check answers with values; an action with none.
     fn obs(&self, action: super::obsws::Action) -> Result<super::obsws::Answer, String>;

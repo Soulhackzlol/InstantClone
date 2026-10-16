@@ -1192,6 +1192,7 @@ impl Controller {
             height: dims as u32,
             keyframe_interval_ms: self.keyframe_interval_ms(),
             codec: self.video_codec(),
+            multitrack: self.multitrack_video(),
         }
     }
 

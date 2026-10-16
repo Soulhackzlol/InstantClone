@@ -115,26 +115,29 @@ const WIDGETS = {
   behavior: { label: 'Auto behavior', def: { on: false } },
   settings: { label: 'Settings',      def: { on: false } },
   overlays: { label: 'Overlays',      def: { on: false, autohide: false, search: true, group: true } },
+  // `only`: the one group shown, or '' for all.
+  events:   { label: 'Events',        def: { on: false, skip: true, times: true, only: '' } },
   activate: { label: 'Action button', def: { on: true, confirmcut: false, safecut: true } },
 };
 // Every widget that has stored options. phase + source are sub-widgets of the
 // status bar; bar rides along with the number screen it lives in.
-const ALL = ['status', 'phase', 'source', 'number', 'bar', 'egress', 'tips', 'dest', 'profiles', 'stats', 'behavior', 'settings', 'overlays', 'activate'];
+const ALL = ['status', 'phase', 'source', 'number', 'bar', 'egress', 'tips', 'dest', 'profiles', 'stats', 'behavior', 'settings', 'overlays', 'events', 'activate'];
 // Reorderable rows = the top-level containers the user can drag around.
-const ROWS = ['status', 'number', 'profiles', 'egress', 'tips', 'dest', 'stats', 'behavior', 'settings', 'overlays', 'activate'];
+const ROWS = ['status', 'number', 'profiles', 'egress', 'tips', 'dest', 'stats', 'behavior', 'settings', 'overlays', 'events', 'activate'];
 // DOM container per row.
 const WEL = {
   status: 'w-top', number: 'w-screen', profiles: 'w-profiles', egress: 'w-eg', tips: 'w-tip', dest: 'w-dests',
-  stats: 'w-stats', behavior: 'w-behavior', settings: 'w-settings', overlays: 'w-overlays', activate: 'w-cta',
+  stats: 'w-stats', behavior: 'w-behavior', settings: 'w-settings', overlays: 'w-overlays', events: 'w-events', activate: 'w-cta',
 };
 // Presets = which widgets are on. Options keep their defaults / last tweak.
-const ALL_ON = ['status', 'phase', 'source', 'number', 'bar', 'egress', 'tips', 'dest', 'profiles', 'stats', 'behavior', 'settings', 'overlays', 'activate'];
+const ALL_ON = ['status', 'phase', 'source', 'number', 'bar', 'egress', 'tips', 'dest', 'profiles', 'stats', 'behavior', 'settings', 'overlays', 'events', 'activate'];
 const PRESETS = {
   full:      { label: 'Full',         on: ['status', 'phase', 'source', 'number', 'bar', 'egress', 'tips', 'dest', 'activate'] },
   minimal:   { label: 'Minimal',      on: ['status', 'phase', 'source', 'number', 'activate'] },
   delay:     { label: 'Delay only',   on: ['number', 'activate'] },
   dest:      { label: 'Destinations', on: ['status', 'phase', 'source', 'dest'] },
   control:   { label: 'Control',      on: ['status', 'source', 'behavior', 'settings', 'overlays'] },
+  events:    { label: 'Events',       on: ['status', 'source', 'events'] },
   dashboard: { label: 'Dashboard',    on: ALL_ON },
 };
 // Editable options per row. An option targets another widget's store via `w`
@@ -174,6 +177,7 @@ const OPTS = {
   overlays: [
     { k: 'search', label: 'Search bar' }, { k: 'group', label: 'Folders' }, { k: 'autohide', label: 'Copy with autohide off' },
   ],
+  events: [{ k: 'skip', label: 'Skip button' }, { k: 'times', label: 'Times' }],
   activate: [{ k: 'safecut', label: 'Cut after airs' }, { k: 'confirmcut', label: 'Confirm cut' }],
 };
 
@@ -830,6 +834,8 @@ function applyState(j) {
   renderDests();
   renderStats();
   renderCta();
+  // The events list changed: fetch it.
+  if (cfg.w.events.on && s.feed !== eventsSeen) { eventsSeen = s.feed; fetchEvents(); }
 }
 
 async function tick() {
@@ -854,6 +860,25 @@ let destIdsSeen = '';     // destination ids the platforms were fetched for
 const PLATFORM_COLORS = {
   twitch: '#9146ff', youtube: '#ff4d4d', kick: '#53fc18', trovo: '#21c26d', restream: '#f27a3f',
 };
+// Platform marks: the dashboard's own (index.html, kept the same by a
+// test). Twitch, YouTube and Kick are their glyphs; relays and local
+// targets get a plain symbol; any other platform shows its letter.
+const PLATFORM_MARK = {
+  twitch: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.3 3 3 6.4V19h4.4v2.4h2.4L12.2 19h3.6l4.9-4.9V3zm14.8 10.4-2.8 2.8h-4.4l-2.4 2.4v-2.4H5.8V4.6h13.3zM15.2 7.3h1.6v4.8h-1.6zm-4.4 0h1.6v4.8h-1.6z"/></svg>',
+  youtube: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M21.6 7.2a2.5 2.5 0 0 0-1.8-1.8C18.2 5 12 5 12 5s-6.2 0-7.8.4A2.5 2.5 0 0 0 2.4 7.2 26 26 0 0 0 2 12c0 1.7.1 3.3.4 4.8a2.5 2.5 0 0 0 1.8 1.8c1.6.4 7.8.4 7.8.4s6.2 0 7.8-.4a2.5 2.5 0 0 0 1.8-1.8c.3-1.5.4-3.1.4-4.8s-.1-3.3-.4-4.8zM10 15.1V8.9l5.3 3.1z"/></svg>',
+  kick: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 3h5v5h2V6h2V4h2V3h5v6h-2v2h-2v2h2v2h2v6h-5v-1h-2v-2h-2v-2H9v5H4z"/></svg>',
+  restream: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="2"/><path d="M7 12h12M11 12l5-5h3M11 12l5 5h3"/></svg>',
+  custom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><path d="M8 7h.01M8 17h.01"/></svg>',
+  sink: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+};
+// Put `slug`'s mark (or `fallback`'s first letter) in `el`, once per change.
+function setMark(el, slug, fallback) {
+  const key = slug + '|' + fallback;
+  if (el._mark === key) return;
+  el._mark = key;
+  if (PLATFORM_MARK[slug]) el.innerHTML = PLATFORM_MARK[slug];
+  else el.textContent = (slug || fallback || '?').slice(0, 1).toUpperCase();
+}
 async function fetchDestPlatforms() {
   const r = await fetchJ('/destinations');
   if (!r.ok || !Array.isArray(r.j)) return;
@@ -905,8 +930,8 @@ function renderDests() {
 }
 function destRow() {
   const row = document.createElement('div');
-  row.innerHTML = '<span class="d-dot"></span><span class="d-name"></span><span class="d-plat"></span>';
-  row._name = row.children[1]; row._meta = row.children[2];
+  row.innerHTML = '<span class="d-mark"><span class="d-glyph"></span><span class="d-dot"></span></span><span class="d-name"></span><span class="d-plat"></span>';
+  row._glyph = row.children[0].firstChild; row._name = row.children[1]; row._meta = row.children[2];
   row._sw = document.createElement('button');
   row._sw.setAttribute('role', 'switch');
   row._sw.onclick = () => onDestToggle(row);
@@ -917,6 +942,7 @@ function patchDestRow(row, d) {
   row._d = d;
   const st = destState(d), platform = destPlatforms[d.id] || '';
   setClass(row, 'dest ' + st + destColor(row, d));
+  setMark(row._glyph, platform, d.name || '');
   setText(row._name, d.name || 'Destination');
   const rate = cfg.w.dest.stats && st === 'alive' ? fmtRate(d.bitrate_kbps) : '';
   setClass(row._meta, rate ? 'd-rate' : 'd-plat');
@@ -931,8 +957,8 @@ function patchDestRow(row, d) {
   if (row._sw.getAttribute('aria-checked') !== checked) row._sw.setAttribute('aria-checked', checked);
   if (row._sw.getAttribute('aria-label') !== (d.name || 'Destination')) row._sw.setAttribute('aria-label', d.name || 'Destination');
 }
-// Compact circular badge: platform initial, live-glow ring, hover shows the
-// name (native title). Tap arms it (confirm), tap again commits.
+// Compact circular badge: the platform's mark, live-glow ring, hover shows
+// the name (native title). Tap arms it (confirm), tap again commits.
 function destIcon() {
   const b = document.createElement('button');
   b.onclick = () => onDestIcon(b);
@@ -944,7 +970,7 @@ function patchDestIcon(b, d) {
   const st = destState(d);
   const look = st === 'alive' ? ' alive' : st === 'wait' || st === 'held' ? ' wait' : '';
   setClass(b, 'dico ' + (d.enabled ? 'on' : 'off') + look + destColor(b, d));
-  setText(b, (destPlatforms[d.id] || d.name || '?').slice(0, 1).toUpperCase());
+  setMark(b, destPlatforms[d.id] || '', d.name || '');
   setTitle(b, `${d.name || 'Destination'} · ${d.enabled ? 'on' : 'off'}`);
   if (b.getAttribute('aria-label') !== b.title) b.setAttribute('aria-label', b.title);
 }
@@ -955,7 +981,7 @@ function onDestIcon(b) {
   // Arm: pulse an amber ring and swap the badge to a check so the "tap again
   // to confirm" intent is unmistakable, not just a colour change.
   b._armed = true;
-  b.classList.add('arm'); b.textContent = '✓';
+  b.classList.add('arm'); b.textContent = '✓'; b._mark = '';
   b.title = d.enabled ? 'Tap again to turn OFF' : 'Tap again to go LIVE';
   b._t = setTimeout(() => disarmDestIcon(b), 3000);
 }
@@ -1205,6 +1231,85 @@ async function copyOverlay(slug) {
   if (await copyText(url)) toast('Overlay URL copied', 'ok'); else toast(url, 'info');
 }
 
+// Events: what integrations list here with a "Dock event" step (the Twitch
+// alerts module lists each follow, sub, cheer and raid). Show one group,
+// play an event's alert again, or skip the alert on stream now.
+let eventCache = [], eventsSeen = -1;
+// Not reached (integrations starting, a blip): the widget still shows, and
+// asks again a moment later.
+const EVENTS_RETRY_MS = 5000;
+let eventsRetry = 0;
+async function fetchEvents() {
+  clearTimeout(eventsRetry);
+  const r = await fetchJ('/dock/events');
+  if (r.ok && Array.isArray(r.j)) eventCache = r.j;
+  else eventsRetry = setTimeout(() => { if (cfg.w.events.on) fetchEvents(); }, EVENTS_RETRY_MS);
+  renderEvents();
+}
+// The row at the top of what's scrolled to, and how far past it: kept
+// where it was when the list is drawn again (newest first, so new events
+// would push it down). At the very top, the newest stay in view.
+function eventsAnchor(list) {
+  if (!list || !list.scrollTop) return null;
+  const row = [...list.children].find(r => r.offsetTop - list.offsetTop + r.offsetHeight > list.scrollTop);
+  return row && { id: row.dataset.id, past: list.scrollTop - (row.offsetTop - list.offsetTop) };
+}
+function renderEvents() {
+  const box = $('w-events'); if (box.hidden) return;
+  const o = cfg.w.events;
+  const groups = [...new Set(eventCache.map(e => e.group).filter(Boolean))];
+  const only = groups.includes(o.only) ? o.only : '';
+  const anchor = eventsAnchor(box.querySelector('.elist'));
+  box.innerHTML = '';
+  const head = document.createElement('div'); head.className = 'ehead';
+  if (groups.length > 1) {
+    const chips = document.createElement('div'); chips.className = 'echips';
+    chips.setAttribute('role', 'group'); chips.setAttribute('aria-label', 'Show');
+    for (const g of ['', ...groups]) {
+      const b = document.createElement('button'); b.type = 'button';
+      b.className = 'echip' + (g === only ? ' on' : ''); b.textContent = g || 'All';
+      b.setAttribute('aria-pressed', String(g === only));
+      b.onclick = () => { cfg.w.events.only = g; saveAndApply(); };
+      chips.appendChild(b);
+    }
+    head.appendChild(chips);
+  }
+  if (o.skip) head.appendChild(miniBtn('Skip alert', skipAlert, 'End the alert on stream now: the next one comes on'));
+  if (head.children.length) box.appendChild(head);
+  // Newest first; the list scrolls past a few.
+  const shown = eventCache.filter(e => !only || e.group === only).slice(-50).reverse();
+  if (!shown.length) {
+    box.insertAdjacentHTML('beforeend', '<div class="empty">No events yet. The Twitch alerts module lists each one here; a "Dock event" step adds your own.</div>');
+    return;
+  }
+  const list = document.createElement('div'); list.className = 'elist';
+  for (const e of shown) list.appendChild(eventRow(e, !only));
+  box.appendChild(list);
+  const kept = anchor && [...list.children].find(r => r.dataset.id === anchor.id);
+  if (kept) list.scrollTop = kept.offsetTop - list.offsetTop + anchor.past;
+}
+function eventRow(e, tagged) {
+  const row = document.createElement('div'); row.className = 'erow'; row.dataset.id = String(e.id);
+  if (cfg.w.events.times) {
+    const t = document.createElement('span'); t.className = 'e-time';
+    t.textContent = new Date(e.at_ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    row.appendChild(t);
+  }
+  const text = document.createElement('span'); text.className = 'e-text'; text.textContent = e.text; text.title = e.text;
+  row.appendChild(text);
+  if (tagged && e.group) { const tag = document.createElement('span'); tag.className = 'o-tag'; tag.textContent = e.group; row.appendChild(tag); }
+  if (e.replay) row.appendChild(miniBtn('Replay', () => replayEvent(e.id), 'Play its alert on stream again'));
+  return row;
+}
+async function replayEvent(id) {
+  const r = await fetchJ('/dock/events/replay', { method: 'POST', headers: FORM, body: 'id=' + id });
+  if (r.ok) toast('Playing it again', 'ok'); else toast(failText(r, "Couldn't play it again"), 'err');
+}
+async function skipAlert() {
+  const r = await fetchJ('/dock/alerts/skip', { method: 'POST', headers: FORM, body: '' });
+  if (r.ok) toast('Alert skipped', 'ok'); else toast(failText(r, "Couldn't skip it"), 'err');
+}
+
 // -------------------------------------------------------------- layout apply --
 
 function applyCfg(c) {
@@ -1229,7 +1334,7 @@ function applyCfg(c) {
   $('w-bar').hidden = !on('bar');
   $('w-bar').classList.toggle('thick', !!c.w.bar.thick);
   $('w-bar').classList.toggle('mono', !!c.w.bar.mono);
-  for (const id of ['egress', 'tips', 'dest', 'profiles', 'stats', 'behavior', 'settings', 'overlays', 'activate']) $(WEL[id]).hidden = !on(id);
+  for (const id of ['egress', 'tips', 'dest', 'profiles', 'stats', 'behavior', 'settings', 'overlays', 'events', 'activate']) $(WEL[id]).hidden = !on(id);
   document.querySelectorAll('.cur .u').forEach(u => u.hidden = !c.w.number.units);
   // Apply the saved drag order by re-appending containers in sequence.
   const wrap = document.querySelector('.wrap');
@@ -1244,6 +1349,7 @@ function applyCfg(c) {
   if (on('profiles')) fetchProfiles();
   if (on('behavior') || on('settings')) { renderBehavior(); renderSettings(); fetchServerCfg(); }
   if (on('overlays')) fetchOverlays();
+  if (on('events')) { eventsSeen = s ? s.feed : -1; fetchEvents(); }
   if (s) applyState(s); else renderCta();   // re-render with the new options
 }
 

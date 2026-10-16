@@ -16,9 +16,14 @@ use std::collections::BTreeMap;
 pub const MAX_INTEGRATIONS: usize = 100;
 /// Room for the "every event" webhook, one trigger per event.
 pub const MAX_HANDLERS: usize = 32;
-pub const MAX_STEPS: usize = 64;
+/// Enough for a chat game with its paths spelled out (a slot machine with
+/// a pay table, streaks and a jackpot takes about 64), and still a bound
+/// on what one imported recipe can bring. `web/integrations.js` has the
+/// same number.
+pub const MAX_STEPS: usize = 256;
 pub const MAX_DEPTH: usize = 4;
 const MAX_NAME_LEN: usize = 80;
+pub const MAX_FOLDER_LEN: usize = 40;
 const MAX_PARAM_LEN: usize = 4000;
 const MAX_ID_LEN: usize = 40;
 
@@ -26,6 +31,8 @@ const MAX_ID_LEN: usize = 40;
 pub struct Integration {
     pub id: String,
     pub name: String,
+    /// The folder the dashboard lists it in, or empty for none.
+    pub folder: String,
     pub enabled: bool,
     /// Catalog entry this came from, or empty when built by hand.
     pub preset: String,
@@ -310,10 +317,17 @@ pub enum StepKind {
     Call,
     /// Switch a channel points reward made here on or off.
     Reward,
+    /// Set the stream's title, its category, or both, on Twitch.
+    Channel,
+    /// Move a goal or drive a timer (see `goals`).
+    Goal,
+    /// Add a line to the OBS dock's events list, with the alert the run
+    /// showed to replay (see `feed`).
+    Dock,
 }
 
 impl StepKind {
-    pub const ALL: [StepKind; 25] = [
+    pub const ALL: [StepKind; 28] = [
         StepKind::Discord,
         StepKind::Chat,
         StepKind::Phone,
@@ -339,6 +353,9 @@ impl StepKind {
         StepKind::WaitChat,
         StepKind::Call,
         StepKind::Reward,
+        StepKind::Channel,
+        StepKind::Goal,
+        StepKind::Dock,
     ];
 
     pub fn id(self) -> &'static str {
@@ -368,6 +385,9 @@ impl StepKind {
             StepKind::WaitChat => "wait_chat",
             StepKind::Call => "call",
             StepKind::Reward => "reward",
+            StepKind::Channel => "channel",
+            StepKind::Goal => "goal",
+            StepKind::Dock => "dock",
         }
     }
 
@@ -396,6 +416,7 @@ impl StepKind {
             StepKind::Overlay => &[("text", "write what shows on stream")],
             StepKind::EditText => &[("op", "pick how to change the text")],
             StepKind::Timeline => &[("text", "write the timeline line")],
+            StepKind::Dock => &[("text", "write the event's line")],
             StepKind::Obs => &[("action", "pick what to do in OBS")],
             StepKind::Light => &[
                 ("device", "pick the light or plug"),
@@ -404,12 +425,18 @@ impl StepKind {
             StepKind::Viewer => &[("value", "name the viewer value, like coins")],
             StepKind::Call => &[("block", "pick the block to run")],
             StepKind::Reward => &[("title", "pick the channel points reward")],
+            StepKind::Goal => &[
+                ("id", "pick the goal or timer"),
+                ("action", "pick what happens to it"),
+            ],
             StepKind::WaitDelay
             | StepKind::Stop
             | StepKind::Marker
             | StepKind::Clip
             | StepKind::Math
-            | StepKind::WaitChat => &[],
+            | StepKind::WaitChat
+            // A title or a category: either is enough (see `validate_steps`).
+            | StepKind::Channel => &[],
         }
     }
 
@@ -492,6 +519,11 @@ impl Integration {
         if self.name.chars().count() > MAX_NAME_LEN {
             errors.push(format!("the name is longer than {MAX_NAME_LEN} characters"));
         }
+        if self.folder.chars().count() > MAX_FOLDER_LEN {
+            errors.push(format!(
+                "the folder's name is longer than {MAX_FOLDER_LEN} characters"
+            ));
+        }
         if self.handlers.is_empty() {
             incomplete.push("add at least one trigger".to_string());
         }
@@ -515,6 +547,7 @@ impl Integration {
             validate_steps(&handler.steps, 1, &mut errors, missing);
         }
         self.block_problems(&mut errors, &mut incomplete);
+        self.moderation_problems(&mut errors);
         errors.dedup();
         incomplete.dedup();
         Problems {
@@ -551,6 +584,52 @@ impl Integration {
         }
     }
 
+    /// A ban or timeout of whoever a viewer typed runs only from a chat
+    /// command or message just mods can use: from anything else (or a
+    /// block that runs it) any viewer could moderate anyone.
+    fn moderation_problems(&self, errors: &mut Vec<String>) {
+        if !self.unsafe_moderation().is_empty() {
+            errors.push(
+                "a ban or timeout of who a viewer typed needs a command only mods can use \
+                 (or name {user}: the viewer themself)"
+                    .to_string(),
+            );
+        }
+    }
+
+    /// The triggers any viewer can set off whose steps (or the blocks they
+    /// run) ban, time out or unban someone a viewer could pick. A switched
+    /// off one counts, as it can be switched on.
+    fn unsafe_moderation(&self) -> Vec<usize> {
+        let blocks: BTreeMap<&str, &[Step]> = self
+            .handlers
+            .iter()
+            .filter_map(|h| match &h.trigger {
+                Trigger::Block { name } => Some((name.trim(), h.steps.as_slice())),
+                _ => None,
+            })
+            .collect();
+        self.handlers
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| !matches!(h.trigger, Trigger::Block { .. }) && !mods_only(&h.trigger))
+            .filter(|(_, h)| moderates_viewer_pick(&h.steps, &blocks, &mut Vec::new()))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// This integration as it may run: a trigger that would let any viewer
+    /// moderate anyone stays off, as saving it would be refused. One saved
+    /// before chat steps ran Twitch commands (when `/timeout {target}` was
+    /// only posted as text) would otherwise start moderating for real.
+    pub fn runnable(&self) -> Integration {
+        let mut safe = self.clone();
+        for index in self.unsafe_moderation() {
+            safe.handlers[index].enabled = false;
+        }
+        safe
+    }
+
     /// Whether any step runs a program or writes a file.
     pub fn has_local_effects(&self) -> bool {
         let mut found = false;
@@ -564,6 +643,7 @@ impl Integration {
         json::obj([
             ("id", json::str(&self.id)),
             ("name", json::str(&self.name)),
+            ("folder", json::str(&self.folder)),
             ("enabled", Value::Bool(self.enabled)),
             ("preset", json::str(&self.preset)),
             ("cooldown_ms", Value::Num(self.cooldown_ms as f64)),
@@ -588,6 +668,7 @@ impl Integration {
         Ok(Integration {
             id: v.str_or("id", "").to_string(),
             name: v.str_or("name", "").trim().to_string(),
+            folder: folder_name(v.str_or("folder", "")),
             enabled: v.bool_or("enabled", true),
             preset: v.str_or("preset", "").to_string(),
             cooldown_ms: v.u64_or("cooldown_ms", 0),
@@ -595,6 +676,16 @@ impl Integration {
             handlers,
         })
     }
+}
+
+/// A folder's name as it is kept: one line (it's a heading on the
+/// dashboard), trimmed.
+pub fn folder_name(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 /// The hotkeys and MIDI pads that switched-on integrations listen for,
@@ -759,6 +850,63 @@ fn valid_block_name(name: &str) -> bool {
     !name.trim().is_empty() && name.len() <= MAX_ID_LEN && name.chars().all(fits)
 }
 
+/// Whether a ban or timeout naming `who` can only reach the viewer themself
+/// (`{user}`) or one name written into the step. Anything else filled in
+/// could be someone a viewer picked: `{target}`, `{arg1}`, `{message}`,
+/// `{words}`, a reply waited for, or a value a step set from any of them.
+fn names_self_or_fixed(who: &str) -> bool {
+    let who = who.trim_start_matches('@');
+    who == "{user}" || !who.contains('{')
+}
+
+/// Whether `steps` (or a block they run) ban, time out or unban whoever a
+/// viewer typed: `/ban {target}`. A switched-off step counts, as it can be
+/// switched on.
+fn moderates_viewer_pick<'a>(
+    steps: &'a [Step],
+    blocks: &BTreeMap<&'a str, &'a [Step]>,
+    seen: &mut Vec<&'a str>,
+) -> bool {
+    let mut found = false;
+    let mut runs = Vec::new();
+    visit_steps(steps, &mut |step| {
+        if step.kind == StepKind::Call {
+            runs.push(step.param("block").trim());
+        }
+        if step.kind != StepKind::Chat {
+            return;
+        }
+        let Some(rest) = step.param("text").trim_start().strip_prefix('/') else {
+            return;
+        };
+        let mut words = rest.split_whitespace();
+        let command = words.next().unwrap_or("").to_ascii_lowercase();
+        let who = words.next().unwrap_or("");
+        found |= matches!(command.as_str(), "ban" | "timeout" | "unban" | "untimeout")
+            && !names_self_or_fixed(who);
+    });
+    found
+        || runs.into_iter().any(|name| {
+            if seen.contains(&name) {
+                return false;
+            }
+            seen.push(name);
+            blocks
+                .get(name)
+                .is_some_and(|steps| moderates_viewer_pick(steps, blocks, seen))
+        })
+}
+
+/// A chat command or message only mods (or the streamer) can start.
+fn mods_only(trigger: &Trigger) -> bool {
+    match trigger {
+        Trigger::ChatCommand { roles, .. } | Trigger::ChatMessage { roles, .. } => {
+            !roles.everyone && !roles.subs && !roles.vips
+        }
+        _ => false,
+    }
+}
+
 /// The steps of each switched-on block of `integration`, by name.
 pub fn blocks(integration: &Integration) -> BTreeMap<String, Vec<Step>> {
     integration
@@ -841,6 +989,17 @@ fn validate_steps(
         }
         if step.kind == StepKind::Light {
             light_step_problems(step, missing, errors);
+        }
+        // Either is enough: `!settitle` sets one, `!setgame` the other.
+        if step.kind == StepKind::Channel
+            && step.param("title").trim().is_empty()
+            && step.param("category").trim().is_empty()
+        {
+            missing.push("write the stream's new title or category".to_string());
+        }
+        // Like a reward: chat never picks which goal or timer is moved.
+        if step.kind == StepKind::Goal && step.param("id").contains('{') {
+            errors.push("a goal's or timer's name can't use variables".to_string());
         }
         // The value's name is part of `{viewer.<name>}`: fixed, and plain.
         let value = step.param("value").trim();
@@ -1462,6 +1621,7 @@ mod tests {
         Integration {
             id: "tell-chat".into(),
             name: "Tell chat".into(),
+            folder: String::new(),
             enabled: true,
             preset: "tell_chat".into(),
             cooldown_ms: 60_000,
@@ -1501,6 +1661,50 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn a_viewer_cannot_pick_who_gets_banned() {
+        let says = "a ban or timeout of who a viewer typed";
+        let with = |roles: Roles, text: &str| {
+            let mut i = sample();
+            i.handlers[1].trigger = Trigger::ChatCommand {
+                command: "!bonk".into(),
+                aliases: vec![],
+                roles,
+                user_cooldown_ms: 0,
+                cooldown_reply: String::new(),
+            };
+            i.handlers[1].steps = vec![Step::new(StepKind::Chat, &[("text", text)])];
+            i.validate().iter().any(|e| e.starts_with(says))
+        };
+        assert!(with(Roles::EVERYONE, "/timeout {target} 60"));
+        assert!(with(Roles::EVERYONE, "/BAN {arg1} spam"));
+        assert!(!with(Roles::MODS, "/timeout {target} 60"));
+        assert!(!with(Roles::EVERYONE, "/timeout {user} 60 roulette"));
+        assert!(!with(Roles::EVERYONE, "/timeout @{user} 60"));
+        assert!(!with(Roles::EVERYONE, "/ban nightbot_spam"));
+        assert!(!with(Roles::EVERYONE, "/shoutout {target}"));
+        // Whatever else fills it in could be a viewer's pick: a cheer's
+        // words, a reply waited for, a value a step set from what they typed.
+        assert!(with(Roles::EVERYONE, "/timeout {words} 60"));
+        assert!(with(Roles::EVERYONE, "/ban {pick.message}"));
+        assert!(with(Roles::EVERYONE, "/unban {who}"));
+        // Through a block it runs, from a trigger anyone sets off.
+        let mut i = sample();
+        i.handlers[0].steps = vec![Step::new(StepKind::Call, &[("block", "bonk")])];
+        i.handlers.push(Handler {
+            enabled: true,
+            trigger: Trigger::Block {
+                name: "bonk".into(),
+            },
+            steps: vec![Step::new(StepKind::Chat, &[("text", "/ban {message}")])],
+        });
+        assert!(i.validate().iter().any(|e| e.starts_with(says)));
+        // Saved before the check, it runs with that trigger off, the rest on.
+        let runs = i.runnable();
+        assert!(!runs.handlers[0].enabled);
+        assert_eq!(runs.handlers[2].enabled, i.handlers[2].enabled);
     }
 
     #[test]
@@ -1685,6 +1889,25 @@ mod tests {
         let mut i = sample();
         i.handlers[0].steps = vec![deepest];
         i
+    }
+
+    /// A folder is one line, kept with the integration, and not too long.
+    #[test]
+    fn an_integration_keeps_its_folder() {
+        let mut i = sample();
+        i.folder = "Alerts".into();
+        assert_eq!(Integration::from_json(&i.to_json()).unwrap(), i);
+        let mut v = i.to_json();
+        if let Value::Obj(fields) = &mut v {
+            for (k, val) in fields.iter_mut() {
+                if k == "folder" {
+                    *val = json::str(" Chat\ngames ");
+                }
+            }
+        }
+        assert_eq!(Integration::from_json(&v).unwrap().folder, "Chat games");
+        i.folder = "x".repeat(MAX_FOLDER_LEN + 1);
+        assert!(i.validate().iter().any(|e| e.contains("folder")));
     }
 
     /// The handler's steps and three checks inside each other make

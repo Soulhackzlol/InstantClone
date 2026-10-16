@@ -18,7 +18,8 @@ use super::chat_room::{self, ChatRoom};
 use super::clock;
 use super::event::{Event, EventKind};
 use super::host::{
-    fmt_clock, fmt_delay, fmt_duration, DiscordCard, DiscordMessage, Host, HttpRequest, LiveState,
+    fmt_clock, fmt_delay, fmt_duration, ChatCommand, DiscordCard, DiscordMessage, Host,
+    HttpRequest, LiveState,
 };
 use super::lights;
 use super::model::{DiscordChannel, PhoneConnection, Step, StepKind};
@@ -80,6 +81,9 @@ pub struct RunEnv {
     pub saved: Arc<crate::sync::Mutex<BTreeMap<String, String>>>,
     /// Called after any of those three changes, to save it.
     pub data_changed: Box<dyn Fn() + Send + Sync>,
+    /// Goals and timers (`{goal.subs}`, `{timer.subathon}`), which save
+    /// themselves.
+    pub goals: Arc<super::goals::Tracker>,
     /// Who chatted lately, and the messages steps are waiting for.
     pub chat_room: Arc<ChatRoom>,
     /// The streamer's own values (`{my.name}`), by name.
@@ -236,6 +240,8 @@ struct Runner {
     /// A `stop` step asked for the run to stay out of the history.
     quiet: bool,
     call_depth: usize,
+    /// The alert this run showed last, for a dock event to replay.
+    shown: Option<alerts::Card>,
 }
 
 /// The values that last between runs: counters, what viewers hold, and
@@ -323,6 +329,7 @@ pub async fn run(
         kept,
         quiet: false,
         call_depth: 0,
+        shown: None,
     };
     let flow = runner.steps(steps).await;
     let status = match (flow, runner.failed) {
@@ -390,6 +397,7 @@ impl Runner {
             vars: &self.ctx.vars,
             kept: &self.kept,
             user_values: &self.env.user_values,
+            goals: &self.env.goals,
             timeline: &self.env.timeline,
             live,
         }
@@ -452,7 +460,10 @@ impl Runner {
             StepKind::Math => self.math(step),
             StepKind::WaitChat => self.wait_chat(step).await,
             StepKind::Reward => self.reward(step).await,
+            StepKind::Channel => self.channel(step).await,
+            StepKind::Goal => self.goal(step),
             StepKind::Overlay => self.overlay(step),
+            StepKind::Dock => self.dock(step),
             StepKind::EditText => self.edit_text(step),
             StepKind::Timeline => self.timeline(step),
             StepKind::Obs => self.obs(step).await,
@@ -807,7 +818,20 @@ impl Runner {
     }
 
     async fn chat(&mut self, step: &Step) {
-        let text = safe_chat_text(&self.marked(self.fill(step, "text")));
+        let text = match chat_command_of(step.param("text")) {
+            // `/me` is the one command chat still runs itself.
+            Some(("me", words)) => {
+                let said = safe_chat_text(&self.marked(self.fill_text(words)));
+                let said: String = said.chars().take(MAX_CHAT_LEN - 4).collect();
+                if said.is_empty() {
+                    said
+                } else {
+                    format!("/me {said}")
+                }
+            }
+            Some((name, words)) => return self.twitch_command(name, words).await,
+            None => safe_chat_text(&self.marked(self.fill(step, "text"))),
+        };
         if text.is_empty() {
             self.record("Chat", StepStatus::Skipped, "the message came out empty");
             return;
@@ -826,6 +850,28 @@ impl Runner {
         {
             Ok(()) => self.record("Twitch chat", StepStatus::Ok, shown),
             Err(e) => self.record("Twitch chat", StepStatus::Failed, e),
+        }
+    }
+
+    /// A chat step that starts with a Twitch command: its words filled in,
+    /// then run for the channel. A test never moderates anyone.
+    async fn twitch_command(&mut self, name: &str, words: &str) {
+        let label = "Twitch chat";
+        let command = match chat_command(name, &self.fill_text(words), &self.ctx.vars) {
+            Ok(command) => command,
+            Err(why) => return self.record(label, StepStatus::Failed, why),
+        };
+        let said = command.describe();
+        if self.dry(label, said.clone()) {
+            return;
+        }
+        if self.ctx.test {
+            let detail = format!("would {said} (tests never run chat commands)");
+            return self.record(label, StepStatus::Skipped, detail);
+        }
+        match self.blocking(move |h| h.chat_command(&command)).await {
+            Ok(()) => self.record(label, StepStatus::Ok, said),
+            Err(e) => self.record(label, StepStatus::Failed, e),
         }
     }
 
@@ -1100,6 +1146,7 @@ impl Runner {
         let card = alerts::Card {
             title,
             text: text.clone(),
+            message: self.fill(step, "message"),
             seconds,
             color: step.param("color").trim().to_string(),
             sound: step.param("sound").trim().to_string(),
@@ -1109,9 +1156,35 @@ impl Runner {
                 .parse()
                 .unwrap_or(alerts::DEFAULT_VOLUME),
             image: step.param("image").trim().to_string(),
+            design: step.param("design").trim().to_string(),
         };
+        self.shown = Some(card.clone());
         self.host.overlay(card);
         self.record("On stream", StepStatus::Ok, text);
+    }
+
+    /// A line in the OBS dock's events, in its group, with the alert this
+    /// run showed before it to replay (unless `replay` is "no").
+    fn dock(&mut self, step: &Step) {
+        let text = self.fill(step, "text");
+        if text.trim().is_empty() {
+            self.record("Dock event", StepStatus::Skipped, "the line came out empty");
+            return;
+        }
+        if self.ctx.test {
+            self.record(
+                "Dock event",
+                StepStatus::Skipped,
+                format!("would add \"{text}\" (tests stay out of the dock)"),
+            );
+            return;
+        }
+        let card = match step.param("replay") {
+            "no" => None,
+            _ => self.shown.clone(),
+        };
+        self.host.dock_event(&self.fill(step, "group"), &text, card);
+        self.record("Dock event", StepStatus::Ok, text);
     }
 
     /// Ask OBS to switch a scene, show or hide a source, or set a text.
@@ -1439,6 +1512,105 @@ impl Runner {
         }
     }
 
+    /// Set the stream's title, its category, or both. A part that comes
+    /// out blank (`!settitle` with nothing after it) is left as it is. The
+    /// next steps get `{stream.ok}`, the category as Twitch names it in
+    /// `{stream.category}`, and `{stream.error}` when Twitch said no.
+    async fn channel(&mut self, step: &Step) {
+        let title = self.fill(step, "title").trim().to_string();
+        let category = self.fill(step, "category").trim().to_string();
+        let given = |text: &String| (!text.is_empty()).then(|| text.clone());
+        let (title, category) = (given(&title), given(&category));
+        let label = "Twitch channel";
+        if title.is_none() && category.is_none() {
+            self.set("stream.ok", "no");
+            let why = "the title and the category both came out empty";
+            return self.record(label, StepStatus::Failed, why);
+        }
+        let wanted = [
+            title.as_ref().map(|t| format!("title \"{t}\"")),
+            category.as_ref().map(|c| format!("category \"{c}\"")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
+        if self.ctx.test {
+            self.set("stream.ok", "yes");
+            self.set("stream.category", category.unwrap_or_default());
+            let detail = format!("would set {wanted} (tests never change your channel)");
+            return self.record(label, StepStatus::Skipped, detail);
+        }
+        let done = self
+            .blocking(move |h| h.channel(title.as_deref(), category.as_deref()))
+            .await;
+        match done {
+            Ok(found) => {
+                self.set("stream.ok", "yes");
+                self.set("stream.category", found.unwrap_or_default());
+                self.record(label, StepStatus::Ok, format!("set {wanted}"));
+            }
+            Err(e) => {
+                self.set("stream.ok", "no");
+                self.set("stream.error", redact_urls(&e));
+                self.record(label, StepStatus::Failed, e);
+            }
+        }
+    }
+
+    /// Move a goal or drive a timer (see `goals`). Which one is fixed by
+    /// the streamer; how much can come from chat. A timer's amount is in
+    /// seconds.
+    fn goal(&mut self, step: &Step) {
+        use super::goals::{clock_text, GoalChange, TimerChange};
+        let (id, action) = (step.param("id").trim(), step.param("action"));
+        let timer = step.param("what") == "timer";
+        let label = format!("{} {id}", if timer { "Timer" } else { "Goal" });
+        let typed = self.fill(step, "amount");
+        let amount = match (typed.trim(), matches!(action, "add" | "subtract" | "set")) {
+            (_, false) => 0,
+            // "Add to the goal" with nothing typed counts one.
+            ("", true) => 1,
+            (text, true) => match text.parse::<i64>() {
+                Ok(amount) => amount,
+                Err(_) => {
+                    let why = format!("\"{text}\" isn't a whole number");
+                    return self.record(label, StepStatus::Failed, why);
+                }
+            },
+        };
+        if self.ctx.test {
+            let detail = format!("would {action} (tests never change your goals and timers)");
+            return self.record(label, StepStatus::Skipped, detail);
+        }
+        let exact = amount.max(0).unsigned_abs();
+        let done = if timer {
+            let change = match action {
+                "start" => TimerChange::Start,
+                "pause" => TimerChange::Pause,
+                "reset" => TimerChange::Reset,
+                "subtract" => TimerChange::Add(amount.saturating_neg()),
+                "set" => TimerChange::Set(exact),
+                _ => TimerChange::Add(amount),
+            };
+            let now = super::twitch::unix_ms();
+            self.env.goals.change_timer(id, change, now).map(clock_text)
+        } else {
+            let change = match action {
+                "reset" => GoalChange::Reset,
+                "subtract" => GoalChange::Add(amount.saturating_neg()),
+                "set" => GoalChange::Set(exact),
+                _ => GoalChange::Add(amount),
+            };
+            let moved = self.env.goals.change_goal(id, change);
+            moved.map(|value| value.to_string())
+        };
+        match done {
+            Ok(now) => self.record(label, StepStatus::Ok, now),
+            Err(why) => self.record(label, StepStatus::Failed, why),
+        }
+    }
+
     /// What a "Wait for chat" step hands the next steps.
     fn heard(&mut self, name: &str, user: &str, login: &str, message: &str) {
         self.set(format!("{name}.ok"), "yes");
@@ -1531,6 +1703,7 @@ struct Lookup<'a> {
     vars: &'a BTreeMap<String, String>,
     kept: &'a Kept,
     user_values: &'a BTreeMap<String, String>,
+    goals: &'a super::goals::Tracker,
     timeline: &'a crate::sync::Mutex<Timeline>,
     live: &'a LiveState,
 }
@@ -1590,6 +1763,18 @@ impl Vars for Lookup<'_> {
                     .unwrap_or(0)
                     .to_string(),
             );
+        }
+        // Only a goal or timer that exists: `{goal.json.current}` is still a
+        // web call's answer saved as "goal", and a typo stays as written.
+        let goal = name
+            .strip_prefix("goal.")
+            .and_then(|goal| self.goals.goal_text(goal));
+        let clock = || {
+            name.strip_prefix("timer.")
+                .and_then(|timer| self.goals.timer_text(timer, super::twitch::unix_ms()))
+        };
+        if let Some(text) = goal.or_else(clock) {
+            return Some(text);
         }
         if let Some(found) = self.viewer_value(name) {
             return Some(found);
@@ -1821,6 +2006,111 @@ pub fn compare(left: &str, op: &str, right: &str) -> bool {
 /// `0`, `30`, `600`: digits only, so no sign, decimals or exponent.
 fn is_whole_number(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The Twitch command a chat step's own words start with (its name and the
+/// words after it), when it is one InstantClone runs. Only the streamer's
+/// words can start one: what a viewer typed only fills it in.
+fn chat_command_of(template: &str) -> Option<(&'static str, &str)> {
+    let rest = template.trim_start().strip_prefix('/')?;
+    let (word, words) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    let name = match word.to_ascii_lowercase().as_str() {
+        "timeout" => "timeout",
+        "ban" => "ban",
+        "unban" | "untimeout" => "unban",
+        "shoutout" | "so" => "shoutout",
+        "announce" => "announce",
+        "me" => "me",
+        _ => return None,
+    };
+    Some((name, words.trim()))
+}
+
+/// The longest timeout Twitch gives: two weeks.
+const MAX_TIMEOUT_S: u32 = 1_209_600;
+
+/// `90`, `10m`, `1h`, `2d` or `1w` in seconds, as Twitch's own /timeout
+/// reads it.
+fn timeout_seconds(word: &str) -> Option<u32> {
+    let split = word
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(word.len());
+    let (number, unit) = word.split_at(split);
+    let per = match unit.to_ascii_lowercase().as_str() {
+        "" | "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86_400,
+        "w" => 604_800,
+        _ => return None,
+    };
+    number.parse::<u32>().ok()?.checked_mul(per)
+}
+
+/// A command's words, filled in: who it is about, for how long, and why.
+/// The viewer who started the run is named by their login, whatever their
+/// display name is written in.
+fn chat_command(
+    name: &str,
+    filled: &str,
+    vars: &BTreeMap<String, String>,
+) -> Result<ChatCommand, String> {
+    let mut words = filled.split_whitespace();
+    if name == "announce" {
+        let text: String = filled.trim().chars().take(MAX_CHAT_LEN).collect();
+        if text.is_empty() {
+            return Err("the announcement came out empty".to_string());
+        }
+        return Ok(ChatCommand::Announce { text });
+    }
+    let who = words
+        .next()
+        .ok_or("it names nobody: write who, like {user}")?;
+    // `{user}` or `{target}` filled in: their login, as a name shown can
+    // differ. An anonymous gift or cheer has none ("Anonymous" is a real
+    // account, not them).
+    let login = match ["user", "target"]
+        .into_iter()
+        .find(|var| vars.get(*var).is_some_and(|shown| shown == who))
+    {
+        Some(var) => login_of(vars, if var == "user" { "viewer" } else { "target" }).ok_or(
+            format!("{who} has no Twitch login (an anonymous gift or cheer)"),
+        )?,
+        None => viewers::login_key(who),
+    };
+    let plain = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    if login.is_empty() || login.len() > 25 || !login.chars().all(plain) {
+        return Err(format!("\"{who}\" isn't a Twitch login"));
+    }
+    let rest: Vec<&str> = words.collect();
+    let reason_from = |at: usize| -> String {
+        rest[at.min(rest.len())..]
+            .join(" ")
+            .chars()
+            .take(500)
+            .collect()
+    };
+    Ok(match name {
+        "timeout" => {
+            let given = rest.first().and_then(|w| timeout_seconds(w));
+            let seconds = given.unwrap_or(600);
+            if seconds == 0 || seconds > MAX_TIMEOUT_S {
+                return Err("a timeout is 1 second to 2 weeks".to_string());
+            }
+            let reason = reason_from(usize::from(given.is_some()));
+            ChatCommand::Timeout {
+                login,
+                seconds,
+                reason,
+            }
+        }
+        "ban" => ChatCommand::Ban {
+            login,
+            reason: reason_from(0),
+        },
+        "unban" => ChatCommand::Unban { login },
+        _ => ChatCommand::Shoutout { login },
+    })
 }
 
 /// Keep a chat message one line, within Twitch's limit, and unable to run
@@ -2204,6 +2494,10 @@ mod tests {
                 .push(format!("chat bot={as_bot} reply={reply_to:?} {text}"));
             Ok(())
         }
+        fn chat_command(&self, command: &ChatCommand) -> Result<(), String> {
+            self.calls.lock().push(format!("command {command:?}"));
+            Ok(())
+        }
         fn marker(&self, d: &str) -> Result<(), String> {
             self.calls.lock().push(format!("marker {d}"));
             Ok(())
@@ -2244,6 +2538,12 @@ mod tests {
                 card.title, card.text, card.seconds, card.color, card.sound
             ));
         }
+        fn dock_event(&self, group: &str, text: &str, card: Option<alerts::Card>) {
+            let replay = card.map(|c| c.text).unwrap_or_default();
+            self.calls
+                .lock()
+                .push(format!("dock {group}|{text}|{replay}"));
+        }
         fn obs(&self, action: obsws::Action) -> Result<obsws::Answer, String> {
             self.calls.lock().push(format!("obs {action:?}"));
             Ok(match action {
@@ -2264,6 +2564,17 @@ mod tests {
             self.calls.lock().push(format!("reward {title} {enabled}"));
             Ok(())
         }
+        fn channel(
+            &self,
+            title: Option<&str>,
+            category: Option<&str>,
+        ) -> Result<Option<String>, String> {
+            self.calls
+                .lock()
+                .push(format!("channel {title:?} {category:?}"));
+            // Twitch answers with its own name for the category.
+            Ok(category.map(str::to_uppercase))
+        }
     }
 
     fn env() -> Arc<RunEnv> {
@@ -2281,6 +2592,10 @@ mod tests {
             viewers: Default::default(),
             saved: Default::default(),
             data_changed: Box::new(|| {}),
+            goals: Arc::new(crate::integrations::goals::Tracker::new(
+                None,
+                Default::default(),
+            )),
             chat_room: Default::default(),
             user_values: BTreeMap::from([
                 ("coin".to_string(), "gem".to_string()),
@@ -2448,6 +2763,90 @@ mod tests {
         assert!(host.calls.lock().is_empty(), "{:?}", host.calls.lock());
         assert!(log.iter().all(|l| l.status == StepStatus::Skipped));
         assert!(log[0].detail.contains("[TEST] Hi Ana"), "{}", log[0].detail);
+    }
+
+    #[test]
+    fn a_chat_step_starting_with_a_command_runs_it_and_a_viewer_never_starts_one() {
+        assert_eq!(
+            chat_command_of("/timeout {user} 1s"),
+            Some(("timeout", "{user} 1s"))
+        );
+        assert_eq!(
+            chat_command_of("  /SO {target}"),
+            Some(("shoutout", "{target}"))
+        );
+        assert_eq!(
+            chat_command_of("/untimeout {user}"),
+            Some(("unban", "{user}"))
+        );
+        assert_eq!(chat_command_of("/me waves"), Some(("me", "waves")));
+        assert_eq!(chat_command_of("/mod {user}"), None);
+        assert_eq!(chat_command_of("{message}"), None);
+        assert_eq!(timeout_seconds("90"), Some(90));
+        assert_eq!(timeout_seconds("10m"), Some(600));
+        assert_eq!(timeout_seconds("1W"), Some(604_800));
+        assert_eq!(timeout_seconds("soon"), None);
+        assert_eq!(timeout_seconds("99999999999"), None);
+    }
+
+    #[test]
+    fn a_command_names_the_viewer_by_their_login_and_reads_how_long() {
+        let vars: BTreeMap<String, String> =
+            [("user", "Ána B"), ("user_login", "ana_b"), ("target", "Bo")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        let timeout = chat_command("timeout", "Ána B 1s too loud", &vars);
+        assert!(timeout.is_err(), "a display name with a space is two words");
+        let timeout = chat_command("timeout", "@Bo 1s too loud", &vars).unwrap();
+        assert_eq!(
+            timeout,
+            ChatCommand::Timeout {
+                login: "bo".into(),
+                seconds: 1,
+                reason: "too loud".into()
+            }
+        );
+        let plain = chat_command("timeout", "Bo spam", &vars).unwrap();
+        assert_eq!(
+            plain,
+            ChatCommand::Timeout {
+                login: "bo".into(),
+                seconds: 600,
+                reason: "spam".into()
+            }
+        );
+        assert!(chat_command("timeout", "Bo 3w", &vars).is_err());
+        assert!(chat_command("ban", "", &vars).is_err());
+        assert!(chat_command("announce", "  ", &vars).is_err());
+        assert!(chat_command("ban", "a/b", &vars).is_err());
+        // An anonymous gift has no login: never the account "anonymous".
+        let anonymous: BTreeMap<String, String> = [("user", "Anonymous"), ("user_login", "")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let refused = chat_command("shoutout", "Anonymous", &anonymous).unwrap_err();
+        assert!(refused.contains("anonymous gift"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_timeout_step_runs_for_the_viewer_and_a_test_only_says_so() {
+        let host = Arc::new(FakeHost::default());
+        let steps = [Step::new(StepKind::Chat, &[("text", "/timeout {user} 1s")])];
+        let said = [("user", "Ána"), ("user_login", "ana")];
+        go(&host, &steps, ctx(&said, false)).await;
+        assert_eq!(
+            *host.calls.lock(),
+            [r#"command Timeout { login: "ana", seconds: 1, reason: "" }"#]
+        );
+        let host = Arc::new(FakeHost::default());
+        let (_, log) = go(&host, &steps, ctx(&said, true)).await;
+        assert!(host.calls.lock().is_empty());
+        assert!(
+            log[0].detail.contains("would time out ana for 1s"),
+            "{}",
+            log[0].detail
+        );
     }
 
     #[tokio::test]
@@ -2844,6 +3243,44 @@ mod tests {
         );
     }
 
+    /// A dock event replays the alert its run showed before it, or none.
+    #[tokio::test]
+    async fn a_dock_event_keeps_the_alert_its_run_showed() {
+        let host = Arc::new(FakeHost::default());
+        let listed = |replay: &str| {
+            Step::new(
+                StepKind::Dock,
+                &[
+                    ("group", "Bits"),
+                    ("text", "{user} cheered"),
+                    ("replay", replay),
+                ],
+            )
+        };
+        let steps = [
+            listed(""),
+            Step::new(StepKind::Overlay, &[("text", "by {user}")]),
+            listed(""),
+            listed("no"),
+        ];
+        go(&host, &steps, ctx(&[("user", "Ana")], false)).await;
+        let (_, log) = go(&host, &steps, ctx(&[("user", "Ana")], true)).await;
+        assert_eq!(
+            log[0].status,
+            StepStatus::Skipped,
+            "tests stay out of the dock"
+        );
+        assert_eq!(
+            host.calls.lock().as_slice(),
+            [
+                "dock Bits|Ana cheered|",
+                "overlay |by Ana|6||",
+                "dock Bits|Ana cheered|by Ana",
+                "dock Bits|Ana cheered|",
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn edited_text_feeds_later_steps() {
         let host = Arc::new(FakeHost::default());
@@ -3186,6 +3623,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_channel_step_sets_what_it_is_given_and_a_test_leaves_twitch_alone() {
+        let steps = [
+            Step::new(StepKind::Channel, &[("title", "{args}")]),
+            Step::new(StepKind::Channel, &[("category", "{args}")]),
+        ];
+        let host = Arc::new(FakeHost::default());
+        go(&host, &steps, ctx(&[("args", "valo")], false)).await;
+        let calls: Vec<String> = host.calls.lock().iter().map(|c| c.to_string()).collect();
+        assert_eq!(
+            calls,
+            [
+                r#"channel Some("valo") None"#,
+                r#"channel None Some("valo")"#
+            ]
+        );
+        // `!settitle` with nothing after it: nothing to set, and Twitch isn't asked.
+        let host = Arc::new(FakeHost::default());
+        let (_, log) = go(&host, &steps, ctx(&[("args", " ")], false)).await;
+        assert!(host.calls.lock().is_empty());
+        assert_eq!(log[0].status, StepStatus::Failed);
+        let host = Arc::new(FakeHost::default());
+        let (_, log) = go(&host, &steps, ctx(&[("args", "valo")], true)).await;
+        assert!(host.calls.lock().is_empty());
+        assert_eq!(log[0].status, StepStatus::Skipped);
+    }
+
+    #[tokio::test]
+    async fn a_goal_step_moves_goals_and_timers_and_a_test_leaves_them() {
+        use crate::integrations::goals::{Goal, Timer};
+        let env = env();
+        let subs = json::parse(r#"{"id":"subs","name":"Sub goal","counts":"subs","target":50}"#);
+        let break_ = json::parse(r#"{"id":"brb","name":"Break","start_s":300}"#);
+        env.goals.configure(
+            &[Goal::from_json(&subs.unwrap()).unwrap()],
+            &[Timer::from_json(&break_.unwrap()).unwrap()],
+        );
+        let goal = |pairs: &[(&str, &str)]| Step::new(StepKind::Goal, pairs);
+        let steps = [
+            goal(&[("id", "subs"), ("action", "add"), ("amount", "{arg1}")]),
+            goal(&[("id", "subs"), ("action", "subtract")]),
+            goal(&[
+                ("what", "timer"),
+                ("id", "brb"),
+                ("action", "add"),
+                ("amount", "90"),
+            ]),
+            goal(&[("id", "nope"), ("action", "reset")]),
+            Step::new(
+                StepKind::SetVar,
+                &[
+                    ("name", "said"),
+                    (
+                        "value",
+                        "{goal.subs}/{goal.subs.target} {timer.brb} {goal.nope|none} {goal.json.x}",
+                    ),
+                ],
+            ),
+        ];
+        let host = Arc::new(FakeHost::default());
+        // A web call's answer saved as "goal" still reads as one.
+        let vars = [("arg1", "5"), ("goal.body", r#"{"x":7}"#)];
+        let (_, log) = run(&steps, ctx(&vars, false), host, env.clone()).await;
+        let details: Vec<&str> = log.iter().map(|l| l.detail.as_str()).collect();
+        assert_eq!(details[..3], ["5", "4", "6:30"]);
+        assert_eq!(log[3].status, StepStatus::Failed);
+        assert_eq!(details[4], "4/50 6:30 none 7");
+
+        // What chat typed has to be a number, and a test changes nothing.
+        let host = Arc::new(FakeHost::default());
+        let (_, log) = run(&steps, ctx(&[("arg1", "lots")], false), host, env.clone()).await;
+        assert_eq!(log[0].status, StepStatus::Failed);
+        let host = Arc::new(FakeHost::default());
+        let (_, log) = run(&steps, ctx(&[("arg1", "5")], true), host, env.clone()).await;
+        assert_eq!(log[0].status, StepStatus::Skipped);
+        assert_eq!(env.goals.goal_text("subs").unwrap(), "3");
+    }
+
+    #[tokio::test]
     async fn a_step_can_name_the_viewer_itself() {
         let env = env();
         let steps = [
@@ -3500,6 +4015,9 @@ mod tests {
             fn chat(&self, _: &str, _: bool, _: Option<&str>) -> Result<(), String> {
                 Ok(())
             }
+            fn chat_command(&self, _: &ChatCommand) -> Result<(), String> {
+                Ok(())
+            }
             fn marker(&self, _: &str) -> Result<(), String> {
                 Ok(())
             }
@@ -3519,6 +4037,7 @@ mod tests {
                 Ok(())
             }
             fn overlay(&self, _: alerts::Card) {}
+            fn dock_event(&self, _: &str, _: &str, _: Option<alerts::Card>) {}
             fn obs(&self, _: obsws::Action) -> Result<obsws::Answer, String> {
                 Ok(Vec::new())
             }
@@ -3527,6 +4046,9 @@ mod tests {
             }
             fn reward(&self, _: &str, _: bool) -> Result<(), String> {
                 Ok(())
+            }
+            fn channel(&self, _: Option<&str>, _: Option<&str>) -> Result<Option<String>, String> {
+                Ok(None)
             }
         }
         let steps = [Step::new(

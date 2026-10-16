@@ -26,6 +26,8 @@ pub struct StreamParams {
     /// Mean IDR spacing in ms, 0 until enough keyframes have been seen.
     pub keyframe_interval_ms: u32,
     pub codec: VideoCodec,
+    /// Enhanced Broadcasting is on: Twitch picks its own tracks' codec.
+    pub multitrack: bool,
 }
 
 /// Warn above this measured IDR spacing. Every ingest we support asks for
@@ -127,25 +129,35 @@ fn resolution_issue(params: &StreamParams, live: &[&Destination]) -> Option<Stri
     ))
 }
 
-/// A codec the destination's ingest cannot decode.
-///
-/// Scoped to Kick on purpose. Twitch negotiates codecs itself under
-/// Enhanced Broadcasting, and YouTube has added HEVC ingest paths, so
-/// warning about either would risk a false positive. Kick's ingest is
-/// H.264 and the failure is total, which makes it worth naming.
+/// A codec a destination's ingest cannot decode (see `Destination::plays`):
+/// the failure is total, so it is worth naming. Twitch negotiates its own
+/// codec under Enhanced Broadcasting, and a custom ingest's codecs are
+/// unknown, so neither is warned about.
 fn codec_issue(params: &StreamParams, live: &[&Destination]) -> Option<String> {
-    if !matches!(
-        params.codec,
-        VideoCodec::Hevc | VideoCodec::Av1 | VideoCodec::Vp9
-    ) {
+    if matches!(params.codec, VideoCodec::Avc | VideoCodec::Unknown) {
         return None;
     }
-    if !live.iter().any(|d| d.platform == "kick") {
-        return None;
+    let mut names: Vec<&'static str> = Vec::new();
+    for d in live {
+        let negotiated = d.platform == "twitch" && params.multitrack;
+        let label = platform_label(&d.platform);
+        if d.platform != "custom"
+            && !negotiated
+            && !d.plays(params.codec)
+            && !names.contains(&label)
+        {
+            names.push(label);
+        }
     }
+    let verb = match names.len() {
+        0 => return None,
+        1 => "needs",
+        _ => "need",
+    };
     Some(format!(
-        "Video codec is {}. Kick needs H.264. {CODEC_FIX}",
-        params.codec.label()
+        "Video codec is {}. {} {verb} H.264. {CODEC_FIX}",
+        params.codec.label(),
+        join_names(&names)
     ))
 }
 
@@ -217,6 +229,7 @@ mod tests {
             height: 1080,
             keyframe_interval_ms: 2_000,
             codec: VideoCodec::Avc,
+            multitrack: false,
         };
         change(&mut params);
         params
@@ -235,7 +248,7 @@ mod tests {
     #[test]
     fn stays_silent_when_nothing_is_wrong_or_nobody_minds() {
         let kick = [dest("kick", true)];
-        let cases: [(&str, StreamParams, &[Destination]); 13] = [
+        let cases: [(&str, StreamParams, &[Destination]); 16] = [
             (
                 "a healthy stream",
                 healthy(),
@@ -300,6 +313,21 @@ mod tests {
                 "a codec not known yet",
                 stream(|p| p.codec = VideoCodec::Unknown),
                 &kick,
+            ),
+            (
+                "AV1 to YouTube only",
+                stream(|p| p.codec = VideoCodec::Av1),
+                &[dest("youtube", true)],
+            ),
+            (
+                "HEVC that Twitch picked under Enhanced Broadcasting",
+                stream(|p| (p.codec, p.multitrack) = (VideoCodec::Hevc, true)),
+                &[dest("twitch", true)],
+            ),
+            (
+                "AV1 to a custom server",
+                stream(|p| p.codec = VideoCodec::Av1),
+                &[dest("custom", true)],
             ),
         ];
         for (case, params, dests) in cases {
@@ -368,6 +396,24 @@ mod tests {
                 "{case}"
             );
         }
+    }
+
+    /// AV1 from OBS reaches only the platforms that play it: the rest are
+    /// named, Twitch too when it isn't choosing through Enhanced Broadcasting.
+    #[test]
+    fn a_codec_some_platforms_cannot_play_names_them() {
+        let av1 = stream(|p| p.codec = VideoCodec::Av1);
+        let dests = [
+            dest("youtube", true),
+            dest("twitch", true),
+            dest("kick", true),
+        ];
+        assert_eq!(
+            compat_warning(&av1, &dests),
+            Some(format!(
+                "Video codec is AV1. Twitch and Kick need H.264. {CODEC_FIX}"
+            ))
+        );
     }
 
     /// Multiple problems collapse into ONE line - the clutter guard.

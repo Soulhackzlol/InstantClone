@@ -141,6 +141,9 @@ pub struct Twitch {
     incoming: mpsc::Sender<ChatMessage>,
     /// Shown on the dashboard when Twitch logged us out.
     notice: Mutex<Option<String>>,
+    /// What the main login allows, once Twitch said (at login, at each
+    /// refresh and check): what it lacks, the dashboard asks for.
+    main_scopes: Mutex<Option<Vec<String>>>,
     upkeep_now: Arc<Notify>,
     /// Set by `check_tokens_soon`: validate on the next upkeep round.
     validate_soon: AtomicBool,
@@ -172,6 +175,7 @@ impl Twitch {
             bot: Conn::default(),
             incoming,
             notice: Mutex::new(None),
+            main_scopes: Mutex::new(None),
             upkeep_now: Arc::new(Notify::new()),
             validate_soon: AtomicBool::new(false),
             log,
@@ -442,6 +446,7 @@ impl Twitch {
         if !self.login_current(attempt) {
             return;
         }
+        self.note_scopes(which, who.scopes.or(tokens.scopes));
         self.set_account(
             which,
             Some(TwitchAccount {
@@ -479,6 +484,7 @@ impl Twitch {
             });
         }
         self.set_account(which, None);
+        self.note_scopes(which, None);
         if which == Which::Main {
             // No channel to join any more.
             self.bot.stop();
@@ -516,6 +522,17 @@ impl Twitch {
             let access = account.access.clone();
             match tokio::task::spawn_blocking(move || auth::validate(&access)).await {
                 Ok(Err(auth::TokenError::Revoked)) => {}
+                // Only while it is still this login: one made meanwhile
+                // (to allow more) has its own list.
+                Ok(Ok(valid)) => {
+                    if self
+                        .account(which)
+                        .is_some_and(|now| now.access == account.access)
+                    {
+                        self.note_scopes(which, valid.scopes);
+                    }
+                    return;
+                }
                 _ => return,
             }
         } else if !expiring && !auth_failed {
@@ -541,6 +558,9 @@ impl Twitch {
             Ok(tokens) => {
                 if let Some(token) = &*self.conn(which).token.lock() {
                     *token.lock() = tokens.access.clone();
+                }
+                if tokens.scopes.is_some() {
+                    self.note_scopes(which, tokens.scopes.clone());
                 }
                 self.set_account(
                     which,
@@ -583,6 +603,14 @@ impl Twitch {
                     "[twitch] couldn't refresh the login yet, will retry: {e}"
                 ));
             }
+        }
+    }
+
+    /// What Twitch says the main login allows (None: logged out, or not
+    /// known yet). The bot only chats: its scopes are never short.
+    fn note_scopes(&self, which: Which, scopes: Option<Vec<String>>) {
+        if which == Which::Main {
+            *self.main_scopes.lock() = scopes;
         }
     }
 
@@ -662,6 +690,31 @@ impl Twitch {
         self.helix_call(helix::create_clip)
     }
 
+    /// Run a chat step's Twitch command in the channel.
+    pub fn run_command(&self, command: &super::host::ChatCommand) -> Result<(), String> {
+        self.helix_call(|a| helix::run_command(a, command))
+    }
+
+    /// Set the stream's title, its category, or both. `category` is a name
+    /// as someone types it ("valo"); the answer is the name Twitch has for
+    /// the category it found, when one was asked for.
+    pub fn set_channel(
+        &self,
+        title: Option<&str>,
+        category: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        let found = match category {
+            Some(name) => Some(self.helix_call(|a| helix::find_category(a, name))?),
+            None => None,
+        };
+        let edit = helix::ChannelEdit {
+            title: title.map(str::to_string),
+            category_id: found.as_ref().map(|c| c.id.clone()),
+        };
+        self.helix_call(|a| helix::update_channel(a, &edit))?;
+        Ok(found.map(|c| c.name))
+    }
+
     /// The channel points rewards this app made on the channel.
     pub fn rewards(&self) -> Result<Vec<helix::Reward>, String> {
         self.helix_call(helix::rewards)
@@ -710,12 +763,22 @@ impl Twitch {
                 ChatState::AuthFailed => "reconnecting".to_string(),
                 ChatState::Error(e) => format!("error: {e}"),
             };
+            // What a login from before a permission was asked for can't do
+            // yet: logging in again once allows it.
+            let missing = match (which, &*self.main_scopes.lock()) {
+                (Which::Main, Some(granted)) if account.is_some() => auth::missing_uses(granted),
+                _ => Vec::new(),
+            };
             json::obj([
                 (
                     "login",
                     json::str(account.map(|a| a.login).unwrap_or_default()),
                 ),
                 ("chat", json::str(state)),
+                (
+                    "missing",
+                    Value::Arr(missing.into_iter().map(json::str).collect()),
+                ),
             ])
         };
         let flow = match &*self.login.lock() {

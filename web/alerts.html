@@ -18,6 +18,12 @@
   entrance. Each alert can bring its own accent (--card-color), sound and
   picture. ?at=top in the address still wins, for setups made before.
   ?demo is the dashboard's preview: no feed, it shows what it is sent.
+  ?embed is an "Alert card" layer inside a design: one card in the look
+  the layer gives it, drawn when the design says, with no feed and no
+  sound (the alerts page around the design has those).
+
+  An alert can name a design (an overlay made in the Studio) instead; an
+  alert that names none takes the default design, if there is one.
 -->
 <style>
   :root{--ease:cubic-bezier(.16,1,.3,1);--k:1}
@@ -45,6 +51,9 @@
   .title{font-size:calc(13*var(--u));font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin-bottom:calc(4*var(--u))}
   .title:empty{display:none}
   .text{font-size:calc(26*var(--u));font-weight:650;letter-spacing:-.01em;text-wrap:balance;overflow-wrap:anywhere}
+  .msg{margin-top:calc(6*var(--u));font-size:calc(16*var(--u));font-weight:500;opacity:.85;overflow-wrap:anywhere;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+  .msg:empty{display:none}
   .w{display:inline-block}
   .time{position:absolute;left:0;right:0;bottom:0;height:calc(3*var(--u))}
   .time i{display:block;height:100%;background:var(--accent);transform-origin:left}
@@ -361,6 +370,14 @@
     body .card.in.out{animation:fadeOut .25s ease forwards !important}
     body .card.in.still{animation:none !important}
   }
+  /* An alert design: an overlay on a 1920 x 1080 canvas, scaled to the page
+     (see fitDesign). Its color-scheme lets it stay see-through. */
+  .design{position:fixed;left:0;top:0;width:1920px;height:1080px;border:0;transform-origin:0 0;
+    background:transparent;color-scheme:normal;pointer-events:none}
+  /* Skipped from the dock: gone at once, softly (SKIP_FADE). */
+  .design.skipped{opacity:0;transition:opacity .25s ease-out}
+  /* A card layer: its box is small, so is the margin. */
+  body.embed{padding:12px}
 </style>
 <style id="user-css"></style>
 </head>
@@ -371,6 +388,7 @@
   const params = new URLSearchParams(location.search);
   const pinnedTop = params.get('at') === 'top';
   const demo = params.has('demo');
+  const embed = params.has('embed');
   // This page's own fingerprint, filled in when served (alerts::page_id).
   const PAGE = '__ALERTS_PAGE_ID__';
   // The pause between two alerts, and the longest a card waits for its
@@ -399,6 +417,9 @@
     'Roboto Mono':'wght@400;600;700', 'Chakra Petch':'wght@400;500;600;700', 'Playfair Display':'ital,wght@0,400;0,700;1,400;1,600'};
   const queue = [];
   let boot = null, seen = null, playing = false;
+  // The dock's Skip: how many the app has asked for, and what ends the
+  // alert on now (null between alerts), with the sound file it plays.
+  let skips = null, current = null, fileSound = null;
   let look = {};
 
   function themeOf(l){ return THEMES[l.theme] ? l.theme : 'island'; }
@@ -419,9 +440,12 @@
     const theme = themeOf(look), own = THEMES[theme];
     const body = document.body, cls = [];
     cls.push('theme-' + theme);
-    const position = pinnedTop ? 'top' : look.position;
+    // A card layer sits where its look says inside its own box (at the
+    // bottom, in the middle, unless told).
+    const position = pinnedTop && !embed ? 'top' : look.position;
     if (position === 'top' || position === 'middle') cls.push(position);
     if (look.align === 'left' || look.align === 'right') cls.push(look.align);
+    if (embed) cls.push('embed');
     cls.push('anim-' + (look.animation || 'theme'));
     if ((look.picture || own.pic) === 'top') cls.push('pic-top');
     body.className = cls.join(' ');
@@ -440,9 +464,11 @@
     document.getElementById('user-css').textContent = look.css || '';
   }
 
-  // `media:<name>` is an upload served next to this page.
+  // `media:<name>` is an upload served next to this page. A card layer is
+  // handed it as that address already, or the Studio's sample picture.
   function mediaSrc(ref){
     if (/^media:[a-z0-9._-]+$/.test(ref || '')) return '/alerts/media/' + ref.slice(6);
+    if (embed && /^(\/alerts\/media\/[a-z0-9._-]+|data:image\/svg\+xml,[^"'<>]*)$/.test(ref || '')) return ref;
     return /^https?:\/\//.test(ref || '') ? ref : '';
   }
 
@@ -478,8 +504,9 @@
     const el = document.createElement('div');
     el.className = 'card';
     el.innerHTML = `<span class="fx" aria-hidden="true">${'<i></i>'.repeat(FX)}</span>`
-      + '<div class="words"><div class="title"></div><div class="text"></div></div><div class="time"><i></i></div>';
+      + '<div class="words"><div class="title"></div><div class="text"></div><div class="msg"></div></div><div class="time"><i></i></div>';
     el.querySelector('.title').textContent = alert.title || '';
+    el.querySelector('.msg').textContent = alert.message || '';
     spellOut(el.querySelector('.text'), alert.text || '');
     if (/^#[0-9a-f]{6}$/i.test(alert.color || '')) el.style.setProperty('--card-color', alert.color);
     const src = mediaSrc(alert.image);
@@ -580,9 +607,13 @@
     zap: (t, g) => { tone(t, 1900, 110, 0.28, 'sawtooth', g * 0.35); tone(t + 0.05, 2400, 300, 0.2, 'square', g * 0.15); },
     blip: (t, g) => { tone(t, 880, 880, 0.08, 'sine', g); tone(t + 0.09, 1320, 1320, 0.12, 'sine', g * 0.8); },
   };
-  function play(alert){
+  // `theme`: the theme of the card a design shows, whose own sound "Theme
+  // sound" is then.
+  // "The design's sound" is the design's own (`own`), else its Alert
+  // card's theme's, else the look's.
+  function play(alert, theme, own){
     let sound = alert.sound || '';
-    if (sound === 'theme') sound = look.sound || THEMES[themeOf(look)].sound;
+    if (sound === 'theme') sound = own || (THEMES[theme] ? THEMES[theme].sound : look.sound || THEMES[themeOf(look)].sound);
     const volume = Math.max(0, Math.min(100, Number(alert.volume == null || alert.volume === '' ? 70 : alert.volume))) / 100;
     if (!sound || !volume) return;
     try {
@@ -591,6 +622,7 @@
         const file = new Audio(src);
         file.volume = volume;
         file.play().catch(() => {});
+        fileSound = file;
         return;
       }
       if (!SOUNDS[sound]) return;
@@ -600,10 +632,119 @@
     } catch (_){ /* no sound is better than no alert */ }
   }
 
+  // An alert with a design (an overlay made in the Studio) shows that
+  // instead of a theme's card: loaded for this one alert, laid out on a
+  // 1920 x 1080 canvas like every overlay and scaled to this page, it plays
+  // its entrance, holds, and leaves its own way. Its sound plays here. A
+  // design that is gone shows the theme's card, so no alert is lost.
+  const DESIGN_LEAVE = 900;
+  function designSrc(alert){ return '/overlay/' + encodeURIComponent(alert.design) + '.html'; }
+  // In OBS the page is the canvas: a design fills it. A dashboard's preview
+  // (demo) is any shape: it shows where the design's layers are (`box`, as
+  // the design says when it plays) as large as fits, up to half again their
+  // size, or the whole canvas until then.
+  const DEMO_PAD = 28, DEMO_ZOOM = 1.5;
+  function fitDesign(frame, box){
+    const b = box || frame.icBox || {x:0, y:0, w:1920, h:1080};
+    frame.icBox = b;
+    if (!demo){
+      // ?at=top (an OBS source set up as 0.1.15 said): a design laid out
+      // low moves up, as far from the top as it was from the bottom.
+      const up = pinnedTop && !embed && b.y > 540 ? 2 * b.y + b.h - 1080 : 0;
+      frame.style.transform = 'scale(' + (innerWidth / 1920) + ') translateY(' + -up + 'px)';
+      return;
+    }
+    const s = Math.min((innerWidth - 2 * DEMO_PAD) / b.w, (innerHeight - 2 * DEMO_PAD) / b.h, DEMO_ZOOM);
+    const x = (innerWidth - b.w * s) / 2 - b.x * s, y = (innerHeight - b.h * s) / 2 - b.y * s;
+    frame.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')';
+  }
+  addEventListener('resize', () => document.querySelectorAll('.design').forEach(f => fitDesign(f)));
+  // A design answers an alert with its own sound and its card's theme (if
+  // it has them): `shown` runs then, or a moment after it loaded when it
+  // doesn't answer.
+  window.addEventListener('message', e => {
+    const frame = [...document.querySelectorAll('.design')].find(f => f.contentWindow === e.source);
+    if (frame && frame.icShown && e.data && e.data.__ic_design) frame.icShown(e.data.__ic_design);
+  });
+  function design(alert, hold, shown){
+    const frame = document.createElement('iframe');
+    frame.className = 'design';
+    frame.setAttribute('aria-hidden', 'true');
+    frame.tabIndex = -1;
+    fitDesign(frame);
+    frame.icShown = said => {
+      // Skipped or gone before it loaded: nothing to show or hear.
+      if (!frame.isConnected || frame.classList.contains('skipped')) return;
+      if (said.box) fitDesign(frame, said.box);
+      const then = shown; shown = null; if (then) then(said);
+    };
+    // A saved overlay is sandboxed, with an origin of its own that has no
+    // name: '*' reaches it, and it checks the message came from this app.
+    frame.onload = () => {
+      frame.contentWindow.postMessage({__ic_alert:{title:alert.title || '', text:alert.text || '', message:alert.message || '',
+        image:mediaSrc(alert.image), color:alert.color || '', ms:hold}}, '*');
+      setTimeout(() => frame.icShown({}), 1500);
+    };
+    frame.src = designSrc(alert);
+    document.body.appendChild(frame);
+    return frame;
+  }
+  // How long a design may take to load (its fonts and pictures, on a cold
+  // start of OBS) before the next alert goes ahead.
+  const DESIGN_LOAD_WAIT = 8000;
+  function nextDesign(alert){
+    // It leaves its own way, then goes; skipped, it fades out at once.
+    let left = false;
+    const gone = () => {
+      if (left) return;
+      left = true;
+      current = null;
+      document.querySelectorAll('.design').forEach(f => f.remove());
+      setTimeout(next, GAP);
+    };
+    // Its time on screen counts from when it shows, not from when it began
+    // to load: a slow load never cuts it short.
+    let timer = setTimeout(gone, DESIGN_LOAD_WAIT);
+    design(alert, alert.ms, said => {
+      clearTimeout(timer);
+      play(alert, said.theme, said.sound);
+      timer = setTimeout(gone, alert.ms + DESIGN_LEAVE);
+    });
+    current = () => {
+      clearTimeout(timer);
+      document.querySelectorAll('.design').forEach(f => f.classList.add('skipped'));
+      setTimeout(gone, SKIP_FADE);
+    };
+  }
+  // End the alert on now, sound and all; the next one comes on.
+  const SKIP_FADE = 250;
+  function skipNow(){
+    const end = current;
+    current = null;
+    if (fileSound){ fileSound.pause(); fileSound = null; }
+    if (end) end();
+  }
+
   function next(){
     const alert = queue.shift();
     if (!alert){ playing = false; return; }
     playing = true;
+    if (!alert.design && !alert.checked && look.design) alert.design = look.design;
+    if (alert.design && !alert.checked){
+      fetch(designSrc(alert), {cache:'no-store'})
+        .then(r => r.ok)
+        .catch(() => false)
+        .then(ok => {
+          // A design that's gone: the default plays instead, or, gone too,
+          // the theme's card.
+          if (ok) alert.checked = true;
+          else if (look.design && alert.design !== look.design) alert.design = look.design;
+          else { alert.design = ''; alert.checked = true; }
+          queue.unshift(alert); next();
+        });
+      return;
+    }
+    if (alert.design){ nextDesign(alert); return; }
     let el;
     // One alert that can't be drawn is skipped: it never stops the queue.
     try { el = card(alert); }
@@ -617,7 +758,8 @@
       el.querySelector('.time i').animate([{transform:'scaleX(1)'}, {transform:'scaleX(0)'}],
         {duration:alert.ms, easing:'linear', fill:'forwards'});
     }));
-    setTimeout(() => leave(el, () => setTimeout(next, GAP)), alert.ms);
+    const timer = setTimeout(() => { current = null; leave(el, () => setTimeout(next, GAP)); }, alert.ms);
+    current = () => { clearTimeout(timer); leave(el, () => setTimeout(next, GAP)); };
   }
 
   // OBS keeps this page open through an app update: when the app serves a
@@ -643,7 +785,13 @@
       // shows; on first load, what is already up is old news.
       if (boot !== null) seen = 0;
       boot = board.boot;
+      skips = null;
     }
+    // A Skip asked for since the last look ends what plays now; one from
+    // before this page opened doesn't.
+    const asked = Number(board.skips) || 0;
+    if (skips !== null && asked > skips) skipNow();
+    skips = asked;
     if (seen === null){ seen = top; return; }
     list.filter(a => a.id > seen).forEach(a => queue.push(a));
     seen = Math.max(seen, top);
@@ -658,8 +806,17 @@
     const turn = ++demoTurn;
     clearTimeout(demoTimer);
     applyLook(data.look);
-    document.querySelectorAll('.card').forEach(c => c.remove());
+    document.querySelectorAll('.card,.design').forEach(c => c.remove());
     if (!data.card) return;
+    const named = data.card.design || (data.look && data.look.design);
+    if (named){
+      const hold = data.replay === 'full' ? DEMO_HOLD : 24 * 3600 * 1000;
+      design(Object.assign({}, data.card, {design:named}), hold, data.sound ? said => play(data.card, said.theme, said.sound) : null);
+      if (data.replay === 'full') demoTimer = setTimeout(() => {
+        if (turn === demoTurn) showDemo({look:data.look, card:data.card});
+      }, DEMO_HOLD + DESIGN_LEAVE);
+      return;
+    }
     const el = card(data.card);
     document.body.appendChild(el);
     if (data.sound) play(data.card);
@@ -669,6 +826,40 @@
     demoTimer = setTimeout(() => leave(el, () => {
       if (turn === demoTurn) showDemo({look:data.look, card:data.card});
     }), DEMO_HOLD);
+  }
+
+  // An "Alert card" layer: still while its design is edited, played in, or
+  // sent out, as its design (this frame's parent) says.
+  let held = null, heldKey = '';
+  function embedded(msg){
+    applyLook(msg.look);
+    if (msg.mode === 'out' || msg.mode === 'none'){
+      heldKey = '';
+      const el = held; held = null;
+      if (el && msg.mode === 'out') leave(el, () => {}); else document.querySelectorAll('.card').forEach(c => c.remove());
+      return;
+    }
+    // A look changed in the Studio comes alone: the card stays the same.
+    const said = msg.card || (held && held.icCard) || {};
+    const key = msg.mode + JSON.stringify(said) + JSON.stringify(msg.look);
+    if (msg.mode === 'still' && key === heldKey && held) return;
+    heldKey = key;
+    document.querySelectorAll('.card').forEach(c => c.remove());
+    const el = card(said);
+    el.icCard = said;
+    held = el;
+    document.body.appendChild(el);
+    if (msg.mode === 'still'){ el.classList.add('in', 'still'); return; }
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el.classList.add('in');
+      decode(el);
+      el.querySelector('.time i').animate([{transform:'scaleX(1)'}, {transform:'scaleX(0)'}],
+        {duration:msg.ms || 6000, easing:'linear', fill:'forwards'});
+    }));
+  }
+  if (embed){
+    window.addEventListener('message', e => { if (e.source === window.parent && e.data && e.data.__ic_card) embedded(e.data.__ic_card); });
+    return;
   }
 
   if (demo){

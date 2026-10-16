@@ -14,12 +14,14 @@ use crate::json::{self, Value};
 /// Chat, VOD markers and clips for the streamer's account, reading the
 /// channel's follows, subs, bits and ad breaks for Twitch event triggers
 /// (see `eventsub`), and channel points: hearing redemptions, and making
-/// and switching the rewards the streamer sets up here. A login from
-/// before rewards could be managed still hears redemptions; managing
-/// them asks for a new login.
+/// and switching the rewards the streamer sets up here, and the chat
+/// commands a chat step runs (timeouts, bans, shoutouts, announcements). A
+/// login from before one of these still does the rest; that one asks for a
+/// new login.
 pub const MAIN_SCOPES: &str = "chat:read chat:edit channel:manage:broadcast clips:edit \
      moderator:read:followers channel:read:subscriptions bits:read \
-     channel:read:redemptions channel:manage:redemptions channel:read:ads";
+     channel:read:redemptions channel:manage:redemptions channel:read:ads \
+     moderator:manage:banned_users moderator:manage:shoutouts moderator:manage:announcements";
 /// A bot account only reads and posts chat.
 pub const BOT_SCOPES: &str = "chat:read chat:edit";
 
@@ -41,6 +43,8 @@ pub struct Tokens {
     pub access: String,
     pub refresh: String,
     pub expires_in: u64,
+    /// What the login allows, when Twitch said.
+    pub scopes: Option<Vec<String>>,
 }
 
 pub enum Poll {
@@ -61,6 +65,7 @@ pub enum TokenError {
 pub struct Validated {
     pub login: String,
     pub user_id: String,
+    pub scopes: Option<Vec<String>>,
 }
 
 pub fn start_device(client_id: &str, scopes: &str) -> Result<DeviceCode, String> {
@@ -143,6 +148,7 @@ pub fn validate(access: &str) -> Result<Validated, TokenError> {
     Ok(Validated {
         login: v.str_or("login", "").to_string(),
         user_id: v.str_or("user_id", "").to_string(),
+        scopes: scope_list(v.get("scopes")),
     })
 }
 
@@ -151,6 +157,48 @@ fn tokens(v: &Value) -> Tokens {
         access: v.str_or("access_token", "").to_string(),
         refresh: v.str_or("refresh_token", "").to_string(),
         expires_in: v.u64_or("expires_in", 3600),
+        scopes: scope_list(v.get("scope")),
+    }
+}
+
+/// A token's scopes as Twitch lists them (`["chat:read", ...]`), or None
+/// when the answer has no list.
+fn scope_list(v: Option<&Value>) -> Option<Vec<String>> {
+    let list = v?.as_array()?;
+    Some(
+        list.iter()
+            .filter_map(|s| s.as_str().map(str::to_string))
+            .collect(),
+    )
+}
+
+/// What a main login is missing of `MAIN_SCOPES`, each as what it allows:
+/// a login from before a scope was asked for keeps working without it, and
+/// the dashboard asks for a new login once.
+pub fn missing_uses(granted: &[String]) -> Vec<&'static str> {
+    let mut uses: Vec<&'static str> = MAIN_SCOPES
+        .split_whitespace()
+        .filter(|s| !granted.iter().any(|g| g == s))
+        .map(scope_use)
+        .collect();
+    uses.dedup();
+    uses
+}
+
+fn scope_use(scope: &str) -> &'static str {
+    match scope {
+        "moderator:manage:banned_users" => "timeouts and bans from chat steps",
+        "moderator:manage:shoutouts" => "shoutouts",
+        "moderator:manage:announcements" => "announcements",
+        "channel:manage:redemptions" => "making and switching channel points rewards",
+        "channel:read:redemptions" => "channel points triggers",
+        "channel:read:ads" => "ad break triggers",
+        "channel:read:subscriptions" => "sub triggers",
+        "bits:read" => "bits triggers",
+        "moderator:read:followers" => "follow triggers",
+        "channel:manage:broadcast" => "stream markers and the title step",
+        "clips:edit" => "clips",
+        _ => "chat",
     }
 }
 
@@ -209,5 +257,32 @@ mod tests {
             form_encode(&[("scopes", "chat:read chat:edit"), ("a", "x&y=z")]),
             "scopes=chat%3Aread%20chat%3Aedit&a=x%26y%3Dz"
         );
+    }
+
+    /// A login from before chat steps could moderate says what logging in
+    /// again would allow; a current one is short of nothing.
+    #[test]
+    fn an_older_login_says_what_logging_in_again_allows() {
+        let all: Vec<String> = MAIN_SCOPES.split_whitespace().map(str::to_string).collect();
+        assert!(missing_uses(&all).is_empty());
+        let older: Vec<String> = all
+            .iter()
+            .filter(|s| !s.starts_with("moderator:manage:"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            missing_uses(&older),
+            [
+                "timeouts and bans from chat steps",
+                "shoutouts",
+                "announcements"
+            ]
+        );
+        let v = json::parse(r#"{"scope":["chat:read","bits:read"]}"#).unwrap();
+        assert_eq!(
+            tokens(&v).scopes,
+            Some(vec!["chat:read".to_string(), "bits:read".to_string()])
+        );
+        assert_eq!(tokens(&json::parse("{}").unwrap()).scopes, None);
     }
 }

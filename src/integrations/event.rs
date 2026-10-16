@@ -48,6 +48,9 @@ pub enum EventKind {
     TwitchRaid,
     TwitchRedeem,
     TwitchAd,
+    // Made by the goals and timers (see `goals`).
+    GoalReached,
+    TimerEnded,
 }
 
 /// One variable an event carries: its name and a sample value.
@@ -61,7 +64,7 @@ pub type ParamSpec = (&'static str, &'static str, &'static str);
 const MAX_PARAM: f64 = 1_000_000.0;
 
 impl EventKind {
-    pub const ALL: [EventKind; 36] = [
+    pub const ALL: [EventKind; 38] = [
         EventKind::ObsConnected,
         EventKind::ObsDisconnected,
         EventKind::EbDetected,
@@ -99,6 +102,8 @@ impl EventKind {
         EventKind::TwitchRaid,
         EventKind::TwitchRedeem,
         EventKind::TwitchAd,
+        EventKind::GoalReached,
+        EventKind::TimerEnded,
     ];
 
     pub fn id(self) -> &'static str {
@@ -139,6 +144,8 @@ impl EventKind {
             EventKind::TwitchRaid => "twitch_raid",
             EventKind::TwitchRedeem => "twitch_redeem",
             EventKind::TwitchAd => "twitch_ad",
+            EventKind::GoalReached => "goal_reached",
+            EventKind::TimerEnded => "timer_ended",
         }
     }
 
@@ -184,6 +191,8 @@ impl EventKind {
             EventKind::TwitchRaid => "A raid comes in",
             EventKind::TwitchRedeem => "Someone redeems channel points",
             EventKind::TwitchAd => "An ad break starts",
+            EventKind::GoalReached => "A goal is reached",
+            EventKind::TimerEnded => "A timer runs out",
         }
     }
 
@@ -225,6 +234,7 @@ impl EventKind {
             | EventKind::TwitchRaid
             | EventKind::TwitchRedeem
             | EventKind::TwitchAd => "Twitch",
+            EventKind::GoalReached | EventKind::TimerEnded => "Goals and timers",
         }
     }
 
@@ -339,11 +349,14 @@ impl EventKind {
                 ("tier", "1"),
                 ("total", "42"),
             ],
+            // `words`: the message without its cheers (Cheer100), for an
+            // alert to show.
             EventKind::TwitchCheer => &[
                 ("user", "Nat"),
                 ("user_login", "nat"),
                 ("bits", "500"),
                 ("message", "Cheer500 gg"),
+                ("words", "gg"),
             ],
             EventKind::TwitchRaid => &[("user", "Nat"), ("user_login", "nat"), ("viewers", "42")],
             EventKind::TwitchRedeem => &[
@@ -354,6 +367,15 @@ impl EventKind {
                 ("input", "with lemon"),
             ],
             EventKind::TwitchAd => &[("seconds", "90"), ("automatic", "yes")],
+            // `goal` and `timer` are the names you gave them; the ids are
+            // what `{goal.subs}` and a step know them by.
+            EventKind::GoalReached => &[
+                ("goal", "Sub goal"),
+                ("goal_id", "subs"),
+                ("value", "50"),
+                ("target", "50"),
+            ],
+            EventKind::TimerEnded => &[("timer", "Subathon"), ("timer_id", "subathon")],
             EventKind::ObsConnected
             | EventKind::EbDetected
             | EventKind::AllDestinationsDown
@@ -372,8 +394,35 @@ impl EventKind {
                 ("within_min", "10", "Within (minutes)"),
             ],
             EventKind::DestinationSteady => &[("for_min", "10", "Live again for (minutes)")],
+            // The least amount that runs it (`min_<variable>`, see
+            // `at_least`). 1 is any: every one has at least that.
+            EventKind::TwitchCheer => &[("min_bits", "1", "At least (bits)")],
+            EventKind::TwitchRaid => &[("min_viewers", "1", "At least (viewers)")],
+            EventKind::TwitchGift => &[("min_count", "1", "At least (subs)")],
+            EventKind::TwitchResub => &[("min_months", "1", "At least (months)")],
             _ => &[],
         }
+    }
+
+    /// Whether an event is as big as a trigger's minimums ask (`min_bits`:
+    /// at least that many bits). A minimum of 1 or less lets every one
+    /// through, a raid of nobody too.
+    pub fn at_least(
+        self,
+        filters: &std::collections::BTreeMap<String, String>,
+        event: &Event,
+    ) -> bool {
+        self.params().iter().all(|(name, ..)| {
+            let Some(var) = name.strip_prefix("min_") else {
+                return true;
+            };
+            let least = self.param(filters, name);
+            let have = event
+                .var(var)
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .unwrap_or(0.0);
+            least <= 1.0 || have >= least
+        })
     }
 
     /// A trigger's setting `name`, or its default when unset or not a
@@ -517,5 +566,27 @@ mod tests {
         // What the engine does with it can't overflow a Duration.
         let _ = std::time::Duration::from_secs_f64(kind.param(&set("inf"), "after_s") * 60.0);
         assert!(kind.is_param("after_s") && !kind.is_param("destination"));
+    }
+
+    #[test]
+    fn a_minimum_lets_only_big_enough_ones_through() {
+        let cheer = |bits: &str| Event::new(EventKind::TwitchCheer).with("bits", bits);
+        let least = |n: &str| BTreeMap::from([("min_bits".to_string(), n.to_string())]);
+        let kind = EventKind::TwitchCheer;
+        assert!(
+            kind.at_least(&BTreeMap::new(), &cheer("1")),
+            "no minimum set"
+        );
+        assert!(kind.at_least(&least("100"), &cheer("100")));
+        assert!(!kind.at_least(&least("100"), &cheer("99")));
+        assert!(
+            !kind.at_least(&least("100"), &cheer("lots")),
+            "not a number"
+        );
+        let raid = Event::new(EventKind::TwitchRaid).with("viewers", "0");
+        assert!(
+            EventKind::TwitchRaid.at_least(&BTreeMap::new(), &raid),
+            "a raid of nobody still counts"
+        );
     }
 }

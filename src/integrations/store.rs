@@ -1,7 +1,7 @@
 //! What integrations keep between runs, in its own file next to the config:
 //! the Twitch logins, the counters, what each viewer holds, saved texts,
-//! when viewers last used a command with a long cooldown, and how often
-//! each integration ran.
+//! when viewers last used a command with a long cooldown, where each goal
+//! and timer stands, and how often each integration ran.
 //!
 //! Kept apart from the settings on purpose. Tokens change on their own
 //! every few hours and counters on every crash; routing those through the
@@ -72,6 +72,8 @@ pub struct Store {
     /// A counter, viewer value, saved text or cooldown worth keeping
     /// changed since the file was last written.
     pub dirty: Arc<std::sync::atomic::AtomicBool>,
+    /// Where each goal and timer stands (see `goals`).
+    pub goals: Arc<super::goals::Tracker>,
     /// Runs per integration id, for `{uses}`.
     pub uses: Mutex<BTreeMap<String, u64>>,
     /// Serialises writes so two savers never interleave.
@@ -113,6 +115,8 @@ impl Store {
                 .collect(),
             _ => BTreeMap::new(),
         };
+        let dirty: Arc<std::sync::atomic::AtomicBool> = Default::default();
+        let goals = super::goals::Tracker::new(doc.get("tracking"), dirty.clone());
         Store {
             path,
             accounts: Mutex::new(Accounts {
@@ -123,7 +127,8 @@ impl Store {
             viewers: Arc::new(Mutex::new(ViewerValues::from_json(doc.get("viewers")))),
             saved: Arc::new(Mutex::new(saved)),
             cooldowns: Mutex::new(whole_numbers("cooldowns")),
-            dirty: Default::default(),
+            dirty,
+            goals: Arc::new(goals),
             uses: Mutex::new(whole_numbers("uses")),
             write_lock: Mutex::new(()),
         }
@@ -177,6 +182,7 @@ impl Store {
                 ("saved", saved),
                 ("cooldowns", whole_numbers(&self.cooldowns.lock())),
                 ("uses", whole_numbers(&self.uses.lock())),
+                ("tracking", self.goals.state_json()),
             ])
         };
         // On disk before the rename: after a power cut the file is the old
@@ -212,6 +218,11 @@ mod tests {
         store.viewers.lock().apply("coins", "ana", paid).unwrap();
         store.saved.lock().insert("winner".into(), "Ana".into());
         store.cooldowns.lock().insert("i1#0#ana".into(), 99);
+        let subs = json::parse(r#"{"id":"subs","name":"Subs","target":50}"#).unwrap();
+        let subs = [super::super::goals::Goal::from_json(&subs).unwrap()];
+        store.goals.configure(&subs, &[]);
+        let seven = super::super::goals::GoalChange::Set(7);
+        store.goals.change_goal("subs", seven).unwrap();
         store.save().unwrap();
 
         let back = Store::open(&dir);
@@ -222,6 +233,8 @@ mod tests {
         assert_eq!(back.viewers.lock().get("coins", "ana"), 250);
         assert_eq!(back.saved.lock().get("winner").unwrap(), "Ana");
         assert_eq!(back.cooldowns.lock().get("i1#0#ana"), Some(&99));
+        back.goals.configure(&subs, &[]);
+        assert_eq!(back.goals.goal_text("subs").unwrap(), "7");
     }
 
     #[test]

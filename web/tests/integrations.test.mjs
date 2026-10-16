@@ -467,3 +467,25 @@ test('a chat message matches the way the app will match it', () => {
   const examples = call('matchExamplesHtml', 'nt', 'word').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   assert.equal(examples, '✓ nt ✓ NT! ✓ oh nt yes ✗ nting ✗ rent ✓ nt and more');
 });
+
+test('a bigger alert from an amount up is a check on that amount, and reads back', () => {
+  const alert = text => ({ type: 'overlay', params: { text }, then: [], else: [] });
+  const h = { trigger: { type: 'event', event: 'twitch_cheer', filters: {} },
+    steps: [alert('cheer'), { type: 'chat', params: { text: 'thanks' }, then: [], else: [] }] };
+  const chain = call('alertTiers', h);
+  assert.equal(chain.name, 'bits');
+  assert.deepEqual([...chain.tiers.map(t => t.from)], [0]);
+  chain.tiers.push({ from: 1000, step: alert('big') }, { from: 5000, step: alert('huge') });
+  call('setTiers', h, chain);
+  const check = h.steps[0];
+  assert.deepEqual([check.type, check.params.left, check.params.op, check.params.right], ['if', '{bits}', 'less', '1000']);
+  assert.equal(check.then[0].params.text, 'cheer');
+  assert.equal(check.else[0].params.right, '5000');
+  assert.equal(h.steps[1].type, 'chat', 'the steps around it stay');
+  const back = call('alertTiers', h);
+  assert.deepEqual(JSON.parse(JSON.stringify(back.tiers.map(t => [t.from, t.step.params.text]))), [[0, 'cheer'], [1000, 'big'], [5000, 'huge']]);
+  assert.equal(call('tierLabel', back, 0), 'Below 1000 bits');
+  assert.equal(call('tierLabel', back, 2), 'From 5000 bits');
+  const follow = { trigger: { type: 'event', event: 'twitch_follow' }, steps: [alert('hi')] };
+  assert.equal(call('alertTiers', follow), null, 'a follow has no amount');
+});

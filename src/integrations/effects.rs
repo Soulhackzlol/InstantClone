@@ -215,6 +215,7 @@ pub struct RealHost {
     pub default_delay_ms: AtomicU32,
     pub programs: crate::sync::Mutex<Vec<std::process::Child>>,
     pub alerts: Arc<super::alerts::Board>,
+    pub feed: Arc<super::feed::Feed>,
     /// When this stream started (Unix ms), 0 between streams. The engine
     /// keeps it, from the stream's own events.
     pub stream_started_ms: AtomicU64,
@@ -306,8 +307,20 @@ impl Host for RealHost {
         self.twitch.send(text, as_bot, reply_to)
     }
 
+    fn chat_command(&self, command: &super::host::ChatCommand) -> Result<(), String> {
+        self.twitch.run_command(command)
+    }
+
     fn marker(&self, description: &str) -> Result<(), String> {
         self.twitch.marker(description)
+    }
+
+    fn channel(
+        &self,
+        title: Option<&str>,
+        category: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        self.twitch.set_channel(title, category)
     }
 
     fn reward(&self, title: &str, enabled: bool) -> Result<(), String> {
@@ -411,6 +424,10 @@ impl Host for RealHost {
 
     fn overlay(&self, card: super::alerts::Card) {
         self.alerts.show(card);
+    }
+
+    fn dock_event(&self, group: &str, text: &str, card: Option<super::alerts::Card>) {
+        self.feed.add(group, text, card);
     }
 
     fn obs(&self, action: super::obsws::Action) -> Result<super::obsws::Answer, String> {

@@ -547,7 +547,8 @@ pub fn to_event(kind_type: &str, e: &Value) -> Option<Event> {
             .with("user", user("user_name"))
             .with("user_login", e.str_or("user_login", ""))
             .with("bits", number("bits"))
-            .with("message", e.str_or("message", "")),
+            .with("message", e.str_or("message", ""))
+            .with("words", without_cheers(e.str_or("message", ""))),
         "channel.raid" => Event::new(EventKind::TwitchRaid)
             .with("user", user("from_broadcaster_user_name"))
             .with("user_login", e.str_or("from_broadcaster_user_login", ""))
@@ -568,6 +569,22 @@ pub fn to_event(kind_type: &str, e: &Value) -> Option<Event> {
             .with("automatic", yes_no(e.bool_or("is_automatic", false))),
         _ => return None,
     })
+}
+
+/// A cheer's message without its cheers: Twitch writes each as a word of
+/// letters then the bits (`Cheer100`, `Kappa50`), which an alert has no use
+/// for once it says how many bits came.
+fn without_cheers(message: &str) -> String {
+    message
+        .split_whitespace()
+        .filter(|word| {
+            let digits = word.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+            !(digits.len() < word.len()
+                && !digits.is_empty()
+                && digits.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Host and path of a Twitch `wss://` address (port 443).
@@ -709,6 +726,15 @@ mod tests {
             declared.sort_unstable();
             assert_eq!(real, declared, "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_cheer_alert_gets_the_words_without_the_cheers() {
+        assert_eq!(without_cheers("Cheer100 gg Kappa50  wp"), "gg wp");
+        // Letters then a number read as a cheer: rare in a message.
+        assert_eq!(without_cheers("gg2 wp b100x 100"), "wp b100x 100");
+        assert_eq!(without_cheers("2024 Cheer"), "2024 Cheer");
+        assert_eq!(without_cheers("Cheer500"), "");
     }
 
     #[test]
