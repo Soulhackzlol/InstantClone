@@ -268,7 +268,9 @@ scenario_d() {
 
 scenario_e() {
   write_config "e2e|Sink|custom|rtmp://127.0.0.1:1936/live|stream"
-  local sink ic ff before after accepts
+  # ffmpeg only starts once the rest is up: cleared, so the stop below
+  # works (under set -u) when an earlier step already failed.
+  local sink ic ff="" before after accepts
   sink=$(start_sink 1936 E.sink.log)
   ic=$(start_ic E.ic.log)
   wait_port 1936 15; assert $? "sink never opened :1936"
@@ -301,7 +303,7 @@ scenario_e() {
 
 scenario_f() {
   write_config "e2e|Sink|custom|rtmp://127.0.0.1:1936/live|stream"
-  local sink ic ff code r s accepts
+  local sink ic ff="" code r s accepts
   sink=$(start_sink 1936 F.sink.log)
   ic=$(start_ic F.ic.log)
   wait_port 1936 15; assert $? "sink never opened :1936"

@@ -1974,7 +1974,7 @@ input[type="checkbox"]:disabled{opacity:.45;cursor:default}
 .st-modal{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;
   padding:18px;background:rgba(4,6,10,.8);backdrop-filter:blur(7px)}
 .st-modal[hidden]{display:none}
-.st-modal-card{width:98vw;height:96vh;display:flex;flex-direction:column;
+.st-modal-card{position:relative;width:98vw;height:96vh;display:flex;flex-direction:column;
   background:var(--bg-2);border:1px solid var(--line-2);border-radius:16px;box-shadow:var(--shadow-2);overflow:hidden}
 .st-modal-head{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:nowrap}
 .st-head-title{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
@@ -1991,6 +1991,36 @@ input[type="checkbox"]:disabled{opacity:.45;cursor:default}
   font-size:12.5px;padding:8px 11px;border-radius:7px;cursor:pointer}
 .st-menu-pop button:hover{background:rgba(255,255,255,.06);color:var(--fg)}
 .st-menu-pop button.st-danger:hover{background:color-mix(in oklch,var(--danger) 14%,transparent)}
+/* The canvas's right-click menu: the overflow menu's look, at the pointer. */
+.st-ctx{position:fixed;right:auto;top:0;left:0;z-index:20;min-width:220px}
+.st-ctx button{display:flex;align-items:center;justify-content:space-between;gap:18px}
+.st-ctx button:disabled{opacity:.4;cursor:default;background:transparent}
+.st-ctx kbd,.st-keys kbd,.st-foot-keys kbd{font:600 10px/1 'JetBrains Mono',monospace;color:var(--fg-4)}
+.st-ctx hr{border:0;border-top:1px solid var(--line);margin:3px 4px}
+/* Zoom: out, the size shown (a click fits it again), in. */
+.st-zoom{position:absolute;right:10px;bottom:10px;z-index:7;display:flex;align-items:center;gap:2px;padding:3px;
+  background:color-mix(in oklch,var(--surface-2) 92%,transparent);border:1px solid var(--line-2);border-radius:9px;box-shadow:var(--shadow-2)}
+.st-zoom button{appearance:none;background:transparent;border:0;color:var(--fg-2);cursor:pointer;border-radius:6px;
+  min-width:30px;height:28px;padding:0 7px;font-weight:600;font-size:13px;line-height:1;font-family:inherit;font-variant-numeric:tabular-nums;transition:background .14s,color .14s,scale .12s}
+.st-zoom button:hover{background:rgba(255,255,255,.07);color:var(--fg)}
+.st-zoom button:active{scale:.96}
+#st-zoom-level{min-width:52px;font-size:11.5px}
+.st-canvas-frame.st-grab .st-hit,.st-canvas-frame.st-grab .st-hit *{cursor:grab}
+.st-canvas-frame.st-panning .st-hit,.st-canvas-frame.st-panning .st-hit *{cursor:grabbing}
+/* Every shortcut, on ? or from the menu. */
+.st-keys{position:absolute;inset:0;z-index:30;display:grid;place-items:center;padding:24px;background:rgba(4,6,10,.6)}
+.st-keys[hidden]{display:none}
+.st-keys-card{width:min(860px,100%);max-height:100%;overflow:auto;background:var(--surface-2);border:1px solid var(--line-2);
+  border-radius:14px;box-shadow:var(--shadow-2);padding:16px 18px 18px}
+.st-keys-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-size:14px}
+.st-keys-head .st-layer-btn{display:inline-block}
+.st-keys-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px 26px}
+.st-keys h4{margin:0 0 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3)}
+.st-keys dl{margin:0;display:grid;grid-template-columns:minmax(0,9.5em) 1fr;gap:6px 12px;font-size:12px}
+.st-keys dt{font:600 11px/1.5 'JetBrains Mono',monospace;color:var(--fg)}
+.st-keys dd{margin:0;color:var(--fg-2);text-wrap:pretty}
+.st-foot-keys{appearance:none;background:transparent;border:0;padding:0;color:inherit;font:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.st-foot-keys:hover{color:var(--fg)}
 .st-modal-body{flex:1;min-height:0;padding:12px;display:grid;
   grid-template-columns:224px minmax(0,1fr) 300px;grid-template-rows:minmax(0,1fr);gap:12px}
 @media (max-width:1120px){.st-modal-body{grid-template-columns:180px minmax(0,1fr) 250px}}
@@ -2048,6 +2078,12 @@ input[type="checkbox"]:disabled{opacity:.45;cursor:default}
 .st-layer .st-layer-btn{display:none;opacity:1}
 .st-layer:hover .st-layer-btn,.st-layer.sel .st-layer-btn,.st-layer:focus-within .st-layer-btn{display:inline-block}
 @media (hover:none){.st-layer .st-layer-btn{display:inline-block}}
+.st-layer.locked .st-lock{display:inline-block;color:var(--fg-2)}
+.st-layer.locked .st-layer-name{font-style:italic}
+.st-layer.hot{border-color:var(--line-2)}
+.st-layer.st-dragging{opacity:.45}
+.st-layer.st-drop-above{box-shadow:inset 0 2px 0 var(--accent)}
+.st-layer.st-drop-below{box-shadow:inset 0 -2px 0 var(--accent)}
 .st-layer-btn:hover{color:var(--fg);background:rgba(255,255,255,.07)}
 .st-empty-hint{padding:18px 12px;text-align:center;color:var(--fg-4);font-size:12px;line-height:1.6}
 
@@ -2089,7 +2125,7 @@ input[type="checkbox"]:disabled{opacity:.45;cursor:default}
 .st-amprow{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:11px;color:var(--fg-3)}
 .st-amprow span{white-space:nowrap}
 .st-amprow input{flex:1;min-width:0}
-.st-amprow b{min-width:30px;text-align:right;color:var(--fg)}
+.st-amprow output{min-width:30px;text-align:right;color:var(--fg)}
 .st-range input{flex:1;min-width:0}
 .st-range output{min-width:2.6em;text-align:right;font:500 11.5px 'JetBrains Mono',monospace;color:var(--fg-2);font-variant-numeric:tabular-nums}
 .st-mini{padding:5px 10px;font-size:11.5px}
@@ -2106,6 +2142,14 @@ input[type="checkbox"]:disabled{opacity:.45;cursor:default}
   color:var(--fg-4);padding:5px;cursor:pointer;transition:border-color .12s,color .12s}
 .st-alignb i{width:7px;height:7px;border-radius:2px;background:currentColor}
 .st-alignb:hover{border-color:var(--accent);color:var(--accent)}
+/* Several layers picked: line them up, or spread them out. */
+.st-lineup{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px;margin-bottom:6px}
+.st-lineup.st-spread{grid-template-columns:repeat(2,minmax(0,1fr))}
+.st-lineb{appearance:none;display:grid;place-items:center;height:30px;background:var(--surface);border:1px solid var(--line);border-radius:6px;
+  color:var(--fg-3);cursor:pointer;transition:border-color .12s,color .12s,scale .12s}
+.st-lineb svg{width:16px;height:16px}
+.st-lineb:hover{border-color:var(--accent);color:var(--accent)}
+.st-lineb:active{scale:.96}
 .st-chip{appearance:none;background:color-mix(in oklch,var(--accent) 12%,transparent);border:1px solid color-mix(in oklch,var(--accent) 30%,transparent);
   color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 6px;border-radius:5px;cursor:pointer;margin:2px 3px 0 0}
 .st-chip:hover{background:color-mix(in oklch,var(--accent) 22%,transparent)}
@@ -2150,18 +2194,39 @@ input[type="checkbox"]:disabled{opacity:.45;cursor:default}
 /* gentle fade when panels re-render */
 @keyframes st-fade-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .st-canvas-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block;pointer-events:none;color-scheme:normal}
-.st-hit{position:absolute;inset:0}
-.st-hit .st-box{position:absolute;border:2px solid transparent;cursor:move;border-radius:4px}
+/* The canvas's pick layer, in canvas px (scaled with it). --st-inv undoes
+   the scale, so outlines and handles keep their size on screen. */
+.st-canvas-scale{--px:calc(1px * var(--st-inv,1))}
+.st-hit{position:absolute;inset:0;touch-action:none}
+.st-hit .st-box{position:absolute;border:calc(2 * var(--px)) solid transparent;cursor:move;border-radius:calc(4 * var(--px))}
 .st-hit .st-box:hover{border-color:color-mix(in oklch,var(--accent) 45%,transparent)}
-.st-hit .st-box.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
-.st-hit .st-resize{position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;border-radius:50%;
-  background:var(--accent);border:2px solid var(--bg-2);cursor:nwse-resize;display:none}
-.st-hit .st-box.sel .st-resize{display:block}
-/* centre snapping guidelines (in canvas space, scaled with the canvas) */
+.st-hit .st-box.sel{border-color:var(--accent);box-shadow:0 0 0 var(--px) var(--accent)}
+.st-hit .st-box.locked{pointer-events:none}
+.st-hit .st-box.hover:not(.sel){border-color:color-mix(in oklch,var(--accent) 45%,transparent)}
+.st-hit .st-box.locked.sel{border-style:dashed;box-shadow:none}
+/* The picked layer's handles, over every box: a layer on top never covers them. */
+.st-hit .st-handles{position:absolute;pointer-events:none}
+.st-hit .st-handle{pointer-events:auto;position:absolute;box-sizing:border-box;width:calc(12 * var(--px));height:calc(12 * var(--px));
+  margin:calc(-6 * var(--px)) 0 0 calc(-6 * var(--px));border-radius:50%;background:var(--accent);border:calc(2 * var(--px)) solid var(--bg-2)}
+/* a grip bigger than it looks */
+.st-hit .st-handle::before{content:'';position:absolute;inset:calc(-6 * var(--px))}
+.st-hit .st-handle[data-handle="nw"]{left:0;top:0;cursor:nwse-resize}
+.st-hit .st-handle[data-handle="n"]{left:50%;top:0;cursor:ns-resize}
+.st-hit .st-handle[data-handle="ne"]{left:100%;top:0;cursor:nesw-resize}
+.st-hit .st-handle[data-handle="e"]{left:100%;top:50%;cursor:ew-resize}
+.st-hit .st-handle[data-handle="se"]{left:100%;top:100%;cursor:nwse-resize}
+.st-hit .st-handle[data-handle="s"]{left:50%;top:100%;cursor:ns-resize}
+.st-hit .st-handle[data-handle="sw"]{left:0;top:100%;cursor:nesw-resize}
+.st-hit .st-handle[data-handle="w"]{left:0;top:50%;cursor:ew-resize}
+/* several picked: the box around them all; a drag on empty canvas: the band */
+.st-hit .st-group{position:absolute;pointer-events:none;border:var(--px) dashed var(--accent);border-radius:calc(4 * var(--px))}
+.st-hit .st-band{position:absolute;pointer-events:none;border:var(--px) solid var(--accent);
+  background:color-mix(in oklch,var(--accent) 12%,transparent)}
+/* snapping guidelines: where an edge or a middle lines up (canvas space) */
 .st-guide{position:absolute;background:var(--accent);pointer-events:none;opacity:0;transition:opacity .1s;z-index:6;
   box-shadow:0 0 10px var(--accent)}
-.st-guide.v{left:960px;top:0;bottom:0;width:2px;margin-left:-1px}
-.st-guide.h{top:540px;left:0;right:0;height:2px;margin-top:-1px}
+.st-guide.v{left:960px;top:0;bottom:0;width:var(--px)}
+.st-guide.h{top:540px;left:0;right:0;height:var(--px)}
 .st-guide.on{opacity:.9}
 .st-simbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
   background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
@@ -2171,6 +2236,7 @@ input[type="checkbox"]:disabled{opacity:.45;cursor:default}
 .st-props-head{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
 .st-props-title{font-size:13px;font-weight:600;color:var(--fg)}
 .st-props-sub{font-size:11px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
+.st-props-sub.st-props-note{font-family:inherit;letter-spacing:0}
 .st-props-body{overflow-y:auto;padding:12px 14px;flex:1;display:flex;flex-direction:column;gap:11px;
   animation:st-fade-in .2s var(--ease-out)}
 /* Redrawn for the same widget (a toggle, a swatch): it stays put, no fade. */
@@ -5062,13 +5128,13 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       </div>
       <!-- What can be added depends on the page showing (overlaySubShown). -->
       <div class="ov-head-acts" data-ovact="delay">
-        <button class="ic-btn ic-btn-ghost" onclick="Studio.restoreDefaults()" title="Put the built-in delay overlays back as they came">Restore built-ins</button>
-        <button class="ic-btn dest-add-btn" onclick="Studio.newOverlay('delay')">
+        <button class="ic-btn ic-btn-ghost" data-st="restoreDefaults" title="Put the built-in delay overlays back as they came">Restore built-ins</button>
+        <button class="ic-btn dest-add-btn" data-st="newOverlay" data-st-args="[&quot;delay&quot;]">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           <span>New delay overlay</span></button>
       </div>
       <div class="ov-head-acts" data-ovact="alerts" hidden>
-        <button class="ic-btn dest-add-btn" onclick="Studio.newOverlay('alerts')">
+        <button class="ic-btn dest-add-btn" data-st="newOverlay" data-st-args="[&quot;alerts&quot;]">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           <span>New design</span></button>
       </div>
@@ -5080,7 +5146,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       </div>
       <div class="ov-head-acts" data-ovact="custom" hidden>
         <button class="ic-btn ic-btn-ghost" onclick="reveal('overlays')" title="Where your own .html files go">Open folder</button>
-        <button class="ic-btn dest-add-btn" onclick="Studio.newOverlay('custom')">
+        <button class="ic-btn dest-add-btn" data-st="newOverlay" data-st-args="[&quot;custom&quot;]">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           <span>New overlay</span></button>
       </div>
@@ -5116,12 +5182,12 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
             <span class="ic-label">Preview</span>
             <span class="ph-cap" id="ovg-phase"></span>
             <div class="st-simbar ovg-viewend" id="ovg-simbar" role="group" aria-label="The delay state the preview plays">
-              <button class="st-auto on" data-psim="auto" onclick="Studio.previewSim('auto')" title="Auto-cycle the delay states"><span class="ic"></span> Auto</button>
-              <button class="st-sim" data-psim="idle" onclick="Studio.previewSim('idle')">Idle</button>
-              <button class="st-sim" data-psim="preparing" onclick="Studio.previewSim('preparing')">Arming</button>
-              <button class="st-sim" data-psim="ready" onclick="Studio.previewSim('ready')">Ready</button>
-              <button class="st-sim" data-psim="active" onclick="Studio.previewSim('active')">Active</button>
-              <button class="st-sim" data-psim="error" onclick="Studio.previewSim('error')">Error</button>
+              <button class="st-auto on" data-psim="auto" data-st="previewSim" data-st-args="[&quot;auto&quot;]" title="Auto-cycle the delay states"><span class="ic"></span> Auto</button>
+              <button class="st-sim" data-psim="idle" data-st="previewSim" data-st-args="[&quot;idle&quot;]">Idle</button>
+              <button class="st-sim" data-psim="preparing" data-st="previewSim" data-st-args="[&quot;preparing&quot;]">Arming</button>
+              <button class="st-sim" data-psim="ready" data-st="previewSim" data-st-args="[&quot;ready&quot;]">Ready</button>
+              <button class="st-sim" data-psim="active" data-st="previewSim" data-st-args="[&quot;active&quot;]">Active</button>
+              <button class="st-sim" data-psim="error" data-st="previewSim" data-st-args="[&quot;error&quot;]">Error</button>
             </div>
           </div>
           <div class="ovg-fit">
@@ -5141,7 +5207,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
             <div class="ic-label">Browser source</div>
             <div class="copy-block">
               <code class="mono" id="ovg-url">select an overlay</code>
-              <button class="ic-btn ic-btn-ghost" id="ovg-copy" onclick="Studio.copyGallery(this)">Copy URL</button>
+              <button class="ic-btn ic-btn-ghost" id="ovg-copy" data-st="copyGallery">Copy URL</button>
             </div>
             <div class="ovg-hint">Sized <b>1920 × 1080</b> in OBS, so it lines up with your canvas.</div>
           </div>
@@ -5175,25 +5241,26 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   <div id="ov-studio" class="st-modal" hidden>
     <div class="st-modal-card">
       <div class="st-modal-head">
-        <button class="ic-btn ic-btn-ghost st-withic" onclick="Studio.backToGallery()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>Back</button>
+        <button class="ic-btn ic-btn-ghost st-withic" data-st="backToGallery"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>Back</button>
         <div class="st-head-title">
           <div class="tab-title" style="font-size:15px">Overlay Studio</div>
         </div>
         <div class="st-toolbar">
-          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-undo" title="Undo (Ctrl+Z)" aria-label="Undo" onclick="Studio.undo()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-2"/></svg></button>
-          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" onclick="Studio.redo()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5M20 9H9a5 5 0 0 0 0 10h2"/></svg></button>
-          <input id="st-name" class="ic-input" placeholder="Overlay name" value="My overlay">
-          <button class="ic-btn ic-btn-primary" id="st-save" onclick="Studio.save()" title="Overwrite this overlay">Save</button>
-          <button class="ic-btn ic-btn-ghost" onclick="Studio.saveAsNew()" title="Save a separate copy with a new URL">Save as new</button>
-          <button class="ic-btn ic-btn-ghost st-withic" onclick="Studio.copyUrl(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 9h11v11H9zM5 15H4V4h11v1"/></svg>Copy URL</button>
+          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-undo" title="Undo (Ctrl+Z)" aria-label="Undo" data-st="undo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-2"/></svg></button>
+          <button class="ic-btn ic-btn-ghost st-icobtn" id="st-redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" data-st="redo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5M20 9H9a5 5 0 0 0 0 10h2"/></svg></button>
+          <input id="st-name" class="ic-input" placeholder="Overlay name" value="My overlay" aria-label="Overlay name" data-st="setDocName">
+          <button class="ic-btn ic-btn-primary" id="st-save" data-st="save" title="Overwrite this overlay">Save</button>
+          <button class="ic-btn ic-btn-ghost" data-st="saveAsNew" title="Save a separate copy with a new URL">Save as new</button>
+          <button class="ic-btn ic-btn-ghost st-withic" data-st="copyUrl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 9h11v11H9zM5 15H4V4h11v1"/></svg>Copy URL</button>
           <div class="st-menu">
-            <button class="ic-btn ic-btn-ghost st-icobtn" title="More" aria-label="More options" onclick="Studio.toggleMenu(event)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg></button>
+            <button class="ic-btn ic-btn-ghost st-icobtn" title="More" aria-label="More options" data-st="toggleMenu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg></button>
             <div class="st-menu-pop" id="st-menu-pop" hidden>
-              <button onclick="Studio.menu('rename')">Rename</button>
-              <button id="st-menu-move" onclick="Studio.menu('move')">Move to Custom</button>
-              <button onclick="Studio.menu('export')">Export .json</button>
-              <button onclick="Studio.menu('import')">Import .json</button>
-              <button class="st-danger" onclick="Studio.menu('delete')">Delete overlay</button>
+              <button data-st="menu" data-st-args="[&quot;rename&quot;]">Rename</button>
+              <button id="st-menu-move" data-st="menu" data-st-args="[&quot;move&quot;]">Move to Custom</button>
+              <button data-st="menu" data-st-args="[&quot;keys&quot;]">Keyboard shortcuts</button>
+              <button data-st="menu" data-st-args="[&quot;export&quot;]">Export .json</button>
+              <button data-st="menu" data-st-args="[&quot;import&quot;]">Import .json</button>
+              <button class="st-danger" data-st="menu" data-st-args="[&quot;delete&quot;]">Delete overlay</button>
             </div>
           </div>
         </div>
@@ -5202,9 +5269,9 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <div class="st-modal-body">
         <aside class="st-left">
           <div class="st-tabs" id="st-left-tabs">
-            <button class="on" data-stleft="layers" onclick="Studio.leftTab('layers')">Layers</button>
-            <button data-stleft="add" onclick="Studio.leftTab('add')">Add</button>
-            <button data-stleft="theme" onclick="Studio.leftTab('theme')">Theme</button>
+            <button class="on" data-stleft="layers" data-st="leftTab" data-st-args="[&quot;layers&quot;]">Layers</button>
+            <button data-stleft="add" data-st="leftTab" data-st-args="[&quot;add&quot;]">Add</button>
+            <button data-stleft="theme" data-st="leftTab" data-st-args="[&quot;theme&quot;]">Theme</button>
           </div>
           <div class="st-left-body" id="st-left-body"></div>
         </aside>
@@ -5215,7 +5282,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
             <div class="st-state-actions">
               <span class="ph-cap" id="st-phase"></span>
               <span class="st-synced" id="st-synced" title="Preview re-synced to your latest change">⟳ synced</span>
-              <button class="st-auto" id="st-play" onclick="Studio.play()" title="Auto-cycle the delay states"><span class="ic"></span> Auto preview</button>
+              <button class="st-auto" id="st-play" data-st="play" title="Auto-cycle the delay states"><span class="ic"></span> Auto preview</button>
             </div>
           </div>
           <div class="st-canvas-frame" id="st-canvas-frame">
@@ -5226,6 +5293,11 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
               <div class="st-guide h" id="st-guide-h"></div>
             </div>
             <div class="st-canvas-bounds" id="st-canvas-bounds"><span class="lbl">SAFE AREA</span></div>
+            <div class="st-zoom" role="group" aria-label="Zoom">
+              <button data-st="zoomOut" title="Zoom out (Ctrl+-)" aria-label="Zoom out">&minus;</button>
+              <button id="st-zoom-level" data-st="zoomFit" title="Fit the canvas (Ctrl+0)" aria-label="Fit the canvas">100%</button>
+              <button data-st="zoomIn" title="Zoom in (Ctrl+=)" aria-label="Zoom in">+</button>
+            </div>
           </div>
         </main>
 
@@ -5233,9 +5305,22 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
         </aside>
       </div>
 
+      <div class="st-ctx st-menu-pop" id="st-ctx" role="menu" hidden></div>
+      <div class="st-keys" id="st-keys" role="dialog" aria-modal="true" aria-labelledby="st-keys-h" hidden>
+        <div class="st-keys-card">
+          <div class="st-keys-head"><b id="st-keys-h">Keyboard shortcuts</b><button class="st-layer-btn" data-st="toggleKeys" title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+          <div class="st-keys-grid">
+            <section><h4>Picking</h4><dl><dt>Click</dt><dd>Pick a layer</dd><dt>Shift or Ctrl + click</dt><dd>Add a layer, or take it out</dd><dt>Drag on empty canvas</dt><dd>Pick every layer it touches</dd><dt>Ctrl+A</dt><dd>Pick every layer on the canvas</dd><dt>Double-click</dt><dd>Type its words</dd><dt>Esc</dt><dd>Step back: the drag, the field, what is picked, then the Studio</dd></dl></section>
+            <section><h4>Moving</h4><dl><dt>Drag</dt><dd>Move it (Shift: straight across or down, Alt: no snapping)</dd><dt>Arrow keys</dt><dd>Nudge 1 px (Shift: 10 px)</dd><dt>Drag a handle</dt><dd>Resize (Shift on a corner: keep its shape)</dd></dl></section>
+            <section><h4>Layers</h4><dl><dt>Ctrl+C, Ctrl+X, Ctrl+V</dt><dd>Copy, cut, paste, between overlays too</dd><dt>Ctrl+D</dt><dd>Duplicate</dd><dt>Delete</dt><dd>Delete</dd><dt>Ctrl+&uarr;, Ctrl+&darr;</dt><dd>Bring forward, send back</dd><dt>Ctrl+Shift+&uarr;, &darr;</dt><dd>To the front, to the back</dd><dt>Ctrl+Shift+L</dt><dd>Lock or unlock</dd><dt>Drag a row in Layers</dt><dd>Restack</dd><dt>Right-click</dt><dd>All of these, in a menu</dd></dl></section>
+            <section><h4>View</h4><dl><dt>Ctrl + scroll</dt><dd>Zoom at the pointer</dd><dt>Ctrl+=, Ctrl+-</dt><dd>Zoom in, zoom out</dd><dt>Ctrl+0</dt><dd>Fit the canvas</dd><dt>Space + drag, or middle drag</dt><dd>Pan</dd><dt>Scroll, zoomed in</dt><dd>Pan (Shift: across)</dd></dl></section>
+            <section><h4>History</h4><dl><dt>Ctrl+Z</dt><dd>Undo</dd><dt>Ctrl+Shift+Z, Ctrl+Y</dt><dd>Redo</dd><dt>?</dt><dd>This card</dd></dl></section>
+          </div>
+        </div>
+      </div>
       <div class="st-modal-foot">
         <span class="st-perf ok" id="st-perf" title="">Lightweight</span>
-        <span id="st-foot-edit">&nbsp;Editing the <b id="st-foot-state">Active</b> state &nbsp;·</span>&nbsp; URL: <code class="mono" id="st-url">save to get a URL</code> &nbsp;·&nbsp; <b>Esc</b> to close.
+        <span id="st-foot-edit">&nbsp;Editing the <b id="st-foot-state">Active</b> state &nbsp;·</span>&nbsp; URL: <code class="mono" id="st-url">save to get a URL</code> &nbsp;·&nbsp; <b>Esc</b> to close &nbsp;·&nbsp; <button class="st-foot-keys" data-st="toggleKeys"><kbd>?</kbd> Shortcuts</button>
       </div>
     </div>
   </div>
@@ -10673,1568 +10758,6 @@ async function confirmResetModal(){
   }
 }
 
-// - Overlay Studio --------------------------
-// A no-code editor for browser-source overlays. The heavy lifting lives
-// in /overlay-runtime.js (window.ICOverlay): widget catalogue, animation
-// library, and bake(doc)->self-contained static HTML. The Studio canvas
-// is just an iframe whose srcdoc is bake(doc); we poke the (same-origin)
-// canvas DOM directly during a drag, then re-bake on commit.
-const Studio = (function(){
-  const clone = o => JSON.parse(JSON.stringify(o));
-  // split/join not regex for the quote case - the build-time minifier
-  // misparses a /"/g literal. (Same reason as in overlay-runtime.js.)
-  const escapeHtml = s => String(s==null?'':s).split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;');
-  const escapeAttr = s => String(s==null?'':s).split('&').join('&amp;').split('<').join('&lt;').split('"').join('&quot;');
-  let doc = null;        // current overlay document
-  let slug = null;       // saved slug, or null for an unsaved draft
-  let sel = null;        // selected widget id
-  let arrived = null;    // a layer just added, animated into the list once
-  let editState = 'active'; // the state you preview AND edit (unified)
-  let left = 'layers';
-  let scale = 1;
-  let mounted = false, frameWatched = false, savedList = [];
-  // The streamer's goals and timers, for the Goal bar and Timer pickers.
-  let tracked = {goals:[], timers:[]};
-  function loadTracked(){
-    if(!window.Integrations) return;
-    Integrations.tracking().then(t=>{ tracked=t; if(sel && $('ov-studio') && !$('ov-studio').hidden) renderProps(); });
-  }
-  // Undo/redo: a stack of doc snapshots. Every rebake records (debounced),
-  // so all edits are captured with minimal wiring. `restoring` guards
-  // against re-recording while applying an undo.
-  let history=[], histIndex=-1, recordT=0, restoring=false;
-  function resetHistory(){ history=[JSON.stringify(doc)]; histIndex=0; updateUndoBtns(); markClean(); }
-  function recordNow(){ if(restoring) return; const s=JSON.stringify(doc); if(history[histIndex]===s) return; history=history.slice(0,histIndex+1); history.push(s); if(history.length>120) history.shift(); histIndex=history.length-1; updateUndoBtns(); updateDirty(); }
-  function recordSoon(){ if(restoring) return; clearTimeout(recordT); recordT=setTimeout(recordNow,300); }
-  function undo(){ if(histIndex>0){ histIndex--; applyHistory(); } }
-  function redo(){ if(histIndex<history.length-1){ histIndex++; applyHistory(); } }
-  function applyHistory(){ restoring=true; doc=JSON.parse(history[histIndex]); if(sel&&!widget(sel)) sel=null; renderLeft(); rebake(); renderProps(); restoring=false; updateUndoBtns(); updateDirty(); }
-  // Unsaved-changes tracking: "dirty" = the doc differs from the snapshot
-  // taken when it was opened (resetHistory) or last saved. Undo back to that
-  // snapshot reads as clean again. Drives the Save indicator + close guards.
-  let savedSnapshot='';
-  function markClean(){ savedSnapshot = doc?JSON.stringify(doc):''; updateDirty(); }
-  function isDirty(){ return !!doc && JSON.stringify(doc)!==savedSnapshot; }
-  function updateDirty(){ const b=$('st-save'); if(!b) return; const d=isDirty();
-    b.textContent = d?'Save ●':'Save'; b.classList.toggle('st-save-dirty',d);
-    b.title = d?'Unsaved changes. Click to overwrite this overlay':'Overwrite this overlay'; }
-  function updateUndoBtns(){ const u=$('st-undo'),r=$('st-redo'); if(u)u.disabled=histIndex<=0; if(r)r.disabled=histIndex>=history.length-1; }
-  // Semantic colour per state, for the dots in the state selector.
-  const STATE_DOT = { idle:'#8a8f9a', preparing:'#ffb73a', ready:'#5ac8fa', active:'#54e38e', error:'#ff5a5a' };
-
-  function IC(){ return window.ICOverlay; }
-  function widget(id){ return doc.widgets.find(w => w.id === id); }
-  function nextId(){ let n=1; while(doc.widgets.some(w=>w.id==='w'+n)) n++; return 'w'+n; }
-  function slugify(s){ return (s||'overlay').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,64) || 'overlay'; }
-  // A slug for `name` that no other saved overlay has: a second "Tourney"
-  // becomes tourney-2, where it used to be written over the first. `mine`
-  // is the slug of the overlay being renamed, which may keep its own.
-  // goal-... and timer-... name goals' and timers' own overlays (see
-  // trackerSlug): one made here and named so is goals-... or timers-...
-  function freeSlug(name, mine){
-    const base = slugify(name).replace(/^(goal|timer)-/, '$1s-'), taken = s => s !== mine && savedList.some(o => o.slug === s);
-    if(!taken(base)) return base;
-    for(let n=2; ; n++){ const s = base.slice(0, 60) + '-' + n; if(!taken(s)) return s; }
-  }
-
-  // ---- views: gallery (browse + preview) vs studio (editor) ----
-  let gsel = null;          // selected overlay slug (everything is an overlay now)
-  let gpicked = false;      // gsel is the user's pick (else a page may lead with its own)
-  let autohideOff = false;  // quick "stays up" override for the selection (?autohide=off)
-  let previewState = 'auto'; // 'auto' = run the delay-lifecycle simulation
-  let gallerySim = null, studioSim = null, playing = false;
-  const ARMED_MS = 15000;
-  // What the Studio offers, by what the overlay is for (the page it is on):
-  // what its preview bar drives, the state edited, and the order of the Add
-  // list. Only a delay overlay changes with the delay: an alert design plays
-  // an alert, a goal's overlay moves its numbers, anything else stays put.
-  const MODES = {
-    delay:  {sim:'states', groups:['data', 'stream', 'ambient', 'deco', 'media', 'power']},
-    goals:  {sim:'goals',  groups:['stream', 'deco', 'media', 'ambient', 'power', 'data']},
-    alerts: {sim:'alert',  groups:['alert', 'deco', 'media', 'ambient', 'stream', 'power', 'data']},
-    custom: {sim:'none',   groups:['deco', 'media', 'stream', 'ambient', 'power', 'data']},
-  };
-  function mode(){ return MODES[doc ? IC().docPurpose(doc) : 'delay']; }
-  // Goals and timers moving in a goal overlay's preview: +1 and -1, or
-  // counting up and back down by itself, so the bar fills and "+1" pops.
-  let simGoals = null, goalAutoT = 0;
-  function startGoalSim(){
-    stopGoalAuto();
-    const goals = clone(tracked.goals || []);
-    simGoals = {
-      goals: goals.length ? goals : [{id:'subs', name:'Sub goal', value:32, target:50}],
-      timers: (tracked.timers || []).map(t => ({...t, running:true, ends_at_ms:Date.now() + Math.max(90000, t.left_ms || 0)})),
-    };
-  }
-  function nudgeGoals(n){
-    stopGoalAuto();
-    simGoals.goals.forEach(g => { g.value = Math.max(0, Math.min(g.target, g.value + n)); });
-    if(studioSim) studioSim.now();
-  }
-  function stopGoalAuto(){ clearInterval(goalAutoT); goalAutoT = 0; const b=$('st-goal-auto'); if(b) b.classList.remove('on'); }
-  function goalAuto(){
-    if(goalAutoT){ stopGoalAuto(); return; }
-    $('st-goal-auto').classList.add('on');
-    let up = true;
-    goalAutoT = setInterval(() => {
-      simGoals.goals.forEach(g => {
-        const step = Math.max(1, Math.round(g.target / 12));
-        g.value = Math.max(0, Math.min(g.target, g.value + (up ? step : -step)));
-      });
-      const g = simGoals.goals[0];
-      if(up && g.value >= g.target) up = false; else if(!up && g.value <= 0) up = true;
-      if(studioSim) studioSim.now();
-    }, 700);
-  }
-  // An alert design's preview plays a sample alert: its entrance, the hold,
-  // its exit; then it is back, held, to edit. The gallery plays the same.
-  const ALERT_DEMO_MS = 3500;
-  let alertDemoT = 0;
-  // The samples take turns: a follow (no message), then a cheer with one,
-  // so a design's message layer shows too.
-  const SAMPLE_ALERTS = [{title:'New follower', text:'Nat'}, {title:'Bits', text:'Nat cheered 500 bits', message:'That clutch was unreal, gg!'}];
-  let sampleTurn = 0;
-  function postSampleAlert(frame){
-    const a = SAMPLE_ALERTS[sampleTurn++ % SAMPLE_ALERTS.length];
-    if(frame && frame.contentWindow) frame.contentWindow.postMessage({__ic_alert:Object.assign({ms:ALERT_DEMO_MS}, a)}, '*');
-  }
-  function playAlert(){
-    const f = $('st-canvas'); if(!f || !f.contentWindow) return;
-    if(studioSim){ studioSim.stop(); studioSim = null; }
-    clearTimeout(alertDemoT);
-    postSampleAlert(f);
-    alertDemoT = setTimeout(studioDrive, ALERT_DEMO_MS + 900);
-  }
-  // In the gallery, over and over, as on stream: it comes in, stays, goes,
-  // and a moment later plays again. (Told once that it is a preview, so the
-  // sample has its picture.)
-  const ALERT_REST_MS = 1600;
-  function alertLoop(frame){
-    let t = 0;
-    if(frame.contentWindow) frame.contentWindow.postMessage({__ic_sim:true, forceState:'idle', state:simFrame('idle', 0), noHide:true}, '*');
-    const play = ()=>{ postSampleAlert(frame); t = setTimeout(play, ALERT_DEMO_MS + ALERT_REST_MS); };
-    t = setTimeout(play, 300);
-    return { stop(){ clearTimeout(t); } };
-  }
-  // A fake /state for a phase at progress p (0..1). Arming ramps the fill.
-  // Bitrate gets a gentle wave so the BitrateMeter sparkline draws a curve.
-  function simFrame(st, p){
-    const frame = delayFrame(st, p);
-    return simGoals ? {...frame, goals:simGoals.goals, timers:simGoals.timers} : frame;
-  }
-  function delayFrame(st, p){
-    const br=6200+Math.round(Math.sin(performance.now()/350)*520);
-    const base={ingest_alive:true,armed_delay_ms:ARMED_MS,buffer_target_ms:ARMED_MS,target_delay_ms:ARMED_MS,
-      current_delay_ms:ARMED_MS,destinations_total:2,destinations_alive:2,
-      destinations:[{alive:true},{alive:true}],stats:{cuts:0,bitrate_kbps:br}};
-    if(st==='idle') return {...base,ingest_alive:false,phase:'idle',buffer_fill_ms:0,destinations_alive:0,destinations:[{alive:false},{alive:false}],stats:{cuts:0,bitrate_kbps:0}};
-    if(st==='preparing') return {...base,phase:'preparing',buffer_fill_ms:Math.round((p==null?0.5:Math.min(1,p))*ARMED_MS)};
-    if(st==='ready') return {...base,phase:'ready',buffer_fill_ms:ARMED_MS};
-    if(st==='active') return {...base,phase:'active',buffer_fill_ms:ARMED_MS};
-    if(st==='error') return {...base,phase:'active',buffer_fill_ms:ARMED_MS,destinations_alive:0,destinations:[{alive:false},{alive:false}]};
-    return base;
-  }
-  // Delay lifecycle for the 'Auto' simulation. Arming ramps; rest hold.
-  // Active is long so the auto-hide ("show then disappear") is visible in preview.
-  const LIFECYCLE = [['idle',1300],['preparing',3400],['ready',1500],['active',13000]];
-  // makeSim(iframe, mode, onTick, noHide): mode 'auto' runs the lifecycle; a
-  // state key pins it (arming keeps animating its fill). noHide keeps auto-hide
-  // widgets visible (used while editing). onTick drives the live caption.
-  function makeSim(iframe, mode, onTick, noHide, replayGap){
-    let timer=0, firstPost=true, lastReplay=performance.now(); const t0=performance.now();
-    const gap = replayGap||5000;
-    function post(st,p,forceReplay){ if(iframe && iframe.contentWindow) iframe.contentWindow.postMessage({__ic_sim:true,forceState:st,state:simFrame(st,p),noHide:!!noHide,replay:firstPost||!!forceReplay},'*'); firstPost=false; if(onTick) onTick(st,p); }
-    function loop(){
-      const total=LIFECYCLE.reduce((a,x)=>a+x[1],0);
-      let el=(performance.now()-t0)%total, acc=0, ph='idle', p=0;
-      for(const x of LIFECYCLE){ if(el<acc+x[1]){ ph=x[0]; p=(el-acc)/x[1]; break; } acc+=x[1]; }
-      post(ph, ph==='preparing'?p:1);
-      timer=setTimeout(loop, 90);
-    }
-    function pinned(){
-      if(mode==='preparing'){ const dur=2800, el=(performance.now()-t0)%dur; post('preparing', el/dur); timer=setTimeout(pinned, 90); }
-      else {
-        // When auto-hide can fire (noHide off), re-show the widget once its
-        // hide has had time to play, so the exit loops while editing. The gap
-        // adapts to the configured hide duration - a fixed 5s would re-show
-        // (and re-arm) BEFORE a longer hide ever fired, so it'd never appear
-        // to hide at all. Otherwise just keep ticking so live widgets stay alive.
-        const now=performance.now(); let rep=false;
-        if(!noHide && now-lastReplay>gap){ rep=true; lastReplay=now; }
-        post(mode, 1, rep); timer=setTimeout(pinned, 500);
-      }
-    }
-    if(!mode || mode==='auto'){ loop(); } else { pinned(); }
-    // rehide(): after an edit, re-arm all auto-hide timers together from the
-    // current pinned frame so they don't drift out of sync until the next
-    // replay. No-op while auto-playing (the lifecycle re-arms them anyway).
-    function rehide(){ if(!mode||mode==='auto'||!iframe||!iframe.contentWindow) return;
-      iframe.contentWindow.postMessage({__ic_sim:true,forceState:mode,state:simFrame(mode,mode==='preparing'?0.5:1),noHide:!!noHide,rehide:true},'*'); }
-    // now(): the pinned frame again at once (the preview's goals moved).
-    function now(){ if(mode && mode!=='auto') post(mode, mode==='preparing'?0.5:1); }
-    return { stop(){ clearTimeout(timer); }, rehide:rehide, now:now };
-  }
-  // A friendly live caption for the current simulated phase.
-  function phaseInfo(st, p){
-    if(st==='preparing') return { t:'Arming '+Math.round((p||0)*100)+'%', c:STATE_DOT.preparing };
-    if(st==='ready') return { t:'Armed', c:STATE_DOT.ready };
-    if(st==='active') return { t:'On delay '+(ARMED_MS/1000).toFixed(1)+'s', c:STATE_DOT.active };
-    if(st==='error') return { t:'Signal lost', c:STATE_DOT.error };
-    return { t:'Idle, no delay', c:STATE_DOT.idle };
-  }
-  function setCaption(elId, st, p){
-    const el=$(elId); if(!el) return;
-    const inf=phaseInfo(st,p);
-    el.innerHTML='<span class="ph-dot" style="background:'+inf.c+'"></span>'+inf.t;
-  }
-  let pendingSelect = null; // slug to auto-select in the gallery after a save
-
-  // The studio is a floating modal; the gallery stays mounted behind it.
-  function setView(name){ $('ov-studio').hidden = name!=='studio'; }
-
-  // Entry point from the tab switch. Default to the gallery; the studio
-  // editor is only mounted when the user opens it.
-  // The Overlay tab page the browser is on: 'delay', 'alerts' or 'custom'.
-  // One browser serves them all, moved into the page that shows.
-  let page = 'delay';
-  function show(which){
-    if(!window.ICOverlay) return;
-    if(which && which!==page) gpicked = false;
-    if(which) page = which;
-    const pane = document.querySelector('.sub-pane[data-subpane="'+page+'"]'), browser = $('ovg-browser');
-    if(pane && browser.parentElement!==pane) pane.appendChild(browser);
-    $$('#ovg-browser [data-only]').forEach(el=>{ el.hidden = el.dataset.only!==page; });
-    // A custom overlay looks the same whatever the delay does.
-    $('ovg-simbar').hidden = !PAGES[page].states;
-    $('ovg-shelf-label').textContent = PAGES[page].label;
-    // Alerts have one browser source for them all, in the bar above.
-    $('ovg-urlbox').hidden = page==='alerts';
-    if($('ov-studio').hidden===false) return; // already in studio
-    setView('gallery');
-    loadSaved().then(()=> easeCardHeight(()=>{ renderGallery(); fitPreview(); }));
-  }
-
-  function ensureStudio(){
-    if(mounted) return;
-    mounted = true;
-    // Reparent the modal to <body>: the tab pane keeps a transform from its
-    // entry animation, which would trap position:fixed inside the pane.
-    const m=$('ov-studio'); if(m && m.parentElement!==document.body) document.body.appendChild(m);
-    // The canvas fits its frame whatever resizes it: the window, the modal
-    // opening, or the state bar wrapping onto a second line. Once: a delete
-    // mounts the Studio again.
-    if(!frameWatched){ frameWatched=true; new ResizeObserver(fitScale).observe($('st-canvas-frame')); }
-    if(!doc){ doc = clone(IC().PRESETS[0]); doc.widgets.forEach((w,i)=>{ w.id='w'+(i+1); }); $('st-name').value = doc.name; }
-    renderStates();
-    renderLeft();
-    rebake();
-    renderProps();
-    resetHistory();
-  }
-  // The Overlay page the Studio was opened from, when not the gallery.
-  let origin = null;
-  function openStudio(slugId, from){
-    origin = from || null;
-    stopGallerySim(); setView('studio'); ensureStudio(); loadTracked();
-    if(slugId) openSaved({slug:slugId, studio:true});
-  }
-  // The three real intents: edit (openStudio), create new (blank), duplicate.
-  function newOverlay(purpose){
-    origin = null;
-    stopGallerySim(); setView('studio'); ensureStudio(); loadTracked();
-    doc = purpose==='alerts' ? IC().alertDoc('New design') : IC().defaultDoc('Untitled overlay'); slug=null; sel=null;
-    doc.purpose = ['custom', 'alerts'].includes(purpose) ? purpose : 'delay';
-    doc.widgets.forEach((w,n)=>{ if(!w.id) w.id='w'+(n+1); });
-    $('st-name').value = doc.name;
-    enterMode(); renderLeft(); rebake(); renderProps(); resetHistory(); updateUrlLabel();
-  }
-  async function duplicateOverlay(slugId){
-    origin = null;
-    stopGallerySim(); setView('studio'); ensureStudio();
-    await openSaved({slug:slugId, studio:true});
-    // It didn't open (unreadable, or hand-written): nothing to copy, and
-    // whatever was open before must not be renamed "copy" in its place.
-    if(slug!==slugId) return;
-    slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name;
-    updateUrlLabel(); resetHistory();
-    toast('Duplicated - "Save as new" to write it','info');
-  }
-  function backToGallery(){
-    if(isDirty() && !confirm('You have unsaved changes to this overlay. Discard them and go back to the gallery?')) return;
-    stopPlay(); stopGoalAuto(); clearTimeout(alertDemoT);
-    setView('gallery');
-    // Back to where it was opened from, or to the page it is on now (a
-    // save may have moved it there, and selects it).
-    const from = origin; origin = null;
-    const home = doc ? ({custom:'custom', alerts:'alerts', goals:'goals'}[IC().docPurpose(doc)] || 'delay') : page;
-    showSubTab('overlay', from || home);
-  }
-
-  // Fit the 1920x1080 canvas into the frame on BOTH axes and centre it, so
-  // the editor always shows a true 16:9 regardless of the modal size.
-  function fitScale(){
-    const frame = $('st-canvas-frame'); if(!frame) return;
-    const fw = frame.clientWidth || 640, fh = frame.clientHeight || 360;
-    scale = Math.max(0.05, Math.min(fw/1920, fh/1080));
-    const tx = Math.max(0,(fw-1920*scale)/2), ty = Math.max(0,(fh-1080*scale)/2);
-    $('st-canvas-scale').style.transform = 'translate('+tx+'px,'+ty+'px) scale('+scale+')';
-    $('st-hit').style.transform = '';
-    // Lay the (non-scaled) 16:9 outline + safe guide exactly over the canvas.
-    const b = $('st-canvas-bounds');
-    if(b){ b.style.left=tx+'px'; b.style.top=ty+'px'; b.style.width=(1920*scale)+'px'; b.style.height=(1080*scale)+'px'; }
-  }
-  function fitPreview(){
-    const stage = $('ovg-stage'); if(!stage) return;
-    const w = stage.clientWidth || 600;
-    $('ovg-scale').style.transform = 'scale('+(w/1920)+')';
-  }
-
-  // ---- gallery: one list of overlays, each with a copyable URL ----
-  function curOverlay(){ return galleryItems().find(o=>o.slug===gsel)||null; }
-  function selUrl(){ return location.origin+'/overlay/'+encodeURIComponent(gsel)+'.html'+(autohideOff?'?autohide=off':''); }
-  // How an overlay shows in the browser: its group on its page (yours
-  // before the built-in ones), what it is, its icon and colour. The page it
-  // is on is the list's `kind` (web.rs overlay_kind); a goal's or a timer's
-  // own overlay is on its card, on the Goals and timers page.
-  // The browser's pages: the list's heading, its groups, whether the
-  // preview plays the delay's states (or a sample alert), and what an empty
-  // page says (alerts always have the ready-made designs).
-  const PAGES = {
-    delay: { label:'Delay overlays', groups:['Yours', 'Built in'], states:true,
-      blank:()=>'<b>No delay overlays</b><span>A delay overlay tells viewers you\'re on a delay: a badge, the countdown while it arms, a frame while it\'s live.</span>'+
-        '<div class="og-row"><button class="ic-btn ic-btn-primary st-withic" onclick="Studio.newOverlay(\'delay\')">'+stIcon(UI_ICON.plus)+'New delay overlay</button>'+
-        '<button class="ic-btn ic-btn-ghost" onclick="Studio.restoreDefaults()">Restore built-ins</button></div>' },
-    alerts: { label:'Alert designs', groups:['Yours', 'Ready-made'], states:false, alerts:true, blank:()=>'' },
-    custom: { label:'Custom overlays', groups:['Made in the Studio', 'Hand-written'], states:false,
-      blank:()=>'<b>Anything else viewers should see</b><span>A starting-soon screen, your socials, a logo, your own HTML: made in the Studio, or .html files you drop in the overlays folder.</span>'+
-        '<div class="og-row"><button class="ic-btn ic-btn-primary st-withic" onclick="Studio.newOverlay(\'custom\')">'+stIcon(UI_ICON.plus)+'New overlay</button>'+
-        '<button class="ic-btn ic-btn-ghost" onclick="reveal(\'overlays\')">Open folder</button></div>' }
-  };
-  const builtIn = slugId => IC().PRESETS.some(p=>slugify(p.name)===slugId);
-  // A ready-made alert design's theme (alert-<theme>), or ''.
-  const readyTheme = slugId => IC().ALERT_THEMES.find(t=>slugId==='alert-'+t) || '';
-  // The overlays on the page showing. Alerts also list the ready-made
-  // designs not saved yet (the themes' cards): one is written the first
-  // time it is edited, copied or used.
-  function galleryItems(){
-    const mine = savedList.filter(o=>o.kind===page);
-    if(page!=='alerts') return mine;
-    const ready = IC().ALERT_THEMES.map(t=>({slug:'alert-'+t, name:Integrations.alertKit.themes[t].name, kind:'alerts', studio:true, unsaved:true}));
-    return mine.concat(ready.filter(r=>!mine.some(o=>o.slug===r.slug)));
-  }
-  function overlayLook(o){
-    if(o.kind==='alerts'){
-      const theme = readyTheme(o.slug);
-      return theme ? {group:'Ready-made', label:'Ready-made alert design', icon:KIND_ICON.AlertCard, color:'var(--warn)', theme}
-        : {group:'Yours', label:'Your alert design', icon:KIND_ICON.AlertCard, color:'var(--warn)', theme:''};
-    }
-    if(o.kind==='custom'){
-      return o.studio ? {group:'Made in the Studio', label:'Custom overlay', icon:UI_ICON.shapes, color:'var(--live)'}
-        : {group:'Hand-written', label:'Hand-written: edit its .html file', icon:KIND_ICON.CustomHTML, color:'var(--fg-3)'};
-    }
-    return builtIn(o.slug) ? {group:'Built in', label:'Built-in delay overlay', icon:UI_ICON.hourglass, color:'var(--accent)'}
-      : {group:'Yours', label:'Your delay overlay', icon:UI_ICON.hourglass, color:'var(--accent)'};
-  }
-  // `keepPreview`: the choice the same, its preview plays on as it is.
-  function renderGallery(keepPreview){
-    const c = $('ovg-list'); if(!c) return;
-    c.innerHTML='';
-    if(pendingSelect && savedList.some(o=>o.slug===pendingSelect)){ gsel=pendingSelect; pendingSelect=null; gpicked=true; }
-    const mine = galleryItems();
-    $('ovg-count').textContent = mine.length || '';
-    $('ovg-top').hidden = !mine.length; $('ovg-blank').hidden = !!mine.length;
-    if(!mine.length){ $('ovg-blank').innerHTML=PAGES[page].blank(); stopGallerySim(); gsel=null; return; }
-    // By group, then by name.
-    PAGES[page].groups.forEach(group=>{
-      const list = mine.filter(o=>overlayLook(o).group===group).sort((a,b)=>(a.name||a.slug).localeCompare(b.name||b.slug));
-      if(!list.length) return;
-      const head=document.createElement('div'); head.className='ovg-group'; head.textContent=group; c.appendChild(head);
-      list.forEach(o=>{
-        const k=overlayLook(o), tile=document.createElement('button');
-        tile.className='ovg-tile'; tile.dataset.gid=o.slug; tile.style.setProperty('--tc', k.color);
-        const alerts = page==='alerts';
-        tile.innerHTML=(alerts ? Integrations.designIcon(k.theme) : '<span class="ovg-tile-ic">'+stIcon(k.icon)+'</span>')+
-          '<span class="ovg-tile-txt"><span class="ovg-tile-name"></span><span class="ovg-tile-path'+(alerts?'':' mono')+'"></span></span>';
-        tile.querySelector('.ovg-tile-name').textContent=o.name||o.slug;
-        tile.querySelector('.ovg-tile-path').textContent=alerts ? designNote(o, k) : '/overlay/'+o.slug+'.html';
-        tile.onclick=()=>{ gpicked=true; selectGallery(o.slug); };
-        c.appendChild(tile);
-      });
-    });
-    const cur = gsel && c.querySelector('.ovg-tile[data-gid="'+CSS.escape(gsel)+'"]');
-    // Nothing picked yet: on Alerts, the design alerts play by default.
-    const lead = !gpicked && page==='alerts' && mine.find(o=>(Integrations.designUse(o.slug)||{}).isDefault);
-    const pick = lead ? lead.slug : cur ? gsel : c.querySelector('.ovg-tile').dataset.gid;
-    selectGallery(pick, keepPreview && !!cur && pick===gsel);
-  }
-  // Under an alert design's name: how many alerts play it, or what it is.
-  function designNote(o, k){
-    const u = Integrations.designUse(o.slug), n = u ? u.names.length : 0;
-    if(n) return 'Plays for '+n+(n===1?' alert':' alerts');
-    return k.theme ? Integrations.alertKit.themes[k.theme].motion : 'Not used yet';
-  }
-
-  function selectGallery(slugId, keepPreview){
-    gsel=slugId; autohideOff=false;
-    $$('#ovg-list .ovg-tile').forEach(el=>el.classList.toggle('sel', el.dataset.gid===slugId));
-    if(!keepPreview) updatePreview();
-    updateGalleryMeta();
-  }
-  function stopGallerySim(){ if(gallerySim){ gallerySim.stop(); gallerySim=null; } }
-  // Quick "keep it up" toggle: off appends ?autohide=off to the copied/preview
-  // URL (the runtime honours it). No re-bake - the baked default is unchanged.
-  function toggleAutohide(on){ autohideOff=!on; updatePreview(); showUrl(); }
-  function updatePreview(){
-    const prev=$('ov-preview'); if(!prev||!gsel) return;
-    stopGallerySim();
-    prev.onload=()=>applyPreviewState();
-    // A ready-made alert design not saved yet: as it would be written.
-    const o=curOverlay();
-    if(o && o.unsaved){ prev.removeAttribute('src'); prev.srcdoc=IC().bake(IC().alertPreset(readyTheme(o.slug))); return; }
-    prev.removeAttribute('srcdoc');
-    prev.src='/overlay/'+encodeURIComponent(gsel)+'.html'+(autohideOff?'?autohide=off':'');
-  }
-  // Drive the preview: 'auto' runs the delay-lifecycle simulation, 'live'
-  // shows the real OBS state, anything else pins one state.
-  function applyPreviewState(){
-    const prev=$('ov-preview'); if(!prev) return;
-    stopGallerySim();
-    const cap=$('ovg-phase');
-    if(PAGES[page].alerts){ if(cap) cap.innerHTML='<span class="ph-dot" style="background:var(--warn)"></span>A sample alert'; gallerySim=alertLoop(prev); return; }
-    if(!PAGES[page].states){ if(cap) cap.innerHTML=''; gallerySim=makeSim(prev, 'active', null, true); return; }
-    if(previewState==='live'){ if(prev.contentWindow) prev.contentWindow.postMessage({__ic_sim:true,forceState:null,state:simFrame('idle',0)},'*'); if(cap) cap.innerHTML='<span class="ph-dot" style="background:#8a8f9a"></span>Live: real OBS state'; return; }
-    // Always keep the widget on screen in the gallery preview (noHide=true) -
-    // the preview is to SHOW the overlay, not to demo its auto-hide, which
-    // would leave the canvas empty for most of the cycle.
-    gallerySim=makeSim(prev, previewState==='auto'?'auto':previewState, (st,p)=>setCaption('ovg-phase',st,p), true);
-  }
-  function previewSim(st){
-    previewState=st;
-    $$('.st-simbar [data-psim]').forEach(b=>b.classList.toggle('on',(b.dataset.psim||'')===st));
-    applyPreviewState();
-  }
-  function updateGalleryMeta(){
-    const o=curOverlay();
-    if(!o){
-      $('ovg-name').textContent='No overlay chosen'; $('ovg-kind').textContent=''; $('ovg-ic').innerHTML='';
-      $('ovg-url').textContent='select an overlay'; $('ovg-primary').innerHTML=''; $('ovg-actions').innerHTML='';
-      return;
-    }
-    // A hand-made file's name can hold a quote: a JS string, made safe for
-    // the attribute it sits in.
-    const k=overlayLook(o), at=escapeAttr(JSON.stringify(o.slug));
-    $('ovg-name').textContent=o.name||o.slug;
-    $('ovg-kind').textContent=k.label;
-    $('ovg-ic').style.setProperty('--tc', k.color); $('ovg-ic').innerHTML=stIcon(k.icon);
-    if(page==='alerts'){ designMeta(o, at); return; }
-    showUrl();
-    // On stream in one click; then changing how it looks.
-    $('ovg-primary').innerHTML='<button class="ic-btn ic-btn-primary st-withic" onclick="Studio.addGalleryToObs(this)">'+stIcon(UI_ICON.plus)+'Add to OBS</button>'+
-      (o.studio ? '<button class="ic-btn ic-btn-ghost st-withic" onclick="Studio.openStudio('+at+')">'+stIcon(UI_ICON.pen)+'Edit in Studio</button>' : '');
-    let h='';
-    // Quick auto-hide toggle (only meaningful when the file bakes one).
-    if(o.autohide) h+='<label class="ovg-switch" title="Off appends ?autohide=off so the overlay stays up"><input type="checkbox"'+(autohideOff?'':' checked')+' onchange="Studio.toggleAutohide(this.checked)"><span>Auto-hide when live</span></label>';
-    if(o.studio) h+='<button class="ic-btn ic-btn-ghost st-mini" onclick="Studio.duplicateOverlay('+at+')">Duplicate</button>';
-    h+='<button class="ic-btn ic-btn-ghost st-mini st-danger" onclick="Studio.deleteFromGallery('+at+')">Delete</button>';
-    $('ovg-actions').innerHTML=h;
-  }
-  // An alert design: which alerts play it, Edit in Studio, Use for every
-  // alert; then Duplicate, and Delete (a ready-made one: Reset, as it came).
-  function designMeta(o, at){
-    const u=Integrations.designUse(o.slug), n=u ? u.names.length : 0;
-    if(u) $('ovg-kind').textContent = !u.total ? 'No alerts yet' : u.everywhere ? 'Every alert plays it'
-      : n ? 'Plays for '+n+' of '+u.total+' alerts' : 'No alert plays it yet';
-    $('ovg-primary').innerHTML=(u && !u.total ? '<button class="ic-btn ic-btn-primary st-withic" onclick="Integrations.addTwitchAlerts()">'+stIcon(UI_ICON.plus)+'Set up Twitch alerts</button>' : '')+
-      '<button class="ic-btn '+(u && !u.total ? 'ic-btn-ghost' : 'ic-btn-primary')+' st-withic" onclick="Studio.editDesign('+at+')">'+stIcon(UI_ICON.pen)+'Edit in Studio</button>'+
-      (u && u.total && !u.everywhere ? '<button class="ic-btn ic-btn-ghost" onclick="Studio.useDesign('+at+',this)" title="Alerts you add later play it too">Use for every alert</button>' : '');
-    $('ovg-actions').innerHTML='<button class="ic-btn ic-btn-ghost st-mini" onclick="Studio.duplicateDesign('+at+')">Duplicate</button>'+
-      (o.unsaved ? '' : readyTheme(o.slug) ? '<button class="ic-btn ic-btn-ghost st-mini" onclick="Studio.resetDesign('+at+')">Reset</button>'
-        : '<button class="ic-btn ic-btn-ghost st-mini st-danger" onclick="Studio.deleteFromGallery('+at+')">Delete</button>');
-  }
-  // A ready-made design is written first, then edited or copied as any.
-  async function readyDesign(slugId){
-    const o=galleryItems().find(x=>x.slug===slugId);
-    if(!o || !o.unsaved) return true;
-    if(!(await Integrations.ensureDesign(slugId))) return false;
-    await loadSaved(); return true;
-  }
-  async function editDesign(slugId){ if(await readyDesign(slugId)) openStudio(slugId); }
-  async function duplicateDesign(slugId){ if(await readyDesign(slugId)) duplicateOverlay(slugId); }
-  async function useDesign(slugId, btn){
-    // Alerts given a design of their own in Integrations lose it: say so.
-    const u=Integrations.designUse(slugId);
-    if(u && u.own && !confirm((u.own===1 ? '1 alert has a design of its own' : u.own+' alerts have a design of their own')+', picked in Integrations. Play this one on every alert instead?')) return;
-    btn.disabled=true;
-    if(!(await Integrations.useDesignEverywhere(slugId))){ btn.disabled=false; return; }
-    await loadSaved(); renderGallery(true);
-  }
-  // A ready-made design you changed, written again as it came: the alerts
-  // that play it keep playing it.
-  async function resetDesign(slugId){
-    const o=curOverlay();
-    if(!confirm('Put "'+((o&&o.name)||slugId)+'" back as it came? Your changes to it are lost.')) return;
-    const r=await fetch('/overlays/'+encodeURIComponent(slugId),{method:'POST',headers:{'Content-Type':'text/html'},body:IC().bake(IC().alertPreset(readyTheme(slugId)))}).then(x=>x.json(),()=>null);
-    if(!r || !r.ok){ toast('Could not reset it'+(r && r.error ? ': '+r.error : ''),'err'); return; }
-    await loadSaved(); renderGallery();
-    toast('Back as it came','ok');
-  }
-  // The alerts' data is in (or changed): the Alerts page says again which
-  // alerts play each design, its preview playing on.
-  function alertsChanged(){
-    if(page!=='alerts' || $('ov-studio').hidden===false) return;
-    loadSaved().then(()=>renderGallery(true));
-  }
-  // The path, not the whole address, and free to wrap after /overlay/ when
-  // its name is long; Copy URL copies the whole address.
-  function showUrl(){
-    const u=$('ovg-url'), path=selUrl().slice(location.origin.length);
-    u.innerHTML='/overlay/<wbr>'+escapeHtml(path.slice('/overlay/'.length)); u.title=selUrl();
-  }
-  // A browser source for the chosen overlay, in the scene on air, through
-  // the OBS connection Integrations use (as the Goals page's button does).
-  function addGalleryToObs(btn){
-    const o=curOverlay(); if(o) Integrations.addOverlayToObs(btn, o.slug, o.name||o.slug);
-  }
-  function copyGallery(btn){ if(gsel) copyText(btn, selUrl(),'Overlay URL'); }
-  // A built-in overlay, written as it came.
-  function savePreset(p){
-    const d=clone(p); d.widgets.forEach((w,n)=>{ w.id='w'+(n+1); });
-    return fetch('/overlays/'+encodeURIComponent(slugify(p.name)),{method:'POST',headers:{'Content-Type':'text/html'},body:IC().bake(d)});
-  }
-  // Restore built-ins: each built-in delay overlay written again as it came
-  // (back if deleted). Nothing else is touched.
-  async function restoreDefaults(){
-    if(!confirm('Put the '+IC().PRESETS.length+' built-in delay overlays back as they came?\n\nAny you changed are reset and any you deleted come back. Your own overlays, goals and timers are kept.')) return;
-    const saved=await Promise.all(IC().PRESETS.map(p=>savePreset(p).then(r=>r.ok, ()=>false)));
-    const failed=saved.filter(ok=>!ok).length;
-    await loadSaved(); renderGallery();
-    toast(failed ? 'Could not restore '+failed+' of them' : 'The built-in delay overlays are back', failed ? 'err' : 'ok');
-  }
-  async function deleteFromGallery(slugId){
-    const o=savedList.find(x=>x.slug===slugId);
-    // An alert design's alerts play another: say which.
-    const u=o && o.kind==='alerts' ? Integrations.designUse(slugId) : null, n=u ? u.names.length : 0;
-    const after=n ? '\n\n'+n+(n===1?' alert plays':' alerts play')+' it: '+(n===1?'it':'they')+' will play '+(u.isDefault ? 'the ready-made Island' : u.defaultName)+' instead.' : '';
-    if(!confirm('Delete overlay "'+((o&&o.name)||slugId)+'"? This removes its file from the overlays folder.'+after)) return;
-    const r = await postAction('/overlays/'+encodeURIComponent(slugId)+'/delete');
-    if(!r.ok){ toast(`Could not delete the overlay: ${r.error}`,'err'); return; }
-    if(o && o.kind==='alerts') await Integrations.designGone(slugId);
-    toast('Deleted','info');
-    gsel=null;
-    await loadSaved(); renderGallery();
-  }
-
-  // ---- canvas ----
-  function rebake(){
-    const html = IC().bake(doc);
-    const f = $('st-canvas');
-    f.onload = function(){ studioDrive(); buildHits(); };
-    f.srcdoc = html;
-    updateUrlLabel();
-    recordSoon(); updatePerfBadge();
-  }
-  // Drive the studio canvas: lifecycle while playing, else pin the edited state.
-  function studioDrive(){
-    if(studioSim){ studioSim.stop(); }
-    // While pinned, keep widgets visible for editing (noHide) - UNLESS the
-    // edited state has an auto-hide, in which case let it play so the exit is
-    // visible (makeSim loops it back into view every ~5s).
-    // Longest hide configured in the edited state - the preview re-shows a
-    // hidden widget this long after it appears (+ a beat), so even a 10s hide
-    // actually plays its exit instead of being reset before it fires.
-    const maxHide = doc.widgets.reduce((m,w)=>{ const h=w.states&&w.states[editState]&&w.states[editState].hide_after_ms; return h>m?h:m; }, 0);
-    const hasHide = maxHide>0;
-    studioSim=makeSim($('st-canvas'), playing?'auto':editState, (st,p)=>{
-      if(mode().sim==='states') setCaption('st-phase',st,p); else $('st-phase').textContent='';
-      if(playing) $$('#st-states .st-st').forEach(b=>b.classList.toggle('on',b.dataset.st===st));
-    }, !playing && !hasHide, hasHide ? maxHide+1800 : 5000);
-  }
-  // A widget's box as laid out, not where an animation has it this frame:
-  // measured mid-entrance, a box would sit where the slide started.
-  function layoutBox(el){ return { left:el.offsetLeft, top:el.offsetTop, width:el.offsetWidth, height:el.offsetHeight }; }
-  function buildHits(){
-    const hit = $('st-hit'); hit.innerHTML='';
-    const f = $('st-canvas'); const cdoc = f.contentDocument; if(!cdoc) return;
-    // Measure with the edited state applied: the baked page starts at
-    // data-state="idle" where most widgets are display:none (rect 0x0),
-    // which would pin every hitbox to the top-left corner.
-    if(cdoc.body) cdoc.body.setAttribute('data-state', editState);
-    doc.widgets.forEach(w=>{
-      const el = cdoc.getElementById((w.id||'').replace(/[^a-zA-Z0-9_-]/g,''));
-      if(!el) return;
-      const r = layoutBox(el);
-      if(r.width<1 && r.height<1) return; // hidden in this state - no handle
-      const box = document.createElement('div');
-      box.className = 'st-box' + (sel===w.id?' sel':'');
-      box.style.left = r.left+'px'; box.style.top = r.top+'px';
-      box.style.width = Math.max(16,r.width)+'px'; box.style.height = Math.max(16,r.height)+'px';
-      box.dataset.id = w.id;
-      box.addEventListener('mousedown', e=>dragStart(e, w, el, box));
-      const meta = IC().KINDS.find(x=>x.key===w.kind)||{};
-      if(!meta.full){
-        const h = document.createElement('div'); h.className='st-resize';
-        h.addEventListener('mousedown', e=>{ e.stopPropagation(); resizeStart(e, w, meta); });
-        box.appendChild(h);
-      }
-      hit.appendChild(box);
-    });
-  }
-
-  // ---- drag (with centre snapping + guidelines) ----
-  const SNAP = 10; // canvas px
-  function showGuide(v,h){ const gv=$('st-guide-v'),gh=$('st-guide-h'); if(gv)gv.classList.toggle('on',v); if(gh)gh.classList.toggle('on',h); }
-  function dragStart(e, w, el, box){
-    e.preventDefault(); select(w.id);
-    const sx = w.anchor.indexOf('right')>=0 ? -1 : 1;
-    const sy = w.anchor.indexOf('bottom')>=0 ? -1 : 1;
-    const startX=e.clientX, startY=e.clientY;
-    const r0 = layoutBox(el);
-    const cx0 = r0.left + r0.width/2, cy0 = r0.top + r0.height/2;
-    let lastDx=0, lastDy=0;
-    function mv(ev){
-      let dx=(ev.clientX-startX)/scale, dy=(ev.clientY-startY)/scale;
-      let snapV=false, snapH=false;
-      if(Math.abs(cx0+dx-960)<SNAP){ dx += (960-(cx0+dx)); snapV=true; }
-      if(Math.abs(cy0+dy-540)<SNAP){ dy += (540-(cy0+dy)); snapH=true; }
-      showGuide(snapV,snapH);
-      lastDx=dx; lastDy=dy;
-      // `translate`, not `transform`: a finished entrance animation holds
-      // transform:none over any inline one, and the widget wouldn't follow.
-      el.style.translate = dx+'px '+dy+'px';
-      box.style.transform = 'translate('+dx+'px,'+dy+'px)';
-    }
-    function up(){
-      document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up);
-      showGuide(false,false);
-      w.offset.x = Math.round(w.offset.x + sx*lastDx);
-      w.offset.y = Math.round(w.offset.y + sy*lastDy);
-      rebake(); renderProps();
-    }
-    document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
-  }
-
-  // ---- resize (bottom-right handle) ----
-  function resizeStart(e, w, meta){
-    e.preventDefault(); select(w.id);
-    const startX=e.clientX, startY=e.clientY;
-    const fontMode = (meta.fields||[]).indexOf('font')>=0;
-    const sf0 = w.font_px||34, sw0=(w.size&&w.size.w)||120, sh0=(w.size&&w.size.h)||80;
-    function mv(ev){
-      const dx=(ev.clientX-startX)/scale, dy=(ev.clientY-startY)/scale;
-      if(fontMode){ w.font_px = Math.max(8, Math.round(sf0 + dx*0.35)); }
-      else { w.size.w = Math.max(20, Math.round(sw0+dx)); w.size.h = Math.max(8, Math.round(sh0+dy)); }
-      softRebake();
-    }
-    function up(){ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); rebake(); renderProps(); }
-    document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
-  }
-
-  // ---- state selector (the state you preview IS the state you edit) ----
-  function renderStates(){
-    const c = $('st-states'); if(!c) return; c.innerHTML='';
-    const sim = mode().sim;
-    $('st-play').hidden = sim!=='states';
-    if(sim!=='states'){ simBar(c, sim); return; }
-    IC().STATES.forEach(st=>{
-      const b=document.createElement('button');
-      b.className='st-st'+(editState===st.key?' on':''); b.dataset.st=st.key; b.title=st.hint;
-      b.innerHTML='<span class="dot" style="background:'+STATE_DOT[st.key]+'"></span>'+st.label;
-      b.onclick=()=>selectState(st.key);
-      c.appendChild(b);
-    });
-  }
-  // The bar of an overlay that isn't about the delay.
-  function simBar(c, sim){
-    const btn = (label, title, act, id) => {
-      const b = document.createElement('button'); b.className = 'st-st'; b.textContent = label; b.title = title; b.onclick = act;
-      if(id) b.id = id; c.appendChild(b); return b;
-    };
-    if(sim==='alert') btn('▶ Play the alert', 'Play a sample alert: in, hold, out', playAlert);
-    if(sim==='goals'){
-      btn('−1', 'Take one from every goal', () => nudgeGoals(-1));
-      btn('+1', 'Add one to every goal', () => nudgeGoals(1));
-      btn('Count up and down', 'Goals fill and empty by themselves', goalAuto, 'st-goal-auto');
-    }
-    const say = {alert:'Waits hidden until an alert plays', goals:'Shows your goals and timers', none:'Looks the same whatever the delay does'}[sim];
-    const note = document.createElement('span'); note.className = 'st-bar-note'; note.textContent = say; c.appendChild(note);
-  }
-  // The state an overlay is edited in, and its preview, for what it is for.
-  function enterMode(){
-    const sim = mode().sim;
-    if(sim!=='states') editState = 'active';
-    simGoals = null; stopGoalAuto();
-    if(sim==='goals') startGoalSim();
-    $('st-foot-edit').hidden = sim!=='states';
-    renderStates();
-  }
-  function selectState(st){
-    playing=false; editState=st; playLabel();
-    $$('#st-states .st-st').forEach(b=>b.classList.toggle('on',b.dataset.st===st));
-    const fl=$('st-foot-state'); if(fl) fl.textContent=(IC().STATES.find(s=>s.key===st)||{label:st}).label;
-    studioDrive(); renderProps();
-  }
-
-  // ---- left panel: Layers + Add ----
-  // Each widget kind's icon, in the dashboard's line style (integrations.js
-  // PATHS): 24 box, 2 stroke, round ends.
-  const KIND_ICON = {
-    DelayReadout:'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2', StatePill:'M7 8h10a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8z',
-    BufferBar:'M3 10h18v4H3zM3 12h11', BufferRing:'M12 21a9 9 0 1 1 9-9', BitrateMeter:'M22 12h-4l-3 9L9 3l-3 9H2',
-    DestinationStatus:'M5 12h.01M12 12h.01M19 12h.01', CutCounter:'M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12',
-    SessionElapsed:'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 7v5h4', Goal:'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
-    Timer:'M6 2h12M6 22h12M7 2v4a5 5 0 0 0 10 0V2M7 22v-4a5 5 0 0 1 10 0v4', Text:'M4 7V4h16v3M9 20h6M12 4v16',
-    Icon:'M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z', Shape:'M4 4h16v16H4z', Divider:'M3 12h18',
-    CornerFrame:'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5', PulsingDot:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM12 20a8 8 0 1 0 0-16',
-    Heartbeat:'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21.2l8.8-8.8a5.5 5.5 0 0 0 0-7.8z',
-    Banner:'M3 14h18v6H3zM6 17h8', EdgeAccent:'M3 3h18v18H3zM7 7h10v10H7z', BackgroundTint:'M3 3h18v18H3zM3 9h18M3 15h18',
-    LiquidFill:'M3 14c3-2 6 2 9 0s6-2 9 0v7H3z', Image:'M3 4h18v16H3zM21 15l-5-5L5 20M9 10a1 1 0 1 0 0-.01', AlertCard:'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0', CustomHTML:'M8 7l-5 5 5 5M16 7l5 5-5 5'
-  };
-  const UI_ICON = { up:'M18 15l-6-6-6 6', down:'M6 9l6 6 6-6', x:'M18 6L6 18M6 6l12 12', pick:'M5 3l14 7.5-6.2 1.7L10 18.5z',
-    plus:'M12 5v14M5 12h14', pen:'M4 20h4L19 9l-4-4L4 16zM14 6l4 4',
-    hourglass:'M6 3h12M6 21h12M7 3v3.5L12 12l-5 5.5V21M17 3v3.5L12 12l5 5.5V21', shapes:'M4 4h7v7H4zM17.5 4.5l3.5 6h-7zM17.5 14a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7zM4 14h7v7H4z' };
-  function stIcon(path){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="'+path+'"/></svg>'; }
-  function kindIcon(kind){ return stIcon(KIND_ICON[kind]||KIND_ICON.Shape); }
-  // A layer's name: its own (Name, at the top of its properties), or what
-  // it shows, as its row says it: a goal's words read with the goal's own
-  // numbers, not as {{goal.sub_goal.target}}.
-  function layerName(w, k){
-    if(w.name) return w.name;
-    const named = (list, id) => (list||[]).find(x=>x.id===id) || (list||[])[0];
-    if(w.kind==='Goal'){ const g=named(tracked.goals,w.goal); return g ? g.name+' bar' : k.label; }
-    if(w.kind==='Timer'){ const t=named(tracked.timers,w.timer); return t ? t.name+' clock' : k.label; }
-    if(w.kind==='Image' && /\{\{alert\.image\}\}/.test(w.src||'')) return 'Alert picture';
-    const text=(w.base&&w.base.text)||'';
-    if(!text) return k.label;
-    const said=text.replace(/\{\{alert\.(title|text)\}\}/g,(m,part)=>part==='title'?'Alert title':'Alert words').replace(/\{\{(goal|timer)\.([a-z0-9_]+)(?:\.([a-z]+))?\}\}/g,(m,what,id,part)=>{
-      const x=((what==='goal'?tracked.goals:tracked.timers)||[]).find(y=>y.id===id); if(!x) return m;
-      if(part==='name') return x.name;
-      if(what==='timer') return x.name+' clock';
-      const v={target:x.target, left:Math.max(0,x.target-x.value), percent:Math.floor(Math.min(1,x.value/(x.target||1))*100)+'%'}[part];
-      return String(v!=null ? v : x.value);
-    });
-    return said;
-  }
-  function leftTab(name){ left=name; $$('#st-left-tabs button').forEach(b=>b.classList.toggle('on',b.dataset.stleft===name)); renderLeft(); }
-  // Representative colour for a layer swatch: the current edit-state colour if
-  // set, else the base, resolved through the theme so @tokens show real hues.
-  function layerColor(w){ return themeHex((w.states&&w.states[editState]&&w.states[editState].color)||(w.base&&w.base.color)||'#5ac8fa'); }
-  // Update layer swatches in place (no panel rebuild, so open pickers survive).
-  function refreshLayerColors(){ if(left!=='layers') return;
-    document.querySelectorAll('#st-left-body .st-layer').forEach(function(row){
-      const w=widget(row.dataset.id); if(!w) return; const sw=row.querySelector('.st-layer-sw'); if(sw) sw.style.background=layerColor(w); }); }
-  function renderLeft(){
-    const c = $('st-left-body'); c.innerHTML='';
-    if(left==='add'){
-      const groups={alert:'The alert',data:'Delay',stream:'Goals and timers',ambient:'Ambient',deco:'Decoration',media:'Media',power:'Power user'};
-      // A tile per widget, in groups. Goals and timers add a ready text of
-      // their numbers too, since that is what a goal's words usually say.
-      const tile=(icon,label,cost,act)=>{
-        const b=document.createElement('button'); b.className='st-item';
-        b.innerHTML='<span class="st-glyph">'+icon+'</span><span class="st-item-l"></span>'+cost;
-        b.querySelector('.st-item-l').textContent=label; b.onclick=act; return b;
-      };
-      mode().groups.forEach(g=>{
-        if(g==='alert'){
-          const h=document.createElement('div'); h.className='st-sec'; h.textContent=groups[g]; c.appendChild(h);
-          const grid=document.createElement('div'); grid.className='st-tiles'; c.appendChild(grid);
-          grid.appendChild(tile(kindIcon('AlertCard'), 'Alert card', '', ()=>addWidget('AlertCard')));
-          grid.appendChild(tile(kindIcon('Image'), 'Its picture', '', ()=>addAlertPart('picture')));
-          grid.appendChild(tile(kindIcon('Text'), 'Its title', '', ()=>addAlertPart('title')));
-          grid.appendChild(tile(kindIcon('Text'), 'Its words', '', ()=>addAlertPart('text')));
-          return;
-        }
-        const items=IC().KINDS.filter(k=>k.group===g); if(!items.length) return;
-        const h=document.createElement('div'); h.className='st-sec'; h.textContent=groups[g]; c.appendChild(h);
-        const grid=document.createElement('div'); grid.className='st-tiles'; c.appendChild(grid);
-        items.forEach(k=>{
-          const cost = k.cost==='mid'?'<span class="st-cost">GPU</span>':(k.cost==='opt'?'<span class="st-cost">CODE</span>':'');
-          grid.appendChild(tile(kindIcon(k.key), k.label, cost, ()=>addWidget(k.key)));
-        });
-        if(g==='stream') grid.appendChild(tile(kindIcon('Text'), 'Goal numbers', '', addGoalText));
-      });
-    } else if(left==='theme'){
-      const t=ensureTheme();
-      const head=document.createElement('div'); head.className='st-sec'; head.textContent='Theme colours'; c.appendChild(head);
-      [['accent','Accent'],['live','Live'],['warn','Arming'],['error','Error'],['ink','Text / ink'],['grey','Idle / grey']].forEach(k=>{
-        const row=document.createElement('div'); row.className='st-field';
-        row.innerHTML='<label>'+k[1]+'</label><div class="st-color"><input type="color" value="'+escapeAttr(t[k[0]])+'" oninput="Studio.setTheme(\''+k[0]+'\',this.value,this)"><input class="ic-input mono" value="'+escapeAttr(t[k[0]])+'" oninput="Studio.setTheme(\''+k[0]+'\',this.value,this)"></div>';
-        c.appendChild(row);
-      });
-      const hint=document.createElement('div'); hint.className='st-hint'; hint.style.padding='10px 2px';
-      hint.textContent='Pick a theme colour from the swatches under any widget colour. Those widgets recolour instantly when you change the theme here.';
-      c.appendChild(hint);
-      // An alert design's own sound: what its alerts set to "The design's
-      // sound" play (an upload or a link carried over from a look stays).
-      if(IC().docPurpose(doc)==='alerts'){
-        const sh=document.createElement('div'); sh.className='st-sec'; sh.textContent='Its sound'; c.appendChild(sh);
-        const cur=doc.sound||'', sounds=Integrations.alertKit.sounds.concat(Integrations.soundUploads()), known=!cur||sounds.some(([v])=>v===cur);
-        const row=document.createElement('div'); row.className='st-field';
-        row.innerHTML='<div class="st-field-row"><select class="ic-input" aria-label="The design\'s sound"><option value="">None of its own</option>'+
-          sounds.map(([v,l])=>'<option value="'+escapeAttr(v)+'"'+(v===cur?' selected':'')+'>'+escapeHtml(l)+'</option>').join('')+
-          (known ? '' : '<option value="'+escapeAttr(cur)+'" selected>'+escapeHtml(cur.slice(0,6)==='media:' ? cur.slice(6) : 'A link')+'</option>')+'</select>'+
-          '<button class="ic-btn ic-btn-ghost" data-do="play" title="Hear it"'+(cur?'':' disabled')+'>Play</button><button class="ic-btn ic-btn-ghost" data-do="upload">Upload</button></div>';
-        const pick=v=>{ if(v) doc.sound=v; else delete doc.sound; rebake(); renderLeft(); };
-        row.querySelector('select').oninput=e=>pick(e.target.value);
-        row.querySelector('[data-do="play"]').onclick=()=>{ if(doc.sound) Integrations.playSound(doc.sound); };
-        row.querySelector('[data-do="upload"]').onclick=()=>Integrations.uploadSound().then(ref=>{ if(ref) pick(ref); });
-        c.appendChild(row);
-        const said=document.createElement('div'); said.className='st-hint'; said.style.padding='6px 2px';
-        said.textContent='Alerts whose sound is "The design\'s sound" play this one.';
-        c.appendChild(said);
-      }
-      // Anything the controls don't reach: CSS of the streamer's own, last
-      // in the page so it wins. Widgets are #w1, #w2... as in Layers.
-      const own=document.createElement('div'); own.className='st-sec'; own.textContent='Your own CSS'; c.appendChild(own);
-      const css=document.createElement('textarea'); css.className='ic-input mono st-css'; css.spellcheck=false;
-      css.placeholder='#w1 .fill { border-radius: 4px }'; css.value=doc.css||'';
-      css.oninput=()=>{ doc.css=css.value; softRebake(); };
-      c.appendChild(css);
-      const how=document.createElement('div'); how.className='st-hint'; how.style.padding='6px 2px';
-      how.textContent='Each widget is #w1, #w2 and so on, as in Layers. A goal bar has .trk and .fill, a timer .v, a text .lbl.';
-      c.appendChild(how);
-    } else {
-      // Layers - the widgets in this overlay, top = front-most.
-      if(!doc || !doc.widgets.length){
-        const e=document.createElement('div'); e.className='st-empty-hint';
-        e.innerHTML='No widgets yet.<br>Place one from the <b>Add</b> tab.';
-        c.appendChild(e); return;
-      }
-      doc.widgets.slice().reverse().forEach(w=>{
-        const k=IC().KINDS.find(x=>x.key===w.kind)||{label:w.kind};
-        const row=document.createElement('div'); row.className='st-layer'+(sel===w.id?' sel':'')+(arrived===w.id?' arrived':''); row.dataset.id=w.id;
-        const label=layerName(w,k);
-        const col=layerColor(w);
-        row.title=k.label;
-        row.innerHTML='<span class="st-layer-sw" style="--sw:'+escapeAttr(col)+'">'+kindIcon(w.kind)+'</span><span class="st-layer-name"></span>'+
-          '<button class="st-layer-btn" title="Bring forward" aria-label="Bring forward" data-act="up">'+stIcon(UI_ICON.up)+'</button>'+
-          '<button class="st-layer-btn" title="Send back" aria-label="Send back" data-act="down">'+stIcon(UI_ICON.down)+'</button>'+
-          '<button class="st-layer-btn" title="Delete" aria-label="Delete" data-act="del">'+stIcon(UI_ICON.x)+'</button>';
-        row.querySelector('.st-layer-name').textContent=label;
-        row.onclick=(ev)=>{ const btn=ev.target&&ev.target.closest?ev.target.closest('[data-act]'):null; const act=btn?btn.dataset.act:null;
-          if(act==='del'){ ev.stopPropagation(); delWidgetById(w.id); }
-          else if(act==='up'){ ev.stopPropagation(); moveWidget(w.id,1); }
-          else if(act==='down'){ ev.stopPropagation(); moveWidget(w.id,-1); }
-          else select(w.id); };
-        c.appendChild(row);
-      });
-      arrived=null;
-    }
-  }
-
-  function addWidget(kind){ placeWidget(IC().defaultWidget(kind, nextId())); }
-  function placeWidget(w){
-    // On a custom overlay a new layer shows in every state, one look; on an
-    // alert design it waits hidden until an alert plays.
-    if(doc.purpose==='custom'){ w.always=true; w.states={}; }
-    // (An alert card comes and goes its theme's way by itself.)
-    if(doc.purpose==='alerts' && w.kind!=='AlertCard'){ w.always=true; w.states={idle:{visible:false}}; }
-    // Never exactly on another widget, where it couldn't be seen or grabbed.
-    while(doc.widgets.some(o=>o.anchor===w.anchor && o.offset.x===w.offset.x && o.offset.y===w.offset.y)) w.offset={x:w.offset.x+24, y:w.offset.y+24};
-    doc.widgets.push(w); sel=w.id; arrived=w.id;
-    left='layers'; $$('#st-left-tabs button').forEach(b=>b.classList.toggle('on',b.dataset.stleft==='layers'));
-    renderLeft(); rebake(); renderProps();
-  }
-  // An alert card's look: a choice redraws it; a slider or a colour shows
-  // on the canvas as it moves, and is kept with the next bake.
-  function setCard(k, v, live){
-    const w=widget(sel); if(!w) return;
-    w.card=Object.assign({}, w.card);
-    if(v===''||v==null||Number.isNaN(v)) delete w.card[k]; else w.card[k]=v;
-    if(!live){ rebake(); renderProps(); return; }
-    const cdoc=$('st-canvas').contentDocument, f=cdoc && cdoc.querySelector('#'+w.id+' iframe.ic-card');
-    if(f){ f.setAttribute('data-look', JSON.stringify(w.card)); f.contentWindow.postMessage({__ic_card:{mode:'still', look:w.card}}, '*'); }
-    recordSoon();
-  }
-  function setCardNum(k, v){ setCard(k, +v, true); }
-  function setCardColor(k, v){ if(/^#[0-9a-f]{6}$/i.test(v)) setCard(k, v.toLowerCase(), true); }
-  function resetCard(){ const w=widget(sel); if(!w) return; w.card={theme:(w.card||{}).theme||'island'}; rebake(); renderProps(); }
-  // A part of the alert: its picture, its title or its words, as it plays.
-  function addAlertPart(what){
-    const w=IC().defaultWidget(what==='picture'?'Image':'Text', nextId());
-    if(what==='picture'){ w.src='{{alert.image}}'; w.size={w:120,h:120}; }
-    else { w.base.text='{{alert.'+what+'}}'; w.font_weight='700'; w.base.color='@ink'; }
-    placeWidget(w);
-  }
-  // "12 / 50" for the first goal: a Text layer on stream in every state.
-  function addGoalText(){
-    const g=(tracked.goals||[])[0], id=g?g.id:'subs', w=IC().defaultWidget('Text', nextId());
-    w.always=true; w.states={}; w.font_weight='700'; w.base.color='@ink';
-    w.base.anim={style:'instant',duration_ms:400,easing:'ease-out',delay_ms:0};
-    w.base.text='{{goal.'+id+'}} / {{goal.'+id+'.target}}';
-    placeWidget(w);
-  }
-  async function openSaved(o){
-    try{
-      const html = await (await fetch('/overlay/'+encodeURIComponent(o.slug)+'.html')).text();
-      const d = IC().readDoc(html);
-      if(!d){ toast('That overlay was hand-written. Open the .html in the overlays folder to edit it','info'); return; }
-      doc=IC().upgradeDoc(d); slug=o.slug; sel=null;
-      // One from before pages takes the page the app lists it on.
-      if(!doc.purpose){ const listed=savedList.find(x=>x.slug===slug); if(listed) doc.purpose=listed.kind; }
-      doc.widgets.forEach((w,n)=>{ if(!w.id) w.id='w'+(n+1); });
-      $('st-name').value = doc.name;
-      enterMode(); renderLeft(); rebake(); renderProps(); resetHistory();
-    }catch(e){ toast('Could not load overlay','err'); }
-  }
-
-  // ---- selection + properties ----
-  function select(id){ sel=id;
-    $$('#st-hit .st-box').forEach(b=>b.classList.toggle('sel',b.dataset.id===id));
-    $$('#st-left-body .st-layer').forEach(b=>b.classList.toggle('sel',b.dataset.id===id));
-    renderProps();
-  }
-  function field(label, inner){ return '<div class="st-field"><label>'+label+'</label>'+inner+'</div>'; }
-
-  function numF(label, path, val){ return field(label,'<input class="ic-input mono" type="number" value="'+escapeAttr(val)+'" oninput="Studio.setNum(\''+path+'\',this.value)">'); }
-  // A slider's track fills up to its thumb (--p, as in the dashboard's), and
-  // its value reads beside it as it moves.
-  function rangeText(el){ const step=+el.step||1, v=+el.value; return step<1 ? v.toFixed(step<0.1?2:1).replace(/\.?0+$/,'') : String(v); }
-  function fillStRange(el){
-    fillRange(el);
-    const out=el.nextElementSibling; if(out && out.tagName==='OUTPUT') out.textContent=rangeText(el);
-  }
-  document.addEventListener('input', e=>{ if(e.target.matches && e.target.matches('#ov-studio input[type=range]')) fillStRange(e.target); });
-  // Panel groups fold away by their heading, and stay as left.
-  let foldedGroups = new Set();
-  try{ foldedGroups = new Set(JSON.parse(localStorage.getItem('ic-st-folded')||'[]')); }catch(_){}
-  function wireGroups(root){
-    root.querySelectorAll('.st-pgroup').forEach(g=>{
-      const head=g.querySelector('.st-pgroup-h'); if(!head) return;
-      const name=(head.firstChild&&head.firstChild.textContent||head.textContent).replace(/·.*$/,'').trim();
-      g.classList.toggle('folded', foldedGroups.has(name));
-      head.setAttribute('role','button'); head.tabIndex=0; head.setAttribute('aria-expanded', String(!foldedGroups.has(name)));
-      const flip=e=>{
-        if(e.target.closest('button,input,select,label')) return;
-        if(e.type==='keydown' && e.key!=='Enter' && e.key!==' ') return;
-        e.preventDefault();
-        const folded=!g.classList.contains('folded');
-        g.classList.toggle('folded', folded); head.setAttribute('aria-expanded', String(!folded));
-        if(folded) foldedGroups.add(name); else foldedGroups.delete(name);
-        try{ localStorage.setItem('ic-st-folded', JSON.stringify([...foldedGroups])); }catch(_){}
-      };
-      head.addEventListener('click', flip); head.addEventListener('keydown', flip);
-    });
-  }
-  // A slider with its value beside it; moving it calls Studio[fn](key, value).
-  function rangeF(label, fn, key, val, min, max, step){
-    return field(label,'<div class="st-range"><input type="range" min="'+min+'" max="'+max+'" step="'+step+'" value="'+escapeAttr(val)+'" oninput="Studio.'+fn+'(\''+key+'\',this.value)"><output></output></div>');
-  }
-  // A colour: a picker, the value as text, and (with `swatches`) the theme's
-  // colours. `call` is the setter up to its value, as "Studio.setGrad(".
-  function colorF(label, call, val, swatches){
-    const to=v=>call+v+')';
-    return field(label,'<div class="st-color"><input type="color" value="'+escapeAttr(themeHex(val))+'" oninput="'+to('this.value')+'"><input class="ic-input mono" value="'+escapeAttr(val)+'" oninput="'+to('this.value')+'"></div>'+
-      (swatches ? '<div class="st-swatches">'+['accent','live','warn','error','ink','grey'].map(k=>'<button class="st-sw" style="background:'+escapeAttr(themeHex('@'+k))+'" title="theme '+k+'" onclick="'+to("'@"+k+"'")+';Studio.refresh()"></button>').join('')+'</div>' : ''));
-  }
-  function renderProps(){
-    const p = $('st-props');
-    const w = sel ? widget(sel) : null;
-    // Redrawn for the widget already shown: keep where it was scrolled to.
-    const was = p.querySelector('.st-props-body'), same = !!w && p.dataset.for === w.id;
-    const scrolled = same && was ? was.scrollTop : 0;
-    p.dataset.for = w ? w.id : '';
-    if(!w){
-      p.innerHTML='<div class="st-props-empty"><span class="st-empty-ic">'+stIcon(UI_ICON.pick)+'</span><b>Nothing selected</b>'+
-        '<span>Click a layer, or a widget on the canvas, to style it.</span>'+
-        '<button class="ic-btn ic-btn-ghost st-mini" onclick="Studio.leftTab(\'add\')">Add a widget</button></div>';
-      return;
-    }
-    const k = IC().KINDS.find(x=>x.key===w.kind)||{fields:[]};
-    const f = k.fields||[];
-    const stLabel = (IC().STATES.find(s=>s.key===editState)||{label:editState}).label;
-    let h = '<div class="st-props-head"><span class="st-props-ic" style="--sw:'+layerColor(w)+'">'+kindIcon(w.kind)+'</span><div><div class="st-props-title">'+escapeHtml(k.label||w.kind)+'</div>'+
-      '<div class="st-props-sub" title="Its name in your own CSS (Theme tab)">#'+escapeHtml(w.id)+'</div></div></div><div class="st-props-body">';
-
-    // ---- GLOBAL: position & size (same in every state) ----
-    h += '<div class="st-pgroup"><div class="st-pgroup-h">Position &amp; size</div>';
-    h += field('Name','<input class="ic-input" value="'+escapeAttr(w.name||'')+'" placeholder="'+escapeAttr(layerName(Object.assign({},w,{name:''}),k))+'" maxlength="40" oninput="Studio.setName(this.value)">');
-    let anchorOpts = IC().ANCHORS.map(a=>'<option value="'+a+'"'+(w.anchor===a?' selected':'')+'>'+a+'</option>').join('');
-    h += field('Anchor','<select class="ic-input" oninput="Studio.set(\'anchor\',this.value)">'+anchorOpts+'</select>');
-    h += '<div class="st-field-row">'+numF('Offset X','offset.x',w.offset.x)+numF('Offset Y','offset.y',w.offset.y)+'</div>';
-    if(!k.full){ h += '<div class="st-field"><label>Align</label><div class="st-align">'+
-      [['tl','Top left','start','start'],['top','Top','center','start'],['tr','Top right','end','start'],['left','Left','start','center'],['center','Centre','center','center'],['right','Right','end','center'],['bl','Bottom left','start','end'],['bottom','Bottom','center','end'],['br','Bottom right','end','end']].map(a=>'<button class="st-alignb" title="'+a[1]+'" aria-label="Align '+a[1].toLowerCase()+'" style="justify-content:'+a[2]+';align-items:'+a[3]+'" onclick="Studio.align(\''+a[0]+'\')"><i></i></button>').join('')+'</div></div>'; }
-    if(f.indexOf('font')>=0) h += numF('Font size','font_px',w.font_px||34);
-    if(!(k.full)) h += '<div class="st-field-row">'+numF('Width','size.w',w.size.w)+numF('Height','size.h',w.size.h)+'</div>';
-    // On an alert design: where it goes when the alert has no picture.
-    if(mode().sim==='alert' && w.kind!=='Image') h += numF('With no picture, move left (px)','nopic',w.nopic||0);
-    if(mode().sim==='alert') h += '<label class="st-check"><input type="checkbox"'+(w.with_message?' checked':'')+' oninput="Studio.setFlag(\'with_message\',this.checked)"> Only when the alert has a message (a cheer\'s, a resub\'s)</label>';
-    if(f.indexOf('bind')>=0){
-      let bo=Object.keys(IC().BINDINGS).map(b=>'<option value="'+b+'"'+(w.bind===b?' selected':'')+'>'+IC().BINDINGS[b].label+'</option>').join('');
-      h += field('Shows','<select class="ic-input" oninput="Studio.set(\'bind\',this.value)">'+bo+'</select>');
-    }
-    // A goal bar or a timer shows the first goal or timer there is, unless
-    // one is picked. The canvas draws a sample while there are none.
-    if(w.kind==='Goal'||w.kind==='Timer'){
-      const isGoal=w.kind==='Goal', key=isGoal?'goal':'timer', list=(isGoal?tracked.goals:tracked.timers)||[];
-      h += '</div><div class="st-pgroup"><div class="st-pgroup-h">'+(isGoal?'Goal bar':'Timer')+'</div>';
-      let opts='<option value="">The first one</option>'+list.map(x=>'<option value="'+escapeAttr(x.id)+'"'+(w[key]===x.id?' selected':'')+'>'+escapeHtml(x.name)+'</option>').join('');
-      if(w[key] && !list.some(x=>x.id===w[key])) opts+='<option value="'+escapeAttr(w[key])+'" selected>'+escapeHtml(w[key])+' (deleted)</option>';
-      h += field(isGoal?'Goal':'Timer','<select class="ic-input" oninput="Studio.set(\''+key+'\',this.value)">'+opts+'</select>');
-      if(!list.length) h += '<div class="st-hint">None yet, so the canvas shows a sample. Make one under <b>Goals and timers</b>.</div>';
-      if(isGoal){
-        h += '<div class="st-hint">Width and Height size the bar. Its name and numbers are Text layers of their own: add one and pick from the chips under its text.</div>';
-        h += rangeF('Fill speed','setNum','smooth',(w.smooth!=null?w.smooth:0.7),0,2,0.1);
-        h += '<div class="st-hint" style="margin-top:-4px">How long the bar takes to reach a new count (seconds).</div>';
-        h += colorF('Track colour',"Studio.set('track',",w.track||'#0a0c10',true)+rangeF('Track opacity','setNum','trackOpacity',w.trackOpacity!=null?w.trackOpacity:0.6,0,1,0.05);
-        h += rangeF('Bar roundness','setNum','radius',w.radius!=null?w.radius:20,0,20,1);
-      } else {
-        h += field('When it runs out, show','<input class="ic-input" value="'+escapeAttr(w.end||'')+'" placeholder="0:00" oninput="Studio.set(\'end\',this.value)">');
-        h += '<div class="st-hint">Its name is a Text layer of its own. For a box behind it, add a Shape layer under it.</div>';
-      }
-    }
-    // An alert card: a theme's card, with what can be changed in it. Its
-    // words, picture and colour are the alert's.
-    if(w.kind==='AlertCard'){
-      const kit=Integrations.alertKit, c=w.card||{}, own=kit.themes[c.theme]||kit.themes.island;
-      const pick=(label,key,opts)=>field(label,'<select class="ic-input" oninput="Studio.setCard(\''+key+'\',this.value)">'+
-        opts.map(([v,l])=>'<option value="'+escapeAttr(v)+'"'+(v===(c[key]||'')?' selected':'')+'>'+escapeHtml(l)+'</option>').join('')+'</select>');
-      h += '</div><div class="st-pgroup"><div class="st-pgroup-h">Alert card</div>';
-      h += pick('Theme','theme',Object.entries(kit.themes).map(([id,t])=>[id,t.name+' · '+t.motion]));
-      h += pick('Font','font',[['','The theme\'s ('+own.font+')']].concat(kit.fonts.map(f=>[f,f])));
-      h += pick('Comes in','animation',[['','The theme\'s way']].concat(kit.anims));
-      h += pick('Its picture','picture',[['','Where the theme puts it'],['left','Beside the words'],['top','Above the words']]);
-      h += rangeF('Size','setCardNum','scale',c.scale||100,50,200,5);
-      h += colorF('Accent',"Studio.setCardColor('accent',",c.accent||own.accent,false);
-      h += colorF('Card',"Studio.setCardColor('background',",c.background||own.bg,false);
-      h += colorF('Words',"Studio.setCardColor('text',",c.text||own.fg,false);
-      h += rangeF('Card opacity','setCardNum','opacity',c.opacity!=null?c.opacity:own.op,0,100,5);
-      h += rangeF('Roundness','setCardNum','radius',c.radius!=null?c.radius:own.r,0,48,1);
-      h += '<div class="st-rowbtns"><button class="ic-btn ic-btn-ghost st-mini" onclick="Studio.resetCard()">Back to '+escapeHtml(own.name)+' as it comes</button></div>';
-      h += '<div class="st-hint">Its words, picture and colour are the alert\'s. Width and Height are its box: the card sits at the bottom of it, as wide as its words.</div>';
-    }
-    if(w.kind==='BitrateMeter'){
-      const sm=w.smooth!=null?w.smooth:0.6;
-      h += rangeF('Smoothing','setNum','smooth',sm,0,0.95,0.05);
-      h += '<div class="st-hint" style="margin-top:-4px">Higher = calmer line. Lower shows every jitter.</div>';
-    }
-    if(w.kind==='LiquidFill'){
-      const fixed=(w.level!=null&&w.level!=='buffer');
-      h += field('Fill level','<select class="ic-input" oninput="Studio.setLiquidLevel(this.value)"><option value="buffer"'+(!fixed?' selected':'')+'>Follow buffer</option><option value="fixed"'+(fixed?' selected':'')+'>Fixed level</option></select>');
-      if(fixed){ const pv=typeof w.level==='number'?w.level:60; h += rangeF('Level','setNum','level',pv,0,100,5); }
-      const wav=w.wave!=null?w.wave:1;
-      h += rangeF('Wave','setNum','wave',wav,0,2,0.1);
-      h += '<div class="st-hint" style="margin-top:-4px">0 = flat, 2 = choppy.</div>';
-    }
-    // Animation speed for widgets with their own ongoing motion.
-    if(['LiquidFill','Heartbeat'].indexOf(w.kind)>=0){
-      const spd=w.speed!=null?w.speed:1;
-      h += rangeF('Speed','setNum','speed',spd,0.25,3,0.05);
-      h += '<div class="st-hint" style="margin-top:-4px">Animation pace. 1 = default.</div>';
-    }
-    // Smoothness (transition easing) for data-driven widgets that move.
-    if(['LiquidFill','BufferBar','BufferRing'].indexOf(w.kind)>=0){
-      const smd=w.smooth!=null?w.smooth:(w.kind==='LiquidFill'?0.6:0.42);
-      h += rangeF('Smoothness','setNum','smooth',smd,0,1.5,0.05);
-      h += '<div class="st-hint" style="margin-top:-4px">How softly it eases to a new value (seconds).</div>';
-    }
-    if(w.kind==='BufferRing'){
-      h += '<label class="st-check"><input type="checkbox"'+(!w.notext?' checked':'')+' oninput="Studio.setFlag(\'notext\',!this.checked)"> Show value in centre</label>';
-      h += rangeF('Ring thickness','setNum','ringWidth',(w.ringWidth!=null?w.ringWidth:4),2,14,1);
-    }
-    if(w.kind==='EdgeAccent'){
-      h += rangeF('Border thickness','setNum','edgeWidth',(w.edgeWidth!=null?w.edgeWidth:3),1,14,1);
-      h += rangeF('Glow reach','setNum','glow',(w.glow!=null?w.glow:38),0,120,4);
-    }
-    if(w.kind==='BackgroundTint'){
-      h += rangeF('Intensity','setNum','intensity',(w.intensity!=null?w.intensity:0.22),0,0.7,0.02);
-    }
-    if(w.kind==='CornerFrame'){
-      h += rangeF('Corner size','setNum','frameSize',(w.frameSize!=null?w.frameSize:46),20,140,4);
-      h += rangeF('Thickness','setNum','frameWidth',(w.frameWidth!=null?w.frameWidth:3),1,12,1);
-    }
-    if(f.indexOf('unit')>=0) h += field('Unit','<input class="ic-input" value="'+escapeAttr(w.unit||'')+'" oninput="Studio.set(\'unit\',this.value)">');
-    if(f.indexOf('icon')>=0){ let io=IC().ICONS.map(n=>'<option value="'+n+'"'+(w.icon===n?' selected':'')+'>'+n+'</option>').join(''); h+=field('Icon','<select class="ic-input" oninput="Studio.set(\'icon\',this.value)">'+io+'</select>'); }
-    if(f.indexOf('shape')>=0){ let so=IC().SHAPES.map(n=>'<option value="'+n+'"'+(w.shape===n?' selected':'')+'>'+n+'</option>').join(''); h+=field('Shape','<select class="ic-input" oninput="Studio.set(\'shape\',this.value)">'+so+'</select>'); }
-    if(f.indexOf('src')>=0){ const isData=(w.src||'').slice(0,5)==='data:';
-      h += field('Image','<div class="st-field-row"><input class="ic-input" value="'+(isData?'(uploaded image)':escapeAttr(w.src||''))+'" placeholder="URL or upload" '+(isData?'disabled':'')+' oninput="Studio.set(\'src\',this.value)"><button class="ic-btn ic-btn-ghost" onclick="Studio.uploadImage()">Upload</button></div>'); }
-    // A Shape's or a picture's corners, ring and shadow (the runtime's
-    // edgeCss). Corners start from the shape's own.
-    if(w.kind==='Shape'||w.kind==='Image'){
-      if(w.kind==='Image') h += '<label class="st-check"><input type="checkbox"'+(w.cover?' checked':'')+' oninput="Studio.setFlag(\'cover\',this.checked)"> Fill its box (its width and height, cropped)</label>';
-      const ownR={rect:6,card:18,line:2,pill:160,circle:160}[w.shape]||0;
-      h += rangeF('Corners','setNum','radius',w.radius!=null?w.radius:(w.kind==='Shape'?ownR:0),0,160,1);
-      h += rangeF('Border','setNum','border',w.border||0,0,16,1);
-      h += colorF('Border colour',"Studio.set('border_color',",w.border_color||'@ink',true);
-      h += '<label class="st-check"><input type="checkbox"'+(w.shadow?' checked':'')+' oninput="Studio.setFlag(\'shadow\',this.checked)"> Drop shadow</label>';
-    }
-    if(f.indexOf('text')>=0){ h += field('Default text','<input class="ic-input" id="st-text" value="'+escapeAttr(w.base.text||'')+'" oninput="Studio.setBase(\'text\',this.value)">');
-      // An alert design's words are the alert's: one click each.
-      if(mode().sim==='alert') h += '<div class="st-say"><div class="st-say-h">What the alert says</div><div class="st-say-row"><span>The alert</span><div>'+
-        [['alert.title','title'],['alert.text','words'],['alert.message','message']].map(([v,l])=>'<button class="st-chip" title="{{'+v+'}}" onclick="Studio.insertVar(\'#st-text\',\'{{'+v+'}}\')">'+l+'</button>').join('')+'</div></div></div>';
-      else h += '<div class="st-hint">Tip: use live data like <code>{{delay}}</code>, <code>{{bitrate}}</code>, <code>{{bufferPct}}</code>, <code>{{phase}}</code>.</div>';
-      // Each goal and timer on a line of its own, with what it can say.
-      const chip=(v,l)=>'<button class="st-chip" title="{{'+escapeAttr(v)+'}}" onclick="Studio.insertVar(\'#st-text\',\'{{'+escapeAttr(v)+'}}\')">'+l+'</button>';
-      const lines=(tracked.goals||[]).map(g=>{ const k='goal.'+g.id; return [g.name,[[k+'.name','name'],[k,'count'],[k+'.target','target'],[k+'.left','left'],[k+'.percent','%']]]; })
-        .concat((tracked.timers||[]).map(t=>{ const k='timer.'+t.id; return [t.name,[[k+'.name','name'],[k,'clock']]]; }));
-      if(lines.length) h += '<div class="st-say"><div class="st-say-h">Goals and timers</div>'+lines.map(([name,parts])=>'<div class="st-say-row"><span>'+escapeHtml(name)+'</span><div>'+parts.map(([v,l])=>chip(v,l)).join('')+'</div></div>').join('')+'</div>'; }
-    if(f.indexOf('custom')>=0){
-      const c = w.custom||IC().defaultCustom();
-      h += field('Custom HTML','<textarea class="ic-input" oninput="Studio.setCustom(\'html\',this.value)">'+escapeHtml(c.html||'')+'</textarea>');
-      h += field('Custom CSS','<textarea class="ic-input" oninput="Studio.setCustom(\'css\',this.value)">'+escapeHtml(c.css||'')+'</textarea>');
-      h += field('Custom JS','<textarea class="ic-input" oninput="Studio.setCustom(\'js\',this.value)">'+escapeHtml(c.js||'')+'</textarea>');
-      h += '<div class="st-cheat"><b>Insert live data</b> '+['delay','phase','bufferPct','bitrate','cutCount','destAlive'].map(v=>'<button class="st-chip" onclick="Studio.insertVar(\'#st-props textarea\',\'{{'+v+'}}\')">{{'+v+'}}</button>').join('')+
-        '<br>In JS: <code>ic.onUpdate(s =&gt; ...)</code>, <code>ic.delay</code>, <code>ic.phase</code>, <code>ic.bind(sel,key)</code>.</div>';
-    }
-    h += '</div>';
-
-    // ---- TYPOGRAPHY (global, text-bearing widgets) ----
-    if(['DelayReadout','StatePill','Text','CutCounter','SessionElapsed','Banner','Timer'].indexOf(w.kind)>=0){
-      h += '<div class="st-pgroup"><div class="st-pgroup-h">Typography</div>';
-      const wt=String(w.font_weight||'');
-      let wo=['','400','500','600','700','800','900'].map(x=>'<option value="'+x+'"'+(wt===x?' selected':'')+'>'+(x||'default')+'</option>').join('');
-      h += '<div class="st-field-row">'+field('Weight','<select class="ic-input" oninput="Studio.set(\'font_weight\',this.value)">'+wo+'</select>')+
-        field('Letter spacing','<input class="ic-input mono" type="number" step="0.5" value="'+escapeAttr(w.letter_spacing!=null?w.letter_spacing:'')+'" placeholder="default" oninput="Studio.setLS(this.value)">')+'</div>';
-      const sys=IC().SYSTEM_FONT;
-      const fo='<option value="">Default (Inter)</option>'+IC().FONTS.map(n=>'<option'+(w.font_family===n?' selected':'')+'>'+escapeHtml(n)+'</option>').join('')+
-        '<option value="'+sys+'"'+(w.font_family===sys?' selected':'')+'>The PC\'s own</option>';
-      h += field('Font','<select class="ic-input" oninput="Studio.set(\'font_family\',this.value)">'+fo+'</select>');
-      h += '<label class="st-check" style="margin-top:2px"><input type="checkbox"'+(w.uppercase?' checked':'')+' oninput="Studio.set(\'uppercase\',this.checked)"> Uppercase</label>';
-      // Words that must stay inside a card: as wide as Width, and smaller
-      // when they're longer (an alert's words, a viewer's name), or wrapped
-      // onto more lines (a viewer's message).
-      if(w.kind==='Text'){
-        h += '<label class="st-check"><input type="checkbox"'+(w.shadow!==false?' checked':'')+' oninput="Studio.set(\'shadow\',this.checked)"> Shadow behind the words</label>';
-        const long = w.fit ? 'fit' : w.wrap ? 'wrap' : '';
-        h += field('Longer than its width','<select class="ic-input" oninput="Studio.setLong(this.value)">'+
-          [['','Run past it'],['fit','Shrink to fit'],['wrap','Wrap, up to 3 lines']].map(([v,l])=>'<option value="'+v+'"'+(long===v?' selected':'')+'>'+l+'</option>').join('')+'</select>');
-        if(long) h += field('Align in its width','<select class="ic-input" oninput="Studio.set(\'text_align\',this.value)">'+
-          [['left','Left'],['center','Centre'],['right','Right']].map(([v,l])=>'<option value="'+v+'"'+((w.text_align||'left')===v?' selected':'')+'>'+l+'</option>').join('')+'</select>');
-      }
-      h += '</div>';
-    }
-
-    // ---- VISIBILITY across all states (set once, no per-state hopping) ----
-    // (An alert design's layers all wait hidden and show while an alert
-    // plays: the delay's states are nothing to them.)
-    if(mode().sim!=='alert'){
-      h += '<div class="st-pgroup"><div class="st-pgroup-h">Show in</div>';
-      let chips = IC().STATES.map(st=>{
-        const visS = !(w.states && w.states[st.key] && w.states[st.key].visible===false);
-        return '<button class="st-vischip'+(visS?' on':'')+'" style="--dot:'+STATE_DOT[st.key]+'" onclick="Studio.toggleVis(\''+st.key+'\')">'+st.label+'</button>';
-      }).join('');
-      h += '<div class="st-vischips">'+chips+'</div>';
-      h += '<div class="st-rowbtns"><button class="ic-btn ic-btn-ghost st-mini" onclick="Studio.visOnly()">Only '+escapeHtml(stLabel)+'</button><button class="ic-btn ic-btn-ghost st-mini" onclick="Studio.visAll()">All states</button></div>';
-      h += '</div>';
-    }
-
-    // ---- LOOK in the currently-selected state ----
-    const one = !!w.always;
-    const sp = one ? w.base : ((w.states && w.states[editState]) || {});
-    const vis = one || sp.visible !== false;
-    h += '<div class="st-pgroup"><div class="st-pgroup-h"><span>'+
-      (one ? 'Look &middot; every state' : '<span class="dot" style="background:'+STATE_DOT[editState]+'"></span>Look &middot; '+escapeHtml(stLabel))+'</span></div>';
-    if(mode().sim==='states'){
-      h += '<label class="st-check"><input type="checkbox"'+(one?' checked':'')+' oninput="Studio.setAlways(this.checked)"> Same look in every delay state</label>';
-      h += '<div class="st-hint">'+(one ? 'What you set here shows whatever the delay is doing. Untick it to style each delay state on its own.'
-        : 'What you set here is for <b>'+escapeHtml(stLabel)+'</b> only: pick another state at the top of the canvas to style it.')+'</div>';
-    }
-    if(vis && !one) h += '<div class="st-rowbtns"><button class="ic-btn ic-btn-ghost st-mini" onclick="Studio.copyLookAll()">Copy this look to every state</button></div>';
-    if(!vis){
-      h += '<div class="st-empty-hint" style="padding:8px 2px">Hidden in '+escapeHtml(stLabel)+'. Toggle it in <b>Show in</b> above to style it here.</div>';
-    } else {
-      const col = sp.color || w.base.color || '#5ac8fa';
-      h += colorF('Colour '+(one?'':'<button class="st-allbtn" onclick="Studio.applyColorAll()">apply to all states</button>'),"Studio.setState('color',",col,true);
-      // Gradient only applies to text glyphs and solid-fill widgets.
-      if(['DelayReadout','StatePill','Text','CutCounter','SessionElapsed','Banner','Shape','Divider','Goal','Timer'].indexOf(w.kind)>=0){
-        const hasG=sp.grad!=null;
-        h += '<label class="st-check" style="margin-top:2px"><input type="checkbox"'+(hasG?' checked':'')+' oninput="Studio.toggleGrad(this.checked)"> Gradient fill</label>';
-        if(hasG){
-          h += colorF('Gradient colour','Studio.setGrad(',sp.grad,false);
-          const mo = sp.grad_anim===true ? 'flow' : (sp.grad_anim||'');
-          h += field('Motion','<select class="ic-input" oninput="Studio.setGradAnim(this.value)">'+[['','None'],['flow','Flow: slides across, on a loop'],['wave','Wave: sways back and forth'],['shine','Shine: a light sweeps across']]
-            .map(o=>'<option value="'+o[0]+'"'+(mo===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select>');
-          if(mo) h += rangeF('Speed (seconds a pass)','setStateNum','grad_speed',(sp.grad_speed!=null?sp.grad_speed:3.5),0.5,10,0.5);
-          h += rangeF('Angle','setStateNum','grad_angle',(sp.grad_angle!=null?sp.grad_angle:135),0,360,15);
-          if(mo==='flow'||mo==='wave') h += '<div class="st-hint">With a glow, the glow follows the colours as they move.</div>';
-        }
-      }
-      const op = sp.opacity!=null?sp.opacity:(w.base.opacity!=null?w.base.opacity:1);
-      h += rangeF('Opacity','setStateNum','opacity',op,0,1,0.05);
-      const gl = sp.glow!=null?sp.glow:(w.base.glow||0);
-      h += rangeF('Glow','setStateNum','glow',gl,0,40,1);
-      if(f.indexOf('text')>=0 && !one) h += field('Text override','<input class="ic-input" value="'+escapeAttr(sp.text!=null?sp.text:'')+'" placeholder="(uses default text)" oninput="Studio.setStateText(this.value)">');
-      // Multiple animations can run together (a pipeline via per-anim delay).
-      h += '<div class="st-field"><label style="display:flex;justify-content:space-between;align-items:center">Animations '+(one?'':'<button class="st-allbtn" onclick="Studio.applyAnimAll()">apply to all states</button>')+'</label></div>';
-      animsDisplay(sp,w).forEach((a,i)=>{
-        let ao=IC().animsFor(w.kind).map(x=>'<option value="'+x.key+'"'+(a.style===x.key?' selected':'')+'>'+x.label+(x.loop?' (loop)':'')+'</option>').join('');
-        let eo=IC().EASINGS.map(x=>'<option value="'+x.key+'"'+((a.easing||'ease-out')===x.key?' selected':'')+'>'+x.key+'</option>').join('');
-        const amp=(a.amount!=null?+a.amount:1);
-        // Intensity scales the motion (slide distance, pulse depth, etc). Fade
-        // has no magnitude to scale, so the slider is hidden for it.
-        const ampRow=(a.style==='fade'||a.style==='instant')?'':
-          '<div class="st-amprow"><span>Intensity</span>'+
-          '<input type="range" class="st-amp" min="0.2" max="2.5" step="0.1" value="'+escapeAttr(amp)+'" oninput="Studio.animSet('+i+',\'amount\',this.value);this.nextElementSibling.textContent=(+this.value).toFixed(1)+\'x\'">'+
-          '<b>'+amp.toFixed(1)+'x</b></div>';
-        h += '<div class="st-animrow"><div class="st-animrow-top"><select class="ic-input" oninput="Studio.animSet('+i+',\'style\',this.value)">'+ao+'</select>'+
-          '<button class="st-layer-btn" title="Remove" aria-label="Remove this animation" onclick="Studio.animDel('+i+')">'+stIcon(UI_ICON.x)+'</button></div>'+
-          '<div class="st-animrow-bot"><label><span>Length (ms)</span><input class="ic-input mono" type="number" value="'+escapeAttr(a.duration_ms||400)+'" oninput="Studio.animSet('+i+',\'duration_ms\',this.value)"></label>'+
-          '<label><span>Delay (ms)</span><input class="ic-input mono" type="number" value="'+escapeAttr(a.delay_ms||0)+'" oninput="Studio.animSet('+i+',\'delay_ms\',this.value)"></label>'+
-          '<label><span>Easing</span><select class="ic-input" oninput="Studio.animSet('+i+',\'easing\',this.value)">'+eo+'</select></label></div>'+ampRow+'</div>';
-      });
-      h += '<button class="ic-btn ic-btn-ghost" style="width:100%;margin-top:4px" onclick="Studio.animAdd()">+ Add animation</button>';
-      const ah = sp.hide_after_ms ? (sp.hide_after_ms/1000) : 0;
-      if(!one){
-      h += '<label class="st-check" style="margin-top:4px"><input type="checkbox"'+(ah>0?' checked':'')+' oninput="Studio.toggleHide(this.checked)"> Auto-hide in '+escapeHtml(stLabel)+'</label>';
-      if(ah>0){
-        h += field('Hide after seconds','<input class="ic-input mono" type="number" min="0.5" step="0.5" value="'+escapeAttr(ah)+'" oninput="Studio.setHideAfter(this.value)">');
-        h += '<div class="st-hint">Shows for '+ah+'s, then leaves so viewers see the gameplay.</div>';
-        const ex=sp.exit||'fade'; const exo=[['fade','Fade'],['slide-down','Slide down'],['slide-up','Slide up'],['pop','Pop'],['instant','Instant']].map(o=>'<option value="'+o[0]+'"'+(ex===o[0]?' selected':'')+'>'+o[1]+'</option>').join('');
-        h += field('Exit style','<select class="ic-input" oninput="Studio.setState(\'exit\',this.value)">'+exo+'</select>');
-      }
-      // Per-state position: move the widget in this phase (it glides there).
-      const eff = sp.offset || w.offset;
-      h += '<div class="st-field"><label style="display:flex;justify-content:space-between;align-items:center">Move in '+escapeHtml(stLabel)+
-        (sp.offset?' <button class="st-allbtn" onclick="Studio.resetStateOffset()">reset to base</button>':'')+'</label>'+
-        '<div class="st-field-row"><input class="ic-input mono" type="number" value="'+escapeAttr(eff.x)+'" oninput="Studio.setStateOffset(\'x\',this.value)" placeholder="X">'+
-        '<input class="ic-input mono" type="number" value="'+escapeAttr(eff.y)+'" oninput="Studio.setStateOffset(\'y\',this.value)" placeholder="Y"></div></div>';
-      }
-    }
-    h += '</div>';
-
-    h += '<div class="st-rowbtns"><button class="ic-btn ic-btn-ghost" onclick="Studio.dupWidget()">Duplicate</button><button class="ic-btn ic-btn-ghost st-danger" onclick="Studio.delWidget()">Delete widget</button></div>';
-    h += '</div>';
-    p.innerHTML = h;
-    const body = p.querySelector('.st-props-body');
-    p.querySelectorAll('input[type=range]').forEach(fillStRange);
-    wireGroups(p);
-    if(same && body){ body.classList.add('st-quiet'); body.scrollTop = scrolled; }
-  }
-
-  // ---- property setters ----
-  // Live-update the canvas WITHOUT reloading the iframe (a reload restarts
-  // every animation). Swap the <style> and reconcile per-widget attributes
-  // in place; fall back to a full rebake only when the structure changes.
-  let rebakeT=0;
-  function liveStyle(){
-    const f=$('st-canvas'); const cdoc=f&&f.contentDocument;
-    if(!cdoc||!cdoc.body){ rebake(); return; }
-    const html=IC().bake(doc);
-    const css=html.split('<style>')[1].split('</style>')[0];
-    const styleEl=cdoc.querySelector('style'); if(styleEl && styleEl.textContent!==css) styleEl.textContent=css;
-    const tmp=document.createElement('div');
-    tmp.innerHTML=html.split(/<body[^>]*>/)[1].split('<scr'+'ipt>')[0];
-    const news=tmp.querySelectorAll('.icw');
-    if(news.length!==cdoc.querySelectorAll('.icw').length){ rebake(); return; }
-    let ok=true;
-    news.forEach(nw=>{
-      const live=cdoc.getElementById(nw.id); if(!live){ ok=false; return; }
-      Array.from(nw.attributes).forEach(a=>{ if(live.getAttribute(a.name)!==a.value) live.setAttribute(a.name,a.value); });
-      Array.from(live.attributes).forEach(a=>{ if(!nw.hasAttribute(a.name)) live.removeAttribute(a.name); });
-    });
-    if(!ok){ rebake(); return; }
-    buildHits(); recordSoon(); updatePerfBadge();
-  }
-  function softRebake(){ clearTimeout(rebakeT); rebakeT=setTimeout(function(){ liveStyle(); if(studioSim&&studioSim.rehide) studioSim.rehide(); flashSynced(); }, 80); }
-  // Brief "synced" pulse on the preview after a live edit re-arms the timers,
-  // so it's clear the preview reflects the change (not the previous cycle).
-  let syncedT=0;
-  function flashSynced(){ const b=$('st-synced'); if(!b) return; b.classList.add('on'); clearTimeout(syncedT); syncedT=setTimeout(function(){ b.classList.remove('on'); }, 900); }
-  // Where the Look controls write: the widget's own look when it is the same
-  // in every state, else the edited state's.
-  function ensureState(){ const w=widget(sel); if(w.always) return w.base; if(!w.states) w.states={}; if(!w.states[editState]) w.states[editState]={}; return w.states[editState]; }
-  // One look for every state: the edited state's becomes the widget's own,
-  // and what the states held for themselves goes (only showing stays).
-  function setAlways(on){ const w=widget(sel); if(!w) return;
-    if(on) IC().oneLook(w, editState); else w.always=false;
-    rebake(); renderProps(); }
-  function set(k,v){ const w=widget(sel); w[k]=v; if(k==='unit'||k==='icon'||k==='shape'||k==='src'||k==='font_family'){ rebake(); } else softRebake(); }
-  function refresh(){ renderProps(); }
-  function setNum(path,v){ const w=widget(sel); const n=parseFloat(v)||0; if(path.indexOf('.')>=0){const[a,b]=path.split('.'); w[a][b]=n;} else w[path]=n; softRebake(); }
-  // LiquidFill: switch between buffer-following and a fixed level (number).
-  function setLiquidLevel(v){ const w=widget(sel); w.level = (v==='buffer') ? 'buffer' : (typeof w.level==='number'?w.level:60); softRebake(); renderProps(); }
-  // Boolean widget flag that changes structure (e.g. BufferRing centre text) -
-  // needs a full rebake since liveStyle only diffs attributes.
-  function setFlag(k,on){ const w=widget(sel); if(on) w[k]=true; else delete w[k]; rebake(); }
-  // What a Text layer does with words longer than its width: run past it,
-  // shrink to fit, or wrap.
-  function setLong(v){
-    const w=widget(sel);
-    delete w.fit; delete w.wrap;
-    if(v==='fit' || v==='wrap') w[v]=true;
-    rebake(); refresh();
-  }
-  function setBase(k,v){ widget(sel).base[k]=v; if(k==='text'&&left==='layers') renderLeft(); softRebake(); }
-  // A layer's own name, for the layer list (the page never shows it).
-  function setName(v){ const w=widget(sel); v=v.trim(); if(v) w.name=v; else delete w.name; if(left==='layers') renderLeft(); recordSoon(); }
-  // CustomHTML lives inside a sandboxed iframe (the widget's inner content),
-  // which the in-place live update can't touch - so debounce a full rebake.
-  let fullT=0; function softFull(){ clearTimeout(fullT); fullT=setTimeout(rebake,300); }
-  function setCustom(k,v){ const w=widget(sel); if(!w.custom) w.custom=IC().defaultCustom(); w.custom[k]=v; softFull(); }
-  // Re-render only when visibility flips (to show/hide the look fields).
-  // Avoid re-rendering on colour input - it would close the native picker.
-  function setState(k,v){ const sp=ensureState(); sp[k]=v; softRebake(); if(k==='visible') renderProps(); if(k==='color') refreshLayerColors(); }
-  function setStateNum(k,v){ ensureState()[k]=parseFloat(v)||0; softRebake(); }
-  function setStateText(v){ const sp=ensureState(); if(v==='') delete sp.text; else sp.text=v; softRebake(); }
-  function setAnim(k,v){ const sp=ensureState(); if(!sp.anim) sp.anim=Object.assign({style:'fade',duration_ms:400,easing:'ease-out',delay_ms:0}, widget(sel).base.anim||{}); sp.anim[k]=v; softRebake(); }
-  function setAnimNum(k,v){ const sp=ensureState(); if(!sp.anim) sp.anim=Object.assign({style:'fade',duration_ms:400,easing:'ease-out',delay_ms:0}, widget(sel).base.anim||{}); sp.anim[k]=parseFloat(v)||0; softRebake(); }
-  function setHideAfter(v){ const sp=ensureState(); const had=sp.hide_after_ms>0; const ms=Math.round((parseFloat(v)||0)*1000); if(ms<=0) delete sp.hide_after_ms; else sp.hide_after_ms=ms; softRebake(); studioDrive(); if((ms>0)!==had) renderProps(); }
-  // Auto-hide on/off toggle: on defaults to 4s + fade exit; off clears both.
-  function toggleHide(on){ const sp=ensureState(); if(on){ sp.hide_after_ms=sp.hide_after_ms||4000; if(!sp.exit) sp.exit='fade'; } else { delete sp.hide_after_ms; delete sp.exit; } softRebake(); studioDrive(); renderProps(); }
-  function setLS(v){ const w=widget(sel); if(v==='') delete w.letter_spacing; else w.letter_spacing=parseFloat(v)||0; softRebake(); }
-  // Theme colours (overlay-wide). Editing one recolours every widget that
-  // uses the matching @token.
-  function ensureTheme(){ if(!doc.theme) doc.theme=IC().defaultTheme(); return doc.theme; }
-  function setTheme(key,val,srcEl){ ensureTheme()[key]=val; softRebake();
-    // Mirror the value to the paired colour/hex input IN PLACE. We must not
-    // renderLeft() here - rebuilding the panel destroys the open
-    // <input type="color">, which is why the picker slammed shut the instant
-    // you dragged the hue. The canvas still updates live via softRebake.
-    if(srcEl&&srcEl.parentNode){ srcEl.parentNode.querySelectorAll('input').forEach(function(i){ if(i!==srcEl&&i.value!==val) i.value=val; }); }
-    refreshLayerColors(); // theme change recolours @token widgets
-  }
-  function themeHex(c){ if(typeof c==='string' && c.charAt(0)==='@'){ const t=ensureTheme(); return t[c.slice(1)]||'#5ac8fa'; } return c||'#5ac8fa'; }
-  // Per-state gradient (a second colour).
-  function setGrad(v){ const sp=ensureState(); if(!v) delete sp.grad; else sp.grad=v; softRebake(); }
-  function toggleGrad(on){ const sp=ensureState(); if(on){ sp.grad=sp.color||widget(sel).base.color||'#54e38e'; } else { delete sp.grad; delete sp.grad_anim; } softRebake(); renderProps(); }
-  function setGradAnim(motion){ const sp=ensureState(); if(motion) sp.grad_anim=motion; else delete sp.grad_anim; softRebake(); renderProps(); }
-  // Alignment helpers - set anchor + offset to a known spot.
-  function align(where){ const w=widget(sel); if(!w) return; const S=64;
-    const map={ 'center':['center',0,0], 'top':['top',0,S], 'bottom':['bottom',0,S],
-      'left':['left',S,0], 'right':['right',S,0],
-      'tl':['top-left',96,62], 'tr':['top-right',96,62], 'bl':['bottom-left',96,62], 'br':['bottom-right',96,62] };
-    const m=map[where]; if(!m) return; w.anchor=m[0]; w.offset={x:m[1],y:m[2]}; rebake(); renderProps(); }
-  // Multi-animation list (per state). Migrates a single `anim` to `anims`.
-  function animsDisplay(sp,w){ if(sp.anims) return sp.anims; if(sp.anim) return [sp.anim]; return [w.base.anim||{style:'fade',duration_ms:400,easing:'ease-out',delay_ms:0}]; }
-  function stAnims(){ const sp=ensureState(); if(!sp.anims){ sp.anims = sp.anim ? [clone(sp.anim)] : [clone(widget(sel).base.anim||{style:'fade',duration_ms:400,easing:'ease-out',delay_ms:0})]; delete sp.anim; } return sp.anims; }
-  function animAdd(){ stAnims().push({style:'pulse',duration_ms:1600,easing:'ease-out',delay_ms:0}); softRebake(); renderProps(); }
-  function animDel(i){ const a=stAnims(); a.splice(i,1); if(!a.length) a.push({style:'instant',duration_ms:400,easing:'ease-out',delay_ms:0}); softRebake(); renderProps(); }
-  function animSet(i,k,v){ const a=stAnims(); if(!a[i]) return;
-    if(k==='duration_ms'||k==='delay_ms') a[i][k]=parseInt(v,10)||0;
-    else if(k==='amount') a[i][k]=parseFloat(v)||1;
-    else a[i][k]=v;
-    softRebake(); if(k==='style') renderProps(); }
-  // Image upload -> embed as a self-contained data URL (no server assets).
-  function uploadImage(){ const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
-    inp.onchange=()=>{ const f=inp.files&&inp.files[0]; if(!f) return;
-      if(f.size>6*1024*1024){ toast('That image is '+Math.round(f.size/1024/1024)+'MB - consider a smaller one so the overlay loads fast in OBS','info'); }
-      const rd=new FileReader(); rd.onload=()=>{ const w=widget(sel); w.src=rd.result; rebake(); renderProps(); toast('Image added','ok'); }; rd.readAsDataURL(f); };
-    inp.click(); }
-  // Insert a {{var}} into a custom/text field at the cursor.
-  function insertVar(fieldSel, v){ const el=document.querySelector(fieldSel); if(!el) return; const s=el.selectionStart||el.value.length;
-    el.value=el.value.slice(0,s)+v+el.value.slice(el.selectionEnd||s); el.dispatchEvent(new Event('input')); el.focus(); }
-  // Reassuring perf estimate (the overlay runs in an OBS browser source).
-  function updatePerfBadge(){ const el=$('st-perf'); if(!el||!doc) return;
-    const full=['EdgeAccent','BackgroundTint','LiquidFill','CornerFrame'];
-    let fs=0, anim=0; const n=doc.widgets.length;
-    doc.widgets.forEach(w=>{ if(full.indexOf(w.kind)>=0) fs++;
-      const ha=(w.base&&w.base.anim&&w.base.anim.style&&w.base.anim.style!=='instant')||Object.keys(w.states||{}).some(k=>{const s=w.states[k];return s.anim&&s.anim.style&&s.anim.style!=='instant';}); if(ha) anim++; });
-    let level='Lightweight', cls='ok';
-    if(fs>=2 || n>10 || anim>8){ level='Moderate'; cls='warn'; }
-    if(fs>=3 || n>16){ level='Heavy'; cls='err'; }
-    el.textContent=level; el.className='st-perf '+cls; el.title=n+' widgets · '+fs+' full-screen · '+anim+' animated, in an OBS browser source';
-  }
-  function setStateOffset(axis,v){ const w=widget(sel); const sp=ensureState(); if(!sp.offset) sp.offset={x:w.offset.x,y:w.offset.y}; sp.offset[axis]=parseInt(v,10)||0; softRebake(); }
-  function resetStateOffset(){ const sp=ensureState(); delete sp.offset; softRebake(); renderProps(); }
-  // Visibility across states - so you don't have to visit each state.
-  function stEnsure(st){ const w=widget(sel); if(!w.states) w.states={}; if(!w.states[st]) w.states[st]={}; return w.states[st]; }
-  function toggleVis(st){ const o=stEnsure(st); o.visible = o.visible===false; if(o.visible===true) delete o.visible; softRebake(); renderProps(); }
-  function visOnly(){ IC().STATES.forEach(s=>{ const o=stEnsure(s.key); if(s.key===editState) delete o.visible; else o.visible=false; }); softRebake(); renderProps(); }
-  function visAll(){ const w=widget(sel); IC().STATES.forEach(s=>{ if(w.states&&w.states[s.key]) delete w.states[s.key].visible; }); softRebake(); renderProps(); }
-  // Apply-to-all: write the current state's value to base + clear overrides.
-  function applyColorAll(){ const w=widget(sel); const c=(w.states&&w.states[editState]&&w.states[editState].color)||w.base.color; w.base.color=c; IC().STATES.forEach(s=>{ if(w.states&&w.states[s.key]) delete w.states[s.key].color; }); softRebake(); renderProps(); renderLeft(); toast('Colour applied to all states','ok'); }
-  function applyAnimAll(){ const w=widget(sel); const a=(w.states&&w.states[editState]&&w.states[editState].anim)||w.base.anim; w.base.anim=clone(a); IC().STATES.forEach(s=>{ if(w.states&&w.states[s.key]) delete w.states[s.key].anim; }); softRebake(); renderProps(); toast('Animation applied to all states','ok'); }
-  // Copy this state's whole look (colour/opacity/text/anim/hide/move) to all others.
-  function copyLookAll(){ const w=widget(sel); const src=(w.states&&w.states[editState])||{}; const look={};
-    ['color','opacity','text','anim','hide_after_ms','offset'].forEach(k=>{ if(src[k]!==undefined) look[k]=clone(src[k]); });
-    IC().STATES.forEach(s=>{ if(s.key!==editState){ if(!w.states[s.key]) w.states[s.key]={}; Object.assign(w.states[s.key], clone(look)); } });
-    softRebake(); renderProps(); renderLeft(); toast('Look copied to all states','ok'); }
-  function dupWidget(){ const w=clone(widget(sel)); w.id=nextId(); w.offset={x:w.offset.x+20,y:w.offset.y+20}; doc.widgets.push(w); sel=w.id; arrived=w.id; renderLeft(); rebake(); renderProps(); }
-  function delWidget(){ delWidgetById(sel); }
-  function delWidgetById(id){ doc.widgets=doc.widgets.filter(w=>w.id!==id); if(sel===id) sel=null; renderLeft(); rebake(); renderProps(); }
-  function moveWidget(id,dir){ const i=doc.widgets.findIndex(w=>w.id===id); if(i<0) return; const j=i+dir; if(j<0||j>=doc.widgets.length) return; const t=doc.widgets[i]; doc.widgets[i]=doc.widgets[j]; doc.widgets[j]=t; renderLeft(); rebake(); }
-
-  // ---- play: run the delay-lifecycle simulation without changing what you edit ----
-  function playLabel(){ const pb=$('st-play'); if(pb) pb.classList.toggle('on',playing); }
-  function stopPlay(){ playing=false; playLabel(); if(studioSim){ studioSim.stop(); studioSim=null; } }
-  function play(){ playing=!playing; playLabel(); if(!playing) $$('#st-states .st-st').forEach(b=>b.classList.toggle('on',b.dataset.st===editState)); studioDrive(); }
-
-  // ---- save / url / delete ----
-  function updateUrlLabel(){ $('st-url').textContent = slug ? (location.origin+'/overlay/'+slug+'.html') : 'save to get a URL'; }
-  async function save(){
-    doc.name = $('st-name').value.trim() || 'Untitled overlay';
-    // A save that fails leaves the overlay where it was: unsaved if it was
-    // new, or still on its own file (not a second "name-2" at the next try).
-    const was = slug;
-    if(!slug) slug = freeSlug(doc.name);
-    const html = IC().bake(doc);
-    try{
-      const r = await fetch('/overlays/'+encodeURIComponent(slug), {method:'POST', headers:{'Content-Type':'text/html'}, body:html});
-      const j = await r.json();
-      // Auto-select this overlay when we return to the gallery so the
-      // save reflects immediately (no F5).
-      if(j.ok){ updateUrlLabel(); pendingSelect=slug; markClean(); toast('Saved. The URL is ready to drop into OBS','ok'); loadSaved(); return true; }
-      toast(j.error||'Save failed','err');
-    }catch(e){ toast('Save failed','err'); }
-    slug = was;
-    return false;
-  }
-  function copyUrl(btn){ if(!slug){ toast('Save the overlay first to get a URL','info'); return; } copyText(btn, location.origin+'/overlay/'+slug+'.html','Overlay URL'); }
-  // ---- overflow menu: save-as / rename / export / import / delete ----
-  function toggleMenu(ev){
-    ev.stopPropagation(); const p=$('st-menu-pop'); if(!p) return; p.hidden=!p.hidden;
-    const purpose=IC().docPurpose(doc), mv=$('st-menu-move');
-    mv.hidden = purpose==='goals' || purpose==='alerts';
-    mv.textContent = purpose==='custom' ? 'Move to Delay' : 'Move to Custom';
-  }
-  // Save a separate copy under a new slug (so it never overwrites the current
-  // overlay). The user can rename afterwards.
-  // A copy that fails to save leaves the original as it was: on its own
-  // file and under its own name (it used to forget its file, so the next
-  // Save made a second overlay instead of updating it).
-  async function saveAsNew(){
-    const was = slug, name = doc.name, purpose = doc.purpose;
-    slug=null; doc.name=(doc.name||'Overlay')+' copy'; $('st-name').value=doc.name;
-    if(IC().docPurpose(doc)==='goals') doc.purpose='custom';
-    if(await save()) return true;
-    slug=was; doc.name=name; $('st-name').value=name; doc.purpose=purpose;
-    return false;
-  }
-  function menu(action){ const p=$('st-menu-pop'); if(p) p.hidden=true;
-    if(action==='delete') return deleteOverlay();
-    if(action==='rename') return renameOverlay();
-    if(action==='move'){
-      doc.purpose = IC().docPurpose(doc)==='custom' ? 'delay' : 'custom'; updateDirty();
-      // What the Studio offers follows: the delay's states, or none.
-      enterMode(); renderLeft(); renderProps(); studioDrive();
-      toast('It moves to the '+(doc.purpose==='custom'?'Custom':'Delay')+' page when you save','info');
-      return;
-    }
-    if(action==='export') return exportDoc();
-    if(action==='import') return importDoc();
-  }
-  async function renameOverlay(){
-    const nn=(prompt('Rename overlay', doc.name)||'').trim(); if(!nn) return;
-    // A goal's or a timer's overlay keeps its file, which its card finds it by.
-    const old=slug; doc.name=nn; $('st-name').value=nn; slug=IC().docPurpose(doc)==='goals' ? old : freeSlug(nn, old);
-    // A save that failed: the overlay keeps its old file (it used to be
-    // deleted here, losing the overlay with the rename).
-    if(!(await save())){ slug=old; return; }
-    if(old && old!==slug){ try{ await fetch('/overlays/'+encodeURIComponent(old)+'/delete',{method:'POST'}); }catch(e){} loadSaved(); }
-  }
-  function exportDoc(){ doc.name=$('st-name').value.trim()||doc.name||'overlay';
-    const blob=new Blob([JSON.stringify(doc,null,2)],{type:'application/json'});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=slugify(doc.name)+'.json'; a.click();
-    setTimeout(()=>URL.revokeObjectURL(a.href),1500); toast('Exported .json','ok'); }
-  function importDoc(){ const inp=document.createElement('input'); inp.type='file'; inp.accept='.json,application/json';
-    inp.onchange=()=>{ const f=inp.files&&inp.files[0]; if(!f) return; const rd=new FileReader();
-      rd.onload=()=>{ try{ const d=JSON.parse(rd.result); if(!d||!Array.isArray(d.widgets)) throw 0;
-        doc=IC().upgradeDoc(d); slug=null; sel=null; doc.widgets.forEach((w,n)=>{ if(!w.id) w.id='w'+(n+1); });
-        $('st-name').value=doc.name||'Imported overlay';
-        renderStates(); renderLeft(); rebake(); renderProps(); resetHistory();
-        toast('Imported. Save to keep it','ok');
-      }catch(e){ toast('Not a valid overlay .json','err'); } };
-      rd.readAsText(f); };
-    inp.click(); }
-  async function deleteOverlay(){
-    if(!slug){ toast('This draft is not saved yet','info'); return; }
-    if(!confirm('Delete overlay "'+doc.name+'"? This removes its file from the overlays folder.')) return;
-    const r = await postAction('/overlays/'+encodeURIComponent(slug)+'/delete');
-    if(!r.ok){ toast(`Could not delete the overlay: ${r.error}`,'err'); return; }
-    toast('Deleted','info'); slug=null; doc=null; mounted=false; backToGallery();
-  }
-  async function loadSaved(){
-    try{ savedList = await (await fetch('/overlays')).json(); if(!Array.isArray(savedList)) savedList=[]; }catch(e){ savedList=[]; }
-    return savedList;
-  }
-  // Overlays an older Studio baked (another build, or none written down)
-  // are baked again from their own doc, so a fix to how layers draw reaches
-  // them without anyone saving. Never while OBS is live: a saved overlay
-  // reloads in OBS. Run once per visit; a failure tries again next visit.
-  // Off air: OBS isn't sending, nothing goes out, and no hold or tail is
-  // keeping a stream up (an overlay rebuilt then reloads in OBS mid-show).
-  function offAir(s){ return !!s && !s.ingest_alive && !s.egress_alive && !s.hold && !(s.tail_ms > 0); }
-  // Each visit tries once: going live stops it, to finish the next time
-  // the stream is off; a failure waits for the next visit.
-  let upgrading=false, upgraded=false;
-  async function upgradeSaved(){
-    if(upgrading || upgraded || !IC() || !offAir(lastState)) return;
-    upgrading=true;
-    let wrote=false, wentLive=false;
-    try{
-      const old=(await loadSaved()).filter(o=>o.studio && o.build!==IC().BUILD);
-      for(const o of old){
-        if(!offAir(lastState)){ wentLive=true; break; }
-        const html=await fetch('/overlay/'+encodeURIComponent(o.slug)+'.html').then(r=>r.ok?r.text():'', ()=>'');
-        const doc=IC().readDoc(html);
-        if(!doc) continue;
-        const r=await fetch('/overlays/'+encodeURIComponent(o.slug),{method:'POST',headers:{'Content-Type':'text/html'},
-          body:IC().bake(o.build ? doc : layeredCard(o.slug, doc))}).then(x=>x.json(),()=>null);
-        if(!r || !r.ok) break;
-        wrote=true;
-      }
-      upgraded=!wentLive;
-    }catch(e){ upgraded=true; console.error('saved overlays not updated:', e); }
-    finally{ upgrading=false; }
-    if(wrote){ await loadSaved(); if($('ovg-browser').offsetParent) renderGallery(true); }
-  }
-  // An alert design InstantClone made as one Alert card, before designs
-  // were layers ("My alerts", the ready-made ones then): the same look, in
-  // layers. One that layers can't draw (custom CSS for the card, the
-  // picture on top) stays as it is.
-  function layeredCard(slugId, doc){
-    const w=doc.widgets || [];
-    if(!/^(alert-[a-z]+|my-alerts(-\d+)?)$/.test(slugId) || w.length!==1 || w[0].kind!=='AlertCard') return doc;
-    const layered=IC().alertLookDoc(Object.assign({theme:readyTheme(slugId) || 'island'}, w[0].card || {}));
-    if(!layered) return doc;
-    layered.name=doc.name;
-    if(doc.sound) layered.sound=doc.sound;
-    return layered;
-  }
-  // First-run seeding: bake the built-in presets to real overlay files so the
-  // gallery is one uniform list (every item has a working URL). Gated by the
-  // server `overlays_seeded` flag (set via POST /overlays/seeded) so deleted
-  // presets stay gone. Skips any slug that already exists.
-  let seeding=false;
-  async function seedPresets(){
-    if(seeding || !IC()) return; seeding=true;
-    try{
-      await loadSaved();
-      for(let i=0;i<IC().PRESETS.length;i++){
-        const p=IC().PRESETS[i];
-        if(savedList.some(o=>o.slug===slugify(p.name))) continue;
-        await savePreset(p);
-      }
-      await fetch('/overlays/seeded',{method:'POST'});
-      await loadSaved(); renderGallery();
-    }catch(e){}finally{ seeding=false; }
-  }
-
-  new ResizeObserver(fitPreview).observe($('ovg-stage'));
-  document.addEventListener('keydown', (e)=>{
-    const studioOpen = $('ov-studio') && !$('ov-studio').hidden;
-    if(e.key==='Escape' && studioOpen){ backToGallery(); return; }
-    if(!studioOpen) return;
-    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target&&e.target.tagName)||'');
-    const mod = e.ctrlKey || e.metaKey;
-    if(mod && (e.key==='z'||e.key==='Z')){ e.preventDefault(); if(e.shiftKey) redo(); else undo(); return; }
-    if(mod && (e.key==='y'||e.key==='Y')){ e.preventDefault(); redo(); return; }
-    if(typing) return;
-    if(mod && (e.key==='d'||e.key==='D') && sel){ e.preventDefault(); dupWidget(); return; }
-    if((e.key==='Delete'||e.key==='Backspace') && sel){ e.preventDefault(); delWidget(); return; }
-    // Arrow-nudge the selected widget's base offset.
-    if(sel && /^Arrow/.test(e.key)){
-      const w=widget(sel); if(!w) return; e.preventDefault();
-      const step=e.shiftKey?10:1;
-      const sx=w.anchor.indexOf('right')>=0?-1:1, sy=w.anchor.indexOf('bottom')>=0?-1:1;
-      if(e.key==='ArrowLeft') w.offset.x-=sx*step;
-      if(e.key==='ArrowRight') w.offset.x+=sx*step;
-      if(e.key==='ArrowUp') w.offset.y-=sy*step;
-      if(e.key==='ArrowDown') w.offset.y+=sy*step;
-      rebake(); renderProps();
-    }
-  });
-  document.addEventListener('click', ()=>{ const p=$('st-menu-pop'); if(p && !p.hidden) p.hidden=true; });
-
-  return { show, openStudio, newOverlay, duplicateOverlay, backToGallery, previewSim, deleteFromGallery,
-    seedPresets, upgradeSaved, restoreDefaults, toggleAutohide, copyGallery, undo, redo, toggleMenu, menu,
-    leftTab, selectState, play, save, saveAsNew, copyUrl, deleteOverlay, loadSaved,
-    set, setNum, setBase, setCustom, setState, setStateNum, setStateText, setAnim, setAnimNum,
-    setHideAfter, toggleHide, setLS, setStateOffset, resetStateOffset, toggleVis, visOnly, visAll, applyColorAll, applyAnimAll, copyLookAll,
-    setTheme, setGrad, toggleGrad, setGradAnim, align, animAdd, animDel, animSet, uploadImage, insertVar,
-    dupWidget, delWidget, isDirty, setLiquidLevel, setFlag, refresh, setAlways, addGalleryToObs,
-    setCard, setCardNum, setCardColor, resetCard, setName, setLong, editDesign, duplicateDesign, useDesign, resetDesign, alertsChanged };
-})();
-
 // Existing init paths call loadOverlays() before the `const Studio`
 // statement runs; the try/catch swallows the temporal-dead-zone error so
 // early calls no-op. The Studio loads its own saved list in init().
@@ -14462,6 +12985,7 @@ function openUpdateInAbout(){
   // and leave first-run users without a tour after they save settings.
 })();
 </script>
+<script src="/studio.js"></script>
 <script src="/integrations.js"></script>
 </body>
 </html>
