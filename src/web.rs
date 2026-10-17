@@ -290,7 +290,8 @@ async fn serve(
     if method == "GET"
         && (bare_path == "/overlay-runtime.js"
             || bare_path == "/dock.js"
-            || bare_path == "/integrations.js")
+            || bare_path == "/integrations.js"
+            || bare_path == "/studio.js")
     {
         if !accept_gzip {
             let body = b"this build serves gzip-encoded JS; \
@@ -307,6 +308,7 @@ async fn serve(
         let blob: &'static [u8] = match bare_path {
             "/dock.js" => DOCK_JS_GZ,
             "/integrations.js" => INTEGRATIONS_JS_GZ,
+            "/studio.js" => STUDIO_JS_GZ,
             _ => OVERLAY_RUNTIME_JS_GZ,
         };
         let r = format!(
@@ -5480,6 +5482,8 @@ static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.ht
 /// The dashboard's Integrations tab; source in `web/integrations.js`,
 /// build-time gzipped like the dock script.
 static INTEGRATIONS_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js.gz"));
+/// The Overlay Studio editor; source in `web/studio.js`, gzipped the same way.
+static STUDIO_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/studio.js.gz"));
 
 /// Overlay Studio author-time runtime + baker. Loaded only by the
 /// dashboard (never by a live overlay in OBS). Source lives in
@@ -8007,6 +8011,7 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         ("GET", "/dock.js", Access::Control),
         ("GET", "/overlay-runtime.js", Access::Admin),
         ("GET", "/integrations.js", Access::Admin),
+        ("GET", "/studio.js", Access::Admin),
         ("GET", "/obs/vod-script/download", Access::Admin),
         ("GET", "/events", Access::Control),
         ("GET", "/overlay-events", Access::Public),

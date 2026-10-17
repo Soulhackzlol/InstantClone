@@ -31,6 +31,8 @@ fn main() {
         ("overlay-runtime.js", false),
         // Integrations UI: template-literal heavy like the dock.
         ("integrations.js", false),
+        // The Overlay Studio editor, the same way.
+        ("studio.js", false),
     ] {
         let src_path = web_dir.join(name);
         println!("cargo:rerun-if-changed={}", src_path.display());
