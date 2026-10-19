@@ -75,6 +75,8 @@ mod trace;
 mod tray;
 mod update_check;
 mod web;
+#[cfg(windows)]
+mod winget_record;
 
 use crate::config::Settings;
 use std::path::PathBuf;
@@ -175,6 +177,8 @@ fn main() -> std::io::Result<()> {
     // second launch during an update's restart must not delete the `.new`
     // the update is about to swap in.
     self_update::sweep_leftovers();
+    #[cfg(windows)]
+    self_update::sync_winget_record();
 
     // Egress trace - wire-level append-only log next to the config.
     // Captures handshake details, sequence headers, every video tag,

@@ -107,9 +107,10 @@ fn owner_of(
     }
 }
 
-/// A string value under an HKCU subkey, or None when it is missing.
+/// A string value under an HKCU subkey, or None when it is missing. Also
+/// used by `winget_record`.
 #[cfg(windows)]
-fn read_value(subkey: &str, name: &str) -> Option<String> {
+pub(crate) fn read_value(subkey: &str, name: &str) -> Option<String> {
     use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
     let subkey = wide(subkey);
     let name = wide(name);
@@ -215,12 +216,14 @@ fn set_under(subkey: &str, enabled: bool) -> io::Result<()> {
     write_value(subkey, name, &run_command()?)
 }
 
+/// Set a string value under an HKCU subkey, creating the subkey when it is
+/// missing. Also used by `winget_record`.
 #[cfg(windows)]
-fn write_value(subkey: &str, name: &str, command: &str) -> io::Result<()> {
+pub(crate) fn write_value(subkey: &str, name: &str, text: &str) -> io::Result<()> {
     use windows_sys::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
     let subkey = wide(subkey);
     let name = wide(name);
-    let value = wide(command);
+    let value = wide(text);
     // Length is in BYTES and must include the terminating null.
     let bytes = (value.len() * std::mem::size_of::<u16>()) as u32;
     let rc = unsafe {

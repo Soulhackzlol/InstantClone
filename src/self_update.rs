@@ -97,12 +97,54 @@ fn sidecar(exe: &Path, ext: &str) -> PathBuf {
 /// A `.new` younger than `STAGED_IN_USE` stays: two setups can run from one
 /// exe (CONFIG_PATH), and the other may be about to swap it in.
 pub fn sweep_leftovers() {
-    if let Ok(exe) = std::env::current_exe() {
+    if let Ok(exe) = running_exe() {
         let _ = std::fs::remove_file(sidecar(&exe, "old"));
         let staged = sidecar(&exe, "new");
         if !is_younger_than(&staged, STAGED_IN_USE) {
             let _ = std::fs::remove_file(staged);
         }
+    }
+}
+
+/// Bring winget's record of this install in line with the exe running now,
+/// when winget installed it. Called once at startup, so a swap made by any
+/// version, or an exe copied in by hand, is recorded on the next launch.
+#[cfg(windows)]
+pub fn sync_winget_record() {
+    let Ok(exe) = running_exe() else {
+        return;
+    };
+    // The path check is free; hashing the exe is only worth it for winget.
+    if !crate::winget_record::is_winget_install(&exe) {
+        return;
+    }
+    if let Some(sha256) = running_sha256() {
+        let version = crate::update_check::current_version();
+        crate::winget_record::record(&exe, version, sha256);
+    }
+}
+
+/// The exe file an update replaces. Started through a link (winget puts one
+/// on PATH), `current_exe` can name the link, and swapping that would leave
+/// the real exe on the old version, so a link is followed to its file.
+fn running_exe() -> std::io::Result<PathBuf> {
+    resolve_link(std::env::current_exe()?)
+}
+
+/// `path` itself, or the file it links to when it is a symbolic link.
+fn resolve_link(path: PathBuf) -> std::io::Result<PathBuf> {
+    if !std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+        return Ok(path);
+    }
+    std::fs::canonicalize(path).map(without_verbatim_prefix)
+}
+
+/// `canonicalize` on Windows answers `\\?\C:\...`. The plain `C:\...` is the
+/// same file and reads normally in messages; a network path keeps its prefix.
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
+        Some(rest) if !rest.starts_with(r"UNC\") => PathBuf::from(rest),
+        _ => path,
     }
 }
 
@@ -138,7 +180,7 @@ pub fn prepare() -> Result<Staged, String> {
     let agent = crate::https::https_agent();
     let bytes = fetch_verified(&agent, &release_downloads(), &latest)?;
 
-    let exe = std::env::current_exe().map_err(|e| format!("can't locate the running exe: {e}"))?;
+    let exe = running_exe().map_err(|e| format!("can't locate the running exe: {e}"))?;
     stage_beside(&exe, &bytes, latest, info.rebuild)
 }
 
@@ -151,8 +193,10 @@ fn stage_beside(
     rebuild: bool,
 ) -> Result<Staged, String> {
     let staged = sidecar(exe, "new");
-    std::fs::write(&staged, bytes)
-        .map_err(|e| format!("can't write the update next to the exe: {e}"))?;
+    std::fs::write(&staged, bytes).map_err(|e| match e.kind() {
+        std::io::ErrorKind::PermissionDenied => unwritable_folder_message(exe),
+        _ => format!("can't write the update next to the exe: {e}"),
+    })?;
 
     // A downloaded Linux binary lands non-executable; the swap-then-relaunch
     // would fail with EACCES without this. Windows keys off the extension,
@@ -175,6 +219,27 @@ fn stage_beside(
         rebuild,
         sha256: crate::sha256::hex(bytes),
     })
+}
+
+/// What to say when the exe's folder refuses the update: an install for
+/// every user (winget's machine scope, or a copy put in Program Files) needs
+/// admin rights to change, which the app doesn't run with.
+fn unwritable_folder_message(exe: &Path) -> String {
+    #[cfg(windows)]
+    if crate::winget_record::is_winget_install(exe) {
+        return format!(
+            "This copy was installed with winget for all users, so updating it needs admin \
+             rights. Run `winget upgrade {}` in an admin terminal.",
+            crate::winget_record::PACKAGE_ID
+        );
+    }
+    let folder = exe.parent().unwrap_or(exe);
+    format!(
+        "InstantClone can't update itself in {} because changing that folder needs admin \
+         rights. Download the new version from the website, or move InstantClone to a \
+         folder of your own first.",
+        folder.display()
+    )
 }
 
 /// Park a verified update for the next restart, which installs it once the
@@ -599,6 +664,46 @@ mod tests {
         let body = format!("{}  some-other.exe\n", "a".repeat(64));
         assert_eq!(parse_checksum(&body, NAME), None);
     }
+
+    #[test]
+    fn the_verbatim_prefix_is_dropped_from_drive_paths_only() {
+        use super::without_verbatim_prefix as plain;
+        use std::path::PathBuf;
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\C:\Apps\instantclone.exe")),
+            PathBuf::from(r"C:\Apps\instantclone.exe")
+        );
+        let share = PathBuf::from(r"\\?\UNC\server\share\instantclone.exe");
+        assert_eq!(
+            plain(share.clone()),
+            share,
+            "a network path needs its prefix"
+        );
+        let normal = PathBuf::from(r"C:\Apps\instantclone.exe");
+        assert_eq!(plain(normal.clone()), normal);
+    }
+
+    /// An all-users winget install is told the one command that updates it.
+    #[cfg(windows)]
+    #[test]
+    fn a_winget_install_for_all_users_is_told_to_use_winget() {
+        let exe = std::path::Path::new(
+            r"C:\Program Files\WinGet\Packages\Soulhackzlol.InstantClone__DefaultSource\instantclone.exe",
+        );
+        let message = super::unwritable_folder_message(exe);
+        assert!(
+            message.contains("winget upgrade Soulhackzlol.InstantClone"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_protected_folder_is_named_with_a_way_out() {
+        let exe = std::path::Path::new(r"C:\Program Files\InstantClone\instantclone.exe");
+        let message = super::unwritable_folder_message(exe);
+        assert!(!message.contains("winget"), "{message}");
+        assert!(message.contains("Download the new version"), "{message}");
+    }
 }
 
 // End-to-end tests of the two risky parts - the download+verify and the
@@ -856,5 +961,41 @@ mod e2e {
         assert!(waiting);
         assert_eq!(taken.map(|s| s.version), Some("9.9.9".to_string()));
         assert!(!after, "a later restart must not install it again");
+    }
+
+    #[test]
+    fn a_plain_file_is_its_own_update_target() {
+        let (dir, exe) = fake_install("resolve-plain");
+        let resolved = super::resolve_link(exe.clone());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            resolved.unwrap(),
+            exe,
+            "no link, so the path must not change"
+        );
+    }
+
+    /// Started through winget's link, the update must replace the real exe
+    /// the link points at, never the link. Creating a link needs Developer
+    /// Mode or admin on Windows, so the test passes quietly without them.
+    #[test]
+    fn a_link_resolves_to_the_exe_it_points_at() {
+        let (dir, exe) = fake_install("resolve-link");
+        let link = dir.join("link-to-instantclone.exe");
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(&exe, &link);
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&exe, &link);
+        if linked.is_err() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+
+        let resolved = super::resolve_link(link);
+        let expected = super::without_verbatim_prefix(std::fs::canonicalize(&exe).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(resolved.unwrap(), expected);
     }
 }
