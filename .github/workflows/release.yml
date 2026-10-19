@@ -176,3 +176,28 @@ jobs:
             artifacts/instantclone-*-linux-x64
             artifacts/optional-vod-unlocker.lua
             artifacts/SHA256SUMS.txt
+
+  # Sends each stable release to winget (Soulhackzlol.InstantClone) as a pull
+  # request to microsoft/winget-pkgs, using Microsoft's wingetcreate, from a
+  # fork owned by the token's account. A job of its own after the release is
+  # out, so winget being slow or failing never holds a release back. Skipped
+  # for pre-releases, which winget doesn't list, and when the WINGET_TOKEN
+  # secret (a classic token with the public_repo scope) isn't set. A tag
+  # moved to republish a build is sent again: winget checks the exe's hash,
+  # so its listing must carry the new one.
+  winget:
+    needs: build
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: windows-2022
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - name: submit to winget
+        if: env.WINGET_TOKEN != ''
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          $url = "https://github.com/${{ github.repository }}/releases/download/$tag/instantclone-$tag-windows-x64.exe"
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          .\wingetcreate.exe update Soulhackzlol.InstantClone --version $version --urls $url --token $env:WINGET_TOKEN --submit
