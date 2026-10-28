@@ -353,6 +353,30 @@ pub fn build(
     Some((config, LocalPlan { main, additional }))
 }
 
+/// Whether the request asks for a VOD audio track (Twitch's VOD Track box,
+/// which Streamlabs sends as is). A config without one then won't start.
+pub fn wants_vod_audio(body: &str) -> bool {
+    crate::json::parse(body)
+        .ok()
+        .and_then(|request| request.path("preferences.vod_track_audio")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// `config` with a VOD audio track (`track_id` 1) beside the live one, named
+/// the way Twitch's own config names it. Unchanged if it has no live track.
+pub fn with_vod_audio(config: &str) -> String {
+    const LIVE: &str = r#""audio_configurations":{"live":[{"codec":"aac","track_id":0,"channels":2,"settings":{"bitrate":160}}]"#;
+    const VOD: &str =
+        r#","vod":[{"codec":"aac","track_id":1,"channels":2,"settings":{"bitrate":160}}]"#;
+    match config.find(LIVE) {
+        Some(at) => {
+            let end = at + LIVE.len();
+            format!("{}{VOD}{}", &config[..end], &config[end..])
+        }
+        None => config.to_string(),
+    }
+}
+
 fn track_json(canvas: &ObsCanvas, canvas_index: u32, encoder: &TrackEncoder) -> String {
     format!(
         r#"{{"type":"{enc}","width":{w},"height":{h},"framerate":{{"numerator":{num},"denominator":{den}}},"canvas_index":{idx},"settings":{s}}}"#,
@@ -477,6 +501,31 @@ mod tests {
         assert!(parse_canvases(r#"{"preferences":{}}"#).is_empty());
         assert!(parse_canvases(r#"{"preferences":{"canvases":[]}}"#).is_empty());
         assert!(parse_canvases("not json").is_empty());
+    }
+
+    /// Streamlabs with its Twitch VOD Track box ticked refuses a config
+    /// without a VOD audio track ("Missing audio encoder configurations").
+    #[test]
+    fn a_vod_track_request_gets_one_in_the_config() {
+        assert!(wants_vod_audio(
+            r#"{"preferences":{"vod_track_audio":true}}"#
+        ));
+        assert!(!wants_vod_audio(
+            r#"{"preferences":{"vod_track_audio":false}}"#
+        ));
+        assert!(!wants_vod_audio("not json"));
+
+        let (config, _) = build(&parse_canvases(REQUEST), 10_000, None, 1935, x264).unwrap();
+        let with_vod = with_vod_audio(&config);
+        let parsed = crate::json::parse(&with_vod).expect("still valid JSON");
+        let vod = parsed
+            .path("audio_configurations.vod.0")
+            .expect("a VOD track");
+        assert_eq!(
+            vod.path("track_id").and_then(crate::json::Value::as_f64),
+            Some(1.0)
+        );
+        assert!(parsed.path("audio_configurations.live.0").is_some());
     }
 
     #[test]

@@ -66,6 +66,7 @@ mod self_update;
 mod sha256;
 mod sink;
 mod slate;
+mod streamlabs;
 mod sync;
 mod sysstat;
 #[cfg(test)]
@@ -180,6 +181,14 @@ fn main() -> std::io::Result<()> {
     #[cfg(windows)]
     self_update::sync_winget_record();
 
+    // A portable OBS is only found while it runs, so the folder last seen
+    // is kept beside the settings for starts that come before OBS's.
+    #[cfg(windows)]
+    obs_register::remember_portable_obs_in(config::beside_config(
+        &cfg_path,
+        std::path::Path::new(obs_register::PORTABLE_OBS_FILE_NAME),
+    ));
+
     // Egress trace - wire-level append-only log next to the config.
     // Captures handshake details, sequence headers, every video tag,
     // and every cut so any "Twitch live looks broken but VOD is fine"
@@ -255,6 +264,8 @@ fn main() -> std::io::Result<()> {
         }
         (ingest, web)
     };
+    // Tells this copy's OBS from one a copy for another channel uses.
+    obs_register::set_own_web_port(settings.web_port);
 
     // After an update (in-app or by hand) the dashboard says what changed
     // since the build the user last saw. A fresh install starts from this
@@ -603,6 +614,10 @@ fn main() -> std::io::Result<()> {
             ctrl.clone(),
         ));
 
+        // Streamlabs Desktop (experimental): idle until the streamer connects
+        // it, then routes its Twitch streams through us while it runs.
+        tokio::spawn(streamlabs::run(ctrl.clone(), rx.clone()));
+
         let ingest_sup = tokio::spawn(supervise_ingest(rx.clone(), ctrl.clone()));
         let egress_sup = tokio::spawn(supervise_egress(rx.clone(), ctrl.clone()));
         let web_sup = tokio::spawn(supervise_web(
@@ -907,6 +922,7 @@ async fn supervise_egress(mut rx: watch::Receiver<Settings>, ctrl: Arc<controlle
                 ctrl.log(format!("[{}] removed", id));
             }
         }
+        ctrl.retain_destination_states(&desired_ids);
 
         // 2) For each desired dest: spawn if missing, or restart if URL
         //    changed, OR if the previous pump has finished (e.g. it

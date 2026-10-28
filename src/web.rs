@@ -1003,7 +1003,10 @@ async fn route(
         // fails. GET is supported as an escape hatch for poking the
         // static fallback from a browser address bar.
         ("POST", "/obs/multitrack-config") => {
-            let authorized = eb_request_authorized(body, &settings.borrow().ingest_key);
+            let authorized = {
+                let s = settings.borrow();
+                eb_request_authorized(body, &s.ingest_key, twitch_destination_key(&s).as_deref())
+            };
             let config = obs_multitrack_config_proxy(body, query, ctrl, settings).await;
             // A refused request gets the static config and its publish is
             // turned away: it must not replace the live session's tracks.
@@ -1054,43 +1057,13 @@ async fn route(
                 ),
             )
         }
-        ("POST", "/obs/register") if crate::obs_register::is_obs_running() => {
-            conflict(OBS_OPEN_REGISTER)
-        }
-        ("POST", "/obs/unregister") if crate::obs_register::is_obs_running() => {
-            conflict(OBS_OPEN_REGISTER)
-        }
-        ("POST", "/obs/register") => {
-            let s = settings.borrow();
-            match crate::obs_register::register(s.web_port, s.ingest_port) {
-                Ok(()) => (
-                    "200 OK",
-                    "application/json",
-                    r#"{"ok":true,"message":"Registered. Open OBS and pick InstantClone in Settings → Stream → Service."}"#.to_string(),
-                ),
-                Err(e) => (
-                    "500 Internal Server Error",
-                    "application/json",
-                    format!(r#"{{"ok":false,"error":"{}"}}"#, e.to_string().replace('"', "'")),
-                ),
-            }
-        }
-        ("POST", "/obs/unregister") => match crate::obs_register::unregister() {
-            Ok(()) => (
-                "200 OK",
-                "application/json",
-                r#"{"ok":true,"message":"Unregistered. OBS no longer lists InstantClone."}"#
-                    .to_string(),
-            ),
-            Err(e) => (
-                "500 Internal Server Error",
-                "application/json",
-                format!(
-                    r#"{{"ok":false,"error":"{}"}}"#,
-                    e.to_string().replace('"', "'")
-                ),
-            ),
-        },
+        // Every OBS on this PC (installed and portable), each registered on
+        // its own: the streamer ticks which, and an open one only stops itself.
+        ("GET", "/obs/installs") => ("200 OK", "application/json", obs_installs_json(settings)),
+        ("POST", "/obs/register") => change_obs_registrations(body, settings, true),
+        ("POST", "/obs/unregister") => change_obs_registrations(body, settings, false),
+        ("POST", "/obs/portable/pick") => pick_portable_obs(body).await,
+        ("POST", "/obs/portable/forget") => forget_portable_obs(body),
         ("POST", "/obs/launch-with-eb") if crate::obs_register::is_obs_running() => {
             conflict(OBS_OPEN_LAUNCH)
         }
@@ -1289,6 +1262,22 @@ async fn route(
                     }
                 ),
             )
+        }
+        // Streamlabs Desktop (experimental): see `streamlabs`.
+        ("GET", "/streamlabs/status") => ("200 OK", "application/json", {
+            let s = settings.borrow();
+            crate::streamlabs::status_json(s.streamlabs_connect, s.web_port)
+        }),
+        ("POST", "/streamlabs/connect") => set_streamlabs_connect(true, settings, cfg_path),
+        ("POST", "/streamlabs/disconnect") => {
+            let answer = set_streamlabs_connect(false, settings, cfg_path);
+            // At once, not when the task next looks: Streamlabs may go live
+            // before then.
+            crate::streamlabs::restore_services(&[settings.borrow().web_port]);
+            answer
+        }
+        ("POST", "/streamlabs/import-twitch") => {
+            import_streamlabs_twitch_key(ctrl, settings, cfg_path).await
         }
         ("GET", "/twitch_ingests") => ("200 OK", "application/json", twitch_ingests_json()),
         ("GET", "/profiles") => ("200 OK", "application/json", profiles_json(settings)),
@@ -1659,7 +1648,7 @@ fn state_json(
     let vertical_present = ctrl.ingest_alive() && ctrl.vertical_track_on_wire().is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"publisher_app":"{pa}","cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         // The dock's events list changed: it fetches the list again.
         fd = ctrl.integrations().map_or(0, |h| h.feed.changes()),
@@ -1718,6 +1707,7 @@ fn state_json(
         ea = ctrl.egress_alive(),
         dla = alive_count,
         dlt = total_count,
+        pa = publisher_app(ctrl),
         bb = ctrl.buffer_building(),
         cfg = s.configured,
         ou = s.obs_url(),
@@ -1763,7 +1753,27 @@ fn eb_not_applied_warning(ctrl: &Controller) -> Option<String> {
     if ctrl.multitrack_video() || ctrl.keyframe_interval_ms() == 0 || !ctrl.publisher_local() {
         return None;
     }
+    // Streamlabs streaming through us is the publisher, not OBS: OBS's
+    // profile says nothing about it (and one track there can be by choice).
+    let streamlabs = crate::streamlabs::status();
+    if streamlabs.live && matches!(streamlabs.route, "eb" | "single") {
+        return None;
+    }
     obs_profile_wants_eb().then(|| EB_NOT_APPLIED.to_string())
+}
+
+/// The app sending the stream, when it is certain: `streamlabs` while
+/// Streamlabs is live through us, else empty. OBS and Streamlabs can both
+/// stream here, so the dashboard names neither when it can't tell.
+fn publisher_app(ctrl: &Controller) -> &'static str {
+    let streamlabs = crate::streamlabs::status();
+    let from_streamlabs =
+        ctrl.ingest_alive() && streamlabs.live && matches!(streamlabs.route, "eb" | "single");
+    if from_streamlabs {
+        "streamlabs"
+    } else {
+        ""
+    }
 }
 
 /// `obs_register::active_profile_wants_eb`, re-read at most once per
@@ -1934,7 +1944,8 @@ async fn obs_multitrack_config_proxy(
     // Stream Key field there). If we don't check it here, a wrong key still gets
     // a brokered session and streams. Empty ingest key = open, same as
     // begin_publish. Strip any query the user appended, matching begin_publish.
-    if !eb_request_authorized(body, &settings.borrow().ingest_key) {
+    let twitch_key = twitch_destination_key(&settings.borrow());
+    if !eb_request_authorized(body, &settings.borrow().ingest_key, twitch_key.as_deref()) {
         ctrl.log(
             "[OBS multitrack] rejected config request - wrong InstantClone key in the \
              OBS Stream Key field. Returning static config; the publish will be refused.",
@@ -1970,13 +1981,6 @@ async fn obs_multitrack_config_proxy(
     // the user, and the symptom (Twitch's edge dropping us at ~60 s
     // because no transcoder session was provisioned via their API)
     // looked identical to a generic network drop.
-    let twitch_key = {
-        let s = settings.borrow();
-        s.destinations
-            .iter()
-            .find(|d| d.enabled && d.platform == "twitch" && !d.stream_key.is_empty())
-            .map(|d| d.stream_key.clone())
-    };
     let Some(twitch_key) = twitch_key else {
         return obs_multitrack_config_local(body, query, ctrl, settings);
     };
@@ -2017,6 +2021,25 @@ async fn obs_multitrack_config_proxy(
             h264_only
         }
         _ => modified_body,
+    };
+
+    // A Streamlabs stream the streamer wanted without Enhanced Broadcasting,
+    // switched on only to come through us: one track, as they chose.
+    let from_streamlabs = is_from_streamlabs(query);
+    let modified_body = if from_streamlabs && crate::streamlabs::take_one_track_request() {
+        match crate::streamlabs::ask_for_one_track(&modified_body) {
+            Some(one_track) => {
+                ctrl.log("[Streamlabs] asking Twitch for one video track");
+                crate::trace::log(
+                    "OBS_MULTITRACK",
+                    "maximum_video_tracks set to 1 (Streamlabs)",
+                );
+                one_track
+            }
+            None => modified_body,
+        }
+    } else {
+        modified_body
     };
 
     let ingest_port = settings.borrow().ingest_port;
@@ -2332,13 +2355,26 @@ struct IngestEndpoint {
 /// Key field). An empty ingest key means auth is off, so everything is allowed.
 /// The query is stripped to match `Controller::begin_publish`; constant-time
 /// compare matches the ingest-key / password / dock-token paths.
-fn eb_request_authorized(body: &str, ingest_key: &str) -> bool {
+fn eb_request_authorized(body: &str, ingest_key: &str, twitch_key: Option<&str>) -> bool {
     if ingest_key.is_empty() {
         return true;
     }
     let presented = read_string_field(body, "authentication").unwrap_or_default();
     let presented = presented.split('?').next().unwrap_or("");
+    // Streamlabs presents the streamer's real Twitch key, fetched from
+    // Twitch itself: a stronger secret than the ingest key.
     crate::crypto::constant_time_eq(presented.as_bytes(), ingest_key.as_bytes())
+        || twitch_key.is_some_and(|key| {
+            crate::crypto::constant_time_eq(presented.as_bytes(), key.as_bytes())
+        })
+}
+
+/// The streamer's real Twitch key: the first enabled Twitch destination's.
+fn twitch_destination_key(s: &Settings) -> Option<String> {
+    s.destinations
+        .iter()
+        .find(|d| d.enabled && d.platform == "twitch" && !d.stream_key.is_empty())
+        .map(|d| d.stream_key.clone())
 }
 
 /// Pull the first `ingest_endpoints[…]` entry's `url_template` and
@@ -2636,12 +2672,16 @@ fn obs_multitrack_config_static(
         ));
     }
 
-    format!(
+    let config = format!(
         r#"{{"meta":{{"service":"InstantClone","schema_version":"2024-06-04","config_id":"{cid}"}},"ingest_endpoints":[{{"protocol":"RTMP","url_template":"rtmp://localhost:{port}/live/{{stream_key}}"}}],"encoder_configurations":[{encs}],"audio_configurations":{{"live":[{{"codec":"aac","track_id":0,"channels":2,"settings":{{"bitrate":160}}}}]}}}}"#,
         cid = config_id,
         port = ingest_port,
         encs = enc_configs,
-    )
+    );
+    if crate::local_eb_config::wants_vod_audio(body) {
+        return crate::local_eb_config::with_vod_audio(&config);
+    }
+    config
 }
 
 /// Split the user's total bandwidth budget across N tracks. With three
@@ -2719,6 +2759,12 @@ fn encoder_family(name: &str) -> &'static str {
     }
 }
 
+/// Whether a multi-track config request comes from Streamlabs, whose Twitch
+/// config URL `streamlabs::ensure_pointed_at_us` tags this way.
+fn is_from_streamlabs(query: &str) -> bool {
+    query.split('&').any(|pair| pair == "from=streamlabs")
+}
+
 /// An explicit `encoder=` in the config URL wins, otherwise the GPU OBS
 /// composites on. Either way the id must be one OBS's log lists as
 /// available: naming an encoder OBS doesn't have stops the stream from
@@ -2734,11 +2780,17 @@ fn choose_encoder(query: &str, body: &str, available: Option<&[String]>) -> Enco
     let explicit = config::parse_form(query)
         .get("encoder")
         .map(|name| encoder_family(name));
+    // Streamlabs logs no encoder list, and OBS's log is another app's. It
+    // ships every encoder OBS has, the oldest ids included, so its GPU is
+    // trusted the way an explicit choice is.
+    let from_streamlabs = is_from_streamlabs(query);
+    let available = if from_streamlabs { None } else { available };
     let (family, source) = match explicit {
         Some(family) => (family, "set in the config URL"),
         None => match crate::local_eb_config::gpu_encoder_family(body) {
+            Some(family) if from_streamlabs => (family, "the GPU Streamlabs runs on"),
             Some(family) => (family, "the GPU OBS runs on"),
-            None => return x264("OBS reported no NVIDIA, AMD or Intel GPU".into()),
+            None => return x264("the app reported no NVIDIA, AMD or Intel GPU".into()),
         },
     };
     if family == "x264" {
@@ -2756,7 +2808,7 @@ fn choose_encoder(query: &str, body: &str, available: Option<&[String]>) -> Enco
         },
         // Can't check: the oldest id, which every OBS with Enhanced
         // Broadcasting still registers (newer ones as a compatibility alias).
-        (None, None) if explicit.is_some() => EncoderChoice {
+        (None, None) if explicit.is_some() || from_streamlabs => EncoderChoice {
             family,
             id: encoder_ids(family).last().copied().unwrap_or("obs_x264"),
             reason: source.into(),
@@ -2842,9 +2894,18 @@ fn obs_multitrack_config_local(
         .or_else(|| crate::local_eb_config::requested_budget_kbps(body))
         .unwrap_or_else(|| crate::local_eb_config::default_budget_kbps(&canvases));
     // The main track is what OBS streams with Enhanced Broadcasting off, so
-    // turning EB on changes nothing about it (see `StreamerSettings`).
-    let streamer = crate::obs_register::active_stream_settings();
+    // turning EB on changes nothing about it (see `StreamerSettings`). Not
+    // for Streamlabs: those settings are OBS's, a different app's.
+    let from_streamlabs = is_from_streamlabs(query);
+    let streamer = if from_streamlabs {
+        None
+    } else {
+        crate::obs_register::active_stream_settings()
+    };
     match &streamer {
+        None if from_streamlabs => {
+            ctrl.log("[Streamlabs] no Twitch destination: building the stream's tracks here")
+        }
         Some(own) => ctrl.log(format!(
             "[OBS multitrack] main track uses your OBS stream settings: {}, {} kbps",
             own.encoder
@@ -2910,6 +2971,9 @@ fn obs_multitrack_config_local(
             "OBS sent no 9:16 canvas (in OBS: Settings → Stream → Enhanced Broadcasting → \
              Additional canvas, pick your vertical canvas, for example Aitum Vertical)",
         );
+    }
+    if crate::local_eb_config::wants_vod_audio(body) {
+        return crate::local_eb_config::with_vod_audio(&config);
     }
     config
 }
@@ -3137,6 +3201,7 @@ async fn post_config(
     // takes effect this instant - no need to wait for a restart.
     crate::trace::set_enabled(new_settings.tracing_enabled);
     let _ = settings.send(new_settings.clone());
+    crate::obs_register::set_own_web_port(new_settings.web_port);
     // Both ports rebind live, so a registered OBS service would point at the
     // old ones. Refreshed now while OBS is shut (it only rewrites an entry
     // that is already there); with OBS open the OBS tab says to close it.
@@ -3348,8 +3413,199 @@ fn arm_refusal(ctrl: &Arc<Controller>, ms: u32) -> Option<(&'static str, &'stati
 
 /// OBS rewrites its service list from memory when it quits, so a change made
 /// while it runs is undone on exit.
-const OBS_OPEN_REGISTER: &str =
-    "Close OBS first. It rewrites its service list when it quits, so a change made now would be lost.";
+/// Every OBS on this PC and where its registration stands: the list the OBS
+/// tab and the wizard tick from. An install's id is its settings folder.
+fn obs_installs_json(settings: &Arc<watch::Sender<Settings>>) -> String {
+    use crate::json::{self, Value};
+    use crate::obs_register::{self, Registration};
+    let (web_port, ingest_port) = {
+        let s = settings.borrow();
+        (s.web_port, s.ingest_port)
+    };
+    let installs = obs_register::obs_installs()
+        .iter()
+        .map(|install| {
+            let registration = obs_register::registration_of(install, web_port, ingest_port);
+            let other_port = match registration {
+                Registration::OtherInstance(port) if port != 0 => Value::Num(f64::from(port)),
+                _ => Value::Null,
+            };
+            let shown = install.root.as_ref().unwrap_or(&install.config_dir);
+            json::obj([
+                ("id", json::str(install.config_dir.display().to_string())),
+                ("portable", Value::Bool(install.portable)),
+                ("path", json::str(shown.display().to_string())),
+                (
+                    "running",
+                    Value::Bool(obs_register::is_install_running(install)),
+                ),
+                ("state", json::str(registration.as_str())),
+                ("other_port", other_port),
+            ])
+        })
+        .collect();
+    json::obj([
+        ("installs", Value::Arr(installs)),
+        (
+            "update_pending",
+            Value::Bool(obs_register::refresh_waiting()),
+        ),
+        // Portable OBS is a Windows build: elsewhere there's nothing to pick.
+        ("portable_pick", Value::Bool(cfg!(windows))),
+    ])
+    .to_json()
+}
+
+/// Register InstantClone in (or remove it from) the OBS installs the
+/// dashboard ticked: `ids`, one install id per line. Each OBS answers for
+/// itself, so an open one doesn't hold back the others.
+fn change_obs_registrations(
+    body: &str,
+    settings: &Arc<watch::Sender<Settings>>,
+    register: bool,
+) -> (&'static str, &'static str, String) {
+    use crate::obs_register;
+    let form = config::parse_form(body);
+    let ids: Vec<&str> = form
+        .get("ids")
+        .map(|v| v.lines().filter(|id| !id.is_empty()).collect())
+        .unwrap_or_default();
+    let installs = obs_register::obs_installs();
+    let chosen: Vec<_> = installs
+        .iter()
+        .filter(|i| ids.contains(&i.config_dir.display().to_string().as_str()))
+        .collect();
+    if chosen.is_empty() {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"Pick at least one OBS."}"#.into(),
+        );
+    }
+    let (web_port, ingest_port) = {
+        let s = settings.borrow();
+        (s.web_port, s.ingest_port)
+    };
+    let mut problems = Vec::new();
+    for install in chosen {
+        let name = if install.portable {
+            format!(
+                "The portable OBS in {}",
+                install
+                    .root
+                    .as_ref()
+                    .unwrap_or(&install.config_dir)
+                    .display()
+            )
+        } else {
+            "OBS".to_string()
+        };
+        let path = install.services_json();
+        let done = if obs_register::is_install_running(install) {
+            Err(format!(
+                "{name} is open. Close it first: it rewrites its service list when it quits."
+            ))
+        } else if register {
+            obs_register::register_in(&path, web_port, ingest_port)
+                .map_err(|e| format!("{name}: {e}"))
+        } else {
+            obs_register::unregister_in(&path).map_err(|e| format!("{name}: {e}"))
+        };
+        if let Err(problem) = done {
+            problems.push(problem);
+        }
+    }
+    if !problems.is_empty() {
+        return (
+            "409 Conflict",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&problems.join(" "))
+            ),
+        );
+    }
+    let message = if register {
+        "Registered. Open OBS and pick InstantClone in Settings → Stream → Service."
+    } else {
+        "Unregistered. OBS no longer lists InstantClone."
+    };
+    (
+        "200 OK",
+        "application/json",
+        format!(r#"{{"ok":true,"message":"{message}"}}"#),
+    )
+}
+
+/// Ask for a portable OBS's obs64.exe with Windows' Open dialog (on this PC)
+/// and add it, in place of `replace` (an install id) when the OBS moved. A
+/// cancelled dialog answers `cancelled`, which is no error.
+async fn pick_portable_obs(body: &str) -> (&'static str, &'static str, String) {
+    let replacing = config::parse_form(body)
+        .get("replace")
+        .filter(|id| !id.is_empty())
+        .map(PathBuf::from);
+    let picked = tokio::task::spawn_blocking(move || {
+        crate::obs_register::pick_portable_obs(replacing.as_deref())
+    })
+    .await;
+    match picked {
+        Ok(Some(Ok(root))) => (
+            "200 OK",
+            "application/json",
+            format!(
+                r#"{{"ok":true,"message":"Added the portable OBS in {}."}}"#,
+                json_escape(&root.display().to_string())
+            ),
+        ),
+        Ok(Some(Err(e))) => (
+            "400 Bad Request",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&e.to_string())
+            ),
+        ),
+        Ok(None) => (
+            "200 OK",
+            "application/json",
+            r#"{"ok":true,"cancelled":true}"#.into(),
+        ),
+        Err(_) => (
+            "500 Internal Server Error",
+            "application/json",
+            r#"{"ok":false,"error":"The file picker closed unexpectedly."}"#.into(),
+        ),
+    }
+}
+
+/// Take a portable OBS (`id`, its settings folder) off the list, after
+/// removing InstantClone from its service list.
+fn forget_portable_obs(body: &str) -> (&'static str, &'static str, String) {
+    let form = config::parse_form(body);
+    let Some(id) = form.get("id").filter(|id| !id.is_empty()) else {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"ok":false,"error":"Which OBS?"}"#.into(),
+        );
+    };
+    match crate::obs_register::forget_portable_obs(Path::new(id)) {
+        Ok(()) => (
+            "200 OK",
+            "application/json",
+            r#"{"ok":true,"message":"Removed. That OBS no longer lists InstantClone."}"#.into(),
+        ),
+        Err(e) => (
+            "409 Conflict",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&e.to_string())
+            ),
+        ),
+    }
+}
 
 /// These launch a fresh OBS with a one-time flag; a second OBS next to an
 /// open one never gets it.
@@ -3903,6 +4159,149 @@ async fn post_destination_upsert(
     reconcile_obs_vod_files(&ns, ctrl);
     let _ = settings.send(ns);
     ("200 OK", "application/json", r#"{"ok":true}"#.into())
+}
+
+/// Turn the Streamlabs connection on or off and save it. The `streamlabs`
+/// task follows the setting; the answer is its status as it stands.
+fn set_streamlabs_connect(
+    on: bool,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> (&'static str, &'static str, String) {
+    let _wl = settings_write_guard();
+    let mut ns = settings.borrow().clone();
+    // Connect points Streamlabs here at once, and is turned away while
+    // another open copy (another channel) streams through it.
+    if on {
+        if let Err(e) = crate::streamlabs::claim(ns.web_port) {
+            return (
+                "409 Conflict",
+                "application/json",
+                format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
+            );
+        }
+    }
+    ns.streamlabs_connect = on;
+    if let Err(e) = ns.save(cfg_path) {
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&e.to_string())
+            ),
+        );
+    }
+    let _ = settings.send(ns);
+    (
+        "200 OK",
+        "application/json",
+        crate::streamlabs::status_json(on, settings.borrow().web_port),
+    )
+}
+
+/// Fill the Twitch destination's key from Streamlabs, which fetches it from
+/// Twitch with the account it is signed in with. Nothing to copy or paste.
+async fn import_streamlabs_twitch_key(
+    ctrl: &Arc<Controller>,
+    settings: &Arc<watch::Sender<Settings>>,
+    cfg_path: &Path,
+) -> (&'static str, &'static str, String) {
+    let key = match crate::streamlabs::twitch_stream_key().await {
+        Ok(key) => key,
+        Err(e) => {
+            return (
+                "409 Conflict",
+                "application/json",
+                format!(r#"{{"ok":false,"error":"{}"}}"#, json_escape(&e)),
+            )
+        }
+    };
+    let _wl = settings_write_guard();
+    let mut ns = settings.borrow().clone();
+    let import = put_twitch_key(&mut ns, key);
+    let answer = format!(
+        r#"{{"ok":true,"destination":"{}","outcome":"{}","enabled":{}}}"#,
+        json_escape(&import.name),
+        import.outcome,
+        import.enabled
+    );
+    if import.outcome == "unchanged" {
+        return ("200 OK", "application/json", answer);
+    }
+    if has_streamable_dest(&ns) {
+        ns.configured = true;
+    }
+    if let Err(e) = ns.save(cfg_path) {
+        return (
+            "500 Internal Server Error",
+            "application/json",
+            format!(
+                r#"{{"ok":false,"error":"{}"}}"#,
+                json_escape(&e.to_string())
+            ),
+        );
+    }
+    reconcile_obs_vod_files(&ns, ctrl);
+    let _ = settings.send(ns);
+    ctrl.log(format!(
+        "[Streamlabs] Twitch key {} destination '{}'",
+        if import.outcome == "added" {
+            "put in a new"
+        } else {
+            "imported into"
+        },
+        import.name
+    ));
+    ("200 OK", "application/json", answer)
+}
+
+/// What importing the Twitch key did, for the dashboard to say.
+#[derive(Debug, PartialEq)]
+struct KeyImport {
+    /// The Twitch destination that has the key now.
+    name: String,
+    /// `added` (a new destination), `updated` or `unchanged` (it had it).
+    outcome: &'static str,
+    /// Whether that destination is switched on.
+    enabled: bool,
+}
+
+/// The first Twitch destination takes `key`; with none, a new one named
+/// "Twitch" is added, switched on.
+fn put_twitch_key(s: &mut Settings, key: String) -> KeyImport {
+    if let Some(twitch) = s.destinations.iter_mut().find(|d| d.platform == "twitch") {
+        let outcome = if twitch.stream_key == key {
+            "unchanged"
+        } else {
+            "updated"
+        };
+        twitch.stream_key = key;
+        return KeyImport {
+            name: twitch.name.clone(),
+            outcome,
+            enabled: twitch.enabled,
+        };
+    }
+    s.destinations.push(config::Destination {
+        id: generate_dest_id(),
+        name: "Twitch".into(),
+        enabled: true,
+        platform: "twitch".into(),
+        stream_key: key,
+        custom_egress_url: String::new(),
+        twitch_ingest: String::new(),
+        youtube_ingest: String::new(),
+        vod_audio: false,
+        vod_audio_inject_eb: false,
+        stream_format: normalize_stream_format("twitch", None),
+        audio_track: normalize_audio_track(None),
+    });
+    KeyImport {
+        name: "Twitch".into(),
+        outcome: "added",
+        enabled: true,
+    }
 }
 
 /// Reconcile OBS's external files (user.ini) against the current
@@ -7444,6 +7843,24 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
     }
 
     #[test]
+    fn streamlabs_gets_its_gpu_encoder_whatever_obs_lists() {
+        let nvidia_request = r#"{"capabilities":{"gpu":[{"vendor_id":4318}]}}"#;
+        let obs_without_nvenc = vec!["obs_x264".to_string()];
+        let from_streamlabs = "from=streamlabs";
+        assert_eq!(
+            choose_encoder(from_streamlabs, nvidia_request, None).id,
+            "jim_nvenc",
+            "no OBS on the PC: Streamlabs' GPU decides, with the oldest id"
+        );
+        assert_eq!(
+            choose_encoder(from_streamlabs, nvidia_request, Some(&obs_without_nvenc)).id,
+            "jim_nvenc",
+            "another app's encoder list says nothing about Streamlabs"
+        );
+        assert_eq!(choose_encoder(from_streamlabs, "", None).family, "x264");
+    }
+
+    #[test]
     fn static_ladder_keeps_encoder_ids_and_bitrate_split() {
         let (tx, _rx) = watch::channel(crate::config::Settings::defaults());
         let cfg = obs_multitrack_config_static(
@@ -7494,18 +7911,68 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         let body = r#"{"schema_version":"2024-06-04","authentication":"secretkey","client":{}}"#;
 
         // No ingest key configured: auth off, anything allowed.
-        assert!(eb_request_authorized(body, ""));
+        assert!(eb_request_authorized(body, "", None));
 
         // Correct key allowed; wrong key (the reported bug) refused.
-        assert!(eb_request_authorized(body, "secretkey"));
-        assert!(!eb_request_authorized(body, "wrongkey"));
+        assert!(eb_request_authorized(body, "secretkey", None));
+        assert!(!eb_request_authorized(body, "wrongkey", None));
 
         // A user-appended query on the key field is stripped before matching.
         let body_q = r#"{"authentication":"secretkey?bandwidthtest=true","client":{}}"#;
-        assert!(eb_request_authorized(body_q, "secretkey"));
+        assert!(eb_request_authorized(body_q, "secretkey", None));
 
         // Missing authentication field with a key set: refused, not allowed.
-        assert!(!eb_request_authorized(r#"{"client":{}}"#, "secretkey"));
+        assert!(!eb_request_authorized(
+            r#"{"client":{}}"#,
+            "secretkey",
+            None
+        ));
+    }
+
+    /// Streamlabs presents the streamer's real Twitch key (it fetches it from
+    /// Twitch), never the ingest key: that key is let through too.
+    #[test]
+    fn eb_request_with_the_twitch_key_is_authorized() {
+        let body = r#"{"authentication":"live_1_abc","client":{"name":"streamlabs"}}"#;
+        assert!(eb_request_authorized(body, "ingestkey", Some("live_1_abc")));
+        assert!(!eb_request_authorized(
+            body,
+            "ingestkey",
+            Some("live_2_xyz")
+        ));
+        assert!(!eb_request_authorized(body, "ingestkey", None));
+    }
+
+    #[test]
+    fn an_imported_twitch_key_fills_the_twitch_destination_or_adds_one() {
+        let mut s = Settings::defaults();
+        s.destinations.clear();
+        let added = put_twitch_key(&mut s, "live_1_abc".into());
+        assert_eq!((added.name.as_str(), added.outcome), ("Twitch", "added"));
+        let twitch = &s.destinations[0];
+        assert!(twitch.enabled && twitch.platform == "twitch" && twitch.stream_key == "live_1_abc");
+
+        s.destinations[0].name = "Main".into();
+        s.destinations[0].enabled = false;
+        assert_eq!(
+            put_twitch_key(&mut s, "live_1_abc".into()),
+            KeyImport {
+                name: "Main".into(),
+                outcome: "unchanged",
+                enabled: false
+            },
+            "the same key again changes nothing, and says the destination is off"
+        );
+        assert_eq!(
+            put_twitch_key(&mut s, "live_1_new".into()).outcome,
+            "updated"
+        );
+        assert_eq!(
+            s.destinations.len(),
+            1,
+            "the existing Twitch destination takes it"
+        );
+        assert_eq!(s.destinations[0].stream_key, "live_1_new");
     }
 
     #[test]
@@ -8038,8 +8505,11 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         ("POST", "/obs/multitrack-config", Access::Public),
         ("GET", "/obs/multitrack-config", Access::Public),
         ("GET", "/obs/register-status", Access::Admin),
+        ("GET", "/obs/installs", Access::Admin),
         ("POST", "/obs/register", Access::Admin),
         ("POST", "/obs/unregister", Access::Admin),
+        ("POST", "/obs/portable/pick", Access::Admin),
+        ("POST", "/obs/portable/forget", Access::Admin),
         ("POST", "/obs/launch-with-eb", Access::Admin),
         ("POST", "/obs/setup-vod-eb", Access::Admin),
         ("POST", "/shortcut/create-eb", Access::Admin),
@@ -8050,6 +8520,10 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         ("POST", "/reveal/overlays", Access::Admin),
         ("POST", "/reveal/trace", Access::Admin),
         ("GET", "/obs/launch-status", Access::Admin),
+        ("GET", "/streamlabs/status", Access::Admin),
+        ("POST", "/streamlabs/connect", Access::Admin),
+        ("POST", "/streamlabs/disconnect", Access::Admin),
+        ("POST", "/streamlabs/import-twitch", Access::Admin),
         ("GET", "/twitch_ingests", Access::Admin),
         ("GET", "/profiles", Access::Control),
         ("GET", "/logs", Access::Admin),

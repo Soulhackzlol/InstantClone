@@ -18,7 +18,9 @@
 //! user can restore manually.
 //!
 //! Config-dir resolution (services.json + logs both live under it):
-//!   * Windows: `%APPDATA%\obs-studio`, then `%LOCALAPPDATA%\obs-studio`.
+//!   * Windows: `%APPDATA%\obs-studio` (or `%LOCALAPPDATA%`) and each known
+//!     portable OBS's `<OBS folder>\config\obs-studio`, the open one first,
+//!     otherwise the one used last.
 //!   * Linux: `$XDG_CONFIG_HOME/obs-studio` (native / deb), then the Flatpak
 //!     and Snap locations.
 //!   * macOS: not handled yet (no candidates).
@@ -33,10 +35,9 @@ use std::path::{Path, PathBuf};
 pub(crate) fn obs_config_dirs() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
-        ["APPDATA", "LOCALAPPDATA"]
-            .iter()
-            .filter_map(|v| std::env::var(v).ok())
-            .map(|base| PathBuf::from(base).join("obs-studio"))
+        obs_installs_by_use()
+            .into_iter()
+            .map(|install| install.config_dir)
             .collect()
     }
     #[cfg(target_os = "linux")]
@@ -69,13 +70,571 @@ fn obs_config_dirs_from(home: Option<PathBuf>, xdg: Option<PathBuf>) -> Vec<Path
     ]
 }
 
+// ── Portable OBS (Windows) ──────────────────────────────────────────
+//
+// A portable OBS keeps its whole config inside its own folder instead of
+// AppData, and nothing else on the machine records where that folder is.
+// The running obs64.exe is the one thing that tells us, so the last one seen
+// is remembered: registering needs OBS closed, and the next start of
+// InstantClone may come before OBS's.
+
+/// The installed-OBS config dirs under AppData.
+#[cfg(windows)]
+fn appdata_obs_dirs() -> Vec<PathBuf> {
+    ["APPDATA", "LOCALAPPDATA"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .map(|base| PathBuf::from(base).join("obs-studio"))
+        .collect()
+}
+
+/// Where a portable OBS keeps its config, relative to its own folder (the
+/// one holding `bin\64bit\obs64.exe`). Unchanged through OBS 33.
+#[cfg(windows)]
+const PORTABLE_CONFIG_DIR: &str = "config\\obs-studio";
+
+/// The OBS exe, relative to its own folder.
+#[cfg(windows)]
+const PORTABLE_EXE: &str = "bin\\64bit\\obs64.exe";
+
+/// Files that switch OBS into portable mode when they sit in its folder,
+/// as OBS's own obs-main.cpp checks them.
+#[cfg(windows)]
+const PORTABLE_MARKERS: [&str; 4] = [
+    "portable_mode",
+    "obs_portable_mode",
+    "portable_mode.txt",
+    "obs_portable_mode.txt",
+];
+
+/// How long one look at the running OBS is reused. A dashboard status poll
+/// resolves several OBS paths, and each would otherwise walk the process list.
+#[cfg(windows)]
+const RUNNING_OBS_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The file that remembers portable OBS folders between runs, one per line.
+/// Unset in tests, where they are only remembered in memory.
+#[cfg(windows)]
+static PORTABLE_OBS_FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Every portable OBS folder seen running or added by hand, oldest first.
+#[cfg(windows)]
+static PORTABLE_OBS_ROOTS: crate::sync::Mutex<Vec<PathBuf>> = crate::sync::Mutex::new(Vec::new());
+
+/// Name of the file, beside the settings, that remembers portable OBS folders.
+#[cfg(windows)]
+pub const PORTABLE_OBS_FILE_NAME: &str = "obs-portable-folder.txt";
+
+/// Remember portable OBS folders in `file`, and load the ones it holds.
+/// Called once at startup, before anything resolves an OBS path.
+#[cfg(windows)]
+pub fn remember_portable_obs_in(file: PathBuf) {
+    let saved = fs::read_to_string(&file)
+        .map(|text| parse_portable_roots(&text))
+        .unwrap_or_default();
+    *PORTABLE_OBS_ROOTS.lock() = saved;
+    let _ = PORTABLE_OBS_FILE.set(file);
+}
+
+/// One folder per line; folders no longer holding a portable OBS are dropped.
+#[cfg(windows)]
+fn parse_portable_roots(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .filter(|root| has_own_config(root))
+        .collect()
+}
+
+/// Every portable OBS known: the remembered ones and any running now, which
+/// is remembered from here on.
+#[cfg(windows)]
+fn portable_obs_roots() -> Vec<PathBuf> {
+    let mut known = PORTABLE_OBS_ROOTS.lock();
+    let before = known.len();
+    for root in running_obs_roots().into_iter().flatten() {
+        if is_portable_obs_root(&root) && !known.contains(&root) {
+            known.push(root);
+        }
+    }
+    if known.len() != before {
+        save_portable_obs_roots(&known);
+    }
+    known.retain(|root| has_own_config(root));
+    known.clone()
+}
+
+/// Every OBS, the one whose settings the rest of this module reads (profile,
+/// logs, WebSocket, the VOD track) first: one registered to this copy, then
+/// an open one, then the one used last. A second OBS on the PC, or one a
+/// copy for another channel streams from, must not answer for this one's.
+#[cfg(windows)]
+fn obs_installs_by_use() -> Vec<ObsInstall> {
+    let mut installs = obs_installs();
+    installs.sort_by_cached_key(|install| {
+        (
+            std::cmp::Reverse(is_registered_here(install)),
+            std::cmp::Reverse(is_install_running(install)),
+            std::cmp::Reverse(last_used(&install.config_dir)),
+        )
+    });
+    installs
+}
+
+/// This copy's dashboard port, which our service entry in OBS names. 0 until
+/// startup sets it (and in tests).
+static OWN_WEB_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// Called at startup and when the dashboard port changes.
+pub fn set_own_web_port(web_port: u16) {
+    OWN_WEB_PORT.store(web_port, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether this OBS's InstantClone service points at this copy.
+#[cfg(windows)]
+fn is_registered_here(install: &ObsInstall) -> bool {
+    let own = OWN_WEB_PORT.load(std::sync::atomic::Ordering::Relaxed);
+    own != 0
+        && fs::read_to_string(install.services_json())
+            .ok()
+            .and_then(|file| registered_ports(&file))
+            .is_some_and(|(web, _)| web == Some(own))
+}
+
+/// When OBS with these settings last started: it writes a new log file into
+/// `logs` each time, which touches the folder. None for one never started.
+#[cfg(windows)]
+fn last_used(config_dir: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(config_dir.join("logs"))
+        .and_then(|meta| meta.modified())
+        .ok()
+}
+
+/// Ask for a portable OBS's obs64.exe with Windows' own Open dialog, for one
+/// that hasn't been open while InstantClone ran, and remember its folder.
+/// With `replacing` (an install's settings folder), the pick takes that
+/// one's place: the same OBS, moved. None when the dialog is cancelled.
+/// Blocks until the dialog closes.
+#[cfg(windows)]
+pub fn pick_portable_obs(replacing: Option<&Path>) -> Option<io::Result<PathBuf>> {
+    let picked = pick_portable_exe()?;
+    Some(add_portable_obs(&picked).inspect(|root| {
+        if let Some(old) = replacing.filter(|old| *old != root.join(PORTABLE_CONFIG_DIR)) {
+            drop_portable_root(old);
+        }
+    }))
+}
+
+/// Forget a portable OBS (by its settings folder), taking InstantClone out of
+/// its service list first so nothing is left pointing here. Refused while
+/// that OBS runs: it rewrites its list on quit, and would be found again.
+#[cfg(windows)]
+pub fn forget_portable_obs(config_dir: &Path) -> io::Result<()> {
+    let install = obs_installs()
+        .into_iter()
+        .find(|i| i.portable && i.config_dir == config_dir)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "That OBS isn't in the list."))?;
+    if is_install_running(&install) {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "That OBS is open. Close it first.",
+        ));
+    }
+    if fs::read_to_string(install.services_json()).is_ok_and(|file| entry_exists(&file)) {
+        unregister_in(&install.services_json())?;
+    }
+    drop_portable_root(config_dir);
+    Ok(())
+}
+
+/// Take the portable OBS with this settings folder off the remembered list.
+#[cfg(windows)]
+fn drop_portable_root(config_dir: &Path) {
+    let mut known = PORTABLE_OBS_ROOTS.lock();
+    known.retain(|root| root.join(PORTABLE_CONFIG_DIR) != config_dir);
+    save_portable_obs_roots(&known);
+}
+
+#[cfg(not(windows))]
+pub fn forget_portable_obs(_config_dir: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "portable OBS is Windows-only",
+    ))
+}
+
+/// The obs64.exe picked in the Open dialog; None when cancelled or when
+/// another pick is already on screen (that one answers instead).
+#[cfg(windows)]
+fn pick_portable_exe() -> Option<PathBuf> {
+    static PICKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if PICKING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return None;
+    }
+    // A thread of its own: the shell's dialog wants a single-threaded COM
+    // apartment, which a pool thread may already be set up otherwise.
+    let picked = std::thread::spawn(open_dialog::pick_obs_exe)
+        .join()
+        .ok()
+        .flatten();
+    PICKING.store(false, std::sync::atomic::Ordering::Release);
+    picked
+}
+
+/// Portable OBS is a Windows build; elsewhere OBS keeps its settings in the
+/// home folder, found on its own.
+#[cfg(not(windows))]
+pub fn pick_portable_obs(_replacing: Option<&Path>) -> Option<io::Result<PathBuf>> {
+    Some(Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "portable OBS is Windows-only",
+    )))
+}
+
+/// Remember the portable OBS that `exe` belongs to. Returns its folder.
+#[cfg(windows)]
+fn add_portable_obs(exe: &Path) -> io::Result<PathBuf> {
+    let root = obs_root_of_exe(exe).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "That isn't OBS's own obs64.exe. Pick the one in the portable OBS's bin\\64bit folder.",
+        )
+    })?;
+    if !has_own_config(&root) {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "That OBS isn't portable: it keeps its settings in AppData, so it's the installed OBS \
+             in the list. If it's a new portable OBS, open it once first.",
+        ));
+    }
+    let mut known = PORTABLE_OBS_ROOTS.lock();
+    if !known.contains(&root) {
+        known.push(root.clone());
+        save_portable_obs_roots(&known);
+    }
+    Ok(root)
+}
+
+/// Windows' standard Open dialog, shown from the dashboard. The click that
+/// asked for it left the browser in front, and Windows lets only the
+/// foreground app put a window over it, so the dialog hangs off an
+/// invisible topmost owner that is brought forward first.
+#[cfg(windows)]
+mod open_dialog {
+    use std::path::PathBuf;
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
+    };
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::Controls::Dialogs::{
+        GetOpenFileNameW, OFN_DONTADDTORECENT, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR,
+        OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, CreateWindowExW, DestroyWindow, GetForegroundWindow, GetSystemMetrics,
+        GetWindowThreadProcessId, SetForegroundWindow, ShowWindow, SM_CXSCREEN, SM_CYSCREEN,
+        SW_SHOWNA, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    };
+
+    /// Room for the picked path, in UTF-16 units (Windows' long-path limit).
+    const PATH_CAPACITY: usize = 32_768;
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// The obs64.exe the streamer picks, or None when they cancel.
+    pub fn pick_obs_exe() -> Option<PathBuf> {
+        let title = wide("Pick the portable OBS: its bin\\64bit\\obs64.exe");
+        // Pairs of label and pattern, each ending in a NUL, the list in two.
+        let filter: Vec<u16> = "OBS Studio (obs64.exe)\0obs64.exe\0\0"
+            .encode_utf16()
+            .collect();
+        let class = wide("STATIC");
+        let mut path = vec![0u16; PATH_CAPACITY];
+        let picked = unsafe {
+            CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+            let owner = CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_POPUP,
+                GetSystemMetrics(SM_CXSCREEN) / 2,
+                GetSystemMetrics(SM_CYSCREEN) / 3,
+                1,
+                1,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            );
+            bring_forward(owner);
+            let mut dialog: OPENFILENAMEW = std::mem::zeroed();
+            dialog.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+            dialog.hwndOwner = owner;
+            dialog.lpstrFilter = filter.as_ptr();
+            dialog.lpstrFile = path.as_mut_ptr();
+            dialog.nMaxFile = PATH_CAPACITY as u32;
+            dialog.lpstrTitle = title.as_ptr();
+            dialog.Flags = OFN_EXPLORER
+                | OFN_FILEMUSTEXIST
+                | OFN_PATHMUSTEXIST
+                | OFN_NOCHANGEDIR
+                | OFN_DONTADDTORECENT;
+            let picked = GetOpenFileNameW(&mut dialog) != 0;
+            if !owner.is_null() {
+                DestroyWindow(owner);
+            }
+            CoUninitialize();
+            picked
+        };
+        if !picked {
+            return None;
+        }
+        let end = path.iter().position(|&c| c == 0).unwrap_or(path.len());
+        Some(PathBuf::from(String::from_utf16_lossy(&path[..end])))
+    }
+
+    /// Put `window` in front. Windows only takes that from the app in
+    /// front, so for that moment this thread joins its input.
+    unsafe fn bring_forward(window: HWND) {
+        if window.is_null() {
+            return;
+        }
+        ShowWindow(window, SW_SHOWNA);
+        let front = GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
+        let ours = GetCurrentThreadId();
+        let joined = front != 0 && front != ours && AttachThreadInput(ours, front, 1) != 0;
+        SetForegroundWindow(window);
+        BringWindowToTop(window);
+        if joined {
+            AttachThreadInput(ours, front, 0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn save_portable_obs_roots(roots: &[PathBuf]) {
+    let Some(file) = PORTABLE_OBS_FILE.get() else {
+        return;
+    };
+    let text: String = roots
+        .iter()
+        .map(|root| format!("{}\n", root.display()))
+        .collect();
+    if let Err(e) = fs::write(file, text) {
+        // Only costs the next start: it finds the folder again once OBS runs.
+        log_line!(
+            "could not remember the portable OBS folders in {}: {e}",
+            file.display()
+        );
+    }
+}
+
+/// The folder of each running OBS, looked up at most once per
+/// `RUNNING_OBS_TTL`. `None` stands for an OBS whose path can't be read
+/// (one running elevated). Streamlabs' engine is called obs64.exe too, but
+/// it never sits in `bin\64bit`, so it is no OBS here.
+#[cfg(windows)]
+fn running_obs_roots() -> Vec<Option<PathBuf>> {
+    type Seen = (std::time::Instant, Vec<Option<PathBuf>>);
+    static CACHE: crate::sync::Mutex<Option<Seen>> = crate::sync::Mutex::new(None);
+    let mut cache = CACHE.lock();
+    if let Some((seen_at, roots)) = cache.as_ref() {
+        if seen_at.elapsed() < RUNNING_OBS_TTL {
+            return roots.clone();
+        }
+    }
+    let roots: Vec<Option<PathBuf>> = obs_process_ids()
+        .into_iter()
+        .filter_map(|pid| match crate::portcheck::process_name(pid) {
+            Some(exe) => obs_root_of_exe(Path::new(&exe)).map(Some),
+            None => Some(None),
+        })
+        .collect();
+    *cache = Some((std::time::Instant::now(), roots.clone()));
+    roots
+}
+
+/// OBS's own folder from its exe path, `<root>\bin\64bit\obs64.exe`. None
+/// for an exe laid out any other way.
+#[cfg(windows)]
+fn obs_root_of_exe(exe: &Path) -> Option<PathBuf> {
+    let named = |dir: &Path, name: &str| {
+        dir.file_name()
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+    };
+    let bit64 = exe.parent()?;
+    let bin = bit64.parent()?;
+    if !named(bit64, "64bit") || !named(bin, "bin") {
+        return None;
+    }
+    bin.parent().map(Path::to_path_buf)
+}
+
+/// Whether `root` holds an OBS settings folder of its own, as only a
+/// portable OBS does.
+#[cfg(windows)]
+fn has_own_config(root: &Path) -> bool {
+    root.join(PORTABLE_CONFIG_DIR).is_dir()
+}
+
+/// Whether OBS in `root` runs portable, by OBS's own rule: a marker file in
+/// its folder, or the `--portable` flag. The flag leaves no trace, so a
+/// config folder with no AppData OBS beside it counts as portable too. An
+/// installed OBS has no config folder of its own and never matches.
+#[cfg(windows)]
+fn is_portable_obs_root(root: &Path) -> bool {
+    if !has_own_config(root) {
+        return false;
+    }
+    PORTABLE_MARKERS
+        .iter()
+        .any(|marker| root.join(marker).exists())
+        || !appdata_obs_dirs().iter().any(|dir| dir.is_dir())
+}
+
 /// Locate the user's `services.json`. Returns `None` when no candidate path
 /// exists - typical when OBS isn't installed at all.
 pub fn services_json_path() -> Option<PathBuf> {
     obs_config_dirs()
         .into_iter()
-        .map(|d| d.join("plugin_config/rtmp-services/services.json"))
+        .map(|d| services_json_in(&d))
         .find(|p| p.exists())
+}
+
+fn services_json_in(config_dir: &Path) -> PathBuf {
+    config_dir.join("plugin_config/rtmp-services/services.json")
+}
+
+// ── Every OBS on this machine ───────────────────────────────────────
+//
+// A PC can hold an installed OBS and any number of portable ones, each with
+// its own settings and its own service list. Registering is per OBS, the
+// streamer picks which, and "close OBS first" only stops the one that's open.
+
+/// One OBS the streamer can register InstantClone in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObsInstall {
+    /// Where this OBS keeps its settings; its service list lives under it.
+    /// Also the install's id in the dashboard.
+    pub config_dir: PathBuf,
+    /// OBS's own folder (the one holding `bin\64bit\obs64.exe`), when known.
+    pub root: Option<PathBuf>,
+    pub portable: bool,
+}
+
+impl ObsInstall {
+    pub fn services_json(&self) -> PathBuf {
+        services_json_in(&self.config_dir)
+    }
+}
+
+/// The installed OBS (its AppData settings) and every known portable OBS.
+#[cfg(windows)]
+pub fn obs_installs() -> Vec<ObsInstall> {
+    let installed_root = obs_executable_candidates()
+        .into_iter()
+        .find(|exe| exe.exists())
+        .and_then(|exe| obs_root_of_exe(&exe));
+    let mut installs: Vec<ObsInstall> = appdata_obs_dirs()
+        .into_iter()
+        .filter(|dir| dir.is_dir())
+        .map(|config_dir| ObsInstall {
+            config_dir,
+            root: installed_root.clone(),
+            portable: false,
+        })
+        .collect();
+    installs.extend(portable_obs_roots().into_iter().map(|root| ObsInstall {
+        config_dir: root.join(PORTABLE_CONFIG_DIR),
+        root: Some(root),
+        portable: true,
+    }));
+    installs
+}
+
+/// Each OBS settings folder present (native, Flatpak, Snap).
+#[cfg(not(windows))]
+pub fn obs_installs() -> Vec<ObsInstall> {
+    obs_config_dirs()
+        .into_iter()
+        .filter(|dir| dir.is_dir())
+        .map(|config_dir| ObsInstall {
+            config_dir,
+            root: None,
+            portable: false,
+        })
+        .collect()
+}
+
+/// Whether this OBS is open. A portable one is matched by its folder; any
+/// other running OBS counts as the installed one. An OBS whose folder can't
+/// be read counts as every one, the safe side: a list written under a running
+/// OBS is overwritten when it quits.
+#[cfg(windows)]
+pub fn is_install_running(install: &ObsInstall) -> bool {
+    let portables = portable_obs_roots();
+    running_obs_roots().iter().any(|running| match running {
+        None => true,
+        Some(root) if install.portable => install.root.as_ref() == Some(root),
+        Some(root) => !portables.contains(root),
+    })
+}
+
+#[cfg(not(windows))]
+pub fn is_install_running(_install: &ObsInstall) -> bool {
+    is_obs_running()
+}
+
+/// Where one OBS's service list stands.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Registration {
+    /// No service list yet: OBS hasn't been opened since it was installed.
+    Missing,
+    NotRegistered,
+    /// Registered with the ports and URLs this InstantClone uses.
+    Current,
+    /// Registered, but pointing somewhere OBS can't reach us any more.
+    Stale,
+    /// Registered to another InstantClone that is running (its web port,
+    /// 0 when unknown).
+    OtherInstance(u16),
+}
+
+impl Registration {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Registration::Missing => "missing",
+            Registration::NotRegistered => "none",
+            Registration::Current => "current",
+            Registration::Stale => "stale",
+            Registration::OtherInstance(_) => "other",
+        }
+    }
+}
+
+pub fn registration_of(install: &ObsInstall, web_port: u16, ingest_port: u16) -> Registration {
+    let Ok(file) = fs::read_to_string(install.services_json()) else {
+        return Registration::Missing;
+    };
+    if !entry_exists(&file) {
+        return Registration::NotRegistered;
+    }
+    if registration_is_current(&file, web_port, ingest_port) {
+        return Registration::Current;
+    }
+    match other_instance_port(
+        &file,
+        web_port,
+        ingest_port,
+        crate::portcheck::port_held_by_other_instance,
+    ) {
+        Some(port) => Registration::OtherInstance(port),
+        None => Registration::Stale,
+    }
 }
 
 /// True when services.json holds an InstantClone entry that matches the
@@ -87,7 +646,7 @@ pub fn services_json_path() -> Option<PathBuf> {
 /// carries our name while pointing OBS somewhere useless, and reporting
 /// that as registered leaves the user with no way to notice or fix it.
 /// Reporting it as unregistered puts the Register button back, and
-/// `register` is remove-and-replace, so one click repairs it.
+/// `register_in` is remove-and-replace, so one click repairs it.
 /// Repair a registration the user already made, when a new build or a
 /// retuned port has left it pointing somewhere OBS cannot use.
 ///
@@ -104,34 +663,58 @@ pub fn services_json_path() -> Option<PathBuf> {
 ///   moment later and leaves the user worse off than not trying: the button
 ///   would read registered while the file on disk says otherwise.
 ///
-/// Everything else is the existing `register`, which is remove-and-replace,
+/// Everything else is the existing `register_in`, which is remove-and-replace,
 /// so this is exactly the click the dashboard would have asked for.
 pub fn refresh_stale_registration(web_port: u16, ingest_port: u16) -> RegistrationRefresh {
-    let Some(path) = services_json_path() else {
-        return RegistrationRefresh::NotNeeded;
-    };
-    let Ok(file) = fs::read_to_string(&path) else {
-        return RegistrationRefresh::NotNeeded;
-    };
-    // The decision is `refresh_decision`, so what the tests pin is what runs.
-    let verdict = match refresh_decision(
-        &file,
-        web_port,
-        ingest_port,
-        is_obs_running(),
-        crate::portcheck::port_held_by_other_instance,
-    ) {
-        RegistrationRefresh::Repaired => match register(web_port, ingest_port) {
-            Ok(()) => RegistrationRefresh::Repaired,
-            Err(e) => RegistrationRefresh::Failed(e.to_string()),
-        },
-        verdict => verdict,
-    };
+    let verdicts = obs_installs()
+        .iter()
+        .map(|install| refresh_install(install, web_port, ingest_port))
+        .collect();
+    let verdict = most_pressing(verdicts);
     REFRESH_WAITING.store(
         verdict == RegistrationRefresh::Deferred,
         std::sync::atomic::Ordering::Relaxed,
     );
     verdict
+}
+
+/// `refresh_stale_registration` for one OBS: only its own entry, and only
+/// while that OBS is closed.
+fn refresh_install(install: &ObsInstall, web_port: u16, ingest_port: u16) -> RegistrationRefresh {
+    let path = install.services_json();
+    let Ok(file) = fs::read_to_string(&path) else {
+        return RegistrationRefresh::NotNeeded;
+    };
+    // The decision is `refresh_decision`, so what the tests pin is what runs.
+    match refresh_decision(
+        &file,
+        web_port,
+        ingest_port,
+        is_install_running(install),
+        crate::portcheck::port_held_by_other_instance,
+    ) {
+        RegistrationRefresh::Repaired => match register_in(&path, web_port, ingest_port) {
+            Ok(()) => RegistrationRefresh::Repaired,
+            Err(e) => RegistrationRefresh::Failed(e.to_string()),
+        },
+        verdict => verdict,
+    }
+}
+
+/// The one verdict the caller acts on across several OBS: a wait first (the
+/// caller comes back for it), then a failure, a repair, another instance.
+fn most_pressing(verdicts: Vec<RegistrationRefresh>) -> RegistrationRefresh {
+    let rank = |v: &RegistrationRefresh| match v {
+        RegistrationRefresh::Deferred => 4,
+        RegistrationRefresh::Failed(_) => 3,
+        RegistrationRefresh::Repaired => 2,
+        RegistrationRefresh::OtherInstance(_) => 1,
+        RegistrationRefresh::NotNeeded => 0,
+    };
+    verdicts
+        .into_iter()
+        .max_by_key(rank)
+        .unwrap_or(RegistrationRefresh::NotNeeded)
 }
 
 /// Set while the startup check is waiting for OBS to close to refresh an
@@ -361,27 +944,26 @@ fn entry_exists(file: &str) -> bool {
     file.contains(r#""name": "InstantClone""#) || file.contains(r#""name":"InstantClone""#)
 }
 
-/// Register InstantClone with OBS. Idempotent and self-healing - a
-/// pre-existing entry is removed and replaced so a changed web_port
-/// (e.g. user retuned the dashboard port in System settings) refreshes
-/// the URL OBS will hit. Returns an `io::Error` with a user-readable
-/// message when something goes wrong, so the UI can surface it.
-pub fn register(web_port: u16, ingest_port: u16) -> io::Result<()> {
-    let path = services_json_path().ok_or_else(|| {
+/// Register InstantClone in one OBS's service list (`path`). Idempotent and
+/// self-healing - a pre-existing entry is removed and replaced so a changed
+/// web_port (e.g. user retuned the dashboard port in System settings)
+/// refreshes the URL OBS will hit. Returns an `io::Error` with a
+/// user-readable message when something goes wrong, so the UI can surface it.
+pub fn register_in(path: &Path, web_port: u16, ingest_port: u16) -> io::Result<()> {
+    let original = fs::read_to_string(path).map_err(|_| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "OBS services.json not found - is OBS installed for the current user?",
+            "this OBS has no service list yet - open it once, close it, then register",
         )
     })?;
-    let original = fs::read_to_string(&path)?;
     let patched = with_entry_registered(&original, web_port, ingest_port)?;
     let bak = path.with_extension("json.instantclone.bak");
     write_or_friendly(&bak, &original)?;
-    write_or_friendly(&path, &patched)?;
+    write_or_friendly(path, &patched)?;
     Ok(())
 }
 
-/// `register`'s whole edit of services.json, without the disk. Pure so the
+/// `register_in`'s whole edit of services.json, without the disk. Pure so the
 /// properties that matter (idempotent, everything else byte-for-byte
 /// untouched, never a second entry) are unit-testable.
 fn with_entry_registered(original: &str, web_port: u16, ingest_port: u16) -> io::Result<String> {
@@ -408,17 +990,11 @@ fn with_entry_registered(original: &str, web_port: u16, ingest_port: u16) -> io:
     })
 }
 
-/// Remove our entry from services.json. Returns Ok(()) even when not
-/// registered (idempotent) - only surfaces an error if the file is
-/// present but in an unexpected shape we can't safely edit.
-pub fn unregister() -> io::Result<()> {
-    let path = services_json_path().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "OBS services.json not found - nothing to unregister",
-        )
-    })?;
-    let original = fs::read_to_string(&path)?;
+/// Remove our entry from one OBS's service list (`path`). Returns Ok(())
+/// even when not registered (idempotent) - only surfaces an error if the
+/// file is present but in an unexpected shape we can't safely edit.
+pub fn unregister_in(path: &Path) -> io::Result<()> {
+    let original = fs::read_to_string(path)?;
     if !entry_exists(&original) {
         return Ok(()); // nothing to do
     }
@@ -431,7 +1007,7 @@ pub fn unregister() -> io::Result<()> {
     })?;
     let bak = path.with_extension("json.instantclone.bak");
     write_or_friendly(&bak, &original)?;
-    write_or_friendly(&path, &stripped)?;
+    write_or_friendly(path, &stripped)?;
     Ok(())
 }
 
@@ -1137,9 +1713,9 @@ pub fn revert_vod_eb(web_port: u16) -> io::Result<bool> {
 // being literally "Twitch"). That's why this is a "Launch OBS" button
 // instead of an auto-injected file edit.
 
-/// Standard Windows install paths for obs64.exe. The first match wins.
-/// Portable / non-standard installs aren't auto-discovered (rare and
-/// the user can always launch OBS themselves with the flag).
+/// Standard Windows install paths for obs64.exe. Other installed locations
+/// aren't auto-discovered (rare, and the user can always launch OBS
+/// themselves with the flag).
 #[cfg(windows)]
 fn obs_executable_candidates() -> [PathBuf; 2] {
     [
@@ -1148,9 +1724,15 @@ fn obs_executable_candidates() -> [PathBuf; 2] {
     ]
 }
 
+/// obs64.exe of the OBS in use (see `obs_installs_by_use`), else the first
+/// standard install path that exists.
 #[cfg(windows)]
 pub fn find_obs_executable() -> Option<PathBuf> {
-    obs_executable_candidates().into_iter().find(|p| p.exists())
+    obs_installs_by_use()
+        .into_iter()
+        .filter_map(|install| install.root.map(|root| root.join(PORTABLE_EXE)))
+        .chain(obs_executable_candidates())
+        .find(|p| p.exists())
 }
 
 /// Native `obs` binary from the standard prefixes, then a PATH scan. Flatpak
@@ -1297,6 +1879,13 @@ fn newest_obs_log_head() -> Option<String> {
 /// reads as "not running" - the note just stays hidden, which is harmless.
 #[cfg(windows)]
 pub fn is_obs_running() -> bool {
+    !running_obs_roots().is_empty()
+}
+
+/// PIDs of every running `obs64.exe` (Streamlabs' engine included; the
+/// caller tells them apart by path). Empty when the list can't be read.
+#[cfg(windows)]
+fn obs_process_ids() -> Vec<u32> {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -1305,11 +1894,11 @@ pub fn is_obs_running() -> bool {
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snapshot == INVALID_HANDLE_VALUE {
-            return false;
+            return Vec::new();
         }
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        let mut running = false;
+        let mut pids = Vec::new();
         if Process32FirstW(snapshot, &mut entry) != 0 {
             loop {
                 let end = entry
@@ -1320,8 +1909,7 @@ pub fn is_obs_running() -> bool {
                 if String::from_utf16_lossy(&entry.szExeFile[..end])
                     .eq_ignore_ascii_case("obs64.exe")
                 {
-                    running = true;
-                    break;
+                    pids.push(entry.th32ProcessID);
                 }
                 if Process32NextW(snapshot, &mut entry) == 0 {
                     break;
@@ -1329,7 +1917,7 @@ pub fn is_obs_running() -> bool {
             }
         }
         CloseHandle(snapshot);
-        running
+        pids
     }
 }
 
@@ -1373,17 +1961,27 @@ pub fn launch_obs_with_eb_config(web_port: u16, dock_token: &str) -> io::Result<
     let exe = find_obs_executable().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "obs64.exe not found in the standard install locations. Launch OBS \
-             manually with the --config-url <endpoint> flag.",
+            "obs64.exe not found in the standard install locations. A portable \
+             OBS is found once it has been open while InstantClone runs. Or \
+             launch OBS manually with the --config-url <endpoint> flag.",
         )
     })?;
     let config_url = eb_config_url(web_port, dock_token);
     // Working dir = OBS's own folder: its logging and locale paths resolve
     // relative to bin/64bit.
     let workdir = exe.parent().unwrap_or(&exe);
+    let mut args = vec!["--config-url", &config_url];
+    // A portable OBS started by a `--portable` shortcut has no marker file,
+    // and without the flag it would open the AppData config instead.
+    if portable_obs_roots()
+        .iter()
+        .any(|root| exe.starts_with(root))
+    {
+        args.push("--portable");
+    }
     use std::os::windows::process::CommandExt;
     std::process::Command::new(&exe)
-        .args(["--config-url", &config_url])
+        .args(args)
         .current_dir(workdir)
         // CREATE_NEW_PROCESS_GROUP: OBS gets its own console group so
         // InstantClone closing doesn't propagate a break to it.
@@ -1780,7 +2378,7 @@ mod tests {
         assert_eq!(patched.replacen(&spliced, "", 1), original);
     }
 
-    /// `register` runs from the dashboard button and again from the stale
+    /// `register_in` runs from the dashboard button and again from the stale
     /// entry repair at startup. Running it twice must be the same file as
     /// running it once, not a second entry or a file that grows each time.
     #[test]
@@ -2102,7 +2700,7 @@ mod tests {
     }
 
     /// Re-registering after the dashboard or ingest port changed must
-    /// swap the URLs in place, through the same transform `register` runs.
+    /// swap the URLs in place, through the same transform `register_in` runs.
     #[test]
     fn re_register_refreshes_changed_port() {
         let v1 = with_entry_registered(&fake_services_json(), 7799, 1935).unwrap();
@@ -2618,6 +3216,55 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("fresh_obs_dir create_dir_all");
         ScratchDir(dir)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_portable_obs_folder_is_found_from_its_exe() {
+        let exe = Path::new(r"D:\Tools\OBS\bin\64bit\obs64.exe");
+        assert_eq!(obs_root_of_exe(exe), Some(PathBuf::from(r"D:\Tools\OBS")));
+        assert_eq!(obs_root_of_exe(Path::new(r"D:\obs64.exe")), None);
+    }
+
+    /// Streamlabs' engine is an obs64.exe too; with it open, OBS must not
+    /// read as open.
+    #[cfg(windows)]
+    #[test]
+    fn streamlabs_engine_is_no_obs() {
+        let engine = Path::new(
+            r"C:\Program Files\Streamlabs OBS\resources\app.asar.unpacked\node_modules\obs-studio-node\obs64.exe",
+        );
+        assert_eq!(obs_root_of_exe(engine), None);
+    }
+
+    /// With several OBS, a wait wins (the startup loop comes back for it),
+    /// then a failure, then a repair.
+    #[test]
+    fn several_obs_report_the_most_pressing_refresh() {
+        use RegistrationRefresh::*;
+        assert_eq!(most_pressing(vec![NotNeeded, Repaired, Deferred]), Deferred);
+        assert_eq!(
+            most_pressing(vec![Repaired, Failed("x".into())]),
+            Failed("x".into())
+        );
+        assert_eq!(most_pressing(vec![OtherInstance(7800), Repaired]), Repaired);
+        assert_eq!(most_pressing(vec![]), NotNeeded);
+    }
+
+    /// The marker makes it portable whatever AppData holds; an installed OBS
+    /// (no config folder of its own) never counts.
+    #[cfg(windows)]
+    #[test]
+    fn only_an_obs_folder_with_its_own_config_counts_as_portable() {
+        let root = fresh_obs_dir("portable");
+        assert!(
+            !is_portable_obs_root(&root),
+            "no config folder: an installed OBS"
+        );
+
+        std::fs::create_dir_all(root.join(PORTABLE_CONFIG_DIR)).unwrap();
+        std::fs::write(root.join("portable_mode.txt"), "").unwrap();
+        assert!(is_portable_obs_root(&root));
     }
 
     /// OBS 31 moved the per-user file: the new one wins, the old one is the fallback.

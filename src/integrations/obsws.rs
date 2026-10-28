@@ -300,9 +300,9 @@ fn set_state(status: &Mutex<Status>, state: &'static str, problem: &str) {
 
 const NO_PASSWORD: &str = "OBS wants a WebSocket password but none is saved. Set one in OBS: Tools > WebSocket Server Settings.";
 
-/// OBS's WebSocket server settings, from the file OBS keeps them in. A
-/// portable OBS keeps that file beside itself, out of reach: OBS's own
-/// defaults (port 4455, no password) are tried then.
+/// OBS's WebSocket server settings, from the file OBS keeps them in. When
+/// no OBS config folder is found (a portable OBS not seen running yet),
+/// OBS's own defaults (port 4455, no password) are tried.
 fn read_settings() -> Result<Settings, String> {
     let Some(path) = crate::obs_register::obs_config_dirs()
         .into_iter()
