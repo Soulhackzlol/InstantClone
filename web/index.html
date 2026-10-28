@@ -367,17 +367,10 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 .wizard-card{width:min(880px,92vw);max-width:880px;margin:40px auto;padding:38px 44px;display:flex;flex-direction:column;gap:18px}
 /* Cards size to their own content (align-items:start) instead of stretching
    to the taller one - no dead space padding out the shorter card. */
-/* Single column: Register is the recommended primary path; Custom is the
-   secondary fallback under an "or" divider. Reads top-to-bottom. */
-.wizard-obs-options{display:flex;flex-direction:column;margin-bottom:2px}
-.obs-or{display:flex;align-items:center;gap:12px;margin:14px 2px;font-size:10px;font-weight:700;
-  letter-spacing:.16em;text-transform:uppercase;color:var(--fg-4)}
-.obs-or::before,.obs-or::after{content:"";flex:1;height:1px;background:var(--line)}
 .wizard-obs-after{margin:0;font-size:12px;color:var(--fg-3);line-height:1.5}
 .wizard-obs-card{padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--bg-2);display:flex;flex-direction:column;gap:12px;
   transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
 .wizard-obs-title{font-size:13.5px;font-weight:600;color:var(--fg);display:flex;justify-content:space-between;align-items:center;gap:8px;line-height:1.3}
-.wizard-obs-badge{flex:0 0 auto;font-size:9.5px;text-transform:uppercase;letter-spacing:1.2px;color:var(--accent);background:color-mix(in oklch,var(--accent) 14%,var(--surface-3));padding:3px 8px;border-radius:999px}
 .wizard-obs-body{margin:0;font-size:12.5px;color:var(--fg-3);line-height:1.55}
 .wizard-obs-action{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:2px}
 .wizard-obs-action .muted{font-size:11px}
@@ -419,10 +412,6 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 .wizard-obs-card.obs-recommended{border-color:color-mix(in oklch,var(--accent) 30%,var(--line));
   background:linear-gradient(180deg,color-mix(in oklch,var(--accent) 7%,var(--bg-2)),var(--bg-2));
   box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 12%,transparent),0 8px 26px -18px color-mix(in oklch,var(--accent) 60%,transparent)}
-/* "no restart" reassurance tag on the custom card. */
-.obs-norestart{flex:0 0 auto;font-size:9px;text-transform:uppercase;letter-spacing:1px;font-weight:700;
-  color:var(--live);background:color-mix(in oklch,var(--live) 14%,transparent);
-  border:1px solid color-mix(in oklch,var(--live) 30%,transparent);padding:2px 7px;border-radius:999px}
 /* Inside a node the check panel drops its own card chrome - the node is the container. */
 .obs-node-body .wiz-obs-verify{margin:0;padding:0;border:0;background:none}
 .obs-node-body .wiz-obs-verify[data-state="ok"]{background:none}
@@ -530,10 +519,9 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 .wizard-card h2{font-size:22px;margin:0;letter-spacing:-.01em}
 .wizard-card .lead{color:var(--fg-3);font-size:13px;margin:0 0 8px}
 /* Field labels are uppercase eyebrow text. The `:not` guard is load-bearing:
-   `.wizard-card label` is more specific than `.wiz-feature-toggle`, so
-   without it the VOD-audio toggle (a <label>) inherited both uppercase AND
-   display:block - stacking its checkbox above ALL-CAPS body text. */
-.wizard-card label:not(.wiz-feature-toggle){display:block;margin-top:8px;font-size:11px;color:var(--fg-3);
+   an OBS row in the install list is a <label> too, and without it inherited
+   both uppercase AND display:block - stacking its tick above ALL-CAPS text. */
+.wizard-card label:not(.obs-inst-pick){display:block;margin-top:8px;font-size:11px;color:var(--fg-3);
   text-transform:uppercase;letter-spacing:.12em;font-weight:600}
 
 /* Visual platform picker (Step 2). Tiles reuse the exact per-platform
@@ -662,10 +650,6 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 /* Twitch-extras feature cards */
 .wiz-feature{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;
   padding:14px;margin-top:10px;transition:border-color .15s var(--ease-out),background .15s var(--ease-out)}
-.wiz-feature-toggle{display:flex;gap:12px;align-items:flex-start;cursor:pointer}
-.wiz-feature-toggle:hover{border-color:var(--line-2);background:var(--surface-3)}
-.wiz-feature-toggle input{width:18px;height:18px;margin-top:2px;flex:0 0 auto;cursor:pointer;
-  accent-color:var(--accent)}
 .wiz-feature-h{font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .wiz-feature-b{font-size:12.5px;color:var(--fg-3);line-height:1.5;margin:6px 0 0}
 /* Provenance tag so a reader can tell a Twitch/OBS feature from an
@@ -674,12 +658,7 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
   padding:2px 7px;border-radius:999px;white-space:nowrap}
 .wiz-tag-twitch{color:#a78bfa;background:color-mix(in oklch,#a78bfa 14%,transparent);
   border:1px solid color-mix(in oklch,#a78bfa 35%,transparent)}
-.wiz-vod-how{margin-top:10px;padding:12px 14px;background:var(--bg-2);border:1px solid var(--line);
-  border-radius:10px;font-size:12.5px;line-height:1.55;color:var(--fg-2);
-  animation:wizStepIn .2s var(--ease-out)}
-.wiz-vod-how-t{font-weight:600;margin-bottom:6px}
-.wiz-vod-how ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
-.wiz-vod-how .w-hint{margin-top:8px}
+.wiz-vod-steps{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
 #w-custom-wrap{margin-top:8px}
 .w-hint{font-size:11.5px;color:var(--fg-4);margin-top:4px}
 /* Container for the per-platform help under the wizard / destination
@@ -1679,6 +1658,142 @@ input[type="checkbox"]:disabled{opacity:.45;cursor:default}
 .obs-section{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:16px;
   display:flex;flex-direction:column;gap:6px}
 .obs-section.span-2{grid-column:1/-1}
+.obs-section[hidden]{display:none}
+.w-sl-import{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:12px}
+.w-sl-import[hidden]{display:none}
+/* Wizard step 1: which app streams. A two-way switch in the tab strip's
+   style, its indicator sliding between the halves the way the tabs' does. */
+.w-app-switch{position:relative;display:grid;grid-template-columns:1fr 1fr;padding:4px;margin-top:14px;
+  background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.w-app-switch[hidden]{display:none}
+.w-app-ind{position:absolute;top:4px;bottom:4px;left:4px;width:calc(50% - 4px);border-radius:9px;
+  background:var(--surface-3);border:1px solid var(--line-2);
+  box-shadow:0 6px 18px -10px color-mix(in oklch,var(--accent) 55%,transparent);
+  transition:transform .32s var(--ease-out)}
+.w-app-switch[data-app="streamlabs"] .w-app-ind{transform:translateX(100%)}
+.w-app{appearance:none;position:relative;z-index:1;display:flex;align-items:center;gap:11px;min-width:0;
+  padding:9px 12px;border:0;border-radius:9px;background:transparent;color:var(--fg-3);
+  text-align:left;cursor:pointer;transition:color .2s var(--ease-out)}
+.w-app:hover{color:var(--fg-2)}
+.w-app.on{color:var(--fg)}
+.w-app:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.w-app-mark{flex:none;display:grid;place-items:center;width:32px;height:32px;border-radius:9px;
+  background:var(--surface-2);border:1px solid var(--line);color:var(--fg-3);
+  transition:color .2s var(--ease-out),background .2s var(--ease-out),border-color .2s var(--ease-out),
+    transform .25s var(--ease-spring)}
+.w-app-mark svg{width:17px;height:17px}
+.w-app.on .w-app-mark{color:var(--fg);background:var(--bg-2);border-color:var(--line-2);transform:scale(1.04)}
+.w-app.on .w-app-mark.sl{color:#80f5d2;border-color:color-mix(in oklch,#80f5d2 35%,var(--line-2))}
+.w-app-text{display:flex;flex-direction:column;gap:1px;min-width:0}
+.w-app-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w-app-sub{font-size:11.5px;color:var(--fg-3)}
+.w-app-sub.exp{color:var(--warn)}
+@media (max-width:520px){
+  .w-app{gap:9px;padding:8px 9px}
+  .w-app-mark{width:28px;height:28px}
+  .w-app-name{white-space:normal;line-height:1.25}
+}
+/* Each app's steps fold open and shut on grid rows, like the OBS step's
+   nodes, so switching morphs the height instead of jumping. */
+.w-app-pane{display:grid;grid-template-rows:0fr;opacity:0;
+  transition:grid-template-rows .36s var(--ease-out),opacity .22s var(--ease-out)}
+.w-app-pane.on{grid-template-rows:1fr;opacity:1;transition-delay:0s,.08s}
+.w-app-pane-body{overflow:hidden;min-height:0}
+.w-app-pane:not(.on) .w-app-pane-body{visibility:hidden;transition:visibility 0s .36s}
+.w-app-pane .w-app-pane-body>*{transform:translateY(6px);transition:transform .36s var(--ease-out)}
+.w-app-pane.on .w-app-pane-body>*{transform:none}
+.wiz-sl-card{margin-top:18px}
+/* OBS tab: its sub-tabs pick which app's setup shows. */
+.obs-app-tabs{align-self:flex-start;max-width:100%}
+.obs-app-tabs[hidden]{display:none}
+.sub-tab-mark{display:inline-flex}
+.obs-app-note{margin:-6px 0 0}
+.obs-grid[data-app="obs"] [data-tab-app="streamlabs"],
+.obs-grid[data-app="streamlabs"] [data-tab-app="obs"]{display:none}
+.obs-grid [data-tab-app]{animation:appPaneIn .32s var(--ease-out)}
+@keyframes appPaneIn{from{opacity:0;transform:translateY(6px)}}
+@media (prefers-reduced-motion:reduce){.obs-grid [data-tab-app]{animation:none}}
+@media (max-width:520px){.w-app-sub{display:none}}
+@media (prefers-reduced-motion:reduce){
+  .w-app-ind,.w-app-mark,.w-app-pane,.w-app-pane .w-app-pane-body>*{transition:none}
+}
+/* Every OBS on this PC, each ticked on its own (wizard + OBS tab). Rows
+   arrive with a short rise, a tick draws its check, a picked row takes
+   the accent; adding a portable OBS folds open on grid rows. */
+.obs-inst-list{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.obs-inst{display:flex;align-items:center;gap:10px;padding:8px 10px 8px 9px;border-radius:11px;
+  background:var(--surface-2);border:1px solid var(--line);
+  transition:border-color .2s var(--ease-out),background .2s var(--ease-out);
+  animation:obsInstIn .34s var(--ease-out) both}
+.obs-inst:hover{border-color:var(--line-2)}
+.obs-inst.picked{border-color:color-mix(in oklch,var(--accent) 45%,var(--line));
+  background:color-mix(in oklch,var(--accent) 6%,var(--surface-2))}
+@keyframes obsInstIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.obs-inst-pick{position:relative;display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer}
+.obs-inst-cb{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.obs-inst-box{flex:none;display:grid;place-items:center;width:18px;height:18px;border-radius:5px;
+  border:1.5px solid var(--line-2);background:var(--bg-2);
+  transition:background .18s var(--ease-out),border-color .18s var(--ease-out),transform .22s var(--ease-spring)}
+.obs-inst-box svg{width:12px;height:12px;fill:none;stroke:var(--accent-ink);stroke-width:2.4;
+  stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:16;stroke-dashoffset:16;
+  transition:stroke-dashoffset .26s var(--ease-out) .04s}
+.obs-inst-cb:checked+.obs-inst-box{background:var(--accent);border-color:var(--accent);transform:scale(1.06)}
+.obs-inst-cb:checked+.obs-inst-box svg{stroke-dashoffset:0}
+.obs-inst-cb:focus-visible+.obs-inst-box{outline:2px solid var(--accent);outline-offset:2px}
+.obs-inst-cb:disabled+.obs-inst-box{opacity:.35}
+.obs-inst-pick:has(.obs-inst-cb:disabled){cursor:default}
+.obs-inst-mark{flex:none;display:grid;place-items:center;width:28px;height:28px;border-radius:8px;
+  background:var(--bg-2);border:1px solid var(--line);color:var(--fg-2)}
+.obs-inst-mark svg{width:15px;height:15px}
+.obs-inst-text{display:flex;flex-direction:column;gap:1px;min-width:0}
+.obs-inst-name{font-size:13px;font-weight:600;color:var(--fg)}
+.obs-inst-path{font-size:11px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.obs-inst .obs-reg-pill{flex:none}
+.obs-inst-empty{margin-top:10px;font-size:12.5px;line-height:1.5;color:var(--fg-3)}
+.obs-inst-empty[hidden]{display:none}
+.obs-inst-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px}
+.obs-inst-btns{display:flex;gap:8px;margin-left:auto}
+.obs-inst-btns [hidden]{display:none}
+/* A quiet text link: most streamers have one installed OBS. */
+.obs-add-toggle{appearance:none;background:none;border:0;padding:4px 2px;font:inherit;font-size:12px;
+  color:var(--fg-3);cursor:pointer;text-decoration:underline;text-decoration-color:var(--line-2);
+  text-underline-offset:3px;transition:color .18s var(--ease-out),text-decoration-color .18s var(--ease-out)}
+.obs-add-toggle:hover{color:var(--fg);text-decoration-color:var(--accent)}
+.obs-add-toggle:disabled{cursor:progress;color:var(--accent);text-decoration-color:transparent;
+  animation:obsPickWait 1.4s ease-in-out infinite}
+/* A portable row's Change and Remove take no room until the row is pointed
+   at or reached by keyboard, so every state pill lines up on the right;
+   then they slide open beside the pill. The negative margin cancels the
+   row's gap while they are shut. */
+.obs-inst-acts{flex:none;display:flex;gap:2px;max-width:0;margin-left:-10px;overflow:hidden;opacity:0;
+  transition:max-width .26s var(--ease-out),margin-left .26s var(--ease-out),opacity .18s var(--ease-out)}
+.obs-inst-acts[hidden]{display:none}
+.obs-inst:hover .obs-inst-acts,.obs-inst:focus-within .obs-inst-acts{max-width:62px;margin-left:0;opacity:1}
+@media (hover:none){.obs-inst-acts{max-width:62px;margin-left:0;opacity:1}}
+.obs-inst-act{appearance:none;display:grid;place-items:center;width:28px;height:28px;border-radius:8px;
+  border:1px solid transparent;background:none;color:var(--fg-3);cursor:pointer;
+  transition:color .15s var(--ease-out),background .15s var(--ease-out),border-color .15s var(--ease-out)}
+.obs-inst-act svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5;
+  stroke-linecap:round;stroke-linejoin:round}
+.obs-inst-act:hover:not(:disabled){color:var(--fg);background:var(--surface-3);border-color:var(--line)}
+.obs-inst-act.danger:hover:not(:disabled){color:var(--err);
+  background:color-mix(in oklch,var(--err) 10%,transparent);border-color:color-mix(in oklch,var(--err) 30%,transparent)}
+.obs-inst-act:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.obs-inst-act:disabled{opacity:.35;cursor:not-allowed}
+.obs-inst-act.waiting{color:var(--accent);opacity:1;animation:obsPickWait 1.4s ease-in-out infinite}
+.obs-inst.leaving{overflow:hidden;opacity:0;padding-top:0;padding-bottom:0;margin-top:-6px;border-color:transparent;
+  transition:height .3s var(--ease-out),opacity .2s var(--ease-out),padding .3s var(--ease-out),margin .3s var(--ease-out)}
+.obs-add-toggle[hidden]{display:none}
+@keyframes obsPickWait{50%{opacity:.55}}
+.obs-add-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.wiz-obs-manual{margin-top:14px}
+@media (max-width:560px){.obs-inst-path{display:none}}
+@media (prefers-reduced-motion:reduce){
+  .obs-inst,.obs-inst-box,.obs-inst-box svg,.obs-add-toggle,.obs-inst-acts,.obs-inst-act{animation:none;transition:none}
+}
+/* A brand mark beside a card title on the OBS tab. */
+.app-mark{display:inline-flex;vertical-align:-3px;margin-right:7px;color:var(--fg-2)}
+.app-mark svg{width:16px;height:16px}
 .obs-reg-card{background:linear-gradient(180deg,rgba(90,200,250,.07) 0%,var(--bg-2) 60%);
   border-color:rgba(90,200,250,.32)}
 .obs-manual-card{opacity:.94}
@@ -4452,9 +4567,24 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   <!-- STEP 1: how OBS finds us -->
   <div class="wiz-step" data-wstep="obs">
     <div class="wiz-step-h">
-      <div class="wiz-step-t">How does OBS reach InstantClone?</div>
-      <div class="wiz-step-s">Pick whichever fits your setup. You can switch later on the OBS tab.</div>
+      <div class="wiz-step-t">Which app do you stream with?</div>
+      <div class="wiz-step-s">Pick yours, then connect it. You can switch later on the OBS tab.</div>
     </div>
+    <!-- Which app sends the stream. Streamlabs only joins on Windows (see
+         renderStreamlabs); OBS is the default and needs no pick. -->
+    <div class="w-app-switch" id="wiz-app-tiles" data-app="obs" role="radiogroup" aria-label="Streaming app" hidden>
+      <span class="w-app-ind" aria-hidden="true"></span>
+      <button type="button" class="w-app on" data-app="obs" role="radio" aria-checked="true" onclick="wizPickApp('obs')">
+        <span class="w-app-mark" data-app-mark="obs"></span>
+        <span class="w-app-text"><span class="w-app-name">OBS Studio</span><span class="w-app-sub">Recommended</span></span>
+      </button>
+      <button type="button" class="w-app" data-app="streamlabs" role="radio" aria-checked="false" onclick="wizPickApp('streamlabs')">
+        <span class="w-app-mark sl" data-app-mark="streamlabs"></span>
+        <span class="w-app-text"><span class="w-app-name">Streamlabs Desktop</span><span class="w-app-sub exp">Experimental</span></span>
+      </button>
+    </div>
+    <!-- One pane per app; switching folds one closed while the other opens. -->
+    <div class="w-app-pane on" data-pane-app="obs"><div class="w-app-pane-body">
     <!-- Guided 2-step flow: set OBS up, then verify. A step expands when active
          and collapses to a check when done; a "Step N" eyebrow turns green as it
          completes. [data-state] = locked | active | done; see wizObs* in JS. -->
@@ -4466,38 +4596,26 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
             <span class="obs-node-title">Point OBS at InstantClone</span>
           </button>
           <div class="obs-node-clip"><div class="obs-node-body">
-            <p class="obs-node-hint">Two ways to connect. The recommended one takes a click.</p>
-            <div class="wizard-obs-options">
-              <div class="wizard-obs-card obs-recommended" id="wiz-obs-service">
-                <div class="wizard-obs-title">
-                  <span>Register as an OBS service</span>
-                  <span class="wizard-obs-badge">recommended</span>
-                </div>
-                <p class="wizard-obs-body">Adds InstantClone to OBS's <b>Service</b> dropdown, so you just pick it.</p>
-                <div class="wiz-callout warn" id="wiz-obs-close-warn" hidden>
-                  <span class="ic" aria-hidden="true">!</span>
-                  <span><b>Close OBS first.</b> It's open right now, and it overwrites its service list when it quits, so register while it's shut or the entry won't stick.</span>
-                </div>
-                <div class="wizard-obs-action">
-                  <button class="ic-btn ic-btn-primary" id="wiz-obs-register-btn" onclick="wizRegisterObs()">Register with OBS</button>
-                </div>
-                <p class="wizard-obs-status muted" id="wiz-obs-status">Checking your OBS install&hellip;</p>
-                <p class="wizard-obs-after">Then reopen OBS and choose <b>InstantClone</b> in <b>Settings &rarr; Stream</b>.</p>
-                <details class="ic-disclose">
-                  <summary>How it works</summary>
-                  <div class="ic-disclose-body">
-                    <p>InstantClone appears next to Twitch / YouTube in OBS's <b>Settings &rarr; Stream &rarr; Service</b> list. Multi-track Video "Auto" works out of the box, so pick InstantClone and stream.</p>
-                    <p>Edits OBS's <code class="mono">services.json</code> in <code class="mono">%APPDATA%</code> with a <code class="mono">.bak</code> backup. Unregister any time from the <b>OBS</b> tab.</p>
-                  </div>
-                </details>
+            <p class="obs-node-hint">One click and InstantClone joins OBS's <b>Service</b> list, next to Twitch and YouTube.</p>
+            <div class="wizard-obs-card obs-recommended" id="wiz-obs-service">
+              <div class="wizard-obs-title">
+                <span>Register as an OBS service</span>
               </div>
-              <div class="obs-or">or</div>
-              <div class="wizard-obs-card" id="wiz-obs-custom">
-                <div class="wizard-obs-title">
-                  <span>Custom RTMP server</span>
-                  <span class="obs-norestart">no restart</span>
+              <p class="wizard-obs-body">Tick each OBS you stream with.</p>
+              <div class="obs-installs-host" id="wiz-obs-installs"></div>
+              <p class="wizard-obs-after">Then reopen OBS and choose <b>InstantClone</b> in <b>Settings &rarr; Stream &rarr; Service</b>.</p>
+              <details class="ic-disclose">
+                <summary>How it works</summary>
+                <div class="ic-disclose-body">
+                  <p>InstantClone appears next to Twitch / YouTube in OBS's <b>Settings &rarr; Stream &rarr; Service</b> list. Multi-track Video "Auto" works out of the box, so pick InstantClone and stream.</p>
+                  <p>Edits that OBS's <code class="mono">services.json</code> (in <code class="mono">%APPDATA%</code>, or inside a portable OBS's own folder) with a <code class="mono">.bak</code> backup. Unregister any time from the <b>OBS</b> tab.</p>
                 </div>
-                <p class="wizard-obs-body">Prefer pasting a URL? Set <b>Service: Custom</b> in OBS. It applies live, nothing to close.</p>
+              </details>
+            </div>
+            <details class="ic-disclose wiz-obs-manual" id="wiz-obs-custom">
+              <summary>Prefer a Custom RTMP server?</summary>
+              <div class="ic-disclose-body">
+                <p>Set <b>Service: Custom</b> in OBS and paste these. It applies live, nothing to close. Handy for OBS before 30.2, multi-RTMP plugins or other encoders. Your real platform key goes in the next step, not in OBS.</p>
                 <div class="wizard-obs-copy-row">
                   <span class="muted">Server</span>
                   <code class="mono" id="wiz-obs-srv">rtmp://localhost:1935/live</code>
@@ -4507,14 +4625,8 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
                   <span class="muted">Stream key</span>
                   <code class="mono">anything (e.g. main)</code>
                 </div>
-                <details class="ic-disclose">
-                  <summary>When to pick this</summary>
-                  <div class="ic-disclose-body">
-                    <p>Older OBS (before 30.2), multi-RTMP plugins, or non-OBS encoders. Your real platform key goes in the next step, not in OBS.</p>
-                  </div>
-                </details>
               </div>
-            </div>
+            </details>
             <button class="ic-btn ic-btn-primary obs-advance" id="wiz-obs-confirm" onclick="wizObsAdvance('connect')">I've set this up in OBS &rarr;</button>
           </div></div>
         </div>
@@ -4548,6 +4660,31 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
         </div>
       </li>
     </ol>
+    </div></div>
+    <div class="w-app-pane" data-pane-app="streamlabs"><div class="w-app-pane-body">
+      <div class="wizard-obs-card obs-recommended wiz-sl-card">
+        <div class="wizard-obs-title">
+          <span>Connect Streamlabs</span>
+          <span class="tag">Experimental</span>
+        </div>
+        <p class="wizard-obs-body">One click and the stream you start from Streamlabs' <b>Go Live</b> button comes through InstantClone. Nothing to change inside Streamlabs, and Enhanced Broadcasting and the VOD track keep working.</p>
+        <div class="wiz-callout tip">
+          <span class="ic" aria-hidden="true">i</span>
+          <span><span class="wiz-callout-t">Twitch only inside Streamlabs.</span>Sign Streamlabs in with Twitch and go live to Twitch: that's just the way in. The stream comes here, and InstantClone sends it wherever you choose, <b>with or without Twitch</b>: YouTube, Kick, any RTMP.</span>
+        </div>
+        <div class="wizard-obs-action">
+          <button class="ic-btn ic-btn-primary" id="wiz-sl-btn" onclick="wizConnectStreamlabs()">Connect Streamlabs</button>
+        </div>
+        <p class="wizard-obs-status muted" id="wiz-sl-status"></p>
+        <details class="ic-disclose">
+          <summary>How it works</summary>
+          <div class="ic-disclose-body">
+            <p>InstantClone points Streamlabs' Twitch Enhanced Broadcasting setup at itself, so the stream comes here first. Go live with Enhanced Broadcasting off and InstantClone switches it on for that stream with a single video track, the stream you picked.</p>
+            <p>A Streamlabs signed in with YouTube or Kick can't come through yet: sign it in with Twitch. Keep InstantClone open when you go live. Disconnect any time from the <b>OBS</b> tab.</p>
+          </div>
+        </details>
+      </div>
+    </div></div>
   </div>
 
   <!-- STEP 2: platform -->
@@ -4578,6 +4715,10 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
     </div>
     <label for="w-key">Stream key <span class="muted" id="w-key-optional-hint" hidden>(optional for Custom if URL has key)</span></label>
     <input id="w-key" type="password" class="ic-input mono" placeholder="paste your stream key" autocomplete="off">
+    <div class="w-sl-import" id="w-sl-import" hidden>
+      <button type="button" class="ic-btn ic-btn-ghost" id="w-sl-import-btn" onclick="wizImportStreamlabsKey()">Import from Streamlabs</button>
+      <span class="muted" id="w-sl-import-msg">Streamlabs is signed in with Twitch, so it can hand over your key.</span>
+    </div>
     <div id="w-key-help" class="w-key-help" hidden></div>
     <div class="wiz-callout tip">
       <span class="ic" aria-hidden="true">&#9733;</span>
@@ -4595,30 +4736,41 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
     <div class="wiz-feature">
       <div class="wiz-feature-h">Enhanced Broadcasting <span class="wiz-tag wiz-tag-twitch">Twitch feature</span></div>
       <p class="wiz-feature-b">Twitch's multi-track quality ladder (1080p / 720p / 480p&hellip;) so every viewer gets a smooth stream. <b>It just works</b>: InstantClone forwards it untouched. Nothing to set here.</p>
-      <details class="ic-disclose">
+      <details class="ic-disclose" data-app-only="obs">
         <summary>How to turn it on in OBS</summary>
         <div class="ic-disclose-body">
           <p><b>In OBS:</b> if you registered InstantClone as a service (previous step), open <b>Settings &rarr; Stream</b>, keep <b>Service</b> on <b>InstantClone</b> and turn on <b>Enhanced Broadcasting</b>, left on <b>Auto</b>.</p>
           <p>On Custom RTMP, Enhanced Broadcasting needs OBS older than 32.2: use <b>OBS tab &rarr; Legacy</b> after setup. On newer OBS, register the InstantClone service instead.</p>
         </div>
       </details>
+      <details class="ic-disclose" data-app-only="streamlabs" hidden>
+        <summary>How to turn it on in Streamlabs</summary>
+        <div class="ic-disclose-body">
+          <p>In Streamlabs' <b>Go Live</b> window, turn on <b>Enhanced Broadcasting</b> in the Twitch section. Left off, InstantClone switches it on for that stream with a single video track, so the stream still comes through.</p>
+        </div>
+      </details>
     </div>
 
-    <label class="wiz-feature wiz-feature-toggle">
-      <input type="checkbox" id="w-vod-audio">
-      <div>
-        <div class="wiz-feature-h" style="margin:0">Save a VOD audio track <span class="wiz-tag wiz-tag-twitch">Twitch feature</span></div>
-        <p class="wiz-feature-b">A second audio track on your Twitch VOD, handy for keeping copyrighted music in the <b>live</b> stream but out of the <b>recording</b>. On the InstantClone service you enable it with a tiny optional script.</p>
-      </div>
-    </label>
-    <div id="w-vod-how" hidden class="wiz-vod-how">
-      <div class="wiz-vod-how-t">Why a script? OBS hardcodes its VOD Track to the service named "Twitch", so it's locked on the InstantClone service. The <b>optional VOD unlocker script</b> adds the same second audio track OBS won't, and nothing else. <b>OBS 32.2+ needs it</b> (older OBS can still use the built-in VOD Track checkbox).</div>
-      <ol>
-        <li>Finish this wizard, then open <b>System &rarr; Twitch &amp; OBS &rarr; Twitch VOD audio</b> and click <b>Download</b>.</li>
-        <li>In OBS: <b>Tools &rarr; Scripts &rarr; +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
-        <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>).</li>
-      </ol>
-      <div class="w-hint">Nothing to configure here. These are the OBS-side steps you do once, after setup.</div>
+    <div class="wiz-feature">
+      <div class="wiz-feature-h">Separate VOD audio <span class="wiz-tag wiz-tag-twitch">Twitch feature</span></div>
+      <p class="wiz-feature-b">A second audio track for your Twitch VOD: keep copyrighted music in the <b>live</b> stream but out of the <b>recording</b>. Nothing to set here.</p>
+      <details class="ic-disclose" data-app-only="obs">
+        <summary>How to set it up in OBS</summary>
+        <div class="ic-disclose-body">
+          <p>OBS ties its VOD Track to the service named "Twitch", so on the InstantClone service a tiny optional script adds that same second track, and nothing else. OBS 32.2 and newer need it; older OBS can use the built-in VOD Track checkbox.</p>
+          <ol class="wiz-vod-steps">
+            <li>After setup, open <b>System &rarr; Twitch &amp; OBS &rarr; Twitch VOD audio</b> and click <b>Download</b>.</li>
+            <li>In OBS: <b>Tools &rarr; Scripts &rarr; +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
+            <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>).</li>
+          </ol>
+        </div>
+      </details>
+      <details class="ic-disclose" data-app-only="streamlabs" hidden>
+        <summary>How to set it up in Streamlabs</summary>
+        <div class="ic-disclose-body">
+          <p>Streamlabs has it built in: <b>Settings &rarr; Output</b>, turn on <b>Twitch VOD Track</b> (under <b>Streaming</b> in Advanced mode) and pick the audio track without the music. It comes through InstantClone as it is.</p>
+        </div>
+      </details>
     </div>
   </div>
 
@@ -4847,7 +4999,9 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
          "dest-vod-legacy" details below (hidden on OBS 32.2+). -->
     <div id="dest-form-vod-wrap" hidden class="dest-vod">
       <div class="dest-vod-title">Twitch VOD audio</div>
-      <div class="muted dest-vod-desc">A second audio track saved only to your Twitch <b>VOD</b>: keep copyrighted music in the live stream but out of the recording. OBS locks its built-in VOD Track to the service literally named "Twitch", so on the <b>InstantClone</b> service you unlock it with a tiny optional script.</div>
+      <div class="muted dest-vod-desc">A second audio track saved only to your Twitch <b>VOD</b>: keep copyrighted music in the live stream but out of the recording.<span id="dest-vod-obs-desc"> OBS locks its built-in VOD Track to the service literally named "Twitch", so on the <b>InstantClone</b> service you unlock it with a tiny optional script.</span></div>
+      <!-- Streamlabs connected: its own VOD Track comes through as it is. -->
+      <div class="muted dest-vod-desc" id="dest-vod-streamlabs" hidden style="margin-top:8px">With <b>Streamlabs</b>, nothing to install: in Streamlabs, <b>Settings &rarr; Output</b>, turn on <b>Twitch VOD Track</b> (under <b>Streaming</b> in Advanced mode) and pick the audio track without the music.</div>
 
       <!-- Recommended path: the VOD unlocker script. Required on OBS 32.2+. -->
       <div id="dest-vod-script" style="margin-top:12px">
@@ -4985,20 +5139,33 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 <section class="tab-pane" data-pane="obs" hidden>
   <div class="tab-head">
     <div>
-      <div class="tab-title">OBS</div>
-      <div class="tab-sub">Point OBS at InstantClone. Your real platform stream keys stay in Destinations.</div>
+      <div class="tab-title" id="obs-tab-title">OBS</div>
+      <div class="tab-sub" id="obs-tab-sub">Point OBS at InstantClone. Your real platform stream keys stay in Destinations.</div>
     </div>
   </div>
-  <div class="obs-grid">
-    <section class="obs-section span-2 obs-reg-card" id="obs-reg-card" data-state="loading">
+  <!-- One app at a time: the connected one, or the one switched to. Only
+       where Streamlabs can run; OBS alone needs no pick. -->
+  <nav class="sub-tabs obs-app-tabs" id="obs-app-tabs" role="tablist" aria-label="Streaming app" hidden>
+    <span class="sub-tab-ind"></span>
+    <button class="sub-tab on" data-subtab="obs" role="tab">
+      <span class="sub-tab-mark" data-app-mark="obs"></span>
+      <span>OBS Studio</span></button>
+    <button class="sub-tab" data-subtab="streamlabs" role="tab">
+      <span class="sub-tab-mark" data-app-mark="streamlabs"></span>
+      <span>Streamlabs</span></button>
+  </nav>
+  <p class="tab-sub obs-app-note" id="obs-app-note" hidden></p>
+  <div class="obs-grid" data-app="obs">
+    <section class="obs-section span-2 obs-reg-card" id="obs-reg-card" data-state="loading" data-tab-app="obs">
       <div class="obs-card-head">
         <div class="obs-card-titles">
-          <div class="ic-label"><span class="ic-badge ic-badge-ok">recommended</span> InstantClone as an OBS service</div>
+          <div class="ic-label"><span class="app-mark" data-app-mark="obs"></span>InstantClone as an OBS service <span class="ic-badge ic-badge-ok">recommended</span></div>
           <div class="tab-sub obs-reg-intro">Register once, then pick <b>InstantClone</b> in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service</b>.</div>
         </div>
         <span class="ic-pill obs-reg-pill" id="obs-reg-pill"><span class="dot"></span><span id="obs-reg-pill-l">Checking</span></span>
       </div>
       <div class="obs-reg-status" id="obs-reg-status" aria-live="polite">Checking your OBS install&hellip;</div>
+      <div class="obs-installs-host" id="obs-installs"></div>
       <ol class="obs-steps" id="obs-reg-steps" hidden>
         <li>In OBS open <b>Settings &rarr; Stream</b>.</li>
         <li>Set <b>Service</b> to <b>InstantClone</b> and click <b>OK</b>.</li>
@@ -5009,16 +5176,42 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <details class="ic-disclose">
         <summary>How it works</summary>
         <div class="ic-disclose-body">
-          <p>Writes an <b>InstantClone</b> entry next to Twitch and YouTube in OBS's <i>Settings &rarr; Stream &rarr; Service</i> list. Multi-track Video "Auto" works out of the box. OBS reads that list when it starts and writes it back when it quits, so InstantClone only changes it while OBS is closed. If you change InstantClone's ports while OBS is closed, the entry follows at once. With OBS open, close it and press Update here.</p>
+          <p>Writes an <b>InstantClone</b> entry next to Twitch and YouTube in OBS's <i>Settings &rarr; Stream &rarr; Service</i> list. Multi-track Video "Auto" works out of the box. OBS reads that list when it starts and writes it back when it quits, so InstantClone only changes it while that OBS is closed. If you change InstantClone's ports while OBS is closed, the entry follows at once.</p>
+          <p>Each OBS on this PC has its own list: the installed one and every portable one. A portable OBS shows up here once it has been open while InstantClone runs, or pick its <code class="mono">obs64.exe</code> with <b>Using a portable OBS?</b></p>
+        </div>
+      </details>
+      </div>
+    </section>
+    <!-- Shown only where Streamlabs Desktop is installed (or already connected). -->
+    <section class="obs-section span-2 obs-reg-card" id="sl-card" data-tab-app="streamlabs" hidden>
+      <div class="obs-card-head">
+        <div class="obs-card-titles">
+          <div class="ic-label"><span class="app-mark" data-app-mark="streamlabs"></span>Streamlabs Desktop<span class="tag">Experimental</span></div>
+          <div class="tab-sub obs-reg-intro">Connect it once: the stream you start from its <b>Go Live</b> button comes through InstantClone. Nothing to change inside Streamlabs.</div>
+          <div class="tab-sub obs-reg-intro"><b>Twitch only inside Streamlabs:</b> sign it in with Twitch and go live to Twitch, that's just the way in. InstantClone sends the stream wherever you choose, with or without Twitch: YouTube, Kick, any RTMP.</div>
+        </div>
+        <span class="ic-pill obs-reg-pill" id="sl-pill"><span class="dot"></span><span id="sl-pill-l">Checking</span></span>
+      </div>
+      <div class="obs-reg-status" id="sl-status" aria-live="polite">Checking for Streamlabs&hellip;</div>
+      <div class="obs-reg-msg" id="sl-msg" role="status"></div>
+      <div class="obs-reg-foot">
+      <details class="ic-disclose">
+        <summary>How it works</summary>
+        <div class="ic-disclose-body">
+          <p>Streamlabs stays signed in with Twitch, so its title, category, chat and alerts keep working, and Enhanced Broadcasting and the VOD track work too. InstantClone points Streamlabs' Twitch Enhanced Broadcasting setup at itself (a file in <code class="mono">%APPDATA%\slobs-client</code>) and leaves it there until you press <b>Disconnect</b>, which puts Streamlabs back as it was. Open InstantClone before you go live: while it's closed, Streamlabs can't start an Enhanced Broadcasting stream.</p>
+          <p>Go live with Enhanced Broadcasting off and InstantClone switches it on for that stream and asks Twitch for one video track: the same stream you picked, through InstantClone.</p>
+          <p>A Streamlabs signed in with YouTube or Kick can't come through yet: sign it in with Twitch. Streamlabs' own Multistream sends around InstantClone: add your other platforms in <b>Destinations</b> instead.</p>
+          <p>This is new. If something breaks or confuses you, <a href="https://github.com/Soulhackzlol/InstantClone/issues/new?labels=streamlabs" target="_blank" rel="noreferrer">report it</a>.</p>
         </div>
       </details>
         <div class="obs-reg-btns">
-          <button class="ic-btn ic-btn-ghost obs-unreg" id="obs-unreg-btn" type="button" onclick="obsUnregister()" hidden>Unregister</button>
-          <button class="ic-btn ic-btn-primary" id="obs-reg-btn" type="button" onclick="obsRegister()" hidden>Register with OBS</button>
+          <button class="ic-btn ic-btn-ghost" id="sl-import-btn" type="button" onclick="slImportTwitch()" title="Puts the stream key of the Twitch account Streamlabs is signed in with into your Twitch destination, so InstantClone sends to the same channel." hidden>Import Twitch key</button>
+          <button class="ic-btn ic-btn-ghost obs-unreg" id="sl-off-btn" type="button" onclick="slConnect(false)" hidden>Disconnect</button>
+          <button class="ic-btn ic-btn-primary" id="sl-on-btn" type="button" onclick="slConnect(true)" hidden>Connect Streamlabs</button>
         </div>
       </div>
     </section>
-    <section class="obs-section span-2 obs-manual-card">
+    <section class="obs-section span-2 obs-manual-card" data-tab-app="obs">
       <div class="ic-label">Or set up a Custom RTMP server manually</div>
       <div class="tab-sub">Paste these in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service: Custom</b>. On OBS 32.2 and newer, Custom can't use Enhanced Broadcasting; use the registered service above for that.</div>
       <div class="obs-manual-row">
@@ -5040,7 +5233,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
         </div>
       </div>
     </section>
-    <section class="obs-section span-2">
+    <section class="obs-section span-2" data-tab-app="obs">
       <div class="ic-label">Recommended OBS settings</div>
       <div class="obs-recs">
         <div class="rec"><div class="rec-k">Output &rarr; Video &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
@@ -5059,7 +5252,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
         </div>
       </details>
     </section>
-    <section class="obs-section span-2 obs-dock-card">
+    <section class="obs-section span-2 obs-dock-card" data-tab-app="obs">
       <div class="ic-label">Control InstantClone from OBS</div>
       <div class="tab-sub">A dock inside OBS with the delay, profiles and destination switches, so you never leave OBS while live.</div>
       <ol class="obs-steps">
@@ -5073,7 +5266,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
         <button class="ic-btn ic-btn-ghost" type="button" onclick="copyEl(this,'dock-url','Dock URL')">Copy</button>
       </div>
     </section>
-    <section class="obs-section span-2">
+    <section class="obs-section span-2" data-tab-app="obs">
       <div class="ic-label">Chat in OBS <span class="muted" style="text-transform:none;letter-spacing:0">(optional)</span></div>
       <div class="tab-sub">Drop chat into OBS as a Custom Browser Dock.</div>
       <ol class="obs-steps">
@@ -5097,7 +5290,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
     <!-- Legacy: OBS before 32.2 could only get Enhanced Broadcasting on a
          custom service through a launch flag. Kept for those setups,
          folded away for everyone else. -->
-    <details class="obs-section span-2 sys-collapse obs-legacy" id="sys-eb-launch">
+    <details class="obs-section span-2 sys-collapse obs-legacy" id="sys-eb-launch" data-tab-app="obs">
       <summary><span class="ic-label">Legacy: launch OBS with Enhanced Broadcasting</span><span class="muted" id="sys-eb-launch-note"></span></summary>
       <div class="tab-sub" style="margin-top:10px">Start OBS pre-wired for Twitch <b>Enhanced Broadcasting</b> (the multi-resolution video ladder), with no destination editing needed. Session-only: reopen OBS normally and it streams plain again. Close OBS first: a second OBS next to an open one never gets the flag.</div>
       <div id="sys-eb-twitch-warn" class="tab-sub" hidden style="margin-top:8px;color:var(--warn,#d6a23a)">
@@ -6158,6 +6351,15 @@ const PLATFORM_MARK = {
   custom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><path d="M8 7h.01M8 17h.01"/></svg>',
   sink: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
 };
+// The streaming apps' own marks (Simple Icons paths), shown where the
+// dashboard names the app: the wizard's app pick and the OBS tab's cards.
+const APP_MARK = {
+  obs: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12,24C5.383,24,0,18.617,0,12S5.383,0,12,0s12,5.383,12,12S18.617,24,12,24z M12,1.109 C5.995,1.109,1.11,5.995,1.11,12C1.11,18.005,5.995,22.89,12,22.89S22.89,18.005,22.89,12C22.89,5.995,18.005,1.109,12,1.109z M6.182,5.99c0.352-1.698,1.503-3.229,3.05-3.996c-0.269,0.273-0.595,0.483-0.844,0.78c-1.02,1.1-1.48,2.692-1.199,4.156 c0.355,2.235,2.455,4.06,4.732,4.028c1.765,0.079,3.485-0.937,4.348-2.468c1.848,0.063,3.645,1.017,4.7,2.548 c0.54,0.799,0.962,1.736,0.991,2.711c-0.342-1.295-1.202-2.446-2.375-3.095c-1.135-0.639-2.529-0.802-3.772-0.425 c-1.56,0.448-2.849,1.723-3.293,3.293c-0.377,1.25-0.216,2.628,0.377,3.772c-0.825,1.429-2.315,2.449-3.932,2.756 c-1.244,0.261-2.551,0.059-3.709-0.464c1.036,0.302,2.161,0.355,3.191-0.011c1.381-0.457,2.522-1.567,3.024-2.935 c0.556-1.49,0.345-3.261-0.591-4.54c-0.7-1.007-1.803-1.717-3.002-1.969c-0.38-0.068-0.764-0.098-1.148-0.134 c-0.611-1.231-0.834-2.66-0.528-3.996L6.182,5.99z"/></svg>',
+  streamlabs: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8.6878 1.3459a1.365 1.365 0 0 0-.2734.0058c-.528.066-1.0133.1616-1.4843.3086A10.0568 10.0568 0 0 0 .3208 8.2697c-.147.471-.2445.9583-.3105 1.4863-.091.734.431 1.4041 1.166 1.4961.734.091 1.404-.43 1.496-1.164.05-.406.119-.7316.209-1.0196A7.3736 7.3736 0 0 1 7.727 4.221c.288-.09.6145-.157 1.0195-.207.735-.092 1.255-.7631 1.164-1.4981a1.3394 1.3394 0 0 0-1.2226-1.17Zm4.0488 5.2226c-2.629 0-3.9432.0007-4.9472.5117A4.684 4.684 0 0 0 5.7406 9.131c-.512 1.004-.5117 2.3183-.5117 4.9473v4.289c0 1.502-.001 2.2542.291 2.8282.257.505.6679.9149 1.1719 1.1719.574.292 1.326.291 2.828.291h6.9706c2.628 0 3.9442.0012 4.9472-.5098a4.6883 4.6883 0 0 0 2.0507-2.0508c.512-1.004.5117-2.3182.5117-4.9472v-1.0723c0-2.629.0003-3.9433-.5117-4.9473a4.6883 4.6883 0 0 0-2.0507-2.0508c-1.003-.511-2.3193-.5117-4.9472-.5117zm.537 6.7051c.741 0 1.3399.5998 1.3399 1.3398v2.6836c0 .74-.5988 1.3399-1.3398 1.3399-.74 0-1.3418-.5999-1.3418-1.3399v-2.6836c0-.74.6018-1.3398 1.3418-1.3398zm5.3632 0c.74 0 1.3399.5998 1.3399 1.3398v2.6836c0 .74-.5999 1.3399-1.3399 1.3399-.741 0-1.3398-.5999-1.3398-1.3399v-2.6836c0-.74.5989-1.3398 1.3398-1.3398z"/></svg>',
+};
+function fillAppMarks(){
+  document.querySelectorAll('[data-app-mark]').forEach(el => { el.innerHTML = APP_MARK[el.dataset.appMark] || ''; });
+}
 // The mark for `slug`, or its letter when there's no mark (Trovo, unknown).
 function platformMark(slug){
   if (PLATFORM_MARK[slug]) return PLATFORM_MARK[slug];
@@ -7182,7 +7384,7 @@ function renderCta(){
       // backend refuses this anyway. Say what it is waiting for instead of
       // offering a button that can only fail.
       setCta(btn, { key: 'wait-armed', cls: 'ic-btn-disabled cp-cta-waiting',
-                    pre: 'Waiting for OBS. The delay starts when it connects', disabled: true, waiting: true });
+                    pre: `Waiting for ${encoderApp() || 'your stream'}. The delay starts when it connects`, disabled: true, waiting: true });
       setText(cancel, 'Disarm');
       clearWarn();
     } else {
@@ -7215,7 +7417,7 @@ function renderCta(){
     if (!lastState.ingest_alive){
       // Nothing to delay yet, and the backend refuses it - so offer the
       // wait rather than a button whose only outcome is an error toast.
-      setCta(btn, { key: 'wait', cls: 'ic-btn-disabled cp-cta-waiting', pre: 'Waiting for OBS to connect',
+      setCta(btn, { key: 'wait', cls: 'ic-btn-disabled cp-cta-waiting', pre: encoderApp() ? `Waiting for ${encoderApp()} to connect` : 'Waiting for your stream',
                     disabled: true, waiting: true });
       // A typed delay past the range is flagged now, not first when OBS
       // connects: the field must never sit at 712 s under "0 - 48s".
@@ -7514,6 +7716,9 @@ function renderHeader(s){
   // to do when it's not connected yet.
   const obs = $('hdr-obs');
   obs.className = 'ic-pill ' + (s.ingest_alive ? 'live ok' : '');
+  // Named after the app sending, when that's certain (see encoderApp).
+  const pillName = obs.querySelector('.ic-pill-k'), app = encoderApp() || 'Stream';
+  if (pillName.textContent !== app) pillName.textContent = app;
   $('hdr-obs-v').textContent = s.ingest_alive ? 'Live' : 'Offline';
   obs.title = s.ingest_alive
     ? 'Your encoder is connected and publishing to InstantClone.'
@@ -7996,7 +8201,7 @@ function updateDestCard(r, d){
                        : d.alive ? 'Connected'
                        : failing ? (d.failure.retry_in_ms != null ? 'Retrying' : d.failure.retries ? 'Connecting' : 'Not connected')
                        : 'Idle';
-  r.statE.title = onHold ? 'Crash protection: live on the reconnect screen until OBS is back.'
+  r.statE.title = onHold ? `Crash protection: live on the reconnect screen until ${encoderApp() || 'your stream'} is back.`
                 : verticalWaiting ? vdiag.title : '';
   // rate + history (auto kbps -> Mbps, matching the header + stats).
   const kbps = d.alive ? (d.bitrate_kbps || 0) : 0;
@@ -8005,7 +8210,7 @@ function updateDestCard(r, d){
   // Until video flows, the card says what it's doing instead of a bare dash.
   const idleMsg = !d.enabled ? 'Off. Switch it on to stream here.'
                 : !d.alive && failing && (d.failure.retry_in_ms != null || !d.failure.retries) ? 'Not connected'
-                : !d.alive ? ((lastState || {}).ingest_alive ? 'Connecting…' : 'Goes live when OBS does')
+                : !d.alive ? ((lastState || {}).ingest_alive ? 'Connecting…' : (encoderApp() ? `Goes live when ${encoderApp()} does` : 'Goes live when you do'))
                 : !isStreaming ? 'Connected, waiting for video'
                 : '';
   r.rate.classList.toggle('is-msg', !!idleMsg);
@@ -8200,6 +8405,15 @@ function obsVerAtLeast(ver, a, b, c){
 async function refreshVodMethods(){
   const badge = $('dest-vod-script-badge');
   if (!badge) return;
+  // Streaming from Streamlabs: its own VOD Track works, OBS's steps don't apply.
+  const sl = slInfo || await slStatus();
+  const viaStreamlabs = !!(sl && sl.enabled);
+  $('dest-vod-streamlabs').hidden = !viaStreamlabs;
+  ['dest-vod-obs-desc', 'dest-vod-script'].forEach(id => { $(id).hidden = viaStreamlabs; });
+  if (viaStreamlabs){
+    $('dest-vod-legacy').hidden = true;
+    return;
+  }
   const info = await obsRegInfo();
   const atLeast = obsVerAtLeast(info.obs_version, 32, 2, 0);
   const verLabel = info.obs_version ? ('OBS ' + info.obs_version) : 'your OBS version';
@@ -8882,7 +9096,7 @@ function renderWizStep(){
   // rest visually).
   if (i === 0){
     $('wiz-title').textContent = 'Welcome to InstantClone';
-    $('wiz-lead').textContent = 'A live, glitch-free stream delay for OBS. A few quick questions and you’re streaming.';
+    $('wiz-lead').textContent = wizWelcomeLead();
   } else {
     $('wiz-title').textContent = 'Set up your stream';
     $('wiz-lead').textContent = `Step ${i + 1} of ${ids.length}`;
@@ -8896,7 +9110,11 @@ function renderWizStep(){
   clearWizMsg();
   wireAllDisclosures($('wizard'));
   reserveCopyButtons($('wizard'));
-  if (wizCurrent === 'key') setTimeout(() => { const k = $('w-key'); if (k) k.focus(); }, 60);
+  if (wizCurrent === 'key'){
+    syncWizStreamlabsImport();
+    refreshStreamlabs();
+    setTimeout(() => { const k = $('w-key'); if (k && !k.disabled) k.focus(); }, 60);
+  }
 }
 
 function wizNext(){
@@ -8981,6 +9199,10 @@ function wizObsReopen(node){
 function validateWizStep(id){
   if (id === 'obs'){
     if (wizObsConfirmed) return true;
+    if (wizApp === 'streamlabs'){
+      wizMsg('Connect Streamlabs above to continue.', 'err');
+      return false;
+    }
     wizMsg('Set OBS up above, then click "I\'ve set this up in OBS" to continue.', 'err');
     const c = $('wiz-obs-confirm');   // draw the eye to the button that unblocks
     if (c){ c.classList.remove('nudge'); void c.offsetWidth; c.classList.add('nudge'); }
@@ -8993,6 +9215,7 @@ function validateWizStep(id){
   // custom endpoint that also has a separate key field.
   if (platform === 'kick' && !custom){ wizMsg('Paste your Kick Server URL (from the Kick dashboard) to continue.', 'err'); return false; }
   if (platform === 'custom' && !custom){ wizMsg('Enter your custom RTMP URL to continue.', 'err'); return false; }
+  if (platform === 'twitch' && wizKeyImported) return true;
   if (platform !== 'custom' && !key){ wizMsg('Paste your stream key to continue.', 'err'); return false; }
   return true;
 }
@@ -9163,8 +9386,6 @@ function fillWizardPlatforms(){
       if (!$('wizard').hidden) renderWizStep();
     });
     // VOD-audio opt-in reveals its OBS how-to inline.
-    const vod = $('w-vod-audio');
-    if (vod) vod.addEventListener('change', () => { $('w-vod-how').hidden = !vod.checked; });
     // Enter in the key field advances, like a real form.
     const keyInput = $('w-key');
     if (keyInput) keyInput.addEventListener('keydown', e => {
@@ -9190,78 +9411,14 @@ function syncWizPlatformTiles(){
   });
 }
 
-// First-run OBS-service registration card in the wizard. Renders the
-// status text + button state based on /obs/register-status, and the
-// "Register with OBS" button calls /obs/register and refreshes.
-// Falls through to the Custom-RTMP card when OBS isn't detected on
-// this machine (e.g. a fresh InstantClone install before OBS is
-// installed - rare but the dashboard shouldn't show an action that
-// can't possibly succeed).
-async function refreshWizObsStatus(){
-  const btn = $('wiz-obs-register-btn');
-  const status = $('wiz-obs-status');
-  if (!btn || !status) return;
-  try {
-    const r = await (await fetch('/obs/register-status')).json();
-    // "Close OBS first" only matters when OBS is actually running AND we still
-    // need to register (a running OBS overwrites services.json on exit).
-    const closeWarn = $('wiz-obs-close-warn');
-    if (closeWarn) closeWarn.hidden = !(r.obs_running && !r.registered);
-    if (r.path === null){
-      status.innerHTML = '<span style="color:var(--warn,#d6a23a)">⚠ OBS not detected on this machine. Use the Custom RTMP card on the right.</span>';
-      btn.disabled = true;
-      btn.textContent = 'Register with OBS';
-      btn.className = 'ic-btn ic-btn-disabled';
-      return;
-    }
-    btn.disabled = false;
-    if (r.registered){
-      status.innerHTML = '<span style="color:var(--live)">✓ Registered.</span> Reopen OBS, then choose <b>InstantClone</b> from Settings → Stream → Service.';
-      btn.textContent = 'Unregister';
-      btn.className = 'ic-btn ic-btn-ghost';
-      btn.onclick = wizUnregisterObs;
-    } else {
-      status.textContent = "We'll add an InstantClone entry to OBS's service list.";
-      btn.textContent = 'Register with OBS';
-      btn.className = 'ic-btn ic-btn-primary';
-      btn.onclick = wizRegisterObs;
-    }
-    // OBS would undo the change when it quits, so the server refuses it:
-    // the button waits for OBS to close (focus re-checks).
-    if (r.obs_running){
-      btn.disabled = true;
-      btn.className = 'ic-btn ic-btn-disabled';
-    }
-  } catch(e){
-    status.textContent = "Couldn't query OBS. The Custom RTMP card on the right also works.";
-  }
-}
-// Re-check OBS's running state when the window regains focus - e.g. the user
-// alt-tabbed to OBS and closed it - so the "close OBS first" note clears itself.
+// The wizard's OBS card is the same list as the OBS tab's.
+function refreshWizObsStatus(){ return refreshObsRegisterStatus(); }
+// Re-check when the window regains focus - e.g. the user alt-tabbed to
+// OBS and closed it - so its "close it first" clears itself.
 window.addEventListener('focus', () => {
   const wiz = $('wizard');
   if (wiz && !wiz.hidden && wizCurrent === 'obs') refreshWizObsStatus();
 });
-async function wizRegisterObs(){
-  const btn = $('wiz-obs-register-btn');
-  if (btn) btn.disabled = true;
-  try {
-    const r = await (await fetch('/obs/register', {method:'POST'})).json();
-    if (r.ok){ toast(r.message || 'Registered','ok'); }
-    else { toast(r.error || 'Failed','err'); }
-  } catch(e){ toast('Request failed','err'); }
-  await refreshWizObsStatus();
-}
-async function wizUnregisterObs(){
-  const btn = $('wiz-obs-register-btn');
-  if (btn) btn.disabled = true;
-  try {
-    const r = await (await fetch('/obs/unregister', {method:'POST'})).json();
-    if (r.ok){ toast(r.message || 'Unregistered','ok'); }
-    else { toast(r.error || 'Failed','err'); }
-  } catch(e){ toast('Request failed','err'); }
-  await refreshWizObsStatus();
-}
 
 // Per-platform "where do I get my stream key + what gotchas to know"
 // hint. Rendered under the key input in both the wizard and the
@@ -9348,6 +9505,12 @@ function skipWizard(){
 
 async function saveWizard(){
   const platform = $('w-platform').value, key = $('w-key').value.trim(), custom = $('w-custom').value.trim();
+  // The Streamlabs import already saved the Twitch destination.
+  if (platform === 'twitch' && wizKeyImported){
+    wizMsg('Saved. Starting up…', 'ok');
+    setTimeout(loadConfig, 500);
+    return;
+  }
   // Defensive: the key step validates before you can reach Save, but if we
   // ever land here empty, bounce back to that step rather than erroring.
   // Kick needs both a Server URL and a key; custom needs the URL; everyone
@@ -9383,10 +9546,14 @@ async function saveWizard(){
 // only the not-registered case (the actual silent dead-end onto OFFLINE) nudges.
 async function nudgeObsWiringIfNeeded(){
   try {
-    const r = await (await fetch('/obs/register-status')).json();
-    if (r.registered) return;
+    // Streaming from Streamlabs: OBS needs no wiring.
+    const sl = await slStatus();
+    if (sl && sl.enabled) return;
+    await loadObsInstalls();
+    const found = obsInstallList();
+    if (found.some(i => i.state === 'current')) return;
     const srv = ($('obs-srv') && $('obs-srv').textContent) || 'rtmp://localhost:1935/live';
-    const how = (r.path === null)
+    const how = !found.length
       ? `In OBS → Settings → Stream: Service = Custom, Server = ${srv}.`
       : `In OBS → Settings → Stream: Service = Custom, Server = ${srv}. Or close OBS and register InstantClone on the OBS tab.`;
     toast('One more step to go live: point OBS at InstantClone. ' + how, 'info', 11000);
@@ -10365,93 +10532,440 @@ async function midiInit(){
 
 // - OBS service registration --------------------─
 // Patches OBS's services.json so InstantClone shows up in the Service
-// dropdown like Twitch/YouTube. OBS reads that file when it starts and
-// writes it back from memory when it quits, so every change waits for OBS
-// to be closed: the server refuses one made while OBS runs, and this card
-// says which of the states below it is in and what to do. Refreshed when
-// the tab opens, when the window regains focus (the user just closed OBS)
-// and every few seconds while the tab is on screen.
-function obsRegState(r){
-  if (!r || r.path === null) return 'missing';
-  if (r.registered_to_other_instance) return 'other';
-  if (r.registered) return 'current';
-  if (r.has_entry) return 'stale';
-  return r.obs_running ? 'blocked' : 'none';
+// dropdown like Twitch/YouTube. A PC can hold an installed OBS and portable
+// ones, each with its own list, so every OBS is a row the streamer ticks.
+// OBS reads its list when it starts and writes it back from memory when it
+// quits, so the server refuses a change to an OBS that is open, and that row
+// says to close it. The wizard and the OBS tab show the same list, with the
+// same ticks. Refreshed when the tab opens, when the window regains focus
+// (the user just closed OBS) and every few seconds while it is on screen.
+let obsInstalls = null;
+const obsPicked = new Map();   // install id -> ticked, kept across refreshes
+const OBS_INSTALL_PILL = {
+  missing: ['bad', 'Open it once'],
+  current: ['ok', 'Registered'],
+  stale: ['warn', 'Out of date'],
+  other: ['warn', 'Other InstantClone'],
+  none: ['', 'Not registered'],
+};
+async function loadObsInstalls(){
+  try { obsInstalls = await (await fetch('/obs/installs')).json(); }
+  catch(_){ obsInstalls = null; }
+  return obsInstalls;
 }
-function renderObsReg(r){
+const obsInstallList = () => (obsInstalls && obsInstalls.installs) || [];
+const obsTicked = () => obsInstallList().filter(i => obsPicked.get(i.id) && i.state !== 'missing');
+function obsInstallPill(i){
+  if (i.running && i.state !== 'current') return ['warn', 'Close it first'];
+  if (i.state === 'other' && i.other_port) return ['warn', 'Other InstantClone :' + i.other_port];
+  return OBS_INSTALL_PILL[i.state] || ['', i.state];
+}
+// One frame per host, built once; rows are then kept by id so a refresh
+// updates them in place and only a new OBS animates in.
+function obsInstallsFrame(host){
+  host.innerHTML = `<ul class="obs-inst-list"></ul>
+    <p class="obs-inst-empty" hidden>OBS isn't installed here, or hasn't been opened yet. Open it once and come back, or use a Custom RTMP server.</p>
+    <div class="obs-inst-foot">
+      <button type="button" class="obs-add-toggle" hidden>Using a portable OBS?</button>
+      <div class="obs-inst-btns">
+        <button type="button" class="ic-btn ic-btn-ghost obs-unreg obs-inst-unreg" hidden>Unregister</button>
+        <button type="button" class="ic-btn ic-btn-primary obs-inst-reg">Register with OBS</button>
+      </div>
+    </div>`;
+  host.querySelector('.obs-add-toggle').onclick = e => obsPickPortable(e.currentTarget);
+  host.querySelector('.obs-inst-reg').onclick = e => obsChangeTicked(true, e.currentTarget);
+  host.querySelector('.obs-inst-unreg').onclick = e => obsChangeTicked(false, e.currentTarget);
+}
+function obsInstallRow(inst){
+  const row = document.createElement('li');
+  row.className = 'obs-inst';
+  row.dataset.id = inst.id;
+  row.innerHTML = `<label class="obs-inst-pick">
+      <input type="checkbox" class="obs-inst-cb">
+      <span class="obs-inst-box" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      <span class="obs-inst-mark">${APP_MARK.obs}</span>
+      <span class="obs-inst-text"><span class="obs-inst-name"></span><span class="obs-inst-path mono"></span></span>
+    </label>
+    <span class="ic-pill obs-reg-pill"><span class="dot"></span><span class="obs-inst-pill-l"></span></span>
+    <span class="obs-inst-acts">
+      <button type="button" class="obs-inst-act" data-act="change" aria-label="Change where this OBS is">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2.5l3 3L6 13H3v-3z"/></svg>
+      </button>
+      <button type="button" class="obs-inst-act danger" data-act="remove" aria-label="Remove this OBS">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>
+      </button>
+    </span>`;
+  row.querySelector('.obs-inst-cb').onchange = e => {
+    obsPicked.set(inst.id, e.target.checked);
+    renderObsInstalls();
+  };
+  row.querySelector('[data-act="change"]').onclick = e => obsPickPortable(e.currentTarget, inst.id);
+  row.querySelector('[data-act="remove"]').onclick = e => obsForgetPortable(e.currentTarget, inst.id);
+  return row;
+}
+// A row that leaves folds shut before it goes, so the list closes the gap.
+function obsInstallRowOut(row){
+  if (row.classList.contains('leaving')) return;
+  row.style.height = row.offsetHeight + 'px';
+  void row.offsetHeight;
+  row.classList.add('leaving');
+  row.style.height = '0px';
+  const gone = () => row.remove();
+  row.addEventListener('transitionend', e => { if (e.propertyName === 'height') gone(); });
+  setTimeout(gone, 450);
+}
+function renderObsInstallsInto(host){
+  if (!host) return;
+  if (!host.querySelector('.obs-inst-list')) obsInstallsFrame(host);
+  const list = host.querySelector('.obs-inst-list');
+  const installs = obsInstallList();
+  const ids = new Set(installs.map(i => i.id));
+  [...list.children].forEach(row => { if (!ids.has(row.dataset.id)) obsInstallRowOut(row); });
+  installs.forEach((inst, idx) => {
+    let row = [...list.children].find(r => r.dataset.id === inst.id && !r.classList.contains('leaving'));
+    if (!row){
+      row = obsInstallRow(inst);
+      row.style.animationDelay = (idx * 45) + 'ms';
+      list.appendChild(row);
+    }
+    const ticked = !!obsPicked.get(inst.id) && inst.state !== 'missing';
+    const cb = row.querySelector('.obs-inst-cb');
+    cb.checked = ticked;
+    cb.disabled = inst.state === 'missing';
+    row.classList.toggle('picked', ticked);
+    const name = inst.portable ? 'OBS Studio (portable)' : 'OBS Studio';
+    const [tone, label] = obsInstallPill(inst);
+    const nameEl = row.querySelector('.obs-inst-name'), pathEl = row.querySelector('.obs-inst-path');
+    if (nameEl.textContent !== name) nameEl.textContent = name;
+    if (pathEl.textContent !== inst.path){ pathEl.textContent = inst.path; pathEl.title = inst.path; }
+    row.querySelector('.obs-reg-pill').className = 'ic-pill obs-reg-pill' + (tone ? ' ' + tone : '');
+    const pillL = row.querySelector('.obs-inst-pill-l');
+    if (pillL.textContent !== label) pillL.textContent = label;
+    // Only a portable OBS was added by hand; the installed one is found on its own.
+    const acts = row.querySelector('.obs-inst-acts');
+    acts.hidden = !inst.portable;
+    acts.querySelectorAll('button').forEach(b => {
+      b.disabled = inst.running;
+      b.title = inst.running ? 'Close this OBS first'
+        : b.dataset.act === 'change' ? 'Moved it? Pick its obs64.exe again' : 'Remove from the list';
+    });
+  });
+  host.querySelector('.obs-inst-empty').hidden = !obsInstalls || installs.length > 0;
+  host.querySelector('.obs-add-toggle').hidden = !(obsInstalls && obsInstalls.portable_pick);
+  const ticked = obsTicked();
+  const reg = host.querySelector('.obs-inst-reg'), unreg = host.querySelector('.obs-inst-unreg');
+  reg.disabled = !ticked.length;
+  reg.textContent = ticked.length > 1 ? `Register in ${ticked.length} OBS` : 'Register with OBS';
+  unreg.hidden = !ticked.some(i => i.state !== 'none');
+}
+// The OBS tab card's own pill and line sum the rows up.
+function renderObsRegSummary(){
   const card = $('obs-reg-card');
   if (!card) return;
-  const state = obsRegState(r);
-  const open = !!(r && r.obs_running);
-  const pill = $('obs-reg-pill'), pillL = $('obs-reg-pill-l');
-  const status = $('obs-reg-status');
-  const reg = $('obs-reg-btn'), unreg = $('obs-unreg-btn');
-  // The other copy's dashboard port, so the user can tell which one it is.
-  const port = state === 'other' ? r.other_instance_web_port : null;
-  const view = {
-    missing: ['bad', 'OBS not found', "OBS isn't installed here, or hasn't been opened yet. Open it once and come back, or use the manual setup below."],
-    current: ['ok', 'Registered', 'OBS lists InstantClone as a service. To stream through it:'],
-    stale: ['warn', 'Out of date', open
-      ? (r.update_pending ? 'The entry in OBS points at old ports. It updates by itself when OBS closes.'
-                          : 'The entry in OBS points at old ports. Close OBS, then press Update.')
-      : 'The entry in OBS points at old ports, so OBS can\'t reach InstantClone. Update it now.'],
-    other: ['warn', 'Other InstantClone', `OBS points at your other InstantClone${port ? ' (dashboard on :' + port + ')' : ''}.`
-      + (open ? ' Close OBS to switch it to this one.' : ' Switch it here if this is the one you stream with.')],
-    blocked: ['warn', 'Close OBS first', 'OBS is open. It rewrites its service list when it quits, so close OBS, then register.'],
-    none: ['', 'Not registered', 'Adds InstantClone to the Service list in OBS in one click.'],
-  }[state];
-  card.dataset.state = state;
-  pill.className = 'ic-pill obs-reg-pill' + (view[0] ? ' ' + view[0] : '');
-  if (pillL.textContent !== view[1]) pillL.textContent = view[1];
-  if (status.textContent !== view[2]) status.textContent = view[2];
-  const label = state === 'stale' ? 'Update' : state === 'other' ? 'Use this InstantClone' : 'Register with OBS';
-  reg.hidden = state === 'missing' || state === 'current' || (state === 'stale' && open && r.update_pending);
-  reg.textContent = label;
-  reg.disabled = open;
-  reg.className = 'ic-btn ' + (open ? 'ic-btn-disabled' : 'ic-btn-primary');
-  reg.title = open ? 'Close OBS first' : '';
-  unreg.hidden = !(state === 'current' || state === 'stale');
-  unreg.disabled = open;
-  unreg.title = open ? 'Close OBS to unregister' : '';
-  $('obs-reg-steps').hidden = state !== 'current';
+  const installs = obsInstallList();
+  const any = s => installs.some(i => i.state === s);
+  const view = !obsInstalls ? ['bad', 'Unknown', 'Could not ask InstantClone about OBS. Is it still running?']
+    : !installs.length ? ['bad', 'OBS not found', "OBS isn't installed here, or hasn't been opened yet. Open it once and come back, or use the manual setup below."]
+    : any('stale') ? ['warn', 'Out of date', obsInstalls.update_pending
+        ? 'An entry points at old ports. It updates by itself when that OBS closes.'
+        : "An entry points at old ports, so that OBS can't reach InstantClone. Tick it and register again."]
+    : any('current') ? ['ok', 'Registered', 'OBS lists InstantClone as a service. To stream through it:']
+    : ['', 'Not registered', 'Tick the OBS you stream with and register: InstantClone joins its Service list.'];
+  card.dataset.state = any('current') && !any('stale') ? 'current' : 'none';
+  $('obs-reg-pill').className = 'ic-pill obs-reg-pill' + (view[0] ? ' ' + view[0] : '');
+  if ($('obs-reg-pill-l').textContent !== view[1]) $('obs-reg-pill-l').textContent = view[1];
+  if ($('obs-reg-status').textContent !== view[2]) $('obs-reg-status').textContent = view[2];
+  $('obs-reg-steps').hidden = !any('current');
+}
+function renderObsInstalls(){
+  // A new OBS starts ticked when it needs a click; one registered already doesn't.
+  obsInstallList().forEach(i => {
+    if (!obsPicked.has(i.id)) obsPicked.set(i.id, i.state === 'none' || i.state === 'stale');
+  });
+  renderObsInstallsInto($('obs-installs'));
+  renderObsInstallsInto($('wiz-obs-installs'));
+  renderObsRegSummary();
 }
 async function refreshObsRegisterStatus(){
-  if (!$('obs-reg-card')) return;
-  const r = await obsRegInfo(true);
-  // obsRegInfo answers {} when the request failed.
-  if (!r || r.registered === undefined){
-    $('obs-reg-status').textContent = 'Could not ask InstantClone about OBS. Is it still running?';
-    return;
-  }
-  renderObsReg(r);
+  await loadObsInstalls();
+  renderObsInstalls();
 }
-async function obsRegChange(url, btn){
-  const msg = $('obs-reg-msg');
+async function obsChangeTicked(register, btn){
+  const ids = obsTicked().filter(i => register || i.state !== 'none').map(i => i.id);
+  if (!ids.length) return;
   btn.disabled = true;
-  msg.textContent = '';
-  const r = await postAction(url);
-  if (r.ok) toast((r.data && r.data.message) || 'Done', 'ok');
-  else { toast(r.error, 'err'); msg.textContent = r.error; }
+  const r = await postAction(register ? '/obs/register' : '/obs/unregister', new URLSearchParams({ids: ids.join('\n')}));
+  btn.disabled = false;
+  if (r.ok){
+    toast((r.data && r.data.message) || 'Done', 'ok');
+    // Done with those: a fresh tick is needed to change them again.
+    ids.forEach(id => obsPicked.set(id, false));
+  } else {
+    toast(r.error, 'err');
+  }
+  const msg = $('obs-reg-msg');
+  if (msg) msg.textContent = r.ok ? '' : r.error;
   await refreshObsRegisterStatus();
 }
-function obsRegister(){ return obsRegChange('/obs/register', $('obs-reg-btn')); }
-function obsUnregister(){ return obsRegChange('/obs/unregister', $('obs-unreg-btn')); }
+// Windows' own Open dialog, opened by InstantClone on this PC: the browser
+// can't hand over a real path. The link waits while the dialog is open.
+// `replace`: the row whose OBS moved, so the pick takes its place.
+async function obsPickPortable(btn, replace){
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.classList.add('waiting');
+  if (!replace) btn.textContent = 'Pick its obs64.exe in the window that opened…';
+  const r = await postAction('/obs/portable/pick', new URLSearchParams({replace: replace || ''}));
+  btn.disabled = false;
+  btn.classList.remove('waiting');
+  if (!replace) btn.textContent = label;
+  if (r.ok && r.data && r.data.cancelled) return;
+  toast(r.ok ? r.data.message : r.error, r.ok ? 'ok' : 'err');
+  if (r.ok) await refreshObsRegisterStatus();
+}
+async function obsForgetPortable(btn, id){
+  btn.disabled = true;
+  const r = await postAction('/obs/portable/forget', new URLSearchParams({id}));
+  if (!r.ok){ btn.disabled = false; toast(r.error, 'err'); return; }
+  obsPicked.delete(id);
+  toast(r.data.message, 'ok');
+  await refreshObsRegisterStatus();
+}
+
+// - Streamlabs Desktop (experimental) ------------------------------
+// Once connected, its Twitch streams come through InstantClone: the server
+// points Streamlabs' Enhanced Broadcasting setup at us and follows its Go
+// Live flow (src/streamlabs.rs). The card and the wizard only show where
+// Streamlabs is installed, so OBS users never see it.
+let slInfo = null;
+// The app sending the stream, named only when it's certain: OBS while
+// Streamlabs isn't connected, Streamlabs while its stream is the one
+// arriving. With Streamlabs connected either app can stream here, so
+// otherwise '' and the words stay neutral ("your stream").
+function encoderApp(){
+  if (lastState && lastState.publisher_app === 'streamlabs') return 'Streamlabs';
+  return slInfo && slInfo.enabled ? '' : 'OBS';
+}
+// "OBS is streaming through InstantClone right now.", for the confirms.
+function liveNowText(){
+  const app = encoderApp();
+  return app ? `${app} is streaming through InstantClone right now.` : 'Your stream is going through InstantClone right now.';
+}
+async function slStatus(){
+  try { slInfo = await (await fetch('/streamlabs/status')).json(); }
+  catch(_){ slInfo = null; }
+  return slInfo;
+}
+const slReady = r => !!(r && r.enabled && r.state === 'connected' && r.platform === 'twitch');
+// [pill tone, pill label, status line] for one status answer.
+// Streamlabs is one per PC, so it streams through one InstantClone: said
+// before Connect is pressed when another copy (another channel) has it.
+const slOtherCopy = r => r && !r.enabled && r.other_copy ? r.other_copy : null;
+function slOtherCopyText(other){
+  return other.running
+    ? `Streamlabs streams through the other InstantClone (dashboard port ${other.port}). Disconnect it there to use Streamlabs here.`
+    : `Streamlabs is set to another InstantClone (dashboard port ${other.port}), which is closed. Connect moves it to this one.`;
+}
+function slView(r){
+  const other = slOtherCopy(r);
+  if (other) return [other.running ? 'warn' : '', other.running ? 'In use' : 'Off', slOtherCopyText(other)];
+  if (!r.enabled) return ['', 'Off', 'Found Streamlabs on this PC. Connect it to stream through InstantClone from its Go Live button.'];
+  if (r.state === 'not_installed') return ['bad', 'Not found', "Streamlabs Desktop isn't installed here, or hasn't been opened yet. Open it once."];
+  if (r.state === 'error') return ['bad', 'Problem', r.problem];
+  if (r.state !== 'connected') return ['warn', 'Waiting', 'Connected. Open Streamlabs and InstantClone picks it up.'];
+  if (r.problem) return ['warn', 'Check Streamlabs', r.problem];
+  if (r.live && r.route === 'around') return ['bad', 'Not through InstantClone', "Streamlabs is live, but its stream isn't reaching InstantClone, so the delay doesn't apply. Go live to Twitch from Streamlabs' Go Live window, without Streamlabs' own Multistream."];
+  if (r.live) return ['ok', 'Live', r.route === 'single'
+    ? 'Live through InstantClone as one video track (Enhanced Broadcasting was off).'
+    : 'Live through InstantClone with Enhanced Broadcasting.'];
+  return ['ok', 'Connected', 'Ready. Go live from Streamlabs as usual: its Twitch stream comes through InstantClone.'];
+}
+function renderStreamlabs(r){
+  renderObsTabApp(r);
+  const card = $('sl-card');
+  if (card){
+    card.hidden = !r || !r.supported || !(r.installed || r.enabled);
+    if (!card.hidden){
+      const [tone, label, text] = slView(r);
+      $('sl-pill').className = 'ic-pill obs-reg-pill' + (tone ? ' ' + tone : '');
+      if ($('sl-pill-l').textContent !== label) $('sl-pill-l').textContent = label;
+      if ($('sl-status').textContent !== text) $('sl-status').textContent = text;
+      const other = slOtherCopy(r);
+      $('sl-on-btn').hidden = r.enabled;
+      $('sl-on-btn').disabled = !!(other && other.running);
+      $('sl-off-btn').hidden = !r.enabled;
+      $('sl-import-btn').hidden = !slReady(r);
+    }
+  }
+  renderWizStreamlabs(r);
+  syncWizStreamlabsImport();
+}
+// Wizard step 1: the app pick shows where Streamlabs can run (Windows); the
+// Streamlabs panel says what's in the way before Connect is pressed.
+function renderWizStreamlabs(r){
+  const tiles = $('wiz-app-tiles');
+  if (!tiles) return;
+  tiles.hidden = !r || !r.supported;
+  if (tiles.hidden) return;
+  const btn = $('wiz-sl-btn'), status = $('wiz-sl-status');
+  const other = slOtherCopy(r);
+  if (other){
+    btn.textContent = 'Connect Streamlabs';
+    btn.disabled = other.running;
+    status.textContent = slOtherCopyText(other);
+  } else if (r.enabled){
+    btn.textContent = 'Connected';
+    btn.disabled = true;
+    status.textContent = r.problem || (r.state === 'connected'
+      ? 'Connected. Keep Streamlabs signed in with your Twitch account.'
+      : 'Connected. Open Streamlabs and InstantClone picks it up.');
+  } else if (!r.installed){
+    btn.disabled = true;
+    status.textContent = "Streamlabs Desktop isn't on this PC, or hasn't been opened yet. Open it once, then come back.";
+  } else {
+    btn.disabled = false;
+    status.textContent = '';
+  }
+}
+let wizApp = 'obs';
+const wizWelcomeLead = () => `A live, glitch-free stream delay for ${wizApp === 'streamlabs' ? 'Streamlabs' : 'OBS'}. A few quick questions and you’re streaming.`;
+function wizPickApp(app){
+  wizApp = app;
+  $('wiz-app-tiles').dataset.app = app;
+  $$('#wiz-app-tiles .w-app').forEach(b => {
+    const on = b.dataset.app === app;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+  $$('.w-app-pane').forEach(p => p.classList.toggle('on', p.dataset.paneApp === app));
+  // Later steps explain things in the picked app's own words.
+  $$('#wizard [data-app-only]').forEach(el => { el.hidden = el.dataset.appOnly !== app; });
+  $('wiz-lead').textContent = wizWelcomeLead();
+  clearWizMsg();
+}
+async function refreshStreamlabs(){ renderStreamlabs(await slStatus()); }
+// The OBS tab shows one app's setup: the one picked here, else Streamlabs
+// while it's connected, else OBS. Both apps can still stream to this copy,
+// which the note under the switch says. The switch is the tab's sub-tabs,
+// so a pick goes through showSubTab like any other.
+let obsTabApp = null;
+function obsTabPickApp(app){ obsTabApp = app; renderObsTabApp(slInfo); }
+function renderObsTabApp(r){
+  const tabs = $('obs-app-tabs');
+  if (!tabs) return;
+  const wasHidden = tabs.hidden;
+  tabs.hidden = !r || !r.supported || !(r.installed || r.enabled);
+  const app = tabs.hidden ? 'obs' : (obsTabApp || (r.enabled ? 'streamlabs' : 'obs'));
+  const pane = tabs.closest('.tab-pane');
+  const current = tabs.querySelector('.sub-tab.on');
+  tabs.querySelectorAll('.sub-tab').forEach(t => t.classList.toggle('on', t.dataset.subtab === app));
+  // Measured once it shows, or when the pick changed under it.
+  if (!tabs.hidden && (wasHidden || !current || current.dataset.subtab !== app)) moveSubTabInd(pane);
+  pane.querySelector('.obs-grid').dataset.app = app;
+  const streamlabs = app === 'streamlabs';
+  $('obs-tab-title').textContent = streamlabs ? 'Streamlabs' : 'OBS';
+  $('obs-tab-sub').textContent = streamlabs
+    ? 'Connect Streamlabs. Your real platform stream keys stay in Destinations.'
+    : 'Point OBS at InstantClone. Your real platform stream keys stay in Destinations.';
+  const obsRegistered = obsInstallList().some(i => i.state === 'current');
+  const note = !streamlabs && r && r.enabled
+    ? 'Streamlabs stays connected too, so either app can stream here. Switch to Streamlabs above to disconnect it.'
+    : streamlabs && obsRegistered
+    ? 'OBS stays registered too, so either app can stream here.'
+    : '';
+  const noteEl = $('obs-app-note');
+  noteEl.hidden = !note;
+  noteEl.textContent = note;
+}
+async function slConnect(on){
+  const btn = $(on ? 'sl-on-btn' : 'sl-off-btn');
+  btn.disabled = true;
+  const r = await postAction(on ? '/streamlabs/connect' : '/streamlabs/disconnect');
+  btn.disabled = false;
+  $('sl-msg').textContent = r.ok ? '' : r.error;
+  if (r.ok) toast(on ? 'Streamlabs connected' : 'Streamlabs disconnected: its Twitch setup is back as it was', 'ok');
+  await refreshStreamlabs();
+  // The server picks Streamlabs up a moment later; show that without waiting
+  // for the next poll.
+  if (on) setTimeout(refreshStreamlabs, 1200);
+}
+// What importing Streamlabs' Twitch key did, in one line.
+function slImportText(d){
+  const name = `"${d.destination}"`;
+  const done = d.outcome === 'added' ? `Added the Twitch destination ${name} with Streamlabs' key.`
+    : d.outcome === 'updated' ? `Put Streamlabs' Twitch key in ${name}.`
+    : `${name} already has Streamlabs' Twitch key. Nothing to change.`;
+  return d.enabled ? done : `${done} It's switched off: turn it on in Destinations to stream there.`;
+}
+async function slImportTwitch(){
+  const btn = $('sl-import-btn');
+  btn.disabled = true;
+  const r = await postAction('/streamlabs/import-twitch');
+  btn.disabled = false;
+  const text = r.ok ? slImportText(r.data) : r.error;
+  // Kept on the card, not only in a toast: the key itself never shows, so
+  // this line is what says it worked.
+  $('sl-msg').textContent = text;
+  toast(text, r.ok ? 'ok' : 'err');
+  if (r.ok && r.data.outcome !== 'unchanged'){ loadDestinations(); loadConfig(); }
+}
+
+// Wizard: connecting Streamlabs is step 1 done; with Twitch picked, the key
+// step can take the key from Streamlabs instead of a paste. The key goes
+// straight into a destination on the server, never through this page.
+let wizKeyImported = false;
+async function wizConnectStreamlabs(){
+  const btn = $('wiz-sl-btn'), status = $('wiz-sl-status');
+  btn.disabled = true;
+  const r = await postAction('/streamlabs/connect');
+  btn.disabled = false;
+  if (!r.ok){ status.textContent = r.error; return; }
+  status.textContent = 'Connected. Keep Streamlabs signed in with your Twitch account.';
+  btn.textContent = 'Connected';
+  btn.disabled = true;
+  wizObsAdvance('connect');
+  setTimeout(refreshStreamlabs, 1200);
+}
+function syncWizStreamlabsImport(){
+  const row = $('w-sl-import');
+  if (!row) return;
+  const twitch = $('w-platform') && $('w-platform').value === 'twitch';
+  row.hidden = !twitch || !(wizKeyImported || slReady(slInfo));
+  $('w-sl-import-btn').hidden = wizKeyImported;
+  // An import only covers Twitch: picking another platform wants a paste.
+  const key = $('w-key');
+  key.disabled = twitch && wizKeyImported;
+  key.placeholder = key.disabled ? 'imported from Streamlabs' : 'paste your stream key';
+}
+async function wizImportStreamlabsKey(){
+  const btn = $('w-sl-import-btn'), msg = $('w-sl-import-msg');
+  btn.disabled = true;
+  const r = await postAction('/streamlabs/import-twitch');
+  btn.disabled = false;
+  if (!r.ok){ msg.textContent = r.error; return; }
+  wizKeyImported = true;
+  $('w-key').value = '';
+  msg.textContent = 'Imported. Your key went straight to the Twitch destination.';
+  clearWizMsg();
+  syncWizStreamlabsImport();
+}
 
 // Everything the OBS tab shows that can change outside the dashboard.
 let obsTabPoll = 0;
 function showObsTab(){
   refreshObsRegisterStatus();
+  refreshStreamlabs();
   refreshSysVodScript();
   clearInterval(obsTabPoll);
   obsTabPoll = setInterval(() => {
     const pane = document.querySelector('.tab-pane[data-pane="obs"]');
     if (!pane || pane.hidden){ clearInterval(obsTabPoll); return; }
-    if (!document.hidden) refreshObsRegisterStatus();
+    if (!document.hidden){ refreshObsRegisterStatus(); refreshStreamlabs(); }
   }, 4000);
 }
 window.addEventListener('focus', () => {
   const pane = document.querySelector('.tab-pane[data-pane="obs"]');
-  if (pane && !pane.hidden) refreshObsRegisterStatus();
+  if (pane && !pane.hidden){ refreshObsRegisterStatus(); refreshStreamlabs(); }
 });
 function openObsLegacy(){
   const d = $('sys-eb-launch');
@@ -11205,11 +11719,11 @@ const TOUR = [
   {
     target: null, side: 'center',
     title: 'Welcome to InstantClone',
-    body: `
-      <p>InstantClone sits between OBS and your streaming platforms (Twitch, YouTube, Kick…). It lets you <b>add/remove/change a stream delay live</b> without disconnecting OBS.</p>
+    get body(){ const app = encoderApp() || 'OBS or Streamlabs'; return `
+      <p>InstantClone sits between ${app} and your streaming platforms (Twitch, YouTube, Kick…). It lets you <b>add/remove/change a stream delay live</b> without disconnecting ${app}.</p>
       <p>This 30-second tour points to the bits you'll actually use. Hit <b>Esc</b> or <b>Skip</b> at any time.</p>
-      <div class="tour-tip"><strong>The big picture:</strong> OBS → InstantClone → your platforms. You stay in OBS, you change the delay here.</div>
-    `,
+      <div class="tour-tip"><strong>The big picture:</strong> ${app} → InstantClone → your platforms. You stay in ${app}, you change the delay here.</div>
+    `; },
   },
   {
     target: '#hero-readout', side: 'right',
@@ -11276,13 +11790,17 @@ const TOUR = [
   },
   {
     target: '.tab[data-tab="obs"]', side: 'bottom', tab: 'obs',
-    title: 'Wire OBS to InstantClone',
-    body: `
+    get title(){ return `Wire ${slInfo && slInfo.enabled ? 'Streamlabs' : 'OBS'} to InstantClone`; },
+    get body(){ return slInfo && slInfo.enabled ? `
+      <p>Streamlabs is connected on this tab: go live from Streamlabs' <b>Go Live</b> button as usual, signed in with Twitch, and the stream comes through InstantClone.</p>
+      <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you go live, the dashboard reads <b>OFFLINE</b>. That's expected, not a mistake.</p>
+      <div class="tour-tip"><strong>Twitch only inside Streamlabs:</strong> it's just the way in. Your real platform keys live in <b>Destinations</b>, with or without Twitch.</div>
+    ` : `
       <p><b>Recommended:</b> close OBS and hit <b>Register with OBS</b>. Then open OBS: InstantClone is in its <b>Settings → Stream → Service</b> list. Pick it, set any Stream Key (we suggest <code>main</code>), and Start Streaming.</p>
       <p><b>Fallback:</b> on older OBS, a multi-RTMP plugin, or a non-OBS encoder, use the Server URL + key shown below with Service: <b>Custom…</b>.</p>
       <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you Start Streaming, the dashboard reads <b>OFFLINE</b>. That's expected, not a mistake.</p>
       <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just a label here. Your real platform keys live in <b>Destinations</b>.</div>
-    `,
+    `; },
   },
   {
     target: '.tab[data-tab="overlay"]', side: 'bottom', tab: 'overlay',
@@ -12256,6 +12774,7 @@ function showSubTab(paneName, subName){
   staggerIn(pane.querySelector(`.sub-pane[data-subpane="${subName}"]`));
   try { localStorage.setItem('ic-subtab-' + paneName, subName); } catch(e){}
   if (paneName === 'overlay') overlaySubShown(subName);
+  if (paneName === 'obs') obsTabPickApp(subName);
   if (paneName !== 'system') return;
   updateSaveBar();
   if (subName === 'about') aboutMaybeAutoCheck();
@@ -12426,8 +12945,8 @@ async function applyUpdate(){
   // same live-stream drop the tray Quit guards against. Confirm only while
   // OBS is actually publishing; when nothing is live this stays one click.
   if (lastState && lastState.ingest_alive &&
-      !confirm('OBS is streaming through InstantClone right now. Updating restarts the app and drops every destination.'
-        + (lastState.multitrack_video ? ' With Enhanced Broadcasting, Twitch only comes back once you stop and start streaming in OBS.' : '')
+      !confirm(`${liveNowText()} Updating restarts the app and drops every destination.`
+        + (lastState.multitrack_video ? ` With Enhanced Broadcasting, Twitch only comes back once you stop and start streaming in ${encoderApp() || 'your app'}.` : '')
         + '\n\nUpdate anyway?')){
     return;
   }
@@ -12563,8 +13082,8 @@ let _restarting = false, _quitting = false;
 async function restartApp(btn){
   if (_restarting || _quitting) return;
   if (lastState && lastState.ingest_alive &&
-      !confirm('OBS is streaming through InstantClone right now. Restarting relaunches the app and drops every destination for a few seconds.'
-        + (lastState.multitrack_video ? ' With Enhanced Broadcasting, Twitch only comes back once you stop and start streaming in OBS.' : '')
+      !confirm(`${liveNowText()} Restarting relaunches the app and drops every destination for a few seconds.`
+        + (lastState.multitrack_video ? ` With Enhanced Broadcasting, Twitch only comes back once you stop and start streaming in ${encoderApp() || 'your app'}.` : '')
         + '\n\nRestart anyway?')){
     return;
   }
@@ -12582,7 +13101,7 @@ async function restartApp(btn){
 async function quitApp(btn){
   if (_quitting || _restarting) return;
   if (lastState && lastState.ingest_alive &&
-      !confirm('OBS is streaming through InstantClone right now. Quitting stops the delay and drops every destination.\n\nQuit anyway?')){
+      !confirm(`${liveNowText()} Quitting stops the delay and drops every destination.\n\nQuit anyway?`)){
     return;
   }
   if (!confirm('Quit InstantClone? The dashboard will go offline until you launch the app again.')) return;
@@ -12959,8 +13478,10 @@ function openUpdateInAbout(){
   wireAllDisclosures();
   reserveCopyButtons();
   wireChatDock();
+  fillAppMarks();
   await loadConfig();
   refreshObsRegisterStatus();
+  refreshStreamlabs();
   checkForUpdate();
   loadWhatsNew();
   checkUpdateOutcome();

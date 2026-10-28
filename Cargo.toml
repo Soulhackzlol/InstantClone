@@ -1,6 +1,6 @@
 [package]
 name = "instantclone"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2021"
 authors = ["s1moscs"]
 license = "GPL-3.0-or-later"
@@ -66,6 +66,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    "Win32_System_Com",
+    "Win32_UI_Controls_Dialogs",
     "Win32_Graphics_Gdi",
     "Win32_NetworkManagement_IpHelper",
     "Win32_Networking_WinSock",

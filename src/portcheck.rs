@@ -101,7 +101,7 @@ pub fn find_process_on_port(port: u16) -> Option<(u32, Option<String>)> {
 /// us access (e.g. PID belongs to an elevated process) - the caller
 /// still has the PID to show.
 #[cfg(windows)]
-fn process_name(pid: u32) -> Option<String> {
+pub(crate) fn process_name(pid: u32) -> Option<String> {
     unsafe {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if h.is_null() {

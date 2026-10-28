@@ -1365,6 +1365,23 @@ impl Controller {
         self.destinations.write().remove(id);
     }
 
+    /// Drop the state of every destination not in `active`: one removed or
+    /// switched off after its pump had already ended (say, while nothing
+    /// was streaming) has no pump left to clear it, and would otherwise
+    /// count in the header's "0/2 live" for good.
+    pub fn retain_destination_states(&self, active: &std::collections::HashSet<String>) {
+        let has_stale = self
+            .destinations
+            .read()
+            .keys()
+            .any(|id| !active.contains(id));
+        if has_stale {
+            self.destinations
+                .write()
+                .retain(|id, _| active.contains(id));
+        }
+    }
+
     /// Why a destination's last attempt failed, if it did. Read-only: unlike
     /// `destination_state` it never registers a destination that has no pump.
     pub fn destination_failure(&self, id: &str) -> Option<EgressFailure> {
@@ -5957,6 +5974,18 @@ mod tests {
     /// keeps the publish slot and viewers see a frozen stream, while nothing
     /// in the app notices because the task is alive and merely parked - and
     /// the supervisor will not respawn a task that has not finished.
+    #[tokio::test]
+    async fn a_destination_removed_after_its_pump_ended_stops_counting() {
+        let h = harness(0);
+        h.ctrl.destination_state("kept");
+        h.ctrl.destination_state("removed");
+        assert_eq!(h.ctrl.destination_alive_summary(), (0, 2));
+
+        let active: std::collections::HashSet<String> = ["kept".to_string()].into();
+        h.ctrl.retain_destination_states(&active);
+        assert_eq!(h.ctrl.destination_alive_summary(), (0, 1));
+    }
+
     #[tokio::test]
     async fn the_idr_wait_gives_up_when_there_is_nothing_left_to_wait_for() {
         let h = harness(0);

@@ -4,6 +4,103 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.18] - Streamlabs Desktop (experimental), every OBS on your PC, and winget
+
+### Streamlabs Desktop, experimental
+
+Streamlabs never reads OBS's service list, so until now it needed the manual
+Custom ingest setup, which gave up Enhanced Broadcasting and the VOD track.
+Not anymore.
+
+- **Connect it once** from the OBS tab (or the first step of setup) and keep
+  going live from Streamlabs' own **Go Live** button. The stream comes
+  through InstantClone with the delay. You don't change anything inside
+  Streamlabs, and you don't have to close it.
+- **Enhanced Broadcasting and the Twitch VOD Track keep working.** Both are
+  Streamlabs' own switches. Leave Enhanced Broadcasting off in the Go Live
+  window and the stream still comes through, as the single track you asked
+  for.
+- **Twitch is only how Streamlabs gets in.** Sign Streamlabs in with Twitch
+  and go live to Twitch, but what InstantClone sends out is up to you:
+  YouTube, Kick, any RTMP, with or without a Twitch destination. Without
+  one, InstantClone builds the stream's tracks itself, on your graphics
+  card.
+- **Import Twitch key** fills your Twitch destination straight from
+  Streamlabs. No copying keys around.
+- **It says when something's off:** Streamlabs signed in with YouTube or
+  Kick, or a stream that went around InstantClone (Streamlabs' own
+  Multistream, say), which the delay can't hold back.
+- **It stays connected while InstantClone is closed.** Streamlabs then
+  can't start an Enhanced Broadcasting stream, so no stream skips the delay
+  without you noticing. **Disconnect** gives Streamlabs its Twitch settings
+  back.
+- **OBS or Streamlabs, one at a time on the OBS tab.** The same switch as
+  in setup picks which one you're setting up, so you only see that app's
+  steps. Both can still stream to the same InstantClone, and the tab says
+  so.
+- **The dashboard names the app that's actually streaming.** With
+  Streamlabs connected, either app could be the one, so the header, the
+  go-live button and the destination cards say "your stream" until
+  Streamlabs' stream arrives, then "Streamlabs". The VOD audio steps for a
+  Twitch destination are Streamlabs' own (it has it built in, no script).
+- Windows only, like Streamlabs. Tested on Streamlabs 1.21.9. It's new, so
+  if something doesn't come through, the **report it** link under the
+  card's **How it works** is the fastest way to get it fixed.
+
+### Every OBS on your PC
+
+- **An installed OBS and portable ones, side by side.** The OBS tab lists
+  every OBS it finds, and you tick which ones get the InstantClone service:
+  one, some or all.
+- **Portable OBS without typing paths.** One that has been open while
+  InstantClone ran is found by itself. Otherwise, **Using a portable OBS?**
+  opens Windows' own file picker: pick its `obs64.exe` and that's it. Moved
+  the folder? Edit it. Not using it anymore? Remove it.
+- **"Close OBS first" means the right OBS.** Only the OBS you're changing
+  has to be closed, and Streamlabs being open no longer counts as OBS.
+- **Each copy reads its own OBS.** Your profile, the encoders, the WebSocket
+  password for integrations, the Enhanced Broadcasting check: they now come
+  from the OBS registered to this InstantClone, then the open one, then the
+  one you used last, instead of whichever was found first.
+
+### Two InstantClones, two channels
+
+- **They no longer step on each other's Streamlabs.** Streamlabs is one per
+  PC, so it streams through one copy. Starting another copy used to undo
+  that connection. Now the other copy shows who has Streamlabs, and Connect
+  waits until it's free, or moves it over when the copy that had it is
+  closed.
+- **Or each other's OBS**, as above: a copy reads the OBS it's registered
+  in, not the one another copy streams from.
+
+### Setup
+
+- **Setup starts with the question that matters:** which app you stream
+  with. OBS is one click (register the service), Streamlabs is one click
+  (connect), and the Custom RTMP route is still there, just out of the way.
+- **The Twitch step explains things in your app's words** and lost a
+  switch that didn't switch anything.
+
+### Updates
+
+- **Installed with winget?** `winget install Soulhackzlol.InstantClone`
+  works, **Update now** still updates in one click, and `winget list` and
+  `winget uninstall` keep up with it. A copy in a folder that needs admin
+  rights says how to update instead of "Access is denied".
+
+### Fixes
+
+- With Streamlabs live, the dashboard no longer warns that "OBS has
+  Enhanced Broadcasting on but is not using it". It was reading OBS's
+  settings for a stream that wasn't OBS's.
+- The header's "Egress 0/2 live" kept counting destinations you had
+  removed or switched off while nothing was streaming. It counts only the
+  ones that are on now.
+- **Import Twitch key** says what it did (added a destination, changed the
+  key, or nothing to change) and the destination shows up right away,
+  instead of only after reloading the page.
+- The app picker in setup no longer cuts off its names on a phone.
+
 ## [0.1.17] - Alerts you design, goals and timers, events in the dock, and folders for integrations
 
 ### Alerts you design

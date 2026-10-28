@@ -140,6 +140,10 @@ pub struct Settings {
     /// the same effect as the `--no-browser` CLI flag, but persisted and
     /// reachable from the UI. The flag still forces suppression regardless.
     pub open_dashboard_on_launch: bool,
+    /// Whether Streamlabs Desktop's Twitch streams are routed through
+    /// InstantClone (see `streamlabs`). Off by default: it edits a file of
+    /// Streamlabs' own, so only the streamer's Connect click turns it on.
+    pub streamlabs_connect: bool,
     /// State: whether the built-in preset overlays have been seeded to the
     /// overlays folder as real files yet. Set true after the dashboard bakes
     /// them on first run, so deleting a seeded overlay doesn't bring it back.
@@ -1014,6 +1018,7 @@ impl Settings {
             // behaviour. Each has an explicit opt-out in the System tab.
             update_check_enabled: true,
             open_dashboard_on_launch: true,
+            streamlabs_connect: false,
             update_tray_notify: true,
             tray_color: 0,
             update_notified: String::new(),
@@ -1340,6 +1345,9 @@ impl Settings {
         if !self.open_dashboard_on_launch {
             writeln!(f, "open_dashboard_on_launch=false")?;
         }
+        if self.streamlabs_connect {
+            writeln!(f, "streamlabs_connect=true")?;
+        }
         if !self.update_tray_notify {
             writeln!(f, "update_tray_notify=false")?;
         }
@@ -1512,6 +1520,7 @@ impl Settings {
             "auto_activate_when_ready" => self.auto_activate_when_ready = value == "true",
             "update_check_enabled" => self.update_check_enabled = value != "false",
             "open_dashboard_on_launch" => self.open_dashboard_on_launch = value != "false",
+            "streamlabs_connect" => self.streamlabs_connect = value == "true",
             "update_tray_notify" => self.update_tray_notify = value != "false",
             "tray_color" => self.tray_color = value.parse().unwrap_or(0),
             "update_notified" => self.update_notified = value.into(),
@@ -4002,6 +4011,7 @@ Name@x"
             auto_arm_delay_ms: 25_000,
             update_check_enabled: false,
             open_dashboard_on_launch: false,
+            streamlabs_connect: true,
             update_tray_notify: false,
             tray_color: 3,
             update_notified: "0.1.17".into(),
