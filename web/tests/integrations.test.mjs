@@ -515,3 +515,31 @@ test('the values offered under a field: the latest step\'s answer, then what hap
   assert.deepEqual([...pick.suggested().map(v => v.name)], ['clip.url', 'counter.told', 'hold', 'time']);
   pick.ctx = pick.field = null;
 });
+
+test('the catalog finds by every word, and Recommended takes turns between kinds', () => {
+  const preset = (id, category, name, description, more = {}) => ({ id, category, name, description, needs: [], recommended: true, ...more });
+  given({
+    twitch: { available: true, main: {} },
+    catalog: {
+      presets: [
+        preset('crash', 'alerts', 'OBS crash alert', 'One Discord message per OBS crash.', { needs: ['discord'] }),
+        preset('timeline', 'alerts', 'Stream timeline', 'One Discord card per stream.', { needs: ['discord'] }),
+        preset('tell', 'chat', 'Tell chat', 'Says we are back.', { needs: ['twitch'] }),
+        preset('clip', 'auto', 'Hype clip', 'Chat goes wild, it clips.', { needs: ['twitch'], recommended: false }),
+      ],
+      packs: [{ id: 'safety', name: 'Crash safety', description: 'Crash alerts for Discord and chat.', presets: ['crash'], needs: ['discord'] }],
+    },
+  });
+  const catalog = page.inside('Catalog');
+  const ids = list => [...list.map(p => p.id)];
+  catalog.query = '';
+  assert.deepEqual(ids(catalog.presetsIn('rec')), ['crash', 'tell', 'timeline']);
+  catalog.query = 'discord crash';
+  assert.deepEqual(ids(catalog.presetsIn('rec')), ['crash']);
+  assert.deepEqual(ids(catalog.packsIn()), ['safety']);
+  assert.equal(catalog.count('rec'), 2, 'every match, packs too');
+  catalog.query = 'twitch';
+  assert.deepEqual(ids(catalog.presetsIn('rec')), ['tell', 'clip'], 'what it needs is found too, recommended or not');
+  assert.equal(catalog.count('alerts'), 0);
+  catalog.query = '';
+});

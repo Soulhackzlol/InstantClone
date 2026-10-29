@@ -3542,15 +3542,27 @@ details.sys-collapse>summary .ic-label{margin:0}
 /* Catalog. */
 .ig-cat{flex:1;min-height:0;display:flex}
 .ig-cat-nav{width:200px;flex:none;padding:16px 12px;display:flex;flex-direction:column;gap:2px;border-right:1px solid var(--line)}
-.ig-cat-nav button{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:8px;
+/* The catalog's search: above the categories and the tiles. */
+.ig-cat-acts{display:flex;gap:8px;margin-left:auto}
+.ig-cat-acts .ic-btn svg{width:13px;height:13px}
+.ig-cat-find{display:flex;align-items:center;gap:10px;margin:14px 20px 0;padding:0 12px;border-radius:10px;
+  border:1px solid var(--line-2);background:var(--bg-1);transition:border-color .15s var(--ease-out),box-shadow .15s var(--ease-out)}
+.ig-cat-find:focus-within{border-color:color-mix(in oklch,var(--accent) 55%,var(--line-2));box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 14%,transparent)}
+.ig-cat-find svg{width:15px;height:15px;flex:none;color:var(--fg-4)}
+.ig-cat-find input{flex:1;min-width:0;padding:11px 0;border:0;outline:0;background:transparent;color:var(--fg);font:inherit;font-size:14px}
+.ig-cat-find input::placeholder{color:var(--fg-4)}
+.ig-cat-find kbd{padding:1px 7px;border-radius:5px;border:1px solid var(--line-2);font:500 11px/1.5 'JetBrains Mono',monospace;color:var(--fg-3)}
+.ig-cat-clear{border:0;background:transparent;color:var(--fg-3);font:inherit;font-size:12.5px;cursor:pointer;padding:4px 2px}
+.ig-cat-clear:hover{color:var(--fg)}
+.ig-cat-nav button{display:flex;gap:9px;align-items:center;padding:8px 10px;border-radius:8px;
   border:1px solid transparent;background:transparent;color:var(--fg-3);font:inherit;font-size:13px;font-weight:500;cursor:pointer;text-align:left;
   transition:background-color .15s var(--ease-out),color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
 .ig-cat-nav button:hover{color:var(--fg);background:color-mix(in oklch,var(--fg) 4%,transparent)}
 .ig-cat-nav button:active{transform:scale(.96)}
 .ig-cat-nav button.on{background:var(--surface-3);border-color:var(--line-2);color:var(--fg)}
-.ig-cat-nav button small{color:var(--fg-4);font-variant-numeric:tabular-nums}
-.ig-cat-import{margin-top:auto;padding:10px;border-radius:10px;border:1px dashed var(--line-2);font-size:12px;line-height:1.5;color:var(--fg-3)}
-.ig-cat-import a{color:var(--accent);font-weight:600}
+.ig-cat-nav button svg{width:15px;height:15px;flex:none}
+.ig-cat-nav button small{margin-left:auto;color:var(--fg-4);font-variant-numeric:tabular-nums}
+.ig-cat-nav button.none:not(.on){opacity:.45}
 .ig-cat-grid{flex:1;min-width:0;overflow-y:auto;padding:16px 18px 20px;display:grid;
   grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;align-content:start;
   /* Rows as tall as their tiles. Plain auto rows shrink to share the
@@ -3561,23 +3573,37 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-cat-grid>*{animation:igTileIn .32s var(--ease-out) both;animation-delay:calc(min(var(--i,0),10) * 26ms)}
 @keyframes igTileIn{from{opacity:0;transform:translateY(8px) scale(.98);filter:blur(3px)}to{opacity:1;transform:none;filter:blur(0)}}
 .ig-cat-tile{padding:8px;gap:10px}
-.ig-cat-tile .dcard-screen{height:128px;padding:10px;border-radius:6px;display:flex;align-items:flex-start;overflow:hidden;
+/* One height for every preview: the tile's spare room goes above its buttons. */
+.ig-cat-tile .dcard-screen{flex:none;height:128px;padding:10px;border-radius:6px;display:flex;align-items:flex-start;overflow:hidden;
   -webkit-mask-image:linear-gradient(#000 78%,transparent);mask-image:linear-gradient(#000 78%,transparent)}
 .ig-cat-id{display:flex;gap:10px;align-items:flex-start;padding:0 4px}
 .ig-cat-id .dcard-icon{width:28px;height:28px;border-radius:8px}
 .ig-cat-id .dcard-icon svg{width:14px;height:14px}
 .ig-cat-desc{margin-top:2px;font-size:12px;line-height:1.45;color:var(--fg-3);text-wrap:pretty}
-.ig-cat-tile .ig-cat-desc{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.ig-cat-tile .ig-cat-desc{margin:0;padding:0 4px}
+.ig-cat-kind{font-size:11px;color:var(--fg-4)}
+.ig-cat mark{background:color-mix(in oklch,var(--accent) 24%,transparent);color:var(--fg);border-radius:3px;padding:0 1px}
+/* Needs on the left, Add on the right, along every tile's bottom edge. */
+.ig-cat-foot{margin-top:auto;display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px;padding:2px 4px 4px}
+.ig-cat-foot .ig-cat-needs{margin-top:0;min-width:0}
+.ig-cat-foot>.ic-btn{flex:none;margin-left:auto}
+.ig-cat-lead{grid-column:1/-1;font-size:12.5px;color:var(--fg-3)}
+.ig-cat-group{grid-column:1/-1;display:flex;align-items:baseline;gap:6px;margin-top:6px;font-size:10.5px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--fg-4)}
+.ig-cat-group small{font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:0}
+.ig-cat-none{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;gap:8px;padding:48px 16px;text-align:center;
+  font-size:12.5px;color:var(--fg-3)}
+.ig-cat-none b{font-size:14px;color:var(--fg)}
+.ig-cat-none .ic-btn svg{width:13px;height:13px}
 /* "Needs" stays beside its pills, and a pill that wraps lines up under
    the first one rather than under the word. */
 .ig-cat-needs{margin-top:6px;display:flex;align-items:baseline;gap:6px}
 .ig-cat-needs-list{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
-.ig-need{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:11px;
+.ig-need{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:11px;white-space:nowrap;
   border:1px solid var(--line);color:var(--fg-3)}
 .ig-need.ok{color:var(--live);border-color:color-mix(in oklch,var(--live) 35%,transparent)}
 .ig-need.miss{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 40%,transparent)}
 .ig-need svg{width:10px;height:10px;flex:none}
-.ig-cat-tile>.ic-btn{margin:auto 4px 4px}
 /* A confirm label ("Click again: …") is longer than the button it
    replaces: it wraps inside its row instead of pushing out of it. */
 .ig-modal .ic-btn.ig-armed{max-width:100%;white-space:normal;text-align:center;height:auto;min-height:30px}
@@ -3606,21 +3632,21 @@ details.sys-collapse>summary .ic-label{margin:0}
   background:color-mix(in oklch,var(--warn) 12%,transparent);border:1px solid color-mix(in oklch,var(--warn) 35%,transparent)}
 /* Add: the tile's colour, tinted, so a grid of them reads as cards and
    not as a wall of solid buttons. It fills on hover. */
-.ig-cat-tile>.ig-cat-add{color:var(--dc);background:color-mix(in oklch,var(--dc) 12%,transparent);
+.ig-cat-tile .ig-cat-add{color:var(--dc);background:color-mix(in oklch,var(--dc) 12%,transparent);
   border-color:color-mix(in oklch,var(--dc) 32%,transparent)}
-.ig-cat-tile>.ig-cat-add:hover{color:var(--bg);background:var(--dc);border-color:transparent}
+.ig-cat-tile .ig-cat-add:hover{color:var(--bg);background:var(--dc);border-color:transparent}
 .ig-cat-pack{padding:14px;gap:10px}
-.ig-cat-pack>.ic-btn{align-self:flex-start;margin-top:auto}
-.ig-cat-build{min-height:214px;padding:16px;text-align:center}
-.ig-cat-build-t{font-size:14px;font-weight:600;color:var(--fg)}
-.ig-cat-build-d{max-width:220px;font-size:12px;line-height:1.5;color:var(--fg-3);text-wrap:pretty}
+.ig-cat-pack .ig-cat-foot{padding:0}
 .ic-btn.ig-added{color:var(--live);border-color:color-mix(in oklch,var(--live) 40%,transparent);
   background:color-mix(in oklch,var(--live) 10%,transparent)}
 .ig-added svg{width:13px;height:13px;animation:igPop .3s cubic-bezier(.2,0,0,1)}
 @media (max-width:720px){
   .ig-cat{flex-direction:column}
   .ig-cat-nav{width:auto;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line)}
-  .ig-cat-import{display:none}
+  .ig-cat-nav button{flex:none}
+  .ig-cat-find{margin:12px 14px 0}
+  .ig-cat-find kbd{display:none}
+  .ig-cat-acts{flex-wrap:wrap;justify-content:flex-end}
 }
 /* Builder. */
 .ig-bld{flex:1;min-height:0;display:flex}

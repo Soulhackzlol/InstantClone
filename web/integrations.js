@@ -2956,6 +2956,7 @@ function onModalKey(e){
     // One layer at a time: the guard, then an open chip, then the modal.
     if (Modal.form.querySelector('.ig-guard')) Modal.hideGuard();
     else if (S.lastRunOpen) setLastRun(false);
+    else if (Modal.kind === 'catalog' && Catalog.query) Catalog.act('cat-clear');
     else if (Modal.kind === 'editor' && Editor.closeChip()) return;
     else Modal.close();
     return;
@@ -2965,6 +2966,12 @@ function onModalKey(e){
     const save = q('.dest-form-foot [data-act="save"]');
     if (save && !save.disabled) save.click();
     else if (save && localLocked()) toast(LOCAL_LOCK_TEXT, 'info', 7000);
+    return;
+  }
+  // The catalog's search, from anywhere in it but a field.
+  if (e.key === '/' && Modal.kind === 'catalog' && !e.target.matches('input, textarea, select')){
+    e.preventDefault();
+    $('ig-cat-search').focus();
     return;
   }
   if (e.key === 'Tab') trapFocus(e);
@@ -3213,38 +3220,35 @@ async function saveIntegration(d, onSaved, opts){
 
 // ---------------------------------------------------------------- catalog
 
+const CAT_NAV = [['rec', 'Recommended', 'star'], ['alerts', 'Alerts', 'bell'], ['chat', 'Chat', 'bubble'], ['auto', 'Automation', 'bolt'], ['packs', 'Packs', 'layers']];
+const CAT_LABEL = {alerts:'Alerts', chat:'Chat', auto:'Automation', packs:'Packs'};
+// Recommended takes turns between categories, so it never opens on a row
+// of one kind.
+function takeTurns(list){
+  const queues = [...new Set(list.map(p => p.category))].map(id => list.filter(p => p.category === id));
+  const out = [];
+  while (queues.some(x => x.length)) queues.forEach(x => { if (x.length) out.push(x.shift()); });
+  return out;
+}
 const Catalog = {
-  cat:'rec', added:null,
+  cat:'rec', added:null, query:'',
   open(){
     this.cat = 'rec';
     this.added = null;
+    this.query = '';
     this.reopen();
   },
-  // Back from something opened here: same category as before.
+  // Back from something opened here: same category and search as before.
   reopen(){
     Modal.open('catalog', 1040, 'min(86vh,820px)');
     this.render();
   },
-  render(){
-    const cat = S.data.catalog;
-    const counts = id => id === 'packs' ? cat.packs.length : this.presetsIn(id).length;
-    const nav = [['rec', 'Recommended'], ['alerts', 'Alerts'], ['chat', 'Chat'], ['auto', 'Automation'], ['packs', 'Packs']]
-      .map(([id, label]) => `<button class="${this.cat === id ? 'on' : ''}" data-act="cat" data-cat="${id}" aria-current="${this.cat === id}">${label}<small data-tick>${counts(id)}</small></button>`).join('');
-    const tiles = this.cat === 'packs' ? this.packsHtml() : this.presetsHtml();
-    Modal.body(`${modalHead('plus', 'var(--accent)', 'Add an integration', 'Add it, then tweak anything.')}
-      <div class="ig-cat"><nav class="ig-cat-nav" aria-label="Categories">${nav}
-        <div class="ig-cat-import">Got a recipe from a friend? <a href="#" data-act="import">Import it</a></div></nav>
-      <div class="ig-cat-grid">${tiles}</div></div>`);
-  },
-  packsHtml(){
-    const cat = S.data.catalog;
-    return cat.packs.map((p, n) => `<div class="dcard ig-cat-pack" data-key="pk-${esc(p.id)}" style="--i:${n}">
-      <div class="dcard-name">${esc(p.name)}</div>
-      <div class="muted ig-cat-desc">${esc(p.description)}</div>
-      <div class="ig-pack-list">${p.presets.map(id => `<span>${svg(PRESET_ICON[id] || 'steps')}${esc((cat.presets.find(x => x.id === id) || {}).name || id)}</span>`).join('')}</div>
-      ${needsHtml(p.needs)}
-      <button class="ic-btn ic-btn-primary ig-small" data-act="pack" data-pack="${esc(p.id)}" aria-label="Add the ${esc(p.name)} pack">Add pack</button>
-    </div>`).join('');
+  words(){ return this.query.toLowerCase().split(/\s+/).filter(Boolean); },
+  // Every word typed is in its name, what it does, its category or what it needs.
+  matches(item, category){
+    const words = this.words();
+    const hay = [item.name, item.description, category].concat(item.needs || []).join(' ').toLowerCase();
+    return words.every(w => hay.includes(w));
   },
   // Without a Twitch app in this copy, what needs Twitch isn't a good
   // first pick: it stays in its own category, out of Recommended.
@@ -3252,18 +3256,62 @@ const Catalog = {
     return S.data.twitch.available || !(p.needs || []).includes('twitch');
   },
   // The presets a category shows, so its count always matches its tiles.
+  // Searching, the first entry is every match.
   presetsIn(id){
-    return S.data.catalog.presets.filter(p => id === 'rec' ? p.recommended && this.usable(p) : p.category === id);
+    const all = S.data.catalog.presets;
+    if (this.query) return all.filter(p => (id === 'rec' || p.category === id) && this.matches(p, CAT_LABEL[p.category]));
+    if (id !== 'rec') return all.filter(p => p.category === id);
+    return takeTurns(all.filter(p => p.recommended && this.usable(p)));
   },
-  presetsHtml(){
-    const list = this.presetsIn(this.cat);
+  packsIn(){ return S.data.catalog.packs.filter(p => this.matches(p, CAT_LABEL.packs)); },
+  count(id){
+    if (id === 'packs') return this.packsIn().length;
+    return this.presetsIn(id).length + (id === 'rec' && this.query ? this.packsIn().length : 0);
+  },
+  render(){
+    const cat = S.data.catalog, searching = !!this.query;
+    const nav = CAT_NAV.map(([id, label, icon]) => {
+      const n = this.count(id);
+      return `<button class="${this.cat === id ? 'on' : ''}${n ? '' : ' none'}" data-act="cat" data-cat="${id}" aria-current="${this.cat === id}">
+        ${svg(icon)}<span>${id === 'rec' && searching ? 'All results' : label}</span><small data-tick>${n}</small></button>`;
+    }).join('');
+    const acts = `<div class="ig-cat-acts"><button class="ic-btn ic-btn-ghost ig-small" data-act="import">Import a recipe</button>
+      <button class="ic-btn ic-btn-ghost ig-small" data-act="build">${svg('plus')}Build your own</button></div>`;
+    Modal.body(`${modalHead('plus', 'var(--accent)', 'Add an integration', 'Pick one: it opens ready to tweak.', acts)}
+      <div class="ig-cat-find">${svg('search')}<input id="ig-cat-search" type="text" value="${esc(this.query)}" aria-label="Search integrations"
+        placeholder="Search ${cat.presets.length} integrations and ${cat.packs.length} packs: alerts, Discord, chat, clips…" spellcheck="false" autocomplete="off">
+        ${searching ? '<button class="ig-cat-clear" data-act="cat-clear">Clear</button>' : '<kbd title="Press / to search">/</kbd>'}</div>
+      <div class="ig-cat"><nav class="ig-cat-nav" aria-label="Categories">${nav}</nav>
+      <div class="ig-cat-grid">${this.gridHtml()}</div></div>`);
+  },
+  // A category's tiles, or while searching, every match grouped by category.
+  gridHtml(){
+    if (!this.query) return this.cat === 'packs' ? this.packsHtml(this.packsIn()) : this.presetsHtml(this.presetsIn(this.cat));
+    const ids = this.cat === 'rec' ? ['alerts', 'chat', 'auto', 'packs'] : [this.cat];
+    const groups = ids.map(id => [id, id === 'packs' ? this.packsIn() : this.presetsIn(id)]).filter(([, list]) => list.length);
+    const n = groups.reduce((sum, [, list]) => sum + list.length, 0);
+    if (!n){
+      return `<div class="ig-cat-none" data-key="none"><b>Nothing matches "${esc(this.query)}"</b>
+        <span>Try another word, or build it yourself from any trigger and any steps.</span>
+        <button class="ic-btn ic-btn-ghost ig-small" data-act="build">${svg('plus')}Build your own</button></div>`;
+    }
+    return `<div class="ig-cat-lead" data-key="lead">${n} ${n === 1 ? 'result' : 'results'} for "${esc(this.query)}"</div>`
+      + groups.map(([id, list]) => `<div class="ig-cat-group" data-key="g-${id}">${CAT_LABEL[id]}<small>${list.length}</small></div>`
+        + (id === 'packs' ? this.packsHtml(list) : this.presetsHtml(list))).join('');
+  },
+  packsHtml(list){
+    const cat = S.data.catalog, words = this.words();
+    return list.map((p, n) => `<div class="dcard ig-cat-pack" data-key="pk-${esc(p.id)}" style="--i:${n}">
+      <div class="dcard-name">${markWords(p.name, words)}</div>
+      <div class="ig-cat-desc">${markWords(p.description, words)}</div>
+      <div class="ig-pack-list">${p.presets.map(id => `<span>${svg(PRESET_ICON[id] || 'steps')}${esc((cat.presets.find(x => x.id === id) || {}).name || id)}</span>`).join('')}</div>
+      <div class="ig-cat-foot">${needsHtml(p.needs)}
+      <button class="ic-btn ic-btn-primary ig-small" data-act="pack" data-pack="${esc(p.id)}" aria-label="Add the ${esc(p.name)} pack">Add pack</button></div>
+    </div>`).join('');
+  },
+  presetsHtml(list){
     const have = id => S.data.integrations.filter(i => i.preset === id).length;
-    // Last: a beginner meets the ready-made ones first.
-    const build = `<button class="dest-add ig-cat-build" data-act="build" data-key="build" style="--i:${list.length + 1}">
-        <span class="dest-add-icon">${svg('plus')}</span>
-        <span class="ig-cat-build-t">Build your own</span>
-        <span class="ig-cat-build-d">Start from a blank page: any trigger, any steps.</span>
-      </button>`;
+    const words = this.words();
     return list.map((p, n) => {
       const fake = fakeStep(p);
       const added = this.added === p.id;
@@ -3275,11 +3323,18 @@ const Catalog = {
       return `<div class="dcard ig-cat-tile" style="--dc:${(KINDS[fake.step.type] || {}).c || 'var(--accent)'};--i:${n}" data-key="t-${esc(p.id)}">
         <div class="dcard-screen" aria-hidden="true">${previewHtml(fake.step, fake.handler, false)}</div>
         <div class="ig-cat-id"><span class="dcard-icon">${svg(PRESET_ICON[p.id] || 'steps')}</span>
-          <div class="dcard-id"><div class="dcard-name">${esc(p.name)}</div><div class="ig-cat-desc" title="${esc(p.description)}">${esc(p.description)}</div>
-          ${needsHtml(p.needs)}</div></div>
-        ${button}
+          <div class="dcard-id"><div class="dcard-name">${markWords(p.name, words)}</div>${this.query ? `<div class="ig-cat-kind">${CAT_LABEL[p.category] || ''}</div>` : ''}</div></div>
+        <div class="ig-cat-desc">${markWords(p.description, words)}</div>
+        <div class="ig-cat-foot">${needsHtml(p.needs)}${button}</div>
       </div>`;
-    }).join('') + build;
+    }).join('');
+  },
+  search(text){
+    if (text === this.query) return;
+    this.query = text;
+    this.render();
+    const grid = q('.ig-cat-grid');
+    if (grid) grid.scrollTop = 0;
   },
   flashAdded(id){
     this.added = id;
@@ -3297,6 +3352,12 @@ const Catalog = {
         this.render();
         const grid = q('.ig-cat-grid');
         if (grid) grid.scrollTop = 0;
+        return true;
+      }
+      case 'cat-clear': {
+        this.search('');
+        const input = $('ig-cat-search');
+        if (input){ input.value = ''; input.focus(); }
         return true;
       }
       case 'add-preset': busy(el, () => addFrom({preset:el.dataset.preset}, true)); return true;
@@ -8650,6 +8711,7 @@ function onInput(e){
     render();
     return;
   }
+  if (el.id === 'ig-cat-search'){ Catalog.search(el.value); return; }
   if (!el.dataset || !el.dataset.bind || !Modal.el || !Modal.el.contains(el)) return;
   if (Modal.kind === 'editor') Editor.input(el);
   else if (Modal.kind === 'builder') Builder.input(el);
