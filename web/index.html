@@ -998,13 +998,13 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
 }
 /* - "Cut after this airs" + hovercard --------------─
    Visible only while a delay is active, sharing the CTA row at a 3:1
-   split (Cut delay : Cut after) so the control column's height never
+   split (Cut : Cut after) so the control column's height never
    changes with state. The hovercard is a pure-CSS tooltip
    (opacity+translate on :hover / :focus-within) so keyboard users get
    it too. It floats ABOVE the button, right-anchored with a fixed
    width - the wrap itself is too narrow to host readable copy. The
    wrap never shrinks below its label: on a phone a quarter of the row
-   is narrower than "Cut after", so Cut delay gives up the room. */
+   is narrower than "Cut after", so Cut gives up the room. */
 .cutafter-wrap{position:relative;flex:1;min-width:max-content}
 /* display:none must survive the class's own display value - [hidden]
    loses to any author display rule otherwise. */
@@ -7325,7 +7325,7 @@ function renderCta(){
     return;
   }
   if (!lastState){
-    setCta(btn, { key: 'boot', cls: 'ic-btn-disabled', pre: 'Arm delay', disabled: true });
+    setCta(btn, { key: 'boot', cls: 'ic-btn-disabled', pre: 'Arm', disabled: true });
     setHidden(cancel, true);
     renderCutAfter('off');
     clearWarn();
@@ -7344,7 +7344,7 @@ function renderCta(){
   // The secondary Disarm shows only while armed, so the user always has an
   // exit path (without it, "armed" state forced you to activate+cut just to
   // get back to passthrough). While arming, the main button itself reads
-  // "Cancel arming". Decided once here, so a tick never shows and re-hides it.
+  // "Cancel". Decided once here, so a tick never shows and re-hides it.
   slideHidden(cancel, ds !== 'armed');
 
   // Capacity refusal is the same message regardless of which state we
@@ -7370,7 +7370,7 @@ function renderCta(){
   if (ds === 'arming'){
     // Primary CTA already does "cancel" semantics here; the secondary
     // button is a clearer alias for users who don't read the label.
-    setCta(btn, { key: 'cancel-arming', cls: 'ic-btn-ghost', pre: '✕ Cancel arming' });
+    setCta(btn, { key: 'cancel-arming', cls: 'ic-btn-ghost', pre: '✕ Cancel' });
     clearWarn();
   } else if (ds === 'armed'){
     if (wantsChange && tooBig){
@@ -7379,7 +7379,7 @@ function renderCta(){
     } else if (wantsChange){
       // User typed a new delay while armed → re-arm at the new value.
       // arm() handles "smaller is instant, bigger waits for buffer".
-      setCta(btn, { key: 'rearm', cls: 'ic-btn-primary', pre: '↻ Re-arm at ', num: fmtDelay(inputMs), n: inputMs });
+      setCta(btn, { key: 'rearm', cls: 'ic-btn-primary', pre: '↻ Re-arm' });
       clearWarn();
     } else if (!lastState.ingest_alive){
       // Nothing is arriving, so there is no buffer to switch on and the
@@ -7390,11 +7390,8 @@ function renderCta(){
       setText(cancel, 'Disarm');
       clearWarn();
     } else {
-      // Name the delay that will really run: what the buffer holds when it
-      // can't hold all of the armed one (the line under the number says so).
-      const short = lastState.capacity_short;
-      const runsMs = short && short.armed_ms === armedMs ? Math.min(armedMs, short.holds_ms) : armedMs;
-      setCta(btn, { key: 'activate', cls: 'ic-btn-primary cp-cta-pulse', pre: '▶ Activate ', num: fmtDelay(runsMs), n: runsMs, post: ' delay' });
+      // One word: the number above already says how long the delay is.
+      setCta(btn, { key: 'activate', cls: 'ic-btn-primary cp-cta-pulse', pre: '▶ Activate' });
       setText(cancel, 'Disarm');
       clearWarn();
     }
@@ -7406,12 +7403,10 @@ function renderCta(){
       // Live delay adjustment - the backend's arm_delay already routes
       // this to a live-update path: smaller is an instant forward cut,
       // larger triggers a rewind once the buffer has the history.
-      const up = inputMs > armedMs;
-      setCta(btn, { key: up ? 'adjust-up' : 'adjust-down', cls: 'ic-btn-primary',
-                    pre: `↻ Adjust ${up ? '↑' : '↓'} to `, num: fmtDelay(inputMs), n: inputMs });
+      setCta(btn, { key: 'adjust', cls: 'ic-btn-primary', pre: '↻ Adjust' });
       clearWarn();
     } else {
-      setCta(btn, { key: 'cut', cls: 'ic-btn-danger', pre: '✕ Cut delay' });
+      setCta(btn, { key: 'cut', cls: 'ic-btn-danger', pre: '✕ Cut' });
       clearWarn();
     }
   } else {
@@ -7428,10 +7423,10 @@ function renderCta(){
       setCta(btn, capLabel());
       showCapWarn();
     } else if (inputMs > 0){
-      setCta(btn, { key: 'arm', cls: 'ic-btn-primary', pre: '⚡ Arm ', num: fmtDelay(inputMs), n: inputMs, post: ' delay' });
+      setCta(btn, { key: 'arm', cls: 'ic-btn-primary', pre: '⚡ Arm' });
       clearWarn();
     } else {
-      setCta(btn, { key: 'idle', cls: 'ic-btn-disabled', pre: 'Arm delay', disabled: true });
+      setCta(btn, { key: 'idle', cls: 'ic-btn-disabled', pre: 'Arm', disabled: true });
       clearWarn();
     }
   }
@@ -11776,9 +11771,9 @@ const TOUR = [
     body: `
       <p>The big button changes meaning by state:</p>
       <ul>
-        <li><b>Arm delay</b> → starts buffering (you can still cancel)</li>
-        <li><b>Activate</b> → once buffer is ready, click to cut your stream over</li>
-        <li><b>Cut delay</b> → return to passthrough live</li>
+        <li><b>Arm</b> → saves video for the delay while viewers still see you live (you can still cancel)</li>
+        <li><b>Activate</b> → once it's ready, viewers switch to the delayed stream</li>
+        <li><b>Cut</b> → viewers go back to live. The saved video stays, so the next Activate is instant</li>
         <li><b>⏱ Cut after</b> → appears while the delay is active. Press it the second your match reaction ends: everything up to that press still airs, then the delay cuts itself to live. No more counting 30 seconds in your head.</li>
       </ul>
       <div class="tour-tip"><strong>Shortcut:</strong> press <b>Space</b> to fire this button when nothing else is selected (click an empty part of the page first). Fields and buttons keep Space for themselves.</div>

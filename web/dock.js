@@ -28,7 +28,7 @@ function fmtClock(ms) {
   return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 }
 // A delay in the dock's one unit, seconds: the number, the field and every
-// label agree (Activate 900s under a 900), whatever the length.
+// label agree (Keep 900s under a 900), whatever the length.
 function fmtDelay(ms) {
   return Math.round(ms / 1000) + 's';
 }
@@ -541,7 +541,7 @@ function setNumberMode(ds) {
 
 // What the main button says and does in each state. `key` names the state;
 // only a new key rebuilds the button (and animates it in), so a label that
-// counts (Ready in 0:23, Arm 30s) just updates its text.
+// counts (Ready in 0:23) just updates its text.
 function mainLook(ds) {
   const m = $('main');
   const ms = inputMs(), armedMs = s.armed_delay_ms || 0;
@@ -551,15 +551,14 @@ function mainLook(ds) {
     if (ms <= 0 || ms === armedMs) return { key: 'keep', cls: 'ghost', label: `Keep ${fmtDelay(armedMs)}` };
     if (overCap(ms)) return capLook;
     return ds === 'active'
-      ? { key: 'adjust', cls: 'primary', icon: '↻', label: `Adjust to ${fmtDelay(ms)}` }
-      : { key: 'rearm', cls: 'primary', icon: '↻', label: `Re-arm at ${fmtDelay(ms)}` };
+      ? { key: 'adjust', cls: 'primary', icon: '↻', label: 'Adjust' }
+      : { key: 'rearm', cls: 'primary', icon: '↻', label: 'Re-arm' };
   }
-  if (ds === 'active') return { key: 'cut', cls: 'danger' + (m._cutArm ? ' armed' : ''), label: m._cutArm ? 'Tap again to cut' : 'Cut delay' };
+  if (ds === 'active') return { key: 'cut', cls: 'danger' + (m._cutArm ? ' armed' : ''), label: m._cutArm ? 'Tap again to cut' : 'Cut' };
   if (ds === 'armed') {
     // Nothing arriving from OBS: /activate would only refuse, so wait.
     if (!s.ingest_alive) return { key: 'wait-armed', label: 'Waiting for OBS', disabled: true };
-    const runs = s.capacity_short ? Math.min(armedMs, s.capacity_short.holds_ms) : armedMs;
-    return { key: 'armed', cls: 'go', icon: '▶', label: `Activate ${fmtDelay(runs)}` };
+    return { key: 'armed', cls: 'go', icon: '▶', label: 'Activate' };
   }
   if (ds === 'arming') {
     // The buffer fills in real time, so the wait is exactly what's missing.
@@ -577,7 +576,7 @@ function mainLook(ds) {
   if (!s.ingest_alive) return { key: 'wait', label: 'Waiting for OBS', disabled: true };
   if (ms <= 0) return { key: 'set', label: 'Set a delay first', disabled: true };
   if (overCap(ms)) return capLook;
-  return { key: 'arm', cls: 'primary', icon: '⏱', label: `Arm ${fmtDelay(ms)}` };
+  return { key: 'arm', cls: 'primary', icon: '⏱', label: 'Arm' };
 }
 function paintMain(look) {
   const m = $('main');
