@@ -106,8 +106,8 @@ const WIDGETS = {
   phase:    { label: 'Phase chip',    def: { on: true, style: 'chip' } },
   source:   { label: 'Live pill',     def: { on: true, style: 'pill' } },
   number:   { label: 'Delay number',  def: { on: true, units: true, step: 5, controls: true, size: 'md', tint: false } },
-  bar:      { label: 'Buffer bar',    def: { on: true, pct: false, thick: false, mono: false } },
-  egress:   { label: 'Egress glance', def: { on: true, dests: true, bitrate: true, codec: false } },
+  bar:      { label: 'Progress bar',  def: { on: true, pct: false, thick: false, mono: false } },
+  egress:   { label: 'Sending glance', def: { on: true, dests: true, bitrate: true, codec: false } },
   tips:     { label: 'Hint text',     def: { on: true, errorsOnly: false } },
   dest:     { label: 'Destinations',  def: { on: false, confirm: true, view: 'rows', active: false, stats: false, brand: true } },
   profiles: { label: 'Delay profiles',def: { on: false, arm: false, value: true, view: 'chips' } },
@@ -154,7 +154,7 @@ const OPTS = {
     { k: 'size', label: 'Size', modes: [['sm', 'S'], ['md', 'M'], ['lg', 'L']] },
     { k: 'step', label: 'Step', sel: [1, 5, 10] },
     { k: 'controls', label: '+/- buttons' }, { k: 'units', label: 'Unit' }, { k: 'tint', label: 'Accent number' },
-    { k: 'on', label: 'Buffer bar', w: 'bar' }, { k: 'pct', label: 'Show %', w: 'bar' },
+    { k: 'on', label: 'Progress bar', w: 'bar' }, { k: 'pct', label: 'Show %', w: 'bar' },
     { k: 'thick', label: 'Thick bar', w: 'bar' }, { k: 'mono', label: 'Accent bar', w: 'bar' },
   ],
   egress: [{ k: 'dests', label: 'Dest count' }, { k: 'bitrate', label: 'Bitrate' }, { k: 'codec', label: 'Codec' }],
@@ -247,8 +247,8 @@ function overCap(ms) { const c = currentCapMs(); return c > 0 && ms > c; }
 // estimate at a typical rate before that.
 function capAdvice(ms) {
   return s && s.capacity_measured
-    ? `Buffer too small for ${fmtDelay(ms)}. Raise the buffer size to at least ${requiredMB(ms)} MB in System, then restart.`
-    : `Likely too long: at a typical rate the buffer holds about ${fmtDelay(currentCapMs())}. Your real bitrate decides once OBS connects.`;
+    ? `${fmtDelay(ms)} is too long for the delay memory. Allow at least ${requiredMB(ms)} MB in System, then restart.`
+    : `Likely too long: at a typical rate the delay memory holds about ${fmtDelay(currentCapMs())}. Your real bitrate decides once OBS connects.`;
 }
 function capToast(ms) {
   toast(capAdvice(ms), 'err');
@@ -546,7 +546,7 @@ function mainLook(ds) {
   const m = $('main');
   const ms = inputMs(), armedMs = s.armed_delay_ms || 0;
   // Over the buffer's reach: the button says so instead of failing on click.
-  const capLook = { key: 'cap', label: `Buffer holds only ${fmtDelay(currentCapMs())}`, disabled: true };
+  const capLook = { key: 'cap', label: `Delay memory holds only ${fmtDelay(currentCapMs())}`, disabled: true };
   if (editing && isEngaged(ds)) {
     if (ms <= 0 || ms === armedMs) return { key: 'keep', cls: 'ghost', label: `Keep ${fmtDelay(armedMs)}` };
     if (overCap(ms)) return capLook;
@@ -571,7 +571,7 @@ function mainLook(ds) {
   // Too long for the buffer is said now, not first when OBS connects.
   // Before a bitrate is measured the reach is a typical one: "about".
   if (!s.ingest_alive && ms > 0 && overCap(ms)) {
-    return { key: 'wait-cap', label: `Buffer holds about ${fmtDelay(currentCapMs())}`, disabled: true };
+    return { key: 'wait-cap', label: `Delay memory holds about ${fmtDelay(currentCapMs())}`, disabled: true };
   }
   if (!s.ingest_alive) return { key: 'wait', label: 'Waiting for OBS', disabled: true };
   if (ms <= 0) return { key: 'set', label: 'Set a delay first', disabled: true };
@@ -609,7 +609,7 @@ function secondaryLook(ds) {
     const cd = Math.max(0, Math.round((s.safe_cut_remaining_ms || 0) / 1000));
     return { cls: 'btn ghost cutafter pending', text: `⏱ ~${fmtDelay(cd * 1000)} ✕`, title: 'Auto-cut armed. Tap to cancel.' };
   }
-  if (cfg.w.activate.safecut) return { cls: 'btn ghost cutafter', text: '⏱ Cut after', title: 'Cut to live after everything buffered has aired' };
+  if (cfg.w.activate.safecut) return { cls: 'btn ghost cutafter', text: '⏱ Cut after', title: 'Back to live once everything saved for the delay has aired' };
   return null;
 }
 
@@ -654,7 +654,7 @@ function setPhase(cls, text) {
   if (from !== to) ph.animate([{ width: from + 'px' }, { width: to + 'px' }], { duration: 320, easing: EASE });
   word.animate([{ opacity: 0, transform: 'translateY(6px)', filter: 'blur(2px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { duration: 240, easing: EASE });
 }
-const PHASE_LOOK = { arming: ['arming', 'Buffering'], armed: ['armed', 'Armed'], active: ['active', 'Active'] };
+const PHASE_LOOK = { arming: ['arming', 'Arming'], armed: ['armed', 'Armed'], active: ['active', 'Active'] };
 
 function paintSource(alive) {
   setClass($('src'), 'pill ' + (alive ? 'on' : 'bad') + (cfg.w.source.style === 'dot' ? ' asdot' : ''));
@@ -753,10 +753,10 @@ function paintTip(ds, hold) {
     : editing ? 'Pick a new delay, then confirm it below.'
     : ds === 'active' && s.safe_cut_pending ? `Auto-cut in ~${fmtDelay(s.safe_cut_remaining_ms || 0)}. Marked footage still airs.`
     : ds === 'active' ? `Live ${fmtBehind(s.current_delay_ms || 0)} behind real time.`
-    : ds === 'armed' && s.capacity_short ? `The buffer holds only ${fmtDelay(s.capacity_short.holds_ms)}. Activate runs that much.`
-    : ds === 'armed' ? 'Buffer full. Hit Activate to go live with delay.'
-    : ds === 'arming' ? 'Filling buffer… you can cancel any time.'
-    : 'Passthrough: no delay applied.';
+    : ds === 'armed' && s.capacity_short ? `The delay memory holds only ${fmtDelay(s.capacity_short.holds_ms)}. Activate runs that much.`
+    : ds === 'armed' ? 'Ready. Press Activate to put viewers on the delay.'
+    : ds === 'arming' ? 'Saving video for the delay… you can cancel any time.'
+    : 'Live, no delay.';
   const show = cfg.w.tips.on && (!cfg.w.tips.errorsOnly || !s.ingest_alive);
   setHidden($('w-tip'), !show);
   if (show) setTip(tip);
@@ -1047,7 +1047,7 @@ async function fetchProfiles() {
 }
 function profileTitle(name, ms, ds, isCur) {
   if (isCur) return `${name}: running now`;
-  if (ds === 'arming') return 'Wait for the buffer to fill, or cancel arming';
+  if (ds === 'arming') return 'Wait until it\'s ready, or cancel arming';
   const apply = cfg.w.profiles.arm;
   if (ds === 'active') return apply ? `Adjust to ${fmtDelay(ms)}` : `Pick ${fmtDelay(ms)}, then Adjust`;
   if (ds === 'armed') return apply ? `Re-arm at ${fmtDelay(ms)}` : `Pick ${fmtDelay(ms)}, then Re-arm`;
@@ -1107,7 +1107,7 @@ function renderStats() {
   let html = items.map(([v, l]) => tiles
     ? `<span class="tile"><b>${v}</b><span>${l}</span></span>`
     : `<span class="st"><b>${v}</b> ${l}</span>`).join('');
-  if (s.backpressure) html += '<span class="st bad">&#9888; buffer lag</span>';
+  if (s.backpressure) html += '<span class="st bad">&#9888; falling behind</span>';
   setHtml(box, html || '<span class="st muted">no metrics selected</span>');
 }
 
@@ -1154,8 +1154,8 @@ async function setServer(key, val, sw, label) {
 function renderBehavior() {
   const box = $('w-behavior'); if (box.hidden) return;
   box.replaceChildren(
-    toggleRow('Pre-arm on stream start', 'auto_arm_on_connect', 'Arms your Default delay (System › General) when OBS starts streaming'),
-    toggleRow('Auto-activate when ready', 'auto_activate_when_ready', 'Every arm goes on air once the buffer is full'));
+    toggleRow('Arm when OBS connects', 'auto_arm_on_connect', 'Arms your Default delay (System › General) when OBS starts streaming'),
+    toggleRow('Activate as soon as it\'s ready', 'auto_activate_when_ready', 'Every arm goes on air once it\'s ready'));
 }
 
 // Settings: the live-safe knobs (things that don't need a restart). Buffer /

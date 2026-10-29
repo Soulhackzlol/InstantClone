@@ -1928,7 +1928,7 @@ impl Settings {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
             errs.push(
-                "ingest key may only contain letters, numbers, '-' and '_' (no spaces or '?')"
+                "the stream key for InstantClone may only contain letters, numbers, '-' and '_' (no spaces or '?')"
                     .into(),
             );
         }
@@ -2106,7 +2106,7 @@ pub fn platform_label(slug: &str) -> &'static str {
         "trovo" => "Trovo",
         "restream" => "Restream",
         "custom" => "Custom RTMP",
-        "sink" => "Local test sink",
+        "sink" => "Test destination",
         _ => "this destination",
     }
 }
@@ -2802,11 +2802,11 @@ mod tests {
         {
             let mut s = Settings::defaults();
             s.ingest_key = "good-key_123".into();
-            assert!(!s.validate().iter().any(|e| e.contains("ingest key")));
+            assert!(!s.validate().iter().any(|e| e.contains("stream key")));
             for bad in ["has space", "has?query", "tab\tinside"] {
                 s.ingest_key = bad.into();
                 assert!(
-                    s.validate().iter().any(|e| e.contains("ingest key")),
+                    s.validate().iter().any(|e| e.contains("stream key")),
                     "should reject {bad:?}"
                 );
             }

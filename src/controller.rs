@@ -175,7 +175,7 @@ impl ActivateError {
             ActivateError::NoIngest => NO_INGEST.to_string(),
             ActivateError::BufferShort { remaining_ms } => {
                 let secs = ((*remaining_ms + 500) / 1000).max(1);
-                format!("buffer is still building, wait ~{}s", secs)
+                format!("not ready yet: about {}s more to save", secs)
             }
         }
     }
@@ -258,8 +258,8 @@ fn buffer_mb_for(ms: u32, kbps: u32) -> u64 {
 /// holds `capacity` ms at `kbps`, and the size that would hold it.
 fn buffer_too_small(ms: u32, capacity: u32, kbps: u32) -> String {
     format!(
-        "Buffer too small for {}: it holds about {} at {:.1} Mbps. \
-         Raise the buffer size to at least {} MB in System, then restart.",
+        "{} is too long for the delay memory: it holds about {} at {:.1} Mbps. \
+         Allow at least {} MB in System, then restart.",
         fmt_duration(u64::from(ms)),
         fmt_duration(u64::from(capacity)),
         f64::from(kbps) / 1000.0,
@@ -3168,7 +3168,7 @@ impl Controller {
                     ActivateError::BufferShort { .. } => {
                         self.activate_once_ready();
                         format!(
-                            "Buffer still filling. The {} s delay starts as soon as it is ready.",
+                            "Not ready yet. The {} s delay starts as soon as it is ready.",
                             ms / 1000
                         )
                     }
@@ -3187,7 +3187,7 @@ impl Controller {
             self.log(format!(
                 "[{source}] arm ignored - delay is on air, cut to live first"
             ));
-            return Some("The delay is on air. Cut to live first, then disarm the buffer.".into());
+            return Some("The delay is on air. Cut to live first, then disarm.".into());
         }
         if self.armed_delay_ms() > 0 {
             self.arm_delay(0);
@@ -5402,7 +5402,8 @@ mod tests {
             .capacity_problem(30_000)
             .expect("30 s is too long for 4 MB");
         assert!(
-            why.starts_with("Buffer too small for 30 s") && why.contains("at least 33 MB"),
+            why.starts_with("30 s is too long for the delay memory")
+                && why.contains("at least 33 MB"),
             "{why}"
         );
         assert!(h.ctrl.capacity_problem(1_000).is_none());
@@ -5525,7 +5526,8 @@ mod tests {
         let h = harness(0);
         h.ctrl.mark_ingest_alive_for_test();
         h.ctrl.note_inbound_kbps_for_test(8_000);
-        let refused = |why: Option<String>| why.is_some_and(|w| w.starts_with("Buffer too small"));
+        let refused =
+            |why: Option<String>| why.is_some_and(|w| w.contains("too long for the delay memory"));
         assert!(refused(h.ctrl.run_named_action("arm", 30_000, "hotkey")));
         assert!(refused(h.ctrl.run_named_action("toggle", 30_000, "midi")));
         assert!(refused(h.ctrl.set_delay_to(30_000, "integration")));
@@ -5553,7 +5555,9 @@ mod tests {
         let short = h.ctrl.capacity_short().expect("30 s doesn't fit 4 MB");
         assert_eq!(short.armed_ms, 30_000);
         assert!(short.holds_ms < 4_000, "{short:?}");
-        assert!(short.message.starts_with("Buffer too small for 30 s"));
+        assert!(short
+            .message
+            .starts_with("30 s is too long for the delay memory"));
         assert_eq!(h.ctrl.capacity_short_seq(), 1);
         assert_eq!(h.ctrl.delay_runs_ms(30_000), short.holds_ms, "what runs");
         assert_eq!(h.ctrl.delay_runs_ms(20_000), 20_000, "about another delay");

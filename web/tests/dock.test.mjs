@@ -151,10 +151,10 @@ test('a delay past what the buffer holds is flagged, firmly only once the bitrat
   given({ buffer_capacity_ms_est: 125_000, capacity_kbps: 18_500 });
   assert.equal(call('overCap', 125_000), false, 'exactly what it holds still fits');
   assert.equal(call('overCap', 125_001), true);
-  assert.match(call('capAdvice', 180_000), /^Buffer too small for 180s\. Raise the buffer size to at least \d+ MB in System, then restart\.$/);
+  assert.match(call('capAdvice', 180_000), /^180s is too long for the delay memory\. Allow at least \d+ MB in System, then restart\.$/);
 
   given({ buffer_capacity_ms_est: 234_000, capacity_measured: false });
-  assert.match(call('capAdvice', 600_000), /^Likely too long: at a typical rate the buffer holds about 234s\./);
+  assert.match(call('capAdvice', 600_000), /^Likely too long: at a typical rate the delay memory holds about 234s\./);
 
   given({ buffer_capacity_ms_est: 0 });
   assert.equal(call('overCap', 3_600_000), false, 'no estimate yet refuses nothing');
@@ -164,11 +164,11 @@ test('the main button offers the one thing that can happen next', () => {
   for (const [why, state, ui, want] of [
     ['OBS not streaming', { ingest_alive: false }, {}, { key: 'wait', label: 'Waiting for OBS', disabled: true }],
     ['OBS not streaming, and the delay typed is past the buffer', { ingest_alive: false, capacity_measured: false }, { field: 600 },
-      { key: 'wait-cap', label: 'Buffer holds about 374s', disabled: true }],
+      { key: 'wait-cap', label: 'Delay memory holds about 374s', disabled: true }],
     ['streaming, nothing typed', {}, {}, { key: 'set', label: 'Set a delay first', disabled: true }],
     ['streaming, 30 typed', {}, { field: 30 }, { key: 'arm', label: 'Arm' }],
     ['more typed than the server takes', { buffer_capacity_ms_est: 4_000_000 }, { field: 99_999 }, { key: 'arm', label: 'Arm' }],
-    ['more typed than the buffer holds', {}, { field: 600 }, { key: 'cap', label: 'Buffer holds only 374s', disabled: true }],
+    ['more typed than the buffer holds', {}, { field: 600 }, { key: 'cap', label: 'Delay memory holds only 374s', disabled: true }],
     ['filling', { phase: 'preparing', armed_delay_ms: 30_000, buffer_fill_ms: 10_000 }, {},
       { key: 'arming', label: 'Ready in 0:20', disabled: true }],
     ['filling, OBS gone', { phase: 'preparing', armed_delay_ms: 30_000, ingest_alive: false }, {},
@@ -186,7 +186,7 @@ test('the main button offers the one thing that can happen next', () => {
     ['armed, a new number typed', { phase: 'ready', armed_delay_ms: 30_000 }, { editing: true, field: 45 },
       { key: 'rearm', label: 'Re-arm' }],
     ['on air, a number past the buffer typed', { phase: 'active', armed_delay_ms: 30_000 }, { editing: true, field: 600 },
-      { key: 'cap', label: 'Buffer holds only 374s', disabled: true }],
+      { key: 'cap', label: 'Delay memory holds only 374s', disabled: true }],
   ]) {
     given(state, ui);
     const look = plain(call('mainLook', call('phaseNow')));
@@ -205,7 +205,7 @@ test('the second button cancels, disarms, or schedules the cut', () => {
   for (const [why, state, title] of [
     ['filling', { phase: 'preparing' }, 'Cancel arming'],
     ['ready', { phase: 'ready' }, 'Disarm'],
-    ['on air', { phase: 'active' }, 'Cut to live after everything buffered has aired'],
+    ['on air', { phase: 'active' }, 'Back to live once everything saved for the delay has aired'],
     ['on air, a cut already waiting', { phase: 'active', safe_cut_pending: true, safe_cut_remaining_ms: 12_400 }, 'Auto-cut armed. Tap to cancel.'],
     ['nothing armed', { phase: 'idle' }, null],
   ]) {
@@ -240,7 +240,7 @@ test('a profile chip says what a tap will do', () => {
   for (const [state, apply, current, title] of [
     ['off', true, false, 'Arm 30s'],
     ['off', false, false, 'Set 30s'],
-    ['arming', true, false, 'Wait for the buffer to fill, or cancel arming'],
+    ['arming', true, false, "Wait until it's ready, or cancel arming"],
     ['armed', true, false, 'Re-arm at 30s'],
     ['armed', false, false, 'Pick 30s, then Re-arm'],
     ['active', true, false, 'Adjust to 30s'],

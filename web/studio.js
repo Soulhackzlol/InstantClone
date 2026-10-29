@@ -1561,7 +1561,7 @@ const Studio = (function(){
     }
     if(w.kind==='LiquidFill'){
       const fixed=(w.level!=null&&w.level!=='buffer');
-      h += field('Fill level','<select class="ic-input"'+on('setLiquidLevel')+'><option value="buffer"'+(!fixed?' selected':'')+'>Follow buffer</option><option value="fixed"'+(fixed?' selected':'')+'>Fixed level</option></select>');
+      h += field('Fill level','<select class="ic-input"'+on('setLiquidLevel')+'><option value="buffer"'+(!fixed?' selected':'')+'>Follow the delay filling</option><option value="fixed"'+(fixed?' selected':'')+'>Fixed level</option></select>');
       if(fixed){ const pv=typeof w.level==='number'?w.level:60; h += rangeF('Level','setNum','level',pv,0,100,5); }
       const wav=w.wave!=null?w.wave:1;
       h += rangeF('Wave','setNum','wave',wav,0,2,0.1);

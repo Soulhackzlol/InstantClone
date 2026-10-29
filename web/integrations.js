@@ -440,7 +440,7 @@ const VAR_HELP = {
   protected:'yes when crash protection kept your destinations up.',
   delay:'The delay, written for people. On delay events, the new one.',
   delay_ms:'The delay in milliseconds, for maths and comparisons.',
-  delay_max:'The longest delay the buffer holds right now, in seconds (an hour at most). !setdelay checks against it.',
+  delay_max:'The longest delay the delay memory holds right now, in seconds (an hour at most). !setdelay checks against it.',
   delay_state:'on or off.',
   phase:'What the delay is doing: idle, preparing, ready or active.',
   hold_active:'yes while the reconnect screen is on air.',
@@ -3972,7 +3972,7 @@ const Editor = {
         return `<div class="ic-label">Does</div>${segHtml(['arm', 'cut_after', 'cut', 'activate', 'disarm'].map(x => [x, DELAY_ACTIONS[x]]), a.params.action, 'set-action')}
           ${a.params.action === 'arm' ? `<div class="dff ig-narrow"><label>Delay</label>${field}</div>` : ''}
           <div class="muted">${{
-            arm:'Arms this delay, or changes it while one is armed or on air. It goes on air once the buffer is full if Auto-activate is on; otherwise press Activate.',
+            arm:'Arms this delay, or changes it while one is armed or on air. It goes on air once it\'s ready if "Activate as soon as it\'s ready" is on; otherwise press Activate.',
             cut_after:'Goes back to live once viewers have caught up with you, so they miss nothing. It takes as long as the delay. If a cut is already waiting, it keeps that one.',
             cut:'Goes back to live right away. Viewers skip what was still in the delay.',
             activate:'Puts on air the delay that finished getting ready.',
@@ -5243,8 +5243,8 @@ const EVENT_INFO = {
   delay_on:{icon:'clock', desc:'The delay starts.'},
   delay_off:{icon:'clock', desc:'The delay stops: viewers see you live.'},
   delay_changed:{icon:'clock', desc:'The delay gets longer or shorter.'},
-  delay_armed:{icon:'clock', desc:'You arm one: the buffer starts filling.'},
-  delay_ready:{icon:'check', desc:'The buffer holds it: it can go on air.'},
+  delay_armed:{icon:'clock', desc:'You arm one: it starts saving video for it.'},
+  delay_ready:{icon:'check', desc:'There\'s enough saved: it can go on air.'},
   delay_disarmed:{icon:'x', desc:'You cancel it before it goes on air.'},
   stream_started:{icon:'play', desc:'A new stream begins. A crash OBS comes back from isn\'t one.'},
   stream_ended:{icon:'film', desc:'The stream is over, with a report: length, crashes, drops.'},
@@ -5748,7 +5748,7 @@ const Builder = {
       }
       case 'delay_action': return field('action', 'Does', {select:Object.entries(DELAY_ACTIONS)})
         + (s.params.action === 'arm' ? field('seconds', 'Delay in whole seconds (0 turns it off, blank uses your Default delay), or a value like {arg1}', {mono:true, ph:'30'})
-          + note('Starts or changes the delay. A delay the buffer can\'t hold fails this step.') : '')
+          + note('Starts or changes the delay. A delay too long for the delay memory fails this step.') : '')
         + warnHtml('This changes your stream. Tests never run it.');
       case 'marker': return field('description', 'Label', {ph:'Crash'}) + note('Only works while you are live on Twitch.');
       case 'channel': return field('title', 'New title (blank: leave it as it is)', {ph:'{args}'})

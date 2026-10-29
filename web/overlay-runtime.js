@@ -25,7 +25,7 @@
 
   // The six editable delay-states. Idle folds in "ingest offline".
   const STATES = [
-    { key: 'idle',      label: 'Idle',      hint: 'Passthrough / OBS not publishing' },
+    { key: 'idle',      label: 'Idle',      hint: 'Live with no delay, or OBS not streaming' },
     { key: 'preparing', label: 'Arming',    hint: 'Buffer filling toward the armed delay' },
     { key: 'ready',     label: 'Ready',     hint: 'Armed - waiting for Activate' },
     { key: 'active',    label: 'Active',    hint: 'Delay is live' },
