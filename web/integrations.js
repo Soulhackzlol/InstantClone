@@ -3637,9 +3637,9 @@ const Editor = {
   // The options as rows, grouped, under what it still needs before it can
   // run. The open row shows its settings right under it.
   sideHtml(chips, step, h){
-    const row = c => `<button class="ig-row${this.chip === c.id ? ' on' : ''}${c.warn ? ' warn' : ''}" data-act="chip" data-chip="${c.id}" data-key="row-${c.id}" aria-expanded="${this.chip === c.id}">
+    const row = c => `<button class="ig-opt${this.chip === c.id ? ' on' : ''}${c.warn ? ' warn' : ''}" data-act="chip" data-chip="${c.id}" data-key="row-${c.id}" aria-expanded="${this.chip === c.id}">
         <span>${esc(c.k)}</span><b data-tick>${esc(c.v)}</b>${svg('chev')}</button>`
-      + (this.chip === c.id ? `<div class="ig-pop-in ig-row-pop" data-key="pop-${c.id}-${this.sel}">${this.popHtml(step, h)}</div>` : '');
+      + (this.chip === c.id ? `<div class="ig-pop-in ig-opt-pop" data-key="pop-${c.id}-${this.sel}">${this.popHtml(step, h)}</div>` : '');
     const placed = new Set();
     const groups = ED_GROUPS.map(([label, ids]) => {
       const list = chips.filter(c => !placed.has(c.id) && (!ids || ids.includes(c.id)));
@@ -4241,7 +4241,7 @@ const Editor = {
       case 'chip':
         this.chip = this.chip === el.dataset.chip ? null : el.dataset.chip;
         this.render();
-        if (this.chip) revealOpened(q('.ig-row-pop'));
+        if (this.chip) revealOpened(q('.ig-opt-pop'));
         return true;
       case 'set-where': allSteps(this.d).filter(s => s.type === 'discord').forEach(s => { s.params.connection = v; }); this.changed(); return true;
       case 'set-ping': if (step) step.params.ping = v; this.changed(); return true;

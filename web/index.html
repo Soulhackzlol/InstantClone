@@ -3514,23 +3514,23 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-side-g{display:flex;flex-direction:column;gap:6px}
 .ig-side-g+.ig-side-g{padding-top:12px;border-top:1px solid var(--line)}
 .ig-side-h{font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-4)}
-.ig-row{display:flex;align-items:center;gap:8px;width:100%;padding:8px 11px;border-radius:9px;border:1px solid var(--line);
+.ig-opt{display:flex;align-items:center;gap:8px;width:100%;padding:8px 11px;border-radius:9px;border:1px solid var(--line);
   background:var(--surface-3);color:var(--fg);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;
   transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),transform .15s var(--ease-out)}
-.ig-row:hover{border-color:var(--line-2)}
-.ig-row:active{transform:scale(.98)}
-.ig-row span{flex:none;color:var(--fg-3)}
-.ig-row b{flex:1;min-width:0;text-align:right;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ig-row svg{width:11px;height:11px;flex:none;color:var(--fg-3);transition:transform .25s var(--ease-out),color .15s var(--ease-out)}
-.ig-row.warn{border-color:color-mix(in oklch,var(--warn) 55%,transparent);background:color-mix(in oklch,var(--warn) 9%,var(--surface-3))}
-.ig-row.warn b{color:var(--warn)}
-.ig-row.on{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 12%,var(--surface-3));
+.ig-opt:hover{border-color:var(--line-2)}
+.ig-opt:active{transform:scale(.98)}
+.ig-opt span{flex:none;color:var(--fg-3)}
+.ig-opt b{flex:1;min-width:0;text-align:right;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-opt svg{width:11px;height:11px;flex:none;color:var(--fg-3);transition:transform .25s var(--ease-out),color .15s var(--ease-out)}
+.ig-opt.warn{border-color:color-mix(in oklch,var(--warn) 55%,transparent);background:color-mix(in oklch,var(--warn) 9%,var(--surface-3))}
+.ig-opt.warn b{color:var(--warn)}
+.ig-opt.on{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 12%,var(--surface-3));
   border-bottom-left-radius:0;border-bottom-right-radius:0}
-.ig-row.on svg{transform:rotate(180deg);color:var(--accent)}
-.ig-row-pop{margin-top:-6px;padding:12px;border:1px solid color-mix(in oklch,var(--accent) 35%,var(--line));border-top:0;
+.ig-opt.on svg{transform:rotate(180deg);color:var(--accent)}
+.ig-opt-pop{margin-top:-6px;padding:12px;border:1px solid color-mix(in oklch,var(--accent) 35%,var(--line));border-top:0;
   border-radius:0 0 9px 9px;background:var(--bg-1)}
 /* The row above already names it. */
-.ig-row-pop>.ic-label:first-child{display:none}
+.ig-opt-pop>.ic-label:first-child{display:none}
 @media (max-width:980px){.ig-ed-cols{grid-template-columns:1fr}.ig-ed-side{position:static}}
 .ig-pop{overflow:hidden;box-sizing:border-box;border-radius:12px;background:var(--bg-2);border:1px solid var(--line)}
 .ig-pop-in{display:flex;flex-direction:column;gap:10px;padding:14px 16px}
@@ -4397,7 +4397,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   .ig-activity-box[open] .ig-activity,.ig-modal.closing .dest-form,.ig-modal.closing .ic-modal-backdrop,
   .ic-btn.ig-armed,.ic-btn-tiny.ig-armed,.ig-cat-grid>*,.ig-menu,.ig-picked,.ig-try-wrap{animation:none}
   .ig-menu.closing{transition:none}
-  .ig-dot svg,.ig-role>span svg,.ig-row svg,.ig-seg .sub-tab-ind{transition:none}
+  .ig-dot svg,.ig-role>span svg,.ig-opt svg,.ig-seg .sub-tab-ind{transition:none}
 }
 @media (max-width:760px){
   .ig-bld,.ig-cat{flex-direction:column}
