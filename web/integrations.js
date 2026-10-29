@@ -2370,7 +2370,6 @@ function render(){
         <div class="ig-head-actions">
           ${empty ? '' : '<button class="ic-btn ic-btn-ghost" data-act="share">Share</button>'}
           <button class="ic-btn ic-btn-ghost" data-act="values">Your values</button>
-          <button class="ic-btn ic-btn-ghost" data-act="import">Import recipe</button>
           <button class="ic-btn dest-add-btn" data-act="catalog">${svg('plus')}<span>Add</span></button>
         </div>
       </div>
@@ -2545,6 +2544,13 @@ function moreHtml(i){
   return `<button class="ic-btn-tiny ig-more" data-act="menu" data-id="${esc(i.id)}" aria-label="More for ${esc(i.name)}"
     aria-haspopup="menu" aria-expanded="${Menu.id === i.id}">${svg('dots', ' stroke-width="3"')}</button>`;
 }
+// The line under a card's name: what blocks it, else what's wrong with
+// it, else where it goes and when it last ran. Never over the preview.
+function cardNoteHtml(c){
+  if (c.issue) return `<div class="dcard-host ig-host-warn" title="${esc(c.issue)}">${esc(c.issue)}</div>`;
+  if (c.flag) return `<div class="dcard-host ig-host-${c.flag.cls}" title="${esc(c.flag.tip)}">${esc(c.flag.label)}</div>`;
+  return `<div class="dcard-host">${esc(c.where)} · ${esc(c.last)}</div>`;
+}
 function flagHtml(flag){
   if (!flag) return '';
   return `<span class="dcard-status ig-flag ${flag.cls}" title="${esc(flag.tip)}"><span class="d-dot"></span><span class="dcard-status-l">${flag.label}</span></span>`;
@@ -2555,13 +2561,11 @@ function gridHtml(items, none, withAdd, folder){
     const c = cardInfo(i);
     return `<div class="dcard ig-card ${i.enabled ? 'alive' : 'off'}" style="--dc:${c.dc}" data-key="c-${esc(i.id)}" draggable="true" data-drag-id="${esc(i.id)}">
       <div class="dcard-screen" data-act="edit" data-id="${esc(i.id)}" role="button" tabindex="0" aria-label="Edit ${esc(i.name)}">
-        ${previewHtml(c.step, c.h, false)}${flagHtml(c.flag)}${c.hist}
+        ${previewHtml(c.step, c.h, false)}${c.hist}
       </div>
       <div class="ig-card-foot">
         <span class="dcard-icon">${svg(c.icon)}</span>
-        <div class="dcard-id"><div class="dcard-name">${esc(i.name)}</div>
-          ${c.issue ? `<div class="dcard-host ig-host-warn" title="${esc(c.issue)}">${esc(c.issue)}</div>`
-            : `<div class="dcard-host">${esc(c.where)} · ${esc(c.last)}</div>`}</div>
+        <div class="dcard-id"><div class="dcard-name">${esc(i.name)}</div>${cardNoteHtml(c)}</div>
         ${moreHtml(i)}${switchHtml(i)}
       </div>
     </div>`;
