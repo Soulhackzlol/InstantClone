@@ -540,10 +540,48 @@ const Studio = (function(){
     });
   }
   function holdSpace(down){ spaceHeld = down; $('st-canvas-frame').classList.toggle('st-grab', down); }
+  // The preview zooms onto what the overlay draws, the most it has drawn
+  // since it loaded (so it settles instead of following every state), and
+  // a small badge isn't a speck on an empty canvas. "Whole canvas" shows
+  // where it sits on the 1920x1080 screen instead.
+  const DRAWN_PAD = 48, DRAWN_ZOOM_MAX = 4;
+  let drawnBox = null, wholeCanvas = false, measureTimer = 0;
   function fitPreview(){
     const stage = $('ovg-stage'); if(!stage) return;
-    const w = stage.clientWidth || 600;
-    $('ovg-scale').style.transform = 'scale('+(w/1920)+')';
+    const w = stage.clientWidth || 600, h = stage.clientHeight || w * 9 / 16, fit = w / 1920;
+    let scale = fit, tx = 0, ty = 0;
+    if(drawnBox && !wholeCanvas){
+      const b = drawnBox;
+      const closer = Math.min(w / (b.x1 - b.x0 + DRAWN_PAD * 2), h / (b.y1 - b.y0 + DRAWN_PAD * 2), fit * DRAWN_ZOOM_MAX);
+      // Not worth it for something that nearly fills the screen.
+      if(closer > fit * 1.15){ scale = closer; tx = w / 2 - (b.x0 + b.x1) / 2 * scale; ty = h / 2 - (b.y0 + b.y1) / 2 * scale; }
+    }
+    $('ovg-scale').style.transform = 'translate('+tx+'px,'+ty+'px) scale('+scale+')';
+    const btn = $('ovg-zoom'), zoomable = !!drawnBox && (wholeCanvas || scale > fit);
+    if(btn){ btn.hidden = !zoomable; btn.textContent = wholeCanvas ? 'Zoom in' : 'Whole canvas'; }
+  }
+  function toggleWholeCanvas(){ wholeCanvas = !wholeCanvas; fitPreview(); }
+  // A saved overlay is sandboxed: it says what it draws when asked
+  // (overlay-runtime.js drawnBounds). One from before that never answers
+  // just shows the whole canvas.
+  function askDrawn(){
+    const prev = $('ov-preview');
+    if(prev && prev.offsetParent && prev.contentWindow) prev.contentWindow.postMessage({__ic_bounds:true}, '*');
+  }
+  window.addEventListener('message', ev => {
+    const prev = $('ov-preview'), got = ev.data && ev.data.__ic_drawn;
+    if(!got || !prev || ev.source !== prev.contentWindow) return;
+    const b = drawnBox;
+    const next = b ? {x0:Math.min(b.x0, got.x0), y0:Math.min(b.y0, got.y0), x1:Math.max(b.x1, got.x1), y1:Math.max(b.y1, got.y1)} : got;
+    if(b && next.x0 === b.x0 && next.y0 === b.y0 && next.x1 === b.x1 && next.y1 === b.y1) return;
+    drawnBox = next;
+    fitPreview();
+  });
+  function watchDrawn(){
+    clearInterval(measureTimer);
+    drawnBox = null;
+    fitPreview();
+    measureTimer = setInterval(askDrawn, 700);
   }
 
   // ---- gallery: one list of overlays, each with a copyable URL ----
@@ -644,7 +682,7 @@ const Studio = (function(){
   function updatePreview(){
     const prev=$('ov-preview'); if(!prev||!gsel) return;
     stopGallerySim();
-    prev.onload=()=>applyPreviewState();
+    prev.onload=()=>{ applyPreviewState(); watchDrawn(); };
     // A ready-made alert design not saved yet: as it would be written.
     const o=curOverlay();
     if(o && o.unsaved){ prev.removeAttribute('src'); prev.srcdoc=IC().bake(IC().alertPreset(readyTheme(o.slug))); return; }
@@ -2266,7 +2304,7 @@ const Studio = (function(){
   // `on`). A field's handler gets the control's arguments, then its value;
   // a button's gets its arguments, then the button.
   const ACTIONS = {
-    newOverlay, restoreDefaults, previewSim, copyGallery, toggleAutohide, addGalleryToObs,
+    newOverlay, restoreDefaults, previewSim, toggleWholeCanvas, copyGallery, toggleAutohide, addGalleryToObs,
     openStudio: slugId => openStudio(slugId), duplicateOverlay, deleteFromGallery,
     editDesign, duplicateDesign, useDesign, resetDesign,
     revealOverlays: () => reveal('overlays'), setUpAlerts: () => Integrations.addTwitchAlerts(),

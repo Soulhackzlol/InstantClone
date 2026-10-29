@@ -1941,7 +1941,13 @@ input[type="checkbox"]:disabled{opacity:.45;cursor:default}
   linear-gradient(45deg,#0a0c10 25%,transparent 25%,transparent 75%,#0a0c10 75%),
   linear-gradient(45deg,#0a0c10 25%,#0e1116 25%,#0e1116 75%,#0a0c10 75%);
   background-size:22px 22px;background-position:0 0,11px 11px}
-.ovg-scale{position:absolute;top:0;left:0;width:1920px;height:1080px;transform-origin:top left}
+.ovg-scale{position:absolute;top:0;left:0;width:1920px;height:1080px;transform-origin:top left;transition:transform .4s var(--ease-out)}
+.ovg-zoom{position:absolute;right:8px;bottom:8px;z-index:1;padding:4px 10px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line-2);background:color-mix(in oklch,var(--bg) 80%,transparent);color:var(--fg-2);font:inherit;font-size:11.5px;
+  backdrop-filter:blur(6px);transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.ovg-zoom:hover{color:var(--fg);border-color:color-mix(in oklch,var(--accent) 45%,var(--line-2))}
+.ovg-zoom[hidden]{display:none}
+@media (prefers-reduced-motion:reduce){.ovg-scale{transition:none}}
 /* color-scheme:normal is load-bearing: the dashboard root sets
    color-scheme:dark, which makes a transparent child iframe paint an opaque
    (white) canvas in Chromium - covering the checkerboard stage. Opting the
@@ -5450,6 +5456,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
           <div class="ovg-fit">
             <div class="ovg-stage" id="ovg-stage">
               <div class="ovg-scale" id="ovg-scale"><iframe id="ov-preview" title="Overlay preview"></iframe></div>
+              <button type="button" class="ovg-zoom" id="ovg-zoom" data-st="toggleWholeCanvas" hidden>Whole canvas</button>
             </div>
           </div>
         </section>
