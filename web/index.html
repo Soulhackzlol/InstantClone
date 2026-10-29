@@ -10660,7 +10660,8 @@ function renderObsInstallsInto(host){
         : b.dataset.act === 'change' ? 'Moved it? Pick its obs64.exe again' : 'Remove from the list';
     });
   });
-  host.querySelector('.obs-inst-empty').hidden = !obsInstalls || installs.length > 0;
+  // The OBS tab card already says it in its status line; only the wizard needs this one.
+  host.querySelector('.obs-inst-empty').hidden = !obsInstalls || installs.length > 0 || !!host.closest('#obs-reg-card');
   host.querySelector('.obs-add-toggle').hidden = !(obsInstalls && obsInstalls.portable_pick);
   const ticked = obsTicked();
   const reg = host.querySelector('.obs-inst-reg'), unreg = host.querySelector('.obs-inst-unreg');
