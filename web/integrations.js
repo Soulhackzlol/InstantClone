@@ -3421,8 +3421,15 @@ function needsHtml(needs){
 
 // ---------------------------------------------------------------- module editor
 
+// The simple editor's option rows, by what they set; the last group takes
+// every row the others don't name.
+const ED_GROUPS = [
+  ['Where', ['where', 'url', 'light', 'file']],
+  ['What it does', ['action', 'look', 'msg', 'ping', 'reply', 'priority', 'dgroup', 'tiers', 'adesign', 'acolor', 'asound', 'apic', 'atime']],
+  ['When', null],
+];
 // The simple editor for catalog modules: pick a moment, write on the
-// preview itself, and every option is a chip that opens its own panel.
+// preview itself, and every option is a row beside it that opens in place.
 const Editor = {
   d:null, sel:0, chip:null, run:null, dirty:false, back:null, justAdded:false,
   // opts: {back} (see Modal.back); {justAdded} when the catalog just made
@@ -3471,7 +3478,7 @@ const Editor = {
     this.show();
   },
   show(){
-    Modal.open('editor', 920);
+    Modal.open('editor', 1180);
     Modal.back = this.back;
     Modal.onClose = () => {
       if (this.dirty){ Modal.guard(); return false; }
@@ -3603,17 +3610,19 @@ const Editor = {
     const head = modalHead(PRESET_ICON[d.preset] || (k ? k.icon : 'steps'), k ? k.c : 'var(--accent)', titleInput(d.name),
       esc(p ? p.description : 'Pick a moment, then write on the message itself. Everything else is one click away.'),
       enableSwitch('enabled', d.enabled));
-    const chips = this.chips(step, h).map(c => `<button class="ig-chip${this.chip === c.id ? ' on' : ''}${c.warn ? ' warn' : ''}" data-act="chip" data-chip="${c.id}" data-key="chip-${c.id}" aria-expanded="${this.chip === c.id}">
-      <span>${esc(c.k)}</span><b data-tick>${esc(c.v)}</b>${svg('chev')}</button>`).join('');
+    // A test opens under the preview; every option is a row beside it.
+    const test = this.chip === '__test'
+      ? `<div class="ig-pop" data-autoh><div class="ig-pop-in" data-key="pop-__test-${this.sel}">${this.popHtml(step, h)}</div></div>` : '';
     Modal.body(`${head}
       <div class="dest-form-body ig-ed-body">
         ${this.momentsHtml()}
         ${twitchEventStatusHtml(h.trigger)}
-        <div class="ig-ed-preview" data-flip data-autoh><div class="ig-ed-pv" data-key="pv-${this.sel}">${this.previewBoxHtml(step, h)}</div></div>
-        <div class="ig-ed-options">
-          <div class="ig-chips" data-flip>${chips}</div>
-          <div class="ig-pop${this.chip ? '' : ' closed'}" data-flip data-autoh>${this.chip
-            ? `<div class="ig-pop-in" data-key="pop-${this.chip}-${this.sel}">${this.popHtml(step, h)}</div>` : ''}</div>
+        <div class="ig-ed-cols">
+          <div class="ig-ed-main">
+            <div class="ig-ed-preview" data-flip data-autoh><div class="ig-ed-pv" data-key="pv-${this.sel}">${this.previewBoxHtml(step, h)}</div></div>
+            ${test}
+          </div>
+          <aside class="ig-ed-side" aria-label="Options" data-flip>${this.sideHtml(this.chips(step, h), step, h)}</aside>
         </div>
       </div>
       ${footHtml(d, this.dirty, `<button class="ic-btn ic-btn-ghost" data-act="ed-builder">Open in builder</button>
@@ -3624,6 +3633,23 @@ const Editor = {
     if (this.chip === 'detect') Meter.watch();
     if (this.chip === 'scene') ObsLive.watch();
     if (step && step.type === 'overlay') alertStage(step, h, false);
+  },
+  // The options as rows, grouped, under what it still needs before it can
+  // run. The open row shows its settings right under it.
+  sideHtml(chips, step, h){
+    const row = c => `<button class="ig-row${this.chip === c.id ? ' on' : ''}${c.warn ? ' warn' : ''}" data-act="chip" data-chip="${c.id}" data-key="row-${c.id}" aria-expanded="${this.chip === c.id}">
+        <span>${esc(c.k)}</span><b data-tick>${esc(c.v)}</b>${svg('chev')}</button>`
+      + (this.chip === c.id ? `<div class="ig-pop-in ig-row-pop" data-key="pop-${c.id}-${this.sel}">${this.popHtml(step, h)}</div>` : '');
+    const placed = new Set();
+    const groups = ED_GROUPS.map(([label, ids]) => {
+      const list = chips.filter(c => !placed.has(c.id) && (!ids || ids.includes(c.id)));
+      list.forEach(c => placed.add(c.id));
+      return list.length ? `<div class="ig-side-g" data-key="g-${label}"><div class="ig-side-h">${label}</div>${list.map(row).join('')}</div>` : '';
+    }).join('');
+    const missing = chips.find(c => c.warn);
+    const fix = missing ? `<div class="ig-side-fix" data-key="fix">${svg('warn')}<span><b>Before it can run</b>${esc(missing.k)}: ${esc(missing.v)}</span>
+      ${this.chip === missing.id ? '' : `<button class="ic-btn ic-btn-primary ig-small" data-act="chip" data-chip="${missing.id}">Fix it</button>`}</div>` : '';
+    return fix + groups;
   },
   // The moments it acts on, each with its switch. A moment that still
   // misses something says so in its colour and its tooltip.
@@ -4215,7 +4241,7 @@ const Editor = {
       case 'chip':
         this.chip = this.chip === el.dataset.chip ? null : el.dataset.chip;
         this.render();
-        if (this.chip) revealOpened(q('.ig-ed-options'));
+        if (this.chip) revealOpened(q('.ig-row-pop'));
         return true;
       case 'set-where': allSteps(this.d).filter(s => s.type === 'discord').forEach(s => { s.params.connection = v; }); this.changed(); return true;
       case 'set-ping': if (step) step.params.ping = v; this.changed(); return true;

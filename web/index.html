@@ -3294,7 +3294,6 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-ed-body{padding:20px 24px 22px;gap:18px}
 .ig-ed-preview{display:flex;flex-direction:column}
 .ig-ed-pv{display:flex;flex-direction:column;gap:10px}
-.ig-ed-options{display:flex;flex-direction:column;gap:10px}
 .ig-live{border-radius:14px;overflow:hidden}
 .ig-live-tag{font-size:10.5px;font-weight:700;letter-spacing:.06em;color:#adadb8}
 .ig-live-discord{background:#313338;color:#dbdee1}
@@ -3495,23 +3494,39 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-mchip-name:hover{color:var(--fg)}
 .ig-mchip.on{background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));border-color:color-mix(in oklch,var(--accent) 55%,transparent)}
 .ig-mchip.on .ig-mchip-name{color:var(--fg)}
-/* Option chips and their panel. */
-.ig-chips{display:flex;flex-wrap:wrap;gap:8px}
-.ig-chip{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;border:1px solid var(--line);
-  background:var(--surface-3);color:var(--fg);font:inherit;font-size:12.5px;cursor:pointer;
+/* The simple editor: the preview you write on, and its options beside it
+   as rows. The open row's settings sit right under it. */
+.ig-ed-cols{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}
+.ig-ed-main{display:flex;flex-direction:column;gap:14px;min-width:0}
+.ig-ed-side{position:sticky;top:0;display:flex;flex-direction:column;gap:14px;padding:14px;border-radius:14px;
+  background:var(--bg-2);border:1px solid var(--line)}
+.ig-side-fix{display:grid;grid-template-columns:auto 1fr;gap:4px 8px;align-items:start;padding:12px;border-radius:10px;font-size:12.5px;line-height:1.45;
+  color:var(--fg-2);background:color-mix(in oklch,var(--warn) 9%,var(--bg-1));border:1px solid color-mix(in oklch,var(--warn) 40%,transparent)}
+.ig-side-fix svg{width:14px;height:14px;margin-top:2px;color:var(--warn)}
+.ig-side-fix b{display:block;font-weight:600;color:var(--warn)}
+.ig-side-fix .ic-btn{grid-column:2;justify-self:start;margin-top:4px}
+.ig-side-g{display:flex;flex-direction:column;gap:6px}
+.ig-side-g+.ig-side-g{padding-top:12px;border-top:1px solid var(--line)}
+.ig-side-h{font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-4)}
+.ig-row{display:flex;align-items:center;gap:8px;width:100%;padding:8px 11px;border-radius:9px;border:1px solid var(--line);
+  background:var(--surface-3);color:var(--fg);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;
   transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),transform .15s var(--ease-out)}
-.ig-chip:hover{border-color:var(--line-2)}
-.ig-chip:active{transform:scale(.96)}
-.ig-chip span{color:var(--fg-2)}
-.ig-chip b{font-weight:600;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ig-chip svg{width:11px;height:11px;color:var(--fg-3);transition:transform .25s var(--ease-out),color .15s var(--ease-out)}
-.ig-chip.warn{border-color:color-mix(in oklch,var(--warn) 55%,transparent);background:color-mix(in oklch,var(--warn) 9%,var(--surface-3))}
-.ig-chip.warn b{color:var(--warn)}
-.ig-chip.on{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 12%,var(--surface-3))}
-.ig-chip.on svg{transform:rotate(180deg);color:var(--accent)}
-.ig-pop{overflow:hidden;box-sizing:border-box;border-radius:12px;background:var(--bg-2);border:1px solid var(--line);
-  transition:border-color .2s var(--ease-out),background-color .2s var(--ease-out)}
-.ig-pop.closed{border-color:transparent;background:transparent}
+.ig-row:hover{border-color:var(--line-2)}
+.ig-row:active{transform:scale(.98)}
+.ig-row span{flex:none;color:var(--fg-3)}
+.ig-row b{flex:1;min-width:0;text-align:right;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-row svg{width:11px;height:11px;flex:none;color:var(--fg-3);transition:transform .25s var(--ease-out),color .15s var(--ease-out)}
+.ig-row.warn{border-color:color-mix(in oklch,var(--warn) 55%,transparent);background:color-mix(in oklch,var(--warn) 9%,var(--surface-3))}
+.ig-row.warn b{color:var(--warn)}
+.ig-row.on{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 12%,var(--surface-3));
+  border-bottom-left-radius:0;border-bottom-right-radius:0}
+.ig-row.on svg{transform:rotate(180deg);color:var(--accent)}
+.ig-row-pop{margin-top:-6px;padding:12px;border:1px solid color-mix(in oklch,var(--accent) 35%,var(--line));border-top:0;
+  border-radius:0 0 9px 9px;background:var(--bg-1)}
+/* The row above already names it. */
+.ig-row-pop>.ic-label:first-child{display:none}
+@media (max-width:980px){.ig-ed-cols{grid-template-columns:1fr}.ig-ed-side{position:static}}
+.ig-pop{overflow:hidden;box-sizing:border-box;border-radius:12px;background:var(--bg-2);border:1px solid var(--line)}
 .ig-pop-in{display:flex;flex-direction:column;gap:10px;padding:14px 16px}
 .ig-pop-in .ig-seg{align-self:flex-start}
 .ig-pick{display:flex;flex-wrap:wrap;gap:8px}
@@ -4376,7 +4391,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   .ig-activity-box[open] .ig-activity,.ig-modal.closing .dest-form,.ig-modal.closing .ic-modal-backdrop,
   .ic-btn.ig-armed,.ic-btn-tiny.ig-armed,.ig-cat-grid>*,.ig-menu,.ig-picked,.ig-try-wrap{animation:none}
   .ig-menu.closing{transition:none}
-  .ig-dot svg,.ig-role>span svg,.ig-chip svg,.ig-seg .sub-tab-ind{transition:none}
+  .ig-dot svg,.ig-role>span svg,.ig-row svg,.ig-seg .sub-tab-ind{transition:none}
 }
 @media (max-width:760px){
   .ig-bld,.ig-cat{flex-direction:column}
