@@ -247,8 +247,8 @@ function overCap(ms) { const c = currentCapMs(); return c > 0 && ms > c; }
 // estimate at a typical rate before that.
 function capAdvice(ms) {
   return s && s.capacity_measured
-    ? `${fmtDelay(ms)} is too long for the delay memory. Allow at least ${requiredMB(ms)} MB in System, then restart.`
-    : `Likely too long: at a typical rate the delay memory holds about ${fmtDelay(currentCapMs())}. Your real bitrate decides once OBS connects.`;
+    ? `${fmtDelay(ms)} is too long for the buffer. Make it at least ${requiredMB(ms)} MB in System, then restart.`
+    : `Likely too long: at a typical rate the buffer holds about ${fmtDelay(currentCapMs())}. Your real bitrate decides once OBS connects.`;
 }
 function capToast(ms) {
   toast(capAdvice(ms), 'err');
@@ -546,7 +546,7 @@ function mainLook(ds) {
   const m = $('main');
   const ms = inputMs(), armedMs = s.armed_delay_ms || 0;
   // Over the buffer's reach: the button says so instead of failing on click.
-  const capLook = { key: 'cap', label: `Delay memory holds only ${fmtDelay(currentCapMs())}`, disabled: true };
+  const capLook = { key: 'cap', label: `Buffer holds only ${fmtDelay(currentCapMs())}`, disabled: true };
   if (editing && isEngaged(ds)) {
     if (ms <= 0 || ms === armedMs) return { key: 'keep', cls: 'ghost', label: `Keep ${fmtDelay(armedMs)}` };
     if (overCap(ms)) return capLook;
@@ -571,7 +571,7 @@ function mainLook(ds) {
   // Too long for the buffer is said now, not first when OBS connects.
   // Before a bitrate is measured the reach is a typical one: "about".
   if (!s.ingest_alive && ms > 0 && overCap(ms)) {
-    return { key: 'wait-cap', label: `Delay memory holds about ${fmtDelay(currentCapMs())}`, disabled: true };
+    return { key: 'wait-cap', label: `Buffer holds about ${fmtDelay(currentCapMs())}`, disabled: true };
   }
   if (!s.ingest_alive) return { key: 'wait', label: 'Waiting for OBS', disabled: true };
   if (ms <= 0) return { key: 'set', label: 'Set a delay first', disabled: true };
@@ -753,7 +753,7 @@ function paintTip(ds, hold) {
     : editing ? 'Pick a new delay, then confirm it below.'
     : ds === 'active' && s.safe_cut_pending ? `Auto-cut in ~${fmtDelay(s.safe_cut_remaining_ms || 0)}. Marked footage still airs.`
     : ds === 'active' ? `Live ${fmtBehind(s.current_delay_ms || 0)} behind real time.`
-    : ds === 'armed' && s.capacity_short ? `The delay memory holds only ${fmtDelay(s.capacity_short.holds_ms)}. Activate runs that much.`
+    : ds === 'armed' && s.capacity_short ? `The buffer holds only ${fmtDelay(s.capacity_short.holds_ms)}. Activate runs that much.`
     : ds === 'armed' ? 'Ready. Press Activate to put viewers on the delay.'
     : ds === 'arming' ? 'Saving video for the delay… you can cancel any time.'
     : 'Live, no delay.';

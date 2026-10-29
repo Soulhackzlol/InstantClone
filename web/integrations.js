@@ -440,7 +440,7 @@ const VAR_HELP = {
   protected:'yes when crash protection kept your destinations up.',
   delay:'The delay, written for people. On delay events, the new one.',
   delay_ms:'The delay in milliseconds, for maths and comparisons.',
-  delay_max:'The longest delay the delay memory holds right now, in seconds (an hour at most). !setdelay checks against it.',
+  delay_max:'The longest delay the buffer holds right now, in seconds (an hour at most). !setdelay checks against it.',
   delay_state:'on or off.',
   phase:'What the delay is doing: idle, preparing, ready or active.',
   hold_active:'yes while the reconnect screen is on air.',
@@ -5748,7 +5748,7 @@ const Builder = {
       }
       case 'delay_action': return field('action', 'Does', {select:Object.entries(DELAY_ACTIONS)})
         + (s.params.action === 'arm' ? field('seconds', 'Delay in whole seconds (0 turns it off, blank uses your Default delay), or a value like {arg1}', {mono:true, ph:'30'})
-          + note('Starts or changes the delay. A delay too long for the delay memory fails this step.') : '')
+          + note('Starts or changes the delay. A delay too long for the buffer fails this step.') : '')
         + warnHtml('This changes your stream. Tests never run it.');
       case 'marker': return field('description', 'Label', {ph:'Crash'}) + note('Only works while you are live on Twitch.');
       case 'channel': return field('title', 'New title (blank: leave it as it is)', {ph:'{args}'})

@@ -89,12 +89,12 @@ test('the buffer size advised for a delay is the smallest that holds it', () => 
   assert.equal(call('requiredMBForMs', 0), 0);
 });
 
-test('"too long for the delay memory" says to restart when the bigger size is already saved', () => {
+test('"too long for the buffer" says to restart when the bigger size is already saved', () => {
   given({ state: { capacity_kbps: 6000, restart_pending: true }, config: { buffer_mb: 3000 } });
-  assert.match(call('bufferAdviceHtml', 3_600_000), /Your new 3000 MB delay memory is saved and starts with the next restart/);
+  assert.match(call('bufferAdviceHtml', 3_600_000), /Your new 3000 MB buffer is saved and starts with the next restart/);
   // Saved, but still too small for this delay: raise it further.
   given({ state: { capacity_kbps: 6000, restart_pending: true }, config: { buffer_mb: 1000 } });
-  assert.match(call('bufferAdviceHtml', 3_600_000), /Allow more delay memory in System.*data-mb="2749"/);
+  assert.match(call('bufferAdviceHtml', 3_600_000), /Make the buffer bigger in System.*data-mb="2749"/);
   given({ state: { capacity_kbps: 6000, restart_pending: false }, config: { buffer_mb: 3000 } });
   assert.match(call('bufferAdviceHtml', 900_000), /data-mb="689"/, 'no restart pending: name the size');
 });

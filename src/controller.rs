@@ -258,8 +258,8 @@ fn buffer_mb_for(ms: u32, kbps: u32) -> u64 {
 /// holds `capacity` ms at `kbps`, and the size that would hold it.
 fn buffer_too_small(ms: u32, capacity: u32, kbps: u32) -> String {
     format!(
-        "{} is too long for the delay memory: it holds about {} at {:.1} Mbps. \
-         Allow at least {} MB in System, then restart.",
+        "{} is too long for the buffer: it holds about {} at {:.1} Mbps. \
+         Make it at least {} MB in System, then restart.",
         fmt_duration(u64::from(ms)),
         fmt_duration(u64::from(capacity)),
         f64::from(kbps) / 1000.0,
@@ -5402,8 +5402,7 @@ mod tests {
             .capacity_problem(30_000)
             .expect("30 s is too long for 4 MB");
         assert!(
-            why.starts_with("30 s is too long for the delay memory")
-                && why.contains("at least 33 MB"),
+            why.starts_with("30 s is too long for the buffer") && why.contains("at least 33 MB"),
             "{why}"
         );
         assert!(h.ctrl.capacity_problem(1_000).is_none());
@@ -5527,7 +5526,7 @@ mod tests {
         h.ctrl.mark_ingest_alive_for_test();
         h.ctrl.note_inbound_kbps_for_test(8_000);
         let refused =
-            |why: Option<String>| why.is_some_and(|w| w.contains("too long for the delay memory"));
+            |why: Option<String>| why.is_some_and(|w| w.contains("too long for the buffer"));
         assert!(refused(h.ctrl.run_named_action("arm", 30_000, "hotkey")));
         assert!(refused(h.ctrl.run_named_action("toggle", 30_000, "midi")));
         assert!(refused(h.ctrl.set_delay_to(30_000, "integration")));
@@ -5555,9 +5554,7 @@ mod tests {
         let short = h.ctrl.capacity_short().expect("30 s doesn't fit 4 MB");
         assert_eq!(short.armed_ms, 30_000);
         assert!(short.holds_ms < 4_000, "{short:?}");
-        assert!(short
-            .message
-            .starts_with("30 s is too long for the delay memory"));
+        assert!(short.message.starts_with("30 s is too long for the buffer"));
         assert_eq!(h.ctrl.capacity_short_seq(), 1);
         assert_eq!(h.ctrl.delay_runs_ms(30_000), short.holds_ms, "what runs");
         assert_eq!(h.ctrl.delay_runs_ms(20_000), 20_000, "about another delay");

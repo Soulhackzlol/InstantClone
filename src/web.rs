@@ -6644,8 +6644,7 @@ mod tests {
         let too_big = arm_refusal(&ctrl, 600_000).expect("over capacity");
         assert_eq!(too_big.0, "409 Conflict");
         assert!(
-            too_big.2.contains("too long for the delay memory")
-                && too_big.2.contains("Allow at least"),
+            too_big.2.contains("too long for the buffer") && too_big.2.contains("Make it at least"),
             "the message has to read as a sentence: {}",
             too_big.2
         );

@@ -4889,7 +4889,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
     <div class="hero-control">
       <div class="cp-head">
         <span class="ic-label">Custom delay</span>
-        <span class="cp-cap mono" id="cp-cap" title="The longest delay that fits in the delay memory at this bitrate. Allow more in System, up to 1 hour."></span>
+        <span class="cp-cap mono" id="cp-cap" title="The longest delay that fits in the buffer at this bitrate. Make the buffer bigger in System, up to 1 hour."></span>
       </div>
       <div class="cp-input-row">
         <button class="cp-step" onclick="bumpDelay(-1)" id="cp-minus" aria-label="decrement">−</button>
@@ -5622,7 +5622,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
     </div>
   </div>
   <div class="restart-banner" id="restart-banner" hidden>
-    <span>⚠ The new delay memory size or file is saved. Restart InstantClone to start using it.</span>
+    <span>⚠ The new buffer size or file is saved. Restart InstantClone to start using it.</span>
     <button class="ic-btn ic-btn-warn" style="flex:0 0 auto;white-space:nowrap" onclick="restartApp(this)">Restart now</button>
   </div>
 
@@ -5713,7 +5713,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       </div>
     </section>
     <section class="sys-section" data-find="buffer disk size mb path memory delay length restart">
-      <div class="ic-label">Delay memory</div>
+      <div class="ic-label">Buffer</div>
       <div class="tab-sub">The video saved for the delay, kept in a file on disk. More memory means a longer delay at the same bitrate.</div>
       <div class="form-row tight" style="margin-top:12px;align-items:flex-start">
         <div><span class="ic-label">Size (MB)</span><input id="s-bmb" class="ic-input mono" type="number" min="50" max="1000000"></div>
@@ -6029,7 +6029,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
         <div class="si"><span class="k">CPU</span><span class="v" id="si-cpu">-</span></div>
         <div class="si"><span class="k">Ingest</span><span class="v" id="si-ingest">-</span></div>
         <div class="si"><span class="k">Dashboard</span><span class="v" id="si-web">-</span></div>
-        <div class="si"><span class="k">Delay memory</span><span class="v" id="si-buffer">-</span></div>
+        <div class="si"><span class="k">Buffer</span><span class="v" id="si-buffer">-</span></div>
         <div class="si"><span class="k">Destinations</span><span class="v" id="si-dests">-</span></div>
       </div>
       <div class="muted sys-about-msg" id="sys-about-msg"></div>
@@ -6050,7 +6050,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
     </section>
     <section class="sys-section">
       <div class="ic-label">Application</div>
-      <div class="tab-sub">Restart to start using a new delay memory size or file. Quit stops every destination cleanly and takes the dashboard offline until you launch the app again.</div>
+      <div class="tab-sub">Restart to start using a new buffer size or file. Quit stops every destination cleanly and takes the dashboard offline until you launch the app again.</div>
       <div class="row" style="gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap">
         <button class="ic-btn ic-btn-ghost" onclick="restartApp(this)">Restart InstantClone</button>
         <button class="ic-btn ic-btn-warn" onclick="quitApp(this)">Quit InstantClone</button>
@@ -6083,7 +6083,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <div class="sys-reset-grid">
         <div class="sys-reset-card">
           <div class="ic-label">Reset settings</div>
-          <div class="tab-sub">Ports, delay memory, overlays folder, trace log, password and stream key, hotkeys, MIDI, crash protection and General options go back to defaults. Destinations, profiles and integrations are kept.</div>
+          <div class="tab-sub">Ports, buffer, overlays folder, trace log, password and stream key, hotkeys, MIDI, crash protection and General options go back to defaults. Destinations, profiles and integrations are kept.</div>
           <button class="ic-btn ic-btn-warn" onclick="openResetModal('settings')">Reset settings…</button>
         </div>
         <div class="sys-reset-card sys-reset-card-danger">
@@ -6095,7 +6095,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <details class="ic-disclose" style="margin-top:10px">
         <summary>What's not touched</summary>
         <div class="ic-disclose-body">
-          <p>The delay memory file on disk is kept (the next launch starts a fresh empty one anyway). InstantClone stays registered in OBS. Unregister from the <b>OBS</b> tab if you also want to remove it from OBS's Service dropdown.</p>
+          <p>The buffer file on disk is kept (the next launch starts a fresh empty one anyway). InstantClone stays registered in OBS. Unregister from the <b>OBS</b> tab if you also want to remove it from OBS's Service dropdown.</p>
         </div>
       </details>
     </section>
@@ -6503,9 +6503,9 @@ function runningBufferMb(){
 function bufferAdviceHtml(ms){
   const saved = lastConfig ? lastConfig.buffer_mb : 0;
   if (lastState && lastState.restart_pending && bufferCapMs(saved, planningKbps()) >= ms){
-    return ` Your new ${saved} MB delay memory is saved and starts with the next restart of InstantClone. <button type="button" class="cap-show" data-mb="0">Show me</button>`;
+    return ` Your new ${saved} MB buffer is saved and starts with the next restart of InstantClone. <button type="button" class="cap-show" data-mb="0">Show me</button>`;
   }
-  return ` Allow more delay memory in System (it needs a restart). <button type="button" class="cap-show" data-mb="${requiredMBForMs(ms)}">Show me</button>`;
+  return ` Make the buffer bigger in System (it needs a restart). <button type="button" class="cap-show" data-mb="${requiredMBForMs(ms)}">Show me</button>`;
 }
 // Live hint under the System-tab buffer-size input. Reads whatever
 // number the user has *currently typed* (not the saved value) so the
@@ -6946,7 +6946,7 @@ async function arm(ms){
     const cap = currentBufferCapMs();
     if (cap > 0 && ms > cap){
       const needMB = requiredMBForMs(ms);
-      toast(`Too long for the delay memory: ${fmtDelay(ms)} at ${capacityRate()} needs at least ${needMB} MB (it has ${runningBufferMb()} MB, so ${fmtDelay(cap)}).`, 'err');
+      toast(`Too long for the buffer: ${fmtDelay(ms)} at ${capacityRate()} needs at least ${needMB} MB (it has ${runningBufferMb()} MB, so ${fmtDelay(cap)}).`, 'err');
       return;
     }
   }
@@ -7371,7 +7371,7 @@ function renderHero(s){
   // delay is, unless a scheduled cut is the more urgent news.
   const short = s.capacity_short;
   if (short && ds !== 'off' && subKey !== 'safecut' && !(s.tail_ms > 0)){
-    sub = `The delay memory holds only ${fmtDelay(short.holds_ms)} of this ${fmtDelay(short.armed_ms)} delay at this bitrate. Allow more in System.`;
+    sub = `The buffer holds only ${fmtDelay(short.holds_ms)} of this ${fmtDelay(short.armed_ms)} delay at this bitrate. Make the buffer bigger in System.`;
     subKey = 'short';
   }
   setSubText($('delay-sub'), sub, subKey);
@@ -7429,15 +7429,15 @@ function renderCta(){
       // Before OBS sends anything the bitrate is a typical one, so the
       // limit is an estimate; once measured it is what /arm enforces.
       const html = (lastState.capacity_measured
-        ? `<b>Can't go to ${fmtDelay(inputMs)} at ${capacityRate()}.</b> The ${runningBufferMb()} MB delay memory holds up to ${fmtDelay(cap)}; this needs at least ${needMB} MB.`
-        : `<b>Likely too long for the delay memory.</b> At a typical ${capacityRate()}, the ${runningBufferMb()} MB delay memory holds about ${fmtDelay(cap)}; ${fmtDelay(inputMs)} needs about ${needMB} MB. Your real bitrate decides once OBS connects.`)
+        ? `<b>Can't go to ${fmtDelay(inputMs)} at ${capacityRate()}.</b> The ${runningBufferMb()} MB buffer holds up to ${fmtDelay(cap)}; this needs at least ${needMB} MB.`
+        : `<b>Likely too long for the buffer.</b> At a typical ${capacityRate()}, the ${runningBufferMb()} MB buffer holds about ${fmtDelay(cap)}; ${fmtDelay(inputMs)} needs about ${needMB} MB. Your real bitrate decides once OBS connects.`)
         + bufferAdviceHtml(inputMs);
       if (warn._html !== html){ warn._html = html; warn.innerHTML = html; }
       animateHidden(warn, false);
     }
   };
   const capLabel = () =>
-    ({ key: 'cap', cls: 'ic-btn-disabled', pre: 'Delay memory holds only ', num: fmtDelay(cap), n: cap, post: ': allow more first', disabled: true });
+    ({ key: 'cap', cls: 'ic-btn-disabled', pre: 'Buffer holds only ', num: fmtDelay(cap), n: cap, post: ': make it bigger first', disabled: true });
 
   if (ds === 'arming'){
     // Primary CTA already does "cancel" semantics here; the secondary
@@ -7677,7 +7677,7 @@ function renderCpProfiles(){
     const disabled = isCur || ds === 'arming';
     if (b.disabled !== disabled) b.disabled = disabled;
     if (tooBig) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled');
-    const title = tooBig ? `${p.name}: too long for the delay memory. Click for details.`
+    const title = tooBig ? `${p.name}: too long for the buffer. Click for details.`
                 : ds === 'active' && !isCur ? `Adjust to ${p.name}` : `Arm: ${p.name}`;
     if (b.title !== title) b.title = title;
     b.dataset.ms = p.delay_ms;
@@ -7717,7 +7717,7 @@ function explainProfile(chip, ms){
   const msg = $('cp-chip-msg');
   if (!msg) return;
   const lead = document.createElement('b');
-  lead.textContent = `${chip.dataset.name} can't arm: it's too long for the delay memory.`;
+  lead.textContent = `${chip.dataset.name} can't arm: it's too long for the buffer.`;
   msg.replaceChildren(lead);
   msg.insertAdjacentHTML('beforeend', ` ${fmtDelay(ms)} at the current bitrate needs at least ${requiredMBForMs(ms)} MB.` + bufferAdviceHtml(ms));
   msg.hidden = false;
@@ -8744,11 +8744,11 @@ function renderProfilesPane(){
       const warn = document.createElement('span'); warn.className = 'profile-warn';
       warn.append(`too long: needs ${needMB} MB`);
       const link = document.createElement('a');
-      link.textContent = 'Allow more →';
+      link.textContent = 'Bigger buffer →';
       link.onclick = (e) => { e.stopPropagation(); jumpToBufferSetting(needMB); };
       warn.appendChild(link);
       b.appendChild(warn);
-      b.title = `${fmtDelay(p.delay_ms)} is too long for the delay memory at the current bitrate: it needs at least ${needMB} MB (you have ${runningBufferMb()} MB, about ${fmtDelay(cap)}).`;
+      b.title = `${fmtDelay(p.delay_ms)} is too long for the buffer at the current bitrate: it needs at least ${needMB} MB (you have ${runningBufferMb()} MB, about ${fmtDelay(cap)}).`;
     } else if (ds === 'active' && !isCur){
       b.title = `Adjust live delay to ${p.name}`;
     } else if (ds === 'armed' && !isCur){
@@ -8782,7 +8782,7 @@ function profileProblem(name, secs){
   if (cap > 0 && ms > cap){
     const needMB = requiredMBForMs(ms);
     const rate = lastState && lastState.capacity_measured ? capacityRate() : `a typical ${capacityRate()}`;
-    return `Can't save a ${fmtDelay(ms)} profile: at ${rate} the ${runningBufferMb()} MB delay memory holds about ${fmtDelay(cap)}. Allow at least ${needMB} MB in System first.`;
+    return `Can't save a ${fmtDelay(ms)} profile: at ${rate} the ${runningBufferMb()} MB buffer holds about ${fmtDelay(cap)}. Make it at least ${needMB} MB in System first.`;
   }
   return '';
 }
@@ -8872,8 +8872,8 @@ function jumpToBufferSetting(mb){
     el.scrollIntoView({behavior: motionOK() ? 'smooth' : 'auto', block:'center'});
   }
   toast(filled ? `Filled in ${mb} MB. Nothing is saved until you press Save, then restart to use it.`
-       : lastState && lastState.restart_pending ? 'Saved already: restart InstantClone to use the new delay memory.'
-       : 'Allow more delay memory here, Save, then restart.', 'info', 5000);
+       : lastState && lastState.restart_pending ? 'Saved already: restart InstantClone to use the new buffer.'
+       : 'Make the buffer bigger here, Save, then restart.', 'info', 5000);
 }
 // "Show me" in the buffer advice (hero warning, profile chip message).
 ['cp-cap-warn', 'cp-chip-msg'].forEach(id => {
@@ -11329,10 +11329,10 @@ function openResetModal(scope){
       '<li><b>All saved delay profiles</b>: gone</li>',
       '<li><b>All your overlays</b> (presets + custom): deleted, the built-in set restored</li>',
       '<li><b>All integrations</b>, their Discord and phone connections, and the Twitch login: gone</li>',
-      '<li>Network ports, delay memory settings, overlays folder, password and stream key, hotkeys, MIDI, crash protection: reset to defaults</li>',
+      '<li>Network ports, buffer settings, overlays folder, password and stream key, hotkeys, MIDI, crash protection: reset to defaults</li>',
       '<li>Diagnostic trace toggle: turned off</li>',
     ].join('');
-    keeps.innerHTML = '<b>Kept:</b> the delay memory file on disk (it\'s reset on every clean shutdown anyway) and the OBS service registration (use the OBS tab to unregister if you want).';
+    keeps.innerHTML = '<b>Kept:</b> the buffer file on disk (it\'s reset on every clean shutdown anyway) and the OBS service registration (use the OBS tab to unregister if you want).';
     typebox.hidden = false;
     confirm.disabled = true;
     confirm.textContent = 'Reset everything';
@@ -11343,13 +11343,13 @@ function openResetModal(scope){
     sub.textContent = "Restores app-level settings to defaults. Your destinations, profiles and integrations stay.";
     list.innerHTML = [
       '<li>Network ports back to <code class="mono">:1935</code> / <code class="mono">:7799</code></li>',
-      '<li>Delay memory size and file back to defaults</li>',
+      '<li>Buffer size and file back to defaults</li>',
       '<li>Overlays folder reset to <code class="mono">overlays/</code></li>',
       '<li>Diagnostic trace toggle turned off</li>',
       '<li>Dashboard password and stream key removed, so the dashboard and InstantClone are open again</li>',
       '<li>Hotkeys, MIDI, crash protection and the General options (arm when OBS connects, activate when ready, default delay, updates) back to defaults</li>',
     ].join('');
-    keeps.innerHTML = '<b>Kept:</b> destinations, delay profiles, integrations, OBS service registration, your delay memory file on disk.';
+    keeps.innerHTML = '<b>Kept:</b> destinations, delay profiles, integrations, OBS service registration, your buffer file on disk.';
     typebox.hidden = true;
     confirm.disabled = false;
     confirm.textContent = 'Reset settings';
@@ -11892,7 +11892,7 @@ const TOUR = [
     title: 'Set a custom delay',
     body: `
       <p>Type how many seconds of delay you want. Use the <b>−</b> / <b>+</b> buttons to nudge.</p>
-      <p>The range above it is the longest delay the delay memory holds at your bitrate, up to 1 hour. Need more? Allow more in <b>System</b>. You can also save commonly-used delays as <b>Profiles</b> for one-click insta-arm.</p>
+      <p>The range above it is the longest delay the buffer holds at your bitrate, up to 1 hour. Need more? Make the buffer bigger in <b>System</b>. You can also save commonly-used delays as <b>Profiles</b> for one-click insta-arm.</p>
     `,
   },
   {
@@ -13273,7 +13273,7 @@ function showQuitFarewell(){
       '<div style="font-size:34px;line-height:1;margin-bottom:14px;color:var(--fg-3)">■</div>'+
       '<h2 style="margin:0 0 10px;font-size:20px">InstantClone has stopped</h2>'+
       '<p style="margin:0;font-size:14px;line-height:1.55;color:var(--fg-2)">'+
-        'Every destination was disconnected cleanly and the delay memory freed. '+
+        'Every destination was disconnected cleanly and the buffer freed. '+
         'You can close this tab. Launch InstantClone again to bring the dashboard back.'+
       '</p>'+
     '</div>';
@@ -13302,7 +13302,7 @@ function applyPlatformCopy(os){
     ? 'Opens this page in your browser each time the app starts. Turn off to stay in the tray.'
     : 'Opens this page in your browser each time the app starts. Turn off to keep it running in the background.';
   document.querySelectorAll('.reveal-btn').forEach(b => {
-    const which = /reveal\('trace'/.test(b.getAttribute('onclick') || '') ? 'log file' : 'delay memory file';
+    const which = /reveal\('trace'/.test(b.getAttribute('onclick') || '') ? 'log file' : 'buffer file';
     b.textContent = `Show ${which} in ${_fileManager}`;
   });
 }
