@@ -3979,10 +3979,22 @@ async fn post_profile_add(
             r#"{"ok":false,"error":"Set a delay between 1 second and 1 hour."}"#.into(),
         );
     };
+    // `was`: the profile being edited, which keeps its place in the list
+    // under its new name.
+    let was = form.get("was").map(|w| w.trim()).filter(|w| !w.is_empty());
     let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
-    // Replace existing by name, else append.
-    if let Some(p) = ns.profiles.iter_mut().find(|p| p.name == name) {
+    if was.is_some_and(|w| w != name) && ns.profiles.iter().any(|p| p.name == name) {
+        return (
+            "409 Conflict",
+            "application/json",
+            r#"{"ok":false,"error":"Another profile already has that name."}"#.into(),
+        );
+    }
+    let key = was.unwrap_or(&name).to_string();
+    // Replace the one edited (or the one by that name), else append.
+    if let Some(p) = ns.profiles.iter_mut().find(|p| p.name == key) {
+        p.name = name;
         p.delay_ms = delay_ms;
     } else {
         ns.profiles.push(config::DelayProfile { name, delay_ms });
@@ -9439,6 +9451,42 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
             "{}",
             r.body
         );
+    }
+
+    /// Editing a profile renames it in place, and never onto another one.
+    #[tokio::test]
+    async fn a_profile_is_renamed_in_place() {
+        let live = Live::new(Settings::defaults());
+        for body in [&b"name=A&delay_ms=15000"[..], b"name=B&delay_ms=30000"] {
+            let r = live.send(&request("POST", "/profiles", "", body)).await;
+            assert_eq!(r.status, 200, "{}", r.body);
+        }
+        let r = live
+            .send(&request(
+                "POST",
+                "/profiles",
+                "",
+                b"name=B&delay_ms=20000&was=A",
+            ))
+            .await;
+        assert_eq!(r.status, 409, "{}", r.body);
+        let r = live
+            .send(&request(
+                "POST",
+                "/profiles",
+                "",
+                b"name=Esports&delay_ms=20000&was=A",
+            ))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let renamed = r.body.find(r#""name":"Esports","delay_ms":20000"#);
+        let b = r.body.find(r#""name":"B","delay_ms":30000"#);
+        assert!(
+            renamed.is_some() && b.is_some() && renamed < b,
+            "kept its place: {}",
+            r.body
+        );
+        assert!(!r.body.contains(r#""name":"A""#), "{}", r.body);
     }
 
     /// The default relative setting resolves beside the settings file, so
