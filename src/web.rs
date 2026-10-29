@@ -918,11 +918,16 @@ async fn route(
     // safe charset (no separators) so no path can escape overlays_dir.
     // POST /overlays/seeded marks the built-in presets as installed.
     if method == "POST" && bare_path.starts_with("/overlays/") {
-        return match overlay_post(&bare_path["/overlays/".len()..], body) {
+        let answer = match overlay_post(&bare_path["/overlays/".len()..], body) {
             OverlayPost::MarkSeeded => overlays_mark_seeded(settings, cfg_path),
             OverlayPost::Delete(slug) => overlay_delete(slug, settings),
             OverlayPost::Save(slug) => overlay_save(slug, body, settings),
         };
+        // The files aren't settings, so nothing else tells the pages.
+        if answer.0.starts_with("200") {
+            crate::revisions::bump(crate::revisions::Topic::Overlays);
+        }
+        return answer;
     }
 
     // Dock layouts: GET /docks/<id> returns the saved layout JSON (or
@@ -971,11 +976,14 @@ async fn route(
             "text/html; charset=utf-8",
             crate::integrations::alerts::page_html(),
         ),
-        ("GET", "/state") => (
-            "200 OK",
-            "application/json",
-            state_json(ctrl, settings, sysstat),
-        ),
+        ("GET", "/state") => {
+            crate::revisions::note_poll();
+            (
+                "200 OK",
+                "application/json",
+                state_json(ctrl, settings, sysstat),
+            )
+        }
         ("GET", "/overlay-state") => (
             "200 OK",
             "application/json",
@@ -1020,43 +1028,11 @@ async fn route(
             "application/json",
             obs_multitrack_config_static(query, body, settings),
         ),
-        ("GET", "/obs/register-status") => {
-            let s = settings.borrow();
-            // Another InstantClone (another folder, its own ports) owns the
-            // entry in OBS and is running: Register here would move OBS off it.
-            let other =
-                crate::obs_register::registered_to_other_instance(s.web_port, s.ingest_port);
-            (
-                "200 OK",
-                "application/json",
-                format!(
-                    r#"{{"registered":{},"registered_to_other_instance":{},"other_instance_web_port":{},"has_entry":{},"update_pending":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"active_profile":{},"path":{}}}"#,
-                    crate::obs_register::is_registered(s.web_port, s.ingest_port),
-                    other.is_some(),
-                    other
-                        .filter(|&port| port != 0)
-                        .map_or("null".to_string(), |port| port.to_string()),
-                    crate::obs_register::has_entry(),
-                    crate::obs_register::refresh_waiting(),
-                    crate::obs_register::is_obs_running(),
-                    crate::obs_register::vod_audio_flag_set(),
-                    crate::obs_register::vod_eb_injection_present(s.web_port),
-                    match crate::obs_register::obs_version() {
-                        Some((a, b, c)) => format!(r#""{a}.{b}.{c}""#),
-                        None => "null".to_string(),
-                    },
-                    match crate::obs_register::active_profile() {
-                        Some(p) => format!(r#""{}""#, p.replace('\\', "\\\\").replace('"', "\\\"")),
-                        None => "null".to_string(),
-                    },
-                    match crate::obs_register::services_json_path() {
-                        Some(p) =>
-                            format!(r#""{}""#, p.display().to_string().replace('\\', "\\\\")),
-                        None => "null".to_string(),
-                    }
-                ),
-            )
-        }
+        ("GET", "/obs/register-status") => (
+            "200 OK",
+            "application/json",
+            obs_register_status_json(settings),
+        ),
         // Every OBS on this PC (installed and portable), each registered on
         // its own: the streamer ticks which, and an open one only stops itself.
         ("GET", "/obs/installs") => ("200 OK", "application/json", obs_installs_json(settings)),
@@ -1242,32 +1218,13 @@ async fn route(
             reveal_path(Path::new("./instantclone-trace.log"));
             ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
         }
-        ("GET", "/obs/launch-status") => {
-            let exe = crate::obs_register::find_obs_executable();
-            (
-                "200 OK",
-                "application/json",
-                format!(
-                    r#"{{"installed":{},"exe":{}}}"#,
-                    exe.is_some(),
-                    match exe {
-                        Some(p) => format!(
-                            "\"{}\"",
-                            p.display()
-                                .to_string()
-                                .replace('\\', "\\\\")
-                                .replace('"', "'")
-                        ),
-                        None => "null".to_string(),
-                    }
-                ),
-            )
-        }
+        ("GET", "/obs/launch-status") => ("200 OK", "application/json", obs_launch_status_json()),
         // Streamlabs Desktop (experimental): see `streamlabs`.
-        ("GET", "/streamlabs/status") => ("200 OK", "application/json", {
-            let s = settings.borrow();
-            crate::streamlabs::status_json(s.streamlabs_connect, s.web_port)
-        }),
+        ("GET", "/streamlabs/status") => (
+            "200 OK",
+            "application/json",
+            streamlabs_status_json(settings),
+        ),
         ("POST", "/streamlabs/connect") => set_streamlabs_connect(true, settings, cfg_path),
         ("POST", "/streamlabs/disconnect") => {
             let answer = set_streamlabs_connect(false, settings, cfg_path);
@@ -1430,6 +1387,8 @@ async fn handle_sse(
         (Feed::Alerts { in_obs }, Some(board)) => Some(board.page_opened(in_obs)),
         _ => None,
     };
+    // A dashboard or dock is open: what changes outside the app is watched.
+    let _watching = matches!(feed, Feed::Dashboard).then(crate::revisions::watching);
 
     let mut last_payload = String::new();
     let mut last_send = std::time::Instant::now();
@@ -1648,10 +1607,13 @@ fn state_json(
     let vertical_present = ctrl.ingest_alive() && ctrl.vertical_track_on_wire().is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"publisher_app":"{pa}","cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"publisher_app":"{pa}","cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"rev":{rev},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         // The dock's events list changed: it fetches the list again.
         fd = ctrl.integrations().map_or(0, |h| h.feed.changes()),
+        // Each kind of data the pages fetch on their own: one moved, the
+        // pages showing it fetch it again (see `revisions`).
+        rev = crate::revisions::json(),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
         hold = hold_json(ctrl),
@@ -3415,6 +3377,90 @@ fn arm_refusal(ctrl: &Arc<Controller>, ms: u32) -> Option<(&'static str, &'stati
 /// while it runs is undone on exit.
 /// Every OBS on this PC and where its registration stands: the list the OBS
 /// tab and the wizard tick from. An install's id is its settings folder.
+/// `GET /obs/register-status`: OBS's service entry and the OBS around it.
+fn obs_register_status_json(settings: &Arc<watch::Sender<Settings>>) -> String {
+    // Copied out: the settings stay unlocked while OBS's files are read.
+    let (web_port, ingest_port) = {
+        let s = settings.borrow();
+        (s.web_port, s.ingest_port)
+    };
+    // Another InstantClone (another folder, its own ports) owns the
+    // entry in OBS and is running: Register here would move OBS off it.
+    let other = crate::obs_register::registered_to_other_instance(web_port, ingest_port);
+    format!(
+        r#"{{"registered":{},"registered_to_other_instance":{},"other_instance_web_port":{},"has_entry":{},"update_pending":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"active_profile":{},"path":{}}}"#,
+        crate::obs_register::is_registered(web_port, ingest_port),
+        other.is_some(),
+        other
+            .filter(|&port| port != 0)
+            .map_or("null".to_string(), |port| port.to_string()),
+        crate::obs_register::has_entry(),
+        crate::obs_register::refresh_waiting(),
+        crate::obs_register::is_obs_running(),
+        crate::obs_register::vod_audio_flag_set(),
+        crate::obs_register::vod_eb_injection_present(web_port),
+        match crate::obs_register::obs_version() {
+            Some((a, b, c)) => format!(r#""{a}.{b}.{c}""#),
+            None => "null".to_string(),
+        },
+        match crate::obs_register::active_profile() {
+            Some(p) => format!(r#""{}""#, p.replace('\\', "\\\\").replace('"', "\\\"")),
+            None => "null".to_string(),
+        },
+        match crate::obs_register::services_json_path() {
+            Some(p) => format!(r#""{}""#, p.display().to_string().replace('\\', "\\\\")),
+            None => "null".to_string(),
+        }
+    )
+}
+
+/// `GET /obs/launch-status`: whether OBS is installed where it can be launched.
+fn obs_launch_status_json() -> String {
+    let exe = crate::obs_register::find_obs_executable();
+    format!(
+        r#"{{"installed":{},"exe":{}}}"#,
+        exe.is_some(),
+        match exe {
+            Some(p) => format!(
+                "\"{}\"",
+                p.display()
+                    .to_string()
+                    .replace('\\', "\\\\")
+                    .replace('"', "'")
+            ),
+            None => "null".to_string(),
+        }
+    )
+}
+
+/// `GET /streamlabs/status`, with the settings unlocked while it looks.
+fn streamlabs_status_json(settings: &Arc<watch::Sender<Settings>>) -> String {
+    let (enabled, web_port) = {
+        let s = settings.borrow();
+        (s.streamlabs_connect, s.web_port)
+    };
+    crate::streamlabs::status_json(enabled, web_port)
+}
+
+/// What the pages show of OBS and Streamlabs, as their endpoints answer it
+/// now. `revisions::follow_outside` bumps a topic when its answer changes,
+/// so an OBS opened or Streamlabs installed shows without a reload.
+pub fn outside_snapshot(
+    settings: &Arc<watch::Sender<Settings>>,
+) -> Vec<(crate::revisions::Topic, String)> {
+    use crate::revisions::Topic;
+    let obs = [
+        obs_register_status_json(settings),
+        obs_installs_json(settings),
+        obs_launch_status_json(),
+    ]
+    .concat();
+    vec![
+        (Topic::Obs, obs),
+        (Topic::Streamlabs, streamlabs_status_json(settings)),
+    ]
+}
+
 fn obs_installs_json(settings: &Arc<watch::Sender<Settings>>) -> String {
     use crate::json::{self, Value};
     use crate::obs_register::{self, Registration};

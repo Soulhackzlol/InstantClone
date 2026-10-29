@@ -814,8 +814,27 @@ function paintNote() {
 }
 $('note-x').onclick = () => { dismissedNote = currentNote(); paintNote(); };
 
+// The rest of what the dock shows (profiles, overlays, server switches,
+// destinations) is fetched on its own. The state carries a change counter
+// for each (`rev`, see src/revisions.rs): when one moves, the dock fetches
+// that one again, so a profile added in the dashboard shows here at once.
+const REFETCH = {
+  config: () => fetchServerCfg(),
+  profiles: () => { if (cfg.w.profiles.on) fetchProfiles(); },
+  overlays: () => { if (cfg.w.overlays.on) fetchOverlays(); },
+  destinations: () => { if (cfg.w.dest.on) fetchDestPlatforms(); },
+};
+let revSeen = null;
+function followRevs(rev) {
+  if (!rev) return;
+  // The first counters are a baseline: the dock fetched everything itself.
+  if (revSeen) for (const topic in REFETCH) if (rev[topic] !== revSeen[topic]) REFETCH[topic]();
+  revSeen = rev;
+}
+
 function applyState(j) {
   s = j;
+  followRevs(s.rev);
   if (profileGateKey() !== profileGate) renderProfiles();   // phase, delay or buffer reach moved
   const ds = PHASE_TO_STATE[s.phase] || 'off';
   if (pending && pending === ds) clearPending();   // the server caught up
@@ -1824,14 +1843,4 @@ window.addEventListener('storage', e => {
   } catch (_) {}
 });
 
-// Aux data (profiles, overlays, server switches, destinations) has no push
-// channel, so refresh it whenever the dock regains focus or visibility -
-// e.g. after editing profiles in the dashboard and clicking back into OBS.
-function refreshAux() {
-  if (cfg.w.profiles.on) fetchProfiles();
-  if (cfg.w.overlays.on) fetchOverlays();
-  fetchServerCfg();
-  if (cfg.w.dest.on) fetchDestPlatforms();
-}
-window.addEventListener('focus', () => { if (!_es) tick(); refreshAux(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAux(); });
+window.addEventListener('focus', () => { if (!_es) tick(); });

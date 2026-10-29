@@ -61,6 +61,7 @@ mod local_eb_config;
 mod midi;
 mod obs_register;
 mod portcheck;
+mod revisions;
 mod rtmp;
 mod self_update;
 mod sha256;
@@ -617,6 +618,13 @@ fn main() -> std::io::Result<()> {
         // Streamlabs Desktop (experimental): idle until the streamer connects
         // it, then routes its Twitch streams through us while it runs.
         tokio::spawn(streamlabs::run(ctrl.clone(), rx.clone()));
+
+        // The change counters the pages refetch by (see `revisions`).
+        tokio::spawn(revisions::follow_settings(rx.clone()));
+        tokio::spawn(revisions::follow_outside({
+            let settings = tx.clone();
+            move || web::outside_snapshot(&settings)
+        }));
 
         let ingest_sup = tokio::spawn(supervise_ingest(rx.clone(), ctrl.clone()));
         let egress_sup = tokio::spawn(supervise_egress(rx.clone(), ctrl.clone()));

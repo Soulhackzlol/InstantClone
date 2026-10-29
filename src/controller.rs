@@ -1998,10 +1998,12 @@ impl Controller {
         }
         let ts_s = process_now_ms() as f64 / 1000.0;
         q.push_back(format!("[+{:>8.3}s] {}", ts_s, line));
+        crate::revisions::bump(crate::revisions::Topic::Logs);
     }
 
     pub fn clear_logs(&self) {
         self.logs.lock().clear();
+        crate::revisions::bump(crate::revisions::Topic::Logs);
     }
 
     // ---- Ingest entry points (called from rtmp::server) ----

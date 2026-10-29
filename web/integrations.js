@@ -8699,6 +8699,18 @@ window.Integrations = {
   },
 };
 
+// Integrations changed elsewhere (another window, a Discord channel or a
+// phone just connected): what this page already loaded follows, the tab
+// and an open catalog, Connections page or Overlay page with it (see Live
+// in the dashboard). An editor keeps its own copy until it's saved.
+if (typeof Live === 'object') Live.on('integrations', async () => {
+  if (!S.data) return;
+  await refreshData();
+  if (Modal.kind === 'catalog') Catalog.render();
+  else if (Modal.kind === 'connections') Conn.render();
+  if (S.stage) Stage.render();
+});
+
 // A reload or a restored tab can land straight on Integrations.
 const pane = document.querySelector('.tab-pane[data-pane="integrations"]');
 if (pane && !pane.hidden) window.Integrations.show();

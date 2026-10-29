@@ -2114,6 +2114,13 @@ const Studio = (function(){
     try{ savedList = await (await fetch('/overlays')).json(); if(!Array.isArray(savedList)) savedList=[]; }catch(e){ savedList=[]; }
     return savedList;
   }
+  // The saved overlays changed elsewhere (another window, a dock): the
+  // gallery redraws only when the list it shows really differs.
+  async function refreshSaved(){
+    const before=JSON.stringify(savedList);
+    await loadSaved();
+    if(JSON.stringify(savedList)!==before && $('ovg-browser').offsetParent) renderGallery(true);
+  }
   // Overlays an older Studio baked (another build, or none written down)
   // are baked again from their own doc, so a fix to how layers draw reaches
   // them without anyone saving. Never while OBS is live: a saved overlay
@@ -2297,5 +2304,5 @@ const Studio = (function(){
   // A colour the page can draw: a theme colour (@accent...) or any CSS one.
   const isColor = v => /^@[a-z]+$/.test(v) ? THEME_KEYS.includes(v.slice(1)) : CSS.supports('color', v);
 
-  return { show, openStudio, loadSaved, upgradeSaved, seedPresets, isDirty, alertsChanged };
+  return { show, openStudio, loadSaved, refreshSaved, upgradeSaved, seedPresets, isDirty, alertsChanged };
 })();

@@ -6295,6 +6295,8 @@ function fadeOutHidden(el){
 }
 const setText = (el, text) => { if (el && el.textContent !== text) el.textContent = text; };
 const setClass = (el, cls, on) => { if (el && el.classList.contains(cls) !== on) el.classList.toggle(cls, on); };
+const setClassName = (el, name) => { if (el && el.className !== name) el.className = name; };
+const setHtml = (el, html) => { if (el && el._html !== html){ el._html = html; el.innerHTML = html; } };
 const $$ = sel => Array.from(document.querySelectorAll(sel));
 // Escape text bound for innerHTML. Used by the hotkeys editor; values there
 // are already constrained, so this is belt-and-braces against future callers.
@@ -8783,13 +8785,18 @@ async function loadConfig({resetSystem = false} = {}){
     // destination, so someone who clicks "Not now - let me look around" gets
     // the full gallery too. seedPresets is a no-op once the flag is set.
     if (!c.overlays_seeded && window.ICOverlay) { Studio.seedPresets(); }
-    // wizard
-    const first = (c.destinations && c.destinations[0]) || {platform:'twitch', custom_egress_url:'', stream_key_set:false};
-    if ($('w-platform').children.length === 0) fillWizardPlatforms();
-    $('w-platform').value = first.platform; $('w-platform').dispatchEvent(new Event('change'));
-    $('w-custom').value = first.custom_egress_url || '';
+    // The wizard starts from the saved setup when it opens. Seeded on every
+    // reload, it would undo the picks made in it whenever a change arrived
+    // from elsewhere (see Live).
+    const wizardOpening = !c.configured && !wizardSkipped && $('wizard').hidden;
+    if (wizardOpening){
+      const first = (c.destinations && c.destinations[0]) || {platform:'twitch', custom_egress_url:'', stream_key_set:false};
+      if ($('w-platform').children.length === 0) fillWizardPlatforms();
+      $('w-platform').value = first.platform; $('w-platform').dispatchEvent(new Event('change'));
+      $('w-custom').value = first.custom_egress_url || '';
+    }
     // system fields
-    paintFavicon(c.tray_color);
+    if (dataChanged('favicon', c.tray_color)) paintFavicon(c.tray_color);
     $('ov-dir-display').textContent = c.overlays_dir || 'overlays/';
     applyPlatformCopy(c.os);
     if (resetSystem || !settingsDirty()){
@@ -8810,46 +8817,45 @@ async function loadConfig({resetSystem = false} = {}){
       $('s-update-check').checked = c.update_check_enabled !== false;
       $('s-update-tray').checked = c.update_tray_notify !== false;
       syncUpdateTray(false);
-      renderTrayColors(c);
+      if (resetSystem || dataChanged('tray-colors', [c.os, c.tray_colors, c.tray_color_choice, c.tray_color])) renderTrayColors(c);
       // Behavior section
       $('s-auto-arm').checked = !!c.auto_arm_on_connect;
       $('s-auto-act').checked = !!c.auto_activate_when_ready;
       $('s-auto-arm-secs').value = Math.round((c.auto_arm_delay_ms || 15000) / 1000);
-      cpApplyConfig(c.crash_protection);
+      // Its preview is redrawn by the server: only when it changed.
+      if (resetSystem || dataChanged('crash-protection', c.crash_protection)) cpApplyConfig(c.crash_protection);
       settingsMarkClean();
     }
     // Global hotkeys: Windows-only, so the whole section stays hidden
     // elsewhere. A pending recording is cancelled before a re-render so
-    // stale listeners never outlive the DOM they were bound to.
+    // stale listeners never outlive the DOM they were bound to; a reload
+    // that brings the same bindings leaves a recording alone.
     if ($('s-hotkeys-section')){
-      if (c.os === 'windows'){
+      $('s-hotkeys-section').hidden = c.os !== 'windows';
+      if (c.os === 'windows' && dataChanged('hotkeys', c.hotkeys)){
         if (hkRec) hkCancelRecording();
         hkBindings = Object.assign(emptyBindings(), c.hotkeys || {});
-        $('s-hotkeys-section').hidden = false;
         hkRenderList();
-      } else {
-        $('s-hotkeys-section').hidden = true;
       }
     }
     // MIDI mapping: Windows-only, same gating as the hotkeys. A one-off
     // poll fills in device availability; learn mode is driven separately.
     if ($('s-midi-section')){
-      if (c.os === 'windows'){
+      $('s-midi-section').hidden = c.os !== 'windows';
+      if (c.os === 'windows' && dataChanged('midi', [c.midi, c.midi_device])){
         if (midiLearnAction) midiCancelLearn();
         midiBindings = Object.assign(emptyBindings(), c.midi || {});
         midiSelected = c.midi_device || '';
-        $('s-midi-section').hidden = false;
         midiInit();
-      } else {
-        $('s-midi-section').hidden = true;
       }
     }
     syncControlsTab();
     // OBS panel
     $('obs-srv').textContent = c.obs_url;
     if ($('wiz-obs-srv')) $('wiz-obs-srv').textContent = c.obs_url;
-    applyIngestKey(c.ingest_key || '');
-    applyAuthState(!!c.auth_enabled, c.dock_token || '');
+    if (dataChanged('ingest-key', c.ingest_key)) applyIngestKey(c.ingest_key || '');
+    // Redrawn, the dock link would hide again while it's being read.
+    if (dataChanged('auth', [c.auth_enabled, c.dock_token])) applyAuthState(!!c.auth_enabled, c.dock_token || '');
     if ($('sys-os-chip')){
       const osLabel = {windows:'Windows', linux:'Linux', macos:'macOS'}[c.os] || (c.os || '');
       if (osLabel){ $('sys-os-chip').textContent = osLabel; $('sys-os-chip').hidden = false; }
@@ -8869,18 +8875,21 @@ async function loadConfig({resetSystem = false} = {}){
     // footer
     $('foot-rtmp').textContent = ':' + c.ingest_port;
     $('foot-web').textContent = ':' + c.web_port;
-    // visibility
+    // visibility. "Skip setup" shows the dashboard for this visit with
+    // nothing saved, so `configured` alone would bring the wizard back.
     const configured = c.configured;
-    $('wizard').hidden = configured;
-    if (!configured) { refreshWizObsStatus(); wizCurrent = 'obs'; wizDir = 'fwd'; renderWizStep(); }
-    $('hdr-bar').hidden = !configured;
-    $('hero').hidden = !configured;
-    $('tabs').hidden = !configured;
-    $('pane-card').hidden = !configured;
-    $('ic-foot').hidden = !configured; fitPaneCard();
+    const dashboard = configured || wizardSkipped;
+    const appearing = dashboard && $('pane-card').hidden;
+    $('wizard').hidden = dashboard;
+    if (wizardOpening) { refreshWizObsStatus(); wizCurrent = 'obs'; wizDir = 'fwd'; renderWizStep(); }
+    $('hdr-bar').hidden = !dashboard;
+    $('hero').hidden = !dashboard;
+    $('tabs').hidden = !dashboard;
+    $('pane-card').hidden = !dashboard;
+    $('ic-foot').hidden = !dashboard; fitPaneCard();
     if (configured){
-      // initial render of dest-add empty state at least
-      loadDestinations(); loadProfiles(); loadOverlays();
+      // Fetched when the dashboard appears; later changes come through Live.
+      if (appearing){ loadDestinations(); loadProfiles(); loadOverlays(); }
       // Show a tab the first time the dashboard appears. Later reloads keep
       // the view as it is rather than replaying its entrance.
       if (!dashboardShown){
@@ -9485,7 +9494,9 @@ function renderKeyHelp(slug, hostId){
 // the wizard returns next launch (gentle nudge, not a permanent skip).
 // Triggers the same first-run tour as the configured path so the user
 // still gets walked through the UI before being left alone.
+let wizardSkipped = false;
 function skipWizard(){
+  wizardSkipped = true;
   $('wizard').hidden = true;
   $('hdr-bar').hidden = false;
   $('hero').hidden = false;
@@ -10537,8 +10548,8 @@ async function midiInit(){
 // OBS reads its list when it starts and writes it back from memory when it
 // quits, so the server refuses a change to an OBS that is open, and that row
 // says to close it. The wizard and the OBS tab show the same list, with the
-// same ticks. Refreshed when the tab opens, when the window regains focus
-// (the user just closed OBS) and every few seconds while it is on screen.
+// same ticks. Refreshed when the tab opens and whenever an OBS changes
+// (opened, closed, registered elsewhere): see Live.
 let obsInstalls = null;
 const obsPicked = new Map();   // install id -> ticked, kept across refreshes
 const OBS_INSTALL_PILL = {
@@ -10638,9 +10649,8 @@ function renderObsInstallsInto(host){
     const nameEl = row.querySelector('.obs-inst-name'), pathEl = row.querySelector('.obs-inst-path');
     if (nameEl.textContent !== name) nameEl.textContent = name;
     if (pathEl.textContent !== inst.path){ pathEl.textContent = inst.path; pathEl.title = inst.path; }
-    row.querySelector('.obs-reg-pill').className = 'ic-pill obs-reg-pill' + (tone ? ' ' + tone : '');
-    const pillL = row.querySelector('.obs-inst-pill-l');
-    if (pillL.textContent !== label) pillL.textContent = label;
+    setClassName(row.querySelector('.obs-reg-pill'), 'ic-pill obs-reg-pill' + (tone ? ' ' + tone : ''));
+    setText(row.querySelector('.obs-inst-pill-l'), label);
     // Only a portable OBS was added by hand; the installed one is found on its own.
     const acts = row.querySelector('.obs-inst-acts');
     acts.hidden = !inst.portable;
@@ -10655,7 +10665,7 @@ function renderObsInstallsInto(host){
   const ticked = obsTicked();
   const reg = host.querySelector('.obs-inst-reg'), unreg = host.querySelector('.obs-inst-unreg');
   reg.disabled = !ticked.length;
-  reg.textContent = ticked.length > 1 ? `Register in ${ticked.length} OBS` : 'Register with OBS';
+  setText(reg, ticked.length > 1 ? `Register in ${ticked.length} OBS` : 'Register with OBS');
   unreg.hidden = !ticked.some(i => i.state !== 'none');
 }
 // The OBS tab card's own pill and line sum the rows up.
@@ -10672,9 +10682,9 @@ function renderObsRegSummary(){
     : any('current') ? ['ok', 'Registered', 'OBS lists InstantClone as a service. To stream through it:']
     : ['', 'Not registered', 'Tick the OBS you stream with and register: InstantClone joins its Service list.'];
   card.dataset.state = any('current') && !any('stale') ? 'current' : 'none';
-  $('obs-reg-pill').className = 'ic-pill obs-reg-pill' + (view[0] ? ' ' + view[0] : '');
-  if ($('obs-reg-pill-l').textContent !== view[1]) $('obs-reg-pill-l').textContent = view[1];
-  if ($('obs-reg-status').textContent !== view[2]) $('obs-reg-status').textContent = view[2];
+  setClassName($('obs-reg-pill'), 'ic-pill obs-reg-pill' + (view[0] ? ' ' + view[0] : ''));
+  setText($('obs-reg-pill-l'), view[1]);
+  setText($('obs-reg-status'), view[2]);
   $('obs-reg-steps').hidden = !any('current');
 }
 function renderObsInstalls(){
@@ -10787,9 +10797,9 @@ function renderStreamlabs(r){
     card.hidden = !r || !r.supported || !(r.installed || r.enabled);
     if (!card.hidden){
       const [tone, label, text] = slView(r);
-      $('sl-pill').className = 'ic-pill obs-reg-pill' + (tone ? ' ' + tone : '');
-      if ($('sl-pill-l').textContent !== label) $('sl-pill-l').textContent = label;
-      if ($('sl-status').textContent !== text) $('sl-status').textContent = text;
+      setClassName($('sl-pill'), 'ic-pill obs-reg-pill' + (tone ? ' ' + tone : ''));
+      setText($('sl-pill-l'), label);
+      setText($('sl-status'), text);
       const other = slOtherCopy(r);
       $('sl-on-btn').hidden = r.enabled;
       $('sl-on-btn').disabled = !!(other && other.running);
@@ -10809,22 +10819,26 @@ function renderWizStreamlabs(r){
   if (tiles.hidden) return;
   const btn = $('wiz-sl-btn'), status = $('wiz-sl-status');
   const other = slOtherCopy(r);
+  // Kept current by Live: opening Streamlabs while this step shows
+  // enables Connect at once.
   if (other){
-    btn.textContent = 'Connect Streamlabs';
+    setText(btn, 'Connect Streamlabs');
     btn.disabled = other.running;
-    status.textContent = slOtherCopyText(other);
+    setText(status, slOtherCopyText(other));
   } else if (r.enabled){
-    btn.textContent = 'Connected';
+    setText(btn, 'Connected');
     btn.disabled = true;
-    status.textContent = r.problem || (r.state === 'connected'
+    setText(status, r.problem || (r.state === 'connected'
       ? 'Connected. Keep Streamlabs signed in with your Twitch account.'
-      : 'Connected. Open Streamlabs and InstantClone picks it up.');
+      : 'Connected. Open Streamlabs and InstantClone picks it up.'));
   } else if (!r.installed){
+    setText(btn, 'Connect Streamlabs');
     btn.disabled = true;
-    status.textContent = "Streamlabs Desktop isn't on this PC, or hasn't been opened yet. Open it once, then come back.";
+    setText(status, "Streamlabs Desktop isn't on this PC, or hasn't been opened yet. Open it once, then come back.");
   } else {
+    setText(btn, 'Connect Streamlabs');
     btn.disabled = false;
-    status.textContent = '';
+    setText(status, '');
   }
 }
 let wizApp = 'obs';
@@ -10950,23 +10964,22 @@ async function wizImportStreamlabsKey(){
   syncWizStreamlabsImport();
 }
 
-// Everything the OBS tab shows that can change outside the dashboard.
-let obsTabPoll = 0;
+// The OBS tab asks once when it opens; what changes outside the dashboard
+// after that (an OBS opened or closed, Streamlabs installed) arrives
+// through Live, without polling.
 function showObsTab(){
   refreshObsRegisterStatus();
   refreshStreamlabs();
   refreshSysVodScript();
-  clearInterval(obsTabPoll);
-  obsTabPoll = setInterval(() => {
-    const pane = document.querySelector('.tab-pane[data-pane="obs"]');
-    if (!pane || pane.hidden){ clearInterval(obsTabPoll); return; }
-    if (!document.hidden){ refreshObsRegisterStatus(); refreshStreamlabs(); }
-  }, 4000);
 }
-window.addEventListener('focus', () => {
-  const pane = document.querySelector('.tab-pane[data-pane="obs"]');
-  if (pane && !pane.hidden){ refreshObsRegisterStatus(); refreshStreamlabs(); }
-});
+// Everything shown about OBS on this PC, once it changed (see Live).
+async function refreshObsSetup(){
+  _obsInstalled = null;
+  await Promise.all([refreshObsRegisterStatus(), obsRegInfo(true)]);
+  refreshSysVodScript();
+  refreshSysEbLaunch();
+  refreshObsEbLaunchAvailability();
+}
 function openObsLegacy(){
   const d = $('sys-eb-launch');
   if (!d) return;
@@ -11040,6 +11053,13 @@ async function createEbShortcut(btnId, msgId){
   btn.disabled = false;
 }
 
+// Said while OBS can't be found to launch, and taken back once it can.
+const OBS_NOT_FOUND = 'OBS not found at the standard install path.';
+function sayObsFound(msg, found){
+  if (!msg) return;
+  if (!found && !msg.textContent) msg.textContent = OBS_NOT_FOUND;
+  else if (found && msg.textContent === OBS_NOT_FOUND) msg.textContent = '';
+}
 async function refreshObsEbLaunchAvailability(){
   const btn = $('obs-eb-setup-btn');
   const msg = $('obs-eb-launch-msg');
@@ -11048,13 +11068,12 @@ async function refreshObsEbLaunchAvailability(){
     const r = await (await fetch('/obs/launch-status')).json();
     if (!r.installed){
       btn.disabled = true;
-      btn.className = 'ic-btn ic-btn-disabled';
-      if (msg) msg.textContent = 'OBS not found at the standard install path.';
+      setClassName(btn, 'ic-btn ic-btn-disabled');
     } else {
       btn.disabled = false;
-      btn.className = 'ic-btn ic-btn-primary';
-      if (msg && !msg.textContent) msg.textContent = '';
+      setClassName(btn, 'ic-btn ic-btn-primary');
     }
+    sayObsFound(msg, r.installed);
   } catch(_){}
 }
 
@@ -11070,9 +11089,8 @@ function firstTwitchDest(){
   return (lastDests || []).find(d => d.enabled && d.platform === 'twitch' && d.stream_key_set);
 }
 
-// OBS-installed probe, cached for the session - the exe doesn't
-// appear/disappear between clicks, and loadDestinations() calls this
-// on every refresh.
+// OBS-installed probe, cached until an OBS changes (refreshObsSetup
+// clears it): loadDestinations() calls this on every refresh.
 let _obsInstalled = null;
 async function refreshSysEbLaunch(){
   const warn = $('sys-eb-twitch-warn');
@@ -11084,12 +11102,9 @@ async function refreshSysEbLaunch(){
   ['sys-eb-btn','sys-vodeb-btn'].forEach(id => {
     const b = $(id);
     // Legacy launchers: plain buttons, not the page's main call to action.
-    if (b){ b.disabled = dis; b.className = dis ? 'ic-btn ic-btn-disabled' : 'ic-btn ic-btn-ghost'; }
+    if (b){ b.disabled = dis; setClassName(b, dis ? 'ic-btn ic-btn-disabled' : 'ic-btn ic-btn-ghost'); }
   });
-  if (dis){
-    const msg = $('sys-eb-msg');
-    if (msg && !msg.textContent) msg.textContent = 'OBS not found at the standard install path.';
-  }
+  if (_obsInstalled !== null) sayObsFound($('sys-eb-msg'), _obsInstalled);
 }
 
 async function sysLaunchEb(){
@@ -11276,6 +11291,8 @@ async function confirmResetModal(){
 // statement runs; the try/catch swallows the temporal-dead-zone error so
 // early calls no-op. The Studio loads its own saved list in init().
 function loadOverlays(){ try { if(window.ICOverlay) Studio.loadSaved(); } catch(_){} }
+// The overlays changed elsewhere (see Live).
+function refreshOverlays(){ if (window.ICOverlay) return Studio.refreshSaved(); }
 
 // Turn the clicked button into its own confirmation: "Copy" -> "✓ Copied"
 // for ~1.5s. Immediate, on-the-thing-you-touched feedback beats a detached
@@ -11624,9 +11641,14 @@ function showUnseenLogs(){
   fadeHidden(button, $('logs')._follow !== false);
   button.textContent = logView.unseen ? `↓ ${logView.unseen} new ${logView.unseen === 1 ? 'line' : 'lines'}` : '↓ Jump to latest';
 }
+// The log is read only while the Logs tab is on screen: a new line moves
+// its counter (see Live), and opening the tab or the window catches up.
+function logsOnScreen(){
+  const pane = document.querySelector('.tab-pane[data-pane="logs"]');
+  return !!pane && !pane.hidden && !document.hidden;
+}
 async function pollLogs(){
-  // A background tab has nobody reading; it catches up when shown.
-  if (document.hidden) return;
+  if (!logsOnScreen()) return;
   try {
     const clears = logView.clears;
     const j = await (await fetch('/logs')).json();
@@ -12401,6 +12423,7 @@ function showTab(name){
     if (midiLearnAction) midiCancelLearn();
   }
   if (name === 'obs') showObsTab();
+  if (name === 'logs') pollLogs();
   if (window.Integrations){ if (name === 'integrations') Integrations.show(); else Integrations.hide(); }
   if (name === 'overlay') overlaySubShown(overlaySub());
   // The Studio modal lives on <body>, so close it when leaving the tab.
@@ -12797,20 +12820,20 @@ async function refreshSysVodScript(){
   if (atLeast === true){
     // Hard requirement: 32.2 locked the built-in VOD Track to Custom services.
     req.className = 'sys-callout req';
-    req.innerHTML = '<span class="sys-callout-ic">⚠</span><span><b>' + ver + ' requires this script for VOD audio.</b> OBS 32.2 stopped the built-in VOD Track working on Custom services, so the old checkbox and the "EB + VOD" launcher no longer add it. Use the script.</span>';
+    setHtml(req, '<span class="sys-callout-ic">⚠</span><span><b>' + ver + ' requires this script for VOD audio.</b> OBS 32.2 stopped the built-in VOD Track working on Custom services, so the old checkbox and the "EB + VOD" launcher no longer add it. Use the script.</span>');
     if (legacyBtn) legacyBtn.hidden = true;
     if (legacyHint) legacyHint.hidden = true;
     if (legacySteer) legacySteer.hidden = false;
   } else if (atLeast === false){
     req.className = 'sys-callout info';
-    req.innerHTML = '<span class="sys-callout-ic">ℹ</span><span>On ' + ver + ' the built-in VOD Track checkbox still works too, but this script is simpler and keeps working after you update OBS.</span>';
+    setHtml(req, '<span class="sys-callout-ic">ℹ</span><span>On ' + ver + ' the built-in VOD Track checkbox still works too, but this script is simpler and keeps working after you update OBS.</span>');
     if (legacyBtn) legacyBtn.hidden = false;
     if (legacyHint) legacyHint.hidden = false;
     if (legacySteer) legacySteer.hidden = true;
   } else {
     // OBS version unknown (never launched / logs unreadable).
     req.className = 'sys-callout info';
-    req.innerHTML = '<span class="sys-callout-ic">ℹ</span><span><b>On OBS 32.2+ this script is required</b>: that version stopped the built-in VOD Track working on Custom services. Older OBS can still use the built-in VOD Track checkbox.</span>';
+    setHtml(req, '<span class="sys-callout-ic">ℹ</span><span><b>On OBS 32.2+ this script is required</b>: that version stopped the built-in VOD Track working on Custom services. Older OBS can still use the built-in VOD Track checkbox.</span>');
     if (legacyBtn) legacyBtn.hidden = false;
     if (legacyHint) legacyHint.hidden = false;
     if (legacySteer) legacySteer.hidden = true;
@@ -12821,7 +12844,7 @@ async function refreshSysVodScript(){
   const ebWrap = $('sys-eb-launch');
   const ebNote = $('sys-eb-launch-note');
   if (ebWrap && ebNote){
-    ebNote.textContent = atLeast === true ? 'not needed on ' + ver : 'for OBS before 32.2';
+    setText(ebNote, atLeast === true ? 'not needed on ' + ver : 'for OBS before 32.2');
   }
 }
 function moveSubTabInd(pane){
@@ -13236,8 +13259,69 @@ async function endHold(btn){
   } catch(_){ toast('Could not reach InstantClone', 'err'); }
 }
 
+// - Live data -----------------------------------------------------
+// The state feed carries a change counter for each kind of data this page
+// fetches on its own (`rev`: config, destinations, profiles, OBS,
+// Streamlabs...; see src/revisions.rs). When one moves, whatever shows that
+// data fetches it again, so a change made in another window, from the tray
+// or outside the app (OBS opened, Streamlabs installed) shows without a
+// reload, and nothing polls for it. The loaders redraw only what differs,
+// so a refetch that brings nothing new draws nothing.
+const Live = {
+  revs: null,
+  loaders: {},
+  // `load` runs each time `topic` moves.
+  on(topic, load){
+    (this.loaders[topic] = this.loaders[topic] || []).push(coalesced(load));
+  },
+  apply(revs){
+    if (!revs) return;
+    const before = this.revs;
+    this.revs = revs;
+    // The first frame is a baseline: the page loaded everything itself.
+    // After a restart every counter starts over, and differs: all reload.
+    if (!before) return;
+    Object.keys(revs).forEach(topic => {
+      if (revs[topic] !== before[topic]) (this.loaders[topic] || []).forEach(load => load());
+    });
+  },
+};
+// `fn`, safe to call at any rate: one run at a time, and calls landing
+// mid-run make a single rerun, so the last change is always fetched.
+function coalesced(fn){
+  let running = false, again = false;
+  const run = async () => {
+    if (running){ again = true; return; }
+    running = true;
+    try { await fn(); } catch(e){ console.warn(e); }
+    running = false;
+    if (again){ again = false; run(); }
+  };
+  return run;
+}
+// `fn` at most once every `ms`: calls inside that time make one run at its
+// end, so a burst of changes is one fetch and the last change still shows.
+function throttled(fn, ms){
+  let last = 0, timer = 0;
+  return () => {
+    const wait = last + ms - Date.now();
+    if (wait <= 0){ last = Date.now(); return fn(); }
+    if (!timer) timer = setTimeout(() => { timer = 0; last = Date.now(); fn(); }, wait);
+  };
+}
+// Whether `value` differs from the last one seen under `key`: a reload
+// redraws a section only when its own data changed.
+const seenData = new Map();
+function dataChanged(key, value){
+  const text = JSON.stringify(value === undefined ? null : value);
+  if (seenData.get(key) === text) return false;
+  seenData.set(key, text);
+  return true;
+}
+
 function applyState(s){
   const prev = lastState;
+  Live.apply(s.rev);
   if ($('stat-idle')) $('stat-idle').hidden = !!s.ingest_alive;
   if (prev){
     if (!prev.ingest_alive && s.ingest_alive) toast('OBS connected','ok');
@@ -13482,11 +13566,19 @@ function openUpdateInAbout(){
   await loadConfig();
   refreshObsRegisterStatus();
   refreshStreamlabs();
+  Live.on('config', loadConfig);
+  Live.on('destinations', loadDestinations);
+  Live.on('profiles', loadProfiles);
+  Live.on('overlays', refreshOverlays);
+  Live.on('obs', refreshObsSetup);
+  Live.on('streamlabs', refreshStreamlabs);
   checkForUpdate();
   loadWhatsNew();
   checkUpdateOutcome();
   startStateSSE();
-  setInterval(pollLogs, 1500);
+  // A busy log moves its counter many times a second: read it once a second.
+  Live.on('logs', throttled(pollLogs, 1000));
+  pollLogs();
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pollLogs(); });
   // Space drives the delay only from the bare page: a focused control
   // (button, switch, select, style card) or an open dialog keeps it, and
