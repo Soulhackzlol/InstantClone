@@ -838,6 +838,7 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
 .state-words.leaving{position:absolute;top:50%;translate:0 -50%}
 .state-label{font-weight:600;letter-spacing:.08em;font-size:11px}
 .state-desc{color:var(--fg-3);font-size:11px}
+.state-desc:empty{display:none}
 .state-pill .state-dot{width:7px;height:7px;border-radius:999px;background:var(--sc,var(--idle));
   transition:background .8s var(--ease-out)}
 .state-pill .state-dot.pulse{animation:hpulse 1.6s cubic-bezier(.2,.7,.2,1) infinite}
@@ -6395,7 +6396,8 @@ function computeStatePill(s){
     // it cannot be entered from offline any more.
     const pre = s && (PHASE_TO_STATE[s.phase] === 'arming' || PHASE_TO_STATE[s.phase] === 'armed');
     if (pre) return { label:'OFFLINE', desc:'· still armed, waiting for OBS', c:'var(--warn)', pulse:false };
-    return { label:'OFFLINE', desc:'· no encoder connected', c:'var(--idle)', pulse:false };
+    // The line under the number says what it waits for: said once.
+    return { label:'OFFLINE', desc:'', c:'var(--idle)', pulse:false };
   }
   const ds = PHASE_TO_STATE[s.phase] || 'off';
   if (ds === 'off')    return { label:'LIVE',      desc:'· Passthrough',    c:'var(--live)',   pulse:true };
@@ -7331,7 +7333,7 @@ function renderHero(s){
   else if (ds === 'off'){
     sub = s.ingest_alive
       ? `Forwarding live with no delay · ${fmtKbps(s.stats.bitrate_kbps)} in`
-      : `Waiting for your encoder to connect…`;
+      : `Waiting for ${encoderApp() || 'your stream'} to connect…`;
     subKey = s.ingest_alive ? 'off-live' : 'off-wait';
   }
   else if (ds === 'arming') sub = `Buffering - ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers still see live until you activate.`;
@@ -7475,10 +7477,9 @@ function renderCta(){
   } else {
     // off / idle (== passthrough or genuinely no source)
     if (!lastState.ingest_alive){
-      // Nothing to delay yet, and the backend refuses it - so offer the
-      // wait rather than a button whose only outcome is an error toast.
-      setCta(btn, { key: 'wait', cls: 'ic-btn-disabled cp-cta-waiting', pre: encoderApp() ? `Waiting for ${encoderApp()} to connect` : 'Waiting for your stream',
-                    disabled: true, waiting: true });
+      // Nothing to delay yet, and the backend refuses it: Arm waits, and
+      // the line under the number says what for.
+      setCta(btn, { key: 'wait', cls: 'ic-btn-disabled', pre: 'Arm', disabled: true });
       // A typed delay past the range is flagged now, not first when OBS
       // connects: the field must never sit at 712 s under "0 - 48s".
       if (inputMs > 0 && tooBig) showCapWarn(); else clearWarn();
