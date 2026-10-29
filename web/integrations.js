@@ -519,7 +519,7 @@ function varHelp(name){
   if ((m = /^arg([4-9])$/.exec(name))) return `Word number ${m[1]} after the command.`;
   if ((m = /^body\.(.+)$/.exec(name))) return `The ${m[1].split('.').join(' › ')} field of what the caller sent.`;
   if ((m = /^query\.(.+)$/.exec(name))) return `The "${m[1]}" value in the address, like ?${m[1]}=red.`;
-  return 'A value an earlier step in this run set.';
+  return '';
 }
 
 // The card over a hovered or focused variable chip: what it holds and an
@@ -546,7 +546,7 @@ const VarTip = {
     }
     const name = target.dataset.token, sample = target.dataset.sample || '';
     this.el.querySelector('code').textContent = '{' + name + '}';
-    this.el.querySelector('p').textContent = varHelp(name);
+    this.el.querySelector('p').textContent = varHelp(name) || SET_EARLIER;
     this.el.querySelector('.ig-vtip-eg b').textContent = sample.length > 120 ? sample.slice(0, 120) + '…' : (sample || '(empty)');
     const r = target.getBoundingClientRect(), w = this.el.offsetWidth, h = this.el.offsetHeight;
     const above = r.top - h - 8 >= 8;
@@ -561,7 +561,7 @@ const VarTip = {
     if (this.el) this.el.classList.remove('on');
   },
 };
-const tokenAt = e => (e.target && e.target.closest) ? e.target.closest('.ig-modal .ig-token[data-token]') : null;
+const tokenAt = e => (e.target && e.target.closest) ? e.target.closest('.ig-modal .ig-vchip[data-token]') : null;
 document.addEventListener('pointerover', e => VarTip.want(tokenAt(e)));
 document.addEventListener('focusin', e => VarTip.want(tokenAt(e)));
 document.addEventListener('pointerdown', () => VarTip.hide(), true);
@@ -1024,36 +1024,249 @@ const FIELD_LABEL = {
   scene:'scene on air', streaming:'streaming?', recording:'recording?', muted:'muted?', visible:'showing?',
   status:'status', ok:'worked?', body:'whole answer', output:'what it printed', code:'exit code',
 };
-// Insert chips for a field, grouped by where each value comes from: what
-// started the run, each earlier step (under its answer's name), and the
-// values that are always there, folded away when `foldLive`. `act` is the
-// editor's insert action; `extra` goes after the last chip.
-function tokensHtml(vars, act, extra, foldLive){
-  const groups = [];
-  vars.forEach(v => {
-    const key = v.step || v.group;
-    let g = groups.find(x => x.key === key);
-    if (!g) groups.push(g = {key, v, list:[]});
-    g.list.push(v);
-  });
-  const label = v => {
-    const field = v.step && answerName(v.step) && v.name.split('.').length === 2 ? FIELD_LABEL[v.name.split('.')[1]] : '';
-    return v.label || field || varLabel(v.name);
-  };
-  const chip = v => `<button class="ig-token" data-act="${act}" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}" aria-label="Insert ${esc(label(v))}">+ ${esc(label(v))}</button>`;
-  const head = v => {
-    if (!v.step) return {trigger:'From what happened', mine:'Your values', live:'Always there'}[v.group] || '';
-    const name = answerName(v.step);
-    return `${esc(stepSource(v.step))}${name ? `<code>${esc(name)}</code>` : ''}`;
-  };
-  return groups.map((g, n) => {
-    const chips = g.list.map(chip).join('') + (n === groups.length - 1 ? extra || '' : '');
-    if (g.key === 'live' && foldLive){
-      return `<details class="ig-vgroup ig-vfold"><summary>${svg('chev')}${head(g.v)}<span class="ig-vcount">${g.list.length}</span></summary><div class="ig-tokens">${chips}</div></details>`;
-    }
-    return `<div class="ig-vgroup"><div class="ig-vgroup-h">${head(g.v)}</div><div class="ig-tokens">${chips}</div></div>`;
-  }).join('') || (extra || '');
+// The name a value goes by: a step's answer fields read under that step.
+function valueLabel(v){
+  const field = v.step && answerName(v.step) && v.name.split('.').length === 2 ? FIELD_LABEL[v.name.split('.')[1]] : '';
+  return v.label || field || varLabel(v.name);
 }
+// Where a value comes from, as a heading: what started the run, an earlier
+// step (under its answer's name), the streamer's own, or always there.
+function valueSource(v){
+  if (!v.step) return {trigger:'From what happened', mine:'Your values', live:'Always there'}[v.group] || '';
+  const name = answerName(v.step);
+  return `${esc(stepSource(v.step))}${name ? ` <code>${esc(name)}</code>` : ''}`;
+}
+const SET_EARLIER = 'A value an earlier step in this run set.';
+function valueHelp(v){
+  return varHelp(v.name) || (v.group === 'steps' ? SET_EARLIER : '');
+}
+const shortSample = (text, max) => !text ? '(empty)' : text.length > max ? text.slice(0, max) + '…' : text;
+// `text` escaped, with every place one of `words` shows marked.
+function markWords(text, words){
+  const lower = text.toLowerCase(), hit = new Array(text.length).fill(false);
+  words.forEach(w => {
+    for (let at = lower.indexOf(w); at >= 0; at = lower.indexOf(w, at + w.length)) hit.fill(true, at, at + w.length);
+  });
+  let html = '', open = false;
+  for (let i = 0; i < text.length; i++){
+    if (hit[i] !== open){ html += hit[i] ? '<mark>' : '</mark>'; open = hit[i]; }
+    html += esc(text[i]);
+  }
+  return html + (open ? '</mark>' : '');
+}
+
+// ------------------------------------------------------------ value picker
+// Values come to the field being written in, in both the simple editor and
+// the builder: a few suggestions right under it, and every value in a
+// searchable menu, opened by "More values…" or by typing {. Which values a
+// field can use comes from valueContext. The strip is a data-persist node,
+// so the form's redraws (morph) leave it where it is.
+const SUGGESTED = 4;
+const COMMON_LIVE = ['time', 'uptime', 'delay'];
+const ValuePick = {
+  field:null, ctx:null, strip:null, menu:null, mode:'', braceAt:-1, range:null, query:'', active:0, items:[],
+  attach(field, ctx){
+    if (field === this.field) return;
+    this.detach();
+    if (!ctx().vars.length) return;
+    this.field = field;
+    this.ctx = ctx;
+    const strip = this.strip = document.createElement('div');
+    strip.className = 'ig-vstrip';
+    strip.setAttribute('data-persist', '');
+    // A click here keeps the caret where it was in the field.
+    strip.addEventListener('pointerdown', e => e.preventDefault());
+    strip.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (b && b.hasAttribute('data-more')) this.openMenu('search');
+      else if (b) this.choose(b.dataset.pick);
+    });
+    // Under the whole row a field sits in, and under its sample line.
+    let anchor = field.closest('.ig-tpl, .ig-bfield, .ig-cond-top') || field;
+    if (anchor.nextElementSibling && anchor.nextElementSibling.classList.contains('ig-sample')) anchor = anchor.nextElementSibling;
+    anchor.after(strip);
+    this.renderStrip();
+  },
+  detach(){
+    this.closeMenu();
+    if (this.strip) this.strip.remove();
+    this.field = this.ctx = this.strip = null;
+  },
+  values(){ return this.ctx ? this.ctx().vars : []; },
+  // The latest earlier steps' answers first, then what started the run,
+  // then the few always-there values most messages use. One already in the
+  // field isn't offered again.
+  suggested(){
+    const text = this.field.value;
+    const usable = this.values().filter(v => !v.name.includes('.json.') && !text.includes('{' + v.name));
+    const steps = [];
+    usable.filter(v => v.group === 'steps').forEach(v => { if (!steps.some(x => x.step === v.step)) steps.push(v); });
+    return steps.reverse().slice(0, 2)
+      .concat(usable.filter(v => v.group === 'trigger'), usable.filter(v => v.group === 'live' && COMMON_LIVE.includes(v.name)))
+      .slice(0, SUGGESTED);
+  },
+  renderStrip(){
+    if (!this.strip) return;
+    const chips = this.suggested().map(v => `<button type="button" class="ig-vchip" data-pick="${esc(v.name)}" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}">
+      <b>${esc(valueLabel(v))}</b><span>${esc(shortSample(v.sample, 22))}</span></button>`).join('');
+    const html = `<span class="ig-vstrip-h">Add</span>${chips}<button type="button" class="ig-vchip more" data-more>More values…</button>
+      <span class="ig-vstrip-k">or type <code>{</code></span>`;
+    if (this.strip._html !== html){ this.strip._html = html; this.strip.innerHTML = html; }
+  },
+  openMenu(mode){
+    const f = this.field;
+    this.mode = mode;
+    this.range = [f.selectionStart, f.selectionEnd];
+    this.query = '';
+    this.active = 0;
+    const menu = this.menu || this.buildMenu();
+    const input = menu.querySelector('input');
+    input.value = '';
+    // Typing {: the field itself is the search.
+    menu.classList.toggle('typed', mode === 'brace');
+    this.renderMenu();
+    menu.classList.add('on');
+    this.place();
+    if (mode === 'search') input.focus({preventScroll:true});
+  },
+  buildMenu(){
+    const menu = this.menu = document.createElement('div');
+    menu.className = 'ig-vmenu';
+    menu.innerHTML = `<div class="ig-vmenu-find">${svg('search')}<input type="text" placeholder="Find a value" aria-label="Find a value" spellcheck="false" autocomplete="off"><span class="ig-vmenu-n"></span></div>
+      <div class="ig-vmenu-list" role="listbox" aria-label="Values"></div>
+      <div class="ig-vmenu-foot">↑↓ to pick · Enter to add · Esc to close</div>`;
+    menu.addEventListener('pointerdown', e => { if (!e.target.closest('input')) e.preventDefault(); });
+    menu.addEventListener('click', e => { const i = e.target.closest('[data-pick]'); if (i) this.choose(i.dataset.pick); });
+    const input = menu.querySelector('input');
+    input.addEventListener('input', () => { this.query = input.value; this.active = 0; this.renderMenu(); });
+    input.addEventListener('keydown', e => this.menuKey(e));
+    document.body.appendChild(menu);
+    return menu;
+  },
+  closeMenu(){
+    if (!this.mode) return;
+    this.mode = '';
+    this.menu.classList.remove('on');
+  },
+  words(){ return this.query.toLowerCase().split(/\s+/).filter(Boolean); },
+  renderMenu(){
+    const all = this.values(), words = this.words();
+    const list = all.filter(v => {
+      const hay = `${v.name} ${valueLabel(v)} ${valueHelp(v)}`.toLowerCase();
+      return words.every(w => hay.includes(w));
+    });
+    this.items = list.map(v => v.name);
+    this.active = Math.min(this.active, Math.max(0, list.length - 1));
+    let html = '', group;
+    list.forEach((v, n) => {
+      const key = v.step || v.group;
+      if (key !== group){ group = key; html += `<div class="ig-vmenu-g">${valueSource(v)}</div>`; }
+      const help = valueHelp(v);
+      html += `<button type="button" class="ig-vmenu-i${n === this.active ? ' on' : ''}" role="option" aria-selected="${n === this.active}" data-pick="${esc(v.name)}"${help ? ` title="${esc(help)}"` : ''}>
+        <span><b>${markWords(valueLabel(v), words)}</b><small><code>{${markWords(v.name, words)}}</code>${help ? ' ' + esc(help) : ''}</small></span>
+        <em>${esc(shortSample(v.sample, 26))}</em></button>`;
+    });
+    const menu = this.menu;
+    menu.querySelector('.ig-vmenu-list').innerHTML = html || `<div class="ig-vmenu-none">No value matches "${esc(this.query)}".</div>`;
+    menu.querySelector('.ig-vmenu-n').textContent = words.length ? `${list.length} of ${all.length}` : `${all.length}`;
+    const on = menu.querySelector('.ig-vmenu-i.on');
+    if (on) on.scrollIntoView({block:'nearest'});
+  },
+  // Under the strip, or above the field when there's no room below.
+  place(){
+    if (!this.mode) return;
+    const menu = this.menu, f = this.field.getBoundingClientRect();
+    const under = (this.strip && this.strip.isConnected ? this.strip : this.field).getBoundingClientRect();
+    const w = menu.offsetWidth, h = menu.offsetHeight;
+    menu.style.left = Math.max(8, Math.min(f.left, innerWidth - w - 8)) + 'px';
+    menu.style.top = (under.bottom + 6 + h <= innerHeight - 8 ? under.bottom + 6 : Math.max(8, f.top - h - 6)) + 'px';
+  },
+  // Arrows, Enter and Esc, from the menu's search or the field typed into.
+  menuKey(e){
+    const n = this.items.length;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+      e.preventDefault();
+      if (n){ this.active = (this.active + (e.key === 'ArrowDown' ? 1 : -1) + n) % n; this.renderMenu(); }
+    } else if ((e.key === 'Enter' || e.key === 'Tab') && n){
+      e.preventDefault();
+      this.choose(this.items[this.active]);
+    } else if (e.key === 'Escape'){
+      e.preventDefault();
+      const back = this.mode === 'search';
+      this.closeMenu();
+      if (back) this.restoreCaret();
+    }
+  },
+  restoreCaret(){
+    this.field.focus({preventScroll:true});
+    this.field.setSelectionRange(this.range[0], this.range[1]);
+  },
+  // Into the field: over the typed { and what follows it, or where the
+  // caret was, a space apart from the word before it.
+  choose(name){
+    const f = this.field;
+    if (!f || !f.isConnected){ this.detach(); return; }
+    let text = tokenText(name, this.ctx().plain);
+    if (this.mode === 'brace') f.setSelectionRange(this.braceAt, f.selectionStart);
+    else {
+      if (this.mode === 'search') this.restoreCaret();
+      if (/[\p{L}\p{N}.,!?:;)]$/u.test(f.value.slice(0, f.selectionStart))) text = ' ' + text;
+    }
+    this.closeMenu();
+    insertAtCursor(f, text);
+  },
+  // The field changed (`e`, its input event) or its caret moved.
+  followField(e){
+    const f = this.field;
+    if (this.mode !== 'brace' && e && e.data === '{' && f.value[f.selectionStart - 1] === '{'){
+      this.braceAt = f.selectionStart - 1;
+      this.openMenu('brace');
+    } else if (this.mode === 'brace'){
+      const at = f.selectionStart, typed = f.value.slice(this.braceAt + 1, at);
+      if (f.value[this.braceAt] !== '{' || at <= this.braceAt || /[\s{}]/.test(typed)) this.closeMenu();
+      else if (typed !== this.query){ this.query = typed; this.active = 0; this.renderMenu(); this.place(); }
+    }
+    if (e) this.renderStrip();
+  },
+};
+// The values a text field can take, as a function read at use, or null for
+// a field that takes none: a step's own names and picks never do.
+const TEXT_FIELD = ':not([readonly]):not([inputmode]):not([data-fixed]):not(.ig-dur):not([type="color"]):not([type="checkbox"])';
+const NOT_TEXT = new Set(['save_as', 'name', 'block', 'id', 'device', 'path', 'method']);
+function valueContext(el){
+  if (!el.matches || !el.matches(`input${TEXT_FIELD}, textarea${TEXT_FIELD}`)) return null;
+  if (Modal.kind === 'editor' && el.closest('.ig-live, .ig-live-plain')){
+    return () => ({vars:varsFor(Editor.handler()), plain:false});
+  }
+  if (Modal.kind === 'builder' && el.closest('.ig-inspector') && Array.isArray(Builder.sel) && !NOT_TEXT.has(el.dataset.name)){
+    return () => {
+      const s = Builder.stepAt(Builder.sel);
+      return {vars:varsFor(Builder.handler(), s), plain:!!s && s.type === 'if'};
+    };
+  }
+  return null;
+}
+document.addEventListener('focusin', e => {
+  if (ValuePick.menu && ValuePick.menu.contains(e.target)) return;
+  const ctx = valueContext(e.target);
+  if (ctx) ValuePick.attach(e.target, ctx);
+});
+// Gone once focus leaves the field and its menu (a redraw that moves the
+// field gives focus straight back, so this waits a moment to look).
+document.addEventListener('focusout', () => setTimeout(() => {
+  const at = document.activeElement, p = ValuePick;
+  if (p.field && at !== p.field && !(p.menu && p.menu.contains(at))) p.detach();
+}));
+document.addEventListener('input', e => { if (e.target === ValuePick.field) ValuePick.followField(e); });
+document.addEventListener('selectionchange', () => {
+  if (ValuePick.mode === 'brace' && document.activeElement === ValuePick.field) ValuePick.followField(null);
+});
+// Before the editor's own keys (and the modal's Esc) while typing {.
+document.addEventListener('keydown', e => {
+  if (ValuePick.mode === 'brace' && e.target === ValuePick.field) ValuePick.menuKey(e);
+}, true);
+window.addEventListener('resize', () => ValuePick.place());
+window.addEventListener('scroll', () => ValuePick.place(), true);
 // The name later steps reach a step's answer by, for the steps whose
 // answer has several fields; '' for any other step.
 function answerName(s){
@@ -2685,6 +2898,7 @@ const Modal = {
     // Shown secrets hide again: the next time could be on stream.
     S.revealed.clear();
     VarTip.hide();
+    ValuePick.detach();
     Keys.stop();
     Meter.stop();
     ObsLive.stop();
@@ -3149,7 +3363,7 @@ function needsHtml(needs){
 // The simple editor for catalog modules: pick a moment, write on the
 // preview itself, and every option is a chip that opens its own panel.
 const Editor = {
-  d:null, sel:0, chip:null, run:null, dirty:false, moreVars:false, back:null, justAdded:false,
+  d:null, sel:0, chip:null, run:null, dirty:false, back:null, justAdded:false,
   // opts: {back} (see Modal.back); {justAdded} when the catalog just made
   // it as a draft, which closing keeps and Back removes again.
   open(i, switchOn, opts){
@@ -3176,9 +3390,7 @@ const Editor = {
     this.chip = steps.some(s => s.type === 'discord' && !known(s.params.connection)) ? 'where'
       : steps.some(s => s.type === 'http' && !s.params.url) ? 'url' : keyless ? 'key'
       : sel.type === 'scene' && !sel.scene ? 'scene' : commandClash(this.d) ? 'cmd' : null;
-    this.lastField = null;
     this.run = null;
-    this.moreVars = false;
     this.converted = null;
     TRIES.clear();
     this.show();
@@ -3188,7 +3400,6 @@ const Editor = {
     this.d.handlers.forEach(h => sampleArgsFrom(h, presetOf(this.d)));
     this.sel = Math.min(this.sel, this.d.handlers.length - 1);
     this.chip = null;
-    this.lastField = null;
     this.run = null;
   },
   resume(){
@@ -3392,13 +3603,6 @@ const Editor = {
     const k = KINDS[step.type];
     const value = step.params[k.text] || '';
     const vars = sampleMap(h);
-    // The trigger's own values first; the always-there ones behind "more".
-    const all = varsFor(h);
-    const common = new Set(['delay', 'delay_state', 'hold_left', 'time', 'uptime']);
-    // Fields of a tried answer are picked from its tree, so they wait here.
-    const shown = this.moreVars ? all : all.filter(v => (v.group !== 'live' || common.has(v.name)) && !v.name.includes('.json.'));
-    const tokens = tokensHtml(shown, 'token',
-      shown.length < all.length ? `<button class="ig-token more" data-act="more-vars">${all.length - shown.length} more…</button>` : '');
     const discord = step.type === 'discord';
     const sample = sampleLine(value, h, discord);
     // A tried answer can send the run down another branch ("offline").
@@ -3463,7 +3667,7 @@ const Editor = {
     // Every step counts: the simple editor edits more than the message.
     const unknown = [];
     walk(h.steps, s => unknownVars(h, s).forEach(u => { if (!unknown.some(x => x.name === u.name)) unknown.push(u); }));
-    return `${box}${unknownVarsHtml(unknown)}<div class="ig-vals"><div class="ig-vals-h">Insert a value</div>${tokens}</div>${FORMS_HELP}`;
+    return `${box}${unknownVarsHtml(unknown)}${FORMS_HELP}`;
   },
   // A Discord card you write on: the text above it, then the card itself
   // (title, body, fields, footer) in its color, then the color swatches.
@@ -3952,13 +4156,6 @@ const Editor = {
         this.render();
         if (this.chip) revealOpened(q('.ig-ed-options'));
         return true;
-      case 'token': {
-        // Into the card field last written in, or the message itself.
-        const field = this.lastField && this.lastField.isConnected ? this.lastField : q('.ig-msg');
-        insertAtCursor(field, tokenText(el.dataset.token));
-        return true;
-      }
-      case 'more-vars': this.moreVars = true; this.render(); return true;
       case 'set-where': allSteps(this.d).filter(s => s.type === 'discord').forEach(s => { s.params.connection = v; }); this.changed(); return true;
       case 'set-ping': if (step) step.params.ping = v; this.changed(); return true;
       case 'set-edit': if (step) step.params.edit = v; this.changed(); return true;
@@ -5042,7 +5239,7 @@ function nestLevels(s){
 const nestFits = (listPath, levels) => branchDepth(listPath) + levels <= MAX_NEST - 1;
 
 const Builder = {
-  d:null, h:0, sel:'trigger', target:[], after:null, run:null, dirty:false, lastField:null, back:null,
+  d:null, h:0, sel:'trigger', target:[], after:null, run:null, dirty:false, back:null,
   testValues:{}, testDry:true, testOpen:false,
   // opts: {dirty} carries the editor's unsaved state over, {switchOn} as in
   // Editor.open, {back} as in Modal.back (default: the catalog, if open).
@@ -5066,7 +5263,6 @@ const Builder = {
     this.sel = 'trigger';
     this.target = [];
     this.after = null;
-    this.lastField = null;
     this.testDry = true;
     this.resetTest();
     this.show();
@@ -5088,7 +5284,6 @@ const Builder = {
     this.after = null;
     this.choosing = null;
     this.unpicked = new WeakSet();
-    this.lastField = null;
     this.resetTest();
     TRIES.clear();
   },
@@ -5313,12 +5508,8 @@ const Builder = {
   inspectorHtml(){
     const h = this.handler();
     const selected = Array.isArray(this.sel) ? this.stepAt(this.sel) : null;
-    // Only what this step can use: the trigger's values, what steps
-    // before it made, and the live ones.
-    const upto = selected || (h.steps || [])[0];
-    const varsBox = `<div class="ig-insp-vars"><div class="ic-label">Values it can use</div>
-      <div class="muted">Click a text field, then a value to put it there.</div>
-      <div class="ig-vals">${tokensHtml(varsFor(h, upto), 'b-token', '', true)}</div>${FORMS_HELP}</div>`;
+    // The values themselves come to the field being written in (ValuePick).
+    const varsBox = `<div class="ig-insp-vars">${FORMS_HELP}</div>`;
     if (this.choosing){
       return `<div class="ig-insp-title" style="--c:#5ac8fa"><span class="ig-insp-ic">${svg('bolt')}</span><span><small>WHEN</small><b>${this.choosing === 'event' ? 'What happens?' : 'How does it start?'}</b></span></div>
         <p class="ig-insp-p">Pick it in the middle. Then add steps from the list on the left: each one runs in order.</p>`;
@@ -6038,19 +6229,6 @@ const Builder = {
       }
       case 'b-new-token': this.handler().trigger.token = randomToken(); this.changed(); return true;
       case 'b-name-answer': { const s = selected(); if (s) nameAnswer(this.handler(), s); this.changed(); return true; }
-      case 'b-token': {
-        // Into the field last written in, or the selected step's text.
-        const s = selected(), main = s && (KINDS[s.type] || {}).text;
-        let field = this.lastField && this.lastField.isConnected ? this.lastField : null;
-        if (!field && main){
-          // Never written in: the value goes at the end, not before it all.
-          field = q(`.ig-inspector [data-bind="p"][data-name="${main}"]`);
-          if (field) field.setSelectionRange(field.value.length, field.value.length);
-        }
-        if (!field){ toast('Click a text field first, then the value to put in it', 'info'); return true; }
-        insertAtCursor(field, tokenText(el.dataset.token, s && s.type === 'if'));
-        return true;
-      }
       case 'b-test': this.leaveChooser(); this.testOpen = true; this.render(); this.reveal('.ig-run-box'); focusAct('test-run'); return true;
       case 'test-run': if (this.askToPick()) busy(el, () => this.test()); return true;
       case 'test-mode': this.testDry = el.dataset.v === 'dry'; this.render(); return true;
@@ -8587,13 +8765,9 @@ function onActivateKey(e){
   }
 }
 
-// Remember the last text field each editor used, for variable inserts.
+// A message field measures itself again once it shows (see autosize).
 document.addEventListener('focusin', e => {
-  const text = ':not([readonly]):not([inputmode]):not([data-fixed]):not(.ig-dur):not([type="color"]):not([type="checkbox"])';
-  // A message field measures itself again once it shows (see autosize).
   if (e.target.matches && e.target.matches('.ig-msg')) autosize(e.target);
-  if (Modal.kind === 'builder' && e.target.matches(`.ig-inspector input${text}, .ig-inspector textarea`)) Builder.lastField = e.target;
-  if (Modal.kind === 'editor' && e.target.matches(`.ig-live input${text}, .ig-live textarea`)) Editor.lastField = e.target;
 });
 // A hidden page has nobody to show activity to; catch up when it's back.
 document.addEventListener('visibilitychange', () => {

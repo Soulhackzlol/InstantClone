@@ -489,3 +489,29 @@ test('a bigger alert from an amount up is a check on that amount, and reads back
   const follow = { trigger: { type: 'event', event: 'twitch_follow' }, steps: [alert('hi')] };
   assert.equal(call('alertTiers', follow), null, 'a follow has no amount');
 });
+
+test('a search marks every place a word shows, and escapes the rest', () => {
+  assert.equal(call('markWords', 'time left on hold', ['time', 'old']), '<mark>time</mark> left on h<mark>old</mark>');
+  assert.equal(call('markWords', 'a<b>', ['b']), 'a&lt;<mark>b</mark>&gt;');
+  assert.equal(call('markWords', 'stream time', []), 'stream time');
+});
+
+test('the values offered under a field: the latest step\'s answer, then what happened, never one already used', () => {
+  given();
+  const counter = { type: 'counter', params: { name: 'told' } };
+  const clip = { type: 'clip', params: {} };
+  const vars = [
+    { name: 'reason', sample: 'crash', group: 'trigger' },
+    { name: 'hold', sample: '2m 00s', group: 'trigger' },
+    { name: 'counter.told', sample: '2', group: 'steps', step: counter },
+    { name: 'clip.url', sample: 'https://clips.twitch.tv/x', group: 'steps', step: clip },
+    { name: 'clip.ok', sample: 'yes', group: 'steps', step: clip },
+    { name: 'phase', sample: 'active', group: 'live' },
+    { name: 'time', sample: '21:04', group: 'live' },
+  ];
+  const pick = page.inside('ValuePick');
+  pick.ctx = () => ({ vars, plain: false });
+  pick.field = { value: 'Back after {reason?yes:no}' };
+  assert.deepEqual([...pick.suggested().map(v => v.name)], ['clip.url', 'counter.told', 'hold', 'time']);
+  pick.ctx = pick.field = null;
+});
