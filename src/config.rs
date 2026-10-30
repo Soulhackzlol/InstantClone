@@ -49,6 +49,10 @@ pub const MAX_DELAY_MS: u32 = 3_600_000;
 pub const SINK_RTMP_PORT: u16 = 19350;
 pub const SINK_WEB_PORT: u16 = 19351;
 
+/// The `ui_language` choices: "auto" follows the browser, the rest are the
+/// languages the pages have strings for (see `web/i18n/`).
+pub const UI_LANGUAGES: &[&str] = &["auto", "en", "es"];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub ingest_port: u16,
@@ -140,6 +144,9 @@ pub struct Settings {
     /// the same effect as the `--no-browser` CLI flag, but persisted and
     /// reachable from the UI. The flag still forces suppression regardless.
     pub open_dashboard_on_launch: bool,
+    /// The dashboard's and dock's language: one of `UI_LANGUAGES`. "auto"
+    /// (the default) follows the browser's own language list.
+    pub ui_language: String,
     /// Whether Streamlabs Desktop's Twitch streams are routed through
     /// InstantClone (see `streamlabs`). Off by default: it edits a file of
     /// Streamlabs' own, so only the streamer's Connect click turns it on.
@@ -1018,6 +1025,7 @@ impl Settings {
             // behaviour. Each has an explicit opt-out in the System tab.
             update_check_enabled: true,
             open_dashboard_on_launch: true,
+            ui_language: "auto".into(),
             streamlabs_connect: false,
             update_tray_notify: true,
             tray_color: 0,
@@ -1345,6 +1353,9 @@ impl Settings {
         if !self.open_dashboard_on_launch {
             writeln!(f, "open_dashboard_on_launch=false")?;
         }
+        if self.ui_language != "auto" {
+            writeln!(f, "ui_language={}", self.ui_language)?;
+        }
         if self.streamlabs_connect {
             writeln!(f, "streamlabs_connect=true")?;
         }
@@ -1520,6 +1531,7 @@ impl Settings {
             "auto_activate_when_ready" => self.auto_activate_when_ready = value == "true",
             "update_check_enabled" => self.update_check_enabled = value != "false",
             "open_dashboard_on_launch" => self.open_dashboard_on_launch = value != "false",
+            "ui_language" if UI_LANGUAGES.contains(&value) => self.ui_language = value.into(),
             "streamlabs_connect" => self.streamlabs_connect = value == "true",
             "update_tray_notify" => self.update_tray_notify = value != "false",
             "tray_color" => self.tray_color = value.parse().unwrap_or(0),
@@ -1862,7 +1874,7 @@ impl Settings {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"update_tray_notify":{utn},"tray_color":{tc},"tray_color_choice":{tcc},"tray_colors":[{tcs}],"open_dashboard_on_launch":{odol},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"crash_protection":{cp},"twitch_client_id":{tci},"twitch_app_built_in":{tbi},"destinations":{dests}}}"#,
+            r#"{{"configured":{c},"ingest_port":{ip},"ingest_bind_all":{iba},"web_port":{wp},"web_bind_all":{wba},"buffer_mb":{bm},"buffer_path":{bp},"target_delay_ms":{td},"obs_url":{ou},"discord_webhook_url":{dw},"webhook_set":{ws},"overlays_dir":{ov},"tracing_enabled":{te},"auto_arm_on_connect":{aaoc},"auto_activate_when_ready":{aawr},"auto_arm_delay_ms":{aadm},"overlays_seeded":{os},"start_with_windows":{sww},"update_check_enabled":{uce},"update_tray_notify":{utn},"tray_color":{tc},"tray_color_choice":{tcc},"tray_colors":[{tcs}],"open_dashboard_on_launch":{odol},"ui_language":{ul},"ingest_key":{ik},"auth_enabled":{ae},"dock_token":{dt},"os":{osname},"version":{ver},"hotkeys":{hotkeys},"midi":{midi},"midi_device":{midid},"crash_protection":{cp},"twitch_client_id":{tci},"twitch_app_built_in":{tbi},"destinations":{dests}}}"#,
             c = self.configured,
             sww = start_with_windows,
             ik = json_str(ik_shown),
@@ -1892,6 +1904,7 @@ impl Settings {
             tcc = self.tray_color,
             tcs = tray_colors,
             odol = self.open_dashboard_on_launch,
+            ul = json_str(&self.ui_language),
             hotkeys = hotkeys,
             midi = midi,
             midid = json_str(&self.midi_device),
@@ -4011,6 +4024,7 @@ Name@x"
             auto_arm_delay_ms: 25_000,
             update_check_enabled: false,
             open_dashboard_on_launch: false,
+            ui_language: "es".into(),
             streamlabs_connect: true,
             update_tray_notify: false,
             tray_color: 3,

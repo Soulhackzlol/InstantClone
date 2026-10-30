@@ -14,11 +14,11 @@ let s = null, lastVal = '0.0', pending = null, pendingTimer = 0;
 // Guarded writes. The state stream lands about 4 times a second and most
 // pushes change nothing the dock shows; writing only real changes keeps
 // running animations from restarting and leaves an idle dock untouched.
-function setText(el, t) { if (el.textContent !== t) el.textContent = t; }
+function setText(el, t) { if (el.textContent !== tr(t, el)) el.textContent = t; }
 function setHtml(el, h) { if (el._html !== h) { el._html = h; el.innerHTML = h; } }
 function setHidden(el, h) { if (el.hidden !== h) el.hidden = h; }
 function setClass(el, c) { if (el.className !== c) el.className = c; }
-function setTitle(el, t) { if (el.title !== t) el.title = t; }
+function setTitle(el, t) { if (el.title !== tr(t, el)) el.title = t; }
 function setDisabled(el, d) { if (el.disabled !== d) el.disabled = d; }
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 function motionOK() { return !document.hidden && !reducedMotion.matches; }
@@ -391,7 +391,7 @@ function fmtRate(k) { if (!k || k <= 0) return ''; return k >= 1000 ? (k / 1000)
 function fmt(ms) { if (ms < 100) return '0.0'; const x = Math.round(ms / 100) / 10; return x < 10 ? x.toFixed(1) : Math.round(x).toString(); }
 // Crossfade helper so the sub-tip swaps smoothly instead of snapping.
 function setTip(text) {
-  const el = $('w-tip'); if (el.textContent === text) return;
+  const el = $('w-tip'); if (el.textContent === tr(text, el)) return;
   el.classList.add('fade'); clearTimeout(el._t);
   el._t = setTimeout(() => { el.textContent = text; el.classList.remove('fade'); }, 140);
 }
@@ -628,7 +628,7 @@ function renderCta() {
   setHidden(cancel, !sec);
   if (sec) {
     setClass(cancel, sec.cls); setText(cancel, sec.text); setTitle(cancel, sec.title);
-    if (cancel.getAttribute('aria-label') !== sec.title) cancel.setAttribute('aria-label', sec.title);
+    if (cancel.getAttribute('aria-label') !== tr(sec.title, cancel)) cancel.setAttribute('aria-label', sec.title);
   }
   if (ds !== 'arming') {
     // Dead-end nudges read as disabled: can't go below 0 or above the cap.
@@ -739,7 +739,7 @@ function paintHold(hold) {
   setText($('hold-clock'), fmtClock(hold.remaining_ms));
   const held = (s.destinations || []).filter(d => d.on_hold).length;
   setText($('hold-sub'), held
-    ? `${held} destination${held === 1 ? '' : 's'} on the reconnect screen`
+    ? (held === 1 ? '1 destination on the reconnect screen' : `${held} destinations on the reconnect screen`)
     : 'Waiting for OBS');
 }
 
@@ -973,7 +973,7 @@ function patchDestRow(row, d) {
   setTitle(row._sw, d.enabled ? 'Turn off' : 'Turn on');
   const checked = String(!!d.enabled);
   if (row._sw.getAttribute('aria-checked') !== checked) row._sw.setAttribute('aria-checked', checked);
-  if (row._sw.getAttribute('aria-label') !== (d.name || 'Destination')) row._sw.setAttribute('aria-label', d.name || 'Destination');
+  if (row._sw.getAttribute('aria-label') !== tr(d.name || 'Destination', row._sw)) row._sw.setAttribute('aria-label', d.name || 'Destination');
 }
 // Compact circular badge: the platform's mark, live-glow ring, hover shows
 // the name (native title). Tap arms it (confirm), tap again commits.
@@ -1031,7 +1031,7 @@ async function commitDest(d, enabled) {
     method: 'POST', headers: FORM,
     body: `id=${encodeURIComponent(d.id)}&enabled=${enabled ? 'on' : 'off'}`,
   });
-  if (!r.ok) toast(failText(r, `Couldn't turn ${d.name || 'it'} ${enabled ? 'on' : 'off'}`), 'err');
+  if (!r.ok) toast(failText(r, enabled ? `Couldn't turn on ${d.name || 'it'}` : `Couldn't turn off ${d.name || 'it'}`), 'err');
   else toast(`${d.name || 'Destination'} ${enabled ? 'on' : 'off'}`, 'ok');
 }
 
@@ -1120,6 +1120,8 @@ let srvLoaded = false;
 async function fetchServerCfg() {
   const r = await fetchJ('/dock/settings');
   if (!r.ok || !r.j) return;
+  // A new language comes with the page's strings: load the dock again.
+  if (srvLoaded && r.j.ui_language !== srvCfg.ui_language) { location.reload(); return; }
   srvCfg = { ...srvCfg, ...r.j }; srvLoaded = true;
   renderBehavior(); renderSettings();
 }

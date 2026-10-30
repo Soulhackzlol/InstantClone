@@ -323,6 +323,24 @@ async fn serve(
         return Ok(());
     }
 
+    // The pages' strings: English needs none, so its file is the bare
+    // translator; any other language's file carries its strings too.
+    if method == "GET" && bare_path == "/i18n.js" {
+        let blob = match page_language(&settings.borrow().ui_language, head_str) {
+            "es" => I18N_ES_JS_GZ,
+            _ => I18N_EN_JS_GZ,
+        };
+        let r = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\n\
+             Content-Encoding: gzip\r\nContent-Length: {}\r\n\
+             Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+            blob.len()
+        );
+        sock.write_all(r.as_bytes()).await?;
+        sock.write_all(blob).await?;
+        return Ok(());
+    }
+
     // Optional VOD-unlocker OBS script, handed to the browser as a Save-As
     // attachment. Serving it (rather than writing it server-side to a fixed
     // path) lets the user drop it wherever their OBS scripts folder actually
@@ -3021,6 +3039,7 @@ const SETTABLE_KEYS: &[&str] = &[
     "update_tray_notify",
     "tray_color",
     "open_dashboard_on_launch",
+    "ui_language",
     "midi_device",
     "twitch_client_id",
 ];
@@ -4642,16 +4661,18 @@ const DOCK_SETTABLE_KEYS: &[&str] = &[
 ];
 
 /// The dock's switches, plus whether a password is set (the dock then knows
-/// a link it copies needs the access token).
+/// a link it copies needs the access token) and the language picked (the
+/// dock loads again in a new one).
 fn dock_settings_json(settings: &Arc<watch::Sender<Settings>>) -> String {
     let s = settings.borrow();
     format!(
-        r#"{{"auto_arm_on_connect":{},"auto_activate_when_ready":{},"tracing_enabled":{},"crash_protection.enabled":{},"auth_enabled":{}}}"#,
+        r#"{{"auto_arm_on_connect":{},"auto_activate_when_ready":{},"tracing_enabled":{},"crash_protection.enabled":{},"auth_enabled":{},"ui_language":{}}}"#,
         s.auto_arm_on_connect,
         s.auto_activate_when_ready,
         s.tracing_enabled,
         s.crash_protection.enabled,
         !s.dashboard_password_hash.is_empty(),
+        config::json_str(&s.ui_language),
     )
 }
 
@@ -5346,6 +5367,11 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         "open_dashboard_on_launch" => {
             s.open_dashboard_on_launch = !matches!(value, "" | "false" | "0" | "off");
         }
+        "ui_language" => {
+            if config::UI_LANGUAGES.contains(&value) {
+                s.ui_language = value.into();
+            }
+        }
         // hotkey.<action>=<combo> and midi.<action>=<signature>. Both
         // `set`s canonicalize and drop anything malformed, so an empty or
         // bad value simply clears the binding - which is exactly how the
@@ -5609,6 +5635,11 @@ fn classify_access(method: &str, path: &str) -> Access {
     // public like the overlay display. Gating it would break Start Streaming the
     // moment a dashboard password is enabled.
     if path == "/obs/multitrack-config" {
+        return Access::Public;
+    }
+    // The pages' strings: the same for everyone, and the login page needs
+    // them before anyone has logged in.
+    if method == "GET" && path == "/i18n.js" {
         return Access::Public;
     }
     // The overlay's read-only feed, and only by GET. An OBS browser source
@@ -5947,6 +5978,39 @@ static STUDIO_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/studio.js
 /// `web/overlay-runtime.js`; build-time gzipped (see `build.rs`).
 static OVERLAY_RUNTIME_JS_GZ: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/overlay-runtime.js.gz"));
+
+/// `web/i18n.js` alone (English), and with the Spanish strings ahead of it.
+/// Built from `web/i18n/` (see `build.rs`).
+static I18N_EN_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-en.js.gz"));
+static I18N_ES_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-es.js.gz"));
+
+/// The language the pages show: the one picked in System, or for "auto" the
+/// first one in the browser's `Accept-Language` list that has strings.
+fn page_language(setting: &str, head: &str) -> &'static str {
+    match setting {
+        "es" => return "es",
+        "en" => return "en",
+        _ => {}
+    }
+    let wanted = head
+        .split("\r\n")
+        .find_map(|line| strip_prefix_icase(line, "accept-language:"))
+        .unwrap_or("");
+    // Browsers list languages most wanted first; a q=0 entry is a refusal.
+    for entry in wanted.split(',') {
+        let mut parts = entry.split(';');
+        let tag = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+        if parts.any(|p| p.trim().replace(' ', "") == "q=0") {
+            continue;
+        }
+        match tag.split('-').next() {
+            Some("es") => return "es",
+            Some("en") => return "en",
+            _ => {}
+        }
+    }
+    "en"
+}
 
 /// Optional VOD-unlocker OBS Lua script, embedded from `obs/`. Served by
 /// `GET /obs/vod-script/download` as a Save-As attachment. Embedding keeps it
@@ -6504,6 +6568,26 @@ mod tests {
         assert!(!after.contains("goal-subs"), "the feed carries no names");
     }
 
+    #[test]
+    fn the_pages_speak_the_picked_language_or_the_browsers() {
+        let asks = |list: &str| format!("GET /i18n.js HTTP/1.1\r\nAccept-Language: {list}\r\n");
+        assert_eq!(page_language("es", &asks("en-US,en")), "es");
+        assert_eq!(page_language("en", &asks("es-ES,es")), "en");
+        // Auto: the first listed language there are strings for.
+        assert_eq!(
+            page_language("auto", &asks("es-ES,es;q=0.9,en;q=0.8")),
+            "es"
+        );
+        assert_eq!(page_language("auto", &asks("ca,es;q=0.9")), "es");
+        assert_eq!(
+            page_language("auto", &asks("fr-FR,en;q=0.5,es;q=0.3")),
+            "en"
+        );
+        assert_eq!(page_language("auto", &asks("es;q=0, en")), "en");
+        assert_eq!(page_language("auto", &asks("de")), "en");
+        assert_eq!(page_language("auto", "GET /i18n.js HTTP/1.1\r\n"), "en");
+    }
+
     /// Reading the overlay feed must never imply being able to drive the
     /// delay. `/state` is Control, and Control is arm / activate / cut /
     /// go-live - so pointing overlays at it, or widening it to reach them,
@@ -6910,6 +6994,13 @@ mod tests {
                 reads_as: "false",
                 reset: "on",
                 read: |s| s.open_dashboard_on_launch.to_string(),
+            },
+            SettableRow {
+                key: "ui_language",
+                set: "es",
+                reads_as: "es",
+                reset: "auto",
+                read: |s| s.ui_language.clone(),
             },
             SettableRow {
                 key: "midi_device",
@@ -8538,6 +8629,7 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         ("GET", "/integrations.js", Access::Admin),
         ("GET", "/studio.js", Access::Admin),
         ("GET", "/obs/vod-script/download", Access::Admin),
+        ("GET", "/i18n.js", Access::Public),
         ("GET", "/events", Access::Control),
         ("GET", "/overlay-events", Access::Public),
         ("GET", "/alerts-events", Access::Public),

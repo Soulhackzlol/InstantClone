@@ -3,6 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>InstantClone Dashboard</title>
+<script src="/i18n.js"></script>
 <link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect x='3' y='3' width='42' height='42' rx='10.5' fill='%235ac8fa'/%3E%3Cpath d='M17 14h4v20h-4zM27 14h4v20h-4z' fill='%23f4f6f9'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1262,6 +1263,7 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
 .tab-sub{color:var(--fg-3);font-size:13px;margin-top:4px;max-width:60ch}
 /* Tray icon color: one dot per color, ringed when it is the one chosen. */
 .tray-color-row{display:flex;align-items:center;gap:14px}
+.sys-language{margin-top:12px;max-width:260px}
 .tray-color-row[hidden]{display:none}
 .tray-colors{display:flex;gap:12px;padding:4px}
 .tray-color{position:relative;width:22px;height:22px;cursor:pointer}
@@ -4775,7 +4777,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   <!-- STEP 3: stream key -->
   <div class="wiz-step" data-wstep="key" hidden>
     <div class="wiz-step-h">
-      <div class="wiz-step-t">Paste your <span id="w-key-platform-name">platform</span> stream key</div>
+      <div class="wiz-step-t">Paste your stream key from <span id="w-key-platform-name">platform</span></div>
       <div class="wiz-step-s">This is the real key from your platform dashboard. It never leaves this PC except to that platform.</div>
     </div>
     <div id="w-custom-wrap" hidden>
@@ -5081,7 +5083,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
           <span class="muted" id="vod-script-msg" style="font-size:11.5px"></span>
         </div>
         <ol style="margin:10px 0 0;padding-left:16px;font-size:11.5px;line-height:1.7;color:var(--fg-2)">
-          <li>Click <b>Download</b> and pick where to save <code class="mono">optional-vod-unlocker.lua</code> (your OBS scripts folder is tidiest).</li>
+          <li>Press <b>Download</b> and pick where to save <code class="mono">optional-vod-unlocker.lua</code> (your OBS scripts folder is tidiest).</li>
           <li>In OBS: <b>Tools → Scripts → +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
           <li>In the script panel, set <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>). Your live mix stays on track 1.</li>
         </ol>
@@ -5374,7 +5376,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <!-- Shown on OBS 32.2+ where the legacy VOD+EB launcher is hidden. -->
       <div class="tab-sub" id="sys-vodeb-legacy-note" hidden style="margin-top:8px">For <b>VOD audio</b> on your OBS version, use the <b>VOD unlocker script</b> in <b>System &rarr; Twitch &amp; OBS</b>, and the registered <b>InstantClone</b> service for Enhanced Broadcasting. These launchers are only for OBS older than 32.2.</div>
       <!-- Shown on older OBS where the legacy VOD+EB launcher still applies. -->
-      <div class="tab-sub" id="sys-vodeb-hint" style="margin-top:8px">The <b>EB + VOD</b> button is the <b>legacy VOD path</b> (OBS before 32.2): it turns on VOD audio mode on your Twitch destination and writes OBS's VOD-track unlock flag. Close OBS before pressing it or the flag write is blocked.</div>
+      <div class="tab-sub" id="sys-vodeb-hint" style="margin-top:8px"><b>EB + VOD</b>: the <b>legacy VOD path</b>, for OBS before 32.2. It turns on VOD audio mode on your Twitch destination and writes OBS's VOD-track unlock flag. Close OBS before pressing it or the flag write is blocked.</div>
       <ul id="sys-vodeb-checklist" hidden style="list-style:none;margin:10px 0 0;padding:0;font-size:12.5px"></ul>
       <div class="tab-sub" id="sys-eb-msg" style="margin-top:8px"></div>
     </details>
@@ -5653,6 +5655,15 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 
   <!-- General: how the app starts and behaves, and the delay buffer -->
   <div class="sub-pane" data-subpane="general">
+    <section class="sys-section" data-find="language idioma spanish español english translate">
+      <div class="ic-label">Language</div>
+      <div class="tab-sub">For the dashboard and the OBS dock. Auto follows your browser. Logs stay in English.</div>
+      <select id="s-language" class="ic-input sys-language" aria-label="Language">
+        <option value="auto">Auto</option>
+        <option value="en" translate="no">English</option>
+        <option value="es" translate="no">Español</option>
+      </select>
+    </section>
     <section class="sys-section" data-find="startup start with windows launch tray open dashboard auto arm activate default delay pre-arm when obs connects ready">
       <div class="ic-label">Behavior</div>
       <div class="tab-sub">How InstantClone reacts when OBS starts streaming and when the delay is ready.</div>
@@ -5852,7 +5863,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
         <span class="muted" id="sys-vod-script-msg" style="font-size:12px"></span>
       </div>
       <ol class="tab-sub" style="margin:10px 0 0;padding-left:18px;line-height:1.7">
-        <li>Click <b>Download</b> and pick where to save <code class="mono">optional-vod-unlocker.lua</code> (your OBS scripts folder is tidiest).</li>
+        <li>Press <b>Download</b> and pick where to save <code class="mono">optional-vod-unlocker.lua</code> (your OBS scripts folder is tidiest).</li>
         <li>In OBS: <b>Tools → Scripts → +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
         <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>). Your live mix stays on track 1.</li>
       </ol>
@@ -5881,7 +5892,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
         <li><b>Name</b>: anything, for example <i>My InstantClone</i>. It can't contain the word "Twitch".</li>
         <li><b>OAuth Redirect URL</b>: <code class="mono">http://localhost</code> <button type="button" class="ic-btn ic-btn-ghost tw-app-copy" onclick="copyText(this,'http://localhost')">Copy</button> It isn't used, but Twitch requires one.</li>
         <li><b>Category</b>: Broadcaster Suite. <b>Client Type</b>: <b>Public</b>. This one matters: a Confidential app can't stay logged in.</li>
-        <li>Click <b>Create</b>, then <b>Manage</b>, copy the <b>Client ID</b> and paste it above. You don't need a secret.</li>
+        <li>Press <b>Create</b>, then <b>Manage</b>, copy the <b>Client ID</b> and paste it above. You don't need a secret.</li>
       </ol>
       <div class="tab-sub tw-app-warn">Changing the app logs your Twitch accounts out. After saving, connect them again in <a href="#" onclick="showTab('integrations');return false">Integrations</a>.</div>
     </details>
@@ -6138,7 +6149,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
     <button type="button" class="ic-btn ic-btn-ghost logs-copy" id="logs-copy-problems" hidden title="Copies every warning and error, for a bug report or a message to support">Copy problems</button>
   </div>
   <div class="logs-wrap">
-    <div class="logs" id="logs" role="log" hidden></div>
+    <div class="logs" id="logs" role="log" translate="no" hidden></div>
     <div class="logs-nomatch" id="logs-nomatch" hidden>No lines match these filters.</div>
     <button type="button" class="logs-latest" id="logs-latest" hidden>↓ Jump to latest</button>
     <div class="logs-empty" id="logs-empty">
@@ -6364,7 +6375,7 @@ function fadeOutHidden(el){
   el.animate([{opacity:1, transform:'none'}, {opacity:0, transform:'scale(.92)'}],
     {duration: 180, easing: 'ease-in'}).onfinish = () => { el.hidden = true; };
 }
-const setText = (el, text) => { if (el && el.textContent !== text) el.textContent = text; };
+const setText = (el, text) => { if (el && el.textContent !== tr(text, el)) el.textContent = text; };
 const setClass = (el, cls, on) => { if (el && el.classList.contains(cls) !== on) el.classList.toggle(cls, on); };
 const setClassName = (el, name) => { if (el && el.className !== name) el.className = name; };
 const setHtml = (el, html) => { if (el && el._html !== html){ el._html = html; el.innerHTML = html; } };
@@ -7191,7 +7202,7 @@ function setSubText(el, text, key){
   const kind = key || text;
   const sameKind = el._subKey === kind;
   el._subKey = kind;
-  if (el.textContent === text) return;
+  if (el.textContent === tr(text, el)) return;
   if (sameKind && !el._subT){ el.textContent = text; return; }
   clearTimeout(el._subT);
   el.classList.add('subfade');
@@ -7356,7 +7367,7 @@ function renderHero(s){
       subKey = 'adjust-building';
     } else {
       const dir = armedMs > curMs ? 'back' : 'forward';
-      sub = `Jumping ${dir} to ${fmtDelay(armedMs)} of delay…`;
+      sub = dir === 'back' ? `Jumping back to ${fmtDelay(armedMs)} of delay…` : `Jumping forward to ${fmtDelay(armedMs)} of delay…`;
       subKey = 'adjust-' + dir;
     }
   }
@@ -7679,7 +7690,7 @@ function renderCpProfiles(){
     if (tooBig) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled');
     const title = tooBig ? `${p.name}: too long for the buffer. Click for details.`
                 : ds === 'active' && !isCur ? `Adjust to ${p.name}` : `Arm: ${p.name}`;
-    if (b.title !== title) b.title = title;
+    if (b.title !== tr(title, b)) b.title = title;
     b.dataset.ms = p.delay_ms;
     b.dataset.name = p.name;
     const label = b.lastElementChild;
@@ -7802,8 +7813,8 @@ function renderHeader(s){
   } else {
     $('hdr-egress-v').textContent = `${live}/${total} live`;
     eg.title = live > 0
-      ? `${live} of ${total} destination${total>1?'s':''} connected and receiving.`
-      : `${total} destination${total>1?'s':''} configured, none connected yet.`;
+      ? (total === 1 ? 'Your destination is connected and receiving.' : `${live} of ${total} destinations connected and receiving.`)
+      : (total === 1 ? '1 destination set up, not connected yet.' : `${total} destinations set up, none connected yet.`);
   }
   // Bitrate pill: "Idle" when nothing flows, auto kbps -> Mbps otherwise.
   const kbps = s.stats.bitrate_kbps || 0;
@@ -8046,7 +8057,7 @@ function updateFormatIcon(r, d){
   if (r.fmtKind !== kind){ r.format.innerHTML = formatIconSvg(kind); r.fmtKind = kind; }
   const wantClass = 'dcard-format' + (cls ? ' ' + cls : '');
   if (r.format.className !== wantClass) r.format.className = wantClass;
-  if (r.format.title !== title){ r.format.title = title; r.format.setAttribute('aria-label', title); }
+  if (r.format.title !== tr(title, r.format)){ r.format.title = title; r.format.setAttribute('aria-label', title); }
 }
 
 function buildDestCard(d){
@@ -8055,7 +8066,7 @@ function buildDestCard(d){
   el.innerHTML = `
     <div class="dcard-head">
       <span class="dcard-icon"></span>
-      <div class="dcard-id"><div class="dcard-name"></div><div class="dcard-host mono"></div></div>
+      <div class="dcard-id"><div class="dcard-name" translate="no"></div><div class="dcard-host mono"></div></div>
       <span class="dcard-format" tabindex="0" role="img"></span>
       <button class="dcard-switch dcard-toggle" type="button" role="switch" title="Enable / disable"><span></span></button>
       <div class="dcard-status"><span class="d-dot"></span><span class="dcard-status-l"></span></div>
@@ -8203,14 +8214,14 @@ function renderDestFailure(r, d, streaming){
     r.whyBar.classList.remove('run');
     return;
   }
-  if (r.whyAdvice.textContent !== f.advice) r.whyAdvice.textContent = f.advice;
-  if (r.whyDetail.textContent !== f.detail) r.whyDetail.textContent = f.detail;
+  if (r.whyAdvice.textContent !== tr(f.advice, r.whyAdvice)) r.whyAdvice.textContent = f.advice;
+  if (r.whyDetail.textContent !== tr(f.detail, r.whyDetail)) r.whyDetail.textContent = f.detail;
   const waiting = f.retry_in_ms != null;
   const secs = waiting ? Math.max(1, Math.ceil(f.retry_in_ms / 1000)) : 0;
   const next = !f.retries ? 'Fix it in Edit, then it connects.'
              : waiting ? `Next try in ${secs} s`
              : 'Trying again now…';
-  if (r.whyNext.textContent !== next) r.whyNext.textContent = next;
+  if (r.whyNext.textContent !== tr(next, r.whyNext)) r.whyNext.textContent = next;
   r.whyRetry.hidden = !waiting;
   if (waiting) r.whyRetry.disabled = false;
   // The bar restarts only for a new wait, not for each tick of the same one.
@@ -8241,7 +8252,7 @@ function updateDestCard(r, d){
   // Host stays clean (just the platform). The format is conveyed by the
   // icon + hover tooltip set below, not by appending text here.
   const platLabel = PLATFORM_LABEL[d.platform] || d.platform;
-  if (r.host.textContent !== platLabel) r.host.textContent = platLabel;
+  if (r.host.textContent !== tr(platLabel, r.host)) r.host.textContent = platLabel;
   updateFormatIcon(r, d);
   // alive = TCP connected. bitrate>0 = actually forwarding frames. The
   // sink/Twitch session can be CONNECTED but receiving nothing (OBS hasn't
@@ -8294,7 +8305,7 @@ function updateDestCard(r, d){
     if (d.alive && d.video_codec) parts.push(d.video_codec);
     const txt = verticalWaiting ? vdiag.hint : parts.join(' · ');
     r.res.classList.toggle('is-hint', verticalWaiting);
-    if (r.res.textContent !== txt) r.res.textContent = txt;
+    if (r.res.textContent !== tr(txt, r.res)) r.res.textContent = txt;
   }
   renderDestFailure(r, d, isStreaming || onHold);
   // Smooth, 0-anchored, per-card stable sparkline (same renderer as stats).
@@ -8308,7 +8319,7 @@ function updateDestCard(r, d){
                    : frames.toLocaleString();
   const metaText = framesText + (frames === 1 ? ' frame' : ' frames') + ' · '
     + count(d.cuts || 0, 'cut', 'cuts') + ' · ' + count(d.reconnects || 0, 'reconnect', 'reconnects');
-  if (r.meta.textContent !== metaText) r.meta.textContent = metaText;
+  if (r.meta.textContent !== tr(metaText, r.meta)) r.meta.textContent = metaText;
   r.toggle.title = d.enabled ? 'Disable this destination' : 'Enable this destination';
   r.toggle.classList.toggle('on', d.enabled);
   r.toggle.setAttribute('aria-checked', d.enabled ? 'true' : 'false');
@@ -8939,6 +8950,7 @@ async function loadConfig({resetSystem = false} = {}){
       $('s-startup').checked = !!c.start_with_windows;
       // Both default true server-side; treat a missing field as on.
       $('s-open-dash').checked = c.open_dashboard_on_launch !== false;
+      $('s-language').value = c.ui_language || 'auto';
       $('s-update-check').checked = c.update_check_enabled !== false;
       $('s-update-tray').checked = c.update_tray_notify !== false;
       syncUpdateTray(false);
@@ -9919,6 +9931,12 @@ async function saveSettings(){
         waitForRestart({port: newWebPort, text: 'The dashboard moved to port ' + newWebPort + '. Taking you there.'});
         return;
       }
+      // A new language comes with the page's strings: load the page again.
+      if (lastConfig && body.get('ui_language') !== (lastConfig.ui_language || 'auto')){
+        settingsMarkClean();
+        location.reload();
+        return;
+      }
       // The restart banner follows the server's restart_pending (applyState).
       loadConfig({resetSystem: true});
     } else { flashFieldErrors(j.error); toast(`Couldn't save settings: ${j.error}`, 'err'); showSettingsError(j.error); }
@@ -10772,7 +10790,7 @@ function renderObsInstallsInto(host){
     const name = inst.portable ? 'OBS Studio (portable)' : 'OBS Studio';
     const [tone, label] = obsInstallPill(inst);
     const nameEl = row.querySelector('.obs-inst-name'), pathEl = row.querySelector('.obs-inst-path');
-    if (nameEl.textContent !== name) nameEl.textContent = name;
+    if (nameEl.textContent !== tr(name, nameEl)) nameEl.textContent = name;
     if (pathEl.textContent !== inst.path){ pathEl.textContent = inst.path; pathEl.title = inst.path; }
     setClassName(row.querySelector('.obs-reg-pill'), 'ic-pill obs-reg-pill' + (tone ? ' ' + tone : ''));
     setText(row.querySelector('.obs-inst-pill-l'), label);
@@ -11184,7 +11202,7 @@ const OBS_NOT_FOUND = 'OBS not found at the standard install path.';
 function sayObsFound(msg, found){
   if (!msg) return;
   if (!found && !msg.textContent) msg.textContent = OBS_NOT_FOUND;
-  else if (found && msg.textContent === OBS_NOT_FOUND) msg.textContent = '';
+  else if (found && msg.textContent === tr(OBS_NOT_FOUND, msg)) msg.textContent = '';
 }
 async function refreshObsEbLaunchAvailability(){
   const btn = $('obs-eb-setup-btn');
@@ -11765,7 +11783,7 @@ function logOverlap(old, lines){
 function showUnseenLogs(){
   const button = $('logs-latest');
   fadeHidden(button, $('logs')._follow !== false);
-  button.textContent = logView.unseen ? `↓ ${logView.unseen} new ${logView.unseen === 1 ? 'line' : 'lines'}` : '↓ Jump to latest';
+  button.textContent = logView.unseen === 1 ? '↓ 1 new line' : logView.unseen ? `↓ ${logView.unseen} new lines` : '↓ Jump to latest';
 }
 // The log is read only while the Logs tab is on screen: a new line moves
 // its counter (see Live), and opening the tab or the window catches up.
@@ -12683,6 +12701,7 @@ function settingsBody(){
     twitch_client_id:$('s-twitch-client').value.trim(),
     start_with_windows:$('s-startup').checked?'on':'off',
     open_dashboard_on_launch:$('s-open-dash').checked?'true':'false',
+    ui_language:$('s-language').value,
     update_check_enabled:$('s-update-check').checked?'true':'false',
     update_tray_notify:$('s-update-tray').checked?'true':'false',
     tray_color:(document.querySelector('input[name="s-tray-color"]:checked') || {value:'0'}).value,
@@ -13343,7 +13362,7 @@ function renderHoldBanner(s){
   if (tail){
     $('hold-title').textContent = 'OBS stopped. Your delay is still airing.';
     const live = s.destinations_alive || 0;
-    $('hold-sub').textContent = `${live} destination${live === 1 ? '' : 's'} live · ends in ${fmtClock(s.tail_ms)}, when viewers reach the end`;
+    $('hold-sub').textContent = `${live === 1 ? '1 destination live' : `${live} destinations live`} · ends in ${fmtClock(s.tail_ms)}, when viewers reach the end`;
     return;
   }
   if (!hold) return;
@@ -13355,7 +13374,7 @@ function renderHoldBanner(s){
   // After a crash OBS asks about Safe Mode, which leaves scripts and
   // plugins off (the VOD track script among them).
   const reopen = hold.reason === 'crash' ? 'reopen OBS in Normal Mode and start streaming' : 'waiting for OBS';
-  const live = held ? `${held} destination${held === 1 ? '' : 's'} live · ${reopen}` : reopen[0].toUpperCase() + reopen.slice(1);
+  const live = held ? `${held === 1 ? '1 destination live' : `${held} destinations live`} · ${reopen}` : reopen[0].toUpperCase() + reopen.slice(1);
   $('hold-sub').textContent = `${live} · ${fmtClock(hold.remaining_ms)} left`;
 }
 // "1:05" for a millisecond countdown.
@@ -13606,8 +13625,9 @@ async function loadWhatsNew(){
   const w = whatsNew;
   const title = w.rebuild ? 'Updated to a new build of v' + w.to : 'Updated to v' + w.to;
   $('whats-new-title').textContent = title;
-  $('whats-new-sub').textContent = (w.from && !w.rebuild ? 'From v' + w.from + '. ' : '')
-    + 'Your settings, destinations and overlays came along.';
+  $('whats-new-sub').textContent = w.from && !w.rebuild
+    ? `From v${w.from}. Your settings, destinations and overlays came along.`
+    : 'Your settings, destinations and overlays came along.';
   const changes = w.changes || [];
   $('whats-new-list').replaceChildren(...changes.slice(0, UPDATE_CHANGES_SHOWN).map(changeRow));
   $('whats-new-changes').hidden = !changes.length;

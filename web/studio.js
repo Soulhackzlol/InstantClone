@@ -387,7 +387,7 @@ const Studio = (function(){
   function phaseInfo(st, p){
     if(st==='preparing') return { t:'Arming '+Math.round((p||0)*100)+'%', c:STATE_DOT.preparing };
     if(st==='ready') return { t:'Armed', c:STATE_DOT.ready };
-    if(st==='active') return { t:'On delay '+(ARMED_MS/1000).toFixed(1)+'s', c:STATE_DOT.active };
+    if(st==='active') return { t:`On delay ${(ARMED_MS/1000).toFixed(1)}s`, c:STATE_DOT.active };
     if(st==='error') return { t:'Signal lost', c:STATE_DOT.error };
     return { t:'Idle, no delay', c:STATE_DOT.idle };
   }
@@ -665,7 +665,7 @@ const Studio = (function(){
   // Under an alert design's name: how many alerts play it, or what it is.
   function designNote(o, k){
     const u = Integrations.designUse(o.slug), n = u ? u.names.length : 0;
-    if(n) return 'Plays for '+n+(n===1?' alert':' alerts');
+    if(n) return n===1 ? 'Plays for 1 alert' : `Plays for ${n} alerts`;
     return k.theme ? Integrations.alertKit.themes[k.theme].motion : 'Not used yet';
   }
 
@@ -736,7 +736,7 @@ const Studio = (function(){
   function designMeta(o){
     const u=Integrations.designUse(o.slug), n=u ? u.names.length : 0;
     if(u) $('ovg-kind').textContent = !u.total ? 'No alerts yet' : u.everywhere ? 'Every alert plays it'
-      : n ? 'Plays for '+n+' of '+u.total+' alerts' : 'No alert plays it yet';
+      : n ? `Plays for ${n} of ${u.total} alerts` : 'No alert plays it yet';
     $('ovg-primary').innerHTML=(u && !u.total ? '<button class="ic-btn ic-btn-primary st-withic"'+on('setUpAlerts')+'>'+stIcon(UI_ICON.plus)+'Set up Twitch alerts</button>' : '')+
       '<button class="ic-btn '+(u && !u.total ? 'ic-btn-ghost' : 'ic-btn-primary')+' st-withic"'+on('editDesign',o.slug)+'>'+stIcon(UI_ICON.pen)+'Edit in Studio</button>'+
       (u && u.total && !u.everywhere ? '<button class="ic-btn ic-btn-ghost"'+on('useDesign',o.slug)+' title="Alerts you add later play it too">Use for every alert</button>' : '');
@@ -807,8 +807,9 @@ const Studio = (function(){
     const o=savedList.find(x=>x.slug===slugId);
     // An alert design's alerts play another: say which.
     const u=o && o.kind==='alerts' ? Integrations.designUse(slugId) : null, n=u ? u.names.length : 0;
-    const after=n ? '\n\n'+n+(n===1?' alert plays':' alerts play')+' it: '+(n===1?'it':'they')+' will play '+(u.isDefault ? 'the ready-made Island' : u.defaultName)+' instead.' : '';
-    if(!confirm('Delete overlay "'+((o&&o.name)||slugId)+'"? This removes its file from the overlays folder.'+after)) return;
+    const instead=u ? (u.isDefault ? 'the ready-made Island' : u.defaultName) : '';
+    const after=!n ? '' : n===1 ? `\n\n1 alert plays it: it will play ${instead} instead.` : `\n\n${n} alerts play it: they will play ${instead} instead.`;
+    if(!confirm(`Delete overlay "${(o&&o.name)||slugId}"? This removes its file from the overlays folder.`+after)) return;
     const r = await postAction('/overlays/'+encodeURIComponent(slugId)+'/delete');
     if(!r.ok){ toast(`Could not delete the overlay: ${r.error}`,'err'); return; }
     if(o && o.kind==='alerts') await Integrations.designGone(slugId);

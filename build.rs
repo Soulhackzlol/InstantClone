@@ -34,29 +34,38 @@ fn main() {
         // The Overlay Studio editor, the same way.
         ("studio.js", false),
     ] {
-        let src_path = web_dir.join(name);
-        println!("cargo:rerun-if-changed={}", src_path.display());
-
-        let raw = fs::read_to_string(&src_path)
-            .unwrap_or_else(|e| panic!("read {}: {}", src_path.display(), e));
+        let raw = read_web(&web_dir.join(name));
         let processed: Vec<u8> = if *do_min {
             minify(&raw)
         } else {
             raw.clone().into_bytes()
         };
 
-        let out_path = out_dir.join(format!("{name}.gz"));
-        let f = fs::File::create(&out_path).unwrap();
-        let mut enc = GzEncoder::new(f, Compression::best());
-        enc.write_all(&processed).unwrap();
-        enc.finish().unwrap();
-
-        let gz_size = fs::metadata(&out_path).unwrap().len();
+        let gz_size = write_gz(&out_dir.join(format!("{name}.gz")), &processed);
         println!(
             "cargo:warning={}: {} B raw -> {} B out -> {} B gz",
             name,
             raw.len(),
             processed.len(),
+            gz_size
+        );
+    }
+
+    // The pages' translator: alone for English, and behind each other
+    // language's strings (web/i18n/<lang>.json, a JSON object, so it drops
+    // into the script as it is).
+    let translator = read_web(&web_dir.join("i18n.js"));
+    write_gz(&out_dir.join("i18n-en.js.gz"), translator.as_bytes());
+    for lang in TRANSLATED {
+        let strings = read_web(&web_dir.join("i18n").join(format!("{lang}.json")));
+        let script = format!("window.IC_I18N={{lang:\"{lang}\",strings:{strings}}};\n{translator}");
+        let gz_size = write_gz(
+            &out_dir.join(format!("i18n-{lang}.js.gz")),
+            script.as_bytes(),
+        );
+        println!(
+            "cargo:warning=i18n {lang}: {} B raw -> {} B gz",
+            script.len(),
             gz_size
         );
     }
@@ -78,6 +87,25 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=build.rs");
+}
+
+/// The languages with strings in web/i18n/, besides English (the code's
+/// own). `config::UI_LANGUAGES` and `web::page_language` list them too.
+const TRANSLATED: &[&str] = &["es"];
+
+/// A file under web/, read for the build and watched for changes.
+fn read_web(path: &std::path::Path) -> String {
+    println!("cargo:rerun-if-changed={}", path.display());
+    fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
+/// Gzip `bytes` into `path`; returns the compressed size.
+fn write_gz(path: &std::path::Path, bytes: &[u8]) -> u64 {
+    let f = fs::File::create(path).unwrap();
+    let mut enc = GzEncoder::new(f, Compression::best());
+    enc.write_all(bytes).unwrap();
+    enc.finish().unwrap();
+    fs::metadata(path).unwrap().len()
 }
 
 // ---------- ICO generation ----------
