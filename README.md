@@ -102,7 +102,7 @@ Multi-track "Auto" works out of the box. Your real platform keys go into the **D
 
 <table>
 <tr><td align="center" width="40"><b>1</b></td><td>Type a delay (e.g. <kbd>15</kbd>s) and hit <b>Arm</b>. The buffer pre-fills from the live feed without touching what's going out.</td></tr>
-<tr><td align="center"><b>2</b></td><td>When it reads <code>ARMED</code>, hit <b>Activate</b>. The switch to delayed is instant on screen, no reconnect, no glitch.</td></tr>
+<tr><td align="center"><b>2</b></td><td>When it reads <code>ARMED</code>, hit <b>Activate</b>. Viewers jump back to a keyframe at least that old and see those seconds once more, then stay that far behind. No reconnect, no glitch.</td></tr>
 <tr><td align="center"><b>3</b></td><td><b>Cut</b> to snap back to live any time, or <b>&#9201; Cut after this airs</b> to auto-cut the moment your reaction reaches viewers. No counting the delay in your head.</td></tr>
 </table>
 
@@ -135,7 +135,7 @@ Once it existed, the parts I'd actually wanted ended up in it: a real two-phase 
 <td valign="top" width="50%">
 
 **🎯 Multistream to every platform**
-Simulcast one OBS feed to Twitch, YouTube, Kick, and custom RTMP at once, a free self-hosted alternative to Restream. Toggle each independently, watch per-destination bitrate live. A **Local test sink** streams to a tiny receiver on your PC so you can rehearse arm/activate/cut with no key and nothing leaving your machine.
+Simulcast one OBS feed to Twitch, YouTube, Kick, and custom RTMP at once, a free self-hosted alternative to Restream. Toggle each independently, watch per-destination bitrate live. A **Test destination** streams to a tiny receiver on your PC so you can rehearse arm/activate/cut with no key and nothing leaving your machine.
 
 </td>
 <td valign="top" width="50%">
@@ -232,12 +232,12 @@ InstantClone talks to Discord, Twitch chat, your phone, OBS and your own tools. 
 <tr>
 <td valign="top" width="50%">
 
-**Two-phase by design.** You **arm** a buffer (a target size in seconds). InstantClone pre-fills it from the live OBS feed without touching what's going out. Once it's full you hit **Activate**, and the switch to delayed is instant on screen: the player just jumps from the live edge to the keyframe at least N seconds back, so viewers are never closer to live than you set.
+**Two-phase by design.** You **arm** a buffer (a target size in seconds). InstantClone pre-fills it from the live OBS feed without touching what's going out. Once it's full you hit **Activate**, and the switch to delayed is instant on screen: the player just jumps from the live edge to the keyframe at least N seconds back, so viewers are never closer to live than you set. Those last seconds play once more, which is what going back in time means.
 
 </td>
 <td valign="top" width="50%">
 
-**Cutting is the same trick in reverse.** You hit **Cut**, InstantClone lines up on the nearest keyframe near the live edge, fixes the timestamps so they keep counting forward smoothly, and resumes. No reconnect, no black frame, no glitch.
+**Cutting is the same trick in reverse.** You hit **Cut**, InstantClone lines up on the nearest keyframe near the live edge, fixes the timestamps so they keep counting forward smoothly, and resumes. What hadn't aired yet is skipped. No reconnect, no black frame, no glitch.
 
 </td>
 </tr>
@@ -276,15 +276,15 @@ InstantClone talks to Discord, Twitch chat, your phone, OBS and your own tools. 
 
 **Stream Deck recipe**
 
-The **Web Request** action speaks form-encoded POST by default.
+In **Integrations**, add one that starts with **A button** and does a **Delay action**, then press **Make an address**. Use that address in Stream Deck's **Website** action with **GET request in background** on, or as an HTTP request in Bitfocus Companion. It works with a dashboard password too, so keep it secret.
+
+A plugin that can POST can call the API directly:
 
 ```text
 URL:    http://127.0.0.1:7799/arm
 Method: POST
 Body:   ms=15000
 ```
-
-One-button arming. Add `/activate` and `/stop` to two more buttons for full delay control from your deck.
 
 </td>
 </tr>
@@ -334,8 +334,10 @@ One-button arming. Add `/activate` and `/stop` to two more buttons for full dela
 <br/>
 
 <table>
-<tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>900+</code></td></tr>
+<tr><td><b>RAM, idle</b></td><td align="right"><code>~2.3 MB</code></td><td width="24"></td><td><b>RAM, 1080p60 + delay</b></td><td align="right"><code>~3.3 MB</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>900+</code></td></tr>
 </table>
+
+<sub>RAM is Task Manager's memory column for v0.1.18 on Windows 11: the median of 5 runs, a 6 Mbps test stream, a 15 s delay and one local destination, with no dashboard open.</sub>
 
 **Buffer.** Disk-backed by default (`./instantclone.buf`; a new install starts at 300 MB, less on a nearly full disk: about 6 min 30 s at 6 Mbps, 3 min 50 s at 10 Mbps), kept off RAM because it can run to hundreds of MB. The only thing in RAM is the IDR index, ~1 MB for 10 minutes at 60 fps. The file resets on every clean shutdown, so nothing accumulates between sessions, and every way of arming (dashboard, dock, API, hotkeys, MIDI, chat) refuses a delay the buffer can't hold once OBS's bitrate is measured, and says what size it needs. Delays go up to 1 hour; the buffer size decides how much of that you can use (a 15 min delay at 6 Mbps needs about 690 MB).
 
@@ -411,7 +413,7 @@ As much as the buffer holds, up to 1 hour. A new install's 300 MB file is about 
 
 <br/>
 
-No. Video is passed through bit-for-bit. The only rewriting happens on the audio container when you route a specific track to a destination (AAC is rewritten to the legacy tag every ingest accepts); the audio samples themselves are untouched.
+No. OBS's video and audio go out as OBS encoded them. Only their containers get rewritten, when a destination takes one track out of several; the picture and the audio samples are untouched. The one thing InstantClone encodes itself is the crash protection reconnect screen, which only airs while OBS is gone.
 
 </details>
 

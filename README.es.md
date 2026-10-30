@@ -102,7 +102,7 @@ El modo multipista "Auto" funciona de fábrica. Tus claves reales van en la pest
 
 <table>
 <tr><td align="center" width="40"><b>1</b></td><td>Escribe un delay (p. ej. <kbd>15</kbd>s) y pulsa <b>Armar</b>. El buffer se prellena desde la señal en directo sin tocar lo que sale.</td></tr>
-<tr><td align="center"><b>2</b></td><td>Cuando ponga <code>ARMED</code>, pulsa <b>Activar</b>. El cambio a diferido es instantáneo en pantalla, sin reconexión ni corte.</td></tr>
+<tr><td align="center"><b>2</b></td><td>Cuando ponga <code>ARMED</code>, pulsa <b>Activar</b>. El público salta atrás a un fotograma clave de al menos esa antigüedad, ve esos segundos una vez más y se queda ese tiempo por detrás. Sin reconexión ni corte.</td></tr>
 <tr><td align="center"><b>3</b></td><td><b>Corta</b> para volver a directo cuando quieras, o <b>&#9201; Cortar cuando esto salga</b> para autocortar justo cuando tu reacción llega a los espectadores. Sin contar el delay de cabeza.</td></tr>
 </table>
 
@@ -135,7 +135,7 @@ Una vez existía, acabaron dentro las partes que de verdad quería: un armado/ac
 <td valign="top" width="50%">
 
 **🎯 Multistream a cada plataforma**
-Haz simulcast de una señal de OBS a Twitch, YouTube, Kick y RTMP personalizado a la vez, una alternativa gratuita y autoalojada a Restream. Activa cada uno por separado y mira el bitrate por destino en vivo. Un **sink de prueba local** emite a un receptor diminuto en tu PC para ensayar armar/activar/cortar sin clave y sin que nada salga de tu máquina.
+Haz simulcast de una señal de OBS a Twitch, YouTube, Kick y RTMP personalizado a la vez, una alternativa gratuita y autoalojada a Restream. Activa cada uno por separado y mira el bitrate por destino en vivo. Un **destino de prueba** emite a un receptor diminuto en tu PC para ensayar armar/activar/cortar sin clave y sin que nada salga de tu máquina.
 
 </td>
 <td valign="top" width="50%">
@@ -232,12 +232,12 @@ InstantClone habla con Discord, el chat de Twitch, tu móvil, OBS y tus propias 
 <tr>
 <td valign="top" width="50%">
 
-**Dos fases por diseño.** **Armas** un buffer (un tamaño objetivo en segundos). InstantClone lo prellena desde la señal de OBS sin tocar lo que sale. Cuando se llena pulsas **Activar**, y el cambio a diferido es instantáneo en pantalla: el reproductor solo salta del borde en directo al fotograma clave de al menos N segundos atrás, así que el público nunca queda más cerca del directo de lo que pusiste.
+**Dos fases por diseño.** **Armas** un buffer (un tamaño objetivo en segundos). InstantClone lo prellena desde la señal de OBS sin tocar lo que sale. Cuando se llena pulsas **Activar**, y el cambio a diferido es instantáneo en pantalla: el reproductor solo salta del borde en directo al fotograma clave de al menos N segundos atrás, así que el público nunca queda más cerca del directo de lo que pusiste. Esos últimos segundos se ven una vez más: es lo que supone volver atrás en el tiempo.
 
 </td>
 <td valign="top" width="50%">
 
-**Cortar es el mismo truco al revés.** Pulsas **Cortar**, InstantClone se alinea con el fotograma clave más cercano al borde en directo, ajusta las marcas de tiempo para que sigan contando hacia delante sin saltos, y continúa. Sin reconexión, sin fotograma negro, sin corte visible.
+**Cortar es el mismo truco al revés.** Pulsas **Cortar**, InstantClone se alinea con el fotograma clave más cercano al borde en directo, ajusta las marcas de tiempo para que sigan contando hacia delante sin saltos, y continúa. Lo que aún no se había emitido se salta. Sin reconexión, sin fotograma negro, sin corte visible.
 
 </td>
 </tr>
@@ -276,15 +276,15 @@ InstantClone habla con Discord, el chat de Twitch, tu móvil, OBS y tus propias 
 
 **Receta de Stream Deck**
 
-La acción **Web Request** habla POST form-encoded por defecto.
+En **Integraciones**, añade una que empiece con **Un botón** y haga una **Acción de delay**, y pulsa **Crear una dirección**. Usa esa dirección en la acción **Website** de Stream Deck con **GET request in background** activado, o como petición HTTP en Bitfocus Companion. También funciona con contraseña en el panel, así que no la compartas.
+
+Un plugin que pueda hacer POST puede llamar a la API directamente:
 
 ```text
 URL:     http://127.0.0.1:7799/arm
 Método:  POST
 Cuerpo:  ms=15000
 ```
-
-Armado de un botón. Añade `/activate` y `/stop` a otros dos botones para control total desde tu deck.
 
 </td>
 </tr>
@@ -334,8 +334,10 @@ Armado de un botón. Añade `/activate` y `/stop` a otros dos botones para contr
 <br/>
 
 <table>
-<tr><td><b>RSS inactivo</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Hilos</b></td><td align="right"><code>1 tokio + 1 bandeja</code></td><td width="24"></td><td><b>Deps runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>900+</code></td></tr>
+<tr><td><b>RAM en reposo</b></td><td align="right"><code>~2,3 MB</code></td><td width="24"></td><td><b>RAM, 1080p60 + delay</b></td><td align="right"><code>~3,3 MB</code></td><td width="24"></td><td><b>Deps runtime</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>900+</code></td></tr>
 </table>
+
+<sub>La RAM es la columna de memoria del Administrador de tareas para la v0.1.18 en Windows 11: la mediana de 5 pasadas, con un stream de prueba de 6 Mbps, un delay de 15 s y un destino local, sin el panel abierto.</sub>
 
 **Buffer.** En disco por defecto (`./instantclone.buf`; una instalación nueva empieza con 300 MB, menos si el disco está casi lleno: unos 6 min 30 s a 6 Mbps, 3 min 50 s a 10 Mbps), fuera de la RAM porque puede llegar a cientos de MB. Lo único en RAM es el índice de IDR, ~1 MB para 10 minutos a 60 fps. El archivo se reinicia en cada apagado limpio, así que nada se acumula entre sesiones, y toda forma de armarlo (panel, dock, API, atajos, MIDI, chat) se niega a armar un delay que el buffer no aguanta en cuanto mide el bitrate de OBS, y dice qué tamaño necesita. El delay llega hasta 1 hora; el tamaño del buffer decide cuánto de eso puedes usar (un delay de 15 min a 6 Mbps necesita unos 690 MB).
 
@@ -411,7 +413,7 @@ El que aguante el buffer, hasta 1 hora. El archivo de 300 MB de una instalación
 
 <br/>
 
-No. El vídeo pasa tal cual, bit a bit. Lo único que se reescribe es el contenedor de audio cuando ruteas una pista concreta a un destino (el AAC se reescribe a la etiqueta legada que acepta cualquier ingest); las muestras de audio no se tocan.
+No. El vídeo y el audio de OBS salen tal como los codificó OBS. Solo se reescriben sus contenedores, cuando un destino toma una pista de varias; la imagen y las muestras de audio no se tocan. Lo único que InstantClone codifica por su cuenta es la pantalla de reconexión de la protección contra caídas, que solo se emite mientras OBS no está.
 
 </details>
 
