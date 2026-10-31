@@ -72,6 +72,23 @@ test('in English the pages show the code\'s own text', () => {
   assert.deepEqual([...tr.ATTRS], []);
 });
 
+test('a value lowered to sit mid-sentence still reads its key', () => {
+  const tr = translator({ lang: 'es', strings: { 'When {}': 'Cuando {}', 'Someone follows': 'Alguien te sigue' } });
+  assert.equal(tr('When someone follows'), 'Cuando alguien te sigue');
+  assert.equal(tr('When nothing known'), 'Cuando nothing known', 'no key leaves it as it is');
+});
+
+test('a value never swallows the pieces of a joined line', () => {
+  const tr = translator({
+    lang: 'es',
+    strings: { '{} on stream': '{} en el directo', 'Needs Twitch': 'Necesita Twitch', '{} frames': '{} frames', '{} cuts': '{} cortes', '{} reconnects': '{} reconexiones' },
+  });
+  assert.equal(tr('Show on stream'), 'Show en el directo', 'alone, the pattern still reads it');
+  assert.equal(tr('Needs Twitch · #1'), 'Necesita Twitch · #1');
+  assert.equal(tr('Needs Twitch · Show on stream'), 'Necesita Twitch · Show en el directo');
+  assert.equal(tr('12 frames · 0 cuts · 3 reconnects'), '12 frames · 0 cortes · 3 reconexiones');
+});
+
 test('the translator finds a string as it reads on screen', () => {
   const tr = translator({
     lang: 'es',

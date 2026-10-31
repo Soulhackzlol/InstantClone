@@ -3,7 +3,7 @@
 // what a destination card says, and the Logs tab's reading of a line.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadPage, plain, rustConst } from './page.mjs';
+import { loadPage, plain, rustConst, rustList } from './page.mjs';
 
 const page = loadPage('index.html');
 const call = (name, ...args) => page.run(name)(...args);
@@ -11,6 +11,36 @@ const call = (name, ...args) => page.run(name)(...args);
 function given({ state = null, config = null, dests = [] } = {}) {
   page.run(`lastState = ${JSON.stringify(state)}; lastConfig = ${JSON.stringify(config)}; lastDests = ${JSON.stringify(dests)}`);
 }
+
+test('the wizard opens on the welcome, whose picks save as real settings', () => {
+  assert.equal(page.run('wizCurrent'), 'welcome');
+  assert.deepEqual(plain(page.run('WIZ_ALL_STEPS.slice(0, 5)')), ['welcome', 'startup', 'delay', 'crash', 'obs']);
+  const settable = rustList('src/web.rs', 'SETTABLE_KEYS');
+  const fields = plain(page.run(`({
+    language: WEL_PICKS.language.fields('es'), on: WEL_PICKS.delay.fields('30000'), off: WEL_PICKS.delay.fields('0'),
+  })`));
+  assert.deepEqual(fields.on, { auto_arm_on_connect: 'true', auto_arm_delay_ms: '30000' });
+  assert.deepEqual(fields.off, { auto_arm_on_connect: 'false' }, 'no delay keeps the saved length');
+  for (const key of [...Object.keys(fields.language), ...Object.keys(fields.on)]) assert.ok(settable.includes(key), key);
+  // Read back the way /config says it, and the delay tile a saved one lights.
+  assert.equal(page.run(`WEL_PICKS.delay.current({auto_arm_on_connect: true, auto_arm_delay_ms: 15000})`), '15000');
+  assert.equal(page.run(`WEL_PICKS.delay.current({auto_arm_on_connect: false, auto_arm_delay_ms: 15000})`), '0');
+  assert.equal(page.run(`WEL_PICKS.crash.current({crash_protection: {enabled: true}})`), 'true');
+  assert.equal(page.run(`WEL_PICKS.language.current({})`), 'auto');
+});
+
+test('the custom delay field follows a delay armed elsewhere', () => {
+  page.run(`$('delay-input').value = ''`);
+  page.run('followArmedDelay(8000)');
+  assert.equal(page.run(`$('delay-input').value`), '8');
+  page.run('followArmedDelay(8000); $(\'delay-input\').value = \'30\'; followArmedDelay(8000)');
+  assert.equal(page.run(`$('delay-input').value`), '30', 'the same delay again leaves what was typed');
+  page.run('followArmedDelay(0)');
+  assert.equal(page.run(`$('delay-input').value`), '30', 'disarming keeps the field');
+  page.run('followArmedDelay(8500)');
+  assert.equal(page.run(`$('delay-input').value`), '', 'the field holds whole seconds');
+  page.run('followArmedDelay(0)');
+});
 
 test('the limits the page repeats are the app\'s', () => {
   assert.equal(page.run('DELAY_MAX_S') * 1000, rustConst('src/config.rs', 'MAX_DELAY_MS'));

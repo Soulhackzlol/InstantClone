@@ -298,7 +298,9 @@ export function stale(strings = readStrings()) {
   const scripts = [...PAGES, 'overlay-runtime.js'].flatMap(file => {
     const src = fs.readFileSync(path.join(WEB, file), 'utf8');
     const code = file.endsWith('.html') ? [...src.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]) : [src];
-    return code.flatMap(part => jsLiterals(part).map(found => normalize(found.text)));
+    // plural(n, 'step') says "steps" without the code spelling it.
+    const plurals = [...src.matchAll(/plural\([^\n]*?'([^']+)'\)/g)].map(m => m[1] + 's');
+    return [...plurals, ...code.flatMap(part => jsLiterals(part).map(found => normalize(found.text)))];
   });
   const said = [...pageStrings().keys(), ...rustStrings(), ...scripts];
   const all = said.join('\n');

@@ -626,6 +626,70 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 @keyframes wizInFwd{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
 @keyframes wizInBack{from{opacity:0;transform:translateX(-24px)}to{opacity:1;transform:none}}
 @keyframes wizStepIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+#wizard.wiz-easing{overflow:hidden}
+/* The welcome: its heading is the step's own, and each piece arrives in turn.
+   Everything restarts when a step shows again (it was display:none). */
+#wizard[data-step="welcome"] #wiz-title,#wizard[data-step="welcome"] #wiz-lead{display:none}
+#wizard[data-step="welcome"] .wiz-progress{margin-top:0}
+.wel-hero,.wel-q{position:relative;text-align:center}
+.wel-hero{padding:18px 0 4px}
+.wel-q{padding:14px 0 2px}
+.wel-aurora{position:absolute;inset:-10px 0 auto;height:260px;overflow:hidden;pointer-events:none;
+  -webkit-mask-image:radial-gradient(closest-side,#000 35%,transparent);mask-image:radial-gradient(closest-side,#000 35%,transparent)}
+.wel-aurora i{position:absolute;width:260px;height:260px;border-radius:50%;filter:blur(46px);opacity:.34;
+  background:var(--accent);left:18%;top:-40px;animation:welDrift 9s ease-in-out infinite alternate}
+.wel-aurora i:nth-child(2){background:oklch(0.62 0.16 250);left:46%;top:10px;animation-duration:11s;animation-delay:-3s}
+.wel-aurora i:nth-child(3){background:var(--live);left:32%;top:60px;opacity:.16;animation-duration:13s;animation-delay:-6s}
+@keyframes welDrift{from{transform:translate(-34px,-10px) scale(.92)}to{transform:translate(38px,22px) scale(1.12)}}
+.wel-mark{position:relative;display:block;width:68px;height:68px;margin:0 auto 18px;
+  filter:drop-shadow(0 12px 26px color-mix(in oklch,var(--accent) 45%,transparent));animation:welMark .7s var(--ease-spring) backwards}
+.wel-mark rect{fill:var(--accent)}
+.wel-bar{fill:var(--accent-ink);transform-box:fill-box;transform-origin:center bottom;animation:welBar .5s var(--ease-spring) .28s backwards}
+.wel-bar+.wel-bar{animation-delay:.38s}
+@keyframes welMark{from{opacity:0;transform:scale(.5) rotate(-14deg)}}
+@keyframes welBar{from{transform:scaleY(0)}}
+.wel-title{position:relative;margin:0;font-size:clamp(28px,5.4vw,42px)!important;line-height:1.12;font-weight:700;letter-spacing:-.025em!important}
+.wel-word{display:inline-block;animation:welWord .62s var(--ease-spring) backwards;animation-delay:calc(var(--i)*85ms + 240ms)}
+.wel-word:last-of-type{color:transparent;-webkit-background-clip:text;background-clip:text;background-size:220% 100%;
+  background-image:linear-gradient(100deg,var(--accent) 20%,#fff 50%,var(--accent) 80%);
+  animation:welWord .62s var(--ease-spring) backwards,welShine 1.5s var(--ease-out) 1s both;animation-delay:calc(var(--i)*85ms + 240ms),1s}
+@keyframes welWord{from{opacity:0;transform:translateY(20px) scale(.96);filter:blur(7px)}}
+@keyframes welShine{from{background-position:100% 0}to{background-position:0 0}}
+.wel-lead{position:relative;margin:12px auto 0!important;max-width:470px;font-size:14px!important;line-height:1.5;color:var(--fg-3);animation:welRise .5s var(--ease-out) .62s backwards}
+.wel-ask{position:relative;margin-top:26px;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-3);animation:welRise .5s var(--ease-out) .74s backwards}
+@keyframes welRise{from{opacity:0;transform:translateY(10px)}}
+.wel-glyph{display:block;width:62px;height:62px;margin:0 auto 18px;padding:15px;border-radius:18px;fill:none;stroke:var(--accent);stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;
+  background:color-mix(in oklch,var(--accent) 12%,var(--surface-2));border:1px solid color-mix(in oklch,var(--accent) 34%,var(--line));
+  animation:welMark .55s var(--ease-spring) backwards,welGlow 2.6s ease-in-out .6s infinite}
+@keyframes welGlow{50%{box-shadow:0 0 0 7px color-mix(in oklch,var(--accent) 11%,transparent)}}
+.wel-hand{transform-box:view-box;transform-origin:12px 12px;animation:welHand 3.2s cubic-bezier(.6,0,.3,1) .35s infinite}
+@keyframes welHand{to{transform:rotate(360deg)}}
+.wel-shield-tick{stroke-dasharray:1;animation:welDraw .5s var(--ease-out) .42s backwards}
+@keyframes welDraw{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
+.wel-q-t{font-size:clamp(20px,3.6vw,25px);font-weight:650;letter-spacing:-.018em;line-height:1.2;animation:welRise .46s var(--ease-out) .08s backwards}
+.wel-q-s{max-width:500px;margin:9px auto 0;font-size:13.5px;line-height:1.5;color:var(--fg-3);animation:welRise .46s var(--ease-out) .17s backwards}
+.wel-choices{--wel-from:.28s;position:relative;display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:22px}
+.wel-hero .wel-choices{--wel-from:.84s;margin-top:12px}
+.wel-choice{appearance:none;position:relative;flex:1 1 150px;max-width:230px;min-height:66px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:13px 26px;
+  border-radius:14px;border:1px solid var(--line);color:var(--fg-2);font:inherit;cursor:pointer;
+  background:linear-gradient(180deg,var(--surface-3),var(--surface-2));
+  animation:welChoice .5s var(--ease-spring) backwards;animation-delay:calc(var(--i)*70ms + var(--wel-from));
+  transition:transform .16s var(--ease-spring),border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .22s var(--ease-out),color .18s var(--ease-out)}
+@keyframes welChoice{from{opacity:0;transform:translateY(16px) scale(.93)}}
+.wel-choice:hover{transform:translateY(-2px);color:var(--fg);border-color:var(--line-2)}
+.wel-choice:active{transform:scale(.97)}
+.wel-choice.on{color:var(--fg);border-color:color-mix(in oklch,var(--accent) 72%,var(--line));
+  background:color-mix(in oklch,var(--accent) 13%,var(--surface-2));box-shadow:0 8px 24px -14px var(--accent),inset 0 0 0 1px color-mix(in oklch,var(--accent) 34%,transparent)}
+.wel-choice-t{font-size:14px;font-weight:600}
+.wel-choice-s{font-size:11.5px;color:var(--fg-3)}
+.wel-tick{position:absolute;top:8px;right:8px;display:flex;width:17px;height:17px;padding:3px;border-radius:50%;background:var(--accent);opacity:0;transform:scale(.3);
+  transition:opacity .14s var(--ease-out),transform .28s var(--ease-spring)}
+.wel-tick svg{fill:none;stroke:var(--accent-ink);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.wel-choice.on .wel-tick{opacity:1;transform:none}
+.wel-later{margin-top:18px;font-size:11.5px;color:var(--fg-4);animation:welRise .46s var(--ease-out) .62s backwards}
+@media (prefers-reduced-motion:reduce){
+  .wel-aurora i,.wel-mark,.wel-bar,.wel-word,.wel-word:last-of-type,.wel-lead,.wel-ask,.wel-glyph,.wel-hand,.wel-shield-tick,.wel-q-t,.wel-q-s,.wel-choice,.wel-later{animation:none}
+}
 .wiz-step-h{margin-bottom:10px}
 .wiz-step-t{font-size:16px;font-weight:600;letter-spacing:-.01em}
 .wiz-step-s{font-size:12.5px;color:var(--fg-3);margin-top:3px;line-height:1.45}
@@ -1082,6 +1146,8 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
     margin-right:-14px;padding-right:14px}
   .ic-header-right::-webkit-scrollbar{display:none}
   .ic-header-right>*{flex:none}
+  /* The row scrolls: what's wrong comes first, never off the edge. */
+  #hdr-backpressure,#hdr-twitch-cap{order:-1}
   .ic-header-right.more-r{mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
   .ic-header-right.more-l.more-r{mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
   .ic-header-right.more-l:not(.more-r){mask-image:linear-gradient(90deg,transparent,#000 28px)}
@@ -3613,7 +3679,8 @@ details.sys-collapse>summary .ic-label{margin:0}
 .ig-cat mark{background:color-mix(in oklch,var(--accent) 24%,transparent);color:var(--fg);border-radius:3px;padding:0 1px}
 /* Needs on the left, Add on the right, along every tile's bottom edge. */
 .ig-cat-foot{margin-top:auto;display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px;padding:2px 4px 4px}
-.ig-cat-foot .ig-cat-needs{margin-top:0;min-width:0}
+/* A full line of its own, so every Add sits in the same place on its card. */
+.ig-cat-foot .ig-cat-needs{margin-top:0;min-width:0;flex:1 0 100%}
 .ig-cat-foot>.ic-btn{flex:none;margin-left:auto}
 .ig-cat-lead{grid-column:1/-1;font-size:12.5px;color:var(--fg-3)}
 .ig-cat-group{grid-column:1/-1;display:flex;align-items:baseline;gap:6px;margin-top:6px;font-size:10.5px;font-weight:600;
@@ -4636,8 +4703,83 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
     <div class="wiz-progress" id="wiz-progress" aria-hidden="true"></div>
   </div>
 
-  <!-- STEP 1: how OBS finds us -->
-  <div class="wiz-step" data-wstep="obs">
+  <!-- The welcome: the language, then one choice per screen. A choice saves as
+       it is picked (welPick); the screens' Next and Back are the wizard's. -->
+  <div class="wiz-step wel-hero" data-wstep="welcome">
+    <div class="wel-aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+    <svg class="wel-mark" viewBox="0 0 48 48" aria-hidden="true">
+      <rect x="3" y="3" width="42" height="42" rx="10.5"/>
+      <path class="wel-bar" d="M17 14h4v20h-4z"/><path class="wel-bar" d="M27 14h4v20h-4z"/>
+    </svg>
+    <h2 class="wel-title" id="wel-title" translate="no"></h2>
+    <p class="wel-lead">A live, glitch-free stream delay. A few quick questions and you’re streaming.</p>
+    <div class="wel-ask">Pick your language</div>
+    <div class="wel-choices" data-wel="language" role="radiogroup" aria-label="Language">
+      <button type="button" class="wel-choice" role="radio" data-value="auto" style="--i:0" onclick="welPick(this)">
+        <span class="wel-choice-t">Auto</span><span class="wel-choice-s">Follows your browser</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="en" style="--i:1" onclick="welPick(this)">
+        <span class="wel-choice-t" translate="no">English</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="es" style="--i:2" onclick="welPick(this)">
+        <span class="wel-choice-t" translate="no">Español</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+    </div>
+  </div>
+
+  <div class="wiz-step wel-q" data-wstep="startup" hidden>
+    <svg class="wel-glyph wel-glyph-power" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.6 6.8a8 8 0 1 0 10.8 0"/></svg>
+    <div class="wel-q-t" id="wel-startup-t">Start InstantClone with Windows?</div>
+    <div class="wel-q-s">It launches at login and waits quietly, so OBS always has somewhere to publish.</div>
+    <div class="wel-choices" data-wel="startup" role="radiogroup" aria-labelledby="wel-startup-t">
+      <button type="button" class="wel-choice" role="radio" data-value="on" style="--i:0" onclick="welPick(this)">
+        <span class="wel-choice-t">Yes, start it</span><span class="wel-choice-s">Always ready</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="off" style="--i:1" onclick="welPick(this)">
+        <span class="wel-choice-t">No, I'll open it</span><span class="wel-choice-s">When you need it</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+    </div>
+    <div class="wel-later">You can change all of this later in System.</div>
+  </div>
+
+  <div class="wiz-step wel-q" data-wstep="delay" hidden>
+    <svg class="wel-glyph wel-glyph-clock" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path class="wel-hand" d="M12 12V6.5"/><path d="M12 12l3.5 2"/></svg>
+    <div class="wel-q-t" id="wel-delay-t">Have a delay ready when you go live?</div>
+    <div class="wel-q-s">It arms by itself when OBS connects. Viewers stay live until you press Activate.</div>
+    <div class="wel-choices" data-wel="delay" role="radiogroup" aria-labelledby="wel-delay-t">
+      <button type="button" class="wel-choice" role="radio" data-value="0" style="--i:0" onclick="welPick(this)">
+        <span class="wel-choice-t">No</span><span class="wel-choice-s">I'll arm it myself</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="15000" style="--i:1" onclick="welPick(this)">
+        <span class="wel-choice-t">15 s</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="30000" style="--i:2" onclick="welPick(this)">
+        <span class="wel-choice-t">30 s</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="120000" style="--i:3" onclick="welPick(this)">
+        <span class="wel-choice-t">2 min</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+    </div>
+    <div class="wel-later">You can change all of this later in System.</div>
+  </div>
+
+  <div class="wiz-step wel-q" data-wstep="crash" hidden>
+    <svg class="wel-glyph wel-glyph-shield" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 2.8v5.4c0 4.6-3.1 8-7.5 9.8-4.4-1.8-7.5-5.2-7.5-9.8V5.800z"/><path class="wel-shield-tick" pathLength="1" d="M8.500 12l2.500 2.500 4.500-5"/></svg>
+    <div class="wel-q-t" id="wel-crash-t">Keep the stream up if OBS crashes?</div>
+    <div class="wel-q-s">Your destinations stay live and show a reconnect screen until OBS is back.</div>
+    <div class="wel-choices" data-wel="crash" role="radiogroup" aria-labelledby="wel-crash-t">
+      <button type="button" class="wel-choice" role="radio" data-value="true" style="--i:0" onclick="welPick(this)">
+        <span class="wel-choice-t">Yes, keep it up</span><span class="wel-choice-s">The screen covers the gap</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="false" style="--i:1" onclick="welPick(this)">
+        <span class="wel-choice-t">No, let it end</span><span class="wel-choice-s">A crash ends the stream</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+    </div>
+    <div class="wel-later">You can change all of this later in System.</div>
+  </div>
+
+  <!-- How OBS finds us -->
+  <div class="wiz-step" data-wstep="obs" hidden>
     <div class="wiz-step-h">
       <div class="wiz-step-t">Which app do you stream with?</div>
       <div class="wiz-step-s">Pick yours, then connect it. You can switch later on the OBS tab.</div>
@@ -5903,7 +6045,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
     <section class="sys-section" data-find="ingest key stream key secret publish security">
       <div class="ic-label">Stream key for InstantClone</div>
       <div class="sys-version-row">
-        <span class="sys-version-pill off" id="ingest-status">Open</span>
+        <span class="sys-version-pill off" id="ingest-status">Unlocked</span>
         <span class="muted" id="ingest-status-note" style="font-size:12.5px">Any stream key is accepted</span>
       </div>
       <div class="tab-sub" style="margin-top:8px">Set a secret and only an OBS using it can stream in. Worth doing whenever InstantClone can be reached over a network. It becomes the Stream key you paste into OBS. Leave blank to accept any key.</div>
@@ -6531,11 +6673,12 @@ function renderBufferHint(){
   if (mb <= 0){ el.textContent = ''; return; }
   // Past the longest delay there is, more buffer buys nothing.
   const top = ms => fmtDelay(Math.min(ms, DELAY_MAX_S * 1000));
-  let txt = `${mb} MB → max ${top(bufferCapMs(mb, BUF_REF_KBPS))} delay at ${BUF_REF_KBPS/1000} Mbps reference.`;
+  const reference = `${mb} MB → max ${top(bufferCapMs(mb, BUF_REF_KBPS))} delay at ${BUF_REF_KBPS/1000} Mbps reference.`;
+  // Two sentences, two text nodes: the translator looks each up on its own.
+  el.replaceChildren(reference);
   if (lastState && lastState.ingest_alive){
-    txt += `  Currently ≈ ${top(bufferCapMs(mb, planningKbps()))} at ${capacityRate()} in.`;
+    el.append(` Currently ≈ ${top(bufferCapMs(mb, planningKbps()))} at ${capacityRate()} in.`);
   }
-  el.textContent = txt;
 }
 
 // - Toast ------------------------------─
@@ -7045,6 +7188,17 @@ function setDelayInput(sec){
   inp.value = String(sec);
   if (from !== sec) rollDelayInput(from, sec, wasEmpty);
   renderCta();
+}
+// A delay armed from elsewhere (the dock, a hotkey, an integration, another
+// tab) shows in the field too, or Activate would read as a change back to
+// what the field last held. Someone typing there keeps what they typed.
+let delayFieldArmedMs = 0;
+function followArmedDelay(armedMs){
+  if (armedMs === delayFieldArmedMs) return;
+  delayFieldArmedMs = armedMs;
+  if (!armedMs || document.activeElement === $('delay-input')) return;
+  if (armedMs % 1000) $('delay-input').value = '';
+  else setDelayInput(armedMs / 1000);
 }
 // A stepper pushed past 0 or the top: the range lights up, the stepper
 // flushes, and the number nudges against the wall.
@@ -7978,7 +8132,9 @@ function rebuildDests(){
   }
   if (c.lastElementChild !== add) c.appendChild(add);
   const waiting = lastDests.filter(d => isVerticalDest(d) && !verticalDiag(d).ready).length;
-  $('dest-sub').textContent = `${lastDests.length} added · ${lastDests.filter(d => d.alive).length} live`
+  // "1 added" has its own key: other languages say one differently.
+  const added = lastDests.length === 1 ? '1 added' : `${lastDests.length} added`;
+  $('dest-sub').textContent = `${added} · ${lastDests.filter(d => d.alive).length} live`
     + (waiting ? ` · ${waiting} waiting for a 9:16 canvas` : '');
 }
 
@@ -8313,12 +8469,15 @@ function updateDestCard(r, d){
   // Counters only once there is something to count.
   const frames = d.tags_sent || 0;
   r.meta.hidden = !frames && !d.cuts && !d.reconnects;
-  const count = (n, one, many) => n + ' ' + (n === 1 ? one : many);
   const framesText = frames >= 1e6 ? (frames / 1e6).toFixed(1) + 'M'
                    : frames >= 1e4 ? (frames / 1e3).toFixed(1) + 'k'
                    : frames.toLocaleString();
-  const metaText = framesText + (frames === 1 ? ' frame' : ' frames') + ' · '
-    + count(d.cuts || 0, 'cut', 'cuts') + ' · ' + count(d.reconnects || 0, 'reconnect', 'reconnects');
+  const cuts = d.cuts || 0, reconnects = d.reconnects || 0;
+  const metaText = [
+    frames === 1 ? '1 frame' : `${framesText} frames`,
+    cuts === 1 ? '1 cut' : `${cuts} cuts`,
+    reconnects === 1 ? '1 reconnect' : `${reconnects} reconnects`,
+  ].join(' · ');
   if (r.meta.textContent !== tr(metaText, r.meta)) r.meta.textContent = metaText;
   r.toggle.title = d.enabled ? 'Disable this destination' : 'Enable this destination';
   r.toggle.classList.toggle('on', d.enabled);
@@ -9018,7 +9177,7 @@ async function loadConfig({resetSystem = false} = {}){
     const dashboard = configured || wizardSkipped;
     const appearing = dashboard && $('pane-card').hidden;
     $('wizard').hidden = dashboard;
-    if (wizardOpening) { refreshWizObsStatus(); wizCurrent = 'obs'; wizDir = 'fwd'; renderWizStep(); }
+    if (wizardOpening) { refreshWizObsStatus(); wizCurrent = 'welcome'; wizDir = 'fwd'; renderWizStep(); }
     $('hdr-bar').hidden = !dashboard;
     $('hero').hidden = !dashboard;
     $('tabs').hidden = !dashboard;
@@ -9183,7 +9342,7 @@ const PLATFORM_COLOR = { twitch:'#a78bfa', youtube:'#fda4af', kick:'#86efac',
 // the instant the platform changes. We track the CURRENT step by id, not
 // index, so a platform switch that removes the Twitch step can never
 // strand the wizard on a panel that no longer exists.
-let wizCurrent = 'obs';
+let wizCurrent = 'welcome';
 // Travel direction for the slide transition: 'fwd' on Next/initial,
 // 'back' on Back. Read by CSS via #wizard[data-dir].
 let wizDir = 'fwd';
@@ -9191,19 +9350,95 @@ let wizDir = 'fwd';
 // Every step that can ever appear, in order. The progress bar renders one
 // permanent segment per entry; `wizStepIds()` is the ACTIVE subset for the
 // current platform. Twitch is the only optional one today.
-const WIZ_ALL_STEPS = ['obs', 'platform', 'key', 'twitch'];
+const WIZ_ALL_STEPS = ['welcome', 'startup', 'delay', 'crash', 'obs', 'platform', 'key', 'twitch'];
 
 function wizStepIds(){
-  const ids = ['obs', 'platform', 'key'];
+  const ids = ['welcome', 'startup', 'delay', 'crash', 'obs', 'platform', 'key'];
   if ($('w-platform').value === 'twitch') ids.push('twitch');
   return ids;
 }
 
+// The welcome's questions: what each one reads from /config, and what a pick
+// posts back. Each saves as it is picked, so Back shows what was chosen.
+const WEL_PICKS = {
+  language: {current: c => c.ui_language || 'auto', fields: value => ({ui_language: value})},
+  startup: {current: c => (c.start_with_windows ? 'on' : 'off'), fields: value => ({start_with_windows: value})},
+  delay: {current: c => (c.auto_arm_on_connect ? String(c.auto_arm_delay_ms) : '0'),
+    fields: value => (value === '0' ? {auto_arm_on_connect: 'false'} : {auto_arm_on_connect: 'true', auto_arm_delay_ms: value})},
+  crash: {current: c => (c.crash_protection && c.crash_protection.enabled ? 'true' : 'false'),
+    fields: value => ({'crash_protection.enabled': value})},
+};
+const welChosen = {};
+let welAdvanceTimer = 0;
+const welValue = group => welChosen[group] ?? (lastConfig ? WEL_PICKS[group].current(lastConfig) : '');
+function renderWelChoices(){
+  $$('#wizard [data-wel]').forEach(choices => {
+    const value = welValue(choices.dataset.wel);
+    choices.querySelectorAll('.wel-choice').forEach(choice => {
+      const on = choice.dataset.value === value;
+      choice.classList.toggle('on', on);
+      choice.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+  });
+}
+// One span per word, so the words can rise in turn.
+function renderWelTitle(){
+  const title = $('wel-title');
+  if (title.children.length) return;
+  const words = tr('Welcome to InstantClone').split(' ');
+  title.setAttribute('aria-label', words.join(' '));
+  title.replaceChildren(...words.flatMap((word, i) => {
+    const span = document.createElement('span');
+    span.className = 'wel-word';
+    span.style.setProperty('--i', i);
+    span.setAttribute('aria-hidden', 'true');
+    span.textContent = word;
+    return [span, ' '];
+  }));
+}
+// A new language comes with the page's strings, so it loads the page again,
+// back on this step. Any other pick moves on by itself after a beat, long
+// enough to see the tick land.
+async function welPick(choice){
+  const group = choice.parentElement.dataset.wel, value = choice.dataset.value, was = welValue(group);
+  clearTimeout(welAdvanceTimer);
+  if (group === 'language' && value === was) return;
+  const step = wizCurrent;
+  welChosen[group] = value;
+  renderWelChoices();
+  let j;
+  try { j = await (await fetch('/config', {method:'POST', body:new URLSearchParams(WEL_PICKS[group].fields(value))})).json(); }
+  catch (_){ j = {ok:false, error:"Couldn't reach InstantClone. Check it is running, then try again."}; }
+  if (!j.ok){
+    welChosen[group] = was;
+    renderWelChoices();
+    wizMsg(j.error, 'err');
+    return;
+  }
+  if (group === 'language'){
+    if (!motionOK()){ location.reload(); return; }
+    $('wizard').animate([{opacity:1}, {opacity:0}], {duration:160, fill:'forwards'}).onfinish = () => location.reload();
+    return;
+  }
+  welAdvanceTimer = setTimeout(() => { if (wizCurrent === step) wizNext(); }, 420);
+}
+// The card eases to the new step's height instead of jumping to it.
+function easeWizHeight(from){
+  const card = $('wizard'), to = card.offsetHeight;
+  if (!from || from === to || !motionOK()) return;
+  card.classList.add('wiz-easing');
+  const ease = card.animate([{height: from + 'px'}, {height: to + 'px'}], {duration:320, easing:'cubic-bezier(.2,.7,.2,1)'});
+  ease.onfinish = ease.oncancel = () => card.classList.remove('wiz-easing');
+}
+
 function renderWizStep(){
+  const fromHeight = $('wizard').offsetHeight;
+  clearTimeout(welAdvanceTimer);
   const ids = wizStepIds();
   if (!ids.includes(wizCurrent)) wizCurrent = ids[ids.length - 1];
   const i = ids.indexOf(wizCurrent);
   $('wizard').dataset.dir = wizDir;
+  $('wizard').dataset.step = wizCurrent;
   // Show the active panel only.
   document.querySelectorAll('#wizard .wiz-step').forEach(el => {
     el.hidden = el.dataset.wstep !== wizCurrent;
@@ -9236,17 +9471,12 @@ function renderWizStep(){
   $('wiz-back').hidden = (i === 0);
   $('wiz-next').innerHTML = last ? 'Save &amp; Start' : 'Next &rarr;';
   syncWizNext();
-  // Step 1 doubles as the welcome: name the app and say what it does, so a
-  // first-time user understands the tool before answering anything. Later
-  // steps drop to a plain position counter (the progress bar shows the
-  // rest visually).
-  if (i === 0){
-    $('wiz-title').textContent = 'Welcome to InstantClone';
-    $('wiz-lead').textContent = wizWelcomeLead();
-  } else {
-    $('wiz-title').textContent = 'Set up your stream';
-    $('wiz-lead').textContent = `Step ${i + 1} of ${ids.length}`;
-  }
+  // The welcome step is its own heading (CSS hides these); the rest show a
+  // plain position counter (the progress bar shows the rest visually).
+  $('wiz-title').textContent = 'Set up your stream';
+  $('wiz-lead').textContent = `Step ${i + 1} of ${ids.length}`;
+  if (wizCurrent === 'welcome') renderWelTitle();
+  renderWelChoices();
   // Name the platform in the key-step heading.
   const pn = $('w-key-platform-name');
   if (pn){
@@ -9261,6 +9491,7 @@ function renderWizStep(){
     refreshStreamlabs();
     setTimeout(() => { const k = $('w-key'); if (k && !k.disabled) k.focus(); }, 60);
   }
+  easeWizHeight(fromHeight);
 }
 
 function wizNext(){
@@ -9577,7 +9808,8 @@ window.addEventListener('focus', () => {
 // transcoding note reads as a few short paragraphs instead of one slab.
 // Short tips pass through untouched.
 function formatTip(tip){
-  const t = (tip || '').trim();
+  // Translated whole, before it splits: the dictionary has the whole tip.
+  const t = tr((tip || '').trim());
   if (t.length <= 220) return `<p>${t}</p>`;
   const sentences = t.split(/(?<=\.)\s+(?=[A-Z])/);
   const paras = []; let buf = '';
@@ -9843,7 +10075,7 @@ function applyIngestKey(key){
     : 'Any string works. The real platform key lives in <b>Destinations</b>.';
   const st = $('ingest-status');
   if (st){
-    st.textContent = key ? 'Locked' : 'Open';
+    st.textContent = key ? 'Locked' : 'Unlocked';
     st.className = 'sys-version-pill ' + (key ? 'ok' : 'off');
   }
   const stn = $('ingest-status-note');
@@ -10811,6 +11043,15 @@ function renderObsInstallsInto(host){
   reg.disabled = !ticked.length;
   setText(reg, ticked.length > 1 ? `Register in ${ticked.length} OBS` : 'Register with OBS');
   unreg.hidden = !ticked.some(i => i.state !== 'none');
+  // One bright button at a time in the wizard: Register until an OBS is
+  // registered, then the step's confirm.
+  if (host.closest('#wizard')){
+    const registerFirst = ticked.length > 0 && !installs.some(i => i.state === 'current');
+    reg.classList.toggle('ic-btn-primary', registerFirst);
+    reg.classList.toggle('ic-btn-ghost', !registerFirst);
+    $('wiz-obs-confirm').classList.toggle('ic-btn-primary', !registerFirst);
+    $('wiz-obs-confirm').classList.toggle('ic-btn-ghost', registerFirst);
+  }
 }
 // The OBS tab card's own pill and line sum the rows up.
 function renderObsRegSummary(){
@@ -10986,7 +11227,6 @@ function renderWizStreamlabs(r){
   }
 }
 let wizApp = 'obs';
-const wizWelcomeLead = () => `A live, glitch-free stream delay for ${wizApp === 'streamlabs' ? 'Streamlabs' : 'OBS'}. A few quick questions and you’re streaming.`;
 function wizPickApp(app){
   wizApp = app;
   $('wiz-app-tiles').dataset.app = app;
@@ -10998,7 +11238,6 @@ function wizPickApp(app){
   $$('.w-app-pane').forEach(p => p.classList.toggle('on', p.dataset.paneApp === app));
   // Later steps explain things in the picked app's own words.
   $$('#wizard [data-app-only]').forEach(el => { el.hidden = el.dataset.appOnly !== app; });
-  $('wiz-lead').textContent = wizWelcomeLead();
   clearWizMsg();
 }
 async function refreshStreamlabs(){ renderStreamlabs(await slStatus()); }
@@ -13312,6 +13551,7 @@ function applyPlatformCopy(os){
   hasTray = onWindows;
   const title = $('s-startup-title');
   if (title) title.textContent = onWindows ? 'Start with Windows' : 'Start at login';
+  setText($('wel-startup-t'), onWindows ? 'Start InstantClone with Windows?' : 'Start InstantClone at login?');
   const sub = $('s-startup-sub');
   if (sub) sub.textContent = onWindows
     ? 'Launches at login and waits in the tray, so OBS always has somewhere to publish.'
@@ -13475,6 +13715,7 @@ function applyState(s){
       toast('OBS reconnected, timeline realigned','info');
   }
   lastState = s;
+  followArmedDelay(s.armed_delay_ms || 0);
   if (window.ICOverlay) Studio.upgradeSaved();
   // The server compares the running buffer with the saved one, so the
   // notice is right after a reload too, and gone once a restart applied it.

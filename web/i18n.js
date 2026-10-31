@@ -27,6 +27,8 @@
   const SKIP = 'script,style,textarea,[translate="no"],[contenteditable="true"]';
   /** Texts joined by this ("12 frames · 0 cuts") are looked up a piece at a time. */
   const JOIN = ' · ';
+  /** What "{}" matches: never across a join, whose pieces have their own keys. */
+  const VALUE = '((?:(?! · ).)+?)';
   const LETTER = /[A-Za-z]/;
   /** Lookups remembered, misses too; emptied when it grows past this. */
   const CACHE_MAX = 5000;
@@ -41,7 +43,7 @@
     return {
       fixed: pieces.join('').length,
       longest: pieces.reduce((a, b) => (b.length > a.length ? b : a), ''),
-      match: new RegExp('^' + escaped.join('(.+?)') + '$'),
+      match: new RegExp('^' + escaped.join(VALUE) + '$'),
       to: strings[key],
     };
   }).sort((a, b) => b.fixed - a.fixed);
@@ -50,8 +52,16 @@
     let next = 0;
     return to.replace(/\{(\d?)\}/g, (_, index) => {
       const value = index ? values[index - 1] : values[next++];
-      return value === undefined ? '' : (lookupWhole(value) ?? value);
+      return value === undefined ? '' : (lookupValue(value) ?? value);
     });
+  }
+
+  /** A value lowered to sit mid-sentence ("When someone follows") reads its capitalized key. */
+  function lookupValue(value) {
+    const said = lookupWhole(value);
+    if (said !== null || !/^[a-z]/.test(value)) return said;
+    const capital = lookupWhole(value[0].toUpperCase() + value.slice(1));
+    return capital === null ? null : capital[0].toLowerCase() + capital.slice(1);
   }
 
   /** The most specific pattern that reads `text`: {said, fixed}, or null. */

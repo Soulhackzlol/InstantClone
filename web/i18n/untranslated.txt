@@ -1,6 +1,7 @@
 # Strings in the page code that stay as they are: names, key names, code,
 # and words that read the same in Spanish. One per line, exactly as
 # `node web/tests/strings.mjs missing` prints them.
+2 min
 !clip
 !delay
 !discord

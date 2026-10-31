@@ -2112,7 +2112,7 @@ function previewHtml(step, handler, big){
         <small>INSTANTCLONE · now</small><b translate="no">${esc(renderSample(step.params.title, vars) || 'InstantClone')}</b><div translate="no">${esc(text)}</div></span></div>`;
     case 'overlay':
       return `<div class="${cls} ig-pv-overlay"><div class="ig-pv-alert">
-        ${step.params.title ? `<small>${esc(renderSample(step.params.title, vars))}</small>` : ''}<b>${esc(text || 'Something on stream')}</b><i></i></div></div>`;
+        ${step.params.title ? `<small translate="no">${esc(renderSample(step.params.title, vars))}</small>` : ''}<b${text ? ' translate="no"' : ''}>${esc(text || 'Something on stream')}</b><i></i></div></div>`;
     case 'marker':
       return `<div class="${cls} ig-pv-marker"><span class="tag">${esc(text || 'Marker')} · 1:02:14</span>
         <div class="bar"><i></i><b style="left:22%"></b><b style="left:48%"></b><b style="left:80%"></b></div></div>`;
@@ -3949,7 +3949,7 @@ const Editor = {
           <div class="muted">Made and changed in the Studio, on the Overlay tab's <button class="ig-link" data-act="alerts-open">Alerts page</button>.</div>${this.everyAlertHtml(['design'])}`;
       case 'acolor': {
         return `<div class="ic-label">Accent</div>${accentPickerHtml(step)}
-          <div class="muted">The first one is the design's. Everything else about the look is its design's: <button class="ig-link" data-act="chip" data-chip="adesign">${esc(designLabel(step.params.design))}</button>.</div>${this.everyAlertHtml(['color'])}`;
+          <div class="muted">The first one comes from the design, and so does the rest of the look: <button class="ig-link" data-act="chip" data-chip="adesign">${esc(designLabel(step.params.design))}</button>.</div>${this.everyAlertHtml(['color'])}`;
       }
       case 'asound': {
         return `<div class="ic-label">Sound</div>${soundControlsHtml(step)}
@@ -3957,7 +3957,7 @@ const Editor = {
       }
       case 'apic':
         return `<div class="ic-label">Picture</div>${picturePickerHtml(step.params.image || '', 'pick-picture')}
-          <div class="muted">A PNG, JPG or GIF (it plays). Where it goes is its design's.</div>${this.everyAlertHtml(['image'])}`;
+          <div class="muted">A PNG, JPG or GIF (it plays). The design decides where it goes.</div>${this.everyAlertHtml(['image'])}`;
       case 'atime':
         return `<div class="ic-label">On screen for</div>${segHtml(ALERT_SECONDS.map(n => [n, n + ' s']), step.params.seconds || '6', 'set-seconds')}
           <div class="muted">Alerts that come in together wait their turn, so none cuts another short.</div>${this.everyAlertHtml(['seconds'])}`;
@@ -7222,7 +7222,7 @@ function alertColor(value, look){
   return /^#[0-9a-f]{6}$/i.test(look.accent || '') ? look.accent : THEMES[themeOf(look)].accent;
 }
 function alertColorName(value){
-  if (!value) return 'design\'s';
+  if (!value) return 'the design\'s';
   const found = CARD_COLORS.find(([c]) => c === value.toLowerCase());
   return found ? found[1].toLowerCase() : value.toLowerCase();
 }
@@ -7265,7 +7265,7 @@ function accentPickerHtml(step){
   const known = !mine || CARD_COLORS.some(([c]) => c === mine);
   const swatch = (c, label, style) => `<button class="ig-swatch${c === mine ? ' on' : ''}" style="--sw:${style}" data-act="set-color" data-v="${c}"
     role="radio" aria-checked="${c === mine}" aria-label="${label}" title="${label}"></button>`;
-  const swatches = [swatch('', "The design's", alertColor('', lookOf()))].concat(CARD_COLORS.map(([c, label]) => swatch(c, label, c))).join('');
+  const swatches = [swatch('', 'From the design', alertColor('', lookOf()))].concat(CARD_COLORS.map(([c, label]) => swatch(c, label, c))).join('');
   return `<div class="ig-swatches"><span class="ig-swatch-set" role="radiogroup" aria-label="Alert accent">${swatches}</span>
     <label class="ig-swatch custom${known ? '' : ' on'}" title="Any color"><input type="color" data-bind="color" value="${esc(shown)}" aria-label="Any color (now ${esc(shown)})"></label></div>`;
 }
@@ -8142,7 +8142,7 @@ const Stage = {
         doc.name = 'My alerts';
         if (!(await this.writeDesign(slug, doc))) return;
       } else if (!(await this.ensureDesign(slug))) return;
-      if (await this.setDefault(slug) && mine) toast('Your alerts look is now a design, "My alerts": edit it like any overlay', 'ok', 7000);
+      if (await this.setDefault(slug) && mine) toast('Your alerts now use a design called "My alerts". Edit it on the Overlay tab.', 'ok', 5000);
     } finally { this.defaulting = false; }
   },
   // A look with custom CSS, written for the old card's markup: that card,
