@@ -535,11 +535,16 @@ test('cards sharing a name and a place say what tells them apart', () => {
   assert.equal(line(said, 1), 'Bye');
 
   const same = [card('a', 'Say it', 'hold_opened', 'Hi'), card('b', 'Say it', 'hold_opened', 'Hi')];
-  assert.equal(line(same, 0), '#1 · Twitch chat', 'their number, when nothing else differs');
-  assert.equal(line(same, 1), '#2 · Twitch chat');
+  assert.equal(line(same, 0), '#1', 'their number, when nothing else differs');
+  assert.equal(line(same, 1), '#2');
 
   const named = [card('a', 'Say it', 'hold_opened', 'Hi'), card('b', 'Greet', 'hold_opened', 'Hi')];
   assert.equal(line(named, 0), 'Twitch chat', 'a name of its own needs nothing');
+
+  given({ integrations: same, twitch: { available: true, main: {} }, stats: {}, issues: { a: ['pick a channel'], b: ['pick a channel'] } });
+  const notes = page.inside('S.data.integrations').map(item => call('cardNoteHtml', call('cardInfo', item), item));
+  assert.match(notes[0], /Pick a channel · #1/, 'the same warning still tells them apart');
+  assert.match(notes[1], /Pick a channel · #2/);
 });
 
 test('the catalog finds by every word, and Recommended takes turns between kinds', () => {

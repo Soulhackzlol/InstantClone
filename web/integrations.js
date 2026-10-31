@@ -2551,9 +2551,12 @@ function moreHtml(i){
 // The line under a card's name: what blocks it, else what's wrong with
 // it, else where it goes and when it last ran. Never over the preview.
 function cardNoteHtml(c, i){
-  if (c.issue) return `<div class="dcard-host ig-host-warn" title="${esc(c.issue)}">${esc(c.issue)}</div>`;
-  if (c.flag) return `<div class="dcard-host ig-host-${c.flag.cls}" title="${esc(c.flag.tip)}">${esc(c.flag.label)}</div>`;
-  const note = `${whereLine(i, c)} · ${c.last}`;
+  const where = whereLine(i, c);
+  // Twins with the same warning still have to tell themselves apart.
+  const twin = where === c.where ? '' : ` · ${where}`;
+  if (c.issue) return `<div class="dcard-host ig-host-warn" title="${esc(c.issue)}">${esc(c.issue + twin)}</div>`;
+  if (c.flag) return `<div class="dcard-host ig-host-${c.flag.cls}" title="${esc(c.flag.tip)}">${esc(c.flag.label + twin)}</div>`;
+  const note = `${where} · ${c.last}`;
   return `<div class="dcard-host" title="${esc(note)}">${esc(note)}</div>`;
 }
 // Where a card goes, or, for cards sharing a name and a place, what tells
@@ -2564,7 +2567,7 @@ function whereLine(i, c){
   if (twins.length < 2) return c.where;
   const only = read => { const mine = read(i); return mine && twins.filter(o => read(o) === mine).length === 1 ? mine : ''; };
   const startedBy = o => { const h = cardInfo(o).h; return h ? triggerSentence(h.trigger) : ''; };
-  return only(startedBy) || only(o => cardInfo(o).summary) || `#${twins.indexOf(i) + 1} · ${c.where}`;
+  return only(startedBy) || only(o => cardInfo(o).summary) || `#${twins.indexOf(i) + 1}`;
 }
 function flagHtml(flag){
   if (!flag) return '';
