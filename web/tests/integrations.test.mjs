@@ -516,6 +516,32 @@ test('the values offered under a field: the latest step\'s answer, then what hap
   pick.ctx = pick.field = null;
 });
 
+test('cards sharing a name and a place say what tells them apart', () => {
+  const card = (id, name, event, text, type = 'chat') => ({
+    id, name, enabled: true,
+    handlers: [{ enabled: true, trigger: { type: 'event', event }, steps: [{ type, params: { text } }] }],
+  });
+  const line = (cards, i) => {
+    given({ integrations: cards, twitch: { available: true, main: {} }, stats: {} });
+    const item = page.inside('S.data.integrations')[i];
+    return call('whereLine', item, call('cardInfo', item));
+  };
+  const started = [card('a', 'Say it', 'hold_opened', 'Hi'), card('b', 'Say it', 'onair_changed', 'Hi')];
+  assert.notEqual(line(started, 0), line(started, 1), 'what starts them');
+  assert.notEqual(line(started, 0), 'Twitch chat');
+
+  const said = [card('a', 'Say it', 'hold_opened', 'Hi'), card('b', 'Say it', 'hold_opened', 'Bye')];
+  assert.equal(line(said, 0), 'Hi', 'what they say');
+  assert.equal(line(said, 1), 'Bye');
+
+  const same = [card('a', 'Say it', 'hold_opened', 'Hi'), card('b', 'Say it', 'hold_opened', 'Hi')];
+  assert.equal(line(same, 0), '#1 · Twitch chat', 'their number, when nothing else differs');
+  assert.equal(line(same, 1), '#2 · Twitch chat');
+
+  const named = [card('a', 'Say it', 'hold_opened', 'Hi'), card('b', 'Greet', 'hold_opened', 'Hi')];
+  assert.equal(line(named, 0), 'Twitch chat', 'a name of its own needs nothing');
+});
+
 test('the catalog finds by every word, and Recommended takes turns between kinds', () => {
   const preset = (id, category, name, description, more = {}) => ({ id, category, name, description, needs: [], recommended: true, ...more });
   given({

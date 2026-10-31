@@ -2550,10 +2550,21 @@ function moreHtml(i){
 }
 // The line under a card's name: what blocks it, else what's wrong with
 // it, else where it goes and when it last ran. Never over the preview.
-function cardNoteHtml(c){
+function cardNoteHtml(c, i){
   if (c.issue) return `<div class="dcard-host ig-host-warn" title="${esc(c.issue)}">${esc(c.issue)}</div>`;
   if (c.flag) return `<div class="dcard-host ig-host-${c.flag.cls}" title="${esc(c.flag.tip)}">${esc(c.flag.label)}</div>`;
-  return `<div class="dcard-host">${esc(c.where)} · ${esc(c.last)}</div>`;
+  const note = `${whereLine(i, c)} · ${c.last}`;
+  return `<div class="dcard-host" title="${esc(note)}">${esc(note)}</div>`;
+}
+// Where a card goes, or, for cards sharing a name and a place, what tells
+// this one apart: what starts it, else what it says, else its number. The
+// names stay as the streamer wrote them.
+function whereLine(i, c){
+  const twins = S.data.integrations.filter(o => o.name === i.name && cardInfo(o).where === c.where);
+  if (twins.length < 2) return c.where;
+  const only = read => { const mine = read(i); return mine && twins.filter(o => read(o) === mine).length === 1 ? mine : ''; };
+  const startedBy = o => { const h = cardInfo(o).h; return h ? triggerSentence(h.trigger) : ''; };
+  return only(startedBy) || only(o => cardInfo(o).summary) || `#${twins.indexOf(i) + 1} · ${c.where}`;
 }
 function flagHtml(flag){
   if (!flag) return '';
@@ -2569,7 +2580,7 @@ function gridHtml(items, none, withAdd, folder){
       </div>
       <div class="ig-card-foot">
         <span class="dcard-icon">${svg(c.icon)}</span>
-        <div class="dcard-id"><div class="dcard-name" translate="no">${esc(i.name)}</div>${cardNoteHtml(c)}</div>
+        <div class="dcard-id"><div class="dcard-name" translate="no">${esc(i.name)}</div>${cardNoteHtml(c, i)}</div>
         ${moreHtml(i)}${switchHtml(i)}
       </div>
     </div>`;
@@ -2585,7 +2596,7 @@ function listHtml(items, none, withAdd, folder){
       <div class="ig-row-main">
         <span class="dcard-icon">${svg(c.icon)}</span>
         <button class="ig-row-name" data-act="peek" data-id="${esc(i.id)}" aria-expanded="${open}">
-          <span class="dcard-name" translate="no">${esc(i.name)}</span><span class="dcard-host${c.issue ? ' ig-host-warn' : ''}">${esc(c.issue || c.where)}</span></button>
+          <span class="dcard-name" translate="no">${esc(i.name)}</span><span class="dcard-host${c.issue ? ' ig-host-warn' : ''}">${esc(c.issue || whereLine(i, c))}</span></button>
         <span class="ig-row-sum" title="${esc(c.summary)}">${esc(c.summary)}</span>
         ${c.hist}${c.flag ? flagHtml(c.flag) : `<span class="ig-row-last">${esc(c.last)}</span>`}
         ${switchHtml(i)}
