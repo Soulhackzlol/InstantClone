@@ -1967,6 +1967,15 @@ impl Controller {
     pub fn publisher_local(&self) -> bool {
         self.publisher_local.load(Ordering::Relaxed)
     }
+    /// The stream's onMetaData names OBS as its encoder ("obs-output module
+    /// (libobs version ...)"). No metadata yet, or another app, reads false.
+    pub fn publisher_is_obs(&self) -> bool {
+        self.ring
+            .metadata
+            .lock()
+            .as_deref()
+            .is_some_and(|metadata| metadata.windows(10).any(|bytes| bytes == b"obs-output"))
+    }
 
     // ---- Internal: ingest counters ----
 
@@ -2356,11 +2365,8 @@ impl Controller {
 
         let current = self.current_delay_ms();
         let target = self.target_delay_ms();
-        // 2 s margin: covers the dead-band oscillation (500 ms),
-        // the next_or_wait poll cycle (500 ms), the last_cut_check
-        // throttle (500 ms), and a little slack so the chip doesn't
-        // strobe on every cut.
-        let over = current.saturating_sub(target) > 2_000;
+        let margin = backpressure_margin_ms(self.keyframe_interval_ms());
+        let over = current.saturating_sub(target) > margin;
         let now = process_now_ms();
         if over {
             // Mark first observation; only return true once it's
@@ -4181,6 +4187,15 @@ const IDR_SEARCH_FLOOR_MS: u32 = 2_000;
 /// fresh stream behaves identically until it reveals a cadence.
 fn recut_dead_band_ms(keyframe_interval_ms: u32) -> u64 {
     RECUT_DEAD_BAND_FLOOR_MS.max(keyframe_interval_ms as u64 / 2 + 500)
+}
+
+/// How far past the target the delay may sit before it reads as an upload
+/// problem. The 2 s floor covers the dead-band oscillation (500 ms), the
+/// next_or_wait poll cycle (500 ms), the last_cut_check throttle (500 ms),
+/// and a little slack so the chip doesn't strobe on every cut. Cuts land on
+/// keyframes, so a healthy pump can also sit a whole keyframe interval behind.
+fn backpressure_margin_ms(keyframe_interval_ms: u32) -> u32 {
+    2_000u32.max(keyframe_interval_ms.saturating_add(500))
 }
 
 /// How far from the ideal input timestamp we accept an IDR when cutting.
@@ -7626,6 +7641,23 @@ mod tests {
             compute_delay_cut(&h.ctrl, &live_edge).is_some(),
             "live is a whole second short of the delay"
         );
+    }
+
+    #[test]
+    fn upload_alarm_allows_for_a_whole_keyframe_interval() {
+        assert_eq!(backpressure_margin_ms(0), 2_000, "not measured yet");
+        assert_eq!(backpressure_margin_ms(1_000), 2_000);
+        assert_eq!(backpressure_margin_ms(8_300), 8_800);
+    }
+
+    #[tokio::test]
+    async fn only_obs_metadata_reads_as_obs() {
+        let h = harness(0);
+        assert!(!h.ctrl.publisher_is_obs(), "no metadata yet");
+        *h.ctrl.ring.metadata.lock() = Some(b"\x02encoder\x02Lavf61.7.100".to_vec());
+        assert!(!h.ctrl.publisher_is_obs());
+        *h.ctrl.ring.metadata.lock() = Some(b"\x02encoder\x02obs-output module".to_vec());
+        assert!(h.ctrl.publisher_is_obs());
     }
 
     /// A pump behind by more than the dead band, but past the newest

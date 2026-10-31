@@ -55,7 +55,14 @@ mod platform {
         _quota_non_paged_pool_usage: usize,
         _pagefile_usage: usize,
         _peak_pagefile_usage: usize,
+        _private_usage: usize,
+        // PROCESS_MEMORY_COUNTERS_EX2, Windows 10 22H2 and newer.
+        private_working_set_size: usize,
+        _shared_commit_usage: usize,
     }
+
+    /// The size of the original PROCESS_MEMORY_COUNTERS, for older Windows.
+    const BASIC_COUNTERS_SIZE: usize = std::mem::offset_of!(ProcessMemoryCounters, _private_usage);
 
     #[link(name = "kernel32")]
     extern "system" {
@@ -127,13 +134,21 @@ mod platform {
                 0.0
             };
 
-        // RSS: working set size. Sized to current PROCESS_MEMORY_COUNTERS.
+        // RSS: the private working set, which is what Task Manager's memory
+        // column shows. The plain working set adds the pages shared with
+        // Windows' own DLLs, several times the app's own use. Windows too old
+        // to know the longer struct refuses it: ask again for the plain one.
         let mut pmc: ProcessMemoryCounters = unsafe { std::mem::zeroed() };
         pmc.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
         let rss = if unsafe { GetProcessMemoryInfo(proc, &mut pmc, pmc.cb) } != 0 {
-            pmc.working_set_size as u64
+            pmc.private_working_set_size as u64
         } else {
-            0
+            pmc.cb = BASIC_COUNTERS_SIZE as u32;
+            if unsafe { GetProcessMemoryInfo(proc, &mut pmc, pmc.cb) } != 0 {
+                pmc.working_set_size as u64
+            } else {
+                0
+            }
         };
 
         // CPU% can briefly exceed 100 on multi-core spikes; clamp display

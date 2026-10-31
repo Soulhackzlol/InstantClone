@@ -1738,10 +1738,12 @@ fn eb_not_applied_warning(ctrl: &Controller) -> Option<String> {
     if ctrl.multitrack_video() || ctrl.keyframe_interval_ms() == 0 || !ctrl.publisher_local() {
         return None;
     }
-    // Streamlabs streaming through us is the publisher, not OBS: OBS's
-    // profile says nothing about it (and one track there can be by choice).
+    // Another app streaming through us, Streamlabs or ffmpeg, is the
+    // publisher, not OBS: OBS's profile says nothing about it (and one track
+    // there can be by choice).
     let streamlabs = crate::streamlabs::status();
-    if streamlabs.live && matches!(streamlabs.route, "eb" | "single") {
+    if !ctrl.publisher_is_obs() || (streamlabs.live && matches!(streamlabs.route, "eb" | "single"))
+    {
         return None;
     }
     obs_profile_wants_eb().then(|| EB_NOT_APPLIED.to_string())
