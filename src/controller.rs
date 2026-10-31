@@ -4273,10 +4273,9 @@ fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<Pendin
     let target = ctrl
         .ring
         .find_idr_near(latest, idr_search_tolerance_ms(keyframe_interval))?;
-    if target.seq == current.seq {
-        return None;
-    }
-    Some(PendingCut { target })
+    // Forward only: a pump past the newest keyframe has nothing to gain from
+    // it, and cutting back would replay what just aired, on every check.
+    (target.seq > current.seq).then_some(PendingCut { target })
 }
 
 /// The cut a delay of `target_delay` needs, if any. A delay lands on the
@@ -7627,6 +7626,25 @@ mod tests {
             compute_delay_cut(&h.ctrl, &live_edge).is_some(),
             "live is a whole second short of the delay"
         );
+    }
+
+    /// A pump behind by more than the dead band, but past the newest
+    /// keyframe (a slow uplink, a keyframe gap wider than the band), has
+    /// nothing to cut forward to. Cutting back to that keyframe would replay
+    /// what just aired and leave it further behind.
+    #[test]
+    fn going_live_never_cuts_back_to_a_keyframe_already_aired() {
+        let h = harness(0);
+        h.ctrl
+            .on_tag(9, 0, &[0x17, 1, 0, 0, 0, 0, 0, 0, 1, 0x65], true, false);
+        for ts in (100..=1_900).step_by(100) {
+            h.ctrl
+                .on_tag(9, ts, &[0x27, 1, 0, 0, 0, 0, 0, 0, 1, 0x41], false, false);
+        }
+        let first = h.ctrl.ring.front_seq().expect("a populated ring");
+        let (_, behind) = h.ctrl.ring.find_by_seq(first + 3).unwrap();
+        assert_eq!(behind.ts_ms, 300, "1.6 s behind, past the keyframe at 0");
+        assert!(compute_delay_cut(&h.ctrl, &behind).is_none());
     }
 
     #[test]
