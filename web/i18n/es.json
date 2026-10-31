@@ -3651,5 +3651,10 @@
 "anytime": "cuando sea",
 "nobody": "nadie",
 "card": "tarjeta",
-"connecting…": "conectando…"
+"connecting…": "conectando…",
+"Keyframe interval measures {}. {} {} 2s. {}": "El intervalo de keyframes mide {}. {} {} 2 s. {}",
+"expects": "pide",
+"expect": "piden",
+"In OBS: Settings → Output → Streaming (Output Mode: Advanced) → Keyframe Interval: 2 s.": "En OBS: Ajustes → Salida → Emisión (Modo de salida: Avanzado) → Intervalo entre fotogramas clave: 2 s.",
+"With a keyframe every {}, the delay can land up to that far over what you set.": "Con un keyframe cada {}, el delay puede pasarse hasta esa cantidad de lo que pusiste."
 }

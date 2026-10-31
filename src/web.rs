@@ -1610,6 +1610,11 @@ fn state_json(
     let compat_warning = if ctrl.ingest_alive() {
         [
             crate::compat::compat_warning(&ctrl.stream_params(), &s.destinations),
+            crate::compat::delay_keyframe_note(
+                &ctrl.stream_params(),
+                &s.destinations,
+                ctrl.armed_delay_ms().max(ctrl.target_delay_ms()),
+            ),
             eb_not_applied_warning(ctrl),
         ]
         .into_iter()

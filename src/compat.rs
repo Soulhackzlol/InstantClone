@@ -105,6 +105,33 @@ fn keyframe_issue(params: &StreamParams, live: &[&Destination]) -> Option<String
     ))
 }
 
+/// What long keyframes do to a delay, which lands on the newest keyframe at
+/// least that old: on any destination, a custom server too, once one is armed
+/// or on. Says the fix unless `keyframe_issue` has said it already. Its parts
+/// are ` · ` lines, as `compat_warning`'s are.
+pub fn delay_keyframe_note(
+    params: &StreamParams,
+    destinations: &[Destination],
+    delay_ms: u32,
+) -> Option<String> {
+    let live: Vec<&Destination> = destinations
+        .iter()
+        .filter(|d| d.enabled && d.platform != "sink")
+        .collect();
+    if delay_ms == 0 || live.is_empty() || params.keyframe_interval_ms <= KEYFRAME_WARN_MS {
+        return None;
+    }
+    let note = format!(
+        "With a keyframe every {}, the delay can land up to that far over what you set.",
+        format_seconds(params.keyframe_interval_ms),
+    );
+    Some(if keyframe_issue(params, &live).is_some() {
+        note
+    } else {
+        format!("{note} · {KEYFRAME_FIX}")
+    })
+}
+
 /// Canvas past a destination's ceiling. Only Kick states a hard cap we can
 /// rely on, so it is the only platform checked here.
 ///
@@ -364,6 +391,31 @@ mod tests {
                 Some(format!("{said} {KEYFRAME_FIX}"))
             );
         }
+    }
+
+    /// Long keyframes matter to a delay on any destination, and only while
+    /// one is armed or on. A custom server hears the fix here, since nothing
+    /// else tells it; a platform that expects 2 s has been told already.
+    #[test]
+    fn a_delay_hears_what_long_keyframes_do_to_it() {
+        let note =
+            "With a keyframe every 4.0s, the delay can land up to that far over what you set.";
+        let custom = [dest("custom", true)];
+        let twitch = [dest("twitch", true)];
+        assert_eq!(
+            delay_keyframe_note(&long_keyframes(), &custom, 10_000),
+            Some(format!("{note} · {KEYFRAME_FIX}"))
+        );
+        assert_eq!(
+            delay_keyframe_note(&long_keyframes(), &twitch, 10_000),
+            Some(note.to_string())
+        );
+        assert_eq!(delay_keyframe_note(&long_keyframes(), &custom, 0), None);
+        assert_eq!(delay_keyframe_note(&healthy(), &custom, 10_000), None);
+        let not_measured = stream(|p| p.keyframe_interval_ms = 0);
+        assert_eq!(delay_keyframe_note(&not_measured, &custom, 10_000), None);
+        let off = [dest("custom", false)];
+        assert_eq!(delay_keyframe_note(&long_keyframes(), &off, 10_000), None);
     }
 
     /// Kick caps video at 1080p on its short side, whichever way up and
