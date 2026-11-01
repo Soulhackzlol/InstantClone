@@ -3,7 +3,7 @@
 // what a destination card says, and the Logs tab's reading of a line.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadPage, plain, rustConst } from './page.mjs';
+import { loadPage, plain, rustConst, rustList } from './page.mjs';
 
 const page = loadPage('index.html');
 const call = (name, ...args) => page.run(name)(...args);
@@ -11,6 +11,99 @@ const call = (name, ...args) => page.run(name)(...args);
 function given({ state = null, config = null, dests = [] } = {}) {
   page.run(`lastState = ${JSON.stringify(state)}; lastConfig = ${JSON.stringify(config)}; lastDests = ${JSON.stringify(dests)}`);
 }
+
+test('the wizard opens on the welcome, whose picks save as real settings', () => {
+  assert.equal(page.run('wizCurrent'), 'welcome');
+  assert.deepEqual(plain(page.run('WIZ_ALL_STEPS.slice(0, 5)')), ['welcome', 'startup', 'delay', 'crash', 'obs']);
+  const settable = rustList('src/web.rs', 'SETTABLE_KEYS');
+  const fields = plain(page.run(`({
+    language: WEL_PICKS.language.fields('es'), on: WEL_PICKS.delay.fields('30000'), off: WEL_PICKS.delay.fields('0'),
+  })`));
+  assert.deepEqual(fields.on, { auto_arm_on_connect: 'true', auto_arm_delay_ms: '30000' });
+  assert.deepEqual(fields.off, { auto_arm_on_connect: 'false' }, 'no delay keeps the saved length');
+  for (const key of [...Object.keys(fields.language), ...Object.keys(fields.on)]) assert.ok(settable.includes(key), key);
+  // Read back the way /config says it, and the delay tile a saved one lights.
+  assert.equal(page.run(`WEL_PICKS.delay.current({auto_arm_on_connect: true, auto_arm_delay_ms: 15000})`), '15000');
+  assert.equal(page.run(`WEL_PICKS.delay.current({auto_arm_on_connect: false, auto_arm_delay_ms: 15000})`), '0');
+  assert.equal(page.run(`WEL_PICKS.crash.current({crash_protection: {enabled: true}})`), 'true');
+  assert.equal(page.run(`WEL_PICKS.language.current({})`), 'auto');
+});
+
+test('the wizard goes back freely, forward only over what is done', () => {
+  page.run(`var realRender = renderWizStep; renderWizStep = () => {}; wizCurrent = 'welcome'; wizVisited.clear(); wizVisited.add('welcome')`);
+  page.run(`wizGoTo('crash')`);
+  assert.equal(page.run('wizCurrent'), 'welcome', 'a step not reached yet stays shut');
+  page.run(`['startup', 'delay', 'crash'].forEach(s => wizVisited.add(s)); wizGoTo('crash')`);
+  assert.equal(page.run('wizCurrent'), 'crash', 'one already seen opens');
+  assert.equal(page.run('wizDir'), 'fwd');
+  page.run(`wizGoTo('startup')`);
+  assert.equal(page.run('wizCurrent'), 'startup');
+  assert.equal(page.run('wizDir'), 'back');
+  page.run(`wizGoTo('not-a-step')`);
+  assert.equal(page.run('wizCurrent'), 'startup');
+  for (const step of plain(page.run('WIZ_ALL_STEPS'))) assert.ok(page.run(`WIZ_STEP_NAMES['${step}']`), step);
+  page.run(`renderWizStep = realRender; wizCurrent = 'welcome'; wizVisited.clear()`);
+});
+
+test('an unconnected app holds the wizard at its step, Next and progress bar alike', () => {
+  page.run(`var realRender = renderWizStep; renderWizStep = () => {}; wizCurrent = 'obs'; wizApp = 'obs'; wizObsConfirmed = false`);
+  page.run(`WIZ_ALL_STEPS.forEach(s => wizVisited.add(s))`);
+  assert.equal(page.run(`validateWizStep('obs')`), false);
+  page.run(`wizGoTo('platform')`);
+  assert.equal(page.run('wizCurrent'), 'obs', 'even a step seen before stays shut past it');
+  page.run(`wizObsConfirmed = true`);
+  assert.equal(page.run(`validateWizStep('obs')`), true);
+  page.run(`wizGoTo('platform')`);
+  assert.equal(page.run('wizCurrent'), 'platform');
+  // Streamlabs counts as connected once it is, and a press of OBS's button doesn't stand in for it.
+  page.run(`wizApp = 'streamlabs'; slInfo = {enabled: false}`);
+  assert.equal(page.run(`validateWizStep('obs')`), false);
+  page.run(`slInfo = {enabled: true}`);
+  assert.equal(page.run(`validateWizStep('obs')`), true);
+  for (const step of ['welcome', 'startup', 'delay', 'crash', 'platform']) {
+    assert.equal(page.run(`wizStepProblem('${step}')`), '', step);
+  }
+  page.run(`renderWizStep = realRender; wizCurrent = 'welcome'; wizApp = 'obs'; wizObsConfirmed = false; slInfo = null; wizVisited.clear()`);
+});
+
+test('a language setting reads as the server would show it', () => {
+  page.run(`globalThis.navigator = {languages: ['fr-FR', 'es-ES', 'en']}`);
+  assert.equal(page.run(`languageOf('auto')`), 'es', 'the first language the page has');
+  assert.equal(page.run(`languageOf('en')`), 'en', 'a setting beats the browser');
+  page.run(`globalThis.navigator = {languages: ['fr']}`);
+  assert.equal(page.run(`languageOf('auto')`), 'en', 'English when the browser wants neither');
+});
+
+test('a language changed elsewhere reloads only an idle dashboard in another language', () => {
+  page.run(`var realReload = reloadForLanguage, realDirty = settingsDirty, reloads = 0; reloadForLanguage = () => { reloads++; }; settingsDirty = () => false;
+    document.documentElement.lang = 'en'; $('wizard').hidden = true`);
+  page.run(`followLanguage(undefined, {ui_language: 'es'})`);
+  assert.equal(page.run('reloads'), 0, 'the first load is what the server already chose');
+  page.run(`followLanguage('es', {ui_language: 'es'})`);
+  assert.equal(page.run('reloads'), 0, 'no change');
+  page.run(`followLanguage('auto', {ui_language: 'en'})`);
+  assert.equal(page.run('reloads'), 0, 'already showing it');
+  page.run(`settingsDirty = () => true; followLanguage('en', {ui_language: 'es'})`);
+  assert.equal(page.run('reloads'), 0, 'unsaved settings stay');
+  page.run(`settingsDirty = () => false; $('wizard').hidden = false; followLanguage('en', {ui_language: 'es'})`);
+  assert.equal(page.run('reloads'), 0, 'the wizard reloads by itself, with its draft');
+  page.run(`$('wizard').hidden = true; followLanguage('en', {ui_language: 'es'})`);
+  assert.equal(page.run('reloads'), 1);
+  page.run(`reloadForLanguage = realReload; settingsDirty = realDirty`);
+});
+
+test('the custom delay field follows a delay armed elsewhere', () => {
+  page.run(`$('delay-input').value = ''`);
+  page.run('followArmedDelay(8000)');
+  assert.equal(page.run(`$('delay-input').value`), '8');
+  page.run('followArmedDelay(8000); $(\'delay-input\').value = \'30\'; followArmedDelay(8000)');
+  assert.equal(page.run(`$('delay-input').value`), '30', 'the same delay again leaves what was typed');
+  page.run('followArmedDelay(0)');
+  assert.equal(page.run(`$('delay-input').value`), '30', 'disarming keeps the field');
+  page.run('followArmedDelay(8500)');
+  assert.equal(page.run(`$('delay-input').value`), '', 'the field holds whole seconds');
+  page.run('followArmedDelay(0)');
+});
 
 test('the limits the page repeats are the app\'s', () => {
   assert.equal(page.run('DELAY_MAX_S') * 1000, rustConst('src/config.rs', 'MAX_DELAY_MS'));
@@ -89,12 +182,12 @@ test('the buffer size advised for a delay is the smallest that holds it', () => 
   assert.equal(call('requiredMBForMs', 0), 0);
 });
 
-test('"buffer too small" says to restart when the bigger size is already saved', () => {
+test('"too long for the buffer" says to restart when the bigger size is already saved', () => {
   given({ state: { capacity_kbps: 6000, restart_pending: true }, config: { buffer_mb: 3000 } });
   assert.match(call('bufferAdviceHtml', 3_600_000), /Your new 3000 MB buffer is saved and starts with the next restart/);
   // Saved, but still too small for this delay: raise it further.
   given({ state: { capacity_kbps: 6000, restart_pending: true }, config: { buffer_mb: 1000 } });
-  assert.match(call('bufferAdviceHtml', 3_600_000), /Raise the buffer in System.*data-mb="2749"/);
+  assert.match(call('bufferAdviceHtml', 3_600_000), /Make the buffer bigger in System.*data-mb="2749"/);
   given({ state: { capacity_kbps: 6000, restart_pending: false }, config: { buffer_mb: 3000 } });
   assert.match(call('bufferAdviceHtml', 900_000), /data-mb="689"/, 'no restart pending: name the size');
 });

@@ -489,3 +489,88 @@ test('a bigger alert from an amount up is a check on that amount, and reads back
   const follow = { trigger: { type: 'event', event: 'twitch_follow' }, steps: [alert('hi')] };
   assert.equal(call('alertTiers', follow), null, 'a follow has no amount');
 });
+
+test('a search marks every place a word shows, and escapes the rest', () => {
+  assert.equal(call('markWords', 'time left on hold', ['time', 'old']), '<mark>time</mark> left on h<mark>old</mark>');
+  assert.equal(call('markWords', 'a<b>', ['b']), 'a&lt;<mark>b</mark>&gt;');
+  assert.equal(call('markWords', 'stream time', []), 'stream time');
+});
+
+test('the values offered under a field: the latest step\'s answer, then what happened, never one already used', () => {
+  given();
+  const counter = { type: 'counter', params: { name: 'told' } };
+  const clip = { type: 'clip', params: {} };
+  const vars = [
+    { name: 'reason', sample: 'crash', group: 'trigger' },
+    { name: 'hold', sample: '2m 00s', group: 'trigger' },
+    { name: 'counter.told', sample: '2', group: 'steps', step: counter },
+    { name: 'clip.url', sample: 'https://clips.twitch.tv/x', group: 'steps', step: clip },
+    { name: 'clip.ok', sample: 'yes', group: 'steps', step: clip },
+    { name: 'phase', sample: 'active', group: 'live' },
+    { name: 'time', sample: '21:04', group: 'live' },
+  ];
+  const pick = page.inside('ValuePick');
+  pick.ctx = () => ({ vars, plain: false });
+  pick.field = { value: 'Back after {reason?yes:no}' };
+  assert.deepEqual([...pick.suggested().map(v => v.name)], ['clip.url', 'counter.told', 'hold', 'time']);
+  pick.ctx = pick.field = null;
+});
+
+test('cards sharing a name and a place say what tells them apart', () => {
+  const card = (id, name, event, text, type = 'chat') => ({
+    id, name, enabled: true,
+    handlers: [{ enabled: true, trigger: { type: 'event', event }, steps: [{ type, params: { text } }] }],
+  });
+  const line = (cards, i) => {
+    given({ integrations: cards, twitch: { available: true, main: {} }, stats: {} });
+    const item = page.inside('S.data.integrations')[i];
+    return call('whereLine', item, call('cardInfo', item));
+  };
+  const started = [card('a', 'Say it', 'hold_opened', 'Hi'), card('b', 'Say it', 'onair_changed', 'Hi')];
+  assert.notEqual(line(started, 0), line(started, 1), 'what starts them');
+  assert.notEqual(line(started, 0), 'Twitch chat');
+
+  const said = [card('a', 'Say it', 'hold_opened', 'Hi'), card('b', 'Say it', 'hold_opened', 'Bye')];
+  assert.equal(line(said, 0), 'Hi', 'what they say');
+  assert.equal(line(said, 1), 'Bye');
+
+  const same = [card('a', 'Say it', 'hold_opened', 'Hi'), card('b', 'Say it', 'hold_opened', 'Hi')];
+  assert.equal(line(same, 0), '#1', 'their number, when nothing else differs');
+  assert.equal(line(same, 1), '#2');
+
+  const named = [card('a', 'Say it', 'hold_opened', 'Hi'), card('b', 'Greet', 'hold_opened', 'Hi')];
+  assert.equal(line(named, 0), 'Twitch chat', 'a name of its own needs nothing');
+
+  given({ integrations: same, twitch: { available: true, main: {} }, stats: {}, issues: { a: ['pick a channel'], b: ['pick a channel'] } });
+  const notes = page.inside('S.data.integrations').map(item => call('cardNoteHtml', call('cardInfo', item), item));
+  assert.match(notes[0], /Pick a channel · #1/, 'the same warning still tells them apart');
+  assert.match(notes[1], /Pick a channel · #2/);
+});
+
+test('the catalog finds by every word, and Recommended takes turns between kinds', () => {
+  const preset = (id, category, name, description, more = {}) => ({ id, category, name, description, needs: [], recommended: true, ...more });
+  given({
+    twitch: { available: true, main: {} },
+    catalog: {
+      presets: [
+        preset('crash', 'alerts', 'OBS crash alert', 'One Discord message per OBS crash.', { needs: ['discord'] }),
+        preset('timeline', 'alerts', 'Stream timeline', 'One Discord card per stream.', { needs: ['discord'] }),
+        preset('tell', 'chat', 'Tell chat', 'Says we are back.', { needs: ['twitch'] }),
+        preset('clip', 'auto', 'Hype clip', 'Chat goes wild, it clips.', { needs: ['twitch'], recommended: false }),
+      ],
+      packs: [{ id: 'safety', name: 'Crash safety', description: 'Crash alerts for Discord and chat.', presets: ['crash'], needs: ['discord'] }],
+    },
+  });
+  const catalog = page.inside('Catalog');
+  const ids = list => [...list.map(p => p.id)];
+  catalog.query = '';
+  assert.deepEqual(ids(catalog.presetsIn('rec')), ['crash', 'tell', 'timeline']);
+  catalog.query = 'discord crash';
+  assert.deepEqual(ids(catalog.presetsIn('rec')), ['crash']);
+  assert.deepEqual(ids(catalog.packsIn()), ['safety']);
+  assert.equal(catalog.count('rec'), 2, 'every match, packs too');
+  catalog.query = 'twitch';
+  assert.deepEqual(ids(catalog.presetsIn('rec')), ['tell', 'clip'], 'what it needs is found too, recommended or not');
+  assert.equal(catalog.count('alerts'), 0);
+  catalog.query = '';
+});

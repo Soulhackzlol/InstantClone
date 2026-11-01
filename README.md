@@ -56,7 +56,7 @@ One feed in. A buffered delay you **arm**, **activate**, and **cut** on the fly,
 
 ## Quickstart
 
-<sub>First launch opens a setup wizard that walks you through all of this. The steps below are the same thing by hand.</sub>
+<sub>First launch opens a short welcome (language and three quick choices) and a setup wizard that walks you through all of this. The steps below are the same thing by hand.</sub>
 
 <table>
 <tr>
@@ -86,9 +86,9 @@ Service:  InstantClone
 Key:      main          (any string works)
 ```
 
-Multi-track "Auto" works out of the box. Your real platform keys go into the **Destinations** tab, not OBS.
+**Multi-track via InstantClone** works on Auto out of the box. Your real platform keys go into the **Destinations** tab, not OBS.
 
-<sub>Prefer manual? Service <b>Custom</b>, Server <code>rtmp://localhost:1935/live</code>, Key <code>main</code>.</sub>
+<sub>Prefer manual? Service <b>Custom</b>, Server <code>rtmp://localhost:1935/live</code>, Key <code>main</code>. On Streamlabs Desktop, connect it from the same tab instead.</sub>
 
 </td>
 </tr>
@@ -102,7 +102,7 @@ Multi-track "Auto" works out of the box. Your real platform keys go into the **D
 
 <table>
 <tr><td align="center" width="40"><b>1</b></td><td>Type a delay (e.g. <kbd>15</kbd>s) and hit <b>Arm</b>. The buffer pre-fills from the live feed without touching what's going out.</td></tr>
-<tr><td align="center"><b>2</b></td><td>When it reads <code>ARMED</code>, hit <b>Activate</b>. The switch to delayed is instant on screen, no reconnect, no glitch.</td></tr>
+<tr><td align="center"><b>2</b></td><td>When it reads <code>ARMED</code>, hit <b>Activate</b>. Viewers jump back to a keyframe at least that old and see those seconds once more, then stay that far behind. No reconnect, no glitch.</td></tr>
 <tr><td align="center"><b>3</b></td><td><b>Cut</b> to snap back to live any time, or <b>&#9201; Cut after this airs</b> to auto-cut the moment your reaction reaches viewers. No counting the delay in your head.</td></tr>
 </table>
 
@@ -120,7 +120,7 @@ Multi-track "Auto" works out of the box. Your real platform keys go into the **D
 
 I wanted a delay buffer for my own stream and went looking. The polished option I found was [InstantDelay](https://instant-delay.com/), which is paid. I'd rather have something I could rebuild from scratch, understand end-to-end, and adapt to my setup, so I wrote this instead.
 
-Once it existed, the parts I'd actually wanted ended up in it: a real two-phase arm/activate (so the moment you go live with delay is **zero glitch** on the destination player), multiple egress destinations at once (so it doubles as a free multistream / simulcast tool, a self-hosted alternative to Restream), an OBS browser-dock, and a stats overlay you can drop in as a browser-source.
+Once it existed, the parts I'd actually wanted ended up in it: a real two-phase arm/activate (so the moment you go live with delay is **zero glitch** on the destination player), several destinations at once (so it doubles as a free multistream / simulcast tool, a self-hosted alternative to Restream), an OBS browser-dock, and a stats overlay you can drop in as a browser-source.
 
 <sub>InstantClone is an independent project, not affiliated with or endorsed by InstantDelay or its developers.</sub>
 
@@ -135,7 +135,7 @@ Once it existed, the parts I'd actually wanted ended up in it: a real two-phase 
 <td valign="top" width="50%">
 
 **🎯 Multistream to every platform**
-Simulcast one OBS feed to Twitch, YouTube, Kick, and custom RTMP at once, a free self-hosted alternative to Restream. Toggle each independently, watch per-destination bitrate live. A **Local test sink** streams to a tiny receiver on your PC so you can rehearse arm/activate/cut with no key and nothing leaving your machine.
+Simulcast one OBS feed to Twitch, YouTube, Kick, and custom RTMP at once, a free self-hosted alternative to Restream. Toggle each independently, watch per-destination bitrate live. A **Test destination** streams to a tiny receiver on your PC so you can rehearse arm/activate/cut with no key and nothing leaving your machine.
 
 </td>
 <td valign="top" width="50%">
@@ -149,7 +149,7 @@ Simulcast one OBS feed to Twitch, YouTube, Kick, and custom RTMP at once, a free
 <td valign="top">
 
 **📱 Vertical (9:16) for free**
-In OBS, turn on **Enhanced Broadcasting** and pick your vertical canvas (for example Aitum Vertical) under **Additional canvas**, then set any non-Twitch destination's format to **Vertical**. InstantClone sends that 9:16 canvas to TikTok, YouTube Shorts, or Kick mobile, with or without a Twitch destination. Switch the Vertical destination on before you start streaming: without Twitch, the vertical track is only encoded while one is on. Streaming to Twitch too? Twitch **Dual Format** provides the same canvas.
+In OBS, turn on **Enhanced Broadcasting** (**Multi-track via InstantClone** on the InstantClone service) and pick your vertical canvas (for example Aitum Vertical) under **Additional canvas**, then set any non-Twitch destination's format to **Vertical**. InstantClone sends that 9:16 canvas to TikTok, YouTube Shorts, or Kick mobile, with or without a Twitch destination. Switch the Vertical destination on before you start streaming: without Twitch, the vertical track is only encoded while one is on. Streaming to Twitch too? Twitch **Dual Format** provides the same canvas.
 
 </td>
 <td valign="top">
@@ -168,8 +168,8 @@ When OBS goes multi-track "Auto", InstantClone proxies Twitch's config, routes t
 </td>
 <td valign="top">
 
-**🔒 RTMPS egress (Kick + any `rtmps://`)**
-The egress socket upgrades to TLS for `rtmps://` URLs, reusing the Windows schannel already linked, so no second TLS stack. Kick is a paste-your-Server-URL platform in the wizard, with the `/app` path added automatically.
+**🔒 RTMPS sending (Kick + any `rtmps://`)**
+The connection upgrades to TLS for `rtmps://` URLs, reusing the Windows schannel already linked, so no second TLS stack. Kick is a paste-your-Server-URL platform in the wizard, with the `/app` path added automatically.
 
 </td>
 </tr>
@@ -183,7 +183,7 @@ A 280×340 control dock lives inside OBS so you're not alt-tabbing mid-match. Th
 <td valign="top">
 
 **⚡ Live delay adjustment**
-Re-arm or nudge the delay up/down without disarming first, exposed as a single typed-value **↻ Adjust to Ns** control. Capacity-aware: it refuses a delay the buffer can't hold and tells you exactly how many MB it needs.
+Re-arm or nudge the delay up/down without disarming first, with one typed value and an **Adjust** button. Capacity-aware: it refuses a delay the buffer can't hold and tells you exactly how many MB it needs.
 
 </td>
 </tr>
@@ -198,6 +198,20 @@ Bind delay on/off, arm, activate, cut, **cut after this airs**, and ending crash
 
 **🎹 MIDI pads and decks**
 Map the same actions to a pad or knob, learned by pressing the control rather than typing a note number. Each mapping remembers which device it came from, so two controllers can drive different actions even when they send the same note, and you can narrow which device InstantClone listens to.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**🎬 Streamlabs Desktop (experimental)**
+Connect it once from the **OBS** tab and keep going live from Streamlabs' own **Go Live** button, signed in with Twitch. Enhanced Broadcasting and the Twitch VOD Track keep working, and what goes out is up to you: YouTube, Kick, any RTMP, with or without a Twitch destination.
+
+</td>
+<td valign="top">
+
+**🌍 English and Spanish, always up to date**
+The dashboard, the OBS dock and the sign-in page speak English and Spanish: pick one on first launch or in **System → General**. Every page follows changes by itself, from another window, the dock or the API, with no F5. The Logs tab and Windows' own dialogs and tray stay in English.
 
 </td>
 </tr>
@@ -232,12 +246,12 @@ InstantClone talks to Discord, Twitch chat, your phone, OBS and your own tools. 
 <tr>
 <td valign="top" width="50%">
 
-**Two-phase by design.** You **arm** a buffer (a target size in seconds). InstantClone pre-fills it from the live OBS feed without touching what's going out. Once it's full you hit **Activate**, and the switch to delayed is instant on screen: the player just jumps from the live edge to the keyframe at least N seconds back, so viewers are never closer to live than you set.
+**Two-phase by design.** You **arm** a buffer (a target size in seconds). InstantClone pre-fills it from the live OBS feed without touching what's going out. Once it's full you hit **Activate**, and the switch to delayed is instant on screen: the player just jumps from the live edge to the keyframe at least N seconds back, so viewers are never closer to live than you set. Those last seconds play once more, which is what going back in time means.
 
 </td>
 <td valign="top" width="50%">
 
-**Cutting is the same trick in reverse.** You hit **Cut**, InstantClone lines up on the nearest keyframe near the live edge, fixes the timestamps so they keep counting forward smoothly, and resumes. No reconnect, no black frame, no glitch.
+**Cutting is the same trick in reverse.** You hit **Cut**, InstantClone lines up on the nearest keyframe near the live edge, fixes the timestamps so they keep counting forward smoothly, and resumes. What hadn't aired yet is skipped. No reconnect, no black frame, no glitch.
 
 </td>
 </tr>
@@ -276,15 +290,15 @@ InstantClone talks to Discord, Twitch chat, your phone, OBS and your own tools. 
 
 **Stream Deck recipe**
 
-The **Web Request** action speaks form-encoded POST by default.
+In **Integrations**, add one that starts with **A button** and does a **Delay action**, then press **Make an address**. Use that address in Stream Deck's **Website** action with **GET request in background** on, or as an HTTP request in Bitfocus Companion. It works with a dashboard password too, so keep it secret.
+
+A plugin that can POST can call the API directly:
 
 ```text
 URL:    http://127.0.0.1:7799/arm
 Method: POST
 Body:   ms=15000
 ```
-
-One-button arming. Add `/activate` and `/stop` to two more buttons for full delay control from your deck.
 
 </td>
 </tr>
@@ -334,8 +348,10 @@ One-button arming. Add `/activate` and `/stop` to two more buttons for full dela
 <br/>
 
 <table>
-<tr><td><b>Idle RSS</b></td><td align="right"><code>~9 MB</code></td><td width="24"></td><td><b>Threads</b></td><td align="right"><code>1 tokio + 1 tray</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>900+</code></td></tr>
+<tr><td><b>RAM, idle</b></td><td align="right"><code>~2.3 MB</code></td><td width="24"></td><td><b>RAM, 1080p60 + delay</b></td><td align="right"><code>~3.3 MB</code></td><td width="24"></td><td><b>Runtime deps</b></td><td align="right"><code>tokio, bytes, ureq</code></td><td width="24"></td><td><b>Tests</b></td><td align="right"><code>960+</code></td></tr>
 </table>
+
+<sub>RAM is Task Manager's memory column for v0.1.18 on Windows 11: the median of 5 runs, a 6 Mbps test stream, a 15 s delay and one local destination, with no dashboard open.</sub>
 
 **Buffer.** Disk-backed by default (`./instantclone.buf`; a new install starts at 300 MB, less on a nearly full disk: about 6 min 30 s at 6 Mbps, 3 min 50 s at 10 Mbps), kept off RAM because it can run to hundreds of MB. The only thing in RAM is the IDR index, ~1 MB for 10 minutes at 60 fps. The file resets on every clean shutdown, so nothing accumulates between sessions, and every way of arming (dashboard, dock, API, hotkeys, MIDI, chat) refuses a delay the buffer can't hold once OBS's bitrate is measured, and says what size it needs. Delays go up to 1 hour; the buffer size decides how much of that you can use (a 15 min delay at 6 Mbps needs about 690 MB).
 
@@ -352,7 +368,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 **Sync disk I/O on the ring-append hot path, by choice.** The buffered write lands in the OS page cache in microseconds and the kernel flushes in the background, so the page cache is already the async buffer; the index and the bytes advance under one lock so a reader never sees a tag whose bytes aren't on disk yet.
 
-**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the Enhanced Broadcasting config built from OBS's canvases and GPU encoders, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), crash protection (crash vs. stop vs. freeze detection, the lossless reconnect-screen encoder checked against ffmpeg, per-track framing for Enhanced Broadcasting, silent AAC), the integrations engine (steps, templates, recipes, chat, Discord cards, on-stream alerts, the stream timeline, OBS actions and events, Twitch EventSub), and the self-update download + checksum-verify + exe swap. **873 tests, all green.** The dashboard, dock and alerts page scripts have 55 more of their own: `node --test web/tests/*.test.mjs`, nothing to install.
+**Tests.** `cargo test --release` covers the state machine (`arm → preparing → ready → active → cut`), AVC + Enhanced-RTMP IDR detection, AMF0 (including Strict Array + recursion guard), settings round-trip, ring-buffer eviction with in-flight-read protection, HTTP parsing, CSRF policy, port pre-flight, content negotiation, Enhanced Broadcasting per-track seq-header cache + TrackId-aware tag selection, multi-track audio + per-destination routing, SPS orientation parsing for vertical selection, the Enhanced Broadcasting config built from OBS's canvases and GPU encoders, the OBS `services.json` patcher, the update-check parser, the hand-rolled SHA-256 (NIST vectors), the RTMP chunk-stream reader/writer, the scheduled safe-cut state machine, the hotkey and MIDI binding tables (including the device that tells two controllers apart), crash protection (crash vs. stop vs. freeze detection, the lossless reconnect-screen encoder checked against ffmpeg, per-track framing for Enhanced Broadcasting, silent AAC), the integrations engine (steps, templates, recipes, chat, Discord cards, on-stream alerts, the stream timeline, OBS actions and events, Twitch EventSub), and the self-update download + checksum-verify + exe swap. **960+ tests, all green.** The dashboard, dock and alerts page scripts have 115 more of their own, one of which fails when a text in the app has no Spanish: `node --test web/tests/*.test.mjs`, nothing to install.
 
 </details>
 
@@ -362,7 +378,7 @@ The dashboard HTML is minified + gzipped at build time by `build.rs` (`flate2`, 
 
 ## Status
 
-**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 900+ tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
+**Daily-driver ready on Windows.** I use it on my own streams, and a growing group of streamers now run it daily too. CI runs fmt + clippy (`-D warnings`) + 960+ tests on every push, and a tagged commit auto-builds and publishes a release with a `SHA256SUMS.txt` alongside (no code-signing certificate yet, so the OS may warn on first launch).
 
 **What's rough, honestly**
 
@@ -411,7 +427,7 @@ As much as the buffer holds, up to 1 hour. A new install's 300 MB file is about 
 
 <br/>
 
-No. Video is passed through bit-for-bit. The only rewriting happens on the audio container when you route a specific track to a destination (AAC is rewritten to the legacy tag every ingest accepts); the audio samples themselves are untouched.
+No. OBS's video and audio go out as OBS encoded them. Only their containers get rewritten, when a destination takes one track out of several; the picture and the audio samples are untouched. The one thing InstantClone encodes itself is the crash protection reconnect screen, which only airs while OBS is gone.
 
 </details>
 
@@ -432,6 +448,15 @@ In InstantClone's **Destinations** tab, never in OBS. OBS only ever points at In
 <br/>
 
 Yes, both. Six actions bind to a global keyboard shortcut, a MIDI pad or knob, or both, in **System → Controls**: delay on/off, arm, activate, cut to live, **cut after this airs**, and ending crash protection. Hotkeys fire while a fullscreen game holds focus, so you never alt-tab mid-match, and every binding needs a modifier (Ctrl, Alt, Shift or Win) so a stray keypress can't trip a delay action. MIDI mappings are learned by pressing the control rather than typing a note number, and each one remembers which device it came from, so two controllers can drive different actions. Windows only for now.
+
+</details>
+
+<details>
+<summary><b>Does it work with Streamlabs Desktop?</b></summary>
+
+<br/>
+
+Yes, as an experimental feature. Connect it once from the **OBS** tab (or the first step of setup), sign Streamlabs in with Twitch and go live from its **Go Live** button. You don't change anything inside Streamlabs. If it's signed in with another platform, the dashboard says so.
 
 </details>
 

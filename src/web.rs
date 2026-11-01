@@ -323,6 +323,24 @@ async fn serve(
         return Ok(());
     }
 
+    // The pages' strings: English needs none, so its file is the bare
+    // translator; any other language's file carries its strings too.
+    if method == "GET" && bare_path == "/i18n.js" {
+        let blob = match page_language(&settings.borrow().ui_language, head_str) {
+            "es" => I18N_ES_JS_GZ,
+            _ => I18N_EN_JS_GZ,
+        };
+        let r = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\n\
+             Content-Encoding: gzip\r\nContent-Length: {}\r\n\
+             Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+            blob.len()
+        );
+        sock.write_all(r.as_bytes()).await?;
+        sock.write_all(blob).await?;
+        return Ok(());
+    }
+
     // Optional VOD-unlocker OBS script, handed to the browser as a Save-As
     // attachment. Serving it (rather than writing it server-side to a fixed
     // path) lets the user drop it wherever their OBS scripts folder actually
@@ -918,11 +936,16 @@ async fn route(
     // safe charset (no separators) so no path can escape overlays_dir.
     // POST /overlays/seeded marks the built-in presets as installed.
     if method == "POST" && bare_path.starts_with("/overlays/") {
-        return match overlay_post(&bare_path["/overlays/".len()..], body) {
+        let answer = match overlay_post(&bare_path["/overlays/".len()..], body) {
             OverlayPost::MarkSeeded => overlays_mark_seeded(settings, cfg_path),
             OverlayPost::Delete(slug) => overlay_delete(slug, settings),
             OverlayPost::Save(slug) => overlay_save(slug, body, settings),
         };
+        // The files aren't settings, so nothing else tells the pages.
+        if answer.0.starts_with("200") {
+            crate::revisions::bump(crate::revisions::Topic::Overlays);
+        }
+        return answer;
     }
 
     // Dock layouts: GET /docks/<id> returns the saved layout JSON (or
@@ -971,11 +994,14 @@ async fn route(
             "text/html; charset=utf-8",
             crate::integrations::alerts::page_html(),
         ),
-        ("GET", "/state") => (
-            "200 OK",
-            "application/json",
-            state_json(ctrl, settings, sysstat),
-        ),
+        ("GET", "/state") => {
+            crate::revisions::note_poll();
+            (
+                "200 OK",
+                "application/json",
+                state_json(ctrl, settings, sysstat),
+            )
+        }
         ("GET", "/overlay-state") => (
             "200 OK",
             "application/json",
@@ -1020,43 +1046,11 @@ async fn route(
             "application/json",
             obs_multitrack_config_static(query, body, settings),
         ),
-        ("GET", "/obs/register-status") => {
-            let s = settings.borrow();
-            // Another InstantClone (another folder, its own ports) owns the
-            // entry in OBS and is running: Register here would move OBS off it.
-            let other =
-                crate::obs_register::registered_to_other_instance(s.web_port, s.ingest_port);
-            (
-                "200 OK",
-                "application/json",
-                format!(
-                    r#"{{"registered":{},"registered_to_other_instance":{},"other_instance_web_port":{},"has_entry":{},"update_pending":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"active_profile":{},"path":{}}}"#,
-                    crate::obs_register::is_registered(s.web_port, s.ingest_port),
-                    other.is_some(),
-                    other
-                        .filter(|&port| port != 0)
-                        .map_or("null".to_string(), |port| port.to_string()),
-                    crate::obs_register::has_entry(),
-                    crate::obs_register::refresh_waiting(),
-                    crate::obs_register::is_obs_running(),
-                    crate::obs_register::vod_audio_flag_set(),
-                    crate::obs_register::vod_eb_injection_present(s.web_port),
-                    match crate::obs_register::obs_version() {
-                        Some((a, b, c)) => format!(r#""{a}.{b}.{c}""#),
-                        None => "null".to_string(),
-                    },
-                    match crate::obs_register::active_profile() {
-                        Some(p) => format!(r#""{}""#, p.replace('\\', "\\\\").replace('"', "\\\"")),
-                        None => "null".to_string(),
-                    },
-                    match crate::obs_register::services_json_path() {
-                        Some(p) =>
-                            format!(r#""{}""#, p.display().to_string().replace('\\', "\\\\")),
-                        None => "null".to_string(),
-                    }
-                ),
-            )
-        }
+        ("GET", "/obs/register-status") => (
+            "200 OK",
+            "application/json",
+            obs_register_status_json(settings),
+        ),
         // Every OBS on this PC (installed and portable), each registered on
         // its own: the streamer ticks which, and an open one only stops itself.
         ("GET", "/obs/installs") => ("200 OK", "application/json", obs_installs_json(settings)),
@@ -1242,32 +1236,13 @@ async fn route(
             reveal_path(Path::new("./instantclone-trace.log"));
             ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
         }
-        ("GET", "/obs/launch-status") => {
-            let exe = crate::obs_register::find_obs_executable();
-            (
-                "200 OK",
-                "application/json",
-                format!(
-                    r#"{{"installed":{},"exe":{}}}"#,
-                    exe.is_some(),
-                    match exe {
-                        Some(p) => format!(
-                            "\"{}\"",
-                            p.display()
-                                .to_string()
-                                .replace('\\', "\\\\")
-                                .replace('"', "'")
-                        ),
-                        None => "null".to_string(),
-                    }
-                ),
-            )
-        }
+        ("GET", "/obs/launch-status") => ("200 OK", "application/json", obs_launch_status_json()),
         // Streamlabs Desktop (experimental): see `streamlabs`.
-        ("GET", "/streamlabs/status") => ("200 OK", "application/json", {
-            let s = settings.borrow();
-            crate::streamlabs::status_json(s.streamlabs_connect, s.web_port)
-        }),
+        ("GET", "/streamlabs/status") => (
+            "200 OK",
+            "application/json",
+            streamlabs_status_json(settings),
+        ),
         ("POST", "/streamlabs/connect") => set_streamlabs_connect(true, settings, cfg_path),
         ("POST", "/streamlabs/disconnect") => {
             let answer = set_streamlabs_connect(false, settings, cfg_path);
@@ -1430,6 +1405,8 @@ async fn handle_sse(
         (Feed::Alerts { in_obs }, Some(board)) => Some(board.page_opened(in_obs)),
         _ => None,
     };
+    // A dashboard or dock is open: what changes outside the app is watched.
+    let _watching = matches!(feed, Feed::Dashboard).then(crate::revisions::watching);
 
     let mut last_payload = String::new();
     let mut last_send = std::time::Instant::now();
@@ -1633,6 +1610,11 @@ fn state_json(
     let compat_warning = if ctrl.ingest_alive() {
         [
             crate::compat::compat_warning(&ctrl.stream_params(), &s.destinations),
+            crate::compat::delay_keyframe_note(
+                &ctrl.stream_params(),
+                &s.destinations,
+                ctrl.armed_delay_ms().max(ctrl.target_delay_ms()),
+            ),
             eb_not_applied_warning(ctrl),
         ]
         .into_iter()
@@ -1648,10 +1630,13 @@ fn state_json(
     let vertical_present = ctrl.ingest_alive() && ctrl.vertical_track_on_wire().is_some();
 
     format!(
-        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"publisher_app":"{pa}","cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
+        r#"{{"phase":"{ph}","armed_delay_ms":{ad},"target_delay_ms":{td},"current_delay_ms":{cd},"buffer_fill_ms":{bf},"buffer_target_ms":{btm},"buffer_capacity_ms_est":{bc},"capacity_kbps":{ck},"capacity_measured":{cm},"capacity_short":{cs},"buffer_mb_running":{bmr},"restart_pending":{rp},"ingest_alive":{ia},"egress_alive":{ea},"destinations_alive":{dla},"destinations_total":{dlt},"buffer_building":{bb},"configured":{cfg},"obs_url":"{ou}","webhook_set":{ws},"video_codec":"{vc}","audio_codec":"{ac}","multitrack_video":{mtv},"multitrack_audio":{mta},"vertical_present":{vp},"publisher_app":"{pa}","cpu_pct":{cp:.2},"rss_bytes":{rb},"uptime_secs":{up},"publisher_token":{pt},"consumer_lag":{cl},"backpressure":{bp},"safe_cut_pending":{scp},"safe_cut_remaining_ms":{scr},"hold":{hold},"tail_ms":{tail},"compat_warning":{cw},"hotkey_conflicts":[{hkc}],"last_action":{la},"feed":{fd},"rev":{rev},"stats":{{"tags_sent":{ts},"bytes_sent":{bs},"cuts":{cu},"ingest_disconnects":{id},"egress_reconnects":{er},"bitrate_kbps":{br},"video_kbps":{vbr}}},"destinations":[{dl}]}}"#,
         ph = ctrl.phase(),
         // The dock's events list changed: it fetches the list again.
         fd = ctrl.integrations().map_or(0, |h| h.feed.changes()),
+        // Each kind of data the pages fetch on their own: one moved, the
+        // pages showing it fetch it again (see `revisions`).
+        rev = crate::revisions::json(),
         scp = ctrl.safe_cut_pending(),
         scr = ctrl.safe_cut_remaining_ms(),
         hold = hold_json(ctrl),
@@ -1753,10 +1738,12 @@ fn eb_not_applied_warning(ctrl: &Controller) -> Option<String> {
     if ctrl.multitrack_video() || ctrl.keyframe_interval_ms() == 0 || !ctrl.publisher_local() {
         return None;
     }
-    // Streamlabs streaming through us is the publisher, not OBS: OBS's
-    // profile says nothing about it (and one track there can be by choice).
+    // Another app streaming through us, Streamlabs or ffmpeg, is the
+    // publisher, not OBS: OBS's profile says nothing about it (and one track
+    // there can be by choice).
     let streamlabs = crate::streamlabs::status();
-    if streamlabs.live && matches!(streamlabs.route, "eb" | "single") {
+    if !ctrl.publisher_is_obs() || (streamlabs.live && matches!(streamlabs.route, "eb" | "single"))
+    {
         return None;
     }
     obs_profile_wants_eb().then(|| EB_NOT_APPLIED.to_string())
@@ -1875,11 +1862,11 @@ fn platforms_json() -> String {
     r#"[
   {"slug":"twitch","label":"Twitch","key_url":"https://dashboard.twitch.tv/u/_/settings/stream","key_help":"Twitch Creator Dashboard → Settings → Stream → Primary Stream Key","tip":"Twitch's transcoded quality ladder (1080p / 720p / 480p / 360p / 160p) is account-tier gated - non-Affiliates get Source-Only at any bitrate, Affiliate / Partner get the ladder. In Source-Only mode every viewer must decode your full source bitrate, and above ~8 Mbps mobile devices may fail (Error #1000 / black screen with audio). Stay ≤ 8 Mbps if your audience includes mobile and you're not sure your account gets transcoded."},
   {"slug":"youtube","label":"YouTube Live","key_url":"https://studio.youtube.com/channel/UC/livestreaming","key_help":"YouTube Studio → Go live → Stream tab → Stream key","tip":"First-time live: YouTube requires a 24h verification window after enabling live streaming."},
-  {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream - copy BOTH the Server URL and the Stream key","tip":"Kick gives you a Server URL and a Stream key in Settings → Stream - paste both (the Server is per-streamer, so there is no single URL to hardcode). Kick ingests over RTMPS (TLS on :443); InstantClone connects over it automatically. What Kick enforces: H.264, CBR, keyframe interval 2 s, bitrate ≤ 8000 kbps, up to 60 fps. B-frames: contrary to a lot of older guides, Kick's normal ingest accepts them - the strict no-B-frames rule is AWS IVS real-time/WHIP, which Kick doesn't use for OBS streaming, so you usually don't need to change anything. If Kick ever rejects your stream, set B-frames to 0 in OBS (Output → Advanced); that's safe for Twitch/YouTube too. InstantClone forwards one encode without re-encoding, so B-frames can't be stripped for Kick alone. And with Twitch Enhanced Broadcasting on, Twitch chooses the encode settings (including B-frames) for you."},
+  {"slug":"kick","label":"Kick","key_url":"https://kick.com/dashboard/settings/stream","key_help":"Kick Creator Dashboard → Settings → Stream - copy BOTH the Server URL and the Stream key","tip":"Kick gives you a Server URL and a Stream key in Settings → Stream - paste both (the Server is per-streamer, so there is no single URL to hardcode). Kick takes streams over RTMPS (TLS on :443); InstantClone connects over it automatically. What Kick enforces: H.264, CBR, keyframe interval 2 s, bitrate ≤ 8000 kbps, up to 60 fps. B-frames: contrary to a lot of older guides, Kick's normal stream server accepts them - the strict no-B-frames rule is AWS IVS real-time/WHIP, which Kick doesn't use for OBS streaming, so you usually don't need to change anything. If Kick ever rejects your stream, set B-frames to 0 in OBS (Output → Advanced); that's safe for Twitch/YouTube too. InstantClone passes on one encode without re-encoding, so B-frames can't be stripped for Kick alone. And with Twitch Enhanced Broadcasting on, Twitch chooses the encode settings (including B-frames) for you."},
   {"slug":"trovo","label":"Trovo","key_url":"https://studio.trovo.live/channel/myinfo","key_help":"Trovo Studio → Channel → My Info → Stream Key","tip":null},
   {"slug":"restream","label":"Restream.io","key_url":"https://app.restream.io/channel-settings","key_help":"Restream → Channel Settings → Stream Key","tip":"Restream relays your single stream to multiple platforms - per-platform limits apply on the downstream side, not here."},
   {"slug":"custom","label":"Custom RTMP URL","key_url":null,"key_help":null,"tip":null},
-  {"slug":"sink","label":"Local test sink (nothing leaves your PC)","key_url":null,"key_help":null,"tip":"InstantClone runs its own tiny RTMP receiver on this PC and streams to it - test arm / activate / cut end to end with zero risk: no real platform, no stream key, nothing leaves your machine. While it's receiving, open http://127.0.0.1:SINK_WEB_PORT/ to watch exactly what a platform would get (including the delay)."}
+  {"slug":"sink","label":"Test destination (nothing leaves your PC)","key_url":null,"key_help":null,"tip":"InstantClone runs its own small receiver on this PC and streams to it, so you can try arm, activate and cut end to end with zero risk: no real platform, no stream key, nothing leaves your machine. While it's receiving, open http://127.0.0.1:SINK_WEB_PORT/ to watch exactly what a platform would get, delay included."}
 ]"#.replace("SINK_WEB_PORT", &crate::config::SINK_WEB_PORT.to_string())
 }
 
@@ -3059,6 +3046,7 @@ const SETTABLE_KEYS: &[&str] = &[
     "update_tray_notify",
     "tray_color",
     "open_dashboard_on_launch",
+    "ui_language",
     "midi_device",
     "twitch_client_id",
 ];
@@ -3415,6 +3403,111 @@ fn arm_refusal(ctrl: &Arc<Controller>, ms: u32) -> Option<(&'static str, &'stati
 /// while it runs is undone on exit.
 /// Every OBS on this PC and where its registration stands: the list the OBS
 /// tab and the wizard tick from. An install's id is its settings folder.
+/// `GET /obs/register-status`: OBS's service entry and the OBS around it.
+fn obs_register_status_json(settings: &Arc<watch::Sender<Settings>>) -> String {
+    // Copied out: the settings stay unlocked while OBS's files are read.
+    let (web_port, ingest_port) = {
+        let s = settings.borrow();
+        (s.web_port, s.ingest_port)
+    };
+    // Another InstantClone (another folder, its own ports) owns the
+    // entry in OBS and is running: Register here would move OBS off it.
+    let other = crate::obs_register::registered_to_other_instance(web_port, ingest_port);
+    format!(
+        r#"{{"registered":{},"registered_to_other_instance":{},"other_instance_web_port":{},"has_entry":{},"update_pending":{},"obs_running":{},"vod_audio_flag":{},"vod_eb_injected":{},"obs_version":{},"active_profile":{},"path":{}}}"#,
+        crate::obs_register::is_registered(web_port, ingest_port),
+        other.is_some(),
+        other
+            .filter(|&port| port != 0)
+            .map_or("null".to_string(), |port| port.to_string()),
+        crate::obs_register::has_entry(),
+        crate::obs_register::refresh_waiting(),
+        crate::obs_register::is_obs_running(),
+        crate::obs_register::vod_audio_flag_set(),
+        crate::obs_register::vod_eb_injection_present(web_port),
+        match crate::obs_register::obs_version() {
+            Some((a, b, c)) => format!(r#""{a}.{b}.{c}""#),
+            None => "null".to_string(),
+        },
+        match crate::obs_register::active_profile() {
+            Some(p) => format!(r#""{}""#, p.replace('\\', "\\\\").replace('"', "\\\"")),
+            None => "null".to_string(),
+        },
+        match crate::obs_register::services_json_path() {
+            Some(p) => format!(r#""{}""#, p.display().to_string().replace('\\', "\\\\")),
+            None => "null".to_string(),
+        }
+    )
+}
+
+/// `GET /obs/launch-status`: whether OBS is installed where it can be launched.
+fn obs_launch_status_json() -> String {
+    let exe = crate::obs_register::find_obs_executable();
+    format!(
+        r#"{{"installed":{},"exe":{}}}"#,
+        exe.is_some(),
+        match exe {
+            Some(p) => format!(
+                "\"{}\"",
+                p.display()
+                    .to_string()
+                    .replace('\\', "\\\\")
+                    .replace('"', "'")
+            ),
+            None => "null".to_string(),
+        }
+    )
+}
+
+/// `GET /streamlabs/status`, with the settings unlocked while it looks.
+fn streamlabs_status_json(settings: &Arc<watch::Sender<Settings>>) -> String {
+    let (enabled, web_port) = {
+        let s = settings.borrow();
+        (s.streamlabs_connect, s.web_port)
+    };
+    crate::streamlabs::status_json(enabled, web_port)
+}
+
+/// What the pages show of OBS and Streamlabs, as their endpoints answer it
+/// now. `revisions::follow_outside` bumps a topic when its answer changes,
+/// so an OBS opened or Streamlabs installed shows without a reload.
+pub fn outside_snapshot(
+    settings: &Arc<watch::Sender<Settings>>,
+) -> Vec<(crate::revisions::Topic, String)> {
+    use crate::revisions::Topic;
+    let obs = [
+        obs_register_status_json(settings),
+        obs_installs_json(settings),
+        obs_launch_status_json(),
+    ]
+    .concat();
+    vec![
+        (Topic::Obs, obs),
+        (Topic::Streamlabs, streamlabs_status_json(settings)),
+        (Topic::Overlays, overlay_files_snapshot(settings)),
+    ]
+}
+
+/// The overlays folder's names, sizes and times: files dropped in or deleted
+/// by hand reach no endpoint, so this is how the pages hear of them.
+fn overlay_files_snapshot(settings: &Arc<watch::Sender<Settings>>) -> String {
+    let dir = settings.borrow().overlays_dir.clone();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return String::new();
+    };
+    let mut files: Vec<String> = entries
+        .flatten()
+        .map(|entry| {
+            let meta = entry.metadata().ok();
+            let size = meta.as_ref().map_or(0, |m| m.len());
+            let time = meta.and_then(|m| m.modified().ok());
+            format!("{:?} {size} {time:?}", entry.file_name())
+        })
+        .collect();
+    files.sort();
+    files.join("\n")
+}
+
 fn obs_installs_json(settings: &Arc<watch::Sender<Settings>>) -> String {
     use crate::json::{self, Value};
     use crate::obs_register::{self, Registration};
@@ -3933,10 +4026,22 @@ async fn post_profile_add(
             r#"{"ok":false,"error":"Set a delay between 1 second and 1 hour."}"#.into(),
         );
     };
+    // `was`: the profile being edited, which keeps its place in the list
+    // under its new name.
+    let was = form.get("was").map(|w| w.trim()).filter(|w| !w.is_empty());
     let _wl = settings_write_guard();
     let mut ns = settings.borrow().clone();
-    // Replace existing by name, else append.
-    if let Some(p) = ns.profiles.iter_mut().find(|p| p.name == name) {
+    if was.is_some_and(|w| w != name) && ns.profiles.iter().any(|p| p.name == name) {
+        return (
+            "409 Conflict",
+            "application/json",
+            r#"{"ok":false,"error":"Another profile already has that name."}"#.into(),
+        );
+    }
+    let key = was.unwrap_or(&name).to_string();
+    // Replace the one edited (or the one by that name), else append.
+    if let Some(p) = ns.profiles.iter_mut().find(|p| p.name == key) {
+        p.name = name;
         p.delay_ms = delay_ms;
     } else {
         ns.profiles.push(config::DelayProfile { name, delay_ms });
@@ -4584,16 +4689,18 @@ const DOCK_SETTABLE_KEYS: &[&str] = &[
 ];
 
 /// The dock's switches, plus whether a password is set (the dock then knows
-/// a link it copies needs the access token).
+/// a link it copies needs the access token) and the language picked (the
+/// dock loads again in a new one).
 fn dock_settings_json(settings: &Arc<watch::Sender<Settings>>) -> String {
     let s = settings.borrow();
     format!(
-        r#"{{"auto_arm_on_connect":{},"auto_activate_when_ready":{},"tracing_enabled":{},"crash_protection.enabled":{},"auth_enabled":{}}}"#,
+        r#"{{"auto_arm_on_connect":{},"auto_activate_when_ready":{},"tracing_enabled":{},"crash_protection.enabled":{},"auth_enabled":{},"ui_language":{}}}"#,
         s.auto_arm_on_connect,
         s.auto_activate_when_ready,
         s.tracing_enabled,
         s.crash_protection.enabled,
         !s.dashboard_password_hash.is_empty(),
+        config::json_str(&s.ui_language),
     )
 }
 
@@ -5288,6 +5395,11 @@ fn apply_field_str(s: &mut Settings, key: &str, value: &str) {
         "open_dashboard_on_launch" => {
             s.open_dashboard_on_launch = !matches!(value, "" | "false" | "0" | "off");
         }
+        "ui_language" => {
+            if config::UI_LANGUAGES.contains(&value) {
+                s.ui_language = value.into();
+            }
+        }
         // hotkey.<action>=<combo> and midi.<action>=<signature>. Both
         // `set`s canonicalize and drop anything malformed, so an empty or
         // bad value simply clears the binding - which is exactly how the
@@ -5553,6 +5665,11 @@ fn classify_access(method: &str, path: &str) -> Access {
     if path == "/obs/multitrack-config" {
         return Access::Public;
     }
+    // The pages' strings: the same for everyone, and the login page needs
+    // them before anyone has logged in.
+    if method == "GET" && path == "/i18n.js" {
+        return Access::Public;
+    }
     // The overlay's read-only feed, and only by GET. An OBS browser source
     // cannot log in, so without this an overlay stops updating the moment a
     // dashboard password is set - it paints once and freezes, silently,
@@ -5807,6 +5924,7 @@ async fn write_simple(
 /// Self-contained login page (no external assets, so it renders before any
 /// authenticated request). Served at GET /login only when auth is enabled.
 const LOGIN_HTML: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8">
+<script src="/i18n.js"></script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>InstantClone - Sign in</title>
 <style>
@@ -5889,6 +6007,39 @@ static STUDIO_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/studio.js
 /// `web/overlay-runtime.js`; build-time gzipped (see `build.rs`).
 static OVERLAY_RUNTIME_JS_GZ: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/overlay-runtime.js.gz"));
+
+/// `web/i18n.js` alone (English), and with the Spanish strings ahead of it.
+/// Built from `web/i18n/` (see `build.rs`).
+static I18N_EN_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-en.js.gz"));
+static I18N_ES_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n-es.js.gz"));
+
+/// The language the pages show: the one picked in System, or for "auto" the
+/// first one in the browser's `Accept-Language` list that has strings.
+fn page_language(setting: &str, head: &str) -> &'static str {
+    match setting {
+        "es" => return "es",
+        "en" => return "en",
+        _ => {}
+    }
+    let wanted = head
+        .split("\r\n")
+        .find_map(|line| strip_prefix_icase(line, "accept-language:"))
+        .unwrap_or("");
+    // Browsers list languages most wanted first; a q=0 entry is a refusal.
+    for entry in wanted.split(',') {
+        let mut parts = entry.split(';');
+        let tag = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+        if parts.any(|p| p.trim().replace(' ', "") == "q=0") {
+            continue;
+        }
+        match tag.split('-').next() {
+            Some("es") => return "es",
+            Some("en") => return "en",
+            _ => {}
+        }
+    }
+    "en"
+}
 
 /// Optional VOD-unlocker OBS Lua script, embedded from `obs/`. Served by
 /// `GET /obs/vod-script/download` as a Save-As attachment. Embedding keeps it
@@ -6446,6 +6597,32 @@ mod tests {
         assert!(!after.contains("goal-subs"), "the feed carries no names");
     }
 
+    #[test]
+    fn the_sign_in_page_speaks_the_language_too() {
+        assert!(LOGIN_HTML.contains(r#"<script src="/i18n.js"></script>"#));
+        assert_eq!(classify_access("GET", "/i18n.js"), Access::Public);
+    }
+
+    #[test]
+    fn the_pages_speak_the_picked_language_or_the_browsers() {
+        let asks = |list: &str| format!("GET /i18n.js HTTP/1.1\r\nAccept-Language: {list}\r\n");
+        assert_eq!(page_language("es", &asks("en-US,en")), "es");
+        assert_eq!(page_language("en", &asks("es-ES,es")), "en");
+        // Auto: the first listed language there are strings for.
+        assert_eq!(
+            page_language("auto", &asks("es-ES,es;q=0.9,en;q=0.8")),
+            "es"
+        );
+        assert_eq!(page_language("auto", &asks("ca,es;q=0.9")), "es");
+        assert_eq!(
+            page_language("auto", &asks("fr-FR,en;q=0.5,es;q=0.3")),
+            "en"
+        );
+        assert_eq!(page_language("auto", &asks("es;q=0, en")), "en");
+        assert_eq!(page_language("auto", &asks("de")), "en");
+        assert_eq!(page_language("auto", "GET /i18n.js HTTP/1.1\r\n"), "en");
+    }
+
     /// Reading the overlay feed must never imply being able to drive the
     /// delay. `/state` is Control, and Control is arm / activate / cut /
     /// go-live - so pointing overlays at it, or widening it to reach them,
@@ -6586,7 +6763,7 @@ mod tests {
         let too_big = arm_refusal(&ctrl, 600_000).expect("over capacity");
         assert_eq!(too_big.0, "409 Conflict");
         assert!(
-            too_big.2.contains("Buffer too small") && too_big.2.contains("Raise the buffer size"),
+            too_big.2.contains("too long for the buffer") && too_big.2.contains("Make it at least"),
             "the message has to read as a sentence: {}",
             too_big.2
         );
@@ -6852,6 +7029,13 @@ mod tests {
                 reads_as: "false",
                 reset: "on",
                 read: |s| s.open_dashboard_on_launch.to_string(),
+            },
+            SettableRow {
+                key: "ui_language",
+                set: "es",
+                reads_as: "es",
+                reset: "auto",
+                read: |s| s.ui_language.clone(),
             },
             SettableRow {
                 key: "midi_device",
@@ -8480,6 +8664,7 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
         ("GET", "/integrations.js", Access::Admin),
         ("GET", "/studio.js", Access::Admin),
         ("GET", "/obs/vod-script/download", Access::Admin),
+        ("GET", "/i18n.js", Access::Public),
         ("GET", "/events", Access::Control),
         ("GET", "/overlay-events", Access::Public),
         ("GET", "/alerts-events", Access::Public),
@@ -9393,6 +9578,42 @@ user-agent: Mozilla/5.0 Chrome/141.0 Safari/537.36
             "{}",
             r.body
         );
+    }
+
+    /// Editing a profile renames it in place, and never onto another one.
+    #[tokio::test]
+    async fn a_profile_is_renamed_in_place() {
+        let live = Live::new(Settings::defaults());
+        for body in [&b"name=A&delay_ms=15000"[..], b"name=B&delay_ms=30000"] {
+            let r = live.send(&request("POST", "/profiles", "", body)).await;
+            assert_eq!(r.status, 200, "{}", r.body);
+        }
+        let r = live
+            .send(&request(
+                "POST",
+                "/profiles",
+                "",
+                b"name=B&delay_ms=20000&was=A",
+            ))
+            .await;
+        assert_eq!(r.status, 409, "{}", r.body);
+        let r = live
+            .send(&request(
+                "POST",
+                "/profiles",
+                "",
+                b"name=Esports&delay_ms=20000&was=A",
+            ))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let renamed = r.body.find(r#""name":"Esports","delay_ms":20000"#);
+        let b = r.body.find(r#""name":"B","delay_ms":30000"#);
+        assert!(
+            renamed.is_some() && b.is_some() && renamed < b,
+            "kept its place: {}",
+            r.body
+        );
+        assert!(!r.body.contains(r#""name":"A""#), "{}", r.body);
     }
 
     /// The default relative setting resolves beside the settings file, so

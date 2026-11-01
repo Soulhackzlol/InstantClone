@@ -1049,7 +1049,7 @@ fn status_label(ctrl: &Controller) -> String {
             let goal = ctrl.delay_runs_ms(ctrl.armed_delay_ms()).max(1) as f32;
             let fill = ctrl.buffer_fill_ms() as f32;
             let pct = ((fill / goal) * 100.0).min(99.0) as u32;
-            format!("Status: BUFFERING - {pct}%")
+            format!("Status: ARMING - {pct}%")
         }
         _ => {
             if ctrl.ingest_alive() {

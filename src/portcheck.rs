@@ -34,7 +34,8 @@ use windows_sys::Win32::System::Threading::{
 };
 #[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    MessageBoxW, IDYES, MB_ICONWARNING, MB_OK, MB_YESNO,
+    MessageBoxW, IDNO, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_YESNO,
+    MB_YESNOCANCEL, MESSAGEBOX_RESULT, MESSAGEBOX_STYLE,
 };
 
 /// Header struct of the variable-length table returned by
@@ -196,87 +197,250 @@ pub fn find_free_port(host: &str, start: u16, range: u16) -> Option<u16> {
     None
 }
 
+/// Which of this copy's two ports is taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortRole {
+    /// Where OBS sends the stream (RTMP).
+    Stream,
+    /// Where the dashboard opens.
+    Dashboard,
+}
+
+impl PortRole {
+    /// The technical name, for the log.
+    pub fn label(self) -> &'static str {
+        match self {
+            PortRole::Stream => "RTMP port",
+            PortRole::Dashboard => "Web port",
+        }
+    }
+
+    /// In plain words, for a dialog.
+    #[cfg(windows)]
+    fn plain(self) -> &'static str {
+        match self {
+            PortRole::Stream => "the port OBS sends your stream to",
+            PortRole::Dashboard => "the port the dashboard opens on",
+        }
+    }
+}
+
 #[cfg(windows)]
 pub enum ConflictChoice {
+    /// Run on this port instead.
     SwitchPort(u16),
+    /// Use the InstantClone that is already running: open its dashboard
+    /// (when its port is known) and quit.
+    UseRunning(Option<u16>),
     Quit,
 }
 
-/// Pop a native modal asking the user what to do about a port conflict.
-/// `label` is shown to the user as "RTMP port" / "web port".
-/// `starting_copy`: another InstantClone that is starting has claimed the
-/// port (see `instance_lock::reserve_port`), whoever listens on it yet.
+/// Who holds a port this copy wants.
+#[cfg(windows)]
+#[derive(Debug, PartialEq, Eq)]
+enum Holder<'a> {
+    /// Another InstantClone: its exe, or None while it is still starting
+    /// and hasn't bound the port yet (see `instance_lock::reserve_port`).
+    Copy(Option<&'a str>),
+    /// Any other program, by its file name when Windows tells it.
+    Program(Option<&'a str>),
+}
+
+#[cfg(windows)]
+fn holder(owner: Option<&(u32, Option<String>)>, starting_copy: bool) -> Holder<'_> {
+    match owner {
+        Some((_, Some(exe))) if is_instantclone_exe(exe) => Holder::Copy(Some(exe)),
+        Some((_, exe)) => Holder::Program(exe.as_deref().map(exe_basename)),
+        None if starting_copy => Holder::Copy(None),
+        None => Holder::Program(None),
+    }
+}
+
+/// Set once the user confirmed a second InstantClone: its other port moves
+/// too without asking the same question again.
+#[cfg(windows)]
+static SECOND_COPY_CONFIRMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Ask the user what to do about a taken port.
+///
+/// Another InstantClone almost always means InstantClone was opened twice,
+/// so the first answer opens the one already running. Starting a second copy
+/// (another channel, its own settings) takes a second, explicit yes.
 #[cfg(windows)]
 pub fn ask_user(
-    label: &str,
+    role: PortRole,
     port: u16,
     owner: Option<(u32, Option<String>)>,
     proposed_port: Option<u16>,
     starting_copy: bool,
 ) -> ConflictChoice {
-    let body_text = conflict_message(label, port, owner.as_ref(), proposed_port, starting_copy);
-    let flags = if proposed_port.is_some() {
-        MB_YESNO | MB_ICONWARNING
-    } else {
-        MB_OK | MB_ICONWARNING
-    };
-    let title = wide("InstantClone");
-    let body = wide(&body_text);
-    let r = unsafe { MessageBoxW(ptr::null_mut(), body.as_ptr(), title.as_ptr(), flags) };
-    match (r, proposed_port) {
-        (IDYES, Some(p)) => ConflictChoice::SwitchPort(p),
+    match holder(owner.as_ref(), starting_copy) {
+        Holder::Copy(exe) => ask_about_copy(exe, proposed_port),
+        Holder::Program(name) => ask_about_program(role, port, name, proposed_port),
+    }
+}
+
+#[cfg(windows)]
+fn ask_about_copy(exe: Option<&str>, proposed_port: Option<u16>) -> ConflictChoice {
+    use std::sync::atomic::Ordering;
+    if SECOND_COPY_CONFIRMED.load(Ordering::Relaxed) {
+        return proposed_port.map_or_else(no_port_for_second_copy, ConflictChoice::SwitchPort);
+    }
+    let flags = MB_YESNOCANCEL | MB_ICONINFORMATION;
+    match message_box(
+        "InstantClone is already open",
+        &already_open_message(exe),
+        flags,
+    ) {
+        IDYES => ConflictChoice::UseRunning(exe.and_then(dashboard_port_of)),
+        IDNO => confirm_second_copy(exe, proposed_port),
         _ => ConflictChoice::Quit,
     }
 }
 
-/// The text of the port-conflict dialog.
-///
-/// Another InstantClone gets its own wording. The same setup can't get here
-/// (a second copy of it never starts, see `instance_lock`), so this is a copy
-/// from a different folder, and moving this one to a free port is the normal
-/// way to run two side by side. Its folder is what tells the user which copy
-/// it is, so that is what the dialog names.
 #[cfg(windows)]
-fn conflict_message(
-    label: &str,
-    port: u16,
-    owner: Option<&(u32, Option<String>)>,
-    proposed_port: Option<u16>,
-    starting_copy: bool,
-) -> String {
-    let other_copy = owner.and_then(|(_, exe)| exe.as_deref().filter(|e| is_instantclone_exe(e)));
-    let is_copy = other_copy.is_some() || (owner.is_none() && starting_copy);
-    let owner_text = match (owner, other_copy) {
-        (Some((pid, _)), Some(exe)) => {
-            let folder = exe.rsplit_once(['\\', '/']).map_or(exe, |(dir, _)| dir);
-            format!("another InstantClone (PID {pid}), running from:\n{folder}")
-        }
-        (Some((pid, Some(exe))), None) => format!("{} (PID {pid})", exe_basename(exe)),
-        (Some((pid, None)), None) => format!("PID {pid} (process name unavailable)"),
-        (None, _) if starting_copy => "another InstantClone that is starting up".to_string(),
-        (None, _) => "another process".to_string(),
+fn confirm_second_copy(exe: Option<&str>, proposed_port: Option<u16>) -> ConflictChoice {
+    let Some(port) = proposed_port else {
+        return no_port_for_second_copy();
     };
+    let here = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.display().to_string()))
+        .unwrap_or_default();
+    // No is the default: a stray Enter keeps a single InstantClone.
+    let flags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2;
+    match message_box(
+        "Start a second InstantClone?",
+        &second_copy_message(&here),
+        flags,
+    ) {
+        IDYES => {
+            SECOND_COPY_CONFIRMED.store(true, std::sync::atomic::Ordering::Relaxed);
+            ConflictChoice::SwitchPort(port)
+        }
+        _ => ConflictChoice::UseRunning(exe.and_then(dashboard_port_of)),
+    }
+}
+
+#[cfg(windows)]
+fn no_port_for_second_copy() -> ConflictChoice {
+    show_error(
+        "InstantClone",
+        "There's no free port left for a second InstantClone. Close the other \
+         InstantClone, or the program using its ports, and try again.",
+    );
+    ConflictChoice::Quit
+}
+
+#[cfg(windows)]
+fn ask_about_program(
+    role: PortRole,
+    port: u16,
+    name: Option<&str>,
+    proposed_port: Option<u16>,
+) -> ConflictChoice {
+    let text = program_message(role, port, name, proposed_port);
+    let Some(new_port) = proposed_port else {
+        show_error("InstantClone", &text);
+        return ConflictChoice::Quit;
+    };
+    match message_box("InstantClone", &text, MB_YESNO | MB_ICONWARNING) {
+        IDYES => ConflictChoice::SwitchPort(new_port),
+        _ => ConflictChoice::Quit,
+    }
+}
+
+/// The folder an exe runs from: what tells two InstantClones apart.
+#[cfg(windows)]
+fn folder_of(exe: &str) -> &str {
+    exe.rsplit_once(['\\', '/']).map_or(exe, |(dir, _)| dir)
+}
+
+/// The dashboard port of the InstantClone running from `exe`, from the
+/// settings beside it, where a copy keeps them unless told otherwise.
+#[cfg(windows)]
+fn dashboard_port_of(exe: &str) -> Option<u16> {
+    let settings = std::path::Path::new(folder_of(exe)).join("instantclone.config.json");
+    crate::config::Settings::load(&settings)
+        .ok()
+        .map(|s| s.web_port)
+}
+
+/// The first question: InstantClone is open already, use that one?
+#[cfg(windows)]
+fn already_open_message(exe: Option<&str>) -> String {
+    match exe {
+        Some(exe) => format!(
+            "InstantClone is already open, from this folder:\n{}\n\n\
+             Yes: open the InstantClone that is already running.\n\
+             No: start a second InstantClone as well.\n\
+             Cancel: do nothing.",
+            folder_of(exe)
+        ),
+        None => "InstantClone is already starting.\n\n\
+                 Yes: let that one open.\n\
+                 No: start a second InstantClone as well.\n\
+                 Cancel: do nothing."
+            .to_string(),
+    }
+}
+
+/// The second question, before a second copy starts.
+#[cfg(windows)]
+fn second_copy_message(here: &str) -> String {
+    format!(
+        "A second InstantClone is only needed to stream two channels at once, \
+         each with its own settings. This one keeps its settings in:\n{here}\n\n\
+         It uses different ports, so OBS has to be set up for it on its own: \
+         its dashboard shows how.\n\n\
+         Yes: start the second InstantClone.\n\
+         No: open the one already running."
+    )
+}
+
+/// What to say when another program holds the port.
+#[cfg(windows)]
+fn program_message(
+    role: PortRole,
+    port: u16,
+    name: Option<&str>,
+    proposed_port: Option<u16>,
+) -> String {
+    let who = name.map_or_else(
+        || "Another program".to_string(),
+        |n| format!("Another program, {n},"),
+    );
     match proposed_port {
-        Some(new_port) if is_copy => format!(
-            "{label} :{port} is already used by {owner_text}\n\n\
-             Use :{new_port} for this copy and continue? It is saved in this copy's \
-             settings, so OBS and the dashboard address for this copy use :{new_port} from now on."
-        ),
-        Some(new_port) => format!(
-            "{label} :{port} is already being used by {owner_text}.\n\n\
-             Switch to :{new_port} and continue?\n\
-             You'll need to update OBS (and the dashboard URL) \
-             to use the new port."
-        ),
+        Some(new_port) => {
+            let after = match role {
+                PortRole::Stream => {
+                    "OBS needs the new address then: the dashboard's OBS tab shows it.".to_string()
+                }
+                PortRole::Dashboard => {
+                    format!("The dashboard then opens at http://127.0.0.1:{new_port}/")
+                }
+            };
+            format!(
+                "{who} is using {} ({port}).\n\n\
+                 Use {new_port} instead and continue? InstantClone remembers it. {after}",
+                role.plain()
+            )
+        }
         None => format!(
-            "{label} :{port} is already being used by {owner_text}.\n\n\
-             No free port found from :{} to :{}.\n\
-             Free a port (close that program) or change \
-             the configured port in instantclone.config.json, then restart.",
-            port.saturating_add(1),
-            port.saturating_add(9),
+            "{who} is using {} ({port}), and the next ports up to {} are taken too.\n\n\
+             Close that program and start InstantClone again.",
+            role.plain(),
+            port.saturating_add(9)
         ),
     }
+}
+
+#[cfg(windows)]
+fn message_box(title: &str, body: &str, flags: MESSAGEBOX_STYLE) -> MESSAGEBOX_RESULT {
+    let title = wide(title);
+    let body = wide(body);
+    unsafe { MessageBoxW(ptr::null_mut(), body.as_ptr(), title.as_ptr(), flags) }
 }
 
 /// Pop a one-shot native error dialog. Used by main.rs for fatal
@@ -384,40 +548,89 @@ mod tests {
         drop(held);
     }
 
-    /// A port held by another InstantClone says so, names its folder, and
-    /// offers the next port as the normal way to run two copies.
+    /// Who holds the port decides which question is asked.
     #[cfg(windows)]
     #[test]
-    fn a_port_held_by_another_instantclone_names_its_folder() {
-        let owner = (
+    fn the_holder_is_told_apart() {
+        let copy = (
             4242,
             Some(r"C:\Streams\Second\InstantClone.exe".to_string()),
         );
-        let text = conflict_message("RTMP port", 1935, Some(&owner), Some(1936), false);
-        assert!(text.contains("another InstantClone (PID 4242)"), "{text}");
+        assert_eq!(
+            holder(Some(&copy), false),
+            Holder::Copy(Some(r"C:\Streams\Second\InstantClone.exe"))
+        );
+        let nginx = (77, Some(r"C:\Tools\nginx.exe".to_string()));
+        assert_eq!(
+            holder(Some(&nginx), false),
+            Holder::Program(Some("nginx.exe"))
+        );
+        // Claimed by a copy that is starting and hasn't bound it yet.
+        assert_eq!(holder(None, true), Holder::Copy(None));
+        assert_eq!(holder(None, false), Holder::Program(None));
+
+        assert!(is_instantclone_exe(r"D:\x\instantclone-0.1.16.exe"));
+        assert!(!is_instantclone_exe(r"D:\instantclone\obs64.exe"));
+    }
+
+    /// InstantClone opened twice: the first question names the folder of the
+    /// one running and offers it first; ports and process ids stay out.
+    #[cfg(windows)]
+    #[test]
+    fn opened_twice_offers_the_running_one_first() {
+        let text = already_open_message(Some(r"C:\Streams\Second\InstantClone.exe"));
         assert!(text.contains(r"C:\Streams\Second"), "{text}");
         assert!(
             !text.contains("InstantClone.exe"),
             "the folder, not the exe: {text}"
         );
-        assert!(text.contains("Use :1936 for this copy"), "{text}");
-
-        let other = (77, Some(r"C:\Tools\nginx.exe".to_string()));
-        let text = conflict_message("RTMP port", 1935, Some(&other), Some(1936), false);
-        assert!(text.contains("nginx.exe (PID 77)"), "{text}");
-        assert!(text.contains("Switch to :1936"), "{text}");
-
-        // Claimed by a copy that is starting and hasn't bound it yet.
-        let text = conflict_message("RTMP port", 1935, None, Some(1936), true);
         assert!(
-            text.contains("another InstantClone that is starting up"),
+            text.contains("Yes: open the InstantClone that is already running"),
             "{text}"
         );
-        assert!(text.contains("Use :1936 for this copy"), "{text}");
-        assert!(!text.contains('\u{2014}'), "no em dashes in dialog copy");
+        assert!(text.contains("No: start a second InstantClone"), "{text}");
+        let starting = already_open_message(None);
+        assert!(starting.contains("already starting"), "{starting}");
+        for text in [text, starting, second_copy_message(r"C:\Here")] {
+            assert!(!text.contains("PID") && !text.contains("port :"), "{text}");
+            assert!(!text.contains('\u{2014}'), "no em dashes in dialog copy");
+        }
+    }
 
-        assert!(is_instantclone_exe(r"D:\x\instantclone-0.1.16.exe"));
-        assert!(!is_instantclone_exe(r"D:\instantclone\obs64.exe"));
+    /// Another program: what the port is for, in plain words.
+    #[cfg(windows)]
+    #[test]
+    fn another_program_is_explained_plainly() {
+        let text = program_message(PortRole::Stream, 1935, Some("nginx.exe"), Some(1936));
+        assert!(
+            text.contains("Another program, nginx.exe, is using"),
+            "{text}"
+        );
+        assert!(
+            text.contains("the port OBS sends your stream to (1935)"),
+            "{text}"
+        );
+        assert!(text.contains("Use 1936 instead"), "{text}");
+        let text = program_message(PortRole::Dashboard, 7799, None, Some(7800));
+        assert!(text.contains("http://127.0.0.1:7800/"), "{text}");
+        let text = program_message(PortRole::Stream, 1935, None, None);
+        assert!(text.contains("up to 1944"), "{text}");
+        assert!(!text.contains('\u{2014}'), "no em dashes in dialog copy");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_running_copys_dashboard_is_read_beside_its_exe() {
+        let dir = std::env::temp_dir().join(format!("ic-portcheck-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("instantclone.config.json"), "web_port=17123\n").unwrap();
+        let exe = dir.join("instantclone.exe").display().to_string();
+        assert_eq!(dashboard_port_of(&exe), Some(17123));
+        assert_eq!(
+            dashboard_port_of(r"C:\nowhere\at\all\instantclone.exe"),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// This process listening is never "another" InstantClone.
