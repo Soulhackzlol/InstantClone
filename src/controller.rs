@@ -175,7 +175,7 @@ impl ActivateError {
             ActivateError::NoIngest => NO_INGEST.to_string(),
             ActivateError::BufferShort { remaining_ms } => {
                 let secs = ((*remaining_ms + 500) / 1000).max(1);
-                format!("buffer is still building, wait ~{}s", secs)
+                format!("not ready yet: about {}s more to save", secs)
             }
         }
     }
@@ -258,8 +258,8 @@ fn buffer_mb_for(ms: u32, kbps: u32) -> u64 {
 /// holds `capacity` ms at `kbps`, and the size that would hold it.
 fn buffer_too_small(ms: u32, capacity: u32, kbps: u32) -> String {
     format!(
-        "Buffer too small for {}: it holds about {} at {:.1} Mbps. \
-         Raise the buffer size to at least {} MB in System, then restart.",
+        "{} is too long for the buffer: it holds about {} at {:.1} Mbps. \
+         Make it at least {} MB in System, then restart.",
         fmt_duration(u64::from(ms)),
         fmt_duration(u64::from(capacity)),
         f64::from(kbps) / 1000.0,
@@ -1967,6 +1967,15 @@ impl Controller {
     pub fn publisher_local(&self) -> bool {
         self.publisher_local.load(Ordering::Relaxed)
     }
+    /// The stream's onMetaData names OBS as its encoder ("obs-output module
+    /// (libobs version ...)"). No metadata yet, or another app, reads false.
+    pub fn publisher_is_obs(&self) -> bool {
+        self.ring
+            .metadata
+            .lock()
+            .as_deref()
+            .is_some_and(|metadata| metadata.windows(10).any(|bytes| bytes == b"obs-output"))
+    }
 
     // ---- Internal: ingest counters ----
 
@@ -1998,10 +2007,12 @@ impl Controller {
         }
         let ts_s = process_now_ms() as f64 / 1000.0;
         q.push_back(format!("[+{:>8.3}s] {}", ts_s, line));
+        crate::revisions::bump(crate::revisions::Topic::Logs);
     }
 
     pub fn clear_logs(&self) {
         self.logs.lock().clear();
+        crate::revisions::bump(crate::revisions::Topic::Logs);
     }
 
     // ---- Ingest entry points (called from rtmp::server) ----
@@ -2354,11 +2365,8 @@ impl Controller {
 
         let current = self.current_delay_ms();
         let target = self.target_delay_ms();
-        // 2 s margin: covers the dead-band oscillation (500 ms),
-        // the next_or_wait poll cycle (500 ms), the last_cut_check
-        // throttle (500 ms), and a little slack so the chip doesn't
-        // strobe on every cut.
-        let over = current.saturating_sub(target) > 2_000;
+        let margin = backpressure_margin_ms(self.keyframe_interval_ms());
+        let over = current.saturating_sub(target) > margin;
         let now = process_now_ms();
         if over {
             // Mark first observation; only return true once it's
@@ -3166,7 +3174,7 @@ impl Controller {
                     ActivateError::BufferShort { .. } => {
                         self.activate_once_ready();
                         format!(
-                            "Buffer still filling. The {} s delay starts as soon as it is ready.",
+                            "Not ready yet. The {} s delay starts as soon as it is ready.",
                             ms / 1000
                         )
                     }
@@ -3185,7 +3193,7 @@ impl Controller {
             self.log(format!(
                 "[{source}] arm ignored - delay is on air, cut to live first"
             ));
-            return Some("The delay is on air. Cut to live first, then disarm the buffer.".into());
+            return Some("The delay is on air. Cut to live first, then disarm.".into());
         }
         if self.armed_delay_ms() > 0 {
             self.arm_delay(0);
@@ -4181,6 +4189,15 @@ fn recut_dead_band_ms(keyframe_interval_ms: u32) -> u64 {
     RECUT_DEAD_BAND_FLOOR_MS.max(keyframe_interval_ms as u64 / 2 + 500)
 }
 
+/// How far past the target the delay may sit before it reads as an upload
+/// problem. The 2 s floor covers the dead-band oscillation (500 ms), the
+/// next_or_wait poll cycle (500 ms), the last_cut_check throttle (500 ms),
+/// and a little slack so the chip doesn't strobe on every cut. Cuts land on
+/// keyframes, so a healthy pump can also sit a whole keyframe interval behind.
+fn backpressure_margin_ms(keyframe_interval_ms: u32) -> u32 {
+    2_000u32.max(keyframe_interval_ms.saturating_add(500))
+}
+
 /// How far from the ideal input timestamp we accept an IDR when cutting.
 /// Grows to half a GOP for long-keyframe streams so a cut can still land on a
 /// real keyframe; never below the 2 s that served the default cadence.
@@ -4271,10 +4288,9 @@ fn compute_delay_cut(ctrl: &Arc<Controller>, current: &TagMeta) -> Option<Pendin
     let target = ctrl
         .ring
         .find_idr_near(latest, idr_search_tolerance_ms(keyframe_interval))?;
-    if target.seq == current.seq {
-        return None;
-    }
-    Some(PendingCut { target })
+    // Forward only: a pump past the newest keyframe has nothing to gain from
+    // it, and cutting back would replay what just aired, on every check.
+    (target.seq > current.seq).then_some(PendingCut { target })
 }
 
 /// The cut a delay of `target_delay` needs, if any. A delay lands on the
@@ -5400,7 +5416,7 @@ mod tests {
             .capacity_problem(30_000)
             .expect("30 s is too long for 4 MB");
         assert!(
-            why.starts_with("Buffer too small for 30 s") && why.contains("at least 33 MB"),
+            why.starts_with("30 s is too long for the buffer") && why.contains("at least 33 MB"),
             "{why}"
         );
         assert!(h.ctrl.capacity_problem(1_000).is_none());
@@ -5523,7 +5539,8 @@ mod tests {
         let h = harness(0);
         h.ctrl.mark_ingest_alive_for_test();
         h.ctrl.note_inbound_kbps_for_test(8_000);
-        let refused = |why: Option<String>| why.is_some_and(|w| w.starts_with("Buffer too small"));
+        let refused =
+            |why: Option<String>| why.is_some_and(|w| w.contains("too long for the buffer"));
         assert!(refused(h.ctrl.run_named_action("arm", 30_000, "hotkey")));
         assert!(refused(h.ctrl.run_named_action("toggle", 30_000, "midi")));
         assert!(refused(h.ctrl.set_delay_to(30_000, "integration")));
@@ -5551,7 +5568,7 @@ mod tests {
         let short = h.ctrl.capacity_short().expect("30 s doesn't fit 4 MB");
         assert_eq!(short.armed_ms, 30_000);
         assert!(short.holds_ms < 4_000, "{short:?}");
-        assert!(short.message.starts_with("Buffer too small for 30 s"));
+        assert!(short.message.starts_with("30 s is too long for the buffer"));
         assert_eq!(h.ctrl.capacity_short_seq(), 1);
         assert_eq!(h.ctrl.delay_runs_ms(30_000), short.holds_ms, "what runs");
         assert_eq!(h.ctrl.delay_runs_ms(20_000), 20_000, "about another delay");
@@ -7624,6 +7641,42 @@ mod tests {
             compute_delay_cut(&h.ctrl, &live_edge).is_some(),
             "live is a whole second short of the delay"
         );
+    }
+
+    #[test]
+    fn upload_alarm_allows_for_a_whole_keyframe_interval() {
+        assert_eq!(backpressure_margin_ms(0), 2_000, "not measured yet");
+        assert_eq!(backpressure_margin_ms(1_000), 2_000);
+        assert_eq!(backpressure_margin_ms(8_300), 8_800);
+    }
+
+    #[tokio::test]
+    async fn only_obs_metadata_reads_as_obs() {
+        let h = harness(0);
+        assert!(!h.ctrl.publisher_is_obs(), "no metadata yet");
+        *h.ctrl.ring.metadata.lock() = Some(b"\x02encoder\x02Lavf61.7.100".to_vec());
+        assert!(!h.ctrl.publisher_is_obs());
+        *h.ctrl.ring.metadata.lock() = Some(b"\x02encoder\x02obs-output module".to_vec());
+        assert!(h.ctrl.publisher_is_obs());
+    }
+
+    /// A pump behind by more than the dead band, but past the newest
+    /// keyframe (a slow uplink, a keyframe gap wider than the band), has
+    /// nothing to cut forward to. Cutting back to that keyframe would replay
+    /// what just aired and leave it further behind.
+    #[test]
+    fn going_live_never_cuts_back_to_a_keyframe_already_aired() {
+        let h = harness(0);
+        h.ctrl
+            .on_tag(9, 0, &[0x17, 1, 0, 0, 0, 0, 0, 0, 1, 0x65], true, false);
+        for ts in (100..=1_900).step_by(100) {
+            h.ctrl
+                .on_tag(9, ts, &[0x27, 1, 0, 0, 0, 0, 0, 0, 1, 0x41], false, false);
+        }
+        let first = h.ctrl.ring.front_seq().expect("a populated ring");
+        let (_, behind) = h.ctrl.ring.find_by_seq(first + 3).unwrap();
+        assert_eq!(behind.ts_ms, 300, "1.6 s behind, past the keyframe at 0");
+        assert!(compute_delay_cut(&h.ctrl, &behind).is_none());
     }
 
     #[test]

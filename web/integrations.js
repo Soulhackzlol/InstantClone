@@ -519,7 +519,7 @@ function varHelp(name){
   if ((m = /^arg([4-9])$/.exec(name))) return `Word number ${m[1]} after the command.`;
   if ((m = /^body\.(.+)$/.exec(name))) return `The ${m[1].split('.').join(' › ')} field of what the caller sent.`;
   if ((m = /^query\.(.+)$/.exec(name))) return `The "${m[1]}" value in the address, like ?${m[1]}=red.`;
-  return 'A value an earlier step in this run set.';
+  return '';
 }
 
 // The card over a hovered or focused variable chip: what it holds and an
@@ -546,7 +546,7 @@ const VarTip = {
     }
     const name = target.dataset.token, sample = target.dataset.sample || '';
     this.el.querySelector('code').textContent = '{' + name + '}';
-    this.el.querySelector('p').textContent = varHelp(name);
+    this.el.querySelector('p').textContent = varHelp(name) || SET_EARLIER;
     this.el.querySelector('.ig-vtip-eg b').textContent = sample.length > 120 ? sample.slice(0, 120) + '…' : (sample || '(empty)');
     const r = target.getBoundingClientRect(), w = this.el.offsetWidth, h = this.el.offsetHeight;
     const above = r.top - h - 8 >= 8;
@@ -561,7 +561,7 @@ const VarTip = {
     if (this.el) this.el.classList.remove('on');
   },
 };
-const tokenAt = e => (e.target && e.target.closest) ? e.target.closest('.ig-modal .ig-token[data-token]') : null;
+const tokenAt = e => (e.target && e.target.closest) ? e.target.closest('.ig-modal .ig-vchip[data-token]') : null;
 document.addEventListener('pointerover', e => VarTip.want(tokenAt(e)));
 document.addEventListener('focusin', e => VarTip.want(tokenAt(e)));
 document.addEventListener('pointerdown', () => VarTip.hide(), true);
@@ -958,7 +958,7 @@ function cardHtml(step, vars, big){
   const fields = parseFields(p.fields).map(f => ({name:fill(f.name), value:fill(f.value), inline:f.inline}))
     .filter(f => f.name.trim() && f.value.trim());
   const foot = [footer, p.timestamp === 'yes' ? discordNow() : ''].filter(Boolean).join(' • ');
-  return `<div class="ig-embed${big ? ' big' : ''}" style="--ec:${esc(cardColor(p.color, vars))}">
+  return `<div class="ig-embed${big ? ' big' : ''}" translate="no" style="--ec:${esc(cardColor(p.color, vars))}">
     ${title ? `<div class="ig-embed-title${/^https?:\/\//.test(fill(p.url)) ? ' link' : ''}">${discordMarkdown(title)}</div>` : ''}
     ${desc ? `<div class="ig-embed-desc">${discordMarkdown(desc)}</div>` : ''}
     ${fields.length ? `<div class="ig-embed-fields">${fields.map((f, n) => `<div class="${f.inline ? 'in' : ''}" style="--span:${fieldSpans(fields)[n]}"><b>${esc(f.name)}</b><span>${discordMarkdown(f.value)}</span></div>`).join('')}</div>` : ''}
@@ -1024,36 +1024,249 @@ const FIELD_LABEL = {
   scene:'scene on air', streaming:'streaming?', recording:'recording?', muted:'muted?', visible:'showing?',
   status:'status', ok:'worked?', body:'whole answer', output:'what it printed', code:'exit code',
 };
-// Insert chips for a field, grouped by where each value comes from: what
-// started the run, each earlier step (under its answer's name), and the
-// values that are always there, folded away when `foldLive`. `act` is the
-// editor's insert action; `extra` goes after the last chip.
-function tokensHtml(vars, act, extra, foldLive){
-  const groups = [];
-  vars.forEach(v => {
-    const key = v.step || v.group;
-    let g = groups.find(x => x.key === key);
-    if (!g) groups.push(g = {key, v, list:[]});
-    g.list.push(v);
-  });
-  const label = v => {
-    const field = v.step && answerName(v.step) && v.name.split('.').length === 2 ? FIELD_LABEL[v.name.split('.')[1]] : '';
-    return v.label || field || varLabel(v.name);
-  };
-  const chip = v => `<button class="ig-token" data-act="${act}" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}" aria-label="Insert ${esc(label(v))}">+ ${esc(label(v))}</button>`;
-  const head = v => {
-    if (!v.step) return {trigger:'From what happened', mine:'Your values', live:'Always there'}[v.group] || '';
-    const name = answerName(v.step);
-    return `${esc(stepSource(v.step))}${name ? `<code>${esc(name)}</code>` : ''}`;
-  };
-  return groups.map((g, n) => {
-    const chips = g.list.map(chip).join('') + (n === groups.length - 1 ? extra || '' : '');
-    if (g.key === 'live' && foldLive){
-      return `<details class="ig-vgroup ig-vfold"><summary>${svg('chev')}${head(g.v)}<span class="ig-vcount">${g.list.length}</span></summary><div class="ig-tokens">${chips}</div></details>`;
-    }
-    return `<div class="ig-vgroup"><div class="ig-vgroup-h">${head(g.v)}</div><div class="ig-tokens">${chips}</div></div>`;
-  }).join('') || (extra || '');
+// The name a value goes by: a step's answer fields read under that step.
+function valueLabel(v){
+  const field = v.step && answerName(v.step) && v.name.split('.').length === 2 ? FIELD_LABEL[v.name.split('.')[1]] : '';
+  return v.label || field || varLabel(v.name);
 }
+// Where a value comes from, as a heading: what started the run, an earlier
+// step (under its answer's name), the streamer's own, or always there.
+function valueSource(v){
+  if (!v.step) return {trigger:'From what happened', mine:'Your values', live:'Always there'}[v.group] || '';
+  const name = answerName(v.step);
+  return `${esc(stepSource(v.step))}${name ? ` <code>${esc(name)}</code>` : ''}`;
+}
+const SET_EARLIER = 'A value an earlier step in this run set.';
+function valueHelp(v){
+  return varHelp(v.name) || (v.group === 'steps' ? SET_EARLIER : '');
+}
+const shortSample = (text, max) => !text ? '(empty)' : text.length > max ? text.slice(0, max) + '…' : text;
+// `text` escaped, with every place one of `words` shows marked.
+function markWords(text, words){
+  const lower = text.toLowerCase(), hit = new Array(text.length).fill(false);
+  words.forEach(w => {
+    for (let at = lower.indexOf(w); at >= 0; at = lower.indexOf(w, at + w.length)) hit.fill(true, at, at + w.length);
+  });
+  let html = '', open = false;
+  for (let i = 0; i < text.length; i++){
+    if (hit[i] !== open){ html += hit[i] ? '<mark>' : '</mark>'; open = hit[i]; }
+    html += esc(text[i]);
+  }
+  return html + (open ? '</mark>' : '');
+}
+
+// ------------------------------------------------------------ value picker
+// Values come to the field being written in, in both the simple editor and
+// the builder: a few suggestions right under it, and every value in a
+// searchable menu, opened by "More values…" or by typing {. Which values a
+// field can use comes from valueContext. The strip is a data-persist node,
+// so the form's redraws (morph) leave it where it is.
+const SUGGESTED = 4;
+const COMMON_LIVE = ['time', 'uptime', 'delay'];
+const ValuePick = {
+  field:null, ctx:null, strip:null, menu:null, mode:'', braceAt:-1, range:null, query:'', active:0, items:[],
+  attach(field, ctx){
+    if (field === this.field) return;
+    this.detach();
+    if (!ctx().vars.length) return;
+    this.field = field;
+    this.ctx = ctx;
+    const strip = this.strip = document.createElement('div');
+    strip.className = 'ig-vstrip';
+    strip.setAttribute('data-persist', '');
+    // A click here keeps the caret where it was in the field.
+    strip.addEventListener('pointerdown', e => e.preventDefault());
+    strip.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (b && b.hasAttribute('data-more')) this.openMenu('search');
+      else if (b) this.choose(b.dataset.pick);
+    });
+    // Under the whole row a field sits in, and under its sample line.
+    let anchor = field.closest('.ig-tpl, .ig-bfield, .ig-cond-top') || field;
+    if (anchor.nextElementSibling && anchor.nextElementSibling.classList.contains('ig-sample')) anchor = anchor.nextElementSibling;
+    anchor.after(strip);
+    this.renderStrip();
+  },
+  detach(){
+    this.closeMenu();
+    if (this.strip) this.strip.remove();
+    this.field = this.ctx = this.strip = null;
+  },
+  values(){ return this.ctx ? this.ctx().vars : []; },
+  // The latest earlier steps' answers first, then what started the run,
+  // then the few always-there values most messages use. One already in the
+  // field isn't offered again.
+  suggested(){
+    const text = this.field.value;
+    const usable = this.values().filter(v => !v.name.includes('.json.') && !text.includes('{' + v.name));
+    const steps = [];
+    usable.filter(v => v.group === 'steps').forEach(v => { if (!steps.some(x => x.step === v.step)) steps.push(v); });
+    return steps.reverse().slice(0, 2)
+      .concat(usable.filter(v => v.group === 'trigger'), usable.filter(v => v.group === 'live' && COMMON_LIVE.includes(v.name)))
+      .slice(0, SUGGESTED);
+  },
+  renderStrip(){
+    if (!this.strip) return;
+    const chips = this.suggested().map(v => `<button type="button" class="ig-vchip" data-pick="${esc(v.name)}" data-token="${esc(v.name)}" data-sample="${esc(v.sample)}">
+      <b>${esc(valueLabel(v))}</b><span>${esc(shortSample(v.sample, 22))}</span></button>`).join('');
+    const html = `<span class="ig-vstrip-h">Add</span>${chips}<button type="button" class="ig-vchip more" data-more>More values…</button>
+      <span class="ig-vstrip-k">or type <code>{</code></span>`;
+    if (this.strip._html !== html){ this.strip._html = html; this.strip.innerHTML = html; }
+  },
+  openMenu(mode){
+    const f = this.field;
+    this.mode = mode;
+    this.range = [f.selectionStart, f.selectionEnd];
+    this.query = '';
+    this.active = 0;
+    const menu = this.menu || this.buildMenu();
+    const input = menu.querySelector('input');
+    input.value = '';
+    // Typing {: the field itself is the search.
+    menu.classList.toggle('typed', mode === 'brace');
+    this.renderMenu();
+    menu.classList.add('on');
+    this.place();
+    if (mode === 'search') input.focus({preventScroll:true});
+  },
+  buildMenu(){
+    const menu = this.menu = document.createElement('div');
+    menu.className = 'ig-vmenu';
+    menu.innerHTML = `<div class="ig-vmenu-find">${svg('search')}<input type="text" placeholder="Find a value" aria-label="Find a value" spellcheck="false" autocomplete="off"><span class="ig-vmenu-n"></span></div>
+      <div class="ig-vmenu-list" role="listbox" aria-label="Values"></div>
+      <div class="ig-vmenu-foot">↑↓ to pick · Enter to add · Esc to close</div>`;
+    menu.addEventListener('pointerdown', e => { if (!e.target.closest('input')) e.preventDefault(); });
+    menu.addEventListener('click', e => { const i = e.target.closest('[data-pick]'); if (i) this.choose(i.dataset.pick); });
+    const input = menu.querySelector('input');
+    input.addEventListener('input', () => { this.query = input.value; this.active = 0; this.renderMenu(); });
+    input.addEventListener('keydown', e => this.menuKey(e));
+    document.body.appendChild(menu);
+    return menu;
+  },
+  closeMenu(){
+    if (!this.mode) return;
+    this.mode = '';
+    this.menu.classList.remove('on');
+  },
+  words(){ return this.query.toLowerCase().split(/\s+/).filter(Boolean); },
+  renderMenu(){
+    const all = this.values(), words = this.words();
+    const list = all.filter(v => {
+      const hay = `${v.name} ${valueLabel(v)} ${valueHelp(v)}`.toLowerCase();
+      return words.every(w => hay.includes(w));
+    });
+    this.items = list.map(v => v.name);
+    this.active = Math.min(this.active, Math.max(0, list.length - 1));
+    let html = '', group;
+    list.forEach((v, n) => {
+      const key = v.step || v.group;
+      if (key !== group){ group = key; html += `<div class="ig-vmenu-g">${valueSource(v)}</div>`; }
+      const help = valueHelp(v);
+      html += `<button type="button" class="ig-vmenu-i${n === this.active ? ' on' : ''}" role="option" aria-selected="${n === this.active}" data-pick="${esc(v.name)}"${help ? ` title="${esc(help)}"` : ''}>
+        <span><b>${markWords(valueLabel(v), words)}</b><small><code>{${markWords(v.name, words)}}</code>${help ? ' ' + esc(help) : ''}</small></span>
+        <em>${esc(shortSample(v.sample, 26))}</em></button>`;
+    });
+    const menu = this.menu;
+    menu.querySelector('.ig-vmenu-list').innerHTML = html || `<div class="ig-vmenu-none">No value matches "${esc(this.query)}".</div>`;
+    menu.querySelector('.ig-vmenu-n').textContent = words.length ? `${list.length} of ${all.length}` : `${all.length}`;
+    const on = menu.querySelector('.ig-vmenu-i.on');
+    if (on) on.scrollIntoView({block:'nearest'});
+  },
+  // Under the strip, or above the field when there's no room below.
+  place(){
+    if (!this.mode) return;
+    const menu = this.menu, f = this.field.getBoundingClientRect();
+    const under = (this.strip && this.strip.isConnected ? this.strip : this.field).getBoundingClientRect();
+    const w = menu.offsetWidth, h = menu.offsetHeight;
+    menu.style.left = Math.max(8, Math.min(f.left, innerWidth - w - 8)) + 'px';
+    menu.style.top = (under.bottom + 6 + h <= innerHeight - 8 ? under.bottom + 6 : Math.max(8, f.top - h - 6)) + 'px';
+  },
+  // Arrows, Enter and Esc, from the menu's search or the field typed into.
+  menuKey(e){
+    const n = this.items.length;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+      e.preventDefault();
+      if (n){ this.active = (this.active + (e.key === 'ArrowDown' ? 1 : -1) + n) % n; this.renderMenu(); }
+    } else if ((e.key === 'Enter' || e.key === 'Tab') && n){
+      e.preventDefault();
+      this.choose(this.items[this.active]);
+    } else if (e.key === 'Escape'){
+      e.preventDefault();
+      const back = this.mode === 'search';
+      this.closeMenu();
+      if (back) this.restoreCaret();
+    }
+  },
+  restoreCaret(){
+    this.field.focus({preventScroll:true});
+    this.field.setSelectionRange(this.range[0], this.range[1]);
+  },
+  // Into the field: over the typed { and what follows it, or where the
+  // caret was, a space apart from the word before it.
+  choose(name){
+    const f = this.field;
+    if (!f || !f.isConnected){ this.detach(); return; }
+    let text = tokenText(name, this.ctx().plain);
+    if (this.mode === 'brace') f.setSelectionRange(this.braceAt, f.selectionStart);
+    else {
+      if (this.mode === 'search') this.restoreCaret();
+      if (/[\p{L}\p{N}.,!?:;)]$/u.test(f.value.slice(0, f.selectionStart))) text = ' ' + text;
+    }
+    this.closeMenu();
+    insertAtCursor(f, text);
+  },
+  // The field changed (`e`, its input event) or its caret moved.
+  followField(e){
+    const f = this.field;
+    if (this.mode !== 'brace' && e && e.data === '{' && f.value[f.selectionStart - 1] === '{'){
+      this.braceAt = f.selectionStart - 1;
+      this.openMenu('brace');
+    } else if (this.mode === 'brace'){
+      const at = f.selectionStart, typed = f.value.slice(this.braceAt + 1, at);
+      if (f.value[this.braceAt] !== '{' || at <= this.braceAt || /[\s{}]/.test(typed)) this.closeMenu();
+      else if (typed !== this.query){ this.query = typed; this.active = 0; this.renderMenu(); this.place(); }
+    }
+    if (e) this.renderStrip();
+  },
+};
+// The values a text field can take, as a function read at use, or null for
+// a field that takes none: a step's own names and picks never do.
+const TEXT_FIELD = ':not([readonly]):not([inputmode]):not([data-fixed]):not(.ig-dur):not([type="color"]):not([type="checkbox"])';
+const NOT_TEXT = new Set(['save_as', 'name', 'block', 'id', 'device', 'path', 'method']);
+function valueContext(el){
+  if (!el.matches || !el.matches(`input${TEXT_FIELD}, textarea${TEXT_FIELD}`)) return null;
+  if (Modal.kind === 'editor' && el.closest('.ig-live, .ig-live-plain')){
+    return () => ({vars:varsFor(Editor.handler()), plain:false});
+  }
+  if (Modal.kind === 'builder' && el.closest('.ig-inspector') && Array.isArray(Builder.sel) && !NOT_TEXT.has(el.dataset.name)){
+    return () => {
+      const s = Builder.stepAt(Builder.sel);
+      return {vars:varsFor(Builder.handler(), s), plain:!!s && s.type === 'if'};
+    };
+  }
+  return null;
+}
+document.addEventListener('focusin', e => {
+  if (ValuePick.menu && ValuePick.menu.contains(e.target)) return;
+  const ctx = valueContext(e.target);
+  if (ctx) ValuePick.attach(e.target, ctx);
+});
+// Gone once focus leaves the field and its menu (a redraw that moves the
+// field gives focus straight back, so this waits a moment to look).
+document.addEventListener('focusout', () => setTimeout(() => {
+  const at = document.activeElement, p = ValuePick;
+  if (p.field && at !== p.field && !(p.menu && p.menu.contains(at))) p.detach();
+}));
+document.addEventListener('input', e => { if (e.target === ValuePick.field) ValuePick.followField(e); });
+document.addEventListener('selectionchange', () => {
+  if (ValuePick.mode === 'brace' && document.activeElement === ValuePick.field) ValuePick.followField(null);
+});
+// Before the editor's own keys (and the modal's Esc) while typing {.
+document.addEventListener('keydown', e => {
+  if (ValuePick.mode === 'brace' && e.target === ValuePick.field) ValuePick.menuKey(e);
+}, true);
+window.addEventListener('resize', () => ValuePick.place());
+window.addEventListener('scroll', () => ValuePick.place(), true);
 // The name later steps reach a step's answer by, for the steps whose
 // answer has several fields; '' for any other step.
 function answerName(s){
@@ -1115,9 +1328,9 @@ function fmtAgo(ms){
   if (!ms) return 'never';
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   if (s < 60) return 'just now';
-  if (s < 3600) return Math.round(s / 60) + ' min ago';
-  if (s < 86400) return Math.round(s / 3600) + ' h ago';
-  return Math.round(s / 86400) + ' days ago';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
 }
 function fmtClock(ms){
   return new Date(ms).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
@@ -1260,10 +1473,12 @@ function morphChildren(parent, src, ctx){
 
 function patch(a, b, ctx){
   if (a.nodeType !== 1){
-    if (a.nodeValue !== b.nodeValue){
+    // What is on screen is in the page's language (see web/i18n.js).
+    const said = tr(b.nodeValue, a.parentElement);
+    if (a.nodeValue !== said){
       const was = a.nodeValue;
-      a.nodeValue = b.nodeValue;
-      if (ctx.before) tick(a.parentElement, was, b.nodeValue);
+      a.nodeValue = said;
+      if (ctx.before) tick(a.parentElement, was, said);
     }
     return;
   }
@@ -1319,7 +1534,8 @@ function syncAttrs(a, b){
     if (!b.hasAttribute(name) && !keep(name)) a.removeAttribute(name);
   }
   for (const {name, value} of b.attributes){
-    if (a.getAttribute(name) !== value && !keep(name)) a.setAttribute(name, value);
+    const said = tr.ATTRS.includes(name) ? tr(value, a) : value;
+    if (a.getAttribute(name) !== said && !keep(name)) a.setAttribute(name, said);
   }
 }
 
@@ -1874,29 +2090,29 @@ function previewHtml(step, handler, big){
         const above = renderSample(step.params.above, vars).trim();
         return `<div class="${cls} ig-pv-discord"><span class="ig-av">${svg('shield')}</span><span class="ig-pv-col">
           <b>InstantClone</b><span class="ig-app">APP</span>
-          ${ping || above ? `<div class="ig-txt">${discordMarkdown(ping + above)}</div>` : ''}${cardHtml(step, vars, big)}</span></div>`;
+          ${ping || above ? `<div class="ig-txt" translate="no">${discordMarkdown(ping + above)}</div>` : ''}${cardHtml(step, vars, big)}</span></div>`;
       }
       return `<div class="${cls} ig-pv-discord"><span class="ig-av">${svg('shield')}</span><span class="ig-pv-col">
-        <b>InstantClone</b><span class="ig-app">APP</span><div class="ig-txt">${discordTimes(esc(ping + text))}</div></span></div>`;
+        <b>InstantClone</b><span class="ig-app">APP</span><div class="ig-txt" translate="no">${discordTimes(esc(ping + text))}</div></span></div>`;
     }
     case 'dock':
       return `<div class="${cls} ig-pv-timeline">${step.params.group ? `<span class="ig-pv-tl-kind note">${esc(renderSample(step.params.group, vars))}</span>` : ''}
-        <div>${esc(text || 'An event')}</div></div>`;
+        <div translate="no">${esc(text || 'An event')}</div></div>`;
     case 'timeline': {
       const live = step.params.at !== 'aired';
       const at = vars[live ? 'vod_time' : 'uptime'] || '1:02:14';
       return `<div class="${cls} ig-pv-timeline"><span class="ig-pv-tl-kind ${esc(step.params.kind || 'note')}">${esc(TIMELINE_KINDS[step.params.kind] || TIMELINE_KINDS.note)}</span>
-        <div><code>${esc(at)}</code>${discordMarkdown(text || 'A moment')}</div></div>`;
+        <div translate="no"><code>${esc(at)}</code>${discordMarkdown(text || 'A moment')}</div></div>`;
     }
     case 'chat':
-      return `<div class="${cls} ig-pv-chat">${ask ? `<div><span class="u1">viewer</span>: ${esc(ask)}</div>` : ''}
-        <div><span class="u2">${esc(chatAuthor(step))}</span>: ${esc(text)}</div></div>`;
+      return `<div class="${cls} ig-pv-chat">${ask ? `<div><span class="u1">viewer</span>: <span translate="no">${esc(ask)}</span></div>` : ''}
+        <div><span class="u2">${esc(chatAuthor(step))}</span>: <span translate="no">${esc(text)}</span></div></div>`;
     case 'phone':
       return `<div class="${cls} ig-pv-phone"><span class="ig-av"></span><span class="ig-pv-col">
-        <small>INSTANTCLONE · now</small><b>${esc(renderSample(step.params.title, vars) || 'InstantClone')}</b><div>${esc(text)}</div></span></div>`;
+        <small>INSTANTCLONE · now</small><b translate="no">${esc(renderSample(step.params.title, vars) || 'InstantClone')}</b><div translate="no">${esc(text)}</div></span></div>`;
     case 'overlay':
       return `<div class="${cls} ig-pv-overlay"><div class="ig-pv-alert">
-        ${step.params.title ? `<small>${esc(renderSample(step.params.title, vars))}</small>` : ''}<b>${esc(text || 'Something on stream')}</b><i></i></div></div>`;
+        ${step.params.title ? `<small translate="no">${esc(renderSample(step.params.title, vars))}</small>` : ''}<b${text ? ' translate="no"' : ''}>${esc(text || 'Something on stream')}</b><i></i></div></div>`;
     case 'marker':
       return `<div class="${cls} ig-pv-marker"><span class="tag">${esc(text || 'Marker')} · 1:02:14</span>
         <div class="bar"><i></i><b style="left:22%"></b><b style="left:48%"></b><b style="left:80%"></b></div></div>`;
@@ -2054,7 +2270,7 @@ function needsTwitch(i){
 // streaming PC itself may set them up: anyone on the network could reach
 // the dashboard from another device and run anything from chat.
 const LOCAL_KINDS = ['program', 'file'];
-const LOCAL_LOCK_TEXT = 'Running programs and writing files needs a dashboard password while the dashboard is open to your network (System › Security). Anyone on your network could use them otherwise.';
+const LOCAL_LOCK_TEXT = 'Running programs and writing files needs a dashboard password while the dashboard is open to your network (System › Access). Anyone on your network could use them otherwise.';
 function localLocked(){ return !!S.data && S.data.local_steps === false; }
 function runsLocally(i){ return allSteps(i).some(s => LOCAL_KINDS.includes(s.type)); }
 
@@ -2149,7 +2365,8 @@ function render(){
   const failing = d.integrations.filter(i => cardInfo(i).failing);
   const empty = d.integrations.length === 0;
   const sub = empty ? 'Alerts, chat commands and automations.'
-    : `<span class="ig-num" data-tick>${on}</span> of ${d.integrations.length} running${failing.length ? ` · <span class="ig-num" data-tick>${failing.length}</span> need${failing.length === 1 ? 's' : ''} attention` : ''}.`;
+    : `<span class="ig-num" data-tick>${on}</span> of ${d.integrations.length} running`
+      + (failing.length ? ` · <span class="ig-num" data-tick>${failing.length}</span> ${failing.length === 1 ? 'needs attention.' : 'need attention.'}` : '.');
   morph(root, `<div class="ig-pane" data-flip>
       <div class="tab-head" data-key="head">
         <div><div class="tab-title">Integrations <span class="ig-exp">Experimental</span></div><div class="tab-sub ig-sub">${sub}</div>
@@ -2157,7 +2374,6 @@ function render(){
         <div class="ig-head-actions">
           ${empty ? '' : '<button class="ic-btn ic-btn-ghost" data-act="share">Share</button>'}
           <button class="ic-btn ic-btn-ghost" data-act="values">Your values</button>
-          <button class="ic-btn ic-btn-ghost" data-act="import">Import recipe</button>
           <button class="ic-btn dest-add-btn" data-act="catalog">${svg('plus')}<span>Add</span></button>
         </div>
       </div>
@@ -2191,7 +2407,7 @@ function noticesHtml(failing){
     const rec = (d.activity || []).find(r => r.integration_id === i.id && r.status === 'failed');
     const step = rec && rec.steps.find(s => s.status === 'failed');
     out.push(`<div class="lan-warn ig-notice" data-key="n-${esc(i.id)}"><span class="lw-ic">⚠</span>
-      <span class="ig-notice-text"><b>${esc(i.name)}</b> ${step ? 'failed: ' + esc(step.detail) : 'is failing'}. Nothing else is affected.</span>
+      <span class="ig-notice-text"><b translate="no">${esc(i.name)}</b> ${step ? 'failed: ' + esc(step.detail) : 'is failing'}. Nothing else is affected.</span>
       <button class="ic-btn ic-btn-ghost ig-small" data-act="edit" data-id="${esc(i.id)}">Fix</button></div>`);
   });
   return out.join('');
@@ -2332,6 +2548,27 @@ function moreHtml(i){
   return `<button class="ic-btn-tiny ig-more" data-act="menu" data-id="${esc(i.id)}" aria-label="More for ${esc(i.name)}"
     aria-haspopup="menu" aria-expanded="${Menu.id === i.id}">${svg('dots', ' stroke-width="3"')}</button>`;
 }
+// The line under a card's name: what blocks it, else what's wrong with
+// it, else where it goes and when it last ran. Never over the preview.
+function cardNoteHtml(c, i){
+  const where = whereLine(i, c);
+  // Twins with the same warning still have to tell themselves apart.
+  const twin = where === c.where ? '' : ` · ${where}`;
+  if (c.issue) return `<div class="dcard-host ig-host-warn" title="${esc(c.issue)}">${esc(c.issue + twin)}</div>`;
+  if (c.flag) return `<div class="dcard-host ig-host-${c.flag.cls}" title="${esc(c.flag.tip)}">${esc(c.flag.label + twin)}</div>`;
+  const note = `${where} · ${c.last}`;
+  return `<div class="dcard-host" title="${esc(note)}">${esc(note)}</div>`;
+}
+// Where a card goes, or, for cards sharing a name and a place, what tells
+// this one apart: what starts it, else what it says, else its number. The
+// names stay as the streamer wrote them.
+function whereLine(i, c){
+  const twins = S.data.integrations.filter(o => o.name === i.name && cardInfo(o).where === c.where);
+  if (twins.length < 2) return c.where;
+  const only = read => { const mine = read(i); return mine && twins.filter(o => read(o) === mine).length === 1 ? mine : ''; };
+  const startedBy = o => { const h = cardInfo(o).h; return h ? triggerSentence(h.trigger) : ''; };
+  return only(startedBy) || only(o => cardInfo(o).summary) || `#${twins.indexOf(i) + 1}`;
+}
 function flagHtml(flag){
   if (!flag) return '';
   return `<span class="dcard-status ig-flag ${flag.cls}" title="${esc(flag.tip)}"><span class="d-dot"></span><span class="dcard-status-l">${flag.label}</span></span>`;
@@ -2342,13 +2579,11 @@ function gridHtml(items, none, withAdd, folder){
     const c = cardInfo(i);
     return `<div class="dcard ig-card ${i.enabled ? 'alive' : 'off'}" style="--dc:${c.dc}" data-key="c-${esc(i.id)}" draggable="true" data-drag-id="${esc(i.id)}">
       <div class="dcard-screen" data-act="edit" data-id="${esc(i.id)}" role="button" tabindex="0" aria-label="Edit ${esc(i.name)}">
-        ${previewHtml(c.step, c.h, false)}${flagHtml(c.flag)}${c.hist}
+        ${previewHtml(c.step, c.h, false)}${c.hist}
       </div>
       <div class="ig-card-foot">
         <span class="dcard-icon">${svg(c.icon)}</span>
-        <div class="dcard-id"><div class="dcard-name">${esc(i.name)}</div>
-          ${c.issue ? `<div class="dcard-host ig-host-warn" title="${esc(c.issue)}">${esc(c.issue)}</div>`
-            : `<div class="dcard-host">${esc(c.where)} · ${esc(c.last)}</div>`}</div>
+        <div class="dcard-id"><div class="dcard-name" translate="no">${esc(i.name)}</div>${cardNoteHtml(c, i)}</div>
         ${moreHtml(i)}${switchHtml(i)}
       </div>
     </div>`;
@@ -2364,7 +2599,7 @@ function listHtml(items, none, withAdd, folder){
       <div class="ig-row-main">
         <span class="dcard-icon">${svg(c.icon)}</span>
         <button class="ig-row-name" data-act="peek" data-id="${esc(i.id)}" aria-expanded="${open}">
-          <span class="dcard-name">${esc(i.name)}</span><span class="dcard-host${c.issue ? ' ig-host-warn' : ''}">${esc(c.issue || c.where)}</span></button>
+          <span class="dcard-name" translate="no">${esc(i.name)}</span><span class="dcard-host${c.issue ? ' ig-host-warn' : ''}">${esc(c.issue || whereLine(i, c))}</span></button>
         <span class="ig-row-sum" title="${esc(c.summary)}">${esc(c.summary)}</span>
         ${c.hist}${c.flag ? flagHtml(c.flag) : `<span class="ig-row-last">${esc(c.last)}</span>`}
         ${switchHtml(i)}
@@ -2418,7 +2653,7 @@ function activityHtml(){
     const open = S.actOpen === key;
     return `<div class="ig-act-item${open ? ' open' : ''}" data-key="a-${esc(key)}" data-autoh>
       <div class="ig-act-row link" data-act="act-row" data-k="${esc(key)}" role="button" tabindex="0" aria-expanded="${open}"><span class="t">${esc(fmtClock(r.at_ms))}</span>
-      <span class="n">${esc(r.name)}${r.test ? ' <span class="muted">(test)</span>' : ''}</span>
+      <span class="n"><span translate="no">${esc(r.name)}</span>${r.test ? ' <span class="muted">(test)</span>' : ''}</span>
       <span class="d">${esc(r.trigger)} → ${esc(detail)}</span><span class="s ${esc(r.status)}">${esc(r.status === 'cooldown' ? 'skipped' : r.status)}</span>${svg('chev', ' class="c"')}</div>
       ${open ? `<div class="ig-act-more">${runPanelHtml(r, true)}</div>` : ''}</div>`;
   }).join('') : '<div class="ig-act-empty" data-key="a-none">Runs show up here, with every step and what it answered.</div>';
@@ -2685,6 +2920,7 @@ const Modal = {
     // Shown secrets hide again: the next time could be on stream.
     S.revealed.clear();
     VarTip.hide();
+    ValuePick.detach();
     Keys.stop();
     Meter.stop();
     ObsLive.stop();
@@ -2742,6 +2978,7 @@ function onModalKey(e){
     // One layer at a time: the guard, then an open chip, then the modal.
     if (Modal.form.querySelector('.ig-guard')) Modal.hideGuard();
     else if (S.lastRunOpen) setLastRun(false);
+    else if (Modal.kind === 'catalog' && Catalog.query) Catalog.act('cat-clear');
     else if (Modal.kind === 'editor' && Editor.closeChip()) return;
     else Modal.close();
     return;
@@ -2751,6 +2988,12 @@ function onModalKey(e){
     const save = q('.dest-form-foot [data-act="save"]');
     if (save && !save.disabled) save.click();
     else if (save && localLocked()) toast(LOCAL_LOCK_TEXT, 'info', 7000);
+    return;
+  }
+  // The catalog's search, from anywhere in it but a field.
+  if (e.key === '/' && Modal.kind === 'catalog' && !e.target.matches('input, textarea, select')){
+    e.preventDefault();
+    $('ig-cat-search').focus();
     return;
   }
   if (e.key === 'Tab') trapFocus(e);
@@ -2999,38 +3242,35 @@ async function saveIntegration(d, onSaved, opts){
 
 // ---------------------------------------------------------------- catalog
 
+const CAT_NAV = [['rec', 'Recommended', 'star'], ['alerts', 'Alerts', 'bell'], ['chat', 'Chat', 'bubble'], ['auto', 'Automation', 'bolt'], ['packs', 'Packs', 'layers']];
+const CAT_LABEL = {alerts:'Alerts', chat:'Chat', auto:'Automation', packs:'Packs'};
+// Recommended takes turns between categories, so it never opens on a row
+// of one kind.
+function takeTurns(list){
+  const queues = [...new Set(list.map(p => p.category))].map(id => list.filter(p => p.category === id));
+  const out = [];
+  while (queues.some(x => x.length)) queues.forEach(x => { if (x.length) out.push(x.shift()); });
+  return out;
+}
 const Catalog = {
-  cat:'rec', added:null,
+  cat:'rec', added:null, query:'',
   open(){
     this.cat = 'rec';
     this.added = null;
+    this.query = '';
     this.reopen();
   },
-  // Back from something opened here: same category as before.
+  // Back from something opened here: same category and search as before.
   reopen(){
     Modal.open('catalog', 1040, 'min(86vh,820px)');
     this.render();
   },
-  render(){
-    const cat = S.data.catalog;
-    const counts = id => id === 'packs' ? cat.packs.length : this.presetsIn(id).length;
-    const nav = [['rec', 'Recommended'], ['alerts', 'Alerts'], ['chat', 'Chat'], ['auto', 'Automation'], ['packs', 'Packs']]
-      .map(([id, label]) => `<button class="${this.cat === id ? 'on' : ''}" data-act="cat" data-cat="${id}" aria-current="${this.cat === id}">${label}<small data-tick>${counts(id)}</small></button>`).join('');
-    const tiles = this.cat === 'packs' ? this.packsHtml() : this.presetsHtml();
-    Modal.body(`${modalHead('plus', 'var(--accent)', 'Add an integration', 'Add it, then tweak anything.')}
-      <div class="ig-cat"><nav class="ig-cat-nav" aria-label="Categories">${nav}
-        <div class="ig-cat-import">Got a recipe from a friend? <a href="#" data-act="import">Import it</a></div></nav>
-      <div class="ig-cat-grid">${tiles}</div></div>`);
-  },
-  packsHtml(){
-    const cat = S.data.catalog;
-    return cat.packs.map((p, n) => `<div class="dcard ig-cat-pack" data-key="pk-${esc(p.id)}" style="--i:${n}">
-      <div class="dcard-name">${esc(p.name)}</div>
-      <div class="muted ig-cat-desc">${esc(p.description)}</div>
-      <div class="ig-pack-list">${p.presets.map(id => `<span>${svg(PRESET_ICON[id] || 'steps')}${esc((cat.presets.find(x => x.id === id) || {}).name || id)}</span>`).join('')}</div>
-      ${needsHtml(p.needs)}
-      <button class="ic-btn ic-btn-primary ig-small" data-act="pack" data-pack="${esc(p.id)}" aria-label="Add the ${esc(p.name)} pack">Add pack</button>
-    </div>`).join('');
+  words(){ return this.query.toLowerCase().split(/\s+/).filter(Boolean); },
+  // Every word typed is in its name, what it does, its category or what it needs.
+  matches(item, category){
+    const words = this.words();
+    const hay = [item.name, item.description, category].concat(item.needs || []).join(' ').toLowerCase();
+    return words.every(w => hay.includes(w));
   },
   // Without a Twitch app in this copy, what needs Twitch isn't a good
   // first pick: it stays in its own category, out of Recommended.
@@ -3038,18 +3278,62 @@ const Catalog = {
     return S.data.twitch.available || !(p.needs || []).includes('twitch');
   },
   // The presets a category shows, so its count always matches its tiles.
+  // Searching, the first entry is every match.
   presetsIn(id){
-    return S.data.catalog.presets.filter(p => id === 'rec' ? p.recommended && this.usable(p) : p.category === id);
+    const all = S.data.catalog.presets;
+    if (this.query) return all.filter(p => (id === 'rec' || p.category === id) && this.matches(p, CAT_LABEL[p.category]));
+    if (id !== 'rec') return all.filter(p => p.category === id);
+    return takeTurns(all.filter(p => p.recommended && this.usable(p)));
   },
-  presetsHtml(){
-    const list = this.presetsIn(this.cat);
+  packsIn(){ return S.data.catalog.packs.filter(p => this.matches(p, CAT_LABEL.packs)); },
+  count(id){
+    if (id === 'packs') return this.packsIn().length;
+    return this.presetsIn(id).length + (id === 'rec' && this.query ? this.packsIn().length : 0);
+  },
+  render(){
+    const cat = S.data.catalog, searching = !!this.query;
+    const nav = CAT_NAV.map(([id, label, icon]) => {
+      const n = this.count(id);
+      return `<button class="${this.cat === id ? 'on' : ''}${n ? '' : ' none'}" data-act="cat" data-cat="${id}" aria-current="${this.cat === id}">
+        ${svg(icon)}<span>${id === 'rec' && searching ? 'All results' : label}</span><small data-tick>${n}</small></button>`;
+    }).join('');
+    const acts = `<div class="ig-cat-acts"><button class="ic-btn ic-btn-ghost ig-small" data-act="import">Import a recipe</button>
+      <button class="ic-btn ic-btn-ghost ig-small" data-act="build">${svg('plus')}Build your own</button></div>`;
+    Modal.body(`${modalHead('plus', 'var(--accent)', 'Add an integration', 'Pick one: it opens ready to tweak.', acts)}
+      <div class="ig-cat-find">${svg('search')}<input id="ig-cat-search" type="text" value="${esc(this.query)}" aria-label="Search integrations"
+        placeholder="Search ${cat.presets.length} integrations and ${cat.packs.length} packs: alerts, Discord, chat, clips…" spellcheck="false" autocomplete="off">
+        ${searching ? '<button class="ig-cat-clear" data-act="cat-clear">Clear</button>' : '<kbd title="Press / to search">/</kbd>'}</div>
+      <div class="ig-cat"><nav class="ig-cat-nav" aria-label="Categories">${nav}</nav>
+      <div class="ig-cat-grid">${this.gridHtml()}</div></div>`);
+  },
+  // A category's tiles, or while searching, every match grouped by category.
+  gridHtml(){
+    if (!this.query) return this.cat === 'packs' ? this.packsHtml(this.packsIn()) : this.presetsHtml(this.presetsIn(this.cat));
+    const ids = this.cat === 'rec' ? ['alerts', 'chat', 'auto', 'packs'] : [this.cat];
+    const groups = ids.map(id => [id, id === 'packs' ? this.packsIn() : this.presetsIn(id)]).filter(([, list]) => list.length);
+    const n = groups.reduce((sum, [, list]) => sum + list.length, 0);
+    if (!n){
+      return `<div class="ig-cat-none" data-key="none"><b>Nothing matches "${esc(this.query)}"</b>
+        <span>Try another word, or build it yourself from any trigger and any steps.</span>
+        <button class="ic-btn ic-btn-ghost ig-small" data-act="build">${svg('plus')}Build your own</button></div>`;
+    }
+    return `<div class="ig-cat-lead" data-key="lead">${n} ${n === 1 ? 'result' : 'results'} for "${esc(this.query)}"</div>`
+      + groups.map(([id, list]) => `<div class="ig-cat-group" data-key="g-${id}">${CAT_LABEL[id]}<small>${list.length}</small></div>`
+        + (id === 'packs' ? this.packsHtml(list) : this.presetsHtml(list))).join('');
+  },
+  packsHtml(list){
+    const cat = S.data.catalog, words = this.words();
+    return list.map((p, n) => `<div class="dcard ig-cat-pack" data-key="pk-${esc(p.id)}" style="--i:${n}">
+      <div class="dcard-name">${markWords(p.name, words)}</div>
+      <div class="ig-cat-desc">${markWords(p.description, words)}</div>
+      <div class="ig-pack-list">${p.presets.map(id => `<span>${svg(PRESET_ICON[id] || 'steps')}${esc((cat.presets.find(x => x.id === id) || {}).name || id)}</span>`).join('')}</div>
+      <div class="ig-cat-foot">${needsHtml(p.needs)}
+      <button class="ic-btn ic-btn-primary ig-small" data-act="pack" data-pack="${esc(p.id)}" aria-label="Add the ${esc(p.name)} pack">Add pack</button></div>
+    </div>`).join('');
+  },
+  presetsHtml(list){
     const have = id => S.data.integrations.filter(i => i.preset === id).length;
-    // Last: a beginner meets the ready-made ones first.
-    const build = `<button class="dest-add ig-cat-build" data-act="build" data-key="build" style="--i:${list.length + 1}">
-        <span class="dest-add-icon">${svg('plus')}</span>
-        <span class="ig-cat-build-t">Build your own</span>
-        <span class="ig-cat-build-d">Start from a blank page: any trigger, any steps.</span>
-      </button>`;
+    const words = this.words();
     return list.map((p, n) => {
       const fake = fakeStep(p);
       const added = this.added === p.id;
@@ -3061,11 +3345,18 @@ const Catalog = {
       return `<div class="dcard ig-cat-tile" style="--dc:${(KINDS[fake.step.type] || {}).c || 'var(--accent)'};--i:${n}" data-key="t-${esc(p.id)}">
         <div class="dcard-screen" aria-hidden="true">${previewHtml(fake.step, fake.handler, false)}</div>
         <div class="ig-cat-id"><span class="dcard-icon">${svg(PRESET_ICON[p.id] || 'steps')}</span>
-          <div class="dcard-id"><div class="dcard-name">${esc(p.name)}</div><div class="ig-cat-desc" title="${esc(p.description)}">${esc(p.description)}</div>
-          ${needsHtml(p.needs)}</div></div>
-        ${button}
+          <div class="dcard-id"><div class="dcard-name">${markWords(p.name, words)}</div>${this.query ? `<div class="ig-cat-kind">${CAT_LABEL[p.category] || ''}</div>` : ''}</div></div>
+        <div class="ig-cat-desc">${markWords(p.description, words)}</div>
+        <div class="ig-cat-foot">${needsHtml(p.needs)}${button}</div>
       </div>`;
-    }).join('') + build;
+    }).join('');
+  },
+  search(text){
+    if (text === this.query) return;
+    this.query = text;
+    this.render();
+    const grid = q('.ig-cat-grid');
+    if (grid) grid.scrollTop = 0;
   },
   flashAdded(id){
     this.added = id;
@@ -3083,6 +3374,12 @@ const Catalog = {
         this.render();
         const grid = q('.ig-cat-grid');
         if (grid) grid.scrollTop = 0;
+        return true;
+      }
+      case 'cat-clear': {
+        this.search('');
+        const input = $('ig-cat-search');
+        if (input){ input.value = ''; input.focus(); }
         return true;
       }
       case 'add-preset': busy(el, () => addFrom({preset:el.dataset.preset}, true)); return true;
@@ -3146,10 +3443,17 @@ function needsHtml(needs){
 
 // ---------------------------------------------------------------- module editor
 
+// The simple editor's option rows, by what they set; the last group takes
+// every row the others don't name.
+const ED_GROUPS = [
+  ['Where', ['where', 'url', 'light', 'file']],
+  ['What it does', ['action', 'look', 'msg', 'ping', 'reply', 'priority', 'dgroup', 'tiers', 'adesign', 'acolor', 'asound', 'apic', 'atime']],
+  ['When', null],
+];
 // The simple editor for catalog modules: pick a moment, write on the
-// preview itself, and every option is a chip that opens its own panel.
+// preview itself, and every option is a row beside it that opens in place.
 const Editor = {
-  d:null, sel:0, chip:null, run:null, dirty:false, moreVars:false, back:null, justAdded:false,
+  d:null, sel:0, chip:null, run:null, dirty:false, back:null, justAdded:false,
   // opts: {back} (see Modal.back); {justAdded} when the catalog just made
   // it as a draft, which closing keeps and Back removes again.
   open(i, switchOn, opts){
@@ -3176,9 +3480,7 @@ const Editor = {
     this.chip = steps.some(s => s.type === 'discord' && !known(s.params.connection)) ? 'where'
       : steps.some(s => s.type === 'http' && !s.params.url) ? 'url' : keyless ? 'key'
       : sel.type === 'scene' && !sel.scene ? 'scene' : commandClash(this.d) ? 'cmd' : null;
-    this.lastField = null;
     this.run = null;
-    this.moreVars = false;
     this.converted = null;
     TRIES.clear();
     this.show();
@@ -3188,7 +3490,6 @@ const Editor = {
     this.d.handlers.forEach(h => sampleArgsFrom(h, presetOf(this.d)));
     this.sel = Math.min(this.sel, this.d.handlers.length - 1);
     this.chip = null;
-    this.lastField = null;
     this.run = null;
   },
   resume(){
@@ -3199,7 +3500,7 @@ const Editor = {
     this.show();
   },
   show(){
-    Modal.open('editor', 920);
+    Modal.open('editor', 1180);
     Modal.back = this.back;
     Modal.onClose = () => {
       if (this.dirty){ Modal.guard(); return false; }
@@ -3331,17 +3632,19 @@ const Editor = {
     const head = modalHead(PRESET_ICON[d.preset] || (k ? k.icon : 'steps'), k ? k.c : 'var(--accent)', titleInput(d.name),
       esc(p ? p.description : 'Pick a moment, then write on the message itself. Everything else is one click away.'),
       enableSwitch('enabled', d.enabled));
-    const chips = this.chips(step, h).map(c => `<button class="ig-chip${this.chip === c.id ? ' on' : ''}${c.warn ? ' warn' : ''}" data-act="chip" data-chip="${c.id}" data-key="chip-${c.id}" aria-expanded="${this.chip === c.id}">
-      <span>${esc(c.k)}</span><b data-tick>${esc(c.v)}</b>${svg('chev')}</button>`).join('');
+    // A test opens under the preview; every option is a row beside it.
+    const test = this.chip === '__test'
+      ? `<div class="ig-pop" data-autoh><div class="ig-pop-in" data-key="pop-__test-${this.sel}">${this.popHtml(step, h)}</div></div>` : '';
     Modal.body(`${head}
       <div class="dest-form-body ig-ed-body">
         ${this.momentsHtml()}
         ${twitchEventStatusHtml(h.trigger)}
-        <div class="ig-ed-preview" data-flip data-autoh><div class="ig-ed-pv" data-key="pv-${this.sel}">${this.previewBoxHtml(step, h)}</div></div>
-        <div class="ig-ed-options">
-          <div class="ig-chips" data-flip>${chips}</div>
-          <div class="ig-pop${this.chip ? '' : ' closed'}" data-flip data-autoh>${this.chip
-            ? `<div class="ig-pop-in" data-key="pop-${this.chip}-${this.sel}">${this.popHtml(step, h)}</div>` : ''}</div>
+        <div class="ig-ed-cols">
+          <div class="ig-ed-main">
+            <div class="ig-ed-preview" data-flip data-autoh><div class="ig-ed-pv" data-key="pv-${this.sel}">${this.previewBoxHtml(step, h)}</div></div>
+            ${test}
+          </div>
+          <aside class="ig-ed-side" aria-label="Options" data-flip>${this.sideHtml(this.chips(step, h), step, h)}</aside>
         </div>
       </div>
       ${footHtml(d, this.dirty, `<button class="ic-btn ic-btn-ghost" data-act="ed-builder">Open in builder</button>
@@ -3352,6 +3655,23 @@ const Editor = {
     if (this.chip === 'detect') Meter.watch();
     if (this.chip === 'scene') ObsLive.watch();
     if (step && step.type === 'overlay') alertStage(step, h, false);
+  },
+  // The options as rows, grouped, under what it still needs before it can
+  // run. The open row shows its settings right under it.
+  sideHtml(chips, step, h){
+    const row = c => `<button class="ig-opt${this.chip === c.id ? ' on' : ''}${c.warn ? ' warn' : ''}" data-act="chip" data-chip="${c.id}" data-key="row-${c.id}" aria-expanded="${this.chip === c.id}">
+        <span>${esc(c.k)}</span><b data-tick>${esc(c.v)}</b>${svg('chev')}</button>`
+      + (this.chip === c.id ? `<div class="ig-pop-in ig-opt-pop" data-key="pop-${c.id}-${this.sel}">${this.popHtml(step, h)}</div>` : '');
+    const placed = new Set();
+    const groups = ED_GROUPS.map(([label, ids]) => {
+      const list = chips.filter(c => !placed.has(c.id) && (!ids || ids.includes(c.id)));
+      list.forEach(c => placed.add(c.id));
+      return list.length ? `<div class="ig-side-g" data-key="g-${label}"><div class="ig-side-h">${label}</div>${list.map(row).join('')}</div>` : '';
+    }).join('');
+    const missing = chips.find(c => c.warn);
+    const fix = missing ? `<div class="ig-side-fix" data-key="fix">${svg('warn')}<span><b>Before it can run</b>${esc(missing.k)}: ${esc(missing.v)}</span>
+      ${this.chip === missing.id ? '' : `<button class="ic-btn ic-btn-primary ig-small" data-act="chip" data-chip="${missing.id}">Fix it</button>`}</div>` : '';
+    return fix + groups;
   },
   // The moments it acts on, each with its switch. A moment that still
   // misses something says so in its colour and its tooltip.
@@ -3368,7 +3688,7 @@ const Editor = {
         data-act="moment" data-n="${n}"${warn ? ` title="${esc(capFirst(warn))}"` : ''}>${esc(labels[n])}</button>`;
     };
     const alert = (primaryStep(hs[this.sel]) || {}).type === 'overlay';
-    const hint = `<div class="ig-mhint">Each one has its own ${alert ? 'alert' : 'settings'}: click a name to edit it below. The tick turns it on or off.</div>`;
+    const hint = `<div class="ig-mhint">${alert ? 'Each one has its own alert' : 'Each one has its own settings'}: click a name to edit it below. The tick turns it on or off.</div>`;
     // Too many for a timeline: chips that wrap, each keeping its switch.
     if (hs.length > 5){
       return `<div class="ig-mchips" role="group" aria-label="Moments">${hs.map((h, n) => `<div class="ig-mchip${n === this.sel ? ' on' : ''}">
@@ -3392,13 +3712,6 @@ const Editor = {
     const k = KINDS[step.type];
     const value = step.params[k.text] || '';
     const vars = sampleMap(h);
-    // The trigger's own values first; the always-there ones behind "more".
-    const all = varsFor(h);
-    const common = new Set(['delay', 'delay_state', 'hold_left', 'time', 'uptime']);
-    // Fields of a tried answer are picked from its tree, so they wait here.
-    const shown = this.moreVars ? all : all.filter(v => (v.group !== 'live' || common.has(v.name)) && !v.name.includes('.json.'));
-    const tokens = tokensHtml(shown, 'token',
-      shown.length < all.length ? `<button class="ig-token more" data-act="more-vars">${all.length - shown.length} more…</button>` : '');
     const discord = step.type === 'discord';
     const sample = sampleLine(value, h, discord);
     // A tried answer can send the run down another branch ("offline").
@@ -3463,7 +3776,7 @@ const Editor = {
     // Every step counts: the simple editor edits more than the message.
     const unknown = [];
     walk(h.steps, s => unknownVars(h, s).forEach(u => { if (!unknown.some(x => x.name === u.name)) unknown.push(u); }));
-    return `${box}${unknownVarsHtml(unknown)}<div class="ig-vals"><div class="ig-vals-h">Insert a value</div>${tokens}</div>${FORMS_HELP}`;
+    return `${box}${unknownVarsHtml(unknown)}${FORMS_HELP}`;
   },
   // A Discord card you write on: the text above it, then the card itself
   // (title, body, fields, footer) in its color, then the color swatches.
@@ -3636,7 +3949,7 @@ const Editor = {
           <div class="muted">Made and changed in the Studio, on the Overlay tab's <button class="ig-link" data-act="alerts-open">Alerts page</button>.</div>${this.everyAlertHtml(['design'])}`;
       case 'acolor': {
         return `<div class="ic-label">Accent</div>${accentPickerHtml(step)}
-          <div class="muted">The first one is the design's. Everything else about the look is its design's: <button class="ig-link" data-act="chip" data-chip="adesign">${esc(designLabel(step.params.design))}</button>.</div>${this.everyAlertHtml(['color'])}`;
+          <div class="muted">The first one comes from the design, and so does the rest of the look: <button class="ig-link" data-act="chip" data-chip="adesign">${esc(designLabel(step.params.design))}</button>.</div>${this.everyAlertHtml(['color'])}`;
       }
       case 'asound': {
         return `<div class="ic-label">Sound</div>${soundControlsHtml(step)}
@@ -3644,7 +3957,7 @@ const Editor = {
       }
       case 'apic':
         return `<div class="ic-label">Picture</div>${picturePickerHtml(step.params.image || '', 'pick-picture')}
-          <div class="muted">A PNG, JPG or GIF (it plays). Where it goes is its design's.</div>${this.everyAlertHtml(['image'])}`;
+          <div class="muted">A PNG, JPG or GIF (it plays). The design decides where it goes.</div>${this.everyAlertHtml(['image'])}`;
       case 'atime':
         return `<div class="ic-label">On screen for</div>${segHtml(ALERT_SECONDS.map(n => [n, n + ' s']), step.params.seconds || '6', 'set-seconds')}
           <div class="muted">Alerts that come in together wait their turn, so none cuts another short.</div>${this.everyAlertHtml(['seconds'])}`;
@@ -3677,7 +3990,7 @@ const Editor = {
         return `<div class="ic-label">Does</div>${segHtml(['arm', 'cut_after', 'cut', 'activate', 'disarm'].map(x => [x, DELAY_ACTIONS[x]]), a.params.action, 'set-action')}
           ${a.params.action === 'arm' ? `<div class="dff ig-narrow"><label>Delay</label>${field}</div>` : ''}
           <div class="muted">${{
-            arm:'Arms this delay, or changes it while one is armed or on air. It goes on air once the buffer is full if Auto-activate is on; otherwise press Activate.',
+            arm:'Arms this delay, or changes it while one is armed or on air. It goes on air once it\'s ready if "Activate as soon as it\'s ready" is on; otherwise press Activate.',
             cut_after:'Goes back to live once viewers have caught up with you, so they miss nothing. It takes as long as the delay. If a cut is already waiting, it keeps that one.',
             cut:'Goes back to live right away. Viewers skip what was still in the delay.',
             activate:'Puts on air the delay that finished getting ready.',
@@ -3950,15 +4263,8 @@ const Editor = {
       case 'chip':
         this.chip = this.chip === el.dataset.chip ? null : el.dataset.chip;
         this.render();
-        if (this.chip) revealOpened(q('.ig-ed-options'));
+        if (this.chip) revealOpened(q('.ig-opt-pop'));
         return true;
-      case 'token': {
-        // Into the card field last written in, or the message itself.
-        const field = this.lastField && this.lastField.isConnected ? this.lastField : q('.ig-msg');
-        insertAtCursor(field, tokenText(el.dataset.token));
-        return true;
-      }
-      case 'more-vars': this.moreVars = true; this.render(); return true;
       case 'set-where': allSteps(this.d).filter(s => s.type === 'discord').forEach(s => { s.params.connection = v; }); this.changed(); return true;
       case 'set-ping': if (step) step.params.ping = v; this.changed(); return true;
       case 'set-edit': if (step) step.params.edit = v; this.changed(); return true;
@@ -4056,7 +4362,7 @@ function commandClash(d){
 }
 function commandClashHtml(d){
   const c = commandClash(d);
-  return c ? warnHtml(`<b>${esc(c.name)}</b> already answers ${esc(c.word)}. This one stays off until you pick another command or switch that one off.`) : '';
+  return c ? warnHtml(`<b translate="no">${esc(c.name)}</b> already answers ${esc(c.word)}. This one stays off until you pick another command or switch that one off.`) : '';
 }
 
 // What a moment still misses before it can run, or ''.
@@ -4087,7 +4393,7 @@ function stepMissing(s){
   if (s.type === 'viewer' && !/^[A-Za-z0-9_]{1,32}$/.test((p.value || '').trim())) return 'name the value: letters, digits and _';
   if (s.type === 'call' && !(p.block || '').trim()) return 'pick the block';
   if (s.type === 'reward' && !(p.title || '').trim()) return 'pick the reward';
-  if (s.type === 'goal' && !(p.id || '').trim()) return `pick the ${p.what === 'timer' ? 'timer' : 'goal'}`;
+  if (s.type === 'goal' && !(p.id || '').trim()) return p.what === 'timer' ? 'pick the timer' : 'pick the goal';
   if (s.type === 'channel' && !(p.title || '').trim() && !(p.category || '').trim()) return 'write the new title or category';
   if (s.type === 'wait' && !/\{|^\d+$/.test((p.ms || '').trim())) return 'set how long to wait';
   if ([p.scene, p.source, p.filter, p.hotkey, s.type === 'light' ? p.device : '', s.type === 'program' || s.type === 'file' ? p.path : ''].some(v => /\{/.test(v || ''))) return 'names here can\'t use values';
@@ -4164,7 +4470,7 @@ function lightPickerHtml(p){
   const list = LightScan.devices;
   const found = !list ? '' : list.length ? `<div class="ig-light-list">${list.map(x => `<div class="ig-light-row${x.ref === ref ? ' on' : ''}">
         <span class="ig-bulb" style="--bulb:${x.plug ? 'transparent' : '#fde68a'}">${svg(x.plug ? 'bolt' : 'bulb')}</span>
-        <span class="ig-light-id"><b>${esc(x.name)}</b><small>${esc(x.brand)}${x.plug ? ' plug' : ''} · ${esc(x.address)}</small></span>
+        <span class="ig-light-id"><b translate="no">${esc(x.name)}</b><small>${esc(x.brand)}${x.plug ? ' plug' : ''} · ${esc(x.address)}</small></span>
         <button class="ic-btn ic-btn-ghost ig-small" data-act="light-try" data-ref="${esc(x.ref)}" data-color="${esc(p.color || '')}" title="Flash it, to see which one it is">Flash</button>
         <button class="ic-btn ${x.ref === ref ? 'ic-btn-ghost' : 'ic-btn-primary'} ig-small" data-act="light-use" data-ref="${esc(x.ref)}" data-name="${esc(x.name)}" data-plug="${x.plug ? 'yes' : ''}" ${x.ref === ref ? 'disabled' : ''}>${x.ref === ref ? 'In use' : 'Use'}</button></div>`).join('')}</div>`
     : '<div class="muted">Nothing found on this network.</div>';
@@ -4955,8 +5261,8 @@ const EVENT_INFO = {
   delay_on:{icon:'clock', desc:'The delay starts.'},
   delay_off:{icon:'clock', desc:'The delay stops: viewers see you live.'},
   delay_changed:{icon:'clock', desc:'The delay gets longer or shorter.'},
-  delay_armed:{icon:'clock', desc:'You arm one: the buffer starts filling.'},
-  delay_ready:{icon:'check', desc:'The buffer holds it: it can go on air.'},
+  delay_armed:{icon:'clock', desc:'You arm one: it starts saving video for it.'},
+  delay_ready:{icon:'check', desc:'There\'s enough saved: it can go on air.'},
   delay_disarmed:{icon:'x', desc:'You cancel it before it goes on air.'},
   stream_started:{icon:'play', desc:'A new stream begins. A crash OBS comes back from isn\'t one.'},
   stream_ended:{icon:'film', desc:'The stream is over, with a report: length, crashes, drops.'},
@@ -5042,7 +5348,7 @@ function nestLevels(s){
 const nestFits = (listPath, levels) => branchDepth(listPath) + levels <= MAX_NEST - 1;
 
 const Builder = {
-  d:null, h:0, sel:'trigger', target:[], after:null, run:null, dirty:false, lastField:null, back:null,
+  d:null, h:0, sel:'trigger', target:[], after:null, run:null, dirty:false, back:null,
   testValues:{}, testDry:true, testOpen:false,
   // opts: {dirty} carries the editor's unsaved state over, {switchOn} as in
   // Editor.open, {back} as in Modal.back (default: the catalog, if open).
@@ -5066,7 +5372,6 @@ const Builder = {
     this.sel = 'trigger';
     this.target = [];
     this.after = null;
-    this.lastField = null;
     this.testDry = true;
     this.resetTest();
     this.show();
@@ -5088,7 +5393,6 @@ const Builder = {
     this.after = null;
     this.choosing = null;
     this.unpicked = new WeakSet();
-    this.lastField = null;
     this.resetTest();
     TRIES.clear();
   },
@@ -5194,7 +5498,7 @@ const Builder = {
           title="Alt+Up or Alt+Down moves it, Ctrl+D duplicates it, Delete removes it">
           <span class="ig-step-ic">${svg(k.icon || 'steps')}</span><span class="ig-step-body"><span class="ig-step-kind">${esc(k.label)}</span><span class="ig-step-text">${tier ? `From ${esc(tier)} up, a bigger one plays` : cardSentence(s)}${off ? '<span class="sr-only">, switched off</span>' : ''}</span>${s.type === 'overlay' ? alertMetaHtml(s) : ''}</span></button>
         ${missing ? `<span class="ig-step-warn">${esc(missing)}</span>`
-          : unknown.length ? `<span class="ig-step-warn soft">${unknown.map(u => `{${esc(u.name)}}`).join(' ')}: nothing fills ${unknown.length > 1 ? 'these' : 'it'}</span>` : ''}
+          : unknown.length ? `<span class="ig-step-warn soft"><span translate="no">${unknown.map(u => `{${esc(u.name)}}`).join(' ')}:</span> ${unknown.length > 1 ? 'nothing fills these' : 'nothing fills it'}</span>` : ''}
         <span class="ig-step-tools">
           ${tool('b-move', pk, 'up', 'Move up', ` data-dir="-1"${this.moveTarget(path, -1) ? '' : ' disabled'}`)}
           ${tool('b-move', pk, 'down', 'Move down', ` data-dir="1"${this.moveTarget(path, 1) ? '' : ' disabled'}`)}
@@ -5313,12 +5617,8 @@ const Builder = {
   inspectorHtml(){
     const h = this.handler();
     const selected = Array.isArray(this.sel) ? this.stepAt(this.sel) : null;
-    // Only what this step can use: the trigger's values, what steps
-    // before it made, and the live ones.
-    const upto = selected || (h.steps || [])[0];
-    const varsBox = `<div class="ig-insp-vars"><div class="ic-label">Values it can use</div>
-      <div class="muted">Click a text field, then a value to put it there.</div>
-      <div class="ig-vals">${tokensHtml(varsFor(h, upto), 'b-token', '', true)}</div>${FORMS_HELP}</div>`;
+    // The values themselves come to the field being written in (ValuePick).
+    const varsBox = `<div class="ig-insp-vars">${FORMS_HELP}</div>`;
     if (this.choosing){
       return `<div class="ig-insp-title" style="--c:#5ac8fa"><span class="ig-insp-ic">${svg('bolt')}</span><span><small>WHEN</small><b>${this.choosing === 'event' ? 'What happens?' : 'How does it start?'}</b></span></div>
         <p class="ig-insp-p">Pick it in the middle. Then add steps from the list on the left: each one runs in order.</p>`;
@@ -5466,7 +5766,7 @@ const Builder = {
       }
       case 'delay_action': return field('action', 'Does', {select:Object.entries(DELAY_ACTIONS)})
         + (s.params.action === 'arm' ? field('seconds', 'Delay in whole seconds (0 turns it off, blank uses your Default delay), or a value like {arg1}', {mono:true, ph:'30'})
-          + note('Starts or changes the delay. A delay the buffer can\'t hold fails this step.') : '')
+          + note('Starts or changes the delay. A delay too long for the buffer fails this step.') : '')
         + warnHtml('This changes your stream. Tests never run it.');
       case 'marker': return field('description', 'Label', {ph:'Crash'}) + note('Only works while you are live on Twitch.');
       case 'channel': return field('title', 'New title (blank: leave it as it is)', {ph:'{args}'})
@@ -5481,8 +5781,8 @@ const Builder = {
           : [['add', 'Add'], ['subtract', 'Subtract'], ['set', 'Set to'], ['reset', 'Reset to 0']];
         const takesAmount = ['add', 'subtract', 'set'].includes(s.params.action);
         return field('what', 'Change', {select:[['', 'A goal'], ['timer', 'A timer']]})
-          + (options.length ? field('id', timer ? 'Timer' : 'Goal', {select:[['', `Pick a ${word}`]].concat(options)})
-            : note(`No ${word} yet. Make one in <b>Overlay › Goals and timers</b>.`))
+          + (options.length ? field('id', timer ? 'Timer' : 'Goal', {select:[['', timer ? 'Pick a timer' : 'Pick a goal']].concat(options)})
+            : note(`${timer ? 'No timer yet.' : 'No goal yet.'} Make one in <b>Overlay › Goals and timers</b>.`))
           + field('action', 'Do', {select:does})
           + (takesAmount ? field('amount', timer ? 'Seconds, or a value like {arg1}' : 'How much, or a value like {arg1}', {mono:true, ph:timer ? '60' : '1'}) : '')
           + note(`Any message can say where it stands: <span class="mono">{${word}.${esc(s.params.id || 'name')}}</span>${timer ? '' : `, and <span class="mono">{goal.${esc(s.params.id || 'name')}.target}</span>`}. Tests never change your goals and timers.`);
@@ -5563,7 +5863,7 @@ const Builder = {
       `<button class="sub-tab${(id === 'any') === any ? ' on' : ''}" data-act="b-cond-match" data-v="${id}" aria-pressed="${(id === 'any') === any}">${label}</button>`).join('')}${SEG_IND}</div></div>`;
     return `<div class="dff"><label>${rows.length > 1 ? 'Checks' : 'Check'}</label><div class="ig-conds">${rows.map(row).join('')}</div>
       ${rows.length < MAX_CONDITIONS ? `<button type="button" class="ig-cond-add" data-act="b-cond-add">${svg('plus')}Add a check</button>` : ''}</div>${match}`
-      + note('Text compares ignoring case; "is more than" compares numbers. Click a value below to put it in the field you last clicked.');
+      + note('Text compares ignoring case; "is more than" compares numbers.');
   },
   // Pick names from OBS's own list: a find box over it, one line each.
   // A typed name is kept too, as OBS may be closed or the source not made
@@ -5609,7 +5909,7 @@ const Builder = {
       if (picked.length) body += named('scene', 'Showing in the scene (none: the one on air)', 'Find or type a scene', scenes);
       const n = esc(answerName(s)), v = f => `<span class="mono">{${n}.${f}}</span>`;
       body += field('save_as', 'Keep the answer as', {mono:true, fixed:true, ph:'obs'})
-        + note(`Later steps find it under "Values it can use" as ${v('scene')}, ${v('streaming')}, ${v('recording')}${!picked.length ? ''
+        + note(`Later steps can use it as ${v('scene')}, ${v('streaming')}, ${v('recording')}${!picked.length ? ''
           : `, ${v('muted')} and ${v('visible')}${picked.length > 1 ? ' (yes when all of them are), and each source\'s own' : ''}`}. Each check keeps its own name.`);
     }
     else if (need === 'filter'){
@@ -6038,19 +6338,6 @@ const Builder = {
       }
       case 'b-new-token': this.handler().trigger.token = randomToken(); this.changed(); return true;
       case 'b-name-answer': { const s = selected(); if (s) nameAnswer(this.handler(), s); this.changed(); return true; }
-      case 'b-token': {
-        // Into the field last written in, or the selected step's text.
-        const s = selected(), main = s && (KINDS[s.type] || {}).text;
-        let field = this.lastField && this.lastField.isConnected ? this.lastField : null;
-        if (!field && main){
-          // Never written in: the value goes at the end, not before it all.
-          field = q(`.ig-inspector [data-bind="p"][data-name="${main}"]`);
-          if (field) field.setSelectionRange(field.value.length, field.value.length);
-        }
-        if (!field){ toast('Click a text field first, then the value to put in it', 'info'); return true; }
-        insertAtCursor(field, tokenText(el.dataset.token, s && s.type === 'if'));
-        return true;
-      }
       case 'b-test': this.leaveChooser(); this.testOpen = true; this.render(); this.reveal('.ig-run-box'); focusAct('test-run'); return true;
       case 'test-run': if (this.askToPick()) busy(el, () => this.test()); return true;
       case 'test-mode': this.testDry = el.dataset.v === 'dry'; this.render(); return true;
@@ -6197,7 +6484,11 @@ function triggerSentence(t){
       return triggerLabel(t) + (tune ? ` · ${tune.k.toLowerCase()} ${tune.v}` : '') + (f.length ? ' · only if ' + f.join(', ') : '');
     }
     case 'chat_command': return `Someone types ${t.command || '!command'} · ${rolesLabel(t.roles)}`;
-    case 'chat_message': return `A chat message ${{exact:'is', starts_with:'starts with', word:'has the word', contains:'contains the letters'}[t.mode] || 'matches'} "${t.pattern || ''}"`;
+    case 'chat_message': {
+      const said = t.pattern || '';
+      return {exact:`A chat message is "${said}"`, starts_with:`A chat message starts with "${said}"`, word:`A chat message has the word "${said}"`,
+        contains:`A chat message contains the letters "${said}"`}[t.mode] || `A chat message matches "${said}"`;
+    }
     case 'block': return t.name ? `A "Run a block" step runs ${t.name}` : 'A block of steps (not named yet)';
     case 'timer': return `Every ${fmtDur(t.every_ms || 0)}${t.only_live !== false ? ' while streaming' : ''}`;
     case 'webhook': return 'Something calls its secret address';
@@ -6534,7 +6825,7 @@ function stepSentence(s){
         subtract:`Take ${n} s off the timer ${name}`, set:`Set the timer ${name} to ${n} s`}[p.action] || `Add ${n} s to the timer ${name}`;
       return {subtract:`Take ${n} from the goal ${name}`, set:`Set the goal ${name} to ${n}`, reset:`Reset the goal ${name}`}[p.action] || `Add ${n} to the goal ${name}`;
     }
-    case 'reward': return `Switch the reward ${q(p.title || '…')} ${p.action === 'off' ? 'off' : 'on'}`;
+    case 'reward': return p.action === 'off' ? `Switch off the reward ${q(p.title || '…')}` : `Switch on the reward ${q(p.title || '…')}`;
     case 'channel': return [p.title && `Set the title to ${q(p.title)}`, p.category && `${p.title ? 'the' : 'Set the'} category to ${q(p.category)}`].filter(Boolean).join(', ') || 'Set the title or category';
     case 'overlay': return `On stream ${q(p.text)}`;
     case 'edit_text': return `${esc((EDIT_OPS[p.op] || EDIT_OPS.first_line)[0])}: ${highlightVars(p.input || '…')} → <span class="v">{${esc((p.save_as || '').trim() || 'text')}}</span>`;
@@ -6654,7 +6945,7 @@ const Conn = {
   discordHtml(){
     const e = this.editing;
     const rows = S.data.connections.discord.map(c => `<div class="ig-acct" data-key="d-${esc(c.id)}"><span class="dcard-icon ig-ic-discord">${svg('bubble')}</span>
-      <div class="dcard-id"><div class="dcard-name">#${esc(c.name)}</div><div class="dcard-host">${esc(c.hint)}</div></div>
+      <div class="dcard-id"><div class="dcard-name" translate="no">#${esc(c.name)}</div><div class="dcard-host">${esc(c.hint)}</div></div>
       <button class="ic-btn ic-btn-ghost ig-small" data-act="d-test" data-id="${esc(c.id)}">Test</button>
       <button class="ic-btn ic-btn-ghost ig-small" data-act="d-edit" data-id="${esc(c.id)}">Edit</button>
       <button class="ic-btn-tiny" data-act="d-del" data-id="${esc(c.id)}" aria-label="Remove #${esc(c.name)}">${svg('x')}</button></div>`).join('');
@@ -6931,7 +7222,7 @@ function alertColor(value, look){
   return /^#[0-9a-f]{6}$/i.test(look.accent || '') ? look.accent : THEMES[themeOf(look)].accent;
 }
 function alertColorName(value){
-  if (!value) return 'design\'s';
+  if (!value) return 'the design\'s';
   const found = CARD_COLORS.find(([c]) => c === value.toLowerCase());
   return found ? found[1].toLowerCase() : value.toLowerCase();
 }
@@ -6974,7 +7265,7 @@ function accentPickerHtml(step){
   const known = !mine || CARD_COLORS.some(([c]) => c === mine);
   const swatch = (c, label, style) => `<button class="ig-swatch${c === mine ? ' on' : ''}" style="--sw:${style}" data-act="set-color" data-v="${c}"
     role="radio" aria-checked="${c === mine}" aria-label="${label}" title="${label}"></button>`;
-  const swatches = [swatch('', "The design's", alertColor('', lookOf()))].concat(CARD_COLORS.map(([c, label]) => swatch(c, label, c))).join('');
+  const swatches = [swatch('', 'From the design', alertColor('', lookOf()))].concat(CARD_COLORS.map(([c, label]) => swatch(c, label, c))).join('');
   return `<div class="ig-swatches"><span class="ig-swatch-set" role="radiogroup" aria-label="Alert accent">${swatches}</span>
     <label class="ig-swatch custom${known ? '' : ' on'}" title="Any color"><input type="color" data-bind="color" value="${esc(shown)}" aria-label="Any color (now ${esc(shown)})"></label></div>`;
 }
@@ -7266,7 +7557,7 @@ function recipeItemHtml(it, n){
       <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(json)}">${svg('copy', ' class="ig-btn-ic"')}Copy</button></div>
     <pre class="ig-rraw">${jsonColored(json)}</pre></div>`;
   return `<div class="ig-ritem ${level}" style="--i:${n}">
-    <b class="ig-rname">${esc(it.name)}</b>
+    <b class="ig-rname" translate="no">${esc(it.name)}</b>
     <div class="ig-rwhen">When ${who || 'nothing'}</div>
     ${flags ? `<div class="ig-rflags">${flags}</div>` : ''}
     ${handlers.length ? `<div class="ig-rfolds">${recipeFold(`steps-${n}`, 'steps', `See every step <span class="ig-rcount">${count}</span>`, steps)}
@@ -7296,14 +7587,14 @@ function jsonColored(text){
 // the program and its arguments, the file, the web address and the OBS
 // scene or source (recipe::strip_private). Say so where that step is, so
 // nobody wonders which program it would run.
-const RECIPE_FILLS = {program:[['path'], 'program and its arguments'], file:[['path'], 'file'],
-  http:[['url'], 'address'], obs:[['scene', 'source'], 'scene or source'], light:[['device'], 'light']};
+const RECIPE_FILLS = {program:[['path'], 'the program and its arguments'], file:[['path'], 'the file'],
+  http:[['url'], 'the address'], obs:[['scene', 'source'], 'the scene or source'], light:[['device'], 'the light']};
 function recipeFillNote(s){
   const fill = RECIPE_FILLS[s.type], p = s.params || {};
   // Recording, the replay buffer, screenshots and hotkeys pick no name.
   if (s.type === 'obs' && ['', 'hotkey'].includes((OBS_ACTIONS[p.action] || [])[1] || '')) return '';
   if (!fill || fill[0].some(name => p[name])) return '';
-  return ` <span class="ig-rnote">· a recipe can't choose the ${fill[1]}: you pick ${s.type === 'program' ? 'them' : 'it'} after adding</span>`;
+  return ` <span class="ig-rnote">· a recipe can't choose ${fill[1]}: ${s.type === 'program' ? 'you pick them after adding' : 'you pick it after adding'}</span>`;
 }
 // The steps of a recipe being imported, in the builder's words, checks
 // with their branches nested. What runs on the PC is tinted red; what
@@ -7408,7 +7699,7 @@ const Values = {
         <button type="button" class="ic-btn-tiny${open ? ' on' : ''}" data-act="v-more" data-n="${n}" aria-expanded="${open}" aria-label="Name and label of ${esc(v.label || v.name || 'this value')}" title="Name and label">${svg('pencil')}</button></div>
       ${open ? `<div class="ig-val-more"><div class="dff"><label>What it is for</label><input class="ic-input" data-bind="v-label" data-n="${n}" value="${esc(v.label)}" placeholder="!daily gives"></div>
         <div class="dff"><label>Name in steps</label><span class="ig-val-name mono">{my.<input class="ic-input mono" data-bind="v-name" data-n="${n}" value="${esc(v.name)}" placeholder="daily" maxlength="32" spellcheck="false">}</span>
-          ${used ? `<div class="muted">${plural(used, 'integration')} read${used === 1 ? 's' : ''} it by this name: renaming it here leaves them reading nothing.</div>` : ''}</div>
+          ${used ? `<div class="muted">${used === 1 ? '1 integration reads it by this name: renaming it here leaves it reading nothing.' : `${used} integrations read it by this name: renaming it here leaves them reading nothing.`}</div>` : ''}</div>
         <button type="button" class="ic-btn ic-btn-ghost ig-small" data-act="v-del" data-n="${n}">Delete this value</button></div>` : ''}</div>`;
   },
   valuesHtml(){
@@ -7548,7 +7839,7 @@ const Recipes = {
         <textarea class="ic-input ig-textarea-code" data-bind="r-text" placeholder="ic-recipe:1:…" spellcheck="false">${esc(this.text)}</textarea>
         ${p ? `<div class="ig-recipe" data-key="r-${esc(p.name)}">
           <div class="sys-section ig-recipe-list">
-            <div class="ig-recipe-head"><span class="ig-ok">${svg('check')}</span><b>${esc(p.name)}</b><span class="muted">${plural(p.items.length, 'integration')}</span></div>
+            <div class="ig-recipe-head"><span class="ig-ok">${svg('check')}</span><b translate="no">${esc(p.name)}</b><span class="muted">${plural(p.items.length, 'integration')}</span></div>
             ${p.items.map((it, n) => recipeItemHtml(it, n)).join('')}
           </div>
           ${recipeWarningHtml(p)}
@@ -7573,7 +7864,7 @@ const Recipes = {
   // while this alerts page still has the plain default one.
   alertsHtml(p){
     const al = p.alerts, own = THEMES[themeOf(al.look)];
-    const names = list => list.map(m => `<b>${esc(m.name)}</b>`).join(', ');
+    const names = list => list.map(m => `<b translate="no">${esc(m.name)}</b>`).join(', ');
     return `<div class="sys-section ig-recipe-alerts" data-key="r-alerts">
       <div class="ic-label">Their alerts look</div>
       <div class="ig-stage ig-stage-short"><iframe class="ig-stage-frame" src="/alerts?demo" title="Their alerts look" tabindex="-1" aria-hidden="true"></iframe></div>
@@ -7851,7 +8142,7 @@ const Stage = {
         doc.name = 'My alerts';
         if (!(await this.writeDesign(slug, doc))) return;
       } else if (!(await this.ensureDesign(slug))) return;
-      if (await this.setDefault(slug) && mine) toast('Your alerts look is now a design, "My alerts": edit it like any overlay', 'ok', 7000);
+      if (await this.setDefault(slug) && mine) toast('Your alerts now use a design called "My alerts". Edit it on the Overlay tab.', 'ok', 5000);
     } finally { this.defaulting = false; }
   },
   // A look with custom CSS, written for the old card's markup: that card,
@@ -7959,7 +8250,7 @@ const Stage = {
          <span class="og-tbar"><i style="transform:translateX(${(goalShare(x) * 100 - 100).toFixed(2)}%)"></i></span>`
       : `<span class="ovg-tile-path"><b class="og-clock ig-num" data-id="${esc(x.id)}">${clockText(timerLeft(x))}</b> · ${this.timerWord(x)[1]}</span>`;
     return `<button class="ovg-tile${on ? ' sel' : ''}" data-key="tile-${what}-${esc(x.id)}" data-act="tr-pick" data-what="${what}" data-id="${esc(x.id)}" style="--tc:${look.color}">
-      <span class="ovg-tile-ic">${svg(look.icon)}</span><span class="ovg-tile-txt"><span class="ovg-tile-name">${esc(x.name)}</span>${meta}</span></button>`;
+      <span class="ovg-tile-ic">${svg(look.icon)}</span><span class="ovg-tile-txt"><span class="ovg-tile-name" translate="no">${esc(x.name)}</span>${meta}</span></button>`;
   },
   // Its own overlay as viewers see it (it reads the real numbers), or what
   // putting it on stream will make.
@@ -8223,7 +8514,8 @@ const Stage = {
         const [kind, name, , fields] = TRACKER_STARTERS[+el.dataset.n];
         // Said before the form, not after it was filled in.
         if (trackersOf(kind).length >= TRACKER_MAX[kind]){
-          toast(`That's the most ${kind}s there can be (${TRACKER_MAX[kind]}): delete one first`, 'info', 5000);
+          toast(kind === 'timer' ? `That's the most timers there can be (${TRACKER_MAX[kind]}): delete one first`
+            : `That's the most goals there can be (${TRACKER_MAX[kind]}): delete one first`, 'info', 5000);
           return true;
         }
         this.edit(kind, '', Object.assign({name}, fields));
@@ -8472,6 +8764,7 @@ function onInput(e){
     render();
     return;
   }
+  if (el.id === 'ig-cat-search'){ Catalog.search(el.value); return; }
   if (!el.dataset || !el.dataset.bind || !Modal.el || !Modal.el.contains(el)) return;
   if (Modal.kind === 'editor') Editor.input(el);
   else if (Modal.kind === 'builder') Builder.input(el);
@@ -8587,13 +8880,9 @@ function onActivateKey(e){
   }
 }
 
-// Remember the last text field each editor used, for variable inserts.
+// A message field measures itself again once it shows (see autosize).
 document.addEventListener('focusin', e => {
-  const text = ':not([readonly]):not([inputmode]):not([data-fixed]):not(.ig-dur):not([type="color"]):not([type="checkbox"])';
-  // A message field measures itself again once it shows (see autosize).
   if (e.target.matches && e.target.matches('.ig-msg')) autosize(e.target);
-  if (Modal.kind === 'builder' && e.target.matches(`.ig-inspector input${text}, .ig-inspector textarea`)) Builder.lastField = e.target;
-  if (Modal.kind === 'editor' && e.target.matches(`.ig-live input${text}, .ig-live textarea`)) Editor.lastField = e.target;
 });
 // A hidden page has nobody to show activity to; catch up when it's back.
 document.addEventListener('visibilitychange', () => {
@@ -8698,6 +8987,18 @@ window.Integrations = {
     await addFrom({preset:'twitch_alerts'}, true);
   },
 };
+
+// Integrations changed elsewhere (another window, a Discord channel or a
+// phone just connected): what this page already loaded follows, the tab
+// and an open catalog, Connections page or Overlay page with it (see Live
+// in the dashboard). An editor keeps its own copy until it's saved.
+if (typeof Live === 'object') Live.on('integrations', async () => {
+  if (!S.data) return;
+  await refreshData();
+  if (Modal.kind === 'catalog') Catalog.render();
+  else if (Modal.kind === 'connections') Conn.render();
+  if (S.stage) Stage.render();
+});
 
 // A reload or a restored tab can land straight on Integrations.
 const pane = document.querySelector('.tab-pane[data-pane="integrations"]');

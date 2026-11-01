@@ -151,7 +151,7 @@ test('a delay past what the buffer holds is flagged, firmly only once the bitrat
   given({ buffer_capacity_ms_est: 125_000, capacity_kbps: 18_500 });
   assert.equal(call('overCap', 125_000), false, 'exactly what it holds still fits');
   assert.equal(call('overCap', 125_001), true);
-  assert.match(call('capAdvice', 180_000), /^Buffer too small for 180s\. Raise the buffer size to at least \d+ MB in System, then restart\.$/);
+  assert.match(call('capAdvice', 180_000), /^180s is too long for the buffer\. Make it at least \d+ MB in System, then restart\.$/);
 
   given({ buffer_capacity_ms_est: 234_000, capacity_measured: false });
   assert.match(call('capAdvice', 600_000), /^Likely too long: at a typical rate the buffer holds about 234s\./);
@@ -166,25 +166,25 @@ test('the main button offers the one thing that can happen next', () => {
     ['OBS not streaming, and the delay typed is past the buffer', { ingest_alive: false, capacity_measured: false }, { field: 600 },
       { key: 'wait-cap', label: 'Buffer holds about 374s', disabled: true }],
     ['streaming, nothing typed', {}, {}, { key: 'set', label: 'Set a delay first', disabled: true }],
-    ['streaming, 30 typed', {}, { field: 30 }, { key: 'arm', label: 'Arm 30s' }],
-    ['more typed than the server takes', { buffer_capacity_ms_est: 4_000_000 }, { field: 99_999 }, { key: 'arm', label: 'Arm 3600s' }],
+    ['streaming, 30 typed', {}, { field: 30 }, { key: 'arm', label: 'Arm' }],
+    ['more typed than the server takes', { buffer_capacity_ms_est: 4_000_000 }, { field: 99_999 }, { key: 'arm', label: 'Arm' }],
     ['more typed than the buffer holds', {}, { field: 600 }, { key: 'cap', label: 'Buffer holds only 374s', disabled: true }],
     ['filling', { phase: 'preparing', armed_delay_ms: 30_000, buffer_fill_ms: 10_000 }, {},
       { key: 'arming', label: 'Ready in 0:20', disabled: true }],
     ['filling, OBS gone', { phase: 'preparing', armed_delay_ms: 30_000, ingest_alive: false }, {},
       { key: 'arming', label: 'Waiting for OBS', disabled: true }],
-    ['ready', { phase: 'ready', armed_delay_ms: 30_000 }, {}, { key: 'armed', label: 'Activate 30s' }],
+    ['ready', { phase: 'ready', armed_delay_ms: 30_000 }, {}, { key: 'armed', label: 'Activate' }],
     ['ready, but the buffer only holds part of it', { phase: 'ready', armed_delay_ms: 600_000,
-      capacity_short: { armed_ms: 600_000, holds_ms: 374_000 } }, {}, { key: 'armed', label: 'Activate 374s' }],
+      capacity_short: { armed_ms: 600_000, holds_ms: 374_000 } }, {}, { key: 'armed', label: 'Activate' }],
     ['ready, OBS gone', { phase: 'ready', armed_delay_ms: 30_000, ingest_alive: false }, {},
       { key: 'wait-armed', label: 'Waiting for OBS', disabled: true }],
-    ['on air', { phase: 'active', armed_delay_ms: 30_000 }, {}, { key: 'cut', label: 'Cut delay' }],
+    ['on air', { phase: 'active', armed_delay_ms: 30_000 }, {}, { key: 'cut', label: 'Cut' }],
     ['on air, the number opened and left as it was', { phase: 'active', armed_delay_ms: 30_000 }, { editing: true, field: 30 },
       { key: 'keep', label: 'Keep 30s' }],
     ['on air, a new number typed', { phase: 'active', armed_delay_ms: 30_000 }, { editing: true, field: 45 },
-      { key: 'adjust', label: 'Adjust to 45s' }],
+      { key: 'adjust', label: 'Adjust' }],
     ['armed, a new number typed', { phase: 'ready', armed_delay_ms: 30_000 }, { editing: true, field: 45 },
-      { key: 'rearm', label: 'Re-arm at 45s' }],
+      { key: 'rearm', label: 'Re-arm' }],
     ['on air, a number past the buffer typed', { phase: 'active', armed_delay_ms: 30_000 }, { editing: true, field: 600 },
       { key: 'cap', label: 'Buffer holds only 374s', disabled: true }],
   ]) {
@@ -205,7 +205,7 @@ test('the second button cancels, disarms, or schedules the cut', () => {
   for (const [why, state, title] of [
     ['filling', { phase: 'preparing' }, 'Cancel arming'],
     ['ready', { phase: 'ready' }, 'Disarm'],
-    ['on air', { phase: 'active' }, 'Cut to live after everything buffered has aired'],
+    ['on air', { phase: 'active' }, 'Back to live once everything saved for the delay has aired'],
     ['on air, a cut already waiting', { phase: 'active', safe_cut_pending: true, safe_cut_remaining_ms: 12_400 }, 'Auto-cut armed. Tap to cancel.'],
     ['nothing armed', { phase: 'idle' }, null],
   ]) {
@@ -240,7 +240,7 @@ test('a profile chip says what a tap will do', () => {
   for (const [state, apply, current, title] of [
     ['off', true, false, 'Arm 30s'],
     ['off', false, false, 'Set 30s'],
-    ['arming', true, false, 'Wait for the buffer to fill, or cancel arming'],
+    ['arming', true, false, "Wait until it's ready, or cancel arming"],
     ['armed', true, false, 'Re-arm at 30s'],
     ['armed', false, false, 'Pick 30s, then Re-arm'],
     ['active', true, false, 'Adjust to 30s'],

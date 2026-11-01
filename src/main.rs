@@ -61,6 +61,7 @@ mod local_eb_config;
 mod midi;
 mod obs_register;
 mod portcheck;
+mod revisions;
 mod rtmp;
 mod self_update;
 mod sha256;
@@ -241,7 +242,7 @@ fn main() -> std::io::Result<()> {
             "127.0.0.1"
         };
         let Some(ingest) = settle_port(
-            "RTMP port",
+            portcheck::PortRole::Stream,
             &mut settings.ingest_port,
             host_ingest,
             relaunched,
@@ -253,8 +254,12 @@ fn main() -> std::io::Result<()> {
         } else {
             "127.0.0.1"
         };
-        let Some(web) = settle_port("Web port", &mut settings.web_port, host_web, relaunched)
-        else {
+        let Some(web) = settle_port(
+            portcheck::PortRole::Dashboard,
+            &mut settings.web_port,
+            host_web,
+            relaunched,
+        ) else {
             return Ok(());
         };
         // Persist any chosen replacement port so the user doesn't get
@@ -617,6 +622,13 @@ fn main() -> std::io::Result<()> {
         // Streamlabs Desktop (experimental): idle until the streamer connects
         // it, then routes its Twitch streams through us while it runs.
         tokio::spawn(streamlabs::run(ctrl.clone(), rx.clone()));
+
+        // The change counters the pages refetch by (see `revisions`).
+        tokio::spawn(revisions::follow_settings(rx.clone()));
+        tokio::spawn(revisions::follow_outside({
+            let settings = tx.clone();
+            move || web::outside_snapshot(&settings)
+        }));
 
         let ingest_sup = tokio::spawn(supervise_ingest(rx.clone(), ctrl.clone()));
         let egress_sup = tokio::spawn(supervise_egress(rx.clone(), ctrl.clone()));
@@ -1483,15 +1495,37 @@ async fn supervise_web(
 /// Resolve a port conflict. Returns `Some(new_port)` to bind a fallback,
 /// or `None` to exit cleanly.
 ///
-/// Windows pops a native "switch to the next free port or quit" modal, since
-/// the release build has no console to print to.
+/// Windows asks with native dialogs, since the release build has no console
+/// to print to (see `portcheck::ask_user`). Picking the InstantClone that is
+/// already running opens its dashboard before this copy leaves.
 #[cfg(windows)]
-fn resolve_port_conflict(label: &str, port: u16, host: &str, starting_copy: bool) -> Option<u16> {
+fn resolve_port_conflict(
+    role: portcheck::PortRole,
+    port: u16,
+    host: &str,
+    starting_copy: bool,
+) -> Option<u16> {
+    use portcheck::ConflictChoice;
+    log_line!("[preflight] {} :{port} is already in use", role.label());
     let owner = portcheck::find_process_on_port(port);
     let proposed = portcheck::find_free_port(host, port.saturating_add(1), 9);
-    match portcheck::ask_user(label, port, owner, proposed, starting_copy) {
-        portcheck::ConflictChoice::SwitchPort(p) => Some(p),
-        portcheck::ConflictChoice::Quit => None,
+    match portcheck::ask_user(role, port, owner, proposed, starting_copy) {
+        ConflictChoice::SwitchPort(p) => Some(p),
+        ConflictChoice::UseRunning(web_port) => {
+            // Its settings didn't say: on its dashboard port, that's this one.
+            let dashboard = web_port.or((role == portcheck::PortRole::Dashboard).then_some(port));
+            if let Some(dashboard) = dashboard {
+                open_browser(&format!("http://127.0.0.1:{dashboard}/"));
+            } else {
+                portcheck::show_error(
+                    "InstantClone",
+                    "InstantClone keeps its settings somewhere else, so this can't tell \
+                     where its dashboard is.\n\nOpen it from the InstantClone icon in the tray.",
+                );
+            }
+            None
+        }
+        ConflictChoice::Quit => None,
     }
 }
 
@@ -1501,7 +1535,13 @@ fn resolve_port_conflict(label: &str, port: u16, host: &str, starting_copy: bool
 /// persisted by the caller so OBS / the dashboard can be repointed once. If
 /// the whole window is busy, print an actionable error and exit.
 #[cfg(not(windows))]
-fn resolve_port_conflict(label: &str, port: u16, host: &str, _starting_copy: bool) -> Option<u16> {
+fn resolve_port_conflict(
+    role: portcheck::PortRole,
+    port: u16,
+    host: &str,
+    _starting_copy: bool,
+) -> Option<u16> {
+    let label = role.label();
     match portcheck::find_free_port(host, port.saturating_add(1), 9) {
         Some(new_port) => {
             log_line!(
@@ -1556,7 +1596,7 @@ fn notify_fatal(title: &str, body: &str) {
 /// that window instead of popping the "switch port?" modal, which would
 /// otherwise block the relaunch.
 fn settle_port(
-    label: &str,
+    role: portcheck::PortRole,
     port: &mut u16,
     host: &str,
     relaunched: bool,
@@ -1576,7 +1616,7 @@ fn settle_port(
                 return Some(reservation);
             }
         }
-        *port = resolve_port_conflict(label, *port, host, starting_copy)?;
+        *port = resolve_port_conflict(role, *port, host, starting_copy)?;
     }
 }
 

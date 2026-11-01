@@ -1,0 +1,385 @@
+# Strings in the page code that stay as they are: names, key names, code,
+# and words that read the same in Spanish. One per line, exactly as
+# `node web/tests/strings.mjs missing` prints them.
+2 min
+!clip
+!delay
+!discord
+!retraso !d
+" aria-label="Align
+" aria-pressed="
+" data-act="lock">
+" maxlength="40"
+" placeholder="
+" placeholder="0:00"
+" placeholder="URL or upload"
+" placeholder="default" data-st-empty
+" selected>
+" style="--dot:
+" style="justify-content:
+" title="theme {}"
+%APPDATA%
+%APPDATA%\slobs-client
+(?<![\p{Alphabetic}\p{N}]){}(?![\p{Alphabetic}\p{N}])
+(prefers-reduced-motion: reduce)
+, NVENC
+, bitrate
+, {}{{}.message}
+, {}{{}.user_login}
+--config-url
+--scene "Replay"
+./instantclone-trace.log
+.bak
+.body
+.code
+.html
+.json.field
+.ok
+/announce
+/ban
+/dock
+/me
+/overlay/
+/overlay/{}.html
+/overlays/{}/delete
+/shoutout
+/timeout {user} 10m
+/unban
+0 configured
+1 min
+10 min
+100 bits
+5 min
+: Broadcaster Suite.
+<$1 id="{}"
+<t:{hold_ends_at}:R>
+?dock={}
+?team=red
+APP
+Aa
+Aitum Vertical
+Alt
+App
+Apply
+Audio
+Authorization: Bearer …
+Auto
+B-frames
+B-frames:
+BUTTON
+Backspace
+Bangers
+Banner
+Bebas Neue
+Bitrate
+Bits
+Blip
+Browser
+Buffer
+C:\Stream\crashes.txt
+CBR
+CC {}
+CPU
+Category
+Chakra Petch
+Chat
+Chat {}
+Chip
+Chips
+Client ID
+Client Type
+Clip
+Color
+Control
+Control audio via OBS
+Coral
+Ctrl
+Ctrl+0
+Ctrl+=, Ctrl+-
+Ctrl+A
+Ctrl+C, Ctrl+X, Ctrl+V
+Ctrl+D
+Ctrl+Shift+L
+Ctrl+Shift+Z, Ctrl+Y
+Ctrl+Shift+↑, ↓
+Ctrl+Z
+Ctrl+↑, Ctrl+↓
+Custom…
+DELETE
+DETAILS
+DOCK
+Del
+Delay
+Diamond II
+Discord
+Discord {} {}
+Dock {}
+Docks
+Down
+Dual Format
+Dual stream → Select key → Encoder
+EB + VOD
+End
+English
+Enhanced Broadcasting
+Enter
+Error
+Esc
+Escape
+Español
+Experimental
+Finder
+Fredoka
+GB
+GET
+GET request in background
+GPU
+GPU (NVENC / AMF / QSV)
+Gaming
+General
+Go Live
+Govee
+HTTP {}
+INPUT
+Insert
+InstantClone
+Inter
+KB
+Kick
+Linux
+Logs
+MB
+MIDI
+Manage
+Mbps
+Mods
+Montserrat
+Nat
+No
+Normal
+Numpad
+OAuth Redirect URL
+OBS
+OBS Studio
+Multi-track via InstantClone
+OBS WebSocket
+OBS {}
+OK
+OUTPUT
+Orbitron
+Oswald
+Overlay
+Overlay Studio
+Overlays
+PATCH
+POST
+PUT
+Permanent Marker
+Playfair Display
+Pop
+Poppins
+Press Start 2P
+Public
+RAM
+RESET
+RTMP
+Restream
+Restream → Channel Settings → Stream Key
+Restream.io
+Roboto Mono
+Rubik
+SELECT
+Shelly
+Shift
+Space
+Special Elite
+Stream Deck
+Streamlabs
+Streamlabs Desktop
+Studio
+Subathon
+TB
+TEXTAREA
+TP-Link
+TWITCH
+Tab
+Trovo
+Trovo Studio → Channel → My Info → Stream Key
+Twitch
+Twitch VOD Track
+URL:
+Up
+VALORANT
+VOD
+VOD audio track
+Vertical
+WLED
+Webhook
+Website
+Win
+Windows
+Yeelight
+YouTube Live
+Zap
+Zoom
+aria-valuemin="0" aria-valuemax="{}" aria-valuenow="{}" aria-valuetext="{}"
+body.st-still .icw{transition:none!important}
+btn full
+btn ghost
+btn ghost cutafter
+btn ghost cutafter pending
+btn ghost disarm
+btn ghost reset
+btn primary
+button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])
+cbtn no
+cbtn yes
+chat {}
+class="ig-pal-locked" aria-disabled="true" title="{}"
+clip, pog, lul
+curl {}
+daily
+dashboard_password_hash=
+data-bind="l-{}"
+data-bind="p" data-name="{}"
+data-n="{}"
+data-name="{}"
+data-st="{}"
+data-unit="{}"
+data-what="{}" data-id="{}"
+delay (ms)
+delay on/off
+dev.twitch.tv/console
+drop-shadow(0 0 {}px oklch(0.80 0.17 65 / .9))
+gg
+goal.{}.target
+http://localhost
+https://ntfy.sh
+https://…/ding.mp3
+https://…/party.gif
+ic-recipe:1:…
+ic.bind(sel,key)
+ic.delay
+ic.onUpdate(s => ...)
+ic.phase
+id={}&enabled={}
+input, textarea, select
+input, textarea, select, [contenteditable="true"]
+input{}, textarea
+insp-{}-{}
+instantclone-log-{}.txt
+instantclone-…
+instantclone.config.json
+kbps
+live ok
+main
+mod
+nothing yet
+ntfy
+obs64.exe
+optional-vod-unlocker.lua
+overlays/
+pts
+px 0px
+px {}px
+rtmp://127.0.0.1:1936/live
+rtmp://host/app
+rtmp://localhost:1935/live
+rtmps
+s1moscs
+saved overlays not updated:
+services.json
+style="--i:{}"
+sw sm
+title="Switched off"
+title="{}"
+use strict
+vertical
+{arg1}
+{body.field}
+{body}
+{chapters}
+{clip.error}
+{clip.ok}
+{clip.url}
+{counter.{}}
+{delay}
+{destination}
+{game|nothing yet}
+{goal.{}.target}
+{input}
+{my.
+{my.name}
+{my.{}}
+{name}
+{obs.muted?muted:unmuted}
+{query.team}
+{stream.category}
+{stream.error}
+{stream.ok}
+{timeline}
+{user_login}
+{user_role}
+{user}
+{viewer.coins#$my.coin#$my.coins}
+{viewers#viewer#viewers}
+{viewers}
+{{alert.{}}}
+{{bitrate}}
+{{bufferPct}}
+{{delay}}
+{{goal.name}}
+{{goal.{}}} / {{goal.{}.target}}
+{{phase}}
+{{user}}
+{{}.output}
+{{}.status}
+{} Mbps
+{} min {} s
+{} ms
+{} pts
+{} · normal {} · {}
+{}/overlay/{}.html
+{}{{}.ok}
+· MT
+≤ 8000 kbps
+⚡ Enhanced Broadcasting
+Buffer too small for ...
+Enhanced Broadcasting (multi-track video) detected - forwarding raw to Twitch destinations, flattening to the primary resolution for any other platform.
+This is where your alerts show up on stream.
+We're live! Come hang out.
+Crash protection is on for 2m 00s. Get back to the PC.
+Stream delay is now on.
+Delay turned off by {}.
+Delay set to {}s by {}.
+Crash protection is on for {}. Get back to the PC.
+Stream delay is now off.
+You ended crash protection after {}.
+Viewers see the reconnect screen. The stream ends <t:{}:R> unless OBS is back.
+Viewers are {} behind.
+It was {}.
+It never went on air.
+It dropped {} ago and hasn't come back. InstantClone keeps retrying.
+It was down for {}.
+Couldn't find {} on Twitch.
+Couldn't get that right now, try again in a bit.
+unexpected data at byte {}
+{} at byte {}
+Start a second InstantClone?
+There's no free port left for a second InstantClone. Close the other InstantClone, or the program using its ports, and try again.
+A second InstantClone is only needed to stream two channels at once, each with its own settings. This one keeps its settings in:n{}nnIt uses different ports, so OBS has to be set up for it on its own: its dashboard shows how.nnYes: start the second InstantClone.nNo: open the one already running.
+RegisterClassW failed
+CreateWindowExW failed
+malformed Content-Length or unsupported Transfer-Encoding
+cross-origin POSTs are blocked (CSRF guard)
+body too large (max 32 MB)
+request body shorter than its Content-Length
+request body is not valid UTF-8
+hashing failed
+unknown scope (use 'settings' or 'all')
+unknown action
+bad dock id
+layout too large
+layout must be single-line json
+too many saved docks
+Content-Type

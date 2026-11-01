@@ -4,6 +4,62 @@ All notable changes will land here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - Everything updates live, Spanish, and a clearer first run
+
+### Every page updates by itself
+
+- **No more F5.** The dashboard and the OBS dock follow changes from another
+  window, the dock or the API, and notice OBS or Streamlabs opening and closing
+  within about 4 seconds. Only what really changed is redrawn.
+- **A much lighter dashboard.** With a stream live, the page takes about a
+  tenth of the main-thread time it did.
+
+### InstantClone speaks Spanish
+
+- The dashboard, the OBS dock, the sign-in page and server messages are in
+  English and Spanish. Pick one on first launch or in **System → General**.
+- The Logs tab, Windows' own dialogs and the tray stay in English, and so do
+  default alert texts until you edit them.
+
+### A clearer first run
+
+- A short welcome asks for your language and three quick choices before setup.
+- Setup's **Next** waits until your streaming app is connected, and the progress
+  bar only moves forward over steps you've completed.
+- With no OBS or Streamlabs installed, setup says what to do next.
+- A second copy of the app now offers to open the one already running first;
+  starting another takes a second yes.
+
+### Integrations and overlays
+
+- Values now appear under the field you're editing, with a searchable menu
+  (or type `{`), in both the simple editor and the step builder.
+- The catalog has search and uniform tiles, and the simple editor has two columns
+  with one **Before it can run** box.
+- Twin cards tell themselves apart, and card warnings sit under the name.
+- The overlay preview zooms onto what the overlay actually draws.
+- Profiles are edited in place.
+
+### Clearer words
+
+- The same words across the app: sending and destinations, **Test destination**,
+  your streaming app. The main button shows one word per action: Arm, Activate,
+  Cut, Re-arm, Adjust, Cancel.
+- More room around the wizard and the main tabs, and a seamless language change.
+
+### Fixes
+
+- A live cut now only moves forward, instead of sometimes replaying a moment.
+- The upload warning allows for your keyframe interval, and long keyframe
+  intervals get a note about what they do to the delay.
+- The Enhanced Broadcasting warning only shows for OBS.
+- The memory reading now matches Task Manager's memory column.
+- The second-copy dialog's "open the running one" works on the stream port too.
+- A stream key draft no longer stays in the browser after setup.
+
+Checked live on Twitch with OBS 33.0.1, single track and Enhanced Broadcasting
+with the VOD track.
+
 ## [0.1.18] - Streamlabs Desktop (experimental), every OBS on your PC, and winget
 
 ### Streamlabs Desktop, experimental

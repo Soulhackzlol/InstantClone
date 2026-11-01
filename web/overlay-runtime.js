@@ -25,7 +25,7 @@
 
   // The six editable delay-states. Idle folds in "ingest offline".
   const STATES = [
-    { key: 'idle',      label: 'Idle',      hint: 'Passthrough / OBS not publishing' },
+    { key: 'idle',      label: 'Idle',      hint: 'Live with no delay, or OBS not streaming' },
     { key: 'preparing', label: 'Arming',    hint: 'Buffer filling toward the armed delay' },
     { key: 'ready',     label: 'Ready',     hint: 'Armed - waiting for Activate' },
     { key: 'active',    label: 'Active',    hint: 'Delay is live' },
@@ -1611,6 +1611,23 @@
     };
   }
 
+  // What this overlay draws on its screen, for the dashboard's preview to
+  // zoom onto: every visible element but the full-screen layers.
+  function drawnBounds(){
+    var W=innerWidth||1920, H=innerHeight||1080, x0=W, y0=H, x1=0, y1=0, all=document.body.getElementsByTagName('*');
+    for(var i=0;i<all.length;i++){
+      var r=all[i].getBoundingClientRect();
+      if(r.width<2||r.height<2||r.width*r.height>W*H*0.8) continue;
+      // Parked off screen, waiting to slide in: not drawn yet.
+      if(r.right<=0||r.left>=W||r.bottom<=0||r.top>=H) continue;
+      var cs=getComputedStyle(all[i]);
+      if(cs.visibility==='hidden'||cs.display==='none'||cs.opacity==='0') continue;
+      x0=Math.min(x0,Math.max(0,r.left)); y0=Math.min(y0,Math.max(0,r.top));
+      x1=Math.max(x1,Math.min(W,r.right)); y1=Math.max(y1,Math.min(H,r.bottom));
+    }
+    return x1>x0&&y1>y0 ? {x0:x0,y0:y0,x1:x1,y1:y1} : null;
+  }
+
   // Sim override from the Studio canvas (inert in OBS). noHide keeps
   // auto-hide widgets visible while the user edits a state.
   window.addEventListener('message',function(ev){
@@ -1619,6 +1636,8 @@
     // opaque, its address is the app's), the Studio's canvas is a srcdoc
     // (no address, the app's origin).
     if(d.__ic_alert&&ALERTS&&(ev.origin===location.origin||ev.origin===window.origin)){ playAlert(d.__ic_alert); return; }
+    // The dashboard's preview asks what this draws, to zoom onto it.
+    if(d.__ic_bounds&&ev.source&&(ev.origin===location.origin||ev.origin===window.origin)){ ev.source.postMessage({__ic_drawn:drawnBounds()},ev.origin); return; }
     if(d.__ic_sim){
       PREVIEW=true;
       window.__ic_noHide=!!d.noHide;

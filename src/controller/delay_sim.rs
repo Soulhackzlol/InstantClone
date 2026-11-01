@@ -790,7 +790,7 @@ async fn a_delay_longer_than_the_buffer_runs_at_what_it_holds() {
         "{}",
         short.holds_ms
     );
-    assert!(short.message.starts_with("Buffer too small for 30 s"));
+    assert!(short.message.starts_with("30 s is too long for the buffer"));
     assert_eq!(
         sim.ctrl.capacity_short_seq(),
         1,
