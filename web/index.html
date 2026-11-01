@@ -697,6 +697,7 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 .wiz-nav{display:flex;align-items:center;gap:10px;margin-top:20px}
 .wiz-nav .spacer{flex:1}
 .wiz-nav #wiz-back,.wiz-nav #wiz-next{flex:0 0 auto;min-width:116px}
+@media (max-width:520px){.wiz-nav #wiz-back,.wiz-nav #wiz-next{min-width:0;padding-inline:14px}}
 /* Tactile press on the nav buttons + a soft glow lift on the primary CTA. */
 .wiz-nav .ic-btn{transition:transform .12s var(--ease-out),box-shadow .18s var(--ease-out),
   background .15s var(--ease-out),border-color .15s var(--ease-out),color .15s var(--ease-out)}
