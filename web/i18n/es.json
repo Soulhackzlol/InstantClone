@@ -956,8 +956,6 @@
 "Live through InstantClone as one video track (Enhanced Broadcasting was off).": "En directo a través de InstantClone con una sola pista de vídeo (Enhanced Broadcasting estaba desactivado).",
 "Live through InstantClone with Enhanced Broadcasting.": "En directo a través de InstantClone con Enhanced Broadcasting.",
 "Ready. Go live from Streamlabs as usual: its Twitch stream comes through InstantClone.": "Listo. Empieza el directo desde Streamlabs como siempre: su señal de Twitch pasa por InstantClone.",
-"Connected. Keep Streamlabs signed in with your Twitch account.": "Conectado. Mantén la sesión de Streamlabs iniciada con tu cuenta de Twitch.",
-"Streamlabs Desktop isn't on this PC, or hasn't been opened yet. Open it once, then come back.": "Streamlabs Desktop no está en este PC o aún no se ha abierto. Ábrelo una vez y vuelve.",
 "Connect Streamlabs. Your real platform stream keys stay in Destinations.": "Conecta Streamlabs. Tus claves de transmisión reales siguen en Destinos.",
 "Streamlabs stays connected too, so either app can stream here. Switch to Streamlabs above to disconnect it.": "Streamlabs también sigue conectado, así que cualquiera de las dos apps puede emitir aquí. Cambia a Streamlabs arriba para desconectarlo.",
 "OBS stays registered too, so either app can stream here.": "OBS también sigue registrado, así que cualquiera de las dos apps puede emitir aquí.",
@@ -3726,5 +3724,13 @@
 "Startup": "Inicio",
 "Delay ready": "Delay listo",
 "If OBS crashes": "Si OBS se cae",
-"Your app": "Tu app"
+"Your app": "Tu app",
+"Download Streamlabs": "Descargar Streamlabs",
+"Connect Streamlabs above to continue.": "Conecta Streamlabs arriba para continuar.",
+"Install OBS and open it once to continue.": "Instala OBS y ábrelo una vez para continuar.",
+"Set OBS up above, then click \"I've set this up in OBS\" to continue.": "Configura OBS arriba y pulsa \"Ya lo he configurado en OBS\" para continuar.",
+"We can't find Streamlabs on this PC": "No encontramos Streamlabs en este PC",
+"Streamlabs is connected": "Streamlabs está conectado",
+"Keep Streamlabs signed in with your Twitch account.": "Mantén la sesión de Streamlabs iniciada con tu cuenta de Twitch.",
+"Open Streamlabs and InstantClone picks it up.": "Abre Streamlabs e InstantClone lo detectará."
 }

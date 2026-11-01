@@ -29,21 +29,49 @@ test('the wizard opens on the welcome, whose picks save as real settings', () =>
   assert.equal(page.run(`WEL_PICKS.language.current({})`), 'auto');
 });
 
-test('any wizard step can be reached, and only the key step holds Next back', () => {
-  page.run(`var realRender = renderWizStep; renderWizStep = () => {}; wizCurrent = 'welcome'`);
+test('the wizard goes back freely, forward only over what is done', () => {
+  page.run(`var realRender = renderWizStep; renderWizStep = () => {}; wizCurrent = 'welcome'; wizVisited.clear(); wizVisited.add('welcome')`);
   page.run(`wizGoTo('crash')`);
-  assert.equal(page.run('wizCurrent'), 'crash');
+  assert.equal(page.run('wizCurrent'), 'welcome', 'a step not reached yet stays shut');
+  page.run(`['startup', 'delay', 'crash'].forEach(s => wizVisited.add(s)); wizGoTo('crash')`);
+  assert.equal(page.run('wizCurrent'), 'crash', 'one already seen opens');
   assert.equal(page.run('wizDir'), 'fwd');
   page.run(`wizGoTo('startup')`);
   assert.equal(page.run('wizCurrent'), 'startup');
   assert.equal(page.run('wizDir'), 'back');
   page.run(`wizGoTo('not-a-step')`);
   assert.equal(page.run('wizCurrent'), 'startup');
-  for (const step of ['welcome', 'startup', 'delay', 'crash', 'obs', 'platform']) {
-    assert.equal(page.run(`validateWizStep('${step}')`), true, step);
-  }
   for (const step of plain(page.run('WIZ_ALL_STEPS'))) assert.ok(page.run(`WIZ_STEP_NAMES['${step}']`), step);
-  page.run(`renderWizStep = realRender; wizCurrent = 'welcome'`);
+  page.run(`renderWizStep = realRender; wizCurrent = 'welcome'; wizVisited.clear()`);
+});
+
+test('an unconnected app holds the wizard at its step, Next and progress bar alike', () => {
+  page.run(`var realRender = renderWizStep; renderWizStep = () => {}; wizCurrent = 'obs'; wizApp = 'obs'; wizObsConfirmed = false`);
+  page.run(`WIZ_ALL_STEPS.forEach(s => wizVisited.add(s))`);
+  assert.equal(page.run(`validateWizStep('obs')`), false);
+  page.run(`wizGoTo('platform')`);
+  assert.equal(page.run('wizCurrent'), 'obs', 'even a step seen before stays shut past it');
+  page.run(`wizObsConfirmed = true`);
+  assert.equal(page.run(`validateWizStep('obs')`), true);
+  page.run(`wizGoTo('platform')`);
+  assert.equal(page.run('wizCurrent'), 'platform');
+  // Streamlabs counts as connected once it is, and a press of OBS's button doesn't stand in for it.
+  page.run(`wizApp = 'streamlabs'; slInfo = {enabled: false}`);
+  assert.equal(page.run(`validateWizStep('obs')`), false);
+  page.run(`slInfo = {enabled: true}`);
+  assert.equal(page.run(`validateWizStep('obs')`), true);
+  for (const step of ['welcome', 'startup', 'delay', 'crash', 'platform']) {
+    assert.equal(page.run(`wizStepProblem('${step}')`), '', step);
+  }
+  page.run(`renderWizStep = realRender; wizCurrent = 'welcome'; wizApp = 'obs'; wizObsConfirmed = false; slInfo = null; wizVisited.clear()`);
+});
+
+test('a language setting reads as the server would show it', () => {
+  page.run(`globalThis.navigator = {languages: ['fr-FR', 'es-ES', 'en']}`);
+  assert.equal(page.run(`languageOf('auto')`), 'es', 'the first language the page has');
+  assert.equal(page.run(`languageOf('en')`), 'en', 'a setting beats the browser');
+  page.run(`globalThis.navigator = {languages: ['fr']}`);
+  assert.equal(page.run(`languageOf('auto')`), 'en', 'English when the browser wants neither');
 });
 
 test('the custom delay field follows a delay armed elsewhere', () => {

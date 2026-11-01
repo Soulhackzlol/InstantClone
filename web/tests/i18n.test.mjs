@@ -78,6 +78,13 @@ test('a value lowered to sit mid-sentence still reads its key', () => {
   assert.equal(tr('When nothing known'), 'Cuando nothing known', 'no key leaves it as it is');
 });
 
+test('a phrase capitalized to start a line reads its own key, not a pattern', () => {
+  const tr = translator({ lang: 'es', strings: { 'pick a Discord channel': 'elige un canal de Discord', '{} channel': '{} canal', Open: 'Abierto', open: 'abierto y ya' } });
+  assert.equal(tr('Pick a Discord channel'), 'Elige un canal de Discord');
+  assert.equal(tr('Twitch channel'), 'Twitch canal', 'with no key of its own, the pattern still reads it');
+  assert.equal(tr('Open'), 'Abierto', 'its capitalized key comes first');
+});
+
 test('a value never swallows the pieces of a joined line', () => {
   const tr = translator({
     lang: 'es',

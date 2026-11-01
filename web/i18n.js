@@ -89,11 +89,16 @@
   }
 
   function lookup(core) {
+    if (!/^[A-Z][a-z]/.test(core)) return lookupAsIs(core);
+    // A phrase capitalized to start a line ("Pick a Discord channel"). Its own
+    // key comes before any pattern that would read it in pieces ("{} channel").
+    const lowered = core[0].toLowerCase() + core.slice(1);
+    const capitalized = text => text[0].toUpperCase() + text.slice(1);
+    if (strings[core] === undefined && strings[lowered] !== undefined) return capitalized(strings[lowered]);
     const said = lookupAsIs(core);
-    if (said !== null || !/^[A-Z][a-z]/.test(core)) return said;
-    // A phrase capitalized to start a line ("Pick a Discord channel").
-    const lower = lookupAsIs(core[0].toLowerCase() + core.slice(1));
-    return lower === null ? null : lower[0].toUpperCase() + lower.slice(1);
+    if (said !== null) return said;
+    const lower = lookupAsIs(lowered);
+    return lower === null ? null : capitalized(lower);
   }
 
   function lookupAsIs(core) {
