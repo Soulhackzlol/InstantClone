@@ -85,6 +85,16 @@ test('a phrase capitalized to start a line reads its own key, not a pattern', ()
   assert.equal(tr('Open'), 'Abierto', 'its capitalized key comes first');
 });
 
+test('a name someone typed survives inside a sentence', () => {
+  const tr = translator({
+    lang: 'es',
+    strings: { 'Stream to {}': 'Emitir a {}', '{} on': '{} activas', 'Last ran {}': 'Última ejecución {}', '{} min ago': 'hace {} min', "Couldn't save: {}": 'No se pudo guardar: {}', '{}: stream key required': '{}: falta la clave de transmisión' },
+  });
+  assert.equal(tr('Stream to My server on'), 'Emitir a My server on', 'a short pattern leaves a name alone');
+  assert.equal(tr('Last ran 3 min ago'), 'Última ejecución hace 3 min', 'a count is still read');
+  assert.equal(tr("Couldn't save: Kick: stream key required"), 'No se pudo guardar: Kick: falta la clave de transmisión', 'a whole message is too');
+});
+
 test('a value never swallows the pieces of a joined line', () => {
   const tr = translator({
     lang: 'es',

@@ -5903,6 +5903,7 @@ async fn write_simple(
 /// Self-contained login page (no external assets, so it renders before any
 /// authenticated request). Served at GET /login only when auth is enabled.
 const LOGIN_HTML: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8">
+<script src="/i18n.js"></script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>InstantClone - Sign in</title>
 <style>
@@ -6573,6 +6574,12 @@ mod tests {
         assert_ne!(before, after);
         assert!(after.contains(&format!(r#""{}":"#, overlay_key("goal-subs"))));
         assert!(!after.contains("goal-subs"), "the feed carries no names");
+    }
+
+    #[test]
+    fn the_sign_in_page_speaks_the_language_too() {
+        assert!(LOGIN_HTML.contains(r#"<script src="/i18n.js"></script>"#));
+        assert_eq!(classify_access("GET", "/i18n.js"), Access::Public);
     }
 
     #[test]

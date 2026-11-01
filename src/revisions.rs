@@ -80,6 +80,18 @@ pub fn bump(topic: Topic) {
     REVS[topic.index()].fetch_add(1, Ordering::Relaxed);
 }
 
+/// Where this run's counters start, in ms since 1970: a page still open
+/// across a restart sees every one differ and fetches it all again, even a
+/// topic that moved the same number of times in both runs.
+fn boot_offset() -> u64 {
+    static OFFSET: OnceLock<u64> = OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis() as u64)
+    })
+}
+
 /// The counters as the state feed's `rev` object.
 pub fn json() -> String {
     let fields: Vec<String> = TOPICS
@@ -88,7 +100,7 @@ pub fn json() -> String {
             format!(
                 r#""{}":{}"#,
                 t.name(),
-                REVS[t.index()].load(Ordering::Relaxed)
+                boot_offset() + REVS[t.index()].load(Ordering::Relaxed)
             )
         })
         .collect();
@@ -213,8 +225,9 @@ fn config_changed(before: &Settings, after: &Settings) -> bool {
 // ---- the world outside ----
 
 /// How often the outside is looked at while a page is watching. Each look
-/// reads a few small files and the process list.
-const OUTSIDE_EVERY: Duration = Duration::from_secs(2);
+/// reads a few small files and the process list, which alone takes about 20 ms
+/// on a busy PC: 1% of a core every 2 s, for something that rarely changes.
+const OUTSIDE_EVERY: Duration = Duration::from_secs(4);
 
 /// Bump a topic when its sample changes. `sample` answers each outside topic
 /// with what its endpoint would answer now; it runs on a blocking thread.
@@ -278,6 +291,18 @@ mod tests {
             );
         }
         assert!(crate::json::parse(&text).is_ok(), "{text}");
+    }
+
+    /// A page open across a restart compares against these: a fresh run has
+    /// to differ even in a topic that never moved.
+    #[test]
+    fn counters_start_where_no_earlier_run_could_have_reached() {
+        let first = crate::json::parse(&json()).unwrap();
+        let config = first
+            .get("config")
+            .and_then(crate::json::Value::as_f64)
+            .unwrap();
+        assert!(config >= boot_offset() as f64 && boot_offset() > 1_000_000_000_000);
     }
 
     #[test]

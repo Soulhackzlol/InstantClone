@@ -177,7 +177,7 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
 .ic-pill.bad{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 35%,transparent);
   background:color-mix(in oklch,var(--danger) 8%,var(--surface-3))}
 .ic-pill.bad .dot{background:var(--danger)}
-.ic-pill.live .dot{background:var(--live);animation:pulse-ring 1.8s var(--ease-out) infinite}
+.ic-pill.live .dot{background:var(--live);--sc:var(--live);--ring-time:1.8s}
 /* Header status pills: muted directional icon + bold label + a value that
    brightens when the pill is active, so "OBS Live" / "Egress 2/3 live"
    reads at a glance and a dead state stays visually quiet. */
@@ -201,11 +201,14 @@ h1,h2,h3,.tab-title,.st-head-title,.wiz-step-t{text-wrap:balance}
   animation:pillIn .22s var(--ease-out)}
 @keyframes pillIn{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:none}}
 #hdr-update,#hdr-whats-new{text-decoration:none}
-@keyframes pulse-ring{
-  0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 60%,transparent)}
-  70%{box-shadow:0 0 0 8px color-mix(in oklch,var(--live) 0%,transparent)}
-  100%{box-shadow:0 0 0 0 color-mix(in oklch,var(--live) 0%,transparent)}
-}
+/* A pulsing dot: a ring on its own layer that grows and fades. Transform and
+   opacity run on the compositor; animating box-shadow, as this did, redrew on
+   the main thread at every frame for as long as the stream was live. */
+.ic-pill.live .dot,.state-pill .state-dot.pulse,.dcard-status.s-live .d-dot,.dcard-status.s-wait .d-dot,.hold-banner .hold-dot{position:relative}
+.ic-pill.live .dot::after,.state-pill .state-dot.pulse::after,.dcard-status.s-live .d-dot::after,.dcard-status.s-wait .d-dot::after,.hold-banner .hold-dot::after{
+  content:"";position:absolute;inset:0;border-radius:50%;background:var(--sc);pointer-events:none;
+  animation:dot-ring var(--ring-time,1.6s) var(--ease-out) infinite}
+@keyframes dot-ring{0%{opacity:.6;transform:scale(1)}70%,100%{opacity:0;transform:scale(var(--ring-scale,3.3))}}
 
 /* - Card / labels / buttons / inputs (atoms) ------─ */
 .ic-card{background:linear-gradient(180deg,var(--surface-2),var(--surface));
@@ -994,12 +997,6 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
 .state-desc:empty{display:none}
 .state-pill .state-dot{width:7px;height:7px;border-radius:999px;background:var(--sc,var(--idle));
   transition:background .8s var(--ease-out)}
-.state-pill .state-dot.pulse{animation:hpulse 1.6s cubic-bezier(.2,.7,.2,1) infinite}
-@keyframes hpulse{
-  0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--sc) 60%,transparent)}
-  70%{box-shadow:0 0 0 8px color-mix(in oklch,var(--sc) 0%,transparent)}
-  100%{box-shadow:0 0 0 0 color-mix(in oklch,var(--sc) 0%,transparent)}
-}
 
 .hero-delay-row{display:flex;align-items:baseline;gap:4px;line-height:.9;margin-top:-4px}
 .hero-delay-num{font-size:var(--hero-fit,116px);font-weight:500;letter-spacing:-.045em;color:var(--fg);
@@ -1131,7 +1128,9 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
 .cp-cta::before{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;
   background:linear-gradient(180deg,rgba(255,255,255,.16),transparent 70%);transition:opacity .25s var(--ease-out)}
 .cp-cta.ic-btn-primary::before{opacity:1}
-.cp-cta-pulse{animation:cta-pulse 1.8s var(--ease-out) infinite}
+/* Clipped by its own overflow, this glow can't be a separate layer: 20 steps a
+   second is all its 10 px of growth can show, instead of a redraw every frame. */
+.cp-cta-pulse{animation:cta-pulse 1.8s steps(18) infinite}
 /* Waiting on OBS: a slow sweep and breathing dots say it's listening. */
 .cp-cta-waiting::after{content:'';position:absolute;inset:0;pointer-events:none;transform:translateX(-100%);
   background:linear-gradient(100deg,transparent 35%,rgba(255,255,255,.07) 50%,transparent 65%);
@@ -1168,7 +1167,7 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
 .cp-cutafter.pending{color:var(--accent);
   border-color:color-mix(in oklch,var(--accent) 55%,transparent);
   background:color-mix(in oklch,var(--accent) 10%,var(--surface-3));
-  animation:cta-pulse 1.8s var(--ease-out) infinite}
+  animation:cta-pulse 1.8s steps(18) infinite}
 .cutafter-card{position:absolute;bottom:calc(100% + 10px);right:0;z-index:30;
   width:min(300px,78vw);
   display:flex;flex-direction:column;gap:7px;padding:12px 14px;border-radius:12px;
@@ -1502,8 +1501,7 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
 .dcard-status.s-ready .d-dot{background:var(--accent)}
 .dcard-status.s-live{color:var(--live);border-color:color-mix(in oklch,var(--live) 30%,var(--line));
   background:color-mix(in oklch,var(--live) 8%,var(--surface-3))}
-.dcard-status.s-live .d-dot{background:var(--live);box-shadow:0 0 6px var(--live);
-  animation:hpulse 1.6s infinite;--sc:var(--live)}
+.dcard-status.s-live .d-dot{background:var(--live);box-shadow:0 0 6px var(--live);--sc:var(--live);--ring-scale:4.2}
 /* Vertical destination waiting on OBS's 9:16 canvas: it deliberately
    sends no video until the canvas arrives. Amber + a slow pulse so it
    reads as "attention" not "error". */
@@ -1513,14 +1511,14 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
   border-radius:10px;border:1px solid color-mix(in oklch,var(--warn,#d6a23a) 55%,var(--line));
   background:color-mix(in oklch,var(--warn,#d6a23a) 8%,var(--bg-2))}
 .hold-banner .hold-dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--warn,#d6a23a);
-  box-shadow:0 0 8px var(--warn,#d6a23a);animation:hpulse 2.4s infinite;--sc:var(--warn,#d6a23a)}
+  box-shadow:0 0 8px var(--warn,#d6a23a);--sc:var(--warn,#d6a23a);--ring-time:2.4s;--ring-scale:2.8}
 .hold-copy{flex:1;min-width:220px;display:grid;gap:2px}
 .hold-copy span{color:var(--fg-3);font-size:12px;font-variant-numeric:tabular-nums}
 .hold-banner .ic-btn{flex:0 0 auto;padding:8px 14px}
 .dcard-status.s-wait{color:var(--warn,#d6a23a);border-color:color-mix(in oklch,var(--warn,#d6a23a) 32%,var(--line));
   background:color-mix(in oklch,var(--warn,#d6a23a) 9%,var(--surface-3))}
 .dcard-status.s-wait .d-dot{background:var(--warn,#d6a23a);box-shadow:0 0 6px var(--warn,#d6a23a);
-  animation:hpulse 2.4s infinite;--sc:var(--warn,#d6a23a)}
+  --sc:var(--warn,#d6a23a);--ring-time:2.4s;--ring-scale:4.2}
 /* Orientation indicator: small glyph in the head; hover/focus shows the
    full format and, for vertical, what it needs, via the native tooltip. */
 .dcard-format{display:inline-flex;align-items:center;justify-content:center;
@@ -5071,7 +5069,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <details class="ic-disclose" data-app-only="streamlabs" hidden>
         <summary>How to set it up in Streamlabs</summary>
         <div class="ic-disclose-body">
-          <p>Streamlabs has it built in: <b>Settings &rarr; Output</b>, turn on <b>Twitch VOD Track</b> (under <b>Streaming</b> in Advanced mode) and pick the audio track without the music. It comes through InstantClone as it is.</p>
+          <p>Streamlabs has it built in: <b>Settings &rarr; Output</b>, turn on <b>Twitch VOD Track</b> (under <b translate="no">Streaming</b> in Advanced mode) and pick the audio track without the music. It comes through InstantClone as it is.</p>
         </div>
       </details>
     </div>
@@ -5304,7 +5302,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <div class="dest-vod-title">Twitch VOD audio</div>
       <div class="muted dest-vod-desc">A second audio track saved only to your Twitch <b>VOD</b>: keep copyrighted music in the live stream but out of the recording.<span id="dest-vod-obs-desc"> OBS locks its built-in VOD Track to the service literally named "Twitch", so on the <b>InstantClone</b> service you unlock it with a tiny optional script.</span></div>
       <!-- Streamlabs connected: its own VOD Track comes through as it is. -->
-      <div class="muted dest-vod-desc" id="dest-vod-streamlabs" hidden style="margin-top:8px">With <b>Streamlabs</b>, nothing to install: in Streamlabs, <b>Settings &rarr; Output</b>, turn on <b>Twitch VOD Track</b> (under <b>Streaming</b> in Advanced mode) and pick the audio track without the music.</div>
+      <div class="muted dest-vod-desc" id="dest-vod-streamlabs" hidden style="margin-top:8px">With <b>Streamlabs</b>, nothing to install: in Streamlabs, <b>Settings &rarr; Output</b>, turn on <b>Twitch VOD Track</b> (under <b translate="no">Streaming</b> in Advanced mode) and pick the audio track without the music.</div>
 
       <!-- Recommended path: the VOD unlocker script. Required on OBS 32.2+. -->
       <div id="dest-vod-script" style="margin-top:12px">
@@ -8137,6 +8135,11 @@ function renderStats(s){
   if (rateHistory.length > HISTORY_LEN) rateHistory.shift();
   cpuHistory.push(s.cpu_pct || 0);
   if (cpuHistory.length > HISTORY_LEN) cpuHistory.shift();
+  // The counters tween at every frame: only while someone can see them.
+  const pane = document.querySelector('.tab-pane[data-pane="stats"]');
+  if (pane && !pane.hidden) paintStats(s);
+}
+function paintStats(s){
   // Bitrate in: count up, auto kbps -> Mbps so a live stream reads "6.20
   // Mbps" instead of "6200 kbps".
   const rkbps = s.stats.bitrate_kbps || 0;
@@ -8967,6 +8970,9 @@ async function loadProfiles(){
 // The profile being edited in place: its saved name, and what was typed
 // so far (kept, so a redraw mid-edit doesn't lose it).
 let profileEdit = null;
+// The starting profiles have Spanish; a name someone typed stays as typed.
+const STARTING_PROFILES = new Set(['Quick', 'Standard', 'Tournament', 'Long']);
+const profileShownName = name => (STARTING_PROFILES.has(name) ? tr(name) : name);
 function renderProfilesPane(){
   const c = $('profile-list');
   const cap = currentBufferCapMs();
@@ -8978,6 +8984,8 @@ function renderProfilesPane(){
     (profiles || []).map(p => (cap > 0 && p.delay_ms > cap) ? requiredMBForMs(p.delay_ms) : 0), profileEdit && profileEdit.name]);
   if (c._sig === sig) return;
   c._sig = sig;
+  // Deleted or renamed from another window: there's nothing left to edit.
+  if (profileEdit && !(profiles || []).some(p => p.name === profileEdit.name)) profileEdit = null;
   // Typing in the row being edited goes on in the same field after a redraw.
   const typing = c.contains(document.activeElement) ? document.activeElement.dataset.f : null;
   c.innerHTML = '';
@@ -8992,8 +9000,8 @@ function renderProfilesPane(){
     const tooBig = cap > 0 && p.delay_ms > cap;
     const b = document.createElement('button');
     b.className = 'profile-row' + (isCur ? ' current' : '') + (tooBig ? ' too-big' : '');
-    b.innerHTML = `<span class="profile-bolt">⚡</span><span class="profile-name"></span><span class="profile-secs mono"></span>`;
-    b.querySelector('.profile-name').textContent = p.name;
+    b.innerHTML = `<span class="profile-bolt">⚡</span><span class="profile-name" translate="no"></span><span class="profile-secs mono"></span>`;
+    b.querySelector('.profile-name').textContent = profileShownName(p.name);
     b.querySelector('.profile-secs').textContent = fmtDelay(p.delay_ms);
     if (isCur){
       const tag = document.createElement('span'); tag.className = 'profile-tag'; tag.textContent = ds;
@@ -9163,10 +9171,18 @@ function paintFavicon(color){
   link.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
   $('favicon').replaceWith(link);
 }
+// The language changed in another window: this one follows, unless it holds
+// settings not saved yet. The wizard's own pick reloads by itself (welPick).
+function followLanguage(was, c){
+  if (was === undefined || was === c.ui_language || !$('wizard').hidden || _savingSettings || settingsDirty()) return;
+  if (languageOf(c.ui_language || 'auto') !== document.documentElement.lang) reloadForLanguage();
+}
 async function loadConfig({resetSystem = false} = {}){
   try {
     const c = await (await fetch('/config')).json();
+    const languageWas = lastConfig ? lastConfig.ui_language : undefined;
     lastConfig = c;
+    followLanguage(languageWas, c);
     // First run: install the built-in presets as real overlays (once).
     // NOT gated on `configured` - building overlays doesn't need a streaming
     // destination, so someone who clicks "Not now - let me look around" gets
@@ -9530,9 +9546,12 @@ function reloadForLanguage(){
 }
 // The page is drawn again in its new language: show it. The wizard's step keeps
 // the mark until it moves on (renderWizStep), or its entrance would start now.
+// A draft nobody read (setup finished in another window meanwhile) goes too:
+// it can hold a stream key.
 function langReturnReady(){
   document.documentElement.classList.add('lang-ready');
   if ($('wizard').hidden) setTimeout(langReturnEnd, 320);
+  try { sessionStorage.removeItem(WIZ_DRAFT); } catch (_){}
 }
 function langReturnEnd(){
   const root = document.documentElement;
@@ -9553,7 +9572,7 @@ const WIZ_DRAFT = 'instantclone_wizard_draft';
 function saveWizDraft(){
   try {
     sessionStorage.setItem(WIZ_DRAFT, JSON.stringify({app: wizApp, platform: $('w-platform').value, key: $('w-key').value,
-      custom: $('w-custom').value, confirmed: wizObsConfirmed, visited: [...wizVisited]}));
+      custom: $('w-custom').value, confirmed: wizObsConfirmed, visited: [...wizVisited], keyboard: wizOnKeyboard}));
   } catch (_){}
 }
 function restoreWizDraft(){
@@ -9569,6 +9588,7 @@ function restoreWizDraft(){
   $('w-key').value = draft.key;
   $('w-custom').value = draft.custom;
   draft.visited.forEach(step => wizVisited.add(step));
+  wizOnKeyboard = draft.keyboard;
   if (draft.confirmed) wizObsAdvance('connect');
 }
 // Arrow keys walk a question's answers, as in any radio group, and Enter on
@@ -11450,8 +11470,8 @@ function renderWizStreamlabs(r){
   setText($('wiz-sl-status'), other ? slOtherCopyText(other) : '');
   const [title, lead] = WIZ_SL_COPY[state](r);
   setText($('wiz-sl-title'), title);
-  if (lead === null) $('wiz-sl-lead').innerHTML = wizSlConnectLead;
-  else setText($('wiz-sl-lead'), lead);
+  if (lead !== null) setText($('wiz-sl-lead'), lead);
+  else if ($('wiz-sl-lead').innerHTML !== wizSlConnectLead) $('wiz-sl-lead').innerHTML = wizSlConnectLead;
   syncWizNext();
 }
 // The connect pitch is in the page already; the other states say their own.
@@ -12174,7 +12194,7 @@ function applyLogFilters(){
   const known = [...select.options].map(o => o.value).filter(Boolean);
   const sources = [...seen].sort();
   if (sources.join('|') !== known.join('|')){
-    select.replaceChildren(new Option('All sources', ''), ...sources.map(name => new Option(name, name)));
+    select.replaceChildren(new Option('All sources', ''), ...sources.map(name => { const o = new Option(name, name); o.translate = false; return o; }));
     select.value = sources.includes(logView.source) ? logView.source : '';
   }
 }
@@ -13043,6 +13063,8 @@ function showTab(name){
   }
   if (name === 'obs') showObsTab();
   if (name === 'logs') pollLogs();
+  // Opening Stats: where the counters are now, with no count up to them.
+  if (name === 'stats' && lastState){ numState.clear(); paintStats(lastState); }
   if (window.Integrations){ if (name === 'integrations') Integrations.show(); else Integrations.hide(); }
   if (name === 'overlay') overlaySubShown(overlaySub());
   // The Studio modal lives on <body>, so close it when leaving the tab.
@@ -14180,6 +14202,9 @@ function openUpdateInAbout(){
 }
 
 (async function init(){
+  // The counters before anything is fetched: a change landing while the page
+  // loads moves one past this, and the first state frame fetches it again.
+  try { Live.revs = (await (await fetch('/state')).json()).rev || null; } catch(_){}
   try { platforms = await (await fetch('/platforms')).json(); } catch(_){ platforms = []; }
   fillWizardPlatforms();
   wireAllDisclosures();

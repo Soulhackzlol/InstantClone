@@ -294,13 +294,13 @@ fn ask_about_copy(exe: Option<&str>, proposed_port: Option<u16>) -> ConflictChoi
         flags,
     ) {
         IDYES => ConflictChoice::UseRunning(exe.and_then(dashboard_port_of)),
-        IDNO => confirm_second_copy(proposed_port),
+        IDNO => confirm_second_copy(exe, proposed_port),
         _ => ConflictChoice::Quit,
     }
 }
 
 #[cfg(windows)]
-fn confirm_second_copy(proposed_port: Option<u16>) -> ConflictChoice {
+fn confirm_second_copy(exe: Option<&str>, proposed_port: Option<u16>) -> ConflictChoice {
     let Some(port) = proposed_port else {
         return no_port_for_second_copy();
     };
@@ -319,7 +319,7 @@ fn confirm_second_copy(proposed_port: Option<u16>) -> ConflictChoice {
             SECOND_COPY_CONFIRMED.store(true, std::sync::atomic::Ordering::Relaxed);
             ConflictChoice::SwitchPort(port)
         }
-        _ => ConflictChoice::UseRunning(None),
+        _ => ConflictChoice::UseRunning(exe.and_then(dashboard_port_of)),
     }
 }
 

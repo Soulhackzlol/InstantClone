@@ -74,6 +74,24 @@ test('a language setting reads as the server would show it', () => {
   assert.equal(page.run(`languageOf('auto')`), 'en', 'English when the browser wants neither');
 });
 
+test('a language changed elsewhere reloads only an idle dashboard in another language', () => {
+  page.run(`var realReload = reloadForLanguage, realDirty = settingsDirty, reloads = 0; reloadForLanguage = () => { reloads++; }; settingsDirty = () => false;
+    document.documentElement.lang = 'en'; $('wizard').hidden = true`);
+  page.run(`followLanguage(undefined, {ui_language: 'es'})`);
+  assert.equal(page.run('reloads'), 0, 'the first load is what the server already chose');
+  page.run(`followLanguage('es', {ui_language: 'es'})`);
+  assert.equal(page.run('reloads'), 0, 'no change');
+  page.run(`followLanguage('auto', {ui_language: 'en'})`);
+  assert.equal(page.run('reloads'), 0, 'already showing it');
+  page.run(`settingsDirty = () => true; followLanguage('en', {ui_language: 'es'})`);
+  assert.equal(page.run('reloads'), 0, 'unsaved settings stay');
+  page.run(`settingsDirty = () => false; $('wizard').hidden = false; followLanguage('en', {ui_language: 'es'})`);
+  assert.equal(page.run('reloads'), 0, 'the wizard reloads by itself, with its draft');
+  page.run(`$('wizard').hidden = true; followLanguage('en', {ui_language: 'es'})`);
+  assert.equal(page.run('reloads'), 1);
+  page.run(`reloadForLanguage = realReload; settingsDirty = realDirty`);
+});
+
 test('the custom delay field follows a delay armed elsewhere', () => {
   page.run(`$('delay-input').value = ''`);
   page.run('followArmedDelay(8000)');

@@ -650,6 +650,8 @@ const Studio = (function(){
         const alerts = page==='alerts';
         tile.innerHTML=(alerts ? Integrations.designIcon(k.theme) : '<span class="ovg-tile-ic">'+stIcon(k.icon)+'</span>')+
           '<span class="ovg-tile-txt"><span class="ovg-tile-name"></span><span class="ovg-tile-path'+(alerts?'':' mono')+'"></span></span>';
+        // A name someone typed stays as typed; the ready-made alert designs have Spanish.
+        tile.querySelector('.ovg-tile-name').translate=alerts;
         tile.querySelector('.ovg-tile-name').textContent=o.name||o.slug;
         tile.querySelector('.ovg-tile-path').textContent=alerts ? designNote(o, k) : '/overlay/'+o.slug+'.html';
         tile.onclick=()=>{ gpicked=true; selectGallery(o.slug); };
@@ -716,6 +718,7 @@ const Studio = (function(){
       return;
     }
     const k=overlayLook(o);
+    $('ovg-name').translate=page==='alerts';
     $('ovg-name').textContent=o.name||o.slug;
     $('ovg-kind').textContent=k.label;
     $('ovg-ic').style.setProperty('--tc', k.color); $('ovg-ic').innerHTML=stIcon(k.icon);

@@ -716,8 +716,8 @@ function paintBar(ds) {
 function paintEgress() {
   const eg = $('w-eg'), o = cfg.w.egress, parts = [];
   if (s.ingest_alive && o.on) {
-    if (o.dests) parts.push(`<span>&#9650;</span><b>${s.destinations_alive || 0}/${s.destinations_total || 0}</b> live`);
-    if (o.bitrate) { const rate = fmtRate(s.stats && s.stats.bitrate_kbps); if (rate) parts.push(`<b>${rate}</b> in`); }
+    if (o.dests) parts.push(`<span>&#9650;</span><b>${s.destinations_alive || 0}/${s.destinations_total || 0}</b> live now`);
+    if (o.bitrate) { const rate = fmtRate(s.stats && s.stats.bitrate_kbps); if (rate) parts.push(`<b>${rate}</b> incoming`); }
     if (o.codec && s.video_codec) parts.push(`<b>${esc(s.video_codec)}</b>${s.multitrack_video ? ' &middot; MT' : ''}`);
   }
   setHidden(eg, !parts.length);
@@ -948,7 +948,7 @@ function renderDests() {
 }
 function destRow() {
   const row = document.createElement('div');
-  row.innerHTML = '<span class="d-mark"><span class="d-glyph"></span><span class="d-dot"></span></span><span class="d-name"></span><span class="d-plat"></span>';
+  row.innerHTML = '<span class="d-mark"><span class="d-glyph"></span><span class="d-dot"></span></span><span class="d-name" translate="no"></span><span class="d-plat"></span>';
   row._glyph = row.children[0].firstChild; row._name = row.children[1]; row._meta = row.children[2];
   row._sw = document.createElement('button');
   row._sw.setAttribute('role', 'switch');
@@ -989,7 +989,7 @@ function patchDestIcon(b, d) {
   const look = st === 'alive' ? ' alive' : st === 'wait' || st === 'held' ? ' wait' : '';
   setClass(b, 'dico ' + (d.enabled ? 'on' : 'off') + look + destColor(b, d));
   setMark(b, destPlatforms[d.id] || '', d.name || '');
-  setTitle(b, `${d.name || 'Destination'} · ${d.enabled ? 'on' : 'off'}`);
+  setTitle(b, d.enabled ? `${d.name || 'Destination'}: on` : `${d.name || 'Destination'}: off`);
   if (b.getAttribute('aria-label') !== b.title) b.setAttribute('aria-label', b.title);
 }
 function onDestIcon(b) {
@@ -1032,7 +1032,7 @@ async function commitDest(d, enabled) {
     body: `id=${encodeURIComponent(d.id)}&enabled=${enabled ? 'on' : 'off'}`,
   });
   if (!r.ok) toast(failText(r, enabled ? `Couldn't turn on ${d.name || 'it'}` : `Couldn't turn off ${d.name || 'it'}`), 'err');
-  else toast(`${d.name || 'Destination'} ${enabled ? 'on' : 'off'}`, 'ok');
+  else toast(enabled ? `${d.name || 'Destination'}: on` : `${d.name || 'Destination'}: off`, 'ok');
 }
 
 // --------------------------------------------------------- extra widgets ----
@@ -1041,6 +1041,8 @@ async function commitDest(d, enabled) {
 // the dashboard). Idle, a tap picks the delay (and arms it with "Apply on
 // tap"); armed or running, it moves to that delay the same way.
 let profileCache = [];
+// The starting profiles have Spanish; a name someone typed stays as typed.
+const STARTING_PROFILES = new Set(['Quick', 'Standard', 'Tournament', 'Long']);
 async function fetchProfiles() {
   const r = await fetchJ('/profiles');
   if (r.ok && Array.isArray(r.j)) { profileCache = r.j; renderProfiles(); }
@@ -1062,7 +1064,7 @@ function renderProfiles() {
   const ds = phaseNow(), target = s?.armed_delay_ms || 0;
   box.innerHTML = '';
   for (const p of profileCache) {
-    const ms = p.delay_ms || 0, name = p.name || fmtDelay(ms);
+    const ms = p.delay_ms || 0, name = STARTING_PROFILES.has(p.name) ? tr(p.name) : p.name || fmtDelay(ms);
     // Too big for the buffer at the current bitrate: greyed + disabled, with
     // a tooltip naming the size it needs. Same wall the arm path enforces.
     const tooBig = overCap(ms);
@@ -1073,8 +1075,8 @@ function renderProfiles() {
     b.title = tooBig ? capAdvice(ms) : profileTitle(name, ms, ds, isCur);
     if (isCur) b.setAttribute('aria-current', 'true');
     b.innerHTML = list
-      ? `<span>${esc(name)}</span><span class="pv">${fmtDelay(ms)}</span>`
-      : esc(name) + (cfg.w.profiles.value ? `<span class="pv">${fmtDelay(ms)}</span>` : '');
+      ? `<span translate="no">${esc(name)}</span><span class="pv">${fmtDelay(ms)}</span>`
+      : `<span translate="no">${esc(name)}</span>` + (cfg.w.profiles.value ? `<span class="pv">${fmtDelay(ms)}</span>` : '');
     b.onclick = () => profileSet(ms);
     box.appendChild(b);
   }
@@ -1101,7 +1103,7 @@ function renderStats() {
   const items = [];
   if (o.cpu) items.push([(s.cpu_pct || 0).toFixed(0) + '%', 'cpu']);
   if (o.mem) items.push([Math.round((s.rss_bytes || 0) / 1048576), 'MB']);
-  if (o.bitrate) { const rate = fmtRate(st.bitrate_kbps); if (rate) items.push([rate, 'in']); }
+  if (o.bitrate) { const rate = fmtRate(st.bitrate_kbps); if (rate) items.push([rate, 'incoming']); }
   if (o.recon) items.push([(st.egress_reconnects || 0) + (st.ingest_disconnects || 0), 'recon']);
   if (o.cuts) items.push([st.cuts || 0, 'cuts']);
   let html = items.map(([v, l]) => tiles
@@ -1151,7 +1153,7 @@ async function setServer(key, val, sw, label) {
     return;
   }
   if (r.j) srvCfg = { ...srvCfg, ...r.j };
-  toast(`${label} ${val ? 'on' : 'off'}`, 'ok');
+  toast(val ? `${label}: on` : `${label}: off`, 'ok');
 }
 function renderBehavior() {
   const box = $('w-behavior'); if (box.hidden) return;
@@ -1231,7 +1233,7 @@ function renderOverlayList() {
 function overlayGroup(text) { const h = document.createElement('div'); h.className = 'ogroup'; h.textContent = text; return h; }
 function overlayRow(o) {
   const row = document.createElement('div'); row.className = 'orow';
-  const nm = document.createElement('span'); nm.className = 'o-name'; nm.textContent = o.name || o.slug;
+  const nm = document.createElement('span'); nm.className = 'o-name'; nm.translate = false; nm.textContent = o.name || o.slug;
   if (o.studio && !cfg.w.overlays.group) { const tag = document.createElement('span'); tag.className = 'o-tag'; tag.textContent = 'studio'; nm.appendChild(tag); }
   const copy = document.createElement('button'); copy.className = 'minibtn'; copy.textContent = 'Copy URL';
   copy.title = 'Copy the browser-source URL'; copy.onclick = () => copyOverlay(o.slug);

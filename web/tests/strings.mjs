@@ -252,6 +252,16 @@ export function pageStrings() {
     const src = fs.readFileSync(path.join(REPO, file), 'utf8');
     for (const found of src.matchAll(pattern)) add(found[1].replace(/\\(.)/g, '$1'), file, true);
   }
+  for (const file of rustFiles()) {
+    const src = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('#[cfg(test)]')[0];
+    for (const pattern of RUST_MESSAGES) {
+      for (const found of src.matchAll(pattern)) add(rustText(found[1]), path.relative(REPO, file), true);
+    }
+  }
+  // The sign-in page is a page too, kept in the binary's source.
+  const login = /const LOGIN_HTML: &str = r##"([\s\S]*?)"##/.exec(fs.readFileSync(path.join(REPO, 'src/web.rs'), 'utf8').replace(/\r\n/g, '\n'))[1];
+  for (const found of login.matchAll(/'([A-Z][^'<>]*)'/g)) add(found[1], 'LOGIN_HTML', true);
+  for (const { word } of markupWords(visibleMarkup(login).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, blankOut))) add(word, 'LOGIN_HTML', true);
   return seen;
 }
 
@@ -263,25 +273,38 @@ const RUST_SHOWN = [
   ['src/instance_lock.rs', /\("([A-Z][a-z]+)", \[0x/g],
 ];
 
+/** What the app answers the pages in words: an error field, a refusal, a sentence. */
+const RUST_LITERAL = '"((?:[^"\\\\]|\\\\[\\s\\S])+)"';
+const RUST_MESSAGES = [
+  /"error":"((?:[^"\\]|\\.)+)"/g,
+  new RegExp(`(?:Err|errs\\.push)\\(\\s*(?:format!\\(\\s*)?${RUST_LITERAL}`, 'g'),
+  /"([A-Z][a-z']* (?:[^"\\\n]|\\[\s\S]){14,}[.?!])"/g,
+];
+
+/** A Rust string as it reads on screen: its escapes undone, "{}" for each value. */
+function rustText(literal) {
+  return normalize(literal.replace(/\\\n\s*/g, '').replace(/\\(.)/g, '$1')
+    .replace(/\{\{/g, '\u0001').replace(/\}\}/g, '\u0002').replace(/\{[^{}]*\}/g, '{}')
+    .replace(/\u0001/g, '{').replace(/\u0002/g, '}'));
+}
+
+function rustFiles(dir = path.join(REPO, 'src')) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) return rustFiles(full);
+    return entry.name.endsWith('.rs') ? [full] : [];
+  });
+}
+
 /** Strings in the Rust source, for keys the app's own messages need. */
 export function rustStrings() {
   const found = [];
-  const walk = dir => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.name.endsWith('.rs')) {
-        const src = fs.readFileSync(full, 'utf8').replace(/\r\n/g, '\n');
-        for (const m of src.matchAll(/r#"([\s\S]*?)"#|"((?:[^"\\]|\\[\s\S])*)"/g)) {
-          const text = (m[1] ?? m[2].replace(/\\\n\s*/g, '').replace(/\\(.)/g, '$1'))
-            .replace(/\{\{/g, '\u0001').replace(/\}\}/g, '\u0002').replace(/\{[^{}]*\}/g, '{}')
-            .replace(/\u0001/g, '{').replace(/\u0002/g, '}');
-          found.push(normalize(text));
-        }
-      }
+  for (const file of rustFiles()) {
+    const src = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+    for (const m of src.matchAll(/r##"([\s\S]*?)"##|r#"([\s\S]*?)"#|"((?:[^"\\]|\\[\s\S])*)"/g)) {
+      found.push(rustText(m[1] ?? m[2] ?? m[3]));
     }
-  };
-  walk(path.join(REPO, 'src'));
+  }
   return found;
 }
 

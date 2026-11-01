@@ -2270,7 +2270,7 @@ function needsTwitch(i){
 // streaming PC itself may set them up: anyone on the network could reach
 // the dashboard from another device and run anything from chat.
 const LOCAL_KINDS = ['program', 'file'];
-const LOCAL_LOCK_TEXT = 'Running programs and writing files needs a dashboard password while the dashboard is open to your network (System › Security). Anyone on your network could use them otherwise.';
+const LOCAL_LOCK_TEXT = 'Running programs and writing files needs a dashboard password while the dashboard is open to your network (System › Access). Anyone on your network could use them otherwise.';
 function localLocked(){ return !!S.data && S.data.local_steps === false; }
 function runsLocally(i){ return allSteps(i).some(s => LOCAL_KINDS.includes(s.type)); }
 
@@ -2407,7 +2407,7 @@ function noticesHtml(failing){
     const rec = (d.activity || []).find(r => r.integration_id === i.id && r.status === 'failed');
     const step = rec && rec.steps.find(s => s.status === 'failed');
     out.push(`<div class="lan-warn ig-notice" data-key="n-${esc(i.id)}"><span class="lw-ic">⚠</span>
-      <span class="ig-notice-text"><b>${esc(i.name)}</b> ${step ? 'failed: ' + esc(step.detail) : 'is failing'}. Nothing else is affected.</span>
+      <span class="ig-notice-text"><b translate="no">${esc(i.name)}</b> ${step ? 'failed: ' + esc(step.detail) : 'is failing'}. Nothing else is affected.</span>
       <button class="ic-btn ic-btn-ghost ig-small" data-act="edit" data-id="${esc(i.id)}">Fix</button></div>`);
   });
   return out.join('');
@@ -2653,7 +2653,7 @@ function activityHtml(){
     const open = S.actOpen === key;
     return `<div class="ig-act-item${open ? ' open' : ''}" data-key="a-${esc(key)}" data-autoh>
       <div class="ig-act-row link" data-act="act-row" data-k="${esc(key)}" role="button" tabindex="0" aria-expanded="${open}"><span class="t">${esc(fmtClock(r.at_ms))}</span>
-      <span class="n">${esc(r.name)}${r.test ? ' <span class="muted">(test)</span>' : ''}</span>
+      <span class="n"><span translate="no">${esc(r.name)}</span>${r.test ? ' <span class="muted">(test)</span>' : ''}</span>
       <span class="d">${esc(r.trigger)} → ${esc(detail)}</span><span class="s ${esc(r.status)}">${esc(r.status === 'cooldown' ? 'skipped' : r.status)}</span>${svg('chev', ' class="c"')}</div>
       ${open ? `<div class="ig-act-more">${runPanelHtml(r, true)}</div>` : ''}</div>`;
   }).join('') : '<div class="ig-act-empty" data-key="a-none">Runs show up here, with every step and what it answered.</div>';
@@ -4362,7 +4362,7 @@ function commandClash(d){
 }
 function commandClashHtml(d){
   const c = commandClash(d);
-  return c ? warnHtml(`<b>${esc(c.name)}</b> already answers ${esc(c.word)}. This one stays off until you pick another command or switch that one off.`) : '';
+  return c ? warnHtml(`<b translate="no">${esc(c.name)}</b> already answers ${esc(c.word)}. This one stays off until you pick another command or switch that one off.`) : '';
 }
 
 // What a moment still misses before it can run, or ''.
@@ -4470,7 +4470,7 @@ function lightPickerHtml(p){
   const list = LightScan.devices;
   const found = !list ? '' : list.length ? `<div class="ig-light-list">${list.map(x => `<div class="ig-light-row${x.ref === ref ? ' on' : ''}">
         <span class="ig-bulb" style="--bulb:${x.plug ? 'transparent' : '#fde68a'}">${svg(x.plug ? 'bolt' : 'bulb')}</span>
-        <span class="ig-light-id"><b>${esc(x.name)}</b><small>${esc(x.brand)}${x.plug ? ' plug' : ''} · ${esc(x.address)}</small></span>
+        <span class="ig-light-id"><b translate="no">${esc(x.name)}</b><small>${esc(x.brand)}${x.plug ? ' plug' : ''} · ${esc(x.address)}</small></span>
         <button class="ic-btn ic-btn-ghost ig-small" data-act="light-try" data-ref="${esc(x.ref)}" data-color="${esc(p.color || '')}" title="Flash it, to see which one it is">Flash</button>
         <button class="ic-btn ${x.ref === ref ? 'ic-btn-ghost' : 'ic-btn-primary'} ig-small" data-act="light-use" data-ref="${esc(x.ref)}" data-name="${esc(x.name)}" data-plug="${x.plug ? 'yes' : ''}" ${x.ref === ref ? 'disabled' : ''}>${x.ref === ref ? 'In use' : 'Use'}</button></div>`).join('')}</div>`
     : '<div class="muted">Nothing found on this network.</div>';
@@ -5863,7 +5863,7 @@ const Builder = {
       `<button class="sub-tab${(id === 'any') === any ? ' on' : ''}" data-act="b-cond-match" data-v="${id}" aria-pressed="${(id === 'any') === any}">${label}</button>`).join('')}${SEG_IND}</div></div>`;
     return `<div class="dff"><label>${rows.length > 1 ? 'Checks' : 'Check'}</label><div class="ig-conds">${rows.map(row).join('')}</div>
       ${rows.length < MAX_CONDITIONS ? `<button type="button" class="ig-cond-add" data-act="b-cond-add">${svg('plus')}Add a check</button>` : ''}</div>${match}`
-      + note('Text compares ignoring case; "is more than" compares numbers. Click a value below to put it in the field you last clicked.');
+      + note('Text compares ignoring case; "is more than" compares numbers.');
   },
   // Pick names from OBS's own list: a find box over it, one line each.
   // A typed name is kept too, as OBS may be closed or the source not made
@@ -5909,7 +5909,7 @@ const Builder = {
       if (picked.length) body += named('scene', 'Showing in the scene (none: the one on air)', 'Find or type a scene', scenes);
       const n = esc(answerName(s)), v = f => `<span class="mono">{${n}.${f}}</span>`;
       body += field('save_as', 'Keep the answer as', {mono:true, fixed:true, ph:'obs'})
-        + note(`Later steps find it under "Values it can use" as ${v('scene')}, ${v('streaming')}, ${v('recording')}${!picked.length ? ''
+        + note(`Later steps can use it as ${v('scene')}, ${v('streaming')}, ${v('recording')}${!picked.length ? ''
           : `, ${v('muted')} and ${v('visible')}${picked.length > 1 ? ' (yes when all of them are), and each source\'s own' : ''}`}. Each check keeps its own name.`);
     }
     else if (need === 'filter'){
@@ -7557,7 +7557,7 @@ function recipeItemHtml(it, n){
       <button class="ic-btn ic-btn-ghost ig-small" data-act="copy" data-text="${esc(json)}">${svg('copy', ' class="ig-btn-ic"')}Copy</button></div>
     <pre class="ig-rraw">${jsonColored(json)}</pre></div>`;
   return `<div class="ig-ritem ${level}" style="--i:${n}">
-    <b class="ig-rname">${esc(it.name)}</b>
+    <b class="ig-rname" translate="no">${esc(it.name)}</b>
     <div class="ig-rwhen">When ${who || 'nothing'}</div>
     ${flags ? `<div class="ig-rflags">${flags}</div>` : ''}
     ${handlers.length ? `<div class="ig-rfolds">${recipeFold(`steps-${n}`, 'steps', `See every step <span class="ig-rcount">${count}</span>`, steps)}
@@ -7839,7 +7839,7 @@ const Recipes = {
         <textarea class="ic-input ig-textarea-code" data-bind="r-text" placeholder="ic-recipe:1:…" spellcheck="false">${esc(this.text)}</textarea>
         ${p ? `<div class="ig-recipe" data-key="r-${esc(p.name)}">
           <div class="sys-section ig-recipe-list">
-            <div class="ig-recipe-head"><span class="ig-ok">${svg('check')}</span><b>${esc(p.name)}</b><span class="muted">${plural(p.items.length, 'integration')}</span></div>
+            <div class="ig-recipe-head"><span class="ig-ok">${svg('check')}</span><b translate="no">${esc(p.name)}</b><span class="muted">${plural(p.items.length, 'integration')}</span></div>
             ${p.items.map((it, n) => recipeItemHtml(it, n)).join('')}
           </div>
           ${recipeWarningHtml(p)}
@@ -7864,7 +7864,7 @@ const Recipes = {
   // while this alerts page still has the plain default one.
   alertsHtml(p){
     const al = p.alerts, own = THEMES[themeOf(al.look)];
-    const names = list => list.map(m => `<b>${esc(m.name)}</b>`).join(', ');
+    const names = list => list.map(m => `<b translate="no">${esc(m.name)}</b>`).join(', ');
     return `<div class="sys-section ig-recipe-alerts" data-key="r-alerts">
       <div class="ic-label">Their alerts look</div>
       <div class="ig-stage ig-stage-short"><iframe class="ig-stage-frame" src="/alerts?demo" title="Their alerts look" tabindex="-1" aria-hidden="true"></iframe></div>
@@ -8250,7 +8250,7 @@ const Stage = {
          <span class="og-tbar"><i style="transform:translateX(${(goalShare(x) * 100 - 100).toFixed(2)}%)"></i></span>`
       : `<span class="ovg-tile-path"><b class="og-clock ig-num" data-id="${esc(x.id)}">${clockText(timerLeft(x))}</b> · ${this.timerWord(x)[1]}</span>`;
     return `<button class="ovg-tile${on ? ' sel' : ''}" data-key="tile-${what}-${esc(x.id)}" data-act="tr-pick" data-what="${what}" data-id="${esc(x.id)}" style="--tc:${look.color}">
-      <span class="ovg-tile-ic">${svg(look.icon)}</span><span class="ovg-tile-txt"><span class="ovg-tile-name">${esc(x.name)}</span>${meta}</span></button>`;
+      <span class="ovg-tile-ic">${svg(look.icon)}</span><span class="ovg-tile-txt"><span class="ovg-tile-name" translate="no">${esc(x.name)}</span>${meta}</span></button>`;
   },
   // Its own overlay as viewers see it (it reads the real numbers), or what
   // putting it on stream will make.

@@ -33,20 +33,50 @@
   /** Lookups remembered, misses too; emptied when it grows past this. */
   const CACHE_MAX = 5000;
   const cache = new Map();
+  /** The translations handed out, which read as themselves. */
+  const written = new Set();
 
   // Keys with values in them, as patterns, the most fixed text first: "Add
-  // {} to the goal {}" before "Add {}", which would also match. Each keeps
-  // its longest fixed piece, so most texts are ruled out with one `includes`.
+  // {} to the goal {}" before "Add {}", which would also match.
   const patterns = Object.keys(strings).filter(key => key.includes('{}')).map(key => {
     const pieces = key.split('{}');
-    const escaped = pieces.map(piece => piece.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     return {
       fixed: pieces.join('').length,
-      longest: pieces.reduce((a, b) => (b.length > a.length ? b : a), ''),
-      match: new RegExp('^' + escaped.join(VALUE) + '$'),
+      pieces,
       to: strings[key],
     };
   }).sort((a, b) => b.fixed - a.fixed);
+  patterns.forEach((pattern, order) => { pattern.order = order; });
+
+  // A pattern matches a whole text, so its first or last piece must be where
+  // the text starts or ends: filed under those letters, a lookup tries a
+  // handful of patterns instead of all of them.
+  const EDGE = 2;
+  const byStart = new Map(), byEnd = new Map(), anywhere = [];
+  const file = (index, edge, pattern) => {
+    const list = index.get(edge);
+    if (list) list.push(pattern);
+    else index.set(edge, [pattern]);
+  };
+  for (const pattern of patterns) {
+    const first = pattern.pieces[0], last = pattern.pieces[pattern.pieces.length - 1];
+    if (first.length >= EDGE) file(byStart, first.slice(0, EDGE), pattern);
+    else if (last.length >= EDGE) file(byEnd, last.slice(-EDGE), pattern);
+    else anywhere.push(pattern);
+  }
+  const NONE = [];
+  function candidates(text) {
+    return [...(byStart.get(text.slice(0, EDGE)) || NONE), ...(byEnd.get(text.slice(-EDGE)) || NONE), ...anywhere]
+      .sort((a, b) => a.order - b.order);
+  }
+  /** Built when first needed: most patterns are never tried in a session. */
+  function matcher(pattern) {
+    if (!pattern.match) {
+      const escaped = pattern.pieces.map(piece => piece.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      pattern.match = new RegExp('^' + escaped.join(VALUE) + '$');
+    }
+    return pattern.match;
+  }
 
   function fill(to, values) {
     let next = 0;
@@ -58,17 +88,26 @@
 
   /** A value lowered to sit mid-sentence ("When someone follows") reads its capitalized key. */
   function lookupValue(value) {
-    const said = lookupWhole(value);
+    const said = readValue(value);
     if (said !== null || !/^[a-z]/.test(value)) return said;
-    const capital = lookupWhole(value[0].toUpperCase() + value.slice(1));
+    const capital = readValue(value[0].toUpperCase() + value.slice(1));
     return capital === null ? null : capital[0].toLowerCase() + capital.slice(1);
+  }
+
+  // A value is often a name someone typed ("Stream to My server on"), which a
+  // short pattern would mangle. Those read only a count ("3 min ago"); a
+  // pattern with this much fixed text is really that message.
+  const VALUE_MIN_FIXED = 12;
+  function readValue(value) {
+    if (strings[value] !== undefined) return strings[value];
+    const found = bestPattern(value);
+    return found && (found.fixed >= VALUE_MIN_FIXED || /^\W*\d/.test(value)) ? found.said : null;
   }
 
   /** The most specific pattern that reads `text`: {said, fixed}, or null. */
   function bestPattern(text) {
-    for (const pattern of patterns) {
-      if (!text.includes(pattern.longest)) continue;
-      const found = pattern.match.exec(text);
+    for (const pattern of candidates(text)) {
+      const found = matcher(pattern).exec(text);
       if (found) return { said: fill(pattern.to, found.slice(1)), fixed: pattern.fixed };
     }
     return null;
@@ -123,14 +162,21 @@
   function tr(text, where) {
     if (typeof text !== 'string' || !LETTER.test(text)) return text;
     if (where && where.closest && where.closest(SKIP)) return text;
+    // Writing a translation wakes the observer: what it wrote isn't read
+    // again, or a short pattern could bite ("Emitir a My server on").
+    if (written.has(text)) return text;
     let said = cache.get(text);
     if (said === undefined) {
       const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text);
       // A line break inside (a confirm's paragraphs) splits the lookup.
       const lines = core.split(/(\n\s*\n)/);
       said = lead + lines.map((line, i) => (i % 2 ? line : lookup(line.replace(/\s+/g, ' ')) ?? line)).join('') + trail;
-      if (cache.size >= CACHE_MAX) cache.clear();
+      if (cache.size >= CACHE_MAX) {
+        cache.clear();
+        written.clear();
+      }
       cache.set(text, said);
+      if (said !== text) written.add(said);
     }
     return said;
   }
