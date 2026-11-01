@@ -585,21 +585,49 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
    so it grows to 4 segments the moment Twitch is chosen. Each segment
    carries a fill layer (::after) that sweeps left-to-right, so advancing
    a step reads as the bar filling forward rather than a colour snap. */
-.wiz-progress{display:flex;margin-top:14px}
+.wiz-progress{display:flex;margin-top:6px;margin-bottom:-8px}
 /* Every possible step has a permanent segment; the optional Twitch one
    collapses (flex-grow + its own gap animate to 0) instead of being ripped
    from the DOM, so switching platform slides the bar between 3 and 4
    segments smoothly. Spacing is an adjacent-sibling margin, not flex gap,
-   so a collapsed segment leaves no orphan gap. */
-.wiz-seg{position:relative;height:4px;flex:1 1 0;min-width:0;border-radius:2px;background:var(--line);
-  overflow:hidden;transition:flex-grow .35s var(--ease-out),opacity .3s var(--ease-out),
-    margin-left .35s var(--ease-out)}
+   so a collapsed segment leaves no orphan gap. Each is a button to its step:
+   a tall target around a thin line, its name on hover. */
+.wiz-seg{appearance:none;position:relative;height:20px;flex:1 1 0;min-width:0;padding:0;border:0;background:none;font:inherit;cursor:pointer;
+  transition:flex-grow .35s var(--ease-out),opacity .3s var(--ease-out),margin-left .35s var(--ease-out)}
 .wiz-seg + .wiz-seg{margin-left:6px}
-.wiz-seg.collapsed{flex-grow:0;opacity:0;margin-left:0;pointer-events:none}
-.wiz-seg::after{content:"";position:absolute;inset:0;border-radius:2px;background:var(--accent);
-  transform:scaleX(0);transform-origin:left;transition:transform .4s var(--ease-out),background .3s var(--ease-out)}
+.wiz-seg.collapsed{flex-grow:0;opacity:0;margin-left:0;pointer-events:none;visibility:hidden}
+.wiz-seg::before,.wiz-seg::after{content:"";position:absolute;inset:8px 0;border-radius:2px;transition:inset .16s var(--ease-out)}
+.wiz-seg::before{background:var(--line)}
+.wiz-seg::after{background:var(--accent);transform:scaleX(0);transform-origin:left;
+  transition:transform .4s var(--ease-out),background .3s var(--ease-out),inset .16s var(--ease-out)}
+.wiz-seg:hover::before,.wiz-seg:hover::after,.wiz-seg:focus-visible::before,.wiz-seg:focus-visible::after{inset:7px 0}
+.wiz-seg:focus-visible{outline:none}
+.wiz-seg:focus-visible::before{box-shadow:0 0 0 2px var(--accent)}
 .wiz-seg.done::after{transform:scaleX(1);background:color-mix(in oklch,var(--accent) 50%,var(--line))}
 .wiz-seg.on::after{transform:scaleX(1)}
+.wiz-seg-tip{position:absolute;z-index:2;top:21px;left:50%;padding:4px 9px;border-radius:7px;white-space:nowrap;font-size:11.5px;color:var(--fg);
+  background:var(--surface-3);border:1px solid var(--line-2);box-shadow:0 8px 20px -10px #000;pointer-events:none;
+  opacity:0;transform:translate(-50%,-3px);transition:opacity .12s var(--ease-out),transform .16s var(--ease-out)}
+.wiz-seg:first-child .wiz-seg-tip{left:0;transform:translate(0,-3px)}
+.wiz-seg:hover .wiz-seg-tip,.wiz-seg:focus-visible .wiz-seg-tip{opacity:1;transform:translate(-50%,0)}
+.wiz-seg:first-child:hover .wiz-seg-tip,.wiz-seg:first-child:focus-visible .wiz-seg-tip{transform:none}
+@media (hover:none){.wiz-seg-tip{display:none}}
+/* No OBS found: what to do about it, in place of a list with nothing to tick. */
+.obs-none{display:flex;flex-direction:column;align-items:center;text-align:center;padding:12px 0 4px}
+.obs-none[hidden]{display:none}
+.obs-none-mark{position:relative;display:grid;place-items:center;width:58px;height:58px;margin:10px 0 18px;border-radius:17px;color:var(--fg-2);
+  background:var(--surface-2);border:1px solid var(--line-2);animation:welMark .55s var(--ease-spring) backwards}
+.obs-none-mark svg{width:30px;height:30px}
+.obs-none-mark i{position:absolute;inset:-1px;border-radius:17px;border:1px solid color-mix(in oklch,var(--accent) 70%,transparent);opacity:0;animation:obsLook 2.6s var(--ease-out) .4s infinite}
+.obs-none-mark i+i{animation-delay:1.7s}
+@keyframes obsLook{0%{opacity:.75;transform:scale(1)}80%,100%{opacity:0;transform:scale(1.55)}}
+.obs-none-t{font-size:15px;font-weight:600;letter-spacing:-.01em;animation:welRise .4s var(--ease-out) .08s backwards}
+.obs-none-s{max-width:400px;margin:5px 0 15px;font-size:12.5px;line-height:1.5;color:var(--fg-3);animation:welRise .4s var(--ease-out) .14s backwards}
+.obs-none .ic-btn{animation:welRise .4s var(--ease-out) .2s backwards}
+.obs-inst-foot.none{justify-content:center;margin-top:4px}
+.wizard-obs-card.no-obs{margin-top:10px}
+.wizard-obs-card.no-obs>.wizard-obs-title,.wizard-obs-card.no-obs>.wizard-obs-body,.wizard-obs-card.no-obs>.wizard-obs-after,.wizard-obs-card.no-obs>.ic-disclose{display:none}
+@media (prefers-reduced-motion:reduce){.obs-none-mark,.obs-none-mark i,.obs-none-t,.obs-none-s,.obs-none .ic-btn{animation:none}}
 /* Reassurance note under the platform tiles. */
 /* One callout system for the whole wizard: a left icon square + text with
    consistent padding / radius / type, differing only by intent colour:
@@ -1820,8 +1848,6 @@ input[type="checkbox"]:disabled{opacity:.45;cursor:default}
 .obs-inst-name{font-size:13px;font-weight:600;color:var(--fg)}
 .obs-inst-path{font-size:11px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .obs-inst .obs-reg-pill{flex:none}
-.obs-inst-empty{margin-top:10px;font-size:12.5px;line-height:1.5;color:var(--fg-3)}
-.obs-inst-empty[hidden]{display:none}
 .obs-inst-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px}
 .obs-inst-btns{display:flex;gap:8px;margin-left:auto}
 .obs-inst-btns [hidden]{display:none}
@@ -4702,11 +4728,11 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   <div class="wiz-head">
     <h2 id="wiz-title">Welcome to InstantClone</h2>
     <p class="lead" id="wiz-lead">A few quick questions and you're live.</p>
-    <div class="wiz-progress" id="wiz-progress" aria-hidden="true"></div>
+    <nav class="wiz-progress" id="wiz-progress" aria-label="Setup steps"></nav>
   </div>
 
   <!-- The welcome: the language, then one choice per screen. A choice saves as
-       it is picked (welPick); the screens' Next and Back are the wizard's. -->
+       it is picked (welPick) and stays put; Next and Back are the wizard's. -->
   <div class="wiz-step wel-hero" data-wstep="welcome">
     <div class="wel-aurora" aria-hidden="true"><i></i><i></i><i></i></div>
     <svg class="wel-mark" viewBox="0 0 48 48" aria-hidden="true">
@@ -9179,7 +9205,7 @@ async function loadConfig({resetSystem = false} = {}){
     const dashboard = configured || wizardSkipped;
     const appearing = dashboard && $('pane-card').hidden;
     $('wizard').hidden = dashboard;
-    if (wizardOpening) { refreshWizObsStatus(); wizCurrent = 'welcome'; wizDir = 'fwd'; renderWizStep(); }
+    if (wizardOpening) { refreshWizObsStatus(); restoreWizDraft(); wizCurrent = 'welcome'; wizDir = 'fwd'; renderWizStep(); }
     $('hdr-bar').hidden = !dashboard;
     $('hero').hidden = !dashboard;
     $('tabs').hidden = !dashboard;
@@ -9354,7 +9380,10 @@ let wizDir = 'fwd';
 // current platform. Twitch is the only optional one today.
 const WEL_STEPS = ['welcome', 'startup', 'delay', 'crash'];
 const WIZ_ALL_STEPS = [...WEL_STEPS, 'obs', 'platform', 'key', 'twitch'];
+const WIZ_STEP_NAMES = {welcome: 'Language', startup: 'Startup', delay: 'Delay ready', crash: 'If OBS crashes', obs: 'Your app',
+  platform: 'Platform', key: 'Stream key', twitch: 'Twitch extras'};
 let wizShownStep = '';
+const wizVisited = new Set();
 
 function wizStepIds(){
   const ids = [...WEL_STEPS, 'obs', 'platform', 'key'];
@@ -9373,7 +9402,6 @@ const WEL_PICKS = {
     fields: value => ({'crash_protection.enabled': value})},
 };
 const welChosen = {};
-let welAdvanceTimer = 0;
 const welValue = group => welChosen[group] ?? (lastConfig ? WEL_PICKS[group].current(lastConfig) : '');
 function renderWelChoices(){
   $$('#wizard [data-wel]').forEach(choices => {
@@ -9414,32 +9442,57 @@ async function welSave(group, value, was){
   return false;
 }
 // A new language comes with the page's strings, so it loads the page again,
-// back on this step. Any other pick moves on by itself after a beat, long
-// enough to see the tick land.
+// back on this step with everything else as it was.
 async function welPick(choice){
   const group = choice.parentElement.dataset.wel, value = choice.dataset.value, was = welValue(group);
-  const changed = value !== was, step = wizCurrent;
-  clearTimeout(welAdvanceTimer);
-  if (group === 'language' && !changed) return;
-  if (changed && !(await welSave(group, value, was))) return;
-  if (group === 'language'){
-    if (!motionOK()){ location.reload(); return; }
-    $('wizard').animate([{opacity:1}, {opacity:0}], {duration:160, fill:'forwards'}).onfinish = () => location.reload();
+  if (value === was || !(await welSave(group, value, was)) || group !== 'language') return;
+  saveWizDraft();
+  if (!motionOK()){ location.reload(); return; }
+  $('wizard').animate([{opacity:1}, {opacity:0}], {duration:160, fill:'forwards'}).onfinish = () => location.reload();
+}
+// What the steps hold, kept across the reload a language change needs. It
+// is read straight back and removed, so the stream key rests here only for
+// the moment the page takes to load, in this tab alone.
+const WIZ_DRAFT = 'instantclone_wizard_draft';
+function saveWizDraft(){
+  try {
+    sessionStorage.setItem(WIZ_DRAFT, JSON.stringify({app: wizApp, platform: $('w-platform').value, key: $('w-key').value,
+      custom: $('w-custom').value, confirmed: wizObsConfirmed, visited: [...wizVisited]}));
+  } catch (_){}
+}
+function restoreWizDraft(){
+  let draft = null;
+  try {
+    draft = JSON.parse(sessionStorage.getItem(WIZ_DRAFT));
+    sessionStorage.removeItem(WIZ_DRAFT);
+  } catch (_){}
+  if (!draft) return;
+  wizPickApp(draft.app);
+  $('w-platform').value = draft.platform;
+  $('w-platform').dispatchEvent(new Event('change'));
+  $('w-key').value = draft.key;
+  $('w-custom').value = draft.custom;
+  draft.visited.forEach(step => wizVisited.add(step));
+  if (draft.confirmed) wizObsAdvance('connect');
+}
+// Arrow keys walk a question's answers, as in any radio group, and Enter on
+// the marked answer goes on, so the keyboard needs no trip to Next.
+const WEL_ARROWS = {ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1};
+function welChoiceKey(event){
+  const choice = event.target;
+  if (!choice.classList.contains('wel-choice')) return;
+  if (event.key === 'Enter' && choice.classList.contains('on')){
+    event.preventDefault();
+    wizNext();
     return;
   }
-  welAdvanceTimer = setTimeout(() => { if (wizCurrent === step) wizNext(); }, 420);
-}
-// Arrow keys walk a question's answers, as in any radio group. They only move
-// the focus: a pick moves on by itself, so Enter or Space makes it.
-const WEL_ARROWS = {ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1};
-function welArrowKey(event){
   const step = WEL_ARROWS[event.key];
-  if (!step || !event.target.classList.contains('wel-choice')) return;
+  if (!step) return;
   event.preventDefault();
-  const choices = [...event.target.parentElement.children];
-  choices[(choices.indexOf(event.target) + step + choices.length) % choices.length].focus();
+  const choices = [...choice.parentElement.children];
+  choices[(choices.indexOf(choice) + step + choices.length) % choices.length].focus();
 }
-$('wizard').addEventListener('keydown', welArrowKey);
+$('wizard').addEventListener('keydown', welChoiceKey);
 // The card eases to the new step's height instead of jumping to it.
 function easeWizHeight(from){
   const card = $('wizard'), to = card.offsetHeight;
@@ -9451,7 +9504,6 @@ function easeWizHeight(from){
 
 function renderWizStep(){
   const fromHeight = $('wizard').offsetHeight;
-  clearTimeout(welAdvanceTimer);
   const ids = wizStepIds();
   if (!ids.includes(wizCurrent)) wizCurrent = ids[ids.length - 1];
   const i = ids.indexOf(wizCurrent);
@@ -9460,6 +9512,7 @@ function renderWizStep(){
   $('wizard').toggleAttribute('data-intro', WEL_STEPS.includes(wizCurrent));
   const moved = wizShownStep !== wizCurrent;
   wizShownStep = wizCurrent;
+  wizVisited.add(wizCurrent);
   // Show the active panel only.
   document.querySelectorAll('#wizard .wiz-step').forEach(el => {
     el.hidden = el.dataset.wstep !== wizCurrent;
@@ -9473,20 +9526,31 @@ function renderWizStep(){
   }
   // Segmented progress. One PERMANENT segment per possible step (segments
   // are never added/removed) so the optional Twitch segment animates its
-  // collapse/expand instead of popping in and out. done/on are computed in
-  // the active-step space; inactive steps (Twitch when not chosen) collapse.
+  // collapse/expand instead of popping in and out. Each goes to its step;
+  // done means seen, since steps can be taken in any order. Inactive steps
+  // (Twitch when not chosen) collapse.
   const prog = $('wiz-progress');
   if (prog.children.length !== WIZ_ALL_STEPS.length){
-    prog.innerHTML = '';
-    WIZ_ALL_STEPS.forEach(() => prog.appendChild(document.createElement('span')));
+    prog.replaceChildren(...WIZ_ALL_STEPS.map(sid => {
+      const seg = document.createElement('button');
+      seg.type = 'button';
+      seg.onclick = () => wizGoTo(sid);
+      const tip = document.createElement('span');
+      tip.className = 'wiz-seg-tip';
+      tip.textContent = WIZ_STEP_NAMES[sid];
+      seg.appendChild(tip);
+      return seg;
+    }));
   }
   WIZ_ALL_STEPS.forEach((sid, idx) => {
-    const pos = ids.indexOf(sid);
     let cls = 'wiz-seg';
-    if (pos === -1) cls += ' collapsed';
-    else if (pos < i) cls += ' done';
-    else if (pos === i) cls += ' on';
-    prog.children[idx].className = cls;
+    if (!ids.includes(sid)) cls += ' collapsed';
+    else if (sid === wizCurrent) cls += ' on';
+    else if (wizVisited.has(sid)) cls += ' done';
+    const seg = prog.children[idx];
+    seg.className = cls;
+    if (sid === wizCurrent) seg.setAttribute('aria-current', 'step');
+    else seg.removeAttribute('aria-current');
   });
   const last = (i === ids.length - 1);
   $('wiz-back').hidden = (i === 0);
@@ -9537,6 +9601,16 @@ function wizBack(){
   if (i > 0){ wizDir = 'back'; wizCurrent = ids[i - 1]; renderWizStep(); }
 }
 
+// A progress segment: any step, in any order. Everything typed stays in its
+// step, and Save & Start sends back to the key if that's still missing.
+function wizGoTo(step){
+  const ids = wizStepIds();
+  if (step === wizCurrent || !ids.includes(step)) return;
+  wizDir = ids.indexOf(step) > ids.indexOf(wizCurrent) ? 'fwd' : 'back';
+  wizCurrent = step;
+  renderWizStep();
+}
+
 // Optional, local-only "did OBS reach us?" check. Polls /state for ingest_alive
 // (OBS publishing into our RTMP server) - a passive read that sends nothing
 // anywhere. No destination is saved during the wizard, and OBS points only at
@@ -9571,7 +9645,6 @@ function wizStopObsCheck(){
 // - Guided OBS flow (the 2-node stepper) ---------------
 const OBS_FLOW = ['connect','verify'];
 // True once the user clicks "I've set this up in OBS" (advances past connect).
-// The wizard's Next is gated on it (validateWizStep) so nobody skips wiring OBS.
 let wizObsConfirmed = false;
 function wizObsNode(node){ return document.querySelector(`.obs-node[data-node="${node}"]`); }
 // Mark a node done and open the next one.
@@ -9597,21 +9670,10 @@ function wizObsReopen(node){
   el.dataset.state = 'active';
 }
 
-// Gated steps: the OBS step needs an explicit "I've set this up" confirmation
-// before Next proceeds; the key step needs a key. Platform (always has a
-// selection) and the optional Twitch step never block.
+// The key step needs a key before Next. Nothing else blocks: OBS can be set
+// up in any order, and finishing without it gets a reminder, not a wall
+// (nudgeObsWiringIfNeeded).
 function validateWizStep(id){
-  if (id === 'obs'){
-    if (wizObsConfirmed) return true;
-    if (wizApp === 'streamlabs'){
-      wizMsg('Connect Streamlabs above to continue.', 'err');
-      return false;
-    }
-    wizMsg('Set OBS up above, then click "I\'ve set this up in OBS" to continue.', 'err');
-    const c = $('wiz-obs-confirm');   // draw the eye to the button that unblocks
-    if (c){ c.classList.remove('nudge'); void c.offsetWidth; c.classList.add('nudge'); }
-    return false;
-  }
   if (id !== 'key') return true;
   const platform = $('w-platform').value;
   const key = $('w-key').value.trim(), custom = $('w-custom').value.trim();
@@ -10977,7 +11039,12 @@ function obsInstallPill(i){
 // updates them in place and only a new OBS animates in.
 function obsInstallsFrame(host){
   host.innerHTML = `<ul class="obs-inst-list"></ul>
-    <p class="obs-inst-empty" hidden>OBS isn't installed here, or hasn't been opened yet. Open it once and come back, or use a Custom RTMP server.</p>
+    <div class="obs-none" hidden>
+      <span class="obs-none-mark" aria-hidden="true">${APP_MARK.obs}<i></i><i></i></span>
+      <div class="obs-none-t">We can't find OBS on this PC</div>
+      <div class="obs-none-s">Already have it? Open it once and it shows up here by itself.</div>
+      <a class="ic-btn ic-btn-primary" href="https://obsproject.com/download" target="_blank" rel="noopener">Download OBS</a>
+    </div>
     <div class="obs-inst-foot">
       <button type="button" class="obs-add-toggle" hidden>Using a portable OBS?</button>
       <div class="obs-inst-btns">
@@ -11062,22 +11129,29 @@ function renderObsInstallsInto(host){
         : b.dataset.act === 'change' ? 'Moved it? Pick its obs64.exe again' : 'Remove from the list';
     });
   });
-  // The OBS tab card already says it in its status line; only the wizard needs this one.
-  host.querySelector('.obs-inst-empty').hidden = !obsInstalls || installs.length > 0 || !!host.closest('#obs-reg-card');
+  // Nothing to register: say what to do about it instead of offering a button.
+  const noObs = !!obsInstalls && !installs.length;
+  host.querySelector('.obs-none').hidden = !noObs;
+  host.querySelector('.obs-inst-foot').classList.toggle('none', noObs);
   host.querySelector('.obs-add-toggle').hidden = !(obsInstalls && obsInstalls.portable_pick);
   const ticked = obsTicked();
   const reg = host.querySelector('.obs-inst-reg'), unreg = host.querySelector('.obs-inst-unreg');
   reg.disabled = !ticked.length;
+  reg.hidden = noObs;
   setText(reg, ticked.length > 1 ? `Register in ${ticked.length} OBS` : 'Register with OBS');
   unreg.hidden = !ticked.some(i => i.state !== 'none');
   // One bright button at a time in the wizard: Register until an OBS is
-  // registered, then the step's confirm.
+  // registered, then the step's confirm. With no OBS the bright one is
+  // Download, and "I've set this up" stays quiet for a Custom RTMP setup.
   if (host.closest('#wizard')){
     const registerFirst = ticked.length > 0 && !installs.some(i => i.state === 'current');
+    const confirmFirst = !registerFirst && !noObs;
     reg.classList.toggle('ic-btn-primary', registerFirst);
     reg.classList.toggle('ic-btn-ghost', !registerFirst);
-    $('wiz-obs-confirm').classList.toggle('ic-btn-primary', !registerFirst);
-    $('wiz-obs-confirm').classList.toggle('ic-btn-ghost', registerFirst);
+    $('wiz-obs-confirm').classList.toggle('ic-btn-primary', confirmFirst);
+    $('wiz-obs-confirm').classList.toggle('ic-btn-ghost', !confirmFirst);
+    $('wiz-obs-service').classList.toggle('no-obs', noObs);
+    document.querySelector('[data-node="connect"] .obs-node-hint').hidden = noObs;
   }
 }
 // The OBS tab card's own pill and line sum the rows up.
@@ -11087,7 +11161,7 @@ function renderObsRegSummary(){
   const installs = obsInstallList();
   const any = s => installs.some(i => i.state === s);
   const view = !obsInstalls ? ['bad', 'Unknown', 'Could not ask InstantClone about OBS. Is it still running?']
-    : !installs.length ? ['bad', 'OBS not found', "OBS isn't installed here, or hasn't been opened yet. Open it once and come back, or use the manual setup below."]
+    : !installs.length ? ['bad', 'OBS not found', '']
     : any('stale') ? ['warn', 'Out of date', obsInstalls.update_pending
         ? 'An entry points at old ports. It updates by itself when that OBS closes.'
         : "An entry points at old ports, so that OBS can't reach InstantClone. Tick it and register again."]

@@ -29,6 +29,23 @@ test('the wizard opens on the welcome, whose picks save as real settings', () =>
   assert.equal(page.run(`WEL_PICKS.language.current({})`), 'auto');
 });
 
+test('any wizard step can be reached, and only the key step holds Next back', () => {
+  page.run(`var realRender = renderWizStep; renderWizStep = () => {}; wizCurrent = 'welcome'`);
+  page.run(`wizGoTo('crash')`);
+  assert.equal(page.run('wizCurrent'), 'crash');
+  assert.equal(page.run('wizDir'), 'fwd');
+  page.run(`wizGoTo('startup')`);
+  assert.equal(page.run('wizCurrent'), 'startup');
+  assert.equal(page.run('wizDir'), 'back');
+  page.run(`wizGoTo('not-a-step')`);
+  assert.equal(page.run('wizCurrent'), 'startup');
+  for (const step of ['welcome', 'startup', 'delay', 'crash', 'obs', 'platform']) {
+    assert.equal(page.run(`validateWizStep('${step}')`), true, step);
+  }
+  for (const step of plain(page.run('WIZ_ALL_STEPS'))) assert.ok(page.run(`WIZ_STEP_NAMES['${step}']`), step);
+  page.run(`renderWizStep = realRender; wizCurrent = 'welcome'`);
+});
+
 test('the custom delay field follows a delay armed elsewhere', () => {
   page.run(`$('delay-input').value = ''`);
   page.run('followArmedDelay(8000)');
