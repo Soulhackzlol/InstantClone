@@ -629,8 +629,8 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 #wizard.wiz-easing{overflow:hidden}
 /* The welcome: its heading is the step's own, and each piece arrives in turn.
    Everything restarts when a step shows again (it was display:none). */
-#wizard[data-step="welcome"] #wiz-title,#wizard[data-step="welcome"] #wiz-lead{display:none}
-#wizard[data-step="welcome"] .wiz-progress{margin-top:0}
+#wizard[data-intro] #wiz-title,#wizard[data-intro] #wiz-lead{display:none}
+#wizard[data-intro] .wiz-progress{margin-top:0}
 .wel-hero,.wel-q{position:relative;text-align:center}
 .wel-hero{padding:18px 0 4px}
 .wel-q{padding:14px 0 2px}
@@ -670,7 +670,7 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 .wel-q-s{max-width:500px;margin:9px auto 0;font-size:13.5px;line-height:1.5;color:var(--fg-3);animation:welRise .46s var(--ease-out) .17s backwards}
 .wel-choices{--wel-from:.28s;position:relative;display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:22px}
 .wel-hero .wel-choices{--wel-from:.84s;margin-top:12px}
-.wel-choice{appearance:none;position:relative;flex:1 1 150px;max-width:230px;min-height:66px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:13px 26px;
+.wel-choice{appearance:none;position:relative;flex:1 1 130px;max-width:230px;min-height:66px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:13px 26px;
   border-radius:14px;border:1px solid var(--line);color:var(--fg-2);font:inherit;cursor:pointer;
   background:linear-gradient(180deg,var(--surface-3),var(--surface-2));
   animation:welChoice .5s var(--ease-spring) backwards;animation-delay:calc(var(--i)*70ms + var(--wel-from));
@@ -678,6 +678,7 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 @keyframes welChoice{from{opacity:0;transform:translateY(16px) scale(.93)}}
 .wel-choice:hover{transform:translateY(-2px);color:var(--fg);border-color:var(--line-2)}
 .wel-choice:active{transform:scale(.97)}
+.wel-choice:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .wel-choice.on{color:var(--fg);border-color:color-mix(in oklch,var(--accent) 72%,var(--line));
   background:color-mix(in oklch,var(--accent) 13%,var(--surface-2));box-shadow:0 8px 24px -14px var(--accent),inset 0 0 0 1px color-mix(in oklch,var(--accent) 34%,transparent)}
 .wel-choice-t{font-size:14px;font-weight:600}
@@ -4806,7 +4807,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <li class="obs-node" data-node="connect" data-state="active">
         <div class="obs-node-main">
           <button type="button" class="obs-node-head" onclick="wizObsReopen('connect')">
-            <span class="obs-eyebrow">Step 1</span>
+            <span class="obs-eyebrow">First</span>
             <span class="obs-node-title">Point OBS at InstantClone</span>
           </button>
           <div class="obs-node-clip"><div class="obs-node-body">
@@ -4821,7 +4822,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
               <details class="ic-disclose">
                 <summary>How it works</summary>
                 <div class="ic-disclose-body">
-                  <p>InstantClone appears next to Twitch / YouTube in OBS's <b>Settings &rarr; Stream &rarr; Service</b> list. Multi-track Video "Auto" works out of the box, so pick InstantClone and stream.</p>
+                  <p>InstantClone appears next to Twitch / YouTube in OBS's <b>Settings &rarr; Stream &rarr; Service</b> list. Multi-track via InstantClone works out of the box on Auto, so pick InstantClone and stream.</p>
                   <p>Edits that OBS's <code class="mono">services.json</code> (in <code class="mono">%APPDATA%</code>, or inside a portable OBS's own folder) with a <code class="mono">.bak</code> backup. Unregister any time from the <b>OBS</b> tab.</p>
                 </div>
               </details>
@@ -4849,7 +4850,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <li class="obs-node" data-node="verify" data-state="locked">
         <div class="obs-node-main">
           <button type="button" class="obs-node-head" onclick="wizObsReopen('verify')">
-            <span class="obs-eyebrow">Step 2 · Optional</span>
+            <span class="obs-eyebrow">Then · Optional</span>
             <span class="obs-node-title">Check it's connected</span>
           </button>
           <div class="obs-node-clip"><div class="obs-node-body">
@@ -4953,7 +4954,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <details class="ic-disclose" data-app-only="obs">
         <summary>How to turn it on in OBS</summary>
         <div class="ic-disclose-body">
-          <p><b>In OBS:</b> if you registered InstantClone as a service (previous step), open <b>Settings &rarr; Stream</b>, keep <b>Service</b> on <b>InstantClone</b> and turn on <b>Enhanced Broadcasting</b>, left on <b>Auto</b>.</p>
+          <p><b>In OBS:</b> if you registered InstantClone as a service (on the OBS step), open <b>Settings &rarr; Stream</b>, keep <b>Service</b> on <b>InstantClone</b> and turn on <b>Multi-track via InstantClone</b>, left on <b>Auto</b>.</p>
           <p>On Custom RTMP, Enhanced Broadcasting needs OBS older than 32.2: use <b>OBS tab &rarr; Legacy</b> after setup. On newer OBS, register the InstantClone service instead.</p>
         </div>
       </details>
@@ -5178,7 +5179,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <div class="muted" id="dest-form-format-help" hidden style="font-size:11.5px;margin-top:6px;line-height:1.5">
         <b style="color:var(--fg-2)">Vertical needs a 9:16 canvas from OBS.</b> Set it up once:
         <ol style="margin:5px 0 5px;padding-left:18px">
-          <li>OBS <b>Settings → Stream</b>: turn on <b>Enhanced Broadcasting</b>.</li>
+          <li>OBS <b>Settings → Stream</b>: turn on <b>Enhanced Broadcasting</b> (<b>Multi-track via InstantClone</b> on the InstantClone service).</li>
           <li>Under <b>Additional canvas</b>, pick your vertical canvas (for example <b>Aitum Vertical</b>).</li>
         </ol>
         Every vertical destination reuses it. With a Twitch destination enabled, Twitch decides instead, so the channel needs Dual Format on. Until a 9:16 canvas arrives, this destination waits and sends nothing.
@@ -5390,7 +5391,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
       <details class="ic-disclose">
         <summary>How it works</summary>
         <div class="ic-disclose-body">
-          <p>Writes an <b>InstantClone</b> entry next to Twitch and YouTube in OBS's <i>Settings &rarr; Stream &rarr; Service</i> list. Multi-track Video "Auto" works out of the box. OBS reads that list when it starts and writes it back when it quits, so InstantClone only changes it while that OBS is closed. If you change InstantClone's ports while OBS is closed, the entry follows at once.</p>
+          <p>Writes an <b>InstantClone</b> entry next to Twitch and YouTube in OBS's <i>Settings &rarr; Stream &rarr; Service</i> list. Multi-track via InstantClone works out of the box on Auto. OBS reads that list when it starts and writes it back when it quits, so InstantClone only changes it while that OBS is closed. If you change InstantClone's ports while OBS is closed, the entry follows at once.</p>
           <p>Each OBS on this PC has its own list: the installed one and every portable one. A portable OBS shows up here once it has been open while InstantClone runs, or pick its <code class="mono">obs64.exe</code> with <b>Using a portable OBS?</b></p>
         </div>
       </details>
@@ -5450,9 +5451,9 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
     <section class="obs-section span-2" data-tab-app="obs">
       <div class="ic-label">Recommended OBS settings</div>
       <div class="obs-recs">
-        <div class="rec"><div class="rec-k">Output &rarr; Video &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
-        <div class="rec"><div class="rec-k">Output &rarr; Encoder</div><div class="rec-v">GPU (NVENC / AMF / QSV)</div><div class="rec-why">InstantClone passes it through untouched. With Enhanced Broadcasting it picks your GPU's encoder on its own.</div></div>
-        <div class="rec"><div class="rec-k">Bitrate</div><div class="rec-v">&le; 80% of upload</div><div class="rec-why">Leave headroom or the "Upload bottleneck" pill lights up.</div></div>
+        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
+        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Video Encoder</div><div class="rec-v">GPU (NVENC / AMF / QSV)</div><div class="rec-why">InstantClone passes it through untouched. With Enhanced Broadcasting it picks your GPU's encoder on its own.</div></div>
+        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Bitrate</div><div class="rec-v">&le; 80% of upload</div><div class="rec-why">Leave headroom or the "Upload bottleneck" pill lights up.</div></div>
         <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">CBR + 2 s keyframe</div><div class="rec-why">The rules that actually matter for Kick. <a href="#" onclick="event.preventDefault();toggleDisclosure('rec-kick-detail')">details</a></div></div>
       </div>
       <details class="ic-disclose" id="rec-kick-detail">
@@ -8176,9 +8177,9 @@ function verticalDiag(d){
       title:'With a Twitch destination, Twitch\'s config decides the tracks, and it has no vertical one for this channel. Turn on Twitch Dual Format for the channel, or disable the Twitch destination so InstantClone builds the config and uses OBS\'s Additional canvas.'};
   if (s.multitrack_video)
     return {ready:false, label:'No 9:16 canvas', hint:'In OBS, pick an Additional canvas',
-      title:'OBS is streaming with Enhanced Broadcasting but sends no 9:16 canvas. In OBS: Settings \u2192 Stream \u2192 Enhanced Broadcasting \u2192 Additional canvas, pick your vertical canvas (for example Aitum Vertical).'};
+      title:'OBS is streaming with Enhanced Broadcasting but sends no 9:16 canvas. In OBS: Settings \u2192 Stream \u2192 Additional canvas, pick your vertical canvas (for example Aitum Vertical).'};
   return {ready:false, label:'Needs OBS setup', hint:'Turn on Enhanced Broadcasting in OBS',
-    title:'OBS is streaming without Enhanced Broadcasting, so there is no 9:16 canvas. In OBS: Settings \u2192 Stream, turn on Enhanced Broadcasting and pick your vertical canvas under Additional canvas.'};
+    title:'OBS is streaming without Enhanced Broadcasting, so there is no 9:16 canvas. In OBS: Settings \u2192 Stream, turn on Enhanced Broadcasting (Multi-track via InstantClone on the InstantClone service) and pick your vertical canvas under Additional canvas.'};
 }
 // Set the card's format icon + hover tooltip from the destination's
 // *actual* live state, not an assumed config. Twitch reads horizontal by
@@ -9350,10 +9351,12 @@ let wizDir = 'fwd';
 // Every step that can ever appear, in order. The progress bar renders one
 // permanent segment per entry; `wizStepIds()` is the ACTIVE subset for the
 // current platform. Twitch is the only optional one today.
-const WIZ_ALL_STEPS = ['welcome', 'startup', 'delay', 'crash', 'obs', 'platform', 'key', 'twitch'];
+const WEL_STEPS = ['welcome', 'startup', 'delay', 'crash'];
+const WIZ_ALL_STEPS = [...WEL_STEPS, 'obs', 'platform', 'key', 'twitch'];
+let wizShownStep = '';
 
 function wizStepIds(){
-  const ids = ['welcome', 'startup', 'delay', 'crash', 'obs', 'platform', 'key'];
+  const ids = [...WEL_STEPS, 'obs', 'platform', 'key'];
   if ($('w-platform').value === 'twitch') ids.push('twitch');
   return ids;
 }
@@ -9396,25 +9399,28 @@ function renderWelTitle(){
     return [span, ' '];
   }));
 }
-// A new language comes with the page's strings, so it loads the page again,
-// back on this step. Any other pick moves on by itself after a beat, long
-// enough to see the tick land.
-async function welPick(choice){
-  const group = choice.parentElement.dataset.wel, value = choice.dataset.value, was = welValue(group);
-  clearTimeout(welAdvanceTimer);
-  if (group === 'language' && value === was) return;
-  const step = wizCurrent;
+// Saves a pick that changed; false (with the old answer back) if it couldn't.
+async function welSave(group, value, was){
   welChosen[group] = value;
   renderWelChoices();
   let j;
   try { j = await (await fetch('/config', {method:'POST', body:new URLSearchParams(WEL_PICKS[group].fields(value))})).json(); }
   catch (_){ j = {ok:false, error:"Couldn't reach InstantClone. Check it is running, then try again."}; }
-  if (!j.ok){
-    welChosen[group] = was;
-    renderWelChoices();
-    wizMsg(j.error, 'err');
-    return;
-  }
+  if (j.ok) return true;
+  welChosen[group] = was;
+  renderWelChoices();
+  wizMsg(j.error, 'err');
+  return false;
+}
+// A new language comes with the page's strings, so it loads the page again,
+// back on this step. Any other pick moves on by itself after a beat, long
+// enough to see the tick land.
+async function welPick(choice){
+  const group = choice.parentElement.dataset.wel, value = choice.dataset.value, was = welValue(group);
+  const changed = value !== was, step = wizCurrent;
+  clearTimeout(welAdvanceTimer);
+  if (group === 'language' && !changed) return;
+  if (changed && !(await welSave(group, value, was))) return;
   if (group === 'language'){
     if (!motionOK()){ location.reload(); return; }
     $('wizard').animate([{opacity:1}, {opacity:0}], {duration:160, fill:'forwards'}).onfinish = () => location.reload();
@@ -9422,6 +9428,17 @@ async function welPick(choice){
   }
   welAdvanceTimer = setTimeout(() => { if (wizCurrent === step) wizNext(); }, 420);
 }
+// Arrow keys walk a question's answers, as in any radio group. They only move
+// the focus: a pick moves on by itself, so Enter or Space makes it.
+const WEL_ARROWS = {ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1};
+function welArrowKey(event){
+  const step = WEL_ARROWS[event.key];
+  if (!step || !event.target.classList.contains('wel-choice')) return;
+  event.preventDefault();
+  const choices = [...event.target.parentElement.children];
+  choices[(choices.indexOf(event.target) + step + choices.length) % choices.length].focus();
+}
+$('wizard').addEventListener('keydown', welArrowKey);
 // The card eases to the new step's height instead of jumping to it.
 function easeWizHeight(from){
   const card = $('wizard'), to = card.offsetHeight;
@@ -9438,7 +9455,10 @@ function renderWizStep(){
   if (!ids.includes(wizCurrent)) wizCurrent = ids[ids.length - 1];
   const i = ids.indexOf(wizCurrent);
   $('wizard').dataset.dir = wizDir;
-  $('wizard').dataset.step = wizCurrent;
+  // The welcome's questions are their own headings: no "Step 3 of 8" above.
+  $('wizard').toggleAttribute('data-intro', WEL_STEPS.includes(wizCurrent));
+  const moved = wizShownStep !== wizCurrent;
+  wizShownStep = wizCurrent;
   // Show the active panel only.
   document.querySelectorAll('#wizard .wiz-step').forEach(el => {
     el.hidden = el.dataset.wstep !== wizCurrent;
@@ -9490,6 +9510,12 @@ function renderWizStep(){
     syncWizStreamlabsImport();
     refreshStreamlabs();
     setTimeout(() => { const k = $('w-key'); if (k && !k.disabled) k.focus(); }, 60);
+  }
+  // A step that just opened starts at the top, the keyboard on its answer.
+  if (moved){
+    window.scrollTo(0, 0);
+    const answer = document.querySelector(`[data-wstep="${wizCurrent}"] .wel-choice.on`);
+    if (answer) answer.focus({preventScroll: true});
   }
   easeWizHeight(fromHeight);
 }
@@ -12187,7 +12213,7 @@ const TOUR = [
       <details class="ic-disclose">
         <summary>Vertical (9:16) for Shorts / mobile</summary>
         <div class="ic-disclose-body">
-          <p>Set any non-Twitch destination to <b>Vertical</b> and it gets the 9:16 canvas OBS sends with Enhanced Broadcasting. Set it up once in OBS: <b>Settings → Stream</b>, turn on <b>Enhanced Broadcasting</b>, and pick your vertical canvas (for example Aitum Vertical) under <b>Additional canvas</b>. It works with or without Twitch. While OBS streams without it, the card says what's missing.</p>
+          <p>Set any non-Twitch destination to <b>Vertical</b> and it gets the 9:16 canvas OBS sends with Enhanced Broadcasting. Set it up once in OBS: <b>Settings → Stream</b>, turn on <b>Enhanced Broadcasting</b> (<b>Multi-track via InstantClone</b> on the InstantClone service), and pick your vertical canvas (for example Aitum Vertical) under <b>Additional canvas</b>. It works with or without Twitch. While OBS streams without it, the card says what's missing.</p>
         </div>
       </details>
       <div class="tour-tip"><strong>Streaming vs Connected:</strong> Streaming = bytes flowing. Connected = TCP up, but OBS hasn't sent a frame yet.</div>

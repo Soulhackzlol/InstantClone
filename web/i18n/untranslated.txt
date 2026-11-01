@@ -21,7 +21,6 @@
 %APPDATA%
 %APPDATA%\slobs-client
 (?<![\p{Alphabetic}\p{N}]){}(?![\p{Alphabetic}\p{N}])
-(Custom RTMP)
 (prefers-reduced-motion: reduce)
 , NVENC
 , bitrate
@@ -58,8 +57,6 @@
 ?team=red
 APP
 Aa
-Additional canvas
-Advanced Audio Properties
 Aitum Vertical
 Alt
 App
@@ -154,7 +151,6 @@ Logs
 MB
 MIDI
 Manage
-Max B-frames
 Mbps
 Mods
 Montserrat
@@ -165,6 +161,7 @@ Numpad
 OAuth Redirect URL
 OBS
 OBS Studio
+Multi-track via InstantClone
 OBS WebSocket
 OBS {}
 OK
@@ -214,7 +211,6 @@ URL:
 Up
 VALORANT
 VOD
-VOD Track
 VOD audio track
 Vertical
 WLED
