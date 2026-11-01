@@ -305,6 +305,7 @@ const Studio = (function(){
   let sampleTurn = 0;
   function postSampleAlert(frame){
     const a = SAMPLE_ALERTS[sampleTurn++ % SAMPLE_ALERTS.length];
+    measureAgain();
     if(frame && frame.contentWindow) frame.contentWindow.postMessage({__ic_alert:Object.assign({ms:ALERT_DEMO_MS}, a)}, '*');
   }
   function playAlert(){
@@ -545,7 +546,7 @@ const Studio = (function(){
   // a small badge isn't a speck on an empty canvas. "Whole canvas" shows
   // where it sits on the 1920x1080 screen instead.
   const DRAWN_PAD = 48, DRAWN_ZOOM_MAX = 4;
-  let drawnBox = null, wholeCanvas = false, measureTimer = 0;
+  let drawnBox = null, wholeCanvas = false, measureTimer = 0, measuresQuiet = 0;
   function fitPreview(){
     const stage = $('ovg-stage'); if(!stage) return;
     const w = stage.clientWidth || 600, h = stage.clientHeight || w * 9 / 16, fit = w / 1920;
@@ -564,7 +565,9 @@ const Studio = (function(){
   // A saved overlay is sandboxed: it says what it draws when asked
   // (overlay-runtime.js drawnBounds). One from before that never answers
   // just shows the whole canvas.
+  const MEASURES_UNTIL_SETTLED = 15;
   function askDrawn(){
+    if(++measuresQuiet > MEASURES_UNTIL_SETTLED){ clearInterval(measureTimer); measureTimer = 0; return; }
     const prev = $('ov-preview');
     if(prev && prev.offsetParent && prev.contentWindow) prev.contentWindow.postMessage({__ic_bounds:true}, '*');
   }
@@ -575,11 +578,18 @@ const Studio = (function(){
     const next = b ? {x0:Math.min(b.x0, got.x0), y0:Math.min(b.y0, got.y0), x1:Math.max(b.x1, got.x1), y1:Math.max(b.y1, got.y1)} : got;
     if(b && next.x0 === b.x0 && next.y0 === b.y0 && next.x1 === b.x1 && next.y1 === b.y1) return;
     drawnBox = next;
+    measuresQuiet = 0;
     fitPreview();
   });
+  // Something new may draw: a state or an alert the preview starts playing.
+  function measureAgain(){
+    measuresQuiet = 0;
+    if(!measureTimer) measureTimer = setInterval(askDrawn, 700);
+  }
   function watchDrawn(){
     clearInterval(measureTimer);
     drawnBox = null;
+    measuresQuiet = 0;
     fitPreview();
     measureTimer = setInterval(askDrawn, 700);
   }
@@ -694,6 +704,7 @@ const Studio = (function(){
   // Drive the preview: 'auto' runs the delay-lifecycle simulation, 'live'
   // shows the real OBS state, anything else pins one state.
   function applyPreviewState(){
+    measureAgain();
     const prev=$('ov-preview'); if(!prev) return;
     stopGallerySim();
     const cap=$('ovg-phase');
@@ -2159,9 +2170,12 @@ const Studio = (function(){
   // The saved overlays changed elsewhere (another window, a dock): the
   // gallery redraws only when the list it shows really differs.
   async function refreshSaved(){
-    const before=JSON.stringify(savedList);
-    await loadSaved();
-    if(JSON.stringify(savedList)!==before && $('ovg-browser').offsetParent) renderGallery(true);
+    let list;
+    try{ list = await (await fetch('/overlays')).json(); }catch(e){ return; }
+    if(!Array.isArray(list)) return;
+    const changed = JSON.stringify(list)!==JSON.stringify(savedList);
+    savedList = list;
+    if(changed && $('ovg-browser').offsetParent) renderGallery(true);
   }
   // Overlays an older Studio baked (another build, or none written down)
   // are baked again from their own doc, so a fix to how layers draw reaches

@@ -1618,8 +1618,10 @@
     for(var i=0;i<all.length;i++){
       var r=all[i].getBoundingClientRect();
       if(r.width<2||r.height<2||r.width*r.height>W*H*0.8) continue;
+      // Parked off screen, waiting to slide in: not drawn yet.
+      if(r.right<=0||r.left>=W||r.bottom<=0||r.top>=H) continue;
       var cs=getComputedStyle(all[i]);
-      if(cs.visibility==='hidden'||cs.display==='none') continue;
+      if(cs.visibility==='hidden'||cs.display==='none'||cs.opacity==='0') continue;
       x0=Math.min(x0,Math.max(0,r.left)); y0=Math.min(y0,Math.max(0,r.top));
       x1=Math.max(x1,Math.min(W,r.right)); y1=Math.max(y1,Math.min(H,r.bottom));
     }

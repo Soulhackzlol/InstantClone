@@ -141,7 +141,11 @@ mod platform {
         let mut pmc: ProcessMemoryCounters = unsafe { std::mem::zeroed() };
         pmc.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
         let rss = if unsafe { GetProcessMemoryInfo(proc, &mut pmc, pmc.cb) } != 0 {
-            pmc.private_working_set_size as u64
+            // Some older Windows may take the longer struct and leave this empty.
+            match pmc.private_working_set_size as u64 {
+                0 => pmc.working_set_size as u64,
+                private => private,
+            }
         } else {
             pmc.cb = BASIC_COUNTERS_SIZE as u32;
             if unsafe { GetProcessMemoryInfo(proc, &mut pmc, pmc.cb) } != 0 {

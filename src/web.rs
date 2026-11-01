@@ -3484,7 +3484,28 @@ pub fn outside_snapshot(
     vec![
         (Topic::Obs, obs),
         (Topic::Streamlabs, streamlabs_status_json(settings)),
+        (Topic::Overlays, overlay_files_snapshot(settings)),
     ]
+}
+
+/// The overlays folder's names, sizes and times: files dropped in or deleted
+/// by hand reach no endpoint, so this is how the pages hear of them.
+fn overlay_files_snapshot(settings: &Arc<watch::Sender<Settings>>) -> String {
+    let dir = settings.borrow().overlays_dir.clone();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return String::new();
+    };
+    let mut files: Vec<String> = entries
+        .flatten()
+        .map(|entry| {
+            let meta = entry.metadata().ok();
+            let size = meta.as_ref().map_or(0, |m| m.len());
+            let time = meta.and_then(|m| m.modified().ok());
+            format!("{:?} {size} {time:?}", entry.file_name())
+        })
+        .collect();
+    files.sort();
+    files.join("\n")
 }
 
 fn obs_installs_json(settings: &Arc<watch::Sender<Settings>>) -> String {

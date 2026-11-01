@@ -1516,6 +1516,12 @@ fn resolve_port_conflict(
             let dashboard = web_port.or((role == portcheck::PortRole::Dashboard).then_some(port));
             if let Some(dashboard) = dashboard {
                 open_browser(&format!("http://127.0.0.1:{dashboard}/"));
+            } else {
+                portcheck::show_error(
+                    "InstantClone",
+                    "InstantClone keeps its settings somewhere else, so this can't tell \
+                     where its dashboard is.\n\nOpen it from the InstantClone icon in the tray.",
+                );
             }
             None
         }

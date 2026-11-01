@@ -237,6 +237,12 @@ where
 {
     let sample = Arc::new(sample);
     let mut seen = Seen::default();
+    // The baseline comes before any page, so a page never misses a change
+    // made between loading its data and the first look.
+    let first = sample.clone();
+    if let Ok(now) = tokio::task::spawn_blocking(move || first()).await {
+        seen.changed(now);
+    }
     loop {
         tokio::time::sleep(OUTSIDE_EVERY).await;
         if !is_watched() {
@@ -258,7 +264,7 @@ struct Seen([Option<String>; TOPICS.len()]);
 
 impl Seen {
     /// The topics whose sample differs from the last one. A first sample
-    /// only sets the baseline: the page fetched that data when it loaded.
+    /// only sets the baseline.
     fn changed(&mut self, now: Vec<(Topic, String)>) -> Vec<Topic> {
         let mut changed = Vec::new();
         for (topic, value) in now {

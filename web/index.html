@@ -9174,11 +9174,20 @@ function paintFavicon(color){
 }
 // The language changed in another window: this one follows, unless it holds
 // settings not saved yet. The wizard's own pick reloads by itself (welPick).
+let languageToFollow = false;
 function followLanguage(was, c){
-  if (was === undefined || was === c.ui_language || !$('wizard').hidden || _savingSettings || settingsDirty()) return;
+  if (was === undefined) return;
+  if (was !== c.ui_language) languageToFollow = true;
+  if (!languageToFollow || !$('wizard').hidden) return;
+  if (_savingSettings || settingsDirty()){
+    // Saving those settings must not put the old language back.
+    $('s-language').value = c.ui_language || 'auto';
+    return;
+  }
+  languageToFollow = false;
   if (languageOf(c.ui_language || 'auto') !== document.documentElement.lang) reloadForLanguage();
 }
-async function loadConfig({resetSystem = false} = {}){
+async function loadConfig({resetSystem = false, live = false} = {}){
   try {
     const c = await (await fetch('/config')).json();
     const languageWas = lastConfig ? lastConfig.ui_language : undefined;
@@ -9283,7 +9292,10 @@ async function loadConfig({resetSystem = false} = {}){
     // visibility. "Skip setup" shows the dashboard for this visit with
     // nothing saved, so `configured` alone would bring the wizard back.
     const configured = c.configured;
-    const dashboard = configured || wizardSkipped;
+    // A save inside the wizard can set `configured` (a key imported from
+    // Streamlabs): only finishing it closes it, not the reload that follows.
+    const wizardStays = live && !$('wizard').hidden;
+    const dashboard = (configured || wizardSkipped) && !wizardStays;
     const appearing = dashboard && $('pane-card').hidden;
     $('wizard').hidden = dashboard;
     if (wizardOpening) { refreshWizObsStatus(); restoreWizDraft(); wizCurrent = 'welcome'; wizDir = 'fwd'; renderWizStep(); }
@@ -10864,6 +10876,12 @@ function hkOnKeydown(e){
 
 // Persist one binding. Optimistic: paint it, then POST. On failure, resync
 // from the server so the UI never lies about what is actually bound.
+// A save that failed has painted what the app doesn't hold, and what the app
+// sends back is what it sent last: repaint it even so.
+function reloadBindings(key){
+  seenData.delete(key);
+  return loadConfig();
+}
 async function hkSaveBinding(action, combo, el, movedOff){
   hkBindings[action] = combo;
   hkRenderCapture(el, action);
@@ -10881,11 +10899,11 @@ async function hkSaveBinding(action, combo, el, movedOff){
         : `${hkTitleOf(action)} hotkey cleared`, 'ok');
     } else {
       toast(`Couldn't save hotkey: ${j.error}`, 'err');
-      await loadConfig();
+      await reloadBindings('hotkeys');
     }
   } catch(e){
     toast('Save failed: the app may have stopped responding', 'err');
-    await loadConfig();
+    await reloadBindings('hotkeys');
   }
 }
 
@@ -11029,8 +11047,8 @@ async function midiSetDevice(name){
     const body = new URLSearchParams(); body.set('midi_device', name);
     const j = await (await fetch('/config', {method:'POST', body})).json();
     if (j.ok) toast(name ? `Listening to ${name}` : 'Listening to every MIDI device', 'ok');
-    else { toast(`Couldn't save the device: ${j.error}`, 'err'); await loadConfig(); }
-  } catch(e){ toast('Save failed: the app may have stopped responding', 'err'); await loadConfig(); }
+    else { toast(`Couldn't save the device: ${j.error}`, 'err'); await reloadBindings('midi'); }
+  } catch(e){ toast('Save failed: the app may have stopped responding', 'err'); await reloadBindings('midi'); }
   // The listener picks the change up on its next sweep (~2 s); refresh so
   // the note stops claiming the old device.
   setTimeout(midiPollOnce, 2400);
@@ -11121,8 +11139,8 @@ async function midiClear(action){
     const body = new URLSearchParams(); body.set('midi.' + action, '');
     const j = await (await fetch('/config', {method:'POST', body})).json();
     if (j.ok) toast(`${hkTitleOf(action)} mapping cleared`, 'ok');
-    else { toast(`Couldn't clear mapping: ${j.error}`, 'err'); await loadConfig(); }
-  } catch(e){ toast('Save failed: the app may have stopped responding', 'err'); await loadConfig(); }
+    else { toast(`Couldn't clear mapping: ${j.error}`, 'err'); await reloadBindings('midi'); }
+  } catch(e){ toast('Save failed: the app may have stopped responding', 'err'); await reloadBindings('midi'); }
 }
 
 document.addEventListener('change', e => {
@@ -14223,7 +14241,7 @@ function openUpdateInAbout(){
   langReturnReady();
   refreshObsRegisterStatus();
   refreshStreamlabs();
-  Live.on('config', loadConfig);
+  Live.on('config', () => loadConfig({live: true}));
   Live.on('destinations', loadDestinations);
   Live.on('profiles', loadProfiles);
   Live.on('overlays', refreshOverlays);
