@@ -1578,7 +1578,7 @@ function animateMorph(ctx){
     if (!parent || !rects.has(parent) || !parent.hasAttribute('data-flip')) return;
     el.animate([
       {opacity:0, transform:'translateY(6px) scale(.98)', filter:'blur(3px)'},
-      {opacity:1, transform:'none', filter:'blur(0)'},
+      {opacity:getComputedStyle(el).opacity, transform:'none', filter:'blur(0)'},
     ], {duration:280, easing:EASE, delay:Math.min(n++, 8) * 28, fill:'backwards'});
   });
   ctx.left.forEach(el => {
@@ -1600,7 +1600,8 @@ function animateMorph(ctx){
 function enterStagger(root){
   if (!root || reduced()) return;
   [...root.querySelectorAll('.ig-grid > [data-key], .ig-list > [data-key], .ig-pack')].slice(0, 24).forEach((el, n) => {
-    el.animate([{opacity:0, transform:'translateY(8px)', filter:'blur(3px)'}, {opacity:1, transform:'none', filter:'blur(0)'}],
+    // Up to its own opacity: a card that's off is dimmer than the others.
+    el.animate([{opacity:0, transform:'translateY(8px)', filter:'blur(3px)'}, {opacity:getComputedStyle(el).opacity, transform:'none', filter:'blur(0)'}],
       {duration:340, easing:EASE, delay:Math.min(n, 12) * 30, fill:'backwards'});
   });
 }
@@ -1612,17 +1613,26 @@ const SEG_IND = '<span class="sub-tab-ind" data-keep-style aria-hidden="true"></
 
 // A slider's track fills up to its thumb (--p, read by index.html's CSS).
 function fillRanges(root){ root.querySelectorAll('input[type=range]').forEach(fillRange); }
+function placeIndicator(seg){
+  const ind = seg.querySelector(':scope > .sub-tab-ind');
+  const on = seg.querySelector(':scope > .sub-tab.on');
+  if (!ind) return;
+  if (!on || !on.offsetWidth){ ind.style.opacity = '0'; return; }
+  ind.style.left = on.offsetLeft + 'px';
+  ind.style.width = on.offsetWidth + 'px';
+  ind.style.top = on.offsetTop + 'px';
+  ind.style.height = on.offsetHeight + 'px';
+  ind.style.opacity = '1';
+}
+// A tab changes size after the redraw that placed the pill: the translator
+// swaps its words, a folded panel opens around it.
+const segTabSizes = new ResizeObserver(entries => {
+  for (const seg of new Set(entries.map(e => e.target.closest('.ig-seg')))) if (seg) placeIndicator(seg);
+});
 function placeIndicators(root){
   root.querySelectorAll('.ig-seg').forEach(seg => {
-    const ind = seg.querySelector(':scope > .sub-tab-ind');
-    const on = seg.querySelector(':scope > .sub-tab.on');
-    if (!ind) return;
-    if (!on || !on.offsetWidth){ ind.style.opacity = '0'; return; }
-    ind.style.left = on.offsetLeft + 'px';
-    ind.style.width = on.offsetWidth + 'px';
-    ind.style.top = on.offsetTop + 'px';
-    ind.style.height = on.offsetHeight + 'px';
-    ind.style.opacity = '1';
+    placeIndicator(seg);
+    seg.querySelectorAll(':scope > .sub-tab').forEach(tab => segTabSizes.observe(tab));
   });
 }
 
