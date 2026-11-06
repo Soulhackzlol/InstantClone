@@ -3469,6 +3469,8 @@
 "After 20 s, so short blips never reach chat. Says \"we're back\" too.": "A los 20 s, así los cortes breves nunca llegan al chat. También dice \"ya estamos de vuelta\".",
 "Anyone types it, the bot answers with your delay. Always up to date.": "Cualquiera lo escribe y el bot responde con tu delay. Siempre al día.",
 "Delay on / off notice": "Aviso de delay activado / desactivado",
+"1 result for \"{}\"": "1 resultado para \"{}\"",
+"{} results for \"{}\"": "{} resultados para \"{}\"",
 "Tells chat when the delay switches. Never says how long.": "Avisa al chat cuando el delay cambia. Nunca dice cuánto dura.",
 "Mod controls": "Controles para mods",
 "!cut and !setdelay 30 for your mods. Controls the stream.": "!cut y !setdelay 30 para tus mods. Controlan el directo.",

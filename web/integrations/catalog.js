@@ -24,10 +24,12 @@ const Catalog = {
     this.render();
   },
   words(){ return this.query.toLowerCase().split(/\s+/).filter(Boolean); },
-  // Every word typed is in its name, what it does, its category or what it needs.
+  // Every word typed is in its name, what it does, its category or what it
+  // needs, as the page shows them or in English.
   matches(item, category){
     const words = this.words();
-    const hay = [item.name, item.description, category].concat(item.needs || []).join(' ').toLowerCase();
+    const shown = [item.name, item.description, category];
+    const hay = shown.concat(shown.map(text => tr(text)), item.needs || []).join(' ').toLowerCase();
     return words.every(w => hay.includes(w));
   },
   // Without a Twitch app in this copy, what needs Twitch isn't a good
@@ -75,15 +77,17 @@ const Catalog = {
         <span>Try another word, or build it yourself from any trigger and any steps.</span>
         <button class="ic-btn ic-btn-ghost ig-small" data-act="build">${svg('plus')}Build your own</button></div>`;
     }
-    return `<div class="ig-cat-lead" data-key="lead">${n} ${n === 1 ? 'result' : 'results'} for "${esc(this.query)}"</div>`
+    const query = esc(this.query);
+    const lead = n === 1 ? `1 result for "${query}"` : `${n} results for "${query}"`;
+    return `<div class="ig-cat-lead" data-key="lead">${lead}</div>`
       + groups.map(([id, list]) => `<div class="ig-cat-group" data-key="g-${id}">${CAT_LABEL[id]}<small>${list.length}</small></div>`
         + (id === 'packs' ? this.packsHtml(list) : this.presetsHtml(list))).join('');
   },
   packsHtml(list){
     const cat = S.data.catalog, words = this.words();
     return list.map((p, n) => `<div class="dcard ig-cat-pack" data-key="pk-${esc(p.id)}" style="--i:${n}">
-      <div class="dcard-name">${markWords(p.name, words)}</div>
-      <div class="ig-cat-desc">${markWords(p.description, words)}</div>
+      <div class="dcard-name">${markWords(tr(p.name), words)}</div>
+      <div class="ig-cat-desc">${markWords(tr(p.description), words)}</div>
       <div class="ig-pack-list">${p.presets.map(id => `<span>${svg(PRESET_ICON[id] || 'steps')}${esc((cat.presets.find(x => x.id === id) || {}).name || id)}</span>`).join('')}</div>
       <div class="ig-cat-foot">${needsHtml(p.needs)}
       <button class="ic-btn ic-btn-primary ig-small" data-act="pack" data-pack="${esc(p.id)}" aria-label="Add the ${esc(p.name)} pack">Add pack</button></div>
@@ -103,8 +107,8 @@ const Catalog = {
       return `<div class="dcard ig-cat-tile" style="--dc:${(KINDS[fake.step.type] || {}).c || 'var(--accent)'};--i:${n}" data-key="t-${esc(p.id)}">
         <div class="dcard-screen" aria-hidden="true">${previewHtml(fake.step, fake.handler, false)}</div>
         <div class="ig-cat-id"><span class="dcard-icon">${svg(PRESET_ICON[p.id] || 'steps')}</span>
-          <div class="dcard-id"><div class="dcard-name">${markWords(p.name, words)}</div>${this.query ? `<div class="ig-cat-kind">${CAT_LABEL[p.category] || ''}</div>` : ''}</div></div>
-        <div class="ig-cat-desc">${markWords(p.description, words)}</div>
+          <div class="dcard-id"><div class="dcard-name">${markWords(tr(p.name), words)}</div>${this.query ? `<div class="ig-cat-kind">${CAT_LABEL[p.category] || ''}</div>` : ''}</div></div>
+        <div class="ig-cat-desc">${markWords(tr(p.description), words)}</div>
         <div class="ig-cat-foot">${needsHtml(p.needs)}${button}</div>
       </div>`;
     }).join('');
