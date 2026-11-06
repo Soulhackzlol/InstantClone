@@ -409,7 +409,6 @@
 .ig-volume input[type=range]{flex:1;min-width:120px}
 .ig-volume .mono{min-width:3.2em;color:var(--fg-3)}
 .ig-recipe-alerts{display:flex;flex-direction:column;gap:10px}
-.ig-mhint{margin-top:8px;font-size:12px;color:var(--fg-3)}
 /* Values: a few under the field being written in (.ig-vstrip), the rest in
    a searchable menu (.ig-vmenu, see ValuePick in integrations.js). */
 .ig-vstrip{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:8px 0 2px;padding:7px 9px;border-radius:10px;
@@ -491,6 +490,10 @@
 .ig-mchip-name:hover{color:var(--fg)}
 .ig-mchip.on{background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));border-color:color-mix(in oklch,var(--accent) 55%,transparent)}
 .ig-mchip.on .ig-mchip-name{color:var(--fg)}
+/* Undo and redo in an editor's footer. */
+.ig-history{display:inline-flex;gap:2px;flex:0 0 auto}
+.ig-history .ic-btn-tiny svg{width:14px;height:14px}
+.ig-history .ic-btn-tiny:disabled{opacity:.35;cursor:default}
 /* Remove a moment: beside its switch, there on hover and on the open one. */
 .ig-moment-del{display:grid;place-items:center;width:20px;height:20px;padding:0;border-radius:50%;border:1px solid var(--line-2);
   background:var(--surface-3);color:var(--fg-3);cursor:pointer;opacity:0;
@@ -498,10 +501,27 @@
 .ig-moment-del svg{width:10px;height:10px}
 .ig-moment-del:hover,.ig-moment-del:focus-visible{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 55%,transparent);opacity:1}
 .ig-moment-del:active{transform:scale(.92)}
-.ig-moment .ig-moment-del{position:absolute;top:2px;left:calc(50% + 20px)}
+.ig-moment .ig-moment-del{position:absolute;top:-1px;left:calc(50% + 22px)}
 .ig-mchip .ig-moment-del{width:18px;height:18px;margin-left:-4px;border-color:transparent;background:none}
 :is(.ig-moment,.ig-mchip):is(:hover,.on,:focus-within) .ig-moment-del{opacity:1}
 @media (hover:none){.ig-moment-del{opacity:1}}
+/* The simple editor's parts, numbered in reading order: the moments, what
+   it says or does, its options. */
+.ig-ed-sect{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin:0 0 10px;font-size:13.5px;color:var(--fg)}
+.ig-ed-sect b{font-weight:600}
+.ig-ed-sect-s{color:var(--fg-3);font-size:12px}
+.ig-ed-num{width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;flex:none;font-size:11px;font-weight:700;
+  color:var(--accent);background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));border:1px solid color-mix(in oklch,var(--accent) 40%,transparent)}
+.ig-ed-body>.ig-moments,.ig-ed-body>.ig-mchips{margin-bottom:22px}
+/* A moment's switch, drawn as one: a knob that slides on. */
+.ig-ed-body .ig-dot{width:30px;height:18px;border-radius:999px;background:var(--surface-3);border:1.5px solid var(--line-2)}
+.ig-ed-body .ig-dot svg{display:none}
+.ig-ed-body .ig-dot::before{content:'';position:absolute;left:2px;top:50%;width:11px;height:11px;margin-top:-5.5px;border-radius:50%;
+  background:var(--fg-3);transition:transform .2s var(--ease-out),background-color .2s var(--ease-out)}
+.ig-ed-body .ig-dot.on{background:var(--accent);border-color:var(--accent)}
+.ig-ed-body .ig-dot.on::before{transform:translateX(12px);background:var(--accent-ink)}
+.ig-ed-body .ig-mchip .ig-dot{width:30px;height:18px}
+.ig-ed-body .ig-moments::before{top:9px}
 /* The simple editor: the preview you write on, and its options beside it
    as rows. The open row's settings sit right under it. */
 .ig-ed-cols{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}
@@ -1136,6 +1156,11 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   transition:height .22s var(--ease-out),margin-bottom .22s var(--ease-out),opacity .18s var(--ease-out),border-width .22s var(--ease-out)}
 .ig-drop-new svg{width:16px;height:16px}
 .ig-dragging .ig-drop-new{height:56px;margin-bottom:10px;opacity:1;border-width:1.5px}
+/* It floats at the top of the scrolled list, so a card dragged from far
+   down never has to reach back up for it. */
+.ig-dragging .ig-drop-new{position:sticky;top:-20px;z-index:6;color:var(--fg-2);
+  border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:color-mix(in oklch,var(--accent) 7%,var(--surface));
+  box-shadow:0 10px 24px -12px rgb(0 0 0 / .7)}
 .ig-folder-empty{display:flex;align-items:center;justify-content:center;min-height:64px;border:1.5px dashed var(--line);border-radius:12px;
   color:var(--fg-4);font-size:12.5px}
 .ig-dragging [data-drop-folder]{transition:background-color .15s var(--ease-out),box-shadow .15s var(--ease-out)}

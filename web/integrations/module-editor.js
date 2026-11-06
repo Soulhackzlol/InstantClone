@@ -9,6 +9,12 @@ const ED_GROUPS = [
 ];
 // The simple editor for catalog modules: pick a moment, write on the
 // preview itself, and every option is a row beside it that opens in place.
+const EDITOR_SHOWN_KEY = 'instantclone_editor_shown';
+const EDITOR_SHOW_AFTER_MS = 600;
+// A numbered heading over a part of the editor, in reading order.
+function edSection(n, title, sub = ''){
+  return `<div class="ig-ed-sect"><span class="ig-ed-num">${n}</span><b>${title}</b>${sub ? `<span class="ig-ed-sect-s">${sub}</span>` : ''}</div>`;
+}
 const Editor = {
   d:null, sel:0, chip:null, run:null, dirty:false, back:null, justAdded:false,
   // opts: {back} (see Modal.back); {justAdded} when the catalog just made
@@ -40,6 +46,7 @@ const Editor = {
     this.run = null;
     this.converted = null;
     TRIES.clear();
+    historyStart(this);
     this.show();
   },
   // After `d` is swapped for another version of it (Discard, Undo).
@@ -190,6 +197,8 @@ const Editor = {
       esc(p ? p.description : 'Pick a moment, then write on the message itself. Everything else is one click away.'),
       enableSwitch('enabled', d.enabled));
     // A test opens under the preview; every option is a row beside it.
+    // The sections are numbered in reading order; moments come first when there are several.
+    const first = d.handlers.length > 1 ? 1 : 0;
     const test = this.chip === '__test'
       ? `<div class="ig-pop" data-autoh><div class="ig-pop-in" data-key="pop-__test-${this.sel}">${this.popHtml(step, h)}</div></div>` : '';
     Modal.body(`${head}
@@ -198,13 +207,14 @@ const Editor = {
         ${twitchEventStatusHtml(h.trigger)}
         <div class="ig-ed-cols">
           <div class="ig-ed-main">
+            ${edSection(first + 1, k && k.text ? 'What it says' : 'What it does')}
             <div class="ig-ed-preview" data-flip data-autoh><div class="ig-ed-pv" data-key="pv-${this.sel}">${this.previewBoxHtml(step, h)}</div></div>
             ${test}
           </div>
-          <aside class="ig-ed-side" aria-label="Options" data-flip>${this.sideHtml(this.chips(step, h), step, h)}</aside>
+          <aside class="ig-ed-side" aria-label="Options" data-flip>${edSection(first + 2, 'Options')}${this.sideHtml(this.chips(step, h), step, h)}</aside>
         </div>
       </div>
-      ${footHtml(d, this.dirty, `<button class="ic-btn ic-btn-ghost" data-act="ed-builder">Open in builder</button>
+      ${footHtml(d, this.dirty, `${historyButtonsHtml(this)}<button class="ic-btn ic-btn-ghost" data-act="ed-builder">Open in builder</button>
         ${step && step.type === 'overlay'
           ? `<button class="ic-btn ic-btn-ghost" data-act="alert-show">${svg('play', ' class="ig-btn-ic"')}Show it on stream</button>`
           : `<button class="ic-btn ic-btn-ghost" data-act="ed-test">${svg('play', ' class="ig-btn-ic"')}Send a test</button>`}`, this.justAdded)}`);
@@ -212,6 +222,18 @@ const Editor = {
     if (this.chip === 'detect') Meter.watch();
     if (this.chip === 'scene') ObsLive.watch();
     if (step && step.type === 'overlay') alertStage(step, h, false);
+    this.showTheWay();
+  },
+  // The first time an editor with several moments opens, the trail flies
+  // from the picked moment to what it edits: that's how the two connect.
+  showTheWay(){
+    if (this.d.handlers.length < 2 || store.get(EDITOR_SHOWN_KEY)) return;
+    store.set(EDITOR_SHOWN_KEY, '1');
+    setTimeout(() => {
+      const from = q('.ig-mchip.on, .ig-moment.on'), to = q('.ig-ed-preview');
+      flyTrail(from, to, () => to && to.animate([{boxShadow:'0 0 0 0 transparent'}, {boxShadow:'0 0 0 3px var(--accent)'}, {boxShadow:'0 0 0 0 transparent'}],
+        {duration:700, easing:'cubic-bezier(.2,.7,.2,1)'}));
+    }, EDITOR_SHOW_AFTER_MS);
   },
   // The options as rows, grouped, under what it still needs before it can
   // run. The open row shows its settings right under it.
@@ -247,14 +269,14 @@ const Editor = {
     };
     const del = n => `<button class="ig-moment-del" data-act="moment-del" data-n="${n}" aria-label="Remove ${esc(labels[n])}" title="Remove">${svg('x')}</button>`;
     const alert = (primaryStep(hs[this.sel]) || {}).type === 'overlay';
-    const hint = `<div class="ig-mhint">${alert ? 'Each one has its own alert' : 'Each one has its own settings'}: click a name to edit it below. The tick turns it on or off.</div>`;
+    const head = edSection(1, alert ? 'Which alerts' : 'When it runs', 'Pick one to edit it. Its switch turns it on or off.');
     // Too many for a timeline: chips that wrap, each keeping its switch.
     if (hs.length > 5){
-      return `<div class="ig-mchips" role="group" aria-label="Moments">${hs.map((h, n) => `<div class="ig-mchip${n === this.sel ? ' on' : ''}">
-        ${dot(h, n)}${name(n, 'ig-mchip-name')}${del(n)}</div>`).join('')}</div>${hint}`;
+      return `${head}<div class="ig-mchips" role="group" aria-label="Moments">${hs.map((h, n) => `<div class="ig-mchip${n === this.sel ? ' on' : ''}">
+        ${dot(h, n)}${name(n, 'ig-mchip-name')}${del(n)}</div>`).join('')}</div>`;
     }
-    return `<div class="ig-moments" role="group" aria-label="Moments" style="--n:${hs.length}">${hs.map((h, n) => `<div class="ig-moment${n === this.sel ? ' on' : ''}">
-      ${dot(h, n)}${name(n, 'ig-moment-name')}${del(n)}</div>`).join('')}</div>${hint}`;
+    return `${head}<div class="ig-moments" role="group" aria-label="Moments" style="--n:${hs.length}">${hs.map((h, n) => `<div class="ig-moment${n === this.sel ? ' on' : ''}">
+      ${dot(h, n)}${name(n, 'ig-moment-name')}${del(n)}</div>`).join('')}</div>`;
   },
   previewBoxHtml(step, h){
     if (step && step.type === 'light'){
@@ -410,7 +432,7 @@ const Editor = {
       const p = step.params, chain = alertTiers(h);
       if (chain){
         const bigger = chain.tiers.length - 1;
-        out.push({id:'tiers', k:'Bigger ones', v:this.tier ? 'editing ' + lowerFirst(tierLabel(chain, this.tier))
+        out.push({id:'tiers', k:'Bigger ones', v:this.tier ? `editing ${lowerFirst(tierLabel(chain, this.tier))}`
           : bigger ? tierLabel(chain, 1).toLowerCase() + (bigger > 1 ? ` +${bigger - 1}` : '') : 'none'});
       }
       out.push({id:'adesign', k:'Design', v:designLabel(p.design)});
@@ -471,7 +493,7 @@ const Editor = {
     if (first && first.type === 'wait_delay') return {id:'aired', label:'once viewers see it'};
     if (first && first.type === 'wait'){
       const ms = parseInt(first.params.ms, 10) || 0;
-      return {id:'w' + ms, label:'after ' + fmtMs(ms)};
+      return {id:'w' + ms, label:`after ${fmtMs(ms)}`};
     }
     return {id:'now', label:'right away'};
   },
@@ -707,12 +729,14 @@ const Editor = {
       this.d.cooldown_ms = ms;
     }
     else if (!rulesInput(t, el, '') && !sceneInput(t, el, '') && !onlyLiveInput(t, el, '') && !quietInput(this.d, el)) return;
-    this.changed();
+    this.changed(fieldOf(el));
   },
-  changed(){
+  /** After any change; `field` is the box typed in, if that was it. */
+  changed(field){
     this.dirty = true;
     this.edits = (this.edits || 0) + 1;
     syncSceneRules(this.d);
+    historyNote(this, field);
     this.render();
   },
   // Point every state of the on-air light at one device, with what that

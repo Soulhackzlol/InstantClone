@@ -5,10 +5,10 @@
 //! replaces.
 //!
 //! The login is the device-code login Integrations uses (see
-//! `integrations::twitch::auth`), asking only to read the stream key, and it
-//! lasts as long as one fetch: the key is read, the token is revoked, and
-//! nothing of the login is kept. A streamer who never uses Integrations is
-//! never asked for chat or channel-point permissions.
+//! `integrations::twitch::auth`), asking to read the stream key and for
+//! everything Integrations needs, so the same approval connects Twitch there
+//! too (the caller hands it over; see `SignedIn`). When Integrations already
+//! has a streamer account, the login is revoked once the key is read.
 //!
 //! Every call here blocks (ureq); callers run them off the async thread.
 
@@ -17,7 +17,7 @@ use crate::json::{self, Value};
 use crate::sync::Mutex;
 use std::time::{Duration, Instant};
 
-const SCOPE: &str = "channel:read:stream_key";
+const KEY_SCOPE: &str = "channel:read:stream_key";
 const KEY_URL: &str = "https://api.twitch.tv/helix/streams/key";
 const REVOKE_URL: &str = "https://id.twitch.tv/oauth2/revoke";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -45,10 +45,30 @@ pub struct Code {
 pub enum Check {
     /// Not approved yet; ask again in a moment.
     Waiting,
-    /// The stream key, and the channel it belongs to.
-    Done { key: String, login: String },
+    /// The stream key, and the login that read it, for Integrations to keep
+    /// or to `revoke`.
+    Done { key: String, signed_in: SignedIn },
     /// Over: declined, expired, or Twitch said no. Start again.
     Ended(String),
+}
+
+/// The streamer's Twitch login, with every permission Integrations asks for.
+pub struct SignedIn {
+    pub client_id: String,
+    pub tokens: auth::Tokens,
+    pub who: auth::Validated,
+}
+
+impl SignedIn {
+    /// Not kept: hand the token back to Twitch. Blocks.
+    pub fn revoke(&self) {
+        revoke(&self.client_id, &self.tokens.access);
+    }
+}
+
+/// The stream key's permission and Integrations' own, in one approval.
+fn scopes() -> String {
+    format!("{KEY_SCOPE} {}", auth::MAIN_SCOPES)
 }
 
 /// What one `check` should do, decided from the waiting login.
@@ -67,7 +87,7 @@ pub fn start(client_id: &str) -> Result<Code, String> {
     if client_id.is_empty() {
         return Err("This copy of InstantClone has no Twitch app. Paste the key instead.".into());
     }
-    let code = auth::start_device(client_id, SCOPE)?;
+    let code = auth::start_device(client_id, &scopes())?;
     let now = Instant::now();
     *PENDING.lock() = Some(Pending {
         client_id: client_id.to_string(),
@@ -99,7 +119,7 @@ pub fn check() -> Check {
             device_code,
         } => (client_id, device_code),
     };
-    match auth::poll_device(&client_id, SCOPE, &device_code) {
+    match auth::poll_device(&client_id, &scopes(), &device_code) {
         Poll::Pending => Check::Waiting,
         Poll::SlowDown => {
             if let Some(p) = PENDING.lock().as_mut() {
@@ -114,11 +134,19 @@ pub fn check() -> Check {
         }
         Poll::Done(tokens) => {
             forget(&device_code);
-            let fetched = fetch_key(&client_id, &tokens.access);
-            revoke(&client_id, &tokens.access);
-            match fetched {
-                Ok((key, login)) => Check::Done { key, login },
-                Err(why) => Check::Ended(why),
+            match fetch_key(&client_id, &tokens.access) {
+                Ok((key, who)) => Check::Done {
+                    key,
+                    signed_in: SignedIn {
+                        client_id,
+                        tokens,
+                        who,
+                    },
+                },
+                Err(why) => {
+                    revoke(&client_id, &tokens.access);
+                    Check::Ended(why)
+                }
             }
         }
     }
@@ -150,8 +178,8 @@ fn forget(device_code: &str) {
     }
 }
 
-/// The channel's stream key and name, read with a fresh login.
-fn fetch_key(client_id: &str, access: &str) -> Result<(String, String), String> {
+/// The channel's stream key, and whose it is, read with a fresh login.
+fn fetch_key(client_id: &str, access: &str) -> Result<(String, auth::Validated), String> {
     let me = auth::validate(access).map_err(|e| match e {
         TokenError::Revoked => "Twitch didn't accept the login. Click the button again.".into(),
         TokenError::Temporary(why) => why,
@@ -171,7 +199,7 @@ fn fetch_key(client_id: &str, access: &str) -> Result<(String, String), String> 
         ));
     }
     let key = key_from_answer(&body).ok_or("Twitch answered without a stream key.")?;
-    Ok((key, me.login))
+    Ok((key, me))
 }
 
 fn key_from_answer(body: &str) -> Option<String> {

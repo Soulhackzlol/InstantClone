@@ -24,6 +24,9 @@
    card's edge (sticky counts from inside the card's 32px padding). The
    halo in the card's colour hides what scrolls past around it. */
 .pane-card .sub-tabs{position:sticky;top:-26px;z-index:5;box-shadow:0 0 0 10px var(--surface)}
+/* What a jump brings into view (a found setting, a guide step) stops below
+   that strip instead of under it. */
+.pane-card:has(.sub-tabs:not([hidden])){scroll-padding-top:64px}
 .sub-tab{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:6px;
   padding:6px 11px;border-radius:6px;color:var(--fg-3);font-size:12px;font-weight:500;cursor:pointer;
   position:relative;z-index:2;transition:color .2s var(--ease-out);white-space:nowrap;flex:1;justify-content:center}

@@ -1143,34 +1143,14 @@ function launchProfile(chip){
   const cta = $('cp-cta');
   if (!cta || !motionOK()) return;
   const bolt = chip.querySelector('.bolt') || chip;
-  const from = bolt.getBoundingClientRect(), to = cta.getBoundingClientRect();
-  if (!to.width) return;
-  const sx = from.left + from.width / 2, sy = from.top + from.height / 2;
-  const ex = to.left + to.width / 2, ey = to.top + to.height / 2;
-  // Quadratic arc that rises a little before dropping into the button.
-  const cx = (sx + ex) / 2, cy = Math.min(sy, ey) - 34;
-  const path = [];
-  for (let i = 0; i <= 10; i++){
-    const t = i / 10, u = 1 - t;
-    path.push(`translate(${u * u * sx + 2 * u * t * cx + t * t * ex}px,${u * u * sy + 2 * u * t * cy + t * t * ey}px)`);
-  }
+  if (!cta.getBoundingClientRect().width) return;
   const ease = 'cubic-bezier(.2,.7,.2,1)';
   chip.animate([{ transform: 'none' }, { transform: 'scale(.92)' }, { transform: 'none' }], { duration: 220, easing: ease });
   const glow = px => `drop-shadow(0 0 ${px}px oklch(0.80 0.17 65 / .9))`;
   bolt.animate([{ transform: 'none', filter: glow(0) }, { transform: 'scale(1.5) rotate(-14deg)', filter: glow(6) },
                 { transform: 'none', filter: glow(0) }], { duration: 420, easing: ease });
   holdCtaFor(PROFILE_FLIGHT_MS);
-  [1, .7, .5, .35].forEach((scale, i) => {
-    const spark = document.createElement('span');
-    spark.className = 'cp-spark';
-    spark.style.opacity = String(1 - i * .22);
-    document.body.appendChild(spark);
-    const flight = spark.animate(path.map(p => ({ transform: `${p} scale(${scale})` })),
-      { duration: PROFILE_FLIGHT_MS, delay: i * 26, easing: 'cubic-bezier(.45,0,.7,.4)', fill: 'both' });
-    // Settled through the promise, not the finish event, which waits for a
-    // painted frame; a cancel rejects it, and either way the spark goes.
-    flight.finished.then(() => { if (i === 0) rippleCta(cta); }, () => {}).finally(() => spark.remove());
-  });
+  flyTrail(bolt, cta, () => rippleCta(cta), {ms: PROFILE_FLIGHT_MS, warm: true});
 }
 function rippleCta(cta){
   const ripple = document.createElement('span');

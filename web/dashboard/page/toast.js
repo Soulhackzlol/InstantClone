@@ -1,7 +1,7 @@
 // - Toast ------------------------------─
 // Errors stay long enough to read and are announced at once (role=alert);
 // the rest are polite. Hovering or focusing a toast holds it, and every
-// toast has a close button. `action` ({label, run, expire}) adds one
+// toast has a close button. `action` ({label, run, expire, undo}) adds one
 // button, used for Undo; `expire` runs when the toast goes without it.
 function toast(msg, kind, ms, action){
   const k = kind || 'info';
@@ -28,6 +28,7 @@ function toast(msg, kind, ms, action){
     b.type = 'button';
     b.className = 'ic-toast-act';
     b.textContent = action.label;
+    if (action.undo) b.dataset.undo = '';
     b.onclick = () => { acted = true; close(); action.run(); };
     el.appendChild(b);
   }
@@ -74,8 +75,19 @@ function deleteWithUndo(key, label, send, restore){
   const settle = () => { settled = true; pendingDeletes.delete(key); };
   const commit = () => { if (settled) return; settle(); send(); };
   pendingDeletes.set(key, commit);
-  toast(label, 'info', DELETE_UNDO_MS, {label:'Undo', expire:commit, run(){ if (settled) return; settle(); restore(); }});
+  toast(label, 'info', DELETE_UNDO_MS, {label:'Undo', undo:true, expire:commit, run(){ if (settled) return; settle(); restore(); }});
 }
 const isDeleting = key => pendingDeletes.has(key);
+// Ctrl+Z on the page (not in a text box or an editor, which have their
+// own) presses the newest Undo still showing.
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== 'z' || e.defaultPrevented) return;
+  if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+  if (document.querySelector('.ig-modal')) return;
+  const undos = document.querySelectorAll('#toast-rail .ic-toast:not(.leaving) [data-undo]');
+  if (!undos.length) return;
+  e.preventDefault();
+  undos[undos.length - 1].click();
+});
 window.addEventListener('pagehide', () => [...pendingDeletes.values()].forEach(commit => commit()));
 

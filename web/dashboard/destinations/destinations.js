@@ -599,10 +599,9 @@ async function refreshVodMethods(){
 // in the app and served at /obs/vod-script/download - no network, no fixed
 // server-side path. We prompt for a location with the File System Access API
 // when the browser has it (a real native Save dialog), and fall back to a
-// plain download otherwise. Callable from the destination form and System tab.
-async function installVodScript(btnId, msgId){
-  const btn = $(btnId || 'vod-script-btn');
-  const msg = $(msgId || 'vod-script-msg');
+// plain download otherwise. The VOD guide's first step (system/vod-guide.js)
+// calls it with its button and message line; true once the file is out.
+async function installVodScript(btn, msg){
   const FILENAME = 'optional-vod-unlocker.lua';
   const done = (t) => { if (msg) msg.textContent = t; };
 
@@ -615,7 +614,7 @@ async function installVodScript(btnId, msgId){
         types: [{ description: 'OBS Lua script', accept: { 'text/x-lua': ['.lua'] } }],
       });
     } catch (e){
-      if (e && e.name === 'AbortError') return; // user cancelled - no noise
+      if (e && e.name === 'AbortError') return false; // user cancelled - no noise
       handle = null; // any other failure: fall through to plain download
     }
     if (handle){
@@ -626,14 +625,15 @@ async function installVodScript(btnId, msgId){
         const w = await handle.createWritable();
         await w.write(bytes);
         await w.close();
-        done('Saved. In OBS: Tools → Scripts → + → ' + FILENAME);
-        toast('VOD unlocker saved','ok');
+        done('Saved: ' + FILENAME);
+        if (btn) btn.disabled = false;
+        return true;
       } catch (e){
         done('Could not save: ' + (e && e.message ? e.message : e));
         toast('Save failed','err');
       }
       if (btn) btn.disabled = false;
-      return;
+      return false;
     }
   }
 
@@ -645,8 +645,8 @@ async function installVodScript(btnId, msgId){
   document.body.appendChild(a);
   a.click();
   a.remove();
-  done('Downloaded ' + FILENAME + ' - move it into OBS, then Tools → Scripts → +.');
-  toast('VOD unlocker downloaded','ok');
+  done('Downloaded ' + FILENAME + ' to your downloads folder.');
+  return true;
 }
 
 // The OBS setup steps only matter once Vertical is picked; the YouTube

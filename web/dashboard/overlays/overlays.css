@@ -140,6 +140,8 @@
 .ov-stage{display:flex;flex-direction:column;gap:14px}
 .og-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .og-push{margin-left:auto}
+/* Delete, beside Edit: red only when pointed at or asking to confirm. */
+.og-del-tiny:hover,.og-del-tiny:focus-visible{color:var(--danger)}
 /* Alerts: the one source that plays them all, across the top of the
    gallery of alert designs (in OBS or not, and its address); the designs
    as tiles, in the gallery and in an alert's Design chip. */

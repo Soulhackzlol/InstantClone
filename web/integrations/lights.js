@@ -14,12 +14,14 @@ function lightRgb(color){
   if (/^warm( white)?$/.test(c)) return '#ffbe78';
   return /^#?([0-9a-f]{3}|[0-9a-f]{6})$/.test(c) ? (c[0] === '#' ? c : '#' + c) : '#9ca3af';
 }
+// One whole sentence per case, so each reads in the page's language.
 function lightSummary(p){
-  const color = (p.color || '').trim(), bright = (p.brightness || '').trim();
-  const at = bright ? ` at ${bright}${/\{/.test(bright) ? '' : '%'}` : '';
+  const color = (p.color || '').trim() || 'pick a color', bright = (p.brightness || '').trim();
+  const pct = /\{/.test(bright) ? bright : bright + '%';
   if (p.action === 'off') return 'Turn off';
-  if (p.action === 'on') return 'Turn on' + at;
-  return (p.action === 'flash' ? 'Flash ' : 'Turn on, ') + (color || 'pick a color') + at;
+  if (p.action === 'on') return bright ? `Turn on at ${pct}` : 'Turn on';
+  if (p.action === 'flash') return bright ? `Flash ${color} at ${pct}` : `Flash ${color}`;
+  return bright ? `Turn on, ${color} at ${pct}` : `Turn on, ${color}`;
 }
 // The device a step drives, and the scan to pick another.
 function lightPickerHtml(p){

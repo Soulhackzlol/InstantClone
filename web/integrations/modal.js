@@ -151,6 +151,14 @@ function onModalKey(e){
     else Modal.close();
     return;
   }
+  // Undo and redo the editor's changes; a text box keeps its own.
+  const editor = {editor:Editor, builder:Builder}[Modal.kind];
+  const key = e.key.toLowerCase();
+  if ((e.ctrlKey || e.metaKey) && editor && (key === 'z' || key === 'y') && !typesText(e.target)){
+    e.preventDefault();
+    historyStep(editor, key === 'z' && !e.shiftKey);
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && (Modal.kind === 'editor' || Modal.kind === 'builder')){
     e.preventDefault();
     const save = q('.dest-form-foot [data-act="save"]');
@@ -274,6 +282,7 @@ function discardEdits(ed){
     ed.d = fresh = withHandler(clone(saved));
     ed.dirty = false;
     ed.reset();
+    historyStart(ed);
     ed.render();
   });
   undoToast('Changes discarded', () => {
@@ -282,6 +291,7 @@ function discardEdits(ed){
       ed.d = edits;
       ed.dirty = true;
       ed.reset();
+      historyStart(ed);
       ed.render();
     });
   });

@@ -1,0 +1,28 @@
+/* - Quick guides (tour/guides.js) ----------------------------------------------
+   The ? menu, the ring on the control a step is about, and its note. */
+.help-menu{position:fixed;z-index:320;min-width:250px;padding:6px;border-radius:12px;border:1px solid var(--line-2);
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));box-shadow:0 24px 60px rgb(0 0 0 / .5);
+  display:flex;flex-direction:column;gap:2px;animation:tipIn .22s var(--ease-out) both}
+.help-menu button{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:8px 10px;border-radius:8px;
+  border:0;background:none;color:var(--fg-2);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.help-menu button span{color:var(--fg-4);font-size:11.5px;white-space:nowrap}
+.help-menu button:hover,.help-menu button:focus-visible{background:var(--surface-3);color:var(--fg);outline:none}
+.help-menu button b{color:var(--fg)}
+.help-menu-h{padding:8px 10px 4px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-4)}
+
+.guide-ring{position:fixed;z-index:310;border-radius:12px;pointer-events:none;opacity:0;
+  border:2px solid var(--accent);box-shadow:0 0 0 4px color-mix(in oklch,var(--accent) 18%,transparent),0 0 28px var(--accent-glow);
+  transition:opacity .25s var(--ease-out)}
+.guide-ring.in{opacity:1;animation:guidePulse 1.6s var(--ease-out) 2}
+@keyframes guidePulse{50%{box-shadow:0 0 0 9px color-mix(in oklch,var(--accent) 6%,transparent),0 0 36px var(--accent-glow)}}
+.guide-note{position:fixed;z-index:311;width:320px;max-width:calc(100vw - 24px);padding:12px 14px;border-radius:12px;
+  border:1px solid var(--line-2);background:linear-gradient(180deg,var(--surface-2),var(--surface));
+  box-shadow:0 24px 60px rgb(0 0 0 / .5),0 0 0 1px var(--accent-glow);
+  opacity:0;transform:translateY(4px);pointer-events:none;transition:opacity .2s var(--ease-out),transform .2s var(--ease-out)}
+.guide-note.in{opacity:1;transform:none;pointer-events:auto}
+.guide-head{display:flex;align-items:center;gap:8px;font-size:13px}
+.guide-head .ic-btn-tiny{margin-left:auto}
+.guide-count{font-size:11px;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums}
+.guide-note p{margin:8px 0 10px;font-size:12.5px;line-height:1.55;color:var(--fg-2)}
+.guide-foot{display:flex;justify-content:flex-end;gap:8px}
+@media (prefers-reduced-motion:reduce){.guide-ring.in{animation:none}.guide-note{transition:none}}

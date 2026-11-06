@@ -1694,6 +1694,93 @@ pub fn revert_vod_eb(web_port: u16) -> io::Result<bool> {
     Ok(true)
 }
 
+// ── Point OBS at InstantClone ───────────────────────────────────────
+//
+// Registering puts InstantClone in OBS's Service list; the streamer still
+// had to pick it in Settings > Stream and type a key, which a first-time
+// user easily misses. Right after an explicit Register (OBS closed), the
+// active profile is switched to it, key included. Its old stream settings
+// are kept next to it, from the first time only, so they can go back.
+
+/// The active profile's folder (under `basic/profiles/`) of the OBS whose
+/// settings live in `config_dir`, as `active_profile_dir` finds it for the
+/// default one.
+fn active_profile_dir_in(config_dir: &Path) -> Option<String> {
+    let s = fs::read_to_string(resolve_user_config_in(config_dir)?).ok()?;
+    if let Some(dir) = ini_get(&s, "Basic", "ProfileDir").filter(|d| !d.is_empty()) {
+        return Some(dir.to_string());
+    }
+    let name = ini_get(&s, "Basic", "Profile")?;
+    Some(profile_dir_by_name(&[config_dir.to_path_buf()], name).unwrap_or_else(|| name.to_string()))
+}
+
+/// Whether a profile's service.json streams to the InstantClone service.
+fn streams_to_instantclone(service_json: &str) -> bool {
+    let compact: String = service_json
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    compact.contains(r#""type":"rtmp_common""#) && compact.contains(r#""service":"InstantClone""#)
+}
+
+/// A profile's stream settings on the InstantClone service, with `key`.
+fn instantclone_service_json(ingest_port: u16, key: &str) -> String {
+    crate::json::obj([
+        (
+            "settings",
+            crate::json::obj([
+                ("bwtest", crate::json::Value::Bool(false)),
+                ("key", crate::json::str(key)),
+                ("protocol", crate::json::str("RTMP")),
+                ("server", crate::json::str(server_url(ingest_port))),
+                ("service", crate::json::str("InstantClone")),
+            ]),
+        ),
+        ("type", crate::json::str("rtmp_common")),
+    ])
+    .to_json()
+}
+
+/// Switch the active profile of the OBS in `config_dir` to the InstantClone
+/// service with `key`. The OBS must be closed, as for `register_in`.
+/// Ok(false): left alone, because there is no profile yet or it already
+/// streams to InstantClone (with whatever key the streamer chose).
+pub fn select_service_in(config_dir: &Path, ingest_port: u16, key: &str) -> io::Result<bool> {
+    let Some(profile) = active_profile_dir_in(config_dir) else {
+        return Ok(false);
+    };
+    let folder = config_dir.join(PROFILES_DIR_REL).join(profile);
+    if !folder.join("basic.ini").exists() {
+        return Ok(false);
+    }
+    let path = folder.join("service.json");
+    let original = fs::read_to_string(&path).unwrap_or_default();
+    if streams_to_instantclone(&original) {
+        return Ok(false);
+    }
+    let kept = path.with_extension("json.instantclone-before.bak");
+    if !original.trim().is_empty() && !kept.exists() {
+        write_or_friendly(&kept, &original)?;
+    }
+    write_or_friendly(&path, instantclone_service_json(ingest_port, key))?;
+    Ok(true)
+}
+
+/// Whether the OBS in `config_dir` streams to InstantClone right now.
+pub fn service_selected_in(config_dir: &Path) -> bool {
+    active_profile_dir_in(config_dir)
+        .and_then(|profile| {
+            fs::read_to_string(
+                config_dir
+                    .join(PROFILES_DIR_REL)
+                    .join(profile)
+                    .join("service.json"),
+            )
+            .ok()
+        })
+        .is_some_and(|s| streams_to_instantclone(&s))
+}
+
 // ── Phase C v2: launch OBS with --config-url ────────────────────────
 //
 // OBS's frontend looks for the multi-track config URL in this order
@@ -3216,6 +3303,85 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("fresh_obs_dir create_dir_all");
         ScratchDir(dir)
+    }
+
+    /// An OBS settings folder with one profile, "Sin Título" in `Sin_Título`,
+    /// streaming to `service` (None: no service.json yet).
+    fn obs_with_profile(label: &str, service: Option<&str>) -> ScratchDir {
+        let dir = fresh_obs_dir(label);
+        std::fs::write(
+            dir.0.join("user.ini"),
+            "[Basic]\nProfile=Sin Título\nProfileDir=Sin_Título\n",
+        )
+        .unwrap();
+        let profile = dir.0.join(PROFILES_DIR_REL).join("Sin_Título");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join("basic.ini"), "[General]\nName=Sin Título\n").unwrap();
+        if let Some(service) = service {
+            std::fs::write(profile.join("service.json"), service).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn registering_points_the_active_profile_at_instantclone_and_keeps_the_old_one() {
+        let twitch = r#"{"settings":{"bwtest":false,"key":"live_123","server":"auto","service":"Twitch"},"type":"rtmp_common"}"#;
+        let dir = obs_with_profile("select", Some(twitch));
+        let profile = dir.0.join(PROFILES_DIR_REL).join("Sin_Título");
+        assert!(!service_selected_in(&dir.0));
+        assert!(select_service_in(&dir.0, 1935, "main").unwrap());
+        let now = std::fs::read_to_string(profile.join("service.json")).unwrap();
+        let v = crate::json::parse(&now).unwrap();
+        assert_eq!(
+            v.path("settings.service")
+                .and_then(crate::json::Value::as_str),
+            Some("InstantClone")
+        );
+        assert_eq!(
+            v.path("settings.key").and_then(crate::json::Value::as_str),
+            Some("main")
+        );
+        assert_eq!(
+            v.path("settings.server")
+                .and_then(crate::json::Value::as_str),
+            Some("rtmp://localhost:1935/live")
+        );
+        assert!(service_selected_in(&dir.0));
+        let kept = profile.join("service.json.instantclone-before.bak");
+        assert_eq!(
+            std::fs::read_to_string(&kept).unwrap(),
+            twitch,
+            "the Twitch settings go back from here"
+        );
+        // Again: already on InstantClone, left as the streamer has it, and the
+        // first backup is never overwritten.
+        assert!(!select_service_in(&dir.0, 1940, "other").unwrap());
+        assert!(now == std::fs::read_to_string(profile.join("service.json")).unwrap());
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), twitch);
+    }
+
+    #[test]
+    fn a_profile_without_stream_settings_gets_them_and_no_backup() {
+        let dir = obs_with_profile("select-new", None);
+        assert!(select_service_in(&dir.0, 1935, "my key").unwrap());
+        let profile = dir.0.join(PROFILES_DIR_REL).join("Sin_Título");
+        assert!(service_selected_in(&dir.0));
+        assert!(!profile
+            .join("service.json.instantclone-before.bak")
+            .exists());
+        let v = crate::json::parse(&std::fs::read_to_string(profile.join("service.json")).unwrap())
+            .unwrap();
+        assert_eq!(
+            v.path("settings.key").and_then(crate::json::Value::as_str),
+            Some("my key")
+        );
+    }
+
+    #[test]
+    fn an_obs_never_opened_is_left_alone() {
+        let dir = fresh_obs_dir("select-none");
+        assert!(!select_service_in(&dir.0, 1935, "main").unwrap());
+        assert!(!service_selected_in(&dir.0));
     }
 
     #[cfg(windows)]

@@ -132,7 +132,7 @@ function discordTimes(html){
     let shown;
     if (style === 'R'){
       const diff = Math.round((at - Date.now()) / 60000);
-      shown = diff === 0 ? 'now' : diff > 0 ? `in ${plural(diff, 'minute')}` : `${plural(-diff, 'minute')} ago`;
+      shown = diff === 0 ? 'now' : diff === 1 ? 'in 1 minute' : diff > 0 ? `in ${diff} minutes` : diff === -1 ? '1 minute ago' : `${-diff} minutes ago`;
     } else shown = new Date(at).toLocaleString([], style === 't' || style === 'T' ? {timeStyle:'short'} : {dateStyle:'medium', timeStyle:'short'});
     return `<span class="ig-ts">${esc(shown)}</span>`;
   });
@@ -205,7 +205,7 @@ function cardColor(value, vars){
 }
 // "Today at 21:04", the way Discord labels a card's timestamp.
 function discordNow(){
-  return 'Today at ' + new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  return `Today at ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`;
 }
 // A Discord card (embed) as it lands, filled with sample values.
 function cardHtml(step, vars, big){

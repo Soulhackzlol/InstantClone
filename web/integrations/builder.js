@@ -304,6 +304,7 @@ const Builder = {
     this.after = null;
     this.testDry = true;
     this.resetTest();
+    historyStart(this);
     this.show();
   },
   resetTest(){
@@ -362,7 +363,7 @@ const Builder = {
         </section>
         <aside class="ig-inspector" aria-label="Settings" data-flip><div class="ig-insp" data-key="${this.inspectorKey()}">${this.inspectorHtml()}</div></aside>
       </div>
-      ${footHtml(d, this.dirty)}`);
+      ${footHtml(d, this.dirty, historyButtonsHtml(this))}`);
     if (this.sel === 'trigger' && !this.choosing){
       if (h.trigger.type === 'chat_activity') Meter.watch();
       if (h.trigger.type === 'scene') ObsLive.watch();
@@ -989,7 +990,7 @@ const Builder = {
       return;
     }
     else if (!quietInput(this.d, el)) return;
-    this.changed();
+    this.changed(fieldOf(el));
   },
   // A block's new name, in the block and in every step that runs it.
   renameBlock(t, name){
@@ -1001,10 +1002,12 @@ const Builder = {
     this.d.handlers.forEach(h => follow(h.steps));
     t.name = name;
   },
-  changed(){
+  /** After any change; `field` is the box typed in, if that was it. */
+  changed(field){
     this.dirty = true;
     this.edits = (this.edits || 0) + 1;
     syncSceneRules(this.d);
+    historyNote(this, field);
     this.render();
   },
   act(a, el){

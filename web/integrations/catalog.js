@@ -103,7 +103,7 @@ const Catalog = {
       const button = added
         ? `<button class="ic-btn ic-btn-ghost ig-small ig-added" data-act="add-preset" data-preset="${esc(p.id)}">${svg('check')}Added</button>`
         : `<button class="ic-btn ${have(p.id) || blocked ? 'ic-btn-ghost' : 'ig-cat-add'} ig-small" data-act="add-preset" data-preset="${esc(p.id)}"
-            aria-label="${have(p.id) ? 'Add another' : 'Add'} ${esc(p.name)}">${have(p.id) ? 'Add another' : 'Add'}</button>`;
+            aria-label="${have(p.id) ? `Add another ${esc(p.name)}` : `Add ${esc(p.name)}`}">${have(p.id) ? 'Add another' : 'Add'}</button>`;
       return `<div class="dcard ig-cat-tile" style="--dc:${(KINDS[fake.step.type] || {}).c || 'var(--accent)'};--i:${n}" data-key="t-${esc(p.id)}">
         <div class="dcard-screen" aria-hidden="true">${previewHtml(fake.step, fake.handler, false)}</div>
         <div class="ig-cat-id"><span class="dcard-icon">${svg(PRESET_ICON[p.id] || 'steps')}</span>

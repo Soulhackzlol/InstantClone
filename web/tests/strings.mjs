@@ -305,11 +305,51 @@ export function rustStrings() {
   const found = [];
   for (const file of rustFiles()) {
     const src = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
-    for (const m of src.matchAll(/r##"([\s\S]*?)"##|r#"([\s\S]*?)"#|"((?:[^"\\]|\\[\s\S])*)"/g)) {
-      found.push(rustText(m[1] ?? m[2] ?? m[3]));
+    for (const literal of rustLiterals(src)) {
+      found.push(rustText(literal));
+      // A preset's text as it is saved, {user} and all, line by line: the
+      // dashboard puts it in the page's language when it is added.
+      const saved = literal.replace(/\\(n|"|\\)/g, (_, c) => (c === 'n' ? '\n' : c));
+      if (/\{[a-z]/.test(saved)) found.push(...saved.split('\n').map(normalize));
     }
   }
   return found;
+}
+
+/** A Rust file's string literals, raw ones too. A quote in a comment ("an
+ * unescaped \" here") or a char literal ('"') would pair the quotes wrongly
+ * for the rest of the file, so this reads it in order and skips both. */
+function rustLiterals(src) {
+  const out = [];
+  const CHAR = /^b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|.)|[^'\\\n])'/;
+  let i = 0;
+  while (i < src.length) {
+    const rest = src.slice(i, i + 12);
+    if (rest.startsWith('//')) { i = src.indexOf('\n', i); if (i < 0) break; continue; }
+    if (rest.startsWith('/*')) { const end = src.indexOf('*/', i + 2); i = end < 0 ? src.length : end + 2; continue; }
+    const raw = /^b?r(#*)"/.exec(rest);
+    if (raw && !/[A-Za-z0-9_]/.test(src[i - 1] || '')) {
+      const close = '"' + raw[1];
+      const start = i + raw[0].length, end = src.indexOf(close, start);
+      out.push(src.slice(start, end < 0 ? src.length : end));
+      i = end < 0 ? src.length : end + close.length;
+      continue;
+    }
+    if (src[i] === '"') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== '"') j += src[j] === '\\' ? 2 : 1;
+      out.push(src.slice(i + 1, j));
+      i = j + 1;
+      continue;
+    }
+    if (src[i] === "'" || (src[i] === 'b' && src[i + 1] === "'")) {
+      const char = CHAR.exec(src.slice(i, i + 14));
+      i += char ? char[0].length : 1;   // otherwise a lifetime, like 'a
+      continue;
+    }
+    i++;
+  }
+  return out;
 }
 
 /** Page strings the dictionary lacks and that aren't marked to stay. */

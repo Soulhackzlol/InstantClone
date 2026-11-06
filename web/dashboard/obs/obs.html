@@ -22,7 +22,7 @@
       <div class="obs-card-head">
         <div class="obs-card-titles">
           <div class="ic-label"><span class="app-mark" data-app-mark="obs"></span>InstantClone as an OBS service <span class="ic-badge ic-badge-ok">recommended</span></div>
-          <div class="tab-sub obs-reg-intro">Register once, then pick <b>InstantClone</b> in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service</b>.</div>
+          <div class="tab-sub obs-reg-intro">Register once with OBS closed: OBS gets set to stream to <b>InstantClone</b>, key included.</div>
         </div>
         <span class="ic-pill obs-reg-pill" id="obs-reg-pill"><span class="dot"></span><span id="obs-reg-pill-l">Checking</span></span>
       </div>
@@ -39,6 +39,7 @@
         <summary>How it works</summary>
         <div class="ic-disclose-body">
           <p>Writes an <b>InstantClone</b> entry next to Twitch and YouTube in OBS's <i>Settings &rarr; Stream &rarr; Service</i> list. Multi-track via InstantClone works out of the box on Auto. OBS reads that list when it starts and writes it back when it quits, so InstantClone only changes it while that OBS is closed. If you change InstantClone's ports while OBS is closed, the entry follows at once.</p>
+          <p>Registering also sets that OBS's current profile to stream to InstantClone, key included, so there is nothing to pick. Its old stream settings stay in <code class="mono">service.json.instantclone-before.bak</code>, next to it.</p>
           <p>Each OBS on this PC has its own list: the installed one and every portable one. A portable OBS shows up here once it has been open while InstantClone runs, or pick its <code class="mono">obs64.exe</code> with <b>Using a portable OBS?</b></p>
         </div>
       </details>
@@ -72,47 +73,6 @@
           <button class="ic-btn ic-btn-primary" id="sl-on-btn" type="button" onclick="slConnect(true)" hidden>Connect Streamlabs</button>
         </div>
       </div>
-    </section>
-    <section class="obs-section span-2 obs-manual-card" data-tab-app="obs">
-      <div class="ic-label">Or set up a Custom RTMP server manually</div>
-      <div class="tab-sub">Paste these in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service: Custom</b>. On OBS 32.2 and newer, Custom can't use Enhanced Broadcasting; use the registered service above for that.</div>
-      <div class="obs-manual-row">
-        <div class="obs-manual-field">
-          <div class="ic-label">Server URL</div>
-          <div class="copy-block">
-            <code class="mono" id="obs-srv">rtmp://localhost:1935/live</code>
-            <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-srv','Server URL')">Copy</button>
-          </div>
-        </div>
-        <div class="obs-manual-field">
-          <div class="ic-label">Stream key</div>
-          <div class="copy-block">
-            <code class="mono" id="obs-key">main</code>
-            <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-key','Stream key')">Copy</button>
-          </div>
-          <div class="tab-sub" id="obs-key-note" style="margin-top:6px">Any string works. The real platform key lives in <b>Destinations</b>.</div>
-          <div class="tab-sub" style="margin-top:8px">Want only an OBS with your secret to stream in? Set a <b>stream key for InstantClone</b> in <a href="#" onclick="goNetworkSettings();return false">System &rarr; Access</a>; it becomes the Stream key here.</div>
-        </div>
-      </div>
-    </section>
-    <section class="obs-section span-2" data-tab-app="obs">
-      <div class="ic-label">Recommended OBS settings</div>
-      <div class="obs-recs">
-        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
-        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Video Encoder</div><div class="rec-v">GPU (NVENC / AMF / QSV)</div><div class="rec-why">InstantClone passes it through untouched. With Enhanced Broadcasting it picks your GPU's encoder on its own.</div></div>
-        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Bitrate</div><div class="rec-v">&le; 80% of upload</div><div class="rec-why">Leave headroom or the "Upload bottleneck" pill lights up.</div></div>
-        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">CBR + 2 s keyframe</div><div class="rec-why">The rules that actually matter for Kick. <a href="#" onclick="event.preventDefault();toggleDisclosure('rec-kick-detail')">details</a></div></div>
-      </div>
-      <details class="ic-disclose" id="rec-kick-detail">
-        <summary>Kick requirements (and the B-frames myth)</summary>
-        <div class="ic-disclose-body">
-          <p>Kick's stream servers run on <b>AWS IVS (low-latency)</b>. The rules it actually enforces: <b>H.264</b>, <b>CBR</b> rate control, <b>keyframe interval 2 s</b>, bitrate <b>&le; 8000 kbps</b>, up to 60 fps.</p>
-          <p style="margin-top:8px"><b>B-frames:</b> despite what a lot of older guides say, Kick's normal RTMP server (IVS low-latency, Main profile) <b>accepts B-frames</b>. The strict "no B-frames" rule is AWS IVS <b>real-time / WHIP</b>, a different server Kick doesn't use for standard OBS streaming. So you usually don't need to touch B-frames at all.</p>
-          <p style="margin-top:6px">If Kick <i>does</i> reject your stream, set B-frames to 0 in OBS &rarr; <b>Settings &rarr; Output</b> (Advanced): x264 <b>B-frames</b> &rarr; <code class="mono">0</code>, NVENC <b>Max B-frames</b> &rarr; <code class="mono">0</code>. That's safe for Twitch and YouTube too. Note InstantClone passes on <b>one</b> encode without re-encoding, so B-frames can't be stripped for Kick alone. It's an OBS-side toggle that applies to every destination.</p>
-          <p style="margin-top:6px">Using Twitch <b>Enhanced Broadcasting</b>? Twitch picks the encode settings for you (including B-frames), so your manual OBS B-frames box may not apply while EB is on.</p>
-          <p style="margin-top:6px">Delay and cuts work the same either way: InstantClone cuts on keyframes (IDRs), which B-frames don't affect.</p>
-        </div>
-      </details>
     </section>
     <section class="obs-section span-2 obs-dock-card" data-tab-app="obs">
       <div class="ic-label">Control InstantClone from OBS</div>
@@ -149,6 +109,49 @@
         <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'chat-dock-url','Chat URL')">Copy</button>
       </div>
     </section>
+    <section class="obs-section span-2" data-tab-app="obs">
+      <div class="ic-label">Recommended OBS settings</div>
+      <div class="obs-recs">
+        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Keyframe Interval</div><div class="rec-v">2 s</div><div class="rec-why">Controls how fast delay cuts can happen.</div></div>
+        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Video Encoder</div><div class="rec-v">GPU (NVENC / AMF / QSV)</div><div class="rec-why">InstantClone passes it through untouched. With Enhanced Broadcasting it picks your GPU's encoder on its own.</div></div>
+        <div class="rec"><div class="rec-k">Output &rarr; Streaming &rarr; Bitrate</div><div class="rec-v">&le; 80% of upload</div><div class="rec-why">Leave headroom or the "Upload bottleneck" pill lights up.</div></div>
+        <div class="rec"><div class="rec-k">Streaming to Kick?</div><div class="rec-v">CBR + 2 s keyframe</div><div class="rec-why">The rules that actually matter for Kick. <a href="#" onclick="event.preventDefault();toggleDisclosure('rec-kick-detail')">details</a></div></div>
+      </div>
+      <details class="ic-disclose" id="rec-kick-detail">
+        <summary>Kick requirements (and the B-frames myth)</summary>
+        <div class="ic-disclose-body">
+          <p>Kick's stream servers run on <b>AWS IVS (low-latency)</b>. The rules it actually enforces: <b>H.264</b>, <b>CBR</b> rate control, <b>keyframe interval 2 s</b>, bitrate <b>&le; 8000 kbps</b>, up to 60 fps.</p>
+          <p style="margin-top:8px"><b>B-frames:</b> despite what a lot of older guides say, Kick's normal RTMP server (IVS low-latency, Main profile) <b>accepts B-frames</b>. The strict "no B-frames" rule is AWS IVS <b>real-time / WHIP</b>, a different server Kick doesn't use for standard OBS streaming. So you usually don't need to touch B-frames at all.</p>
+          <p style="margin-top:6px">If Kick <i>does</i> reject your stream, set B-frames to 0 in OBS &rarr; <b>Settings &rarr; Output</b> (Advanced): x264 <b>B-frames</b> &rarr; <code class="mono">0</code>, NVENC <b>Max B-frames</b> &rarr; <code class="mono">0</code>. That's safe for Twitch and YouTube too. Note InstantClone passes on <b>one</b> encode without re-encoding, so B-frames can't be stripped for Kick alone. It's an OBS-side toggle that applies to every destination.</p>
+          <p style="margin-top:6px">Using Twitch <b>Enhanced Broadcasting</b>? Twitch picks the encode settings for you (including B-frames), so your manual OBS B-frames box may not apply while EB is on.</p>
+          <p style="margin-top:6px">Delay and cuts work the same either way: InstantClone cuts on keyframes (IDRs), which B-frames don't affect.</p>
+        </div>
+      </details>
+    </section>
+    <!-- Registering does it all for OBS (the wizard did the same), so the
+         manual setup is folded away for other apps and plugins. -->
+    <details class="obs-section span-2 sys-collapse obs-manual-card" data-tab-app="obs">
+      <summary><span class="ic-label">Another streaming app, or a Custom RTMP server?</span></summary>
+      <div class="tab-sub" style="margin-top:10px">Paste these in <b>OBS &rarr; Settings &rarr; Stream &rarr; Service: Custom</b>. On OBS 32.2 and newer, Custom can't use Enhanced Broadcasting; use the registered service above for that.</div>
+      <div class="obs-manual-row">
+        <div class="obs-manual-field">
+          <div class="ic-label">Server URL</div>
+          <div class="copy-block">
+            <code class="mono" id="obs-srv">rtmp://localhost:1935/live</code>
+            <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-srv','Server URL')">Copy</button>
+          </div>
+        </div>
+        <div class="obs-manual-field">
+          <div class="ic-label">Stream key</div>
+          <div class="copy-block">
+            <code class="mono" id="obs-key">main</code>
+            <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'obs-key','Stream key')">Copy</button>
+          </div>
+          <div class="tab-sub" id="obs-key-note" style="margin-top:6px">Any string works. The real platform key lives in <b>Destinations</b>.</div>
+          <div class="tab-sub" style="margin-top:8px">Want only an OBS with your secret to stream in? Set a <b>stream key for InstantClone</b> in <a href="#" onclick="goNetworkSettings();return false">System &rarr; Access</a>; it becomes the Stream key here.</div>
+        </div>
+      </div>
+    </details>
     <!-- Legacy: OBS before 32.2 could only get Enhanced Broadcasting on a
          custom service through a launch flag. Kept for those setups,
          folded away for everyone else. -->

@@ -43,11 +43,39 @@ async function saveNamedDesigns(added){
   added.forEach(i => allSteps(i).forEach(s => { if (s.type === 'overlay' && s.params.design) named.add(s.params.design); }));
   for (const slug of named) await Stage.ensureDesign(slug);
 }
+// What a preset says (its name, messages, titles, card fields, the reward it
+// listens for) comes from the app in English. In another language the copy
+// is saved in it before anyone sees it, a whole text at a time: only words
+// with a translation of their own change, never ids, sources or commands.
+const SAID_PARAMS = ['title', 'text', 'group', 'footer', 'description'];
+function inPageLanguage(i){
+  const say = text => tr.exact(text) ?? text;
+  const copy = clone(i);
+  copy.name = say(copy.name);
+  allSteps(copy).forEach(s => {
+    SAID_PARAMS.forEach(k => { if (typeof s.params[k] === 'string') s.params[k] = say(s.params[k]); });
+    if (typeof s.params.fields === 'string') s.params.fields = s.params.fields.split('\n').map(say).join('\n');
+  });
+  copy.handlers.forEach(h => {
+    const f = h.trigger.filters;
+    if (f && typeof f.reward === 'string') f.reward = say(f.reward);
+  });
+  return JSON.stringify(copy) === JSON.stringify(i) ? null : copy;
+}
+async function sayAddedInPageLanguage(ids){
+  let changed = false;
+  for (const id of ids){
+    const copy = find(id) && inPageLanguage(find(id));
+    if (copy && (await api('/integrations/save', copy)).ok) changed = true;
+  }
+  if (changed) await load();
+}
 async function addFrom(body, openAfter){
   const fromCatalog = Modal.kind === 'catalog';
   const r = await api('/integrations/add', body);
   if (!r.ok){ toast(r.error || 'Could not add it', 'err', 5000); return []; }
   await load();
+  await sayAddedInPageLanguage(r.ids || []);
   const added = (r.ids || []).map(find).filter(Boolean);
   if (!added.length){ toast('You already have everything in this pack', 'info'); return []; }
   const ids = added.map(i => i.id);

@@ -7,6 +7,37 @@ const STAGGER_SELECTOR = '.dcard, .dest-starter, .stat-card, .metric-mini, .obs-
 const STAGGER_STEP_MS = 40;
 const STAGGER_MAX = 8;
 const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+// The trail: sparks that arc from one thing to the next, saying "this leads
+// to that": a profile into the button it sets, a finished step into the one
+// to do now. `land` runs as the lead spark arrives (at once without motion).
+// `ms` is the flight; `warm` gives the profile's amber, else the accent.
+// Either end can be an element or a box (a DOMRect) where something was.
+const TRAIL_MS = 520;
+function flyTrail(fromEl, toEl, land, {ms = TRAIL_MS, warm = false} = {}){
+  const box = x => x && (x.getBoundingClientRect ? x.getBoundingClientRect() : x);
+  const from = box(fromEl), to = box(toEl);
+  if (!from || !to || !to.width || !motionOK()){ if (land) land(); return; }
+  const sx = from.left + from.width / 2, sy = from.top + from.height / 2;
+  const ex = to.left + to.width / 2, ey = to.top + to.height / 2;
+  // A quadratic arc that rises a little before it drops in.
+  const cx = (sx + ex) / 2, cy = Math.min(sy, ey) - 34;
+  const path = [];
+  for (let i = 0; i <= 10; i++){
+    const t = i / 10, u = 1 - t;
+    path.push(`translate(${u * u * sx + 2 * u * t * cx + t * t * ex}px,${u * u * sy + 2 * u * t * cy + t * t * ey}px)`);
+  }
+  [1, .7, .5, .35].forEach((scale, i) => {
+    const spark = document.createElement('span');
+    spark.className = 'trail-spark' + (warm ? ' warm' : '');
+    spark.style.opacity = String(1 - i * .22);
+    document.body.appendChild(spark);
+    const flight = spark.animate(path.map(p => ({ transform: `${p} scale(${scale})` })),
+      { duration: ms, delay: i * 26, easing: 'cubic-bezier(.45,0,.7,.4)', fill: 'both' });
+    // Settled through the promise, not the finish event, which waits for a
+    // painted frame; a cancel rejects it, and either way the spark goes.
+    flight.finished.then(() => { if (i === 0 && land) land(); }, () => {}).finally(() => spark.remove());
+  });
+}
 // Something that just opened glides into view once it has grown, when it
 // would end below what its scroll box shows: whole when it fits, else its
 // top. Never scrolls its top out of sight.

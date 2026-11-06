@@ -3541,6 +3541,11 @@ fn obs_installs_json(settings: &Arc<watch::Sender<Settings>>) -> String {
                 ),
                 ("state", json::str(registration.as_str())),
                 ("other_port", other_port),
+                // Its profile streams to InstantClone: nothing left to pick.
+                (
+                    "selected",
+                    Value::Bool(obs_register::service_selected_in(&install.config_dir)),
+                ),
             ])
         })
         .collect();
@@ -3582,11 +3587,19 @@ fn change_obs_registrations(
             r#"{"ok":false,"error":"Pick at least one OBS."}"#.into(),
         );
     }
-    let (web_port, ingest_port) = {
+    // The key OBS sends: the InstantClone stream key when one is set
+    // (System > Access), else any word.
+    let (web_port, ingest_port, obs_key) = {
         let s = settings.borrow();
-        (s.web_port, s.ingest_port)
+        let key = if s.ingest_key.is_empty() {
+            "main".to_string()
+        } else {
+            s.ingest_key.clone()
+        };
+        (s.web_port, s.ingest_port, key)
     };
     let mut problems = Vec::new();
+    let mut pointed = 0;
     for install in chosen {
         let name = if install.portable {
             format!(
@@ -3607,6 +3620,10 @@ fn change_obs_registrations(
             ))
         } else if register {
             obs_register::register_in(&path, web_port, ingest_port)
+                .and_then(|()| {
+                    obs_register::select_service_in(&install.config_dir, ingest_port, &obs_key)
+                })
+                .map(|switched| pointed += usize::from(switched))
                 .map_err(|e| format!("{name}: {e}"))
         } else {
             obs_register::unregister_in(&path).map_err(|e| format!("{name}: {e}"))
@@ -3625,7 +3642,9 @@ fn change_obs_registrations(
             ),
         );
     }
-    let message = if register {
+    let message = if register && pointed > 0 {
+        "Registered, and OBS now streams to InstantClone, key included. Open OBS and press Start Streaming."
+    } else if register {
         "Registered. Open OBS and pick InstantClone in Settings → Stream → Service."
     } else {
         "Unregistered. OBS no longer lists InstantClone."
@@ -4321,7 +4340,11 @@ async fn import_streamlabs_twitch_key(
 ) -> (&'static str, &'static str, String) {
     match crate::streamlabs::twitch_stream_key().await {
         Ok(key) => match save_twitch_key(ctrl, settings, cfg_path, key, "Streamlabs") {
-            Ok(import) => ("200 OK", "application/json", key_import_json(&import, "")),
+            Ok(import) => (
+                "200 OK",
+                "application/json",
+                key_import_json(&import, "", false),
+            ),
             Err(e) => error_answer("500 Internal Server Error", &e),
         },
         Err(e) => error_answer("409 Conflict", &e),
@@ -4370,12 +4393,24 @@ async fn check_twitch_key_login(
             r#"{"ok":true,"state":"waiting"}"#.to_string(),
         ),
         Check::Ended(why) => error_answer("409 Conflict", &why),
-        Check::Done { key, login } => {
+        Check::Done { key, signed_in } => {
+            // The same approval connects Twitch in Integrations, unless an
+            // account is connected there already: then it goes back.
+            let kept = ctrl.integrations().is_some_and(|i| {
+                i.twitch
+                    .adopt_main(&signed_in.client_id, &signed_in.tokens, &signed_in.who)
+            });
+            let login = signed_in.who.login.clone();
+            if kept {
+                ctrl.log(format!("[Twitch] {login} connected for Integrations too"));
+            } else {
+                tokio::task::spawn_blocking(move || signed_in.revoke());
+            }
             match save_twitch_key(ctrl, settings, cfg_path, key, "Twitch") {
                 Ok(import) => (
                     "200 OK",
                     "application/json",
-                    key_import_json(&import, &login),
+                    key_import_json(&import, &login, kept),
                 ),
                 Err(e) => error_answer("500 Internal Server Error", &e),
             }
@@ -4391,13 +4426,15 @@ fn error_answer(status: &'static str, why: &str) -> (&'static str, &'static str,
     )
 }
 
-fn key_import_json(import: &KeyImport, login: &str) -> String {
+/// `integrations`: the login that read the key stays, for Integrations.
+fn key_import_json(import: &KeyImport, login: &str, integrations: bool) -> String {
     format!(
-        r#"{{"ok":true,"state":"done","destination":"{}","outcome":"{}","enabled":{},"login":"{}"}}"#,
+        r#"{{"ok":true,"state":"done","destination":"{}","outcome":"{}","enabled":{},"login":"{}","integrations":{}}}"#,
         json_escape(&import.name),
         import.outcome,
         import.enabled,
-        json_escape(login)
+        json_escape(login),
+        integrations
     )
 }
 

@@ -30,9 +30,18 @@ async function onDrop(e){
   if (!at) return;
   e.preventDefault();
   onDragEnd();
-  if (!at.hasAttribute('data-drop-new')){ moveToFolder([id], at.dataset.dropFolder); return; }
+  const i = find(id), was = (i && i.folder) || '';
+  const undo = () => moveToFolder([id], was);
+  if (!at.hasAttribute('data-drop-new')){
+    const to = at.dataset.dropFolder;
+    if (await moveToFolder([id], to)) undoToast(to ? `Moved to ${to}` : 'Out of its folder', undo);
+    return;
+  }
   const name = newFolderName();
-  if (await moveToFolder([id], name)) renameNow(name);
+  if (await moveToFolder([id], name)){
+    renameNow(name);
+    undoToast('Moved to a new folder', undo);
+  }
 }
 function onDragEnd(){
   S.dragging = null;

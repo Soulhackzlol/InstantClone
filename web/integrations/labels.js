@@ -57,8 +57,10 @@ function activitySummary(t){
     return r.kind;
   });
   if (!parts.length) return 'no rules yet';
-  const joint = t.match === 'any' ? ' or ' : ' and ';
-  return parts.length > 1 ? parts.slice(0, -1).join(', ') + joint + parts[parts.length - 1] : parts[0];
+  // Said a piece at a time: the joined sentence has no key to look up.
+  const said = parts.map(part => tr(part));
+  const joint = tr(t.match === 'any' ? 'or' : 'and');
+  return said.length > 1 ? `${said.slice(0, -1).join(', ')} ${joint} ${said[said.length - 1]}` : said[0];
 }
 // `note:1:36@Launchpad` reads "pad 36 (Launchpad)".
 function padLabel(sig){

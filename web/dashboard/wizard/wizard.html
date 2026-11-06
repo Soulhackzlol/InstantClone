@@ -125,12 +125,14 @@
               </div>
               <p class="wizard-obs-body">Tick each OBS you stream with.</p>
               <div class="obs-installs-host" id="wiz-obs-installs"></div>
-              <p class="wizard-obs-after">Then reopen OBS and choose <b>InstantClone</b> in <b>Settings &rarr; Stream &rarr; Service</b>.</p>
+              <p class="wizard-obs-after" id="wiz-obs-after">Then reopen OBS and choose <b>InstantClone</b> in <b>Settings &rarr; Stream &rarr; Service</b>.</p>
+              <p class="wizard-obs-after" id="wiz-obs-ready" hidden>Done: OBS now streams to <b>InstantClone</b>, key included. Nothing to pick in OBS.</p>
               <details class="ic-disclose">
                 <summary>How it works</summary>
                 <div class="ic-disclose-body">
                   <p>InstantClone appears next to Twitch / YouTube in OBS's <b>Settings &rarr; Stream &rarr; Service</b> list. Multi-track via InstantClone works out of the box on Auto, so pick InstantClone and stream.</p>
                   <p>Edits that OBS's <code class="mono">services.json</code> (in <code class="mono">%APPDATA%</code>, or inside a portable OBS's own folder) with a <code class="mono">.bak</code> backup. Unregister any time from the <b>OBS</b> tab.</p>
+                  <p>It also sets your current OBS profile to stream to InstantClone, key included. Your old stream settings stay in <code class="mono">service.json.instantclone-before.bak</code>, next to it.</p>
                 </div>
               </details>
             </div>
@@ -296,16 +298,11 @@
 
     <div class="wiz-feature">
       <div class="wiz-feature-h">Separate VOD audio <span class="wiz-tag wiz-tag-twitch">Twitch feature</span></div>
-      <p class="wiz-feature-b">A second audio track for your Twitch VOD: keep copyrighted music in the <b>live</b> stream but out of the <b>recording</b>. Nothing to set here.</p>
+      <p class="wiz-feature-b">A second audio track for your Twitch VOD: keep copyrighted music in the <b>live</b> stream but out of the <b>recording</b>. Optional, and you can do it later in <b>System &rarr; Twitch &amp; OBS</b>.</p>
       <details class="ic-disclose" data-app-only="obs">
-        <summary>How to set it up in OBS</summary>
+        <summary>Set it up now in OBS (3 steps)</summary>
         <div class="ic-disclose-body">
-          <p>OBS ties its VOD Track to the service named "Twitch", so on the InstantClone service a tiny optional script adds that same second track, and nothing else. OBS 32.2 and newer need it; older OBS can use the built-in VOD Track checkbox.</p>
-          <ol class="wiz-vod-steps">
-            <li>After setup, open <b>System &rarr; Twitch &amp; OBS &rarr; Twitch VOD audio</b> and click <b>Download</b>.</li>
-            <li>In OBS: <b>Tools &rarr; Scripts &rarr; +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
-            <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>).</li>
-          </ol>
+          <div data-vod-guide></div>
         </div>
       </details>
       <details class="ic-disclose" data-app-only="streamlabs" hidden>

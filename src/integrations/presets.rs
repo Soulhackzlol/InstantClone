@@ -1196,7 +1196,8 @@ fn chapters(d: &str) -> Vec<Handler> {
 /// Clip the moment once viewers have seen it, mark the VOD, put it on the
 /// timeline and in Discord, where the link unfurls into a player.
 fn highlight(d: &str) -> Vec<Handler> {
-    let post = |by: &str| {
+    // `fields` says who marked it: the streamer's button or a mod in chat.
+    let post = |fields: &str| {
         let mut steps = vec![
             Step::new(StepKind::Clip, &[]),
             check(
@@ -1208,10 +1209,7 @@ fn highlight(d: &str) -> Vec<Handler> {
                     line("highlight", "aired", "⭐ Highlight · [clip]({clip.url})"),
                     with(
                         card(d, GOLD, "⭐ New highlight", "[Watch the clip]({clip.url})"),
-                        &[
-                            ("above", "{clip.url}"),
-                            ("fields", &format!("Stream time | {{uptime}}\nBy | {by}")),
-                        ],
+                        &[("above", "{clip.url}"), ("fields", fields)],
                     ),
                     Step::new(
                         StepKind::Overlay,
@@ -1242,7 +1240,7 @@ fn highlight(d: &str) -> Vec<Handler> {
         steps
     };
     // Mods hear back in chat either way.
-    let mut from_mods = post("{user}")[1..].to_vec();
+    let mut from_mods = post("Stream time | {uptime}\nBy | {user}")[1..].to_vec();
     if let Some(found) = from_mods.iter_mut().find(|s| s.kind == StepKind::If) {
         found.then.push(reply("⭐ Clipped: {clip.url}"));
         found
@@ -1251,7 +1249,10 @@ fn highlight(d: &str) -> Vec<Handler> {
     }
     let mut from_mods = command("!highlight", Roles::MODS, 0, from_mods);
     from_mods.enabled = false;
-    vec![button(post("{channel}")), from_mods]
+    vec![
+        button(post("Stream time | {uptime}\nBy | {channel}")),
+        from_mods,
+    ]
 }
 
 /// Chat decides: when it gets busy in the ways the rules say, clip it.

@@ -161,18 +161,23 @@ function renderObsRegSummary(){
   if (!card) return;
   const installs = obsInstallList();
   const any = s => installs.some(i => i.state === s);
+  // Registering also points OBS at InstantClone, key included (when OBS
+  // was closed): then the steps to pick it in OBS are done already.
+  const ready = installs.some(i => i.state === 'current' && i.selected);
   const view = !obsInstalls ? ['bad', 'Unknown', 'Could not ask InstantClone about OBS. Is it still running?']
     : !installs.length ? ['bad', 'OBS not found', '']
     : any('stale') ? ['warn', 'Out of date', obsInstalls.update_pending
         ? 'An entry points at old ports. It updates by itself when that OBS closes.'
         : "An entry points at old ports, so that OBS can't reach InstantClone. Tick it and register again."]
+    : ready ? ['ok', 'Ready', 'OBS streams to InstantClone, key included. Open OBS and press Start Streaming.']
     : any('current') ? ['ok', 'Registered', 'OBS lists InstantClone as a service. To stream through it:']
     : ['', 'Not registered', 'Tick the OBS you stream with and register: InstantClone joins its Service list.'];
   card.dataset.state = any('current') && !any('stale') ? 'current' : 'none';
   setClassName($('obs-reg-pill'), 'ic-pill obs-reg-pill' + (view[0] ? ' ' + view[0] : ''));
   setText($('obs-reg-pill-l'), view[1]);
   setText($('obs-reg-status'), view[2]);
-  $('obs-reg-steps').hidden = !any('current');
+  $('obs-reg-steps').hidden = !any('current') || ready;
+  if ($('wiz-obs-ready')){ $('wiz-obs-ready').hidden = !ready; $('wiz-obs-after').hidden = ready; }
 }
 function renderObsInstalls(){
   // A new OBS starts ticked when it needs a click; one registered already doesn't.

@@ -84,10 +84,9 @@ const TOUR = [
       <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you go live, the dashboard reads <b>OFFLINE</b>. That's expected, not a mistake.</p>
       <div class="tour-tip"><strong>Twitch only inside Streamlabs:</strong> it's just the way in. Your real platform keys live in <b>Destinations</b>, with or without Twitch.</div>
     ` : `
-      <p><b>Recommended:</b> close OBS and hit <b>Register with OBS</b>. Then open OBS: InstantClone is in its <b>Settings → Stream → Service</b> list. Pick it, set any Stream Key (we suggest <code>main</code>), and Start Streaming.</p>
-      <p><b>Fallback:</b> on older OBS, a multi-RTMP plugin, or another streaming app, use the Server URL + key shown below with Service: <b>Custom…</b>.</p>
+      <p>Close OBS and press <b>Register with OBS</b> here: OBS is set to stream to InstantClone, key and all. Then open OBS and press <b>Start Streaming</b>.</p>
+      <p>Below it, add the <b>OBS dock</b> to run the delay without leaving OBS.</p>
       <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you Start Streaming, the dashboard reads <b>OFFLINE</b>. That's expected, not a mistake.</p>
-      <div class="tour-tip"><strong>Why a fake key?</strong> OBS's key is just a label here. Your real platform keys live in <b>Destinations</b>.</div>
     `; },
   },
   {
@@ -111,7 +110,7 @@ const TOUR = [
     title: 'You\'re ready',
     body: `
       <p>That's everything. Profiles, System, Logs are self-explanatory once you've used the rest.</p>
-      <p>Click this <b>?</b> button any time to re-open this tour. <b>Esc</b> closes it.</p>
+      <p>This <b>?</b> button brings the tour back any time, and <b>quick guides</b> that walk you to one thing: connecting OBS, alerts, the VOD audio and more.</p>
       <div class="tour-tip"><strong>Need help?</strong> Press <b>Copy diagnostics</b> in the Logs tab and paste it into a bug report. Secrets are left out.</div>
     `,
   },

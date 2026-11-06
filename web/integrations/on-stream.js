@@ -100,14 +100,16 @@ const Stage = {
     this.designs = list.filter(o => o.kind === 'alerts');
     await this.ensureDefault();
   },
-  // Every design an alert can take: the ones saved, then the built-in ones
-  // (the themes' cards) not saved yet, which are made when first taken.
-  // A built-in one keeps its theme once saved, to be shown as ready-made.
+  // Every design an alert can take: your own, then the built-in ones (the
+  // themes' cards), each made the first time it is taken. A built-in one
+  // keeps its theme once saved, to be shown as ready-made.
   allDesigns(){
     const themes = window.ICOverlay ? window.ICOverlay.ALERT_THEMES : [];
     const saved = this.designs.map(d => ({slug:d.slug, name:d.name || d.slug, theme:themes.find(t => d.slug === 'alert-' + t) || ''}));
-    const built = themes.map(t => ({slug:'alert-' + t, name:THEMES[t].name, theme:t, builtin:true}));
-    return saved.concat(built.filter(b => !saved.some(d => d.slug === b.slug)));
+    // The ready-made ones keep the themes' order, saved or not, so picking
+    // one (which saves it) never moves its tile.
+    const ready = themes.map(t => saved.find(d => d.theme === t) || {slug:'alert-' + t, name:THEMES[t].name, theme:t, builtin:true});
+    return saved.filter(d => !d.theme).concat(ready);
   },
   designNamed(slug){ return this.allDesigns().find(d => d.slug === slug) || null; },
   // A built-in design is written to the overlays folder the first time it
@@ -329,7 +331,8 @@ const Stage = {
           <button class="ic-btn ic-btn-ghost ig-small" data-act="conn" data-tab="twitch">Connect Twitch</button></div>` : '';
     return `<aside class="overlay-section ovg-detail og-detail" data-key="tr-detail-${what}-${esc(x.id)}" style="--dc:${look.color}">
       ${this.detailHeadHtml(look.icon, look.color, x.name, look.line,
-        `<button class="ic-btn-tiny og-push" data-act="tr-edit" ${at} aria-label="Edit ${esc(x.name)}" title="Edit">${svg('pencil')}</button>`)}
+        `<button class="ic-btn-tiny og-push" data-act="tr-edit" ${at} aria-label="Edit ${esc(x.name)}" title="Edit">${svg('pencil')}</button>
+         <button class="ic-btn-tiny og-del-tiny" data-act="tr-remove" ${at} aria-label="Delete ${esc(x.name)}" title="Delete">${svg('trash')}</button>`)}
       ${deaf}
       ${what === 'goal' ? this.goalMeterHtml(x, at) : this.timerMeterHtml(x, at)}
       ${stream}</aside>`;
@@ -473,35 +476,52 @@ const Stage = {
   },
   async save(remove){
     const f = this.form, key = f.what === 'goal' ? 'goals' : 'timers';
-    // A redraw keeps what a number field holds, not its mark: each is read again.
-    if (!remove) Modal.form.querySelectorAll('[data-bind="tr-target"],[data-bind="tr-value"],[data-bind="tr-dur"]').forEach(el => this.input(el));
-    const d = Object.assign({}, f.d, {name:f.d.name.trim()});
-    if (!remove){
-      if (!d.name){ toast('Give it a name', 'err'); focusField('tr-name'); return; }
-      if (Modal.form.querySelector('[aria-invalid="true"]')){ toast('One of the numbers isn\'t right yet', 'err'); return; }
+    if (remove){
+      if (!(await this.remove(f.what, f.d.id))) return;
+      this.form = null;
+      Modal.close(true);
+      return;
     }
+    // A redraw keeps what a number field holds, not its mark: each is read again.
+    Modal.form.querySelectorAll('[data-bind="tr-target"],[data-bind="tr-value"],[data-bind="tr-dur"]').forEach(el => this.input(el));
+    const d = Object.assign({}, f.d, {name:f.d.name.trim()});
+    if (!d.name){ toast('Give it a name', 'err'); focusField('tr-name'); return; }
+    if (Modal.form.querySelector('[aria-invalid="true"]')){ toast('One of the numbers isn\'t right yet', 'err'); return; }
     const next = clone(tracking()), at = next[key].findIndex(x => x.id === d.id);
-    if (remove){ if (at >= 0) next[key].splice(at, 1); }
-    else if (at >= 0) next[key][at] = d;
+    if (at >= 0) next[key][at] = d;
     else next[key].push(d);
     let r = await api('/integrations/goals', {goals:next.goals, timers:next.timers});
     if (!r || r.ok === false){ toast((r && r.error) || 'That didn\'t save', 'err', 6000); return; }
-    if (!remove && f.what === 'goal' && f.value !== f.valueWas){
+    if (f.what === 'goal' && f.value !== f.valueWas){
       r = await api('/integrations/goals/change', {what:'goal', id:d.id, action:'set', amount:f.value});
       if (!r || r.ok === false){ toast((r && r.error) || 'Saved, but its count didn\'t change', 'err', 6000); return; }
     }
     S.data.tracking = r.tracking;
-    if (!remove) this.sel = `${f.what}:${d.id}`;
-    // Its own overlay goes with it: there is nothing left for it to show.
-    const slug = trackerSlug(f.what, d.id);
-    if (remove && this.slugs && this.slugs.has(slug)){
-      await api(`/overlays/${encodeURIComponent(slug)}/delete`, {});
-      await this.loadSlugs();
-    }
+    this.sel = `${f.what}:${d.id}`;
     this.form = null;
     Modal.close(true);
     this.render();
-    toast(remove ? `Deleted ${d.name}` : f.isNew ? `${d.name} is ready: put it on stream when you like` : 'Saved', 'ok', 4500);
+    toast(f.isNew ? `${d.name} is ready: put it on stream when you like` : 'Saved', 'ok', 4500);
+  },
+  // Delete a goal or timer, from its card or its form. Its own overlay goes
+  // with it: there is nothing left for it to show. False when it failed.
+  async remove(what, id){
+    const key = what === 'goal' ? 'goals' : 'timers';
+    const next = clone(tracking()), at = next[key].findIndex(x => x.id === id);
+    if (at < 0) return true;
+    const [gone] = next[key].splice(at, 1);
+    const r = await api('/integrations/goals', {goals:next.goals, timers:next.timers});
+    if (!r || r.ok === false){ toast((r && r.error) || 'That didn\'t save', 'err', 6000); return false; }
+    S.data.tracking = r.tracking;
+    const slug = trackerSlug(what, id);
+    if (this.slugs && this.slugs.has(slug)){
+      await api(`/overlays/${encodeURIComponent(slug)}/delete`, {});
+      await this.loadSlugs();
+    }
+    if (this.sel === `${what}:${id}`) this.sel = null;
+    this.render();
+    toast(`Deleted ${gone.name}`, 'ok', 4500);
+    return true;
   },
   async change(body){
     const r = await api('/integrations/goals/change', body);
@@ -556,6 +576,12 @@ const Stage = {
       case 'tr-look':
         if (typeof Studio !== 'undefined') Studio.openStudio(el.dataset.slug, 'goals');
         return true;
+      case 'tr-remove': {
+        const has = this.slugs && this.slugs.has(trackerSlug(what, id));
+        if (!armConfirm(el, has ? 'Delete it and its overlay?' : 'Delete it?')) return true;
+        await busy(el, () => this.remove(what, id));
+        return true;
+      }
       case 'tr-del': {
         const has = this.slugs && this.slugs.has(trackerSlug(this.form.what, this.form.d.id));
         if (!armConfirm(el, has ? 'Delete it and its overlay?' : 'Delete it?')) return true;
@@ -592,6 +618,11 @@ async function onClick(e){
   if (el.closest('.ov-stage') && await Stage.act(a, el)) return;
   switch (a){
     case 'modal-close': Modal.close(); break;
+    case 'undo': case 'redo': {
+      const editor = {editor:Editor, builder:Builder}[Modal.kind];
+      if (editor) historyStep(editor, a === 'undo');
+      break;
+    }
     case 'modal-back': Modal.goBack(); break;
     case 'guard-keep': Modal.hideGuard(); break;
     case 'discard': discardEdits(Modal.kind === 'builder' ? Builder : Editor); break;

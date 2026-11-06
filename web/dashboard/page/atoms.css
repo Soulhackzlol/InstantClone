@@ -1,8 +1,9 @@
 /* - Card / labels / buttons / inputs (atoms) ------─ */
 .ic-card{background:linear-gradient(180deg,var(--surface-2),var(--surface));
   border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-1)}
+/* Section titles read as titles: a step brighter than the words under them. */
 .ic-label{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
-  color:color-mix(in oklch,var(--fg-2) 45%,var(--fg-3))}
+  color:var(--fg-2)}
 
 .ic-btn{appearance:none;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;
   padding:10px 16px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface-3);
@@ -127,3 +128,9 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 .ic-btn-warn:hover:not(:disabled,.ic-btn-disabled){background:color-mix(in oklch,var(--warn) 28%,var(--bg-2));
   border-color:color-mix(in oklch,var(--warn) 60%,var(--line))}
 .ic-btn-danger:disabled{opacity:.45;cursor:not-allowed}
+/* The trail (flyTrail in page/motion.js): sparks in viewport coordinates,
+   above everything. Accent by default; amber for a profile's launch. */
+.trail-spark{position:fixed;left:0;top:0;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;
+  pointer-events:none;z-index:1000;background:color-mix(in oklch,var(--accent) 45%,white);
+  box-shadow:0 0 10px 3px color-mix(in oklch,var(--accent) 75%,transparent)}
+.trail-spark.warm{background:oklch(0.93 0.12 85);box-shadow:0 0 10px 3px color-mix(in oklch,var(--warn) 75%,transparent)}

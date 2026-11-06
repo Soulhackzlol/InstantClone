@@ -281,10 +281,7 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
   .cp-profiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(58px,1fr))}
   .cp-profile-chip{justify-content:center;padding:6px 8px}
 }
-/* Profile launch: sparks fly in viewport coordinates, above everything. */
-.cp-spark{position:fixed;left:0;top:0;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;
-  pointer-events:none;z-index:1000;background:oklch(0.93 0.12 85);
-  box-shadow:0 0 10px 3px color-mix(in oklch,var(--warn) 75%,transparent)}
+/* Profile launch: its sparks are the trail (page/atoms.css). */
 .cp-ripple{position:absolute;left:50%;top:50%;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;
   pointer-events:none;background:oklch(0.97 0.08 85 / .5)}
 

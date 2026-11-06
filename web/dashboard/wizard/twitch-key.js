@@ -27,10 +27,15 @@ function syncWizTwitchKey(){
   $('w-key-verb').textContent = box.hidden ? 'Paste your stream key from' : 'Get your stream key from';
 }
 
-/** `kind` is '' (a hint), 'ok' or 'err'. */
+/** `kind` is '' (a hint), 'ok' or 'err'. `text` is one sentence or a list,
+ * each in its own span so each translates on its own. */
 function twitchKeySay(text, kind){
   const msg = $('w-tw-key-msg');
-  msg.textContent = text;
+  msg.replaceChildren(...[].concat(text).map((sentence, n) => {
+    const span = document.createElement('span');
+    span.textContent = (n ? ' ' : '') + sentence;
+    return span;
+  }));
   msg.classList.toggle('ok', kind === 'ok');
   msg.classList.toggle('err', kind === 'err');
 }
@@ -85,8 +90,11 @@ async function askTwitchKey(){
   wizKeyImported = true;
   wizKeyFrom = 'Twitch';
   $('w-key').value = '';
-  const got = `Got it. The key for ${r.data.login} went straight to your Twitch destination.`;
-  twitchKeySay(r.data.enabled ? got : `${got} It's switched off: turn it on in Destinations to stream there.`, 'ok');
+  twitchKeySay([
+    `Got it. The key for ${r.data.login} went straight to your Twitch destination.`,
+    r.data.enabled ? '' : 'It\'s switched off: turn it on in Destinations to stream there.',
+    r.data.integrations ? 'Twitch is connected in Integrations too, for alerts, chat commands and clips.' : '',
+  ].filter(Boolean), 'ok');
   clearWizMsg();
   syncWizStreamlabsImport();
   syncWizTwitchKey();

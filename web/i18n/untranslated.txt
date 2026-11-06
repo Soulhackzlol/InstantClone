@@ -346,22 +346,17 @@ vertical
 Buffer too small for ...
 Enhanced Broadcasting (multi-track video) detected - forwarding raw to Twitch destinations, flattening to the primary resolution for any other platform.
 This is where your alerts show up on stream.
-We're live! Come hang out.
 Crash protection is on for 2m 00s. Get back to the PC.
-Stream delay is now on.
 Delay turned off by {}.
 Delay set to {}s by {}.
 Crash protection is on for {}. Get back to the PC.
-Stream delay is now off.
 You ended crash protection after {}.
 Viewers see the reconnect screen. The stream ends <t:{}:R> unless OBS is back.
 Viewers are {} behind.
 It was {}.
-It never went on air.
 It dropped {} ago and hasn't come back. InstantClone keeps retrying.
 It was down for {}.
 Couldn't find {} on Twitch.
-Couldn't get that right now, try again in a bit.
 unexpected data at byte {}
 {} at byte {}
 Start a second InstantClone?
@@ -382,3 +377,5 @@ layout too large
 layout must be single-line json
 too many saved docks
 Content-Type
+textarea, [contenteditable="true"], input:not([type]), input[type="text"], input[type="search"], input[type="number"], input[type="url"]
+service.json.instantclone-before.bak

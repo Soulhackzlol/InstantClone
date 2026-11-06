@@ -9,15 +9,8 @@
       <!-- Version-aware requirement callout, filled by refreshSysVodScript(). -->
       <div id="sys-vod-req" class="sys-callout info" hidden></div>
 
-      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <button class="ic-btn ic-btn-primary" id="sys-vod-script-btn" onclick="installVodScript('sys-vod-script-btn','sys-vod-script-msg')">Download VOD unlocker script</button>
-        <span class="muted" id="sys-vod-script-msg" style="font-size:12px"></span>
-      </div>
-      <ol class="tab-sub" style="margin:10px 0 0;padding-left:18px;line-height:1.7">
-        <li>Press <b>Download</b> and pick where to save <code class="mono">optional-vod-unlocker.lua</code> (your OBS scripts folder is tidiest).</li>
-        <li>In OBS: <b>Tools → Scripts → +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
-        <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>). Your live mix stays on track 1.</li>
-      </ol>
+      <!-- The three steps, one at a time (system/vod-guide.js). -->
+      <div data-vod-guide></div>
       <div class="tab-sub" style="margin-top:8px">Then, per destination, use <b>Audio track</b> to route it: Twitch keeps <b>Both</b>, send <b>Track 2</b> (music stripped) to YouTube to dodge copyright.</div>
     </section>
 

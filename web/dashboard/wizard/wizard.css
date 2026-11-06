@@ -414,7 +414,6 @@
   padding:2px 7px;border-radius:999px;white-space:nowrap}
 .wiz-tag-twitch{color:#a78bfa;background:color-mix(in oklch,#a78bfa 14%,transparent);
   border:1px solid color-mix(in oklch,#a78bfa 35%,transparent)}
-.wiz-vod-steps{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
 #w-custom-wrap{margin-top:8px}
 .w-hint{font-size:11.5px;color:var(--fg-4);margin-top:4px}
 /* Container for the per-platform help under the wizard / destination
