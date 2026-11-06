@@ -148,6 +148,15 @@ pub const PRESETS: &[Preset] = &[
         preview: ("chat", "Stream delay is now on.", ""),
     },
     Preset {
+        id: "ad_break_notice",
+        name: "Ad break notice",
+        category: "chat",
+        description: "When a Twitch ad break starts, chat hears how long it lasts, and a welcome back once it ends.",
+        needs: &["twitch"],
+        recommended: false,
+        preview: ("chat", "📺 Ad break (90s). Back soon!", ""),
+    },
+    Preset {
         id: "mod_controls",
         name: "Mod controls",
         category: "chat",
@@ -218,6 +227,15 @@ pub const PRESETS: &[Preset] = &[
         needs: &["obs"],
         recommended: false,
         preview: ("action", "", ""),
+    },
+    Preset {
+        id: "mute_reward",
+        name: "Mute me reward",
+        category: "auto",
+        description: "Viewers spend channel points to mute your mic for 10 seconds, shown on stream. Make a reward called \"Mute the streamer\" in its editor, and pick your mic if it isn't Mic/Aux.",
+        needs: &["twitch", "obs"],
+        recommended: false,
+        preview: ("overlay", "🔇 Bo muted me · back in 10 seconds", ""),
     },
     Preset {
         id: "clip_button",
@@ -532,6 +550,54 @@ fn is_old_setdelay_limit(step: &Step) -> bool {
         && refusal_as_shipped
 }
 
+/// Twitch tells when an ad break starts and how long it is, not when it ends:
+/// waiting its length says "back" as it ends.
+fn ad_break_notice() -> Vec<Handler> {
+    vec![on(
+        EventKind::TwitchAd,
+        vec![
+            chat("📺 Ad break ({seconds}s). Back soon!"),
+            with(
+                Step::new(
+                    StepKind::Math,
+                    &[("a", "{seconds}"), ("op", "multiply"), ("b", "1000")],
+                ),
+                &[("save_as", "ad_ms")],
+            ),
+            Step::new(StepKind::Wait, &[("ms", "{ad_ms}")]),
+            chat("We're back! 👋"),
+        ],
+    )]
+}
+
+/// The reward the "Mute me" entry answers, and the mic it mutes: OBS's own
+/// name for the first mic.
+const MUTE_REWARD: &str = "Mute the streamer";
+const MUTE_MIC: &str = "Mic/Aux";
+
+/// A channel point reward that mutes the mic for a while, on stream for
+/// everyone to see, then unmutes it.
+fn mute_reward() -> Vec<Handler> {
+    let mic = |action| Step::new(StepKind::Obs, &[("action", action), ("source", MUTE_MIC)]);
+    vec![on_filtered(
+        EventKind::TwitchRedeem,
+        &[("reward", MUTE_REWARD)],
+        vec![
+            mic("mute"),
+            Step::new(
+                StepKind::Overlay,
+                &[
+                    ("title", "🔇 {user} muted me"),
+                    ("text", "Back in 10 seconds"),
+                    ("seconds", "10"),
+                ],
+            ),
+            Step::new(StepKind::Wait, &[("ms", "10000")]),
+            mic("unmute"),
+        ],
+    )]
+}
+
 /// Build a catalog entry. `discord_channel` is the id of the Discord
 /// connection to post to (empty when none exists yet).
 pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integration> {
@@ -562,6 +628,8 @@ pub fn build(preset_id: &str, id: String, discord_channel: &str) -> Option<Integ
                 &[("fields", "Platform | {platform}")],
             )],
         )],
+        "ad_break_notice" => ad_break_notice(),
+        "mute_reward" => mute_reward(),
         "going_live" => {
             cooldown_ms = 10 * 60_000;
             vec![on(

@@ -126,7 +126,7 @@ const PRESET_ICON = {
   vod_markers:'bookmark', webhook:'link', crash_counter:'file', stream_alerts:'bell', api_command:'globe',
   clip_button:'film', delay_status:'clock', smart_alerts:'pulse', stream_timeline:'list', chapters:'bookmark',
   highlight:'star', hype_clip:'flame', on_air_light:'bulb', scene_delay:'layers', twitch_alerts:'heart',
-  hype_alerts:'flame', stream_log:'list',
+  hype_alerts:'flame', stream_log:'list', ad_break_notice:'tv', mute_reward:'mic',
 };
 // Which step a card previews: the first one that says something.
 const PREVIEW_ORDER = ['discord','chat','phone','overlay','marker','http','light','file','timeline','dock','clip','delay_action','program'];
