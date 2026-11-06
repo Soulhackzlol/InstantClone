@@ -53,14 +53,19 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
   font-size:11px;font-weight:600;border:1px solid var(--line);background:var(--panel);color:var(--fg-3);
   transition:color .2s var(--ease-out),border-color .2s var(--ease-out)}
-.pill .dot{width:6px;height:6px;border-radius:50%;background:var(--fg-4);
-  transition:background-color .2s,box-shadow .2s}
+.pill .dot{width:6px;height:6px;border-radius:50%;background:var(--fg-4);transition:background-color .2s}
 .pill.on{color:var(--fg)}
-/* Gentle breathing on the live dot - the dock reads "alive" at a glance. */
-.pill.on .dot{background:var(--live);animation:breathe 2.4s ease-in-out infinite}
-@keyframes breathe{
-  0%,100%{box-shadow:0 0 0 3px color-mix(in oklch,var(--live) 18%,transparent)}
-  50%{box-shadow:0 0 0 5px color-mix(in oklch,var(--live) 6%,transparent)}}
+/* Gentle breathing on the live dot - the dock reads "alive" at a glance. A
+   halo on its own layer grows and fades: transform and opacity run on the
+   compositor. Animating box-shadow, as this did, repainted the dock at every
+   frame inside OBS for the whole stream. The halo lies over the dot in the
+   dot's own colour, so the dot looks the same under it. */
+.pill.on .dot{position:relative;background:var(--live)}
+.pill.on .dot::after{content:"";position:absolute;inset:-3px;border-radius:50%;pointer-events:none;
+  background:color-mix(in oklch,var(--live) 18%,transparent);will-change:transform,opacity;
+  animation:breathe 2.4s ease-in-out infinite}
+/* 3 px of halo at 18% to 5 px at 6%, as the box-shadow was. */
+@keyframes breathe{50%{transform:scale(1.34);opacity:.33}}
 .pill.bad .dot{background:var(--fg-4)}
 /* Live-as-dot mode: collapse the pill to just its signal dot. */
 .pill.asdot{padding:5px;gap:0}
@@ -364,13 +369,17 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
   background:linear-gradient(180deg,color-mix(in oklch,#fff 22%,var(--accent)),color-mix(in oklch,#fff 6%,var(--accent)));
   box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 0 0 1px color-mix(in oklch,var(--accent) 70%,transparent),
     0 10px 26px -8px color-mix(in oklch,var(--accent) 55%,transparent)}
-.btn.go{background:linear-gradient(180deg,color-mix(in oklch,#fff 12%,var(--live)),var(--live));color:#04140a;border-color:transparent;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.35);animation:readyglow 1.8s ease-in-out infinite}
+.btn.go{position:relative;background:linear-gradient(180deg,color-mix(in oklch,#fff 12%,var(--live)),var(--live));
+  color:#04140a;border-color:transparent;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 2px 8px -4px color-mix(in oklch,var(--live) 30%,transparent)}
 .btn.go:hover:not(:disabled){border-color:transparent;background:linear-gradient(180deg,color-mix(in oklch,#fff 20%,var(--live)),var(--live))}
-/* Buffer is full and waiting on the streamer - breathe so the eye lands here. */
-@keyframes readyglow{
-  0%,100%{box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 2px 8px -4px color-mix(in oklch,var(--live) 30%,transparent)}
-  50%{box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 6px 22px -6px color-mix(in oklch,var(--live) 60%,transparent)}}
+/* Buffer is full and waiting on the streamer - breathe so the eye lands here.
+   The big glow is a layer of its own that fades in and out: animating the
+   button's box-shadow repainted the dock at every frame while it waited. */
+.btn.go::after{content:"";position:absolute;inset:-1px;border-radius:inherit;pointer-events:none;opacity:0;
+  box-shadow:0 6px 22px -6px color-mix(in oklch,var(--live) 60%,transparent);will-change:opacity;
+  animation:readyglow 1.8s ease-in-out infinite}
+@keyframes readyglow{50%{opacity:1}}
 .btn.danger{background:color-mix(in oklch,var(--danger) 18%,var(--bg-2));color:var(--danger);
   border-color:color-mix(in oklch,var(--danger) 50%,transparent)}
 .btn.danger:hover:not(:disabled){background:color-mix(in oklch,var(--danger) 26%,var(--surface-3));
@@ -383,6 +392,7 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 /* Inert, but still a button: the dashboard's disabled look, not a ghost. */
 .btn:disabled{cursor:not-allowed;transform:none;box-shadow:none;animation:none;
   background:var(--surface-3);color:var(--fg-3);border-color:var(--line-2)}
+.btn:disabled::after{content:none}
 .btn.full{width:100%}
 /* Buffering: the main button fills toward Activate (--p is 0..1) and counts
    down the wait. Disabled, but at full strength so the countdown reads. */
@@ -398,11 +408,14 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 /* Safe cut ("cut after airs") secondary: text button; pending state counts
    down in warn amber with a soft pulse so the armed auto-cut is unmissable. */
 .cta-row .btn.cutafter{flex:0 0 auto;padding:10px 11px;font-size:11.5px;white-space:nowrap}
-.cta-row .btn.cutafter.pending{border-color:color-mix(in oklch,var(--warn) 55%,transparent);color:var(--warn);
-  font-variant-numeric:tabular-nums;animation:cutpulse 1.6s ease-in-out infinite}
-@keyframes cutpulse{
-  0%,100%{box-shadow:0 0 0 0 color-mix(in oklch,var(--warn) 22%,transparent)}
-  50%{box-shadow:0 0 0 4px color-mix(in oklch,var(--warn) 10%,transparent)}}
+.cta-row .btn.cutafter.pending{position:relative;border-color:color-mix(in oklch,var(--warn) 55%,transparent);
+  color:var(--warn);font-variant-numeric:tabular-nums}
+/* The ring fades in and out on a layer of its own, like the Activate glow:
+   it lasts until the cut airs, as long as the delay. */
+.cta-row .btn.cutafter.pending::after{content:"";position:absolute;inset:-1px;border-radius:inherit;pointer-events:none;
+  opacity:0;box-shadow:0 0 0 4px color-mix(in oklch,var(--warn) 10%,transparent);will-change:opacity;
+  animation:cutpulse 1.6s ease-in-out infinite}
+@keyframes cutpulse{50%{opacity:1}}
 
 /* Status-as-dot mode: collapse the chip to a colored dot of the state hue. */
 .phase.asdot{width:14px;height:14px;min-width:14px;padding:0;font-size:0;border-radius:50%;

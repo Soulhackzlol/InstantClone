@@ -103,10 +103,13 @@
 #hdr-update,#hdr-whats-new{text-decoration:none}
 /* A pulsing dot: a ring on its own layer that grows and fades. Transform and
    opacity run on the compositor; animating box-shadow, as this did, redrew on
-   the main thread at every frame for as long as the stream was live. */
+   the main thread at every frame for as long as the stream was live.
+   will-change gives the ring that layer before it moves: without it, a ring
+   painted after the hero's aurora layers made the page recheck their overlap
+   on the main thread at every frame (~100 ms of work a second while live). */
 .ic-pill.live .dot,.state-pill .state-dot.pulse,.dcard-status.s-live .d-dot,.dcard-status.s-wait .d-dot,.hold-banner .hold-dot{position:relative}
 .ic-pill.live .dot::after,.state-pill .state-dot.pulse::after,.dcard-status.s-live .d-dot::after,.dcard-status.s-wait .d-dot::after,.hold-banner .hold-dot::after{
   content:"";position:absolute;inset:0;border-radius:50%;background:var(--sc);pointer-events:none;
-  animation:dot-ring var(--ring-time,1.6s) var(--ease-out) infinite}
+  will-change:transform,opacity;animation:dot-ring var(--ring-time,1.6s) var(--ease-out) infinite}
 @keyframes dot-ring{0%{opacity:.6;transform:scale(1)}70%,100%{opacity:0;transform:scale(var(--ring-scale,3.3))}}
 
