@@ -1,8 +1,8 @@
 //! Build-time HTML pipeline: minify + gzip web/*.html, emit gz blobs to
 //! OUT_DIR so the binary embeds only the compressed bytes. Skips the
 //! minifier on anything that looks risky (template literals, <pre>).
-//! The dashboard page is first joined from its pieces in web/dashboard/
-//! (see `read_dashboard`).
+//! The dashboard page and the Integrations script are first joined from
+//! their pieces in web/dashboard/ and web/integrations/ (see `read_pieces`).
 //!
 //! Net effect: the dashboard's ~870 KB of HTML/CSS/JS in source goes out
 //! as ~165 KB gzipped. The release binary serves the gz blob directly with
@@ -36,10 +36,9 @@ fn main() {
         // The Overlay Studio editor, the same way.
         ("studio.js", false),
     ] {
-        let raw = if *name == "index.html" {
-            read_dashboard(&web_dir.join("dashboard"))
-        } else {
-            read_web(&web_dir.join(name))
+        let raw = match PIECED.iter().find(|(served, _)| served == name) {
+            Some((_, folder)) => read_pieces(&web_dir, folder),
+            None => read_web(&web_dir.join(name)),
         };
         let processed: Vec<u8> = if *do_min {
             minify(&raw)
@@ -105,12 +104,20 @@ fn read_web(path: &std::path::Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
-/// The dashboard page (served at /), joined from the pieces that
-/// web/dashboard/parts.txt lists, in that order and with nothing added
-/// between them. Pieces sit in one folder per feature. A piece on disk
-/// that the list leaves out fails the build, so a new file can't be
-/// silently missing from the page.
-fn read_dashboard(dir: &std::path::Path) -> String {
+/// Files served whole but kept as pieces: (served name, folder under web/).
+/// The dashboard has one folder per feature inside its own; the
+/// Integrations script is one flat folder.
+const PIECED: &[(&str, &str)] = &[
+    ("index.html", "dashboard"),
+    ("integrations.js", "integrations"),
+];
+
+/// A served file joined from the pieces that web/<folder>/parts.txt lists,
+/// in that order and with nothing added between them. A piece in the
+/// folder (or a folder inside it) that the list leaves out fails the
+/// build, so a new file can't be silently missing.
+fn read_pieces(web_dir: &std::path::Path, folder: &str) -> String {
+    let dir = web_dir.join(folder);
     let list = read_web(&dir.join("parts.txt"));
     let parts: Vec<&str> = list
         .lines()
@@ -120,17 +127,11 @@ fn read_dashboard(dir: &std::path::Path) -> String {
 
     // Watching the folder itself also catches a piece added to it.
     println!("cargo:rerun-if-changed={}", dir.display());
-    for folder in read_dir_names(dir)
-        .into_iter()
-        .filter(|name| name != "parts.txt")
-    {
-        for file_name in read_dir_names(&dir.join(&folder)) {
-            let piece = format!("{folder}/{file_name}");
-            assert!(
-                parts.contains(&piece.as_str()),
-                "web/dashboard/{piece} is not listed in web/dashboard/parts.txt"
-            );
-        }
+    for piece in files_under(&dir, "") {
+        assert!(
+            piece == "parts.txt" || parts.contains(&piece.as_str()),
+            "web/{folder}/{piece} is not listed in web/{folder}/parts.txt"
+        );
     }
 
     parts
@@ -139,12 +140,21 @@ fn read_dashboard(dir: &std::path::Path) -> String {
         .collect()
 }
 
-/// The names of the entries in `dir`.
-fn read_dir_names(dir: &std::path::Path) -> Vec<String> {
-    fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("read {}: {}", dir.display(), e))
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect()
+/// Every file under `dir`, as a path relative to it with `/` between
+/// folders, each starting with `prefix`.
+fn files_under(dir: &std::path::Path, prefix: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {}", dir.display(), e));
+    for entry in entries {
+        let entry = entry.unwrap();
+        let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+        if entry.file_type().unwrap().is_dir() {
+            files.extend(files_under(&entry.path(), &format!("{name}/")));
+        } else {
+            files.push(name);
+        }
+    }
+    files
 }
 
 /// Gzip `bytes` into `path`; returns the compressed size.
