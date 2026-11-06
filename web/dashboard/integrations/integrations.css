@@ -820,7 +820,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-val-more .dff{width:100%;margin:0}
 .ig-val-name{display:flex;align-items:center;gap:2px;opacity:.85}
 .ig-val-name .ic-input{flex:1 1 0;min-width:0}
-.ig-val-empty{padding:18px 0}
+.ig-val-empty{padding:4px 0}
 .ig-value-list{margin:8px 0 0;padding-left:20px;max-height:220px;overflow:auto}
 .ig-value-list li{padding:2px 0;overflow-wrap:anywhere}
 .ig-reward-picks{display:flex;flex-direction:column;gap:4px;margin:8px 0}

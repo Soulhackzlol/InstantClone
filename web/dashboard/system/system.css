@@ -92,16 +92,21 @@ details.sys-collapse>summary .ic-label{margin:0}
   box-shadow:0 24px 60px rgba(0,0,0,.5);padding:0;overflow:hidden;
   animation:modalIn .22s var(--ease-out) both}
 @keyframes modalIn{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
-.ic-modal-head{display:flex;align-items:flex-start;gap:14px;padding:18px 20px 12px}
+.ic-modal-head{display:flex;align-items:flex-start;gap:14px;padding:18px 22px 12px}
+/* The close button stays in the corner however short the title is. */
+.ic-modal-head>.ic-btn-tiny{flex:none;margin:-2px -6px 0 auto}
 .ic-modal-icon{width:36px;height:36px;flex:0 0 36px;border-radius:50%;
   background:color-mix(in oklch,var(--err) 18%,var(--bg-2));color:var(--err);
   display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:600}
 .ic-modal-title{font-size:15px;font-weight:600;color:var(--fg);letter-spacing:-.01em}
 .ic-modal-sub{color:var(--fg-3);font-size:12.5px;margin-top:2px}
-.ic-modal-body{padding:4px 20px 8px;color:var(--fg-2);font-size:13px}
+.ic-modal-body{padding:4px 22px 18px;color:var(--fg-2);font-size:13px}
 .ic-modal-list{margin:0;padding-left:18px;line-height:1.6}
 .ic-modal-list li b{color:var(--err)}
-.ic-modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px 18px;
+/* Type RESET to confirm: the label sits on its input, as in every form. */
+.ic-modal-confirm{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.ic-modal-confirm[hidden]{display:none}
+.ic-modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:14px 22px;
   border-top:1px solid var(--line);background:color-mix(in oklch,var(--err) 3%,var(--bg-2))}
 .form-row{display:flex;gap:16px;margin-top:16px;align-items:flex-end;flex-wrap:wrap}
 .form-row.tight{gap:12px;margin-top:10px}
