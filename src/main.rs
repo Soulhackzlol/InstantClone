@@ -622,7 +622,7 @@ fn main() -> std::io::Result<()> {
             ctrl.clone(),
         ));
 
-        // Streamlabs Desktop (experimental): idle until the streamer connects
+        // Streamlabs Desktop: idle until the streamer connects
         // it, then routes its Twitch streams through us while it runs.
         tokio::spawn(streamlabs::run(ctrl.clone(), rx.clone()));
 

@@ -204,7 +204,7 @@ Map the same actions to a pad or knob, learned by pressing the control rather th
 <tr>
 <td valign="top">
 
-**🎬 Streamlabs Desktop (experimental)**
+**🎬 Streamlabs Desktop**
 Connect it once from the **OBS** tab and keep going live from Streamlabs' own **Go Live** button, signed in with Twitch. Enhanced Broadcasting and the Twitch VOD Track keep working, and what goes out is up to you: YouTube, Kick, any RTMP, with or without a Twitch destination.
 
 </td>
@@ -226,8 +226,8 @@ If OBS crashes or freezes, every destination stays live on a reconnect screen (f
 <tr>
 <td valign="top" colspan="2">
 
-**🧩 Integrations (experimental)**
-InstantClone talks to Discord, Twitch chat, your phone, OBS and your own tools. It can start on follows, subs, gifted subs, bits, raids, channel point rewards and ad breaks, and on OBS recording, replays or a muted mic. One click adds a crash alert, on-stream Twitch alerts, a `!delay` command, mod controls, a highlight button that clips what viewers actually saw, a Discord card that writes your stream's timeline, YouTube chapters, an on-air light and more, and a step builder covers the rest, down to OBS scenes, filters, recording and hotkeys, and smart lights and plugs on your network (WiZ, LIFX, Govee, Yeelight, Kasa, Shelly, WLED) with no hub. They're new and may still change: please report what breaks or confuses you with the tab's **Report it** link.
+**🧩 Integrations**
+InstantClone talks to Discord, Twitch chat, your phone, OBS and your own tools. It can start on follows, subs, gifted subs, bits, raids, channel point rewards and ad breaks, and on OBS recording, replays or a muted mic. One click adds a crash alert, on-stream Twitch alerts, a `!delay` command, mod controls, a highlight button that clips what viewers actually saw, a Discord card that writes your stream's timeline, YouTube chapters, an on-air light and more, and a step builder covers the rest, down to OBS scenes, filters, recording and hotkeys, and smart lights and plugs on your network (WiZ, LIFX, Govee, Yeelight, Kasa, Shelly, WLED) with no hub. Something not working? Every integration's menu has **Report a problem**.
 
 </td>
 </tr>
@@ -456,7 +456,7 @@ Yes, both. Six actions bind to a global keyboard shortcut, a MIDI pad or knob, o
 
 <br/>
 
-Yes, as an experimental feature. Connect it once from the **OBS** tab (or the first step of setup), sign Streamlabs in with Twitch and go live from its **Go Live** button. You don't change anything inside Streamlabs. If it's signed in with another platform, the dashboard says so.
+Yes. Connect it once from the **OBS** tab (or the first step of setup), sign Streamlabs in with Twitch and go live from its **Go Live** button. You don't change anything inside Streamlabs. If it's signed in with another platform, the dashboard says so.
 
 </details>
 

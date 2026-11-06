@@ -115,8 +115,7 @@ function render(){
       + (failing.length ? ` · <span class="ig-num" data-tick>${failing.length}</span> ${failing.length === 1 ? 'needs attention.' : 'need attention.'}` : '.');
   morph(root, `<div class="ig-pane" data-flip>
       <div class="tab-head" data-key="head">
-        <div><div class="tab-title">Integrations <span class="ig-exp">Experimental</span></div><div class="tab-sub ig-sub">${sub}</div>
-          <div class="ig-exp-note">Still experimental: they work, but how they look and how you set them up may still change. Found a bug or have an idea? <a href="${esc(reportUrl())}" target="_blank" rel="noreferrer">Report it</a></div></div>
+        <div><div class="tab-title">Integrations</div><div class="tab-sub ig-sub">${sub}</div></div>
         <div class="ig-head-actions">
           ${empty ? '' : '<button class="ic-btn ic-btn-ghost" data-act="share">Share</button>'}
           <button class="ic-btn ic-btn-ghost" data-act="values">Your values</button>

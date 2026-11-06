@@ -1237,7 +1237,7 @@ async fn route(
             ("200 OK", "application/json", r#"{"ok":true}"#.to_string())
         }
         ("GET", "/obs/launch-status") => ("200 OK", "application/json", obs_launch_status_json()),
-        // Streamlabs Desktop (experimental): see `streamlabs`.
+        // Streamlabs Desktop: see `streamlabs`.
         ("GET", "/streamlabs/status") => (
             "200 OK",
             "application/json",

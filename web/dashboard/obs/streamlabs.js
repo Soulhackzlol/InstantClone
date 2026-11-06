@@ -1,4 +1,4 @@
-// - Streamlabs Desktop (experimental) ------------------------------
+// - Streamlabs Desktop ---------------------------------------------
 // Once connected, its Twitch streams come through InstantClone: the server
 // points Streamlabs' Enhanced Broadcasting setup at us and follows its Go
 // Live flow (src/streamlabs.rs). The card and the wizard only show where
