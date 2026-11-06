@@ -38,7 +38,7 @@ cargo test --release
 .\target\release\instantclone.exe
 ```
 
-The dashboard page has no single source file: it lives in pieces under [web/dashboard/](web/dashboard/), one folder per feature (`destinations/`, `wizard/`, `system/`…, with `page/` for what the whole page shares), and `build.rs` joins them in the order [parts.txt](web/dashboard/parts.txt) lists. The Integrations script (`/integrations.js`) works the same way from [web/integrations/](web/integrations/). A new piece goes into its folder's `parts.txt`, or the build stops and says so.
+The dashboard page is kept as pieces under [web/dashboard/](web/dashboard/), one folder per feature (`destinations/`, `wizard/`, `system/`…, with `page/` for what the whole page shares). [web/dashboard/index.html](web/dashboard/index.html) is its skeleton: the page's own tags with a `<!-- include hero/hero.css -->` line where each piece goes, in the order the page needs (styles in cascade order, markup in on-screen order, scripts in run order). `build.rs` swaps each include line for its piece. The Integrations script (`/integrations.js`) works the same way from [web/integrations/integrations.js](web/integrations/integrations.js). A new piece needs its include line in the skeleton, or the build stops and says so.
 
 ## Be decent
 

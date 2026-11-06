@@ -1,14 +1,3 @@
-// Integrations tab: the module list, the catalog, the module editor, the
-// step builder, connections (Discord, Twitch, phone) and recipes.
-//
-// Loaded after the dashboard script, so it reuses its helpers ($, toast,
-// staggerIn, fitPaneCard, flashCopied, prefersReducedMotion) and its
-// components: a module is a .dcard, every editor is the destination modal
-// (.ic-modal + .dest-form). All user text goes through esc() before it
-// touches the DOM, and every redraw goes through morph() (see Rendering).
-(function(){
-'use strict';
-
 // ---------------------------------------------------------------- helpers
 
 const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g,

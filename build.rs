@@ -1,8 +1,9 @@
 //! Build-time HTML pipeline: minify + gzip web/*.html, emit gz blobs to
 //! OUT_DIR so the binary embeds only the compressed bytes. Skips the
 //! minifier on anything that looks risky (template literals, <pre>).
-//! The dashboard page and the Integrations script are first joined from
-//! their pieces in web/dashboard/ and web/integrations/ (see `read_pieces`).
+//! The dashboard page and the Integrations script are first built from
+//! their skeletons, web/dashboard/index.html and
+//! web/integrations/integrations.js (see `read_pieced`).
 //!
 //! Net effect: the dashboard's ~870 KB of HTML/CSS/JS in source goes out
 //! as ~165 KB gzipped. The release binary serves the gz blob directly with
@@ -37,7 +38,7 @@ fn main() {
         ("studio.js", false),
     ] {
         let raw = match PIECED.iter().find(|(served, _)| served == name) {
-            Some((_, folder)) => read_pieces(&web_dir, folder),
+            Some((_, skeleton)) => read_pieced(&web_dir, skeleton),
             None => read_web(&web_dir.join(name)),
         };
         let processed: Vec<u8> = if *do_min {
@@ -104,40 +105,56 @@ fn read_web(path: &std::path::Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
 }
 
-/// Files served whole but kept as pieces: (served name, folder under web/).
-/// The dashboard has one folder per feature inside its own; the
-/// Integrations script is one flat folder.
+/// Files served whole but kept as pieces: (served name, skeleton under
+/// web/). A skeleton is the served file's own frame (the page's tags, the
+/// script's wrapping function) with an include line where each piece goes.
 const PIECED: &[(&str, &str)] = &[
-    ("index.html", "dashboard"),
-    ("integrations.js", "integrations"),
+    ("index.html", "dashboard/index.html"),
+    ("integrations.js", "integrations/integrations.js"),
 ];
 
-/// A served file joined from the pieces that web/<folder>/parts.txt lists,
-/// in that order and with nothing added between them. A piece in the
-/// folder (or a folder inside it) that the list leaves out fails the
-/// build, so a new file can't be silently missing.
-fn read_pieces(web_dir: &std::path::Path, folder: &str) -> String {
-    let dir = web_dir.join(folder);
-    let list = read_web(&dir.join("parts.txt"));
-    let parts: Vec<&str> = list
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .collect();
+/// A served file built from its skeleton: every include line is replaced
+/// by the piece it names (a path from the skeleton's folder), every other
+/// line is kept as it is. Each file in the skeleton's folder (or a folder
+/// inside it) must be included exactly once, so a new piece can't be
+/// silently missing and none can show up twice.
+fn read_pieced(web_dir: &std::path::Path, skeleton: &str) -> String {
+    let path = web_dir.join(skeleton);
+    let dir = path.parent().unwrap();
+    let skeleton_name = path.file_name().unwrap().to_string_lossy().into_owned();
+    let mut joined = String::new();
+    let mut included: Vec<String> = Vec::new();
+    for line in read_web(&path).split_inclusive('\n') {
+        match include_target(line) {
+            Some(piece) => {
+                assert!(
+                    !included.iter().any(|seen| seen == piece),
+                    "web/{skeleton} includes {piece} twice"
+                );
+                joined.push_str(&read_web(&dir.join(piece)));
+                included.push(piece.to_string());
+            }
+            None => joined.push_str(line),
+        }
+    }
 
     // Watching the folder itself also catches a piece added to it.
     println!("cargo:rerun-if-changed={}", dir.display());
-    for piece in files_under(&dir, "") {
+    for piece in files_under(dir, "") {
         assert!(
-            piece == "parts.txt" || parts.contains(&piece.as_str()),
-            "web/{folder}/{piece} is not listed in web/{folder}/parts.txt"
+            piece == skeleton_name || included.contains(&piece),
+            "{piece} is in the folder of web/{skeleton} but no include line names it"
         );
     }
+    joined
+}
 
-    parts
-        .iter()
-        .map(|piece| read_web(&dir.join(piece)))
-        .collect()
+/// The piece a skeleton line pulls in: `<!-- include hero/hero.css -->`,
+/// alone on its line.
+fn include_target(line: &str) -> Option<&str> {
+    line.trim()
+        .strip_prefix("<!-- include ")?
+        .strip_suffix(" -->")
 }
 
 /// Every file under `dir`, as a path relative to it with `/` between

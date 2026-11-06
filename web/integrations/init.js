@@ -99,4 +99,3 @@ if (overlayPane && !overlayPane.hidden){
   const open = overlayPane.querySelector('.sub-tab.on');
   window.Integrations.stage(open ? open.dataset.subtab : null);
 }
-})();

@@ -5994,12 +5994,12 @@ static DOCK_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html
 static DOCK_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js.gz"));
 
 /// Main dashboard / first-run wizard. Source lives in `web/dashboard/`
-/// (pieces joined in the order `parts.txt` lists); build-time joined,
+/// (its skeleton `index.html` includes the pieces); build-time joined,
 /// minified + gzipped (see `build.rs`).
 static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
 /// The dashboard's Integrations tab; source in `web/integrations/`
-/// (pieces joined in the order `parts.txt` lists), build-time gzipped like
-/// the dock script.
+/// (its skeleton `integrations.js` includes the pieces), build-time
+/// gzipped like the dock script.
 static INTEGRATIONS_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/integrations.js.gz"));
 /// The Overlay Studio editor; source in `web/studio.js`, gzipped the same way.
 static STUDIO_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/studio.js.gz"));
