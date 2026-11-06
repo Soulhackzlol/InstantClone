@@ -343,7 +343,6 @@ vertical
 {}{{}.ok}
 · MT
 ≤ 8000 kbps
-⚡ Enhanced Broadcasting
 Buffer too small for ...
 Enhanced Broadcasting (multi-track video) detected - forwarding raw to Twitch destinations, flattening to the primary resolution for any other platform.
 This is where your alerts show up on stream.

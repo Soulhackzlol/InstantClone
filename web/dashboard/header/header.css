@@ -40,6 +40,27 @@
 :where(a:not([class])):hover{color:var(--fg);border-color:var(--fg)}
 .ic-brand-dot{display:inline-block;width:5px;height:5px;border-radius:999px;background:var(--fg-4);margin:0 6px 2px}
 .ic-header-right{display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+/* Wider than a phone the header is always one line. When the pills don't
+   fit, fitHeader (header.js) tightens it a step at a time, least useful
+   detail first: 1 the Enhanced Broadcasting and Vertical words (their icons
+   and tooltips stay), 2 the codec (on the Stats tab too), 3 the credit,
+   4 the OBS / Sending words, 5 the "Updated" note (in About too), and as a
+   last resort 6 the row scrolls. Warnings are never shortened. */
+@media (min-width:521px){
+  .ic-brand{flex:none;flex-wrap:nowrap}
+  .ic-header-right{flex-wrap:nowrap;min-width:0;justify-content:flex-start}
+  .ic-header-right>*{flex:none}
+  .ic-header.fit-1 .hdr-word,
+  .ic-header.fit-2 #hdr-codec,
+  .ic-header.fit-3 .ic-brand-sep,.ic-header.fit-3 .ic-brand-sub,
+  .ic-header.fit-4 :is(#hdr-obs,#hdr-egress) .ic-pill-k,
+  .ic-header.fit-5 #hdr-whats-new{display:none}
+  .ic-header.fit-6 .ic-header-right{overflow-x:auto;scrollbar-width:none}
+  .ic-header.fit-6 .ic-header-right::-webkit-scrollbar{display:none}
+  .ic-header.fit-6 .ic-header-right.more-r{mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
+  .ic-header.fit-6 .ic-header-right.more-l.more-r{mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
+  .ic-header.fit-6 .ic-header-right.more-l:not(.more-r){mask-image:linear-gradient(90deg,transparent,#000 28px)}
+}
 .ic-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border-radius:999px;
   background:var(--surface-3);border:1px solid var(--line);font-size:12px;color:var(--fg-2);
   transition:border-color .2s var(--ease-out),background-color .2s var(--ease-out),color .2s var(--ease-out)}

@@ -172,3 +172,37 @@ function openTwitchCapInfo(){
     'err'
   );
 }
+
+// - One-line header ------------------------------
+// Wider than a phone the header is one line. When the pills don't fit, it
+// tightens a step at a time (the steps are in header.css). A pill showing or
+// hiding, or the window resizing, fits it again from scratch; the pills' text
+// changing (four times a second while live) only ever adds a step, so a tick
+// costs one measurement.
+const HEADER_FIT_STEPS = 6;
+const headerFit = {step:0, full:false, frame:0};
+function fitHeader(full){
+  const bar = $('hdr-bar'), row = bar.querySelector('.ic-header-right');
+  if (full){
+    for (let i = 1; i <= HEADER_FIT_STEPS; i++) bar.classList.remove('fit-' + i);
+    headerFit.step = 0;
+  }
+  if (bar.hidden || matchMedia('(max-width:520px)').matches) return;
+  while (headerFit.step < HEADER_FIT_STEPS && row.scrollWidth > row.clientWidth + 1){
+    bar.classList.add('fit-' + ++headerFit.step);
+  }
+}
+function fitHeaderSoon(full){
+  headerFit.full = headerFit.full || full;
+  if (headerFit.frame) return;
+  headerFit.frame = requestAnimationFrame(() => {
+    const fullFit = headerFit.full;
+    headerFit.frame = 0;
+    headerFit.full = false;
+    fitHeader(fullFit);
+  });
+}
+new ResizeObserver(() => fitHeaderSoon(true)).observe($('hdr-bar'));
+new MutationObserver(changes => fitHeaderSoon(changes.some(c => c.type === 'attributes')))
+  .observe($('hdr-bar').querySelector('.ic-header-right'),
+    {subtree:true, childList:true, characterData:true, attributes:true, attributeFilter:['hidden']});
