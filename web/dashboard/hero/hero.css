@@ -173,7 +173,9 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
 .hero-delay-num.d-active{color:var(--live)}
 /* Less delay on air than was armed (the buffer can't hold it). */
 .hero-delay-num.d-short{color:var(--warn)}
-.hero-delay-unit{font-size:32px;color:var(--fg-3);font-weight:400}
+/* The unit in the number's own font, sized with the "/ 5.0s" beside it:
+   a 32px sans "s" read as a capital S. */
+.hero-delay-unit{font-family:var(--mono);font-size:24px;color:var(--fg-3);font-weight:400}
 .hero-delay-of{font-size:22px;color:var(--fg-3);margin-left:6px;white-space:nowrap}
 .hero-delay-sub{color:var(--fg-3);font-size:13px;min-height:1.4em;
   transition:opacity .22s var(--ease-out),transform .22s var(--ease-out)}
@@ -270,6 +272,11 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
 /* The armed profile is disabled (it's already on), but it must still read as on. */
 .cp-profile-chip.on:disabled{opacity:1;cursor:default}
 .cp-profile-chip .bolt{display:inline-block}
+/* A phone: the chips share a row evenly, never one left alone on a second. */
+@media (max-width:560px){
+  .cp-profiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(58px,1fr))}
+  .cp-profile-chip{justify-content:center;padding:6px 8px}
+}
 /* Profile launch: sparks fly in viewport coordinates, above everything. */
 .cp-spark{position:fixed;left:0;top:0;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;
   pointer-events:none;z-index:1000;background:oklch(0.93 0.12 85);

@@ -353,4 +353,9 @@
 .ovg-switch input{accent-color:var(--accent,#5ac8fa);cursor:pointer;margin:0}
 .ovg-switch:hover{border-color:var(--line2,rgba(255,255,255,.18))}
 .st-danger{color:var(--danger)!important}
-
+/* Unsaved-changes cue on the Studio Save button. */
+.st-save-dirty{box-shadow:0 0 0 2px color-mix(in oklch,var(--accent) 55%,transparent);font-weight:700}
+/* Brief "preview re-synced" pulse after a live edit. */
+.st-synced{font-size:11px;color:var(--accent);opacity:0;transform:translateY(-2px);
+  transition:opacity .2s ease,transform .2s ease;pointer-events:none;white-space:nowrap}
+.st-synced.on{opacity:.9;transform:none}

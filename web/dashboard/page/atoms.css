@@ -121,3 +121,9 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
   animation:fieldShake .35s cubic-bezier(.36,.07,.19,.97)}
 @keyframes fieldShake{10%,90%{transform:translateX(-1px)} 20%,80%{transform:translateX(2px)} 30%,50%,70%{transform:translateX(-3px)} 40%,60%{transform:translateX(3px)}}
 
+/* A caution button (warn) and a danger button that cannot be pressed yet. */
+.ic-btn-warn{background:color-mix(in oklch,var(--warn) 18%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--warn) 45%,var(--line));color:var(--warn)}
+.ic-btn-warn:hover:not(:disabled,.ic-btn-disabled){background:color-mix(in oklch,var(--warn) 28%,var(--bg-2));
+  border-color:color-mix(in oklch,var(--warn) 60%,var(--line))}
+.ic-btn-danger:disabled{opacity:.45;cursor:not-allowed}

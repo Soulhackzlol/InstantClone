@@ -1,6 +1,5 @@
 /* Tray icon color: one dot per color, ringed when it is the one chosen. */
 .tray-color-row{display:flex;align-items:center;gap:14px}
-.sys-language{margin-top:12px;max-width:260px}
 .tray-color-row[hidden]{display:none}
 .tray-colors{display:flex;gap:12px;padding:4px}
 .tray-color{position:relative;width:22px;height:22px;cursor:pointer}
@@ -13,6 +12,4 @@
 .tray-color input:checked+span{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--fg)}
 .tray-color input:focus-visible+span{outline:2px solid var(--accent);outline-offset:5px}
 @media (prefers-reduced-motion: reduce){.tray-color span{transition:none}}
-#ov-gallery .tab-head>div:first-child{flex:1 1 340px;min-width:0}
-#ov-gallery .tab-head .tab-sub{max-width:none;text-wrap:balance}
 

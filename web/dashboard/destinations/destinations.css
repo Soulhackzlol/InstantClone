@@ -242,7 +242,8 @@
    drop out of the grid, so each platform packs its own set. */
 .dfg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 18px;align-items:start}
 .dff{display:flex;flex-direction:column;gap:6px;min-width:0}
-.dest-form-note{display:block;min-width:0;font-size:12px;line-height:1.55;align-self:center}
+/* Top-aligned, so it reads beside its neighbour's label instead of floating. */
+.dest-form-note{display:block;min-width:0;font-size:12px;line-height:1.55;align-self:start}
 .dest-form .dff>label,.dest-form .dff>label.muted{margin:0;font-size:12.5px;font-weight:600;color:var(--fg-2);
   text-transform:none;letter-spacing:0}
 .dest-form .dff>label .muted{font-weight:400;font-size:11.5px}

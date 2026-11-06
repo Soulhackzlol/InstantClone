@@ -1,0 +1,8 @@
+/* The dialog frame every dialog uses (Reset, the destination editor,
+   Integrations): over the page, centred, on a dimmed backdrop. While one is
+   open the page behind it does not scroll. */
+.ic-modal{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+.ic-modal[hidden]{display:none}
+.ic-modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(4px);
+  animation:fadeIn .18s var(--ease-out)}
+html:has(.ic-modal:not([hidden])){overflow:hidden;scrollbar-gutter:stable}

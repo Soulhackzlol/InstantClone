@@ -1,0 +1,58 @@
+/* Crash protection card. The preview is drawn server-side by the same
+   renderer that encodes the stream, so it is what viewers will see. Wide
+   screens put the preview beside the controls and keep it in view while
+   they scroll; narrow ones stack them. */
+.crash-check{display:flex;align-items:flex-start;gap:10px;cursor:pointer}
+.crash-check input{width:16px;height:16px;margin-top:2px;flex:none;cursor:pointer;accent-color:var(--accent)}
+.crash-check>span{display:flex;flex-direction:column;gap:2px;min-width:0}
+.crash-check-title{font-weight:600}
+.crash-master{margin-top:14px}
+.crash-body{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:20px 28px;margin-top:18px;
+  padding-top:18px;border-top:1px solid var(--line);animation:softDrop .2s var(--ease-out)}
+.crash-stage{display:flex;flex-direction:column;gap:8px;align-self:start;position:sticky;top:12px}
+.crash-stage-head,.crash-field-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.crash-label{font-weight:600;font-size:12.5px;color:var(--fg-2)}
+.crash-note{color:var(--fg-3);font-size:11.5px;line-height:1.45}
+.crash-preview-frame{display:grid;place-items:center;background:var(--bg);border:1px solid var(--line);
+  border-radius:10px;padding:10px;aspect-ratio:16/10}
+.crash-preview{display:block;width:100%;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.45);aspect-ratio:16/9;
+  background:var(--surface) no-repeat 0 0/100% 2400%;animation:crash-loop 2s steps(24,jump-none) infinite}
+.crash-preview-frame.vertical .crash-preview{width:auto;height:100%;aspect-ratio:9/16}
+/* The preview is one strip of 24 frames (CP_PREVIEW_FRAMES) stacked top to
+   bottom; sliding it a frame at a time plays the 2 s loop with no script. */
+@keyframes crash-loop{to{background-position:0 100%}}
+.crash-controls{display:flex;flex-direction:column;gap:18px;min-width:0}
+.crash-field{display:flex;flex-direction:column;gap:8px;min-width:0}
+.crash-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.crash-seg button{appearance:none;border:0;background:var(--bg-2);color:var(--fg-3);font:inherit;font-size:11.5px;
+  font-weight:600;padding:5px 11px;cursor:pointer}
+.crash-seg button[aria-pressed="true"]{background:var(--surface-3);color:var(--accent)}
+.crash-themes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.crash-theme{appearance:none;display:flex;flex-direction:column;gap:6px;padding:5px 5px 7px;border-radius:9px;cursor:pointer;
+  background:var(--bg-2);border:1px solid var(--line);color:var(--fg-3);font:inherit;font-size:12px;font-weight:600;
+  transition:border-color .15s,color .15s,transform .15s var(--ease-out)}
+.crash-theme:hover{border-color:var(--line-2);color:var(--fg);transform:translateY(-1px)}
+.crash-theme[aria-checked="true"]{border-color:var(--accent);color:var(--fg);
+  box-shadow:0 0 0 1px var(--accent) inset}
+.crash-theme img{display:block;width:100%;aspect-ratio:16/9;border-radius:5px;background:var(--surface)}
+.crash-swatches{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.crash-swatch{appearance:none;width:26px;height:26px;border-radius:50%;padding:0;cursor:pointer;border:2px solid var(--bg-2);
+  box-shadow:0 0 0 1px var(--line-2);transition:transform .12s var(--ease-out)}
+.crash-swatch:hover{transform:scale(1.08)}
+.crash-swatch[aria-pressed="true"]{box-shadow:0 0 0 2px var(--fg)}
+.crash-inline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.crash-small-btn{padding:6px 10px;font-size:12px}
+.crash-link{appearance:none;background:none;border:0;padding:0;color:var(--accent);font:inherit;font-size:11.5px;cursor:pointer}
+.crash-link:hover{text-decoration:underline}
+.crash-text-row{position:relative;display:block}
+.crash-text-row .ic-input{padding-right:58px}
+.crash-count{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:10.5px;color:var(--fg-4);pointer-events:none}
+.crash-count.full{color:var(--warn)}
+.crash-hold-value{font-size:12.5px;color:var(--accent);font-weight:600}
+.crash-range{width:100%}
+.crash-advanced>summary{cursor:pointer;color:var(--fg-3);font-size:12.5px}
+.crash-advanced>summary:hover{color:var(--fg)}
+.crash-advanced .crash-check{margin-top:10px}
+@media (max-width:820px){.crash-body{grid-template-columns:1fr}.crash-stage{position:static}}
+@media (max-width:420px){.crash-themes{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (prefers-reduced-motion: reduce){.crash-body,.crash-preview{animation:none}.crash-theme:hover,.crash-swatch:hover{transform:none}}

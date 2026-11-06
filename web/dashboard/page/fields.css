@@ -39,3 +39,9 @@ input[type="checkbox"]:checked{background-color:var(--accent);border-color:trans
 input[type="checkbox"]:hover:not(:disabled){border-color:var(--fg-4)}
 input[type="checkbox"]:focus-visible{outline:2px solid color-mix(in oklch,var(--accent) 60%,transparent);outline-offset:2px}
 input[type="checkbox"]:disabled{opacity:.45;cursor:default}
+/* Fields side by side, wrapping on a narrow screen; checkboxes in a row. */
+.form-row{display:flex;gap:16px;margin-top:16px;align-items:flex-end;flex-wrap:wrap}
+.form-row.tight{gap:12px;margin-top:10px}
+.form-row>div,.form-row>label{display:flex;flex-direction:column;gap:6px;flex:1;min-width:180px}
+.checkbox-row{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px}
+.checkbox-row label{display:inline-flex;align-items:center;gap:8px;color:var(--fg-2);font-size:13px;cursor:pointer}

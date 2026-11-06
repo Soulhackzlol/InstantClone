@@ -189,4 +189,6 @@
 .ovg-blank b{font-size:15px;color:var(--fg)}
 .ovg-blank span{max-width:62ch;font-size:13px;line-height:1.6;color:var(--fg-3);text-wrap:pretty}
 .ovg-blank .og-row{justify-content:center;margin-top:6px}
-
+/* The gallery heading: its words use the width there is. */
+#ov-gallery .tab-head>div:first-child{flex:1 1 340px;min-width:0}
+#ov-gallery .tab-head .tab-sub{max-width:none;text-wrap:balance}
