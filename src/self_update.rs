@@ -478,6 +478,37 @@ pub fn wait_for_pid_exit(pid: u32, timeout_ms: u32) {
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn wait_for_pid_exit(_pid: u32, _timeout_ms: u32) {}
 
+/// Block until process `pid` exits, however long that takes. A helper the
+/// app starts (the test sink) waits on this to leave with the app, also when
+/// the app is killed or crashes and never gets to stop it.
+#[cfg(windows)]
+pub fn wait_for_pid_exit_forever(pid: u32) {
+    const INFINITE: u32 = u32::MAX;
+    wait_for_pid_exit(pid, INFINITE);
+}
+
+/// Block until process `pid` exits, however long that takes (see the Windows
+/// version). Once a second: nothing hurries a helper's exit.
+#[cfg(target_os = "linux")]
+pub fn wait_for_pid_exit_forever(pid: u32) {
+    loop {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Err(_) => return,
+            Ok(stat) if proc_stat_has_exited(&stat) => return,
+            Ok(_) => std::thread::sleep(std::time::Duration::from_secs(1)),
+        }
+    }
+}
+
+/// Elsewhere there is no way to watch the app, so this never returns and a
+/// helper lives on as it did before.
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn wait_for_pid_exit_forever(_pid: u32) {
+    loop {
+        std::thread::park();
+    }
+}
+
 /// Find the hash for `name` in a `SHA256SUMS.txt` body. Each line is
 /// `<64-hex-hash>  <filename>`; we match the filename and return the hash.
 fn parse_checksum(sums: &str, name: &str) -> Option<String> {
@@ -627,6 +658,41 @@ mod tests {
             start.elapsed() < std::time::Duration::from_secs(1),
             "a pid that cannot exist must not cost the timeout"
         );
+    }
+
+    /// The test sink's way out: waiting with no deadline holds while the
+    /// process runs and lets go once it is killed.
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn waiting_forever_ends_when_the_process_is_killed() {
+        use std::time::Duration;
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("start ping");
+        #[cfg(target_os = "linux")]
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("start sleep");
+        let pid = child.id();
+        let (done, gone) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            super::wait_for_pid_exit_forever(pid);
+            let _ = done.send(());
+        });
+        assert!(
+            gone.recv_timeout(Duration::from_millis(500)).is_err(),
+            "the process still runs, so the wait must still hold"
+        );
+        child.kill().expect("kill the child");
+        assert!(
+            gone.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "once the process is killed the wait must end"
+        );
+        let _ = child.wait();
     }
 
     #[test]
