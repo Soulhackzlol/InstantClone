@@ -60,6 +60,9 @@ mod json;
 mod local_eb_config;
 mod midi;
 mod obs_register;
+// Build-time only (build.rs includes it); here so its rules are tested.
+#[cfg(test)]
+mod pieced;
 mod portcheck;
 mod revisions;
 mod rtmp;

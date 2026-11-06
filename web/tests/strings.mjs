@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readWebFile } from './web-files.mjs';
+import { readWebFile, sourceOf } from './web-files.mjs';
 
 const WEB = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const REPO = path.dirname(WEB);
@@ -240,20 +240,20 @@ export function pageStrings() {
         literals.push(...jsLiterals(code, countLines(src, 0, at) + 1));
         return blankOut(whole);
       });
-      for (const { word, at } of markupWords(markup)) add(word, `${file}:${countLines(markup, 0, at) + 1}`, true);
+      for (const { word, at } of markupWords(markup)) add(word, sourceOf(file, countLines(markup, 0, at) + 1), true);
     } else {
       literals.push(...jsLiterals(src));
     }
     for (const { text, line } of literals) {
-      if (/<[a-zA-Z/]/.test(text)) markupWords(text).forEach(found => add(found.word, `${file}:${line}`, true));
-      else add(edgeless(normalize(decodeEntities(text))), `${file}:${line}`, false);
+      if (/<[a-zA-Z/]/.test(text)) markupWords(text).forEach(found => add(found.word, sourceOf(file, line), true));
+      else add(edgeless(normalize(decodeEntities(text))), sourceOf(file, line), false);
     }
   }
   for (const [file, pattern] of RUST_SHOWN) {
     const src = fs.readFileSync(path.join(REPO, file), 'utf8');
     for (const found of src.matchAll(pattern)) add(found[1].replace(/\\(.)/g, '$1'), file, true);
   }
-  for (const file of rustFiles()) {
+  for (const file of rustFiles().filter(file => !BUILD_ONLY.includes(path.relative(REPO, file).split(path.sep).join('/')))) {
     const src = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('#[cfg(test)]')[0];
     for (const pattern of RUST_MESSAGES) {
       for (const found of src.matchAll(pattern)) add(rustText(found[1]), path.relative(REPO, file), true);
@@ -273,6 +273,9 @@ const RUST_SHOWN = [
   ['src/integrations/event.rs', /EventKind::\w+ => "([A-Z][^"]*)"/g],
   ['src/instance_lock.rs', /\("([A-Z][a-z]+)", \[0x/g],
 ];
+
+/** Rust sources that only run while building (build.rs uses them): their errors never reach a page. */
+const BUILD_ONLY = ['src/pieced.rs'];
 
 /** What the app answers the pages in words: an error field, a refusal, a sentence. */
 const RUST_LITERAL = '"((?:[^"\\\\]|\\\\[\\s\\S])+)"';

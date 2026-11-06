@@ -17,6 +17,10 @@ use std::path::PathBuf;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
+// The skeleton rules, shared with the app's tests (see the module's header).
+#[path = "src/pieced.rs"]
+mod pieced;
+
 fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let web_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("web");
@@ -113,65 +117,22 @@ const PIECED: &[(&str, &str)] = &[
     ("integrations.js", "integrations/integrations.js"),
 ];
 
-/// A served file built from its skeleton: every include line is replaced
-/// by the piece it names (a path from the skeleton's folder), every other
-/// line is kept as it is. Each file in the skeleton's folder (or a folder
-/// inside it) must be included exactly once, so a new piece can't be
-/// silently missing and none can show up twice.
+/// A served file built from its skeleton (see src/pieced.rs for the
+/// rules). Any broken rule stops the build with the file and line to fix.
 fn read_pieced(web_dir: &std::path::Path, skeleton: &str) -> String {
     let path = web_dir.join(skeleton);
     let dir = path.parent().unwrap();
     let skeleton_name = path.file_name().unwrap().to_string_lossy().into_owned();
-    let mut joined = String::new();
-    let mut included: Vec<String> = Vec::new();
-    for line in read_web(&path).split_inclusive('\n') {
-        match include_target(line) {
-            Some(piece) => {
-                assert!(
-                    !included.iter().any(|seen| seen == piece),
-                    "web/{skeleton} includes {piece} twice"
-                );
-                joined.push_str(&read_web(&dir.join(piece)));
-                included.push(piece.to_string());
-            }
-            None => joined.push_str(line),
-        }
-    }
-
-    // Watching the folder itself also catches a piece added to it.
+    // Watching the folder itself also catches a piece added or removed.
     println!("cargo:rerun-if-changed={}", dir.display());
-    for piece in files_under(dir, "") {
-        assert!(
-            piece == skeleton_name || included.contains(&piece),
-            "{piece} is in the folder of web/{skeleton} but no include line names it"
-        );
-    }
-    joined
-}
-
-/// The piece a skeleton line pulls in: `<!-- include hero/hero.css -->`,
-/// alone on its line.
-fn include_target(line: &str) -> Option<&str> {
-    line.trim()
-        .strip_prefix("<!-- include ")?
-        .strip_suffix(" -->")
-}
-
-/// Every file under `dir`, as a path relative to it with `/` between
-/// folders, each starting with `prefix`.
-fn files_under(dir: &std::path::Path, prefix: &str) -> Vec<String> {
-    let mut files = Vec::new();
-    let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {}", dir.display(), e));
-    for entry in entries {
-        let entry = entry.unwrap();
-        let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
-        if entry.file_type().unwrap().is_dir() {
-            files.extend(files_under(&entry.path(), &format!("{name}/")));
-        } else {
-            files.push(name);
-        }
-    }
-    files
+    let text = read_web(&path);
+    pieced::pieces_in(dir, &skeleton_name)
+        .and_then(|pieces| {
+            pieced::join(&format!("web/{skeleton}"), &text, &pieces, |piece| {
+                Ok(read_web(&dir.join(piece)))
+            })
+        })
+        .unwrap_or_else(|e| panic!("{e}"))
 }
 
 /// Gzip `bytes` into `path`; returns the compressed size.
