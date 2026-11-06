@@ -813,7 +813,7 @@ const Builder = {
     const rows = shown.map(x => row(x)).join('') + (typed && !all.some(([v]) => v === typed) ? row([typed, typed], true) : '');
     const empty = all.length ? 'Nothing matches.' : opts.offline;
     const head = picked.length ? `<span class="ig-pick-sum" title="${esc(picked.join(', '))}">${multi ? `${picked.length} picked` : esc(picked[0])}</span><button type="button" class="ig-pick-clear" data-act="b-obs-clear" data-name="${name}">Clear</button>` : '';
-    return `<div class="dff ig-pick"><div class="ig-pick-h"><span class="ig-pick-l">${label}</span>${head}</div>
+    return `<div class="dff ig-picker"><div class="ig-pick-h"><span class="ig-pick-l">${label}</span>${head}</div>
       <div class="ig-pick-box"><div class="ig-pick-find">${svg('search')}<input data-bind="pick-find" data-name="${esc(key)}" value="${esc(find)}" placeholder="${esc(opts.ph)}" spellcheck="false" aria-label="Find or type a name"></div>
       <div class="ig-pick-list" role="listbox"${multi ? ' aria-multiselectable="true"' : ''} aria-label="${esc(label)}">${rows || `<div class="ig-pick-none">${esc(empty)}</div>`}</div></div></div>`;
   },

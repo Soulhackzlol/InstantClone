@@ -233,13 +233,13 @@ html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-it
 .cp-input{flex:1;appearance:none;-moz-appearance:textfield;background:transparent;border:0;outline:0;
   color:var(--fg);font-size:22px;font-weight:500;text-align:center;padding:0;line-height:1.25;
   font-variant-numeric:tabular-nums;letter-spacing:-.01em;min-width:0;
-  font-family:'JetBrains Mono',monospace}
+  font-family:var(--mono)}
 /* Rolling digits: an overlay with the input's exact metrics plays the roll,
    then hands back to the real field (see rollDelayInput). */
 .cp-input-wrap{position:relative;flex:1;min-width:0;display:flex}
 .cp-input-wrap.rolling .cp-input,.cp-input-wrap.rolling .cp-input::placeholder{color:transparent}
 .cp-roll{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;
-  color:var(--fg);font:500 22px/1.25 'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+  color:var(--fg);font:500 22px/1.25 var(--mono);font-variant-numeric:tabular-nums}
 .cp-roll[hidden]{display:none}
 /* One column per character; the input's -.01em tracking narrows each advance. */
 .cp-roll .dg{display:inline-block;width:calc(1ch - .01em);height:1.25em;overflow:hidden;text-align:center}

@@ -1,4 +1,4 @@
-// - Phase C: Launch OBS with --config-url --------------
+// - Launch OBS with --config-url ----------------------
 // Spawns obs64.exe with the Enhanced Broadcasting CLI flag. The user
 // has to use this every time they want EB on a Custom RTMP setup,
 // since OBS only reads --config-url at launch and rtmp_custom's

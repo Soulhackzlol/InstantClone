@@ -50,7 +50,6 @@
 .upd-opts{display:grid;gap:12px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
 .upd-opt{display:flex;align-items:flex-start;gap:10px;cursor:pointer;transition:opacity .2s var(--ease-out)}
 .upd-opt[hidden]{display:none}
-.upd-opt input{flex:none;width:16px;height:16px;margin:2px 0 0;cursor:pointer}
 .upd-opt-t{display:block;font-weight:600;color:var(--fg)}
 .upd-opt-s{display:block;margin-top:1px;font-size:12px;color:var(--fg-3)}
 .upd-opt-sub{margin-left:26px}

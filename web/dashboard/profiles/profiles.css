@@ -15,7 +15,7 @@
   background:color-mix(in oklch,var(--accent) 15%,var(--surface-3))}
 .profile-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-weight:500;color:var(--fg);font-size:13.5px}
-.profile-secs{color:var(--accent);font-size:13px;font-weight:500;font-family:'JetBrains Mono',monospace}
+.profile-secs{color:var(--accent);font-size:13px;font-weight:500;font-family:var(--mono)}
 /* Too-big = the current buffer can't hold this delay. Keep it quiet:
    muted label, not armable. A small inline "Raise buffer" link is the
    only affordance - it takes you to the setting, nothing auto-changes. */
@@ -51,5 +51,5 @@
 .profile-new{background:transparent;border:1px dashed var(--line-2);margin-top:8px;cursor:default;
   display:flex;gap:10px;padding:11px 14px;border-radius:9px;align-items:center}
 .profile-new .ic-input{flex:1;min-width:0}
-.profile-new .ic-input.mono{max-width:110px;font-family:'JetBrains Mono',monospace}
+.profile-new .ic-input.mono{max-width:110px;font-family:var(--mono)}
 

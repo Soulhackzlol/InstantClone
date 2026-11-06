@@ -793,3 +793,7 @@ function removeDestWithUndo(d){
   rebuildDests();
 }
 
+// Per-platform accent, mirroring the .dcard.platform-* CSS so a wizard
+// tile matches the destination card the same choice produces.
+const PLATFORM_COLOR = { twitch:'#a78bfa', youtube:'#fda4af', kick:'#86efac',
+  trovo:'#67e8f9', restream:'#5eead4', custom:'#fcd34d', sink:'#93c5fd' };

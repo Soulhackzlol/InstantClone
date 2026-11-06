@@ -149,8 +149,8 @@ function discordMarkdown(text){
   html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
     .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>')
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<span class="ig-link">$1</span>')
-    .replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, '$1<span class="ig-link">$2</span>');
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<span class="ig-dlink">$1</span>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, '$1<span class="ig-dlink">$2</span>');
   html = discordTimes(html).replace(/\n/g, '<br>');
   return html.replace(/\u0000(\d+)\u0000/g, (all, n) => blocks[+n]);
 }

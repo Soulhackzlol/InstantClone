@@ -1,5 +1,12 @@
 /* - Design tokens (ported from instantclone design system, OKLCH-based) ---─ */
 :root{
+  /* Type: the system's own faces, so the page fetches no fonts (it opens
+     offline and calls nobody). Segoe UI Variable on Windows 11, Segoe UI on
+     10, the system face elsewhere; Cascadia Mono where Windows Terminal
+     installed it, else Consolas. The dock repeats these two. */
+  --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  --mono:"Cascadia Mono",Consolas,ui-monospace,"SF Mono",Menlo,monospace;
+
   /* Surfaces - five stacked elevations from the page background up.
      Tuned to a near-blue-black so the OKLCH accent doesn't bleed into
      the neutrals; keep deltas large enough (~3% lightness/step) that
@@ -50,9 +57,9 @@
    grows past the viewport (e.g. the tab-height morph adding/removing scroll). */
 html{color-scheme:dark;scrollbar-gutter:stable}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
-  font-family:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif;font-size:14px;
+  font-family:var(--sans);font-size:14px;
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-.mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.mono{font-family:var(--mono)}
 button{font-family:inherit}
 input,select,textarea{font-family:inherit;color:inherit}
 /* Type detail: balance headings so a title never drops a lone word onto its

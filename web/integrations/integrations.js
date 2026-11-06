@@ -8,6 +8,8 @@
 // touches the DOM, and every redraw goes through morph() (see Rendering).
 (function(){
 'use strict';
+// Run order, as on the dashboard: functions can live in any piece, what
+// runs at load runs top to bottom, and init.js comes last.
 
 <!-- include helpers.js -->
 <!-- include alert-tiers.js -->
@@ -16,8 +18,11 @@
 <!-- include templates.js -->
 <!-- include value-picker.js -->
 <!-- include rendering.js -->
-<!-- include motion-details.js -->
+<!-- include motion.js -->
+<!-- include controls.js -->
 <!-- include web-request.js -->
+<!-- include menu.js -->
+<!-- include clipboard.js -->
 <!-- include previews.js -->
 <!-- include state.js -->
 <!-- include pane.js -->

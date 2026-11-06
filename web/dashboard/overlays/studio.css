@@ -18,7 +18,7 @@
 .st-item:hover{border-color:var(--line-2);transform:translateY(-1px);color:var(--fg)}
 .st-glyph{width:24px;height:24px;flex:none;display:inline-flex;align-items:center;justify-content:center;
   border-radius:6px;background:var(--bg-2);border:1px solid var(--line);font-size:11px;color:var(--accent);
-  font-family:'JetBrains Mono',monospace;line-height:1}
+  font-family:var(--mono);line-height:1}
 .st-item-l{flex:1;text-align:left}
 /* The Add tab: two tiles a row, icon over name. */
 .st-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
@@ -44,7 +44,7 @@
 .st-canvas-bounds::after{content:'';position:absolute;inset:5%;
   border:1.5px dashed rgba(90,200,250,.5);border-radius:5px}
 .st-canvas-bounds .lbl{position:absolute;left:calc(5% + 5px);top:calc(5% - 14px);
-  font:700 9px 'JetBrains Mono',monospace;color:rgba(90,200,250,.8);letter-spacing:.12em}
+  font:700 9px var(--mono);color:rgba(90,200,250,.8);letter-spacing:.12em}
 
 /* Studio as a full-page floating modal (reparented to body so the tab
    pane's lingering transform can't trap position:fixed). */
@@ -72,7 +72,7 @@
 .st-ctx{position:fixed;right:auto;top:0;left:0;z-index:20;min-width:220px}
 .st-ctx button{display:flex;align-items:center;justify-content:space-between;gap:18px}
 .st-ctx button:disabled{opacity:.4;cursor:default;background:transparent}
-.st-ctx kbd,.st-keys kbd,.st-foot-keys kbd{font:600 10px/1 'JetBrains Mono',monospace;color:var(--fg-4)}
+.st-ctx kbd,.st-keys kbd,.st-foot-keys kbd{font:600 10px/1 var(--mono);color:var(--fg-4)}
 .st-ctx hr{border:0;border-top:1px solid var(--line);margin:3px 4px}
 /* Zoom: out, the size shown (a click fits it again), in. */
 .st-zoom{position:absolute;right:10px;bottom:10px;z-index:7;display:flex;align-items:center;gap:2px;padding:3px;
@@ -94,7 +94,7 @@
 .st-keys-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px 26px}
 .st-keys h4{margin:0 0 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3)}
 .st-keys dl{margin:0;display:grid;grid-template-columns:minmax(0,9.5em) 1fr;gap:6px 12px;font-size:12px}
-.st-keys dt{font:600 11px/1.5 'JetBrains Mono',monospace;color:var(--fg)}
+.st-keys dt{font:600 11px/1.5 var(--mono);color:var(--fg)}
 .st-keys dd{margin:0;color:var(--fg-2);text-wrap:pretty}
 .st-foot-keys{appearance:none;background:transparent;border:0;padding:0;color:inherit;font:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 .st-foot-keys:hover{color:var(--fg)}
@@ -189,7 +189,7 @@
 .st-allbtn:hover{text-decoration:underline}
 .st-hint{font-size:11px;color:var(--fg-3);line-height:1.5;margin-top:-2px;text-wrap:pretty}
 .st-css{min-height:120px;font-size:11.5px;resize:vertical}
-.st-hint code{font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:10px}
+.st-hint code{font-family:var(--mono);color:var(--accent);font-size:10px}
 .st-swatches{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .st-sw{width:22px;height:22px;border-radius:6px;border:1px solid var(--line-2);cursor:pointer;padding:0}
 .st-sw:hover{transform:scale(1.1)}
@@ -204,7 +204,7 @@
 .st-amprow input{flex:1;min-width:0}
 .st-amprow output{min-width:30px;text-align:right;color:var(--fg)}
 .st-range input{flex:1;min-width:0}
-.st-range output{min-width:2.6em;text-align:right;font:500 11.5px 'JetBrains Mono',monospace;color:var(--fg-2);font-variant-numeric:tabular-nums}
+.st-range output{min-width:2.6em;text-align:right;font:500 11.5px var(--mono);color:var(--fg-2);font-variant-numeric:tabular-nums}
 .st-mini{padding:5px 10px;font-size:11.5px}
 .st-say{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .st-say-h{font-size:11px;font-weight:600;color:var(--fg-2)}
@@ -228,14 +228,14 @@
 .st-lineb:hover{border-color:var(--accent);color:var(--accent)}
 .st-lineb:active{scale:.96}
 .st-chip{appearance:none;background:color-mix(in oklch,var(--accent) 12%,transparent);border:1px solid color-mix(in oklch,var(--accent) 30%,transparent);
-  color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 6px;border-radius:5px;cursor:pointer;margin:2px 3px 0 0}
+  color:var(--accent);font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:5px;cursor:pointer;margin:2px 3px 0 0}
 .st-chip:hover{background:color-mix(in oklch,var(--accent) 22%,transparent)}
 
 /* - Live phase caption + microinteractions -----─ */
 /* Live phase caption - sits in the chrome (NOT over the canvas, so it
    never reads as part of the overlay). */
 .ph-cap{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:999px;
-  background:var(--surface);border:1px solid var(--line);font:600 11px 'Inter',ui-sans-serif,sans-serif;
+  background:var(--surface);border:1px solid var(--line);font:600 11px var(--sans);
   color:var(--fg-3);white-space:nowrap;opacity:0;transition:opacity .2s}
 .ph-cap:not(:empty){opacity:1}
 .ph-cap .ph-dot{width:8px;height:8px;border-radius:50%;flex:none;animation:ph-pulse 1.8s ease-in-out infinite}
@@ -312,7 +312,7 @@
 .st-sim.on{color:var(--accent-ink);background:var(--accent);border-color:transparent}
 .st-props-head{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
 .st-props-title{font-size:13px;font-weight:600;color:var(--fg)}
-.st-props-sub{font-size:11px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
+.st-props-sub{font-size:11px;color:var(--fg-4);font-family:var(--mono)}
 .st-props-sub.st-props-note{font-family:inherit;letter-spacing:0}
 .st-props-body{overflow-y:auto;padding:12px 14px;flex:1;display:flex;flex-direction:column;gap:11px;
   animation:st-fade-in .2s var(--ease-out)}
@@ -328,7 +328,7 @@
 .st-field .ic-input,.st-field select{padding:8px 10px;font-size:12.5px;line-height:1.35;border-radius:8px}
 .st-field select.ic-input{padding-right:30px;background-position:right 10px center}
 @supports (appearance:base-select){.st-field select.ic-input{padding-right:10px}}
-.st-field textarea.ic-input{height:auto;min-height:60px;font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.5}
+.st-field textarea.ic-input{height:auto;min-height:60px;font-family:var(--mono);font-size:11.5px;line-height:1.5}
 .st-color{display:flex;align-items:center;gap:8px}
 .st-color .ic-input{flex:1;min-width:0}
 .st-color input[type=color]{flex:none;width:34px;height:30px;border:1px solid var(--line);border-radius:6px;background:transparent;padding:2px;cursor:pointer}
@@ -336,7 +336,7 @@
 .st-check input{width:15px;height:15px;cursor:pointer}
 .st-cheat{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;
   font-size:11px;color:var(--fg-3);line-height:1.6}
-.st-cheat code{font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:10.5px}
+.st-cheat code{font-family:var(--mono);color:var(--accent);font-size:10.5px}
 .st-props-empty{margin:auto;padding:28px 22px;display:flex;flex-direction:column;align-items:center;gap:8px;
   text-align:center;color:var(--fg-3);font-size:12.5px;line-height:1.55;text-wrap:pretty;animation:st-fade-in .25s var(--ease-out)}
 .st-props-empty b{color:var(--fg);font-size:13px;font-weight:600}

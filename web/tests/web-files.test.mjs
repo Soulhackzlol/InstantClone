@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isPieceName, joinSkeleton, readWebFile, sourceOf } from './web-files.mjs';
 
 /** Builds `skeleton` over `pieces` ({path: text}) written to a fresh folder. */
@@ -81,6 +82,30 @@ test('junk files are left alone and a piece name an include could not write is r
   const pieces = { 'hero/hero.css': '', 'hero/.hero.css.swp': '', 'Thumbs.db': '', 'b.js': '' };
   assert.equal(joinWith('<!-- include b.js -->\n<!-- include hero/hero.css -->\n', pieces), '');
   assert.throws(() => joinWith('<!-- include b.js -->\n', { 'b.js': '', 'my piece.css': '' }), /^Error: my piece\.css/);
+});
+
+const WEB = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+/** The pieces a skeleton includes, in order, that end in `ext`. */
+function includedPieces(skeleton, ext) {
+  return fs.readFileSync(path.join(WEB, skeleton), 'utf8').split(/\r?\n/)
+    .map(line => /^<!-- include (\S+) -->$/.exec(line)?.[1]).filter(piece => piece && piece.endsWith(ext));
+}
+
+test('the skeletons keep the order their comments promise', () => {
+  // Styles: shared foundations first, then each feature's pieces together.
+  const css = includedPieces('dashboard/index.html', '.css');
+  const lastShared = css.findLastIndex(piece => piece.startsWith('page/'));
+  assert.ok(css.slice(0, lastShared + 1).every(piece => piece.startsWith('page/')), `page/ styles come first: ${css.join(', ')}`);
+  const folders = css.slice(lastShared + 1).map(piece => piece.split('/')[0]);
+  assert.deepEqual(folders.filter((folder, i) => folders.indexOf(folder) !== i && folders[i - 1] !== folder), [],
+    'a feature\'s style pieces sit together');
+  // Scripts: page/dom.js opens (its 'use strict' must be the first statement), page/start.js closes.
+  const js = includedPieces('dashboard/index.html', '.js').filter(piece => piece !== 'page/language-return.js');
+  assert.equal(js[0], 'page/dom.js');
+  assert.ok(fs.readFileSync(path.join(WEB, 'dashboard/page/dom.js'), 'utf8').trimStart().startsWith('\'use strict\';'));
+  assert.equal(js.at(-1), 'page/start.js');
+  assert.equal(includedPieces('integrations/integrations.js', '.js').at(-1), 'init.js');
 });
 
 test('the shipped files build, framed as served, and each line knows its piece', () => {

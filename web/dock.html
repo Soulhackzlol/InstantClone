@@ -2,9 +2,6 @@
 <html lang="en"><head><meta charset="utf-8"><title>InstantClone</title>
 <script src="/i18n.js"></script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <style>
 /* The dashboard's design tokens, so the dock reads as the same product.
    --panel / --panel-2 are the dock's two surfaces (rows, and the inset
@@ -18,11 +15,13 @@
   --live:oklch(0.78 0.18 145);--warn:oklch(0.80 0.17 65);--danger:oklch(0.72 0.21 25);
   --ease-out:cubic-bezier(.2,.7,.2,1);--ease-sheet:cubic-bezier(.32,.72,0,1);
   --r:10px;--r-sm:8px;
+  /* The system's own type, as the dashboard (page/tokens.css says why). */
+  --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
 }
 *{box-sizing:border-box}
 html{color-scheme:dark}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
-  font-family:'Inter',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px;
+  font-family:var(--sans);font-size:13px;
   overflow-x:hidden;overflow-y:auto;
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 button,input{font-family:inherit}
@@ -328,7 +327,7 @@ body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 
 /* Events list */
 .events{display:flex;flex-direction:column;gap:5px}
-.ehead{display:flex;align-items:center;gap:6px}
+.ehead{display:flex;align-items:center;gap:8px;margin-bottom:2px;min-width:0}
 .echips{display:flex;gap:4px;flex-wrap:wrap;flex:1;min-width:0}
 .echip{padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);color:var(--fg-3);
   font:inherit;font-size:10.5px;font-weight:600;cursor:pointer;transition:border-color .15s var(--ease-out),color .15s}
@@ -453,9 +452,9 @@ body:hover .gear,.gear:focus-visible{opacity:.55}
 .sheet::-webkit-scrollbar{width:6px}
 .sheet::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
 .grabber{width:34px;height:4px;border-radius:999px;background:var(--line-2);margin:2px auto 10px}
-.ehead{display:flex;align-items:center;gap:8px;margin-bottom:2px;min-width:0}
-.ehead h3{margin:0;font-size:13.5px;font-weight:700;color:var(--fg);letter-spacing:-.005em;white-space:nowrap}
-.ehead .slot{font-size:10.5px;font-weight:600;color:var(--fg-3);background:var(--panel-2);min-width:0;
+.sheet-head{display:flex;align-items:center;gap:8px;margin-bottom:2px;min-width:0}
+.sheet-head h3{margin:0;font-size:13.5px;font-weight:700;color:var(--fg);letter-spacing:-.005em;white-space:nowrap}
+.sheet-head .slot{font-size:10.5px;font-weight:600;color:var(--fg-3);background:var(--panel-2);min-width:0;
   border:1px solid var(--line);border-radius:999px;padding:2px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .eclose{margin-left:auto;flex:0 0 auto;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
   background:var(--panel-2);color:var(--fg-3);font-size:16px;line-height:1;cursor:pointer;

@@ -22,7 +22,7 @@ function onActivateKey(e){
   // Enter in a list's find box picks the first match, or the typed name.
   if (e.key === 'Enter' && e.target.matches('[data-bind="pick-find"]')){
     e.preventDefault();
-    const first = e.target.closest('.ig-pick').querySelector('.ig-pick-row');
+    const first = e.target.closest('.ig-picker').querySelector('.ig-pick-row');
     if (first) first.click();
     return;
   }

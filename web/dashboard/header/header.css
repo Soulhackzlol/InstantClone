@@ -89,7 +89,7 @@
 /* Fixed width so "Idle" <-> "6.20 Mbps" doesn't resize the pill and shove
    the neighbouring header pills sideways on connect/disconnect. */
 .ic-pill-rate{gap:0;min-width:86px;justify-content:center}
-.ic-pill-rate .ic-pill-v{font-family:'JetBrains Mono',monospace;font-weight:500}
+.ic-pill-rate .ic-pill-v{font-family:var(--mono);font-weight:500}
 /* "Idle" is a word, not a reading: it sets like the other pills. */
 .ic-pill-rate.idle .ic-pill-v{font-family:inherit}
 .ic-pill-rate .unit{color:var(--fg-3);font-size:11px;margin-left:1px}
@@ -113,3 +113,19 @@
   will-change:transform,opacity;animation:dot-ring var(--ring-time,1.6s) var(--ease-out) infinite}
 @keyframes dot-ring{0%{opacity:.6;transform:scale(1)}70%,100%{opacity:0;transform:scale(var(--ring-scale,3.3))}}
 
+/* On a phone the header is two calm rows: the name, then the live pills
+   in one line that scrolls sideways if it must. */
+@media (max-width:520px){
+  .ic-header{flex-direction:column;align-items:stretch;gap:10px;padding:12px 14px}
+  .ic-brand{align-items:baseline;flex-wrap:nowrap}
+  .ic-brand-sub{overflow:visible}
+  .ic-header-right{margin-left:0;flex-wrap:nowrap;justify-content:flex-start;overflow-x:auto;scrollbar-width:none;
+    margin-right:-14px;padding-right:14px}
+  .ic-header-right::-webkit-scrollbar{display:none}
+  .ic-header-right>*{flex:none}
+  /* The row scrolls: what's wrong comes first, never off the edge. */
+  #hdr-backpressure,#hdr-twitch-cap{order:-1}
+  .ic-header-right.more-r{mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
+  .ic-header-right.more-l.more-r{mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
+  .ic-header-right.more-l:not(.more-r){mask-image:linear-gradient(90deg,transparent,#000 28px)}
+}

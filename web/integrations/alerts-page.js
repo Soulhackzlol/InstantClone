@@ -109,5 +109,3 @@ function alertsStatusHtml(compact, after = ''){
   return `<div class="ig-alerts-status${inObs ? ' ok' : ''}" data-key="alerts-status">
     <span class="ig-meter-dot ${inObs ? 'ok' : 'off'}"></span><span class="ig-alerts-line">${line}</span>${action}${after}</div>`;
 }
-
-// An alert step as the page shows it, filled in with sample values.

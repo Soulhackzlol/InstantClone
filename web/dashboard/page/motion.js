@@ -1,5 +1,3 @@
-// - Tabs -------------------------------
-let _tabIdx = -1;   // index of the current tab, for slide direction (see showTab)
 // - Motion helpers ----------------------------------------
 // Content eases in card by card when a tab or sub-tab opens, so the eye
 // lands on the first thing and follows down. The first STAGGER_MAX cards
@@ -39,4 +37,32 @@ document.addEventListener('click', (e) => {
   const det = summary && summary.parentElement;
   if (!(det instanceof HTMLDetailsElement) || det.open || det.classList.contains('disc-ready')) return;
   setTimeout(() => { if (det.open) revealOpened(det); });
+});
+// Entrances replayed on demand, and one-shot classes taken off when they end.
+function staggerIn(root){
+  if (!root || prefersReducedMotion()) return;
+  const items = [...root.querySelectorAll(STAGGER_SELECTOR)].filter(el => el.offsetParent !== null);
+  items.forEach(el => el.classList.remove('stagger-in'));
+  void root.offsetWidth; // one reflow restarts every item's animation
+  items.forEach((el, i) => {
+    el.style.setProperty('--stagger', Math.min(i, STAGGER_MAX) * STAGGER_STEP_MS + 'ms');
+    el.classList.add('stagger-in');
+  });
+}
+// Play a one-shot animation class again even if it's still on.
+function restartAnimation(el, cls){
+  if (prefersReducedMotion()) return;
+  el.classList.remove(cls);
+  void el.offsetWidth;
+  el.classList.add(cls);
+}
+// One-shot classes come off when they finish: their end state must not pin
+// transforms that hover effects use.
+document.addEventListener('animationend', e => {
+  if (e.animationName === 'staggerIn') e.target.classList.remove('stagger-in');
+  else if (e.animationName === 'wentLive') e.target.classList.remove('went-live');
+  else if (e.animationName === 'aurora-bloom') e.target.classList.remove('bloom');
+  else if (e.animationName === 'cta-bloom') e.target.classList.remove('cp-cta-bloom');
+  else if (e.animationName === 'cap-flash') e.target.classList.remove('flash');
+  else if (e.animationName === 'step-deny') e.target.classList.remove('deny');
 });

@@ -82,7 +82,7 @@
 .tour-body p:last-child{margin-bottom:0}
 .tour-body b{color:var(--fg)}
 .tour-body code{background:var(--bg-2);border:1px solid var(--line);
-  padding:1px 6px;border-radius:5px;font-family:'JetBrains Mono',monospace;font-size:12px}
+  padding:1px 6px;border-radius:5px;font-family:var(--mono);font-size:12px}
 .tour-body ul{margin:6px 0 8px 16px;padding:0}
 .tour-body li{margin:3px 0}
 /* Not scoped to .tour-body: the wizard reuses the same accent callout
@@ -210,7 +210,7 @@
   min-width:22px;height:24px;padding:0 7px;border-radius:6px;
   border:1px solid var(--line-2);border-bottom-width:2px;
   background:color-mix(in oklch,#fff 7%,var(--surface-3,transparent));
-  color:var(--fg);font-family:ui-monospace,'SF Mono',Menlo,monospace;
+  color:var(--fg);font-family:var(--mono);
   font-size:12px;font-weight:600;line-height:1;
   animation:hk-chip-in .22s var(--ease-spring) both}
 .hk-sep{color:var(--fg-4);font-size:11px;font-weight:600}

@@ -8,33 +8,33 @@
 <!-- include page/language-return.js -->
 </script>
 <link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect x='3' y='3' width='42' height='42' rx='10.5' fill='%235ac8fa'/%3E%3Cpath d='M17 14h4v20h-4zM27 14h4v20h-4z' fill='%23f4f6f9'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <style>
+/* Shared foundations (page/) first, then each feature in on-screen order.
+   When two rules tie, the later piece wins, so a feature can restyle a
+   foundation. A rule for a feature's own elements goes in its own piece. */
 <!-- include page/tokens.css -->
-<!-- include header/header.css -->
 <!-- include page/atoms.css -->
 <!-- include page/toast.css -->
-<!-- include hero/phone-bar.css -->
 <!-- include page/language-change.css -->
-<!-- include wizard/wizard.css -->
-<!-- include hero/hero.css -->
 <!-- include page/tabs.css -->
-<!-- include system/save-bar.css -->
-<!-- include system/find-setting.css -->
 <!-- include page/fields.css -->
-<!-- include system/about.css -->
 <!-- include page/pane.css -->
-<!-- include system/tray-color.css -->
+<!-- include page/color-picker.css -->
+<!-- include header/header.css -->
+<!-- include wizard/wizard.css -->
+<!-- include hero/phone-bar.css -->
+<!-- include hero/hero.css -->
 <!-- include destinations/destinations.css -->
 <!-- include stats/stats.css -->
 <!-- include obs/obs.css -->
 <!-- include overlays/overlays.css -->
 <!-- include overlays/studio.css -->
 <!-- include profiles/profiles.css -->
+<!-- include system/save-bar.css -->
+<!-- include system/find-setting.css -->
+<!-- include system/about.css -->
+<!-- include system/tray-color.css -->
 <!-- include system/system.css -->
-<!-- include page/color-picker.css -->
 <!-- include logs/logs.css -->
 <!-- include tour/tour.css -->
 <!-- include integrations/integrations.css -->
@@ -50,6 +50,7 @@
 </defs></svg>
 
 <div class="ic-shell">
+<!-- Markup in on-screen order. -->
 
 <!-- include header/header.html -->
 <!-- include wizard/wizard.html -->
@@ -92,6 +93,11 @@
 <!-- Overlay Studio runtime + baker (author-time only; defines window.ICOverlay). -->
 <script src="/overlay-runtime.js"></script>
 <script>
+// Run order. Functions are hoisted, so one can live in any piece; what runs
+// at load (listeners, values, calls) runs top to bottom. page/dom.js stays
+// first (its 'use strict' must open the script) and page/start.js last
+// (it starts the feeds). A piece that runs code at load goes after
+// everything that code uses; one with only functions can go anywhere.
 <!-- include page/dom.js -->
 <!-- include page/state.js -->
 <!-- include page/toast.js -->
@@ -101,6 +107,7 @@
 <!-- include destinations/destinations.js -->
 <!-- include profiles/profiles.js -->
 <!-- include system/settings.js -->
+<!-- include system/twitch.js -->
 <!-- include wizard/wizard.js -->
 <!-- include system/access.js -->
 <!-- include crash-protection/crash-protection.js -->
@@ -109,17 +116,22 @@
 <!-- include obs/obs-service.js -->
 <!-- include obs/streamlabs.js -->
 <!-- include obs/obs-launch.js -->
+<!-- include obs/chat-dock.js -->
 <!-- include system/reset.js -->
 <!-- include hero/phone-bar.js -->
 <!-- include logs/logs.js -->
 <!-- include tour/tour.js -->
 <!-- include page/motion.js -->
 <!-- include page/color-picker.js -->
+<!-- include page/tabs.js -->
+<!-- include page/pane.js -->
 <!-- include system/save-bar.js -->
 <!-- include system/find-setting.js -->
 <!-- include page/sub-tabs.js -->
 <!-- include system/about.js -->
 <!-- include page/live.js -->
+<!-- include system/updates.js -->
+<!-- include page/start.js -->
 </script>
 <script src="/studio.js"></script>
 <script src="/integrations.js"></script>

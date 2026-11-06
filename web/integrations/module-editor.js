@@ -365,7 +365,7 @@ const Editor = {
         <div class="ig-embed-foot edit"><i>${svg('shield')}</i>
           ${tplHtml(input('footer', p.footer, 'placeholder="Footer" aria-label="Footer"'), p.footer, vars, 'line', false)}
           ${ts && p.footer ? '<span class="ig-foot-dot" aria-hidden="true">•</span>' : ''}
-          <button class="ig-ts${ts ? ' on' : ''}" data-act="set-ts" aria-pressed="${ts}">${svg('clock')}${ts ? esc(discordNow()) : 'Add the time'}</button></div>
+          <button class="ig-ts-toggle${ts ? ' on' : ''}" data-act="set-ts" aria-pressed="${ts}">${svg('clock')}${ts ? esc(discordNow()) : 'Add the time'}</button></div>
       </div>
       <div class="ig-swatches"><span class="ig-swatch-set" role="radiogroup" aria-label="Card color">${swatches}</span>
         <label class="ig-swatch custom${known ? '' : ' on'}" title="Any color"><input type="color" data-bind="color" value="${esc(color)}" aria-label="Any color (now ${esc(color)})"></label></div>`;

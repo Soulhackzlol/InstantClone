@@ -34,21 +34,5 @@
 .tabs.more-r,.sub-tabs.more-r{mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
 .tabs.more-l,.sub-tabs.more-l{mask-image:linear-gradient(90deg,transparent,#000 28px)}
 .tabs.more-l.more-r,.sub-tabs.more-l.more-r{mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
-/* On a phone the header is two calm rows: the name, then the live pills
-   in one line that scrolls sideways if it must. */
-@media (max-width:520px){
-  .ic-header{flex-direction:column;align-items:stretch;gap:10px;padding:12px 14px}
-  .ic-brand{align-items:baseline;flex-wrap:nowrap}
-  .ic-brand-sub{overflow:visible}
-  .ic-header-right{margin-left:0;flex-wrap:nowrap;justify-content:flex-start;overflow-x:auto;scrollbar-width:none;
-    margin-right:-14px;padding-right:14px}
-  .ic-header-right::-webkit-scrollbar{display:none}
-  .ic-header-right>*{flex:none}
-  /* The row scrolls: what's wrong comes first, never off the edge. */
-  #hdr-backpressure,#hdr-twitch-cap{order:-1}
-  .ic-header-right.more-r{mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
-  .ic-header-right.more-l.more-r{mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
-  .ic-header-right.more-l:not(.more-r){mask-image:linear-gradient(90deg,transparent,#000 28px)}
-}
 .sub-pane{display:flex;flex-direction:column;gap:20px;animation:paneIn .2s var(--ease-out) both}
 .sub-tab[hidden]{display:none}

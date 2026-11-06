@@ -174,7 +174,7 @@
   .ig-run div{grid-template-columns:auto minmax(0,1fr);row-gap:2px}
   .ig-run .d{grid-column:1/-1}
 }
-.ig-activity .t{color:var(--fg-4);font-family:'JetBrains Mono',monospace;font-size:11.5px;font-variant-numeric:tabular-nums}
+.ig-activity .t{color:var(--fg-4);font-family:var(--mono);font-size:11.5px;font-variant-numeric:tabular-nums}
 .ig-act-row .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ig-act-row .d{color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ig-act-row .s{text-align:right;font-size:11.5px}
@@ -222,9 +222,9 @@
   animation:igFadeUp .22s var(--ease-out)}
 .ig-unknown>div{display:flex;align-items:flex-start;gap:8px}
 .ig-unknown svg{width:13px;height:13px;flex:none;margin-top:3px;color:var(--warn)}
-.ig-unknown code{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--warn)}
+.ig-unknown code{font-family:var(--mono);font-size:11.5px;color:var(--warn)}
 .ig-fixvar{padding:0 6px;border:1px solid color-mix(in oklch,var(--accent) 40%,transparent);border-radius:6px;
-  background:color-mix(in oklch,var(--accent) 10%,transparent);color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11.5px;
+  background:color-mix(in oklch,var(--accent) 10%,transparent);color:var(--accent);font-family:var(--mono);font-size:11.5px;
   cursor:pointer;transition:background-color .15s var(--ease-out)}
 .ig-fixvar:hover{background:color-mix(in oklch,var(--accent) 20%,transparent)}
 .ig-fixvar:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
@@ -260,7 +260,7 @@
 .ig-pv-phone .ig-av{width:22px;height:22px;flex:none;border-radius:6px;background:var(--accent)}
 .ig-pv-phone small{display:block;font-size:9.5px;letter-spacing:.04em;color:var(--fg-3)}
 .ig-pv-phone b{font-weight:600}
-.ig-pv-json{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--fg-2);white-space:pre;overflow:hidden}
+.ig-pv-json{font-family:var(--mono);font-size:10.5px;color:var(--fg-2);white-space:pre;overflow:hidden}
 .ig-pv-json .k{color:var(--accent)}
 .ig-pv-marker{display:flex;flex-direction:column;gap:7px}
 .ig-pv-marker .tag{align-self:center;padding:2px 7px;border-radius:5px;background:#9146ff;color:#fff;font-size:10px;font-weight:600;
@@ -419,7 +419,7 @@
 .ig-vchip:active{transform:scale(.96)}
 .ig-vchip.more{background:transparent;border-style:dashed;color:var(--fg-2)}
 .ig-vstrip-k{margin-left:auto;font-size:11.5px;color:var(--fg-4);white-space:nowrap}
-.ig-vstrip-k code{font-family:'JetBrains Mono',monospace;color:var(--fg-2)}
+.ig-vstrip-k code{font-family:var(--mono);color:var(--fg-2)}
 .ig-vmenu{position:fixed;z-index:2050;width:min(380px,calc(100vw - 16px));display:none;flex-direction:column;padding:8px;border-radius:12px;
   background:var(--bg-2);border:1px solid var(--line-2);box-shadow:0 18px 44px -14px rgba(0,0,0,.8)}
 .ig-vmenu.on{display:flex;animation:igValuesIn .14s var(--ease-out)}
@@ -427,18 +427,18 @@
 .ig-vmenu.typed .ig-vmenu-find{display:none}
 .ig-vmenu-find svg{width:14px;height:14px;flex:none;color:var(--fg-4)}
 .ig-vmenu-find input{flex:1;min-width:0;padding:6px 0;border:0;outline:0;background:transparent;color:var(--fg);font:inherit;font-size:13px}
-.ig-vmenu-n{font:500 11px/1 'JetBrains Mono',monospace;color:var(--fg-4)}
+.ig-vmenu-n{font:500 11px/1 var(--mono);color:var(--fg-4)}
 .ig-vmenu-list{max-height:min(320px,50vh);overflow-y:auto;overscroll-behavior:contain;padding-top:2px}
 .ig-vmenu-g{padding:9px 8px 4px;font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-4)}
-.ig-vmenu-g code{font:500 10.5px/1.5 'JetBrains Mono',monospace;letter-spacing:0;text-transform:none;color:var(--fg-2);
+.ig-vmenu-g code{font:500 10.5px/1.5 var(--mono);letter-spacing:0;text-transform:none;color:var(--fg-2);
   background:var(--surface-3);padding:0 5px;border-radius:4px}
 .ig-vmenu-i{display:flex;align-items:center;gap:10px;width:100%;padding:6px 8px;border:0;border-radius:8px;background:transparent;
   color:var(--fg-2);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
 .ig-vmenu-i>span{display:flex;flex-direction:column;min-width:0;flex:1}
 .ig-vmenu-i b{color:var(--fg);font-weight:600}
 .ig-vmenu-i small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--fg-4)}
-.ig-vmenu-i small code{font:500 11px/1.5 'JetBrains Mono',monospace;color:var(--fg-3);margin-right:4px}
-.ig-vmenu-i em{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:normal 11.5px/1.5 'JetBrains Mono',monospace;color:var(--fg-3)}
+.ig-vmenu-i small code{font:500 11px/1.5 var(--mono);color:var(--fg-3);margin-right:4px}
+.ig-vmenu-i em{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:normal 11.5px/1.5 var(--mono);color:var(--fg-3)}
 .ig-vmenu-i mark{background:none;color:var(--accent)}
 .ig-vmenu-i:hover,.ig-vmenu-i.on{background:var(--surface-3)}
 .ig-vmenu-none{padding:16px 8px;font-size:12.5px;color:var(--fg-3);text-align:center}
@@ -557,7 +557,7 @@
 .ig-cat-find svg{width:15px;height:15px;flex:none;color:var(--fg-4)}
 .ig-cat-find input{flex:1;min-width:0;padding:11px 0;border:0;outline:0;background:transparent;color:var(--fg);font:inherit;font-size:14px}
 .ig-cat-find input::placeholder{color:var(--fg-4)}
-.ig-cat-find kbd{padding:1px 7px;border-radius:5px;border:1px solid var(--line-2);font:500 11px/1.5 'JetBrains Mono',monospace;color:var(--fg-3)}
+.ig-cat-find kbd{padding:1px 7px;border-radius:5px;border:1px solid var(--line-2);font:500 11px/1.5 var(--mono);color:var(--fg-3)}
 .ig-cat-clear{border:0;background:transparent;color:var(--fg-3);font:inherit;font-size:12.5px;cursor:pointer;padding:4px 2px}
 .ig-cat-clear:hover{color:var(--fg)}
 .ig-cat-nav button{display:flex;gap:9px;align-items:center;padding:8px 10px;border-radius:8px;
@@ -597,7 +597,7 @@
 .ig-cat-lead{grid-column:1/-1;font-size:12.5px;color:var(--fg-3)}
 .ig-cat-group{grid-column:1/-1;display:flex;align-items:baseline;gap:6px;margin-top:6px;font-size:10.5px;font-weight:600;
   letter-spacing:.1em;text-transform:uppercase;color:var(--fg-4)}
-.ig-cat-group small{font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:0}
+.ig-cat-group small{font:500 10.5px/1 var(--mono);letter-spacing:0}
 .ig-cat-none{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;gap:8px;padding:48px 16px;text-align:center;
   font-size:12.5px;color:var(--fg-3)}
 .ig-cat-none b{font-size:14px;color:var(--fg)}
@@ -740,7 +740,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-step-kind{font-size:11px;font-weight:600;line-height:1.3;color:color-mix(in oklch,var(--c) 55%,var(--fg-3));
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ig-step-text{min-width:0;font-size:13.5px;line-height:1.45;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ig-step-text .v{font-family:'JetBrains Mono',monospace;font-size:12px;color:color-mix(in oklch,var(--accent) 70%,#fff)}
+.ig-step-text .v{font-family:var(--mono);font-size:12px;color:color-mix(in oklch,var(--accent) 70%,#fff)}
 .ig-step-tools{display:flex;gap:2px;opacity:0;transition:opacity .15s var(--ease-out)}
 .ig-step:hover .ig-step-tools,.ig-step.on .ig-step-tools,.ig-step:focus-within .ig-step-tools{opacity:1}
 .ig-step-tools svg{width:13px;height:13px}
@@ -865,7 +865,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   background:color-mix(in oklch,var(--live) 9%,transparent);border:1px solid color-mix(in oklch,var(--live) 32%,transparent);
   animation:igFadeUp .26s var(--ease-out)}
 .ig-converted svg{width:13px;height:13px;flex:none;margin-top:3px;color:var(--live);animation:igPop .3s cubic-bezier(.2,0,0,1)}
-.ig-converted code{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--warn)}
+.ig-converted code{font-family:var(--mono);font-size:11.5px;color:var(--warn)}
 @media (prefers-reduced-motion: reduce){.ig-converted,.ig-converted svg{animation:none}}
 /* Motion details. */
 .ig-pane [data-tick],.ig-modal [data-tick]{display:inline-block}
@@ -902,11 +902,11 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   transition:opacity .14s var(--ease-out),transform .14s var(--ease-out)}
 .ig-vtip.below{transform:translateY(-4px)}
 .ig-vtip.on{opacity:1;transform:none}
-.ig-vtip code{font:600 12px/1.4 'JetBrains Mono',monospace;color:color-mix(in oklch,var(--accent) 70%,#fff)}
+.ig-vtip code{font:600 12px/1.4 var(--mono);color:color-mix(in oklch,var(--accent) 70%,#fff)}
 .ig-vtip p{margin:0;font-size:12.5px;line-height:1.45;color:var(--fg-2);text-wrap:pretty}
 .ig-vtip-eg{display:flex;align-items:baseline;gap:6px;min-width:0;font-size:12px}
 .ig-vtip-eg span{color:var(--fg-4);flex:none}
-.ig-vtip-eg b{min-width:0;padding:1px 6px;border-radius:5px;background:var(--surface-3);color:var(--fg);font:500 11.5px/1.5 'JetBrains Mono',monospace;
+.ig-vtip-eg b{min-width:0;padding:1px 6px;border-radius:5px;background:var(--surface-3);color:var(--fg);font:500 11.5px/1.5 var(--mono);
   overflow-wrap:anywhere}
 .ig-vtip small{font-size:11px;color:var(--fg-4)}
 @media (prefers-reduced-motion: reduce){.ig-vtip,.ig-vtip.below{transform:none;transition:opacity .1s linear}}
@@ -965,12 +965,12 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-insp-vars{margin-top:auto;padding-top:12px;display:flex;flex-direction:column;gap:8px}
 .ig-insp-p{margin:0;font-size:13px;line-height:1.6;color:var(--fg-2);text-wrap:pretty}
 .ig-inspector .dff>label{font-size:12px;font-weight:600;color:var(--fg-2)}
-.ig-inspector textarea.ic-input{resize:vertical;min-height:70px;font-family:'JetBrains Mono',monospace;font-size:12.5px}
+.ig-inspector textarea.ic-input{resize:vertical;min-height:70px;font-family:var(--mono);font-size:12.5px}
 .ig-copy-row{display:flex;gap:6px}
 .ig-copy-row .ic-input{flex:1;min-width:0;font-size:11.5px}
 .ig-run{display:flex;flex-direction:column;gap:2px;font-size:12.5px}
 .ig-run div{display:grid;grid-template-columns:62px 190px minmax(0,1fr);gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}
-.ig-run .t{color:var(--fg-4);font-family:'JetBrains Mono',monospace;font-size:11.5px;font-variant-numeric:tabular-nums}
+.ig-run .t{color:var(--fg-4);font-family:var(--mono);font-size:11.5px;font-variant-numeric:tabular-nums}
 .ig-run .ok{color:var(--live)}.ig-run .failed{color:var(--danger)}.ig-run .skipped{color:var(--fg-3)}
 .ig-run .d{color:var(--fg-3);overflow-wrap:anywhere}
 /* Connections. */
@@ -990,10 +990,10 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-device-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
 .ig-device-actions a{text-decoration:none}
 .ig-code{align-self:stretch;padding:14px;border-radius:12px;background:var(--bg-2);border:1px dashed color-mix(in oklch,var(--accent) 45%,var(--line));
-  font:600 30px/1 'JetBrains Mono',monospace;letter-spacing:.18em;color:var(--fg);text-align:center;font-variant-numeric:tabular-nums;
+  font:600 30px/1 var(--mono);letter-spacing:.18em;color:var(--fg);text-align:center;font-variant-numeric:tabular-nums;
   animation:igPop .35s cubic-bezier(.2,0,0,1)}
 /* Recipes. */
-.ig-textarea-code{width:100%;min-height:90px;resize:vertical;font-family:'JetBrains Mono',monospace;font-size:12px}
+.ig-textarea-code{width:100%;min-height:90px;resize:vertical;font-family:var(--mono);font-size:12px}
 .ig-recipe{display:flex;flex-direction:column;gap:12px;animation:igFadeUp .3s var(--ease-out)}
 .ig-recipe-list{display:flex;flex-direction:column;gap:10px}
 .ig-recipe-head{display:flex;align-items:center;gap:8px}
@@ -1062,7 +1062,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-rraw-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;font-size:11.5px;color:var(--fg-3)}
 .ig-foot-why{border:0;background:none;padding:0;font:inherit;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
 .ig-rraw{margin:0;padding:12px 14px;max-height:300px;overflow:auto;border-radius:10px;background:var(--bg-2);border:1px solid var(--line);
-  font:11.5px/1.6 'JetBrains Mono',monospace;color:var(--fg-3);white-space:pre-wrap;overflow-wrap:anywhere;tab-size:2;scrollbar-width:thin}
+  font:11.5px/1.6 var(--mono);color:var(--fg-3);white-space:pre-wrap;overflow-wrap:anywhere;tab-size:2;scrollbar-width:thin}
 .ig-rraw .jk{color:color-mix(in oklch,var(--accent) 75%,var(--fg))}
 .ig-rraw .js{color:var(--live)}
 .ig-rraw .jd{color:#fcd34d}
@@ -1150,20 +1150,20 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-try-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .ig-try-inputs{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
 .ig-try-meta{display:flex;align-items:center;gap:8px}
-.ig-status-pill{padding:2px 8px;border-radius:999px;font:600 11.5px/1.5 'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+.ig-status-pill{padding:2px 8px;border-radius:999px;font:600 11.5px/1.5 var(--mono);font-variant-numeric:tabular-nums}
 .ig-status-pill.ok{color:var(--live);background:color-mix(in oklch,var(--live) 14%,transparent)}
 .ig-status-pill.bad{color:var(--danger);background:color-mix(in oklch,var(--danger) 14%,transparent)}
 .ig-try-text{max-height:220px;overflow:auto;padding:10px;border-radius:8px;background:var(--bg-2);
-  font:12px/1.5 'JetBrains Mono',monospace;color:var(--fg-2);white-space:pre-wrap;word-break:break-word}
+  font:12px/1.5 var(--mono);color:var(--fg-2);white-space:pre-wrap;word-break:break-word}
 .ig-picked{display:flex;flex-direction:column;gap:8px;padding:10px;border-radius:10px;
   border:1px solid color-mix(in oklch,var(--accent) 45%,transparent);background:color-mix(in oklch,var(--accent) 8%,transparent);
   animation:igFadeUp .24s var(--ease-out)}
 .ig-picked-what{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:12.5px}
-.ig-picked-what code{font-family:'JetBrains Mono',monospace;color:color-mix(in oklch,var(--accent) 70%,#fff);flex:none;max-width:60%;
+.ig-picked-what code{font-family:var(--mono);color:color-mix(in oklch,var(--accent) 70%,#fff);flex:none;max-width:60%;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ig-picked-what span{min-width:0;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ig-picked-actions{display:flex;gap:6px;flex-wrap:wrap}
-.ig-jtree{max-height:420px;overflow:auto;padding:6px;border-radius:8px;background:var(--bg-2);font:12px/1.5 'JetBrains Mono',monospace}
+.ig-jtree{max-height:420px;overflow:auto;padding:6px;border-radius:8px;background:var(--bg-2);font:12px/1.5 var(--mono)}
 .ig-jnode>summary{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:6px;cursor:pointer;list-style:none;color:var(--fg-2)}
 .ig-jnode>summary::-webkit-details-marker{display:none}
 .ig-jnode>summary:hover{background:var(--surface-3)}
@@ -1181,7 +1181,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-jleaf .v.number{color:#fcd34d}
 .ig-jleaf .v.boolean{color:#a78bfa}
 .ig-jleaf .v.null{color:var(--fg-4)}
-.ig-juse{flex:none;font:600 11px/1.5 Inter,system-ui,sans-serif;color:var(--accent);opacity:0;transition:opacity .12s var(--ease-out)}
+.ig-juse{flex:none;font:600 11px/1.5 var(--sans);color:var(--accent);opacity:0;transition:opacity .12s var(--ease-out)}
 .ig-jleaf:hover .ig-juse,.ig-jleaf:focus-visible .ig-juse{opacity:1}
 .ig-jleaf.off{cursor:default;opacity:.55}
 .ig-jleaf.off:hover{background:transparent}
@@ -1220,7 +1220,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-starts{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
 .ig-starts .ic-label{margin-right:4px}
 .ig-start{padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--surface-3);color:var(--fg);
-  font:600 12px/1.3 'JetBrains Mono',monospace;cursor:pointer;
+  font:600 12px/1.3 var(--mono);cursor:pointer;
   transition:border-color .15s var(--ease-out),background-color .15s var(--ease-out),transform .12s var(--ease-out)}
 .ig-start:hover{border-color:color-mix(in oklch,var(--accent) 55%,var(--line))}
 .ig-start:active{transform:scale(.96)}
@@ -1237,11 +1237,11 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-embed-title{color:#f2f3f5;font-weight:600;font-size:12px;line-height:1.3;overflow-wrap:anywhere}
 .ig-embed-title.link{color:#00a8fc}
 .ig-embed-desc{font-size:11.5px;line-height:1.4;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.ig-embed code{padding:0 .25em;border-radius:3px;background:#1e1f22;font:85% 'JetBrains Mono',monospace}
+.ig-embed code{padding:0 .25em;border-radius:3px;background:#1e1f22;font:85% var(--mono)}
 .ig-embed pre{margin:4px 0;padding:6px 8px;border-radius:4px;background:#1e1f22;border:1px solid #1a1b1e;
-  font:11px/1.45 'JetBrains Mono',monospace;color:#dbdee1;white-space:pre-wrap}
-.ig-link{color:#00a8fc}
-.ig-txt .ig-link,.ig-embed-desc .ig-link,.ig-embed-fields .ig-link{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidden;
+  font:11px/1.45 var(--mono);color:#dbdee1;white-space:pre-wrap}
+.ig-dlink{color:#00a8fc}
+.ig-txt .ig-dlink,.ig-embed-desc .ig-dlink,.ig-embed-fields .ig-dlink{display:inline-block;max-width:100%;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;vertical-align:bottom}
 .ig-embed-fields{display:none}
 .ig-embed-foot{display:none}
@@ -1291,11 +1291,11 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-embed-foot.edit{display:flex;align-items:center;gap:8px;font-size:12px;color:#b5bac1}
 .ig-embed-foot.edit input{flex:0 1 auto;field-sizing:content;min-width:60px;max-width:100%;font-size:12px}
 .ig-embed-foot.edit .ig-foot-dot{color:#949ba4}
-.ig-ts{display:inline-flex;align-items:center;gap:5px;flex:none;padding:3px 8px;border-radius:999px;border:1px dashed rgba(255,255,255,.16);
+.ig-ts-toggle{display:inline-flex;align-items:center;gap:5px;flex:none;padding:3px 8px;border-radius:999px;border:1px dashed rgba(255,255,255,.16);
   background:transparent;color:#949ba4;font:inherit;font-size:11.5px;cursor:pointer;transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
-.ig-ts svg{width:12px;height:12px}
-.ig-ts.on{border-style:solid;border-color:transparent;color:#b5bac1}
-.ig-ts:hover{color:#dbdee1}
+.ig-ts-toggle svg{width:12px;height:12px}
+.ig-ts-toggle.on{border-style:solid;border-color:transparent;color:#b5bac1}
+.ig-ts-toggle:hover{color:#dbdee1}
 .ig-swatches{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px}
 .ig-swatch-set{display:contents}
 .ig-swatch{position:relative;width:22px;height:22px;padding:0;border-radius:50%;border:0;background:var(--sw);cursor:pointer;
@@ -1314,13 +1314,13 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-more-fields[open] summary{color:var(--fg)}
 .ig-forms{margin-top:8px}
 .ig-forms dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:0;font-size:12.5px}
-.ig-forms dt{font-family:'JetBrains Mono',monospace;color:var(--fg)}
+.ig-forms dt{font-family:var(--mono);color:var(--fg)}
 .ig-forms dd{margin:0;color:var(--fg-3)}
 .ig-forms dd b{margin-left:8px;font-weight:500;color:var(--fg-2)}
 @media (max-width:560px){.ig-forms dl{grid-template-columns:1fr}.ig-forms dd{margin-bottom:4px}}
 /* A timeline line, as {timeline} writes it. */
 .ig-pv-timeline{display:flex;flex-direction:column;gap:7px;color:var(--fg-2)}
-.ig-pv-timeline code{margin-right:7px;padding:1px 6px;border-radius:5px;background:var(--surface-3);color:var(--accent);font:600 10.5px 'JetBrains Mono',monospace}
+.ig-pv-timeline code{margin-right:7px;padding:1px 6px;border-radius:5px;background:var(--surface-3);color:var(--accent);font:600 10.5px var(--mono)}
 .ig-pv-tl-kind{align-self:flex-start;padding:1px 8px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
   background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));color:var(--accent)}
 .ig-pv-tl-kind.chapter{background:color-mix(in oklch,#a78bfa 18%,var(--surface-3));color:#a78bfa}
@@ -1345,7 +1345,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   .ig-rule{grid-template-columns:minmax(0,1fr) 64px auto auto}
   .ig-rule .ig-rule-at{display:none}
 }
-.ig-rule-bar span{position:relative;display:block;padding:0 8px;font:600 10.5px/16px 'JetBrains Mono',monospace;color:var(--fg);text-align:right}
+.ig-rule-bar span{position:relative;display:block;padding:0 8px;font:600 10.5px/16px var(--mono);color:var(--fg);text-align:right}
 .ig-meter{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:9px 12px;border-radius:10px;background:var(--bg-1);
   border:1px solid var(--line);font-size:12.5px}
 .ig-meter-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--fg-4)}
@@ -1433,7 +1433,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-tpl-out.above{padding:5px 8px;margin:0 0 6px;font-size:14px}
 .ig-tpl-out .ig-tpl-none{color:#949ba4;font-style:italic}
 .ig-tpl-out .ig-tpl-hint{float:right;margin-left:8px;padding:0 5px;border-radius:4px;background:rgba(255,255,255,.06);
-  font:500 10px/1.8 'JetBrains Mono',monospace;color:#949ba4;text-transform:uppercase;letter-spacing:.04em}
+  font:500 10px/1.8 var(--mono);color:#949ba4;text-transform:uppercase;letter-spacing:.04em}
 /* The channel header when no channel is picked. */
 .ig-live-head .hash.none+span,.ig-live-head button.none{color:var(--warn);font-style:italic}
 .ig-live-head button{padding:0;border:0;background:none;font:inherit;cursor:pointer;color:inherit}
@@ -1472,8 +1472,8 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-test-values{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px}
 .ig-test-values .dff label{font-family:inherit}
 .ig-test-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
-/* The OBS step. */
-.ig-pick{min-width:0}
+/* The OBS step. Its picker field spaces its parts a little wider than a plain field. */
+.ig-picker{gap:8px}
 .ig-pick-h{display:flex;align-items:baseline;gap:8px;min-width:0}
 .ig-pick-l{flex:1 1 0;min-width:0;font-size:12px;font-weight:600;color:var(--fg-2)}
 .ig-pick-sum{flex:0 1 auto;max-width:45%;font-size:11.5px;color:var(--fg-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1528,9 +1528,6 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 .ig-pv-action .ig-bulb{width:30px;height:30px;border-radius:50%;background:color-mix(in oklch,var(--bulb) 30%,transparent);
   color:var(--bulb);border:1px solid color-mix(in oklch,var(--bulb) 55%,var(--line))}
 .ig-pv-action .ig-bulb.off{color:var(--fg-3);border-color:var(--line)}
-.ig-swatches{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:6px}
-.ig-swatch{width:24px;height:24px;border-radius:50%;border:2px solid var(--line);background:var(--sw);cursor:pointer;padding:0}
-.ig-swatch.on{border-color:var(--fg);box-shadow:0 0 0 2px var(--bg-1) inset}
 .ig-swatch-pick{width:30px;height:26px;padding:0;border:1px solid var(--line);border-radius:8px;background:none;cursor:pointer}
 @media (prefers-reduced-motion: reduce){.ig-bulb.flash{animation:none}}
 /* Touch screens have no hover: keep controls in sight, and big enough. */
@@ -1541,6 +1538,6 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   .ig-field-edit .ic-btn-tiny,.ig-field-w{width:32px;height:32px;line-height:32px}
   .ig-field-w{right:37px}
   .ig-field-edit>:first-child{padding-right:76px}
-  .ig-vchip,.ig-ts{padding:5px 10px}
+  .ig-vchip,.ig-ts-toggle{padding:5px 10px}
   .ig-swatch{width:28px;height:28px}
 }

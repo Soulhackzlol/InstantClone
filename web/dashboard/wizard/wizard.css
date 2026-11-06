@@ -9,8 +9,6 @@
 @media (max-width:640px){.wizard-obs-card{padding:20px 16px}}
 .wizard-obs-title{font-size:15px;font-weight:600;color:var(--fg);display:flex;justify-content:space-between;align-items:center;gap:8px;line-height:1.3}
 .wizard-obs-body{margin:0;font-size:13.5px;color:var(--fg-3);line-height:1.6}
-.wizard-obs-action{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:2px}
-.wizard-obs-action .muted{font-size:11px}
 /* Guided OBS flow, light typographic treatment: a small "Step N" eyebrow (no
    rail, no numbered circles), hairline divider between steps. A node expands
    when active and collapses when done; the eyebrow gains a ✓ and turns green.

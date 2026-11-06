@@ -1,5 +1,3 @@
-// ---------------------------------------------------------------- events
-
 // ---------------------------------------------------------------- on stream
 
 // The Overlay tab's Alerts and Goals pages. That tab is where everything

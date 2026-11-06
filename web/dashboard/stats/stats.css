@@ -17,8 +17,8 @@
 .stat-ic{width:14px;height:14px;color:var(--fg-3);opacity:.85;flex:0 0 auto;transition:color .18s,opacity .18s}
 .stat-card:hover .stat-ic{color:var(--tint);opacity:1}
 .stat-now{font-size:26px;font-weight:500;color:var(--fg);letter-spacing:-.02em;
-  font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
-.stat-unit{color:var(--fg-3);font-size:12px;margin-left:4px;font-family:'JetBrains Mono',monospace}
+  font-family:var(--mono);font-variant-numeric:tabular-nums}
+.stat-unit{color:var(--fg-3);font-size:12px;margin-left:4px;font-family:var(--mono)}
 .stat-spark{width:100%;height:70px;display:block}
 .stats-small{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px}
 @media (max-width:980px){.stats-small{grid-template-columns:repeat(3,1fr)}}
@@ -34,26 +34,7 @@
 .metric-mini-v{display:flex;align-items:baseline;gap:4px;margin-top:8px}
 .metric-mini-v .mono{font-size:22px;font-weight:500;color:var(--fg);letter-spacing:-.01em;
   font-variant-numeric:tabular-nums}
-.metric-unit{color:var(--fg-3);font-size:11px;font-family:'JetBrains Mono',monospace}
+.metric-unit{color:var(--fg-3);font-size:11px;font-family:var(--mono)}
 /* Sparkline strokes draw in on first paint for a touch of life. */
 .stat-spark path[class$="-line"],.stat-spark path[id$="-line"]{
   transition:stroke .2s}
-
-/* Every checkbox is drawn as the dashboard's switch (a destination's
-   Enabled), so a setting looks and works the same wherever it is. Drawn
-   with backgrounds alone: no extra markup, and an input can't carry
-   pseudo-elements in every browser. Sized here, over inline sizes. */
-input[type="checkbox"]{appearance:none;-webkit-appearance:none;flex:none;box-sizing:border-box;
-  width:34px!important;height:20px!important;margin:0;vertical-align:middle;cursor:pointer;
-  border:1px solid var(--line-2);border-radius:999px;background-color:var(--surface-3);
-  background-image:radial-gradient(circle,var(--fg-3) 0 6px,transparent 6.5px);
-  background-repeat:no-repeat;background-size:18px 18px;background-position:0 50%;
-  transition:background-color .2s var(--ease-out),border-color .2s var(--ease-out),background-position .25s var(--ease-spring)}
-input[type="checkbox"]:checked{background-color:var(--accent);border-color:transparent;
-  background-image:radial-gradient(circle,#fff 0 6px,transparent 6.5px);background-position:14px 50%}
-input[type="checkbox"]:hover:not(:disabled){border-color:var(--fg-4)}
-input[type="checkbox"]:focus-visible{outline:2px solid color-mix(in oklch,var(--accent) 60%,transparent);outline-offset:2px}
-input[type="checkbox"]:disabled{opacity:.45;cursor:default}
-/* The destination form keeps its own drawn switch over a hidden input. */
-.dest-form-enable input[type="checkbox"]{width:1px!important;height:1px!important}
-

@@ -7,7 +7,7 @@
 .sys-find input:focus{border-color:color-mix(in oklch,var(--tint) 75%,transparent);background:var(--bg);
   box-shadow:0 0 0 3px color-mix(in oklch,var(--tint) 18%,transparent)}
 .sys-find input::-webkit-search-cancel-button{display:none}
-.sys-find-key{position:absolute;right:9px;font:600 10.5px/1 'JetBrains Mono',monospace;color:var(--fg-4);
+.sys-find-key{position:absolute;right:9px;font:600 10.5px/1 var(--mono);color:var(--fg-4);
   border:1px solid var(--line-2);border-radius:5px;padding:3px 6px;pointer-events:none}
 .sys-find input:focus~.sys-find-key,.sys-find input:not(:placeholder-shown)~.sys-find-key{display:none}
 .sys-find-results{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:30;display:flex;flex-direction:column;

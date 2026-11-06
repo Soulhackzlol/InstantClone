@@ -4,7 +4,7 @@
    and tag sit above the message, which gets the full width. */
 .logs-wrap{position:relative}
 .logs{--log-tw:8.5ch;background:#050608;border:1px solid var(--line);border-radius:12px;padding:6px;
-  font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--fg-2);line-height:1.55;margin:0;
+  font-family:var(--mono);font-size:12px;color:var(--fg-2);line-height:1.55;margin:0;
   height:clamp(420px,calc(100vh - 330px),900px);overflow-y:auto;
   scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
 /* Beside a phone's width the pane card is fitted to the window and scrolls
@@ -29,7 +29,7 @@
 .log-row:hover{background:rgba(255,255,255,.035)}
 .log-row{cursor:copy}
 .log-row.copied{animation:logCopied .9s var(--ease-out)}
-.log-row.copied::after{content:"Copied";position:absolute;right:10px;top:3px;font:600 10.5px/1.55 'Inter',sans-serif;
+.log-row.copied::after{content:"Copied";position:absolute;right:10px;top:3px;font:600 10.5px/1.55 var(--sans);
   color:var(--accent);animation:logCopiedTag .9s var(--ease-out) forwards}
 @keyframes logCopied{from{background:color-mix(in oklch,var(--accent) 16%,transparent)}}
 @keyframes logCopiedTag{0%{opacity:0;transform:translateY(2px)}15%,70%{opacity:1;transform:none}100%{opacity:0}}
@@ -70,7 +70,7 @@
 .logs-chip:hover{color:var(--fg)}
 .logs-chip:active{transform:scale(.96)}
 .logs-chip[aria-pressed="true"]{background:var(--surface-3);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.35)}
-.logs-n{font:600 10.5px/1 'JetBrains Mono',monospace;padding:2px 5px;border-radius:999px}
+.logs-n{font:600 10.5px/1 var(--mono);padding:2px 5px;border-radius:999px}
 .logs-n:empty{display:none}
 .logs-chip.lvl-warn .logs-n{background:color-mix(in oklch,var(--warn) 20%,transparent);color:var(--warn)}
 .logs-chip.lvl-err .logs-n{background:color-mix(in oklch,var(--err) 20%,transparent);color:var(--err)}
