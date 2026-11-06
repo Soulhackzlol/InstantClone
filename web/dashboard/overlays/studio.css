@@ -1,0 +1,356 @@
+/* - Overlay Studio ---------------─ */
+.st-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.st-toolbar .ic-input{max-width:160px;height:34px}
+.st-left,.st-right{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;
+  display:flex;flex-direction:column;overflow:hidden}
+.st-right{padding:0}
+.st-tabs{display:flex;border-bottom:1px solid var(--line)}
+.st-tabs button{flex:1;appearance:none;background:transparent;border:0;color:var(--fg-3);
+  font-size:11.5px;font-weight:600;padding:9px 4px;cursor:pointer;letter-spacing:.02em}
+.st-tabs button.on{color:var(--fg);box-shadow:inset 0 -2px 0 var(--accent)}
+.st-left-body{overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:7px;flex:1}
+/* Many layers scroll: a row never shrinks to fit (it clips its overflow, so
+   as a flex item it could be squeezed down to nothing). */
+.st-left-body>*{flex:none}
+.st-item{appearance:none;text-align:left;background:var(--surface);border:1px solid var(--line);
+  border-radius:8px;padding:9px 11px;cursor:pointer;color:var(--fg-2);font-size:12.5px;
+  display:flex;align-items:center;justify-content:space-between;gap:8px;transition:border-color .12s,transform .12s}
+.st-item:hover{border-color:var(--line-2);transform:translateY(-1px);color:var(--fg)}
+.st-glyph{width:24px;height:24px;flex:none;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:6px;background:var(--bg-2);border:1px solid var(--line);font-size:11px;color:var(--accent);
+  font-family:'JetBrains Mono',monospace;line-height:1}
+.st-item-l{flex:1;text-align:left}
+/* The Add tab: two tiles a row, icon over name. */
+.st-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.st-tiles .st-item{position:relative;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:9px;padding:10px;min-height:72px;font-size:12px;line-height:1.25}
+.st-tiles .st-item:active{transform:scale(.96)}
+.st-tiles .st-item .st-glyph{width:28px;height:28px;border-radius:8px;color:var(--accent);
+  background:color-mix(in oklch,var(--accent) 12%,var(--bg-2));border-color:color-mix(in oklch,var(--accent) 28%,transparent)}
+.st-tiles .st-item .st-cost{position:absolute;top:8px;right:8px}
+.st-item .st-cost{font-size:9px;font-weight:700;letter-spacing:.06em;padding:1px 5px;border-radius:5px;
+  background:color-mix(in oklch,var(--warn) 16%,transparent);color:var(--warn)}
+.st-canvas-wrap{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
+.st-canvas-frame{position:relative;flex:1;min-height:0;background:#06080c;
+  border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.st-canvas-scale{position:absolute;top:0;left:0;width:1920px;height:1080px;transform-origin:top left;
+  background:
+  linear-gradient(45deg,#0d1016 25%,transparent 25%,transparent 75%,#0d1016 75%),
+  linear-gradient(45deg,#0d1016 25%,#11151c 25%,#11151c 75%,#0d1016 75%);
+  background-size:64px 64px;background-position:0 0,32px 32px}
+/* Crisp 16:9 canvas outline + title-safe guide. Positioned by JS (not
+   scaled) so the border stays a clean 1px and the letterbox is dimmed. */
+.st-canvas-bounds{position:absolute;pointer-events:none;border:1px solid rgba(255,255,255,.34);
+  border-radius:3px;box-shadow:0 0 0 100vmax rgba(3,5,8,.55)}
+.st-canvas-bounds::after{content:'';position:absolute;inset:5%;
+  border:1.5px dashed rgba(90,200,250,.5);border-radius:5px}
+.st-canvas-bounds .lbl{position:absolute;left:calc(5% + 5px);top:calc(5% - 14px);
+  font:700 9px 'JetBrains Mono',monospace;color:rgba(90,200,250,.8);letter-spacing:.12em}
+
+/* Studio as a full-page floating modal (reparented to body so the tab
+   pane's lingering transform can't trap position:fixed). */
+.st-modal{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;
+  padding:18px;background:rgba(4,6,10,.8);backdrop-filter:blur(7px)}
+.st-modal[hidden]{display:none}
+.st-modal-card{position:relative;width:98vw;height:96vh;display:flex;flex-direction:column;
+  background:var(--bg-2);border:1px solid var(--line-2);border-radius:16px;box-shadow:var(--shadow-2);overflow:hidden}
+.st-modal-head{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:nowrap}
+.st-head-title{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+@media (max-width:760px){.st-head-title{display:none}}
+.st-modal-head .st-toolbar{margin-left:auto;flex-wrap:nowrap}
+.st-icobtn{padding:8px 11px;font-size:15px;line-height:1;min-width:38px}
+.st-icobtn:disabled{opacity:.35;cursor:default}
+.st-menu{position:relative}
+.st-menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:10;min-width:170px;
+  background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow-2);
+  padding:5px;display:flex;flex-direction:column;gap:2px}
+.st-menu-pop[hidden]{display:none}
+.st-menu-pop button{appearance:none;background:transparent;border:0;text-align:left;color:var(--fg-2);
+  font-size:12.5px;padding:8px 11px;border-radius:7px;cursor:pointer}
+.st-menu-pop button:hover{background:rgba(255,255,255,.06);color:var(--fg)}
+.st-menu-pop button.st-danger:hover{background:color-mix(in oklch,var(--danger) 14%,transparent)}
+/* The canvas's right-click menu: the overflow menu's look, at the pointer. */
+.st-ctx{position:fixed;right:auto;top:0;left:0;z-index:20;min-width:220px}
+.st-ctx button{display:flex;align-items:center;justify-content:space-between;gap:18px}
+.st-ctx button:disabled{opacity:.4;cursor:default;background:transparent}
+.st-ctx kbd,.st-keys kbd,.st-foot-keys kbd{font:600 10px/1 'JetBrains Mono',monospace;color:var(--fg-4)}
+.st-ctx hr{border:0;border-top:1px solid var(--line);margin:3px 4px}
+/* Zoom: out, the size shown (a click fits it again), in. */
+.st-zoom{position:absolute;right:10px;bottom:10px;z-index:7;display:flex;align-items:center;gap:2px;padding:3px;
+  background:color-mix(in oklch,var(--surface-2) 92%,transparent);border:1px solid var(--line-2);border-radius:9px;box-shadow:var(--shadow-2)}
+.st-zoom button{appearance:none;background:transparent;border:0;color:var(--fg-2);cursor:pointer;border-radius:6px;
+  min-width:30px;height:28px;padding:0 7px;font-weight:600;font-size:13px;line-height:1;font-family:inherit;font-variant-numeric:tabular-nums;transition:background .14s,color .14s,scale .12s}
+.st-zoom button:hover{background:rgba(255,255,255,.07);color:var(--fg)}
+.st-zoom button:active{scale:.96}
+#st-zoom-level{min-width:52px;font-size:11.5px}
+.st-canvas-frame.st-grab .st-hit,.st-canvas-frame.st-grab .st-hit *{cursor:grab}
+.st-canvas-frame.st-panning .st-hit,.st-canvas-frame.st-panning .st-hit *{cursor:grabbing}
+/* Every shortcut, on ? or from the menu. */
+.st-keys{position:absolute;inset:0;z-index:30;display:grid;place-items:center;padding:24px;background:rgba(4,6,10,.6)}
+.st-keys[hidden]{display:none}
+.st-keys-card{width:min(860px,100%);max-height:100%;overflow:auto;background:var(--surface-2);border:1px solid var(--line-2);
+  border-radius:14px;box-shadow:var(--shadow-2);padding:16px 18px 18px}
+.st-keys-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-size:14px}
+.st-keys-head .st-layer-btn{display:inline-block}
+.st-keys-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px 26px}
+.st-keys h4{margin:0 0 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3)}
+.st-keys dl{margin:0;display:grid;grid-template-columns:minmax(0,9.5em) 1fr;gap:6px 12px;font-size:12px}
+.st-keys dt{font:600 11px/1.5 'JetBrains Mono',monospace;color:var(--fg)}
+.st-keys dd{margin:0;color:var(--fg-2);text-wrap:pretty}
+.st-foot-keys{appearance:none;background:transparent;border:0;padding:0;color:inherit;font:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.st-foot-keys:hover{color:var(--fg)}
+.st-modal-body{flex:1;min-height:0;padding:12px;display:grid;
+  grid-template-columns:224px minmax(0,1fr) 300px;grid-template-rows:minmax(0,1fr);gap:12px}
+@media (max-width:1120px){.st-modal-body{grid-template-columns:180px minmax(0,1fr) 250px}}
+/* Too narrow for three columns: the canvas keeps the width, layers go
+   under it, and the properties run down the right. */
+@media (max-width:900px){
+  .st-modal-body{grid-template-columns:minmax(0,1fr) 250px;grid-template-rows:minmax(0,3fr) minmax(0,2fr)}
+  .st-canvas-wrap{grid-area:1/1}
+  .st-left{grid-area:2/1}
+  .st-right{grid-area:1/2/3/3}
+}
+.st-modal-foot{padding:9px 16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--fg-3)}
+.st-perf{font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:6px;text-transform:uppercase;cursor:help}
+.st-perf.ok{background:color-mix(in oklch,var(--live) 15%,transparent);color:var(--live)}
+.st-perf.warn{background:color-mix(in oklch,var(--warn) 16%,transparent);color:var(--warn)}
+.st-perf.err{background:color-mix(in oklch,var(--danger) 16%,transparent);color:var(--danger)}
+
+/* State selector above the canvas: the state you preview IS the state you
+   edit. Colour dots tie each state to its overlay colour. */
+.st-statebar2{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:7px 9px}
+.st-states{display:flex;gap:5px;flex-wrap:wrap}
+/* What the bar says an overlay that isn't about the delay does. */
+.st-bar-note{font-size:11.5px;color:var(--fg-4);margin-left:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-st{appearance:none;display:inline-flex;align-items:center;gap:7px;background:var(--surface);
+  border:1px solid var(--line);border-radius:8px;color:var(--fg-3);font-size:12px;font-weight:600;
+  padding:7px 12px;cursor:pointer;transition:border-color .12s,background .12s,color .12s}
+.st-st:hover{color:var(--fg);border-color:var(--line-2)}
+.st-st .dot{width:9px;height:9px;border-radius:50%;flex:none}
+.st-st.on{color:var(--fg);border-color:var(--accent);background:color-mix(in oklch,var(--accent) 13%,var(--surface))}
+.st-state-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+
+/* Left panel: layers + add */
+.st-sec{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-4);margin:10px 2px 4px}
+.st-sec:first-child{margin-top:2px}
+.st-layer{position:relative;overflow:hidden;display:flex;align-items:center;gap:6px;padding:8px 9px;border:1px solid var(--line);
+  border-radius:8px;background:var(--surface);cursor:pointer;transition:border-color .12s}
+.st-layer:hover{border-color:var(--line-2)}
+.st-layer.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.st-layer-sw,.st-props-ic{width:24px;height:24px;border-radius:7px;flex:none;display:grid;place-items:center;color:var(--sw);
+  background:color-mix(in oklch,var(--sw) 16%,var(--surface-3));border:1px solid color-mix(in oklch,var(--sw) 38%,var(--line-2))}
+/* A layer coloured near black (a dark card) keeps its hue, lifted to read. */
+@supports (color:oklch(from red l c h)){.st-layer-sw,.st-props-ic{color:oklch(from var(--sw) max(l,.72) c h)}}
+.st-layer-sw svg{width:13px;height:13px}
+.st-props-ic{width:30px;height:30px;border-radius:8px}
+.st-props-ic svg{width:16px;height:16px}
+.st-layer-name{flex:1;font-size:12.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-layer.sel .st-layer-name{color:var(--fg)}
+.st-layer-btn{appearance:none;background:transparent;border:0;color:var(--fg-4);cursor:pointer;
+  line-height:0;padding:5px;border-radius:6px;opacity:0;transition:opacity .15s var(--ease-out),color .12s,background .12s}
+.st-layer-btn svg{width:13px;height:13px}
+/* A row's buttons show where they can be used: on the row under the pointer,
+   the selected one, or from the keyboard. */
+.st-layer-btn:focus-visible,.st-animrow .st-layer-btn{opacity:1}
+.st-layer .st-layer-btn{display:none;opacity:1}
+.st-layer:hover .st-layer-btn,.st-layer.sel .st-layer-btn,.st-layer:focus-within .st-layer-btn{display:inline-block}
+@media (hover:none){.st-layer .st-layer-btn{display:inline-block}}
+.st-layer.locked .st-lock{display:inline-block;color:var(--fg-2)}
+.st-layer.locked .st-layer-name{font-style:italic}
+.st-layer.hot{border-color:var(--line-2)}
+.st-layer.st-dragging{opacity:.45}
+.st-layer.st-drop-above{box-shadow:inset 0 2px 0 var(--accent)}
+.st-layer.st-drop-below{box-shadow:inset 0 -2px 0 var(--accent)}
+.st-layer-btn:hover{color:var(--fg);background:rgba(255,255,255,.07)}
+.st-empty-hint{padding:18px 12px;text-align:center;color:var(--fg-4);font-size:12px;line-height:1.6}
+
+/* Property panel sections */
+.st-pgroup{border-top:1px solid var(--line);padding-top:12px;margin-top:4px;display:flex;flex-direction:column;gap:11px}
+.st-pgroup:first-of-type{border-top:0;padding-top:0;margin-top:0}
+.st-pgroup-h{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-3);
+  display:flex;align-items:center;gap:8px;font-weight:700;cursor:pointer;user-select:none;border-radius:6px;margin:-4px -6px;padding:4px 6px}
+.st-pgroup-h:hover{color:var(--fg)}
+.st-pgroup-h:focus-visible{outline:2px solid color-mix(in oklch,var(--accent) 60%,transparent)}
+.st-pgroup-h::after{content:"";margin-left:auto;width:7px;height:7px;flex:none;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+  transform:translateY(-2px) rotate(45deg);transition:transform .2s var(--ease-out);opacity:.7}
+.st-pgroup.folded .st-pgroup-h::after{transform:rotate(-45deg)}
+.st-pgroup.folded>:not(.st-pgroup-h){display:none}
+.st-pgroup-h>span:first-child{display:flex;align-items:center;gap:8px}
+.st-pgroup-h .dot{width:9px;height:9px;border-radius:50%;flex:none}
+.st-vischips{display:flex;gap:5px;flex-wrap:wrap}
+.st-vischip{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:7px;
+  color:var(--fg-4);font-size:11px;font-weight:600;padding:6px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+  transition:color .12s,border-color .12s,background .12s}
+.st-vischip::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--dot,#8a8f9a);opacity:.3;transition:opacity .12s}
+.st-vischip:hover{border-color:var(--line-2)}
+.st-vischip.on{color:var(--fg);border-color:var(--line-2);background:var(--surface-2)}
+.st-vischip.on::before{opacity:1}
+.st-allbtn{appearance:none;background:transparent;border:0;color:var(--accent);font-size:10px;font-weight:600;cursor:pointer;padding:1px 2px;letter-spacing:.01em}
+.st-allbtn:hover{text-decoration:underline}
+.st-hint{font-size:11px;color:var(--fg-3);line-height:1.5;margin-top:-2px;text-wrap:pretty}
+.st-css{min-height:120px;font-size:11.5px;resize:vertical}
+.st-hint code{font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:10px}
+.st-swatches{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.st-sw{width:22px;height:22px;border-radius:6px;border:1px solid var(--line-2);cursor:pointer;padding:0}
+.st-sw:hover{transform:scale(1.1)}
+.st-animrow{padding:7px;border:1px solid var(--line);border-radius:8px;background:var(--surface);margin-bottom:6px;display:flex;flex-direction:column;gap:5px}
+.st-animrow-top{display:flex;gap:5px;align-items:center}
+.st-animrow-top select{flex:1}
+.st-animrow-bot{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+.st-animrow-bot label{display:flex;flex-direction:column;gap:3px;font-size:10.5px;color:var(--fg-4);min-width:0}
+.st-range{display:flex;align-items:center;gap:10px}
+.st-amprow{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:11px;color:var(--fg-3)}
+.st-amprow span{white-space:nowrap}
+.st-amprow input{flex:1;min-width:0}
+.st-amprow output{min-width:30px;text-align:right;color:var(--fg)}
+.st-range input{flex:1;min-width:0}
+.st-range output{min-width:2.6em;text-align:right;font:500 11.5px 'JetBrains Mono',monospace;color:var(--fg-2);font-variant-numeric:tabular-nums}
+.st-mini{padding:5px 10px;font-size:11.5px}
+.st-say{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.st-say-h{font-size:11px;font-weight:600;color:var(--fg-2)}
+.st-say-row{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--fg-3)}
+.st-say-row>div{display:flex;flex-wrap:wrap;gap:4px}
+.st-withic{display:inline-flex;align-items:center;gap:6px}
+.st-withic svg,.st-icobtn svg{width:15px;height:15px;flex:none}
+.st-glyph svg{width:15px;height:15px}
+.st-align{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;max-width:120px}
+/* Each button is the screen in small, with a dot where the widget goes. */
+.st-alignb{appearance:none;display:flex;height:28px;background:var(--surface);border:1px solid var(--line);border-radius:6px;
+  color:var(--fg-4);padding:5px;cursor:pointer;transition:border-color .12s,color .12s}
+.st-alignb i{width:7px;height:7px;border-radius:2px;background:currentColor}
+.st-alignb:hover{border-color:var(--accent);color:var(--accent)}
+/* Several layers picked: line them up, or spread them out. */
+.st-lineup{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px;margin-bottom:6px}
+.st-lineup.st-spread{grid-template-columns:repeat(2,minmax(0,1fr))}
+.st-lineb{appearance:none;display:grid;place-items:center;height:30px;background:var(--surface);border:1px solid var(--line);border-radius:6px;
+  color:var(--fg-3);cursor:pointer;transition:border-color .12s,color .12s,scale .12s}
+.st-lineb svg{width:16px;height:16px}
+.st-lineb:hover{border-color:var(--accent);color:var(--accent)}
+.st-lineb:active{scale:.96}
+.st-chip{appearance:none;background:color-mix(in oklch,var(--accent) 12%,transparent);border:1px solid color-mix(in oklch,var(--accent) 30%,transparent);
+  color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 6px;border-radius:5px;cursor:pointer;margin:2px 3px 0 0}
+.st-chip:hover{background:color-mix(in oklch,var(--accent) 22%,transparent)}
+
+/* - Live phase caption + microinteractions -----─ */
+/* Live phase caption - sits in the chrome (NOT over the canvas, so it
+   never reads as part of the overlay). */
+.ph-cap{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:999px;
+  background:var(--surface);border:1px solid var(--line);font:600 11px 'Inter',ui-sans-serif,sans-serif;
+  color:var(--fg-3);white-space:nowrap;opacity:0;transition:opacity .2s}
+.ph-cap:not(:empty){opacity:1}
+.ph-cap .ph-dot{width:8px;height:8px;border-radius:50%;flex:none;animation:ph-pulse 1.8s ease-in-out infinite}
+@keyframes ph-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.3);opacity:.6}}
+
+/* Auto-preview toggle (clearly a mode, not an animation pause) */
+.st-auto{appearance:none;display:inline-flex;align-items:center;gap:8px;background:var(--surface);
+  border:1px solid var(--line);border-radius:8px;color:var(--fg-2);font-size:11.5px;font-weight:600;
+  padding:7px 13px;cursor:pointer;white-space:nowrap;transition:background .14s,border-color .14s,color .14s}
+.st-auto:hover{border-color:var(--line-2);color:var(--fg)}
+.st-auto .ic{width:9px;height:9px;border-radius:50%;background:currentColor;flex:none;opacity:.6}
+.st-auto.on{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
+.st-auto.on .ic{opacity:1;animation:ph-pulse 1.3s ease-in-out infinite}
+
+/* modal pop-in */
+@keyframes st-modal-in{from{opacity:0}to{opacity:1}}
+@keyframes st-card-in{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+.st-modal:not([hidden]){animation:st-modal-in .18s ease}
+.st-modal:not([hidden]) .st-modal-card{animation:st-card-in .26s cubic-bezier(.2,.8,.2,1)}
+
+/* button + chip microinteractions */
+.st-sim,.st-st,.st-item,.st-layer,.st-layer-btn,.st-auto{transition:transform .12s var(--ease-out),border-color .14s,background .14s,color .14s,box-shadow .14s}
+.st-sim:hover,.st-st:hover,.st-auto:hover{transform:translateY(-1px)}
+.st-sim:active,.st-st:active,.st-auto:active{transform:scale(.96)}
+.st-item:active{transform:scale(.985)}
+.st-st.on .dot{animation:ph-pulse 1.8s ease-in-out infinite}
+
+/* selected layer accent stripe */
+.st-layer::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent);
+  transform:scaleY(0);transition:transform .16s var(--ease-out)}
+.st-layer.sel::before{transform:scaleY(1)}
+
+/* gentle fade when panels re-render */
+@keyframes st-fade-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.st-canvas-scale iframe{width:1920px;height:1080px;border:0;background:transparent;display:block;pointer-events:none;color-scheme:normal}
+/* The canvas's pick layer, in canvas px (scaled with it). --st-inv undoes
+   the scale, so outlines and handles keep their size on screen. */
+.st-canvas-scale{--px:calc(1px * var(--st-inv,1))}
+.st-hit{position:absolute;inset:0;touch-action:none}
+.st-hit .st-box{position:absolute;border:calc(2 * var(--px)) solid transparent;cursor:move;border-radius:calc(4 * var(--px))}
+.st-hit .st-box:hover{border-color:color-mix(in oklch,var(--accent) 45%,transparent)}
+.st-hit .st-box.sel{border-color:var(--accent);box-shadow:0 0 0 var(--px) var(--accent)}
+.st-hit .st-box.locked{pointer-events:none}
+.st-hit .st-box.hover:not(.sel){border-color:color-mix(in oklch,var(--accent) 45%,transparent)}
+.st-hit .st-box.locked.sel{border-style:dashed;box-shadow:none}
+/* The picked layer's handles, over every box: a layer on top never covers them. */
+.st-hit .st-handles{position:absolute;pointer-events:none}
+.st-hit .st-handle{pointer-events:auto;position:absolute;box-sizing:border-box;width:calc(12 * var(--px));height:calc(12 * var(--px));
+  margin:calc(-6 * var(--px)) 0 0 calc(-6 * var(--px));border-radius:50%;background:var(--accent);border:calc(2 * var(--px)) solid var(--bg-2)}
+/* a grip bigger than it looks */
+.st-hit .st-handle::before{content:'';position:absolute;inset:calc(-6 * var(--px))}
+.st-hit .st-handle[data-handle="nw"]{left:0;top:0;cursor:nwse-resize}
+.st-hit .st-handle[data-handle="n"]{left:50%;top:0;cursor:ns-resize}
+.st-hit .st-handle[data-handle="ne"]{left:100%;top:0;cursor:nesw-resize}
+.st-hit .st-handle[data-handle="e"]{left:100%;top:50%;cursor:ew-resize}
+.st-hit .st-handle[data-handle="se"]{left:100%;top:100%;cursor:nwse-resize}
+.st-hit .st-handle[data-handle="s"]{left:50%;top:100%;cursor:ns-resize}
+.st-hit .st-handle[data-handle="sw"]{left:0;top:100%;cursor:nesw-resize}
+.st-hit .st-handle[data-handle="w"]{left:0;top:50%;cursor:ew-resize}
+/* several picked: the box around them all; a drag on empty canvas: the band */
+.st-hit .st-group{position:absolute;pointer-events:none;border:var(--px) dashed var(--accent);border-radius:calc(4 * var(--px))}
+.st-hit .st-band{position:absolute;pointer-events:none;border:var(--px) solid var(--accent);
+  background:color-mix(in oklch,var(--accent) 12%,transparent)}
+/* snapping guidelines: where an edge or a middle lines up (canvas space) */
+.st-guide{position:absolute;background:var(--accent);pointer-events:none;opacity:0;transition:opacity .1s;z-index:6;
+  box-shadow:0 0 10px var(--accent)}
+.st-guide.v{left:960px;top:0;bottom:0;width:var(--px)}
+.st-guide.h{top:540px;left:0;right:0;height:var(--px)}
+.st-guide.on{opacity:.9}
+.st-simbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.st-sim{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:7px;
+  color:var(--fg-3);font-size:11.5px;font-weight:600;padding:6px 11px;cursor:pointer}
+.st-sim.on{color:var(--accent-ink);background:var(--accent);border-color:transparent}
+.st-props-head{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.st-props-title{font-size:13px;font-weight:600;color:var(--fg)}
+.st-props-sub{font-size:11px;color:var(--fg-4);font-family:'JetBrains Mono',monospace}
+.st-props-sub.st-props-note{font-family:inherit;letter-spacing:0}
+.st-props-body{overflow-y:auto;padding:12px 14px;flex:1;display:flex;flex-direction:column;gap:11px;
+  animation:st-fade-in .2s var(--ease-out)}
+/* Redrawn for the same widget (a toggle, a swatch): it stays put, no fade. */
+.st-props-body.st-quiet{animation:none}
+.st-field{display:flex;flex-direction:column;gap:5px}
+.st-field-row{display:flex;gap:8px}
+/* Side by side, each gets half: never the width its input would like. */
+.st-field-row>*{flex:1 1 0;min-width:0}
+.st-field-row>.ic-btn{flex:none}
+.st-field label{font-size:11px;color:var(--fg-3);font-weight:500}
+.st-field>label:has(>.st-allbtn){display:flex;justify-content:space-between;align-items:center}
+.st-field .ic-input,.st-field select{padding:8px 10px;font-size:12.5px;line-height:1.35;border-radius:8px}
+.st-field select.ic-input{padding-right:30px;background-position:right 10px center}
+@supports (appearance:base-select){.st-field select.ic-input{padding-right:10px}}
+.st-field textarea.ic-input{height:auto;min-height:60px;font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.5}
+.st-color{display:flex;align-items:center;gap:8px}
+.st-color .ic-input{flex:1;min-width:0}
+.st-color input[type=color]{flex:none;width:34px;height:30px;border:1px solid var(--line);border-radius:6px;background:transparent;padding:2px;cursor:pointer}
+.st-check{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg-2);cursor:pointer}
+.st-check input{width:15px;height:15px;cursor:pointer}
+.st-cheat{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+  font-size:11px;color:var(--fg-3);line-height:1.6}
+.st-cheat code{font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:10.5px}
+.st-props-empty{margin:auto;padding:28px 22px;display:flex;flex-direction:column;align-items:center;gap:8px;
+  text-align:center;color:var(--fg-3);font-size:12.5px;line-height:1.55;text-wrap:pretty;animation:st-fade-in .25s var(--ease-out)}
+.st-props-empty b{color:var(--fg);font-size:13px;font-weight:600}
+.st-props-empty .ic-btn{margin-top:6px}
+.st-empty-ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;margin-bottom:4px;color:var(--accent);
+  background:color-mix(in oklch,var(--accent) 12%,var(--surface));border:1px solid color-mix(in oklch,var(--accent) 26%,transparent)}
+.st-empty-ic svg{width:18px;height:18px}
+/* A layer just added (or duplicated) arrives in the list. */
+@keyframes st-layer-in{from{opacity:0;transform:translateY(-6px) scale(.98)}}
+.st-layer.arrived{animation:st-layer-in .32s var(--ease-out)}
+.st-rowbtns{display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;align-items:center}
+.ovg-switch{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--fg2,#c5cad3);cursor:pointer;
+  background:var(--bg2,#0c0e12);border:1px solid var(--line,rgba(255,255,255,.1));border-radius:8px;padding:7px 11px;user-select:none}
+.ovg-switch input{accent-color:var(--accent,#5ac8fa);cursor:pointer;margin:0}
+.ovg-switch:hover{border-color:var(--line2,rgba(255,255,255,.18))}
+.st-danger{color:var(--danger)!important}
+

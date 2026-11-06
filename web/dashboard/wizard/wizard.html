@@ -1,0 +1,307 @@
+<!-- - Wizard (only when !configured) ------ -->
+<!-- Multi-step questionnaire. Each `.wiz-step` is one screen; the JS state
+     machine (wizStepIds / renderWizStep / wizNext / wizBack) shows one at a
+     time. The Twitch step is dynamic - it only joins the sequence when the
+     chosen platform is Twitch. Every referenced id is preserved from the
+     old single-screen wizard so the save/test/tile logic is untouched. -->
+<section class="ic-card wizard-card" id="wizard" hidden>
+  <div class="wiz-head">
+    <h2 id="wiz-title">Welcome to InstantClone</h2>
+    <p class="lead" id="wiz-lead">A few quick questions and you're live.</p>
+    <nav class="wiz-progress" id="wiz-progress" aria-label="Setup steps"></nav>
+  </div>
+
+  <!-- The welcome: the language, then one choice per screen. A choice saves as
+       it is picked (welPick) and stays put; Next and Back are the wizard's. -->
+  <div class="wiz-step wel-hero" data-wstep="welcome">
+    <div class="wel-aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+    <svg class="wel-mark" viewBox="0 0 48 48" aria-hidden="true">
+      <rect x="3" y="3" width="42" height="42" rx="10.5"/>
+      <path class="wel-bar" d="M17 14h4v20h-4z"/><path class="wel-bar" d="M27 14h4v20h-4z"/>
+    </svg>
+    <h2 class="wel-title" id="wel-title" translate="no"></h2>
+    <p class="wel-lead">A live, glitch-free stream delay. A few quick questions and you’re streaming.</p>
+    <div class="wel-ask">Pick your language</div>
+    <div class="wel-choices" data-wel="language" role="radiogroup" aria-label="Language">
+      <button type="button" class="wel-choice" role="radio" data-value="auto" style="--i:0" onclick="welPick(this)">
+        <span class="wel-choice-t">Auto</span><span class="wel-choice-s">Follows your browser</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="en" style="--i:1" onclick="welPick(this)">
+        <span class="wel-choice-t" translate="no">English</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="es" style="--i:2" onclick="welPick(this)">
+        <span class="wel-choice-t" translate="no">Español</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+    </div>
+  </div>
+
+  <div class="wiz-step wel-q" data-wstep="startup" hidden>
+    <svg class="wel-glyph wel-glyph-power" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.6 6.8a8 8 0 1 0 10.8 0"/></svg>
+    <div class="wel-q-t" id="wel-startup-t">Start InstantClone with Windows?</div>
+    <div class="wel-q-s">It launches at login and waits quietly, so OBS always has somewhere to publish.</div>
+    <div class="wel-choices" data-wel="startup" role="radiogroup" aria-labelledby="wel-startup-t">
+      <button type="button" class="wel-choice" role="radio" data-value="on" style="--i:0" onclick="welPick(this)">
+        <span class="wel-choice-t">Yes, start it</span><span class="wel-choice-s">Always ready</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="off" style="--i:1" onclick="welPick(this)">
+        <span class="wel-choice-t">No, I'll open it</span><span class="wel-choice-s">When you need it</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+    </div>
+    <div class="wel-later">You can change all of this later in System.</div>
+  </div>
+
+  <div class="wiz-step wel-q" data-wstep="delay" hidden>
+    <svg class="wel-glyph wel-glyph-clock" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path class="wel-hand" d="M12 12V6.5"/><path d="M12 12l3.5 2"/></svg>
+    <div class="wel-q-t" id="wel-delay-t">Have a delay ready when you go live?</div>
+    <div class="wel-q-s">It arms by itself when OBS connects. Viewers stay live until you press Activate.</div>
+    <div class="wel-choices" data-wel="delay" role="radiogroup" aria-labelledby="wel-delay-t">
+      <button type="button" class="wel-choice" role="radio" data-value="0" style="--i:0" onclick="welPick(this)">
+        <span class="wel-choice-t">No</span><span class="wel-choice-s">I'll arm it myself</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="15000" style="--i:1" onclick="welPick(this)">
+        <span class="wel-choice-t">15 s</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="30000" style="--i:2" onclick="welPick(this)">
+        <span class="wel-choice-t">30 s</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="120000" style="--i:3" onclick="welPick(this)">
+        <span class="wel-choice-t">2 min</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+    </div>
+    <div class="wel-later">You can change all of this later in System.</div>
+  </div>
+
+  <div class="wiz-step wel-q" data-wstep="crash" hidden>
+    <svg class="wel-glyph wel-glyph-shield" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 2.8v5.4c0 4.6-3.1 8-7.5 9.8-4.4-1.8-7.5-5.2-7.5-9.8V5.800z"/><path class="wel-shield-tick" pathLength="1" d="M8.500 12l2.500 2.500 4.500-5"/></svg>
+    <div class="wel-q-t" id="wel-crash-t">Keep the stream up if OBS crashes?</div>
+    <div class="wel-q-s">Your destinations stay live and show a reconnect screen until OBS is back.</div>
+    <div class="wel-choices" data-wel="crash" role="radiogroup" aria-labelledby="wel-crash-t">
+      <button type="button" class="wel-choice" role="radio" data-value="true" style="--i:0" onclick="welPick(this)">
+        <span class="wel-choice-t">Yes, keep it up</span><span class="wel-choice-s">The screen covers the gap</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+      <button type="button" class="wel-choice" role="radio" data-value="false" style="--i:1" onclick="welPick(this)">
+        <span class="wel-choice-t">No, let it end</span><span class="wel-choice-s">A crash ends the stream</span><span class="wel-tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+      </button>
+    </div>
+    <div class="wel-later">You can change all of this later in System.</div>
+  </div>
+
+  <!-- How OBS finds us -->
+  <div class="wiz-step" data-wstep="obs" hidden>
+    <div class="wiz-step-h">
+      <div class="wiz-step-t">Which app do you stream with?</div>
+      <div class="wiz-step-s">Pick yours, then connect it. You can switch later on the OBS tab.</div>
+    </div>
+    <!-- Which app sends the stream. Streamlabs only joins on Windows (see
+         renderStreamlabs); OBS is the default and needs no pick. -->
+    <div class="w-app-switch" id="wiz-app-tiles" data-app="obs" role="radiogroup" aria-label="Streaming app" hidden>
+      <span class="w-app-ind" aria-hidden="true"></span>
+      <button type="button" class="w-app on" data-app="obs" role="radio" aria-checked="true" onclick="wizPickApp('obs')">
+        <span class="w-app-mark" data-app-mark="obs"></span>
+        <span class="w-app-text"><span class="w-app-name">OBS Studio</span><span class="w-app-sub">Recommended</span></span>
+      </button>
+      <button type="button" class="w-app" data-app="streamlabs" role="radio" aria-checked="false" onclick="wizPickApp('streamlabs')">
+        <span class="w-app-mark sl" data-app-mark="streamlabs"></span>
+        <span class="w-app-text"><span class="w-app-name">Streamlabs Desktop</span><span class="w-app-sub exp">Experimental</span></span>
+      </button>
+    </div>
+    <!-- One pane per app; switching folds one closed while the other opens. -->
+    <div class="w-app-pane on" data-pane-app="obs"><div class="w-app-pane-body">
+    <!-- Guided 2-step flow: set OBS up, then verify. A step expands when active
+         and collapses to a check when done; a "Step N" eyebrow turns green as it
+         completes. [data-state] = locked | active | done; see wizObs* in JS. -->
+    <ol class="obs-flow" id="obs-flow">
+      <li class="obs-node" data-node="connect" data-state="active">
+        <div class="obs-node-main">
+          <button type="button" class="obs-node-head" onclick="wizObsReopen('connect')">
+            <span class="obs-eyebrow">First</span>
+            <span class="obs-node-title">Point OBS at InstantClone</span>
+          </button>
+          <div class="obs-node-clip"><div class="obs-node-body">
+            <p class="obs-node-hint">One click and InstantClone joins OBS's <b>Service</b> list, next to Twitch and YouTube.</p>
+            <div class="wizard-obs-card obs-recommended" id="wiz-obs-service">
+              <div class="wizard-obs-title">
+                <span>Register as an OBS service</span>
+              </div>
+              <p class="wizard-obs-body">Tick each OBS you stream with.</p>
+              <div class="obs-installs-host" id="wiz-obs-installs"></div>
+              <p class="wizard-obs-after">Then reopen OBS and choose <b>InstantClone</b> in <b>Settings &rarr; Stream &rarr; Service</b>.</p>
+              <details class="ic-disclose">
+                <summary>How it works</summary>
+                <div class="ic-disclose-body">
+                  <p>InstantClone appears next to Twitch / YouTube in OBS's <b>Settings &rarr; Stream &rarr; Service</b> list. Multi-track via InstantClone works out of the box on Auto, so pick InstantClone and stream.</p>
+                  <p>Edits that OBS's <code class="mono">services.json</code> (in <code class="mono">%APPDATA%</code>, or inside a portable OBS's own folder) with a <code class="mono">.bak</code> backup. Unregister any time from the <b>OBS</b> tab.</p>
+                </div>
+              </details>
+            </div>
+            <details class="ic-disclose wiz-obs-manual" id="wiz-obs-custom" onclick="syncWizObsConfirm()">
+              <summary>Prefer a Custom RTMP server?</summary>
+              <div class="ic-disclose-body">
+                <p>Set <b>Service: Custom</b> in OBS and paste these. It applies live, nothing to close. Handy for OBS before 30.2, multi-RTMP plugins or other streaming apps. Your real platform key goes in the next step, not in OBS.</p>
+                <div class="wizard-obs-copy-row">
+                  <span class="muted">Server</span>
+                  <code class="mono" id="wiz-obs-srv">rtmp://localhost:1935/live</code>
+                  <button class="ic-btn ic-btn-ghost" onclick="copyEl(this,'wiz-obs-srv','Server URL')">Copy</button>
+                </div>
+                <div class="wizard-obs-copy-row">
+                  <span class="muted">Stream key</span>
+                  <code class="mono">anything (e.g. main)</code>
+                </div>
+              </div>
+            </details>
+            <button class="ic-btn ic-btn-primary obs-advance" id="wiz-obs-confirm" onclick="wizObsAdvance('connect')">I've set this up in OBS &rarr;</button>
+          </div></div>
+        </div>
+      </li>
+
+      <li class="obs-node" data-node="verify" data-state="locked">
+        <div class="obs-node-main">
+          <button type="button" class="obs-node-head" onclick="wizObsReopen('verify')">
+            <span class="obs-eyebrow">Then · Optional</span>
+            <span class="obs-node-title">Check it's connected</span>
+          </button>
+          <div class="obs-node-clip"><div class="obs-node-body">
+            <!-- Local-only: passive read of ingest, no destination saved yet, OBS
+                 points at 127.0.0.1, so nothing can reach a platform during this. -->
+            <div class="wiz-obs-verify" id="wiz-obs-verify" data-state="idle">
+              <p class="wov-sub">A private local test. We just watch for OBS's video arriving here, so <b>nothing is sent to Twitch or any platform.</b></p>
+              <div class="wov-body">
+                <button class="ic-btn ic-btn-primary wov-start" onclick="wizStartObsCheck()">Check connection</button>
+                <div class="wov-waiting">
+                  <span class="wov-spinner" aria-hidden="true"></span>
+                  <span class="wov-status">In OBS, click <b>Start Streaming</b> now, watching for it&hellip;</span>
+                  <button class="ic-btn ic-btn-ghost wov-cancel" onclick="wizStopObsCheck()">Cancel</button>
+                </div>
+                <div class="wov-ok">
+                  <span class="wov-check" aria-hidden="true">&#10003;</span>
+                  <span class="wov-status-ok">OBS is reaching InstantClone. Nothing left your PC. You can stop streaming now.</span>
+                </div>
+              </div>
+            </div>
+          </div></div>
+        </div>
+      </li>
+    </ol>
+    </div></div>
+    <div class="w-app-pane" data-pane-app="streamlabs"><div class="w-app-pane-body">
+      <!-- [data-state] = connect | missing | connected; see renderWizStreamlabs. -->
+      <div class="wizard-obs-card obs-recommended wiz-sl-card" id="wiz-sl-card" data-state="connect">
+        <div class="obs-none">
+          <span class="obs-none-mark sl" aria-hidden="true"><span class="wiz-sl-mark" data-app-mark="streamlabs"></span><i></i><i></i></span>
+          <div class="obs-none-t" id="wiz-sl-title">Connect Streamlabs</div>
+          <div class="obs-none-s" id="wiz-sl-lead">One click and the stream you start from Streamlabs' <b>Go Live</b> button comes through InstantClone. Nothing to change inside Streamlabs, and Enhanced Broadcasting and the VOD track keep working.</div>
+          <button class="ic-btn ic-btn-primary" id="wiz-sl-btn" onclick="wizConnectStreamlabs()">Connect Streamlabs</button>
+          <a class="ic-btn ic-btn-primary" id="wiz-sl-get" href="https://streamlabs.com/" target="_blank" rel="noopener">Download Streamlabs</a>
+        </div>
+        <p class="wizard-obs-status muted" id="wiz-sl-status"></p>
+        <div class="wiz-sl-twitch">
+          <b>Twitch only inside Streamlabs.</b> Sign Streamlabs in with Twitch and go live to Twitch: that's just the way in. The stream comes here, and InstantClone sends it wherever you choose, <b>with or without Twitch</b>: YouTube, Kick, any RTMP.
+        </div>
+        <details class="ic-disclose wiz-sl-how">
+          <summary>How it works</summary>
+          <div class="ic-disclose-body">
+            <p>InstantClone points Streamlabs' Twitch Enhanced Broadcasting setup at itself, so the stream comes here first. Go live with Enhanced Broadcasting off and InstantClone switches it on for that stream with a single video track, the stream you picked.</p>
+            <p>A Streamlabs signed in with YouTube or Kick can't come through yet: sign it in with Twitch. Keep InstantClone open when you go live. Disconnect any time from the <b>OBS</b> tab.</p>
+          </div>
+        </details>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- STEP 2: platform -->
+  <div class="wiz-step" data-wstep="platform" hidden>
+    <div class="wiz-step-h">
+      <div class="wiz-step-t">Which platform are you streaming to?</div>
+      <div class="wiz-step-s">Pick the one to get you live now. You can stream to several at once.</div>
+    </div>
+    <label id="w-platform-label" class="sr-only">Streaming platform</label>
+    <div class="w-platform-tiles" id="w-platform-tiles" role="radiogroup" aria-labelledby="w-platform-label"></div>
+    <select id="w-platform" hidden></select>
+    <div class="wiz-callout info">
+      <span class="ic" aria-hidden="true">+</span>
+      <span>This is just your first destination. Add YouTube, Kick, and more, plus a test destination, any time from the <b>Destinations</b> tab.</span>
+    </div>
+  </div>
+
+  <!-- STEP 3: stream key -->
+  <div class="wiz-step" data-wstep="key" hidden>
+    <div class="wiz-step-h">
+      <div class="wiz-step-t">Paste your stream key from <span id="w-key-platform-name">platform</span></div>
+      <div class="wiz-step-s">This is the real key from your platform dashboard. It never leaves this PC except to that platform.</div>
+    </div>
+    <div id="w-custom-wrap" hidden>
+      <label for="w-custom" id="w-custom-label">Custom RTMP URL (without the stream key)</label>
+      <input id="w-custom" class="ic-input mono" placeholder="rtmp://127.0.0.1:1936/live">
+      <div class="w-hint">Either put the stream key in the field below (recommended) or paste the full URL with the key embedded.</div>
+    </div>
+    <label for="w-key">Stream key <span class="muted" id="w-key-optional-hint" hidden>(optional for Custom if URL has key)</span></label>
+    <input id="w-key" type="password" class="ic-input mono" placeholder="paste your stream key" autocomplete="off">
+    <div class="w-sl-import" id="w-sl-import" hidden>
+      <button type="button" class="ic-btn ic-btn-ghost" id="w-sl-import-btn" onclick="wizImportStreamlabsKey()">Import from Streamlabs</button>
+      <span class="muted" id="w-sl-import-msg">Streamlabs is signed in with Twitch, so it can hand over your key.</span>
+    </div>
+    <div id="w-key-help" class="w-key-help" hidden></div>
+    <div class="wiz-callout tip">
+      <span class="ic" aria-hidden="true">&#9733;</span>
+      <span><span class="wiz-callout-t">Playing ranked behind a delay?</span>While the delay is live, a <b>Cut after</b> button lets your reaction air in full, then cuts to live on its own, no counting seconds.</span>
+    </div>
+  </div>
+
+  <!-- STEP 4 (Twitch only): Enhanced Broadcasting + VOD audio -->
+  <div class="wiz-step" data-wstep="twitch" hidden>
+    <div class="wiz-step-h">
+      <div class="wiz-step-t">Twitch extras <span class="muted" style="font-weight:400;font-size:13px">(optional)</span></div>
+      <div class="wiz-step-s">Both are optional. Skip straight to Save &amp; Start if you just want to go live.</div>
+    </div>
+
+    <div class="wiz-feature">
+      <div class="wiz-feature-h">Enhanced Broadcasting <span class="wiz-tag wiz-tag-twitch">Twitch feature</span></div>
+      <p class="wiz-feature-b">Twitch's multi-track quality ladder (1080p / 720p / 480p&hellip;) so every viewer gets a smooth stream. <b>It just works</b>: InstantClone passes it on untouched. Nothing to set here.</p>
+      <details class="ic-disclose" data-app-only="obs">
+        <summary>How to turn it on in OBS</summary>
+        <div class="ic-disclose-body">
+          <p><b>In OBS:</b> if you registered InstantClone as a service (on the OBS step), open <b>Settings &rarr; Stream</b>, keep <b>Service</b> on <b>InstantClone</b> and turn on <b>Multi-track via InstantClone</b>, left on <b>Auto</b>.</p>
+          <p>On Custom RTMP, Enhanced Broadcasting needs OBS older than 32.2: use <b>OBS tab &rarr; Legacy</b> after setup. On newer OBS, register the InstantClone service instead.</p>
+        </div>
+      </details>
+      <details class="ic-disclose" data-app-only="streamlabs" hidden>
+        <summary>How to turn it on in Streamlabs</summary>
+        <div class="ic-disclose-body">
+          <p>In Streamlabs' <b>Go Live</b> window, turn on <b>Enhanced Broadcasting</b> in the Twitch section. Left off, InstantClone switches it on for that stream with a single video track, so the stream still comes through.</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="wiz-feature">
+      <div class="wiz-feature-h">Separate VOD audio <span class="wiz-tag wiz-tag-twitch">Twitch feature</span></div>
+      <p class="wiz-feature-b">A second audio track for your Twitch VOD: keep copyrighted music in the <b>live</b> stream but out of the <b>recording</b>. Nothing to set here.</p>
+      <details class="ic-disclose" data-app-only="obs">
+        <summary>How to set it up in OBS</summary>
+        <div class="ic-disclose-body">
+          <p>OBS ties its VOD Track to the service named "Twitch", so on the InstantClone service a tiny optional script adds that same second track, and nothing else. OBS 32.2 and newer need it; older OBS can use the built-in VOD Track checkbox.</p>
+          <ol class="wiz-vod-steps">
+            <li>After setup, open <b>System &rarr; Twitch &amp; OBS &rarr; Twitch VOD audio</b> and click <b>Download</b>.</li>
+            <li>In OBS: <b>Tools &rarr; Scripts &rarr; +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
+            <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>).</li>
+          </ol>
+        </div>
+      </details>
+      <details class="ic-disclose" data-app-only="streamlabs" hidden>
+        <summary>How to set it up in Streamlabs</summary>
+        <div class="ic-disclose-body">
+          <p>Streamlabs has it built in: <b>Settings &rarr; Output</b>, turn on <b>Twitch VOD Track</b> (under <b translate="no">Streaming</b> in Advanced mode) and pick the audio track without the music. It comes through InstantClone as it is.</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div id="w-msg"></div>
+
+  <div class="wiz-nav">
+    <button class="wiz-skip" onclick="skipWizard()">Skip setup</button>
+    <span class="spacer"></span>
+    <button class="ic-btn ic-btn-ghost" id="wiz-back" onclick="wizBack()" hidden>&larr; Back</button>
+    <button class="ic-btn ic-btn-primary" id="wiz-next" onclick="wizNext()">Next &rarr;</button>
+  </div>
+</section>
+

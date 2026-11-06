@@ -1,0 +1,26 @@
+  <!-- Controls: global hotkeys and MIDI (both Windows-only; the tab hides when neither is available) -->
+  <div class="sub-pane" data-subpane="controls" hidden>
+    <!-- Global hotkeys. Windows-only (RegisterHotKey from the tray); the
+         whole section stays hidden until loadConfig confirms the platform. -->
+    <section class="sys-section" id="s-hotkeys-section" hidden data-find="hotkeys hotkey keyboard shortcut keybind key binding">
+      <div class="ic-label">Global hotkeys</div>
+      <div class="tab-sub">Drive the delay from anywhere, even mid-game with OBS in the background. Click a field and press your combo. Each needs a modifier (Ctrl, Alt, Shift or Win) so it can never fire by accident. Arm and toggle use the <b>Default delay</b> from System &rarr; General, and a binding flashes here when it fires.</div>
+      <div class="hk-list" id="hk-list"></div>
+      <div class="hk-warn" id="hk-warn" role="status" aria-live="polite"></div>
+    </section>
+
+    <!-- MIDI controller mapping. Windows-only; learn mode is server-side
+         (the MIDI events arrive at the backend) so the dashboard polls. -->
+    <section class="sys-section" id="s-midi-section" hidden data-find="midi controller stream deck pad knob launchpad">
+      <div class="ic-label">MIDI controller</div>
+      <div class="tab-sub">Map a pad or knob to each action. Click Learn, then press the control you want. Works while gaming, just like the hotkeys. Each mapping remembers which device it came from, so two controllers can drive different actions even when they send the same note. Windows hands a MIDI input to one app at a time, so while InstantClone is listening your DAW or deck software can't open the same device. Narrow <b>Listen to</b> to the controller you want if you use both.</div>
+      <div class="hk-device">
+        <label for="midi-device">Listen to</label>
+        <select id="midi-device" class="ic-input"><option value="">Every connected device</option></select>
+      </div>
+      <div class="hk-note" id="midi-note" hidden></div>
+      <div class="hk-list" id="midi-list"></div>
+      <div class="hk-warn" id="midi-warn" role="status" aria-live="polite"></div>
+    </section>
+  </div>
+

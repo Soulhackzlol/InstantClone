@@ -38,6 +38,8 @@ cargo test --release
 .\target\release\instantclone.exe
 ```
 
+The dashboard page has no single source file: it lives in pieces under [web/dashboard/](web/dashboard/), one folder per feature (`destinations/`, `wizard/`, `system/`…, with `page/` for what the whole page shares), and `build.rs` joins them in the order [parts.txt](web/dashboard/parts.txt) lists. A new piece goes into that list, or the build stops and says so.
+
 ## Be decent
 
 Participation here is covered by the [Code of Conduct](CODE_OF_CONDUCT.md). Short version: be respectful, no harassment.

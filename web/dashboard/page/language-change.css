@@ -1,0 +1,12 @@
+/* - Language change (see reloadForLanguage) ─ */
+/* Leaving, what's on screen dips out while its frame stays. Coming back, the
+   wizard's frame shows before the page's script is done, its contents waiting
+   unseen until it says it's ready, with no entrance on the way in. */
+html.lang-leaving .ic-shell>:not(#wizard),html.lang-leaving #wizard>*{opacity:0;transition:opacity .14s var(--ease-out)}
+html[data-lang-return="wizard"]:not(.lang-ready) #wizard[hidden]{display:flex}
+html[data-lang-return="wizard"] #wizard{min-height:var(--lang-return-h)}
+html[data-lang-return="wizard"] #wizard .wiz-step:not([hidden]),
+html[data-lang-return="wizard"] #wizard .wiz-step:not([hidden]) *:not(.wel-aurora i){animation:none!important}
+html[data-lang-return]:not(.lang-ready) .ic-shell>:not(#wizard),html[data-lang-return]:not(.lang-ready) #wizard>*{opacity:0}
+html.lang-ready .ic-shell>:not(#wizard),html.lang-ready #wizard>*{transition:opacity .28s var(--ease-out)}
+

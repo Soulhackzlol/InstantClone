@@ -1,0 +1,112 @@
+/* - Header ------------------─ */
+.ic-header{display:flex;align-items:center;gap:16px;padding:14px 22px;
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));
+  border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-1)}
+.ic-brand{display:flex;align-items:baseline;gap:0;min-width:0;flex-wrap:wrap}
+/* Solid cream wordmark - matches the rest of the dashboard's
+   typography (no gradient text fill, no logo glyph) so the header
+   reads as continuous with the panes below. */
+.ic-brand-mark{font-size:16px;font-weight:700;letter-spacing:-.01em;color:#f5efe1}
+.ic-brand-sub{color:var(--fg-3);font-size:12px;letter-spacing:.05px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ic-brand-sep{color:var(--fg-4);opacity:.7;margin:0 8px;font-size:13px}
+/* Credit link uses the same scoped accent treatment as the About
+   message links, so every clickable string in the chrome reads the
+   same: accent colour, soft underline, hover lifts to a tinted pill. */
+.ic-brand-sub a{color:var(--accent);text-decoration:none;font-weight:600;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 35%,transparent);
+  padding:0 2px;border-radius:3px;
+  transition:color .15s,border-color .15s,background .15s}
+.ic-brand-sub a:hover{color:#fff;
+  background:color-mix(in oklch,var(--accent) 18%,transparent);
+  border-bottom-color:var(--accent)}
+.ic-brand-sub a:visited{color:var(--accent)}
+/* Unified inline content links: accent colour + animated underline, so
+   every in-body link (help text, tour, notes) matches the app instead of
+   falling back to the default browser blue. */
+.muted a,.tour-body a,#dest-form-format-help a,#dest-form-twitch-native-note a{
+  color:var(--accent);text-decoration:none;font-weight:600;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 32%,transparent);
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.muted a:hover,.tour-body a:hover,#dest-form-format-help a:hover,#dest-form-twitch-native-note a:hover{
+  color:var(--fg);border-color:var(--fg)}
+.muted a:visited,.tour-body a:visited{color:var(--accent)}
+/* Every other plain link in the copy gets the same look, never the
+   browser's blue or visited purple. :where() keeps this weaker than any
+   link that is styled on purpose. */
+:where(a:not([class])){color:var(--accent);text-decoration:none;font-weight:600;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 32%,transparent);
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+:where(a:not([class])):hover{color:var(--fg);border-color:var(--fg)}
+.ic-brand-dot{display:inline-block;width:5px;height:5px;border-radius:999px;background:var(--fg-4);margin:0 6px 2px}
+.ic-header-right{display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+.ic-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border-radius:999px;
+  background:var(--surface-3);border:1px solid var(--line);font-size:12px;color:var(--fg-2);
+  transition:border-color .2s var(--ease-out),background-color .2s var(--ease-out),color .2s var(--ease-out)}
+.ic-pill:hover{border-color:var(--line-2)}
+.ic-pill .dot{width:7px;height:7px;border-radius:999px;background:var(--idle)}
+.ic-pill.ok .dot{background:var(--live);box-shadow:0 0 0 4px color-mix(in oklch,var(--live) 15%,transparent)}
+.ic-pill.ok{color:var(--fg)}
+.ic-pill.warn{color:var(--warn);border-color:color-mix(in oklch,var(--warn) 35%,transparent);
+  background:color-mix(in oklch,var(--warn) 8%,var(--surface-3))}
+
+/* Encoder-compatibility strip. Deliberately absent whenever the stream is
+   fine - the dashboard already carries a lot, so this only earns its space
+   when it has something actionable to say. One line per problem, each
+   naming where the fix lives in OBS, readable on touch too. */
+#compat-warn{display:flex;align-items:flex-start;gap:10px;margin:0 0 14px;padding:9px 12px;
+  border:1px solid color-mix(in oklch,var(--warn) 30%,transparent);border-radius:10px;
+  background:color-mix(in oklch,var(--warn) 7%,var(--surface-2));font-size:12.5px}
+#compat-warn .cw-ic{flex:none;color:var(--warn);font-size:13px;line-height:1.45}
+#compat-warn .cw-text{flex:1;min-width:0;color:var(--fg-2);line-height:1.45}
+#compat-warn .cw-line + .cw-line{margin-top:4px}
+#compat-warn .cw-when{margin-top:4px;color:var(--fg-4);font-size:11.5px}
+#compat-warn .cw-x{flex:none;width:22px;height:22px;border-radius:6px;border:0;cursor:pointer;
+  background:transparent;color:var(--fg-4);font-size:14px;line-height:1;
+  transition:color .15s var(--ease-out),background .15s var(--ease-out)}
+#compat-warn .cw-x:hover{color:var(--fg);background:var(--surface-3)}
+
+/* LAN-exposure warning. Only rendered while the box is actually ticked,
+   so the default (loopback-only) setup never sees it. */
+.lan-warn{display:flex;gap:8px;align-items:flex-start;margin-top:10px;padding:9px 11px;
+  border:1px solid color-mix(in oklch,var(--warn) 30%,transparent);border-radius:9px;
+  background:color-mix(in oklch,var(--warn) 7%,var(--surface-2));
+  font-size:12px;line-height:1.5;color:var(--fg-2)}
+.lan-warn .lw-ic{flex:none;color:var(--warn)}
+.ic-pill.warn .dot{background:var(--warn)}
+.ic-pill.bad{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 35%,transparent);
+  background:color-mix(in oklch,var(--danger) 8%,var(--surface-3))}
+.ic-pill.bad .dot{background:var(--danger)}
+.ic-pill.live .dot{background:var(--live);--sc:var(--live);--ring-time:1.8s}
+/* Header status pills: muted directional icon + bold label + a value that
+   brightens when the pill is active, so "OBS Live" / "Egress 2/3 live"
+   reads at a glance and a dead state stays visually quiet. */
+.ic-pill-ic{width:13px;height:13px;flex:0 0 auto;opacity:.65;margin:0 -2px 0 -1px;transition:opacity .2s,color .2s}
+.ic-pill.ok .ic-pill-ic{opacity:.9}
+.ic-pill-k{font-weight:600}
+.ic-pill-v{color:var(--fg-3);font-variant-numeric:tabular-nums;transition:color .2s}
+.ic-pill.ok .ic-pill-v{color:var(--fg)}
+/* Fixed width so "Idle" <-> "6.20 Mbps" doesn't resize the pill and shove
+   the neighbouring header pills sideways on connect/disconnect. */
+.ic-pill-rate{gap:0;min-width:86px;justify-content:center}
+.ic-pill-rate .ic-pill-v{font-family:'JetBrains Mono',monospace;font-weight:500}
+/* "Idle" is a word, not a reading: it sets like the other pills. */
+.ic-pill-rate.idle .ic-pill-v{font-family:inherit}
+.ic-pill-rate .unit{color:var(--fg-3);font-size:11px;margin-left:1px}
+/* Conditional header pills (codec / EB / backpressure / cap / update) are
+   toggled via [hidden]. When shown, display flips none->inline-flex, which
+   replays this entrance animation once - so they fade+scale in instead of
+   popping. (Exit stays instant; the appearance is the jarring part.) */
+#hdr-codec,#hdr-ebroadcast,#hdr-dualformat,#hdr-backpressure,#hdr-twitch-cap,#hdr-update,#hdr-whats-new{
+  animation:pillIn .22s var(--ease-out)}
+@keyframes pillIn{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:none}}
+#hdr-update,#hdr-whats-new{text-decoration:none}
+/* A pulsing dot: a ring on its own layer that grows and fades. Transform and
+   opacity run on the compositor; animating box-shadow, as this did, redrew on
+   the main thread at every frame for as long as the stream was live. */
+.ic-pill.live .dot,.state-pill .state-dot.pulse,.dcard-status.s-live .d-dot,.dcard-status.s-wait .d-dot,.hold-banner .hold-dot{position:relative}
+.ic-pill.live .dot::after,.state-pill .state-dot.pulse::after,.dcard-status.s-live .d-dot::after,.dcard-status.s-wait .d-dot::after,.hold-banner .hold-dot::after{
+  content:"";position:absolute;inset:0;border-radius:50%;background:var(--sc);pointer-events:none;
+  animation:dot-ring var(--ring-time,1.6s) var(--ease-out) infinite}
+@keyframes dot-ring{0%{opacity:.6;transform:scale(1)}70%,100%{opacity:0;transform:scale(var(--ring-scale,3.3))}}
+

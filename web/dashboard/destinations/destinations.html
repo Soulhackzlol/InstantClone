@@ -1,0 +1,181 @@
+<section class="tab-pane" data-pane="destinations" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">Destinations</div>
+      <div class="tab-sub" id="dest-sub">0 configured</div>
+    </div>
+    <button class="ic-btn dest-add-btn" id="dest-add-btn" onclick="openDestForm(null)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span>Add destination</span></button>
+  </div>
+  <!-- First run: pick a platform to start from (filled by rebuildDests). -->
+  <div class="dest-empty" id="dest-empty" hidden>
+    <div class="dest-empty-title">Where do you stream?</div>
+    <div class="dest-empty-sub">Pick a platform to add it. Add as many as you like: each gets its own connection, and one delay covers them all.</div>
+    <div class="dest-empty-grid" id="dest-empty-grid"></div>
+  </div>
+  <div class="dest-grid" id="dest-grid"></div>
+  <div class="ic-modal" id="dest-modal" hidden role="dialog" aria-modal="true" aria-labelledby="dest-form-title">
+    <div class="ic-modal-backdrop" onclick="cancelDestForm()"></div>
+    <div class="dest-form" id="dest-form">
+    <div class="dest-form-head">
+      <span class="dest-form-mark" id="dest-form-mark" aria-hidden="true"></span>
+      <div class="dest-form-titles">
+        <h4 id="dest-form-title">New destination</h4>
+        <div class="dest-form-hint">Fan your OBS feed out to this platform. Real stream keys live here, not in OBS.</div>
+      </div>
+      <label class="dest-form-enable" title="A switched-off destination keeps its settings but doesn't stream">
+        <input type="checkbox" id="dest-form-enabled" checked><span class="dfe-track"><span></span></span><span>Enabled</span>
+      </label>
+      <button type="button" class="dest-form-x" onclick="cancelDestForm()" title="Close" aria-label="Close editor">✕</button>
+    </div>
+    <div class="dest-form-body">
+    <input id="dest-form-id" type="hidden">
+    <div class="dfg">
+      <div class="dff"><label for="dest-form-name">Name</label>
+        <input id="dest-form-name" class="ic-input" placeholder="Twitch / YouTube / Backup …"></div>
+      <div class="dff"><label for="dest-form-platform">Platform</label>
+        <select id="dest-form-platform" class="ic-input"></select></div>
+    </div>
+    <div class="dfg-sep">Connection</div>
+    <div class="dfg">
+    <div class="dff" id="dest-form-custom-wrap" hidden>
+      <label id="dest-form-custom-label">Custom RTMP URL</label>
+      <input id="dest-form-custom" class="ic-input mono" placeholder="rtmp://host/app">
+      <div id="dest-form-custom-help" class="muted" hidden style="font-size:11.5px;margin-top:5px;line-height:1.45"></div>
+    </div>
+    <div class="dff" id="dest-form-twitch-wrap" hidden>
+      <label>Twitch server <span class="muted">(pin a region if auto-routing is flaky)</span></label>
+      <select id="dest-form-twitch-ingest" class="ic-input"></select>
+    </div>
+    <div class="dff" id="dest-form-youtube-wrap" hidden>
+      <label>YouTube server <span class="muted">(switch to backup if the primary is flaky)</span></label>
+      <select id="dest-form-youtube-ingest" class="ic-input">
+        <option value="">Primary (a.rtmp.youtube.com)</option>
+        <option value="backup">Backup (b.rtmp.youtube.com)</option>
+      </select>
+    </div>
+    <div class="dff" id="dest-form-key-wrap">
+    <label id="dest-form-key-label">Stream key <span class="muted" id="dest-form-key-hint"></span></label>
+    <input id="dest-form-key" type="password" class="ic-input mono" autocomplete="off">
+    <div id="dest-form-key-help" class="w-key-help" hidden></div>
+    </div>
+    </div>
+    <div class="dfg-sep">Format &amp; audio</div>
+    <div class="dfg">
+    <!-- Stream format. Non-Twitch only: Twitch sends BOTH canvases
+         natively via Dual Format, so offering the choice there would
+         only confuse. -->
+    <div class="dff" id="dest-form-format-wrap" hidden>
+      <label>Stream format</label>
+      <select id="dest-form-format" class="ic-input">
+        <option value="horizontal">Horizontal 16:9 - normal landscape</option>
+        <option value="vertical">Vertical 9:16 - TikTok, YouTube Shorts, Kick mobile</option>
+      </select>
+      <div class="muted" id="dest-form-format-help" hidden style="font-size:11.5px;margin-top:6px;line-height:1.5">
+        <b style="color:var(--fg-2)">Vertical needs a 9:16 canvas from OBS.</b> Set it up once:
+        <ol style="margin:5px 0 5px;padding-left:18px">
+          <li>OBS <b>Settings → Stream</b>: turn on <b>Enhanced Broadcasting</b> (<b>Multi-track via InstantClone</b> on the InstantClone service).</li>
+          <li>Under <b>Additional canvas</b>, pick your vertical canvas (for example <b>Aitum Vertical</b>).</li>
+        </ol>
+        Every vertical destination reuses it. With a Twitch destination enabled, Twitch decides instead, so the channel needs Dual Format on. Until a 9:16 canvas arrives, this destination waits and sends nothing.
+        <span id="dest-form-format-youtube" hidden><br>For YouTube, paste the <b>vertical</b> stream key from YouTube's <b>Dual stream → Select key → Encoder</b>.</span>
+      </div>
+    </div>
+    <div id="dest-form-twitch-native-note" hidden class="muted dest-form-note">
+      Twitch needs no format setting: InstantClone passes on whatever OBS sends, Enhanced Broadcasting included. With Twitch <b>Dual Format</b> on, it sends both canvases. <a href="https://help.twitch.tv/s/article/dual-format-vertical-video?language=en_US" target="_blank" rel="noopener">How to enable Twitch Dual Format →</a>
+    </div>
+    <!-- Per-destination audio track routing (issue #44). Only bites when OBS
+         sends a 2nd audio track (VOD unlocker script or Enhanced Broadcasting);
+         with one track everything stays on the live audio regardless. -->
+    <div class="dff" id="dest-form-audio-wrap">
+      <label>Audio track <span class="muted" style="text-transform:none;letter-spacing:0">(only if OBS sends a second track)</span></label>
+      <select id="dest-form-audio" class="ic-input">
+        <option value="auto">Auto (recommended)</option>
+        <option value="both">Both tracks (Twitch VOD audio)</option>
+        <option value="1">Track 1 only (live audio)</option>
+        <option value="2">Track 2 only (clean, no copyright)</option>
+      </select>
+      <div class="muted" id="dest-form-audio-help" style="font-size:11.5px;margin-top:5px;line-height:1.45">
+        <b>Auto</b>: Twitch keeps both tracks, other platforms get the live one. Most setups can leave it.
+        <details style="margin-top:3px"><summary style="cursor:pointer">When to change it</summary>
+          If OBS sends a second audio track (via the <b>VOD unlocker script</b> or Enhanced Broadcasting), choose what <i>this</i> destination gets. Classic use: send <b>Track 2</b> (music stripped) to YouTube to dodge copyright while Twitch keeps <b>Both</b>. Only Twitch consumes a second audio track, so other platforms always send a single one. If the track you pick isn't being sent, the live track is used instead, so a destination never goes silent.
+        </details>
+      </div>
+    </div>
+    </div>
+    <!-- Twitch VOD audio (Twitch only). Visible only when platform == twitch.
+         Leads with the VOD-unlocker script (the path on OBS 32.2+); the old
+         VOD-Track-checkbox method + EB launcher live in the version-gated
+         "dest-vod-legacy" details below (hidden on OBS 32.2+). -->
+    <div id="dest-form-vod-wrap" hidden class="dest-vod">
+      <div class="dest-vod-title">Twitch VOD audio</div>
+      <div class="muted dest-vod-desc">A second audio track saved only to your Twitch <b>VOD</b>: keep copyrighted music in the live stream but out of the recording.<span id="dest-vod-obs-desc"> OBS locks its built-in VOD Track to the service literally named "Twitch", so on the <b>InstantClone</b> service you unlock it with a tiny optional script.</span></div>
+      <!-- Streamlabs connected: its own VOD Track comes through as it is. -->
+      <div class="muted dest-vod-desc" id="dest-vod-streamlabs" hidden style="margin-top:8px">With <b>Streamlabs</b>, nothing to install: in Streamlabs, <b>Settings &rarr; Output</b>, turn on <b>Twitch VOD Track</b> (under <b translate="no">Streaming</b> in Advanced mode) and pick the audio track without the music.</div>
+
+      <!-- Recommended path: the VOD unlocker script. Required on OBS 32.2+. -->
+      <div id="dest-vod-script" style="margin-top:12px">
+        <div class="dest-vod-title" style="font-size:12.5px">VOD unlocker script <span class="muted" id="dest-vod-script-badge" style="font-weight:400"></span></div>
+        <div class="row" style="gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="ic-btn ic-btn-primary" id="vod-script-btn" onclick="installVodScript('vod-script-btn','vod-script-msg')">Download VOD unlocker script</button>
+          <span class="muted" id="vod-script-msg" style="font-size:11.5px"></span>
+        </div>
+        <ol style="margin:10px 0 0;padding-left:16px;font-size:11.5px;line-height:1.7;color:var(--fg-2)">
+          <li>Press <b>Download</b> and pick where to save <code class="mono">optional-vod-unlocker.lua</code> (your OBS scripts folder is tidiest).</li>
+          <li>In OBS: <b>Tools → Scripts → +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
+          <li>In the script panel, set <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>). Your live mix stays on track 1.</li>
+        </ol>
+        <details style="margin-top:8px">
+          <summary>Why a script?</summary>
+          <div>OBS hardcodes the VOD Track to the service named "Twitch". The script attaches the exact same second audio encoder OBS's built-in VOD Track would, just without that lock, so it works on the InstantClone service. It touches nothing else.</div>
+        </details>
+      </div>
+
+      <!-- Legacy path: OBS's built-in VOD Track checkbox. OBS before 32.2 only. -->
+      <details id="dest-vod-legacy" style="margin-top:12px">
+        <summary>On OBS older than 32.2? Old VOD Track method</summary>
+      <label class="dest-vod-toggle" style="margin-top:10px">
+        <input type="checkbox" id="dest-form-vod-audio">
+        <div>
+          <div class="dest-vod-title">VOD audio mode <span class="muted" style="font-weight:400">(Custom RTMP)</span></div>
+          <div class="muted dest-vod-desc">Uses OBS's built-in VOD Track checkbox on a Custom RTMP setup. Only works on OBS before 32.2 - newer OBS locks it, so use the script above.</div>
+        </div>
+      </label>
+      <details>
+        <summary>How to set it up in OBS</summary>
+        <ol>
+          <li><b>Settings → Stream</b>: Service = <b>Custom…</b>, Server = the URL on the <b>OBS tab</b>, Key = <code class="mono">main</code></li>
+          <li><b>Settings → Output</b>: Output Mode = <b>Advanced</b>, then tick <b>VOD Track</b> under the Streaming tab</li>
+          <li><b>Close OBS</b>, save this destination, then reopen OBS. (The config can't change while OBS is running.)</li>
+        </ol>
+      </details>
+
+      <!-- Shown only when VOD audio is on. -->
+      <div id="dest-form-vod-eb-wrap" hidden class="dest-eb">
+        <div class="dest-eb-title">Keep Enhanced Broadcasting too?<span class="tag">Experimental</span></div>
+        <div class="muted dest-eb-desc">VOD audio normally turns off EB's quality ladder. To run both, launch OBS from here: it passes a one-time flag OBS needs for Custom RTMP.</div>
+        <div class="row" style="gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="ic-btn ic-btn-primary" id="obs-eb-setup-btn" onclick="setupVodEb()">Launch OBS with VOD + EB</button>
+          <button type="button" class="ic-btn ic-btn-ghost" id="eb-shortcut-btn" onclick="createEbShortcut()">Make a desktop shortcut</button>
+          <span class="muted" id="obs-eb-launch-msg" style="font-size:11.5px"></span>
+        </div>
+        <ul id="vod-eb-checklist" class="vod-eb-checklist" hidden style="list-style:none;margin:10px 0 0;padding:0;font-size:11.5px"></ul>
+        <span class="muted" id="eb-shortcut-msg" style="display:block;font-size:11px;margin-top:6px">Shortcut = one double-click to start InstantClone + OBS in this mode.</span>
+        <details>
+          <summary>Why launch from here?</summary>
+          <div>OBS ignores config-URL injections for Custom RTMP, so the only way to enable EB is the <code class="mono">--config-url</code> launch flag. It's per-launch: reopening OBS normally drops EB until you click here again.</div>
+        </details>
+      </div>
+      </details>
+    </div>
+    </div>
+    <div class="dest-form-foot">
+      <div class="dest-form-msg" id="dest-form-msg"></div>
+      <button class="ic-btn ic-btn-ghost" onclick="cancelDestForm()">Cancel</button>
+      <button class="ic-btn ic-btn-primary" onclick="saveDestForm()">Save destination</button>
+    </div>
+    </div>
+  </div>
+</section>
+

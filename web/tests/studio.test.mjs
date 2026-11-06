@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPage } from './page.mjs';
+import { readWebFile } from './web-files.mjs';
 
 const REPO = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 const source = file => fs.readFileSync(path.join(REPO, file), 'utf8');
@@ -123,7 +124,7 @@ test('every control the Studio draws names an action it has', () => {
   // A control is data (data-st), not code in an attribute: each name it
   // gives must be one the dispatcher knows, or the click does nothing.
   const studio = source('web/studio.js');
-  const html = source('web/index.html');
+  const html = readWebFile('index.html');
   const actions = new Set(/const ACTIONS = \{([\s\S]*?)\n {2}\};/.exec(studio)[1]
     .split(/[,\n]/).map(s => s.trim().split(':')[0]).filter(s => /^[a-zA-Z]+$/.test(s)));
   const named = [...studio.matchAll(/(?<![A-Za-z])on\('([a-zA-Z]+)'/g), ...html.matchAll(/data-st="([a-zA-Z]+)"/g)].map(m => m[1]);

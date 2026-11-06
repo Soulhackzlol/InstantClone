@@ -1,0 +1,440 @@
+/* - Wizard (when !configured) --------─ */
+.wizard-card{width:min(800px,92vw);max-width:800px;margin:56px auto;padding:52px 64px 44px;display:flex;flex-direction:column;gap:32px}
+@media (max-width:640px){.wizard-card{margin:16px auto;padding:28px 20px 24px;gap:24px}}
+/* Cards size to their own content (align-items:start) instead of stretching
+   to the taller one - no dead space padding out the shorter card. */
+.wizard-obs-after{margin:0;font-size:13px;color:var(--fg-3);line-height:1.55}
+.wizard-obs-card{padding:28px;border:1px solid var(--line);border-radius:16px;background:var(--bg-2);display:flex;flex-direction:column;gap:16px;
+  transition:border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .18s var(--ease-out)}
+@media (max-width:640px){.wizard-obs-card{padding:20px 16px}}
+.wizard-obs-title{font-size:15px;font-weight:600;color:var(--fg);display:flex;justify-content:space-between;align-items:center;gap:8px;line-height:1.3}
+.wizard-obs-body{margin:0;font-size:13.5px;color:var(--fg-3);line-height:1.6}
+.wizard-obs-action{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:2px}
+.wizard-obs-action .muted{font-size:11px}
+/* Guided OBS flow, light typographic treatment: a small "Step N" eyebrow (no
+   rail, no numbered circles), hairline divider between steps. A node expands
+   when active and collapses when done; the eyebrow gains a ✓ and turns green.
+   State is [data-state] = locked | active | done (+ [data-verified] on verify). */
+.obs-flow{list-style:none;margin:28px 0 0;padding:0}
+.obs-node{padding:0}
+.obs-node + .obs-node{margin-top:24px;padding-top:24px;border-top:1px solid var(--line)}
+/* No OBS to point anywhere: the card alone says what to do. A Custom RTMP
+   setup confirmed from it still gets the steps back. */
+.obs-flow.no-obs .obs-node[data-state="active"] .obs-node-head,
+.obs-flow.no-obs .obs-node[data-node="verify"][data-state="locked"]{display:none}
+.obs-flow.no-obs .obs-advance[hidden]{display:none}
+.obs-node-head{appearance:none;background:none;border:0;padding:2px 0;width:100%;text-align:left;
+  cursor:pointer;display:flex;flex-direction:column;gap:3px;color:var(--fg);font:inherit;border-radius:6px}
+.obs-node-head:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+.obs-eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--fg-4);
+  display:inline-flex;align-items:center;gap:6px;transition:color .25s var(--ease-out)}
+.obs-node[data-state="active"] .obs-eyebrow{color:var(--accent)}
+.obs-node[data-state="done"] .obs-eyebrow,
+.obs-node[data-node="verify"][data-verified] .obs-eyebrow{color:var(--live)}
+.obs-node[data-state="done"] .obs-eyebrow::after,
+.obs-node[data-node="verify"][data-verified] .obs-eyebrow::after{content:"\2713";font-size:12px}
+.obs-node-title{font-size:15px;font-weight:600;letter-spacing:-.01em;transition:color .25s var(--ease-out)}
+.obs-node[data-state="locked"] .obs-node-head{cursor:default;pointer-events:none}
+.obs-node[data-state="locked"] .obs-eyebrow,
+.obs-node[data-state="locked"] .obs-node-title{color:var(--fg-4)}
+.obs-node[data-state="done"] .obs-node-title{color:var(--fg-3)}
+.obs-node-hint{margin:14px 0 18px;font-size:13.5px;color:var(--fg-3);line-height:1.6;text-wrap:pretty}
+/* Body expands/collapses via grid-rows (0fr<->1fr); only the active node is open. */
+.obs-node-clip{display:grid;grid-template-rows:0fr;opacity:0;
+  transition:grid-template-rows .34s var(--ease-out),opacity .26s var(--ease-out)}
+.obs-node[data-state="active"] .obs-node-clip{grid-template-rows:1fr;opacity:1}
+.obs-node-clip>.obs-node-body{overflow:hidden;min-height:0}
+.obs-advance{margin-top:24px}
+/* Shake to point the eye here when Next is clicked before confirming. */
+.obs-advance.nudge{animation:obsNudge .5s var(--ease-out)}
+@keyframes obsNudge{0%,100%{transform:none}20%{transform:translateX(-4px)}
+  40%{transform:translateX(4px)}60%{transform:translateX(-3px)}80%{transform:translateX(2px)}}
+/* Method cards: recommended one wears a soft accent frame; both lift on hover. */
+.wizard-obs-card:hover{border-color:var(--line-2)}
+.wizard-obs-card.obs-recommended{border-color:color-mix(in oklch,var(--accent) 30%,var(--line));
+  background:linear-gradient(180deg,color-mix(in oklch,var(--accent) 7%,var(--bg-2)),var(--bg-2));
+  box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 12%,transparent),0 8px 26px -18px color-mix(in oklch,var(--accent) 60%,transparent)}
+/* Inside a node the check panel drops its own card chrome - the node is the container. */
+.obs-node-body .wiz-obs-verify{margin:0;padding:0;border:0;background:none}
+.obs-node-body .wiz-obs-verify[data-state="ok"]{background:none}
+.obs-node-body .wov-sub{margin-top:0}
+.wizard-obs-copy-row{display:flex;align-items:center;gap:8px;font-size:12px}
+/* flex:1 (basis 0) + min-width:0 + overflow:hidden: the URL takes the leftover
+   width and shrinks/ellipsises as needed, so the Copy button always stays on
+   the same line. A non-zero flex-basis made flexbox wrap the button under the
+   input before shrink could apply. Matches the proven .copy-block pattern. */
+.wizard-obs-copy-row code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;padding:7px 10px;background:var(--surface);border:1px solid var(--line);
+  border-radius:6px;font-size:11.5px}
+/* Optional local-only OBS-connection check. One sub-state shows at a time,
+   driven by [data-state] (idle -> waiting -> ok). */
+.wiz-obs-verify{margin-top:14px;padding:14px 16px;border-radius:12px;background:var(--surface-2);
+  border:1px solid var(--line);transition:border-color .25s var(--ease-out),background .25s var(--ease-out)}
+.wov-sub{margin:6px 0 12px;font-size:12px;color:var(--fg-3);line-height:1.5;text-wrap:pretty}
+.wov-body>*{display:none}
+.wiz-obs-verify[data-state="idle"] .wov-start{display:inline-flex}
+.wiz-obs-verify[data-state="waiting"] .wov-waiting{display:flex;align-items:center;gap:11px}
+.wiz-obs-verify[data-state="ok"] .wov-ok{display:flex;align-items:center;gap:9px}
+.wov-status{font-size:12.5px;color:var(--fg-2)}
+.wov-cancel{margin-left:auto;flex:0 0 auto}
+.wov-status-ok{font-size:12.5px;color:var(--fg);font-weight:500}
+.wov-check{width:22px;height:22px;flex:0 0 auto;border-radius:50%;background:var(--live);color:#04120a;
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;
+  animation:cpIcoIn .3s cubic-bezier(0.2,0,0,1)}
+.wov-spinner{width:15px;height:15px;flex:0 0 auto;border:2px solid var(--line-2);
+  border-top-color:var(--accent);border-radius:50%;animation:wovspin .7s linear infinite}
+@keyframes wovspin{to{transform:rotate(360deg)}}
+.wiz-obs-verify[data-state="ok"]{border-color:color-mix(in oklch,var(--live) 40%,var(--line));
+  background:color-mix(in oklch,var(--live) 8%,var(--surface-2))}
+.wizard-obs-status{margin:4px 0 0;font-size:12px;line-height:1.5;color:var(--fg-3)}
+.wizard-obs-status:empty{display:none}
+/* Progressive disclosure primitive - `<details class="ic-disclose">`
+   with a `<summary>` that reads as an inline link, plus a subtle
+   slide-down on open. Used to keep wizard / OBS / platform-tip
+   explanations one click away instead of dumping paragraphs of dense
+   text into the user's eyeline on first paint. */
+.ic-disclose{margin-top:8px;font-size:11.5px;color:var(--fg-3);line-height:1.5}
+.ic-disclose summary{
+  cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+  color:var(--fg-3);font-size:11.5px;
+  -webkit-user-select:none;user-select:none;list-style:none;
+  /* Roomier padding grows the click/tap target (~30px tall vs 18) without a
+     40px pseudo, which would overlap the next stacked summary (8px gap). */
+  padding:6px 4px;margin-left:-4px;border-radius:6px;
+  transition:color .15s var(--ease-out);
+}
+.ic-disclose summary::-webkit-details-marker{display:none}
+.ic-disclose summary::before{
+  content:"";display:inline-block;width:0;height:0;
+  border-left:4px solid currentColor;border-top:3px solid transparent;border-bottom:3px solid transparent;
+  transition:transform .18s var(--ease-out);transform-origin:35% 50%;
+}
+.ic-disclose.is-open summary::before{transform:rotate(90deg)}
+.ic-disclose summary:hover{color:var(--fg-2)}
+.ic-disclose summary:active{color:var(--fg)}   /* instant feedback on press-down */
+.ic-disclose summary:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+/* Reveal system (see wireDisclosure). The `.disc-sleeve` height is driven
+   frame-by-frame by a critically-damped SPRING in JS - not a CSS transition -
+   so a reversal mid-flight carries the current velocity through instead of
+   restarting a fixed ease (that velocity reset was the "brick wall"). No
+   `transition` here on purpose: it would fight the per-frame updates. The
+   padded body rides a GPU-composited opacity + translateY (--disc-ms) so the
+   content materialises in step with the spring without a second layout tween. */
+.disc-sleeve{height:0;overflow:hidden}
+.ic-disclose-body{
+  margin-top:6px;padding:10px 12px;border-radius:8px;
+  background:color-mix(in oklch,var(--bg-2) 60%,var(--surface));
+  border:1px solid var(--line);
+  color:var(--fg-3);font-size:11.5px;line-height:1.55;text-wrap:pretty;
+  opacity:0;transform:translateY(-4px);
+  transition:opacity var(--disc-ms,.26s) var(--ease-out),
+    transform var(--disc-ms,.26s) var(--ease-out);
+}
+.ic-disclose.is-open > .disc-sleeve > .ic-disclose-body{opacity:1;transform:none}
+/* Safety net: if a disclosure is ever shown before JS wires it (dynamic
+   injection, script error), fall back to native <details> behaviour so the
+   body is never invisibly hidden - the managed path adds `.disc-ready`. */
+.ic-disclose:not(.disc-ready)[open] > .ic-disclose-body{opacity:1;transform:none}
+.ic-disclose-body p{margin:0}
+.ic-disclose-body p + p{margin-top:8px}
+.ic-disclose-body code.mono{background:var(--surface);padding:1px 5px;border-radius:4px;font-size:11px}
+/* Every other <details> grows open and folds shut, in browsers that can
+   animate to `auto` (Chromium 131+, so OBS 33's docks too). Others snap
+   open as before. The spring-driven .ic-disclose animates itself. The clip
+   margin keeps focus rings and shadows at the edges whole once open. */
+@supports selector(::details-content){
+  details:not(.disc-ready){interpolate-size:allow-keywords}
+  details:not(.disc-ready)::details-content{block-size:0;opacity:0;overflow:clip;overflow-clip-margin:6px;
+    transition:block-size .28s var(--ease-out),opacity .22s var(--ease-out),content-visibility .28s allow-discrete}
+  details:not(.disc-ready)[open]::details-content{block-size:auto;opacity:1}
+}
+/* Summaries that kept the browser's marker get a caret that turns. */
+.ig-more-fields>summary,.crash-advanced>summary{list-style:none;display:flex;align-items:center;gap:7px;width:fit-content;-webkit-user-select:none;user-select:none}
+.ig-more-fields>summary::-webkit-details-marker,.crash-advanced>summary::-webkit-details-marker{display:none}
+.ig-more-fields>summary::before,.crash-advanced>summary::before{content:"";flex:none;width:0;height:0;
+  border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;
+  transition:transform .2s var(--ease-out)}
+.ig-more-fields[open]>summary::before,.crash-advanced[open]>summary::before{transform:rotate(90deg)}
+@media (prefers-reduced-motion:reduce){
+  details::details-content{transition:none!important}
+}
+.wizard-card h2{font-size:24px;margin:0;letter-spacing:-.018em}
+.wizard-card .lead{color:var(--fg-3);font-size:13px;margin:6px 0 0}
+/* Field labels are uppercase eyebrow text. The `:not` guard is load-bearing:
+   an OBS row in the install list is a <label> too, and without it inherited
+   both uppercase AND display:block - stacking its tick above ALL-CAPS text. */
+.wizard-card label:not(.obs-inst-pick){display:block;margin:16px 0 8px;font-size:11px;color:var(--fg-3);
+  text-transform:uppercase;letter-spacing:.12em;font-weight:600}
+
+/* Visual platform picker (Step 2). Tiles reuse the exact per-platform
+   accent (--dc) the destination cards use, so the choice you make here
+   matches the card you'll see afterwards. The real value lives in a
+   hidden <select> so the save/test logic never had to change. Sized to
+   be the visual centrepiece of the step: ~3 per row on the 640px card. */
+.w-platform-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+  gap:16px;margin-top:4px}
+.w-ptile{--dc:var(--line-2);appearance:none;cursor:pointer;position:relative;display:flex;
+  flex-direction:column;align-items:center;gap:12px;padding:20px 14px;border-radius:15px;
+  text-align:center;color:var(--fg-2);overflow:hidden;
+  background:linear-gradient(180deg,color-mix(in oklch,var(--surface-3) 55%,var(--surface-2)),var(--surface-2));
+  border:1px solid var(--line);
+  transition:border-color .18s var(--ease-out),background .18s var(--ease-out),
+    color .18s var(--ease-out),transform .14s var(--ease-spring),box-shadow .2s var(--ease-out)}
+/* Soft radial wash in the platform colour, revealed on hover/selected. A
+   pseudo-element so it can fade independently of the tile's own bg. */
+.w-ptile::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:radial-gradient(120% 80% at 50% -10%,color-mix(in oklch,var(--dc) 22%,transparent),transparent 70%);
+  opacity:0;transition:opacity .2s var(--ease-out)}
+.w-ptile:hover{border-color:color-mix(in oklch,var(--dc) 50%,var(--line-2));color:var(--fg);
+  transform:translateY(-3px);
+  box-shadow:0 10px 26px -12px color-mix(in oklch,var(--dc) 65%,transparent)}
+.w-ptile:hover::before{opacity:.7}
+.w-ptile:active{transform:scale(.96)}
+.w-ptile.on{border-color:color-mix(in oklch,var(--dc) 80%,transparent);color:var(--fg);
+  background:linear-gradient(180deg,color-mix(in oklch,var(--dc) 16%,var(--surface-2)),
+    color-mix(in oklch,var(--dc) 7%,var(--surface-2)));
+  box-shadow:0 0 0 1px color-mix(in oklch,var(--dc) 60%,transparent) inset,
+    0 10px 30px -12px color-mix(in oklch,var(--dc) 55%,transparent)}
+.w-ptile.on::before{opacity:1}
+/* Badge: a lit chip with a colour-matched glow and a top sheen, so it reads
+   as a physical object rather than a flat square. */
+.w-ptile-badge{position:relative;width:48px;height:48px;border-radius:14px;display:flex;
+  align-items:center;justify-content:center;font-weight:700;font-size:21px;color:#0b0d12;
+  background:linear-gradient(150deg,color-mix(in oklch,var(--dc) 82%,#fff),var(--dc) 62%,
+    color-mix(in oklch,var(--dc) 82%,#000));
+  box-shadow:0 4px 12px -3px color-mix(in oklch,var(--dc) 60%,transparent),
+    inset 0 1px 0 rgba(255,255,255,.4),inset 0 -2px 5px rgba(0,0,0,.18);
+  transition:box-shadow .2s var(--ease-out),transform .14s var(--ease-spring)}
+.w-ptile:hover .w-ptile-badge{transform:scale(1.05)}
+.w-ptile.on .w-ptile-badge{box-shadow:0 6px 18px -4px color-mix(in oklch,var(--dc) 70%,transparent),
+    inset 0 1px 0 rgba(255,255,255,.45),inset 0 -2px 5px rgba(0,0,0,.2)}
+.w-ptile-label{font-size:13px;font-weight:600;line-height:1.2;letter-spacing:0;
+  text-transform:none;color:inherit;position:relative}
+/* Corner check appears only on the chosen tile. Scales in so the
+   selection has a beat of feedback rather than snapping. */
+.w-ptile-check{position:absolute;top:8px;right:8px;width:18px;height:18px;border-radius:999px;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;
+  color:#0d0f14;background:var(--dc);opacity:0;transform:scale(.4);
+  transition:opacity .15s var(--ease-out),transform .15s var(--ease-out)}
+.w-ptile.on .w-ptile-check{opacity:1;transform:scale(1)}
+
+/* - Multi-step wizard chrome ---------─ */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0}
+/* Segmented progress bar - one segment per step in the current sequence,
+   so it grows to 4 segments the moment Twitch is chosen. Each segment
+   carries a fill layer (::after) that sweeps left-to-right, so advancing
+   a step reads as the bar filling forward rather than a colour snap. */
+.wiz-progress{display:flex;margin-top:20px;margin-bottom:-8px}
+/* Every possible step has a permanent segment; the optional Twitch one
+   collapses (flex-grow + its own gap animate to 0) instead of being ripped
+   from the DOM, so switching platform slides the bar between 3 and 4
+   segments smoothly. Spacing is an adjacent-sibling margin, not flex gap,
+   so a collapsed segment leaves no orphan gap. Each is a button to its step:
+   a tall target around a thin line, its name on hover. */
+.wiz-seg{appearance:none;position:relative;height:20px;flex:1 1 0;min-width:0;padding:0;border:0;background:none;font:inherit;cursor:pointer;
+  transition:flex-grow .35s var(--ease-out),opacity .3s var(--ease-out),margin-left .35s var(--ease-out)}
+.wiz-seg + .wiz-seg{margin-left:6px}
+.wiz-seg.collapsed{flex-grow:0;opacity:0;margin-left:0;pointer-events:none;visibility:hidden}
+.wiz-seg::before,.wiz-seg::after{content:"";position:absolute;inset:8px 0;border-radius:2px;transition:inset .16s var(--ease-out)}
+.wiz-seg::before{background:var(--line)}
+.wiz-seg::after{background:var(--accent);transform:scaleX(0);transform-origin:left;
+  transition:transform .4s var(--ease-out),background .3s var(--ease-out),inset .16s var(--ease-out)}
+.wiz-seg:not(:disabled):hover::before,.wiz-seg:not(:disabled):hover::after,.wiz-seg:focus-visible::before,.wiz-seg:focus-visible::after{inset:7px 0}
+.wiz-seg:disabled{cursor:default}
+.wiz-seg:focus-visible{outline:none}
+.wiz-seg:focus-visible::before{box-shadow:0 0 0 2px var(--accent)}
+.wiz-seg.done::after{transform:scaleX(1);background:color-mix(in oklch,var(--accent) 50%,var(--line))}
+.wiz-seg.on::after{transform:scaleX(1)}
+.wiz-seg-tip{position:absolute;z-index:2;top:21px;left:50%;padding:4px 9px;border-radius:7px;white-space:nowrap;font-size:11.5px;color:var(--fg);
+  background:var(--surface-3);border:1px solid var(--line-2);box-shadow:0 8px 20px -10px #000;pointer-events:none;
+  opacity:0;transform:translate(-50%,-3px);transition:opacity .12s var(--ease-out),transform .16s var(--ease-out)}
+.wiz-seg:first-child .wiz-seg-tip{left:0;transform:translate(0,-3px)}
+.wiz-seg:not(:disabled):hover .wiz-seg-tip,.wiz-seg:focus-visible .wiz-seg-tip{opacity:1;transform:translate(-50%,0)}
+.wiz-seg:first-child:hover .wiz-seg-tip,.wiz-seg:first-child:focus-visible .wiz-seg-tip{transform:none}
+@media (hover:none){.wiz-seg-tip{display:none}}
+/* No OBS found: what to do about it, in place of a list with nothing to tick. */
+.obs-none{display:flex;flex-direction:column;align-items:center;text-align:center;padding:20px 0 12px}
+.obs-none[hidden]{display:none}
+.obs-none-mark{position:relative;display:grid;place-items:center;width:64px;height:64px;margin:4px 0 24px;border-radius:18px;color:var(--fg-2);
+  background:var(--surface-2);border:1px solid var(--line-2);animation:welMark .55s var(--ease-spring) backwards}
+.obs-none-mark svg{width:32px;height:32px}
+.obs-none-mark i{position:absolute;inset:-1px;border-radius:18px;border:1px solid color-mix(in oklch,var(--accent) 70%,transparent);opacity:0;animation:obsLook 2.6s var(--ease-out) .4s infinite}
+.obs-none-mark i+i{animation-delay:1.7s}
+@keyframes obsLook{0%{opacity:.75;transform:scale(1)}80%,100%{opacity:0;transform:scale(1.55)}}
+.obs-none-t{font-size:18px;font-weight:600;letter-spacing:-.014em;line-height:1.25;text-wrap:balance;animation:welRise .4s var(--ease-out) .08s backwards}
+.obs-none-s{max-width:480px;margin:10px 0 24px;font-size:13.5px;line-height:1.6;color:var(--fg-3);text-wrap:pretty;animation:welRise .4s var(--ease-out) .14s backwards}
+.obs-none-s b{color:var(--fg-2);font-weight:600}
+.obs-none .ic-btn{min-height:42px;padding-inline:24px;animation:welRise .4s var(--ease-out) .2s backwards}
+.obs-inst-foot.none{justify-content:center;margin-top:12px}
+.obs-inst-foot.none .obs-inst-btns{display:none}
+.wizard-obs-card.no-obs{margin-top:4px}
+.wizard-obs-card.no-obs>.wizard-obs-title,.wizard-obs-card.no-obs>.wizard-obs-body,.wizard-obs-card.no-obs>.wizard-obs-after,.wizard-obs-card.no-obs>.ic-disclose{display:none}
+/* Streamlabs in the wizard: one state at a time. Only one still looking for
+   the app has the rings around its mark. */
+.wiz-sl-mark{display:grid}
+.obs-none-mark.sl{color:#80f5d2;border-color:color-mix(in oklch,#80f5d2 30%,var(--line-2))}
+.wiz-sl-card:not([data-state="missing"]) .obs-none-mark i{display:none}
+.wiz-sl-card:not([data-state="missing"]) #wiz-sl-get,
+.wiz-sl-card:not([data-state="connect"]) #wiz-sl-btn,
+.wiz-sl-card[data-state="missing"] .wiz-sl-twitch,
+.wiz-sl-card[data-state="missing"] .wiz-sl-how{display:none}
+.wiz-sl-card[data-state="connected"] .obs-none-s{margin-bottom:8px}
+.wiz-sl-card .wizard-obs-status{text-align:center;margin:0}
+.wiz-sl-twitch{padding-top:20px;border-top:1px solid var(--line);font-size:13px;line-height:1.6;color:var(--fg-3);text-wrap:pretty}
+.wiz-sl-twitch b{color:var(--fg-2);font-weight:600}
+@media (prefers-reduced-motion:reduce){.obs-none-mark,.obs-none-mark i,.obs-none-t,.obs-none-s,.obs-none .ic-btn{animation:none}}
+/* Reassurance note under the platform tiles. */
+/* One callout system for the whole wizard: a left icon square + text with
+   consistent padding / radius / type, differing only by intent colour:
+   .info (neutral reassurance), .warn (do this first), .tip (helpful aside). */
+.wiz-callout{display:flex;gap:12px;align-items:flex-start;margin-top:24px;padding:16px 18px;
+  border-radius:12px;font-size:13px;line-height:1.55;color:var(--fg-2)}
+.wiz-callout .ic{flex:0 0 auto;width:18px;height:18px;border-radius:6px;display:flex;align-items:center;
+  justify-content:center;font-weight:700;font-size:12px;line-height:1;margin-top:1px}
+.wiz-callout b,.wiz-callout strong{color:var(--fg);font-weight:600}
+.wiz-callout-t{display:block;font-weight:600;color:var(--fg);margin-bottom:2px}
+.wiz-callout.info{background:var(--surface-2);border:1px solid var(--line)}
+.wiz-callout.info .ic{color:var(--accent);background:color-mix(in oklch,var(--accent) 15%,transparent)}
+.wiz-callout.tip{background:color-mix(in oklch,var(--accent) 6%,var(--bg-2));
+  border:1px solid color-mix(in oklch,var(--accent) 22%,var(--line))}
+.wiz-callout.tip .ic{color:var(--accent-ink);background:var(--accent)}
+.wiz-callout.warn{background:color-mix(in oklch,var(--warn,#d6a23a) 9%,var(--surface-2));
+  border:1px solid color-mix(in oklch,var(--warn,#d6a23a) 26%,var(--line))}
+.wiz-callout.warn .ic{color:#0d0f14;background:var(--warn,#d6a23a)}
+/* Directional step transition: incoming panel slides in from the side you
+   are travelling toward (right on Next, left on Back), so movement through
+   the flow has a consistent physical direction. */
+#wizard[data-dir="fwd"] .wiz-step:not([hidden]){animation:wizInFwd .3s var(--ease-out)}
+#wizard[data-dir="back"] .wiz-step:not([hidden]){animation:wizInBack .3s var(--ease-out)}
+@keyframes wizInFwd{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+@keyframes wizInBack{from{opacity:0;transform:translateX(-24px)}to{opacity:1;transform:none}}
+@keyframes wizStepIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+#wizard.wiz-easing{overflow:hidden}
+/* The welcome: its heading is the step's own, and each piece arrives in turn.
+   Everything restarts when a step shows again (it was display:none). */
+#wizard[data-intro] #wiz-title,#wizard[data-intro] #wiz-lead{display:none}
+#wizard[data-intro] .wiz-progress{margin-top:0}
+.wel-hero,.wel-q{position:relative;text-align:center}
+.wel-hero{padding:32px 0 20px}
+.wel-q{padding:36px 0 20px}
+.wel-aurora{position:absolute;inset:-20px 0 auto;height:300px;overflow:hidden;pointer-events:none;
+  -webkit-mask-image:radial-gradient(closest-side,#000 35%,transparent);mask-image:radial-gradient(closest-side,#000 35%,transparent)}
+.wel-aurora i{position:absolute;width:260px;height:260px;border-radius:50%;filter:blur(60px);opacity:.22;
+  background:var(--accent);left:18%;top:-40px;animation:welDrift 9s ease-in-out infinite alternate}
+.wel-aurora i:nth-child(2){background:oklch(0.62 0.16 250);left:46%;top:10px;animation-duration:11s;animation-delay:-3s}
+.wel-aurora i:nth-child(3){background:var(--live);left:32%;top:60px;opacity:.09;animation-duration:13s;animation-delay:-6s}
+@keyframes welDrift{from{transform:translate(-34px,-10px) scale(.92)}to{transform:translate(38px,22px) scale(1.12)}}
+.wel-mark{position:relative;display:block;width:68px;height:68px;margin:0 auto 28px;
+  filter:drop-shadow(0 12px 26px color-mix(in oklch,var(--accent) 45%,transparent));animation:welMark .7s var(--ease-spring) backwards}
+.wel-mark rect{fill:var(--accent)}
+.wel-bar{fill:var(--accent-ink);transform-box:fill-box;transform-origin:center bottom;animation:welBar .5s var(--ease-spring) .28s backwards}
+.wel-bar+.wel-bar{animation-delay:.38s}
+@keyframes welMark{from{opacity:0;transform:scale(.5) rotate(-14deg)}}
+@keyframes welBar{from{transform:scaleY(0)}}
+.wel-title{position:relative;margin:0;font-size:clamp(28px,5.4vw,42px)!important;line-height:1.12;font-weight:700;letter-spacing:-.025em!important}
+.wel-word{display:inline-block;animation:welWord .62s var(--ease-spring) backwards;animation-delay:calc(var(--i)*85ms + 240ms)}
+.wel-word:last-of-type{color:transparent;-webkit-background-clip:text;background-clip:text;background-size:220% 100%;
+  background-image:linear-gradient(100deg,var(--accent) 20%,#fff 50%,var(--accent) 80%);
+  animation:welWord .62s var(--ease-spring) backwards,welShine 1.5s var(--ease-out) 1s both;animation-delay:calc(var(--i)*85ms + 240ms),1s}
+@keyframes welWord{from{opacity:0;transform:translateY(20px) scale(.96);filter:blur(7px)}}
+@keyframes welShine{from{background-position:100% 0}to{background-position:0 0}}
+.wel-lead{position:relative;margin:16px auto 0!important;max-width:500px;font-size:15px!important;line-height:1.55;color:var(--fg-3);text-wrap:balance;animation:welRise .5s var(--ease-out) .62s backwards}
+.wel-ask{position:relative;margin-top:48px;font-size:13px;font-weight:500;color:var(--fg-3);animation:welRise .5s var(--ease-out) .74s backwards}
+@keyframes welRise{from{opacity:0;transform:translateY(10px)}}
+.wel-glyph{display:block;width:62px;height:62px;margin:0 auto 28px;padding:15px;border-radius:18px;fill:none;stroke:var(--accent);stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;
+  background:color-mix(in oklch,var(--accent) 12%,var(--surface-2));border:1px solid color-mix(in oklch,var(--accent) 34%,var(--line));
+  animation:welMark .55s var(--ease-spring) backwards,welGlow 2.6s ease-in-out .6s infinite}
+@keyframes welGlow{50%{box-shadow:0 0 0 7px color-mix(in oklch,var(--accent) 11%,transparent)}}
+.wel-hand{transform-box:view-box;transform-origin:12px 12px;animation:welHand 3.2s cubic-bezier(.6,0,.3,1) .35s infinite}
+@keyframes welHand{to{transform:rotate(360deg)}}
+.wel-shield-tick{stroke-dasharray:1;animation:welDraw .5s var(--ease-out) .42s backwards}
+@keyframes welDraw{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
+.wel-q-t{font-size:clamp(22px,3.6vw,28px);font-weight:650;letter-spacing:-.02em;line-height:1.2;text-wrap:balance;animation:welRise .46s var(--ease-out) .08s backwards}
+.wel-q-s{max-width:500px;margin:14px auto 0;font-size:15px;line-height:1.55;color:var(--fg-3);text-wrap:balance;animation:welRise .46s var(--ease-out) .17s backwards}
+.wel-choices{--wel-from:.28s;position:relative;display:flex;flex-wrap:wrap;justify-content:center;gap:16px;margin-top:40px}
+.wel-hero .wel-choices{--wel-from:.84s;margin-top:18px}
+.wel-choice{appearance:none;position:relative;flex:1 1 130px;max-width:230px;min-height:88px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:18px 26px;
+  border-radius:16px;border:1px solid var(--line);color:var(--fg-2);font:inherit;cursor:pointer;
+  background:linear-gradient(180deg,var(--surface-3),var(--surface-2));
+  animation:welChoice .5s var(--ease-spring) backwards;animation-delay:calc(var(--i)*70ms + var(--wel-from));
+  transition:transform .16s var(--ease-spring),border-color .18s var(--ease-out),background .18s var(--ease-out),box-shadow .22s var(--ease-out),color .18s var(--ease-out)}
+@media (max-width:520px){
+  .wel-choices{gap:10px;margin-top:28px}
+  .wel-choice{flex-basis:90px;min-height:76px;padding:14px 8px}
+  .wel-hero{padding-top:12px}
+  .wel-q{padding-top:16px}
+}
+@keyframes welChoice{from{opacity:0;transform:translateY(16px) scale(.93)}}
+.wel-choice:hover{transform:translateY(-2px);color:var(--fg);border-color:var(--line-2)}
+.wel-choice:active{transform:scale(.97)}
+.wel-choice:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wel-choice.on{color:var(--fg);border-color:color-mix(in oklch,var(--accent) 72%,var(--line));
+  background:color-mix(in oklch,var(--accent) 13%,var(--surface-2));box-shadow:0 8px 24px -14px var(--accent),inset 0 0 0 1px color-mix(in oklch,var(--accent) 34%,transparent)}
+.wel-choice-t{font-size:15px;font-weight:600}
+.wel-choice-s{font-size:12.5px;color:var(--fg-3)}
+.wel-tick{position:absolute;top:10px;right:10px;display:flex;width:17px;height:17px;padding:3px;border-radius:50%;background:var(--accent);opacity:0;transform:scale(.3);
+  transition:opacity .14s var(--ease-out),transform .28s var(--ease-spring)}
+.wel-tick svg{fill:none;stroke:var(--accent-ink);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.wel-choice.on .wel-tick{opacity:1;transform:none}
+.wel-later{margin-top:32px;font-size:12.5px;color:var(--fg-4);animation:welRise .46s var(--ease-out) .62s backwards}
+@media (prefers-reduced-motion:reduce){
+  .wel-aurora i,.wel-mark,.wel-bar,.wel-word,.wel-word:last-of-type,.wel-lead,.wel-ask,.wel-glyph,.wel-hand,.wel-shield-tick,.wel-q-t,.wel-q-s,.wel-choice,.wel-later{animation:none}
+}
+.wiz-step-h{margin-bottom:24px}
+.wiz-step-t{font-size:18px;font-weight:600;letter-spacing:-.014em;line-height:1.3}
+.wiz-step-s{font-size:13.5px;color:var(--fg-3);margin-top:6px;line-height:1.55}
+/* Pushed to the card's foot, so it stays put when a language change keeps the card's height. */
+.wiz-nav{display:flex;align-items:center;gap:12px;margin-top:auto;padding-top:8px}
+.wiz-nav .spacer{flex:1}
+.wiz-nav #wiz-back,.wiz-nav #wiz-next{flex:0 0 auto;min-width:116px}
+@media (max-width:520px){.wiz-nav #wiz-back,.wiz-nav #wiz-next{min-width:0;padding-inline:14px}}
+/* Tactile press on the nav buttons + a soft glow lift on the primary CTA. */
+.wiz-nav .ic-btn{transition:transform .12s var(--ease-out),box-shadow .18s var(--ease-out),
+  background .15s var(--ease-out),border-color .15s var(--ease-out),color .15s var(--ease-out)}
+.wiz-nav .ic-btn:active{transform:scale(.96)}
+.wiz-nav #wiz-next:hover{transform:translateY(-1px);
+  box-shadow:0 6px 20px -8px color-mix(in oklch,var(--accent) 70%,transparent)}
+.wiz-nav #wiz-next:active{transform:scale(.96)}
+.wiz-skip{background:none;border:0;color:var(--fg-4);font:inherit;font-size:12px;cursor:pointer;
+  padding:6px 2px;text-decoration:underline;text-underline-offset:3px;
+  text-decoration-color:var(--line-2);transition:color .15s var(--ease-out)}
+.wiz-skip:hover{color:var(--fg-3)}
+/* Staggered tile entrance - re-fires each time the platform step becomes
+   visible (its parent was display:none, so child animations restart). The
+   per-tile delay is set inline in JS. */
+#wizard .wiz-step[data-wstep="platform"]:not([hidden]) .w-ptile{animation:tileIn .34s var(--ease-out) both}
+@keyframes tileIn{from{opacity:0;transform:translateY(10px) scale(.96)}to{opacity:1;transform:none}}
+/* Twitch-extras feature cards */
+.wiz-feature{background:var(--surface-2);border:1px solid var(--line);border-radius:14px;
+  padding:20px;margin-top:16px;transition:border-color .15s var(--ease-out),background .15s var(--ease-out)}
+.wiz-feature-h{font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.wiz-feature-b{font-size:13px;color:var(--fg-3);line-height:1.55;margin:8px 0 0}
+/* Provenance tag so a reader can tell a Twitch/OBS feature from an
+   InstantClone one at a glance. */
+.wiz-tag{font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+  padding:2px 7px;border-radius:999px;white-space:nowrap}
+.wiz-tag-twitch{color:#a78bfa;background:color-mix(in oklch,#a78bfa 14%,transparent);
+  border:1px solid color-mix(in oklch,#a78bfa 35%,transparent)}
+.wiz-vod-steps{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
+#w-custom-wrap{margin-top:8px}
+.w-hint{font-size:11.5px;color:var(--fg-4);margin-top:4px}
+/* Container for the per-platform help under the wizard / destination
+   key input. Inside lives an optional link to the platform's key page
+   and an optional <details> disclosure for the long gotcha tip. We
+   don't put a visible card around it anymore - the disclosure body
+   carries its own panel, and the deep-link is just a styled anchor. */
+.w-key-help{margin-top:10px;display:flex;flex-direction:column;gap:6px;font-size:11.5px;color:var(--fg-3);line-height:1.45}
+.w-key-help .w-key-link{color:var(--fg-2);text-decoration:underline;text-underline-offset:2px;font-size:11.5px}
+.w-key-help .w-key-link:hover{color:var(--fg)}
+.w-key-disclose{margin-top:0}
+/* Kick gets the warning palette on its summary even when not hovered. */
+.w-key-disclose summary.warn{color:var(--warn,#d6a23a)}
+.w-key-disclose summary.warn:hover{color:color-mix(in oklch,var(--warn,#d6a23a) 70%,#fff)}
+.w-key-help a:hover{color:var(--fg)}
+.w-key-help .w-key-tip{margin-top:4px;color:var(--fg-4)}
+.w-key-help .w-key-tip.warn{color:var(--warn,#d6a23a)}
+#w-msg{margin-top:8px;min-height:1.2em;font-size:12px}
+#w-msg .err{color:var(--danger)}
+#w-msg .ok{color:var(--live)}
+

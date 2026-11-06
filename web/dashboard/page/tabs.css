@@ -1,0 +1,54 @@
+/* - Tabs ------------------- */
+.tabs{display:flex;align-items:center;padding:4px;background:var(--surface);border:1px solid var(--line);
+  border-radius:10px;gap:2px;position:relative;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:7px;
+  padding:9px 14px;border-radius:7px;color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
+  position:relative;z-index:2;transition:color .2s var(--ease-out);white-space:nowrap;
+  flex:1;justify-content:center}
+@media (max-width:720px){.tab{flex:0 0 auto}}
+.tab:hover{color:var(--fg)}
+.tab.on{color:var(--fg)}
+.tab svg{opacity:.85;width:15px;height:15px;transition:color .2s var(--ease-out)}
+.tab.on svg{opacity:1;color:var(--accent)}
+/* Indicators slide without overshoot: a spring's overshoot grows with the
+   distance, and a long slide (Destinations to Logs) ran into the strip's end. */
+.tab-ind{position:absolute;top:4px;bottom:4px;background:var(--surface-3);border-radius:7px;
+  transition:left .28s var(--ease-out),width .28s var(--ease-out);z-index:1;border:1px solid var(--line-2)}
+
+/* - Sub-tabs (nested nav, currently used by System pane) -─ */
+.sub-tabs{position:relative;display:flex;gap:2px;padding:4px;background:var(--surface-2);
+  border:1px solid var(--line);border-radius:9px;align-items:stretch;overflow-x:auto;scrollbar-width:none}
+.sub-tabs::-webkit-scrollbar{display:none}
+.sub-tab{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:6px;
+  padding:6px 11px;border-radius:6px;color:var(--fg-3);font-size:12px;font-weight:500;cursor:pointer;
+  position:relative;z-index:2;transition:color .2s var(--ease-out);white-space:nowrap;flex:1;justify-content:center}
+@media (max-width:720px){.sub-tab{flex:0 0 auto}}
+.sub-tab:hover{color:var(--fg)}
+.sub-tab.on{color:var(--fg)}
+.sub-tab svg{opacity:.7;width:12px;height:12px}
+.sub-tab.on svg{opacity:1}
+.sub-tab-ind{position:absolute;top:4px;bottom:4px;background:var(--surface-3);border-radius:6px;
+  transition:left .28s var(--ease-out),width .28s var(--ease-out);z-index:1;border:1px solid var(--line-2)}
+/* A strip that scrolls sideways fades the edge that hides more tabs. */
+.tabs.more-r,.sub-tabs.more-r{mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
+.tabs.more-l,.sub-tabs.more-l{mask-image:linear-gradient(90deg,transparent,#000 28px)}
+.tabs.more-l.more-r,.sub-tabs.more-l.more-r{mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
+/* On a phone the header is two calm rows: the name, then the live pills
+   in one line that scrolls sideways if it must. */
+@media (max-width:520px){
+  .ic-header{flex-direction:column;align-items:stretch;gap:10px;padding:12px 14px}
+  .ic-brand{align-items:baseline;flex-wrap:nowrap}
+  .ic-brand-sub{overflow:visible}
+  .ic-header-right{margin-left:0;flex-wrap:nowrap;justify-content:flex-start;overflow-x:auto;scrollbar-width:none;
+    margin-right:-14px;padding-right:14px}
+  .ic-header-right::-webkit-scrollbar{display:none}
+  .ic-header-right>*{flex:none}
+  /* The row scrolls: what's wrong comes first, never off the edge. */
+  #hdr-backpressure,#hdr-twitch-cap{order:-1}
+  .ic-header-right.more-r{mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
+  .ic-header-right.more-l.more-r{mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
+  .ic-header-right.more-l:not(.more-r){mask-image:linear-gradient(90deg,transparent,#000 28px)}
+}
+.sub-pane{display:flex;flex-direction:column;gap:20px;animation:paneIn .2s var(--ease-out) both}
+.sub-tab[hidden]{display:none}

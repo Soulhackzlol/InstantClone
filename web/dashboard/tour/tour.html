@@ -1,0 +1,34 @@
+<!-- - Tour: spotlight cutout + floating tooltip ------─ -->
+<!-- The backdrop SVG draws a full-screen dark rect with a clear hole
+     punched over the current target element. Tooltip floats next to
+     the hole, auto-placed by JS. -->
+<div class="tour" id="tour" hidden>
+  <svg class="tour-backdrop-svg" id="tour-bg" preserveAspectRatio="none">
+    <defs>
+      <mask id="tour-mask">
+        <rect id="tour-mask-rect-all" x="0" y="0" width="100%" height="100%" fill="white"/>
+        <rect id="tour-mask-rect-hole" rx="10" ry="10" fill="black"/>
+      </mask>
+    </defs>
+    <rect x="0" y="0" width="100%" height="100%" fill="rgba(0,0,0,0.65)" mask="url(#tour-mask)"/>
+  </svg>
+  <div class="tour-highlight" id="tour-highlight"></div>
+  <div class="tour-tooltip" id="tour-tooltip" data-side="bottom">
+    <div class="tour-arrow"></div>
+    <div class="tour-head">
+      <div>
+        <div class="tour-step" id="tour-step">1 / 9</div>
+        <div class="tour-title" id="tour-title">Welcome to InstantClone</div>
+      </div>
+      <button class="ic-btn-tiny" onclick="closeTour()" title="Close (Esc)" aria-label="Close tour">✕</button>
+    </div>
+    <div class="tour-body" id="tour-body"></div>
+    <div class="tour-foot">
+      <button class="ic-btn ic-btn-ghost" onclick="closeTour()">Skip tour</button>
+      <span class="spacer"></span>
+      <button class="ic-btn ic-btn-ghost" id="tour-prev" onclick="tourPrev()" disabled>← Back</button>
+      <button class="ic-btn ic-btn-primary" id="tour-next" onclick="tourNext()">Next →</button>
+    </div>
+  </div>
+</div>
+

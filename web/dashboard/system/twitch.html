@@ -1,0 +1,51 @@
+  <!-- Twitch & OBS: VOD audio and the legacy OBS launcher -->
+  <div class="sub-pane" data-subpane="twitch" hidden>
+    <!-- Twitch VOD audio via the optional unlocker script. Surfaced here so
+         a streamer can grab it without opening a destination's settings. -->
+    <section class="sys-section" data-find="twitch vod audio track music copyright soundtrack script lua">
+      <div class="ic-label">Twitch VOD audio</div>
+      <div class="tab-sub">Keep copyrighted music in your live stream but out of the <b>VOD</b>. OBS locks its built-in <b>VOD Track</b> to the service literally named "Twitch", so on the InstantClone service you add the second audio track with a tiny optional script.</div>
+
+      <!-- Version-aware requirement callout, filled by refreshSysVodScript(). -->
+      <div id="sys-vod-req" class="sys-callout info" hidden></div>
+
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="ic-btn ic-btn-primary" id="sys-vod-script-btn" onclick="installVodScript('sys-vod-script-btn','sys-vod-script-msg')">Download VOD unlocker script</button>
+        <span class="muted" id="sys-vod-script-msg" style="font-size:12px"></span>
+      </div>
+      <ol class="tab-sub" style="margin:10px 0 0;padding-left:18px;line-height:1.7">
+        <li>Press <b>Download</b> and pick where to save <code class="mono">optional-vod-unlocker.lua</code> (your OBS scripts folder is tidiest).</li>
+        <li>In OBS: <b>Tools → Scripts → +</b>, pick <code class="mono">optional-vod-unlocker.lua</code> (one time).</li>
+        <li>Set the script's <b>VOD audio track</b> to the OBS mixer track carrying your VOD audio (route it in <b>Advanced Audio Properties</b>). Your live mix stays on track 1.</li>
+      </ol>
+      <div class="tab-sub" style="margin-top:8px">Then, per destination, use <b>Audio track</b> to route it: Twitch keeps <b>Both</b>, send <b>Track 2</b> (music stripped) to YouTube to dodge copyright.</div>
+    </section>
+
+    <section class="sys-section" data-find="obs quick launch enhanced broadcasting eb shortcut legacy launcher">
+      <div class="ic-label">OBS quick launch</div>
+      <div class="tab-sub">The launchers that start OBS with Enhanced Broadcasting moved to the <a href="#" onclick="showTab('obs');openObsLegacy();return false">OBS tab, under Legacy</a>.</div>
+    </section>
+
+    <!-- Which Twitch app Integrations log in with. Releases bring their own;
+         a copy without one (a fork, a dev build) or a streamer who prefers
+         their own app pastes a Client ID here. Opens by itself when there
+         is no app at all. Saved with the System save bar. -->
+    <details class="sys-section sys-collapse" id="sys-twitch-app" data-find="twitch app client id login chat integrations developer console own">
+      <summary><span class="ic-label">Twitch login app</span><span class="muted" id="sys-twitch-app-note" style="font-weight:400;font-size:12px;margin-left:6px"></span></summary>
+      <div class="tab-sub" style="margin-top:10px">Integrations log in to Twitch through an app registered at Twitch. InstantClone brings its own, so most people never touch this. Use your own if you prefer to, or if Twitch shows as unavailable.</div>
+      <div id="sys-twitch-app-status" class="tw-app-status"></div>
+      <div style="margin-top:12px">
+        <span class="ic-label">Your app's Client ID</span>
+        <input id="s-twitch-client" class="ic-input mono" style="margin-top:6px" maxlength="64" spellcheck="false" autocomplete="off" placeholder="Leave empty to use InstantClone's app">
+      </div>
+      <ol class="tw-app-steps">
+        <li>Open <a href="https://dev.twitch.tv/console/apps/create" target="_blank" rel="noopener">dev.twitch.tv/console</a> and log in. Twitch asks you to turn on two-factor authentication first.</li>
+        <li><b>Name</b>: anything, for example <i>My InstantClone</i>. It can't contain the word "Twitch".</li>
+        <li><b>OAuth Redirect URL</b>: <code class="mono">http://localhost</code> <button type="button" class="ic-btn ic-btn-ghost tw-app-copy" onclick="copyText(this,'http://localhost')">Copy</button> It isn't used, but Twitch requires one.</li>
+        <li><b>Category</b>: Broadcaster Suite. <b>Client Type</b>: <b>Public</b>. This one matters: a Confidential app can't stay logged in.</li>
+        <li>Press <b>Create</b>, then <b>Manage</b>, copy the <b>Client ID</b> and paste it above. You don't need a secret.</li>
+      </ol>
+      <div class="tab-sub tw-app-warn">Changing the app logs your Twitch accounts out. After saving, connect them again in <a href="#" onclick="showTab('integrations');return false">Integrations</a>.</div>
+    </details>
+  </div>
+

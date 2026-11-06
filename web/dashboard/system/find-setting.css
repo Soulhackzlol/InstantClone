@@ -1,0 +1,32 @@
+/* Find a setting, in the System header. */
+.sys-find{position:relative;display:flex;align-items:center;width:min(320px,100%);margin-left:auto}
+.sys-find>svg{position:absolute;left:11px;width:15px;height:15px;color:var(--fg-4);pointer-events:none}
+.sys-find input{width:100%;height:36px;padding:0 34px 0 34px;border-radius:10px;background:var(--bg-2);color:var(--fg);
+  border:1px solid var(--line);font:inherit;font-size:13px;outline:0;
+  transition:border-color .2s var(--ease-out),box-shadow .25s var(--ease-out)}
+.sys-find input:focus{border-color:color-mix(in oklch,var(--tint) 75%,transparent);background:var(--bg);
+  box-shadow:0 0 0 3px color-mix(in oklch,var(--tint) 18%,transparent)}
+.sys-find input::-webkit-search-cancel-button{display:none}
+.sys-find-key{position:absolute;right:9px;font:600 10.5px/1 'JetBrains Mono',monospace;color:var(--fg-4);
+  border:1px solid var(--line-2);border-radius:5px;padding:3px 6px;pointer-events:none}
+.sys-find input:focus~.sys-find-key,.sys-find input:not(:placeholder-shown)~.sys-find-key{display:none}
+.sys-find-results{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:30;display:flex;flex-direction:column;
+  padding:5px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line-2);
+  box-shadow:0 16px 40px rgba(0,0,0,.5);animation:softDrop .15s var(--ease-out)}
+.sys-find-results[hidden]{display:none}
+.sys-find-option{appearance:none;display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+  padding:9px 10px;border:0;border-radius:8px;background:transparent;color:var(--fg-2);font:inherit;font-size:13px;
+  text-align:left;cursor:pointer}
+.sys-find-option b{font-weight:600;color:var(--fg)}
+.sys-find-option span{font-size:11.5px;color:var(--fg-4);white-space:nowrap}
+.sys-find-option:hover,.sys-find-option[aria-selected="true"]{background:var(--surface-3)}
+.sys-find-empty{padding:10px;font-size:12.5px;color:var(--fg-3)}
+/* The section a search landed on glows briefly. */
+.sys-found{animation:sysFound 1.6s var(--ease-out)}
+@keyframes sysFound{0%,35%{box-shadow:0 0 0 2px var(--accent)}100%{box-shadow:0 0 0 2px transparent}}
+@media (max-width:640px){.sys-find{width:100%}}
+@media (prefers-reduced-motion: reduce){.sys-found,.sys-find-results,.sys-foot{animation:none}}
+.sys-about-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:680px){.sys-about-grid{grid-template-columns:1fr}}
+.sys-about-card{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px}
+.sys-about-card .ic-label{margin-bottom:4px}

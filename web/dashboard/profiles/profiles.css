@@ -1,0 +1,55 @@
+/* - Profiles ----------------- */
+.profile-list{display:flex;flex-direction:column;gap:10px}
+.profile-row{display:flex;align-items:center;gap:16px;padding:14px 18px;background:var(--bg-2);
+  border:1px solid var(--line);border-radius:9px;cursor:pointer;text-align:left;appearance:none;
+  color:inherit;font:inherit;transition:border-color .12s var(--ease-out),background .12s var(--ease-out)}
+.profile-row:hover{border-color:color-mix(in oklch,var(--accent) 40%,var(--line-2))}
+.profile-row.current{border-color:color-mix(in oklch,var(--accent) 60%,transparent);
+  background:color-mix(in oklch,var(--accent) 7%,var(--bg-2));
+  box-shadow:0 0 0 1px color-mix(in oklch,var(--accent) 25%,transparent),0 6px 16px var(--accent-glow)}
+.profile-bolt{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;
+  background:var(--surface-3);border:1px solid var(--line);color:var(--fg-3);flex:0 0 auto;font-size:14px}
+.profile-row:hover .profile-bolt{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 40%,transparent)}
+.profile-row.current .profile-bolt{color:var(--accent);
+  border-color:color-mix(in oklch,var(--accent) 50%,transparent);
+  background:color-mix(in oklch,var(--accent) 15%,var(--surface-3))}
+.profile-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-weight:500;color:var(--fg);font-size:13.5px}
+.profile-secs{color:var(--accent);font-size:13px;font-weight:500;font-family:'JetBrains Mono',monospace}
+/* Too-big = the current buffer can't hold this delay. Keep it quiet:
+   muted label, not armable. A small inline "Raise buffer" link is the
+   only affordance - it takes you to the setting, nothing auto-changes. */
+.profile-row.too-big{cursor:default}
+.profile-row.too-big:hover{border-color:var(--line)}
+.profile-row.too-big .profile-bolt,.profile-row.too-big .profile-name,.profile-row.too-big .profile-secs{color:var(--fg-4)}
+.profile-row.too-big:hover .profile-bolt{color:var(--fg-4);border-color:var(--line)}
+.profile-row.editing{cursor:default;gap:10px;padding:8px 10px}
+.profile-row.editing:hover{border-color:color-mix(in oklch,var(--accent) 40%,var(--line-2))}
+.profile-row.editing .ic-input{padding:7px 10px}
+.profile-row.editing [data-f="name"]{flex:1;min-width:0}
+.profile-row.editing [data-f="secs"]{width:96px;flex:none}
+.profile-warn{margin-left:auto;display:inline-flex;align-items:center;gap:10px;font-size:10.5px;
+  color:var(--warn,#d6a23a);white-space:nowrap}
+.profile-warn a{color:var(--accent);cursor:pointer;font-weight:600;
+  border-bottom:1px solid color-mix(in oklch,var(--accent) 32%,transparent);
+  transition:color .15s var(--ease-out),border-color .15s var(--ease-out)}
+.profile-warn a:hover{color:var(--fg);border-color:var(--fg)}
+/* On a phone the buffer note takes its own line under the name; the
+   delete button stays on the first line. 40px = the bolt plus its gap. */
+@media (max-width:520px){
+  .profile-row{flex-wrap:wrap;row-gap:6px}
+  .profile-warn{order:1;flex-basis:100%;margin-left:40px}
+}
+.ic-input.flash{animation:inputflash 1.2s var(--ease-out)}
+@keyframes inputflash{
+  0%{box-shadow:0 0 0 0 color-mix(in oklch,var(--accent) 55%,transparent);border-color:var(--accent)}
+  100%{box-shadow:0 0 0 7px transparent}
+}
+.cp-profile-chip.too-big{opacity:.45;cursor:not-allowed;border-color:var(--line)}
+.profile-tag{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  padding:3px 7px;border-radius:999px;background:color-mix(in oklch,var(--accent) 18%,transparent);color:var(--accent)}
+.profile-new{background:transparent;border:1px dashed var(--line-2);margin-top:8px;cursor:default;
+  display:flex;gap:10px;padding:11px 14px;border-radius:9px;align-items:center}
+.profile-new .ic-input{flex:1;min-width:0}
+.profile-new .ic-input.mono{max-width:110px;font-family:'JetBrains Mono',monospace}
+

@@ -1,0 +1,34 @@
+<section class="tab-pane" data-pane="logs" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">Logs</div>
+      <div class="tab-sub">Live, newest at the bottom.</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="ic-btn ic-btn-ghost" onclick="copyDiagnostics(this)" title="Copies version, settings, what every destination is doing and this log, with stream keys and other secrets taken out. Paste it into a bug report.">Copy diagnostics</button>
+      <button class="ic-btn ic-btn-ghost" onclick="downloadLogs()">⬇ Download</button>
+      <button class="ic-btn ic-btn-ghost" onclick="clearLogs()">Clear</button>
+    </div>
+  </div>
+  <div class="logs-tools" id="logs-tools" hidden>
+    <div class="logs-chips" role="group" aria-label="Show">
+      <button type="button" class="logs-chip" data-log-level="all" aria-pressed="true">All</button>
+      <button type="button" class="logs-chip lvl-warn" data-log-level="problems" aria-pressed="false">Problems <span class="logs-n" id="logs-n-problems"></span></button>
+      <button type="button" class="logs-chip lvl-err" data-log-level="err" aria-pressed="false">Errors <span class="logs-n" id="logs-n-err"></span></button>
+    </div>
+    <select id="logs-source" class="ic-input logs-source" aria-label="Source"><option value="">All sources</option></select>
+    <input id="logs-search" type="search" class="ic-input logs-search" placeholder="Filter lines" aria-label="Filter lines" autocomplete="off" spellcheck="false">
+    <button type="button" class="ic-btn ic-btn-ghost logs-copy" id="logs-copy-problems" hidden title="Copies every warning and error, for a bug report or a message to support">Copy problems</button>
+  </div>
+  <div class="logs-wrap">
+    <div class="logs" id="logs" role="log" translate="no" hidden></div>
+    <div class="logs-nomatch" id="logs-nomatch" hidden>No lines match these filters.</div>
+    <button type="button" class="logs-latest" id="logs-latest" hidden>↓ Jump to latest</button>
+    <div class="logs-empty" id="logs-empty">
+      <div class="logs-empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/></svg></div>
+      <div class="logs-empty-title">No events yet</div>
+      <div class="logs-empty-body">As soon as OBS connects, you'll see what comes in, what goes out and each destination here in real time.</div>
+    </div>
+  </div>
+</section>
+

@@ -1,0 +1,27 @@
+/* Phone delay bar (see the "Phone delay bar" script): slides up from the
+   bottom edge once the delay card's button has scrolled out of sight. */
+.mini-bar{display:none}
+@media (max-width:720px){
+  .mini-bar{position:fixed;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:900;
+    display:flex;align-items:center;gap:10px;padding:7px 7px 7px 14px;border-radius:16px;
+    background:color-mix(in oklch,var(--surface-2) 86%,transparent);backdrop-filter:blur(16px) saturate(1.4);
+    border:1px solid var(--line-2);box-shadow:0 12px 32px rgba(0,0,0,.5);
+    transform:translateY(calc(100% + 24px));opacity:0;pointer-events:none;
+    transition:transform .34s var(--ease-out),opacity .2s var(--ease-out)}
+  .mini-bar.on{transform:none;opacity:1;pointer-events:auto}
+  .mini-bar[hidden]{display:none}
+  body.mini-on{padding-bottom:76px}
+  body.mini-on .ic-toast-rail{bottom:calc(80px + env(safe-area-inset-bottom))}
+}
+.mini-read{appearance:none;border:0;background:none;color:var(--fg);font:inherit;cursor:pointer;
+  display:flex;align-items:baseline;gap:5px;flex:1;min-width:0;padding:4px 0;text-align:left}
+.mini-dot{flex:none;align-self:center;width:7px;height:7px;border-radius:50%;background:var(--sc,var(--idle));margin-right:3px}
+.mini-num{font-size:20px;font-weight:700;letter-spacing:-.02em}
+.mini-unit{font-size:12px;color:var(--fg-3)}
+.mini-state{min-width:0;margin-left:6px;font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--fg-3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini-cta{flex:none;max-width:58%;height:40px;padding:0 14px;font-size:13px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (prefers-reduced-motion:reduce){.mini-bar{transition:opacity .15s}}
+@media (prefers-reduced-motion: reduce){.ic-toast{animation:none}.ic-toast.leaving{transition:none}}
+

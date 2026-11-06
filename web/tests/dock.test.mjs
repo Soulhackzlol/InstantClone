@@ -2,8 +2,8 @@
 // server can report. Run with `node --test "web/tests/*.test.mjs"`.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import { element, loadPage, plain, rustConst } from './page.mjs';
+import { readWebFile } from './web-files.mjs';
 
 // Opened the way OBS opens a named dock on a password-protected dashboard.
 const page = loadPage('dock.html', 'http://127.0.0.1:7799/dock?dock=cam%202!&token=ab-12_cd');
@@ -25,7 +25,7 @@ function given(state, { field = 0, editing = false } = {}) {
 
 test("the dock's platform marks are the dashboard's", () => {
   const table = file => {
-    const text = fs.readFileSync(new URL('../' + file, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const text = readWebFile(file).replace(/\r\n/g, '\n');
     const at = text.indexOf('const PLATFORM_MARK = {');
     return text.slice(at, text.indexOf('};', at));
   };

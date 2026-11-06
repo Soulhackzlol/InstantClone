@@ -1,0 +1,46 @@
+<section class="tab-pane" data-pane="system" hidden>
+  <div class="tab-head">
+    <div>
+      <div class="tab-title">System</div>
+      <div class="tab-sub">How InstantClone starts, protects your stream and connects. Press / to find any setting.</div>
+    </div>
+    <!-- Find a setting: matches section titles, their text and the
+         data-find keywords, then opens the right sub-tab. -->
+    <div class="sys-find" role="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="sys-find" type="search" placeholder="Find a setting" aria-label="Find a setting" autocomplete="off" spellcheck="false"
+        role="combobox" aria-expanded="false" aria-controls="sys-find-results" aria-autocomplete="list">
+      <kbd class="sys-find-key" aria-hidden="true">/</kbd>
+      <div class="sys-find-results" id="sys-find-results" role="listbox" hidden></div>
+    </div>
+  </div>
+  <div class="restart-banner" id="restart-banner" hidden>
+    <span>⚠ The new buffer size or file is saved. Restart InstantClone to start using it.</span>
+    <button class="ic-btn ic-btn-warn" style="flex:0 0 auto;white-space:nowrap" onclick="restartApp(this)">Restart now</button>
+  </div>
+
+  <nav class="sub-tabs" id="sys-sub-tabs" role="tablist" aria-label="System sections">
+    <span class="sub-tab-ind" id="sys-sub-ind"></span>
+    <button class="sub-tab on" data-subtab="general" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10"/><path d="M18 6h2"/><circle cx="16" cy="6" r="2"/><path d="M4 12h4"/><path d="M12 12h8"/><circle cx="10" cy="12" r="2"/><path d="M4 18h12"/><path d="M20 18h0"/><circle cx="18" cy="18" r="2"/></svg>
+      <span>General</span></button>
+    <button class="sub-tab" data-subtab="crash" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.5 3 8.5 7 10 4-1.5 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+      <span>Crash protection</span></button>
+    <button class="sub-tab" data-subtab="controls" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01"/><path d="M11 10h.01"/><path d="M15 10h.01"/><path d="M8 14h8"/></svg>
+      <span>Controls</span></button>
+    <button class="sub-tab" data-subtab="twitch" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m10 9 5 2-5 2z"/></svg>
+      <span>Twitch &amp; OBS</span></button>
+    <button class="sub-tab" data-subtab="access" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      <span>Access</span></button>
+    <button class="sub-tab" data-subtab="alerts" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 1 1 12 0c0 4 1 5 2 6H4c1-1 2-2 2-6z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
+      <span>Alerts &amp; logs</span></button>
+    <button class="sub-tab" data-subtab="about" role="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg>
+      <span>About</span></button>
+  </nav>
+

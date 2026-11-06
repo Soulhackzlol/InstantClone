@@ -1,0 +1,316 @@
+/* - Destinations --------------- */
+/* min(): on a phone the pane is narrower than 330px, and a fixed minimum
+   pushed every card past its right edge. */
+.dest-grid{display:grid;gap:20px;grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr))}
+.dcard{background:var(--bg-2);border:1px solid var(--line);border-radius:16px;padding:20px;
+  display:flex;flex-direction:column;gap:16px;
+  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),opacity .25s var(--ease-out);
+  position:relative;overflow:hidden}
+/* Platform-coloured left edge (landing style): subtle when idle, solid +
+   glowing when the feed is live. */
+.dcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
+  background:var(--dc,var(--fg-3));opacity:.5;
+  transition:opacity .2s var(--ease-out),box-shadow .2s var(--ease-out)}
+.dcard:hover{border-color:color-mix(in oklch,var(--dc,var(--accent)) 35%,var(--line-2));
+  box-shadow:0 16px 40px -22px color-mix(in oklch,var(--dc,var(--accent)) 70%,transparent)}
+.dcard:hover::before{opacity:.9}
+.dcard.alive{border-color:color-mix(in oklch,var(--dc,var(--accent)) 28%,var(--line))}
+.dcard.alive::before{opacity:1;box-shadow:0 0 16px var(--dc,var(--accent))}
+.dcard.off{opacity:.55}
+.dcard.off::before{opacity:.2}
+.dcard.platform-twitch{--dc:#a78bfa}
+.dcard.platform-youtube{--dc:#fda4af}
+.dcard.platform-kick{--dc:#86efac}
+.dcard.platform-trovo{--dc:#67e8f9}
+.dcard.platform-restream{--dc:#5eead4}
+.dcard.platform-custom{--dc:#fcd34d}
+.dcard.platform-sink{--dc:#93c5fd}
+.dcard-player{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--dc,var(--accent));
+  text-decoration:none;margin-left:auto}
+.dcard-player:hover{text-decoration:underline;text-underline-offset:2px}
+.dcard-head{display:flex;align-items:center;gap:9px}
+.dcard-icon svg,.dest-starter-icon svg{width:18px;height:18px}
+.w-ptile-badge svg{width:24px;height:24px}
+.dcard-icon{width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
+  background:color-mix(in oklch,var(--dc,var(--fg-3)) 16%,var(--surface-3));
+  border:1px solid color-mix(in oklch,var(--dc,var(--fg-3)) 38%,transparent);
+  color:var(--dc,var(--fg-3));font-weight:700;font-size:14px;flex:0 0 auto}
+.dcard-id{flex:1;min-width:0}
+.dcard-name{font-size:14px;font-weight:600;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dcard-host{font-size:11px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;
+  font-family:'JetBrains Mono',monospace}
+/* Enable/disable toggle - platform-coloured when on, matching the landing. */
+.dcard-switch{appearance:none;width:34px;height:19px;background:var(--surface-3);border:1px solid var(--line);
+  border-radius:999px;position:relative;cursor:pointer;flex:0 0 auto;padding:0;
+  transition:background .2s var(--ease-out),border-color .2s var(--ease-out)}
+.dcard-switch>span{position:absolute;top:1px;left:1px;width:15px;height:15px;border-radius:999px;
+  background:var(--fg-3);transition:transform .2s var(--ease-spring),background .2s var(--ease-out);display:block}
+.dcard-switch.on{background:color-mix(in oklch,var(--dc,var(--accent)) 80%,transparent);border-color:transparent}
+.dcard-switch.on>span{transform:translateX(15px);background:#fff}
+.dcard-status{display:inline-flex;align-items:center;justify-content:center;gap:5px;font-size:11px;font-weight:500;
+  padding:3px 8px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line);
+  color:var(--fg-3);flex:0 0 auto;min-width:84px;max-width:44%;
+  transition:color .2s ease,background .2s ease,border-color .2s ease}
+.dcard-status .d-dot{width:5px;height:5px;border-radius:999px;background:var(--fg-4)}
+.dcard-status-l{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* On a phone the name needs the room: the pill keeps its coloured dot and
+   the card body below already says the state in words. */
+@media (max-width:420px){
+  .dcard-status{min-width:0;width:22px;height:22px;padding:0;overflow:hidden}
+  .dcard-status .dcard-status-l{display:none}
+}
+.dcard-status.s-ready{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 30%,var(--line));
+  background:color-mix(in oklch,var(--accent) 8%,var(--surface-3))}
+.dcard-status.s-ready .d-dot{background:var(--accent)}
+.dcard-status.s-live{color:var(--live);border-color:color-mix(in oklch,var(--live) 30%,var(--line));
+  background:color-mix(in oklch,var(--live) 8%,var(--surface-3))}
+.dcard-status.s-live .d-dot{background:var(--live);box-shadow:0 0 6px var(--live);--sc:var(--live);--ring-scale:4.2}
+/* Vertical destination waiting on OBS's 9:16 canvas: it deliberately
+   sends no video until the canvas arrives. Amber + a slow pulse so it
+   reads as "attention" not "error". */
+/* Crash protection hold: the hero banner while the reconnect screen is on
+   air, with the countdown and End now. Amber, like a waiting destination. */
+.hold-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px;padding:12px 14px;
+  border-radius:10px;border:1px solid color-mix(in oklch,var(--warn,#d6a23a) 55%,var(--line));
+  background:color-mix(in oklch,var(--warn,#d6a23a) 8%,var(--bg-2))}
+.hold-banner .hold-dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--warn,#d6a23a);
+  box-shadow:0 0 8px var(--warn,#d6a23a);--sc:var(--warn,#d6a23a);--ring-time:2.4s;--ring-scale:2.8}
+.hold-copy{flex:1;min-width:220px;display:grid;gap:2px}
+.hold-copy span{color:var(--fg-3);font-size:12px;font-variant-numeric:tabular-nums}
+.hold-banner .ic-btn{flex:0 0 auto;padding:8px 14px}
+.dcard-status.s-wait{color:var(--warn,#d6a23a);border-color:color-mix(in oklch,var(--warn,#d6a23a) 32%,var(--line));
+  background:color-mix(in oklch,var(--warn,#d6a23a) 9%,var(--surface-3))}
+.dcard-status.s-wait .d-dot{background:var(--warn,#d6a23a);box-shadow:0 0 6px var(--warn,#d6a23a);
+  --sc:var(--warn,#d6a23a);--ring-time:2.4s;--ring-scale:4.2}
+/* Orientation indicator: small glyph in the head; hover/focus shows the
+   full format and, for vertical, what it needs, via the native tooltip. */
+.dcard-format{display:inline-flex;align-items:center;justify-content:center;
+  width:24px;height:24px;border-radius:7px;flex:0 0 auto;color:var(--fg-3);
+  background:var(--surface-3);border:1px solid var(--line);cursor:help;
+  transition:transform .14s ease,color .14s ease,border-color .14s ease}
+.dcard-format:hover{transform:scale(1.1);color:var(--fg);
+  border-color:color-mix(in oklch,var(--fg-3) 45%,var(--line))}
+.dcard-format svg{width:14px;height:14px;display:block}
+.dcard-format.fmt-vertical{color:var(--dc,var(--accent));
+  border-color:color-mix(in oklch,var(--dc,var(--accent)) 32%,var(--line))}
+.dcard-format.fmt-wait{color:var(--warn,#d6a23a);
+  border-color:color-mix(in oklch,var(--warn,#d6a23a) 36%,var(--line))}
+/* Inset "screen": a darker panel holding the live bitrate + trace, exactly
+   like the landing cards. The sparkline bleeds to the screen's edges. */
+.dcard-screen{background:var(--bg-1);border:1px solid color-mix(in oklch,var(--line) 65%,transparent);
+  border-radius:11px;padding:12px 14px 0;overflow:hidden;position:relative;
+  flex:1;display:flex;flex-direction:column}
+/* Wraps so a long idle message pushes the counters to their own line
+   instead of being squeezed into a narrow column beside them. */
+.dcard-body{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:2px 10px}
+.dcard-rate-row{display:flex;align-items:baseline;gap:5px;min-width:0;max-width:100%}
+.dcard-rate{font-size:24px;font-weight:600;color:var(--fg);letter-spacing:-.02em;line-height:1;
+  font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+.dcard-rate-u{font-size:11px;color:var(--fg-3);font-family:'JetBrains Mono',monospace}
+.dcard-foot-meta{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;white-space:nowrap}
+.dcard-foot-meta[hidden]{display:none}
+/* A sentence in place of the bitrate while nothing is flowing. */
+.dcard-rate.is-msg{font-size:13px;font-weight:500;color:var(--fg-3);font-family:inherit;letter-spacing:0;line-height:24px;
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dcard.went-live{animation:wentLive 1.1s var(--ease-out)}
+@keyframes wentLive{from{box-shadow:0 0 0 0 color-mix(in oklch,var(--dc,var(--accent)) 60%,transparent)}
+  to{box-shadow:0 0 0 16px transparent}}
+/* Detected resolution + codec of the forwarded track (e.g. 1080x1920 · H.264). */
+.dcard-res{font-size:10px;color:var(--fg-4);font-family:'JetBrains Mono',monospace;margin-top:3px;letter-spacing:.02em;min-height:1.5em}
+/* A waiting vertical destination spells out its fix here, visible on touch
+   and to keyboard users (the pill's tooltip alone isn't). */
+.dcard-res.is-hint{color:var(--warn,#d6a23a);font-family:inherit;font-size:11px;letter-spacing:0}
+.dcard-spark{display:block;width:calc(100% + 28px);height:40px;margin:auto -14px 0;padding-top:6px;box-sizing:content-box}
+/* Edit / remove: subtle glass buttons over the trace, revealed on hover. */
+/* Reveal via slide + visibility, NOT opacity. Animating opacity on a
+   backdrop-filter element makes Chromium skip the blur mid-transition and
+   snap it in at the end (the "pop"); keeping opacity fixed means the glass
+   blur is live the whole time. Revealed on card hover, or when an action
+   button itself is focused (keyboard) - deliberately NOT the card's
+   :focus-within, so clicking the toggle switch doesn't pin them open. */
+.dcard-actions{position:absolute;right:9px;bottom:9px;display:flex;gap:5px;z-index:2;
+  transform:translateY(calc(100% + 14px));pointer-events:none;
+  transition:transform .22s var(--ease-out)}
+.dcard:hover .dcard-actions,.dcard-actions:focus-within{transform:none;pointer-events:auto}
+.dcard-act{width:27px;height:27px;border-radius:8px;border:1px solid var(--line);cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--fg-2);
+  background:color-mix(in oklch,var(--bg-1) 52%,transparent);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  transition:color .15s,background .15s,border-color .15s}
+.dcard-act:hover{color:var(--fg);border-color:var(--line-2);background:color-mix(in oklch,var(--bg-1) 78%,transparent)}
+.dcard-act.dcard-del:hover{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 45%,var(--line))}
+/* Touch screens have no hover: the actions stay in reach. */
+@media (hover:none){.dcard-actions{transform:none;pointer-events:auto}}
+/* Why it isn't streaming: a calm reveal in place of the empty trace, and a
+   slim bar running down to the next attempt. */
+.dcard-why{display:grid;grid-template-rows:0fr;opacity:0;
+  transition:grid-template-rows .32s var(--ease-out),opacity .32s var(--ease-out)}
+.dcard-why-in{overflow:hidden;min-height:0}
+.dcard.failing .dcard-why{grid-template-rows:1fr;opacity:1}
+.dcard.failing .dcard-spark{display:none}
+.dcard-why-advice{margin-top:8px;font-size:12px;line-height:1.45;color:var(--fg-2);text-wrap:pretty}
+.dcard-why-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin:7px 0 12px;font-size:11px;color:var(--fg-3)}
+.dcard-why-next{font-variant-numeric:tabular-nums;margin-right:auto}
+.dcard-why-btn{appearance:none;border:0;background:none;padding:2px 0;font:inherit;font-weight:600;color:var(--accent);cursor:pointer}
+.dcard-why-btn.dcard-why-more{color:var(--fg-3);font-weight:500}
+.dcard-why-btn:hover{text-decoration:underline;text-underline-offset:2px}
+.dcard-why-btn:focus-visible{outline:1px solid var(--accent);outline-offset:2px;border-radius:3px}
+.dcard-why-btn:disabled{opacity:.5;cursor:default;text-decoration:none}
+.dcard-why-btn[hidden]{display:none}
+.dcard-why-detail{margin:-6px 0 12px;font-size:10.5px;line-height:1.45;color:var(--fg-4);overflow-wrap:anywhere}
+.dcard-why-bar{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--warn);opacity:0;
+  transform-origin:left;transform:scaleX(0);pointer-events:none}
+.dcard.failing .dcard-why-bar.run{opacity:.55;animation:whyDrain linear forwards}
+@keyframes whyDrain{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+/* The in-card question (stop a live destination, remove one). */
+.dcard-ask{position:absolute;inset:auto 9px 9px 9px;z-index:3;padding:11px 12px;border-radius:10px;
+  background:var(--surface-2);border:1px solid var(--line-2);box-shadow:0 10px 30px rgba(0,0,0,.4);
+  animation:softDrop .2s var(--ease-out)}
+.dcard-ask-q{font-size:12.5px;line-height:1.45;color:var(--fg)}
+.dcard-ask-row{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+@media (prefers-reduced-motion: reduce){
+  .dcard-why{transition:none}
+  .dcard-why-bar{display:none}
+  .dcard-ask{animation:none}
+}
+/* Empty Destinations: a platform picker instead of a lone "+" tile. */
+.dest-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:26px 8px 10px}
+.dest-empty[hidden],.dest-grid[hidden]{display:none}
+.dest-empty-title{font-size:20px;font-weight:650;letter-spacing:-.01em;color:var(--fg)}
+.dest-empty-sub{max-width:52ch;font-size:13px;color:var(--fg-3);line-height:1.5;text-wrap:pretty}
+.dest-empty-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;width:min(720px,100%);margin-top:18px}
+@media (max-width:640px){.dest-empty-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.dest-starter{appearance:none;display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:16px;border-radius:14px;
+  background:var(--bg-2);border:1px solid var(--line);color:var(--fg);font:inherit;text-align:left;cursor:pointer;
+  transition:border-color .2s var(--ease-out),box-shadow .2s var(--ease-out),transform .2s var(--ease-out)}
+.dest-starter:hover{border-color:color-mix(in oklch,var(--dc,var(--accent)) 45%,var(--line-2));transform:translateY(-2px);
+  box-shadow:0 18px 40px -24px color-mix(in oklch,var(--dc,var(--accent)) 80%,transparent)}
+.dest-starter:active{transform:scale(.96)}
+.dest-starter-icon{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;margin-bottom:6px;
+  background:color-mix(in oklch,var(--dc,var(--fg-3)) 16%,var(--surface-3));
+  border:1px solid color-mix(in oklch,var(--dc,var(--fg-3)) 38%,transparent);color:var(--dc,var(--fg-3));font-weight:700}
+.dest-starter-name{font-size:14px;font-weight:600}
+.dest-starter-note{font-size:12px;color:var(--fg-3)}
+.dest-starter.platform-twitch{--dc:#a78bfa}
+.dest-starter.platform-youtube{--dc:#fda4af}
+.dest-starter.platform-kick{--dc:#86efac}
+.dest-starter.platform-restream{--dc:#5eead4}
+.dest-starter.platform-custom{--dc:#fcd34d}
+.dest-starter.platform-sink{--dc:#93c5fd}
+.dest-add{appearance:none;background:transparent;border:1px dashed var(--line-2);border-radius:12px;
+  color:var(--fg-3);font-size:13px;font-weight:500;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  min-height:140px;transition:color .2s var(--ease-out),border-color .2s var(--ease-out),background .2s var(--ease-out);font-family:inherit}
+.dest-add:hover{color:var(--accent);border-color:color-mix(in oklch,var(--accent) 50%,transparent);
+  background:color-mix(in oklch,var(--accent) 4%,transparent)}
+.dest-add-icon{width:36px;height:36px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
+  background:var(--surface-3);border:1px solid var(--line-2);transition:transform .2s var(--ease-out)}
+.dest-add-icon svg{width:18px;height:18px}
+.dest-add:hover .dest-add-icon{transform:rotate(90deg)}
+/* Header "Add destination": accent-tinted rather than a solid accent
+   block, so it leads without outshining the live cards beside it. */
+.ic-btn.dest-add-btn{padding:9px 15px 9px 12px;gap:7px;font-weight:600;color:var(--accent);
+  background:color-mix(in oklch,var(--accent) 13%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--accent) 40%,var(--line-2))}
+.ic-btn.dest-add-btn svg{width:15px;height:15px;transition:transform .2s var(--ease-out)}
+.ic-btn.dest-add-btn:hover{background:color-mix(in oklch,var(--accent) 22%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--accent) 65%,transparent);
+  box-shadow:0 8px 22px -12px var(--accent)}
+.ic-btn.dest-add-btn:hover svg{transform:rotate(90deg)}
+@media (prefers-reduced-motion: reduce){.ic-btn.dest-add-btn svg,.dest-add-icon{transition:none}}
+
+/* Destination editor - a centred floating modal (see .ic-modal shell).
+   Scrolls internally when the VOD/EB section makes it tall. */
+.dest-form{padding:0;background:linear-gradient(180deg,var(--bg-2),var(--surface));
+  border:1px solid color-mix(in oklch,var(--accent) 40%,var(--line));border-radius:var(--radius);
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.6);
+  animation:modalPop .2s var(--ease-out) both;display:flex;flex-direction:column;
+  position:relative;width:min(820px,100%);max-height:min(92vh,900px);overflow:hidden}
+/* Header and footer stay put; only the body scrolls, so Save is always in
+   reach however long the Twitch VOD section gets. */
+.dest-form-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:18px 12px 20px 22px;
+  display:flex;flex-direction:column;gap:10px}
+.dest-form-foot{display:flex;align-items:center;gap:8px;padding:14px 22px;border-top:1px solid var(--line);
+  background:color-mix(in oklch,var(--bg-2) 85%,transparent)}
+.dest-form-foot .dest-form-msg{flex:1;min-width:0;margin:0}
+.dest-form-mark{--dc:var(--fg-3);width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex:none;
+  background:color-mix(in oklch,var(--dc) 16%,var(--surface-3));border:1px solid color-mix(in oklch,var(--dc) 38%,transparent);
+  color:var(--dc);font-weight:700;transition:color .25s var(--ease-out),background .25s var(--ease-out),border-color .25s var(--ease-out)}
+.dest-form-mark svg{width:21px;height:21px}
+.dest-form-titles{flex:1;min-width:0}
+/* Two columns of fields on wide screens, one on narrow ones. Hidden fields
+   drop out of the grid, so each platform packs its own set. */
+.dfg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 18px;align-items:start}
+.dff{display:flex;flex-direction:column;gap:6px;min-width:0}
+.dest-form-note{display:block;min-width:0;font-size:12px;line-height:1.55;align-self:center}
+.dest-form .dff>label,.dest-form .dff>label.muted{margin:0;font-size:12.5px;font-weight:600;color:var(--fg-2);
+  text-transform:none;letter-spacing:0}
+.dest-form .dff>label .muted{font-weight:400;font-size:11.5px}
+.dest-form .dff:focus-within>label{color:var(--tint)}
+/* Enabled: a switch in the header instead of a checkbox at the bottom. */
+.dest-form .dest-form-enable{display:inline-flex;align-items:center;gap:8px;margin:0;cursor:pointer;flex:none;
+  font-size:12.5px;font-weight:500;color:var(--fg-2);text-transform:none;letter-spacing:0}
+.dest-form-enable input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.dfe-track{position:relative;width:36px;height:20px;border-radius:999px;background:var(--surface-3);border:1px solid var(--line-2);
+  transition:background .2s var(--ease-out),border-color .2s var(--ease-out)}
+.dfe-track>span{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--fg-3);
+  transition:transform .25s var(--ease-spring),background .2s var(--ease-out)}
+.dest-form-enable input:checked+.dfe-track{background:var(--accent);border-color:transparent}
+.dest-form-enable input:checked+.dfe-track>span{transform:translateX(16px);background:#fff}
+.dest-form-enable input:focus-visible+.dfe-track{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:760px){.dfg{grid-template-columns:1fr}}
+/* Phones: a full-screen sheet rather than a box floating in a margin. */
+@media (max-width:560px){
+  #dest-modal{padding:0}
+  .dest-form{width:100%;height:100dvh;max-height:100dvh;border-radius:0;border-width:0}
+  .dest-form-head{padding:14px 16px}
+  .dest-form-body{padding:14px 6px 18px 16px}
+  .dest-form-foot{padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+  .dest-form-hint{display:none}
+}
+@keyframes modalPop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+/* Header row: title + one-click close so editing feels like a focused
+   panel you can dismiss without scrolling to the Cancel button. */
+.dest-form-head{display:flex;align-items:center;gap:14px;padding:18px 22px 16px;border-bottom:1px solid var(--line)}
+.dest-form h4{margin:0;font-size:15px;font-weight:600}
+.dest-form-hint{font-size:11.5px;color:var(--fg-3);margin-top:3px;line-height:1.4}
+.dest-form-x{flex:0 0 auto;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
+  background:var(--surface-3);color:var(--fg-3);font-size:13px;cursor:pointer;line-height:1;
+  transition:color .15s,background .15s,border-color .15s,transform .15s var(--ease-out)}
+.dest-form-x:hover{color:var(--fg);background:color-mix(in oklch,var(--danger) 14%,var(--surface-3));
+  border-color:color-mix(in oklch,var(--danger) 40%,var(--line));transform:rotate(90deg)}
+/* Section separator: a quiet uppercase micro-label with a rule, so the
+   form reads as scannable groups instead of one long list. */
+.dfg-sep{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:9.5px;font-weight:700;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--fg-4)}
+.dfg-sep::after{content:"";flex:1;height:1px;background:var(--line)}
+/* VOD audio + EB block - kept calm and progressive (details behind
+   disclosures) so it reads as one toggle with an optional extra. */
+.dest-vod{margin-top:12px;padding:13px 15px;border:1px solid var(--line);border-radius:11px;background:var(--bg-1)}
+/* NOTE: `.dest-form label` (uppercase, letter-spaced, block, muted) is more
+   specific than a bare `.dest-vod-toggle`, so these resets are scoped with
+   `.dest-form` to win, and title/desc reset explicitly too. Without this the
+   whole block rendered UPPERCASE and stacked. */
+.dest-form .dest-vod-toggle{display:flex;align-items:flex-start;gap:10px;margin:0;cursor:pointer;
+  text-transform:none;letter-spacing:normal;font-weight:400;font-size:13px;color:var(--fg-2)}
+.dest-form .dest-vod-toggle input{margin-top:2px;flex:0 0 auto;cursor:pointer}
+.dest-vod-title{font-weight:600;color:var(--fg);font-size:13px;text-transform:none;letter-spacing:normal}
+.dest-vod-title .muted{font-weight:400}
+.dest-vod-desc{font-size:11.5px;margin-top:3px;line-height:1.5;color:var(--fg-3);text-transform:none;letter-spacing:normal}
+.dest-vod details{margin-top:10px}
+.dest-vod details>summary{font-size:11px;color:var(--accent);cursor:pointer;user-select:none;list-style:none}
+.dest-vod details>summary::-webkit-details-marker{display:none}
+.dest-vod details>summary::before{content:"▸ ";color:var(--fg-4)}
+.dest-vod details[open]>summary::before{content:"▾ "}
+.dest-vod details ol{margin:8px 0 0;padding-left:16px;font-size:11px;line-height:1.7;color:var(--fg-2)}
+.dest-vod details>div{margin-top:6px;font-size:11px;line-height:1.6;color:var(--fg-2)}
+.dest-eb{margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
+.dest-eb-title{font-weight:600;color:var(--fg);font-size:12.5px;text-transform:none;letter-spacing:normal}
+.dest-eb-desc{font-size:11.5px;margin-top:4px;line-height:1.5;color:var(--fg-3);text-transform:none;letter-spacing:normal}
+.dest-form label{display:block;margin-top:6px;font-size:11px;color:var(--fg-3);text-transform:uppercase;
+  letter-spacing:.12em;font-weight:600}
+.dest-form .row{display:flex;gap:8px;margin-top:8px;align-items:center}
+.dest-form .row .ic-btn{flex:0 0 auto}
+.dest-form-msg{min-height:1.2em;font-size:12px;margin-top:6px}
+.dest-form-msg .err{color:var(--danger)}
+

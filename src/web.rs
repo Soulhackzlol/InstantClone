@@ -5993,8 +5993,9 @@ static DOCK_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.html
 /// build-time gzipped (see `build.rs`).
 static DOCK_JS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dock.js.gz"));
 
-/// Main dashboard / first-run wizard. Source lives in `web/index.html`;
-/// build-time minified + gzipped (see `build.rs`).
+/// Main dashboard / first-run wizard. Source lives in `web/dashboard/`
+/// (pieces joined in the order `parts.txt` lists); build-time joined,
+/// minified + gzipped (see `build.rs`).
 static INDEX_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html.gz"));
 /// The dashboard's Integrations tab; source in `web/integrations.js`,
 /// build-time gzipped like the dock script.

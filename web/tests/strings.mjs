@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readWebFile } from './web-files.mjs';
 
 const WEB = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const REPO = path.dirname(WEB);
@@ -232,7 +233,7 @@ export function pageStrings() {
     if (text && !seen.has(text) && readsAsWords(text, inMarkup)) seen.set(text, where);
   };
   for (const file of PAGES) {
-    const src = fs.readFileSync(path.join(WEB, file), 'utf8').replace(/\r\n/g, '\n');
+    const src = readWebFile(file).replace(/\r\n/g, '\n');
     const literals = [];
     if (file.endsWith('.html')) {
       const markup = visibleMarkup(src).replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gi, (whole, code, at) => {
@@ -319,7 +320,7 @@ export function stale(strings = readStrings()) {
   // words too ("anytime" shown as a value), and the overlay runtime's, which
   // show in the Studio's previews.
   const scripts = [...PAGES, 'overlay-runtime.js'].flatMap(file => {
-    const src = fs.readFileSync(path.join(WEB, file), 'utf8');
+    const src = readWebFile(file);
     const code = file.endsWith('.html') ? [...src.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]) : [src];
     // plural(n, 'step') says "steps" without the code spelling it.
     const plurals = [...src.matchAll(/plural\([^\n]*?'([^']+)'\)/g)].map(m => m[1] + 's');

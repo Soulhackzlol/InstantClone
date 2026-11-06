@@ -1,0 +1,32 @@
+<!-- - Reset confirmation modal ----------------─
+     Two-step destructive flow: scope-dependent. The "settings" scope
+     just needs a click-through; the "all" scope additionally requires
+     typing the literal word RESET so a stray double-click can't wipe
+     destinations + profiles. Tab key returns focus to the cancel
+     button so the trapped-focus default is the safe action. -->
+<div class="ic-modal" id="reset-modal" hidden role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
+  <div class="ic-modal-backdrop" onclick="closeResetModal()"></div>
+  <div class="ic-modal-card" id="reset-modal-card">
+    <div class="ic-modal-head">
+      <div class="ic-modal-icon" id="reset-modal-icon">⚠</div>
+      <div>
+        <div class="ic-modal-title" id="reset-modal-title">Reset settings</div>
+        <div class="ic-modal-sub" id="reset-modal-sub"></div>
+      </div>
+      <button class="ic-btn-tiny" onclick="closeResetModal()" title="Cancel (Esc)" aria-label="Close">✕</button>
+    </div>
+    <div class="ic-modal-body">
+      <ul class="ic-modal-list" id="reset-modal-list"></ul>
+      <div id="reset-modal-keeps" class="muted" style="margin-top:10px;font-size:12px"></div>
+      <div id="reset-modal-typebox" hidden style="margin-top:14px">
+        <label class="ic-label" for="reset-confirm-input">Type <code class="mono" style="color:var(--err)">RESET</code> to confirm</label>
+        <input id="reset-confirm-input" class="ic-input mono" autocomplete="off" spellcheck="false" oninput="onResetConfirmInput()">
+      </div>
+    </div>
+    <div class="ic-modal-foot">
+      <button class="ic-btn ic-btn-ghost" id="reset-cancel-btn" onclick="closeResetModal()">Cancel</button>
+      <button class="ic-btn ic-btn-danger" id="reset-confirm-btn" onclick="confirmResetModal()" disabled>Reset</button>
+    </div>
+  </div>
+</div>
+

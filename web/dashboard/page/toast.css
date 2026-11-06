@@ -1,0 +1,23 @@
+/* Toast */
+/* Above every overlay (modals 1000, tour 300, studio 400) so a toast
+   fired while the destination modal is open isn't hidden behind it. */
+.ic-toast-rail{position:fixed;right:24px;bottom:24px;z-index:2000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}
+.ic-toast{background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;
+  padding:10px 14px 10px 12px;display:flex;align-items:center;gap:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.4);pointer-events:auto;
+  animation:toast-in .25s var(--ease-spring);font-size:13px}
+.ic-toast-icon{width:18px;height:18px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;
+  background:color-mix(in oklch,var(--accent) 22%,transparent);color:var(--accent);font-size:11px;font-weight:700}
+.ic-toast.err .ic-toast-icon{background:color-mix(in oklch,var(--danger) 22%,transparent);color:var(--danger)}
+.ic-toast.ok .ic-toast-icon{background:color-mix(in oklch,var(--live) 22%,transparent);color:var(--live)}
+@keyframes toast-in{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
+.ic-toast.leaving{opacity:0;transform:translateX(12px);transition:opacity .25s var(--ease-out),transform .25s var(--ease-out)}
+.ic-toast-text{flex:1;min-width:0;overflow-wrap:anywhere}
+.ic-toast-act{margin-left:4px;padding:4px 11px;border-radius:7px;border:1px solid color-mix(in oklch,var(--accent) 45%,transparent);
+  background:color-mix(in oklch,var(--accent) 12%,transparent);color:var(--accent);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
+  transition:background-color .15s var(--ease-out)}
+.ic-toast-act:hover{background:color-mix(in oklch,var(--accent) 20%,transparent)}
+.ic-toast-x{flex:none;width:22px;height:22px;margin:-2px -6px -2px 0;border-radius:6px;border:0;background:transparent;
+  color:var(--fg-4);font-size:12px;line-height:1;cursor:pointer;transition:color .15s var(--ease-out),background-color .15s var(--ease-out)}
+.ic-toast-x:hover,.ic-toast-x:focus-visible{color:var(--fg);background:var(--surface-3);outline:none}
+@media (max-width:520px){.ic-toast-rail{left:12px;right:12px;bottom:12px;align-items:stretch}}

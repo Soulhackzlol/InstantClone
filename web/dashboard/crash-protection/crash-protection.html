@@ -1,0 +1,84 @@
+  <!-- Crash protection -->
+  <div class="sub-pane" data-subpane="crash" hidden>
+    <!-- Crash protection: keep destinations live on a reconnect screen when
+         OBS crashes. Off by default; the rest of the card appears once it is
+         turned on. Saved with the tab's Save settings button. -->
+    <section class="sys-section" id="s-cp-section" data-find="crash protection reconnect screen brb be right back slate obs crash freeze hold style theme">
+      <div class="ic-label">Crash protection</div>
+      <label class="crash-check crash-master">
+        <input type="checkbox" id="s-cp-enabled" onchange="cpSyncVisibility()">
+        <span>
+          <span class="crash-check-title">Keep the stream up if OBS crashes</span>
+          <span class="tab-sub">Your destinations stay live and show a reconnect screen until OBS is back. Stopping in OBS ends the stream as usual, once your delay has aired.</span>
+        </span>
+      </label>
+      <div class="crash-body" id="s-cp-details" hidden>
+        <div class="crash-stage">
+          <div class="crash-stage-head">
+            <span class="crash-label">What viewers see</span>
+            <div class="crash-seg" role="group" aria-label="Preview shape">
+              <button type="button" data-cp-shape="horizontal" aria-pressed="true">16:9</button>
+              <button type="button" data-cp-shape="vertical" aria-pressed="false">9:16</button>
+            </div>
+          </div>
+          <div class="crash-preview-frame" id="s-cp-preview-frame">
+            <div class="crash-preview" id="s-cp-preview" role="img" aria-label="Preview of the reconnect screen"></div>
+          </div>
+          <span class="crash-note">Drawn by the same code that streams it. Some Enhanced Broadcasting qualities (AV1 or 10-bit HEVC) show your last frame instead.</span>
+        </div>
+        <div class="crash-controls">
+          <div class="crash-field">
+            <span class="crash-label">Style</span>
+            <div class="crash-themes" id="s-cp-themes" role="radiogroup" aria-label="Reconnect screen style"></div>
+          </div>
+          <div class="crash-field">
+            <span class="crash-label">Accent</span>
+            <div class="crash-swatches" id="s-cp-swatches" role="group" aria-label="Accent colour">
+              <span class="st-color" title="Custom colour"><input type="color" id="s-cp-accent" aria-label="Custom accent colour"></span>
+            </div>
+          </div>
+          <div class="crash-field">
+            <span class="crash-label">Background</span>
+            <span class="crash-inline">
+              <span class="st-color"><input type="color" id="s-cp-bg" aria-label="Background colour"></span>
+              <span class="crash-note" id="s-cp-bg-note">Style default</span>
+              <button type="button" class="ic-btn crash-small-btn" id="s-cp-bg-reset">Use style default</button>
+            </span>
+          </div>
+          <div class="crash-field">
+            <span class="crash-field-head">
+              <label class="crash-label" for="s-cp-headline">Text</label>
+              <button type="button" class="crash-link" id="s-cp-text-reset" hidden>Reset text</button>
+            </span>
+            <span class="crash-text-row">
+              <input id="s-cp-headline" class="ic-input" type="text" maxlength="28" aria-label="Headline">
+              <span class="crash-count mono" id="s-cp-headline-count" aria-hidden="true"></span>
+            </span>
+            <span class="crash-text-row">
+              <input id="s-cp-subline" class="ic-input" type="text" maxlength="48" aria-label="Subline">
+              <span class="crash-count mono" id="s-cp-subline-count" aria-hidden="true"></span>
+            </span>
+          </div>
+          <div class="crash-field">
+            <span class="crash-field-head">
+              <label class="crash-label" for="s-cp-hold">Hold for</label>
+              <output class="crash-hold-value mono" id="s-cp-hold-value" for="s-cp-hold"></output>
+            </span>
+            <input id="s-cp-hold" class="crash-range" type="range" min="30" max="300" step="15">
+            <span class="crash-note">Then the stream ends cleanly. A delay still airing counts toward it.</span>
+          </div>
+          <details class="crash-advanced">
+            <summary>Advanced</summary>
+            <label class="crash-check">
+              <input type="checkbox" id="s-cp-every">
+              <span>
+                <span class="crash-check-title">Protect every disconnect</span>
+                <span class="tab-sub">For encoders that fail cleanly, like an NVENC error. Stopping in OBS then shows the screen too, until OBS reconnects or the hold ends.</span>
+              </span>
+            </label>
+          </details>
+        </div>
+      </div>
+    </section>
+  </div>
+

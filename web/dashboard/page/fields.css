@@ -1,0 +1,26 @@
+/* One input that grows + its action buttons, on a single line (wrapping only
+   when the row gets genuinely narrow). Used by the Security controls. */
+.sec-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sec-row .ic-input{flex:1 1 180px;min-width:0}
+.sys-version-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}
+.sys-version-num{font-family:var(--mono);font-size:13px;color:var(--fg);font-weight:600}
+.sys-version-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:99px;
+  font-size:11px;font-weight:600;letter-spacing:.3px}
+.sys-version-pill.ok{background:color-mix(in oklch,var(--accent) 12%,transparent);color:var(--accent)}
+.sys-version-pill.new{background:color-mix(in oklch,var(--warn,#d6a23a) 18%,transparent);color:var(--warn,#d6a23a)}
+.sys-version-pill.ahead{background:color-mix(in oklch,#a18bff 18%,transparent);color:#a18bff}
+.sys-version-pill.err{background:color-mix(in oklch,var(--err) 14%,transparent);color:var(--err)}
+.sys-version-pill.off{background:color-mix(in oklch,var(--fg-3) 16%,transparent);color:var(--fg-3)}
+.sys-os-chip{display:inline-flex;align-items:center;padding:2px 9px;border-radius:99px;font-size:11px;
+  font-weight:600;letter-spacing:.3px;background:var(--surface-3);color:var(--fg-2);border:1px solid var(--line)}
+/* Secrets (dock token URL) blurred by default so they can't leak on a stream
+   or screen-share; the Show button reveals on demand. Copy still works blurred. */
+.blur-secret{filter:blur(6px);transition:filter .1s ease;user-select:none}
+.ic-input.blur-secret{transition:filter .1s ease,border-color .2s var(--ease-out),
+  background-color .2s var(--ease-out),box-shadow .25s var(--ease-out)}
+.blur-secret.revealed{filter:none;user-select:text}
+/* A blurred secret INPUT stays editable: unblur while focused (so typing is
+   never blurred) and while empty (so the placeholder is readable). It only
+   blurs a saved value sitting idle on screen. */
+.ic-input.blur-secret:focus,
+.ic-input.blur-secret:placeholder-shown{filter:none;user-select:text}

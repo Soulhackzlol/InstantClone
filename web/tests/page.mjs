@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { readWebFile } from './web-files.mjs';
 
 const WEB = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const REPO = path.dirname(WEB);
@@ -171,12 +172,12 @@ function openedUp(source) {
 
 /** The scripts a page runs, in the order the browser would: [name, source]. */
 function scriptsOf(file) {
-  const html = fs.readFileSync(path.join(WEB, file), 'utf8');
+  const html = readWebFile(file);
   const out = [];
   let inline = 0;
   for (const tag of html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)) {
     const src = /\bsrc="\/?([^"]+)"/.exec(tag[1]);
-    if (src) out.push([src[1], openedUp(fs.readFileSync(path.join(WEB, src[1]), 'utf8'))]);
+    if (src) out.push([src[1], openedUp(readWebFile(src[1]))]);
     else if (tag[2].trim()) out.push([`${file}#script${++inline}`, openedUp(tag[2])]);
   }
   return out;

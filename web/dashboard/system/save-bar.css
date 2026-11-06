@@ -1,0 +1,12 @@
+/* Save bar: appears only while there are unsaved changes, pinned to the
+   bottom of the window so Save is never a long scroll away. */
+.sys-foot{position:sticky;bottom:12px;z-index:5;display:flex;align-items:center;gap:10px;margin-top:4px;
+  padding:9px 10px 9px 16px;border:1px solid var(--line);border-radius:12px;
+  background:var(--surface-2);
+  box-shadow:0 10px 30px rgba(0,0,0,.35);border-color:color-mix(in oklch,var(--warn) 55%,var(--line));
+  animation:softRise .18s var(--ease-out)}
+.sys-foot[hidden]{display:none}
+.sys-foot-state{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg);font-weight:600;white-space:nowrap}
+.sys-foot-state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--warn)}
+@keyframes softRise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+#s-msg{flex:1;min-width:0;font-size:12px}

@@ -1,9 +1,11 @@
 //! Build-time HTML pipeline: minify + gzip web/*.html, emit gz blobs to
 //! OUT_DIR so the binary embeds only the compressed bytes. Skips the
 //! minifier on anything that looks risky (template literals, <pre>).
+//! The dashboard page is first joined from its pieces in web/dashboard/
+//! (see `read_dashboard`).
 //!
-//! Net effect: ~125 KB of HTML/CSS/JS in source compresses to ~25 KB in
-//! the binary. The release binary serves the gz blob directly with
+//! Net effect: the dashboard's ~870 KB of HTML/CSS/JS in source goes out
+//! as ~165 KB gzipped. The release binary serves the gz blob directly with
 //! `Content-Encoding: gzip` - every real browser supports it.
 
 use std::env;
@@ -34,7 +36,11 @@ fn main() {
         // The Overlay Studio editor, the same way.
         ("studio.js", false),
     ] {
-        let raw = read_web(&web_dir.join(name));
+        let raw = if *name == "index.html" {
+            read_dashboard(&web_dir.join("dashboard"))
+        } else {
+            read_web(&web_dir.join(name))
+        };
         let processed: Vec<u8> = if *do_min {
             minify(&raw)
         } else {
@@ -97,6 +103,48 @@ const TRANSLATED: &[&str] = &["es"];
 fn read_web(path: &std::path::Path) -> String {
     println!("cargo:rerun-if-changed={}", path.display());
     fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+}
+
+/// The dashboard page (served at /), joined from the pieces that
+/// web/dashboard/parts.txt lists, in that order and with nothing added
+/// between them. Pieces sit in one folder per feature. A piece on disk
+/// that the list leaves out fails the build, so a new file can't be
+/// silently missing from the page.
+fn read_dashboard(dir: &std::path::Path) -> String {
+    let list = read_web(&dir.join("parts.txt"));
+    let parts: Vec<&str> = list
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+
+    // Watching the folder itself also catches a piece added to it.
+    println!("cargo:rerun-if-changed={}", dir.display());
+    for folder in read_dir_names(dir)
+        .into_iter()
+        .filter(|name| name != "parts.txt")
+    {
+        for file_name in read_dir_names(&dir.join(&folder)) {
+            let piece = format!("{folder}/{file_name}");
+            assert!(
+                parts.contains(&piece.as_str()),
+                "web/dashboard/{piece} is not listed in web/dashboard/parts.txt"
+            );
+        }
+    }
+
+    parts
+        .iter()
+        .map(|piece| read_web(&dir.join(piece)))
+        .collect()
+}
+
+/// The names of the entries in `dir`.
+fn read_dir_names(dir: &std::path::Path) -> Vec<String> {
+    fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("read {}: {}", dir.display(), e))
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect()
 }
 
 /// Gzip `bytes` into `path`; returns the compressed size.
