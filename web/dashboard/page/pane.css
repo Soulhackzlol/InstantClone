@@ -18,6 +18,10 @@
    only so it's GPU-composited; .pane-card clips overflow-x so the slide never
    flashes a scrollbar. Reduced-motion collapses it globally. */
 .tab-pane{animation:paneIn .28s var(--ease-out) both;display:flex;flex-direction:column;gap:28px}
+/* A pane laid out ahead of its first click (warmHiddenPanes): never seen,
+   never in the way, and hidden again before anything is drawn. */
+.pane-warm{position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;animation:none}
+.pane-warm .pane-warm{position:static}
 @media (max-width:560px){.tab-pane{gap:20px}}
 @keyframes paneIn{
   from{opacity:0;transform:translate3d(var(--pane-dx,0),0,0)}

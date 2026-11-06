@@ -16,7 +16,7 @@ async function refreshSysVodScript(){
   if (atLeast === true){
     // Hard requirement: 32.2 locked the built-in VOD Track to Custom services.
     req.className = 'sys-callout req';
-    setHtml(req, '<span class="sys-callout-ic">⚠</span><span><b>' + ver + ' requires this script for VOD audio.</b> OBS 32.2 stopped the built-in VOD Track working on Custom services, so the old checkbox and the "EB + VOD" launcher no longer add it. Use the script.</span>');
+    setHtml(req, '<span class="sys-callout-ic">⚠</span><span><b>Your OBS needs this script for VOD audio.</b> <span>Download it below and add it to OBS once.</span></span>');
     if (legacyBtn) legacyBtn.hidden = true;
     if (legacyHint) legacyHint.hidden = true;
     if (legacySteer) legacySteer.hidden = false;
@@ -29,7 +29,7 @@ async function refreshSysVodScript(){
   } else {
     // OBS version unknown (never launched / logs unreadable).
     req.className = 'sys-callout info';
-    setHtml(req, '<span class="sys-callout-ic">ℹ</span><span><b>On OBS 32.2+ this script is required</b>: that version stopped the built-in VOD Track working on Custom services. Older OBS can still use the built-in VOD Track checkbox.</span>');
+    setHtml(req, '<span class="sys-callout-ic">ℹ</span><span><b>OBS 32.2 and newer need this script for VOD audio.</b> <span>Download it below and add it to OBS once.</span></span>');
     if (legacyBtn) legacyBtn.hidden = false;
     if (legacyHint) legacyHint.hidden = false;
     if (legacySteer) legacySteer.hidden = true;

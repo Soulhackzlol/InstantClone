@@ -178,9 +178,12 @@ async function slImportTwitch(){
 }
 
 // Wizard: connecting Streamlabs is step 1 done; with Twitch picked, the key
-// step can take the key from Streamlabs instead of a paste. The key goes
-// straight into a destination on the server, never through this page.
+// step can take the key from Streamlabs (or from Twitch itself, see
+// wizard/twitch-key.js) instead of a paste. The key goes straight into a
+// destination on the server, never through this page.
 let wizKeyImported = false;
+/** Who handed the Twitch key over: '', 'Streamlabs' or 'Twitch'. */
+let wizKeyFrom = '';
 async function wizConnectStreamlabs(){
   const btn = $('wiz-sl-btn');
   btn.disabled = true;
@@ -195,12 +198,14 @@ function syncWizStreamlabsImport(){
   const row = $('w-sl-import');
   if (!row) return;
   const twitch = $('w-platform') && $('w-platform').value === 'twitch';
-  row.hidden = !twitch || !(wizKeyImported || slReady(slInfo));
+  row.hidden = !twitch || !(wizKeyFrom === 'Streamlabs' || (!wizKeyImported && slReady(slInfo)));
   $('w-sl-import-btn').hidden = wizKeyImported;
   // An import only covers Twitch: picking another platform wants a paste.
-  const key = $('w-key');
-  key.disabled = twitch && wizKeyImported;
-  key.placeholder = key.disabled ? 'imported from Streamlabs' : 'paste your stream key';
+  // Once it's in, the paste field and the "where to find it" link go.
+  const done = twitch && wizKeyImported;
+  $('w-key').disabled = done;
+  $('w-key-paste').hidden = done;
+  $('w-key-help').classList.toggle('key-done', done);
 }
 async function wizImportStreamlabsKey(){
   const btn = $('w-sl-import-btn'), msg = $('w-sl-import-msg');
@@ -209,10 +214,12 @@ async function wizImportStreamlabsKey(){
   btn.disabled = false;
   if (!r.ok){ msg.textContent = r.error; return; }
   wizKeyImported = true;
+  wizKeyFrom = 'Streamlabs';
   $('w-key').value = '';
   msg.textContent = 'Imported. Your key went straight to the Twitch destination.';
   clearWizMsg();
   syncWizStreamlabsImport();
+  syncWizTwitchKey();
 }
 
 // The OBS tab asks once when it opens; what changes outside the dashboard

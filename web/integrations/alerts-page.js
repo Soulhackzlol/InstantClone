@@ -92,7 +92,7 @@ function alertsPill(){
   const a = S.data.alerts || {};
   if (a.in_obs) return ['ok', 'in OBS'];
   if (a.elsewhere) return ['warn', 'not in OBS'];
-  return ['', 'Add to OBS'];
+  return ['todo', 'Add to OBS'];
 }
 
 // Is the alerts page in OBS, with one click to put it there. `compact`

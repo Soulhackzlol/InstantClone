@@ -56,6 +56,12 @@
   transition:border-color .2s var(--ease-out),background-color .2s var(--ease-out),color .2s var(--ease-out),transform .15s var(--ease-out)}
 .ig-conns .ic-pill:hover{border-color:var(--line-2);color:var(--fg)}
 .ig-conns .ic-pill:active{transform:scale(.96)}
+/* Not set up yet: an invitation in the accent, so grey never reads as off. */
+.ic-pill.todo{color:var(--fg);border-style:dashed;border-color:color-mix(in oklch,var(--accent) 50%,transparent)}
+.ic-pill.todo .dot{background:none;box-shadow:inset 0 0 0 1.5px var(--accent)}
+.ic-pill.todo .ic-pill-v{color:var(--accent);font-weight:600}
+.ic-pill.todo .ic-pill-v::after{content:" +"}
+.ig-conns .ic-pill.todo:hover{border-color:var(--accent);background:color-mix(in oklch,var(--accent) 10%,transparent)}
 /* Segmented controls, with the dashboard's sliding pill. */
 .ig-seg{display:inline-flex;flex:0 0 auto;flex-wrap:wrap;max-width:100%}
 .ig-seg .sub-tab{flex:0 0 auto;padding:6px 13px;transition:color .2s var(--ease-out),transform .15s var(--ease-out)}
@@ -485,6 +491,17 @@
 .ig-mchip-name:hover{color:var(--fg)}
 .ig-mchip.on{background:color-mix(in oklch,var(--accent) 16%,var(--surface-3));border-color:color-mix(in oklch,var(--accent) 55%,transparent)}
 .ig-mchip.on .ig-mchip-name{color:var(--fg)}
+/* Remove a moment: beside its switch, there on hover and on the open one. */
+.ig-moment-del{display:grid;place-items:center;width:20px;height:20px;padding:0;border-radius:50%;border:1px solid var(--line-2);
+  background:var(--surface-3);color:var(--fg-3);cursor:pointer;opacity:0;
+  transition:opacity .15s var(--ease-out),color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-moment-del svg{width:10px;height:10px}
+.ig-moment-del:hover,.ig-moment-del:focus-visible{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 55%,transparent);opacity:1}
+.ig-moment-del:active{transform:scale(.92)}
+.ig-moment .ig-moment-del{position:absolute;top:2px;left:calc(50% + 20px)}
+.ig-mchip .ig-moment-del{width:18px;height:18px;margin-left:-4px;border-color:transparent;background:none}
+:is(.ig-moment,.ig-mchip):is(:hover,.on,:focus-within) .ig-moment-del{opacity:1}
+@media (hover:none){.ig-moment-del{opacity:1}}
 /* The simple editor: the preview you write on, and its options beside it
    as rows. The open row's settings sit right under it. */
 .ig-ed-cols{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}

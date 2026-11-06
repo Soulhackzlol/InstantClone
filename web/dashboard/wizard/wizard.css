@@ -425,6 +425,7 @@
 .w-key-help{margin-top:10px;display:flex;flex-direction:column;gap:6px;font-size:11.5px;color:var(--fg-3);line-height:1.45}
 .w-key-help .w-key-link{color:var(--fg-2);text-decoration:underline;text-underline-offset:2px;font-size:11.5px}
 .w-key-help .w-key-link:hover{color:var(--fg)}
+.w-key-help.key-done .w-key-link{display:none}
 .w-key-disclose{margin-top:0}
 /* Kick gets the warning palette on its summary even when not hovered. */
 .w-key-disclose summary.warn{color:var(--warn,#d6a23a)}
@@ -432,6 +433,24 @@
 .w-key-help a:hover{color:var(--fg)}
 .w-key-help .w-key-tip{margin-top:4px;color:var(--fg-4)}
 .w-key-help .w-key-tip.warn{color:var(--warn,#d6a23a)}
+/* Twitch: "Get my key from Twitch" above the paste field, then the wait
+   for the approval on twitch.tv, then an "or paste it" divider. */
+.w-tw-key{display:flex;flex-direction:column;gap:12px;margin-bottom:14px}
+.w-tw-key[hidden],.w-tw-key-row[hidden],.w-tw-key-wait[hidden],.w-or[hidden]{display:none}
+.w-tw-key-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px}
+.w-tw-key-row .muted{flex:1 1 220px;line-height:1.45}
+.w-tw-key-row .muted.err{color:var(--danger)}
+.w-tw-key-row .muted.ok{color:var(--ok)}
+.w-tw-key-wait{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border:1px solid var(--line-2);border-radius:10px;background:color-mix(in oklch,var(--accent) 6%,transparent);font-size:12.5px;line-height:1.5}
+.w-tw-key-spin{flex:none;width:14px;height:14px;margin-top:2px;border:2px solid color-mix(in oklch,var(--accent) 30%,transparent);border-top-color:var(--accent);border-radius:50%;animation:wovspin .9s linear infinite}
+.w-tw-key-wait-text{display:flex;flex-direction:column;gap:4px;min-width:0}
+.w-tw-key-wait-text b.mono{color:var(--fg);letter-spacing:1px}
+.w-tw-key-links{display:flex;gap:14px;align-items:center;margin-top:2px}
+.w-tw-key-links a,.w-tw-key-cancel{color:var(--fg-2);text-decoration:underline;text-underline-offset:2px;font:inherit;font-size:12px;background:none;border:0;padding:0;cursor:pointer}
+.w-tw-key-links a:hover,.w-tw-key-cancel:hover{color:var(--fg)}
+.w-or{display:flex;align-items:center;gap:10px;color:var(--fg-4);font-size:11.5px}
+.w-or::before,.w-or::after{content:"";flex:1;height:1px;background:var(--line)}
+@media (prefers-reduced-motion:reduce){.w-tw-key-spin{animation-duration:2.5s}}
 #w-msg{margin-top:8px;min-height:1.2em;font-size:12px}
 #w-msg .err{color:var(--danger)}
 #w-msg .ok{color:var(--live)}

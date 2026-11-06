@@ -230,8 +230,9 @@ const Editor = {
       ${this.chip === missing.id ? '' : `<button class="ic-btn ic-btn-primary ig-small" data-act="chip" data-chip="${missing.id}">Fix it</button>`}</div>` : '';
     return fix + groups;
   },
-  // The moments it acts on, each with its switch. A moment that still
-  // misses something says so in its colour and its tooltip.
+  // The moments it acts on, each with its switch and its remove button
+  // (shown on hover and on the open one). A moment that still misses
+  // something says so in its colour and its tooltip.
   momentsHtml(){
     const hs = this.d.handlers;
     if (hs.length === 1) return '';
@@ -244,15 +245,16 @@ const Editor = {
       return `<button class="${cls}${n === this.sel ? ' on' : ''}${warn ? ' warn' : ''}"${n === this.sel ? ' aria-current="true"' : ''}
         data-act="moment" data-n="${n}"${warn ? ` title="${esc(capFirst(warn))}"` : ''}>${esc(labels[n])}</button>`;
     };
+    const del = n => `<button class="ig-moment-del" data-act="moment-del" data-n="${n}" aria-label="Remove ${esc(labels[n])}" title="Remove">${svg('x')}</button>`;
     const alert = (primaryStep(hs[this.sel]) || {}).type === 'overlay';
     const hint = `<div class="ig-mhint">${alert ? 'Each one has its own alert' : 'Each one has its own settings'}: click a name to edit it below. The tick turns it on or off.</div>`;
     // Too many for a timeline: chips that wrap, each keeping its switch.
     if (hs.length > 5){
       return `<div class="ig-mchips" role="group" aria-label="Moments">${hs.map((h, n) => `<div class="ig-mchip${n === this.sel ? ' on' : ''}">
-        ${dot(h, n)}${name(n, 'ig-mchip-name')}</div>`).join('')}</div>${hint}`;
+        ${dot(h, n)}${name(n, 'ig-mchip-name')}${del(n)}</div>`).join('')}</div>${hint}`;
     }
-    return `<div class="ig-moments" role="group" aria-label="Moments" style="--n:${hs.length}">${hs.map((h, n) => `<div class="ig-moment">
-      ${dot(h, n)}${name(n, 'ig-moment-name')}</div>`).join('')}</div>${hint}`;
+    return `<div class="ig-moments" role="group" aria-label="Moments" style="--n:${hs.length}">${hs.map((h, n) => `<div class="ig-moment${n === this.sel ? ' on' : ''}">
+      ${dot(h, n)}${name(n, 'ig-moment-name')}${del(n)}</div>`).join('')}</div>${hint}`;
   },
   previewBoxHtml(step, h){
     if (step && step.type === 'light'){
@@ -817,6 +819,23 @@ const Editor = {
         this.render();
         return true;
       case 'moment-toggle': { const x = this.d.handlers[+el.dataset.n]; x.enabled = !x.enabled; this.changed(); return true; }
+      // Gone at once, with Undo on the toast (the X is too small to ask on).
+      case 'moment-del': {
+        const d = this.d, at = +el.dataset.n;
+        if (d.handlers.length < 2) return true;
+        const label = momentLabels(d.handlers)[at];
+        const [gone] = d.handlers.splice(at, 1);
+        const pick = n => { this.sel = n; this.tier = 0; this.testValues = {}; this.run = null; this.chip = null; };
+        pick(Math.min(this.sel > at ? this.sel - 1 : this.sel, d.handlers.length - 1));
+        this.changed();
+        undoToast(`Removed "${label}"`, () => {
+          if (Modal.kind !== 'editor' || this.d !== d) return;
+          d.handlers.splice(Math.min(at, d.handlers.length), 0, gone);
+          pick(d.handlers.indexOf(gone));
+          this.changed();
+        });
+        return true;
+      }
       case 'chip':
         this.chip = this.chip === el.dataset.chip ? null : el.dataset.chip;
         this.render();

@@ -85,6 +85,13 @@ test('a phrase capitalized to start a line reads its own key, not a pattern', ()
   assert.equal(tr('Open'), 'Abierto', 'its capitalized key comes first');
 });
 
+test('punctuation a translation starts with sits against the markup before it', () => {
+  const tr = translator({ lang: 'es', strings: { 'tab.': '.', 'Save settings': 'Guardar ajustes' } });
+  assert.equal(tr(' tab.'), '.', '"la pestaña <b>Destinos</b> ." would read wrong');
+  assert.equal(tr(' Save settings'), ' Guardar ajustes', 'a word keeps its space');
+  assert.equal(tr(' .'), ' .', 'text with nothing to translate stays');
+});
+
 test('a name someone typed survives inside a sentence', () => {
   const tr = translator({
     lang: 'es',

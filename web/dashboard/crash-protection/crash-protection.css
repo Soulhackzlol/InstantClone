@@ -9,7 +9,8 @@
 .crash-master{margin-top:14px}
 .crash-body{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:20px 28px;margin-top:18px;
   padding-top:18px;border-top:1px solid var(--line);animation:softDrop .2s var(--ease-out)}
-.crash-stage{display:flex;flex-direction:column;gap:8px;align-self:start;position:sticky;top:12px}
+/* Sticks below the System section strip (page/tabs.css). */
+.crash-stage{display:flex;flex-direction:column;gap:8px;align-self:start;position:sticky;top:30px}
 .crash-stage-head,.crash-field-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .crash-label{font-weight:600;font-size:12.5px;color:var(--fg-2)}
 .crash-note{color:var(--fg-3);font-size:11.5px;line-height:1.45}

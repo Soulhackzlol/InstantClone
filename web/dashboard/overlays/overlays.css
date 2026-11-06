@@ -37,11 +37,14 @@
 }
 .ovg-view{gap:14px;padding:18px}
 /* Every page's preview has the same bar: "Preview", what it plays, then
-   what you can do with it, at the end. */
-.ovg-viewbar{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;min-height:36px}
-.ovg-viewbar>.ic-label{margin:0}
+   what you can do with it, at the end. One line: the state's words give
+   way (ellipsis) before the controls ever drop below. */
+.ovg-viewbar{display:flex;align-items:center;gap:8px 10px;min-height:36px}
+.ovg-viewbar>.ic-label{margin:0;flex:0 0 auto}
+.ovg-viewbar>.ph-cap{display:block;min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis}
+.ovg-viewbar>.ph-cap .ph-dot{display:inline-block;vertical-align:middle;margin:-2px 7px 0 0}
 .ovg-viewbar>.ph-cap:empty{display:none}
-.ovg-viewend{margin-left:auto}
+.ovg-viewend{margin-left:auto;flex:0 0 auto}
 /* The delay's states, one segmented control: one of them plays. */
 .ovg-viewbar .st-simbar{gap:2px;padding:3px}
 .ovg-viewbar .st-sim,.ovg-viewbar .st-auto{padding:5px 10px;border-color:transparent;border-radius:7px;background:none}
@@ -49,6 +52,7 @@
 .ovg-viewbar .st-sim.on,.ovg-viewbar .st-auto.on{color:var(--accent-ink);background:var(--accent)}
 /* A phone: its own row, three and three. */
 @media (max-width:560px){
+  .ovg-viewbar{flex-wrap:wrap}
   .ovg-viewbar .st-simbar{flex-basis:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
   .ovg-viewbar .st-sim,.ovg-viewbar .st-auto{justify-content:center}
 }

@@ -68,12 +68,16 @@
    1.1 s sweep on every state change. --tint (hovers) takes one clean hue
    per state: blending the accent with the state colour made a third hue,
    so cyan and the arming amber hovered green. */
-html{transition:--aurora-a 1.1s var(--ease-out),--aurora-b 1.1s var(--ease-out),--aurora-glow 1.1s var(--ease-out);
-  --tint:var(--accent)}
+html{--tint:var(--accent)}
 html[data-stream-state="off"]{--aurora-a:oklch(0.55 0.04 230);--aurora-b:oklch(0.5 0.05 260);--aurora-glow:.16}
 html[data-stream-state="arming"]{--aurora-a:var(--warn);--aurora-b:oklch(0.65 0.18 35);--aurora-glow:.34;--tint:var(--warn)}
 html[data-stream-state="armed"]{--aurora-a:var(--accent);--aurora-b:oklch(0.62 0.16 250);--aurora-glow:.32}
 html[data-stream-state="active"]{--aurora-a:var(--live);--aurora-b:oklch(0.7 0.15 185);--aurora-glow:.36;--tint:var(--live)}
+/* The sweep runs only on what draws with these colours. Run on <html>, every
+   element inherited each in-between value, so the whole page (~2,000
+   elements) restyled on every frame of it; here about fifteen do. */
+.hero-aurora,.hero-card::after,body::before{
+  transition:--aurora-a 1.1s var(--ease-out),--aurora-b 1.1s var(--ease-out),--aurora-glow 1.1s var(--ease-out)}
 /* Ambient light at the top of the page in the state's color, so the whole
    dashboard (not just one box) says where the stream is. Fixed and
    pointer-less, so scrolling never repaints it. */

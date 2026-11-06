@@ -226,7 +226,7 @@
   <!-- STEP 3: stream key -->
   <div class="wiz-step" data-wstep="key" hidden>
     <div class="wiz-step-h">
-      <div class="wiz-step-t">Paste your stream key from <span id="w-key-platform-name">platform</span></div>
+      <div class="wiz-step-t"><span id="w-key-verb">Paste your stream key from</span> <span id="w-key-platform-name">platform</span></div>
       <div class="wiz-step-s">This is the real key from your platform dashboard. It never leaves this PC except to that platform.</div>
     </div>
     <div id="w-custom-wrap" hidden>
@@ -234,8 +234,30 @@
       <input id="w-custom" class="ic-input mono" placeholder="rtmp://127.0.0.1:1936/live">
       <div class="w-hint">Either put the stream key in the field below (recommended) or paste the full URL with the key embedded.</div>
     </div>
-    <label for="w-key">Stream key <span class="muted" id="w-key-optional-hint" hidden>(optional for Custom if URL has key)</span></label>
-    <input id="w-key" type="password" class="ic-input mono" placeholder="paste your stream key" autocomplete="off">
+    <!-- Twitch: one approval on twitch.tv instead of a paste (see wizard/twitch-key.js). -->
+    <div class="w-tw-key" id="w-tw-key" hidden>
+      <div class="w-tw-key-row">
+        <button type="button" class="ic-btn ic-btn-primary" id="w-tw-key-btn" onclick="wizTwitchKeyStart()">Get my key from Twitch</button>
+        <span class="muted" id="w-tw-key-msg">Approve once on Twitch and your key fills in by itself. Nothing to copy.</span>
+      </div>
+      <div class="w-tw-key-wait" id="w-tw-key-wait" hidden>
+        <span class="w-tw-key-spin" aria-hidden="true"></span>
+        <div class="w-tw-key-wait-text">
+          <div>Approve InstantClone on the Twitch page that just opened. This updates on its own.</div>
+          <div class="muted">If Twitch asks for a code, it's <b class="mono" id="w-tw-key-code" translate="no"></b>.</div>
+          <div class="w-tw-key-links">
+            <a id="w-tw-key-open" href="https://www.twitch.tv/activate" target="_blank" rel="noopener">Open the Twitch page again</a>
+            <button type="button" class="w-tw-key-cancel" onclick="wizTwitchKeyCancel()">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <div class="w-or" id="w-tw-or"><span>or paste it yourself</span></div>
+    </div>
+    <!-- Hidden once Twitch or Streamlabs handed the key over. -->
+    <div id="w-key-paste">
+      <label for="w-key">Stream key <span class="muted" id="w-key-optional-hint" hidden>(optional for Custom if URL has key)</span></label>
+      <input id="w-key" type="password" class="ic-input mono" placeholder="paste your stream key" autocomplete="off">
+    </div>
     <div class="w-sl-import" id="w-sl-import" hidden>
       <button type="button" class="ic-btn ic-btn-ghost" id="w-sl-import-btn" onclick="wizImportStreamlabsKey()">Import from Streamlabs</button>
       <span class="muted" id="w-sl-import-msg">Streamlabs is signed in with Twitch, so it can hand over your key.</span>

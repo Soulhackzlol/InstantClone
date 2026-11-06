@@ -11,6 +11,11 @@ const HOTKEY_ACTIONS = [
   ['cut_after', 'Cut after this airs', 'Press once to schedule a cut the instant the live edge reaches every viewer; press again to cancel it.'],
   ['end_hold',  'End crash protection', 'While the reconnect screen is on air after an OBS crash, end the stream on every destination now.'],
 ];
+// Kept for anyone who bound it already, but not offered: the reconnect
+// screen already has its own End now button, and a key for it is one more
+// thing to read past.
+const OFFERED_ONLY_WHEN_SET = new Set(['end_hold']);
+const isOffered = (action, bindings) => !OFFERED_ONLY_WHEN_SET.has(action) || !!bindings[action];
 const emptyBindings = () => ({toggle:'',arm:'',activate:'',cut:'',cut_after:'',end_hold:''});
 let hkBindings = emptyBindings();
 let hkRec = null; // {action, el} while recording, else null
@@ -79,6 +84,7 @@ function hkRenderList(){
   const list = $('hk-list'); if (!list) return;
   list.innerHTML = '';
   for (const [action, title, sub] of HOTKEY_ACTIONS){
+    if (!isOffered(action, hkBindings)) continue;
     const row = document.createElement('div');
     row.className = 'hk-row';
     const main = document.createElement('div');

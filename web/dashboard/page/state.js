@@ -127,9 +127,9 @@ function runningBufferMb(){
 function bufferAdviceHtml(ms){
   const saved = lastConfig ? lastConfig.buffer_mb : 0;
   if (lastState && lastState.restart_pending && bufferCapMs(saved, planningKbps()) >= ms){
-    return ` Your new ${saved} MB buffer is saved and starts with the next restart of InstantClone. <button type="button" class="cap-show" data-mb="0">Show me</button>`;
+    return ` <span>Your new ${saved} MB buffer is saved and starts with the next restart of InstantClone.</span> <button type="button" class="cap-show" data-mb="0">Show me</button>`;
   }
-  return ` Make the buffer bigger in System (it needs a restart). <button type="button" class="cap-show" data-mb="${requiredMBForMs(ms)}">Show me</button>`;
+  return ` <span>Make the buffer bigger in System (it needs a restart).</span> <button type="button" class="cap-show" data-mb="${requiredMBForMs(ms)}">Show me</button>`;
 }
 // Live hint under the System-tab buffer-size input. Reads whatever
 // number the user has *currently typed* (not the saved value) so the

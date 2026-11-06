@@ -52,6 +52,7 @@ function midiRenderList(){
   const list = $('midi-list'); if (!list) return;
   list.innerHTML = '';
   for (const [action, title, sub] of HOTKEY_ACTIONS){
+    if (!isOffered(action, midiBindings)) continue;
     const row = document.createElement('div');
     row.className = 'hk-row';
     const main = document.createElement('div');

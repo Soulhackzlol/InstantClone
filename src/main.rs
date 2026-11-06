@@ -59,6 +59,9 @@ mod integrations;
 mod json;
 mod local_eb_config;
 mod midi;
+// Build-time only (build.rs includes it); here so its rules are tested.
+#[cfg(test)]
+mod minify;
 mod obs_register;
 // Build-time only (build.rs includes it); here so its rules are tested.
 #[cfg(test)]
@@ -78,6 +81,7 @@ mod test_support;
 mod trace;
 #[cfg(windows)]
 mod tray;
+mod twitch_key;
 mod update_check;
 mod web;
 #[cfg(windows)]

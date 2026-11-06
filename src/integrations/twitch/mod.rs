@@ -46,7 +46,7 @@ pub fn default_client_id() -> String {
 }
 
 /// The user's own app (System settings) wins over the default.
-fn effective_client_id(custom: &str) -> String {
+pub fn effective_client_id(custom: &str) -> String {
     let custom = custom.trim();
     if custom.is_empty() {
         default_client_id()

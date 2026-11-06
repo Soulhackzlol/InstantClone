@@ -99,6 +99,14 @@ const TOUR = [
     `,
   },
   {
+    target: '#hdr-compact', side: 'bottom',
+    title: 'Need more room?',
+    body: `
+      <p>This button folds the delay panel into one slim bar, so the tabs get the screen. The state, the delay and the main button stay in it.</p>
+      <p>Press it again to bring the big panel back.</p>
+    `,
+  },
+  {
     target: '#hdr-help', side: 'bottom', tab: 'destinations',
     title: 'You\'re ready',
     body: `

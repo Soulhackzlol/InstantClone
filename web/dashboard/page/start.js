@@ -26,6 +26,7 @@
   // A busy log moves its counter many times a second: read it once a second.
   Live.on('logs', throttled(pollLogs, 1000));
   pollLogs();
+  setTimeout(warmHiddenPanes, WARM_START_MS);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pollLogs(); });
   // Space drives the delay only from the bare page: a focused control
   // (button, switch, select, style card) or an open dialog keeps it, and

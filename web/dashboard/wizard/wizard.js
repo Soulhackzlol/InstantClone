@@ -255,8 +255,14 @@ function renderWizStep(){
   reserveCopyButtons($('wizard'));
   if (wizCurrent === 'key'){
     syncWizStreamlabsImport();
+    syncWizTwitchKey();
     refreshStreamlabs();
-    setTimeout(() => { const k = $('w-key'); if (k && !k.disabled) k.focus(); }, 60);
+    // With "Get my key from Twitch" on offer, that's the first thing to do.
+    setTimeout(() => {
+      const twitchBtn = $('w-tw-key-btn');
+      const k = twitchBtn && twitchBtn.offsetParent ? twitchBtn : $('w-key');
+      if (k && !k.disabled) k.focus();
+    }, 60);
   }
   // A step that just opened starts at the top, and someone on the keyboard
   // lands on its answer. A mouse doesn't need the focus ring.

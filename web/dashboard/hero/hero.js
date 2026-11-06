@@ -1120,11 +1120,10 @@ let profileMessageTimer = 0;
 function explainProfile(chip, ms){
   const msg = $('cp-chip-msg');
   if (!msg) return;
-  const lead = document.createElement('b');
-  lead.textContent = `${chip.dataset.name} can't arm: it's too long for the buffer.`;
-  msg.replaceChildren(lead);
-  msg.insertAdjacentHTML('beforeend', ` ${fmtDelay(ms)} at the current bitrate needs at least ${requiredMBForMs(ms)} MB.` + bufferAdviceHtml(ms));
-  msg.hidden = false;
+  // One sentence per element, so each one translates on its own.
+  msg.innerHTML = `<b>This profile is too long for your buffer.</b> <span>It needs at least ${requiredMBForMs(ms)} MB.</span>`
+    + bufferAdviceHtml(ms);
+  animateHidden(msg, false);
   if (motionOK()) chip.animate([0, -5, 5, -3, 2, 0].map(r => ({ transform: `rotate(${r}deg)` })),
     { duration: 400, easing: 'ease-out' });
   clearTimeout(profileMessageTimer);
@@ -1132,8 +1131,7 @@ function explainProfile(chip, ms){
 }
 function hideProfileMessage(){
   clearTimeout(profileMessageTimer);
-  const msg = $('cp-chip-msg');
-  if (msg) msg.hidden = true;
+  animateHidden($('cp-chip-msg'), true);
 }
 
 // Profile launch: the bolt flashes and a spark arcs from the chip into the

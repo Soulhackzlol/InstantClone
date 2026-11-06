@@ -136,7 +136,8 @@ async function loadConfig({resetSystem = false, live = false} = {}){
     // nothing saved, so `configured` alone would bring the wizard back.
     const configured = c.configured;
     // A save inside the wizard can set `configured` (a key imported from
-    // Streamlabs): only finishing it closes it, not the reload that follows.
+    // Streamlabs or Twitch): only finishing it closes it, not the reload
+    // that follows, and the tour waits for the dashboard too.
     const wizardStays = live && !$('wizard').hidden;
     const dashboard = (configured || wizardSkipped) && !wizardStays;
     const appearing = dashboard && $('pane-card').hidden;
@@ -147,7 +148,7 @@ async function loadConfig({resetSystem = false, live = false} = {}){
     $('tabs').hidden = !dashboard;
     $('pane-card').hidden = !dashboard;
     $('ic-foot').hidden = !dashboard; fitPaneCard();
-    if (configured){
+    if (configured && dashboard){
       // Fetched when the dashboard appears; later changes come through Live.
       if (appearing){ loadDestinations(); loadProfiles(); loadOverlays(); }
       // Show a tab the first time the dashboard appears. Later reloads keep

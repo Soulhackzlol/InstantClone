@@ -170,7 +170,11 @@
       const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text);
       // A line break inside (a confirm's paragraphs) splits the lookup.
       const lines = core.split(/(\n\s*\n)/);
-      said = lead + lines.map((line, i) => (i % 2 ? line : lookup(line.replace(/\s+/g, ' ')) ?? line)).join('') + trail;
+      const saidCore = lines.map((line, i) => (i % 2 ? line : lookup(line.replace(/\s+/g, ' ')) ?? line)).join('');
+      // After markup ("the <b>OBS</b> tab." is "la pestaña <b>OBS</b>."), a
+      // translation that starts with punctuation drops the space before it.
+      const tight = saidCore !== core && /^[.,;:!?)]/.test(saidCore);
+      said = (tight ? '' : lead) + saidCore + trail;
       if (cache.size >= CACHE_MAX) {
         cache.clear();
         written.clear();

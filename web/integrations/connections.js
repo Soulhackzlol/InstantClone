@@ -11,21 +11,22 @@ const CONNECTIONS = [
 ];
 
 // How a connection stands: [pill class, words]. The strip and the cards
-// say the same.
+// say the same. The class is 'ok', 'warn', 'todo' (not set up yet: drawn
+// as an invitation, not as switched off) or '' (on its way).
 function connState(id){
   const c = S.data.connections, t = S.data.twitch;
   switch (id){
-    case 'discord': return c.discord.length ? ['ok', plural(c.discord.length, 'channel')] : ['', 'Add'];
+    case 'discord': return c.discord.length ? ['ok', plural(c.discord.length, 'channel')] : ['todo', 'Add'];
     case 'twitch':
-      if (!t.main.login) return ['', t.available ? 'Connect' : 'Set up'];
+      if (!t.main.login) return ['todo', t.available ? 'Connect' : 'Set up'];
       return t.main.chat === 'connected' ? ['ok', 'connected'] : ['warn', 'chat ' + t.main.chat];
-    case 'phone': return c.phone.topic ? ['ok', 'connected'] : ['', 'Connect'];
+    case 'phone': return c.phone.topic ? ['ok', 'connected'] : ['todo', 'Connect'];
     // The open dashboard keeps OBS connected. Out of reach only warns when
     // an integration needs it: otherwise it just has to be set up.
     case 'obs': {
       const o = S.data.obs || {};
       if (o.state === 'connected') return ['ok', 'connected'];
-      if (o.state === 'error') return o.used ? ['warn', 'can\'t reach'] : ['', 'Set up'];
+      if (o.state === 'error') return o.used ? ['warn', 'can\'t reach'] : ['todo', 'Set up'];
       return ['', 'connecting…'];
     }
     case 'stream': return alertsPill();

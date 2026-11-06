@@ -162,27 +162,28 @@ function delProfile(name){
   profiles = profiles.filter(p => p.name !== name);
   renderCpProfiles(); renderProfilesPane();
 }
-// Jump to System -> General (buffer size) with the suggested size filled
-// in, so "needs more MB" is one click from fixable. Nothing is saved: the
-// field only lights up and the Save bar appears, and Discard undoes it.
+// Jump to System -> General (buffer size) and light the field up. The size
+// it needs is offered on the toast, never typed in behind the user's back;
+// taking it only fills the field (the Save bar appears, Discard undoes it).
 // Buffer changes need a restart (the DiskRing is immutable once mapped);
 // the restart banner says so once it is saved. mb 0 = just show the place.
 function jumpToBufferSetting(mb){
   showTab('system');
   showSubTab('system', 'general');
   const el = $('s-bmb');
-  const filled = el && mb > (parseInt(el.value, 10) || 0);
+  const offer = el && mb > (parseInt(el.value, 10) || 0);
   if (el){
-    if (filled){
-      el.value = mb;
-      el.dispatchEvent(new Event('input', {bubbles: true}));
-    }
     el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
     el.focus({preventScroll: true});
     el.scrollIntoView({behavior: motionOK() ? 'smooth' : 'auto', block:'center'});
   }
-  toast(filled ? `Filled in ${mb} MB. Nothing is saved until you press Save, then restart to use it.`
-       : lastState && lastState.restart_pending ? 'Saved already: restart InstantClone to use the new buffer.'
+  const fill = () => {
+    el.value = mb;
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    toast('Press Save, then restart InstantClone to use it.', 'info', 5000);
+  };
+  if (offer) toast(`It needs at least ${mb} MB.`, 'info', 9000, {label: `Use ${mb} MB`, run: fill});
+  else toast(lastState && lastState.restart_pending ? 'Saved already: restart InstantClone to use the new buffer.'
        : 'Make the buffer bigger here, Save, then restart.', 'info', 5000);
 }
 // "Show me" in the buffer advice (hero warning, profile chip message).

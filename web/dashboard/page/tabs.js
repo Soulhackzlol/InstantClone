@@ -101,3 +101,39 @@ $$('.tab').forEach(t => t.addEventListener('click', () => {
   if (!t.classList.contains('on')) showTab(t.dataset.tab);
 }));
 window.addEventListener('resize', moveTabInd);
+
+// - Warm-up: each tab laid out once before its first click -----------------
+// A pane never shown before lays its text out for the first time when its
+// tab is clicked: a one-off cost (up to ~70 ms for OBS, four times that on a
+// slow PC) that lands on the first frame of the slide-in. Once the page is
+// idle, every hidden pane and sub-pane is laid out once, out of sight
+// (.pane-warm), and hidden again in the same task, so nothing is ever drawn.
+const WARM_START_MS = 2000;   // after the page's own entrance has played
+const whenIdle = window.requestIdleCallback
+  ? fn => requestIdleCallback(fn, {timeout: 3000})
+  : fn => setTimeout(fn, 200);
+function warmHiddenPanes(){
+  const card = $('pane-card');
+  // The wizard is up: the panes have no width yet. Ask again later.
+  if (!card || card.hidden || !card.clientWidth){ setTimeout(warmHiddenPanes, 5000); return; }
+  const panes = $$('.tab-pane');
+  const warmNext = () => {
+    const pane = panes.shift();
+    if (!pane) return;
+    warmPane(pane);
+    whenIdle(warmNext);
+  };
+  whenIdle(warmNext);
+}
+function warmPane(pane){
+  const width = $('pane-card').clientWidth;
+  const hidden = [pane, ...pane.querySelectorAll('.sub-pane')].filter(el => el.hidden);
+  if (!hidden.length || !width) return;
+  for (const el of hidden){ el.classList.add('pane-warm'); el.hidden = false; }
+  // Out of the flow, at the width it will have: only the outermost ones.
+  const outer = hidden.filter(el => !el.parentElement.closest('.pane-warm'));
+  for (const el of outer) el.style.width = width + 'px';
+  void pane.offsetHeight;
+  for (const el of hidden){ el.hidden = true; el.classList.remove('pane-warm'); }
+  for (const el of outer) el.style.width = '';
+}
