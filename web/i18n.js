@@ -165,7 +165,7 @@
     const head = strings[core.slice(0, at)];
     if (head === undefined) return null;
     const rest = core.slice(at + LABEL.length);
-    const tail = lookupValue(rest) ?? lookupLabelled(rest);
+    const tail = lookupValue(rest);   // which reads a nested label too
     return tail === null ? null : head + LABEL + tail;
   }
 

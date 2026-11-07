@@ -61,6 +61,13 @@ async function wizTwitchKeyStart(){
   setTwitchKeyWaiting(true);
 }
 
+// Another platform picked, or the wizard skipped: the code is dropped, so
+// nothing keeps asking Twitch. Moving on to the next step keeps it: an
+// approval that comes later still fills the Twitch destination.
+function dropWizTwitchKey(){
+  if (twitchKeyWaitingNow) wizTwitchKeyCancel();
+}
+
 async function wizTwitchKeyCancel(){
   setTwitchKeyWaiting(false);
   twitchKeySay('Approve once on Twitch and your key fills in by itself. Nothing to copy.');

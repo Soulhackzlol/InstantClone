@@ -136,7 +136,7 @@
 .ig-packs{width:min(940px,100%);text-align:left}
 /* Starter packs: a card each, tinted by its own colour (--pk), what's
    inside as a list, and one button that adds only what's missing. */
-.ig-starters{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
+.ig-starters{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(290px,100%),1fr));gap:14px}
 .ig-starter{position:relative;display:flex;flex-direction:column;gap:12px;padding:18px;border-radius:14px;overflow:hidden;
   border:1px solid color-mix(in oklch,var(--pk) 28%,var(--line));
   background:radial-gradient(120% 70% at 0% 0%,color-mix(in oklch,var(--pk) 13%,transparent),transparent 60%),var(--surface-2);

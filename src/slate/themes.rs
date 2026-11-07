@@ -46,8 +46,12 @@ fn canvas_center(canvas: &Canvas) -> (f32, f32) {
 }
 
 /// `phase` rounded down to one of `steps` positions.
+/// A phase that lands on a step (0.3333 for 2 of 6) can come out a hair
+/// under it in floating point; the margin keeps it on that step, so the
+/// stream and the preview, which reach a moment by different sums, agree.
 fn stepped(phase: f32, steps: f32) -> f32 {
-    (phase * steps).floor() / steps
+    const ON_THE_STEP: f32 = 1e-4;
+    (phase * steps + ON_THE_STEP).floor() / steps
 }
 
 const HEADLINE_COLOR: Rgb = Rgb::new(0xee, 0xf0, 0xf3);
@@ -96,6 +100,10 @@ fn draw_text_block(
 
 /// Glow levels per dot.
 const WHISPER_GLOW_STEPS: f32 = 8.0;
+/// Moments per loop the glow can change at: 12 a second, a multiple of 6
+/// so each dot's 1/6 offset lands on one, and the dashboard's 24-frame
+/// preview shows every one of them at the moment the stream does.
+const WHISPER_TIME_STEPS: f32 = 24.0;
 
 /// Minimal centred text over three dots whose glow chases left to right.
 fn draw_whisper(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
@@ -112,7 +120,7 @@ fn draw_whisper(canvas: &mut Canvas, style: &ScreenStyle, phase: f32) {
     let radius = (7.0 * scale).round().max(1.0);
     let dot_y = (center_y + 100.0 * scale).round();
     for index in 0..3 {
-        let wave = phase - index as f32 / 6.0;
+        let wave = stepped(phase, WHISPER_TIME_STEPS) - index as f32 / 6.0;
         let glow = 0.5 + 0.5 * (TAU * wave).sin();
         let glow = (glow * WHISPER_GLOW_STEPS).round() / WHISPER_GLOW_STEPS;
         let dot_x = (center_x + (index as f32 - 1.0) * spacing).round();
@@ -433,5 +441,29 @@ mod tests {
             stripe_seen |= painted.iter().any(|x| row[*x] != row[painted[0]]);
         }
         assert!(stripe_seen, "the stripe never showed on the track");
+    }
+
+    /// The dashboard plays the loop as a strip of 24 frames (web.rs
+    /// crash_protection_preview, crash-protection.js CP_PREVIEW_FRAMES).
+    /// Every stream frame at 30 fps must be the strip frame showing at that
+    /// moment, so the preview moves exactly as viewers see it.
+    #[test]
+    fn the_24_frame_preview_shows_every_stream_frame() {
+        const PREVIEW_FRAMES: usize = 24;
+        let stream_frames = crate::crash_hold::SLATE_FPS as usize * super::super::LOOP_MS / 1000;
+        for theme in SlateTheme::ALL {
+            let style = style(theme);
+            let strip: Vec<YuvFrame> = (0..PREVIEW_FRAMES)
+                .map(|k| render(&style, 480, 270, k as f32 / PREVIEW_FRAMES as f32))
+                .collect();
+            for i in 0..stream_frames {
+                let streamed = render(&style, 480, 270, i as f32 / stream_frames as f32);
+                let shown = &strip[i * PREVIEW_FRAMES / stream_frames];
+                assert!(
+                    streamed.y == shown.y && streamed.u == shown.u && streamed.v == shown.v,
+                    "{theme:?}: stream frame {i} of {stream_frames} differs from the preview"
+                );
+            }
+        }
     }
 }

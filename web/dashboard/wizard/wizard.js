@@ -215,6 +215,7 @@ function renderWizStep(){
   const fromHeight = $('wizard').offsetHeight;
   const ids = wizStepIds();
   if (!ids.includes(wizCurrent)) wizCurrent = ids[ids.length - 1];
+  if ($('w-platform').value !== 'twitch') dropWizTwitchKey();
   const i = ids.indexOf(wizCurrent);
   $('wizard').dataset.dir = wizDir;
   // The welcome's questions are their own headings: no "Step 3 of 8" above.
@@ -672,6 +673,7 @@ function renderKeyHelp(slug, hostId){
 let wizardSkipped = false;
 function skipWizard(){
   wizardSkipped = true;
+  dropWizTwitchKey();
   $('wizard').hidden = true;
   $('hdr-bar').hidden = false;
   $('hero').hidden = false;

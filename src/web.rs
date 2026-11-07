@@ -3626,7 +3626,10 @@ fn change_obs_registrations(
                 .map(|switched| pointed += usize::from(switched))
                 .map_err(|e| format!("{name}: {e}"))
         } else {
-            obs_register::unregister_in(&path).map_err(|e| format!("{name}: {e}"))
+            obs_register::unregister_in(&path)
+                .and_then(|()| obs_register::restore_service_in(&install.config_dir))
+                .map(|back| pointed += back)
+                .map_err(|e| format!("{name}: {e}"))
         };
         if let Err(problem) = done {
             problems.push(problem);
@@ -3646,6 +3649,8 @@ fn change_obs_registrations(
         "Registered, and OBS now streams to InstantClone, key included. Open OBS and press Start Streaming."
     } else if register {
         "Registered. Open OBS and pick InstantClone in Settings → Stream → Service."
+    } else if pointed > 0 {
+        "Unregistered. OBS no longer lists InstantClone and streams with your old settings again."
     } else {
         "Unregistered. OBS no longer lists InstantClone."
     };

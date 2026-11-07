@@ -53,6 +53,8 @@ const Editor = {
   reset(){
     this.d.handlers.forEach(h => sampleArgsFrom(h, presetOf(this.d)));
     this.sel = Math.min(this.sel, this.d.handlers.length - 1);
+    // The other version may have fewer levels than the one being edited.
+    this.tier = 0;
     this.chip = null;
     this.run = null;
   },
@@ -150,6 +152,8 @@ const Editor = {
     this.d.handlers.forEach(h => sampleArgsFrom(h, presetOf(this.d)));
     this.dirty = dirty;
     this.sel = Math.min(this.sel, this.d.handlers.length - 1);
+    // The other version may have fewer levels than the one being edited.
+    this.tier = 0;
     this.chip = null;
     this.run = null;
     this.show();

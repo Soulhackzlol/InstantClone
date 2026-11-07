@@ -1,6 +1,6 @@
 /* Reset dialog: a card tinted with the error colour, since what it does
    cannot be undone. */
-.ic-modal-card{position:relative;width:min(520px,100%);background:var(--bg-1);
+.ic-modal-card{position:relative;width:min(520px,100%);background:linear-gradient(180deg,var(--bg-2),var(--surface));
   border:1px solid color-mix(in oklch,var(--err) 28%,var(--line));border-radius:14px;
   box-shadow:0 24px 60px rgba(0,0,0,.5);padding:0;overflow:hidden;
   animation:modalIn .22s var(--ease-out) both}

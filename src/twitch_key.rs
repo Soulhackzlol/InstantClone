@@ -122,7 +122,13 @@ pub fn check() -> Check {
     match auth::poll_device(&client_id, &scopes(), &device_code) {
         Poll::Pending => Check::Waiting,
         Poll::SlowDown => {
-            if let Some(p) = PENDING.lock().as_mut() {
+            // Only this login slows down: a newer one may have started
+            // while Twitch was being asked.
+            if let Some(p) = PENDING
+                .lock()
+                .as_mut()
+                .filter(|p| p.device_code == device_code)
+            {
                 p.interval += SLOW_DOWN_STEP;
                 p.next_poll = Instant::now() + p.interval;
             }

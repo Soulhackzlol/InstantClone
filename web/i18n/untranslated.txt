@@ -378,4 +378,3 @@ layout must be single-line json
 too many saved docks
 Content-Type
 textarea, [contenteditable="true"], input:not([type]), input[type="text"], input[type="search"], input[type="number"], input[type="url"]
-service.json.instantclone-before.bak

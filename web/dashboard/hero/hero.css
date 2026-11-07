@@ -124,7 +124,7 @@ body::before{content:'';position:fixed;left:0;right:0;top:0;height:560px;pointer
    nothing happens. One-shot animations already play once and are left as
    they are. Spinners keep turning: a still one reads as a hang. */
 html.calm *,html.calm *::before,html.calm *::after{animation-iteration-count:1 !important}
-html.calm .wov-spinner,html.calm .ig-spin,html.calm .is-busy::after{animation-iteration-count:infinite !important}
+html.calm .wov-spinner,html.calm .ig-spin,html.calm .w-tw-key-spin,html.calm .is-busy::after{animation-iteration-count:infinite !important}
 /* Film grain over the lights: big blurred gradients band into visible
    steps on 8-bit screens; a faint noise dithers them smooth. */
 .hero-aurora::after{content:'';position:absolute;inset:0;opacity:.05;mix-blend-mode:overlay;

@@ -1,5 +1,6 @@
 /* Crash protection card. The preview is drawn server-side by the same
-   renderer that encodes the stream, so it is what viewers will see. Wide
+   renderer that encodes the stream, so it is what viewers will see, frame
+   for frame (slate/themes.rs tests the 24-frame strip against 30 fps). Wide
    screens put the preview beside the controls and keep it in view while
    they scroll; narrow ones stack them. */
 .crash-check{display:flex;align-items:flex-start;gap:10px;cursor:pointer}
@@ -22,6 +23,8 @@
 /* The preview is one strip of 24 frames (CP_PREVIEW_FRAMES) stacked top to
    bottom; sliding it a frame at a time plays the 2 s loop with no script. */
 @keyframes crash-loop{to{background-position:0 100%}}
+/* Scrolled out of view, the preview rests (crash-protection.js). */
+.crash-preview.resting{animation-play-state:paused}
 .crash-controls{display:flex;flex-direction:column;gap:18px;min-width:0}
 .crash-field{display:flex;flex-direction:column;gap:8px;min-width:0}
 .crash-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}

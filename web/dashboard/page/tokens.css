@@ -12,6 +12,10 @@
      the neutrals; keep deltas large enough (~3% lightness/step) that
      stacked surfaces remain legible without leaning on borders. */
   --bg:#07080a; --bg-2:#0c0e12; --surface:#11141a; --surface-2:#171b22; --surface-3:#1f242d;
+  /* Wells set into a card or dialog (a card's screen, a panel's rows, a
+     preview): between --bg and --bg-2, so they read as recessed. Used since
+     0.1.0 but only defined in 0.2.0; until then they drew see-through. */
+  --bg-1:#0a0b0e;
 
   /* Hairlines. Bumped from 6%/12% to 10%/18% white - previous values
      were below the threshold where a 1 px stroke visibly separates

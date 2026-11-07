@@ -179,5 +179,11 @@ function cpApplyConfig(cp){
   cpRender();
 }
 cpInit();
+// The preview plays only while it can be seen: scrolled away it rests, so
+// an open System pane costs nothing for a film strip nobody is watching.
+if ('IntersectionObserver' in window){
+  new IntersectionObserver(entries => entries.forEach(e => e.target.classList.toggle('resting', !e.isIntersecting)))
+    .observe($('s-cp-preview'));
+}
 
 

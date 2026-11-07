@@ -7,7 +7,7 @@
   </div>
   <!-- One app at a time: the connected one, or the one switched to. Only
        where Streamlabs can run; OBS alone needs no pick. -->
-  <nav class="sub-tabs obs-app-tabs" id="obs-app-tabs" role="tablist" aria-label="Streaming app" hidden>
+  <nav class="sub-tabs section-tabs obs-app-tabs" id="obs-app-tabs" role="tablist" aria-label="Streaming app" hidden>
     <span class="sub-tab-ind"></span>
     <button class="sub-tab on" data-subtab="obs" role="tab">
       <span class="sub-tab-mark" data-app-mark="obs"></span>
@@ -39,7 +39,7 @@
         <summary>How it works</summary>
         <div class="ic-disclose-body">
           <p>Writes an <b>InstantClone</b> entry next to Twitch and YouTube in OBS's <i>Settings &rarr; Stream &rarr; Service</i> list. Multi-track via InstantClone works out of the box on Auto. OBS reads that list when it starts and writes it back when it quits, so InstantClone only changes it while that OBS is closed. If you change InstantClone's ports while OBS is closed, the entry follows at once.</p>
-          <p>Registering also sets that OBS's current profile to stream to InstantClone, key included, so there is nothing to pick. Its old stream settings stay in <code class="mono">service.json.instantclone-before.bak</code>, next to it.</p>
+          <p>Registering also sets that OBS's current profile to stream to InstantClone, key included, so there is nothing to pick. Its old stream settings are kept, and Unregister puts them back.</p>
           <p>Each OBS on this PC has its own list: the installed one and every portable one. A portable OBS shows up here once it has been open while InstantClone runs, or pick its <code class="mono">obs64.exe</code> with <b>Using a portable OBS?</b></p>
         </div>
       </details>

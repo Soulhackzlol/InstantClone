@@ -454,13 +454,18 @@ impl Twitch {
     /// Twitch" asks for these permissions too, so one approval also connects
     /// Integrations. Taken only when no streamer account is connected yet
     /// and it came through the same Twitch app; false when it wasn't.
+    /// Also false while a login of its own is under way: that one would
+    /// replace the adopted account when it finishes.
     pub fn adopt_main(
         self: &Arc<Self>,
         client_id: &str,
         tokens: &auth::Tokens,
         who: &auth::Validated,
     ) -> bool {
-        if self.account(Which::Main).is_some() || client_id != self.client_id() {
+        if self.account(Which::Main).is_some()
+            || client_id != self.client_id()
+            || self.login.lock().is_some()
+        {
             return false;
         }
         self.sign_in(Which::Main, tokens, who);

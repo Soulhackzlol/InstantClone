@@ -63,7 +63,9 @@ function finishVodStep(host, id){
   const done = vodGuideDone();
   done.add(id);
   vodGuideSave(done);
-  const from = host.querySelector(`.vg-step[data-step="${id}"] .vg-num`);
+  // Measured before the redraw replaces it: a removed element has no box.
+  const step = host.querySelector(`.vg-step[data-step="${id}"] .vg-num`);
+  const from = step && step.getBoundingClientRect();
   renderVodGuides();
   const next = host.querySelector('.vg-step[data-state="now"] .vg-num') || host.querySelector('.vg-all');
   flyTrail(from, next, () => next && next.animate([{transform:'scale(1)'}, {transform:'scale(1.25)'}, {transform:'scale(1)'}],

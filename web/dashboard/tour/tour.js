@@ -127,7 +127,7 @@ function openTour(idx){
   tourIdx = idx || 0;
   // The tour points at the delay panel's parts: it shows them all, and
   // folds it back up after if it was folded.
-  if (heroCompact()){ tourFoldedHero = true; setHeroCompact(false, false); }
+  if (heroCompact()){ tourFoldedHero = true; setHeroCompact(false, false, false); }
   $('tour').hidden = false;
   $('hdr-help-hint').hidden = true;
   try { localStorage.setItem('instantclone_onboarded','1'); } catch(_){}
@@ -143,7 +143,7 @@ function openTour(idx){
 
 function closeTour(){
   $('tour').hidden = true;
-  if (tourFoldedHero){ tourFoldedHero = false; setHeroCompact(true, true); }
+  if (tourFoldedHero){ tourFoldedHero = false; setHeroCompact(true, true, false); }
   if (tourResizeHandler){
     window.removeEventListener('resize', tourResizeHandler);
     window.removeEventListener('scroll', tourScrollHandler, true);

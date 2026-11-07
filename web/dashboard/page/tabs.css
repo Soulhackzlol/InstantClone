@@ -20,13 +20,23 @@
 .sub-tabs{position:relative;display:flex;gap:2px;padding:4px;background:var(--surface-2);
   border:1px solid var(--line);border-radius:9px;align-items:stretch;overflow-x:auto;scrollbar-width:none}
 .sub-tabs::-webkit-scrollbar{display:none}
-/* The section strip stays in reach while its pane scrolls, 6px under the
-   card's edge (sticky counts from inside the card's 32px padding). The
-   halo in the card's colour hides what scrolls past around it. */
-.pane-card .sub-tabs{position:sticky;top:-26px;z-index:5;box-shadow:0 0 0 10px var(--surface)}
+/* A pane's section strip (.section-tabs: System, Overlays, the OBS app
+   switch) stays in reach while its pane scrolls, 6px under the card's edge
+   (sticky counts from inside the card's padding). Segmented controls share
+   .sub-tabs but never stick. The halo in the card's colour hides what
+   scrolls past around it; once the pane has scrolled, a soft fade in the
+   same colour under the halo lets the content slide beneath instead of
+   being cut off at a hard edge (a dark shade can't show on these cards). */
+.pane-card .section-tabs{position:sticky;top:-26px;z-index:5;
+  box-shadow:0 0 0 10px var(--surface),0 20px 16px -2px transparent}
+@media (max-width:560px){.pane-card .section-tabs{top:-14px}}
+@supports (animation-timeline:scroll()){
+  .pane-card .section-tabs{animation:section-shade linear both;animation-timeline:scroll(nearest block);animation-range:0 32px}
+}
+@keyframes section-shade{to{box-shadow:0 0 0 10px var(--surface),0 20px 16px -2px var(--surface)}}
 /* What a jump brings into view (a found setting, a guide step) stops below
-   that strip instead of under it. */
-.pane-card:has(.sub-tabs:not([hidden])){scroll-padding-top:64px}
+   the open pane's strip instead of under it. */
+.pane-card:has(.tab-pane:not([hidden]) .section-tabs:not([hidden])){scroll-padding-top:64px}
 .sub-tab{appearance:none;background:transparent;border:0;display:inline-flex;align-items:center;gap:6px;
   padding:6px 11px;border-radius:6px;color:var(--fg-3);font-size:12px;font-weight:500;cursor:pointer;
   position:relative;z-index:2;transition:color .2s var(--ease-out);white-space:nowrap;flex:1;justify-content:center}

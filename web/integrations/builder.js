@@ -809,11 +809,11 @@ const Builder = {
     const shown = typed ? all.filter(([v, l]) => (v + ' ' + l).toLowerCase().includes(typed.toLowerCase())) : all;
     const row = ([v, l], isNew) => {
       const on = picked.includes(v);
-      return `<button type="button" class="ig-pick-row${on ? ' on' : ''}${isNew ? ' new' : ''}" role="option" aria-selected="${on}" data-act="b-obs-pick" data-name="${name}" data-v="${esc(v)}"${multi ? ' data-multi="1"' : ''}${isNew ? ' data-new="1"' : ''} title="${esc(v)}"><span class="ig-pick-mark${multi ? ' box' : ''}">${svg('check', ' stroke-width="3"')}</span><span class="ig-pick-t">${isNew ? `Use “${esc(l)}”` : esc(l)}</span></button>`;
+      return `<button type="button" class="ig-pick-row${on ? ' on' : ''}${isNew ? ' new' : ''}" role="option" aria-selected="${on}" data-act="b-obs-pick"${isNew ? '' : ' translate="no"'} data-name="${name}" data-v="${esc(v)}"${multi ? ' data-multi="1"' : ''}${isNew ? ' data-new="1"' : ''} title="${esc(v)}"><span class="ig-pick-mark${multi ? ' box' : ''}">${svg('check', ' stroke-width="3"')}</span><span class="ig-pick-t">${isNew ? `Use “${esc(l)}”` : esc(l)}</span></button>`;
     };
     const rows = shown.map(x => row(x)).join('') + (typed && !all.some(([v]) => v === typed) ? row([typed, typed], true) : '');
     const empty = all.length ? 'Nothing matches.' : opts.offline;
-    const head = picked.length ? `<span class="ig-pick-sum" title="${esc(picked.join(', '))}">${multi ? `${picked.length} picked` : esc(picked[0])}</span><button type="button" class="ig-pick-clear" data-act="b-obs-clear" data-name="${name}">Clear</button>` : '';
+    const head = picked.length ? `<span class="ig-pick-sum"${multi ? '' : ' translate="no"'} title="${esc(picked.join(', '))}">${multi ? `${picked.length} picked` : esc(picked[0])}</span><button type="button" class="ig-pick-clear" data-act="b-obs-clear" data-name="${name}">Clear</button>` : '';
     return `<div class="dff ig-picker"><div class="ig-pick-h"><span class="ig-pick-l">${label}</span>${head}</div>
       <div class="ig-pick-box"><div class="ig-pick-find">${svg('search')}<input data-bind="pick-find" data-name="${esc(key)}" value="${esc(find)}" placeholder="${esc(opts.ph)}" spellcheck="false" aria-label="Find or type a name"></div>
       <div class="ig-pick-list" role="listbox"${multi ? ' aria-multiselectable="true"' : ''} aria-label="${esc(label)}">${rows || `<div class="ig-pick-none">${esc(empty)}</div>`}</div></div></div>`;

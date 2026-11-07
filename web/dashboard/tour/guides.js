@@ -192,7 +192,8 @@ function helpMenuHtml(){
 
 function openHelpMenu(btn){
   const old = $('help-menu');
-  if (old){ old.remove(); return; }
+  // Closed through its own shut, so its listeners on the page go with it.
+  if (old){ old.shut({type:'keydown', key:'Escape'}); return; }
   const menu = document.createElement('div');
   menu.className = 'help-menu';
   menu.id = 'help-menu';
@@ -210,6 +211,7 @@ function openHelpMenu(btn){
     document.removeEventListener('pointerdown', shut, true);
     document.removeEventListener('keydown', shut, true);
   };
+  menu.shut = shut;
   document.addEventListener('pointerdown', shut, true);
   document.addEventListener('keydown', shut, true);
   menu.addEventListener('click', e => {
@@ -264,6 +266,7 @@ function startGuide(id){
   addEventListener('resize', placeGuide);
   document.addEventListener('scroll', placeGuide, true);
   document.addEventListener('keydown', guideKey);
+  guideFollow = setInterval(followGuide, GUIDE_FOLLOW_MS);
   guideStep(0);
 }
 
@@ -274,6 +277,8 @@ function guideKey(e){
 function stopGuide(){
   if (!guideEls) return;
   clearInterval(guideNow && guideNow.waiting);
+  clearInterval(guideFollow);
+  guideFollow = null;
   guideEls.ring.remove();
   guideEls.note.remove();
   guideEls = null;
@@ -292,7 +297,9 @@ const guideText = text => typeof text === 'function' ? text() : text;
 const GUIDE_LOOK_MS = 1200;
 async function guideTarget(step){
   if (!step.modal && document.querySelector('.ic-modal') && igGuide()) igGuide().closeDialog();
-  if (step.tab) showTab(step.tab);
+  // Only a tab that isn't open yet is opened: opening it again replays its
+  // entrance and reloads it on every step.
+  if (step.tab && !document.querySelector(`.tab[data-tab="${step.tab}"].on`)) showTab(step.tab);
   if (step.sub) showSubTab(step.tab, step.sub);
   for (let waited = 0; waited <= GUIDE_LOOK_MS; waited += 100){
     const el = guideFind(step.target);
@@ -323,11 +330,13 @@ function untilStill(el){
 }
 const GUIDE_POLL_MS = 300;
 const GUIDE_DONE_PAUSE_MS = 450;
-async function guideStep(n){
+// `from`: the step shown when the move began; it is shown again when every
+// step back from it is passed over, so the note never shows a step it isn't on.
+async function guideStep(n, from = guideNow.at){
   const {guide} = guideNow;
   clearInterval(guideNow.waiting);
   if (n >= guide.steps.length){ markGuideDone(guide.id); stopGuide(); return; }
-  if (n < 0) return;
+  if (n < 0){ if (from >= 0) guideStep(from, -1); return; }
   // The trail starts where the eye is: the note whose button was pressed,
   // or for the first step, the ? button the guide was picked from.
   const was = guideEls.note.classList.contains('in') ? guideEls.note.getBoundingClientRect()
@@ -335,10 +344,15 @@ async function guideStep(n){
   const dir = n >= guideNow.at ? 1 : -1;
   guideNow.at = n;
   const step = guide.steps[n];
-  if (step.skip && step.skip()){ guideStep(n + dir); return; }
+  if (step.skip && step.skip()){ guideStep(n + dir, from); return; }
   const target = await guideTarget(step);
   if (!guideNow || guideNow.at !== n) return;   // closed or moved on meanwhile
-  if (!target){ guideStep(n + dir); return; }
+  // The dialog this step is in was closed: back to the step that opens it.
+  if (!target && step.modal && !document.querySelector('.ig-modal')){
+    const opener = guide.steps.slice(0, n).findLastIndex(s => !s.modal);
+    if (opener >= 0){ guideStep(opener, -1); return; }
+  }
+  if (!target){ guideStep(n + dir, from); return; }
   guideNow.target = target;
   target.scrollIntoView({block:'center', behavior:motionOK() ? 'smooth' : 'auto'});
   const {note, ring} = guideEls;
@@ -365,6 +379,7 @@ async function guideStep(n){
 
 function guideNoteHtml(guide, n){
   const step = guide.steps[n], last = n === guide.steps.length - 1;
+  const back = guide.steps.slice(0, n).some(s => !(s.skip && s.skip()));
   const act = step.act ? `<button type="button" class="ic-btn ic-btn-primary ig-small" data-go="act">${step.act.label}</button>` : '';
   const next = step.wait && !last
     ? `<button type="button" class="ic-btn ic-btn-ghost ig-small" data-go="next">Skip</button>`
@@ -374,7 +389,7 @@ function guideNoteHtml(guide, n){
       <button type="button" class="ic-btn-tiny" data-go="close" aria-label="Close">✕</button></div>
     <div class="guide-dots" aria-hidden="true">${dots}</div>
     <p></p>${step.wait ? '<div class="guide-wait"><span class="guide-wait-dot"></span>Waiting for you to do it</div>' : ''}
-    <div class="guide-foot">${n ? '<button type="button" class="ic-btn ic-btn-ghost ig-small" data-go="back">Back</button>' : ''}${act}${next}</div>`;
+    <div class="guide-foot">${back ? '<button type="button" class="ic-btn ic-btn-ghost ig-small" data-go="back">Back</button>' : ''}${act}${next}</div>`;
 }
 
 // A step you do yourself: once it's done, the ring says so and the guide
@@ -409,5 +424,8 @@ function placeGuide(){
   const left = Math.min(Math.max(GUIDE_GAP, r.left), innerWidth - w - GUIDE_GAP);
   Object.assign(note.style, {left:`${left}px`, top:`${top}px`});
 }
-// Dialogs redraw as you work in them: the ring follows its control.
-setInterval(() => { if (guideNow && guideEls && guideEls.ring.classList.contains('in')) placeGuide(); }, 250);
+// Dialogs redraw as you work in them: the ring follows its control. Runs
+// only while a guide is open (startGuide/stopGuide).
+const GUIDE_FOLLOW_MS = 250;
+let guideFollow = null;
+function followGuide(){ if (guideNow && guideEls && guideEls.ring.classList.contains('in')) placeGuide(); }

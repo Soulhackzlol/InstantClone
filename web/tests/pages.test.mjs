@@ -66,7 +66,7 @@ const MOMENTARY_LOOPS = {
     'hk-pulse': 'a hotkey being recorded',
     igMeterPulse: 'a trigger editor saying it would fire',
     'cta-pulse': 'stepped to 10 frames a second (hero.css says why)',
-    'crash-loop': 'the crash-protection settings preview, a film strip at 12 frames a second',
+    'crash-loop': 'the crash-protection settings preview, a film strip at 12 frames a second, paused while scrolled out of view',
   },
   'dock.html': { 'dico-pulse': 'a destination switch waiting 3 s for its second tap' },
   'alerts.html': {},

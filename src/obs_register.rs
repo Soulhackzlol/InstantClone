@@ -244,6 +244,7 @@ pub fn forget_portable_obs(config_dir: &Path) -> io::Result<()> {
     if fs::read_to_string(install.services_json()).is_ok_and(|file| entry_exists(&file)) {
         unregister_in(&install.services_json())?;
     }
+    restore_service_in(config_dir)?;
     drop_portable_root(config_dir);
     Ok(())
 }
@@ -1754,16 +1755,53 @@ pub fn select_service_in(config_dir: &Path, ingest_port: u16, key: &str) -> io::
         return Ok(false);
     }
     let path = folder.join("service.json");
-    let original = fs::read_to_string(&path).unwrap_or_default();
+    // Settings that can't be read (locked, not UTF-8) can't be backed up, so
+    // they are never overwritten: only a missing file counts as none.
+    let original = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
     if streams_to_instantclone(&original) {
         return Ok(false);
     }
-    let kept = path.with_extension("json.instantclone-before.bak");
-    if !original.trim().is_empty() && !kept.exists() {
+    // The backup always holds the settings being replaced now: an older one
+    // would put back a server or key the streamer has since moved away from.
+    let kept = path.with_extension(SERVICE_BACKUP_EXT);
+    if !original.trim().is_empty() {
         write_or_friendly(&kept, &original)?;
     }
     write_or_friendly(&path, instantclone_service_json(ingest_port, key))?;
     Ok(true)
+}
+
+/// Where `select_service_in` keeps a profile's old stream settings.
+const SERVICE_BACKUP_EXT: &str = "json.instantclone-before.bak";
+
+/// Put back the stream settings `select_service_in` replaced, in every
+/// profile of the OBS in `config_dir` that still streams to InstantClone,
+/// so someone who stops using InstantClone finds OBS as they had it. A
+/// profile they moved elsewhere since is left alone. The OBS must be
+/// closed, as for `unregister_in`. Returns how many profiles went back.
+pub fn restore_service_in(config_dir: &Path) -> io::Result<usize> {
+    let Ok(entries) = fs::read_dir(config_dir.join(PROFILES_DIR_REL)) else {
+        return Ok(0);
+    };
+    let mut restored = 0;
+    for entry in entries.flatten() {
+        let path = entry.path().join("service.json");
+        let kept = path.with_extension(SERVICE_BACKUP_EXT);
+        let Ok(old) = fs::read_to_string(&kept) else {
+            continue;
+        };
+        if !fs::read_to_string(&path).is_ok_and(|now| streams_to_instantclone(&now)) {
+            continue;
+        }
+        write_or_friendly(&path, &old)?;
+        fs::remove_file(&kept)?;
+        restored += 1;
+    }
+    Ok(restored)
 }
 
 /// Whether the OBS in `config_dir` streams to InstantClone right now.
@@ -3354,10 +3392,57 @@ mod tests {
             "the Twitch settings go back from here"
         );
         // Again: already on InstantClone, left as the streamer has it, and the
-        // first backup is never overwritten.
+        // backup is not touched.
         assert!(!select_service_in(&dir.0, 1940, "other").unwrap());
         assert!(now == std::fs::read_to_string(profile.join("service.json")).unwrap());
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), twitch);
+        // The streamer moves to another server, then registers again: the
+        // backup now holds that server, not the first Twitch settings.
+        let custom = r#"{"settings":{"key":"abc","server":"rtmp://example.test/live"},"type":"rtmp_custom"}"#;
+        std::fs::write(profile.join("service.json"), custom).unwrap();
+        assert!(select_service_in(&dir.0, 1935, "main").unwrap());
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), custom);
+        // Unregistering puts that server back and drops the backup.
+        assert_eq!(restore_service_in(&dir.0).unwrap(), 1);
+        assert_eq!(
+            std::fs::read_to_string(profile.join("service.json")).unwrap(),
+            custom
+        );
+        assert!(!kept.exists());
+        assert!(!service_selected_in(&dir.0));
+        // Again: nothing left to put back.
+        assert_eq!(restore_service_in(&dir.0).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_profile_moved_elsewhere_is_not_restored() {
+        let twitch = r#"{"settings":{"key":"live_1","service":"Twitch"},"type":"rtmp_common"}"#;
+        let dir = obs_with_profile("restore-moved", Some(twitch));
+        let profile = dir.0.join(PROFILES_DIR_REL).join("Sin_Título");
+        assert!(select_service_in(&dir.0, 1935, "main").unwrap());
+        // The streamer picked another server by hand after registering.
+        let theirs =
+            r#"{"settings":{"key":"k","server":"rtmp://other.test/live"},"type":"rtmp_custom"}"#;
+        std::fs::write(profile.join("service.json"), theirs).unwrap();
+        assert_eq!(restore_service_in(&dir.0).unwrap(), 0);
+        assert_eq!(
+            std::fs::read_to_string(profile.join("service.json")).unwrap(),
+            theirs
+        );
+    }
+
+    #[test]
+    fn stream_settings_that_cannot_be_read_are_never_overwritten() {
+        let dir = obs_with_profile("select-unreadable", None);
+        let profile = dir.0.join(PROFILES_DIR_REL).join("Sin_Título");
+        // Not UTF-8: read_to_string fails with something other than NotFound.
+        let unreadable = [0xffu8, 0xfe, 0x00, b'{'];
+        std::fs::write(profile.join("service.json"), unreadable).unwrap();
+        assert!(select_service_in(&dir.0, 1935, "main").is_err());
+        assert_eq!(
+            std::fs::read(profile.join("service.json")).unwrap(),
+            unreadable
+        );
     }
 
     #[test]

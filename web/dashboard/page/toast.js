@@ -83,7 +83,8 @@ const isDeleting = key => pendingDeletes.has(key);
 document.addEventListener('keydown', e => {
   if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== 'z' || e.defaultPrevented) return;
   if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
-  if (document.querySelector('.ig-modal')) return;
+  // A dialog or the Studio has its own undo, or none for the page.
+  if (document.querySelector('.ig-modal, .ic-modal:not([hidden]), #ov-studio:not([hidden])')) return;
   const undos = document.querySelectorAll('#toast-rail .ic-toast:not(.leaving) [data-undo]');
   if (!undos.length) return;
   e.preventDefault();
