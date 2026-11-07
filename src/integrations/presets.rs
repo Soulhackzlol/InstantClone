@@ -289,44 +289,95 @@ pub struct Pack {
     pub name: &'static str,
     pub description: &'static str,
     pub presets: &'static [&'static str],
+    /// A starter pack says who it suits ("Ranked and tournament streams");
+    /// an add-on pack, for one job, leaves it empty.
+    pub who: &'static str,
+    /// The dashboard icon its card shows.
+    pub icon: &'static str,
 }
 
 pub const PACKS: &[Pack] = &[
+    // Starter packs: a whole setup for one kind of stream.
+    Pack {
+        id: "starter_first",
+        name: "First streams",
+        description: "The basics, done well: alerts that thank every follow and sub, a Discord ping when you go live, your socials one command away, and chat told if OBS drops.",
+        presets: &["twitch_alerts", "going_live", "socials", "tell_chat"],
+        who: "New channels finding their feet",
+        icon: "heart",
+    },
+    Pack {
+        id: "starter_competitive",
+        name: "Competitive",
+        description: "Anti-snipe first: chat can ask the delay, mods can change it, and an OBS crash is announced instead of quietly ending the stream.",
+        presets: &["delay_command", "delay_notice", "mod_controls", "tell_chat", "phone_crash"],
+        who: "Ranked and tournament streams",
+        icon: "target",
+    },
+    Pack {
+        id: "starter_subathon",
+        name: "Subathon",
+        description: "Big moments get big reactions: louder alerts, a clip when chat goes wild, ad breaks chat understands and a reward to mute you. Add the timer in Overlay, Goals.",
+        presets: &["hype_alerts", "hype_clip", "ad_break_notice", "mute_reward"],
+        who: "Long, event-driven streams",
+        icon: "flame",
+    },
+    Pack {
+        id: "starter_community",
+        name: "Community hub",
+        description: "Your Discord follows every stream: a go-live ping, a timeline that writes itself, highlights and chapters to jump back to.",
+        presets: &["going_live", "stream_timeline", "highlight", "chapters"],
+        who: "Communities that live on Discord",
+        icon: "users",
+    },
+    // Add-on packs: a few integrations for one job.
     Pack {
         id: "stream_pro",
         name: "Stream pro",
         description: "Your whole stream in Discord: a live timeline, highlights, chapters and alerts that only speak up when it matters.",
         presets: &["stream_timeline", "smart_alerts", "highlight", "chapters"],
+        who: "",
+        icon: "layers",
     },
     Pack {
         id: "highlights",
         name: "Highlights",
         description: "Never miss a clip: a button for you, and chat's reaction for when you're too busy to press it.",
         presets: &["highlight", "hype_clip", "chapters"],
+        who: "",
+        icon: "highlight",
     },
     Pack {
         id: "crash_safety",
         name: "Crash safety",
         description: "OBS drops: Discord and chat hear about it, and your editor gets a marker.",
         presets: &["crash_alert", "tell_chat", "vod_markers"],
+        who: "",
+        icon: "shield",
     },
     Pack {
         id: "chat_helper",
         name: "Chat helper",
         description: "Viewers ask, the bot answers. No more editing commands by hand.",
         presets: &["delay_command", "delay_notice", "socials"],
+        who: "",
+        icon: "chat",
     },
     Pack {
         id: "watchtower",
         name: "Watchtower",
         description: "For when you step away: OBS crashes reach your phone, platform problems reach Discord.",
         presets: &["smart_alerts", "phone_crash", "crash_alert"],
+        who: "",
+        icon: "eye",
     },
     Pack {
         id: "studio",
         name: "Studio",
         description: "Your room and OBS join in: an on-air light by the door, and the delay following your scenes.",
         presets: &["on_air_light", "scene_delay"],
+        who: "",
+        icon: "light",
     },
 ];
 
@@ -1928,6 +1979,8 @@ pub fn catalog_json() -> Value {
                 ("id", json::str(p.id)),
                 ("name", json::str(p.name)),
                 ("description", json::str(p.description)),
+                ("who", json::str(p.who)),
+                ("icon", json::str(p.icon)),
                 (
                     "needs",
                     Value::Arr(pack_needs(p).into_iter().map(json::str).collect()),

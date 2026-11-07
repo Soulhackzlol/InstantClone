@@ -1640,6 +1640,8 @@
     if(d.__ic_bounds&&ev.source&&(ev.origin===location.origin||ev.origin===window.origin)){ ev.source.postMessage({__ic_drawn:drawnBounds()},ev.origin); return; }
     if(d.__ic_sim){
       PREVIEW=true;
+      // The preview's sample alert, in the dashboard's language.
+      if(d.sample&&typeof d.sample.title==='string'){ SAMPLE_ALERT.title=d.sample.title; SAMPLE_ALERT.text=String(d.sample.text||''); SAMPLE_ALERT.message=String(d.sample.message||''); }
       window.__ic_noHide=!!d.noHide;
       // An alert design keeps what it is doing (an alert playing) unless told.
       forced=d.forceState||(ALERTS?forced||'idle':null);

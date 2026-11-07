@@ -76,6 +76,21 @@ window.Integrations = {
     showTab('integrations');
     await addFrom({preset:'twitch_alerts'}, true);
   },
+  // What the quick guides (tour/guides.js) ask about and do.
+  guide:{
+    twitchOn:() => !!(S.data && S.data.twitch.main.login),
+    discordOn:() => !!(S.data && S.data.connections.discord.length),
+    phoneOn:() => !!(S.data && S.data.connections.phone.topic),
+    count:() => (S.data ? S.data.integrations.length : 0),
+    alerts:() => (S.data && S.data.integrations.find(i => i.preset === 'twitch_alerts')) || null,
+    open:i => openEditor(i),
+    closeDialog(){ if (modalOpen()) Modal.close(); },
+    // The open editor's first moment that goes by an amount (bits, months...).
+    amountMoment(){
+      const n = Modal.kind && Editor.d ? Editor.d.handlers.findIndex(h => tierVar(h)) : -1;
+      return n < 0 ? null : document.querySelector(`.ig-ed-body [data-act="moment"][data-n="${n}"]`);
+    },
+  },
 };
 
 // Integrations changed elsewhere (another window, a Discord channel or a

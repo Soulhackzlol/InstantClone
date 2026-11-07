@@ -78,16 +78,18 @@ const TOUR = [
   },
   {
     target: '.tab[data-tab="obs"]', side: 'bottom', tab: 'obs',
-    get title(){ return `Wire ${slInfo && slInfo.enabled ? 'Streamlabs' : 'OBS'} to InstantClone`; },
-    get body(){ return slInfo && slInfo.enabled ? `
+    title: 'Your streaming apps',
+    get body(){ return `
+      <p>This tab manages the streaming apps on this PC. Every OBS and Streamlabs Desktop it finds shows up here: set each one up once and it streams to InstantClone, key included.</p>
+      <p>Here you can also add the <b>OBS dock</b> to run the delay from inside OBS, show your chat in OBS and check OBS's recommended settings. Another app or a custom RTMP server? Its manual setup is at the bottom.</p>
+    ` + (slInfo && slInfo.enabled ? `
       <p>Streamlabs is connected on this tab: go live from Streamlabs' <b>Go Live</b> button as usual, signed in with Twitch, and the stream comes through InstantClone.</p>
       <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you go live, the dashboard reads <b>OFFLINE</b>. That's expected, not a mistake.</p>
       <div class="tour-tip"><strong>Twitch only inside Streamlabs:</strong> it's just the way in. Your real platform keys live in <b>Destinations</b>, with or without Twitch.</div>
     ` : `
-      <p>Close OBS and press <b>Register with OBS</b> here: OBS is set to stream to InstantClone, key and all. Then open OBS and press <b>Start Streaming</b>.</p>
-      <p>Below it, add the <b>OBS dock</b> to run the delay without leaving OBS.</p>
+      <p>Then open OBS and press <b>Start Streaming</b>.</p>
       <p style="font-size:12px;color:var(--fg-3);margin-top:8px">Until you Start Streaming, the dashboard reads <b>OFFLINE</b>. That's expected, not a mistake.</p>
-    `; },
+    `); },
   },
   {
     target: '.tab[data-tab="overlay"]', side: 'bottom', tab: 'overlay',

@@ -12,31 +12,46 @@ const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: r
 // to do now. `land` runs as the lead spark arrives (at once without motion).
 // `ms` is the flight; `warm` gives the profile's amber, else the accent.
 // Either end can be an element or a box (a DOMRect) where something was.
-const TRAIL_MS = 520;
-function flyTrail(fromEl, toEl, land, {ms = TRAIL_MS, warm = false} = {}){
+// Without `ms`, the flight takes longer the farther it goes, within these.
+const TRAIL_MS_MIN = 380, TRAIL_MS_MAX = 720;
+// A comet: a bright head and a tail of smaller sparks, each a beat behind.
+const TRAIL_TAIL = [1, .8, .65, .52, .42, .33, .26];
+const TRAIL_TAIL_GAP_MS = 18;
+function flyTrail(fromEl, toEl, land, {ms, warm = false} = {}){
   const box = x => x && (x.getBoundingClientRect ? x.getBoundingClientRect() : x);
   const from = box(fromEl), to = box(toEl);
   if (!from || !to || !to.width || !motionOK()){ if (land) land(); return; }
   const sx = from.left + from.width / 2, sy = from.top + from.height / 2;
   const ex = to.left + to.width / 2, ey = to.top + to.height / 2;
-  // A quadratic arc that rises a little before it drops in.
-  const cx = (sx + ex) / 2, cy = Math.min(sy, ey) - 34;
+  const far = Math.hypot(ex - sx, ey - sy);
+  const duration = ms || Math.min(TRAIL_MS_MAX, Math.max(TRAIL_MS_MIN, 260 + far * .35));
+  // A quadratic arc that lifts more the farther it goes, then drops in.
+  const cx = (sx + ex) / 2, cy = Math.min(sy, ey) - Math.min(140, 26 + far * .16);
   const path = [];
-  for (let i = 0; i <= 10; i++){
-    const t = i / 10, u = 1 - t;
+  for (let i = 0; i <= 16; i++){
+    const t = i / 16, u = 1 - t;
     path.push(`translate(${u * u * sx + 2 * u * t * cx + t * t * ex}px,${u * u * sy + 2 * u * t * cy + t * t * ey}px)`);
   }
-  [1, .7, .5, .35].forEach((scale, i) => {
+  const kind = warm ? ' warm' : '';
+  TRAIL_TAIL.forEach((scale, i) => {
     const spark = document.createElement('span');
-    spark.className = 'trail-spark' + (warm ? ' warm' : '');
-    spark.style.opacity = String(1 - i * .22);
+    spark.className = 'trail-spark' + kind;
+    spark.style.opacity = String(1 - i * .12);
     document.body.appendChild(spark);
-    const flight = spark.animate(path.map(p => ({ transform: `${p} scale(${scale})` })),
-      { duration: ms, delay: i * 26, easing: 'cubic-bezier(.45,0,.7,.4)', fill: 'both' });
+    // The head swells on the way and shrinks as it lands; the tail just follows.
+    const frames = path.map((p, k) => ({ transform: `${p} scale(${i ? scale : scale * (1 + .5 * Math.sin(Math.PI * k / 16))})` }));
+    const flight = spark.animate(frames, { duration, delay: i * TRAIL_TAIL_GAP_MS, easing: 'cubic-bezier(.55,0,.25,1)', fill: 'both' });
     // Settled through the promise, not the finish event, which waits for a
     // painted frame; a cancel rejects it, and either way the spark goes.
-    flight.finished.then(() => { if (i === 0 && land) land(); }, () => {}).finally(() => spark.remove());
+    flight.finished.then(() => { if (i === 0){ trailLand(ex, ey, kind); if (land) land(); } }, () => {}).finally(() => spark.remove());
   });
+}
+function trailLand(x, y, kind){
+  const ring = document.createElement('span');
+  ring.className = 'trail-land' + kind;
+  document.body.appendChild(ring);
+  ring.animate([{ transform: `translate(${x}px,${y}px) scale(.3)`, opacity: 1 }, { transform: `translate(${x}px,${y}px) scale(1.9)`, opacity: 0 }],
+    { duration: 460, easing: 'cubic-bezier(.2,.7,.3,1)' }).finished.catch(() => {}).then(() => ring.remove());
 }
 // Something that just opened glides into view once it has grown, when it
 // would end below what its scroll box shows: whole when it fits, else its

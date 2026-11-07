@@ -202,7 +202,7 @@ function animateMorph(ctx){
 // class, so the redraw that lands mid-way can't cut them short.
 function enterStagger(root){
   if (!root || reduced()) return;
-  [...root.querySelectorAll('.ig-grid > [data-key], .ig-list > [data-key], .ig-pack')].slice(0, 24).forEach((el, n) => {
+  [...root.querySelectorAll('.ig-grid > [data-key], .ig-list > [data-key], .ig-starter')].slice(0, 24).forEach((el, n) => {
     // Up to its own opacity: a card that's off is dimmer than the others.
     el.animate([{opacity:0, transform:'translateY(8px)', filter:'blur(3px)'}, {opacity:getComputedStyle(el).opacity, transform:'none', filter:'blur(0)'}],
       {duration:340, easing:EASE, delay:Math.min(n, 12) * 30, fill:'backwards'});

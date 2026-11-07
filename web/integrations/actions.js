@@ -48,14 +48,17 @@ async function saveNamedDesigns(added){
 // is saved in it before anyone sees it, a whole text at a time: only words
 // with a translation of their own change, never ids, sources or commands.
 const SAID_PARAMS = ['title', 'text', 'group', 'footer', 'description'];
+const sayExactly = text => tr.exact(text) ?? text;
+// A step's words in the page's language, where the strings have them.
+function sayStep(s){
+  SAID_PARAMS.forEach(k => { if (typeof s.params[k] === 'string') s.params[k] = sayExactly(s.params[k]); });
+  if (typeof s.params.fields === 'string') s.params.fields = s.params.fields.split('\n').map(sayExactly).join('\n');
+}
 function inPageLanguage(i){
-  const say = text => tr.exact(text) ?? text;
+  const say = sayExactly;
   const copy = clone(i);
   copy.name = say(copy.name);
-  allSteps(copy).forEach(s => {
-    SAID_PARAMS.forEach(k => { if (typeof s.params[k] === 'string') s.params[k] = say(s.params[k]); });
-    if (typeof s.params.fields === 'string') s.params.fields = s.params.fields.split('\n').map(say).join('\n');
-  });
+  allSteps(copy).forEach(sayStep);
   copy.handlers.forEach(h => {
     const f = h.trigger.filters;
     if (f && typeof f.reward === 'string') f.reward = say(f.reward);

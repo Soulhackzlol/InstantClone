@@ -417,7 +417,7 @@ const Builder = {
     const amount = tierVar(this.handler());
     const out = (steps || []).map((s, n) => {
       const path = base.concat(n), pk = pathKey(path), id = uidOf(s);
-      const tier = s.type === 'if' && amount && isTierCheck(s, amount) ? `${s.params.right} ${TIER_UNITS[amount]}` : '';
+      const tier = s.type === 'if' && amount && isTierCheck(s, amount) ? `${s.params.right} ${tierUnit(amount)}` : '';
       const k = tier ? Object.assign({}, KINDS.if, {label:'Bigger alerts'}) : KINDS[s.type] || {label:s.type, tag:'?', c:'#888'};
       const off = s.enabled === false;
       // Inside a switched-off check, nothing runs: nothing is missing.

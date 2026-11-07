@@ -6,6 +6,8 @@
 const TIER_VARS = {twitch_cheer:'bits', twitch_raid:'viewers', twitch_gift:'count', twitch_resub:'months'};
 const TIER_UNITS = {bits:'bits', viewers:'viewers', count:'subs', months:'months'};
 const TIER_FIRST = {bits:1000, viewers:50, count:5, months:12};
+// The amount's word in the page's language ("months", "meses").
+function tierUnit(name){ return tr(TIER_UNITS[name]); }
 // The alert and three bigger ones: three checks inside each other, as deep
 // as steps go (model::MAX_DEPTH).
 const MAX_TIERS = 4;
@@ -47,7 +49,7 @@ function setTiers(h, chain){
 }
 // "From 1000 bits", or what the first one covers.
 function tierLabel(chain, n){
-  const unit = TIER_UNITS[chain.name];
+  const unit = tierUnit(chain.name);
   if (n) return `From ${chain.tiers[n].from} ${unit}`;
   return chain.tiers.length > 1 ? `Below ${chain.tiers[1].from} ${unit}` : 'Every one';
 }

@@ -294,7 +294,11 @@ const Stage = {
     return `<button class="ic-btn ic-btn-ghost ig-small og-nudge" data-act="tr-change" data-do="add" data-n="${n}" ${at}
       aria-label="${aria}">${n < 0 ? '−' : '+'}${label}</button>`;
   },
-  resetHtml(at){ return `<button class="ic-btn ic-btn-ghost ig-small og-push" data-act="tr-change" data-do="reset" ${at}>Reset</button>`; },
+  // An icon, so the row's buttons fit on one line in a narrow card.
+  resetHtml(at){
+    return `<button class="ic-btn ic-btn-ghost ig-small og-push og-reset" data-act="tr-change" data-do="reset" ${at}
+      aria-label="Reset" title="Reset">${svg('refresh')}</button>`;
+  },
   goalMeterHtml(g, at){
     const done = g.value >= g.target, share = goalShare(g);
     const step = n => this.nudgeHtml(n, Math.abs(n), `${n < 0 ? 'Take' : 'Add'} ${Math.abs(n)} ${n < 0 ? 'from' : 'to'} ${esc(g.name)}`, at);

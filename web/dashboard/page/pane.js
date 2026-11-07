@@ -54,7 +54,7 @@ function easeCardHeight(draw){
 // height. 360 px is the card's own floor.
 function fitPaneCard(){
   const card = $('pane-card');
-  if (!card || card.hidden) return;
+  if (!card || card.hidden || !card.parentElement) return;
   const box = card.getBoundingClientRect();
   const below = card.parentElement.getBoundingClientRect().bottom - box.bottom;
   const top = box.top + window.scrollY;

@@ -140,21 +140,11 @@ function listHtml(items, none, withAdd, folder){
 }
 
 function emptyHtml(){
-  const packs = S.data.catalog.packs;
-  const preset = id => S.data.catalog.presets.find(p => p.id === id);
-  const works = p => S.data.twitch.available || !(p.needs || []).includes('twitch');
-  const best = Math.max(0, packs.findIndex(works));
+  const starters = S.data.catalog.packs.filter(p => p.who);
   return `<div class="dest-empty" data-key="empty">
-    <div class="dest-empty-title">What should InstantClone do for you?</div>
-    <div class="dest-empty-sub">Pick a pack to add a few integrations at once. Anything that needs a connection waits, switched off, until it's connected. You can change or remove anything later.</div>
-    <div class="dest-empty-grid ig-packs">
-      ${packs.map((p, n) => `<button class="dest-starter ig-pack${n === best ? ' ig-pack-rec' : ''}" data-act="pack" data-pack="${esc(p.id)}">
-        <span class="dest-starter-name">${esc(p.name)}${n === best ? ' <span class="dcard-status s-ready ig-rec">Recommended</span>' : ''}</span>
-        <span class="dest-starter-note">${esc(p.description)}</span>
-        <span class="ig-pack-list">${p.presets.map(id => `<span>${svg(PRESET_ICON[id] || 'steps')}${esc((preset(id) || {}).name || id)}</span>`).join('')}</span>
-        ${needsHtml(p.needs)}
-      </button>`).join('')}
-    </div>
+    <div class="dest-empty-title">What kind of stream do you run?</div>
+    <div class="dest-empty-sub">Pick the closest starter pack: it adds a few integrations made for it. Anything that needs a connection waits, switched off, until it's connected. You can change or remove anything later.</div>
+    <div class="ig-starters ig-packs">${starters.map((p, n) => starterCardHtml(p, n)).join('')}</div>
     <div class="muted ig-empty-more">or <a href="#" data-act="catalog">browse everything</a> · <a href="#" data-act="build">build your own</a> · <a href="#" data-act="import">import a recipe</a></div>
   </div>`;
 }

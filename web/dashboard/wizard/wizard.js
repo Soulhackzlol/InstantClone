@@ -236,7 +236,7 @@ function renderWizStep(){
   }
   const last = (i === ids.length - 1);
   $('wiz-back').hidden = (i === 0);
-  $('wiz-next').innerHTML = last ? 'Save &amp; Start' : 'Next &rarr;';
+  $('wiz-next').innerHTML = last ? 'Save and start' : 'Next &rarr;';
   syncWizNext();
   // The welcome step is its own heading (CSS hides these); the rest show a
   // plain position counter (the progress bar shows the rest visually).

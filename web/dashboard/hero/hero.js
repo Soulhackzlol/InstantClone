@@ -86,8 +86,8 @@ function writeHeroNumber(el, text){
 // on a state update and on resize, never per animation frame.
 function fitHeroNumber(){
   const big = $('delay-big');
-  if (!big) return;
-  const row = big.parentElement;
+  const row = big && big.parentElement;
+  if (!row) return;
   big.style.removeProperty('--hero-fit');
   const overflow = row.scrollWidth - row.clientWidth;
   if (overflow <= 0) return;
@@ -116,13 +116,14 @@ const HERO_EASE = 'cubic-bezier(.2,0,0,1)';
 const HERO_PARTS = [['.state-pill', 'box'], ['.hero-delay-row', 'type'], ['.hero-delay-sub', 'swap'], ['.arm-bar', 'box'],
   ['.cp-head', 'box'], ['.cp-input-row', 'box'], ['.cp-unit', 'inner'], ['.cp-hint', 'box'], ['.cp-profiles', 'box'], ['.cp-actions', 'box']];
 function heroCompact(){ const hero = $('hero'); return !!hero && hero.classList.contains('compact'); }
-function setHeroCompact(on, animate){
+// `remember`: the person chose it (saved); a default for the window isn't.
+function setHeroCompact(on, animate, remember = true){
   const hero = $('hero'), btn = $('hdr-compact');
   // One change at a time: a second click mid-change is ignored, and a
   // change that isn't animated (the tour's) ends the one under way first.
   if (!hero || on === heroCompact()) return;
   if (hero.icFoldEnd){ if (animate) return; hero.icFoldEnd(); }
-  try { localStorage.setItem(HERO_COMPACT_KEY, on ? '1' : ''); } catch(_){}
+  if (remember) try { localStorage.setItem(HERO_COMPACT_KEY, on ? '1' : ''); } catch(_){}
   if (btn){
     btn.setAttribute('aria-pressed', String(on));
     btn.title = on ? 'Show the full delay panel' : 'Compact the delay panel: more room for the tabs';
@@ -245,10 +246,16 @@ function heroPartLeaves(hero, el, was, card){
   fade.finished.then(gone, gone);
   return fade;
 }
+// Never chosen: a short window or a phone starts compact, so the tabs get
+// the room. The compact button's choice is kept from then on.
+const HERO_COMPACT_BELOW_PX = 1100;
+const HERO_COMPACT_PHONE_PX = 600;
 (() => {
-  let saved = false;
-  try { saved = localStorage.getItem(HERO_COMPACT_KEY) === '1'; } catch(_){}
-  if (saved) setHeroCompact(true, false);
+  let saved = null;
+  try { saved = localStorage.getItem(HERO_COMPACT_KEY); } catch(_){}
+  const small = innerHeight < HERO_COMPACT_BELOW_PX || innerWidth < HERO_COMPACT_PHONE_PX;
+  if (saved === '1') setHeroCompact(true, false);
+  else if (saved === null && small) setHeroCompact(true, false, false);
 })();
 
 // - Calm mode --------------------------------

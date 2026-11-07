@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------- lights
 // Lights and plugs a scan found, shared by every editor this session.
 const LightScan = {devices:null};
-const LIGHT_SWATCHES = [['red', '#ff2020'], ['amber', '#ffa000'], ['green', '#00dc46'], ['cyan', '#00d2ff'], ['blue', '#1e50ff'], ['purple', '#963cff'], ['pink', '#ff46aa'], ['white', '#ffffff']];
+const LIGHT_SWATCHES = [['red', '#ff2020', 'Red'], ['amber', '#ffa000', 'Amber'], ['green', '#00dc46', 'Green'], ['cyan', '#00d2ff', 'Cyan'],
+  ['blue', '#1e50ff', 'Blue'], ['purple', '#963cff', 'Purple'], ['pink', '#ff46aa', 'Pink'], ['white', '#ffffff', 'White']];
 const LIGHT_ACTIONS = {color:'Turn on in a color', flash:'Flash a color, then stay on', on:'Turn on', off:'Turn off'};
 // A light step's color as CSS, for previews: a name, a hex, or a value
 // that only becomes a color when it runs.
@@ -58,10 +59,11 @@ function lightControlsHtml(p, bind){
   if (plug) return out + '<div class="muted">A plug only turns on or off.</div>';
   if (action === 'color' || action === 'flash'){
     const color = p.color || '';
-    out += `<div class="dff"><label>Color</label><div class="ig-swatches">${LIGHT_SWATCHES.map(([n, hex]) =>
-        `<button class="ig-swatch${color.toLowerCase() === n ? ' on' : ''}" style="--sw:${hex}" data-act="l-swatch" data-v="${n}" aria-label="${n}" aria-pressed="${color.toLowerCase() === n}" title="${n}"></button>`).join('')}
+    const swatch = LIGHT_SWATCHES.some(([n]) => color.toLowerCase() === n);
+    out += `<div class="dff"><label>Color</label><div class="ig-swatches">${LIGHT_SWATCHES.map(([n, hex, label]) =>
+        `<button class="ig-swatch${color.toLowerCase() === n ? ' on' : ''}" style="--sw:${hex}" data-act="l-swatch" data-v="${n}" aria-label="${label}" aria-pressed="${color.toLowerCase() === n}" title="${label}"></button>`).join('')}
         <input type="color" class="ig-swatch-pick" value="${esc(/^#[0-9a-f]{6}$/i.test(lightRgb(color)) ? lightRgb(color) : '#ffffff')}" ${bind('color')} aria-label="Any color"></div>
-      <input class="ic-input mono" ${bind('color')} value="${esc(color)}" placeholder="red, #ff2020, or {arg1}" spellcheck="false"></div>`;
+      <input class="ic-input mono" ${bind('color')} value="${esc(swatch ? '' : color)}" placeholder="or another: #ff2020, or {arg1}" aria-label="Another color" spellcheck="false"></div>`;
   }
   if (action !== 'off') out += `<div class="dff ig-narrow"><label>Brightness, %</label><input class="ic-input" ${bind('brightness')} value="${esc(p.brightness || '')}" placeholder="as it is" inputmode="numeric"></div>`;
   return out;

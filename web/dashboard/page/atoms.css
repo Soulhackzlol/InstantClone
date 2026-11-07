@@ -131,6 +131,10 @@ select.ic-input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-r
 /* The trail (flyTrail in page/motion.js): sparks in viewport coordinates,
    above everything. Accent by default; amber for a profile's launch. */
 .trail-spark{position:fixed;left:0;top:0;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;
-  pointer-events:none;z-index:1000;background:color-mix(in oklch,var(--accent) 45%,white);
+  pointer-events:none;z-index:1105;background:color-mix(in oklch,var(--accent) 45%,white);
   box-shadow:0 0 10px 3px color-mix(in oklch,var(--accent) 75%,transparent)}
 .trail-spark.warm{background:oklch(0.93 0.12 85);box-shadow:0 0 10px 3px color-mix(in oklch,var(--warn) 75%,transparent)}
+/* Where the trail lands: a ring that opens out and fades. */
+.trail-land{position:fixed;left:0;top:0;width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;pointer-events:none;z-index:1104;
+  border:2px solid color-mix(in oklch,var(--accent) 70%,white);box-shadow:0 0 16px var(--accent-glow)}
+.trail-land.warm{border-color:oklch(0.9 0.13 85);box-shadow:0 0 16px color-mix(in oklch,var(--warn) 55%,transparent)}

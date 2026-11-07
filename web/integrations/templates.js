@@ -134,7 +134,7 @@ function discordTimes(html){
       const diff = Math.round((at - Date.now()) / 60000);
       shown = diff === 0 ? 'now' : diff === 1 ? 'in 1 minute' : diff > 0 ? `in ${diff} minutes` : diff === -1 ? '1 minute ago' : `${-diff} minutes ago`;
     } else shown = new Date(at).toLocaleString([], style === 't' || style === 'T' ? {timeStyle:'short'} : {dateStyle:'medium', timeStyle:'short'});
-    return `<span class="ig-ts">${esc(shown)}</span>`;
+    return `<span class="ig-ts">${esc(style === 'R' ? tr(shown) : shown)}</span>`;
   });
 }
 // The bits of Discord's Markdown previews need: code blocks, `code`,

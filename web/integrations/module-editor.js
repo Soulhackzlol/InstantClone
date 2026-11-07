@@ -432,7 +432,7 @@ const Editor = {
       const p = step.params, chain = alertTiers(h);
       if (chain){
         const bigger = chain.tiers.length - 1;
-        out.push({id:'tiers', k:'Bigger ones', v:this.tier ? `editing ${lowerFirst(tierLabel(chain, this.tier))}`
+        out.push({id:'tiers', k:'Levels', v:this.tier ? `editing ${lowerFirst(tierLabel(chain, this.tier))}`
           : bigger ? tierLabel(chain, 1).toLowerCase() + (bigger > 1 ? ` +${bigger - 1}` : '') : 'none'});
       }
       out.push({id:'adesign', k:'Design', v:designLabel(p.design)});
@@ -511,7 +511,7 @@ const Editor = {
       case 'tiers': {
         const chain = alertTiers(h);
         if (!chain) return '';
-        const unit = TIER_UNITS[chain.name];
+        const unit = tierUnit(chain.name);
         const rows = chain.tiers.map((t, n) => {
           const on = n === this.tier;
           const what = n ? `<span>From</span><input class="ic-input mono ig-tier-from" data-bind="tier-from" data-n="${n}" inputmode="numeric"
@@ -522,9 +522,9 @@ const Editor = {
             ${n ? `<button class="ic-btn-tiny" data-act="tier-del" data-n="${n}" aria-label="Remove the one ${esc(lowerFirst(tierLabel(chain, n)))}">${svg('x')}</button>` : ''}</div>`;
         }).join('');
         const add = chain.tiers.length < MAX_TIERS
-          ? `<button class="dest-add ig-add-row" data-act="tier-add" data-key="tier-add"><span class="dest-add-icon">${svg('plus')}</span>A bigger one</button>` : '';
-        return `<div class="ic-label">Bigger ones</div><div class="ig-tiers" data-flip>${rows}${add}</div>
-          <div class="muted">From that many ${unit} up, its own alert plays instead: its design, sound and words. <b>Edit</b> picks the one the preview and the options above change.</div>`;
+          ? `<button class="dest-add ig-add-row" data-act="tier-add" data-key="tier-add"><span class="dest-add-icon">${svg('plus')}</span>Add a level</button>` : '';
+        return `<div class="ic-label">Levels</div><div class="ig-tiers" data-flip>${rows}${add}</div>
+          <div class="muted">A level is a second alert for big amounts: from that many ${unit} up, it plays instead of the normal one, with its own design, sound and words. <b>Edit</b> picks which one the preview and the options above change.</div>`;
       }
       case 'adesign': return `<div class="ic-label">Design</div>${designTilesHtml(step.params.design)}
           <div class="muted">Made and changed in the Studio, on the Overlay tab's <button class="ig-link" data-act="alerts-open">Alerts page</button>.</div>${this.everyAlertHtml(['design'])}`;

@@ -132,15 +132,61 @@
   .ig-row-peek{padding-left:12px;flex-direction:column}
   .ig-row-peek-actions{width:auto;flex-direction:row}
 }
-/* First run. */
-.ig-packs{width:min(900px,100%)}
-/* A pack carries a list and its needs: on a phone it gets the full width. */
-@media (max-width:520px){.ig-packs{grid-template-columns:minmax(0,1fr)}}
-.ig-pack{gap:8px;padding:18px}
-.ig-pack .dest-starter-name{font-size:15px}
-.ig-pack .dest-starter-note{line-height:1.5;text-wrap:pretty}
-.ig-pack.ig-pack-rec{border-color:color-mix(in oklch,var(--accent) 45%,var(--line))}
-.ig-rec{min-width:0;max-width:none;margin-left:6px;padding:1px 7px;font-size:10.5px;vertical-align:1px}
+/* First run: the starter packs, in the page's width. */
+.ig-packs{width:min(940px,100%);text-align:left}
+/* Starter packs: a card each, tinted by its own colour (--pk), what's
+   inside as a list, and one button that adds only what's missing. */
+.ig-starters{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
+.ig-starter{position:relative;display:flex;flex-direction:column;gap:12px;padding:18px;border-radius:14px;overflow:hidden;
+  border:1px solid color-mix(in oklch,var(--pk) 28%,var(--line));
+  background:radial-gradient(120% 70% at 0% 0%,color-mix(in oklch,var(--pk) 13%,transparent),transparent 60%),var(--surface-2);
+  transition:border-color .2s var(--ease-out),transform .2s var(--ease-out),box-shadow .2s var(--ease-out)}
+.ig-starter:hover{border-color:color-mix(in oklch,var(--pk) 55%,var(--line));transform:translateY(-2px);
+  box-shadow:0 14px 34px -18px color-mix(in oklch,var(--pk) 60%,transparent)}
+.ig-st-top{display:flex;align-items:center;gap:12px}
+.ig-st-badge{flex:none;display:grid;place-items:center;width:42px;height:42px;border-radius:12px;color:var(--pk);
+  background:color-mix(in oklch,var(--pk) 16%,transparent);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--pk) 35%,transparent)}
+.ig-st-badge svg{width:21px;height:21px}
+.ig-st-id{min-width:0}
+.ig-st-title{font-size:16px;font-weight:700;color:var(--fg);line-height:1.25}
+.ig-st-who{font-size:12px;color:color-mix(in oklch,var(--pk) 70%,var(--fg-2));margin-top:2px}
+.ig-st-desc{margin:0;font-size:13px;line-height:1.55;color:var(--fg-2);text-wrap:pretty}
+.ig-st-list{list-style:none;margin:0;padding:4px;display:flex;flex-direction:column;gap:2px;border-radius:10px;
+  background:color-mix(in oklch,var(--bg) 55%,transparent);box-shadow:inset 0 0 0 1px var(--line)}
+.ig-st-list li{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px;font-size:13px;color:var(--fg)}
+.ig-st-ic{flex:none;display:grid;place-items:center;width:24px;height:24px;border-radius:7px;color:var(--pk);
+  background:color-mix(in oklch,var(--pk) 12%,transparent)}
+.ig-st-ic svg{width:13px;height:13px}
+.ig-st-name{flex:1;min-width:0}
+.ig-st-list li.got{color:var(--fg-3)}
+.ig-st-list li.got .ig-st-ic{color:var(--fg-3);background:var(--surface-3)}
+.ig-st-got{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--ok)}
+.ig-st-got svg{width:11px;height:11px}
+.ig-st-foot{display:grid;gap:10px;margin-top:auto}
+.ig-st-foot .ig-cat-needs{min-width:0}
+.ig-st-add{justify-self:end}
+.ig-starter .ic-btn-primary.ig-st-add{background:var(--pk);border-color:transparent;color:var(--bg)}
+.ig-starter .ic-btn-primary.ig-st-add:hover{filter:brightness(1.08)}
+.ig-st-add.is-busy{opacity:.6;pointer-events:none;cursor:progress}
+/* Packs in the catalog: a heading per kind. */
+.ig-pk-head{grid-column:1/-1;display:flex;flex-direction:column;gap:3px;margin-top:4px}
+.ig-pk-head b{font-size:13px;color:var(--fg)}
+.ig-pk-head span{font-size:12.5px;color:var(--fg-3);max-width:70ch}
+.ig-pk-head ~ .ig-pk-head{margin-top:14px}
+/* Recommended, while there are few integrations: a way to the starters. */
+.ig-start-strip{grid-column:1/-1;display:flex;align-items:center;flex-wrap:wrap;gap:12px 18px;padding:14px 16px;border-radius:12px;
+  border:1px dashed color-mix(in oklch,var(--accent) 35%,var(--line));background:color-mix(in oklch,var(--accent) 6%,transparent)}
+.ig-start-txt{display:flex;flex-direction:column;gap:2px;flex:1 1 220px;min-width:0}
+.ig-start-txt b{font-size:13.5px;color:var(--fg)}
+.ig-start-txt span{font-size:12.5px;color:var(--fg-3)}
+.ig-start-chips{display:flex;flex-wrap:wrap;gap:8px}
+.ig-start-chip{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;font:inherit;font-size:12.5px;cursor:pointer;
+  color:var(--fg);background:color-mix(in oklch,var(--pk) 12%,var(--surface-2));border:1px solid color-mix(in oklch,var(--pk) 35%,var(--line));
+  transition:background .15s var(--ease-out),transform .15s var(--ease-out)}
+.ig-start-chip svg{width:14px;height:14px;color:var(--pk)}
+.ig-start-chip:hover{background:color-mix(in oklch,var(--pk) 22%,var(--surface-2));transform:translateY(-1px)}
+.ig-start-chip:focus-visible{outline:2px solid var(--pk);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.ig-starter,.ig-start-chip{transition:none}.ig-starter:hover,.ig-start-chip:hover{transform:none}}
 .ig-pack-list{display:flex;flex-direction:column;gap:5px;margin-top:4px;font-size:12.5px;color:var(--fg-2)}
 .ig-pack-list span{display:flex;align-items:center;gap:7px}
 .ig-pack-list svg{width:13px;height:13px;flex:none;color:var(--fg-3)}
@@ -202,7 +248,8 @@
 .ig-title-input:focus{border-color:color-mix(in oklch,var(--accent) 55%,transparent);background:var(--bg-1);
   box-shadow:0 0 0 3px color-mix(in oklch,var(--accent) 16%,transparent)}
 .ig-head-btn{padding:8px 14px}
-.ig-foot-msg{display:flex;align-items:center;gap:10px;min-width:0}
+.ig-foot-msg{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px;min-width:0}
+.ig-foot-msg>.ig-last{flex:none}
 .ig-last{display:inline-flex;align-items:center;gap:6px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ig-last i{width:6px;height:6px;flex:none;border-radius:50%;background:var(--fg-4)}
 .ig-last.ok i{background:var(--live)}.ig-last.bad i{background:var(--danger)}
@@ -318,7 +365,8 @@
 .ig-live-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 12px}
 .ig-live-alert .ig-live-tag{color:var(--fg-3)}
 .ig-live-theme{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--fg-3)}
-.ig-link{display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:none;color:var(--accent);font:inherit;font-size:12px;cursor:pointer}
+.ig-link{position:relative;display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:none;color:var(--accent);font:inherit;font-size:12px;cursor:pointer}
+.ig-link::before{content:"";position:absolute;inset:-8px -3px}
 .ig-link:hover{text-decoration:underline}
 .ig-link .ig-btn-ic{width:12px;height:12px}
 .ig-ed-stage{position:relative;height:190px;overflow:hidden;border-radius:10px;
@@ -400,11 +448,12 @@
 .ig-step-meta{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:11.5px;color:var(--fg-3)}
 .ig-step-meta i{width:9px;height:9px;border-radius:50%;background:var(--sw);box-shadow:0 0 0 1px rgba(255,255,255,.18)}
 .ig-bld-alert .ig-live-row{justify-content:space-between}
-.ig-tier{display:flex;align-items:center;gap:10px;min-height:40px;padding:4px 6px 4px 12px;border-radius:10px;
+.ig-tier{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-height:40px;padding:4px 6px 4px 12px;border-radius:10px;
   background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line)}
 .ig-tier.on{box-shadow:inset 0 0 0 1px var(--accent)}
-.ig-tier-what{display:flex;align-items:center;gap:6px;flex:1;min-width:0;font-size:13px}
-.ig-tier-from{width:84px;padding:4px 8px;font-variant-numeric:tabular-nums}
+.ig-tier-what{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;font-size:13px}
+.ig-tier-what span{white-space:nowrap}
+.ig-tier-from{width:64px;padding:4px 8px;font-variant-numeric:tabular-nums}
 .ig-tier-look{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:30%}
 .ig-volume input[type=range]{flex:1;min-width:120px}
 .ig-volume .mono{min-width:3.2em;color:var(--fg-3)}
@@ -499,10 +548,11 @@
   background:var(--surface-3);color:var(--fg-3);cursor:pointer;opacity:0;
   transition:opacity .15s var(--ease-out),color .15s var(--ease-out),border-color .15s var(--ease-out),transform .15s var(--ease-out)}
 .ig-moment-del svg{width:10px;height:10px}
+.ig-moment-del::before{content:"";position:absolute;inset:-7px}
 .ig-moment-del:hover,.ig-moment-del:focus-visible{color:var(--danger);border-color:color-mix(in oklch,var(--danger) 55%,transparent);opacity:1}
 .ig-moment-del:active{transform:scale(.92)}
 .ig-moment .ig-moment-del{position:absolute;top:-1px;left:calc(50% + 22px)}
-.ig-mchip .ig-moment-del{width:18px;height:18px;margin-left:-4px;border-color:transparent;background:none}
+.ig-mchip .ig-moment-del{position:relative;width:18px;height:18px;margin-left:-4px;border-color:transparent;background:none}
 :is(.ig-moment,.ig-mchip):is(:hover,.on,:focus-within) .ig-moment-del{opacity:1}
 @media (hover:none){.ig-moment-del{opacity:1}}
 /* The simple editor's parts, numbered in reading order: the moments, what
@@ -566,7 +616,6 @@
 /* Checkbox rows: undo the destination form's uppercase field labels. */
 .ig-modal .crash-check{display:flex;margin:0;font-size:13px;font-weight:400;color:var(--fg);text-transform:none;letter-spacing:0}
 .ig-modal .crash-check .muted{font-size:12px}
-.ig-pack.is-busy{opacity:.6;pointer-events:none;cursor:progress}
 /* Who can use it: toggle pills. */
 .ig-roles{display:flex;flex-wrap:wrap;gap:6px}
 .dest-form .ig-role{position:relative;display:inline-flex;margin:0;cursor:pointer;font-size:inherit;color:inherit;
@@ -1446,6 +1495,9 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
   .ig-modal .dest-form{width:100%;height:100dvh}
   .ig-modal .dest-form-head{gap:10px}
   .ig-modal .dest-form-head .dest-form-mark{display:none}
+  .ig-modal .dest-form-head{flex-wrap:wrap}
+  .ig-modal .dest-form-head .dest-form-titles{flex:1 1 60%}
+  .ig-modal .dest-form-head .ig-cat-acts{order:3;flex-basis:100%}
   .ig-modal .dest-form-enable>span:last-child{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   .ig-modal .dest-form-foot{flex-wrap:wrap;row-gap:10px}
   .ig-modal .ig-foot-msg{order:-1;flex-basis:100%}
@@ -1482,7 +1534,7 @@ html.ig-dragging-on,html.ig-dragging-on *{cursor:grabbing !important;user-select
 /* What still blocks switching on, under a card's name. */
 .dcard-host.ig-host-warn{color:var(--warn)}
 .dcard-host.ig-host-bad{color:var(--danger)}
-.ig-foot-need{color:var(--warn);font-size:12px}
+.ig-foot-need{color:var(--warn);font-size:12px;flex:1 1 220px;min-width:0;text-wrap:pretty}
 /* Builder: a switched-off step, one that misses something, insert points. */
 .ig-step.off :is(.ig-step-ic,.ig-step-kind,.ig-step-text){opacity:.6}
 .ig-step.off .ig-step-text{text-decoration:line-through;text-decoration-color:var(--fg-4)}

@@ -343,7 +343,7 @@ const Recipes = {
   syncAlerts(){
     const p = this.preview;
     if (!p || !p.alerts) return;
-    let card = {title:'New follower', text:'Nat', sound:'theme'};
+    let card = {title:tr('New follower'), text:'Nat', sound:'theme'};
     for (const it of p.items){
       const h = (it.integration.handlers || []).find(x => (x.steps || []).some(s => s.type === 'overlay'));
       if (h){ card = alertCardOf(h.steps.find(s => s.type === 'overlay'), h); break; }

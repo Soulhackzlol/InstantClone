@@ -379,7 +379,9 @@
 @media (prefers-reduced-motion:reduce){
   .wel-aurora i,.wel-mark,.wel-bar,.wel-word,.wel-word:last-of-type,.wel-lead,.wel-ask,.wel-glyph,.wel-hand,.wel-shield-tick,.wel-q-t,.wel-q-s,.wel-choice,.wel-later{animation:none}
 }
-.wiz-step-h{margin-bottom:24px}
+.wiz-step-h{margin-bottom:24px;text-align:center}
+/* Every step's heading sits centred, as on the first questions. */
+.wiz-head{text-align:center}
 .wiz-step-t{font-size:18px;font-weight:600;letter-spacing:-.014em;line-height:1.3}
 .wiz-step-s{font-size:13.5px;color:var(--fg-3);margin-top:6px;line-height:1.55}
 /* Pushed to the card's foot, so it stays put when a language change keeps the card's height. */

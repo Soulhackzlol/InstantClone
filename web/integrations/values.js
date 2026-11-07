@@ -287,9 +287,14 @@ function varsFor(handler, upto){
 function myValues(){
   return (S.data.values || []).map(v => ({name:'my.' + v.name, sample:v.value})).concat(trackerValues());
 }
+// The sample timeline's lines end in a word ("`0:12` 🟢 Live"): that word
+// in the page's language, so the preview reads like the rest of the page.
+function saidTimeline(text){
+  return String(text || '').split('\n').map(line => line.replace(/[A-Za-z][A-Za-z ]*$/, word => tr(word))).join('\n');
+}
 function sampleMap(handler){
   const m = {};
-  varsFor(handler).forEach(v => { m[v.name] = v.sample; });
+  varsFor(handler).forEach(v => { m[v.name] = v.name === 'timeline' ? saidTimeline(v.sample) : v.sample; });
   return m;
 }
 // Variables a step's fields use that nothing fills there: most likely a
