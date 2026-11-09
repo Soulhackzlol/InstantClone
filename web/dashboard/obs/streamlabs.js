@@ -150,6 +150,7 @@ async function slConnect(on){
   const r = await postAction(on ? '/streamlabs/connect' : '/streamlabs/disconnect');
   btn.disabled = false;
   $('sl-msg').textContent = r.ok ? '' : r.error;
+  $('sl-msg').classList.remove('ok');
   if (r.ok) toast(on ? 'Streamlabs connected' : 'Streamlabs disconnected: its Twitch setup is back as it was', 'ok');
   await refreshStreamlabs();
   // The server picks Streamlabs up a moment later; show that without waiting
@@ -173,6 +174,8 @@ async function slImportTwitch(){
   // Kept on the card, not only in a toast: the key itself never shows, so
   // this line is what says it worked.
   $('sl-msg').textContent = text;
+  // The box is red for errors; a key that went in is good news.
+  $('sl-msg').classList.toggle('ok', r.ok);
   toast(text, r.ok ? 'ok' : 'err');
   if (r.ok && r.data.outcome !== 'unchanged'){ loadDestinations(); loadConfig(); }
 }

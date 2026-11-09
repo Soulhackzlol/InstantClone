@@ -79,16 +79,11 @@ That's the whole install. On Windows a tray icon sits in the systray while it ru
 
 **2 · Point OBS at it**
 
-Close OBS, click **Register with OBS** in the dashboard's **OBS** tab, then open OBS and in **Settings → Stream** pick:
+Close OBS and click **Register with OBS** in the dashboard's **OBS** tab (setup offers it too). OBS's current profile now streams to InstantClone, key included: open OBS and press **Start Streaming**. Your old stream settings are kept, and **Unregister** puts them back.
 
-```text
-Service:  InstantClone
-Key:      main          (any string works)
-```
+**Multi-track via InstantClone** works on Auto out of the box. Your real platform keys go into the **Destinations** tab, not OBS. Streaming to Twitch? Setup's **Get my key from Twitch** fills it in with one approval.
 
-**Multi-track via InstantClone** works on Auto out of the box. Your real platform keys go into the **Destinations** tab, not OBS.
-
-<sub>Prefer manual? Service <b>Custom</b>, Server <code>rtmp://localhost:1935/live</code>, Key <code>main</code>. On Streamlabs Desktop, connect it from the same tab instead.</sub>
+<sub>OBS never opened yet, or prefer to pick it yourself? In <b>Settings → Stream</b> choose Service <b>InstantClone</b>, any key (<code>main</code>). Manual: Service <b>Custom</b>, Server <code>rtmp://localhost:1935/live</code>, Key <code>main</code>. On Streamlabs Desktop, connect it from the same tab instead.</sub>
 
 </td>
 </tr>
@@ -155,7 +150,7 @@ In OBS, turn on **Enhanced Broadcasting** (**Multi-track via InstantClone** on t
 <td valign="top">
 
 **🎚 VOD audio + copyright-safe routing**
-Keep music live but out of the recording. One click adds a second audio track (via a bundled OBS script); then per destination pick an **Audio track**, Twitch keeps **Both**, send the clean **Track 2** to YouTube to dodge copyright, or **Track 1** to Kick.
+Keep music live but out of the recording. A short guide in the dashboard adds a second audio track (a bundled OBS script, three steps); then per destination pick an **Audio track**, Twitch keeps **Both**, send the clean **Track 2** to YouTube to dodge copyright, or **Track 1** to Kick.
 
 </td>
 </tr>

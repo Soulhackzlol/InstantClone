@@ -754,7 +754,11 @@ function renderHero(s){
       : `Waiting for ${encoderApp() || 'your stream'} to connect…`;
     subKey = s.ingest_alive ? 'off-live' : 'off-wait';
   }
-  else if (ds === 'arming') sub = `Saving video: ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers see you live until you activate.`;
+  // Folded, the delay readout and the bar beside it already say how much is
+  // saved, and the full line would be cut short in the room left.
+  else if (ds === 'arming') sub = $('hero').classList.contains('compact')
+    ? 'Live until you activate.'
+    : `Saving video: ${fillSec.toFixed(1)}s of ${targetSec.toFixed(1)}s · viewers see you live until you activate.`;
   else if (ds === 'armed') sub = `Ready. Press Activate to put viewers on the delay.`;
   else if (ds === 'active' && adjusting){
     // Honest copy: the delay never "rewinds" gradually - the cut

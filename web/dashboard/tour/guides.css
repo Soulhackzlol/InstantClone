@@ -19,7 +19,8 @@
 .help-folder-b>div{overflow:hidden;display:flex;flex-direction:column;gap:2px;padding-left:8px}
 .help-folder-b button{justify-content:flex-start}
 .help-folder-b button span{margin-left:auto}
-.help-hint{font-style:normal;font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:999px;align-self:center;white-space:nowrap;
+/* Not .help-hint: that is the header's floating "New here?" bubble. */
+.guide-suggest{font-style:normal;font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:999px;align-self:center;white-space:nowrap;
   color:var(--accent);background:color-mix(in oklch,var(--accent) 14%,transparent)}
 .help-hint-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);align-self:center;margin-right:auto;
   box-shadow:0 0 8px var(--accent-glow)}

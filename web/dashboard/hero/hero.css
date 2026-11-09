@@ -10,7 +10,9 @@
    under it, and the hold banner shows above it as ever. It is not clipped
    (a Cut after card can open over the tabs), so the light is clipped to the
    card's corners instead. */
-#hero.compact{overflow:visible}
+/* Lifted over what follows it (the tabs at 2, a pane's sticky strip at 5),
+   or the open card would slide under them. */
+#hero.compact{overflow:visible;z-index:6}
 #hero.compact .hero-aurora{border-radius:inherit}
 #hero.compact .hero{grid-template-columns:minmax(0,1fr) auto;align-items:center}
 #hero.compact .hero-readout{flex-direction:row;align-items:center;gap:14px;padding:12px 18px 12px 20px;border-right:0}
@@ -18,8 +20,15 @@
 #hero.compact .hero-delay-num{font-size:34px}
 #hero.compact .hero-delay-unit{font-size:15px}
 #hero.compact .hero-delay-of{font-size:13px}
-#hero.compact .hero-delay-sub{flex:1;min-width:0;min-height:0;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#hero.compact .arm-bar{position:absolute;left:0;right:0;bottom:0;margin:0;height:3px;border-radius:0}
+/* Two lines before it gives up: one line cut "Saving video: 5.6s of 30.0s" mid-word. */
+#hero.compact .hero-delay-sub{flex:1;min-width:0;min-height:0;font-size:12.5px;line-height:1.35;text-wrap:pretty;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+/* The saving bar runs along the whole card's bottom edge, not just under the
+   readout column, inset by the corner radius so its ends stay inside the
+   curve (the compact card is not clipped). The readout steps back as its
+   frame so the bar can reach past it. */
+#hero.compact .hero-readout{position:static}
+#hero.compact .arm-bar{position:absolute;left:var(--radius);right:var(--radius);bottom:0;width:auto;margin:0;height:3px;border-radius:999px}
 #hero.compact .hero-control{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px}
 #hero.compact .cp-head,#hero.compact .cp-hint,#hero.compact .cp-unit{display:none}
 #hero.compact .cp-input-row{width:168px;padding:3px}

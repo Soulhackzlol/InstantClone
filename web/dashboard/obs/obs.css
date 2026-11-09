@@ -149,6 +149,7 @@
 .obs-reg-card[data-state="current"] .obs-reg-status{margin-top:4px}
 .obs-reg-msg{font-size:12px;line-height:1.5;color:var(--err);margin-top:4px}
 .obs-reg-msg:empty{display:none}
+.obs-reg-msg.ok{color:var(--ok)}
 /* Footer: how it works on the left, the quiet way out on the right, apart
    from the main action so it is never clicked by mistake. */
 /* Footer: how it works on the left; the card's actions on the right, in

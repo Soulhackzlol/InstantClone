@@ -182,7 +182,7 @@ function helpMenuHtml(){
     return `<div class="help-folder${on ? ' open' : ''}">
       <button class="help-folder-h" data-folder="${f.id}" aria-expanded="${on}">${f.title}${hint}<span>${n} / ${f.guides.length}</span></button>
       <div class="help-folder-b"><div>${f.guides.map(g => `<button role="menuitem" data-guide="${g.id}"${on ? '' : ' tabindex="-1"'}>
-        <i class="help-tick${done.includes(g.id) ? ' on' : ''}" aria-hidden="true"></i>${guideTitle(g)}${guideSuggested(g, done) ? '<em class="help-hint">Suggested</em>' : ''}
+        <i class="help-tick${done.includes(g.id) ? ' on' : ''}" aria-hidden="true"></i>${guideTitle(g)}${guideSuggested(g, done) ? '<em class="guide-suggest">Suggested</em>' : ''}
         <span>${g.steps.length} ${g.steps.length === 1 ? 'step' : 'steps'}</span></button>`).join('')}</div></div>
     </div>`;
   };

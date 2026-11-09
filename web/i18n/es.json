@@ -37,6 +37,7 @@
 "your stream": "tu directo",
 "Waiting for {} to connect…": "Esperando a que {} se conecte…",
 "Saving video: {}s of {}s · viewers see you live until you activate.": "Guardando vídeo: {}s de {}s · los espectadores te ven en directo hasta que actives.",
+"Live until you activate.": "En directo hasta que actives.",
 "Ready. Press Activate to put viewers on the delay.": "Listo. Pulsa Activar para poner a los espectadores en el delay.",
 "Saving more video: moves to {} once {}s saved reaches it.": "Guardando más vídeo: pasa a {} cuando los {}s guardados lleguen.",
 "Jumping {} to {} of delay…": "Saltando {} hasta {} de delay…",
