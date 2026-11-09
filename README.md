@@ -21,7 +21,7 @@
 <br/>
 <br/>
 
-<sub><a href="https://youtu.be/y3aj88gTAOs"><b>▶ Watch the setup tutorial</b></a> &nbsp;·&nbsp; Spanish audio, English subtitles</sub>
+<sub><a href="https://youtu.be/MK02-bGvD8I"><b>▶ Watch the setup tutorial</b></a> &nbsp;·&nbsp; Spanish or English audio, with subtitles</sub>
 
 <br/>
 <br/>
